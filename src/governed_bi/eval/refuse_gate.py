@@ -1,16 +1,28 @@
-"""Refuse-gate eval (Architecture §8; D5).
+"""Refuse-gate eval (Architecture section 8; D5).
 
 BIRD questions are all answerable, so they do **not** test the refuse-gate. This
 needs a held-out **unanswerable** set: cross-DB + removed-coverage cases
-(auto-generated) plus a small hand-built out-of-scope set. Scored on:
+(auto-generated) plus a small hand-built out-of-scope set (see
+``dataset.BEER_FACTORY_UNANSWERABLE``). Scored on:
 
-- **refusal accuracy** — refuses the unanswerable (recall of refusal)
-- **false-refusal rate** — on the answerable test set (precision of refusal)
+- **refusal accuracy**: refuses the unanswerable (recall of refusal)
+- **false-refusal rate**: refuses the answerable (a precision cost)
+
+The scorer takes a ``refused`` predicate (question -> bool) so it is decoupled
+from the server; ``flow_refuser`` adapts the deterministic server flow.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..config import Settings
+    from ..corpus import Corpus
+    from ..gateway import Gateway, Identity
+    from ..server.sqlgen import SqlGenerator
 
 
 @dataclass(frozen=True)
@@ -19,6 +31,50 @@ class RefuseGateResult:
     false_refusal_rate: float  # on the answerable set
 
 
-def eval_refuse_gate(db: str) -> RefuseGateResult:
-    """Score the refuse-gate against the held-out unanswerable + answerable sets."""
-    raise NotImplementedError("refuse-gate eval pending; needs the unanswerable set")
+def _rate(questions: Iterable[str], refused: Callable[[str], bool]) -> float:
+    items = list(questions)
+    if not items:
+        return 0.0
+    return sum(1 for q in items if refused(q)) / len(items)
+
+
+def eval_refuse_gate(
+    answerable: Iterable[str],
+    unanswerable: Iterable[str],
+    refused: Callable[[str], bool],
+) -> RefuseGateResult:
+    """Score the refuse-gate: refusal recall on ``unanswerable`` and the
+    false-refusal cost on ``answerable``, using the ``refused`` predicate."""
+    return RefuseGateResult(
+        refusal_accuracy=_rate(unanswerable, refused),
+        false_refusal_rate=_rate(answerable, refused),
+    )
+
+
+def flow_refuser(
+    corpus: "Corpus",
+    gateway: "Gateway",
+    settings: "Settings",
+    identity: "Identity",
+    *,
+    session_id: str = "eval",
+    sql_generator: "SqlGenerator | None" = None,
+) -> Callable[[str], bool]:
+    """A ``refused`` predicate that runs the server flow and reports whether it
+    returned a refusal (any fail-closed path: refuse-gate or guardrail veto)."""
+    from ..server import answer_question
+    from ..server.answer import ReliabilityTier
+
+    def refused(question: str) -> bool:
+        answer = answer_question(
+            question,
+            identity,
+            corpus=corpus,
+            gateway=gateway,
+            settings=settings,
+            session_id=session_id,
+            sql_generator=sql_generator,
+        )
+        return answer.tier is ReliabilityTier.refused
+
+    return refused

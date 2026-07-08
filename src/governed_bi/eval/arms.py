@@ -1,21 +1,39 @@
-"""The three-arm eval harness (Architecture §8; D4).
+"""The three-arm eval harness (Architecture section 8; D4).
 
-Runs the held-out ``test_final.jsonl`` questions through the server against each
-of the three corpus arms and scores EX. Also collects the free behavioral
-signals from the manifest + logs:
+Runs a set of questions through a *solver* (question -> SQL, or None if it
+declines/refuses) and scores EX plus the free behavioral signals:
 
-- **decoy-touch rate** — share of questions where the agent used a
-  manifest-flagged fake column/table (Server §"three points" #1 drives this → 0
-  in dev via suspect hard-block).
-- **governed-path adherence** — share resolved via the semantic layer.
+- **decoy-touch rate**: share of produced queries that reference a
+  manifest-flagged fake column (Server "three points" #1 drives this to 0 in dev
+  via the suspect hard-block). Computed here from the corpus suspect set.
+- **governed-path adherence**: share of questions the solver actually answered
+  (produced SQL for) rather than refused.
 
-Reports Arm2/Arm3-vs-Arm1 (the moat proof) and Arm2-vs-Arm3 (curator quality).
+The three arms differ only by the corpus/solver they use: (1) no semantic layer,
+(2) curator-built layer, (3) gold layer. Arm 2 vs 1 is the moat proof; Arm 2 vs 3
+is curator quality. This module supplies the reusable scorer (``run_arm``) and a
+``flow_solver`` that drives the deterministic server flow as the curator arm; the
+no-layer (LLM baseline) and gold (manifest oracle) solvers plug into the same
+``run_arms`` orchestrator when available.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+import sqlglot
+from sqlglot import exp
+
+from .ex import execution_match
+
+if TYPE_CHECKING:
+    from ..config import Settings
+    from ..corpus import Corpus
+    from ..gateway import Gateway, Identity
+    from ..server.sqlgen import SqlGenerator
+    from .dataset import EvalItem
 
 
 class Arm(str, Enum):
@@ -33,6 +51,102 @@ class ArmResult:
     n: int
 
 
-def run_arms(db: str) -> dict[Arm, ArmResult]:
-    """Run all three arms on a DB's test split and return per-arm results."""
-    raise NotImplementedError("three-arm harness pending; needs server + gold + DB")
+@runtime_checkable
+class Solver(Protocol):
+    """Turns a question into SQL, or ``None`` if it declines / refuses."""
+
+    def solve(self, question: str) -> str | None: ...
+
+
+def _touches_suspect(sql: str, suspect_columns: frozenset[str], dialect: str) -> bool:
+    if not suspect_columns:
+        return False
+    suspect_bare = {ref.split(".", 1)[1] for ref in suspect_columns}
+    try:
+        tree = sqlglot.parse_one(sql, read=dialect)
+    except Exception:
+        return False
+    return any(col.name in suspect_bare for col in tree.find_all(exp.Column))
+
+
+def run_arm(
+    arm: Arm,
+    gateway: "Gateway",
+    items: "list[EvalItem]",
+    solver: Solver,
+    *,
+    suspect_columns: frozenset[str] = frozenset(),
+    dialect: str = "sqlite",
+) -> ArmResult:
+    """Score one arm: EX over ``items`` plus decoy-touch and governed-path rates."""
+    matches = 0
+    produced = 0
+    decoy = 0
+    for item in items:
+        pred = solver.solve(item.question)
+        if not pred:
+            continue  # refused / no SQL: not a governed-path answer
+        produced += 1
+        if _touches_suspect(pred, suspect_columns, dialect):
+            decoy += 1
+        if execution_match(pred, item.sql, gateway):
+            matches += 1
+    n = len(items)
+    return ArmResult(
+        arm=arm,
+        ex=matches / n if n else 0.0,
+        decoy_touch_rate=decoy / produced if produced else 0.0,
+        governed_path_adherence=produced / n if n else 0.0,
+        n=n,
+    )
+
+
+def run_arms(
+    gateway: "Gateway",
+    items: "list[EvalItem]",
+    solvers: dict[Arm, Solver],
+    *,
+    suspect_columns: frozenset[str] = frozenset(),
+    dialect: str = "sqlite",
+) -> dict[Arm, ArmResult]:
+    """Score every provided arm. Callers supply the solvers they can run (e.g.
+    just the curator arm in dev); the no-layer and gold arms plug in the same way
+    once their solvers exist."""
+    return {
+        arm: run_arm(
+            arm, gateway, items, solver, suspect_columns=suspect_columns, dialect=dialect
+        )
+        for arm, solver in solvers.items()
+    }
+
+
+def flow_solver(
+    corpus: "Corpus",
+    gateway: "Gateway",
+    settings: "Settings",
+    identity: "Identity",
+    *,
+    session_id: str = "eval",
+    sql_generator: "SqlGenerator | None" = None,
+) -> Solver:
+    """A :class:`Solver` that drives the server flow (the curator arm).
+
+    Returns the flow's generated SQL, or ``None`` when the flow refuses (a
+    refusal is not a governed-path answer and scores as unsolved).
+    """
+    from ..server import answer_question
+
+    class _FlowSolver:
+        def solve(self, question: str) -> str | None:
+            answer = answer_question(
+                question,
+                identity,
+                corpus=corpus,
+                gateway=gateway,
+                settings=settings,
+                session_id=session_id,
+                sql_generator=sql_generator,
+            )
+            return answer.sql
+
+    return _FlowSolver()
