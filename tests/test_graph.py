@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import networkx as nx
 import pytest
 
 from governed_bi.corpus import load_corpus
@@ -22,6 +23,7 @@ from governed_bi.graph import (
     NODE_TABLE,
     NODE_TERM,
     build_graph,
+    plan_joins,
 )
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
@@ -113,3 +115,102 @@ def test_excluded_column_absent_in_server_graph(graph):
     """The PII column is governance.excluded, so for_server() drops it and the
     server-facing graph must not contain its node."""
     assert "col_beer_factory_transaction_CreditCardNumber" not in graph.nodes
+
+
+# --------------------------------------------------------------------------- #
+# Steiner join planning
+# --------------------------------------------------------------------------- #
+
+# Short aliases for the beer_factory table ids used in planning assertions.
+CUSTOMERS = "tbl_beer_factory_customers"
+TRANSACTION = "tbl_beer_factory_transaction"
+ROOTBEER = "tbl_beer_factory_rootbeer"
+BRAND = "tbl_beer_factory_rootbeerbrand"
+REVIEW = "tbl_beer_factory_rootbeerreview"
+
+
+def _synthetic_join_graph(tables, joins):
+    """Minimal graph shaped like a projection: table nodes + JOINS_TO edges.
+
+    ``joins`` items are ``(join_id, left, right, cost, confidence)``.
+    """
+    g = nx.MultiDiGraph()
+    for t in tables:
+        g.add_node(t, kind=NODE_TABLE)
+    for join_id, left, right, cost, confidence in joins:
+        g.add_edge(
+            left,
+            right,
+            key=join_id,
+            type=EDGE_JOINS_TO,
+            join_id=join_id,
+            cost=cost,
+            confidence=confidence,
+        )
+    return g
+
+
+def test_plan_single_table_needs_no_joins(graph):
+    plan = plan_joins(graph, {CUSTOMERS})
+    assert plan.join_ids == []
+    assert plan.min_confidence == 1.0
+
+
+def test_plan_direct_join(graph):
+    plan = plan_joins(graph, {TRANSACTION, CUSTOMERS})
+    assert plan.join_ids == ["join_transaction_customers"]
+    assert plan.min_confidence == 0.95
+
+
+def test_plan_pulls_in_steiner_point(graph):
+    # customers and rootbeer only connect through transaction.
+    plan = plan_joins(graph, {CUSTOMERS, ROOTBEER})
+    assert plan.join_ids == ["join_transaction_customers", "join_transaction_rootbeer"]
+
+
+def test_plan_full_path(graph):
+    plan = plan_joins(graph, {CUSTOMERS, REVIEW})
+    assert set(plan.join_ids) == {
+        "join_transaction_customers",
+        "join_transaction_rootbeer",
+        "join_rootbeer_rootbeerbrand",
+        "join_review_rootbeerbrand",
+    }
+
+
+def test_plan_order_is_incremental(graph):
+    """Each emitted join attaches a new table to the already-connected set."""
+    plan = plan_joins(graph, {CUSTOMERS, ROOTBEER})
+    # first join touches the start table; second bridges to the far table.
+    assert plan.join_ids[0] == "join_transaction_customers"
+
+
+def test_plan_unknown_table_raises(graph):
+    with pytest.raises(ValueError, match="not table nodes"):
+        plan_joins(graph, {CUSTOMERS, "tbl_beer_factory_ghost"})
+
+
+def test_plan_disconnected_raises():
+    # X-Y joined; Z is an isolated table with no join edge.
+    g = _synthetic_join_graph(
+        ["X", "Y", "Z"],
+        [("join_xy", "X", "Y", 1.0, 0.9)],
+    )
+    with pytest.raises(ValueError, match="not connected"):
+        plan_joins(g, {"X", "Z"})
+
+
+def test_low_confidence_join_is_penalized():
+    # Direct A-B is cheap but low-confidence; the A-C-B detour is high-confidence
+    # and, after the penalty, cheaper. The planner must avoid the direct edge.
+    g = _synthetic_join_graph(
+        ["A", "B", "C"],
+        [
+            ("join_ab", "A", "B", 1.0, 0.1),  # weight 1.0*(1+0.9) = 1.9
+            ("join_ac", "A", "C", 0.4, 1.0),  # weight 0.4
+            ("join_cb", "C", "B", 0.4, 1.0),  # weight 0.4  -> detour total 0.8
+        ],
+    )
+    plan = plan_joins(g, {"A", "B"})
+    assert set(plan.join_ids) == {"join_ac", "join_cb"}
+    assert plan.min_confidence == 1.0  # the 0.1 edge was avoided

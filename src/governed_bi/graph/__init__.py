@@ -10,6 +10,7 @@ Steiner-tree join planning; Neo4j is the optional enterprise-scale projection.
 
 from __future__ import annotations
 
+from .planner import JoinPlan, plan_joins
 from .projection import (
     EDGE_BINDS_TO,
     EDGE_DERIVED_FROM,
@@ -25,6 +26,8 @@ from .projection import (
 
 __all__ = [
     "build_graph",
+    "JoinPlan",
+    "plan_joins",
     "EDGE_BINDS_TO",
     "EDGE_DERIVED_FROM",
     "EDGE_HAS_COLUMN",
