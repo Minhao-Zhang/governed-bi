@@ -287,3 +287,66 @@ def test_tokenizer_error_fails_syntax_not_crash():
     verdict = _check('SELECT "unterminated')
     assert not verdict.passed
     assert verdict.failed_layer is GuardrailLayer.syntax
+
+
+# --------------------------------------------------------------------------- #
+# Regression: second-round review findings (scope-aware resolution)
+# --------------------------------------------------------------------------- #
+
+
+def test_bare_having_excluded_column_is_blocked():
+    # A bare column referenced only in HAVING must still be checked (all Column
+    # nodes are enumerated, not just sqlglot's scope.columns).
+    sql = 'SELECT COUNT(*) AS n FROM "transaction" HAVING SUM(CreditCardNumber) > 0'
+    verdict = _check(sql)
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.ast_column_allowlist
+
+
+def test_cte_name_collision_does_not_poison_base_table():
+    # A nested CTE named like the base table must not defer the real table's
+    # qualified excluded column (per-scope resolution, not a global map).
+    sql = (
+        'SELECT tr.CreditCardNumber FROM "transaction" tr '
+        'WHERE EXISTS (WITH "transaction" AS (SELECT 1 AS id) SELECT id FROM "transaction")'
+    )
+    verdict = _check(sql)
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.ast_column_allowlist
+
+
+def test_derived_alias_collision_does_not_defer_base_column():
+    # A CTE aliased like the base-table alias must not defer the base column.
+    sql = 'WITH tr AS (SELECT 1 AS k) SELECT tr.CreditCardNumber FROM "transaction" AS tr'
+    verdict = _check(sql)
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.ast_column_allowlist
+
+
+def test_unknown_bare_column_in_derived_only_scope_is_blocked():
+    # The CTE projects only CustomerID; a bare unknown column must be blocked, not
+    # assumed to come from the derived source.
+    sql = 'WITH d AS (SELECT CustomerID FROM customers) SELECT Nonexistent FROM d'
+    verdict = _check(sql)
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.ast_column_allowlist
+
+
+def test_projected_derived_column_is_allowed():
+    sql = 'WITH d AS (SELECT CustomerID FROM customers) SELECT CustomerID FROM d'
+    assert _check(sql).passed
+
+
+def test_correlated_subquery_resolves_and_passes():
+    sql = (
+        'SELECT c.First FROM customers c '
+        'WHERE EXISTS (SELECT 1 FROM "transaction" t WHERE t.CustomerID = c.CustomerID)'
+    )
+    assert _check(sql).passed
+
+
+def test_schema_qualified_table_is_blocked_by_term_semantics():
+    # A db/schema-qualified name reaches outside the licensed namespace.
+    verdict = _check_scoped("SELECT c.First FROM secret_db.customers AS c", {"customers"})
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.term_semantics
