@@ -22,6 +22,10 @@ dependencies = [
 # these engines; the connector code imports the driver lazily.
 postgres = ["psycopg[binary]>=3.1"]
 redshift = ["redshift-connector>=2.1"]
+# The audit/edit cockpit (viz). Streamlit is the current frontend, isolated to
+# governed_bi.viz.app; the UI-agnostic view models in governed_bi.viz.presenter
+# carry no UI dependency, so a different frontend swaps in app.py alone.
+viz = ["streamlit>=1.30"]
 # Heavy agent frameworks are deferred until the harnesses are built:
 #   curator -> deepagents ; server -> langgraph + middleware.
 

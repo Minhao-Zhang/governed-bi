@@ -123,6 +123,22 @@ See [`data/README.md`](../data/README.md) for how to vendor a small BIRD SQLite
 file. Once you have one, `validate_corpus(assets, connector=conn)` also runs the
 physical-existence check (every `physical_name` exists in the live catalog).
 
+## Audit cockpit (viz)
+
+A read-only Streamlit cockpit renders the full corpus (Facts + Inference + Audit
++ excluded assets): corpus health, the table/tier view, the asset listing,
+skills, and an "ask" panel that runs the server flow and shows the reliability
+stamp. Streamlit is the optional `viz` extra:
+
+```bash
+uv run --extra viz streamlit run src/governed_bi/viz/app.py
+```
+
+Set `GOVERNED_BI_CORPUS`, `GOVERNED_BI_DB`, and `GOVERNED_BI_SQLITE` to point it
+at a different corpus / database. The display logic lives in the UI-agnostic
+`governed_bi.viz.presenter` (no UI dependency), so a different frontend swaps in
+`app.py` alone.
+
 ## Run the tests
 
 ```bash
