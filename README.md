@@ -54,22 +54,23 @@ tests/                 corpus smoke tests
 
 Modules carry docstrings that point back to the design docs and decision IDs.
 
-## Development
+## Usage & development
 
 Requires [uv](https://docs.astral.sh/uv/) and Python 3.13.
 
 ```bash
 uv sync                                   # create .venv, install deps + package
-
-# validate the example corpus (ID conventions + reference integrity)
-uv run python -m governed_bi.corpus.cli corpus/california_schools
-
+uv run python -m governed_bi.corpus.cli   # validate the corpus (ID + reference integrity)
 uv run pytest                             # run the test suite
 ```
 
-Dependencies are intentionally minimal (pydantic, pyyaml, networkx, sqlglot).
-The agent frameworks the design names (`langgraph`, `deepagents`) are deferred
-until those harnesses are built.
+The full quickstart (validate CLI, programmatic corpus API) is in
+[docs/usage.md](docs/usage.md). To write or edit corpus assets, see
+[docs/corpus-authoring.md](docs/corpus-authoring.md).
+
+Only the corpus layer is runnable today; the harnesses are documented stubs.
+Dependencies are intentionally minimal (pydantic, pyyaml, networkx, sqlglot);
+`langgraph` and `deepagents` are deferred until those harnesses are built.
 
 ## License
 

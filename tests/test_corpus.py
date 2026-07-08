@@ -14,6 +14,7 @@ from governed_bi.corpus import (
     parse_asset,
     validate_corpus,
 )
+from governed_bi.corpus.cli import main as cli_main
 from governed_bi.corpus.ids import derive_column_id, is_valid_id
 
 EXAMPLE_DB = Path(__file__).resolve().parents[1] / "corpus" / "california_schools"
@@ -130,3 +131,19 @@ def test_for_server_drops_excluded_columns():
     server_view = corpus.for_server()
     frpm_view = next(a for a in server_view.assets if a.id == "tbl_california_schools_frpm")
     assert all(c.physical_name != "lie_12" for c in frpm_view.columns)
+
+
+# --------------------------------------------------------------------------- #
+# CLI
+# --------------------------------------------------------------------------- #
+
+
+def test_cli_validates_example_returns_zero(capsys):
+    assert cli_main([str(EXAMPLE_DB)]) == 0
+    assert "CI green" in capsys.readouterr().out
+
+
+def test_cli_missing_path_exits_2():
+    with pytest.raises(SystemExit) as exc:
+        cli_main(["definitely/not/a/real/corpus/path"])
+    assert exc.value.code == 2

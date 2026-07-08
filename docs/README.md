@@ -22,6 +22,14 @@ self-built [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) 
 
 [External design sources](references.md) that ground the design.
 
+## Using the repo
+
+The design docs above describe the intended system. For what actually runs
+today (the corpus layer and the dev workflow):
+
+- [Usage](usage.md): install, the validate CLI, and the programmatic corpus API.
+- [Corpus authoring](corpus-authoring.md): write and validate corpus assets step by step.
+
 ## The spine (non-negotiables)
 
 - **Two planes.** A semantic/control plane (versioned config + markdown, published via PR/CI) stays separate from a data plane that executes only guardrail-passed SQL. Meaning is defined once and owned by humans.
