@@ -350,3 +350,39 @@ def test_schema_qualified_table_is_blocked_by_term_semantics():
     verdict = _check_scoped("SELECT c.First FROM secret_db.customers AS c", {"customers"})
     assert not verdict.passed
     assert verdict.failed_layer is GuardrailLayer.term_semantics
+
+
+# --------------------------------------------------------------------------- #
+# Regression: third-round review finding (USING / NATURAL join keys)
+# --------------------------------------------------------------------------- #
+
+
+def test_using_join_on_excluded_column_is_blocked():
+    # A USING key is an exp.Identifier, not an exp.Column; L3 must still check it.
+    sql = 'SELECT COUNT(*) AS n FROM "transaction" t1 JOIN "transaction" t2 USING (CreditCardNumber)'
+    verdict = _check(sql)
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.ast_column_allowlist
+
+
+def test_using_join_on_unknown_column_is_blocked():
+    verdict = _check("SELECT COUNT(*) AS n FROM customers a JOIN customers b USING (Email)")
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.ast_column_allowlist
+
+
+def test_using_join_suspect_column_hard_blocked_in_dev():
+    verdict = _check("SELECT COUNT(*) AS n FROM customers a JOIN customers b USING (ZipCode)")
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.ast_column_allowlist
+
+
+def test_natural_join_is_blocked():
+    verdict = _check('SELECT COUNT(*) AS n FROM customers NATURAL JOIN "transaction"')
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.ast_column_allowlist
+
+
+def test_using_join_on_allowed_column_passes():
+    sql = 'SELECT COUNT(*) AS n FROM "transaction" t1 JOIN "transaction" t2 USING (CustomerID)'
+    assert _check(sql).passed

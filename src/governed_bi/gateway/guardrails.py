@@ -287,6 +287,31 @@ def _layer_columns(
             continue  # projected by an in-scope derived source (validated there)
         return _fail(layer, f"column not in the allowlist: {name}")
 
+    # Join keys that are not exp.Column nodes: USING (col) identifiers and NATURAL
+    # joins. These reference columns that the find_all(exp.Column) pass never sees.
+    for join in root.find_all(exp.Join):
+        if join.args.get("method") == "NATURAL" or join.args.get("kind") == "NATURAL":
+            # NATURAL joins on every common column, including ones we cannot
+            # enumerate against the allowlist. Fail closed; require explicit keys.
+            return _fail(layer, "NATURAL JOIN is not allowed; use an explicit ON/USING clause")
+        using = join.args.get("using")
+        if not using:
+            continue
+        select = join.find_ancestor(exp.Select)
+        scope = by_select.get(id(select)) if select is not None else None
+        if scope is None:
+            return _fail(layer, "cannot attribute a USING join to a query scope")
+        _resolved, base, _derived = cache[id(scope)]
+        for identifier in using:
+            key = identifier.name
+            candidate_allowed = any(f"{p}.{key}" in allowed for p in base)
+            candidate_suspect = any(f"{p}.{key}" in suspect for p in base)
+            if hard_block_suspect and candidate_suspect and not candidate_allowed:
+                return _fail(layer, f"suspect (decoy) column blocked: {key}")
+            if candidate_allowed or candidate_suspect:
+                continue
+            return _fail(layer, f"column not in the allowlist: {key}")
+
     return _pass()
 
 
