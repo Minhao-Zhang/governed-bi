@@ -1,0 +1,17 @@
+asset_type: join
+id: join_frpm_schools
+
+# ── Facts (the referenced physical columns exist in the catalog) ──
+left_table: tbl_california_schools_frpm
+right_table: tbl_california_schools_schools
+on: "biao_3.lie_2 = biao_1.lie_0"
+
+# ── Inference (the EXISTENCE of the edge is inferred; BIRD withholds FK) ──
+cardinality: many_to_one
+cost: 1.0
+confidence: 0.82
+
+# ── Audit ──
+audit:
+  evidence: "value-overlap 0.97 (frpm.lie_2 subset of schools.lie_0); right key unique; used in 12 seed queries"
+  provenance: { source: curator, model: claude-opus-4-8, status: draft, source_refs: [q1032, q1044] }

@@ -1,0 +1,4 @@
+# Derived, rebuildable projections (D9): search index, embeddings, compiled
+# graph. Git is the single source of truth — these are never authored directly.
+_generated/
+*/_generated/

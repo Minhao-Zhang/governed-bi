@@ -1,0 +1,14 @@
+asset_type: negative_example
+id: neg_california_schools_002
+
+# ── Inference (curator proposes; human certifies) ──
+pattern: "questions about teacher salaries / compensation"
+example_questions: ["What is the average teacher salary per district?"]
+reason: "no table in this DB covers compensation"
+escalation: "not answerable from this data - contact <owner>"
+confidence: 0.8
+
+# ── Audit ──
+audit:
+  evidence: "3 self-eval questions on compensation found no covering table"
+  provenance: { source: curator, status: draft, source_refs: [q1180] }

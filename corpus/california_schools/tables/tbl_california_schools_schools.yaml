@@ -1,0 +1,54 @@
+asset_type: table
+id: tbl_california_schools_schools
+
+# ── Facts (catalog/data) ──
+db: california_schools
+physical_name: biao_1
+row_count: 17686
+
+# ── Inference (curator writes / gold fills; server-consumed) ──
+description: "One row per school: identity, district, location. The hub table."
+grain: "one row = one school (by CDS code)"
+confidence: 0.9
+
+columns:
+  - # Facts
+    physical_name: lie_0
+    physical_type: "varchar(20)"
+    logical_type: string
+    nullable: false
+    is_unique: true
+    sample_values: ["01100170109835", "01100170112607"]
+    # Inference
+    description: "CDS code - the canonical school identifier"
+    role: primary_key
+    references: null
+    reliability: { status: ok, note: null }
+    confidence: 0.95
+    # Audit
+    audit:
+      description_evidence: "unique; every other table joins in via this column"
+      provenance: { source: curator, model: claude-opus-4-8, status: draft, source_refs: [q1032, q1044] }
+
+  - # Facts
+    physical_name: lie_3
+    physical_type: "varchar(120)"
+    logical_type: string
+    nullable: true
+    is_unique: false
+    sample_values: ["Alameda High", "Envision Academy"]
+    # Inference
+    description: "school name"
+    role: dimension
+    references: null
+    reliability: { status: ok, note: null }
+    confidence: 0.85
+    # Audit
+    audit:
+      description_evidence: "free-text names; used as the display label in seed queries"
+      provenance: { source: curator, model: claude-opus-4-8, status: draft, source_refs: [q1044] }
+
+# ── Audit (table-level) ──
+audit:
+  description_evidence: "hub table; inferred from inbound join pattern across seed queries"
+  provenance: { source: curator, model: claude-opus-4-8, status: draft, built_at: "2026-07-07" }

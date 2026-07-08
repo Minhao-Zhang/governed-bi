@@ -1,0 +1,16 @@
+asset_type: metric
+id: metric_frpm_rate
+
+# ── Inference (curator derives from evidence + seed queries) ──
+name: "free-meal eligibility rate"
+base_table: tbl_california_schools_frpm
+expression: "SUM(free_count) / NULLIF(SUM(enrollment), 0)"
+dimensions: [school, academic_year]
+rules:
+  - { kind: filter, note: "exclude rows where enrollment = 0" }
+confidence: 0.6
+
+# ── Audit ──
+audit:
+  evidence: "BIRD evidence field: 'eligible free rate = free_count / total'; seen in 5 seed queries"
+  provenance: { source: curator, status: draft, version: "0.1.0", source_refs: [q1050] }

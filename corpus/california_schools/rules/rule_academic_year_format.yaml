@@ -1,0 +1,13 @@
+asset_type: rule
+id: rule_academic_year_format
+
+# ── Inference ──
+kind: business_rule
+scope: [tbl_california_schools_frpm]
+statement: "academic_year is the starting calendar year (2014 = the 2014-15 school year)"
+confidence: 0.7
+
+# ── Audit ──
+audit:
+  evidence: "sample values 2014, 2015; BIRD evidence note"
+  provenance: { source: curator, status: draft, source_refs: [q1060] }

@@ -1,0 +1,21 @@
+asset_type: few_shot
+id: fs_california_schools_003
+
+# ── Facts ──
+db: california_schools
+
+# ── Inference (curator selects/distills; server-consumed as a prompt exemplar) ──
+question: "Which schools have the highest free-meal eligibility rate?"
+sql: |
+  SELECT s.lie_3, (SUM(f.lie_5) * 1.0 / NULLIF(SUM(f.lie_7), 0)) AS rate
+  FROM biao_3 AS f
+  JOIN biao_1 AS s ON f.lie_2 = s.lie_0
+  GROUP BY s.lie_3
+  ORDER BY rate DESC
+bound_terms: [free-meal, eligibility rate]
+complexity: medium
+confidence: 0.9
+
+# ── Audit ──
+audit:
+  provenance: { source: curator, status: draft, source_refs: [q1032] }
