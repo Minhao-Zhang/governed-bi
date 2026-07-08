@@ -1,22 +1,31 @@
 """Tests for the SQL guardrail stack (gateway/guardrails.py).
 
-L1 (syntax) and L2 (policy blacklist) are enforced today; later milestones add
-L3 to L5. These tests assert only what is currently enforced.
+L1 (syntax), L2 (policy blacklist), and L3 (AST column allowlist) are enforced;
+L4 to L5 land later. The allowlist is built from the committed beer_factory
+corpus, so no live database is needed.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from governed_bi.gateway import GuardrailLayer, check
+from governed_bi.corpus import load_corpus
+from governed_bi.gateway import GuardrailLayer, check, column_allowlist
 
-# L3 is not enforced yet, so the allowlist is irrelevant to these cases; pass an
-# empty set and let L1/L2 do the work.
-NO_COLUMNS: set[str] = set()
+CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
+ALLOWLIST = column_allowlist(load_corpus(CORPUS_ROOT, db="beer_factory").for_server())
 
 
-def _check(sql: str):
-    return check(sql, allowed_columns=NO_COLUMNS, hard_block_suspect=True, dialect="sqlite")
+def _check(sql: str, *, hard_block_suspect: bool = True):
+    return check(
+        sql,
+        allowed_columns=set(ALLOWLIST.allowed),
+        suspect_columns=ALLOWLIST.suspect,
+        hard_block_suspect=hard_block_suspect,
+        dialect="sqlite",
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -25,7 +34,7 @@ def _check(sql: str):
 
 
 def test_valid_select_passes():
-    verdict = _check("SELECT CustomerID FROM customers WHERE amount > 1")
+    verdict = _check("SELECT c.CustomerID, c.First FROM customers c WHERE c.State = 'IL'")
     assert verdict.passed
     assert verdict.failed_layer is None
 
@@ -51,7 +60,7 @@ def test_empty_sql_fails_syntax():
     "sql",
     [
         "INSERT INTO customers VALUES ('x')",
-        "UPDATE customers SET name = 'x'",
+        "UPDATE customers SET First = 'x'",
         "DELETE FROM customers",
         "DROP TABLE customers",
         "CREATE TABLE t (a INT)",
@@ -75,20 +84,91 @@ def test_multiple_statements_fail_policy():
 
 def test_stacked_write_in_second_statement_is_blocked():
     # A benign-looking first statement must not smuggle a write past the gate.
-    verdict = _check("SELECT CustomerID FROM customers; DELETE FROM customers")
+    verdict = _check("SELECT c.CustomerID FROM customers c; DELETE FROM customers")
     assert not verdict.passed
     assert verdict.failed_layer is GuardrailLayer.policy_blacklist
 
 
 def test_cte_select_passes():
-    sql = "WITH recent AS (SELECT CustomerID FROM orders) SELECT CustomerID FROM recent"
+    sql = (
+        'WITH recent AS (SELECT CustomerID FROM "transaction") '
+        "SELECT CustomerID FROM recent"
+    )
     assert _check(sql).passed
 
 
 def test_union_select_passes():
-    assert _check("SELECT CustomerID FROM customers UNION SELECT CustomerID FROM orders").passed
+    assert _check('SELECT CustomerID FROM customers UNION SELECT CustomerID FROM "transaction"').passed
 
 
 def test_subquery_select_passes():
-    sql = "SELECT name FROM customers WHERE CustomerID IN (SELECT CustomerID FROM orders)"
+    sql = 'SELECT First FROM customers WHERE CustomerID IN (SELECT CustomerID FROM "transaction")'
     assert _check(sql).passed
+
+
+# --------------------------------------------------------------------------- #
+# L3: AST column allowlist
+# --------------------------------------------------------------------------- #
+
+
+def test_allowlist_shape():
+    # The PII column ships governance.excluded, so it is in neither set.
+    assert "customers.ZipCode" in ALLOWLIST.suspect
+    assert all("CreditCardNumber" not in ref for ref in ALLOWLIST.allowed | ALLOWLIST.suspect)
+
+
+def test_unknown_column_is_blocked():
+    verdict = _check("SELECT c.Nonexistent FROM customers c")
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.ast_column_allowlist
+
+
+def test_unknown_source_is_blocked():
+    verdict = _check("SELECT x.CustomerID FROM customers c")
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.ast_column_allowlist
+
+
+def test_excluded_column_is_blocked():
+    verdict = _check('SELECT t.CreditCardNumber FROM "transaction" t')
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.ast_column_allowlist
+
+
+def test_alias_and_real_name_both_resolve():
+    # A column may reference the table by alias or by its real name.
+    assert _check("SELECT c.First FROM customers c").passed
+    assert _check("SELECT customers.First FROM customers c").passed
+
+
+def test_derived_cte_column_is_deferred_not_blocked():
+    # SUM(PurchasePrice) reads from the CTE projection; the base reference inside
+    # the CTE is what gets checked.
+    sql = (
+        'WITH r AS (SELECT PurchasePrice FROM "transaction") '
+        "SELECT SUM(PurchasePrice) AS total FROM r"
+    )
+    assert _check(sql).passed
+
+
+# --------------------------------------------------------------------------- #
+# L3: suspect-column enforcement toggle (Server "three points" #1)
+# --------------------------------------------------------------------------- #
+
+
+def test_suspect_column_hard_blocked_in_dev():
+    verdict = _check("SELECT c.ZipCode FROM customers c", hard_block_suspect=True)
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.ast_column_allowlist
+    assert "suspect" in (verdict.reason or "")
+
+
+def test_suspect_column_allowed_in_prod():
+    verdict = _check("SELECT c.ZipCode FROM customers c", hard_block_suspect=False)
+    assert verdict.passed
+
+
+def test_suspect_bare_column_hard_blocked_in_dev():
+    verdict = _check('SELECT ZipCode FROM customers', hard_block_suspect=True)
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.ast_column_allowlist
