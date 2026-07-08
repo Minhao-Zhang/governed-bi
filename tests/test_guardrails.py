@@ -172,3 +172,35 @@ def test_suspect_bare_column_hard_blocked_in_dev():
     verdict = _check('SELECT ZipCode FROM customers', hard_block_suspect=True)
     assert not verdict.passed
     assert verdict.failed_layer is GuardrailLayer.ast_column_allowlist
+
+
+# --------------------------------------------------------------------------- #
+# L5: cross-join / cartesian-product cost guard
+# --------------------------------------------------------------------------- #
+
+
+def test_comma_join_without_predicate_is_blocked():
+    # Two base tables, no equality linking them -> unconstrained cross join.
+    verdict = _check('SELECT c.CustomerID, t.PurchasePrice FROM customers c, "transaction" t')
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.cost_estimate
+
+
+def test_explicit_join_on_passes():
+    sql = (
+        'SELECT c.CustomerID, t.PurchasePrice '
+        'FROM customers c JOIN "transaction" t ON c.CustomerID = t.CustomerID'
+    )
+    assert _check(sql).passed
+
+
+def test_comma_join_linked_in_where_passes():
+    sql = (
+        'SELECT c.CustomerID, t.PurchasePrice '
+        'FROM customers c, "transaction" t WHERE c.CustomerID = t.CustomerID'
+    )
+    assert _check(sql).passed
+
+
+def test_single_table_select_passes_cost_guard():
+    assert _check("SELECT c.CustomerID FROM customers c").passed
