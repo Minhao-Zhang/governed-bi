@@ -235,3 +235,55 @@ def test_term_semantics_blocks_out_of_scope_table():
 def test_term_semantics_skipped_when_scope_is_none():
     # Default _check passes allowed_tables=None, so L4 does not run.
     assert _check("SELECT c.First FROM customers c").passed
+
+
+# --------------------------------------------------------------------------- #
+# Regression: adversarial-review findings
+# --------------------------------------------------------------------------- #
+
+
+def test_star_projection_is_blocked():
+    # SELECT * cannot be checked against the allowlist, so it is blocked.
+    verdict = _check("SELECT * FROM customers")
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.ast_column_allowlist
+
+
+def test_qualified_star_projection_is_blocked():
+    verdict = _check("SELECT c.* FROM customers c")
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.ast_column_allowlist
+
+
+def test_count_star_is_allowed():
+    # COUNT(*) is an aggregate, not a star projection; it must not be blocked.
+    assert _check("SELECT COUNT(*) AS n FROM customers").passed
+
+
+def test_bare_excluded_column_via_inert_cte_is_blocked():
+    # A no-op CTE must not flip a query-global flag that defers the excluded
+    # (PII) column; scope-aware L3 blocks the bare reference.
+    sql = 'WITH d AS (SELECT 1 AS x) SELECT CreditCardNumber FROM "transaction"'
+    verdict = _check(sql)
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.ast_column_allowlist
+
+
+def test_bare_unknown_column_via_sibling_subquery_is_blocked():
+    sql = "SELECT Nonexistent FROM customers, (SELECT 1 AS x) sub"
+    verdict = _check(sql)
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.ast_column_allowlist
+
+
+def test_bare_projected_derived_column_is_allowed():
+    # A bare column projected from a CTE (no base table in that scope) is fine.
+    sql = 'WITH r AS (SELECT PurchasePrice FROM "transaction") SELECT PurchasePrice FROM r'
+    assert _check(sql).passed
+
+
+def test_tokenizer_error_fails_syntax_not_crash():
+    # An unterminated literal raises sqlglot TokenError; L1 must catch it.
+    verdict = _check('SELECT "unterminated')
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.syntax

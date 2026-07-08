@@ -10,8 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from governed_bi.corpus import load_corpus
+from governed_bi.corpus import Corpus, load_corpus
 from governed_bi.corpus.ids import derive_column_id
+from governed_bi.corpus.schemas import Column, LogicalType, TableAsset, TermAsset, TermBinding
 from governed_bi.retrieval import BM25Index, RetrievalResult, retrieve, tokenize
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
@@ -143,3 +144,33 @@ def test_top_k_controls_breadth(corpus):
     assert isinstance(narrow, RetrievalResult)
     assert set(narrow.scores) <= set(wide.scores)
     assert len(wide.scores) >= len(narrow.scores) >= 1
+
+
+def test_term_bound_to_column_grounds_owning_table():
+    # A term bound to a column must surface both the column and its owning table.
+    col_id = derive_column_id("tbl_shop_orders", "LifecycleStatus")
+    table = TableAsset(
+        id="tbl_shop_orders",
+        db="shop",
+        physical_name="orders",
+        columns=[
+            Column(
+                physical_name="LifecycleStatus",
+                physical_type="text",
+                logical_type=LogicalType.string,
+                nullable=True,
+                is_unique=False,
+                description="whether the customer churned",
+            )
+        ],
+    )
+    term = TermAsset(
+        id="term_churned",
+        name="churned",
+        synonyms=["churn"],
+        binding=TermBinding(asset_type="column", asset_id=col_id),
+    )
+    res = retrieve(Corpus(assets=[table, term]), "churned customers")
+    assert "term_churned" in res.term_ids
+    assert "tbl_shop_orders" in res.table_ids
+    assert col_id in res.column_ids

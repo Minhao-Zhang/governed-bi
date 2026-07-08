@@ -117,6 +117,52 @@ def test_excluded_column_absent_in_server_graph(graph):
     assert "col_beer_factory_transaction_CreditCardNumber" not in graph.nodes
 
 
+def test_no_phantom_nodes_from_excluded_reference():
+    """for_server() can leave a join/FK pointing at an excluded asset; build_graph
+    must not resurface it as a bare, kind-less node."""
+    from governed_bi.corpus import Corpus
+    from governed_bi.corpus.ids import derive_column_id
+    from governed_bi.corpus.schemas import Column, Governance, JoinAsset, LogicalType, TableAsset
+
+    b_pk = derive_column_id("tbl_x_b", "id")
+    a = TableAsset(
+        id="tbl_x_a",
+        db="x",
+        physical_name="a",
+        columns=[
+            Column(
+                physical_name="b_id",
+                physical_type="int",
+                logical_type=LogicalType.integer,
+                nullable=True,
+                is_unique=False,
+                references=b_pk,  # FK into the excluded table's column
+            )
+        ],
+    )
+    b = TableAsset(
+        id="tbl_x_b",
+        db="x",
+        physical_name="b",
+        governance=Governance(excluded=True),
+        columns=[
+            Column(
+                physical_name="id",
+                physical_type="int",
+                logical_type=LogicalType.integer,
+                nullable=False,
+                is_unique=True,
+            )
+        ],
+    )
+    join = JoinAsset(id="join_a_b", left_table="tbl_x_a", right_table="tbl_x_b", on="a.b_id = b.id")
+
+    g = build_graph(Corpus(assets=[a, b, join]).for_server())
+    assert [n for n, d in g.nodes(data=True) if "kind" not in d] == []  # no phantom nodes
+    assert "tbl_x_b" not in g.nodes  # excluded table did not resurface
+    assert b_pk not in g.nodes
+
+
 # --------------------------------------------------------------------------- #
 # Steiner join planning
 # --------------------------------------------------------------------------- #
@@ -198,6 +244,17 @@ def test_plan_disconnected_raises():
     )
     with pytest.raises(ValueError, match="not connected"):
         plan_joins(g, {"X", "Z"})
+
+
+def test_plan_joins_with_unrelated_isolated_table_does_not_crash():
+    # A disconnected table unrelated to the required set must not crash steiner_tree.
+    g = _synthetic_join_graph(
+        ["X", "Y", "Z"],
+        [("join_xy", "X", "Y", 1.0, 0.9)],
+    )
+    plan = plan_joins(g, {"X", "Y"})
+    assert plan.join_ids == ["join_xy"]
+    assert plan.min_confidence == 0.9
 
 
 def test_low_confidence_join_is_penalized():

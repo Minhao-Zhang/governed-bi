@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 
 import sqlglot
 from sqlglot import exp
-from sqlglot.errors import ParseError
+from sqlglot.errors import SqlglotError
 from sqlglot.optimizer.scope import traverse_scope
 
 from ..corpus.schemas import ReliabilityStatus, TableAsset
@@ -120,10 +120,15 @@ def _fail(layer: GuardrailLayer, reason: str) -> GuardrailVerdict:
 
 
 def _layer_syntax(sql: str, dialect: str | None) -> tuple[GuardrailVerdict, list[exp.Expression]]:
-    """L1: parse. Returns the verdict and, on success, the parsed statements."""
+    """L1: parse. Returns the verdict and, on success, the parsed statements.
+
+    Catches the whole ``SqlglotError`` family (both ``ParseError`` and the sibling
+    ``TokenError`` raised on unterminated literals / stray delimiters), so malformed
+    SQL always yields a fail-closed verdict instead of an unhandled exception.
+    """
     try:
         statements = [s for s in sqlglot.parse(sql, read=dialect) if s is not None]
-    except ParseError as err:
+    except SqlglotError as err:
         first = str(err).splitlines()[0] if str(err) else "parse error"
         return _fail(GuardrailLayer.syntax, f"does not parse as SQL: {first}"), []
     if not statements:
@@ -155,37 +160,45 @@ def _layer_policy(statements: list[exp.Expression]) -> GuardrailVerdict:
     return _pass()
 
 
-def _source_map(root: exp.Expression) -> tuple[dict[str, str | None], bool]:
-    """Map each in-scope source name to its physical base table, or ``None`` if it
-    is a derived source (CTE / subquery). Returns the map and whether any derived
-    source is present.
+_MISSING = object()  # sentinel: a source name that is not known anywhere in the query
 
-    Both the physical name and any alias key the same source, so a column may be
-    written either ``customers.col`` or ``c.col``. The view is flattened across
-    scopes; that is conservative for an allow/block decision and never lets an
-    unknown physical column through.
+
+def _global_sources(root: exp.Expression) -> dict[str, str | None]:
+    """Map every source name in the query to its physical base table, or ``None``
+    for a derived source (CTE / subquery).
+
+    Flattened across scopes and keyed by both alias and physical name, so a
+    qualified column (including a correlated reference into an outer scope) always
+    resolves. Bare columns are handled per-scope by the caller, which is what
+    makes L3 fail-closed; this map is only consulted for qualified references.
     """
     cte_names = {cte.alias for cte in root.find_all(exp.CTE) if cte.alias}
     sources: dict[str, str | None] = {}
-    has_derived = False
-
     for table in root.find_all(exp.Table):
         physical = table.name
         derived = physical in cte_names
-        has_derived = has_derived or derived
         for key in filter(None, (physical, table.alias)):
             sources[key] = None if derived else physical
-
     for cte in root.find_all(exp.CTE):
         if cte.alias:
             sources[cte.alias] = None
-            has_derived = True
     for sub in root.find_all(exp.Subquery):
         if sub.alias:
             sources[sub.alias] = None
-            has_derived = True
+    return sources
 
-    return sources, has_derived
+
+def _is_projection_star(select: exp.Select) -> bool:
+    """Whether the SELECT projects a star (``*`` or ``table.*``).
+
+    A bare ``*`` is an ``exp.Star``; ``table.*`` is an ``exp.Column`` named ``*``.
+    ``COUNT(*)`` is an ``exp.Count`` (its star is nested), so it is not flagged.
+    """
+    for projection in select.expressions:
+        node = projection.this if isinstance(projection, exp.Alias) else projection
+        if isinstance(node, exp.Star) or (isinstance(node, exp.Column) and node.name == "*"):
+            return True
+    return False
 
 
 def _layer_columns(
@@ -194,42 +207,64 @@ def _layer_columns(
     suspect: set[str],
     hard_block_suspect: bool,
 ) -> GuardrailVerdict:
-    """L3: every column resolves to an allowed physical column.
+    """L3: every referenced column resolves to an allowed physical column.
 
-    Columns from CTEs/subqueries are deferred to the SELECT that defines them
-    (whose own base-column references are checked here). A ``suspect`` column is
-    hard-blocked when ``hard_block_suspect`` (dev/BIRD) and permitted otherwise.
+    Scope-aware (via ``traverse_scope``):
+
+    - A star projection (``SELECT *`` / ``t.*``) is blocked: the allowlist cannot
+      vouch for columns it never enumerates.
+    - A qualified column resolves through the query-wide source map (so aliases and
+      correlated references work); a derived source defers to the scope that
+      defines it.
+    - A bare column is judged against the base tables of *its own scope* only, so
+      an unrelated CTE elsewhere cannot wave it through. If it matches no base
+      column and the scope has a base table, it is blocked (require qualification);
+      if the scope has only derived sources, it is deferred to them.
+    - A ``suspect`` column is hard-blocked when ``hard_block_suspect`` (dev/BIRD).
     """
     layer = GuardrailLayer.ast_column_allowlist
-    sources, has_derived = _source_map(root)
-    allowed_bare = {ref.split(".", 1)[1] for ref in allowed}
-    suspect_bare = {ref.split(".", 1)[1] for ref in suspect}
+    global_sources = _global_sources(root)
 
-    for column in root.find_all(exp.Column):
-        name = column.name
-        table_ref = column.table
-
-        if table_ref:
-            if table_ref not in sources:
-                return _fail(layer, f"column references unknown source '{table_ref}'")
-            physical = sources[table_ref]
-            if physical is None:
-                continue  # derived source; validated where it is defined
-            ref = f"{physical}.{name}"
-            if hard_block_suspect and ref in suspect:
-                return _fail(layer, f"suspect (decoy) column blocked: {ref}")
-            if ref in allowed or ref in suspect:
-                continue
-            return _fail(layer, f"column not in the allowlist: {ref}")
-
-        # Bare column: attribute by name (scope-flattened).
-        if hard_block_suspect and name in suspect_bare and name not in allowed_bare:
-            return _fail(layer, f"suspect (decoy) column blocked: {name}")
-        if name in allowed_bare or name in suspect_bare:
+    for scope in traverse_scope(root):
+        select = scope.expression
+        if not isinstance(select, exp.Select):
             continue
-        if has_derived:
-            continue  # may originate in a derived source; defer
-        return _fail(layer, f"column not in the allowlist: {name}")
+        if _is_projection_star(select):
+            return _fail(layer, "star projection is not allowed; enumerate columns")
+
+        base_physicals = {
+            src.name for src in scope.sources.values() if isinstance(src, exp.Table)
+        }
+
+        for column in scope.columns:
+            name = column.name
+            qualifier = column.table
+
+            if qualifier:
+                physical = global_sources.get(qualifier, _MISSING)
+                if physical is _MISSING:
+                    return _fail(layer, f"column references unknown source '{qualifier}'")
+                if physical is None:
+                    continue  # derived source; validated where it is defined
+                ref = f"{physical}.{name}"
+                if hard_block_suspect and ref in suspect:
+                    return _fail(layer, f"suspect (decoy) column blocked: {ref}")
+                if ref in allowed or ref in suspect:
+                    continue
+                return _fail(layer, f"column not in the allowlist: {ref}")
+
+            # Bare column: only this scope's base tables can own it.
+            candidate_allowed = any(f"{p}.{name}" in allowed for p in base_physicals)
+            candidate_suspect = any(f"{p}.{name}" in suspect for p in base_physicals)
+            if hard_block_suspect and candidate_suspect and not candidate_allowed:
+                return _fail(layer, f"suspect (decoy) column blocked: {name}")
+            if candidate_allowed or candidate_suspect:
+                continue
+            if base_physicals:
+                # A base table is in scope but owns no such allowed column: it is
+                # an unknown or excluded column (or needs qualification). Block.
+                return _fail(layer, f"column not in the allowlist: {name}")
+            # Only derived sources in scope: the column comes from one of them.
 
     return _pass()
 
@@ -374,16 +409,17 @@ def _layer_terms(root: exp.Expression, allowed_tables: set[str]) -> GuardrailVer
     this question: the tables surfaced by retrieval and their join-plan Steiner
     points (see ``server.flow``). A base table outside that set means the SQL
     wandered past the semantically grounded scope, so it is blocked fail-closed.
-    Derived sources (CTE names) are not base tables and are skipped.
+
+    Scope-aware (via ``traverse_scope``): a real base table is a ``Table`` source
+    in some scope, while a CTE is a derived ``Scope`` in the scope that references
+    it. Checking only ``Table`` sources means a nested CTE cannot borrow an
+    out-of-scope table's name to slip that table past the gate.
     """
     layer = GuardrailLayer.term_semantics
-    cte_names = {cte.alias for cte in root.find_all(exp.CTE) if cte.alias}
-    for table in root.find_all(exp.Table):
-        name = table.name
-        if name in cte_names:
-            continue
-        if name not in allowed_tables:
-            return _fail(layer, f"table outside the retrieved scope: {name}")
+    for scope in traverse_scope(root):
+        for src in scope.sources.values():
+            if isinstance(src, exp.Table) and src.name not in allowed_tables:
+                return _fail(layer, f"table outside the retrieved scope: {src.name}")
     return _pass()
 
 

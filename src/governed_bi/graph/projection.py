@@ -89,17 +89,23 @@ def build_graph(corpus: "Corpus") -> nx.MultiDiGraph:
                 expression=a.expression,
             )
 
-    # Pass 2: cross-asset edges (endpoints now all exist).
+    # Pass 2: cross-asset edges. Endpoints are guarded: for_server() can drop an
+    # excluded table/column while a surviving FK reference or join still points at
+    # it, and networkx would otherwise auto-create a bare, kind-less node,
+    # re-materializing the excluded asset in the server-facing graph. Skipping such
+    # an edge keeps the graph free of both phantom nodes and excluded assets.
+    def _edge(u: str, v: str, **attrs: object) -> None:
+        if u in g and v in g:
+            g.add_edge(u, v, **attrs)
+
     for a in corpus.assets:
         if isinstance(a, TableAsset):
             for col in a.columns:
                 if col.references:
                     col_id = derive_column_id(a.id, col.physical_name)
-                    g.add_edge(
-                        col_id, col.references, key=EDGE_REFERENCES, type=EDGE_REFERENCES
-                    )
+                    _edge(col_id, col.references, key=EDGE_REFERENCES, type=EDGE_REFERENCES)
         elif isinstance(a, JoinAsset):
-            g.add_edge(
+            _edge(
                 a.left_table,
                 a.right_table,
                 key=a.id,
@@ -112,11 +118,11 @@ def build_graph(corpus: "Corpus") -> nx.MultiDiGraph:
             )
         elif isinstance(a, TermAsset):
             if a.binding:
-                g.add_edge(a.id, a.binding.asset_id, key=EDGE_BINDS_TO, type=EDGE_BINDS_TO)
+                _edge(a.id, a.binding.asset_id, key=EDGE_BINDS_TO, type=EDGE_BINDS_TO)
             for rel in a.related_terms:
                 edge_type = rel.relation.value.upper()  # e.g. "uses" -> "USES"
-                g.add_edge(a.id, rel.id, key=edge_type, type=edge_type, relation=rel.relation.value)
+                _edge(a.id, rel.id, key=edge_type, type=edge_type, relation=rel.relation.value)
         elif isinstance(a, MetricAsset):
-            g.add_edge(a.id, a.base_table, key=EDGE_DERIVED_FROM, type=EDGE_DERIVED_FROM)
+            _edge(a.id, a.base_table, key=EDGE_DERIVED_FROM, type=EDGE_DERIVED_FROM)
 
     return g

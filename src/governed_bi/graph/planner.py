@@ -75,16 +75,18 @@ def plan_joins(graph: nx.MultiDiGraph, required_tables: set[str]) -> JoinPlan:
     if len(required) <= 1:
         return JoinPlan(join_ids=[], min_confidence=1.0)
 
-    component_of: dict[str, int] = {}
-    for i, component in enumerate(nx.connected_components(ug)):
-        for node in component:
-            component_of[node] = i
-    if len({component_of[t] for t in required}) > 1:
+    # Restrict planning to the connected component of the required tables. This
+    # both enforces "required tables must be connected" and avoids a networkx
+    # crash: steiner_tree's default (mehlhorn) indexes shortest paths for every
+    # node in the graph, so an unrelated disconnected table (another fact cluster,
+    # a non-FK lookup) would raise KeyError if left in.
+    component = nx.node_connected_component(ug, next(iter(required)))
+    if not required <= component:
         raise ValueError(
             f"required tables are not connected in the join graph: {sorted(required)}"
         )
 
-    tree = steiner_tree(ug, list(required), weight="weight")
+    tree = steiner_tree(ug.subgraph(component), list(required), weight="weight")
 
     # Recover an incremental join order: BFS from a deterministic start so each
     # emitted join attaches a new table to the already-connected set.

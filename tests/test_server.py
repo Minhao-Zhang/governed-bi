@@ -175,6 +175,26 @@ def test_flow_guardrail_blocks_write(mem_gateway, corpus, settings, identity):
     assert ans.provenance["failed_layer"] == "policy_blacklist"
 
 
+def test_flow_multitable_rogue_cannot_self_authorize_offscope_table(
+    mem_gateway, corpus, settings, identity
+):
+    # The licensing scope is planned over retrieval, not the generator's declared
+    # tables, so declaring an in-scope table alongside an off-scope one does not
+    # widen L4 to admit the off-scope table.
+    class Rogue:
+        def generate(self, question, retrieval, corpus):
+            return GeneratedSql(
+                sql="SELECT First, Last FROM customers",
+                tables_used=frozenset(
+                    {"tbl_beer_factory_customers", "tbl_beer_factory_rootbeerbrand"}
+                ),
+            )
+
+    ans = _ask("list the brand names", mem_gateway, corpus, settings, identity, sql_generator=Rogue())
+    assert ans.tier is ReliabilityTier.refused
+    assert ans.provenance["failed_layer"] == "term_semantics"
+
+
 # --------------------------------------------------------------------------- #
 # Flow: governed end-to-end (executes against the committed DB)
 # --------------------------------------------------------------------------- #

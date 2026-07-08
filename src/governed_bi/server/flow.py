@@ -187,18 +187,28 @@ def answer_question(
             provenance={**base_provenance, "refused_by": "no_coverage"},
         )
 
-    # Steiner join plan over the tables the generated SQL uses (best-effort: a
-    # lone or non-FK-connected table simply yields no plan).
     graph = build_graph(corpus)
+
+    # L4 licensing scope: retrieval's tables plus the Steiner points needed to
+    # connect THEM. Planned over retrieval, never the generator's declared tables,
+    # so a rogue/hallucinating generator cannot self-authorize an off-scope table.
     try:
-        plan = plan_joins(graph, set(generated.tables_used))
-        join_ids, min_confidence = plan.join_ids, plan.min_confidence
+        licensing_plan = plan_joins(graph, set(retrieval.table_ids))
+        licensing_join_ids = licensing_plan.join_ids
+    except ValueError:
+        licensing_join_ids = []
+    licensed = _licensed_tables(corpus, retrieval, licensing_join_ids)
+
+    # Reliability stamp: confidence of the joins the generated SQL actually needs
+    # (best-effort; a lone or non-FK-connected table simply yields no plan).
+    try:
+        stamp_plan = plan_joins(graph, set(generated.tables_used))
+        join_ids, min_confidence = stamp_plan.join_ids, stamp_plan.min_confidence
     except ValueError:
         join_ids, min_confidence = [], 1.0
 
     dialect = gateway.catalog().dialect.value
     allowlist = column_allowlist(corpus)
-    licensed = _licensed_tables(corpus, retrieval, join_ids)
 
     verdict = check(
         generated.sql,

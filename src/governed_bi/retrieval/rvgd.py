@@ -187,6 +187,15 @@ def retrieve(corpus: "Corpus", question: str, *, top_k: int = 8) -> RetrievalRes
     score_map: dict[str, float] = dict(ranked)
     top_ids = [doc_id for doc_id, _ in ranked[:top_k]]
 
+    # A term may bind to a column, but columns are inline (not top-level assets),
+    # so grounding resolves a bound column id to its owning table. This map makes
+    # that resolution deterministic and mirrors validate.py's reference check.
+    col_owner: dict[str, str] = {}
+    for a in corpus.assets:
+        if isinstance(a, TableAsset):
+            for c in a.columns:
+                col_owner[derive_column_id(a.id, c.physical_name)] = a.id
+
     # Ground/expand to a fixpoint so term -> metric -> base_table chains close.
     selected: set[str] = set(top_ids)
     frontier: list[str] = list(top_ids)
@@ -194,7 +203,9 @@ def retrieve(corpus: "Corpus", question: str, *, top_k: int = 8) -> RetrievalRes
         asset = corpus.by_id(frontier.pop())
         expansions: list[str] = []
         if isinstance(asset, TermAsset) and asset.binding is not None:
-            expansions.append(asset.binding.asset_id)
+            # A column binding grounds the owning table (surfacing the column too);
+            # a table/metric binding grounds that asset directly.
+            expansions.append(col_owner.get(asset.binding.asset_id, asset.binding.asset_id))
         elif isinstance(asset, MetricAsset):
             expansions.append(asset.base_table)
         for target in expansions:
