@@ -9,9 +9,9 @@ over time, evaluated on the self-built [BIRD-Obfuscation](https://github.com/Min
 accuracy). Enterprise abstractions (identity, human gate, RLS, scoped
 memory/cache) are seamed in but toggled off.
 
-> **Design-first.** The design is well ahead of the build: D1–D10 are settled
+> **Design-first.** The design is well ahead of the build: D1-D10 are settled
 > (see [`docs/design-decisions.md`](docs/design-decisions.md)). This repo is the
-> scaffold — the corpus layer is implemented; the harnesses are documented stubs.
+> scaffold. The corpus layer is implemented; the harnesses are documented stubs.
 
 ## The idea in three lines
 
@@ -22,13 +22,13 @@ memory/cache) are seamed in but toggled off.
   curator-authored and human-audited. Git is the single source of truth; graph /
   vector / BM25 stores are rebuildable projections.
 - **Fail-closed.** Out-of-scope / missing-coverage / tripped-guardrail returns a
-  refusal or a clarifying question — never a confident wrong number.
+  refusal or a clarifying question, never a confident wrong number.
 
 ## Documentation
 
 Start at [`docs/README.md`](docs/README.md). Key docs:
 [architecture](docs/architecture.md) ·
-[design decisions (D1–D10)](docs/design-decisions.md) ·
+[design decisions (D1-D10)](docs/design-decisions.md) ·
 [asset schemas](docs/asset-schemas.md) ·
 [curator](docs/curator.md) · [server](docs/server.md) · [viz](docs/viz.md) ·
 [glossary](docs/glossary.md).

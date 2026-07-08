@@ -52,7 +52,7 @@ One field is authored by neither the catalog nor the curator, but by a **human o
 ```yaml
 governance:
   excluded: true
-  reason: "PII / deprecated / known-bad — never surface"
+  reason: "PII / deprecated / known-bad, never surface"
   by: minhaoz
   at: "2026-07-07"
 ```
@@ -80,7 +80,7 @@ corpus/
     rules/       rule_<name>.yaml
     negatives/   neg_<db>_<n>.yaml
     skills/      *.md                        # prose gotchas / query-patterns (not typed assets)
-  _generated/    # search index, embeddings, compiled graph — derived, gitignored, rebuildable
+  _generated/    # search index, embeddings, compiled graph (derived, gitignored, rebuildable)
 ```
 
 ## ID conventions (CI regex-checked)
@@ -144,12 +144,12 @@ columns:
     is_unique: false
     sample_values: [512.00, 431.00, 1043.00]
     # Inference
-    description: "enrollment — values appear tampered"
+    description: "enrollment - values appear tampered"
     role: measure
     references: null
     reliability:
       status: suspect
-      note: "UNRELIABLE — DO NOT USE."
+      note: "UNRELIABLE - DO NOT USE."
     confidence: 0.6
     # Governance (human-authored override; not curator, not gold)
     governance: { excluded: false }    # human sets true → asset removed everywhere the server sees
@@ -288,7 +288,7 @@ id: neg_california_schools_002
 pattern: "questions about teacher salaries / compensation"
 example_questions: ["What is the average teacher salary per district?"]
 reason: "no table in this DB covers compensation"
-escalation: "not answerable from this data — contact <owner>"
+escalation: "not answerable from this data - contact <owner>"
 confidence: 0.8
 
 # ── Audit ──
@@ -310,16 +310,16 @@ kind: routing              # routing | gotchas | pattern | domain_overview
 provenance: { source: curator, model: claude-opus-4-8, status: draft, source_refs: [q1032, q1044] }
 ---
 
-# California Schools — routing & gotchas
+# California Schools: routing & gotchas
 
 ## Scope
 Answers about schools, districts, and free/reduced-price-meal eligibility.
-Hub table: `tbl_california_schools_schools` — join everything via the CDS code.
+Hub table: `tbl_california_schools_schools`. Join everything via the CDS code.
 
 ## Routing triggers
 - IF the question is about eligibility rate → use `metric_frpm_rate`; join
   `tbl_california_schools_frpm` → `tbl_california_schools_schools` via `join_frpm_schools`.
-- DO NOT use `col_california_schools_frpm_lie_12` for counts — it is flagged unreliable (see its reliability caveat).
+- DO NOT use `col_california_schools_frpm_lie_12` for counts, it is flagged unreliable (see its reliability caveat).
 
 ## Gotchas
 - `academic_year` is the *starting* calendar year (see `rule_academic_year_format`).

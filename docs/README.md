@@ -1,4 +1,4 @@
-# governed-bi — Design
+# governed-bi design
 
 Design for an agentic BI / Generative-BI system: natural-language questions →
 grounded, governed, auditable answers over enterprise relational data.
@@ -10,15 +10,15 @@ self-built [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) 
 
 ## Read in this order
 
-1. [System overview](system-overview.md) — what this is, the two harnesses, status.
-2. [Architecture](architecture.md) — the full design (spine, kernel, services, storage, flow, eval, environments).
-3. [Diagrams](diagrams.md) — Mermaid architecture, data-flow, and user sequence diagrams.
-4. [Design decisions](design-decisions.md) — D1–D10 as ADRs, with alternatives and trade-offs.
-5. [Asset schemas](asset-schemas.md) — the per-asset YAML field spec (Facts / Inference / Audit tiers).
-6. [Curator](curator.md) — the build-side proposer + adversary loop.
-7. [Server](server.md) — the serve-side LangGraph flow + guardrails.
-8. [Viz](viz.md) — the interactive audit + edit cockpit (save → PR).
-9. [Glossary](glossary.md) — canonical terms.
+1. [System overview](system-overview.md): what this is, the two harnesses, status.
+2. [Architecture](architecture.md): the full design (spine, kernel, services, storage, flow, eval, environments).
+3. [Diagrams](diagrams.md): Mermaid architecture, data-flow, and user sequence diagrams.
+4. [Design decisions](design-decisions.md): D1-D10 as ADRs, with alternatives and trade-offs.
+5. [Asset schemas](asset-schemas.md): the per-asset YAML field spec (Facts / Inference / Audit tiers).
+6. [Curator](curator.md): the build-side proposer + adversary loop.
+7. [Server](server.md): the serve-side LangGraph flow + guardrails.
+8. [Viz](viz.md): the interactive audit + edit cockpit (save → PR).
+9. [Glossary](glossary.md): canonical terms.
 
 [External design sources](references.md) that ground the design.
 

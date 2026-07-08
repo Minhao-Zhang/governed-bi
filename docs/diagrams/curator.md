@@ -43,7 +43,7 @@ stateDiagram-v2
     Proposed --> Proposed: adversary verdict = revise (proposer patches, re-proposes)
     Proposed --> [*]: adversary verdict = reject (dropped, never stored)
     Draft --> Certified: human certifies (prod only, D6)
-    Draft --> [*]: dev / BIRD — draft is the accepted terminal (no cert)
+    Draft --> [*]: dev / BIRD, draft is the accepted terminal (no cert)
     Certified --> Proposed: drift repair proposes an update
 ```
 

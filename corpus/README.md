@@ -1,6 +1,6 @@
 # corpus/
 
-The **semantic layer** — the moat. Git-tracked plain Markdown + YAML typed
+The **semantic layer** is the moat. Git-tracked plain Markdown + YAML typed
 assets, curator-authored / human-audited (D9). **Git is the single source of
 truth.** Every other store (in-memory graph, vector, BM25, Postgres) is a
 derived, rebuildable projection under `_generated/`, never authored directly.
@@ -20,7 +20,7 @@ corpus/
     rules/       rule_<name>.yaml
     negatives/   neg_<db>_<n>.yaml
     skills/      *.md                        # prose gotchas / query-patterns
-  _generated/    # search index, embeddings, compiled graph — gitignored
+  _generated/    # search index, embeddings, compiled graph (gitignored)
 ```
 
 `california_schools/` is a small **worked example** taken from the schema spec;
@@ -30,7 +30,7 @@ a full corpus.
 ## Field tiers
 
 Every asset splits into **Facts** (catalog truth, never inferred), **Inference**
-(the semantic layer the curator writes / gold fills), and **Audit** (why — never
+(the semantic layer the curator writes / gold fills), and **Audit** (why, never
 injected into the server context). Plus a human-only **Governance** override.
 
 ## Validate

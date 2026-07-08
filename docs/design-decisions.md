@@ -1,6 +1,6 @@
 # Agentic BI Design Decisions
 
-Settled decisions D1–D10 for the [Agentic BI System](system-overview.md), with
+Settled decisions D1-D10 for the [Agentic BI System](system-overview.md), with
 the alternatives considered and the trade-offs. The **ADR-grade** ones are hard
 to reverse. Treat them as ADRs.
 

@@ -5,7 +5,7 @@ vault / upstream projects); listed here so the in-text references resolve.
 
 | Source | What it grounds |
 |---|---|
-| **[BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation)** | The near-term eval dataset: 4 DB versions, ~10k verified Q&A, decoy manifest, rename map. A *separate upstream repo* that produces validated data and manifests. It explicitly scopes out "the downstream agent that exercises the traps" — that downstream agent is *this* system. |
+| **[BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation)** | The near-term eval dataset: 4 DB versions, ~10k verified Q&A, decoy manifest, rename map. A *separate upstream repo* that produces validated data and manifests. It explicitly scopes out "the downstream agent that exercises the traps": that downstream agent is *this* system. |
 | **BIRD Bench Obfuscation Methodology** | How the obfuscation dimensions (decoy / rename / FK-withheld / rewrite) are constructed. |
 | **Data Agent Memory Design Overview** (2026-07-05) | Memory policy, reusable numbers (TTLs, thresholds), the "curation beats accumulation" law, and the SQL semantic-cache design. |
 | **How Anthropic enables self-service data analytics with Claude** | Corpus rot (~95%→65%/month untended); skills as the highest-value lever (<21% → 95%+); the raw-corpus-grep null result. |

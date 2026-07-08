@@ -16,7 +16,7 @@
 - Two harnesses over one shared substrate: **curator** (builds the corpus) and **server** (answers). The semantic layer is the moat. Fail-closed.
 - Design notes:
     - [Architecture](architecture.md): full design
-    - [Design decisions](design-decisions.md): D1–D10 with alternatives and trade-offs
+    - [Design decisions](design-decisions.md): D1-D10 with alternatives and trade-offs
     - [Asset schemas](asset-schemas.md): the per-asset YAML field spec (Facts / Inference / Audit tiers)
     - [Curator](curator.md): the build-side proposer + adversary loop
     - [Server](server.md): the serve-side LangGraph flow + guardrails
@@ -26,7 +26,7 @@
 
 ## Status
 
-> **Decided (D1–D10)**
+> **Decided (D1-D10)**
 >
 > target · governed unit · eval · grading · refusal · ownership · identity ·
 > memory · corpus contract · curator gate. See [Design decisions](design-decisions.md).
