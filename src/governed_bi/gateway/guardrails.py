@@ -13,6 +13,17 @@ Ordered, fail-closed on any layer:
 These run in the server's ``wrap_tool_call`` middleware. The refuse-gate (D5)
 runs *concurrently*, not as a sixth layer.
 
+Fail-closed policy and its cost: several layers include deliberate policy blocks
+that refuse rather than risk a leak - L2 rejects anything but a single read-only
+statement; L3 blocks star projections and unqualified columns in a mixed
+base+derived scope (the allowlist cannot vouch for columns the query never
+enumerates or attribute a bare name it cannot resolve); L4/L5 block NATURAL joins
+and cross-namespace / db-qualified names. Each trades a false-refusal cost for
+zero column leakage. That cost is not meant to be paid by the user: a
+feedback-aware generator recovers via the server's repair loop (the block is fed
+back as ``RepairFeedback`` and the SQL is regenerated), and the eval's refuse-gate
+``false_refusal_rate`` is the counterweight metric that keeps the blocks honest.
+
 Build status: all five layers are enforced. L4 (term-semantics) runs only when
 the caller passes ``allowed_tables`` (the server's retrieval scope); with no
 scope it is skipped, so a corpus-only unit check still exercises L1 to L3 and L5.

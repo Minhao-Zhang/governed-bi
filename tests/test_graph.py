@@ -23,6 +23,7 @@ from governed_bi.graph import (
     NODE_TABLE,
     NODE_TERM,
     build_graph,
+    join_neighborhood,
     plan_joins,
 )
 
@@ -255,6 +256,40 @@ def test_plan_joins_with_unrelated_isolated_table_does_not_crash():
     plan = plan_joins(g, {"X", "Y"})
     assert plan.join_ids == ["join_xy"]
     assert plan.min_confidence == 0.9
+
+
+# --------------------------------------------------------------------------- #
+# FK join-neighborhood (L4 licensing decoupled from retrieval recall)
+# --------------------------------------------------------------------------- #
+
+
+def test_join_neighborhood_hops1(graph):
+    # customers joins only to transaction, so its 1-hop neighborhood is just those
+    # two (and includes the input id itself).
+    assert join_neighborhood(graph, {CUSTOMERS}, hops=1) == {CUSTOMERS, TRANSACTION}
+
+
+def test_join_neighborhood_hops2_reaches_further(graph):
+    # A second hop from transaction pulls in rootbeer.
+    assert join_neighborhood(graph, {CUSTOMERS}, hops=2) == {CUSTOMERS, TRANSACTION, ROOTBEER}
+
+
+def test_join_neighborhood_hops1_excludes_far_table(graph):
+    # rootbeerbrand is 3 hops from customers; a 1-hop neighborhood must not reach it.
+    assert BRAND not in join_neighborhood(graph, {CUSTOMERS}, hops=1)
+
+
+def test_join_neighborhood_unknown_id_is_empty(graph):
+    # An id that is not a table node contributes nothing (it is ignored).
+    assert join_neighborhood(graph, {"tbl_beer_factory_ghost"}, hops=1) == set()
+
+
+def test_join_neighborhood_ignores_unknown_keeps_valid(graph):
+    # A mix of one valid and one unknown id yields only the valid id's neighborhood.
+    assert join_neighborhood(graph, {CUSTOMERS, "tbl_beer_factory_ghost"}, hops=1) == {
+        CUSTOMERS,
+        TRANSACTION,
+    }
 
 
 def test_low_confidence_join_is_penalized():

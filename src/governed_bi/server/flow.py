@@ -27,7 +27,7 @@ import sqlglot
 from sqlglot import exp
 
 from ..gateway import check, column_allowlist
-from ..graph import build_graph, plan_joins
+from ..graph import build_graph, join_neighborhood, plan_joins
 from ..retrieval import retrieve
 from .answer import LOW_CONFIDENCE_JOIN, Answer, UncertaintySignals, assemble, refusal
 from .routing import bind_terms, route_intent
@@ -44,6 +44,12 @@ from ..corpus.schemas import JoinAsset, NegativeExampleAsset, TableAsset
 # closed. Each retry feeds the prior failure (guardrail reason / execution error)
 # back to the generator. Tune against the eval.
 MAX_REPAIR_ATTEMPTS = 3
+
+# How many FK-join hops out from the retrieved tables L4 licensing extends (see
+# _licensed_tables). 1 admits a retrieved table's direct FK neighbors; raising it
+# widens the licensed table scope further. Tunable heuristic; tune against the
+# eval's false_refusal_rate vs. any scope-widening cost.
+LICENSE_JOIN_HOPS = 1
 
 # Canned escalation blobs for the fail-closed paths (D5).
 _ESCALATION_NO_COVERAGE = (
@@ -103,13 +109,29 @@ def _physical(corpus: "Corpus", table_id: str) -> str | None:
     return asset.physical_name if isinstance(asset, TableAsset) else None
 
 
-def _licensed_tables(corpus, retrieval, join_ids) -> frozenset[str]:
+def _licensed_tables(corpus, graph, retrieval, join_ids, *, hops=LICENSE_JOIN_HOPS) -> frozenset[str]:
     """Physical names the query is licensed to touch (the L4 term-semantics set).
 
-    The retrieval scope (candidate tables, which already include a bound metric's
-    base table via grounding) plus any Steiner-point tables the join plan bridges
-    through. Deliberately excludes the generator's self-declared tables so a rogue
+    Base table ids are the union of three sources:
+      1. the retrieval scope (candidate tables, which already include a bound
+         metric's base table via grounding);
+      2. the join endpoints of ``join_ids`` (the Steiner points the plan bridges
+         through to connect the retrieved tables);
+      3. the FK ``join_neighborhood`` of the retrieved tables, ``hops`` deep.
+
+    Deliberately excludes the generator's self-declared tables so a rogue
     generator cannot authorize a table retrieval never surfaced.
+
+    Decoupling L4 from retrieval recall (source 3): the lexical retriever can miss
+    a table the correct answer needs; licensing the retrieved tables' FK neighbors
+    means such a table is not refused just because retrieval under-recalled. This
+    is safe because L3 (``column_allowlist``) still guards every column
+    independently: only non-excluded, non-suspect columns are ever allowed, so
+    reaching a FK-neighbor table exposes only its already-allowed columns and never
+    leaks excluded/suspect data. It only widens which related tables' allowed
+    columns are reachable, not what any single table exposes. A table beyond
+    ``hops`` of (or disconnected from) every retrieved table stays out of scope and
+    is still blocked at L4.
     """
     table_ids: set[str] = set(retrieval.table_ids)
     for join_id in join_ids:
@@ -117,6 +139,7 @@ def _licensed_tables(corpus, retrieval, join_ids) -> frozenset[str]:
         if isinstance(join, JoinAsset):
             table_ids.add(join.left_table)
             table_ids.add(join.right_table)
+    table_ids |= join_neighborhood(graph, set(retrieval.table_ids), hops=hops)
     return frozenset(p for tid in table_ids if (p := _physical(corpus, tid)) is not None)
 
 
@@ -189,15 +212,16 @@ def answer_question(
     dialect = gateway.catalog().dialect.value
     allowlist = column_allowlist(corpus)
 
-    # L4 licensing scope: retrieval's tables plus the Steiner points needed to
-    # connect THEM. Planned over retrieval, never the generator's declared tables,
-    # so a rogue/hallucinating generator cannot self-authorize an off-scope table.
+    # L4 licensing scope: retrieval's tables, the Steiner points needed to connect
+    # THEM, and their FK join-neighborhood (decoupling L4 from retrieval recall).
+    # Planned over retrieval, never the generator's declared tables, so a
+    # rogue/hallucinating generator cannot self-authorize an off-scope table.
     # Question-scoped, so it is computed once and reused across repair attempts.
     try:
         licensing_join_ids = plan_joins(graph, set(retrieval.table_ids)).join_ids
     except ValueError:
         licensing_join_ids = []
-    licensed = _licensed_tables(corpus, retrieval, licensing_join_ids)
+    licensed = _licensed_tables(corpus, graph, retrieval, licensing_join_ids)
 
     # Bounded self-repair loop: generate -> guardrail -> execute. A guardrail
     # rejection or an execution error is handed back to the generator (as
