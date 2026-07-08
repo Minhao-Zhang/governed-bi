@@ -31,7 +31,7 @@ from ..graph import build_graph, plan_joins
 from ..retrieval import retrieve
 from .answer import LOW_CONFIDENCE_JOIN, Answer, UncertaintySignals, assemble, refusal
 from .routing import bind_terms, route_intent
-from .sqlgen import SqlGenerator, TemplateSqlGenerator
+from .sqlgen import RepairFeedback, SqlGenerator, TemplateSqlGenerator
 
 if TYPE_CHECKING:
     from ..config import Settings
@@ -39,6 +39,11 @@ if TYPE_CHECKING:
     from ..gateway import Gateway, Identity
 
 from ..corpus.schemas import JoinAsset, NegativeExampleAsset, TableAsset
+
+# How many times SQL generation may be retried within one turn before failing
+# closed. Each retry feeds the prior failure (guardrail reason / execution error)
+# back to the generator. Tune against the eval.
+MAX_REPAIR_ATTEMPTS = 3
 
 # Canned escalation blobs for the fail-closed paths (D5).
 _ESCALATION_NO_COVERAGE = (
@@ -180,75 +185,102 @@ def answer_question(
     retrieval = retrieve(corpus, question)
 
     generator = sql_generator or TemplateSqlGenerator()
-    generated = generator.generate(question, retrieval, corpus)
-    if generated is None:
-        return refusal(
-            escalation=_ESCALATION_NO_COVERAGE,
-            provenance={**base_provenance, "refused_by": "no_coverage"},
-        )
-
     graph = build_graph(corpus)
+    dialect = gateway.catalog().dialect.value
+    allowlist = column_allowlist(corpus)
 
     # L4 licensing scope: retrieval's tables plus the Steiner points needed to
     # connect THEM. Planned over retrieval, never the generator's declared tables,
     # so a rogue/hallucinating generator cannot self-authorize an off-scope table.
+    # Question-scoped, so it is computed once and reused across repair attempts.
     try:
-        licensing_plan = plan_joins(graph, set(retrieval.table_ids))
-        licensing_join_ids = licensing_plan.join_ids
+        licensing_join_ids = plan_joins(graph, set(retrieval.table_ids)).join_ids
     except ValueError:
         licensing_join_ids = []
     licensed = _licensed_tables(corpus, retrieval, licensing_join_ids)
 
-    # Reliability stamp: confidence of the joins the generated SQL actually needs
-    # (best-effort; a lone or non-FK-connected table simply yields no plan).
-    try:
-        stamp_plan = plan_joins(graph, set(generated.tables_used))
-        join_ids, min_confidence = stamp_plan.join_ids, stamp_plan.min_confidence
-    except ValueError:
-        join_ids, min_confidence = [], 1.0
+    # Bounded self-repair loop: generate -> guardrail -> execute. A guardrail
+    # rejection or an execution error is handed back to the generator (as
+    # RepairFeedback) for another attempt rather than refusing outright; every
+    # attempt is re-guardrailed, so un-vetted SQL never executes. Stops early when
+    # the generator cannot improve (repeats a SQL), and fails closed after the cap.
+    feedback: list[RepairFeedback] = []
+    seen_sql: set[str] = set()
+    last_refusal: dict = {"refused_by": "no_coverage", "escalation": _ESCALATION_NO_COVERAGE}
+    attempts = 0
 
-    dialect = gateway.catalog().dialect.value
-    allowlist = column_allowlist(corpus)
+    while attempts < MAX_REPAIR_ATTEMPTS:
+        generated = generator.generate(question, retrieval, corpus, feedback=tuple(feedback))
+        attempts += 1
+        if generated is None:
+            break  # the generator declined; keep the most informative refusal so far
+        if generated.sql in seen_sql:
+            break  # no progress on the feedback; stop repairing
+        seen_sql.add(generated.sql)
 
-    verdict = check(
-        generated.sql,
-        allowed_columns=set(allowlist.allowed),
-        suspect_columns=allowlist.suspect,
-        allowed_tables=licensed,
-        hard_block_suspect=settings.hard_block_suspect_columns,
-        dialect=dialect,
-    )
-    if not verdict.passed:
-        return refusal(
-            escalation=_ESCALATION_GUARDRAIL,
-            provenance={
-                **base_provenance,
+        verdict = check(
+            generated.sql,
+            allowed_columns=set(allowlist.allowed),
+            suspect_columns=allowlist.suspect,
+            allowed_tables=licensed,
+            hard_block_suspect=settings.hard_block_suspect_columns,
+            dialect=dialect,
+        )
+        if not verdict.passed:
+            layer = verdict.failed_layer.value if verdict.failed_layer else None
+            feedback.append(
+                RepairFeedback(sql=generated.sql, stage="guardrail", reason=f"{layer}: {verdict.reason}")
+            )
+            last_refusal = {
                 "refused_by": "guardrail",
-                "failed_layer": verdict.failed_layer.value if verdict.failed_layer else None,
+                "escalation": _ESCALATION_GUARDRAIL,
+                "failed_layer": layer,
                 "reason": verdict.reason,
                 "sql": generated.sql,
-            },
+            }
+            continue
+
+        try:
+            result = gateway.execute(generated.sql, identity)
+        except Exception as err:  # give the generator a chance to repair, then fail closed
+            feedback.append(RepairFeedback(sql=generated.sql, stage="execution", reason=str(err)))
+            last_refusal = {
+                "refused_by": "execution",
+                "escalation": _ESCALATION_EXECUTION,
+                "error": str(err),
+                "sql": generated.sql,
+            }
+            continue
+
+        # Success. The stamp reflects the joins the executed SQL actually needs and
+        # whether it took a repair to get here (a repaired answer is lineage, not
+        # governed).
+        try:
+            stamp_plan = plan_joins(graph, set(generated.tables_used))
+            join_ids, min_confidence = stamp_plan.join_ids, stamp_plan.min_confidence
+        except ValueError:
+            join_ids, min_confidence = [], 1.0
+
+        signals = UncertaintySignals(
+            low_confidence_join=min_confidence < LOW_CONFIDENCE_JOIN,
+            suspect_in_scope=_suspect_in_scope(generated.sql, allowlist.suspect, dialect),
+            repaired=attempts > 1,
+        )
+        provenance = {
+            **base_provenance,
+            "metric_id": generated.metric_id,
+            "tables_used": sorted(generated.tables_used),
+            "join_ids": join_ids,
+            "min_join_confidence": min_confidence,
+            "row_count": result.row_count,
+            "truncated": result.truncated,
+            "attempts": attempts,
+        }
+        return assemble(
+            text=_render(result, generated), sql=generated.sql, signals=signals, provenance=provenance
         )
 
-    try:
-        result = gateway.execute(generated.sql, identity)
-    except Exception as err:  # fail-closed on any execution error
-        return refusal(
-            escalation=_ESCALATION_EXECUTION,
-            provenance={**base_provenance, "refused_by": "execution", "error": str(err), "sql": generated.sql},
-        )
-
-    signals = UncertaintySignals(
-        low_confidence_join=min_confidence < LOW_CONFIDENCE_JOIN,
-        suspect_in_scope=_suspect_in_scope(generated.sql, allowlist.suspect, dialect),
-    )
-    provenance = {
-        **base_provenance,
-        "metric_id": generated.metric_id,
-        "tables_used": sorted(generated.tables_used),
-        "join_ids": join_ids,
-        "min_join_confidence": min_confidence,
-        "row_count": result.row_count,
-        "truncated": result.truncated,
-    }
-    return assemble(text=_render(result, generated), sql=generated.sql, signals=signals, provenance=provenance)
+    # Exhausted the attempts (or the generator declined / could not improve): fail
+    # closed with the most recent failure reason.
+    escalation = last_refusal.pop("escalation")
+    return refusal(escalation=escalation, provenance={**base_provenance, **last_refusal, "attempts": attempts})

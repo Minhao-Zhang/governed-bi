@@ -151,7 +151,7 @@ def test_flow_no_coverage_refuses(mem_gateway, corpus, settings, identity):
 def test_flow_guardrail_blocks_out_of_scope_table(mem_gateway, corpus, settings, identity):
     # A rogue generator emits a table retrieval never surfaced for this question.
     class Rogue:
-        def generate(self, question, retrieval, corpus):
+        def generate(self, question, retrieval, corpus, *, feedback=()):
             return GeneratedSql(
                 sql="SELECT First FROM customers",
                 tables_used=frozenset({"tbl_beer_factory_customers"}),
@@ -167,7 +167,7 @@ def test_flow_guardrail_blocks_out_of_scope_table(mem_gateway, corpus, settings,
 
 def test_flow_guardrail_blocks_write(mem_gateway, corpus, settings, identity):
     class Rogue:
-        def generate(self, question, retrieval, corpus):
+        def generate(self, question, retrieval, corpus, *, feedback=()):
             return GeneratedSql(sql="DROP TABLE customers", tables_used=frozenset())
 
     ans = _ask("total revenue", mem_gateway, corpus, settings, identity, sql_generator=Rogue())
@@ -182,7 +182,7 @@ def test_flow_multitable_rogue_cannot_self_authorize_offscope_table(
     # tables, so declaring an in-scope table alongside an off-scope one does not
     # widen L4 to admit the off-scope table.
     class Rogue:
-        def generate(self, question, retrieval, corpus):
+        def generate(self, question, retrieval, corpus, *, feedback=()):
             return GeneratedSql(
                 sql="SELECT First, Last FROM customers",
                 tables_used=frozenset(
@@ -198,6 +198,68 @@ def test_flow_multitable_rogue_cannot_self_authorize_offscope_table(
 # --------------------------------------------------------------------------- #
 # Flow: governed end-to-end (executes against the committed DB)
 # --------------------------------------------------------------------------- #
+
+
+# --------------------------------------------------------------------------- #
+# Self-repair loop (feedback -> regenerate -> re-guardrail -> re-execute)
+# --------------------------------------------------------------------------- #
+
+
+def test_flow_repairs_after_guardrail_rejection(bird_gateway, corpus, settings, identity):
+    # First attempt references an out-of-scope table (blocked at L4); given that
+    # feedback, the generator repairs to a valid in-scope query that executes.
+    class RepairingGenerator:
+        def generate(self, question, retrieval, corpus, *, feedback=()):
+            if not feedback:
+                return GeneratedSql(
+                    sql="SELECT First FROM customers",
+                    tables_used=frozenset({"tbl_beer_factory_customers"}),
+                )
+            return GeneratedSql(
+                sql='SELECT SUM(PurchasePrice) AS total_revenue FROM "transaction"',
+                tables_used=frozenset({"tbl_beer_factory_transaction"}),
+                metric_id="metric_revenue",
+            )
+
+    ans = _ask("total revenue", bird_gateway, corpus, settings, identity, sql_generator=RepairingGenerator())
+    assert ans.tier is ReliabilityTier.lineage  # repaired -> not governed
+    assert "SUM(PurchasePrice)" in ans.sql
+    assert ans.provenance["attempts"] == 2
+    assert "repaired" in ans.provenance["uncertainty_flags"]
+
+
+def test_flow_repair_exhaustion_fails_closed(mem_gateway, corpus, settings, identity):
+    # Always produces a distinct but out-of-scope query; after MAX_REPAIR_ATTEMPTS
+    # the flow gives up and refuses (never a confident wrong answer).
+    from governed_bi.server.flow import MAX_REPAIR_ATTEMPTS
+
+    class AlwaysBadGenerator:
+        def __init__(self):
+            self.n = 0
+
+        def generate(self, question, retrieval, corpus, *, feedback=()):
+            self.n += 1
+            return GeneratedSql(
+                sql=f"SELECT First AS c{self.n} FROM customers",
+                tables_used=frozenset({"tbl_beer_factory_customers"}),
+            )
+
+    ans = _ask("total revenue", mem_gateway, corpus, settings, identity, sql_generator=AlwaysBadGenerator())
+    assert ans.tier is ReliabilityTier.refused
+    assert ans.provenance["failed_layer"] == "term_semantics"
+    assert ans.provenance["attempts"] == MAX_REPAIR_ATTEMPTS
+
+
+def test_flow_no_progress_stops_early(mem_gateway, corpus, settings, identity):
+    # A generator that ignores feedback and repeats the same bad SQL must not loop
+    # to the cap; the no-progress guard stops it at two attempts.
+    class StubbornGenerator:
+        def generate(self, question, retrieval, corpus, *, feedback=()):
+            return GeneratedSql(sql="SELECT First FROM customers", tables_used=frozenset({"tbl_beer_factory_customers"}))
+
+    ans = _ask("total revenue", mem_gateway, corpus, settings, identity, sql_generator=StubbornGenerator())
+    assert ans.tier is ReliabilityTier.refused
+    assert ans.provenance["attempts"] == 2
 
 
 def test_flow_governed_revenue(bird_gateway, corpus, settings, identity):

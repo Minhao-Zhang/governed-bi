@@ -35,6 +35,7 @@ class UncertaintySignals:
     suspect_in_scope: bool = False
     fenced_raw_fallback: bool = False
     corrective_rag: bool = False
+    repaired: bool = False  # the SQL only passed after one or more repair attempts
 
     def fired(self) -> list[str]:
         return [name for name, on in vars(self).items() if on]

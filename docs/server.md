@@ -27,6 +27,8 @@ A **deterministic LangGraph DAG with conditional routing** (design-spine #2, nev
 9. **Execute as-user**: gateway RLS, forced LIMIT/timeout, audit/replay.
 10. **Answer + reliability stamp**: best-effort tiering (governed → lineage → fenced-raw). High-stakes → sign-off / SQL-only.
 
+**Self-repair (steps 7-9 as a bounded loop).** Generation, guardrails, and execution run as a loop: a guardrail rejection or an execution error is fed back to the generator for another attempt, each attempt re-guardrailed so un-vetted SQL never runs. It stops early when the generator cannot improve (repeats a query) and fails closed after a small cap. A repaired answer is stamped `lineage`, not `governed`. This recovers malformed or out-of-scope SQL without ever emitting an unchecked query; it cannot catch *plausible-but-wrong* SQL (valid, in-allowlist, but the wrong computation), which is exactly why the reliability stamp and the refuse / SQL-only paths exist. The guardrails are a safety/governance gate, not a correctness oracle.
+
 ## Three points where curator inference drives serve behavior
 
 The Inference tier *steers*, it doesn't decorate. This is what separates the server from a generic text-to-SQL pipeline.

@@ -27,12 +27,13 @@ from __future__ import annotations
 from .answer import Answer, ReliabilityTier, UncertaintySignals, assemble, reliability_tier
 from .flow import answer_question
 from .routing import Route, bind_terms, route_intent
-from .sqlgen import GeneratedSql, SqlGenerator, TemplateSqlGenerator
+from .sqlgen import GeneratedSql, RepairFeedback, SqlGenerator, TemplateSqlGenerator
 
 __all__ = [
     "Answer",
     "GeneratedSql",
     "ReliabilityTier",
+    "RepairFeedback",
     "Route",
     "SqlGenerator",
     "TemplateSqlGenerator",
