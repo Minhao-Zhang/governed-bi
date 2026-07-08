@@ -7,16 +7,19 @@ Ordered, fail-closed on any layer:
 3. **AST column allowlist** every referenced column is a known, non-excluded,
    non-``suspect`` column (dev/BIRD hard-blocks suspect; prod soft-warns).
 4. **term-semantics** referenced assets match the bound terms.
-5. **cost / EXPLAIN** estimated cost under budget.
+5. **cost** structural cross-join / cartesian-product guard; numeric
+   EXPLAIN-based cost (Postgres / Redshift) is future per-dialect work.
 
 These run in the server's ``wrap_tool_call`` middleware. The refuse-gate (D5)
 runs *concurrently*, not as a sixth layer.
 
-Build status: L1 to L3 are enforced. L4 to L5 are not yet wired into ``check``.
+Build status: L1 to L3 and L5 are enforced. L4 (term-semantics) is not yet
+wired into ``check``; L5 runs right after L3 until L4 lands.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -24,6 +27,7 @@ from typing import TYPE_CHECKING
 import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError
+from sqlglot.optimizer.scope import traverse_scope
 
 from ..corpus.schemas import ReliabilityStatus, TableAsset
 
@@ -229,6 +233,139 @@ def _layer_columns(
     return _pass()
 
 
+def _source_key(node: exp.Expression | None) -> str | None:
+    """The in-scope name of a FROM source: its alias, else (for a base table) its
+    physical name. This matches the keys sqlglot's scope resolver uses and the
+    ``table`` qualifier carried on a column."""
+    if isinstance(node, exp.Table):
+        return node.alias or node.name
+    if isinstance(node, exp.Subquery):
+        return node.alias or None
+    return None
+
+
+def _from_primary(select: exp.Select) -> str | None:
+    """The source key of the query's leading FROM source (before any JOINs)."""
+    from_node = select.args.get("from_") or select.args.get("from")
+    return _source_key(from_node.this) if from_node is not None else None
+
+
+def _equality_conjuncts(predicate: exp.Expression):
+    """Yield the ``=`` comparisons joined by top-level ``AND`` in a predicate.
+
+    Descends only through ``AND`` and parentheses, so nothing inside an ``OR``
+    branch or a nested subquery is mistaken for a connecting predicate.
+    """
+    stack = [predicate]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, exp.And):
+            stack.append(node.this)
+            stack.append(node.expression)
+        elif isinstance(node, exp.Paren):
+            stack.append(node.this)
+        elif isinstance(node, exp.EQ):
+            yield node
+
+
+def _uf_find(parent: dict[str, str], node: str) -> str:
+    while parent[node] != node:
+        parent[node] = parent[parent[node]]
+        node = parent[node]
+    return node
+
+
+def _uf_union(parent: dict[str, str], a: str, b: str) -> None:
+    parent[_uf_find(parent, a)] = _uf_find(parent, b)
+
+
+def _layer_cartesian(root: exp.Expression) -> GuardrailVerdict:
+    """L5: structural cost guard against unconstrained cross joins.
+
+    Analysed per query scope to avoid false positives. Within a scope, the base
+    physical tables joined in the FROM/JOINs are graph nodes; an equality
+    predicate that links a column of one to a column of another - a JOIN ``ON``
+    conjunct or a top-level ``WHERE`` conjunct ``a.x = b.y`` - is an edge. If a
+    scope joins two or more base tables that are not all connected into one
+    component, the join is an (accidental) cartesian product and is blocked
+    fail-closed. A comma join whose linking predicate lives in ``WHERE`` is
+    legitimate and passes.
+
+    Derived sources (CTEs / subqueries) are each their own scope; they are never
+    required nodes here, but may bridge base tables that join only through them.
+    Predicates that cannot be reliably attributed simply add no edge, so the only
+    block is the clear case: two or more base tables with no connecting equality.
+
+    This is a deterministic structural guard; numeric EXPLAIN-based cost
+    (Postgres / Redshift) is future per-dialect work.
+    """
+    layer = GuardrailLayer.cost_estimate
+
+    for scope in traverse_scope(root):
+        select = scope.expression
+        if not isinstance(select, exp.Select):
+            continue  # e.g. a set-operation scope has no FROM of its own
+
+        base = {
+            name: src.name
+            for name, src in scope.sources.items()
+            if isinstance(src, exp.Table)
+        }
+        if len(base) < 2:
+            continue  # one base table (or none) cannot cross-join
+
+        # Union-find over every source in scope; derived sources may act as
+        # bridges even though only base tables must end up connected.
+        parent = {name: name for name in scope.sources}
+
+        # A column's ``table`` qualifier is an alias or a physical name; map both
+        # to the source key, but leave an ambiguous physical name (a self-join
+        # reuses one physical table under two aliases) unmapped so a predicate we
+        # cannot attribute simply adds no edge.
+        ref: dict[str, str] = {}
+        physical_uses = Counter(
+            src.name for src in scope.sources.values() if isinstance(src, exp.Table)
+        )
+        for name, src in scope.sources.items():
+            ref[name] = name
+            if isinstance(src, exp.Table) and src.name != name and physical_uses[src.name] == 1:
+                ref.setdefault(src.name, name)
+
+        def node_of(column: exp.Column) -> str | None:
+            return ref.get(column.table) if column.table else None
+
+        predicates: list[exp.Expression] = []
+        where = select.args.get("where")
+        if where is not None:
+            predicates.append(where.this)
+
+        left_root = _from_primary(select)
+        for join in select.args.get("joins") or []:
+            on = join.args.get("on")
+            if on is not None:
+                predicates.append(on)
+            # USING is equality sugar on the shared columns: link the joined
+            # source to the accumulated left side so it is not seen as unjoined.
+            if join.args.get("using") and left_root is not None:
+                joined = _source_key(join.this)
+                if joined in parent and left_root in parent:
+                    _uf_union(parent, joined, left_root)
+
+        for predicate in predicates:
+            for eq in _equality_conjuncts(predicate):
+                left, right = eq.this, eq.expression
+                if isinstance(left, exp.Column) and isinstance(right, exp.Column):
+                    a, b = node_of(left), node_of(right)
+                    if a is not None and b is not None and a != b:
+                        _uf_union(parent, a, b)
+
+        if len({_uf_find(parent, name) for name in base}) > 1:
+            tables = ", ".join(sorted({phys for phys in base.values()}))
+            return _fail(layer, f"unconstrained cross join between tables: {tables}")
+
+    return _pass()
+
+
 def check(
     sql: str,
     *,
@@ -242,7 +379,8 @@ def check(
     ``allowed_columns`` / ``suspect_columns`` are physical ``table.column``
     references (build them with :func:`column_allowlist`). ``hard_block_suspect``
     is the dev/prod suspect toggle. ``dialect`` is the sqlglot dialect name
-    (e.g. ``"sqlite"``) for parsing. L4 to L5 are not yet enforced.
+    (e.g. ``"sqlite"``) for parsing. L4 (term-semantics) is not yet enforced;
+    L5 (cost) runs right after L3.
     """
     verdict, statements = _layer_syntax(sql, dialect)
     if not verdict.passed:
@@ -258,5 +396,6 @@ def check(
     if not verdict.passed:
         return verdict
 
-    # L4 (term-semantics) and L5 (cost/EXPLAIN) land in later milestones.
-    return _pass()
+    # L4 (term-semantics) lands in a later milestone; L5 (cost) runs after L3
+    # until it does.
+    return _layer_cartesian(statements[0])
