@@ -204,3 +204,34 @@ def test_comma_join_linked_in_where_passes():
 
 def test_single_table_select_passes_cost_guard():
     assert _check("SELECT c.CustomerID FROM customers c").passed
+
+
+# --------------------------------------------------------------------------- #
+# L4: term-semantics (only enforced when allowed_tables is supplied)
+# --------------------------------------------------------------------------- #
+
+
+def _check_scoped(sql: str, allowed_tables):
+    return check(
+        sql,
+        allowed_columns=set(ALLOWLIST.allowed),
+        suspect_columns=ALLOWLIST.suspect,
+        allowed_tables=frozenset(allowed_tables),
+        hard_block_suspect=True,
+        dialect="sqlite",
+    )
+
+
+def test_term_semantics_allows_in_scope_table():
+    assert _check_scoped("SELECT c.First FROM customers c", {"customers"}).passed
+
+
+def test_term_semantics_blocks_out_of_scope_table():
+    verdict = _check_scoped("SELECT c.First FROM customers c", {"transaction"})
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.term_semantics
+
+
+def test_term_semantics_skipped_when_scope_is_none():
+    # Default _check passes allowed_tables=None, so L4 does not run.
+    assert _check("SELECT c.First FROM customers c").passed

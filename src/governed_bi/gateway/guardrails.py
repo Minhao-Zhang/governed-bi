@@ -13,8 +13,9 @@ Ordered, fail-closed on any layer:
 These run in the server's ``wrap_tool_call`` middleware. The refuse-gate (D5)
 runs *concurrently*, not as a sixth layer.
 
-Build status: L1 to L3 and L5 are enforced. L4 (term-semantics) is not yet
-wired into ``check``; L5 runs right after L3 until L4 lands.
+Build status: all five layers are enforced. L4 (term-semantics) runs only when
+the caller passes ``allowed_tables`` (the server's retrieval scope); with no
+scope it is skipped, so a corpus-only unit check still exercises L1 to L3 and L5.
 """
 
 from __future__ import annotations
@@ -366,21 +367,43 @@ def _layer_cartesian(root: exp.Expression) -> GuardrailVerdict:
     return _pass()
 
 
+def _layer_terms(root: exp.Expression, allowed_tables: set[str]) -> GuardrailVerdict:
+    """L4: every base table the query touches is within the retrieved scope.
+
+    ``allowed_tables`` is the set of physical table names the server licensed for
+    this question: the tables surfaced by retrieval and their join-plan Steiner
+    points (see ``server.flow``). A base table outside that set means the SQL
+    wandered past the semantically grounded scope, so it is blocked fail-closed.
+    Derived sources (CTE names) are not base tables and are skipped.
+    """
+    layer = GuardrailLayer.term_semantics
+    cte_names = {cte.alias for cte in root.find_all(exp.CTE) if cte.alias}
+    for table in root.find_all(exp.Table):
+        name = table.name
+        if name in cte_names:
+            continue
+        if name not in allowed_tables:
+            return _fail(layer, f"table outside the retrieved scope: {name}")
+    return _pass()
+
+
 def check(
     sql: str,
     *,
     allowed_columns: set[str],
     hard_block_suspect: bool,
     suspect_columns: frozenset[str] = frozenset(),
+    allowed_tables: frozenset[str] | None = None,
     dialect: str | None = None,
 ) -> GuardrailVerdict:
     """Run the layers in order; return on the first failure (fail-closed).
 
     ``allowed_columns`` / ``suspect_columns`` are physical ``table.column``
     references (build them with :func:`column_allowlist`). ``hard_block_suspect``
-    is the dev/prod suspect toggle. ``dialect`` is the sqlglot dialect name
-    (e.g. ``"sqlite"``) for parsing. L4 (term-semantics) is not yet enforced;
-    L5 (cost) runs right after L3.
+    is the dev/prod suspect toggle. ``allowed_tables`` (physical table names)
+    drives L4 (term-semantics); when ``None``, L4 is skipped (e.g. a
+    corpus-only unit check with no retrieval scope). ``dialect`` is the sqlglot
+    dialect name (e.g. ``"sqlite"``) for parsing.
     """
     verdict, statements = _layer_syntax(sql, dialect)
     if not verdict.passed:
@@ -396,6 +419,9 @@ def check(
     if not verdict.passed:
         return verdict
 
-    # L4 (term-semantics) lands in a later milestone; L5 (cost) runs after L3
-    # until it does.
+    if allowed_tables is not None:
+        verdict = _layer_terms(statements[0], set(allowed_tables))
+        if not verdict.passed:
+            return verdict
+
     return _layer_cartesian(statements[0])
