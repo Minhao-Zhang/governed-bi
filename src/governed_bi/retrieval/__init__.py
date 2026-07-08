@@ -11,4 +11,28 @@ fallback:
 Retrieves the **Facts + Inference tiers only** (loader contract); Audit and
 ``governance.excluded`` assets are never retrieved. The vector / BM25 indexes
 are rebuildable projections under ``corpus/_generated/``.
+
+This slice ships the deterministic lexical (BM25) channel plus the Ground
+expansion; see ``rvgd.py``. Semantic (V), graph (G), and Corrective-RAG
+reranking are later slices.
 """
+
+from __future__ import annotations
+
+from .rvgd import (
+    BM25Index,
+    RetrievalResult,
+    asset_document,
+    build_index,
+    retrieve,
+    tokenize,
+)
+
+__all__ = [
+    "BM25Index",
+    "RetrievalResult",
+    "asset_document",
+    "build_index",
+    "retrieve",
+    "tokenize",
+]
