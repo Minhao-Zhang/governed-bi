@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from .connectors import ColumnInfo, Connector, Dialect, QueryResult, SqliteConnector, TableInfo
 from .gateway import AuditEntry, Gateway, Identity
+from .guardrails import GuardrailLayer, GuardrailVerdict, check
 
 __all__ = [
     "AuditEntry",
@@ -19,8 +20,11 @@ __all__ = [
     "Connector",
     "Dialect",
     "Gateway",
+    "GuardrailLayer",
+    "GuardrailVerdict",
     "Identity",
     "QueryResult",
     "SqliteConnector",
     "TableInfo",
+    "check",
 ]
