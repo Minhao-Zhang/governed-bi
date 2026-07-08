@@ -31,6 +31,24 @@
 > target · governed unit · eval · grading · refusal · ownership · identity ·
 > memory · corpus contract · curator gate. See [Design decisions](design-decisions.md).
 
+> **Built (code)**
+>
+> corpus (schemas / loader / validate / serialize) · graph projection + Steiner
+> join planner (in-memory networkx) · gateway + five-layer guardrails · RVGD
+> retrieval (BM25 + ground expansion) · the deterministic serve flow (refuse-gate,
+> template SQL-gen, bounded self-repair, reliability stamp) · working memory ·
+> the eval scaffold (EX scorer, arm harness, refuse-gate) · the read-only viz
+> cockpit. This slice runs end-to-end with no model and no network.
+
+> **Pending (code)**
+>
+> the LLM SQL generator · the LLM curator Inference tier (descriptions / joins /
+> reliability caveats / metrics / terms / rules / skills, plus the per-asset
+> adversary) · embeddings retrieval (the vector channel; BM25 is the built one) ·
+> the obfuscated BIRD eval data (a small vendored beer_factory set stands in until
+> the jsonl lands). These are the model-backed seams; the arms cannot yet show the
+> moat without them.
+
 > **Open (design-level)**
 >
 > - Reliability-inference signals: the exact evidence the curator uses (deepens Curator Phase 2)

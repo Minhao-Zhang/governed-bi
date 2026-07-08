@@ -10,6 +10,18 @@ maintainer**: cold-start plus ongoing drift-repair. Untended corpora rot
 
 > Implementation: [`src/governed_bi/curator/`](../src/governed_bi/curator/).
 
+> **Build status (scaffold vs seam).** A deterministic **scaffold** is built and
+> runs with no model and no network: programmatic Facts profiling (`profile`), a
+> `HeuristicProposer` that fills column roles / confidence / provenance from Facts
+> and leaves prose `description`s to the LLM, an adversary `review` that wraps the
+> CI validator with cheap self-consistency checks, and a `curate`
+> propose -> review -> promote loop (`proposed -> draft`). The **LLM-authored
+> Inference tier** (descriptions, joins, reliability caveats, terms / metrics /
+> rules, and skills) and the **per-asset adversary `refute`** are the seams a live
+> harness plugs into; they are what make the curator arm (Arm 2) beat the no-layer
+> arm (Arm 1), and are still pending. The sections below describe the full design;
+> a step marked *(seam)* is model-backed and not yet built.
+
 ## Inputs / outputs
 
 - **Inputs (per DB):** the live DB (catalog + data); that DB's seed queries (`train_final.jsonl`: question + gold SQL + BIRD `evidence`). **Train only, never test (the leakage wall).**
@@ -35,17 +47,17 @@ Both the proposer's claim/evidence **and** the adversary's verdict/reasons land 
 
 ## The loop (per DB)
 
-1. **Profile (Facts, programmatic).** Read catalog + sample data → emit the Facts tier for every table/column. Deterministic; no LLM; correct in every arm.
-2. **Propose (Inference + skills).** Proposer hypothesizes descriptions, joins (value-overlap + seed-SQL join patterns), reliability caveats (execute-and-observe against the traps), terms/synonyms, metrics/rules (from `evidence` + recurring computations), and authors **routing/gotcha/pattern skills**. Free exploration is confined to this pocket.
-3. **Adversary pass.** Each proposed Inference/skill asset is challenged → accept / revise / reject. Survivors → `draft`.
-4. **Self-eval & repair (inner loop, capped).** Assemble the draft layer → run the server pipeline on the DB's **train** questions → measure EX → diagnose failures → proposer patches (a failed question often *becomes* the gotcha skill that fixes it) → adversary re-checks the patch → repeat until train-EX plateaus or the iteration/budget cap hits. **Train-only.**
-5. **Propose corpus.** CI reference-integrity green ∧ train-EX plateaued → emit (dev auto-accepts; prod opens a PR to the owner, D6).
+1. **Profile (Facts, programmatic).** *(built)* Read catalog + sample data → emit the Facts tier for every table/column. Deterministic; no LLM; correct in every arm.
+2. **Propose (Inference + skills).** *(seam; deterministic stub built)* Proposer hypothesizes descriptions, joins (value-overlap + seed-SQL join patterns), reliability caveats (execute-and-observe against the traps), terms/synonyms, metrics/rules (from `evidence` + recurring computations), and authors **routing/gotcha/pattern skills**. Free exploration is confined to this pocket. The built `HeuristicProposer` fills only roles/confidence/provenance from Facts; the prose and the derived assets are the LLM proposer's job.
+3. **Adversary pass.** *(structural `review` built; per-asset `refute` seam)* Each proposed Inference/skill asset is challenged → accept / revise / reject. Survivors → `draft`. The built `review` is the deterministic structural gate (CI validator + self-consistency); the per-claim refutation with probe queries is the LLM seam.
+4. **Self-eval & repair (inner loop, capped).** *(seam)* Assemble the draft layer → run the server pipeline on the DB's **train** questions → measure EX → diagnose failures → proposer patches (a failed question often *becomes* the gotcha skill that fixes it) → adversary re-checks the patch → repeat until train-EX plateaus or the iteration/budget cap hits. **Train-only.**
+5. **Propose corpus.** *(emit downstream)* CI reference-integrity green ∧ train-EX plateaued → emit (dev auto-accepts; prod opens a PR to the owner, D6).
 
-**Done-enough criterion:** `CI green ∧ (train-EX plateaued ∨ cap)`.
+**Done-enough criterion:** `CI green ∧ (train-EX plateaued ∨ cap)`. The built `curate` loop enforces the machine-checkable half (`CI green`, capped rounds); the train-EX half arrives with the self-eval seam (step 4).
 
 ## Reliability inference (Phase 2 detail)
 
-The curator flags an unreliable column via **general data-quality anomalies, not BIRD-trap-specific detectors** (P2, so it transfers to an enterprise deployment; BIRD's traps merely validate that the signals fire). Each signal contributes to a confidence score. A column is marked `suspect` only above a threshold, and the adversary independently tries to refute each caveat before it commits.
+*(Seam: design for the LLM proposer; the deterministic scaffold does not yet flag `suspect`.)* The curator flags an unreliable column via **general data-quality anomalies, not BIRD-trap-specific detectors** (P2, so it transfers to an enterprise deployment; BIRD's traps merely validate that the signals fire). Each signal contributes to a confidence score. A column is marked `suspect` only above a threshold, and the adversary independently tries to refute each caveat before it commits.
 
 | Signal | Generic form | Catches (BIRD trap) |
 |---|---|---|

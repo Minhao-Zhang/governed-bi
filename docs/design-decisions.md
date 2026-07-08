@@ -75,6 +75,7 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 
 - **Alternative:** fail-closed the moment coverage runs out (safe but misses the long tail, and makes the agent guess whether it's out of scope).
 - **Consequence:** refusal is driven by a curated signal, not a coverage heuristic. Two caveats: the stamp needs teeth, because a footer alone is weak against silent wrong answers; and BIRD won't test the refuse-gate, which needs a held-out unanswerable set.
+- **Built:** the four-tier stamp (`governed` / `lineage` / `fenced_raw` / `refused`) and the fail-closed refuse-gate are implemented; a **bounded self-repair loop** feeds a guardrail rejection or execution error back to the generator for another attempt before refusing, and a repaired answer is stamped `lineage`, never `governed`. The tier thresholds and the uncertainty-signal set are **uncalibrated heuristics**, to be tuned on the eval. `governed` means safe + in-scope + no uncertainty flag fired, **not** "verified correct": the guardrails are a safety/governance gate, not a correctness oracle, so plausible-but-wrong SQL is caught by the stamp + fail-closed, not by a proof of correctness.
 
 ## D6: Ownership & Human Gate
 
@@ -84,6 +85,8 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 > **Env-toggle:** test (BIRD) auto-accepts; prod (enterprise) requires PR + owner +
 > CI behind every corpus change. Certification (blessing a *definition*) stays
 > distinct from high-stakes answer sign-off (blessing an *answer*).
+
+- **Built (scope):** this repo ships a **read-only** audit cockpit; interactive corpus editing and save-to-PR are **out of scope here** (generic git/PR + CI in dev, the enterprise app in prod). The repo owns the write *primitives* a downstream editor reuses: the asset schema, `corpus.serialize.write_corpus`, and `corpus.validate` + CLI (the CI gate). See [Viz](viz.md).
 
 ## D7: Identity
 
@@ -108,6 +111,7 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 
 - **Reason:** more memory often hurts (EnterpriseMem-Bench: episodic swung +14pp to −16pp; retrieval biases the model). Working memory is the one universal win.
 - **Consequence:** the memory/corpus distinction collapses. Correction memory ≈ correction-harvesting→PR-to-reference-doc; promoted episodic ≈ gated few-shots. One PR-gated corpus, not two governance models. See the *Data Agent Memory Design Overview*.
+- **Built:** working memory is implemented as an in-process, session-scoped store (`InMemoryWorkingMemory`), the store the `before_model` middleware reads to inject prior context. Episodic and correction memory are **off-by-default protocol seams** (`EpisodicMemory` / `CorrectionMemory`), not implemented, consistent with "adopt per-domain only when eval earns it".
 
 ## Two-harness Split (ADR-grade, cross-cutting)
 
@@ -143,7 +147,7 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 - **Asset types (YAML):** `table`, `column`, `join`, `few_shot`, `term`, `metric`, `rule`/`context`, `negative_example`; **markdown** for skills / gotchas / query-patterns. CI enforces reference integrity (`term→metric→column→table` all resolve) and regex IDs (`tbl_<domain>_<name>`, …). That check doubles as the curator's machine-checkable "done-enough" signal.
 - **Column reliability is prose, not a flag.** No `decoy: true`. The curator writes a free-text **reliability caveat** ("UNRELIABLE: DO NOT USE" plus a reason) inferred from data evidence. *Same mechanism in BIRD and enterprise deployments.* In BIRD the decoy manifest lets us *grade* it (decoy-recall / decoy-touch); in the enterprise setting nobody knows ground truth, but the same inference runs. Transferability is the deciding reason.
 - **BIRD scope is not only structure.** BIRD ships an `evidence` field (external-knowledge hints ≈ lightweight rules / derived metrics), so the curator also generates `metric`/`rule`/`term`/`context` for BIRD, seeded by evidence. These are scored end-to-end by EX (Arm 1 vs Arm 2), with **no per-asset gold** for those (gold stays limited to names, FK, and decoy-exclusions per D4). **Synonyms (`term`/`term_relationship`) are in-scope for BIRD too**: the obfuscation's *rewrite* dimension means one concept gets asked multiple ways, so synonym mappings aid paraphrase-robust retrieval. They're consumed via the dictionary engine or in-memory, still no Neo4j.
-- **Graph is a projection, deferred.** `join` (+ `term_relationship`, + metric/column lineage) project into a property graph. BIRD uses an **in-memory graph** (e.g. networkx) for Steiner-tree planning; **Neo4j is an optional derived projection** for enterprise scale (and a stated learning goal), rebuilt from YAML by a loader.
+- **Graph is a projection (in-memory built; Neo4j deferred).** `join` (+ `term_relationship`, + metric/column lineage) project into a property graph. BIRD uses an **in-memory graph** (networkx) for Steiner-tree planning; **that projection and the Steiner join planner are built** (the planner cost model is a tunable heuristic). **Neo4j is an optional derived projection** for enterprise scale (and a stated learning goal), rebuilt from YAML by a loader, and stays deferred.
 - **Alternatives:** custom DB-backed schema (loses git diff/PR/audit; authoring-in-DB breaks the source-of-truth invariant); typed decoy flag (not transferable to an enterprise deployment).
 - Concretizes the **Markdown-first Storage** ADR; detail in [Architecture](architecture.md) §5, per-asset field spec in [Asset schemas](asset-schemas.md).
 
@@ -160,3 +164,4 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 
 - **Alternative:** a single-agent curator (cheaper, but self-review is weak: a model rarely refutes its own plausible inference, and that's where owner-less layers silently rot).
 - **Consequence:** dev = adversary is the only reviewer (auto-accept on pass); prod = automated first-line reviewer before human certification (D6). Proposer claim + adversary verdict both land in the asset `audit` block → the viz/audit surface.
+- **Built:** a deterministic scaffold only - programmatic Facts profiling, a `HeuristicProposer` that fills column roles / confidence / provenance from Facts (leaving prose descriptions to the LLM), an adversary `review` that wraps the CI validator with self-consistency checks, and a `curate` promote loop (`proposed -> draft`). The **LLM proposer** (descriptions, joins, reliability caveats, terms / metrics / rules, skills) and the **per-asset adversary `refute`** are the seams; they are what make Arm 2 beat Arm 1, and are still pending. See [Curator](curator.md).
