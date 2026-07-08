@@ -1,13 +1,19 @@
 """Server step 10: answer assembly + reliability stamp (D5).
 
-Best-effort tiering with a **reliability stamp** that has teeth (not just a
-footer). Uncertainty aggregates into the stamp: a low-confidence join used, a
-fenced-raw fallback, Corrective-RAG triggered, or a suspect column in scope all
-lower the tier, which drives differential handling. High-stakes (leadership /
-PII) escalates to human sign-off or SQL-only.
+The stamp is a **governance + uncertainty stamp, not a correctness guarantee**.
+``governed`` means only "safe + in-scope + no uncertainty flag fired" (the SQL
+cleared the five guardrail layers and nothing in ``UncertaintySignals`` tripped);
+it does NOT mean the answer was verified correct against ground truth. Uncertainty
+aggregates into the stamp: a low-confidence join used, a fenced-raw fallback,
+Corrective-RAG triggered, a suspect column in scope, or a repaired query all lower
+the tier, which drives differential handling. High-stakes (leadership / PII)
+escalates to human sign-off or SQL-only.
 
-The tier logic here is deterministic and testable; the flow (``server.flow``)
-feeds it the signals it accumulated while running the DAG.
+The thresholds and the signal set are **uncalibrated heuristics** - a first cut to
+be tuned against the eval (which tier boundary catches the wrong answers without
+over-refusing), not calibrated probabilities. The tier logic here is deterministic
+and testable; the flow (``server.flow``) feeds it the signals it accumulated while
+running the DAG.
 """
 
 from __future__ import annotations
@@ -15,15 +21,24 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
-# A join at or below this confidence lowers the stamp (tune on the eval). Kept
+# A join at or below this confidence lowers the stamp. Uncalibrated/tunable
+# threshold (a guessed cut, tune on the eval), not a calibrated probability. Kept
 # here so the planner's raw confidence and the stamp threshold stay separate.
 LOW_CONFIDENCE_JOIN = 0.7
 
 
 class ReliabilityTier(str, Enum):
-    governed = "governed"  # high stamp
-    lineage = "lineage"  # medium stamp
-    fenced_raw = "fenced_raw"  # low stamp
+    """A governance + uncertainty stamp, NOT a correctness guarantee.
+
+    The tier reports how the answer was produced (safe + in-scope, and which
+    uncertainty flags fired), not whether the number is right. ``governed`` is the
+    clean-run stamp, not a verified-correct claim; the boundaries are uncalibrated
+    heuristics tuned on the eval.
+    """
+
+    governed = "governed"  # high stamp: safe + in-scope + no uncertainty flag fired
+    lineage = "lineage"  # medium stamp: an uncertainty flag fired
+    fenced_raw = "fenced_raw"  # low stamp: fenced-raw fallback
     refused = "refused"  # fail-closed
 
 
@@ -54,8 +69,10 @@ class Answer:
 
 
 def reliability_tier(signals: UncertaintySignals) -> ReliabilityTier:
-    """Map accumulated uncertainty to a tier. A clean run is ``governed``; any
-    fired flag drops to ``lineage``; a fenced-raw fallback drops to ``fenced_raw``.
+    """Map accumulated uncertainty to a tier. A clean run is ``governed`` (safe +
+    in-scope + no flag fired, NOT verified correct); any fired flag drops to
+    ``lineage``; a fenced-raw fallback drops to ``fenced_raw``. The mapping is an
+    uncalibrated heuristic to be tuned against the eval.
     """
     if signals.fenced_raw_fallback:
         return ReliabilityTier.fenced_raw

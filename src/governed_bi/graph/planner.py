@@ -9,6 +9,14 @@ The plan is an approximate minimum Steiner tree over the undirected projection o
 the ``JOINS_TO`` edges. Intermediate tables the query did not ask for may appear
 as Steiner points (e.g. connecting ``customers`` and ``rootbeer`` pulls in
 ``transaction``).
+
+Cost model + its role: the planning weight is a **tunable heuristic**,
+``cost * (1 + LOW_CONFIDENCE_PENALTY * (1 - confidence))`` (tune the penalty and
+per-join ``cost`` on the eval). The plan currently feeds two consumers: L4
+licensing (its Steiner points widen the term-semantics scope, alongside the FK
+``join_neighborhood`` below) and the reliability stamp (``min_confidence``). A
+plan-consuming SQL generator that emits the joined query is the LLM seam; today
+the deterministic template generator handles the single-metric path.
 """
 
 from __future__ import annotations
@@ -55,6 +63,37 @@ def _join_graph(graph: nx.MultiDiGraph) -> nx.Graph:
             continue
         ug.add_edge(u, v, weight=weight, join_id=data["join_id"], confidence=confidence)
     return ug
+
+
+def join_neighborhood(
+    graph: nx.MultiDiGraph, table_ids: set[str], *, hops: int = 1
+) -> set[str]:
+    """The FK join-neighborhood of ``table_ids``: every table reachable within
+    ``hops`` undirected ``JOINS_TO`` edges, INCLUDING the valid input ids.
+
+    Builds an undirected adjacency over the ``JOINS_TO`` edges among ``NODE_TABLE``
+    nodes and BFS from each input id up to ``hops`` hops. Input ids that are not
+    table nodes in the graph are ignored (they contribute nothing). Deterministic.
+
+    Used by the server to decouple L4 licensing from retrieval recall: a table the
+    lexical retriever missed but the answer legitimately needs (a near FK neighbor
+    of a retrieved table) is still licensed. This is safe because L3 guards every
+    column independently; see ``server.flow._licensed_tables``.
+    """
+    ug = _join_graph(graph)
+    reached = {t for t in table_ids if t in ug}
+    frontier = set(reached)
+    for _ in range(max(hops, 0)):
+        nxt: set[str] = set()
+        for node in frontier:
+            for neighbor in ug.neighbors(node):
+                if neighbor not in reached:
+                    nxt.add(neighbor)
+        reached |= nxt
+        frontier = nxt
+        if not frontier:
+            break
+    return reached
 
 
 def plan_joins(graph: nx.MultiDiGraph, required_tables: set[str]) -> JoinPlan:

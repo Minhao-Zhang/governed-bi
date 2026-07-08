@@ -150,15 +150,18 @@ def test_flow_no_coverage_refuses(mem_gateway, corpus, settings, identity):
 
 def test_flow_guardrail_blocks_out_of_scope_table(mem_gateway, corpus, settings, identity):
     # A rogue generator emits a table retrieval never surfaced for this question.
+    # "total revenue" retrieves only {transaction}; rootbeerreview is 3 FK hops away
+    # so it is outside the licensed scope (retrieval + 1-hop neighborhood) and L4
+    # blocks it.
     class Rogue:
         def generate(self, question, retrieval, corpus, *, feedback=()):
             return GeneratedSql(
-                sql="SELECT First FROM customers",
-                tables_used=frozenset({"tbl_beer_factory_customers"}),
+                sql="SELECT StarRating FROM rootbeerreview",
+                tables_used=frozenset({"tbl_beer_factory_rootbeerreview"}),
             )
 
     ans = _ask(
-        "What is the average star rating?", mem_gateway, corpus, settings, identity, sql_generator=Rogue()
+        "total revenue", mem_gateway, corpus, settings, identity, sql_generator=Rogue()
     )
     assert ans.tier is ReliabilityTier.refused
     assert ans.provenance["refused_by"] == "guardrail"
@@ -178,21 +181,47 @@ def test_flow_guardrail_blocks_write(mem_gateway, corpus, settings, identity):
 def test_flow_multitable_rogue_cannot_self_authorize_offscope_table(
     mem_gateway, corpus, settings, identity
 ):
-    # The licensing scope is planned over retrieval, not the generator's declared
-    # tables, so declaring an in-scope table alongside an off-scope one does not
-    # widen L4 to admit the off-scope table.
+    # The licensing scope is planned over retrieval (+ its FK join-neighborhood),
+    # not the generator's declared tables, so declaring an in-scope table alongside
+    # an off-scope one does not widen L4 to admit the off-scope table.
+    #
+    # "total revenue" retrieves only {transaction}; its 1-hop neighborhood is
+    # {transaction, customers, rootbeer}. rootbeerreview is 3 FK hops away, so it is
+    # genuinely out of scope even after the neighborhood widening and must still be
+    # blocked at L4 - the SECURITY property the neighborhood change must preserve.
     class Rogue:
         def generate(self, question, retrieval, corpus, *, feedback=()):
             return GeneratedSql(
-                sql="SELECT First, Last FROM customers",
+                sql="SELECT StarRating FROM rootbeerreview",
                 tables_used=frozenset(
-                    {"tbl_beer_factory_customers", "tbl_beer_factory_rootbeerbrand"}
+                    {"tbl_beer_factory_transaction", "tbl_beer_factory_rootbeerreview"}
                 ),
             )
 
-    ans = _ask("list the brand names", mem_gateway, corpus, settings, identity, sql_generator=Rogue())
+    ans = _ask("total revenue", mem_gateway, corpus, settings, identity, sql_generator=Rogue())
     assert ans.tier is ReliabilityTier.refused
     assert ans.provenance["failed_layer"] == "term_semantics"
+
+
+def test_flow_licenses_fk_neighbor_not_retrieved(corpus):
+    # Decoupling L4 from retrieval recall: "total revenue" retrieves only the
+    # transaction table, but its 1-hop FK neighbors (customers, rootbeer) are
+    # licensed too, so an answer that legitimately needs one is not refused just
+    # because the lexical retriever under-recalled.
+    from governed_bi.graph import build_graph, plan_joins
+    from governed_bi.server.flow import _licensed_tables
+
+    graph = build_graph(corpus)
+    retrieval = retrieve(corpus, "total revenue")
+    assert set(retrieval.table_ids) == {"tbl_beer_factory_transaction"}  # retrieval missed the rest
+
+    join_ids = plan_joins(graph, set(retrieval.table_ids)).join_ids
+    licensed = _licensed_tables(corpus, graph, retrieval, join_ids)
+
+    assert "transaction" in licensed  # the retrieved table
+    assert "customers" in licensed  # 1-hop FK neighbor retrieval never surfaced
+    assert "rootbeer" in licensed  # 1-hop FK neighbor retrieval never surfaced
+    assert "rootbeerreview" not in licensed  # 3 hops out: still not licensed
 
 
 # --------------------------------------------------------------------------- #
@@ -211,9 +240,11 @@ def test_flow_repairs_after_guardrail_rejection(bird_gateway, corpus, settings, 
     class RepairingGenerator:
         def generate(self, question, retrieval, corpus, *, feedback=()):
             if not feedback:
+                # rootbeerreview is 3 FK hops from the retrieved transaction table,
+                # so it is out of scope and blocked at L4.
                 return GeneratedSql(
-                    sql="SELECT First FROM customers",
-                    tables_used=frozenset({"tbl_beer_factory_customers"}),
+                    sql="SELECT StarRating FROM rootbeerreview",
+                    tables_used=frozenset({"tbl_beer_factory_rootbeerreview"}),
                 )
             return GeneratedSql(
                 sql='SELECT SUM(PurchasePrice) AS total_revenue FROM "transaction"',
@@ -239,9 +270,11 @@ def test_flow_repair_exhaustion_fails_closed(mem_gateway, corpus, settings, iden
 
         def generate(self, question, retrieval, corpus, *, feedback=()):
             self.n += 1
+            # Distinct each attempt (avoids the no-progress guard) but always the
+            # off-scope rootbeerreview table, so every attempt is blocked at L4.
             return GeneratedSql(
-                sql=f"SELECT First AS c{self.n} FROM customers",
-                tables_used=frozenset({"tbl_beer_factory_customers"}),
+                sql=f"SELECT StarRating AS c{self.n} FROM rootbeerreview",
+                tables_used=frozenset({"tbl_beer_factory_rootbeerreview"}),
             )
 
     ans = _ask("total revenue", mem_gateway, corpus, settings, identity, sql_generator=AlwaysBadGenerator())
@@ -252,10 +285,15 @@ def test_flow_repair_exhaustion_fails_closed(mem_gateway, corpus, settings, iden
 
 def test_flow_no_progress_stops_early(mem_gateway, corpus, settings, identity):
     # A generator that ignores feedback and repeats the same bad SQL must not loop
-    # to the cap; the no-progress guard stops it at two attempts.
+    # to the cap; the no-progress guard stops it at two attempts. rootbeerreview is
+    # off-scope for "total revenue" (3 FK hops from transaction), so it is blocked
+    # at L4 on the first attempt and the repeat trips the no-progress guard.
     class StubbornGenerator:
         def generate(self, question, retrieval, corpus, *, feedback=()):
-            return GeneratedSql(sql="SELECT First FROM customers", tables_used=frozenset({"tbl_beer_factory_customers"}))
+            return GeneratedSql(
+                sql="SELECT StarRating FROM rootbeerreview",
+                tables_used=frozenset({"tbl_beer_factory_rootbeerreview"}),
+            )
 
     ans = _ask("total revenue", mem_gateway, corpus, settings, identity, sql_generator=StubbornGenerator())
     assert ans.tier is ReliabilityTier.refused
