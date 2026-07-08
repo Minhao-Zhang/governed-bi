@@ -67,6 +67,8 @@ Fork only the harness, but share the substrate. Sharing has three directions, an
 
 Markdown-first. The graph earns its place only for joins and lineage. A heavy LLM knowledge graph is deferred. Rationale: curation and structure beat representation sophistication. Anthropic's null result showed raw-corpus grep moved accuracy <1pt. See the *Data Agent Memory Design Overview*.
 
+*Built today:* retrieval runs the pure-Python **BM25** lexical channel plus deterministic grounding over the corpus relationships; embeddings (the vector / semantic channel) are deferred. The FK graph is the in-memory `networkx` projection that drives Steiner join planning; Neo4j stays the enterprise-scale projection.
+
 > **Corpus contract = Git+YAML typed assets, curator-authored / human-audited (D9)**
 >
 > The "compiled config" row is realized as *《从数据到智能》*-style typed YAML
@@ -97,13 +99,22 @@ The full stage-by-stage design is in [Server](server.md), along with the three p
 > cache on success. TTL 15 min. Single global threshold, a known gap that is
 > not tuned per domain. See the *Data Agent Memory Design Overview* §5.
 
-Guardrails, in order (fail-closed on any): syntax → policy blacklist → AST column allowlist → term-semantics → cost estimate (EXPLAIN).
+Guardrails, in order (fail-closed on any, all five enforced): syntax → policy blacklist → AST column allowlist → term-semantics → cost. The AST allowlist is scope-aware (resolves each column against its own query scope and blocks star projections); term-semantics licenses the retrieved tables plus the join plan's Steiner points (not just the exact retrieved set) and blocks cross-namespace table names. The cost layer is a structural cross-join guard for now; numeric EXPLAIN-based cost (Postgres / Redshift) is future per-dialect work. Stage-by-stage detail is in [Server](server.md) step 8.
+
+> **Bounded self-repair (generation → guardrails → execution)**
+>
+> Generation, guardrails, and execution run as a bounded loop. A guardrail
+> rejection or an execution error is fed back to the generator for another
+> attempt rather than refusing outright; every attempt is re-guardrailed, so
+> un-vetted SQL never runs. It stops early when the generator repeats a query
+> (no progress) and fails closed after a small cap. A repaired answer is stamped
+> `lineage`, not `governed`.
 
 > **Refusal & best-effort (two concurrent gates, not a waterfall)**
 >
 > - **Refuse-gate** (curated negative examples): match → canned escalation blob (owner contact). This is the fail-closed path.
 > - **Hard guardrails** (`wrap_tool_call`): can veto any query regardless.
-> - **Best-effort otherwise:** governed → lineage → fenced-raw, with a **reliability stamp** (provenance tier and confidence). Give the stamp teeth: low-reliability answers get differential handling.
+> - **Best-effort otherwise:** governed → lineage → fenced-raw, with a **reliability stamp** (provenance tier plus the uncertainty flags that fired). The tiers are uncalibrated governance/uncertainty heuristics, tuned on the eval: `governed` means safe, in-scope, and no uncertainty flag, **not** verified-correct. The guardrails are a safety/governance gate, not a correctness oracle, so a plausible-but-wrong query (valid, in-allowlist, wrong computation) is caught here and by the fail-closed paths, not at a guardrail. Give the stamp teeth: low-reliability answers get differential handling.
 > - **High-stakes** (leadership/PII): human sign-off or return-SQL-only.
 
 ## 7. Memory Policy
