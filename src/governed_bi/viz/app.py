@@ -2,8 +2,9 @@
 
 Read-only audit cockpit over the corpus: corpus health, the table/tier view, the
 non-table asset listing, skills, and an "ask" panel that runs the server flow and
-shows the reliability stamp + guardrail trace. Editing and save-to-PR (D6) are a
-planned follow-up; the view models already carry everything a form would edit.
+shows the reliability stamp + guardrail trace. Editing and save-to-PR (D6) are
+out of scope for this repo: a correction is "edit a file + PR" served by generic
+git/PR tooling + CI, or the enterprise app (see docs/viz.md).
 
 This is the **only** Streamlit-specific module. All display data comes from
 ``governed_bi.viz.presenter`` (no UI dependency), so swapping Streamlit for a more
