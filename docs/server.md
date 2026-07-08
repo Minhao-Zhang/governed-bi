@@ -20,10 +20,10 @@ A **deterministic LangGraph DAG with conditional routing** (design-spine #2, nev
 2. **Query understanding + term binding**: resolve business language via `term` assets. Synonyms and `term_relationship` map varied phrasings → the canonical asset (strong-routing, not an LLM guess).
 3. **Intent routing**: hard-wired route (`nl2sql | kpi_lookup | knowledge_qa | deep_analysis`), each with its own retrieval and memory budget.
 4. **SQL semantic-cache fast path**: question embedding → cosine ≥0.92 vs cached SQL → hit skips retrieval/plan/gen but **always re-executes** (SQL-text-only, as-user, D7). TTL 15 min; write back on success.
-5. **RVGD retrieval**: R exact / V semantic / G graph / D dictionary. Four-stage rerank, token-budgeted, Corrective-RAG fallback. **Facts + Inference tiers only** (loader contract); Audit and `excluded` assets never retrieved.
+5. **RVGD retrieval**: R exact / V semantic / G graph / D dictionary. Four-stage rerank, token-budgeted, Corrective-RAG fallback. **Facts + Inference tiers only** (loader contract); Audit and `excluded` assets never retrieved. *Built:* the pure-Python **BM25** lexical channel plus deterministic grounding (a bound term pulls in its target, a metric its base table, a table its columns); embeddings (V), the graph channel (G), and Corrective-RAG rerank are later slices.
 6. **Steiner-tree join planning** over the inferred FK graph.
-7. **SQL generation**: layered system prompt (role → schema constraint → safety → output). Emits **physical (obfuscated) identifiers**.
-8. **Five guardrails** (`wrap_tool_call`, fail-closed on any): syntax → policy blacklist → AST column allowlist → term-semantics → cost/EXPLAIN. Refuse-gate runs **concurrently** (D5).
+7. **SQL generation** (a pluggable seam, `SqlGenerator`): the design-vision generator layers a system prompt (role → schema constraint → safety → output) over an LLM, emitting **physical (obfuscated) identifiers**. *Built:* a deterministic `TemplateSqlGenerator` that needs no model and handles only single-table metric aggregates - enough to validate the whole path end to end; the model-backed generator stays the seam.
+8. **Five guardrails** (`wrap_tool_call`, fail-closed on any, all five enforced): syntax → policy blacklist → AST column allowlist → term-semantics → cost. **L3 is scope-aware** (sqlglot `traverse_scope`): it resolves each column against its own query scope, checks every column node (including bare `HAVING` refs and `USING` / `NATURAL` join keys), and blocks star projections (`SELECT *` / `t.*`) the allowlist cannot vouch for. **L4 (term-semantics)** licenses the retrieved tables plus the Steiner points the join plan bridges through - not the exact retrieved set, so it is decoupled from lexical-retrieval recall - and blocks cross-namespace (db/schema-qualified) table names; L3 still guards every column, so widening the table scope never leaks an excluded or `suspect` column. **L5** is a structural cross-join / cartesian guard; numeric EXPLAIN-based cost (Postgres / Redshift) is future per-dialect work. Refuse-gate runs **concurrently** (D5).
 9. **Execute as-user**: gateway RLS, forced LIMIT/timeout, audit/replay.
 10. **Answer + reliability stamp**: best-effort tiering (governed → lineage → fenced-raw). High-stakes → sign-off / SQL-only.
 
@@ -38,7 +38,7 @@ The Inference tier *steers*, it doesn't decorate. This is what separates the ser
 2. **Join `confidence` → planning + uncertainty.** Low-confidence inferred joins get a **cost penalty** in the Steiner plan; a below-threshold join in the chosen path **propagates to the reliability stamp**.
 3. **Skills → SQL-gen shaping** (routing / gotchas). This is the lever that lets **Arm 2 beat the Arm 3 gold ceiling**.
 
-**Uncertainty aggregation → reliability stamp:** low-confidence join used · fenced-raw fallback · Corrective-RAG triggered · suspect column in scope → lower tier → differential handling (D5, give the stamp teeth).
+**Uncertainty aggregation → reliability stamp:** low-confidence join used · fenced-raw fallback · Corrective-RAG triggered · suspect column in scope · SQL repaired → lower tier → differential handling (D5, give the stamp teeth). The tiers are **uncalibrated governance/uncertainty heuristics**, to be tuned on the eval: `governed` means safe, in-scope, and no uncertainty flag fired, **not** verified-correct. Because fail-closed carries a false-refusal cost, the eval's `false_refusal_rate` ([Architecture](architecture.md) §8) is its counterweight.
 
 ## Governance exclusion (hard, human-set)
 
