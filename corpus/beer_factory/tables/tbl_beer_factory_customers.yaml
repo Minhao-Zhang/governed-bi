@@ -1,0 +1,89 @@
+asset_type: table
+id: tbl_beer_factory_customers
+
+# ── Facts (catalog/data) ──
+db: beer_factory
+physical_name: customers
+row_count: 554
+
+# ── Inference ──
+description: "One row per customer of the root beer factory."
+grain: "one row = one customer"
+confidence: 0.9
+
+columns:
+  - # Facts
+    physical_name: CustomerID
+    physical_type: INTEGER
+    logical_type: integer
+    nullable: true
+    is_unique: true
+    sample_values: [101811, 864896]
+    # Inference
+    description: "unique customer identifier"
+    role: primary_key
+    confidence: 0.95
+  - physical_name: First
+    physical_type: TEXT
+    logical_type: string
+    nullable: true
+    is_unique: false
+    sample_values: ["Kenneth"]
+    description: "customer first name"
+    role: dimension
+    confidence: 0.9
+  - physical_name: Last
+    physical_type: TEXT
+    logical_type: string
+    nullable: true
+    is_unique: false
+    sample_values: ["Walton"]
+    description: "customer last name"
+    role: dimension
+    confidence: 0.9
+  - physical_name: State
+    physical_type: TEXT
+    logical_type: string
+    nullable: true
+    is_unique: false
+    sample_values: ["CA"]
+    description: "US state (two-letter code)"
+    role: dimension
+    confidence: 0.85
+  - physical_name: Gender
+    physical_type: TEXT
+    logical_type: string
+    nullable: true
+    is_unique: false
+    sample_values: ["M", "F"]
+    description: "customer gender as recorded"
+    role: dimension
+    confidence: 0.8
+  - physical_name: FirstPurchaseDate
+    physical_type: DATE
+    logical_type: date
+    nullable: true
+    is_unique: false
+    sample_values: ["2013-05-30"]
+    description: "date of the customer's first purchase"
+    role: dimension
+    confidence: 0.85
+  - physical_name: ZipCode
+    physical_type: INTEGER
+    logical_type: integer
+    nullable: true
+    is_unique: false
+    sample_values: [94256]
+    description: "postal code, stored as an integer"
+    role: dimension
+    reliability:
+      status: suspect
+      note: "Stored as INTEGER, so leading zeros are lost. Unreliable as a postal key or for display; cast/pad before use."
+    confidence: 0.6
+    audit:
+      reliability_evidence: "declared INTEGER; east-coast ZIPs with leading zeros cannot round-trip"
+      provenance: { source: curator, status: draft }
+
+# ── Audit ──
+audit:
+  provenance: { source: curator, status: draft }

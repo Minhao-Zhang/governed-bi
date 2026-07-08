@@ -1,0 +1,16 @@
+asset_type: negative_example
+id: neg_beer_factory_001
+
+# ── Inference ──
+pattern: "questions about employees, staffing, or headcount"
+example_questions:
+  - "How many employees work at the factory?"
+  - "What is the average salary of factory staff?"
+reason: "no table in this database covers employees, staffing, or payroll"
+escalation: "not answerable from this data - contact <owner>"
+confidence: 0.8
+
+# ── Audit ──
+audit:
+  evidence: "self-eval questions about staffing found no covering table"
+  provenance: { source: curator, status: draft }

@@ -23,9 +23,10 @@ corpus/
   _generated/    # search index, embeddings, compiled graph (gitignored)
 ```
 
-`california_schools/` is a small **worked example** taken from the schema spec;
-it exists so the loader + CI validator have something real to run on. It is not
-a full corpus.
+`beer_factory/` is the **worked example**, authored over the real BIRD
+`beer_factory` database (`data/bird/beer_factory.sqlite`). It exercises every
+asset type and validates against that DB (physical-existence). Use it as the
+reference for authoring your own.
 
 ## Field tiers
 
@@ -36,7 +37,7 @@ injected into the server context). Plus a human-only **Governance** override.
 ## Validate
 
 ```bash
-uv run python -m governed_bi.corpus.cli corpus/california_schools
+uv run python -m governed_bi.corpus.cli corpus/beer_factory
 ```
 
 A green run (ID conventions + reference integrity) is the curator's

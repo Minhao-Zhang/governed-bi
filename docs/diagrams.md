@@ -45,9 +45,9 @@ from design-level scaffolding.
 
 ### L2/L3: worked examples and deep dives
 
-7. [California Schools example diagrams](diagrams/california-schools.md)
+7. [Beer factory example diagrams](diagrams/beer-factory.md)
    - Example semantic mini-graph
-   - Example eligibility-rate question sequence
+   - Example top-rated-brand question sequence
    - Example refusal path
 
 ## Source map
@@ -60,6 +60,6 @@ from design-level scaffolding.
 | [curator](diagrams/curator.md) | `docs/curator.md`, `src/governed_bi/curator/` |
 | [viz](diagrams/viz.md) | `docs/viz.md`, `src/governed_bi/viz/` |
 | [eval](diagrams/eval.md) | `docs/architecture.md` §8, `src/governed_bi/eval/` |
-| [california-schools](diagrams/california-schools.md) | `corpus/california_schools/` |
+| [beer-factory](diagrams/beer-factory.md) | `corpus/beer_factory/` |
 
 

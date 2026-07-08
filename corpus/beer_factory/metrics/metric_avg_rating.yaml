@@ -1,0 +1,16 @@
+asset_type: metric
+id: metric_avg_rating
+
+# ── Inference ──
+name: "average star rating"
+base_table: tbl_beer_factory_rootbeerreview
+expression: "AVG(StarRating)"
+dimensions: [brand]
+rules:
+  - { kind: filter, note: "exclude rows where StarRating is null" }
+confidence: 0.7
+
+# ── Audit ──
+audit:
+  evidence: "StarRating is 1-5; averaged per brand in review-ranking questions"
+  provenance: { source: curator, status: draft, version: "0.1.0" }

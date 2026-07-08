@@ -1,0 +1,58 @@
+asset_type: table
+id: tbl_beer_factory_rootbeer
+
+# ── Facts ──
+db: beer_factory
+physical_name: rootbeer
+row_count: 6430
+
+# ── Inference ──
+description: "One row per individual root beer unit the factory acquired for resale."
+grain: "one row = one physical root beer unit"
+confidence: 0.85
+
+columns:
+  - physical_name: RootBeerID
+    physical_type: INTEGER
+    logical_type: integer
+    nullable: true
+    is_unique: true
+    sample_values: [100000]
+    description: "unique root beer unit identifier"
+    role: primary_key
+    confidence: 0.95
+  - physical_name: BrandID
+    physical_type: INTEGER
+    logical_type: integer
+    nullable: true
+    is_unique: false
+    sample_values: [10001]
+    description: "brand of this unit"
+    role: foreign_key
+    references: col_beer_factory_rootbeerbrand_BrandID
+    confidence: 0.9
+    audit:
+      evidence: "declared FK rootbeer.BrandID -> rootbeerbrand.BrandID"
+      provenance: { source: curator, status: draft }
+  - physical_name: ContainerType
+    physical_type: TEXT
+    logical_type: string
+    nullable: true
+    is_unique: false
+    sample_values: ["Bottle", "Can"]
+    description: "container the unit came in"
+    role: dimension
+    confidence: 0.85
+  - physical_name: PurchaseDate
+    physical_type: DATE
+    logical_type: date
+    nullable: true
+    is_unique: false
+    sample_values: ["2015-07-03"]
+    description: "date the factory acquired the unit"
+    role: dimension
+    confidence: 0.85
+
+# ── Audit ──
+audit:
+  provenance: { source: curator, status: draft }

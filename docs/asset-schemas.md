@@ -24,7 +24,7 @@ The corpus is **not YAML-only.** Two representations, split by access pattern:
 - **YAML typed assets** carry *structured, atomic, per-entity* content: Facts + definitions (`table`/`column`/`join`/`metric`/`term`/`rule`/`few_shot`/`negative_example`). Machine-parsed, CI-checked, graph-projected, retrieved as discrete units.
 - **Markdown skills / reference docs** carry *prose, cross-entity, procedural* content: routing triggers, gotchas, query patterns, domain overview. Retrieved (vector + BM25) and injected as narrative. They **reference YAML assets by ID and never duplicate their data.**
 
-Why both: you can't CI-check or graph-project a prose blob, and you can't cleanly express *"IF the question is about eligibility rate, start from the derived table, DO NOT use raw counts"* in a per-column field, since that's cross-entity procedure. Anthropic and the book draw the same split.
+Why both: you can't CI-check or graph-project a prose blob, and you can't cleanly express *"IF the question is about revenue, start from the transaction fact table, DO NOT use the brand list price"* in a per-column field, since that's cross-entity procedure. Anthropic and the book draw the same split.
 
 > **Skills are the highest-value output, and curator-only**
 >
@@ -50,11 +50,12 @@ The loader enforces the contract: the server's context is built from Facts + Inf
 One field is authored by neither the catalog nor the curator, but by a **human owner** (D6): `governance.excluded`. On a column or table, when a human sets it `true` after review, the asset is **removed entirely** from everything the server sees (retrieval, the presented schema, the graph) in **all environments, no toggle, permanently**. It is still shown in the viz/audit surface (marked, with reason) so the exclusion is auditable, and guardrail L3 hard-blocks it as defense-in-depth.
 
 ```yaml
+# on tbl_beer_factory_transaction, column CreditCardNumber
 governance:
   excluded: true
-  reason: "PII / deprecated / known-bad, never surface"
+  reason: "PII (payment card number); never surface to the server"
   by: minhaoz
-  at: "2026-07-07"
+  at: "2026-07-08"
 ```
 
 Distinct from the curator's `reliability.status: suspect`:
@@ -87,14 +88,14 @@ corpus/
 
 | Asset | ID format | Example |
 |---|---|---|
-| table | `tbl_<db>_<name>` | `tbl_california_schools_frpm` |
-| column *(inline; id derived by loader)* | `col_<db>_<table>_<physical>` | `col_california_schools_frpm_lie_2` |
-| join | `join_<left>_<right>` | `join_frpm_schools` |
-| few_shot | `fs_<db>_<n>` | `fs_california_schools_003` |
-| term | `term_<name>` | `term_eligibility_rate` |
-| metric | `metric_<name>` | `metric_frpm_rate` |
-| rule | `rule_<name>` | `rule_academic_year_format` |
-| negative_example | `neg_<db>_<n>` | `neg_california_schools_002` |
+| table | `tbl_<db>_<name>` | `tbl_beer_factory_customers` |
+| column *(inline; id derived by loader)* | `col_<db>_<table>_<physical>` | `col_beer_factory_customers_CustomerID` |
+| join | `join_<left>_<right>` | `join_transaction_customers` |
+| few_shot | `fs_<db>_<n>` | `fs_beer_factory_001` |
+| term | `term_<name>` | `term_revenue` |
+| metric | `metric_<name>` | `metric_revenue` |
+| rule | `rule_<name>` | `rule_boolean_flags` |
+| negative_example | `neg_<db>_<n>` | `neg_beer_factory_001` |
 
 The **physical ↔ meaning bridge** runs through every table/column: `physical_name` is the identifier as it exists in the live DB (obfuscated for BIRD, cryptic in enterprise data). SQL emits this; the Inference tier carries the *meaning*. The curator's whole job is filling meaning for cryptic physical names, and this is identical in BIRD and enterprise deployments.
 
@@ -103,112 +104,111 @@ The **physical ↔ meaning bridge** runs through every table/column: `physical_n
 ## Asset: `table` (with inline columns)
 
 ```yaml
-# tables/tbl_california_schools_frpm.yaml
+# tables/tbl_beer_factory_customers.yaml
 asset_type: table
-id: tbl_california_schools_frpm
+id: tbl_beer_factory_customers
 
 # ── Facts (catalog/data) ──
-db: california_schools                 # scoping namespace = the connection/database this belongs to
-physical_name: biao_3                  # identifier in the live DB
-row_count: 17686
+db: beer_factory                       # scoping namespace = the connection/database this belongs to
+physical_name: customers               # identifier in the live DB
+row_count: 554
 
 # ── Inference (curator writes / gold fills; server-consumed) ──
-description: "Free/reduced-price meal eligibility counts per school-year"
-grain: "one row = one school × academic year"
-confidence: 0.85
+description: "One row per customer of the root beer factory."
+grain: "one row = one customer"
+confidence: 0.9
 
 columns:
   - # Facts
-    physical_name: lie_2
-    physical_type: "varchar(20)"       # verbatim from catalog, dialect-specific
-    logical_type: string               # normalized, portable (string/integer/decimal/date/datetime/boolean)
-    nullable: false
+    physical_name: CustomerID
+    physical_type: INTEGER             # verbatim from catalog, dialect-specific
+    logical_type: integer              # normalized, portable (string/integer/decimal/date/datetime/boolean)
+    nullable: true
     is_unique: true
-    sample_values: ["01100170109835", "01100170112607"]
+    sample_values: [101811, 864896]
     # Inference
-    description: "school+district identifier (CDS code)"
+    description: "unique customer identifier"
     role: primary_key                  # primary_key | foreign_key | key | measure | dimension
     references: null                   # col id if FK
     reliability: { status: ok, note: null }   # status: ok | suspect ; note: prose (server-visible)
-    confidence: 0.9
-    # Audit
-    audit:
-      description_evidence: "unique across all rows; joins to schools in 12 seed queries"
-      provenance: { source: curator, model: claude-opus-4-8, status: draft, source_refs: [q1032] }
+    confidence: 0.95
 
   - # Facts
-    physical_name: lie_12
-    physical_type: "numeric(10,2)"
-    logical_type: decimal
-    nullable: false
+    physical_name: ZipCode
+    physical_type: INTEGER
+    logical_type: integer
+    nullable: true
     is_unique: false
-    sample_values: [512.00, 431.00, 1043.00]
+    sample_values: [94256]
     # Inference
-    description: "enrollment - values appear tampered"
-    role: measure
+    description: "postal code, stored as an integer"
+    role: dimension
     references: null
     reliability:
       status: suspect
-      note: "UNRELIABLE - DO NOT USE."
+      note: "Stored as INTEGER, so leading zeros are lost. Unreliable as a postal key or for display; cast/pad before use."
     confidence: 0.6
     # Governance (human-authored override; not curator, not gold)
     governance: { excluded: false }    # human sets true → asset removed everywhere the server sees
     # Audit
     audit:
-      reliability_evidence: "corr(values, join-key order)=0.02; near-synonym of lie_7"
-      description_evidence: "inferred from value range + 3 seed queries"
-      provenance: { source: curator, model: claude-opus-4-8, status: draft, source_refs: [q1032, q1077] }
+      reliability_evidence: "declared INTEGER; east-coast ZIPs with leading zeros cannot round-trip"
+      provenance: { source: curator, status: draft }
 
 # ── Audit (table-level) ──
 audit:
-  description_evidence: "table name obfuscated; inferred from column set + seed-query usage"
-  provenance: { source: curator, model: claude-opus-4-8, status: draft, built_at: "2026-07-07" }
+  provenance: { source: curator, status: draft }
 ```
 
 ## Asset: `join` (FK is inferred; BIRD withholds it)
 
 ```yaml
-# joins/join_frpm_schools.yaml
+# joins/join_transaction_customers.yaml
 asset_type: join
-id: join_frpm_schools
+id: join_transaction_customers
 
 # ── Facts (the referenced physical columns exist in the catalog) ──
-left_table: tbl_california_schools_frpm
-right_table: tbl_california_schools_schools
-on: "biao_3.lie_2 = biao_1.lie_0"      # physical names
+left_table: tbl_beer_factory_transaction
+right_table: tbl_beer_factory_customers
+on: "transaction.CustomerID = customers.CustomerID"   # physical names
 
 # ── Inference (the EXISTENCE of the edge is inferred) ──
 cardinality: many_to_one               # inferred from uniqueness of the right key
 cost: 1.0                              # Steiner-planner input (derivable from cardinality × row_counts)
-confidence: 0.82
+confidence: 0.95
 
 # ── Audit ──
 audit:
-  evidence: "value-overlap 0.97 (frpm.lie_2 ⊆ schools.lie_0); right key unique; used in 12 seed queries"
-  provenance: { source: curator, model: claude-opus-4-8, status: draft, source_refs: [q1032, q1044] }
+  evidence: "declared foreign key; every sale has one buyer"
+  provenance: { source: curator, status: draft }
 ```
 
 ## Asset: `few_shot`
 
 ```yaml
-# few-shots/fs_california_schools_003.yaml
+# few-shots/fs_beer_factory_001.yaml
 asset_type: few_shot
-id: fs_california_schools_003
+id: fs_beer_factory_001
 
 # ── Facts ──
-db: california_schools
+db: beer_factory
 
 # ── Inference (curator selects/distills; server-consumed as a prompt exemplar) ──
-question: "Which schools have the highest free-meal eligibility rate?"
+question: "Which root beer brand has the highest average review rating?"
 sql: |
-  SELECT ... FROM biao_3 ...           # gold SQL in the live (obfuscated) identifiers
-bound_terms: [free-meal, eligibility rate]
+  SELECT b.BrandName, AVG(r.StarRating) AS avg_rating
+  FROM rootbeerreview AS r
+  JOIN rootbeerbrand AS b ON r.BrandID = b.BrandID
+  WHERE r.StarRating IS NOT NULL
+  GROUP BY b.BrandName
+  ORDER BY avg_rating DESC
+bound_terms: [brand, rating]
 complexity: medium                     # simple | medium | complex → controls injection count
 confidence: 0.9
 
 # ── Audit ──
 audit:
-  provenance: { source: curator, status: draft, source_refs: [q1032] }
+  provenance: { source: curator, status: draft }
   # NB: the BIRD eval harness's CI additionally checks source_refs ⊆ train split (leakage guard).
   # That is a harness rule, not a schema rule (P2).
 ```
@@ -216,63 +216,67 @@ audit:
 ## Asset: `term` (synonyms + relationships inline)
 
 ```yaml
-# terms/term_eligibility_rate.yaml
+# terms/term_revenue.yaml
 asset_type: term
-id: term_eligibility_rate
+id: term_revenue
 
 # ── Inference (curator maps business language → assets) ──
-name: "free-meal eligibility rate"
-synonyms: ["FRPM rate", "free/reduced-price meal rate", "eligibility %"]
-binding: { asset_type: metric, asset_id: metric_frpm_rate }
+name: "revenue"
+synonyms: ["sales", "total sales", "gross revenue"]
+binding: { asset_type: metric, asset_id: metric_revenue }
 related_terms:                         # projects into the graph
-  - { id: term_enrollment, relation: uses }   # relation: synonym_of | broader_than | uses
-confidence: 0.7
+  - { id: term_brand, relation: uses }   # relation: synonym_of | broader_than | uses
+confidence: 0.75
 
 # ── Audit ──
 audit:
-  evidence: "phrase varies across seed questions (paraphrase dimension); all map to one computation"
-  provenance: { source: curator, status: draft, source_refs: [q1032, q1101] }
+  evidence: "'revenue'/'sales' used interchangeably across seed questions; all map to SUM(PurchasePrice)"
+  provenance: { source: curator, status: draft }
 ```
 
 ## Asset: `metric` (inline rules; no per-asset gold, D4)
 
 ```yaml
-# metrics/metric_frpm_rate.yaml
+# metrics/metric_revenue.yaml
 asset_type: metric
-id: metric_frpm_rate
+id: metric_revenue
 
 # ── Inference (curator derives from evidence + seed queries) ──
-name: "free-meal eligibility rate"
-base_table: tbl_california_schools_frpm
-expression: "SUM(free_count) / NULLIF(SUM(enrollment), 0)"   # in meaning; SQL-gen maps to physical
-dimensions: [school, academic_year]
+name: "total revenue"
+base_table: tbl_beer_factory_transaction
+expression: "SUM(PurchasePrice)"       # in meaning; SQL-gen maps to physical
+dimensions: [customer, brand, transaction_date]
 rules:
-  - { kind: filter, note: "exclude rows where enrollment = 0" }
-confidence: 0.6
+  - { kind: filter, note: "count only completed sales (all rows in transaction)" }
+confidence: 0.75
 
 # ── Audit ──
 audit:
-  evidence: "BIRD evidence field: 'eligible free rate = free_count / total'; seen in 5 seed queries"
-  provenance: { source: curator, status: draft, version: "0.1.0", source_refs: [q1050] }
+  evidence: "PurchasePrice is the per-sale amount; recurring SUM over sales in seed queries"
+  provenance: { source: curator, status: draft, version: "0.1.0" }
 ```
 
 ## Asset: `rule` / `context` (standalone)
 
 ```yaml
-# rules/rule_academic_year_format.yaml
+# rules/rule_boolean_flags.yaml
 asset_type: rule
-id: rule_academic_year_format
+id: rule_boolean_flags
 
 # ── Inference ──
 kind: business_rule                    # business_rule | context | constraint
-scope: [tbl_california_schools_frpm]   # assets it constrains; empty = global
-statement: "academic_year is the starting calendar year (2014 = the 2014-15 school year)"
-confidence: 0.7
+scope: [tbl_beer_factory_rootbeerbrand]   # assets it constrains; empty = global
+statement: >
+  The ingredient and availability flags on rootbeerbrand (CaneSugar, CornSyrup,
+  Honey, ArtificialSweetener, Caffeinated, Alcoholic, AvailableInCans,
+  AvailableInBottles, AvailableInKegs) are stored as the TEXT strings 'TRUE' and
+  'FALSE', not as integers or booleans. Filter with = 'TRUE', never = 1.
+confidence: 0.85
 
 # ── Audit ──
 audit:
-  evidence: "sample values 2014, 2015; BIRD evidence note"
-  provenance: { source: curator, status: draft, source_refs: [q1060] }
+  evidence: "sampled values are the literal strings 'TRUE'/'FALSE' in TEXT columns"
+  provenance: { source: curator, status: draft }
 ```
 
 ## Asset: `negative_example`
@@ -280,21 +284,23 @@ audit:
 Marks a question class as **unanswerable from this data** → fires the refuse-gate's canned escalation (D5). Curator-proposed from self-eval coverage gaps (dev) or owner-curated (prod); adversary-checked; matched at serve time by semantic similarity.
 
 ```yaml
-# negatives/neg_california_schools_002.yaml
+# negatives/neg_beer_factory_001.yaml
 asset_type: negative_example
-id: neg_california_schools_002
+id: neg_beer_factory_001
 
 # ── Inference (curator proposes; human certifies) ──
-pattern: "questions about teacher salaries / compensation"
-example_questions: ["What is the average teacher salary per district?"]
-reason: "no table in this DB covers compensation"
+pattern: "questions about employees, staffing, or headcount"
+example_questions:
+  - "How many employees work at the factory?"
+  - "What is the average salary of factory staff?"
+reason: "no table in this database covers employees, staffing, or payroll"
 escalation: "not answerable from this data - contact <owner>"
 confidence: 0.8
 
 # ── Audit ──
 audit:
-  evidence: "3 self-eval questions on compensation found no covering table"
-  provenance: { source: curator, status: draft, source_refs: [q1180] }
+  evidence: "self-eval questions about staffing found no covering table"
+  provenance: { source: curator, status: draft }
 ```
 
 ## Asset: `skill` (Markdown, not YAML)
@@ -303,30 +309,36 @@ Prose procedural knowledge per domain. Frontmatter carries the same provenance a
 
 ```markdown
 ---
-# skills/routing_frpm.md
-skill_id: skill_california_schools_routing
-db: california_schools
+# skills/routing.md
+skill_id: skill_beer_factory_routing
+db: beer_factory
 kind: routing              # routing | gotchas | pattern | domain_overview
-provenance: { source: curator, model: claude-opus-4-8, status: draft, source_refs: [q1032, q1044] }
+provenance: { source: curator, status: draft }
 ---
 
-# California Schools: routing & gotchas
+# Beer factory: routing & gotchas
 
 ## Scope
-Answers about schools, districts, and free/reduced-price-meal eligibility.
-Hub table: `tbl_california_schools_schools`. Join everything via the CDS code.
+Sales, customers, root beer brands, and reviews for a root beer factory.
+`transaction` is the sales fact table; `rootbeer` is the unit dimension, which
+rolls up to `rootbeerbrand`.
 
 ## Routing triggers
-- IF the question is about eligibility rate → use `metric_frpm_rate`; join
-  `tbl_california_schools_frpm` → `tbl_california_schools_schools` via `join_frpm_schools`.
-- DO NOT use `col_california_schools_frpm_lie_12` for counts, it is flagged unreliable (see its reliability caveat).
+- Revenue / sales questions use `metric_revenue` (`SUM(PurchasePrice)` on
+  `tbl_beer_factory_transaction`). To break revenue down by brand, join
+  transaction to rootbeer (`join_transaction_rootbeer`) then rootbeer to
+  rootbeerbrand (`join_rootbeer_rootbeerbrand`).
+- Rating / review-quality questions use `metric_avg_rating`
+  (`AVG(StarRating)` on `tbl_beer_factory_rootbeerreview`); join to
+  `tbl_beer_factory_rootbeerbrand` via `join_review_rootbeerbrand`.
 
 ## Gotchas
-- `academic_year` is the *starting* calendar year (see `rule_academic_year_format`).
-- Several near-synonym columns are decoys; prefer the primary column named in each table asset.
-
-## Query patterns
-- Eligibility rate = free_count / enrollment, excluding enrollment = 0.
+- Ingredient and availability flags on `rootbeerbrand` are the strings
+  `'TRUE'`/`'FALSE'`, not integers (see `rule_boolean_flags`). Filter with
+  `= 'TRUE'`.
+- `customers.ZipCode` is an INTEGER, so leading zeros are lost; do not use it as
+  a postal key (see its reliability caveat).
+- `transaction.CreditCardNumber` is PII and is excluded; never select it.
 ```
 
 Skills reference typed assets by ID; they do **not** restate the assets' data. A skill is pure curator value-add: there is no gold skill to diff against.
@@ -359,6 +371,6 @@ BIRD uses an in-memory graph (networkx) for Steiner planning; Neo4j is the optio
 ## Gold vs curator (the same schema, two fillers)
 
 - **Curator (Arm 2)** fills the Inference tier by *inference*: descriptions, roles, `references`, `reliability`, `confidence`, with `audit.*_evidence` recording why.
-- **Gold (Arm 3)** fills the *same* Inference fields deterministically from the manifests: real names (rename map), FK graph (original schema), and `reliability.status=suspect` on every manifest decoy, with `provenance.source: gold`, `confidence: 1.0`.
+- **Gold (Arm 3)** fills the *same* Inference fields deterministically from the manifests: real names (rename map), FK graph (original schema), and any `reliability.status=suspect` flags the manifest records, with `provenance.source: gold`, `confidence: 1.0`.
 - Facts are identical across arms (read from the catalog). The gold-diff compares the Inference tier only.
 - **Skills (Markdown) are curator-only**: no manifest derives them, so Arm 3 has none. This is the mechanism by which Arm 2 can *exceed* the gold ceiling on skill-sensitive questions.

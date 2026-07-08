@@ -16,7 +16,7 @@ Two checks require inputs beyond the corpus and are therefore *optional* hooks
 (and belong to the eval harness, not the schema — P2):
 
 - **Physical existence** — every ``physical_name`` / ``on`` column exists in the
-  live catalog. Needs a DB connection (pass ``catalog``).
+  live catalog. Needs a DB connection (pass ``connector``).
 - **Leakage guard** — few-shot ``source_refs`` ⊆ train split. Needs the split
   (pass ``train_refs``). BIRD-eval-specific.
 """
@@ -25,8 +25,12 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from . import ids
+
+if TYPE_CHECKING:
+    from ..gateway.connectors.base import Connector
 from .schemas import (
     Asset,
     FewShotAsset,
@@ -63,12 +67,12 @@ def _column_ids(assets: Iterable[Asset]) -> set[str]:
 def validate_corpus(
     assets: list[Asset],
     *,
-    catalog: object | None = None,
+    connector: "Connector | None" = None,
     train_refs: set[str] | None = None,
 ) -> list[Finding]:
     """Validate a parsed corpus. Returns findings; empty list == CI green.
 
-    ``catalog`` and ``train_refs`` are optional; when omitted the corresponding
+    ``connector`` and ``train_refs`` are optional; when omitted the corresponding
     checks (physical existence, leakage guard) are skipped rather than failing.
     """
     findings: list[Finding] = []
@@ -135,20 +139,38 @@ def validate_corpus(
                     )
 
     # -- Physical existence (optional; needs a live catalog) ---------------- #
-    if catalog is not None:  # pragma: no cover - requires a DB connection
-        _check_physical_existence(assets, catalog, findings)
+    if connector is not None:
+        _check_physical_existence(assets, connector, findings)
 
     return findings
 
 
 def _check_physical_existence(
-    assets: list[Asset], catalog: object, findings: list[Finding]
-) -> None:  # pragma: no cover
-    """Placeholder: verify physical_name / join.on columns exist in the catalog.
-
-    Wire this to the gateway's catalog reader when the DB layer lands.
+    assets: list[Asset], connector: "Connector", findings: list[Finding]
+) -> None:
+    """Verify each table's ``physical_name`` and its columns exist in the live
+    catalog. Join ``on`` columns are not parsed yet (they need SQL parsing);
+    that check is deferred to the eval harness.
     """
-    raise NotImplementedError("physical-existence check needs the gateway catalog reader")
+    live_tables = set(connector.list_tables())
+    for a in assets:
+        if not isinstance(a, TableAsset):
+            continue
+        if a.physical_name not in live_tables:
+            findings.append(
+                Finding("missing-table", a.id, f"physical_name '{a.physical_name}' not in the catalog")
+            )
+            continue
+        live_columns = {c.name for c in connector.describe_table(a.physical_name).columns}
+        for col in a.columns:
+            if col.physical_name not in live_columns:
+                findings.append(
+                    Finding(
+                        "missing-column",
+                        a.id,
+                        f"column '{col.physical_name}' not in table '{a.physical_name}'",
+                    )
+                )
 
 
 def is_green(findings: list[Finding]) -> bool:

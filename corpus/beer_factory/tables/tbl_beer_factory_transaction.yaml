@@ -1,0 +1,93 @@
+asset_type: table
+id: tbl_beer_factory_transaction
+
+# ── Facts ──
+db: beer_factory
+physical_name: transaction
+row_count: 6312
+
+# ── Inference ──
+description: "One row per sale of a root beer unit to a customer."
+grain: "one row = one sale"
+confidence: 0.85
+
+columns:
+  - physical_name: TransactionID
+    physical_type: INTEGER
+    logical_type: integer
+    nullable: true
+    is_unique: true
+    sample_values: [100000]
+    description: "unique sale identifier"
+    role: primary_key
+    confidence: 0.95
+  - physical_name: CustomerID
+    physical_type: INTEGER
+    logical_type: integer
+    nullable: true
+    is_unique: false
+    sample_values: [864896]
+    description: "customer who made the purchase"
+    role: foreign_key
+    references: col_beer_factory_customers_CustomerID
+    confidence: 0.9
+    audit:
+      evidence: "declared FK transaction.CustomerID -> customers.CustomerID"
+      provenance: { source: curator, status: draft }
+  - physical_name: RootBeerID
+    physical_type: INTEGER
+    logical_type: integer
+    nullable: true
+    is_unique: false
+    sample_values: [105661]
+    description: "root beer unit that was sold"
+    role: foreign_key
+    references: col_beer_factory_rootbeer_RootBeerID
+    confidence: 0.9
+  - physical_name: TransactionDate
+    physical_type: DATE
+    logical_type: date
+    nullable: true
+    is_unique: false
+    sample_values: ["2014-07-07"]
+    description: "date of the sale"
+    role: dimension
+    confidence: 0.85
+  - physical_name: CreditCardType
+    physical_type: TEXT
+    logical_type: string
+    nullable: true
+    is_unique: false
+    sample_values: ["Discover"]
+    description: "payment card network"
+    role: dimension
+    confidence: 0.8
+  - physical_name: PurchasePrice
+    physical_type: REAL
+    logical_type: decimal
+    nullable: true
+    is_unique: false
+    sample_values: [3.0]
+    description: "sale price, USD"
+    role: measure
+    confidence: 0.9
+  - physical_name: CreditCardNumber
+    physical_type: INTEGER
+    logical_type: integer
+    nullable: true
+    is_unique: false
+    sample_values: []
+    description: "customer credit card number (PII)"
+    role: dimension
+    governance:
+      excluded: true
+      reason: "PII (payment card number); never surface to the server"
+      by: minhaoz
+      at: "2026-07-08"
+    confidence: 0.9
+    audit:
+      provenance: { source: human, status: certified }
+
+# ── Audit ──
+audit:
+  provenance: { source: curator, status: draft }

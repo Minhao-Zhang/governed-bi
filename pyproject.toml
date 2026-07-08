@@ -18,9 +18,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# DB connectors beyond SQLite (which is stdlib). Installed only when targeting
+# these engines; the connector code imports the driver lazily.
+postgres = ["psycopg[binary]>=3.1"]
+redshift = ["redshift-connector>=2.1"]
 # Heavy agent frameworks are deferred until the harnesses are built:
 #   curator -> deepagents ; server -> langgraph + middleware.
-# Add them here (or as their own extras) when that work starts.
 
 [dependency-groups]
 dev = [

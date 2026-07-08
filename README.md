@@ -37,19 +37,20 @@ Start at [`docs/README.md`](docs/README.md). Key docs:
 
 ```
 docs/                  design docs (canonical)
-corpus/                the semantic layer (Git = source of truth); worked example under california_schools/
+data/bird/             beer_factory.sqlite (BIRD, CC BY-SA 4.0; see NOTICE)
+corpus/                the semantic layer (Git = source of truth); worked example under beer_factory/
 src/governed_bi/
   config.py            environment toggles (dev/BIRD vs prod/enterprise) + reusable numbers
-  corpus/              ✅ implemented: schemas, IDs, CI validator, loader, CLI
-  gateway/             stub: governed data boundary + 5-layer guardrails
+  corpus/              done: schemas, IDs, CI validator, loader, CLI
+  gateway/             done (SQLite): connector + read-only gateway; Postgres/Redshift seams; guardrails stub
+  curator/             profile.py done (Facts tier); proposer/adversary/loop stubs
   graph/               stub: FK graph projection + Steiner-tree join planning
   retrieval/           stub: RVGD retrieval
   memory/              stub: working / profile / episodic / correction
-  curator/             stub: proposer + adversary build loop (deepagents)
   server/              stub: LangGraph serve DAG + middleware
   eval/                stub: execution accuracy, 3-arm harness, gold oracle, refuse-gate
   viz/                 stub: audit + edit cockpit
-tests/                 corpus smoke tests
+tests/                 corpus + connector/gateway/profiling tests
 ```
 
 Modules carry docstrings that point back to the design docs and decision IDs.
@@ -68,10 +69,18 @@ The full quickstart (validate CLI, programmatic corpus API) is in
 [docs/usage.md](docs/usage.md). To write or edit corpus assets, see
 [docs/corpus-authoring.md](docs/corpus-authoring.md).
 
-Only the corpus layer is runnable today; the harnesses are documented stubs.
-Dependencies are intentionally minimal (pydantic, pyyaml, networkx, sqlglot);
-`langgraph` and `deepagents` are deferred until those harnesses are built.
+Runnable today: the corpus layer, the SQLite connector and gateway, and
+catalog-driven Facts profiling. The remaining harnesses are documented stubs.
+Core dependencies are intentionally minimal (pydantic, pyyaml, networkx,
+sqlglot); the Postgres/Redshift connectors are optional extras, and `langgraph`
+/ `deepagents` are deferred until those harnesses are built.
 
 ## License
 
-MIT © 2026 Minhao Zhang
+Code in this repository is under the MIT License (see [LICENSE](LICENSE)),
+© 2026 Minhao Zhang.
+
+Bundled data is third-party and separately licensed. `data/bird/beer_factory.sqlite`
+is the `beer_factory` database from the [BIRD benchmark](https://bird-bench.github.io/),
+included unmodified under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/);
+see [`data/bird/NOTICE`](data/bird/NOTICE). The MIT license does not cover the data.

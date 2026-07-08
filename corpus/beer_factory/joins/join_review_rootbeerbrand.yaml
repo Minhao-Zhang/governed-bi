@@ -1,0 +1,17 @@
+asset_type: join
+id: join_review_rootbeerbrand
+
+# ── Facts ──
+left_table: tbl_beer_factory_rootbeerreview
+right_table: tbl_beer_factory_rootbeerbrand
+on: "rootbeerreview.BrandID = rootbeerbrand.BrandID"
+
+# ── Inference ──
+cardinality: many_to_one
+cost: 1.0
+confidence: 0.95
+
+# ── Audit ──
+audit:
+  evidence: "declared foreign key; each review is of one brand"
+  provenance: { source: curator, status: draft }

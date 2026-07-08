@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 
 # A name segment: lowercase alphanumerics, underscore-joined. DB and table names
-# themselves contain underscores (e.g. ``california_schools``), so the patterns
+# themselves contain underscores (e.g. ``beer_factory``), so the patterns
 # validate the *prefix and shape*, not a segment-by-segment parse.
 _NAME = r"[a-z0-9]+(?:_[a-z0-9]+)*"
 _NUM = r"\d+"
@@ -53,7 +53,7 @@ def is_valid_id(asset_type: str, asset_id: str) -> bool:
 
 
 def derive_column_id(table_id: str, physical_name: str) -> str:
-    """Loader-internal column id, e.g. ``col_california_schools_frpm_lie_2``.
+    """Loader-internal column id, e.g. ``col_beer_factory_customers_CustomerID``.
 
     Columns are inline in their table asset and do not carry their own ``id`` in
     YAML (D9: "id derived by loader"). This derivation is deterministic and

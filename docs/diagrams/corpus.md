@@ -247,7 +247,7 @@ sequenceDiagram
     participant Loader as load_corpus
     participant Validator as validate_corpus
 
-    Developer->>CLI: python -m governed_bi.corpus.cli corpus/california_schools
+    Developer->>CLI: python -m governed_bi.corpus.cli corpus/beer_factory
     CLI->>CLI: Detect single DB dir or corpus root
     CLI->>Loader: load corpus assets and skills
     Loader-->>CLI: Corpus

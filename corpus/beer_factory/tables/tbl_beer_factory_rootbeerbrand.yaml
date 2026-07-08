@@ -1,0 +1,72 @@
+asset_type: table
+id: tbl_beer_factory_rootbeerbrand
+
+# ── Facts ──
+db: beer_factory
+physical_name: rootbeerbrand
+row_count: 24
+
+# ── Inference ──
+description: "One row per root beer brand the factory stocks or reviews."
+grain: "one row = one brand"
+confidence: 0.9
+
+columns:
+  - physical_name: BrandID
+    physical_type: INTEGER
+    logical_type: integer
+    nullable: true
+    is_unique: true
+    sample_values: [10001, 10012]
+    description: "unique brand identifier"
+    role: primary_key
+    confidence: 0.95
+  - physical_name: BrandName
+    physical_type: TEXT
+    logical_type: string
+    nullable: true
+    is_unique: true
+    sample_values: ["A&W"]
+    description: "brand name"
+    role: dimension
+    confidence: 0.9
+  - physical_name: BreweryName
+    physical_type: TEXT
+    logical_type: string
+    nullable: true
+    is_unique: false
+    sample_values: ["Dr Pepper Snapple Group"]
+    description: "producing brewery"
+    role: dimension
+    confidence: 0.85
+  - physical_name: FirstBrewedYear
+    physical_type: INTEGER
+    logical_type: integer
+    nullable: true
+    is_unique: false
+    sample_values: [1919]
+    description: "year the brand was first brewed"
+    role: dimension
+    confidence: 0.85
+  - physical_name: WholesaleCost
+    physical_type: REAL
+    logical_type: decimal
+    nullable: true
+    is_unique: false
+    sample_values: [0.42]
+    description: "wholesale cost per unit, USD"
+    role: measure
+    confidence: 0.85
+  - physical_name: CurrentRetailPrice
+    physical_type: REAL
+    logical_type: decimal
+    nullable: true
+    is_unique: false
+    sample_values: [1.0]
+    description: "current retail price per unit, USD"
+    role: measure
+    confidence: 0.85
+
+# ── Audit ──
+audit:
+  provenance: { source: curator, status: draft }

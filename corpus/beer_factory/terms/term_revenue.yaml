@@ -1,0 +1,15 @@
+asset_type: term
+id: term_revenue
+
+# ── Inference ──
+name: "revenue"
+synonyms: ["sales", "total sales", "gross revenue"]
+binding: { asset_type: metric, asset_id: metric_revenue }
+related_terms:
+  - { id: term_brand, relation: uses }
+confidence: 0.75
+
+# ── Audit ──
+audit:
+  evidence: "'revenue'/'sales' used interchangeably across seed questions; all map to SUM(PurchasePrice)"
+  provenance: { source: curator, status: draft }

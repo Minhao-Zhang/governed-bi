@@ -1,0 +1,19 @@
+Third-party data notice
+========================
+
+File:         beer_factory.sqlite
+Work:         "beer_factory" database from the BIRD benchmark
+Author:       The BIRD benchmark authors (Li et al., 2023)
+Source:       BIRD (BIg Bench for LaRge-scale Database Grounded Text-to-SQL
+              Evaluation), https://bird-bench.github.io/
+License:      Creative Commons Attribution-ShareAlike 4.0 International
+              (CC BY-SA 4.0), https://creativecommons.org/licenses/by-sa/4.0/
+Modifications: None. This is a verbatim copy of BIRD's train database
+              `beer_factory`. The accompanying `database_description/` CSVs and
+              all other BIRD databases are intentionally not included.
+
+This file is NOT covered by the repository's MIT license. It remains under
+CC BY-SA 4.0. Any modified/derived version of it (for example an obfuscated
+variant) must also be distributed under CC BY-SA 4.0 with the changes noted.
+The rest of this repository (source code) is MIT licensed and is a separately
+licensed work aggregated with this data, not a derivative of it.

@@ -11,7 +11,7 @@ the same. The Git-tracked YAML and Markdown files **are** the source of truth;
 editing them is editing the semantic layer. The graph, vector, and BM25 stores
 are rebuildable projections and are never edited directly.
 
-Work against the bundled example as you read: [`corpus/california_schools/`](../corpus/california_schools).
+Work against the bundled example as you read: [`corpus/beer_factory/`](../corpus/beer_factory).
 
 ## 1. Create the directory layout
 

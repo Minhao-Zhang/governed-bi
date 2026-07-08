@@ -1,0 +1,59 @@
+asset_type: table
+id: tbl_beer_factory_rootbeerreview
+
+# ── Facts ──
+db: beer_factory
+physical_name: rootbeerreview
+row_count: 713
+
+# ── Inference ──
+description: "One row per customer review of a brand. Composite key (CustomerID, BrandID)."
+grain: "one row = one customer x brand review"
+confidence: 0.85
+
+columns:
+  - physical_name: CustomerID
+    physical_type: INTEGER
+    logical_type: integer
+    nullable: true
+    is_unique: false
+    sample_values: [101811]
+    description: "reviewing customer (part of the composite key)"
+    role: key
+    references: col_beer_factory_customers_CustomerID
+    confidence: 0.9
+    audit:
+      evidence: "declared FK rootbeerreview.CustomerID -> customers.CustomerID"
+      provenance: { source: curator, status: draft }
+  - physical_name: BrandID
+    physical_type: INTEGER
+    logical_type: integer
+    nullable: true
+    is_unique: false
+    sample_values: [10012]
+    description: "reviewed brand (part of the composite key)"
+    role: key
+    references: col_beer_factory_rootbeerbrand_BrandID
+    confidence: 0.9
+  - physical_name: StarRating
+    physical_type: INTEGER
+    logical_type: integer
+    nullable: true
+    is_unique: false
+    sample_values: [5]
+    description: "review score, 1 to 5 stars"
+    role: measure
+    confidence: 0.9
+  - physical_name: ReviewDate
+    physical_type: DATE
+    logical_type: date
+    nullable: true
+    is_unique: false
+    sample_values: ["2013-07-15"]
+    description: "date the review was written"
+    role: dimension
+    confidence: 0.85
+
+# ── Audit ──
+audit:
+  provenance: { source: curator, status: draft }

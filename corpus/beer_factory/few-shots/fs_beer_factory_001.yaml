@@ -1,0 +1,22 @@
+asset_type: few_shot
+id: fs_beer_factory_001
+
+# ── Facts ──
+db: beer_factory
+
+# ── Inference ──
+question: "Which root beer brand has the highest average review rating?"
+sql: |
+  SELECT b.BrandName, AVG(r.StarRating) AS avg_rating
+  FROM rootbeerreview AS r
+  JOIN rootbeerbrand AS b ON r.BrandID = b.BrandID
+  WHERE r.StarRating IS NOT NULL
+  GROUP BY b.BrandName
+  ORDER BY avg_rating DESC
+bound_terms: [brand, rating]
+complexity: medium
+confidence: 0.9
+
+# ── Audit ──
+audit:
+  provenance: { source: curator, status: draft }

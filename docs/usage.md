@@ -1,17 +1,21 @@
 # Usage (Quickstart)
 
-This covers what you can actually run today. The project is design-first: the
-**corpus layer** is implemented and usable; the harnesses (curator, server,
-gateway, graph, retrieval, memory, eval, viz) are documented stubs that raise
+This covers what you can actually run today. The project is design-first, but the
+corpus layer, the SQLite connector and gateway, and catalog-driven Facts profiling
+all work now. The rest (the curator's proposer/adversary loop, the server, graph,
+retrieval, memory, eval, viz) are documented stubs that raise
 `NotImplementedError` until they are built. For what those will do, see the
-[design docs](README.md); this page stays strictly to the runnable surface.
+[design docs](README.md); this page stays on the runnable surface.
 
 | Area | Status | Where |
 |---|---|---|
-| Corpus schemas, IDs, validator, loader, CLI | **runnable** | `src/governed_bi/corpus/` |
-| Example corpus (`california_schools`) | **runnable** | `corpus/california_schools/` |
-| Dev workflow (install, validate, test) | **runnable** | this page |
-| curator / server / gateway / graph / retrieval / memory / eval / viz | design only | `docs/`, stubs in `src/governed_bi/` |
+| Corpus schemas, IDs, validator, loader, CLI | runnable | `src/governed_bi/corpus/` |
+| Example corpus (`beer_factory`, real BIRD DB) | runnable | `corpus/beer_factory/` |
+| SQLite connector + gateway (read-only, audit) | runnable | `src/governed_bi/gateway/` |
+| Facts profiling + physical-existence check | runnable | `src/governed_bi/curator/profile.py` |
+| Dev workflow (install, validate, test) | runnable | this page |
+| Postgres / Redshift connectors | seam (optional extras) | `src/governed_bi/gateway/connectors/` |
+| curator proposer/adversary, server, graph, retrieval, memory, eval, viz | design only | `docs/`, stubs |
 
 ## Prerequisites
 
@@ -38,7 +42,7 @@ The corpus CLI checks ID conventions and reference integrity. A green run is the
 
 ```bash
 # validate the bundled example (defaults to the corpus/ directory)
-uv run python -m governed_bi.corpus.cli corpus/california_schools
+uv run python -m governed_bi.corpus.cli corpus/beer_factory
 
 # validate everything under corpus/
 uv run python -m governed_bi.corpus.cli
@@ -50,10 +54,10 @@ uv run python -m governed_bi.corpus.cli --help
 Output on success:
 
 ```
-CI green: 9 assets, 1 skills, 0 findings.
+CI green: 16 assets, 1 skills, 0 findings.
 ```
 
-On failure it lists each finding (for example `dangling-ref [metric_frpm_rate]:
+On failure it lists each finding (for example `dangling-ref [metric_revenue]:
 metric.base_table -> 'tbl_missing' does not resolve`) and exits non-zero.
 
 Exit codes: `0` green, `1` findings, `2` bad usage or path not found. That makes
@@ -71,7 +75,7 @@ from pathlib import Path
 from governed_bi.corpus import load_corpus, validate_corpus, is_green, parse_asset
 
 # Load a DB's corpus (YAML assets + Markdown skills) into typed models.
-corpus = load_corpus(Path("corpus"), db="california_schools")
+corpus = load_corpus(Path("corpus"), db="beer_factory")
 print(len(corpus.assets), "assets;", len(corpus.skills), "skills")
 
 # Run the same checks the CLI runs.
@@ -93,6 +97,31 @@ print(table.id, table.asset_type)
 
 `Corpus.for_server()` is the consumption contract in code: it is what the server
 is allowed to see (Facts + Inference, never Audit, and never an excluded asset).
+
+## Connect to a database
+
+The gateway wraps a per-dialect connector. SQLite is implemented (read-only, with
+an audit log and a forced row cap); Postgres and Redshift are seams behind the
+`postgres` / `redshift` optional extras. Point it at a SQLite file and you can
+introspect the catalog, profile the Facts tier, and run guarded queries:
+
+```python
+from governed_bi.gateway import SqliteConnector, Gateway, Identity
+from governed_bi.curator.profile import profile_database
+
+conn = SqliteConnector("data/bird/mydb.sqlite")     # opens read-only
+tables = profile_database(conn, db="mydb")           # Facts-tier table assets
+gw = Gateway(conn)
+result = gw.execute(
+    "SELECT COUNT(*) FROM some_table",
+    Identity(user="dev", all_access=True),
+)
+print(result.rows, gw.audit_log)
+```
+
+See [`data/README.md`](../data/README.md) for how to vendor a small BIRD SQLite
+file. Once you have one, `validate_corpus(assets, connector=conn)` also runs the
+physical-existence check (every `physical_name` exists in the live catalog).
 
 ## Run the tests
 

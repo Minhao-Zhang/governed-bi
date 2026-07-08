@@ -10,7 +10,7 @@ flowchart LR
     subgraph Implemented
         Config["config.py<br/>environment toggles"]
         CorpusPkg["corpus package<br/>schemas, IDs, loader, validator, CLI"]
-        ExampleCorpus["corpus/california_schools<br/>worked YAML + Markdown corpus"]
+        ExampleCorpus["corpus/beer_factory<br/>worked YAML + Markdown corpus"]
         Tests["tests/test_corpus.py<br/>corpus smoke tests"]
     end
 

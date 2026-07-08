@@ -224,7 +224,7 @@ class JoinAsset(_Strict):
     # ── Facts (referenced physical columns exist in the catalog) ──
     left_table: str
     right_table: str
-    on: str  # physical-name equality, e.g. "biao_3.lie_2 = biao_1.lie_0"
+    on: str  # physical-name equality, e.g. "transaction.CustomerID = customers.CustomerID"
 
     # ── Inference (the EXISTENCE of the edge is inferred) ──
     cardinality: Cardinality | None = None

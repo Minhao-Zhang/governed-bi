@@ -7,7 +7,7 @@ they need a live catalog / the eval split, so they belong to the eval harness.
 
 Run it with:
 
-    uv run python -m governed_bi.corpus.cli corpus/california_schools
+    uv run python -m governed_bi.corpus.cli corpus/beer_factory
     uv run python -m governed_bi.corpus.cli --help
 """
 

@@ -1,0 +1,6 @@
+# Machine-generated, rebuildable corpus output (profiled Facts, curator drafts).
+# Not the curated source of truth (that lives in corpus/, git-tracked). Ignored
+# because it can be regenerated from the database.
+*
+!.gitignore
+!README.md

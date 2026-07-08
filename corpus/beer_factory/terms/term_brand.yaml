@@ -1,0 +1,14 @@
+asset_type: term
+id: term_brand
+
+# ── Inference ──
+name: "brand"
+synonyms: ["root beer brand", "label", "make"]
+binding: { asset_type: table, asset_id: tbl_beer_factory_rootbeerbrand }
+related_terms: []
+confidence: 0.8
+
+# ── Audit ──
+audit:
+  evidence: "'brand'/'label' refer to the rootbeerbrand entity across questions"
+  provenance: { source: curator, status: draft }

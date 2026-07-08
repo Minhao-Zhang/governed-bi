@@ -12,6 +12,7 @@ See ``docs/asset-schemas.md`` and D9 in ``docs/design-decisions.md``.
 from __future__ import annotations
 
 from .loader import Corpus, Skill, load_corpus
+from .serialize import dump_asset, dump_skill, write_corpus
 from .schemas import (
     Asset,
     Column,
@@ -34,6 +35,8 @@ __all__ = [
     "Corpus",
     "FewShotAsset",
     "Finding",
+    "dump_asset",
+    "dump_skill",
     "JoinAsset",
     "MetricAsset",
     "NegativeExampleAsset",
@@ -47,4 +50,5 @@ __all__ = [
     "parse_asset",
     "parse_skill_frontmatter",
     "validate_corpus",
+    "write_corpus",
 ]

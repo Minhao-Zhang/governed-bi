@@ -1,0 +1,16 @@
+asset_type: metric
+id: metric_revenue
+
+# ── Inference ──
+name: "total revenue"
+base_table: tbl_beer_factory_transaction
+expression: "SUM(PurchasePrice)"
+dimensions: [customer, brand, transaction_date]
+rules:
+  - { kind: filter, note: "count only completed sales (all rows in transaction)" }
+confidence: 0.75
+
+# ── Audit ──
+audit:
+  evidence: "PurchasePrice is the per-sale amount; recurring SUM over sales in seed queries"
+  provenance: { source: curator, status: draft, version: "0.1.0" }
