@@ -99,7 +99,7 @@ The full stage-by-stage design is in [Server](server.md), along with the three p
 > cache on success. TTL 15 min. Single global threshold, a known gap that is
 > not tuned per domain. See the *Data Agent Memory Design Overview* §5.
 
-Guardrails, in order (fail-closed on any, all five enforced): syntax → policy blacklist → AST column allowlist → term-semantics → cost. The AST allowlist is scope-aware (resolves each column against its own query scope and blocks star projections); term-semantics licenses the retrieved tables plus the join plan's Steiner points (not just the exact retrieved set) and blocks cross-namespace table names. The cost layer is a structural cross-join guard for now; numeric EXPLAIN-based cost (Postgres / Redshift) is future per-dialect work. Stage-by-stage detail is in [Server](server.md) step 8.
+Guardrails, in order (fail-closed on any, all five enforced): syntax → policy blacklist → AST column allowlist → term-semantics → cost. The AST allowlist is scope-aware (resolves each column against its own query scope and blocks star projections); term-semantics licenses the retrieved tables plus their FK join-neighborhood and the join plan's Steiner points (not just the exact retrieved set, so it is decoupled from retrieval recall) and blocks cross-namespace table names. The cost layer is a structural cross-join guard for now; numeric EXPLAIN-based cost (Postgres / Redshift) is future per-dialect work. Stage-by-stage detail is in [Server](server.md) step 8.
 
 > **Bounded self-repair (generation → guardrails → execution)**
 >
