@@ -1,4 +1,4 @@
-"""Environment toggles + reusable numbers.
+"""Environment toggles + reusable numbers + model configuration.
 
 Environments are **toggles, not architecture forks** (Architecture §9). The same
 code runs in both; only these switches differ. Bake the abstractions in now so
@@ -6,12 +6,22 @@ prod is a config flip, not a rewrite.
 
 The numeric defaults are the "reusable numbers" starting points (Architecture
 §7); tune against the BIRD-Obfuscation eval before trusting them.
+
+Model choices (provider, LLM, embedding) live in a project-level config file
+(``governed_bi.toml`` at the repo root) parsed by :func:`load_settings`, so the
+whole system reads one source of truth and a model swap is a config edit, not a
+code change. **The API key is never stored in the file** - it is read from an
+environment variable named by ``ModelConfig.api_key_env`` (default
+``OPENAI_API_KEY``) at call time. This keeps secrets out of git.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import os
+import tomllib
+from dataclasses import dataclass, field, replace
 from enum import Enum
+from pathlib import Path
 
 
 class Environment(str, Enum):
@@ -40,8 +50,33 @@ ROUTE_MEMORY_BUDGETS: dict[str, MemoryBudget] = {
 
 
 @dataclass(frozen=True)
+class ModelConfig:
+    """Which models the LLM and embedding seams call, and where the key lives.
+
+    Provider-agnostic by shape, OpenAI by default (the current project decision).
+    The concrete clients live in ``governed_bi.llm``; this record only names what
+    they should use, so swapping a model is a config edit. ``api_key_env`` names
+    an environment variable - the key itself is **never** stored here or in the
+    config file.
+    """
+
+    provider: str = "openai"
+    llm_model: str = "gpt-5.5"
+    llm_reasoning_effort: str = "low"  # low | medium | high (provider-specific)
+    llm_max_output_tokens: int | None = None  # None = provider default
+    embedding_model: str = "text-embedding-3-small"
+    embedding_dimensions: int | None = None  # None = model default (1536 for -3-small)
+    api_key_env: str = "OPENAI_API_KEY"
+
+    def api_key(self) -> str | None:
+        """Read the API key from the configured environment variable, or None."""
+        return os.environ.get(self.api_key_env)
+
+
+@dataclass(frozen=True)
 class Settings:
-    """Runtime configuration. Construct via ``Settings.for_env(...)``."""
+    """Runtime configuration. Construct via ``Settings.for_env(...)`` or load a
+    project config file with :func:`load_settings`."""
 
     environment: Environment
 
@@ -74,19 +109,85 @@ class Settings:
         default_factory=lambda: dict(ROUTE_MEMORY_BUDGETS)
     )
 
+    # ── Model seam configuration (see load_settings / governed_bi.toml) ──
+    models: ModelConfig = field(default_factory=ModelConfig)
+
     @classmethod
-    def for_env(cls, environment: Environment | str) -> "Settings":
+    def for_env(
+        cls, environment: Environment | str, *, models: ModelConfig | None = None
+    ) -> "Settings":
         env = Environment(environment)
+        base = dict(models=models) if models is not None else {}
         if env is Environment.dev:
             return cls(
                 environment=env,
                 auto_accept_corpus=True,
                 single_all_access_identity=True,
                 hard_block_suspect_columns=True,
+                **base,
             )
         return cls(
             environment=env,
             auto_accept_corpus=False,
             single_all_access_identity=False,
             hard_block_suspect_columns=False,
+            **base,
         )
+
+
+# The project config file lives at the repo root. Kept here so callers do not
+# hard-code the path; overridable via the ``GOVERNED_BI_CONFIG`` env var (useful
+# for tests and alternate deployments).
+_CONFIG_FILENAME = "governed_bi.toml"
+
+
+def _default_config_path() -> Path | None:
+    """Locate ``governed_bi.toml``: the env override, else walk up from here to
+    the first ancestor that contains it. Returns None when no file is found (so
+    callers fall back to built-in defaults)."""
+    override = os.environ.get("GOVERNED_BI_CONFIG")
+    if override:
+        p = Path(override)
+        return p if p.is_file() else None
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / _CONFIG_FILENAME
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _model_config_from_table(table: dict) -> ModelConfig:
+    """Build a :class:`ModelConfig` from a ``[models]`` TOML table, ignoring keys
+    it does not recognise so a forward-compatible file never crashes an old build.
+    """
+    known = {f for f in ModelConfig.__dataclass_fields__}
+    kwargs = {k: v for k, v in table.items() if k in known}
+    return ModelConfig(**kwargs)
+
+
+def load_settings(path: str | Path | None = None) -> Settings:
+    """Load :class:`Settings` from the project config file.
+
+    Reads ``[runtime].environment`` (default ``dev``) and the ``[models]`` table
+    from ``governed_bi.toml``. Missing file or missing tables fall back to the
+    built-in defaults, so this is always safe to call. The API key is **not** read
+    here - :meth:`ModelConfig.api_key` reads it from the environment on demand.
+    """
+    resolved = Path(path) if path is not None else _default_config_path()
+    if resolved is None or not resolved.is_file():
+        return Settings.for_env(Environment.dev)
+
+    data = tomllib.loads(resolved.read_text(encoding="utf-8"))
+    runtime = data.get("runtime", {})
+    env = runtime.get("environment", Environment.dev.value)
+    models = _model_config_from_table(data.get("models", {}))
+    settings = Settings.for_env(env, models=models)
+
+    # Optional [runtime] overrides for the environment toggles, so a deployment
+    # can, e.g., soft-warn on suspect columns without switching the whole env.
+    overrides = {
+        k: runtime[k]
+        for k in ("auto_accept_corpus", "single_all_access_identity", "hard_block_suspect_columns")
+        if k in runtime
+    }
+    return replace(settings, **overrides) if overrides else settings

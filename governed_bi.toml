@@ -1,0 +1,29 @@
+# Project-level configuration for governed-bi.
+#
+# One source of truth for model choices and environment toggles, parsed by
+# governed_bi.config.load_settings(). Swapping a model is an edit here, not a
+# code change.
+#
+# SECURITY: never put an API key in this file. The key is read at call time from
+# the environment variable named by [models].api_key_env (default OPENAI_API_KEY).
+
+[runtime]
+# dev  = BIRD scale: auto-accept corpus, single all-access identity, hard-block
+#        suspect columns, files + SQLite.
+# prod = enterprise scale: PR + owner + CI, real user + gateway RLS, soft-warn.
+environment = "dev"
+
+[models]
+# Provider-agnostic by shape; OpenAI by current project decision.
+provider = "openai"
+
+# LLM used by the curator proposer and the server SQL generator.
+llm_model = "gpt-5.5"
+llm_reasoning_effort = "low"     # low | medium | high
+
+# Embedding model for the retrieval vector channel and the SQL semantic cache.
+# The search space is small, so a compact model is enough; swap freely.
+embedding_model = "text-embedding-3-small"
+
+# Environment variable that holds the API key (the key itself never lives here).
+api_key_env = "OPENAI_API_KEY"
