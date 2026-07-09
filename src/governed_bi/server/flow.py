@@ -12,10 +12,12 @@ never a confident wrong number. SQL generation is a pluggable seam
 (:class:`~governed_bi.server.sqlgen.SqlGenerator`); the default deterministic
 generator handles metric / KPI questions so the whole path runs without a model.
 
-This is the deterministic core. The full design fronts it with a LangGraph DAG
-and middleware (``before_model`` / ``wrap_tool_call``), the semantic SQL cache
-(``server.cache``), and working memory (D8); those wrap this function, they do
-not change its contract.
+This is the deterministic core. The LangGraph harness that fronts it is built in
+``server.graph`` (a StateGraph DAG whose nodes reuse the helpers here, with
+``before_model`` / ``wrap_tool_call`` middleware realized as the context and
+guardrail nodes); ``answer_question_graph`` there is Answer-equivalent to this
+function. The semantic SQL cache (``server.cache``) is wired in here; working
+memory (D8) still wraps this contract without changing it.
 """
 
 from __future__ import annotations

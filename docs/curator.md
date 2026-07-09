@@ -24,8 +24,13 @@ maintainer**: cold-start plus ongoing drift-repair. Untended corpora rot
 > the lever that makes the curator arm (Arm 2) beat the no-layer arm (Arm 1). Still
 > seams: LLM authoring of **joins / terms / metrics / rules / skills**, the
 > **per-asset adversary `refute`** (probe queries), and the **self-eval train-EX
-> loop**. The sections below describe the full design; a step marked *(seam)* is
-> model-backed and not yet built.
+> loop**. The **deepagents harness** itself is built (`curator/deep_agent.py`):
+> `build_curator_agent` wires a deep agent over grounded tools - `profile_facts`
+> (the Facts tier) and `run_probe_query` (a read-only SQL probe = the live refute
+> primitive) - with a LangChain model (`agents` extra). Construction is verified
+> offline; running the autonomous loop needs a live model. The sections below
+> describe the full design; a step marked *(seam)* is model-backed and not yet
+> run.
 
 ## Inputs / outputs
 

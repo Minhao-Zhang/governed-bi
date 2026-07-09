@@ -22,6 +22,8 @@ Curator and server have opposite risk profiles. They use different harnesses but
 | Autonomy | maximum (explore) | minimum (fail-closed) |
 | Harness | `deepagents` | `LangGraph` + middleware |
 
+*Built:* both harnesses exist behind the `agents` extra, over LangChain-backed model clients. Server = `server.graph` (a LangGraph `StateGraph` DAG, Answer-equivalent to the plain `answer_question`); curator = `curator.deep_agent` (a deepagents agent over Facts-profiling + read-only-probe tools, construction verified offline, live run model-gated).
+
 > **Curator = permanent maintainer**
 >
 > Not a one-time bootstrapper. Cold-start is its first job, but drift-repair is

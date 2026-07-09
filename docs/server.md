@@ -14,6 +14,8 @@ auditable** (two-harness split; `LangGraph` + middleware). Counterpart to the
 
 A **deterministic LangGraph DAG with conditional routing** (design-spine #2, never autonomous ReAct). Middleware: `before_model` injects context (working memory, RLS scope, semantic-layer router); `wrap_tool_call` runs the guardrails, and fail-closed lives here.
 
+> *Built:* two entry points over one set of tested building blocks. `server.flow.answer_question` is the plain deterministic reference; `server.graph.build_serve_graph` / `answer_question_graph` is the **LangGraph `StateGraph`** harness (nodes: ingest → refuse_gate → prepare → cache → retrieve+context → generate → guardrail → execute → stamp; the self-repair loop is a graph cycle back to `generate`). The `before_model` / `wrap_tool_call` middleware maps to the context and guardrail nodes. The two are Answer-equivalent by construction (the graph nodes call the same helpers), asserted in the tests. The LangGraph harness needs the `agents` extra.
+
 ## The flow
 
 1. **Ingest**: question + identity (D7, as-user) + working memory (D8, session-scoped).

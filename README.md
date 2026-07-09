@@ -41,14 +41,15 @@ data/bird/             beer_factory.sqlite (BIRD, CC BY-SA 4.0; see NOTICE)
 corpus/                the semantic layer (Git = source of truth); worked example under beer_factory/
 src/governed_bi/
   config.py            environment toggles + reusable numbers + model config (ModelConfig, load_settings)
-  llm/                 done: ChatClient/Embedder seams (lazy OpenAI + deterministic offline defaults)
+  llm/                 done: ChatClient/Embedder seams (raw OpenAI + LangChain + deterministic offline defaults)
   corpus/              done: schemas, IDs, CI validator, loader, serializer, CLI
   gateway/             done (SQLite): connector + read-only gateway; Postgres/Redshift seams; five-layer guardrails
   curator/             done: Facts profiling, HeuristicProposer + LlmProposer, adversary review, curate loop
   graph/               done: FK graph projection + Steiner-tree join planning + FK join-neighborhood
   retrieval/           done: RVGD BM25 + grounding + vector channel (embedder-gated, RRF fusion)
   memory/              done: working memory (D8); episodic/correction protocol seams
-  server/              done: serve DAG, routing, context assembly, SQL gen (template + LLM), self-repair, SQL cache, reliability stamp
+  server/              done: serve DAG, routing, context assembly, SQL gen (template + LLM), self-repair, SQL cache, stamp; LangGraph harness in graph.py
+  curator/             + deep_agent.py: the deepagents build harness
   eval/                done: execution accuracy, arm harness, refuse-gate
   viz/                 done: read-only audit cockpit (Streamlit, swappable UI)
 tests/                 unit + end-to-end suites across all of the above
@@ -75,8 +76,10 @@ Runnable today with no model or network: the full ask -> answer serve pipeline
 bounded self-repair, reliability stamp) over the committed beer_factory DB, plus
 the curator scaffold, memory, eval, and the read-only viz cockpit. Core
 dependencies are intentionally minimal (pydantic, pyyaml, networkx, sqlglot);
-the Postgres/Redshift connectors and `langgraph` / `deepagents` are optional /
-deferred.
+the Postgres/Redshift connectors are optional extras. The agent harnesses
+(server = LangGraph `StateGraph`, curator = deepagents, with LangChain model
+clients) live behind the `agents` extra and run on the deterministic offline
+model doubles without a key.
 
 ### Models & configuration
 
@@ -86,16 +89,31 @@ effort) for generation/curation and `text-embedding-3-small` for the vector
 channel and SQL cache. All are swappable by editing the file.
 
 ```bash
-uv sync --extra openai          # install the OpenAI clients (optional)
+uv sync --extra agents          # LangGraph + deepagents + LangChain model clients
+uv sync --extra openai          # (alternative) the minimal raw-openai client only
 export OPENAI_API_KEY=sk-...     # the key is read from the env, never stored
 ```
 
-The OpenAI clients (`governed_bi.llm.OpenAiChatClient` / `OpenAiEmbedder`) are
-imported lazily behind the `ChatClient` / `Embedder` protocols, and each has a
-deterministic offline default (`StaticChatClient`, `HashingEmbedder`) so tests
-and the default pipeline need neither the dependency nor a key. To use a real
-model, inject the clients: `answer_question(..., sql_generator=LlmSqlGenerator(...),
-embedder=..., cache=SqlCache(...))`.
+The model clients are imported lazily behind the `ChatClient` / `Embedder`
+protocols, and each has a deterministic offline default (`StaticChatClient`,
+`HashingEmbedder`) so tests and the default pipeline need neither the dependency
+nor a key. To use a real model, build a LangChain client and inject it:
+
+```python
+from governed_bi.config import load_settings
+from governed_bi.llm import LangChainChatClient, LangChainEmbedder
+from governed_bi.server import LlmSqlGenerator, SqlCache
+from governed_bi.server.graph import answer_question_graph  # LangGraph harness
+
+models = load_settings().models
+chat = LangChainChatClient.from_config(models)
+answer = answer_question_graph(
+    question, identity, corpus=corpus, gateway=gateway, settings=settings, session_id=sid,
+    sql_generator=LlmSqlGenerator(chat, dialect="sqlite"),
+    embedder=LangChainEmbedder.from_config(models),
+    cache=SqlCache(LangChainEmbedder.from_config(models)),
+)
+```
 
 ## License
 
