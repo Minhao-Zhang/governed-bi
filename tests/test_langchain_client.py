@@ -46,7 +46,7 @@ def test_chat_client_from_config_builds_chat_openai(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     chat = LangChainChatClient.from_config(ModelConfig())
     # Lazy import worked and produced a ChatOpenAI bound to the configured model.
-    assert chat.model.model_name == "gpt-5.5"
+    assert chat.model.model_name == "gpt-5.6-sol"
     assert isinstance(chat, ChatClient)
 
 

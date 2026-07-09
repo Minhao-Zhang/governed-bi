@@ -7,7 +7,7 @@ Two implementations of the ``SqlGenerator`` seam:
   **physical (obfuscated) identifiers** from the resolved ``PromptContext``. It is
   feedback-aware, so the flow's bounded self-repair loop can correct a rejected
   attempt. The client is injected, so tests use a scripted ``StaticChatClient``
-  and production uses ``OpenAiChatClient``.
+  and production uses a LangChain client (``LangChainChatClient``).
 - ``TemplateSqlGenerator`` (deterministic, no model): answers metric / KPI
   questions by emitting the metric's expression over its base table. Intentionally
   narrow (single-table aggregate, no grouping); anything it cannot template it
@@ -234,8 +234,9 @@ class LlmSqlGenerator:
     the flow fails closed instead of guessing.
 
     The client is injected, so tests drive it with a scripted
-    :class:`~governed_bi.llm.StaticChatClient` and production injects
-    :class:`~governed_bi.llm.OpenAiChatClient`. Implements the :class:`SqlGenerator`
+    :class:`~governed_bi.llm.StaticChatClient` and production injects a LangChain
+    client (:class:`~governed_bi.llm.LangChainChatClient`, which routes reasoning
+    models to the OpenAI Responses API). Implements the :class:`SqlGenerator`
     protocol.
     """
 

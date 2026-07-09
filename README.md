@@ -5,26 +5,63 @@ _[English](README.md) · [简体中文](README.zh.md)_
 An agentic BI / Generative-BI system: natural-language questions → **grounded,
 governed, auditable** answers over relational data.
 
-Near-term target is a **general, DB-agnostic showcase** that cold-starts from
-`{a DB connection + a handful of known-good queries}` and grows a semantic layer
-over time, evaluated on the self-built [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) dataset (execution
-accuracy). Enterprise abstractions (identity, human gate, RLS, scoped
-memory/cache) are seamed in but toggled off.
+Near-term target is a **SQLite-proven showcase** (with dialect-pluggable seams
+for other engines) that grows a reviewable semantic layer from a seed of
+known-good queries — *seed-assisted semantic-layer growth*, not a zero-prior cold
+start — evaluated on the self-built [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) dataset (execution
+accuracy). Enterprise abstractions (identity/RLS, human gate, scoped
+memory/cache) are seamed in but toggled off; enforcement belongs to a private
+enterprise fork, not this engine.
 
-> **Design-first.** The design is well ahead of the build: D1-D10 are settled
-> (see [`docs/design-decisions.md`](docs/design-decisions.md)). This repo is the
-> scaffold. The corpus layer is implemented; the harnesses are documented stubs.
+> **Design-first, and honest about maturity.** The design (D1-D10) is well ahead
+> of the build (see [`docs/design-decisions.md`](docs/design-decisions.md)). The
+> deterministic core runs end-to-end **offline**; the LangGraph/deepagents
+> harnesses are built but exercised only against deterministic model doubles —
+> **nothing has yet run against a live model**. See the [status table](#status)
+> for what is proven vs. designed vs. seamed.
 
 ## The idea in three lines
 
 - **Two harnesses over one shared substrate.** A `curator` (build) *produces*
   the corpus; a `server` (serve) *consumes* it to answer. Opposite risk
   profiles, one substrate.
-- **The corpus is the moat.** Git-tracked YAML typed assets + Markdown skills,
+- **The corpus is the intended moat** — a hypothesis the eval must prove, not yet
+  a demonstrated result. Git-tracked YAML typed assets + Markdown skills,
   curator-authored and human-audited. Git is the single source of truth; graph /
   vector / BM25 stores are rebuildable projections.
 - **Fail-closed.** Out-of-scope / missing-coverage / tripped-guardrail returns a
-  refusal or a clarifying question, never a confident wrong number.
+  refusal or a clarifying question, never a confident wrong number. Guardrails are
+  a safety gate, **not a correctness oracle** — so answers carry two separate
+  stamps: `safety_clearance` (did it pass the guardrails) and `semantic_assurance`
+  (how well-grounded), never collapsed into one "trust score".
+
+## Status
+
+What is proven vs. designed vs. merely seamed. The single biggest open risk is
+that **the LLM generator and curator have never run against a live model** — every
+test below uses deterministic offline doubles, so real generation/curation quality
+is unmeasured.
+
+| Capability | Status | Evidence |
+|---|---|---|
+| SQLite governed serve path (retrieve → context → SQL-gen → 5-layer guardrails → execute → stamp) | **Built** | `uv run pytest` — 265 offline tests |
+| Corpus contract + validation (typed YAML/MD, ID + reference integrity) | **Built** | `python -m governed_bi.corpus.cli`, CI |
+| Bounded self-repair + two-axis reliability stamp | **Built** | `tests/test_server.py` |
+| Semantic SQL cache (re-guardrail + re-execute on hit, `certified`-only admission) | **Built, off by default** | `tests/test_cache.py` |
+| LangGraph server harness (Answer-equivalent to the core flow) | **Built, offline only** | `tests/test_serve_graph.py` equivalence |
+| deepagents curator harness | **Construction-only** | `tests/test_curator_deep_agent.py` (no live run) |
+| Live-model generation / curation quality | **Unproven** | needs `OPENAI_API_KEY` + a run |
+| BIRD-Obfuscation 3-arm eval (no-layer / curator / gold) | **Partial** | curator arm scored offline; obfuscated DBs + baseline/gold arms pending |
+| `CorpusRelease` (immutable, hash-pinned serving release) | **Designed** | not implemented — see [design decisions](docs/design-decisions.md) |
+| Identity → query scope (RLS / tenant isolation) | **Seam only** | single-identity SQLite showcase; enforcement is enterprise-fork scope |
+| Postgres / Redshift execution | **Extension point** | connector seams, not implemented |
+
+**Honest one-liner:** a governed NL2SQL kernel that treats model output as
+untrusted — it constrains the accessible data surface, validates generated SQL
+structurally, separates curation from serving, and keeps the semantic layer
+reviewable. SQLite-proven and evaluation-oriented; the next milestone is showing
+that curator-built assets measurably beat a fair no-corpus baseline on
+obfuscated schemas.
 
 ## Documentation
 
@@ -86,7 +123,7 @@ model doubles without a key.
 ### Models & configuration
 
 Model choices live in one project file, [`governed_bi.toml`](governed_bi.toml),
-parsed by `governed_bi.config.load_settings()`: OpenAI `gpt-5.5` (low reasoning
+parsed by `governed_bi.config.load_settings()`: OpenAI `gpt-5.6-sol` (low reasoning
 effort) for generation/curation and `text-embedding-3-small` for the vector
 channel and SQL cache. All are swappable by editing the file.
 
@@ -115,6 +152,15 @@ answer = answer_question_graph(
     embedder=LangChainEmbedder.from_config(models),
     cache=SqlCache(LangChainEmbedder.from_config(models)),
 )
+```
+
+To exercise the **real** path (the one thing the offline tests can't), run the
+live smoke script — it drives the LLM generator + real embeddings over
+beer_factory and reports EX / refusal / decoy-touch:
+
+```bash
+export OPENAI_API_KEY=sk-...
+uv run --extra agents python scripts/live_smoke.py
 ```
 
 ## License

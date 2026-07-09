@@ -21,7 +21,13 @@ from governed_bi.server import (
     bind_terms,
     route_intent,
 )
-from governed_bi.server.answer import ReliabilityTier, UncertaintySignals, reliability_tier
+from governed_bi.server.answer import (
+    ReliabilityTier,
+    SemanticAssurance,
+    UncertaintySignals,
+    reliability_tier,
+    semantic_assurance,
+)
 from governed_bi.server.sqlgen import GeneratedSql
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
@@ -123,6 +129,16 @@ def test_reliability_tier_fenced_raw():
     assert reliability_tier(UncertaintySignals(fenced_raw_fallback=True)) is ReliabilityTier.fenced_raw
 
 
+def test_semantic_assurance_axis():
+    # The epistemic axis, distinct from safety, that the tier projects.
+    assert semantic_assurance(UncertaintySignals()) is SemanticAssurance.certified
+    assert semantic_assurance(UncertaintySignals(repaired=True)) is SemanticAssurance.heuristic
+    assert (
+        semantic_assurance(UncertaintySignals(fenced_raw_fallback=True))
+        is SemanticAssurance.unverified
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Flow: fail-closed paths (no execution needed)
 # --------------------------------------------------------------------------- #
@@ -146,6 +162,23 @@ def test_flow_no_coverage_refuses(mem_gateway, corpus, settings, identity):
     ans = _ask("Tell me about the weather on Mars", mem_gateway, corpus, settings, identity)
     assert ans.tier is ReliabilityTier.refused
     assert ans.provenance["refused_by"] == "no_coverage"
+    # A refusal clears neither axis: nothing safe was executed, nothing delivered.
+    assert ans.safety_clearance is False
+    assert ans.semantic_assurance is SemanticAssurance.none
+
+
+def test_flow_policy_block_fails_closed_without_repair(mem_gateway, corpus, settings, identity):
+    # A hard policy/DDL block (L2) must fail closed on the first attempt: feeding it
+    # back would only coach the generator to evade the policy. attempts == 1 proves
+    # no repair was attempted (contrast the scope-failure repair loop below).
+    class Rogue:
+        def generate(self, question, retrieval, corpus, *, feedback=(), context=None):
+            return GeneratedSql(sql="DROP TABLE customers", tables_used=frozenset())
+
+    ans = _ask("total revenue", mem_gateway, corpus, settings, identity, sql_generator=Rogue())
+    assert ans.tier is ReliabilityTier.refused
+    assert ans.provenance["failed_layer"] == "policy_blacklist"
+    assert ans.provenance["attempts"] == 1  # no coaching retry
 
 
 def test_flow_guardrail_blocks_out_of_scope_table(mem_gateway, corpus, settings, identity):
@@ -306,6 +339,9 @@ def test_flow_no_progress_stops_early(mem_gateway, corpus, settings, identity):
 def test_flow_governed_revenue(bird_gateway, corpus, settings, identity):
     ans = _ask("What is the total revenue?", bird_gateway, corpus, settings, identity)
     assert ans.tier is ReliabilityTier.governed
+    # A clean answer clears both axes: safe + certified (governed is their projection).
+    assert ans.safety_clearance is True
+    assert ans.semantic_assurance is SemanticAssurance.certified
     assert "SUM(PurchasePrice)" in ans.sql
     assert "total_revenue" in ans.text  # single-cell numeric answer
     assert ans.provenance["metric_id"] == "metric_revenue"

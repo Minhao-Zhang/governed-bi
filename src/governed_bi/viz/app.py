@@ -142,6 +142,11 @@ def _render_ask(corpus, sqlite_path: Path) -> None:
 
     view = presenter.answer_view(answer)
     _TIER_RENDERER.get(view.tier, st.info)(f"tier: {view.tier}")
+    # The two axes the tier collapses, shown side by side so neither is read as the
+    # other: safety is a pass/fail gate; assurance is how well-grounded (not "right").
+    axis_cols = st.columns(2)
+    axis_cols[0].metric("safety clearance", "cleared" if view.safety_clearance else "not cleared")
+    axis_cols[1].metric("semantic assurance", view.semantic_assurance)
     if view.text:
         st.write(view.text)
     if view.sql:

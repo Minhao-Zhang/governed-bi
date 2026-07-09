@@ -61,8 +61,8 @@ class ModelConfig:
     """
 
     provider: str = "openai"
-    llm_model: str = "gpt-5.5"
-    llm_reasoning_effort: str = "low"  # low | medium | high (provider-specific)
+    llm_model: str = "gpt-5.6-sol"  # GPT-5.6 flagship tier; the `gpt-5.6` alias also routes here
+    llm_reasoning_effort: str = "low"  # none | low | medium | high | xhigh | max (provider-specific)
     llm_max_output_tokens: int | None = None  # None = provider default
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int | None = None  # None = model default (1536 for -3-small)

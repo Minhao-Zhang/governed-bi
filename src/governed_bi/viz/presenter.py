@@ -107,7 +107,9 @@ class CorpusHealth:
 
 @dataclass(frozen=True)
 class AnswerView:
-    tier: str
+    tier: str  # the collapsed single-axis stamp (kept for a compact badge)
+    safety_clearance: bool  # axis 1: guardrails + authorization passed
+    semantic_assurance: str  # axis 2: how well-grounded (drives delivery), not "is it right"
     text: str | None
     sql: str | None
     escalation: str | None
@@ -254,9 +256,16 @@ def skill_views(corpus: "Corpus") -> list[SkillView]:
 
 
 def answer_view(answer: "Answer") -> AnswerView:
-    """Map a server ``Answer`` to display fields (reliability stamp + trace)."""
+    """Map a server ``Answer`` to display fields: the two stamp axes + trace.
+
+    Surfacing both axes (not just the collapsed tier) is deliberate - safety
+    clearance and semantic assurance mean different things, and the cockpit should
+    not let a reviewer read one as the other.
+    """
     return AnswerView(
         tier=answer.tier.value,
+        safety_clearance=answer.safety_clearance,
+        semantic_assurance=answer.semantic_assurance.value,
         text=answer.text,
         sql=answer.sql,
         escalation=answer.escalation,

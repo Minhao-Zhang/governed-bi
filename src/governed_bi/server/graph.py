@@ -42,6 +42,7 @@ from .flow import (
     _guardrail_feedback,
     _licensed_table_ids,
     _match_negative_example,
+    _repairable_guardrail,
     _try_cache_hit,
 )
 from .routing import bind_terms, route_intent
@@ -82,6 +83,7 @@ class ServeState(TypedDict, total=False):
     generated: Any
     progress: bool
     guard_passed: bool
+    guard_repairable: bool
     answer: Any  # the terminal Answer
 
 
@@ -205,7 +207,12 @@ def build_serve_graph(
         if verdict.passed:
             return {"guard_passed": True}
         fb, last_refusal = _guardrail_feedback(generated, verdict)
-        return {"guard_passed": False, "feedback": state["feedback"] + [fb], "last_refusal": last_refusal}
+        return {
+            "guard_passed": False,
+            "guard_repairable": _repairable_guardrail(verdict),
+            "feedback": state["feedback"] + [fb],
+            "last_refusal": last_refusal,
+        }
 
     def execute_node(state: ServeState) -> dict:
         generated = state["generated"]
@@ -253,6 +260,8 @@ def build_serve_graph(
     def after_guardrail(state: ServeState):
         if state.get("guard_passed"):
             return "execute"
+        if not state.get("guard_repairable"):
+            return "refuse"  # hard policy block: fail closed, don't coach a retry
         return "generate" if state["attempts"] < MAX_REPAIR_ATTEMPTS else "refuse"
 
     def after_execute(state: ServeState):
