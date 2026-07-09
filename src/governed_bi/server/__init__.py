@@ -28,11 +28,18 @@ from .answer import Answer, ReliabilityTier, UncertaintySignals, assemble, relia
 from .context import PromptContext, assemble_context
 from .flow import answer_question
 from .routing import Route, bind_terms, route_intent
-from .sqlgen import GeneratedSql, RepairFeedback, SqlGenerator, TemplateSqlGenerator
+from .sqlgen import (
+    GeneratedSql,
+    LlmSqlGenerator,
+    RepairFeedback,
+    SqlGenerator,
+    TemplateSqlGenerator,
+)
 
 __all__ = [
     "Answer",
     "GeneratedSql",
+    "LlmSqlGenerator",
     "PromptContext",
     "ReliabilityTier",
     "RepairFeedback",
