@@ -69,7 +69,7 @@ flowchart TD
     RefChecks --> MetricRefs["metric.base_table -> table pool"]
     RefChecks --> RuleRefs["rule.scope -> asset or column pool"]
     RefChecks --> FewShotLeak["optional few-shot leakage guard<br/>source_refs subset train_refs"]
-    RefChecks --> CatalogHook["optional physical-existence hook<br/>pending gateway catalog reader"]
+    RefChecks --> CatalogHook["optional physical-existence hook<br/>via the gateway catalog reader"]
 
     TableRefs --> Findings["list[Finding]"]
     JoinRefs --> Findings
@@ -232,7 +232,7 @@ flowchart LR
     Metric -->|DERIVED_FROM<br/>base_table + expression| Table
     Metric -->|DERIVED_FROM<br/>expression columns| Column
 
-    Corpus["Corpus.for_server()"] -. input .-> Projection["build_graph()<br/>pending networkx.MultiDiGraph"]
+    Corpus["Corpus.for_server()"] -. input .-> Projection["build_graph()<br/>networkx.MultiDiGraph"]
     Projection -. emits .-> Table
     Projection -. emits .-> Term
 ```

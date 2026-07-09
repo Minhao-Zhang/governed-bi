@@ -1,8 +1,8 @@
 # Server Diagrams
 
-The server package is currently a contract scaffold for the planned serve-time
-DAG. These diagrams reflect `docs/server.md` and the stubbed modules in
-`src/governed_bi/server/`, `gateway/`, `retrieval/`, and `graph/`.
+The serve-time DAG is implemented. These diagrams reflect `docs/server.md` and
+the built modules in `src/governed_bi/server/` (including the LangGraph harness
+in `server/graph.py`), `gateway/`, `retrieval/`, and `graph/`.
 
 ## Answer pipeline
 

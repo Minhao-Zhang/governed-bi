@@ -4,9 +4,12 @@ This directory is split by level of detail so individual Mermaid diagrams are
 easy to review and fix. The diagrams intentionally distinguish implemented code
 from design-level scaffolding.
 
-> **Implementation note:** the corpus layer is implemented. The server, curator,
-> gateway, graph, retrieval, memory, eval, and viz packages currently define the
-> intended boundaries and contracts, with most runtime functions still pending.
+> **Implementation note:** the whole ask -> answer pipeline is implemented and
+> tested (corpus, gateway + five-layer guardrails, graph + Steiner planner,
+> retrieval, context assembly, serve flow with self-repair + SQL cache, memory,
+> eval, viz), and both agent harnesses (LangGraph serve DAG, deepagents curator)
+> are built behind the `agents` extra. These diagrams show the contracts; a few
+> nodes labelled "future" are seams (e.g. Neo4j, live-model curation).
 
 ## Recommended reading by complexity
 
