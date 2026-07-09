@@ -1,11 +1,10 @@
-# Curator Diagrams
+# Curator 图表
 
 _[English](curator.md) · [简体中文](curator.zh.md)_
 
-The curator package is currently a design scaffold. It is the offline build-side
-harness that writes the corpus.
+curator 包目前是一个设计脚手架。它是负责写入 corpus 的离线构建侧 harness。
 
-## Curator build-loop data flow
+## Curator 构建循环数据流
 
 ```mermaid
 flowchart TD
@@ -28,11 +27,9 @@ flowchart TD
     Mode -->|prod / enterprise| PullRequest["Open PR for human certification"]
 ```
 
-## Asset lifecycle state machine
+## 资产生命周期状态机
 
-The three boxes are the persisted `provenance.status` values. The adversary's
-verdict (accept / revise / reject) drives the transitions out of `proposed`; it
-is not itself a stored status.
+这三个方框是持久化的 `provenance.status` 取值。adversary 的判定结果（accept / revise / reject）驱动着从 `proposed` 出发的状态转换；判定结果本身并不是一个存储的状态。
 
 ```mermaid
 stateDiagram-v2
@@ -49,7 +46,7 @@ stateDiagram-v2
     Certified --> Proposed: drift repair proposes an update
 ```
 
-## Proposer and adversary sequence
+## Proposer 与 adversary 时序图
 
 ```mermaid
 sequenceDiagram
@@ -80,7 +77,7 @@ sequenceDiagram
     CI-->>Corpus: green or findings
 ```
 
-## Drift-repair feedback loop
+## 漂移修复(drift-repair)反馈循环
 
 ```mermaid
 flowchart LR
@@ -93,4 +90,3 @@ flowchart LR
     Corpus --> CI["CI + PR / auto-accept"]
     CI --> Server
 ```
-

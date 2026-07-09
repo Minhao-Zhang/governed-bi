@@ -1,5 +1,7 @@
 # Usage (Quickstart)
 
+_[English](usage.md) · [简体中文](usage.zh.md)_
+
 The full ask -> answer pipeline runs end to end today over the committed
 `beer_factory` database, and needs no model or network: it falls back to
 deterministic offline defaults (a template SQL generator, a hashing embedder).

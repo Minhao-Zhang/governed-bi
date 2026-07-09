@@ -1,12 +1,10 @@
-# Corpus Diagrams
+# Corpus 图表
 
 _[English](corpus.md) · [简体中文](corpus.zh.md)_
 
-The corpus package is the implemented center of the repo. It loads Git-tracked
-YAML assets and Markdown skills, validates them, and exposes different views for
-server runtime and human audit.
+corpus 包是本仓库已实现的核心。它加载 Git 跟踪的 YAML 资产和 Markdown 技能（skill），对其进行校验，并针对 server 运行时和人工审计分别暴露不同的视图。
 
-## Corpus consumption contract
+## Corpus 消费契约
 
 ```mermaid
 flowchart LR
@@ -30,7 +28,7 @@ flowchart LR
     ServerView -. rebuilds .-> Generated
 ```
 
-## Loader internals
+## 加载器内部实现
 
 ```mermaid
 flowchart TD
@@ -55,7 +53,7 @@ flowchart TD
     Corpus --> ForServer["for_server()<br/>copy assets, remove Audit,<br/>drop governance.excluded"]
 ```
 
-## Validation internals
+## 校验内部实现
 
 ```mermaid
 flowchart TD
@@ -83,7 +81,7 @@ flowchart TD
     Findings --> Green{"is_green(findings)?"}
 ```
 
-## Pydantic asset model
+## Pydantic 资产模型
 
 ```mermaid
 classDiagram
@@ -220,7 +218,7 @@ classDiagram
     SkillFrontmatter --> Provenance
 ```
 
-## Graph projection edge taxonomy
+## 图投影边类型
 
 ```mermaid
 flowchart LR
@@ -239,7 +237,7 @@ flowchart LR
     Projection -. emits .-> Term
 ```
 
-## Corpus CLI sequence
+## Corpus CLI 时序
 
 ```mermaid
 sequenceDiagram
@@ -261,4 +259,3 @@ sequenceDiagram
         CLI-->>Developer: print findings and exit 1
     end
 ```
-

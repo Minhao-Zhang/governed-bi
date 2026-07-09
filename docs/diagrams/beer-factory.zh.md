@@ -1,12 +1,11 @@
-# Beer Factory Example Diagrams
+# 啤酒厂示例图表
 
 _[English](beer-factory.md) · [简体中文](beer-factory.zh.md)_
 
-These diagrams ground the architecture in the worked example under
-`corpus/beer_factory/`, which is authored over the real BIRD `beer_factory`
-database in `data/bird/beer_factory.sqlite`.
+这些图表将架构落实到 `corpus/beer_factory/` 下的实操示例中，该示例编写自
+`data/bird/beer_factory.sqlite` 中真实的 BIRD `beer_factory` 数据库。
 
-## Semantic mini-graph
+## 语义微图
 
 ```mermaid
 flowchart LR
@@ -62,7 +61,7 @@ flowchart LR
     Skill -->|warns against| ColTxnCC
 ```
 
-## Top-rated-brand question sequence
+## 评分最高品牌问题序列图
 
 ```mermaid
 sequenceDiagram
@@ -95,7 +94,7 @@ sequenceDiagram
     end
 ```
 
-## Example refusal path
+## 拒答路径示例
 
 ```mermaid
 sequenceDiagram
@@ -113,7 +112,7 @@ sequenceDiagram
     Server-->>User: not answerable from this data - contact owner
 ```
 
-## Few-shot to SQL mapping
+## few-shot 到 SQL 的映射
 
 ```mermaid
 flowchart TD

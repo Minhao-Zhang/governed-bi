@@ -1,5 +1,7 @@
 # Corpus authoring
 
+_[English](corpus-authoring.md) · [简体中文](corpus-authoring.zh.md)_
+
 How to write and validate corpus assets by hand. The [asset schemas](asset-schemas.md)
 page is the field-by-field reference; this page is the task-oriented walkthrough.
 

@@ -1,5 +1,7 @@
 # governed-bi design
 
+_[English](README.md) · [简体中文](README.zh.md)_
+
 Design for an agentic BI / Generative-BI system: natural-language questions →
 grounded, governed, auditable answers over enterprise relational data.
 

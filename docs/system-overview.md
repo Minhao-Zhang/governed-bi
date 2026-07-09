@@ -1,5 +1,7 @@
 # Agentic BI System
 
+_[English](system-overview.md) · [简体中文](system-overview.zh.md)_
+
 > **What this is**
 >
 > Design for an agentic BI / Generative-BI system: natural-language questions →

@@ -1,5 +1,7 @@
 # External design sources
 
+_[English](references.md) · [简体中文](references.zh.md)_
+
 The design docs reference these sources. They live outside this repo (design
 vault / upstream projects); listed here so the in-text references resolve.
 

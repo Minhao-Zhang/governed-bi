@@ -1,5 +1,7 @@
 # Agentic BI Glossary
 
+_[English](glossary.md) · [简体中文](glossary.zh.md)_
+
 Canonical terms for the [Agentic BI System](system-overview.md). When a term
 below conflicts with how something is being described, the term below wins.
 

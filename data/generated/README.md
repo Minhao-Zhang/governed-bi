@@ -1,5 +1,7 @@
 # data/generated/
 
+_[English](README.md) · [简体中文](README.zh.md)_
+
 Default target for machine-generated corpus output: profiled Facts assets today,
 curator drafts later. Written by `governed_bi.corpus.write_corpus(...)`.
 

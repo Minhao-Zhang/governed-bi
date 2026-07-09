@@ -1,5 +1,7 @@
 # data/
 
+_[English](README.md) · [简体中文](README.zh.md)_
+
 A small, real BIRD SQLite database, vendored for development and tests.
 
 ## What's here

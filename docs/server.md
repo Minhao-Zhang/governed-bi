@@ -1,5 +1,7 @@
 # Agentic BI Server
 
+_[English](server.md) · [简体中文](server.zh.md)_
+
 The serve-side agent for the [Agentic BI System](system-overview.md). It is the
 online governed agent that *consumes* the corpus to answer, **fail-closed and
 auditable** (two-harness split; `LangGraph` + middleware). Counterpart to the

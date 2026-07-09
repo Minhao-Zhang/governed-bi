@@ -1,55 +1,53 @@
-# Agentic BI Asset Schemas
+# Agentic BI 资产 Schema
 
 _[English](asset-schemas.md) · [简体中文](asset-schemas.zh.md)_
 
-The per-asset YAML field spec for the [Agentic BI System](system-overview.md)
-corpus. Concretizes **D9** in [Design decisions](design-decisions.md) (Git+YAML
-typed assets, curator-authored / human-audited); storage rationale in
-[Architecture](architecture.md) §5; term definitions in [Glossary](glossary.md).
-Adapted from *《从数据到智能》* Ch.3, with the authoring model inverted.
+这是 [Agentic BI 系统](system-overview.zh.md) corpus 的逐资产 YAML 字段规范。具体化了
+[设计决策](design-decisions.zh.md)中的 **D9**（Git+YAML 类型化资产，由 curator 撰写、
+人工审核）；存储方案的理由见[架构](architecture.zh.md)第 5 节；术语定义见
+[术语表](glossary.zh.md)。改编自 *《从数据到智能》* 第 3 章，但撰写模式方向相反。
 
-> This is the canonical field spec. The Pydantic implementation lives in
-> [`src/governed_bi/corpus/schemas.py`](../src/governed_bi/corpus/schemas.py);
-> ID conventions in [`ids.py`](../src/governed_bi/corpus/ids.py); the CI
-> reference-integrity checker in
-> [`validate.py`](../src/governed_bi/corpus/validate.py).
+> 这是权威的字段规范。Pydantic 实现见
+> [`src/governed_bi/corpus/schemas.py`](../src/governed_bi/corpus/schemas.py)；
+> ID 约定见 [`ids.py`](../src/governed_bi/corpus/ids.py)；CI
+> 引用完整性检查器见
+> [`validate.py`](../src/governed_bi/corpus/validate.py)。
 
-## Two principles (the backbone)
+## 两大原则（基石）
 
-- **P1: Three field tiers.** Every asset's fields split into **Facts** (read from the catalog/data, never inferred), **Inference** (curator writes, or gold fills; this is the semantic layer), and **Audit** (why the inference was made, for reference only). Different tiers follow different rules (below).
-- **P2: Universal fields, project-specific values only.** No field name is ever BIRD-specific. BIRD, enterprise deployments, and any future project share the *exact same schema*; only the values (which DB, which SQL dialect, which `source_refs`) differ. BIRD-eval-specific rules (e.g. leakage guards) live in the eval harness, never in the schema.
+- **P1：三个字段层。** 每个资产的字段分为三层：**Facts**（从 catalog/数据中读取，绝不推断）、**Inference**（由 curator 撰写，或由 gold 填充；这正是语义层）、以及 **Audit**（记录做出该推断的理由，仅供参考）。不同层遵循不同的规则（见下文）。
+- **P2：字段通用，只有取值才是项目特定的。** 没有任何字段名是 BIRD 专属的。BIRD、企业级部署，以及未来的任何项目，共享*完全相同的 schema*；只有取值（用哪个 DB、哪种 SQL 方言、哪些 `source_refs`）会不同。BIRD 评测专属的规则（例如 leakage guard）存在于 eval harness 中，绝不存在于 schema 里。
 
-## Two representations: YAML for structure, Markdown for procedure
+## 两种表示形式：YAML 表示结构，Markdown 表示流程
 
-The corpus is **not YAML-only.** Two representations, split by access pattern:
+该 corpus **并非只有 YAML。** 存在两种表示形式，按访问模式划分：
 
-- **YAML typed assets** carry *structured, atomic, per-entity* content: Facts + definitions (`table`/`column`/`join`/`metric`/`term`/`rule`/`few_shot`/`negative_example`). Machine-parsed, CI-checked, graph-projected, retrieved as discrete units.
-- **Markdown skills / reference docs** carry *prose, cross-entity, procedural* content: routing triggers, gotchas, query patterns, domain overview. Retrieved (vector + BM25) and injected as narrative. They **reference YAML assets by ID and never duplicate their data.**
+- **YAML 类型化资产**承载*结构化、原子化、按实体划分*的内容：Facts 加各类定义（`table`/`column`/`join`/`metric`/`term`/`rule`/`few_shot`/`negative_example`）。由机器解析、经 CI 检查、投影到图中，并作为离散单元被检索。
+- **Markdown skill / 参考文档**承载*行文式、跨实体、程序性*的内容：路由触发条件、注意事项（gotcha）、查询模式、领域概览。通过检索（向量 + BM25）获取，并以叙述形式注入。它们**通过 ID 引用 YAML 资产，绝不重复其数据。**
 
-Why both: you can't CI-check or graph-project a prose blob, and you can't cleanly express *"IF the question is about revenue, start from the transaction fact table, DO NOT use the brand list price"* in a per-column field, since that's cross-entity procedure. Anthropic and the book draw the same split.
+为什么两者都需要：你没法对一段行文式内容做 CI 检查或投影进图，也没法把"如果问题是关于收入的，就从交易事实表出发，不要用品牌零售价"这样跨实体的流程干净地表达成某个逐列字段，因为这本身就是跨实体的流程。Anthropic 和这本书采用的是同样的划分方式。
 
-> **Skills are the highest-value output, and curator-only**
+> **Skill 是价值最高的产出，且只有 curator 才能产出**
 >
-> Anthropic's result: same model, **<21% without skills, 95%+ with them**.
-> That's the single biggest lever. Skills have **no gold counterpart** (nothing
-> in the manifests derives them), so **Arm 3 has no skills**. That is exactly
-> why the curator (Arm 2) can *beat* the gold ceiling on skill-sensitive
-> questions (D4).
+> Anthropic 的结果：同一模型，没有 skill 时**低于 21%**，有 skill 时**95%以上**。
+> 这是单一的最大杠杆。Skill **没有 gold 对应物**（manifest 中没有任何东西能推导出
+> 它），因此 **Arm 3 没有 skill**。这正是为什么 curator（Arm 2）能在对 skill 敏感的
+> 问题上*超越* gold 上限（D4）的原因。
 
-## The consumption contract (who reads which tier)
+## 消费契约（谁读取哪一层）
 
-| Consumer | Facts | Inference | Audit |
+| 消费方 | Facts | Inference | Audit |
 |---|---|---|---|
-| **Server** (SQL generation) | ✅ | ✅ | ❌ **never injected** |
-| **Viz / audit surface** | ✅ | ✅ | ✅ |
-| **Gold-diff** (Arm 2 vs Arm 3) | n/a (identical in all arms) | ✅ the diff target | n/a |
-| **Retrieval index** (R/V/G/D) | ✅ | ✅ | ❌ |
+| **Server**（SQL 生成） | ✅ | ✅ | ❌ **绝不注入** |
+| **Viz / 审计界面** | ✅ | ✅ | ✅ |
+| **Gold-diff**（Arm 2 对比 Arm 3） | n/a（在所有 arm 中相同） | ✅ 该 diff 的目标 | n/a |
+| **检索索引**（R/V/G/D） | ✅ | ✅ | ❌ |
 
-The loader enforces the contract: the server's context is built from Facts + Inference only. Audit-tier prose (evidence, provenance) can therefore be as verbose as humans need without costing the server tokens or adding noise. If Audit ever bloats the files, the escape hatch is a sidecar (not needed at BIRD scale).
+loader 强制执行这一契约：server 的上下文仅由 Facts 加 Inference 构建。因此 Audit 层的文本（证据、溯源）可以按人类需要写得再详尽，也不会消耗 server 的 token，也不会引入噪声。如果 Audit 层把文件撑得过大，退路是拆分成 sidecar 文件（在 BIRD 的规模下尚不需要）。
 
-## Governance overrides (human-authored, outside the three tiers)
+## 治理覆盖（由人类撰写，位于三层字段之外）
 
-One field is authored by neither the catalog nor the curator, but by a **human owner** (D6): `governance.excluded`. On a column or table, when a human sets it `true` after review, the asset is **removed entirely** from everything the server sees (retrieval, the presented schema, the graph) in **all environments, no toggle, permanently**. It is still shown in the viz/audit surface (marked, with reason) so the exclusion is auditable, and guardrail L3 hard-blocks it as defense-in-depth.
+有一个字段既不是由 catalog 撰写、也不是由 curator 撰写，而是由**人类所有者**撰写（D6）：`governance.excluded`。在某一列或某个表上，当人类审核后将其设为 `true`，该资产就会从 server 所能看到的一切（检索、呈现给它的 schema、图）中**被彻底移除**，并且是在**所有环境中、没有开关、永久生效**。它仍会显示在 viz / 审计界面中（带有标记与原因），从而使这一排除动作可被审计；护栏 L3 也会将其硬性拦截，作为纵深防御的一层。
 
 ```yaml
 # on tbl_beer_factory_transaction, column CreditCardNumber
@@ -60,17 +58,17 @@ governance:
   at: "2026-07-08"
 ```
 
-Distinct from the curator's `reliability.status: suspect`:
+这与 curator 的 `reliability.status: suspect` 不同：
 
 | | `reliability: suspect` | `governance.excluded` |
 |---|---|---|
-| Author | curator (AI), adversary-checked | human owner (certified) |
-| Means | "looks unreliable" | "decided: never use" |
-| Serve effect | soft-warn or hard-block (env-toggle) | **removed entirely**, all envs, no toggle |
+| 撰写者 | curator（AI），经 adversary 检查 | 人类所有者（经认证） |
+| 含义 | “看起来不可靠” | “已决定：永不使用” |
+| 服务时的效果 | 软性警告或硬性拦截（可按环境切换） | **彻底移除**，所有环境，无开关 |
 
-Escalation path: curator flags `suspect` → human reviews (D6) → leaves it, or escalates to `excluded`. Kept **out of the autonomous eval arms** (so Arm 2 stays pure-curator); it's the human-in-the-loop governance capability for enterprise deployments.
+升级路径：curator 标记为 `suspect` → 人类审核（D6） → 维持原状，或升级为 `excluded`。这一机制**排除在自主评测 arm 之外**（以使 Arm 2 保持纯 curator）；它是面向企业级部署的人机协同治理能力。
 
-## Directory layout
+## 目录结构
 
 ```
 corpus/
@@ -86,12 +84,12 @@ corpus/
   _generated/    # search index, embeddings, compiled graph (derived, gitignored, rebuildable)
 ```
 
-## ID conventions (CI regex-checked)
+## ID 约定（CI 用正则表达式检查）
 
-| Asset | ID format | Example |
+| 资产 | ID 格式 | 示例 |
 |---|---|---|
 | table | `tbl_<db>_<name>` | `tbl_beer_factory_customers` |
-| column *(inline; id derived by loader)* | `col_<db>_<table>_<physical>` | `col_beer_factory_customers_CustomerID` |
+| column *（内联；ID 由 loader 推导）* | `col_<db>_<table>_<physical>` | `col_beer_factory_customers_CustomerID` |
 | join | `join_<left>_<right>` | `join_transaction_customers` |
 | few_shot | `fs_<db>_<n>` | `fs_beer_factory_001` |
 | term | `term_<name>` | `term_revenue` |
@@ -99,11 +97,11 @@ corpus/
 | rule | `rule_<name>` | `rule_boolean_flags` |
 | negative_example | `neg_<db>_<n>` | `neg_beer_factory_001` |
 
-The **physical ↔ meaning bridge** runs through every table/column: `physical_name` is the identifier as it exists in the live DB (obfuscated for BIRD, cryptic in enterprise data). SQL emits this; the Inference tier carries the *meaning*. The curator's whole job is filling meaning for cryptic physical names, and this is identical in BIRD and enterprise deployments.
+**物理 ↔ 含义桥梁**贯穿每一个表/列：`physical_name` 是该字段在实际数据库中存在的标识符（在 BIRD 中经过混淆处理，在企业数据中则本身就晦涩难懂）。SQL 输出的正是这个标识符；而 Inference 层承载的是它的*含义*。curator 的全部工作，就是为晦涩难懂的物理名称填充含义，这一点在 BIRD 与企业级部署中完全相同。
 
 ---
 
-## Asset: `table` (with inline columns)
+## 资产：`table`（带内联列）
 
 ```yaml
 # tables/tbl_beer_factory_customers.yaml
@@ -162,7 +160,7 @@ audit:
   provenance: { source: curator, status: draft }
 ```
 
-## Asset: `join` (FK is inferred; BIRD withholds it)
+## 资产：`join`（FK 由推断得出；BIRD 会隐去它）
 
 ```yaml
 # joins/join_transaction_customers.yaml
@@ -185,7 +183,7 @@ audit:
   provenance: { source: curator, status: draft }
 ```
 
-## Asset: `few_shot`
+## 资产：`few_shot`
 
 ```yaml
 # few-shots/fs_beer_factory_001.yaml
@@ -215,7 +213,7 @@ audit:
   # That is a harness rule, not a schema rule (P2).
 ```
 
-## Asset: `term` (synonyms + relationships inline)
+## 资产：`term`（内联同义词与关系）
 
 ```yaml
 # terms/term_revenue.yaml
@@ -236,7 +234,7 @@ audit:
   provenance: { source: curator, status: draft }
 ```
 
-## Asset: `metric` (inline rules; no per-asset gold, D4)
+## 资产：`metric`（内联规则；没有逐资产的 gold，D4）
 
 ```yaml
 # metrics/metric_revenue.yaml
@@ -258,7 +256,7 @@ audit:
   provenance: { source: curator, status: draft, version: "0.1.0" }
 ```
 
-## Asset: `rule` / `context` (standalone)
+## 资产：`rule` / `context`（独立）
 
 ```yaml
 # rules/rule_boolean_flags.yaml
@@ -281,9 +279,9 @@ audit:
   provenance: { source: curator, status: draft }
 ```
 
-## Asset: `negative_example`
+## 资产：`negative_example`
 
-Marks a question class as **unanswerable from this data** → fires the refuse-gate's canned escalation (D5). Curator-proposed from self-eval coverage gaps (dev) or owner-curated (prod); adversary-checked; matched at serve time by semantic similarity.
+把某一类问题标记为**无法从这份数据中回答** → 触发 refuse-gate 预设的升级处理（D5）。由 curator 基于 self-eval 覆盖缺口提出（dev 环境），或由所有者整理（prod 环境）；经 adversary 检查；在 serve 时按语义相似度匹配。
 
 ```yaml
 # negatives/neg_beer_factory_001.yaml
@@ -305,9 +303,9 @@ audit:
   provenance: { source: curator, status: draft }
 ```
 
-## Asset: `skill` (Markdown, not YAML)
+## 资产：`skill`（Markdown，非 YAML）
 
-Prose procedural knowledge per domain. Frontmatter carries the same provenance as YAML assets (auditable, but no gold). The body is retrieved and injected into the server prompt.
+按领域组织的行文式程序性知识。Frontmatter 携带与 YAML 资产相同的溯源信息（可审计，但没有 gold）。正文会被检索并注入到 server 的 prompt 中。
 
 ```markdown
 ---
@@ -343,36 +341,36 @@ rolls up to `rootbeerbrand`.
 - `transaction.CreditCardNumber` is PII and is excluded; never select it.
 ```
 
-Skills reference typed assets by ID; they do **not** restate the assets' data. A skill is pure curator value-add: there is no gold skill to diff against.
+Skill 通过 ID 引用类型化资产，**不会**重述这些资产的数据。skill 完全是 curator 带来的增量价值：没有 gold skill 可以比对（diff）。
 
 ---
 
-## CI reference-integrity (the "done-enough" signal)
+## CI 引用完整性检查（“足够完成”信号）
 
-CI validates the corpus and its pass doubles as the curator's machine-checkable stop signal (D9):
+CI 会校验这个 corpus，而校验通过同时也充当 curator 的、可由机器检查的停止信号（D9）：
 
-- **ID regex**: every `id` matches its convention.
-- **Physical existence**: every `physical_name` / `on` column exists in the live catalog.
-- **Reference resolution**: `references`, `binding.asset_id`, `related_terms[].id`, `metric.base_table`, `rule.scope[]` all resolve to existing assets.
-- **Enum validity**: `role`, `reliability.status`, `logical_type`, `complexity`, `cardinality`, `relation`, `kind` ∈ their allowed sets.
-- *(Eval-harness layer, not schema)*: few-shot `source_refs ⊆ train split` (leakage guard).
+- **ID 正则**：每个 `id` 都匹配其约定格式。
+- **物理存在性**：每个 `physical_name` / `on` 中出现的列都存在于实际的 catalog 中。
+- **引用解析**：`references`、`binding.asset_id`、`related_terms[].id`、`metric.base_table`、`rule.scope[]` 都能解析到已存在的资产。
+- **枚举合法性**：`role`、`reliability.status`、`logical_type`、`complexity`、`cardinality`、`relation`、`kind` 均 ∈ 各自允许的取值集合。
+- *（属于 eval harness 层，不属于 schema）*：few-shot 的 `source_refs ⊆ train split`（leakage guard）。
 
-## Graph projection (all derived from YAML; Neo4j never authored)
+## 图投影（全部从 YAML 派生；Neo4j 从不被直接撰写）
 
-| Edge | From → To | Sourced from |
+| 边 | 从 → 到 | 来源 |
 |---|---|---|
-| `HAS_COLUMN` | Table → Column | inline `columns[]` |
-| `JOINS_TO` | Table → Table (props: on, cardinality, cost) | `join` |
+| `HAS_COLUMN` | Table → Column | 内联 `columns[]` |
+| `JOINS_TO` | Table → Table（属性：on、cardinality、cost） | `join` |
 | `REFERENCES` | Column → Column | `column.references` |
 | `BINDS_TO` | Term → Metric/Table/Column | `term.binding` |
 | `SYNONYM_OF` / `BROADER_THAN` / `USES` | Term → Term | `term.related_terms[]` |
 | `DERIVED_FROM` | Metric → Table/Column | `metric.base_table` / expression |
 
-BIRD uses an in-memory graph (networkx) for Steiner planning; Neo4j is the optional enterprise-scale projection.
+BIRD 使用内存中的图（networkx）做 Steiner 规划；Neo4j 是可选的企业级投影。
 
-## Gold vs curator (the same schema, two fillers)
+## Gold 对比 curator（同一个 schema，两个填充者）
 
-- **Curator (Arm 2)** fills the Inference tier by *inference*: descriptions, roles, `references`, `reliability`, `confidence`, with `audit.*_evidence` recording why.
-- **Gold (Arm 3)** fills the *same* Inference fields deterministically from the manifests: real names (rename map), FK graph (original schema), and any `reliability.status=suspect` flags the manifest records, with `provenance.source: gold`, `confidence: 1.0`.
-- Facts are identical across arms (read from the catalog). The gold-diff compares the Inference tier only.
-- **Skills (Markdown) are curator-only**: no manifest derives them, so Arm 3 has none. This is the mechanism by which Arm 2 can *exceed* the gold ceiling on skill-sensitive questions.
+- **Curator（Arm 2）** 通过*推断*来填充 Inference 层：描述（description）、角色（role）、`references`、`reliability`、`confidence`，并用 `audit.*_evidence` 记录原因。
+- **Gold（Arm 3）** 从 manifest 中以确定性的方式填充*相同的* Inference 字段：真实名称（通过 rename map）、FK 图（来自原始 schema），以及 manifest 中记录的任何 `reliability.status=suspect` 标记，并附带 `provenance.source: gold`、`confidence: 1.0`。
+- Facts 在所有 arm 中都是相同的（均从 catalog 中读取）。gold-diff 只比较 Inference 层。
+- **Skill（Markdown）只由 curator 产出**：没有任何 manifest 能推导出它们，所以 Arm 3 没有 skill。这正是 Arm 2 能在对 skill 敏感的问题上*超越* gold 上限的机制所在。

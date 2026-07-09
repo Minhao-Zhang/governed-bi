@@ -1,5 +1,7 @@
 # Agentic BI Curator
 
+_[English](curator.md) · [简体中文](curator.zh.md)_
+
 The build-side agent for the [Agentic BI System](system-overview.md). It is the
 offline agent that *produces* the corpus (two-harness split; `deepagents`). Runs
 **per-DB, independently**. Writes the corpus defined in
