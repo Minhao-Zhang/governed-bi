@@ -10,17 +10,22 @@ maintainer**: cold-start plus ongoing drift-repair. Untended corpora rot
 
 > Implementation: [`src/governed_bi/curator/`](../src/governed_bi/curator/).
 
-> **Build status (scaffold vs seam).** A deterministic **scaffold** is built and
-> runs with no model and no network: programmatic Facts profiling (`profile`), a
+> **Build status (scaffold vs seam).** A deterministic **scaffold** runs with no
+> model and no network: programmatic Facts profiling (`profile`), a
 > `HeuristicProposer` that fills column roles / confidence / provenance from Facts
 > and leaves prose `description`s to the LLM, an adversary `review` that wraps the
 > CI validator with cheap self-consistency checks, and a `curate`
 > propose -> review -> promote loop (`proposed -> draft`). The **LLM-authored
-> Inference tier** (descriptions, joins, reliability caveats, terms / metrics /
-> rules, and skills) and the **per-asset adversary `refute`** are the seams a live
-> harness plugs into; they are what make the curator arm (Arm 2) beat the no-layer
-> arm (Arm 1), and are still pending. The sections below describe the full design;
-> a step marked *(seam)* is model-backed and not yet built.
+> Inference tier** is now built as `LlmProposer` (`curator/llm_proposer.py`): it
+> composes over the heuristic (which decides roles/provenance) and layers
+> model-authored **descriptions + reliability caveats** (`suspect` + a "DO NOT USE"
+> note) via an injected `ChatClient` (OpenAI `gpt-5.5` low), never touching Facts
+> and degrading to the base proposal on a malformed response. Those caveats are
+> the lever that makes the curator arm (Arm 2) beat the no-layer arm (Arm 1). Still
+> seams: LLM authoring of **joins / terms / metrics / rules / skills**, the
+> **per-asset adversary `refute`** (probe queries), and the **self-eval train-EX
+> loop**. The sections below describe the full design; a step marked *(seam)* is
+> model-backed and not yet built.
 
 ## Inputs / outputs
 
@@ -57,7 +62,7 @@ Both the proposer's claim/evidence **and** the adversary's verdict/reasons land 
 
 ## Reliability inference (Phase 2 detail)
 
-*(Seam: design for the LLM proposer; the deterministic scaffold does not yet flag `suspect`.)* The curator flags an unreliable column via **general data-quality anomalies, not BIRD-trap-specific detectors** (P2, so it transfers to an enterprise deployment; BIRD's traps merely validate that the signals fire). Each signal contributes to a confidence score. A column is marked `suspect` only above a threshold, and the adversary independently tries to refute each caveat before it commits.
+*(Built: `LlmProposer` flags `suspect` + a "DO NOT USE" note from the table's Facts. The structured-signal scoring below is the fuller design the prompt approximates.)* The curator flags an unreliable column via **general data-quality anomalies, not BIRD-trap-specific detectors** (P2, so it transfers to an enterprise deployment; BIRD's traps merely validate that the signals fire). Each signal contributes to a confidence score. A column is marked `suspect` only above a threshold, and the adversary independently tries to refute each caveat before it commits.
 
 | Signal | Generic form | Catches (BIRD trap) |
 |---|---|---|

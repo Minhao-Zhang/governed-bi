@@ -67,7 +67,7 @@ Fork only the harness, but share the substrate. Sharing has three directions, an
 
 Markdown-first. The graph earns its place only for joins and lineage. A heavy LLM knowledge graph is deferred. Rationale: curation and structure beat representation sophistication. Anthropic's null result showed raw-corpus grep moved accuracy <1pt. See the *Data Agent Memory Design Overview*.
 
-*Built today:* retrieval runs the pure-Python **BM25** lexical channel plus deterministic grounding over the corpus relationships; embeddings (the vector / semantic channel) are deferred. The FK graph is the in-memory `networkx` projection that drives Steiner join planning; Neo4j stays the enterprise-scale projection.
+*Built today:* retrieval runs the pure-Python **BM25** lexical channel plus deterministic grounding over the corpus relationships, and a **vector / semantic channel** (embeddings, fused with BM25 via Reciprocal Rank Fusion) behind an injected `Embedder` seam, off unless an embedder is passed. The FK graph is the in-memory `networkx` projection that drives Steiner join planning; Neo4j stays the enterprise-scale projection. Model choices (the OpenAI `gpt-5.5` LLM and `text-embedding-3-small` embedder, both swappable) live in a project config file (`governed_bi.toml`, parsed by `config.load_settings`); the API key is read from the environment, never stored. The clients live in `governed_bi.llm` behind `ChatClient` / `Embedder` protocols, each with a deterministic offline default so the pipeline runs with no model or network.
 
 > **Corpus contract = Git+YAML typed assets, curator-authored / human-audited (D9)**
 >

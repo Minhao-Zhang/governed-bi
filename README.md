@@ -40,17 +40,18 @@ docs/                  design docs (canonical)
 data/bird/             beer_factory.sqlite (BIRD, CC BY-SA 4.0; see NOTICE)
 corpus/                the semantic layer (Git = source of truth); worked example under beer_factory/
 src/governed_bi/
-  config.py            environment toggles (dev/BIRD vs prod/enterprise) + reusable numbers
-  corpus/              done: schemas, IDs, CI validator, loader, CLI
-  gateway/             done (SQLite): connector + read-only gateway; Postgres/Redshift seams; guardrails stub
-  curator/             profile.py done (Facts tier); proposer/adversary/loop stubs
-  graph/               stub: FK graph projection + Steiner-tree join planning
-  retrieval/           stub: RVGD retrieval
-  memory/              stub: working / profile / episodic / correction
-  server/              stub: LangGraph serve DAG + middleware
-  eval/                stub: execution accuracy, 3-arm harness, gold oracle, refuse-gate
-  viz/                 stub: audit + edit cockpit
-tests/                 corpus + connector/gateway/profiling tests
+  config.py            environment toggles + reusable numbers + model config (ModelConfig, load_settings)
+  llm/                 done: ChatClient/Embedder seams (lazy OpenAI + deterministic offline defaults)
+  corpus/              done: schemas, IDs, CI validator, loader, serializer, CLI
+  gateway/             done (SQLite): connector + read-only gateway; Postgres/Redshift seams; five-layer guardrails
+  curator/             done: Facts profiling, HeuristicProposer + LlmProposer, adversary review, curate loop
+  graph/               done: FK graph projection + Steiner-tree join planning + FK join-neighborhood
+  retrieval/           done: RVGD BM25 + grounding + vector channel (embedder-gated, RRF fusion)
+  memory/              done: working memory (D8); episodic/correction protocol seams
+  server/              done: serve DAG, routing, context assembly, SQL gen (template + LLM), self-repair, SQL cache, reliability stamp
+  eval/                done: execution accuracy, arm harness, refuse-gate
+  viz/                 done: read-only audit cockpit (Streamlit, swappable UI)
+tests/                 unit + end-to-end suites across all of the above
 ```
 
 Modules carry docstrings that point back to the design docs and decision IDs.
@@ -69,11 +70,32 @@ The full quickstart (validate CLI, programmatic corpus API) is in
 [docs/usage.md](docs/usage.md). To write or edit corpus assets, see
 [docs/corpus-authoring.md](docs/corpus-authoring.md).
 
-Runnable today: the corpus layer, the SQLite connector and gateway, and
-catalog-driven Facts profiling. The remaining harnesses are documented stubs.
-Core dependencies are intentionally minimal (pydantic, pyyaml, networkx,
-sqlglot); the Postgres/Redshift connectors are optional extras, and `langgraph`
-/ `deepagents` are deferred until those harnesses are built.
+Runnable today with no model or network: the full ask -> answer serve pipeline
+(retrieval, context assembly, template SQL generation, five-layer guardrails,
+bounded self-repair, reliability stamp) over the committed beer_factory DB, plus
+the curator scaffold, memory, eval, and the read-only viz cockpit. Core
+dependencies are intentionally minimal (pydantic, pyyaml, networkx, sqlglot);
+the Postgres/Redshift connectors and `langgraph` / `deepagents` are optional /
+deferred.
+
+### Models & configuration
+
+Model choices live in one project file, [`governed_bi.toml`](governed_bi.toml),
+parsed by `governed_bi.config.load_settings()`: OpenAI `gpt-5.5` (low reasoning
+effort) for generation/curation and `text-embedding-3-small` for the vector
+channel and SQL cache. All are swappable by editing the file.
+
+```bash
+uv sync --extra openai          # install the OpenAI clients (optional)
+export OPENAI_API_KEY=sk-...     # the key is read from the env, never stored
+```
+
+The OpenAI clients (`governed_bi.llm.OpenAiChatClient` / `OpenAiEmbedder`) are
+imported lazily behind the `ChatClient` / `Embedder` protocols, and each has a
+deterministic offline default (`StaticChatClient`, `HashingEmbedder`) so tests
+and the default pipeline need neither the dependency nor a key. To use a real
+model, inject the clients: `answer_question(..., sql_generator=LlmSqlGenerator(...),
+embedder=..., cache=SqlCache(...))`.
 
 ## License
 
