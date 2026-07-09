@@ -150,6 +150,29 @@ def test_repair_matches_plain(bird_gateway, corpus, settings, identity):
     assert "repaired" in viagraph.provenance["uncertainty_flags"]
 
 
+def test_repair_exhaustion_matches_plain(mem_gateway, corpus, settings, identity):
+    # A generator that emits a distinct but always-off-scope query each attempt:
+    # the graph's repair cycle must hit the cap and refuse, same as the plain loop.
+    from governed_bi.server.flow import MAX_REPAIR_ATTEMPTS
+
+    class AlwaysBad:
+        def __init__(self):
+            self.n = 0
+
+        def generate(self, question, retrieval, corpus, *, feedback=(), context=None):
+            self.n += 1
+            return GeneratedSql(
+                sql=f"SELECT StarRating AS c{self.n} FROM rootbeerreview",
+                tables_used=frozenset({"tbl_beer_factory_rootbeerreview"}),
+            )
+
+    plain = answer_question("total revenue", **_kw(mem_gateway, corpus, settings, identity, sql_generator=AlwaysBad()))
+    viagraph = answer_question_graph("total revenue", **_kw(mem_gateway, corpus, settings, identity, sql_generator=AlwaysBad()))
+    assert plain.tier is ReliabilityTier.refused
+    assert plain.provenance["attempts"] == MAX_REPAIR_ATTEMPTS
+    _assert_same(plain, viagraph, provenance_keys=("refused_by", "failed_layer", "attempts"))
+
+
 def test_llm_decline_matches_plain(mem_gateway, corpus, settings, identity):
     def make_gen():
         return LlmSqlGenerator(StaticChatClient("CANNOT_ANSWER"), dialect="sqlite")
