@@ -230,6 +230,82 @@ def _try_cache_hit(
     return assemble(text=_render(result, None), sql=entry.sql, signals=signals, provenance=provenance)
 
 
+def _guardrail_feedback(generated, verdict) -> tuple[RepairFeedback, dict]:
+    """The (repair-feedback, refusal-record) pair for a guardrail rejection.
+
+    Shared by the plain loop (``answer_question``) and the LangGraph DAG so both
+    describe a block identically.
+    """
+    layer = verdict.failed_layer.value if verdict.failed_layer else None
+    fb = RepairFeedback(sql=generated.sql, stage="guardrail", reason=f"{layer}: {verdict.reason}")
+    refusal_record = {
+        "refused_by": "guardrail",
+        "escalation": _ESCALATION_GUARDRAIL,
+        "failed_layer": layer,
+        "reason": verdict.reason,
+        "sql": generated.sql,
+    }
+    return fb, refusal_record
+
+
+def _execution_feedback(generated, err: Exception) -> tuple[RepairFeedback, dict]:
+    """The (repair-feedback, refusal-record) pair for an execution error."""
+    fb = RepairFeedback(sql=generated.sql, stage="execution", reason=str(err))
+    refusal_record = {
+        "refused_by": "execution",
+        "escalation": _ESCALATION_EXECUTION,
+        "error": str(err),
+        "sql": generated.sql,
+    }
+    return fb, refusal_record
+
+
+def _finalize_success(
+    *, question, graph, generated, result, attempts, base_provenance, dialect, allowlist, licensed, cache
+) -> "Answer":
+    """Stamp + assemble a successful answer, and write back a clean one to the cache.
+
+    The stamp reflects the joins the executed SQL actually needs and whether it
+    took a repair to get here (a repaired answer is lineage, not governed). Shared
+    by ``answer_question`` and the LangGraph DAG so both stamp identically.
+    """
+    try:
+        stamp_plan = plan_joins(graph, set(generated.tables_used))
+        join_ids, min_confidence = stamp_plan.join_ids, stamp_plan.min_confidence
+    except ValueError:
+        join_ids, min_confidence = [], 1.0
+
+    signals = UncertaintySignals(
+        low_confidence_join=min_confidence < LOW_CONFIDENCE_JOIN,
+        suspect_in_scope=_suspect_in_scope(generated.sql, allowlist.suspect, dialect),
+        repaired=attempts > 1,
+    )
+    provenance = {
+        **base_provenance,
+        "metric_id": generated.metric_id,
+        "tables_used": sorted(generated.tables_used),
+        "join_ids": join_ids,
+        "min_join_confidence": min_confidence,
+        "row_count": result.row_count,
+        "truncated": result.truncated,
+        "attempts": attempts,
+    }
+    answer = assemble(
+        text=_render(result, generated), sql=generated.sql, signals=signals, provenance=provenance
+    )
+    # Write back only clean (governed) SQL, so a later cache hit is always
+    # high-confidence. Cache SQL text only, never results (D7).
+    if cache is not None and answer.tier is ReliabilityTier.governed:
+        cache.put(
+            question,
+            generated.sql,
+            licensed_tables=licensed,
+            tables_used=frozenset(generated.tables_used),
+            metric_id=generated.metric_id,
+        )
+    return answer
+
+
 def answer_question(
     question: str,
     identity: "Identity",
@@ -335,69 +411,29 @@ def answer_question(
             dialect=dialect,
         )
         if not verdict.passed:
-            layer = verdict.failed_layer.value if verdict.failed_layer else None
-            feedback.append(
-                RepairFeedback(sql=generated.sql, stage="guardrail", reason=f"{layer}: {verdict.reason}")
-            )
-            last_refusal = {
-                "refused_by": "guardrail",
-                "escalation": _ESCALATION_GUARDRAIL,
-                "failed_layer": layer,
-                "reason": verdict.reason,
-                "sql": generated.sql,
-            }
+            fb, last_refusal = _guardrail_feedback(generated, verdict)
+            feedback.append(fb)
             continue
 
         try:
             result = gateway.execute(generated.sql, identity)
         except Exception as err:  # give the generator a chance to repair, then fail closed
-            feedback.append(RepairFeedback(sql=generated.sql, stage="execution", reason=str(err)))
-            last_refusal = {
-                "refused_by": "execution",
-                "escalation": _ESCALATION_EXECUTION,
-                "error": str(err),
-                "sql": generated.sql,
-            }
+            fb, last_refusal = _execution_feedback(generated, err)
+            feedback.append(fb)
             continue
 
-        # Success. The stamp reflects the joins the executed SQL actually needs and
-        # whether it took a repair to get here (a repaired answer is lineage, not
-        # governed).
-        try:
-            stamp_plan = plan_joins(graph, set(generated.tables_used))
-            join_ids, min_confidence = stamp_plan.join_ids, stamp_plan.min_confidence
-        except ValueError:
-            join_ids, min_confidence = [], 1.0
-
-        signals = UncertaintySignals(
-            low_confidence_join=min_confidence < LOW_CONFIDENCE_JOIN,
-            suspect_in_scope=_suspect_in_scope(generated.sql, allowlist.suspect, dialect),
-            repaired=attempts > 1,
+        return _finalize_success(
+            question=question,
+            graph=graph,
+            generated=generated,
+            result=result,
+            attempts=attempts,
+            base_provenance=base_provenance,
+            dialect=dialect,
+            allowlist=allowlist,
+            licensed=licensed,
+            cache=cache,
         )
-        provenance = {
-            **base_provenance,
-            "metric_id": generated.metric_id,
-            "tables_used": sorted(generated.tables_used),
-            "join_ids": join_ids,
-            "min_join_confidence": min_confidence,
-            "row_count": result.row_count,
-            "truncated": result.truncated,
-            "attempts": attempts,
-        }
-        answer = assemble(
-            text=_render(result, generated), sql=generated.sql, signals=signals, provenance=provenance
-        )
-        # Write back only clean (governed) SQL, so a later cache hit is always
-        # high-confidence. Cache SQL text only, never results (D7).
-        if cache is not None and answer.tier is ReliabilityTier.governed:
-            cache.put(
-                question,
-                generated.sql,
-                licensed_tables=licensed,
-                tables_used=frozenset(generated.tables_used),
-                metric_id=generated.metric_id,
-            )
-        return answer
 
     # Exhausted the attempts (or the generator declined / could not improve): fail
     # closed with the most recent failure reason.
