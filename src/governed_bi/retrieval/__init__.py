@@ -19,6 +19,7 @@ reranking are later slices.
 
 from __future__ import annotations
 
+from .embedding import EmbeddingIndex, build_embedding_index, fuse_rankings
 from .rvgd import (
     BM25Index,
     RetrievalResult,
@@ -30,9 +31,12 @@ from .rvgd import (
 
 __all__ = [
     "BM25Index",
+    "EmbeddingIndex",
     "RetrievalResult",
     "asset_document",
+    "build_embedding_index",
     "build_index",
+    "fuse_rankings",
     "retrieve",
     "tokenize",
 ]

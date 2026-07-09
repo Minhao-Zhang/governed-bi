@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from ..config import Settings
     from ..corpus import Corpus
     from ..gateway import Gateway, Identity
+    from ..llm import Embedder
 
 from ..corpus.schemas import JoinAsset, NegativeExampleAsset, TableAsset
 
@@ -179,13 +180,16 @@ def answer_question(
     settings: "Settings",
     session_id: str,
     sql_generator: "SqlGenerator | None" = None,
+    embedder: "Embedder | None" = None,
 ) -> "Answer":
     """Run one question through the serve DAG, fail-closed on any guardrail or
     refuse-gate hit. ``corpus`` should be the ``for_server()`` view.
 
     ``sql_generator`` defaults to the deterministic template generator; an
     enterprise deployment injects a model-backed one implementing the same
-    ``SqlGenerator`` protocol.
+    ``SqlGenerator`` protocol. ``embedder`` (optional) turns on the retrieval
+    vector channel (BM25 + embedding cosine, fused); with none, retrieval is
+    pure lexical BM25.
     """
     route = route_intent(question)
     bound_terms = bind_terms(corpus, question)
@@ -204,7 +208,7 @@ def answer_question(
             provenance={**base_provenance, "refused_by": "refuse_gate", "negative_example": negative.id},
         )
 
-    retrieval = retrieve(corpus, question)
+    retrieval = retrieve(corpus, question, embedder=embedder)
 
     generator = sql_generator or TemplateSqlGenerator()
     graph = build_graph(corpus)
