@@ -1,21 +1,24 @@
 # Usage (Quickstart)
 
-This covers what you can actually run today. The project is design-first, but the
-corpus layer, the SQLite connector and gateway, and catalog-driven Facts profiling
-all work now. The rest (the curator's proposer/adversary loop, the server, graph,
-retrieval, memory, eval, viz) are documented stubs that raise
-`NotImplementedError` until they are built. For what those will do, see the
-[design docs](README.md); this page stays on the runnable surface.
+The full ask -> answer pipeline runs end to end today over the committed
+`beer_factory` database, and needs no model or network: it falls back to
+deterministic offline defaults (a template SQL generator, a hashing embedder).
+This page stays on the runnable surface; for the design behind it, see the
+[design docs](README.md).
 
 | Area | Status | Where |
 |---|---|---|
-| Corpus schemas, IDs, validator, loader, CLI | runnable | `src/governed_bi/corpus/` |
+| Corpus schemas, IDs, validator, loader, serializer, CLI | runnable | `src/governed_bi/corpus/` |
 | Example corpus (`beer_factory`, real BIRD DB) | runnable | `corpus/beer_factory/` |
-| SQLite connector + gateway (read-only, audit) | runnable | `src/governed_bi/gateway/` |
-| Facts profiling + physical-existence check | runnable | `src/governed_bi/curator/profile.py` |
-| Dev workflow (install, validate, test) | runnable | this page |
+| SQLite connector + gateway (read-only, audit) + five-layer guardrails | runnable | `src/governed_bi/gateway/` |
+| Curator: Facts profiling, heuristic + LLM proposer, adversary, curate loop | runnable | `src/governed_bi/curator/` |
+| Graph projection + Steiner join planning | runnable | `src/governed_bi/graph/` |
+| Retrieval (BM25 + grounding, + embedder-gated vector channel) | runnable | `src/governed_bi/retrieval/` |
+| Serve flow (route, context, SQL gen, guardrails, self-repair, cache, stamp) | runnable | `src/governed_bi/server/` |
+| Memory (working) + eval (EX, arms, refuse-gate) + viz cockpit | runnable | `src/governed_bi/{memory,eval,viz}/` |
+| Model clients (raw OpenAI / LangChain) | runnable behind `openai` / `agents` extras | `src/governed_bi/llm/` |
+| Agent harnesses (LangGraph serve DAG, deepagents curator) | runnable behind `agents` extra | `server/graph.py`, `curator/deep_agent.py` |
 | Postgres / Redshift connectors | seam (optional extras) | `src/governed_bi/gateway/connectors/` |
-| curator proposer/adversary, server, graph, retrieval, memory, eval, viz | design only | `docs/`, stubs |
 
 ## Prerequisites
 
@@ -122,6 +125,38 @@ print(result.rows, gw.audit_log)
 See [`data/README.md`](../data/README.md) for how to vendor a small BIRD SQLite
 file. Once you have one, `validate_corpus(assets, connector=conn)` also runs the
 physical-existence check (every `physical_name` exists in the live catalog).
+
+## Ask a question (serve pipeline)
+
+The serve flow routes a question, retrieves + assembles context, generates SQL,
+runs the five guardrail layers, executes as-user, and stamps the answer. With no
+model it uses the deterministic template generator (metric / KPI questions):
+
+```python
+from pathlib import Path
+from governed_bi.config import Settings, Environment
+from governed_bi.corpus import load_corpus
+from governed_bi.gateway import SqliteConnector, Gateway, Identity
+from governed_bi.server import answer_question
+
+corpus = load_corpus(Path("corpus"), db="beer_factory").for_server()
+conn = SqliteConnector("data/bird/beer_factory.sqlite")
+ans = answer_question(
+    "What is the total revenue?",
+    Identity(user="dev", all_access=True),
+    corpus=corpus,
+    gateway=Gateway(conn),
+    settings=Settings.for_env(Environment.dev),
+    session_id="s",
+)
+print(ans.tier, ans.sql, ans.text)  # -> ReliabilityTier.governed  SELECT ...  total_revenue = ...
+```
+
+To use a real OpenAI model (LLM generator, embeddings, SQL cache) or the LangGraph
+serve harness (`answer_question_graph`) and the deepagents curator, install the
+`agents` extra and inject the clients - see the **Models & configuration** section
+of the [README](../README.md). The API key is read from `OPENAI_API_KEY`, never
+stored.
 
 ## Audit cockpit (viz)
 

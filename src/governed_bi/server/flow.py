@@ -12,10 +12,12 @@ never a confident wrong number. SQL generation is a pluggable seam
 (:class:`~governed_bi.server.sqlgen.SqlGenerator`); the default deterministic
 generator handles metric / KPI questions so the whole path runs without a model.
 
-This is the deterministic core. The full design fronts it with a LangGraph DAG
-and middleware (``before_model`` / ``wrap_tool_call``), the semantic SQL cache
-(``server.cache``), and working memory (D8); those wrap this function, they do
-not change its contract.
+This is the deterministic core. The LangGraph harness that fronts it is built in
+``server.graph`` (a StateGraph DAG whose nodes reuse the helpers here, with
+``before_model`` / ``wrap_tool_call`` middleware realized as the context and
+guardrail nodes); ``answer_question_graph`` there is Answer-equivalent to this
+function. The semantic SQL cache (``server.cache``) is wired in here; working
+memory (D8) still wraps this contract without changing it.
 """
 
 from __future__ import annotations
@@ -29,7 +31,15 @@ from sqlglot import exp
 from ..gateway import check, column_allowlist
 from ..graph import build_graph, join_neighborhood, plan_joins
 from ..retrieval import retrieve
-from .answer import LOW_CONFIDENCE_JOIN, Answer, UncertaintySignals, assemble, refusal
+from .answer import (
+    LOW_CONFIDENCE_JOIN,
+    Answer,
+    ReliabilityTier,
+    UncertaintySignals,
+    assemble,
+    refusal,
+)
+from .context import assemble_context
 from .routing import bind_terms, route_intent
 from .sqlgen import RepairFeedback, SqlGenerator, TemplateSqlGenerator
 
@@ -37,6 +47,8 @@ if TYPE_CHECKING:
     from ..config import Settings
     from ..corpus import Corpus
     from ..gateway import Gateway, Identity
+    from ..llm import Embedder
+    from .cache import SqlCache
 
 from ..corpus.schemas import JoinAsset, NegativeExampleAsset, TableAsset
 
@@ -104,15 +116,10 @@ def _match_negative_example(corpus: "Corpus", question: str) -> "NegativeExample
     return None
 
 
-def _physical(corpus: "Corpus", table_id: str) -> str | None:
-    asset = corpus.by_id(table_id)
-    return asset.physical_name if isinstance(asset, TableAsset) else None
+def _licensed_table_ids(corpus, graph, retrieval, join_ids, *, hops=LICENSE_JOIN_HOPS) -> frozenset[str]:
+    """Table-asset ids the query is licensed to touch (the L4 term-semantics set).
 
-
-def _licensed_tables(corpus, graph, retrieval, join_ids, *, hops=LICENSE_JOIN_HOPS) -> frozenset[str]:
-    """Physical names the query is licensed to touch (the L4 term-semantics set).
-
-    Base table ids are the union of three sources:
+    The union of three sources:
       1. the retrieval scope (candidate tables, which already include a bound
          metric's base table via grounding);
       2. the join endpoints of ``join_ids`` (the Steiner points the plan bridges
@@ -120,7 +127,10 @@ def _licensed_tables(corpus, graph, retrieval, join_ids, *, hops=LICENSE_JOIN_HO
       3. the FK ``join_neighborhood`` of the retrieved tables, ``hops`` deep.
 
     Deliberately excludes the generator's self-declared tables so a rogue
-    generator cannot authorize a table retrieval never surfaced.
+    generator cannot authorize a table retrieval never surfaced. The physical-name
+    ``allowed_tables`` the guardrail uses is derived from the assembled context
+    (``PromptContext.allowed_table_names``) so the model sees exactly what L4 will
+    permit.
 
     Decoupling L4 from retrieval recall (source 3): the lexical retriever can miss
     a table the correct answer needs; licensing the retrieved tables' FK neighbors
@@ -140,7 +150,7 @@ def _licensed_tables(corpus, graph, retrieval, join_ids, *, hops=LICENSE_JOIN_HO
             table_ids.add(join.left_table)
             table_ids.add(join.right_table)
     table_ids |= join_neighborhood(graph, set(retrieval.table_ids), hops=hops)
-    return frozenset(p for tid in table_ids if (p := _physical(corpus, tid)) is not None)
+    return frozenset(tid for tid in table_ids if isinstance(corpus.by_id(tid), TableAsset))
 
 
 def _suspect_in_scope(sql: str, suspect: frozenset[str], dialect: str | None) -> bool:
@@ -171,6 +181,133 @@ def _render(result, generated) -> str:
     return f"{result.row_count} row(s) over [{head}]{suffix}"
 
 
+def _try_cache_hit(
+    cache, question, gateway, identity, settings, allowlist, dialect, graph, base_provenance
+) -> "Answer | None":
+    """Serve a semantic-cache hit, or return None to fall through to the pipeline.
+
+    A hit is re-guardrailed (against the licensed tables stored with it) and
+    re-executed for freshness (D7). If the re-check fails - a corpus change now
+    blocks the cached SQL - or execution errors, this returns None so the full
+    pipeline runs instead. Fail-closed: a stale/blocked cached query is never
+    served. The reliability stamp is **re-derived** from the current graph (over
+    the stored ``tables_used``), identical to a fresh miss, so it never goes stale.
+    """
+    entry = cache.lookup(question)
+    if entry is None:
+        return None
+    verdict = check(
+        entry.sql,
+        allowed_columns=set(allowlist.allowed),
+        suspect_columns=allowlist.suspect,
+        allowed_tables=entry.licensed_tables,
+        hard_block_suspect=settings.hard_block_suspect_columns,
+        dialect=dialect,
+    )
+    if not verdict.passed:
+        return None
+    try:
+        result = gateway.execute(entry.sql, identity)
+    except Exception:
+        return None
+    try:
+        stamp_plan = plan_joins(graph, set(entry.tables_used))
+        join_ids, min_confidence = stamp_plan.join_ids, stamp_plan.min_confidence
+    except ValueError:
+        join_ids, min_confidence = [], 1.0
+    signals = UncertaintySignals(
+        low_confidence_join=min_confidence < LOW_CONFIDENCE_JOIN,
+        suspect_in_scope=_suspect_in_scope(entry.sql, allowlist.suspect, dialect),
+    )
+    provenance = {
+        **base_provenance,
+        "metric_id": entry.metric_id,
+        "tables_used": sorted(entry.tables_used),
+        "join_ids": join_ids,
+        "min_join_confidence": min_confidence,
+        "row_count": result.row_count,
+        "truncated": result.truncated,
+        "cache_hit": True,
+    }
+    return assemble(text=_render(result, None), sql=entry.sql, signals=signals, provenance=provenance)
+
+
+def _guardrail_feedback(generated, verdict) -> tuple[RepairFeedback, dict]:
+    """The (repair-feedback, refusal-record) pair for a guardrail rejection.
+
+    Shared by the plain loop (``answer_question``) and the LangGraph DAG so both
+    describe a block identically.
+    """
+    layer = verdict.failed_layer.value if verdict.failed_layer else None
+    fb = RepairFeedback(sql=generated.sql, stage="guardrail", reason=f"{layer}: {verdict.reason}")
+    refusal_record = {
+        "refused_by": "guardrail",
+        "escalation": _ESCALATION_GUARDRAIL,
+        "failed_layer": layer,
+        "reason": verdict.reason,
+        "sql": generated.sql,
+    }
+    return fb, refusal_record
+
+
+def _execution_feedback(generated, err: Exception) -> tuple[RepairFeedback, dict]:
+    """The (repair-feedback, refusal-record) pair for an execution error."""
+    fb = RepairFeedback(sql=generated.sql, stage="execution", reason=str(err))
+    refusal_record = {
+        "refused_by": "execution",
+        "escalation": _ESCALATION_EXECUTION,
+        "error": str(err),
+        "sql": generated.sql,
+    }
+    return fb, refusal_record
+
+
+def _finalize_success(
+    *, question, graph, generated, result, attempts, base_provenance, dialect, allowlist, licensed, cache
+) -> "Answer":
+    """Stamp + assemble a successful answer, and write back a clean one to the cache.
+
+    The stamp reflects the joins the executed SQL actually needs and whether it
+    took a repair to get here (a repaired answer is lineage, not governed). Shared
+    by ``answer_question`` and the LangGraph DAG so both stamp identically.
+    """
+    try:
+        stamp_plan = plan_joins(graph, set(generated.tables_used))
+        join_ids, min_confidence = stamp_plan.join_ids, stamp_plan.min_confidence
+    except ValueError:
+        join_ids, min_confidence = [], 1.0
+
+    signals = UncertaintySignals(
+        low_confidence_join=min_confidence < LOW_CONFIDENCE_JOIN,
+        suspect_in_scope=_suspect_in_scope(generated.sql, allowlist.suspect, dialect),
+        repaired=attempts > 1,
+    )
+    provenance = {
+        **base_provenance,
+        "metric_id": generated.metric_id,
+        "tables_used": sorted(generated.tables_used),
+        "join_ids": join_ids,
+        "min_join_confidence": min_confidence,
+        "row_count": result.row_count,
+        "truncated": result.truncated,
+        "attempts": attempts,
+    }
+    answer = assemble(
+        text=_render(result, generated), sql=generated.sql, signals=signals, provenance=provenance
+    )
+    # Write back only clean (governed) SQL, so a later cache hit is always
+    # high-confidence. Cache SQL text only, never results (D7).
+    if cache is not None and answer.tier is ReliabilityTier.governed:
+        cache.put(
+            question,
+            generated.sql,
+            licensed_tables=licensed,
+            tables_used=frozenset(generated.tables_used),
+            metric_id=generated.metric_id,
+        )
+    return answer
+
+
 def answer_question(
     question: str,
     identity: "Identity",
@@ -180,13 +317,19 @@ def answer_question(
     settings: "Settings",
     session_id: str,
     sql_generator: "SqlGenerator | None" = None,
+    embedder: "Embedder | None" = None,
+    cache: "SqlCache | None" = None,
 ) -> "Answer":
     """Run one question through the serve DAG, fail-closed on any guardrail or
     refuse-gate hit. ``corpus`` should be the ``for_server()`` view.
 
     ``sql_generator`` defaults to the deterministic template generator; an
     enterprise deployment injects a model-backed one implementing the same
-    ``SqlGenerator`` protocol.
+    ``SqlGenerator`` protocol. ``embedder`` (optional) turns on the retrieval
+    vector channel (BM25 + embedding cosine, fused); with none, retrieval is
+    pure lexical BM25. ``cache`` (optional) is the semantic SQL cache: a hit
+    (after the refuse-gate) re-guardrails + re-executes stored SQL and skips
+    retrieval/planning/generation; a clean answer is written back on a miss.
     """
     route = route_intent(question)
     bound_terms = bind_terms(corpus, question)
@@ -205,12 +348,23 @@ def answer_question(
             provenance={**base_provenance, "refused_by": "refuse_gate", "negative_example": negative.id},
         )
 
-    retrieval = retrieve(corpus, question)
-
-    generator = sql_generator or TemplateSqlGenerator()
-    graph = build_graph(corpus)
     dialect = gateway.catalog().dialect.value
     allowlist = column_allowlist(corpus)
+    graph = build_graph(corpus)
+
+    # SQL semantic-cache fast path (D7): a hit re-guardrails + re-executes stored
+    # SQL (and re-derives the stamp from the current graph), skipping retrieval /
+    # generation. A stale or now-blocked hit falls through (fail-closed).
+    if cache is not None:
+        hit = _try_cache_hit(
+            cache, question, gateway, identity, settings, allowlist, dialect, graph, base_provenance
+        )
+        if hit is not None:
+            return hit
+
+    retrieval = retrieve(corpus, question, embedder=embedder)
+
+    generator = sql_generator or TemplateSqlGenerator()
 
     # L4 licensing scope: retrieval's tables, the Steiner points needed to connect
     # THEM, and their FK join-neighborhood (decoupling L4 from retrieval recall).
@@ -221,7 +375,13 @@ def answer_question(
         licensing_join_ids = plan_joins(graph, set(retrieval.table_ids)).join_ids
     except ValueError:
         licensing_join_ids = []
-    licensed = _licensed_tables(corpus, graph, retrieval, licensing_join_ids)
+    licensed_ids = _licensed_table_ids(corpus, graph, retrieval, licensing_join_ids)
+
+    # Resolve the licensed scope into a prompt context (schema, joins, caveats,
+    # skills, exemplars) the generator reads. The guardrail's allowed_tables is
+    # derived from it, so what the model can see == what L4 permits.
+    context = assemble_context(corpus, retrieval, licensed_table_ids=licensed_ids)
+    licensed = context.allowed_table_names()
 
     # Bounded self-repair loop: generate -> guardrail -> execute. A guardrail
     # rejection or an execution error is handed back to the generator (as
@@ -234,7 +394,9 @@ def answer_question(
     attempts = 0
 
     while attempts < MAX_REPAIR_ATTEMPTS:
-        generated = generator.generate(question, retrieval, corpus, feedback=tuple(feedback))
+        generated = generator.generate(
+            question, retrieval, corpus, feedback=tuple(feedback), context=context
+        )
         attempts += 1
         if generated is None:
             break  # the generator declined; keep the most informative refusal so far
@@ -251,57 +413,28 @@ def answer_question(
             dialect=dialect,
         )
         if not verdict.passed:
-            layer = verdict.failed_layer.value if verdict.failed_layer else None
-            feedback.append(
-                RepairFeedback(sql=generated.sql, stage="guardrail", reason=f"{layer}: {verdict.reason}")
-            )
-            last_refusal = {
-                "refused_by": "guardrail",
-                "escalation": _ESCALATION_GUARDRAIL,
-                "failed_layer": layer,
-                "reason": verdict.reason,
-                "sql": generated.sql,
-            }
+            fb, last_refusal = _guardrail_feedback(generated, verdict)
+            feedback.append(fb)
             continue
 
         try:
             result = gateway.execute(generated.sql, identity)
         except Exception as err:  # give the generator a chance to repair, then fail closed
-            feedback.append(RepairFeedback(sql=generated.sql, stage="execution", reason=str(err)))
-            last_refusal = {
-                "refused_by": "execution",
-                "escalation": _ESCALATION_EXECUTION,
-                "error": str(err),
-                "sql": generated.sql,
-            }
+            fb, last_refusal = _execution_feedback(generated, err)
+            feedback.append(fb)
             continue
 
-        # Success. The stamp reflects the joins the executed SQL actually needs and
-        # whether it took a repair to get here (a repaired answer is lineage, not
-        # governed).
-        try:
-            stamp_plan = plan_joins(graph, set(generated.tables_used))
-            join_ids, min_confidence = stamp_plan.join_ids, stamp_plan.min_confidence
-        except ValueError:
-            join_ids, min_confidence = [], 1.0
-
-        signals = UncertaintySignals(
-            low_confidence_join=min_confidence < LOW_CONFIDENCE_JOIN,
-            suspect_in_scope=_suspect_in_scope(generated.sql, allowlist.suspect, dialect),
-            repaired=attempts > 1,
-        )
-        provenance = {
-            **base_provenance,
-            "metric_id": generated.metric_id,
-            "tables_used": sorted(generated.tables_used),
-            "join_ids": join_ids,
-            "min_join_confidence": min_confidence,
-            "row_count": result.row_count,
-            "truncated": result.truncated,
-            "attempts": attempts,
-        }
-        return assemble(
-            text=_render(result, generated), sql=generated.sql, signals=signals, provenance=provenance
+        return _finalize_success(
+            question=question,
+            graph=graph,
+            generated=generated,
+            result=result,
+            attempts=attempts,
+            base_provenance=base_provenance,
+            dialect=dialect,
+            allowlist=allowlist,
+            licensed=licensed,
+            cache=cache,
         )
 
     # Exhausted the attempts (or the generator declined / could not improve): fail

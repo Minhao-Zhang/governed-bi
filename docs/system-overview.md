@@ -35,19 +35,26 @@
 >
 > corpus (schemas / loader / validate / serialize) · graph projection + Steiner
 > join planner (in-memory networkx) · gateway + five-layer guardrails · RVGD
-> retrieval (BM25 + ground expansion) · the deterministic serve flow (refuse-gate,
-> template SQL-gen, bounded self-repair, reliability stamp) · working memory ·
-> the eval scaffold (EX scorer, arm harness, refuse-gate) · the read-only viz
-> cockpit. This slice runs end-to-end with no model and no network.
+> retrieval (BM25 + ground expansion, plus an embedder-gated vector channel fused
+> with BM25 via RRF) · retrieval→context assembly · the serve flow (refuse-gate,
+> template AND LLM SQL-gen, bounded self-repair, SQL semantic cache, reliability
+> stamp) · working memory · the eval scaffold · the read-only viz cockpit · model
+> config (`governed_bi.toml`) and the `ChatClient` / `Embedder` seams (raw OpenAI +
+> LangChain + deterministic offline defaults) · the LLM curator proposer
+> (descriptions + `suspect` caveats) · the **LangGraph serve harness**
+> (`server.graph`, Answer-equivalent to the plain flow) and the **deepagents
+> curator harness** (`curator.deep_agent`, construction). The core slice runs
+> end-to-end with no model or network; the harnesses run behind the `agents` extra
+> on offline model doubles.
 
 > **Pending (code)**
 >
-> the LLM SQL generator · the LLM curator Inference tier (descriptions / joins /
-> reliability caveats / metrics / terms / rules / skills, plus the per-asset
-> adversary) · embeddings retrieval (the vector channel; BM25 is the built one) ·
-> the obfuscated BIRD eval data (a small vendored beer_factory set stands in until
-> the jsonl lands). These are the model-backed seams; the arms cannot yet show the
-> moat without them.
+> LLM authoring of the remaining Inference assets (joins / terms / metrics / rules
+> / skills) and the live per-asset adversary `refute` · the curator self-eval
+> train-EX loop · the obfuscated BIRD eval data (a small vendored beer_factory set
+> stands in until the jsonl lands) · a first run against a **live** OpenAI API
+> (everything so far uses the offline doubles). Without the eval data the arms
+> cannot yet show the moat.
 
 > **Open (design-level)**
 >

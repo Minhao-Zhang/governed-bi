@@ -20,6 +20,7 @@ Modules map to the per-DB loop (``docs/curator.md``):
 from __future__ import annotations
 
 from .adversary import review
+from .llm_proposer import LlmProposer
 from .loop import CurationResult, curate
 from .profile import profile_database
 from .proposer import HeuristicProposer, Proposer
@@ -27,6 +28,7 @@ from .proposer import HeuristicProposer, Proposer
 __all__ = [
     "CurationResult",
     "HeuristicProposer",
+    "LlmProposer",
     "Proposer",
     "curate",
     "profile_database",

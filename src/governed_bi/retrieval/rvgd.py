@@ -42,6 +42,7 @@ from ..corpus.schemas import (
 
 if TYPE_CHECKING:
     from ..corpus import Asset, Corpus
+    from ..llm import Embedder
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
@@ -171,10 +172,19 @@ def build_index(corpus: "Corpus") -> BM25Index:
     return BM25Index.from_documents({a.id: asset_document(a) for a in corpus.assets})
 
 
-def retrieve(corpus: "Corpus", question: str, *, top_k: int = 8) -> RetrievalResult:
-    """Rank corpus assets by BM25 against ``question``, then ground/expand.
+def retrieve(
+    corpus: "Corpus",
+    question: str,
+    *,
+    top_k: int = 8,
+    embedder: "Embedder | None" = None,
+) -> RetrievalResult:
+    """Rank corpus assets against ``question``, then ground/expand.
 
-    1. Rank every asset by BM25; keep the ``top_k`` with score > 0.
+    1. Rank every asset by BM25 (lexical). When an ``embedder`` is given, also rank
+       by embedding cosine (the V channel) and fuse the two with Reciprocal Rank
+       Fusion; keep the ``top_k`` fused matches. With no embedder the ranking is
+       pure BM25 (byte-for-byte the prior behavior).
     2. Ground deterministically (fixpoint): a ``term`` pulls in its binding, a
        ``metric`` pulls in its base table, and every selected table contributes
        its columns.
@@ -184,6 +194,12 @@ def retrieve(corpus: "Corpus", question: str, *, top_k: int = 8) -> RetrievalRes
     """
     index = build_index(corpus)
     ranked = index.rank(question)
+    if embedder is not None:
+        from .embedding import build_embedding_index, fuse_rankings
+
+        emb_index = build_embedding_index(corpus, embedder)
+        emb_ranked = emb_index.rank(embedder.embed_one(question))
+        ranked = fuse_rankings(ranked, emb_ranked)
     score_map: dict[str, float] = dict(ranked)
     top_ids = [doc_id for doc_id, _ in ranked[:top_k]]
 
