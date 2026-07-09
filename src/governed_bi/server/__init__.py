@@ -25,6 +25,7 @@ Retrieval, join planning, guardrails, and gateway execution live in the
 from __future__ import annotations
 
 from .answer import Answer, ReliabilityTier, UncertaintySignals, assemble, reliability_tier
+from .context import PromptContext, assemble_context
 from .flow import answer_question
 from .routing import Route, bind_terms, route_intent
 from .sqlgen import GeneratedSql, RepairFeedback, SqlGenerator, TemplateSqlGenerator
@@ -32,6 +33,7 @@ from .sqlgen import GeneratedSql, RepairFeedback, SqlGenerator, TemplateSqlGener
 __all__ = [
     "Answer",
     "GeneratedSql",
+    "PromptContext",
     "ReliabilityTier",
     "RepairFeedback",
     "Route",
@@ -40,6 +42,7 @@ __all__ = [
     "UncertaintySignals",
     "answer_question",
     "assemble",
+    "assemble_context",
     "bind_terms",
     "reliability_tier",
     "route_intent",

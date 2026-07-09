@@ -23,6 +23,7 @@ from ..corpus.schemas import MetricAsset, TableAsset
 if TYPE_CHECKING:
     from ..corpus import Corpus
     from ..retrieval import RetrievalResult
+    from .context import PromptContext
 
 
 @dataclass(frozen=True)
@@ -55,7 +56,10 @@ class SqlGenerator(Protocol):
     Returning ``None`` means "I cannot safely generate this"; the flow then fails
     closed (refuse / clarify) rather than guessing. ``feedback`` carries prior
     failed attempts in this turn so the generator can self-repair; a generator
-    that ignores it simply makes a single-shot attempt.
+    that ignores it simply makes a single-shot attempt. ``context`` is the
+    resolved :class:`~governed_bi.server.context.PromptContext` (schema, joins,
+    caveats, skills) the flow assembled; a model-backed generator reads it, the
+    deterministic template does not need it.
     """
 
     def generate(
@@ -65,6 +69,7 @@ class SqlGenerator(Protocol):
         corpus: "Corpus",
         *,
         feedback: tuple[RepairFeedback, ...] = (),
+        context: "PromptContext | None" = None,
     ) -> GeneratedSql | None:
         ...
 
@@ -88,9 +93,9 @@ class TemplateSqlGenerator:
     ``None``) when no metric was retrieved or its base table is missing.
 
     It is correct-by-construction for its narrow domain, so it ignores
-    ``feedback`` and makes the same single-shot attempt (the repair loop then
-    stops on no-progress). Self-repair is exercised by a feedback-aware
-    (model-backed) generator.
+    ``feedback`` (and ``context``) and makes the same single-shot attempt (the
+    repair loop then stops on no-progress). Self-repair is exercised by a
+    feedback-aware (model-backed) generator.
     """
 
     def generate(
@@ -100,6 +105,7 @@ class TemplateSqlGenerator:
         corpus: "Corpus",
         *,
         feedback: tuple[RepairFeedback, ...] = (),
+        context: "PromptContext | None" = None,
     ) -> GeneratedSql | None:
         metric_ids = getattr(retrieval, "metric_ids", [])
         for metric_id in metric_ids:

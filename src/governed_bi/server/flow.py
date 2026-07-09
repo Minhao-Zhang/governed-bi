@@ -30,6 +30,7 @@ from ..gateway import check, column_allowlist
 from ..graph import build_graph, join_neighborhood, plan_joins
 from ..retrieval import retrieve
 from .answer import LOW_CONFIDENCE_JOIN, Answer, UncertaintySignals, assemble, refusal
+from .context import assemble_context
 from .routing import bind_terms, route_intent
 from .sqlgen import RepairFeedback, SqlGenerator, TemplateSqlGenerator
 
@@ -104,15 +105,10 @@ def _match_negative_example(corpus: "Corpus", question: str) -> "NegativeExample
     return None
 
 
-def _physical(corpus: "Corpus", table_id: str) -> str | None:
-    asset = corpus.by_id(table_id)
-    return asset.physical_name if isinstance(asset, TableAsset) else None
+def _licensed_table_ids(corpus, graph, retrieval, join_ids, *, hops=LICENSE_JOIN_HOPS) -> frozenset[str]:
+    """Table-asset ids the query is licensed to touch (the L4 term-semantics set).
 
-
-def _licensed_tables(corpus, graph, retrieval, join_ids, *, hops=LICENSE_JOIN_HOPS) -> frozenset[str]:
-    """Physical names the query is licensed to touch (the L4 term-semantics set).
-
-    Base table ids are the union of three sources:
+    The union of three sources:
       1. the retrieval scope (candidate tables, which already include a bound
          metric's base table via grounding);
       2. the join endpoints of ``join_ids`` (the Steiner points the plan bridges
@@ -120,7 +116,10 @@ def _licensed_tables(corpus, graph, retrieval, join_ids, *, hops=LICENSE_JOIN_HO
       3. the FK ``join_neighborhood`` of the retrieved tables, ``hops`` deep.
 
     Deliberately excludes the generator's self-declared tables so a rogue
-    generator cannot authorize a table retrieval never surfaced.
+    generator cannot authorize a table retrieval never surfaced. The physical-name
+    ``allowed_tables`` the guardrail uses is derived from the assembled context
+    (``PromptContext.allowed_table_names``) so the model sees exactly what L4 will
+    permit.
 
     Decoupling L4 from retrieval recall (source 3): the lexical retriever can miss
     a table the correct answer needs; licensing the retrieved tables' FK neighbors
@@ -140,7 +139,7 @@ def _licensed_tables(corpus, graph, retrieval, join_ids, *, hops=LICENSE_JOIN_HO
             table_ids.add(join.left_table)
             table_ids.add(join.right_table)
     table_ids |= join_neighborhood(graph, set(retrieval.table_ids), hops=hops)
-    return frozenset(p for tid in table_ids if (p := _physical(corpus, tid)) is not None)
+    return frozenset(tid for tid in table_ids if isinstance(corpus.by_id(tid), TableAsset))
 
 
 def _suspect_in_scope(sql: str, suspect: frozenset[str], dialect: str | None) -> bool:
@@ -221,7 +220,13 @@ def answer_question(
         licensing_join_ids = plan_joins(graph, set(retrieval.table_ids)).join_ids
     except ValueError:
         licensing_join_ids = []
-    licensed = _licensed_tables(corpus, graph, retrieval, licensing_join_ids)
+    licensed_ids = _licensed_table_ids(corpus, graph, retrieval, licensing_join_ids)
+
+    # Resolve the licensed scope into a prompt context (schema, joins, caveats,
+    # skills, exemplars) the generator reads. The guardrail's allowed_tables is
+    # derived from it, so what the model can see == what L4 permits.
+    context = assemble_context(corpus, retrieval, licensed_table_ids=licensed_ids)
+    licensed = context.allowed_table_names()
 
     # Bounded self-repair loop: generate -> guardrail -> execute. A guardrail
     # rejection or an execution error is handed back to the generator (as
@@ -234,7 +239,9 @@ def answer_question(
     attempts = 0
 
     while attempts < MAX_REPAIR_ATTEMPTS:
-        generated = generator.generate(question, retrieval, corpus, feedback=tuple(feedback))
+        generated = generator.generate(
+            question, retrieval, corpus, feedback=tuple(feedback), context=context
+        )
         attempts += 1
         if generated is None:
             break  # the generator declined; keep the most informative refusal so far
