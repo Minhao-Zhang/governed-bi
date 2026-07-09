@@ -21,7 +21,7 @@ maintainer**: cold-start plus ongoing drift-repair. Untended corpora rot
 > Inference tier** is now built as `LlmProposer` (`curator/llm_proposer.py`): it
 > composes over the heuristic (which decides roles/provenance) and layers
 > model-authored **descriptions + reliability caveats** (`suspect` + a "DO NOT USE"
-> note) via an injected `ChatClient` (OpenAI `gpt-5.5` low), never touching Facts
+> note) via an injected `ChatClient` (OpenAI `gpt-5.6-sol` low), never touching Facts
 > and degrading to the base proposal on a malformed response. Those caveats are
 > the lever that makes the curator arm (Arm 2) beat the no-layer arm (Arm 1). Still
 > seams: LLM authoring of **joins / terms / metrics / rules / skills**, the

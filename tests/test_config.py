@@ -19,7 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 def test_model_config_defaults_are_the_project_decision():
     m = ModelConfig()
     assert m.provider == "openai"
-    assert m.llm_model == "gpt-5.5"
+    assert m.llm_model == "gpt-5.6-sol"
     assert m.llm_reasoning_effort == "low"
     assert m.embedding_model == "text-embedding-3-small"
     assert m.api_key_env == "OPENAI_API_KEY"
@@ -47,7 +47,7 @@ def test_load_project_config_file():
     """The committed governed_bi.toml carries the project's model decision."""
     settings = load_settings(REPO_ROOT / "governed_bi.toml")
     assert settings.environment is Environment.dev
-    assert settings.models.llm_model == "gpt-5.5"
+    assert settings.models.llm_model == "gpt-5.6-sol"
     assert settings.models.llm_reasoning_effort == "low"
     assert settings.models.embedding_model == "text-embedding-3-small"
     # dev toggles come from for_env, not the file.

@@ -28,13 +28,13 @@ from typing import TYPE_CHECKING
 import sqlglot
 from sqlglot import exp
 
-from ..gateway import check, column_allowlist
+from ..gateway import GuardrailLayer, check, column_allowlist
 from ..graph import build_graph, join_neighborhood, plan_joins
 from ..retrieval import retrieve
 from .answer import (
     LOW_CONFIDENCE_JOIN,
     Answer,
-    ReliabilityTier,
+    SemanticAssurance,
     UncertaintySignals,
     assemble,
     refusal,
@@ -250,6 +250,24 @@ def _guardrail_feedback(generated, verdict) -> tuple[RepairFeedback, dict]:
     return fb, refusal_record
 
 
+# Guardrail failures the repair loop must NOT coach a retry around: feeding a hard
+# policy/DDL block back to the generator is just pressure to evade the policy, not
+# a fixable syntax slip. Scope failures (L3 column allowlist / L4 term-semantics)
+# stay repairable *by decision* (2026-07-09, design-decisions D11): the
+# FK-neighborhood + repair loop is the design's deliberate false-refusal-reduction
+# mechanism (see guardrails docstring). Only L2 fails closed without a retry.
+_NON_REPAIRABLE_LAYERS = frozenset({GuardrailLayer.policy_blacklist})
+
+
+def _repairable_guardrail(verdict) -> bool:
+    """Whether a guardrail rejection may be fed back for another attempt.
+
+    A hard policy block (L2) fails closed immediately; everything else is repaired
+    within the attempt cap.
+    """
+    return verdict.failed_layer not in _NON_REPAIRABLE_LAYERS
+
+
 def _execution_feedback(generated, err: Exception) -> tuple[RepairFeedback, dict]:
     """The (repair-feedback, refusal-record) pair for an execution error."""
     fb = RepairFeedback(sql=generated.sql, stage="execution", reason=str(err))
@@ -295,9 +313,10 @@ def _finalize_success(
     answer = assemble(
         text=_render(result, generated), sql=generated.sql, signals=signals, provenance=provenance
     )
-    # Write back only clean (governed) SQL, so a later cache hit is always
-    # high-confidence. Cache SQL text only, never results (D7).
-    if cache is not None and answer.tier is ReliabilityTier.governed:
+    # Cache admission gates on the *semantic* axis, never on safety alone: only a
+    # ``certified`` answer (clean run, no uncertainty flag) is written back, so a
+    # later hit is always high-assurance. Cache SQL text only, never results (D7).
+    if cache is not None and answer.semantic_assurance is SemanticAssurance.certified:
         cache.put(
             question,
             generated.sql,
@@ -414,6 +433,8 @@ def answer_question(
         )
         if not verdict.passed:
             fb, last_refusal = _guardrail_feedback(generated, verdict)
+            if not _repairable_guardrail(verdict):
+                break  # hard policy block: fail closed, don't coach a retry
             feedback.append(fb)
             continue
 

@@ -1,0 +1,44 @@
+name: CI
+
+# Enforce the PR-gated governance narrative the docs describe: corpus validation
+# (D9) + the full test suite must pass on every push/PR. The deterministic core
+# runs offline (no OpenAI key, no network); the harness + cockpit extras are
+# installed so the LangGraph-equivalence and viz tests RUN here rather than being
+# silently skipped.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+
+      # Core + `agents` (LangGraph/deepagents/LangChain harnesses) + `viz`
+      # (Streamlit cockpit). Installing the extras is what makes the equivalence
+      # and viz-smoke tests execute instead of `importorskip`-skipping.
+      - name: Sync (with agents + viz extras)
+        run: uv sync --extra agents --extra viz
+
+      # The governed end-to-end tests execute against the committed BIRD database.
+      # Fail loudly if it is ever removed, rather than letting the highest-value
+      # integration tests silently skip (the reproducible-demo gap a review flagged).
+      - name: Require the committed demo database
+        run: test -f data/bird/beer_factory.sqlite
+
+      # Corpus validation is the curator's "done-enough" gate (D9): ID conventions
+      # + reference integrity across every db under corpus/.
+      - name: Validate corpus
+        run: uv run python -m governed_bi.corpus.cli
+
+      # -rs surfaces the reason for any skip in the log, so a newly-skipped
+      # integration path is visible in review even when the suite is green.
+      - name: Run tests
+        run: uv run pytest -q -rs
