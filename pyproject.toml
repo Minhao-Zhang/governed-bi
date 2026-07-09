@@ -26,6 +26,10 @@ redshift = ["redshift-connector>=2.1"]
 # governed_bi.viz.app; the UI-agnostic view models in governed_bi.viz.presenter
 # carry no UI dependency, so a different frontend swaps in app.py alone.
 viz = ["streamlit>=1.30"]
+# The LLM + embedding seams (governed_bi.llm). Imported lazily, so the engine
+# runs on the deterministic offline clients without it; install to use the
+# OpenAI-backed generator, curator proposer, vector retrieval, and SQL cache.
+openai = ["openai>=1.40"]
 # Heavy agent frameworks are deferred until the harnesses are built:
 #   curator -> deepagents ; server -> langgraph + middleware.
 
