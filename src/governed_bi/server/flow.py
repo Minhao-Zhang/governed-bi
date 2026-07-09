@@ -29,7 +29,14 @@ from sqlglot import exp
 from ..gateway import check, column_allowlist
 from ..graph import build_graph, join_neighborhood, plan_joins
 from ..retrieval import retrieve
-from .answer import LOW_CONFIDENCE_JOIN, Answer, UncertaintySignals, assemble, refusal
+from .answer import (
+    LOW_CONFIDENCE_JOIN,
+    Answer,
+    ReliabilityTier,
+    UncertaintySignals,
+    assemble,
+    refusal,
+)
 from .context import assemble_context
 from .routing import bind_terms, route_intent
 from .sqlgen import RepairFeedback, SqlGenerator, TemplateSqlGenerator
@@ -39,6 +46,7 @@ if TYPE_CHECKING:
     from ..corpus import Corpus
     from ..gateway import Gateway, Identity
     from ..llm import Embedder
+    from .cache import SqlCache
 
 from ..corpus.schemas import JoinAsset, NegativeExampleAsset, TableAsset
 
@@ -171,6 +179,51 @@ def _render(result, generated) -> str:
     return f"{result.row_count} row(s) over [{head}]{suffix}"
 
 
+def _try_cache_hit(
+    cache, question, gateway, identity, settings, allowlist, dialect, base_provenance
+) -> "Answer | None":
+    """Serve a semantic-cache hit, or return None to fall through to the pipeline.
+
+    A hit is re-guardrailed (against the licensed tables stored with it) and
+    re-executed for freshness (D7). If the re-check fails - a corpus change now
+    blocks the cached SQL - or execution errors, this returns None so the full
+    pipeline runs instead. Fail-closed: a stale/blocked cached query is never
+    served.
+    """
+    entry = cache.lookup(question)
+    if entry is None:
+        return None
+    verdict = check(
+        entry.sql,
+        allowed_columns=set(allowlist.allowed),
+        suspect_columns=allowlist.suspect,
+        allowed_tables=entry.licensed_tables,
+        hard_block_suspect=settings.hard_block_suspect_columns,
+        dialect=dialect,
+    )
+    if not verdict.passed:
+        return None
+    try:
+        result = gateway.execute(entry.sql, identity)
+    except Exception:
+        return None
+    signals = UncertaintySignals(
+        low_confidence_join=entry.min_join_confidence < LOW_CONFIDENCE_JOIN,
+        suspect_in_scope=_suspect_in_scope(entry.sql, allowlist.suspect, dialect),
+    )
+    provenance = {
+        **base_provenance,
+        "metric_id": entry.metric_id,
+        "tables_used": sorted(entry.tables_used),
+        "join_ids": entry.join_ids,
+        "min_join_confidence": entry.min_join_confidence,
+        "row_count": result.row_count,
+        "truncated": result.truncated,
+        "cache_hit": True,
+    }
+    return assemble(text=_render(result, None), sql=entry.sql, signals=signals, provenance=provenance)
+
+
 def answer_question(
     question: str,
     identity: "Identity",
@@ -181,6 +234,7 @@ def answer_question(
     session_id: str,
     sql_generator: "SqlGenerator | None" = None,
     embedder: "Embedder | None" = None,
+    cache: "SqlCache | None" = None,
 ) -> "Answer":
     """Run one question through the serve DAG, fail-closed on any guardrail or
     refuse-gate hit. ``corpus`` should be the ``for_server()`` view.
@@ -189,7 +243,9 @@ def answer_question(
     enterprise deployment injects a model-backed one implementing the same
     ``SqlGenerator`` protocol. ``embedder`` (optional) turns on the retrieval
     vector channel (BM25 + embedding cosine, fused); with none, retrieval is
-    pure lexical BM25.
+    pure lexical BM25. ``cache`` (optional) is the semantic SQL cache: a hit
+    (after the refuse-gate) re-guardrails + re-executes stored SQL and skips
+    retrieval/planning/generation; a clean answer is written back on a miss.
     """
     route = route_intent(question)
     bound_terms = bind_terms(corpus, question)
@@ -208,12 +264,23 @@ def answer_question(
             provenance={**base_provenance, "refused_by": "refuse_gate", "negative_example": negative.id},
         )
 
+    dialect = gateway.catalog().dialect.value
+    allowlist = column_allowlist(corpus)
+
+    # SQL semantic-cache fast path (D7): a hit re-guardrails + re-executes stored
+    # SQL, skipping retrieval / planning / generation. A stale or now-blocked hit
+    # falls through to the full pipeline (fail-closed).
+    if cache is not None:
+        hit = _try_cache_hit(
+            cache, question, gateway, identity, settings, allowlist, dialect, base_provenance
+        )
+        if hit is not None:
+            return hit
+
     retrieval = retrieve(corpus, question, embedder=embedder)
 
     generator = sql_generator or TemplateSqlGenerator()
     graph = build_graph(corpus)
-    dialect = gateway.catalog().dialect.value
-    allowlist = column_allowlist(corpus)
 
     # L4 licensing scope: retrieval's tables, the Steiner points needed to connect
     # THEM, and their FK join-neighborhood (decoupling L4 from retrieval recall).
@@ -311,9 +378,22 @@ def answer_question(
             "truncated": result.truncated,
             "attempts": attempts,
         }
-        return assemble(
+        answer = assemble(
             text=_render(result, generated), sql=generated.sql, signals=signals, provenance=provenance
         )
+        # Write back only clean (governed) SQL, so a later cache hit is always
+        # high-confidence. Cache SQL text only, never results (D7).
+        if cache is not None and answer.tier is ReliabilityTier.governed:
+            cache.put(
+                question,
+                generated.sql,
+                licensed_tables=licensed,
+                tables_used=frozenset(generated.tables_used),
+                metric_id=generated.metric_id,
+                join_ids=join_ids,
+                min_join_confidence=min_confidence,
+            )
+        return answer
 
     # Exhausted the attempts (or the generator declined / could not improve): fail
     # closed with the most recent failure reason.
