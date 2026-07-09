@@ -1,11 +1,10 @@
-# Evaluation Diagrams
+# Eval 图表
 
 _[English](eval.md) · [简体中文](eval.zh.md)_
 
-The eval package is currently a scaffold. The intended harness proves whether
-the curator-built semantic layer improves execution accuracy and safety signals.
+eval 包目前是一个脚手架。设计中的 harness 用于验证 curator 构建的语义层是否能提升执行准确率（execution accuracy）和安全信号。
 
-## Three-arm evaluation
+## 三臂评测
 
 ```mermaid
 flowchart LR
@@ -36,7 +35,7 @@ flowchart LR
     CuratorFeedback --> Curator
 ```
 
-## Refuse-gate evaluation
+## 拒答闸(Refuse-gate)评测
 
 ```mermaid
 flowchart TD
@@ -48,7 +47,7 @@ flowchart TD
     RefusalAccuracy --> RefuseResult
 ```
 
-## Metrics and feedback
+## 指标与反馈
 
 ```mermaid
 flowchart LR
@@ -67,4 +66,3 @@ flowchart LR
     Scoreboard --> Diagnosis["Failure diagnosis"]
     Diagnosis --> Curator["Curator repair loop<br/>train-only"]
 ```
-

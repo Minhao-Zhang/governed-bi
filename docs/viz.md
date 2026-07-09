@@ -1,5 +1,7 @@
 # Agentic BI Viz
 
+_[English](viz.md) · [简体中文](viz.zh.md)_
+
 The audit **cockpit** for the [Agentic BI System](system-overview.md) corpus.
 This repo ships a **read-only** cockpit: browse and audit the AI-built layer, and
 ask a question to see the governed answer plus its reliability stamp.

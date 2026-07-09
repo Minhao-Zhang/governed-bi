@@ -1,5 +1,7 @@
 # Agentic BI Architecture
 
+_[English](architecture.md) · [简体中文](architecture.zh.md)_
+
 Full design for the [Agentic BI System](system-overview.md). Terms are in the
 [Glossary](glossary.md). The reasoning and alternatives behind each choice are
 in [Design decisions](design-decisions.md).

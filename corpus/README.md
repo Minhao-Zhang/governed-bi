@@ -1,5 +1,7 @@
 # corpus/
 
+_[English](README.md) · [简体中文](README.zh.md)_
+
 The **semantic layer** is the moat. Git-tracked plain Markdown + YAML typed
 assets, curator-authored / human-audited (D9). **Git is the single source of
 truth.** Every other store (in-memory graph, vector, BM25, Postgres) is a

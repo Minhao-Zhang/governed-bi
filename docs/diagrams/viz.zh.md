@@ -1,11 +1,10 @@
-# Viz Diagrams
+# Viz 图表
 
 _[English](viz.md) · [简体中文](viz.zh.md)_
 
-The viz package is currently a scaffold for an interactive local audit and edit
-cockpit over the Git corpus.
+viz 包目前是一个脚手架，用于在 Git corpus 之上构建一个交互式本地审计与编辑驾驶舱（cockpit）。
 
-## Cockpit subsystem
+## 驾驶舱子系统
 
 ```mermaid
 flowchart TB
@@ -31,7 +30,7 @@ flowchart TB
     PullRequest --> CI
 ```
 
-## Audit and certify sequence
+## 审计与认证序列图
 
 ```mermaid
 sequenceDiagram
@@ -61,7 +60,7 @@ sequenceDiagram
     end
 ```
 
-## Editability by tier
+## 分层可编辑性
 
 ```mermaid
 flowchart LR
@@ -76,4 +75,3 @@ flowchart LR
     GovernanceMode --> UI
     UI --> Save["Save to Git corpus"]
 ```
-

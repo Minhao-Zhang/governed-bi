@@ -1,12 +1,12 @@
-# Server Diagrams
+# Server 图表
 
 _[English](server.md) · [简体中文](server.zh.md)_
 
-The serve-time DAG is implemented. These diagrams reflect `docs/server.md` and
-the built modules in `src/governed_bi/server/` (including the LangGraph harness
-in `server/graph.py`), `gateway/`, `retrieval/`, and `graph/`.
+服务阶段的 DAG 已经实现。这些图表对应 `docs/server.md`，以及
+`src/governed_bi/server/`（包括 `server/graph.py` 中的 LangGraph harness）、
+`gateway/`、`retrieval/`、`graph/` 中已构建的模块。
 
-## Answer pipeline
+## 回答流水线
 
 ```mermaid
 flowchart TD
@@ -34,7 +34,7 @@ flowchart TD
     Stamp --> CacheWrite["Cache successful SQL text<br/>TTL 15 minutes"]
 ```
 
-## Ask-question sequence
+## 提问序列图
 
 ```mermaid
 sequenceDiagram
@@ -71,7 +71,7 @@ sequenceDiagram
     end
 ```
 
-## SQL semantic-cache sequence
+## SQL 语义缓存序列图
 
 ```mermaid
 sequenceDiagram
@@ -99,7 +99,7 @@ sequenceDiagram
     end
 ```
 
-## Refuse-gate sequence
+## 拒答闸(Refuse-gate)序列图
 
 ```mermaid
 sequenceDiagram
@@ -129,7 +129,7 @@ sequenceDiagram
     end
 ```
 
-## Reliability and governance enforcement
+## 可靠性与治理执行
 
 ```mermaid
 stateDiagram-v2
@@ -154,7 +154,7 @@ stateDiagram-v2
     Removed --> [*]: hidden from retrieval and SQL context
 ```
 
-## Guardrail stack
+## 护栏栈
 
 ```mermaid
 flowchart TD
@@ -170,4 +170,3 @@ flowchart TD
     Cost -->|fail| Veto
     Cost -->|pass| Pass["pass to Gateway.execute()"]
 ```
-

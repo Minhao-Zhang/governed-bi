@@ -1,11 +1,10 @@
-# Overview Diagrams
+# 总览图
 
 _[English](overview.md) · [简体中文](overview.zh.md)_
 
-These are the lowest-complexity diagrams. They show the repo status and the
-target architecture before drilling into individual subsystems.
+这些是复杂度最低的图。它们在深入各子系统之前，先展示仓库现状与目标架构。
 
-## Current code status
+## 当前代码状态
 
 ```mermaid
 flowchart LR
@@ -42,7 +41,7 @@ flowchart LR
     VizPkg -. edits .-> CorpusPkg
 ```
 
-## Target system architecture
+## 目标系统架构
 
 ```mermaid
 flowchart TB
@@ -95,7 +94,7 @@ flowchart TB
     EvalTelemetry -- train/held-out runs --> Server
 ```
 
-## Two harnesses over one substrate
+## 同一基座上的两套 harness
 
 ```mermaid
 flowchart TB
@@ -134,7 +133,7 @@ flowchart TB
     Memory -. harvest .-> Proposer
 ```
 
-## Environment toggles
+## 环境开关
 
 ```mermaid
 flowchart TD
@@ -154,4 +153,3 @@ flowchart TD
     Settings --> MemoryBudgets["route_memory_budgets<br/>nl2sql, kpi_lookup,<br/>knowledge_qa, deep_analysis"]
     Settings --> CacheNumbers["sql_cache_ttl_minutes = 15<br/>cache_hit_cosine_gate = 0.92"]
 ```
-

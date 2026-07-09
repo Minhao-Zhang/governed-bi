@@ -1,5 +1,7 @@
 # Architecture and Flow Diagrams
 
+_[English](diagrams.md) · [简体中文](diagrams.zh.md)_
+
 This directory is split by level of detail so individual Mermaid diagrams are
 easy to review and fix. The diagrams intentionally distinguish implemented code
 from design-level scaffolding.
