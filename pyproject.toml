@@ -30,8 +30,16 @@ viz = ["streamlit>=1.30"]
 # runs on the deterministic offline clients without it; install to use the
 # OpenAI-backed generator, curator proposer, vector retrieval, and SQL cache.
 openai = ["openai>=1.40"]
-# Heavy agent frameworks are deferred until the harnesses are built:
-#   curator -> deepagents ; server -> langgraph + middleware.
+# The agent harnesses: server = LangGraph StateGraph DAG, curator = deepagents,
+# with LangChain-backed model/embedding clients. Imported only by the harness
+# modules (governed_bi.server.graph, governed_bi.curator.deep_agent, and the
+# LangChain clients in governed_bi.llm); the deterministic core runs without them.
+agents = [
+    "langgraph>=1.0",
+    "langchain>=1.0",
+    "langchain-openai>=1.0",
+    "deepagents>=0.6",
+]
 
 [dependency-groups]
 dev = [

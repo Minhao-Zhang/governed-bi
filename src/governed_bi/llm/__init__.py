@@ -20,11 +20,14 @@ from .client import (
     StaticChatClient,
     cosine,
 )
+from .langchain_client import LangChainChatClient, LangChainEmbedder
 
 __all__ = [
     "ChatClient",
     "Embedder",
     "HashingEmbedder",
+    "LangChainChatClient",
+    "LangChainEmbedder",
     "OpenAiChatClient",
     "OpenAiEmbedder",
     "StaticChatClient",
