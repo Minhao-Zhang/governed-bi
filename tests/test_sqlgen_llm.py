@@ -120,6 +120,32 @@ def test_declines_on_sentinel(corpus):
     assert gen.generate("weather on mars", retrieval, corpus, context=ctx) is None
 
 
+def test_sql_containing_the_sentinel_literal_is_not_a_decline(corpus):
+    # Valid SQL that merely contains the literal 'CANNOT_ANSWER' (e.g. a status
+    # filter) must NOT be mistaken for a decline.
+    ctx, retrieval = _flow_context(corpus, "total revenue")
+    sql = "SELECT COUNT(*) AS n FROM \"transaction\" WHERE PaymentMethod = 'CANNOT_ANSWER'"
+    out = LlmSqlGenerator(StaticChatClient(sql), dialect="sqlite").generate(
+        "count", retrieval, corpus, context=ctx
+    )
+    assert out is not None
+    assert out.sql == sql
+
+
+def test_extract_takes_last_block_and_drops_language_tag(corpus):
+    ctx, retrieval = _flow_context(corpus, "total revenue")
+    # An echoed example block, then the real answer in a python-tagged fence.
+    response = (
+        "```sql\nSELECT wrong FROM x\n```\n"
+        f"Answer:\n```python\n{REVENUE_SQL}\n```"
+    )
+    out = LlmSqlGenerator(StaticChatClient(response), dialect="sqlite").generate(
+        "total revenue", retrieval, corpus, context=ctx
+    )
+    assert out is not None
+    assert out.sql == REVENUE_SQL  # last block, and 'python' tag not captured
+
+
 def test_declines_on_empty_response(corpus):
     ctx, retrieval = _flow_context(corpus, "total revenue")
     gen = LlmSqlGenerator(StaticChatClient("   "), dialect="sqlite")

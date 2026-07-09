@@ -62,8 +62,6 @@ def _put(cache, question, sql, licensed):
         licensed_tables=licensed,
         tables_used=frozenset({"tbl_beer_factory_transaction"}),
         metric_id="metric_revenue",
-        join_ids=[],
-        min_join_confidence=1.0,
     )
 
 
@@ -115,12 +113,15 @@ def test_stale_hit_that_no_longer_passes_guardrails_falls_through(mem_gateway, c
     # An entry whose licensed_tables no longer admits its table (a stand-in for a
     # corpus change) must re-fail L4 on lookup and return None (fall through),
     # never be served.
+    from governed_bi.graph import build_graph
+
     cache = SqlCache(HashingEmbedder())
     _put(cache, REVENUE_Q, 'SELECT SUM(PurchasePrice) FROM "transaction"', frozenset())  # empty scope
     allowlist = column_allowlist(corpus)
+    graph = build_graph(corpus)
 
     result = _try_cache_hit(
-        cache, REVENUE_Q, mem_gateway, identity, settings, allowlist, "sqlite", {}
+        cache, REVENUE_Q, mem_gateway, identity, settings, allowlist, "sqlite", graph, {}
     )
     assert result is None  # blocked at L4 re-check -> fall through
 

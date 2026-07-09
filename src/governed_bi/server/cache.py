@@ -37,16 +37,18 @@ DEFAULT_TTL_SECONDS = 15 * 60
 
 @dataclass(frozen=True)
 class CacheEntry:
-    """One cached question -> SQL association (SQL text only, no results)."""
+    """One cached question -> SQL association (SQL text only, no results).
+
+    The reliability stamp is **not** cached: the flow re-derives it fresh from the
+    current corpus on a hit (over ``tables_used``), so the stamp cannot go stale.
+    """
 
     question: str
     vector: list[float]
     sql: str
     licensed_tables: frozenset[str]  # physical names in force when stored (L4 re-check)
-    tables_used: frozenset[str]  # asset ids, for the reliability stamp
+    tables_used: frozenset[str]  # asset ids, for re-deriving the stamp on a hit
     metric_id: str | None
-    join_ids: list[str]
-    min_join_confidence: float
     stored_at: float  # epoch seconds (from the injected clock)
 
 
@@ -93,8 +95,6 @@ class SqlCache:
         licensed_tables: frozenset[str],
         tables_used: frozenset[str],
         metric_id: str | None,
-        join_ids: list[str],
-        min_join_confidence: float,
     ) -> None:
         self._entries.append(
             CacheEntry(
@@ -104,8 +104,6 @@ class SqlCache:
                 licensed_tables=licensed_tables,
                 tables_used=tables_used,
                 metric_id=metric_id,
-                join_ids=list(join_ids),
-                min_join_confidence=min_join_confidence,
                 stored_at=self.clock(),
             )
         )

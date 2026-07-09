@@ -90,6 +90,8 @@ class LlmProposer:
             return table  # fail-safe: keep the base proposal untouched
 
         col_specs = payload.get("columns", {})
+        if not isinstance(col_specs, dict):
+            col_specs = {}  # fail-safe: a non-dict "columns" (list/null/str) is ignored
         new_columns = [self._enrich_column(c, col_specs.get(c.physical_name)) for c in table.columns]
 
         update: dict = {"columns": new_columns}

@@ -109,6 +109,20 @@ def test_malformed_response_degrades_to_base():
     assert table.audit.provenance.status is ProvenanceStatus.proposed
 
 
+@pytest.mark.parametrize(
+    "columns_value",
+    ['["OrderID"]', "null", '"OrderID"', "42"],
+)
+def test_valid_json_with_non_dict_columns_degrades_safely(columns_value):
+    # A valid-JSON but hostile/malformed response whose "columns" is not an object
+    # must not crash (fail-safe); table-level prose still applies, columns stay base.
+    payload = '{"table_description": "Orders.", "columns": %s}' % columns_value
+    [table] = LlmProposer(StaticChatClient(payload)).propose([_orders_table()])
+    assert table.description == "Orders."  # table-level prose still applied
+    assert all(c.description is None for c in table.columns)  # columns left as base
+    assert table.columns[0].role is ColumnRole.primary_key  # roles intact
+
+
 def test_output_passes_the_adversary_review():
     proposed = LlmProposer(StaticChatClient(ORDERS_JSON)).propose([_orders_table()])
     assert review(proposed) == []

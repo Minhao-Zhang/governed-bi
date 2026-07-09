@@ -180,7 +180,7 @@ def _render(result, generated) -> str:
 
 
 def _try_cache_hit(
-    cache, question, gateway, identity, settings, allowlist, dialect, base_provenance
+    cache, question, gateway, identity, settings, allowlist, dialect, graph, base_provenance
 ) -> "Answer | None":
     """Serve a semantic-cache hit, or return None to fall through to the pipeline.
 
@@ -188,7 +188,8 @@ def _try_cache_hit(
     re-executed for freshness (D7). If the re-check fails - a corpus change now
     blocks the cached SQL - or execution errors, this returns None so the full
     pipeline runs instead. Fail-closed: a stale/blocked cached query is never
-    served.
+    served. The reliability stamp is **re-derived** from the current graph (over
+    the stored ``tables_used``), identical to a fresh miss, so it never goes stale.
     """
     entry = cache.lookup(question)
     if entry is None:
@@ -207,16 +208,21 @@ def _try_cache_hit(
         result = gateway.execute(entry.sql, identity)
     except Exception:
         return None
+    try:
+        stamp_plan = plan_joins(graph, set(entry.tables_used))
+        join_ids, min_confidence = stamp_plan.join_ids, stamp_plan.min_confidence
+    except ValueError:
+        join_ids, min_confidence = [], 1.0
     signals = UncertaintySignals(
-        low_confidence_join=entry.min_join_confidence < LOW_CONFIDENCE_JOIN,
+        low_confidence_join=min_confidence < LOW_CONFIDENCE_JOIN,
         suspect_in_scope=_suspect_in_scope(entry.sql, allowlist.suspect, dialect),
     )
     provenance = {
         **base_provenance,
         "metric_id": entry.metric_id,
         "tables_used": sorted(entry.tables_used),
-        "join_ids": entry.join_ids,
-        "min_join_confidence": entry.min_join_confidence,
+        "join_ids": join_ids,
+        "min_join_confidence": min_confidence,
         "row_count": result.row_count,
         "truncated": result.truncated,
         "cache_hit": True,
@@ -266,13 +272,14 @@ def answer_question(
 
     dialect = gateway.catalog().dialect.value
     allowlist = column_allowlist(corpus)
+    graph = build_graph(corpus)
 
     # SQL semantic-cache fast path (D7): a hit re-guardrails + re-executes stored
-    # SQL, skipping retrieval / planning / generation. A stale or now-blocked hit
-    # falls through to the full pipeline (fail-closed).
+    # SQL (and re-derives the stamp from the current graph), skipping retrieval /
+    # generation. A stale or now-blocked hit falls through (fail-closed).
     if cache is not None:
         hit = _try_cache_hit(
-            cache, question, gateway, identity, settings, allowlist, dialect, base_provenance
+            cache, question, gateway, identity, settings, allowlist, dialect, graph, base_provenance
         )
         if hit is not None:
             return hit
@@ -280,7 +287,6 @@ def answer_question(
     retrieval = retrieve(corpus, question, embedder=embedder)
 
     generator = sql_generator or TemplateSqlGenerator()
-    graph = build_graph(corpus)
 
     # L4 licensing scope: retrieval's tables, the Steiner points needed to connect
     # THEM, and their FK join-neighborhood (decoupling L4 from retrieval recall).
@@ -390,8 +396,6 @@ def answer_question(
                 licensed_tables=licensed,
                 tables_used=frozenset(generated.tables_used),
                 metric_id=generated.metric_id,
-                join_ids=join_ids,
-                min_join_confidence=min_confidence,
             )
         return answer
 

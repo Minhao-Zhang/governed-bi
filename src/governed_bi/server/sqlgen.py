@@ -184,15 +184,22 @@ def _render_feedback(feedback: tuple[RepairFeedback, ...]) -> str:
 def _extract_sql(response: str) -> str:
     """Pull the SQL out of a model response, tolerating markdown fences/prose.
 
-    Prefers a fenced ```sql block, then any fenced block, else the whole text.
-    Trims a trailing semicolon. Returns the empty string for an empty response.
+    If the response has fenced code blocks, take the **last** one (the model's
+    final answer usually follows any echoed example) and drop its info-string
+    (```sql / ```python / bare ```), so a language tag is never captured into the
+    SQL. Otherwise strip stray backticks. Trims a trailing semicolon; returns the
+    empty string for an empty response.
     """
     text = response.strip()
     if not text:
         return ""
-    fence = re.search(r"```(?:sql)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
-    if fence:
-        text = fence.group(1).strip()
+    # A fenced block: opening fence + optional info-string, a newline, then the
+    # body, then the closing fence. Take the last block's body.
+    blocks = re.findall(r"```[ \t]*[A-Za-z0-9_+-]*[ \t]*\r?\n(.*?)```", text, re.DOTALL)
+    if blocks:
+        text = blocks[-1].strip()
+    else:
+        text = text.strip("`").strip()
     return text.rstrip(";").strip()
 
 
@@ -263,7 +270,10 @@ class LlmSqlGenerator:
 
         response = self.chat.complete(system, user)
         sql = _extract_sql(response)
-        if not sql or _CANNOT_ANSWER in response.strip().upper():
+        # Decline only on the exact sentinel (matched against the extracted SQL, not
+        # the raw response), so valid SQL that merely contains the literal
+        # 'CANNOT_ANSWER' (e.g. a status filter) is not mistaken for a decline.
+        if not sql or sql.strip().upper() == _CANNOT_ANSWER:
             return None
 
         return GeneratedSql(
