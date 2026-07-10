@@ -347,6 +347,25 @@ def test_flow_governed_revenue(bird_gateway, corpus, settings, identity):
     assert ans.provenance["metric_id"] == "metric_revenue"
 
 
+def test_flow_reads_working_memory_without_mutating_it(bird_gateway, corpus, settings, identity):
+    # A conversational caller passes the session's prior turns (D8); the flow
+    # injects them into the prompt context but must only READ - the caller records
+    # the new turn, so the flow never double-counts the current question.
+    from governed_bi.memory import InMemoryWorkingMemory
+
+    wm = InMemoryWorkingMemory()
+    wm.append("s", "user", "What is the total revenue?")
+    wm.append("s", "assistant", "total_revenue = 18496.0")
+    ans = _ask(
+        "What is the average star rating?", bird_gateway, corpus, settings, identity, working_memory=wm
+    )
+    assert ans.tier is ReliabilityTier.governed  # follow-up still answered (template path)
+    assert wm.history("s") == [
+        ("user", "What is the total revenue?"),
+        ("assistant", "total_revenue = 18496.0"),
+    ]  # unchanged: the flow did not append
+
+
 def test_flow_governed_avg_rating(bird_gateway, corpus, settings, identity):
     ans = _ask("What is the average star rating?", bird_gateway, corpus, settings, identity)
     assert ans.tier is ReliabilityTier.governed

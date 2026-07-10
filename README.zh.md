@@ -78,9 +78,9 @@ uv run python -m governed_bi.corpus.cli   # validate the corpus (ID + reference 
 uv run pytest                             # run the test suite
 ```
 
-完整的快速上手指南(validate CLI、可编程调用的 corpus API)见
-[docs/usage.md](docs/usage.zh.md)。要编写或编辑 corpus 资产，参见
-[docs/corpus-authoring.md](docs/corpus-authoring.zh.md)。
+新手？[演练](docs/walkthrough.zh.md)是一份引导式的“克隆 → 第一个问题”教程。
+[快速上手](docs/usage.zh.md)是参考（validate CLI、可编程调用的 corpus API）；要编写或
+编辑 corpus 资产，参见 [corpus 编写](docs/corpus-authoring.zh.md)。
 
 今天就可以在没有模型、没有网络的情况下运行：在已提交的 beer_factory 数据库上，
 完整的问题到答案的 serve 流程（检索、上下文组装、模板化 SQL 生成、五层护栏、

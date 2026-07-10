@@ -24,6 +24,7 @@ are included verbatim.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -120,6 +121,10 @@ class PromptContext:
     few_shots: list[FewShotView] = field(default_factory=list)
     skills: list[SkillView] = field(default_factory=list)
     caveats: list[str] = field(default_factory=list)
+    # Prior (role, content) turns from working memory (D8), oldest first. Empty
+    # for a single-shot request; a conversational caller passes the session
+    # history so a follow-up ("what about last year?") can resolve against it.
+    conversation: list[tuple[str, str]] = field(default_factory=list)
 
     def allowed_table_names(self) -> frozenset[str]:
         """Physical names of the licensed tables - the L4 ``allowed_tables`` set."""
@@ -183,6 +188,7 @@ def assemble_context(
     *,
     licensed_table_ids: frozenset[str] | set[str],
     low_confidence_join: float = LOW_CONFIDENCE_JOIN,
+    history: Sequence[tuple[str, str]] = (),
 ) -> PromptContext:
     """Resolve retrieval ids + the licensed table scope into a :class:`PromptContext`.
 
@@ -277,6 +283,7 @@ def assemble_context(
         few_shots=few_shots,
         skills=skills,
         caveats=caveats,
+        conversation=list(history),
     )
 
 
@@ -298,6 +305,15 @@ def _render_column(col: ColumnView) -> str:
 
 def _render(ctx: PromptContext) -> str:
     lines: list[str] = []
+
+    if ctx.conversation:
+        lines.append(
+            "## Conversation so far (oldest first; use ONLY to resolve references "
+            "in the latest question, e.g. 'that', 'last year')"
+        )
+        for role, content in ctx.conversation:
+            lines.append(f"  {role}: {content}")
+        lines.append("")
 
     lines.append("## Tables (use ONLY these physical identifiers)")
     for tv in ctx.tables:

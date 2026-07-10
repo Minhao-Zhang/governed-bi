@@ -72,15 +72,18 @@ and the audit trail becomes **three-party: proposer -> adversary -> human**.
 
 Built here (read-only), computed from the corpus:
 
-- **Corpus health** (home). Asset counts, CI status, and the flags a reviewer
+- **Chat** (default). A multi-turn conversation over the governed server flow;
+  each answer shows the two-axis stamp, the SQL, and the provenance trace, and
+  follow-ups are fed back through working memory (D8).
+- **Corpus health**. Asset counts, CI status, and the flags a reviewer
   triages first: # suspect columns, # excluded assets, # low-confidence joins.
 - **Table view**. Facts + Inference side by side; `suspect` and `excluded`
   columns flagged with their reason; per-column provenance status.
 - **Assets**. The non-table assets (joins, metrics, terms, rules, few-shots,
   negatives), filterable by type, with provenance status.
 - **Skills**. Rendered markdown.
-- **Ask**. Runs the server flow and shows the tier, SQL, answer, and the
-  guardrail/plan trace (the reliability stamp).
+- **Ask**. The same server flow as a single-shot form (one question, one answer),
+  showing the stamp, SQL, and the guardrail/plan trace.
 
 Design vision, not built here (a fuller cockpit, or the downstream product):
 

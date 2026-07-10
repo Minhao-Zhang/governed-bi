@@ -4,7 +4,7 @@ _[English](README.md) · [简体中文](README.zh.md)_
 
 面向 agentic BI / Generative-BI 系统的设计：自然语言问题 → 基于企业关系型数据的接地（grounded）、受治理（governed）、可审计（auditable）的答案。
 
-近期目标是打造一个**通用、与数据库无关(DB-agnostic)的展示系统**，可从 `{a DB connection + a few known-good queries}` 冷启动，并随时间推移逐步扩展出语义层。企业级抽象已经以预留接口(seam)的方式接入，但默认处于关闭状态。评估基于自建的 [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) 数据集（执行准确率；记录成本）。
+近期目标是打造一个**在 SQLite 上得到验证的展示系统**（对其他引擎留有方言可插拔接口），它从一批已知良好的种子查询出发、逐步扩展出一个可审阅的语义层——这是*种子辅助的生长*，而非零先验的冷启动。企业级抽象已经以预留接口(seam)的方式接入，但默认处于关闭状态。评估基于自建的 [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) 数据集（执行准确率；记录成本）。
 
 ## 按此顺序阅读
 
@@ -15,7 +15,7 @@ _[English](README.md) · [简体中文](README.zh.md)_
 5. [资产模式](asset-schemas.zh.md)：每个资产的 YAML 字段规范（Facts 层 / Inference 层 / Audit 层）。
 6. [Curator](curator.zh.md)：构建侧的 proposer + adversary 循环。
 7. [Server](server.zh.md)：服务侧的 LangGraph 流程 + 护栏(guardrails)。
-8. [Viz](viz.zh.md)：交互式审计 + 编辑驾驶舱（保存 → PR）。
+8. [Viz](viz.zh.md)：只读审计驾驶舱——浏览语义层并与受治理 server 对话。
 9. [术语表](glossary.zh.md)：规范术语。
 
 支撑本设计的[外部设计资料来源](references.zh.md)。
@@ -24,6 +24,7 @@ _[English](README.md) · [简体中文](README.zh.md)_
 
 上述设计文档描述的是预期中的系统。至于当前实际运行的部分（corpus 层与开发工作流）：
 
+- [演练](walkthrough.zh.md)：克隆 → 校验 → 提出第一个问题。**从这里开始。**
 - [使用指南](usage.zh.md)：安装、validate CLI，以及可编程调用的 corpus API。
 - [Corpus 编写](corpus-authoring.zh.md)：逐步编写并校验 corpus 资产。
 

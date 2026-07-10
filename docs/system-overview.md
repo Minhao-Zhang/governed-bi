@@ -6,9 +6,10 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
 >
 > Design for an agentic BI / Generative-BI system: natural-language questions →
 > grounded, governed, auditable answers over enterprise relational data.
-> Near-term = a **general, DB-agnostic showcase** (personal GitHub) that
-> cold-starts from `{a DB connection + a few known-good queries}` and grows the
-> semantic layer over time. Enterprise abstractions are seamed in but toggled
+> Near-term = a **SQLite-proven showcase** (personal GitHub; dialect-pluggable
+> seams for other engines) that grows a reviewable semantic layer from a seed of
+> known-good queries — *seed-assisted growth*, not a zero-prior cold start.
+> Enterprise abstractions are seamed in but toggled
 > off. Evaluated on the self-built [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) dataset (execution
 > accuracy; cost logged). A private **enterprise fork** (phase 2) reuses this
 > engine at enterprise scale, facing the same no-owner / no-manpower situation.
@@ -22,7 +23,7 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
     - [Asset schemas](asset-schemas.md): the per-asset YAML field spec (Facts / Inference / Audit tiers)
     - [Curator](curator.md): the build-side proposer + adversary loop
     - [Server](server.md): the serve-side LangGraph flow + guardrails
-    - [Viz](viz.md): the interactive audit + edit cockpit (save → PR)
+    - [Viz](viz.md): the read-only audit cockpit — browse the layer + chat with the server
     - [Glossary](glossary.md): canonical terms
 - Grounded in the [external design sources](references.md).
 

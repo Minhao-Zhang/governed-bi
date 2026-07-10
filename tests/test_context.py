@@ -101,6 +101,29 @@ def test_render_includes_join_paths_when_present(corpus):
     assert "## Joins" in text
 
 
+def test_conversation_history_renders_into_context(corpus):
+    graph = build_graph(corpus)
+    retrieval = retrieve(corpus, "total revenue")
+    try:
+        join_ids = plan_joins(graph, set(retrieval.table_ids)).join_ids
+    except ValueError:
+        join_ids = []
+    licensed_ids = _licensed_table_ids(corpus, graph, retrieval, join_ids)
+    history = [("user", "What is the total revenue?"), ("assistant", "total_revenue = 18496.0")]
+    ctx = assemble_context(corpus, retrieval, licensed_table_ids=licensed_ids, history=history)
+    assert ctx.conversation == history
+    text = ctx.render()
+    assert "## Conversation so far" in text
+    assert "user: What is the total revenue?" in text
+    assert "assistant: total_revenue = 18496.0" in text
+
+
+def test_no_history_means_no_conversation_section(corpus):
+    ctx, _ = _context(corpus, "total revenue")
+    assert ctx.conversation == []
+    assert "## Conversation so far" not in ctx.render()
+
+
 def test_empty_retrieval_yields_empty_but_valid_context(corpus):
     from governed_bi.retrieval import RetrievalResult
 

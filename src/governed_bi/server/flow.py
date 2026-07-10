@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from ..corpus import Corpus
     from ..gateway import Gateway, Identity
     from ..llm import Embedder
+    from ..memory import WorkingMemory
     from .cache import SqlCache
 
 from ..corpus.schemas import JoinAsset, NegativeExampleAsset, TableAsset
@@ -338,6 +339,7 @@ def answer_question(
     sql_generator: "SqlGenerator | None" = None,
     embedder: "Embedder | None" = None,
     cache: "SqlCache | None" = None,
+    working_memory: "WorkingMemory | None" = None,
 ) -> "Answer":
     """Run one question through the serve DAG, fail-closed on any guardrail or
     refuse-gate hit. ``corpus`` should be the ``for_server()`` view.
@@ -349,6 +351,11 @@ def answer_question(
     pure lexical BM25. ``cache`` (optional) is the semantic SQL cache: a hit
     (after the refuse-gate) re-guardrails + re-executes stored SQL and skips
     retrieval/planning/generation; a clean answer is written back on a miss.
+    ``working_memory`` (optional, D8) supplies the prior turns of this
+    ``session_id``; when present they are injected into the prompt context so a
+    conversational follow-up can resolve references. This function only *reads*
+    the history - the caller records the new turn after receiving the answer, so
+    the current question is never double-counted as prior context.
     """
     route = route_intent(question)
     bound_terms = bind_terms(corpus, question)
@@ -398,8 +405,13 @@ def answer_question(
 
     # Resolve the licensed scope into a prompt context (schema, joins, caveats,
     # skills, exemplars) the generator reads. The guardrail's allowed_tables is
-    # derived from it, so what the model can see == what L4 permits.
-    context = assemble_context(corpus, retrieval, licensed_table_ids=licensed_ids)
+    # derived from it, so what the model can see == what L4 permits. Prior
+    # conversation turns (D8 working memory, if supplied) are injected so a
+    # follow-up can resolve references; the caller records this turn afterward.
+    history = working_memory.history(session_id) if working_memory is not None else ()
+    context = assemble_context(
+        corpus, retrieval, licensed_table_ids=licensed_ids, history=history
+    )
     licensed = context.allowed_table_names()
 
     # Bounded self-repair loop: generate -> guardrail -> execute. A guardrail

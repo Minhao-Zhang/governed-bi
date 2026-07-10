@@ -87,7 +87,7 @@ def test_answer_view_maps_stamp_and_trace():
 APP = Path(__file__).resolve().parents[1] / "src" / "governed_bi" / "viz" / "app.py"
 
 
-@pytest.mark.parametrize("view", ["Health", "Tables", "Assets", "Skills", "Ask"])
+@pytest.mark.parametrize("view", ["Chat", "Ask", "Health", "Tables", "Assets", "Skills"])
 def test_streamlit_app_renders_every_view(view):
     pytest.importorskip("streamlit")
     from streamlit.testing.v1 import AppTest
@@ -97,3 +97,21 @@ def test_streamlit_app_renders_every_view(view):
     assert not at.exception, list(at.exception)
     at.sidebar.radio[0].set_value(view).run()
     assert not at.exception, list(at.exception)
+
+
+def test_streamlit_chat_answers_a_question():
+    # Drive the Chat view end-to-end: submit a question through the real UI and
+    # confirm the governed answer renders (UI -> server flow -> SQLite -> stamp).
+    # Uses the offline template generator (no key), so it runs in CI.
+    pytest.importorskip("streamlit")
+    if not (Path(__file__).resolve().parents[1] / "data" / "bird" / "beer_factory.sqlite").exists():
+        pytest.skip("vendored beer_factory.sqlite not present")
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file(str(APP), default_timeout=60)
+    at.run()
+    at.sidebar.radio[0].set_value("Chat").run()
+    at.chat_input[0].set_value("What is the total revenue?").run()
+    assert not at.exception, list(at.exception)
+    # A governed answer stamps its tier via st.success ("tier: governed").
+    assert any("tier:" in block.value for block in at.success)

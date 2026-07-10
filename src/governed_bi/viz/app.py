@@ -1,10 +1,18 @@
 """Cockpit entry point (Streamlit).
 
-Read-only audit cockpit over the corpus: corpus health, the table/tier view, the
-non-table asset listing, skills, and an "ask" panel that runs the server flow and
-shows the reliability stamp + guardrail trace. Editing and save-to-PR (D6) are
-out of scope for this repo: a correction is "edit a file + PR" served by generic
-git/PR tooling + CI, or the enterprise app (see docs/viz.md).
+Read-only audit cockpit over the corpus, plus a conversational front end:
+
+- **Chat**: a multi-turn chat over the governed server flow. Each turn shows the
+  answer, its two-axis stamp, the SQL, and the provenance trace; prior turns are
+  fed back through the engine's working memory (D8), so a follow-up can resolve
+  references (with a live model - the offline template generator answers each
+  question independently).
+- **Ask**: the same server flow as a single-shot form.
+- **Health / Tables / Assets / Skills**: the read-only audit views.
+
+Editing and save-to-PR (D6) are out of scope for this repo: a correction is "edit
+a file + PR" served by generic git/PR tooling + CI, or the enterprise app (see
+docs/viz.md).
 
 This is the **only** Streamlit-specific module. All display data comes from
 ``governed_bi.viz.presenter`` (no UI dependency), so swapping Streamlit for a more
@@ -111,36 +119,11 @@ def _render_skills(corpus) -> None:
             st.markdown(skill.body)
 
 
-def _render_ask(corpus, sqlite_path: Path) -> None:
-    st.subheader("Ask (server flow)")
-    if not sqlite_path.exists():
-        st.info(f"No database at {sqlite_path}; set GOVERNED_BI_SQLITE to enable the ask panel.")
-        return
+def _render_answer_view(view, *, provenance_expander: bool = False) -> None:
+    """Render one server answer: the two-axis stamp, text, SQL, and provenance.
 
-    from governed_bi.config import Environment, Settings
-    from governed_bi.gateway import Gateway, Identity, SqliteConnector
-    from governed_bi.server import answer_question
-
-    question = st.text_input("Question", value="What is the total revenue?")
-    if not st.button("Ask") or not question.strip():
-        return
-
-    server_corpus = corpus.for_server()  # the flow sees the governed view, not the audit view
-    connector = SqliteConnector(sqlite_path)
-    try:
-        gateway = Gateway(connector)
-        answer = answer_question(
-            question,
-            Identity(user="viz", all_access=True),
-            corpus=server_corpus,
-            gateway=gateway,
-            settings=Settings.for_env(Environment.dev),
-            session_id="viz",
-        )
-    finally:
-        connector.close()
-
-    view = presenter.answer_view(answer)
+    Shared by the Ask and Chat views so a governed answer looks the same in both.
+    """
     _TIER_RENDERER.get(view.tier, st.info)(f"tier: {view.tier}")
     # The two axes the tier collapses, shown side by side so neither is read as the
     # other: safety is a pass/fail gate; assurance is how well-grounded (not "right").
@@ -153,7 +136,150 @@ def _render_ask(corpus, sqlite_path: Path) -> None:
         st.code(view.sql, language="sql")
     if view.escalation:
         st.warning(view.escalation)
-    st.json(view.provenance)
+    if provenance_expander:
+        with st.expander("provenance"):
+            st.json(view.provenance)
+    else:
+        st.json(view.provenance)
+
+
+def _server_answer(corpus, sqlite_path: Path, question: str, *, session_id: str, generator, embedder, memory):
+    """Run one question through the governed server flow against ``sqlite_path``.
+
+    A fresh read-only connector per call (cheap for SQLite); the flow sees the
+    ``for_server()`` view, not the full audit corpus.
+    """
+    from governed_bi.config import Environment, Settings
+    from governed_bi.gateway import Gateway, Identity, SqliteConnector
+    from governed_bi.server import answer_question
+
+    connector = SqliteConnector(sqlite_path)
+    try:
+        return answer_question(
+            question,
+            Identity(user="viz", all_access=True),
+            corpus=corpus.for_server(),
+            gateway=Gateway(connector),
+            settings=Settings.for_env(Environment.dev),
+            session_id=session_id,
+            sql_generator=generator,
+            embedder=embedder,
+            working_memory=memory,
+        )
+    finally:
+        connector.close()
+
+
+def _render_ask(corpus, sqlite_path: Path) -> None:
+    st.subheader("Ask (server flow)")
+    if not sqlite_path.exists():
+        st.info(f"No database at {sqlite_path}; set GOVERNED_BI_SQLITE to enable the ask panel.")
+        return
+
+    question = st.text_input("Question", value="What is the total revenue?")
+    if not st.button("Ask") or not question.strip():
+        return
+
+    answer = _server_answer(
+        corpus, sqlite_path, question,
+        session_id="viz-ask", generator=None, embedder=None, memory=None,
+    )
+    _render_answer_view(presenter.answer_view(answer))
+
+
+def _build_chat_generator():
+    """Return ``(generator, embedder, mode_caption)`` for the chat view.
+
+    Uses the live LangChain client (context-aware follow-ups via working memory)
+    when a key + the ``agents`` extra are available; otherwise the deterministic
+    offline template generator, which answers metric questions independently and
+    ignores conversation history.
+    """
+    from governed_bi.server import TemplateSqlGenerator
+
+    if os.environ.get("OPENAI_API_KEY"):
+        try:
+            from governed_bi.config import load_settings
+            from governed_bi.llm import LangChainChatClient, LangChainEmbedder
+            from governed_bi.server import LlmSqlGenerator
+
+            models = load_settings().models
+            chat = LangChainChatClient.from_config(models)
+            return (
+                LlmSqlGenerator(chat, dialect="sqlite"),
+                LangChainEmbedder.from_config(models),
+                f"Live model: {models.llm_model} — follow-ups resolve against the conversation.",
+            )
+        except Exception as err:  # missing agents extra, bad config, etc.
+            return (
+                TemplateSqlGenerator(), None,
+                f"Template generator (live model unavailable: {err}).",
+            )
+    return (
+        TemplateSqlGenerator(), None,
+        "Offline template generator — answers metric questions independently. "
+        "Set OPENAI_API_KEY (+ the agents extra) for context-aware follow-ups.",
+    )
+
+
+def _render_chat(corpus, sqlite_path: Path) -> None:
+    st.subheader("Chat (governed server, multi-turn)")
+    if not sqlite_path.exists():
+        st.info(f"No database at {sqlite_path}; set GOVERNED_BI_SQLITE to enable chat.")
+        return
+
+    from governed_bi.memory import InMemoryWorkingMemory
+
+    # Conversational state persisted across Streamlit reruns.
+    if "chat" not in st.session_state:
+        st.session_state.chat = {
+            "transcript": [],  # [{"role": "user"|"assistant", "text"|"view"}]
+            "memory": InMemoryWorkingMemory(),
+            "session_id": "viz-chat",
+            "generator": _build_chat_generator(),
+        }
+    chat = st.session_state.chat
+    generator, embedder, mode = chat["generator"]
+
+    top = st.container()
+    with top:
+        cols = st.columns([4, 1])
+        cols[0].caption(mode)
+        if cols[1].button("Clear"):
+            chat["memory"].clear(chat["session_id"])
+            chat["transcript"] = []
+            st.rerun()
+
+    # Replay the conversation so far (state survives reruns; new turns appended below).
+    for msg in chat["transcript"]:
+        with st.chat_message(msg["role"]):
+            if msg["role"] == "user":
+                st.write(msg["text"])
+            else:
+                _render_answer_view(msg["view"], provenance_expander=True)
+
+    prompt = st.chat_input("Ask a question about the data…")
+    if not prompt or not prompt.strip():
+        return
+
+    with st.chat_message("user"):
+        st.write(prompt)
+    chat["transcript"].append({"role": "user", "text": prompt})
+
+    answer = _server_answer(
+        corpus, sqlite_path, prompt,
+        session_id=chat["session_id"], generator=generator, embedder=embedder,
+        memory=chat["memory"],
+    )
+    view = presenter.answer_view(answer)
+    with st.chat_message("assistant"):
+        _render_answer_view(view, provenance_expander=True)
+    chat["transcript"].append({"role": "assistant", "view": view})
+
+    # Record the turn AFTER answering, so the current question is never injected as
+    # prior history (the flow only reads working memory; the caller records).
+    chat["memory"].append(chat["session_id"], "user", prompt)
+    chat["memory"].append(chat["session_id"], "assistant", view.text or view.escalation or "(refused)")
 
 
 def run(corpus_root: Path, *, db: str, sqlite_path: Path) -> None:
@@ -165,17 +291,19 @@ def run(corpus_root: Path, *, db: str, sqlite_path: Path) -> None:
     # The cockpit sees the FULL corpus (Facts + Inference + Audit + excluded).
     corpus = load_corpus(corpus_root, db=db)
 
-    view = st.sidebar.radio("View", ["Health", "Tables", "Assets", "Skills", "Ask"])
-    if view == "Health":
+    view = st.sidebar.radio("View", ["Chat", "Ask", "Health", "Tables", "Assets", "Skills"])
+    if view == "Chat":
+        _render_chat(corpus, sqlite_path)
+    elif view == "Ask":
+        _render_ask(corpus, sqlite_path)
+    elif view == "Health":
         _render_health(corpus)
     elif view == "Tables":
         _render_tables(corpus)
     elif view == "Assets":
         _render_assets(corpus)
-    elif view == "Skills":
-        _render_skills(corpus)
     else:
-        _render_ask(corpus, sqlite_path)
+        _render_skills(corpus)
 
 
 if __name__ == "__main__":
