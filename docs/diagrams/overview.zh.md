@@ -23,7 +23,7 @@ flowchart LR
         RetrievalPkg["retrieval package<br/>RVGD contract"]
         MemoryPkg["memory package<br/>working memory protocol"]
         EvalPkg["eval package<br/>arms, EX, gold, refuse gate"]
-        VizPkg["viz package<br/>audit/edit cockpit entrypoint"]
+        VizPkg["viz package<br/>read-only cockpit entrypoint"]
     end
 
     ExampleCorpus --> CorpusPkg

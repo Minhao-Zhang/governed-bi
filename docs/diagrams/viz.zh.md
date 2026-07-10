@@ -2,7 +2,7 @@
 
 _[English](viz.md) · [简体中文](viz.zh.md)_
 
-viz 包目前是一个脚手架，用于在 Git corpus 之上构建一个交互式本地审计与编辑驾驶舱（cockpit）。
+**已交付的** viz 包是一个针对 Git corpus 的**只读**本地驾驶舱（对受治理 server 的 Chat + Ask，外加 health / tables / assets / skills）。下面图示的交互式**编辑 + 保存 → PR**流程是*设计愿景*，由下游承担（通用 git/PR + CI，或企业应用）——**并非在此实现**。见 [viz.md](../viz.zh.md)。
 
 ## 驾驶舱子系统
 

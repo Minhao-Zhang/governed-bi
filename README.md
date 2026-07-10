@@ -106,9 +106,9 @@ uv run python -m governed_bi.corpus.cli   # validate the corpus (ID + reference 
 uv run pytest                             # run the test suite
 ```
 
-The full quickstart (validate CLI, programmatic corpus API) is in
-[docs/usage.md](docs/usage.md). To write or edit corpus assets, see
-[docs/corpus-authoring.md](docs/corpus-authoring.md).
+New to the repo? The [walkthrough](docs/walkthrough.md) is a guided clone → first-question
+tour. The [quickstart](docs/usage.md) is the reference (validate CLI, programmatic
+corpus API); to write or edit corpus assets, see [corpus authoring](docs/corpus-authoring.md).
 
 Runnable today with no model or network: the full ask -> answer serve pipeline
 (retrieval, context assembly, template SQL generation, five-layer guardrails,

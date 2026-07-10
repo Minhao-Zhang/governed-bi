@@ -5,9 +5,10 @@ _[English](README.md) · [简体中文](README.zh.md)_
 Design for an agentic BI / Generative-BI system: natural-language questions →
 grounded, governed, auditable answers over enterprise relational data.
 
-Near-term target is a **general, DB-agnostic showcase** that cold-starts from
-`{a DB connection + a few known-good queries}` and grows a semantic layer over
-time. Enterprise abstractions are seamed in but toggled off. Evaluated on the
+Near-term target is a **SQLite-proven showcase** (with dialect-pluggable seams
+for other engines) that grows a reviewable semantic layer from a seed of
+known-good queries — *seed-assisted growth*, not a zero-prior cold start.
+Enterprise abstractions are seamed in but toggled off. Evaluated on the
 self-built [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) dataset (execution accuracy; cost logged).
 
 ## Read in this order
@@ -19,7 +20,7 @@ self-built [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) 
 5. [Asset schemas](asset-schemas.md): the per-asset YAML field spec (Facts / Inference / Audit tiers).
 6. [Curator](curator.md): the build-side proposer + adversary loop.
 7. [Server](server.md): the serve-side LangGraph flow + guardrails.
-8. [Viz](viz.md): the interactive audit + edit cockpit (save → PR).
+8. [Viz](viz.md): the read-only audit cockpit — browse the layer and chat with the governed server.
 9. [Glossary](glossary.md): canonical terms.
 
 [External design sources](references.md) that ground the design.
@@ -29,6 +30,7 @@ self-built [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) 
 The design docs above describe the intended system. For what actually runs
 today (the corpus layer and the dev workflow):
 
+- [Walkthrough](walkthrough.md): clone → validate → ask your first question. **Start here.**
 - [Usage](usage.md): install, the validate CLI, and the programmatic corpus API.
 - [Corpus authoring](corpus-authoring.md): write and validate corpus assets step by step.
 

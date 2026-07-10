@@ -2,8 +2,11 @@
 
 _[English](viz.md) · [简体中文](viz.zh.md)_
 
-The viz package is currently a scaffold for an interactive local audit and edit
-cockpit over the Git corpus.
+The **shipped** viz package is a **read-only** local cockpit over the Git corpus
+(Chat + Ask over the governed server, plus health / tables / assets / skills). The
+interactive **edit + save → PR** flow diagrammed below is the *design vision*,
+owned downstream (generic git/PR + CI, or the enterprise app) — **not built here**.
+See [viz.md](../viz.md).
 
 ## Cockpit subsystem
 

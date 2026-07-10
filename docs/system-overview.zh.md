@@ -5,9 +5,10 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
 > **这是什么**
 >
 > 一个 agentic BI / Generative-BI 系统的设计：自然语言问题 → 基于企业关系型数据的
-> 接地、受治理、可审计的答案。近期目标 = 一个**通用、与数据库无关的展示项目**
-> （个人 GitHub），从 `{a DB connection + a few known-good queries}` 冷启动，并
-> 随着时间推移不断扩展语义层。企业抽象已内置于系统中，但处于关闭状态。在自建的
+> 接地、受治理、可审计的答案。近期目标 = 一个**在 SQLite 上得到验证的展示项目**
+> （个人 GitHub；对其他引擎留有方言可插拔接口），从一批已知良好的种子查询出发、
+> 逐步扩展出一个可审阅的语义层——这是*种子辅助的生长*，而非零先验的冷启动。
+> 企业抽象已内置于系统中，但处于关闭状态。在自建的
 > [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) 数据集上
 > 进行评测（执行准确率；记录成本）。一个私有的**企业分支(fork)**（第二阶段）
 > 在企业规模上复用该引擎，面临同样的无人负责、无人力的处境。
@@ -21,7 +22,7 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
     - [资产模式](asset-schemas.zh.md)：按资产划分的 YAML 字段规范（Facts 层 / Inference 层 / Audit 层）
     - [Curator](curator.zh.md)：构建侧的 proposer + adversary 循环
     - [Server](server.zh.md)：服务侧的 LangGraph 流程 + 护栏
-    - [Viz](viz.zh.md)：交互式审计与编辑驾驶舱（保存 → PR）
+    - [Viz](viz.zh.md)：只读审计驾驶舱——浏览语义层 + 与 server 对话
     - [术语表](glossary.zh.md)：规范术语
 - 本设计依据[外部设计来源](references.zh.md)。
 

@@ -53,6 +53,7 @@ if TYPE_CHECKING:
     from ..corpus import Corpus
     from ..gateway import Gateway, Identity
     from ..llm import Embedder
+    from ..memory import WorkingMemory
     from .answer import Answer
     from .cache import SqlCache
     from .sqlgen import SqlGenerator
@@ -95,6 +96,7 @@ def build_serve_graph(
     sql_generator: "SqlGenerator | None" = None,
     embedder: "Embedder | None" = None,
     cache: "SqlCache | None" = None,
+    working_memory: "WorkingMemory | None" = None,
 ):
     """Compile the serve DAG for a (corpus, gateway, settings, ...) deployment.
 
@@ -171,7 +173,12 @@ def build_serve_graph(
         except ValueError:
             licensing_join_ids = []
         licensed_ids = _licensed_table_ids(corpus, graph_obj, retrieval, licensing_join_ids)
-        context = assemble_context(corpus, retrieval, licensed_table_ids=licensed_ids)
+        history = (
+            working_memory.history(state["session_id"]) if working_memory is not None else ()
+        )
+        context = assemble_context(
+            corpus, retrieval, licensed_table_ids=licensed_ids, history=history
+        )
         return {"retrieval": retrieval, "context": context, "licensed": context.allowed_table_names()}
 
     def generate_node(state: ServeState) -> dict:
@@ -304,6 +311,7 @@ def answer_question_graph(
     sql_generator: "SqlGenerator | None" = None,
     embedder: "Embedder | None" = None,
     cache: "SqlCache | None" = None,
+    working_memory: "WorkingMemory | None" = None,
 ) -> "Answer":
     """Build + invoke the serve DAG for one question; return the ``Answer``.
 
@@ -312,7 +320,13 @@ def answer_question_graph(
     graph once with :func:`build_serve_graph` and invoke it per question instead.
     """
     graph = build_serve_graph(
-        corpus, gateway, settings, sql_generator=sql_generator, embedder=embedder, cache=cache
+        corpus,
+        gateway,
+        settings,
+        sql_generator=sql_generator,
+        embedder=embedder,
+        cache=cache,
+        working_memory=working_memory,
     )
     final = graph.invoke(
         {"question": question, "identity": identity, "session_id": session_id}
