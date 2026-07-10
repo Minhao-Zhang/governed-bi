@@ -98,7 +98,7 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 > CI behind every corpus change. Certification (blessing a *definition*) stays
 > distinct from high-stakes answer sign-off (blessing an *answer*).
 
-- **Built (scope):** this repo ships a **read-only** audit cockpit; interactive corpus editing and save-to-PR are **out of scope here** (generic git/PR + CI in dev, the enterprise app in prod). The repo owns the write *primitives* a downstream editor reuses: the asset schema, `corpus.serialize.write_corpus`, and `corpus.validate` + CLI (the CI gate). See [Viz](viz.md).
+- **Built (scope):** this repo ships a **read-only** audit surface — the `viz.presenter` view models plus the optional `governed_bi.api` HTTP API — with the interactive UI as a separate project; interactive corpus editing and save-to-PR are **out of scope here** (generic git/PR + CI in dev, the enterprise app in prod). The repo owns the write *primitives* a downstream editor reuses: the asset schema, `corpus.serialize.write_corpus`, and `corpus.validate` + CLI (the CI gate). See [Viz](viz.md).
 
 ## D7: Identity
 

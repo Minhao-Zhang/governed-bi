@@ -6,7 +6,7 @@ embedder + narrator) — driven by config, so the same API binary runs the three
 profiles (local-dev / public-demo / internal) by configuration alone. The model
 stack is live (LangChain, needs the ``agents`` extra + a key) when
 ``OPENAI_API_KEY`` is set, else the deterministic offline default (template SQL,
-no narration) — mirroring the viz cockpit's behavior.
+no narration), the same live-vs-offline split the engine uses elsewhere.
 
 Near-term the data source is SQLite (the committed fixture). The connector seam
 is where a Postgres/Redshift profile plugs in later; nothing else here changes.
@@ -14,6 +14,7 @@ is where a Postgres/Redshift profile plugs in later; nothing else here changes.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +30,8 @@ if TYPE_CHECKING:
     from ..llm import Embedder
     from ..server import AnswerNarrator
     from ..server.sqlgen import SqlGenerator
+
+logger = logging.getLogger("governed_bi.api")
 
 
 @dataclass(frozen=True)
@@ -69,7 +72,13 @@ def _build_model_stack(settings) -> tuple[Any, Any, Any, str | None, bool]:
                 True,
             )
         except Exception:  # missing agents extra / bad config -> offline fallback
-            pass
+            # A key was set (live intended) but the stack failed to build; make the
+            # silent downgrade to offline observable rather than a mystery.
+            logger.warning(
+                "OPENAI_API_KEY is set but the live model stack failed to build; "
+                "falling back to the offline profile",
+                exc_info=True,
+            )
     return (None, None, None, None, False)
 
 

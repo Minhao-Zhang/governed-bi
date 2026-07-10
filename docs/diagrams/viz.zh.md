@@ -2,9 +2,9 @@
 
 _[English](viz.md) · [简体中文](viz.zh.md)_
 
-**已交付的** viz 包是一个针对 Git corpus 的**只读**本地驾驶舱（对受治理 server 的 Chat，外加 health / tables / assets / skills）。下面图示的交互式**编辑 + 保存 → PR**流程是*设计愿景*，由下游承担（通用 git/PR + CI，或企业应用）——**并非在此实现**。见 [viz.md](../viz.zh.md)。
+**已交付的**针对 Git corpus 的**只读**审计接口是 `presenter` 视图模型（UI 无关——health / tables / assets / skills / graph）外加 `governed_bi.api` HTTP/JSON API（在 `POST /chat` 对受治理 server 提供 Chat）；本仓库**不附带任何 UI**。下面图示的交互式 UI（含**编辑 + 保存 → PR** 流程）是*设计愿景*，是一个独立项目（见 [ui-frontend-design.md](../ui-frontend-design.zh.md)），其写入侧由下游承担（通用 git/PR + CI，或企业应用）——**并非在此实现**。见 [viz.md](../viz.zh.md)。
 
-## 驾驶舱子系统
+## 只读接口子系统
 
 ```mermaid
 flowchart TB
@@ -36,7 +36,7 @@ flowchart TB
 sequenceDiagram
     autonumber
     actor Reviewer as Human reviewer
-    participant Viz as Viz cockpit
+    participant Viz as Frontend UI
     participant Corpus as Git corpus files
     participant CI as Corpus CI
     participant PR as Pull request

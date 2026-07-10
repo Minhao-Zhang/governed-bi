@@ -24,12 +24,9 @@ postgres = ["psycopg[binary]>=3.1"]
 # Redshift speaks the Postgres wire protocol; RedshiftConnector subclasses
 # PostgresConnector and reuses psycopg (overriding only svv_* catalog introspection).
 redshift = ["psycopg[binary]>=3.1"]
-# The audit/edit cockpit (viz). Streamlit is the current frontend, isolated to
-# governed_bi.viz.app; the UI-agnostic view models in governed_bi.viz.presenter
-# carry no UI dependency, so a different frontend swaps in app.py alone.
-viz = ["streamlit>=1.30"]
 # The HTTP JSON API (governed_bi.api) a separate frontend consumes. Imported only
-# by that package; the core install stays free of a web framework.
+# by that package; the core install stays free of a web framework. The read-only
+# view models in governed_bi.viz.presenter are dependency-free and need no extra.
 api = ["fastapi>=0.115", "uvicorn[standard]>=0.30"]
 # The LLM + embedding seams (governed_bi.llm). Imported lazily, so the engine
 # runs on the deterministic offline clients without it; install to use the
@@ -51,6 +48,10 @@ dev = [
     "pytest>=8.0",
     # Starlette's TestClient (used by the API tests) needs httpx.
     "httpx>=0.27",
+    # LangChain's DeterministicFakeEmbedding (used by the LangChainEmbedder tests)
+    # imports numpy; it is not a hard langchain-core dependency, so pin it here for
+    # the test environment (previously satisfied transitively via streamlit).
+    "numpy>=1.26",
 ]
 
 [build-system]

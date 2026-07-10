@@ -23,7 +23,7 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
     - [Asset schemas](asset-schemas.md): the per-asset YAML field spec (Facts / Inference / Audit tiers)
     - [Curator](curator.md): the build-side proposer + adversary loop
     - [Server](server.md): the serve-side LangGraph flow + guardrails
-    - [Viz](viz.md): the read-only audit cockpit — browse the layer + chat with the server
+    - [Viz](viz.md): the read-only audit surface — the presenter view models + the `governed_bi.api` HTTP API to browse the layer + chat with the server
     - [Glossary](glossary.md): canonical terms
 - Grounded in the [external design sources](references.md).
 
@@ -41,7 +41,7 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
 > retrieval (BM25 + ground expansion, plus an embedder-gated vector channel fused
 > with BM25 via RRF) · retrieval→context assembly · the serve flow (refuse-gate,
 > template AND LLM SQL-gen, bounded self-repair, SQL semantic cache, reliability
-> stamp) · working memory · the eval scaffold · the read-only viz cockpit · model
+> stamp) · working memory · the eval scaffold · the read-only viz presenter view models + the `governed_bi.api` HTTP API · model
 > config (`governed_bi.toml`) and the `ChatClient` / `Embedder` seams (raw OpenAI +
 > LangChain + deterministic offline defaults) · the LLM curator proposer
 > (descriptions + `suspect` caveats) · the **LangGraph serve harness**

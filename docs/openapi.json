@@ -28,6 +28,30 @@
         }
       }
     },
+    "/livez": {
+      "get": {
+        "tags": [
+          "meta"
+        ],
+        "summary": "Livez",
+        "description": "Process liveness (no corpus work). Use /health for corpus status.",
+        "operationId": "livez_livez_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Livez Livez Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": [
@@ -114,6 +138,14 @@
             "schema": {
               "anyOf": [
                 {
+                  "enum": [
+                    "join",
+                    "metric",
+                    "term",
+                    "rule",
+                    "few_shot",
+                    "negative_example"
+                  ],
                   "type": "string"
                 },
                 {
@@ -378,6 +410,10 @@
           "has_live_model": {
             "type": "boolean",
             "title": "Has Live Model"
+          },
+          "can_stream": {
+            "type": "boolean",
+            "title": "Can Stream"
           }
         },
         "type": "object",
@@ -387,7 +423,8 @@
           "can_edit",
           "edit_mode",
           "model",
-          "has_live_model"
+          "has_live_model",
+          "can_stream"
         ],
         "title": "CapabilitiesResponse"
       },
@@ -395,10 +432,14 @@
         "properties": {
           "question": {
             "type": "string",
+            "maxLength": 8000,
+            "minLength": 1,
             "title": "Question"
           },
           "session_id": {
             "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
             "title": "Session Id",
             "default": "default"
           },
@@ -407,6 +448,7 @@
               "$ref": "#/components/schemas/TurnIn"
             },
             "type": "array",
+            "maxItems": 100,
             "title": "History"
           },
           "identity": {
@@ -943,6 +985,8 @@
           },
           "text": {
             "type": "string",
+            "maxLength": 8000,
+            "minLength": 1,
             "title": "Text"
           }
         },

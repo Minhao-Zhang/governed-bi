@@ -20,7 +20,7 @@ self-built [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) 
 5. [Asset schemas](asset-schemas.md): the per-asset YAML field spec (Facts / Inference / Audit tiers).
 6. [Curator](curator.md): the build-side proposer + adversary loop.
 7. [Server](server.md): the serve-side LangGraph flow + guardrails.
-8. [Viz](viz.md): the read-only audit cockpit — browse the layer and chat with the governed server.
+8. [Viz](viz.md): the read-only audit surface — the presenter view models plus the `governed_bi.api` HTTP API to browse the layer and chat with the governed server (the interactive UI is a separate project).
 9. [Glossary](glossary.md): canonical terms.
 
 [External design sources](references.md) that ground the design.

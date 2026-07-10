@@ -2,9 +2,12 @@
 
 _[English](viz.md) · [简体中文](viz.zh.md)_
 
-The audit **cockpit** for the [Agentic BI System](system-overview.md) corpus.
-This repo ships a **read-only** cockpit: browse and audit the AI-built layer, and
-ask a question to see the governed answer plus its reliability stamp.
+The **read-only audit surface** for the [Agentic BI System](system-overview.md)
+corpus. This repo ships **no bundled UI**; instead it ships the pieces a UI reads
+from — the `presenter` view models (UI-agnostic) and the `governed_bi.api`
+HTTP/JSON API — so you can browse and audit the AI-built layer, and ask a question
+to see the governed answer plus its reliability stamp. The interactive UI is a
+separate project (see [ui-frontend-design.md](ui-frontend-design.md)).
 
 **Editing the corpus and opening PRs is intentionally not built here.** Because
 git is the source of truth (D9), a correction is "edit a file + PR", which is
@@ -13,13 +16,15 @@ served by generic git/PR tooling plus CI (dev), or by the enterprise application
 own the interactive editor or the PR orchestration.
 
 > Implementation: [`src/governed_bi/viz/`](../src/governed_bi/viz/) (read-only).
-> `presenter.py` holds UI-agnostic view models; `app.py` is the Streamlit
-> renderer, the only UI-specific module (optional `viz` extra).
+> `presenter.py` holds UI-agnostic view models; [`governed_bi.api`](../src/governed_bi/api/)
+> (optional `api` extra) serves them over HTTP/JSON. Run it with
+> `uv run --extra api uvicorn --factory governed_bi.api:create_app` (interactive
+> docs at http://localhost:8000/docs).
 
 ## Scope: engine vs product
 
-The cockpit's *reading* is engine-adjacent: a dev / audit / showcase tool over
-the corpus. The cockpit's *editing* is product surface: an interactive form plus
+The audit surface's *reading* is engine-adjacent: a dev / audit / showcase tool over
+the corpus. Its *editing* is product surface: an interactive form plus
 a git/PR workflow that embeds this engine. Keeping editing out avoids baking a UI
 framework and git/PR orchestration into the library, and matches the two-product
 split (a generic public engine; a private enterprise fork where owner + PR + CI
@@ -30,7 +35,7 @@ review actually lives).
 | Asset schema (for schema-driven forms) | this repo (`corpus/schemas`) |
 | Serialize edits back to YAML | this repo (`corpus/serialize.write_corpus`) |
 | Validate on the PR (the CI gate) | this repo (`corpus/validate` + CLI) |
-| Read-only cockpit (health / tables / assets / skills / ask) | this repo (`viz/`) |
+| Read-only audit surface (health / tables / assets / skills / ask) | this repo (`viz/presenter` + `governed_bi.api`) |
 | Interactive edit form + git/PR orchestration | downstream tooling / enterprise app |
 
 ## The write path (downstream)
@@ -70,11 +75,12 @@ and the audit trail becomes **three-party: proposer -> adversary -> human**.
 
 ## Views
 
-Built here (read-only), computed from the corpus:
+Built here (read-only) as `presenter` view models, computed from the corpus and
+served over HTTP/JSON by `governed_bi.api` for a separate UI to render:
 
-- **Chat** (default). A multi-turn conversation over the governed server flow;
-  each answer shows the two-axis stamp, the SQL, and the provenance trace, and
-  follow-ups are fed back through working memory (D8).
+- **Chat**. A multi-turn conversation over the governed server flow (served at
+  `POST /chat`); each answer shows the two-axis stamp, the SQL, and the provenance
+  trace, and follow-ups are fed back through working memory (D8).
 - **Corpus health**. Asset counts, CI status, and the flags a reviewer
   triages first: # suspect columns, # excluded assets, # low-confidence joins.
 - **Table view**. Facts + Inference side by side; `suspect` and `excluded`
@@ -83,7 +89,7 @@ Built here (read-only), computed from the corpus:
   negatives), filterable by type, with provenance status.
 - **Skills**. Rendered markdown.
 
-Design vision, not built here (a fuller cockpit, or the downstream product):
+Design vision, not built here (a fuller audit surface, or the downstream product):
 
 - **FK graph** (join projection, edges styled by confidence).
 - **Gold-diff** (BIRD: curator vs gold per asset).
@@ -92,8 +98,8 @@ Design vision, not built here (a fuller cockpit, or the downstream product):
 
 ## Simple by design
 
-A local read-only app computed from the corpus: UI-agnostic view models
-(`presenter`) plus a thin Streamlit renderer (`app`), so the frontend is
+A read-only surface computed from the corpus: UI-agnostic view models
+(`presenter`) served over HTTP/JSON by `governed_bi.api`, so the frontend is
 swappable and carries no logic of its own. No SaaS, no multi-tenant, no in-repo
 editing or PR orchestration.
 

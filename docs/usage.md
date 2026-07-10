@@ -20,7 +20,7 @@ This page stays on the runnable surface; for the design behind it, see the
 | Graph projection + Steiner join planning | runnable | `src/governed_bi/graph/` |
 | Retrieval (BM25 + grounding, + embedder-gated vector channel) | runnable | `src/governed_bi/retrieval/` |
 | Serve flow (route, context, SQL gen, guardrails, self-repair, cache, stamp) | runnable | `src/governed_bi/server/` |
-| Memory (working) + eval (EX, arms, refuse-gate) + viz cockpit | runnable | `src/governed_bi/{memory,eval,viz}/` |
+| Memory (working) + eval (EX, arms, refuse-gate) + viz presenter (audit view models) | runnable | `src/governed_bi/{memory,eval,viz}/` |
 | Model clients (raw OpenAI / LangChain) | runnable behind `openai` / `agents` extras | `src/governed_bi/llm/` |
 | Agent harnesses (LangGraph serve DAG, deepagents curator) | runnable behind `agents` extra | `server/graph.py`, `curator/deep_agent.py` |
 | Postgres / Redshift connectors | implemented behind optional extras; offline-tested, not run live | `src/governed_bi/gateway/connectors/` |
@@ -165,22 +165,31 @@ serve harness (`answer_question_graph`) and the deepagents curator, install the
 of the [README](../README.md). The API key is read from `OPENAI_API_KEY`, never
 stored.
 
-## Audit cockpit (viz)
+## Audit surface (viz presenter + API)
 
-A read-only Streamlit cockpit renders the full corpus (Facts + Inference + Audit
-+ excluded assets): a multi-turn **Chat** over the governed server flow (each
-answer showing the two-axis reliability stamp, the result table, and SQL), plus
-corpus health, the table/tier view, the asset listing, and skills. Streamlit is
-the optional `viz` extra:
+This repo ships **no bundled UI**. The read-only audit/review surface is two
+UI-agnostic pieces: the `governed_bi.viz.presenter` view models (corpus health,
+the table/tier view, the relationship/knowledge graph, the asset listing,
+skills, and an answer's two-axis reliability stamp — no UI dependency), and the
+`governed_bi.api` FastAPI HTTP/JSON API that serves those view models plus the
+governed serve flow at `POST /chat`. To run the API (optional `api` extra):
 
 ```bash
-uv run --extra viz streamlit run src/governed_bi/viz/app.py
+uv run --extra api uvicorn --factory governed_bi.api:create_app
+```
+
+Then open the interactive docs at http://localhost:8000/docs, or POST a question:
+
+```bash
+curl -s localhost:8000/chat -H 'content-type: application/json' \
+  -d '{"question":"What is the total revenue?"}'
 ```
 
 Set `GOVERNED_BI_CORPUS`, `GOVERNED_BI_DB`, and `GOVERNED_BI_SQLITE` to point it
-at a different corpus / database. The display logic lives in the UI-agnostic
-`governed_bi.viz.presenter` (no UI dependency), so a different frontend swaps in
-`app.py` alone.
+at a different corpus / database. Because the display logic lives in the
+UI-agnostic `governed_bi.viz.presenter` (no UI dependency), a separate frontend
+can consume the same view models — the interactive UI is a separate project, see
+[docs/ui-frontend-design.md](ui-frontend-design.md).
 
 ## Run the tests
 

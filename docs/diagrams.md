@@ -42,7 +42,7 @@ from design-level scaffolding.
    - Asset lifecycle state machine
    - Proposer/adversary sequence
 5. [Viz diagrams](diagrams/viz.md)
-   - Cockpit subsystem
+   - Read-only surface (presenter view models + API)
    - Audit/certification sequence
 6. [Evaluation diagrams](diagrams/eval.md)
    - Three-arm evaluation

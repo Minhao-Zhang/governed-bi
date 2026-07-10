@@ -22,7 +22,7 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
     - [资产模式](asset-schemas.zh.md)：按资产划分的 YAML 字段规范（Facts 层 / Inference 层 / Audit 层）
     - [Curator](curator.zh.md)：构建侧的 proposer + adversary 循环
     - [Server](server.zh.md)：服务侧的 LangGraph 流程 + 护栏
-    - [Viz](viz.zh.md)：只读审计驾驶舱——浏览语义层 + 与 server 对话
+    - [Viz](viz.zh.md)：只读审计面(audit surface)——presenter 视图模型 + `governed_bi.api` HTTP API，用于浏览语义层 + 与 server 对话
     - [术语表](glossary.zh.md)：规范术语
 - 本设计依据[外部设计来源](references.zh.md)。
 
@@ -39,7 +39,7 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
 > 规划器（基于内存的 networkx）· gateway + 五层护栏 · RVGD 检索（BM25 + 接地
 > 扩展，外加一个由 embedder 门控、经 RRF 与 BM25 融合的向量通道）· 检索→上下文
 > 组装 · 服务流程（拒答关卡(refuse-gate)、模板式与 LLM 式两种 SQL 生成、有界
-> 自修复、SQL 语义缓存、可靠性标记）· 工作记忆 · 评测脚手架 · 只读的 viz 驾驶舱 ·
+> 自修复、SQL 语义缓存、可靠性标记）· 工作记忆 · 评测脚手架 · 只读的 viz presenter 视图模型 + `governed_bi.api` HTTP API ·
 > 模型配置(`governed_bi.toml`)以及 `ChatClient` / `Embedder` 扩展点（原生 OpenAI +
 > LangChain + 确定性的离线默认实现）· 基于 LLM 的 curator proposer（描述 +
 > `suspect` 警示）· **LangGraph serve harness**（`server.graph`，在 Answer 层面

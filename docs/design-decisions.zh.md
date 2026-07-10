@@ -127,11 +127,12 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 > PR + 负责人 + CI。认证（为一份*定义*背书）与高风险答案签核（为一个
 > *答案*背书）二者保持区分。
 
-- **已构建（范围）：** 本仓库提供一个**只读**的审计驾驶舱；交互式的 corpus
-  编辑与保存为 PR **不在本仓库范围内**（开发环境下用通用的 git/PR + CI，
-  生产环境下由企业应用承担）。本仓库拥有下游编辑器会复用的写入*原语*：
-  资产 schema、`corpus.serialize.write_corpus`，以及 `corpus.validate` +
-  CLI（即 CI 关卡）。参见[Viz](viz.zh.md)。
+- **已构建（范围）：** 本仓库提供一个**只读**的审计面（audit surface）——即
+  `viz.presenter` 视图模型加上可选的 `governed_bi.api` HTTP API——交互式 UI
+  则是一个独立项目；交互式的 corpus 编辑与保存为 PR **不在本仓库范围内**
+  （开发环境下用通用的 git/PR + CI，生产环境下由企业应用承担）。本仓库拥有
+  下游编辑器会复用的写入*原语*：资产 schema、`corpus.serialize.write_corpus`，
+  以及 `corpus.validate` + CLI（即 CI 关卡）。参见[Viz](viz.zh.md)。
 
 ## D7：身份
 

@@ -1,14 +1,14 @@
-"""UI-agnostic view models for the audit cockpit (docs/viz.md).
+"""UI-agnostic view models for the read-only audit surface (docs/viz.md).
 
 This module is the **swappable seam**: it turns the domain objects (the full
 corpus, an answer) into plain, frozen dataclasses with no rendering logic and no
-UI dependency. ``governed_bi.viz.app`` (Streamlit) renders these; a different
-frontend (Marimo, a web app, a static export) would reuse this module unchanged
-and only rewrite the renderer.
+UI dependency. The HTTP API (``governed_bi.api``) serializes these as JSON and a
+separate frontend renders them; swapping frontends touches only the renderer,
+never this module. This repo ships no bundled UI.
 
 It reads the **full** corpus (Facts + Inference + Audit, including
-``governance.excluded`` assets), not the ``for_server()`` view: the whole point
-of the cockpit is to show the tiers, the provenance, and the exclusions that the
+``governance.excluded`` assets), not the ``for_server()`` view: the point of the
+audit surface is to show the tiers, the provenance, and the exclusions that the
 server never sees.
 """
 
@@ -38,7 +38,7 @@ LOW_CONFIDENCE_JOIN = 0.7
 
 @dataclass(frozen=True)
 class ColumnView:
-    # Facts (read-only in the cockpit)
+    # Facts (read-only in the audit view)
     physical_name: str
     physical_type: str
     logical_type: str
@@ -339,8 +339,8 @@ def answer_view(answer: "Answer") -> AnswerView:
     """Map a server ``Answer`` to display fields: the two stamp axes + trace.
 
     Surfacing both axes (not just the collapsed tier) is deliberate - safety
-    clearance and semantic assurance mean different things, and the cockpit should
-    not let a reviewer read one as the other.
+    clearance and semantic assurance mean different things, and the audit surface
+    should not let a reviewer read one as the other.
     """
     result = None
     if answer.result is not None:

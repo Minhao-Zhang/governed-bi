@@ -3,7 +3,7 @@
 _[English](walkthrough.md) · [简体中文](walkthrough.zh.md)_
 
 A start-to-finish tour: install the repo, validate the example corpus, and ask
-your first question — both in the chat UI and from Python. Everything here runs
+your first question — both over the HTTP API and from Python. Everything here runs
 **offline** (no API key, no network) against the committed `beer_factory`
 database, using the deterministic template SQL generator. A final optional step
 shows how to switch on a live model.
@@ -62,47 +62,55 @@ CI green: 16 assets, 1 skills, 0 findings.
 uv run pytest -q
 ```
 
-The suite is green offline. With the harness and cockpit extras installed
-(`uv run --extra agents --extra viz pytest`) all **287** tests run, including the
-LangGraph-equivalence and the Streamlit UI tests; without them, a handful skip.
+The suite is green offline. With the harness and API extras installed
+(`uv run --extra agents --extra api pytest`) all **321** tests run, including the
+LangGraph-equivalence and the HTTP API tests; without them, a handful skip.
 
 ## 4. Ask your first question
 
-There are two ways in: a chat UI, and a few lines of Python. Both drive the exact
-same governed server flow.
+There are two ways in: the HTTP API, and a few lines of Python. Both drive the
+exact same governed server flow.
 
-### 4a. In the chat UI (recommended)
+### 4a. Over the HTTP API (recommended)
 
 ```bash
-uv run --extra viz streamlit run src/governed_bi/viz/app.py
+uv run --extra api uvicorn --factory governed_bi.api:create_app
 ```
 
-This opens the cockpit in your browser. The default view is **Chat**. Type:
+This serves the governed API at http://localhost:8000 (interactive docs at
+http://localhost:8000/docs). Ask your first question by POSTing to `/chat`:
 
-> What is the total revenue?
+```bash
+curl -s localhost:8000/chat -H 'content-type: application/json' \
+  -d '{"question":"What is the total revenue?"}'
+```
 
-You'll get a governed answer that looks like this:
+You'll get a governed answer whose JSON carries:
 
-- **tier: governed** (a green badge)
-- **safety clearance: cleared**  ·  **semantic assurance: certified**
+- **tier: governed**
+- **safety_clearance: true**  ·  **semantic_assurance: certified**
 - the answer: `total_revenue = 18496.0`
 - the SQL it ran: `SELECT SUM(PurchasePrice) AS total_revenue FROM "transaction"`
-- an expandable **provenance** trace (route, metric, tables, join confidence)
+- a **provenance** trace (route, metric, tables, join confidence)
 
 Now ask something the semantic layer does **not** cover:
 
-> How many employees work at the factory?
+```bash
+curl -s localhost:8000/chat -H 'content-type: application/json' \
+  -d '{"question":"How many employees work at the factory?"}'
+```
 
 Instead of guessing, the system **refuses**:
 
-- **tier: refused** (a red badge)
+- **tier: refused**
 - an escalation message: _"not answerable from this data - contact &lt;owner&gt;"_
 - no SQL, no number
 
 That refusal is the point: there is no employee/payroll data in scope, so a
 governed system says so rather than inventing a plausible-but-wrong number.
 
-Keep chatting — the transcript persists, and **Clear** resets the session.
+The API is stateless — to keep a conversation going, send prior turns back as
+`history` (with a stable `session_id`) on the next `/chat` request.
 
 ### 4b. From Python
 
@@ -155,7 +163,7 @@ context-aware follow-ups in chat — set a key and install the `agents` extra:
 
 ```bash
 export OPENAI_API_KEY=sk-...        # read from the env, never stored in the repo
-uv run --extra agents --extra viz streamlit run src/governed_bi/viz/app.py
+uv run --extra agents --extra api uvicorn --factory governed_bi.api:create_app
 ```
 
 Prefer a file? Copy `.env.example` to `.env` at the repo root and put the key
@@ -164,12 +172,12 @@ variable already set in your shell. `.env` is git-ignored.
 
 The model is `gpt-5.5` at low reasoning effort (configured in
 [`governed_bi.toml`](../governed_bi.toml)), called through LangChain's
-`ChatOpenAI`, which routes reasoning models to the OpenAI **Responses API**. In
-chat, follow-ups now resolve against the conversation (prior turns are fed back
+`ChatOpenAI`, which routes reasoning models to the OpenAI **Responses API**. Over
+`/chat`, follow-ups now resolve against the conversation (prior turns are fed back
 through the engine's working memory), the answer is phrased in **natural
-language**, and the executed rows are shown in a collapsible **result** table
-beneath it. Offline, the answer text falls back to a compact render, but the
-result table still appears — the executed rows are always carried on the answer.
+language**, and the executed rows are returned in the response's **result** field.
+Offline, the answer text falls back to a compact render, but the `result` rows are
+still present — the executed rows are always carried on the answer.
 
 For a scripted live check that prints execution accuracy, refusal, and
 decoy-touch over `beer_factory`, run:

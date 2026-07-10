@@ -1,8 +1,8 @@
-"""Tests for the UI-agnostic viz presenter.
+"""Tests for the UI-agnostic viz presenter (view models, no UI dependency).
 
-These import only ``governed_bi.viz`` / ``.presenter`` (no Streamlit), which also
-demonstrates the swap seam: the cockpit's view models carry no UI dependency, so
-the suite runs without the optional ``viz`` extra installed.
+These import only ``governed_bi.viz.presenter``; there is no bundled UI to test.
+The interactive frontend is a separate project (see docs/ui-frontend-design.md);
+it renders these view models, which the HTTP API (``governed_bi.api``) also serves.
 """
 
 from __future__ import annotations
@@ -12,15 +12,15 @@ from pathlib import Path
 import pytest
 
 from governed_bi.corpus import load_corpus
-from governed_bi.viz import presenter
 from governed_bi.server.answer import Answer, ReliabilityTier
+from governed_bi.viz import presenter
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 
 
 @pytest.fixture
 def corpus():
-    # The cockpit reads the FULL corpus (Audit + excluded assets), not for_server.
+    # The audit surface reads the FULL corpus (Audit + excluded assets), not for_server.
     return load_corpus(CORPUS_ROOT, db="beer_factory")
 
 
@@ -66,6 +66,18 @@ def test_skill_views(corpus):
     assert skills[0].body.strip()
 
 
+def test_schema_graph_nodes_and_edges(corpus):
+    graph = presenter.schema_graph(corpus)
+    assert len(graph.nodes) == 5
+    customers = next(n for n in graph.nodes if n.physical_name == "customers")
+    assert customers.row_count == 554
+    assert customers.has_suspect  # ZipCode is suspect
+    assert len(graph.edges) == 4
+    # beer_factory joins are all 0.95, above the low-confidence threshold.
+    assert all(not e.low_confidence for e in graph.edges)
+    assert all(e.source and e.target for e in graph.edges)
+
+
 def test_answer_view_maps_stamp_and_trace():
     answer = Answer(
         tier=ReliabilityTier.governed,
@@ -97,40 +109,3 @@ def test_answer_view_maps_result_rows():
     assert view.result.rows == [[18496.0]]  # tuples normalised to lists for rendering
     assert view.result.row_count == 1
     assert view.result.truncated is False
-
-
-# --------------------------------------------------------------------------- #
-# Streamlit app smoke test (only when the optional `viz` extra is installed)
-# --------------------------------------------------------------------------- #
-
-APP = Path(__file__).resolve().parents[1] / "src" / "governed_bi" / "viz" / "app.py"
-
-
-@pytest.mark.parametrize("view", ["Chat", "Health", "Tables", "Assets", "Skills"])
-def test_streamlit_app_renders_every_view(view):
-    pytest.importorskip("streamlit")
-    from streamlit.testing.v1 import AppTest
-
-    at = AppTest.from_file(str(APP), default_timeout=30)
-    at.run()
-    assert not at.exception, list(at.exception)
-    at.sidebar.radio[0].set_value(view).run()
-    assert not at.exception, list(at.exception)
-
-
-def test_streamlit_chat_answers_a_question():
-    # Drive the Chat view end-to-end: submit a question through the real UI and
-    # confirm the governed answer renders (UI -> server flow -> SQLite -> stamp).
-    # Uses the offline template generator (no key), so it runs in CI.
-    pytest.importorskip("streamlit")
-    if not (Path(__file__).resolve().parents[1] / "data" / "bird" / "beer_factory.sqlite").exists():
-        pytest.skip("vendored beer_factory.sqlite not present")
-    from streamlit.testing.v1 import AppTest
-
-    at = AppTest.from_file(str(APP), default_timeout=60)
-    at.run()
-    at.sidebar.radio[0].set_value("Chat").run()
-    at.chat_input[0].set_value("What is the total revenue?").run()
-    assert not at.exception, list(at.exception)
-    # A governed answer stamps its tier via st.success ("tier: governed").
-    assert any("tier:" in block.value for block in at.success)

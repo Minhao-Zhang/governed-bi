@@ -18,7 +18,7 @@ _[English](usage.md) · [简体中文](usage.zh.md)_
 | 图投影 + Steiner 连接规划 | 可运行 | `src/governed_bi/graph/` |
 | 检索（BM25 + 接地，外加由 embedder 门控的向量通道） | 可运行 | `src/governed_bi/retrieval/` |
 | serve 流程（路由、上下文、SQL 生成、护栏、自修复、缓存、标记） | 可运行 | `src/governed_bi/server/` |
-| Memory（working）+ eval（EX、arms、refuse-gate）+ viz 驾驶舱 | 可运行 | `src/governed_bi/{memory,eval,viz}/` |
+| Memory（working）+ eval（EX、arms、refuse-gate）+ viz presenter（审计视图模型） | 可运行 | `src/governed_bi/{memory,eval,viz}/` |
 | 模型客户端（原生 OpenAI / LangChain） | 可运行（需启用 `openai` / `agents` 可选依赖组） | `src/governed_bi/llm/` |
 | 智能体 harness（LangGraph 的 serve DAG、deepagents 的 curator） | 可运行（需启用 `agents` 可选依赖组） | `server/graph.py`, `curator/deep_agent.py` |
 | Postgres / Redshift 连接器 | 已实现（需可选依赖组）；离线测试，未连真实库 | `src/governed_bi/gateway/connectors/` |
@@ -161,20 +161,29 @@ serve harness（`answer_question_graph`）以及 deepagents 的 curator，需要
 可选依赖组并注入相应的 client，参见 [README](../README.zh.md) 中的 **Models &
 configuration** 一节。API key 从 `OPENAI_API_KEY` 读取，绝不会被存储。
 
-## 审计驾驶舱（viz）
+## 审计界面（viz presenter + API）
 
-一个只读的 Streamlit 驾驶舱，会渲染完整的 corpus（Facts + Inference + Audit，加上被
-排除的资产）：对受治理 server 流程的多轮 **Chat**（每个答案都展示双轴可靠性标记、
-结果表格与 SQL），外加 corpus 健康度、表/档位视图、资产列表与技能。Streamlit 位于
-可选依赖组 `viz` 之后：
+本仓库**不附带任何 UI**。只读的审计/审查界面由两个与 UI 无关的部分组成：
+`governed_bi.viz.presenter` 视图模型（corpus 健康度、表/档位视图、关系/知识图谱、
+资产列表、技能，以及某个答案的双轴可靠性标记——不依赖任何 UI），以及
+`governed_bi.api` 这个 FastAPI HTTP/JSON API，它在 `POST /chat` 处提供这些视图模型
+以及受治理的 serve 流程。运行该 API（需启用可选依赖组 `api`）：
 
 ```bash
-uv run --extra viz streamlit run src/governed_bi/viz/app.py
+uv run --extra api uvicorn --factory governed_bi.api:create_app
+```
+
+随后在 http://localhost:8000/docs 打开交互式文档，或直接 POST 一个问题：
+
+```bash
+curl -s localhost:8000/chat -H 'content-type: application/json' \
+  -d '{"question":"What is the total revenue?"}'
 ```
 
 设置 `GOVERNED_BI_CORPUS`、`GOVERNED_BI_DB` 和 `GOVERNED_BI_SQLITE`，可以让它指向另一个
-corpus / 数据库。展示逻辑位于与 UI 无关的 `governed_bi.viz.presenter` 中（不依赖任何
-UI 框架），因此换一个前端只需要替换 `app.py` 即可。
+corpus / 数据库。由于展示逻辑位于与 UI 无关的 `governed_bi.viz.presenter` 中（不依赖任何
+UI 框架），一个独立的前端可以消费同样的视图模型——交互式 UI 是一个独立项目，参见
+[docs/ui-frontend-design.md](ui-frontend-design.zh.md)。
 
 ## 运行测试
 

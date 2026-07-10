@@ -15,7 +15,6 @@ import pytest
 from governed_bi.corpus import load_corpus
 from governed_bi.llm import HashingEmbedder
 from governed_bi.retrieval import (
-    EmbeddingIndex,
     build_embedding_index,
     fuse_rankings,
     retrieve,

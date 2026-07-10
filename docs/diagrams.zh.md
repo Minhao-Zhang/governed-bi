@@ -35,7 +35,7 @@ _[English](diagrams.md) · [简体中文](diagrams.zh.md)_
    - 资产生命周期状态机
    - Proposer/adversary 序列图
 5. [Viz 图表](diagrams/viz.zh.md)
-   - 驾驶舱子系统
+   - 只读界面（presenter 视图模型 + API）
    - 审计/认证序列图
 6. [Eval 图表](diagrams/eval.zh.md)
    - 三臂评测

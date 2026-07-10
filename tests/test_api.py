@@ -8,6 +8,7 @@ SQL generator, no narrator), and no test ever reaches a live model.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from governed_bi.api import create_app  # noqa: E402
+from governed_bi.api.stack import build_stack  # noqa: E402
 
 BIRD_DB = Path(__file__).resolve().parents[1] / "data" / "bird" / "beer_factory.sqlite"
 
@@ -38,6 +40,8 @@ def test_capabilities_reports_offline_dev(client):
     assert body["environment"] == "dev"
     assert body["dialect"] == "sqlite"
     assert body["has_live_model"] is False  # hermetic env: no key -> offline
+    assert body["model"] is None  # offline: no model name (locks the live<->model consistency)
+    assert body["can_stream"] is False  # this REST API is request/response
     assert body["can_edit"] is False
     assert body["edit_mode"] is None
 
@@ -117,3 +121,67 @@ def test_chat_refuses_out_of_scope(client):
     assert body["sql"] is None
     assert body["result"] is None
     assert body["escalation"]
+
+
+@pytest.mark.skipif(not BIRD_DB.exists(), reason="vendored beer_factory.sqlite not present")
+def test_chat_accepts_history_turns(client):
+    # Exercises the working-memory rebuild loop (the stateless-chat mechanism).
+    r = client.post(
+        "/chat",
+        json={
+            "question": "What is the total revenue?",
+            "session_id": "s",
+            "history": [
+                {"role": "user", "text": "hi"},
+                {"role": "assistant", "text": "hello"},
+            ],
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["tier"] == "governed"
+
+
+# --------------------------------------------------------------------------- #
+# error / validation / ops paths (offline; no DB needed)
+# --------------------------------------------------------------------------- #
+
+
+def test_livez(client):
+    r = client.get("/livez")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
+
+
+def test_corpus_assets_rejects_unknown_type(client):
+    assert client.get("/corpus/assets", params={"type": "bogus"}).status_code == 422
+    # 'table' is a real asset_type but not selectable here -> also rejected.
+    assert client.get("/corpus/assets", params={"type": "table"}).status_code == 422
+
+
+def test_chat_rejects_blank_question(client):
+    assert client.post("/chat", json={"question": ""}).status_code == 422
+    assert client.post("/chat", json={"question": "   "}).status_code == 422  # stripped -> empty
+
+
+def test_chat_rejects_invalid_history_role(client):
+    r = client.post(
+        "/chat",
+        json={"question": "What is the total revenue?", "history": [{"role": "system", "text": "x"}]},
+    )
+    assert r.status_code == 422
+
+
+def test_chat_returns_503_when_db_missing():
+    # Inject a stack pointing at a nonexistent DB; no DB file needed for this test.
+    stack = replace(build_stack(), sqlite_path=Path("does/not/exist.sqlite"))
+    client = TestClient(create_app(stack))
+    r = client.post("/chat", json={"question": "What is the total revenue?"})
+    assert r.status_code == 503
+    assert r.json()["detail"] == "database unavailable"  # generic; no path leaked
+
+
+def test_cors_allows_configured_origin(monkeypatch):
+    monkeypatch.setenv("GOVERNED_BI_CORS_ORIGINS", "https://app.example.com")
+    client = TestClient(create_app())
+    r = client.get("/capabilities", headers={"Origin": "https://app.example.com"})
+    assert r.headers.get("access-control-allow-origin") == "https://app.example.com"

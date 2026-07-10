@@ -2,13 +2,16 @@
 
 _[English](viz.md) · [简体中文](viz.zh.md)_
 
-The **shipped** viz package is a **read-only** local cockpit over the Git corpus
-(Chat over the governed server, plus health / tables / assets / skills). The
-interactive **edit + save → PR** flow diagrammed below is the *design vision*,
-owned downstream (generic git/PR + CI, or the enterprise app) — **not built here**.
-See [viz.md](../viz.md).
+The **shipped** read-only audit surface over the Git corpus is the `presenter`
+view models (UI-agnostic — health / tables / assets / skills / graph) plus the
+`governed_bi.api` HTTP/JSON API (Chat over the governed server at `POST /chat`);
+this repo ships **no bundled UI**. The interactive UI diagrammed
+below — including the **edit + save → PR** flow — is the *design vision*, a
+separate project (see [ui-frontend-design.md](../ui-frontend-design.md)) with the
+write side owned downstream (generic git/PR + CI, or the enterprise app) —
+**not built here**. See [viz.md](../viz.md).
 
-## Cockpit subsystem
+## Read-only surface subsystem
 
 ```mermaid
 flowchart TB
@@ -40,7 +43,7 @@ flowchart TB
 sequenceDiagram
     autonumber
     actor Reviewer as Human reviewer
-    participant Viz as Viz cockpit
+    participant Viz as Frontend UI
     participant Corpus as Git corpus files
     participant CI as Corpus CI
     participant PR as Pull request

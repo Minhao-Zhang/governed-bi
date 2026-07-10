@@ -28,6 +28,7 @@ class CapabilitiesResponse(_View):
     edit_mode: str | None  # "file" | "pr" | null
     model: str | None  # LLM model name when a live model is wired, else null
     has_live_model: bool
+    can_stream: bool  # whether a streaming chat endpoint exists (False for this REST API)
 
 
 # ── health ────────────────────────────────────────────────────────────────── #
@@ -101,6 +102,12 @@ class SchemaGraphResponse(_View):
 
 
 # ── corpus assets + skills ────────────────────────────────────────────────── #
+# The selectable non-table asset types (tables have their own /schema view). Used
+# to constrain the /corpus/assets ?type= filter so unknown values 422 and the
+# valid set is published in the OpenAPI schema.
+AssetTypeFilter = Literal["join", "metric", "term", "rule", "few_shot", "negative_example"]
+
+
 class AssetRowResponse(_View):
     id: str
     asset_type: str
@@ -118,14 +125,19 @@ class SkillResponse(_View):
 
 # ── chat ──────────────────────────────────────────────────────────────────── #
 class TurnIn(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
     role: Literal["user", "assistant"]
-    text: str
+    text: str = Field(min_length=1, max_length=8000)
 
 
 class ChatRequest(BaseModel):
-    question: str
-    session_id: str = "default"
-    history: list[TurnIn] = Field(default_factory=list)
+    # Strip surrounding whitespace so a whitespace-only question fails min_length
+    # (min_length alone would let "   " through), and bound sizes so a client
+    # can't push a degenerate/oversized payload into the serve flow.
+    model_config = ConfigDict(str_strip_whitespace=True)
+    question: str = Field(min_length=1, max_length=8000)
+    session_id: str = Field("default", min_length=1, max_length=128)
+    history: list[TurnIn] = Field(default_factory=list, max_length=100)
     identity: str | None = None  # accepted but not enforced near-term (single demo identity)
 
 

@@ -44,7 +44,7 @@ is unmeasured.
 
 | Capability | Status | Evidence |
 |---|---|---|
-| SQLite governed serve path (retrieve → context → SQL-gen → 5-layer guardrails → execute → stamp) | **Built** | `uv run pytest` — 287 offline tests |
+| SQLite governed serve path (retrieve → context → SQL-gen → 5-layer guardrails → execute → stamp) | **Built** | `uv run --extra agents --extra api pytest` — 321 offline tests |
 | Corpus contract + validation (typed YAML/MD, ID + reference integrity) | **Built** | `python -m governed_bi.corpus.cli`, CI |
 | Bounded self-repair + two-axis reliability stamp | **Built** | `tests/test_server.py` |
 | Semantic SQL cache (re-guardrail + re-execute on hit, `certified`-only admission) | **Built, off by default** | `tests/test_cache.py` |
@@ -90,7 +90,7 @@ src/governed_bi/
   server/              done: serve DAG, routing, context assembly, SQL gen (template + LLM), self-repair, SQL cache, stamp; LangGraph harness in graph.py
   curator/             + deep_agent.py: the deepagents build harness
   eval/                done: execution accuracy, arm harness, refuse-gate
-  viz/                 done: read-only audit cockpit (Streamlit, swappable UI)
+  viz/                 done: read-only audit surface — UI-agnostic presenter view models (no UI dependency)
 tests/                 unit + end-to-end suites across all of the above
 ```
 
@@ -113,7 +113,8 @@ corpus API); to write or edit corpus assets, see [corpus authoring](docs/corpus-
 Runnable today with no model or network: the full question -> answer serve pipeline
 (retrieval, context assembly, template SQL generation, five-layer guardrails,
 bounded self-repair, reliability stamp) over the committed beer_factory DB, plus
-the curator scaffold, memory, eval, and the read-only viz cockpit. Core
+the curator scaffold, memory, eval, and the read-only audit surface (presenter
+view models + the `governed_bi.api` HTTP API). Core
 dependencies are intentionally minimal (pydantic, pyyaml, networkx, sqlglot);
 the Postgres/Redshift connectors are optional extras. The agent harnesses
 (server = LangGraph `StateGraph`, curator = deepagents, with LangChain model

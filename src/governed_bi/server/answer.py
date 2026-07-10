@@ -29,7 +29,7 @@ running the DAG.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 
 # A join at or below this confidence lowers the stamp. Uncalibrated/tunable

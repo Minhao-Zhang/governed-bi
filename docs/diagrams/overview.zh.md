@@ -23,7 +23,7 @@ flowchart LR
         RetrievalPkg["retrieval package<br/>RVGD contract"]
         MemoryPkg["memory package<br/>working memory protocol"]
         EvalPkg["eval package<br/>arms, EX, gold, refuse gate"]
-        VizPkg["viz package<br/>read-only cockpit entrypoint"]
+        VizPkg["viz package<br/>presenter view models"]
     end
 
     ExampleCorpus --> CorpusPkg
@@ -38,7 +38,7 @@ flowchart LR
     ServerPkg -. uses .-> MemoryPkg
     CuratorPkg -. self-eval via .-> ServerPkg
     EvalPkg -. measures .-> ServerPkg
-    VizPkg -. edits .-> CorpusPkg
+    VizPkg -. reads .-> CorpusPkg
 ```
 
 ## 目标系统架构
@@ -46,7 +46,7 @@ flowchart LR
 ```mermaid
 flowchart TB
     Analyst["User / analyst"] --> Server["Server harness<br/>deterministic LangGraph DAG"]
-    Reviewer["Human reviewer / owner"] --> Viz["Viz cockpit<br/>audit + edit + PR"]
+    Reviewer["Human reviewer / owner"] --> Viz["Review surface<br/>presenter view models + API (read-only)<br/>+ separate interactive UI for edit + PR"]
 
     subgraph ControlPlane["Semantic / control plane"]
         Curator["Curator harness<br/>offline proposer + adversary"]

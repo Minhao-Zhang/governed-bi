@@ -21,7 +21,7 @@ _[English](README.md) · [简体中文](README.zh.md)_
 
 | 能力 | 状态 | 证据 |
 |---|---|---|
-| SQLite 受治理服务路径（检索 → 上下文 → SQL 生成 → 五层护栏 → 执行 → 标记） | **已构建** | `uv run pytest`——287 个离线测试 |
+| SQLite 受治理服务路径（检索 → 上下文 → SQL 生成 → 五层护栏 → 执行 → 标记） | **已构建** | `uv run --extra agents --extra api pytest`——321 个离线测试 |
 | corpus 契约 + 校验（类型化 YAML/MD、ID + 引用完整性） | **已构建** | `python -m governed_bi.corpus.cli`、CI |
 | 有界自修复 + 双轴可靠性标记 | **已构建** | `tests/test_server.py` |
 | 语义 SQL 缓存（命中时重新过护栏 + 重新执行，仅 `certified` 准入） | **已构建，默认关闭** | `tests/test_cache.py` |
@@ -62,7 +62,7 @@ src/governed_bi/
   server/              done: serve DAG, routing, context assembly, SQL gen (template + LLM), self-repair, SQL cache, stamp; LangGraph harness in graph.py
   curator/             + deep_agent.py: the deepagents build harness
   eval/                done: execution accuracy, arm harness, refuse-gate
-  viz/                 done: read-only audit cockpit (Streamlit, swappable UI)
+  viz/                 done: read-only audit surface — UI-agnostic presenter view models (no UI dependency)
 tests/                 unit + end-to-end suites across all of the above
 ```
 
@@ -85,7 +85,7 @@ uv run pytest                             # run the test suite
 今天就可以在没有模型、没有网络的情况下运行：在已提交的 beer_factory 数据库上，
 完整的问题到答案的 serve 流程（检索、上下文组装、模板化 SQL 生成、五层护栏、
 受限自修复、可靠性标记）都能跑通，此外还有 curator 脚手架、memory、eval，以及
-只读的 viz 驾驶舱。核心依赖刻意保持精简（pydantic、pyyaml、networkx、sqlglot）；
+只读的审计面（presenter 视图模型 + `governed_bi.api` HTTP API）。核心依赖刻意保持精简（pydantic、pyyaml、networkx、sqlglot）；
 Postgres/Redshift 连接器是可选的 extra。两个 agent harness（server 是 LangGraph
 的 `StateGraph`，curator 是 deepagents，两者都配合 LangChain 模型客户端）都放在
 `agents` extra 背后，且在没有 key 的情况下，也能在确定性的离线模型替身(double)

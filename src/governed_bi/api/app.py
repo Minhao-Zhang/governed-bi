@@ -19,6 +19,7 @@ is used, keeping the core install lean.
 
 from __future__ import annotations
 
+import logging
 import os
 
 from .. import __version__
@@ -26,6 +27,7 @@ from ..viz import presenter
 from .schemas import (
     AnswerResponse,
     AssetRowResponse,
+    AssetTypeFilter,
     CapabilitiesResponse,
     ChatRequest,
     HealthResponse,
@@ -34,6 +36,8 @@ from .schemas import (
     TableResponse,
 )
 from .stack import ServeStack, build_stack
+
+logger = logging.getLogger("governed_bi.api")
 
 
 def create_app(stack: ServeStack | None = None):
@@ -48,13 +52,22 @@ def create_app(stack: ServeStack | None = None):
         summary="Governed NL2SQL serve flow + corpus/schema/audit, as JSON.",
     )
 
-    origins = [o.strip() for o in os.environ.get("GOVERNED_BI_CORS_ORIGINS", "*").split(",") if o.strip()]
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=origins or ["*"],
-        allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["*"],
-    )
+    # CORS: default to the local Next.js dev origin so the separate frontend works
+    # out of the box, without a blanket wildcard. Override with
+    # GOVERNED_BI_CORS_ORIGINS (comma-separated; "*" to allow any origin); set it
+    # empty to disable CORS entirely (same-origin only).
+    origins = [
+        o.strip()
+        for o in os.environ.get("GOVERNED_BI_CORS_ORIGINS", "http://localhost:3000").split(",")
+        if o.strip()
+    ]
+    if origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["*"],
+        )
 
     @app.get("/capabilities", response_model=CapabilitiesResponse, tags=["meta"])
     def capabilities() -> CapabilitiesResponse:
@@ -66,7 +79,17 @@ def create_app(stack: ServeStack | None = None):
             edit_mode=None,
             model=stack.model_name,
             has_live_model=stack.has_live_model,
+            can_stream=False,  # this REST API is request/response; streaming is a later phase
         )
+
+    @app.get("/", include_in_schema=False)
+    def root() -> dict:
+        return {"name": "governed-bi API", "version": __version__, "docs": "/docs"}
+
+    @app.get("/livez", tags=["meta"])
+    def livez() -> dict:
+        """Process liveness (no corpus work). Use /health for corpus status."""
+        return {"status": "ok"}
 
     @app.get("/health", response_model=HealthResponse, tags=["audit"])
     def health() -> HealthResponse:
@@ -85,7 +108,7 @@ def create_app(stack: ServeStack | None = None):
 
     @app.get("/corpus/assets", response_model=list[AssetRowResponse], tags=["corpus"])
     def corpus_assets(
-        asset_type: str | None = Query(None, alias="type"),
+        asset_type: AssetTypeFilter | None = Query(None, alias="type"),
     ) -> list[AssetRowResponse]:
         """Non-table assets (metrics/terms/joins/rules/few-shots/negatives)."""
         types = {asset_type} if asset_type else None
@@ -106,7 +129,9 @@ def create_app(stack: ServeStack | None = None):
         from ..server import answer_question
 
         if not stack.sqlite_path.exists():
-            raise HTTPException(status_code=503, detail=f"database unavailable: {stack.sqlite_path}")
+            # Log the path server-side; never leak the filesystem layout to clients.
+            logger.error("configured sqlite database is missing: %s", stack.sqlite_path)
+            raise HTTPException(status_code=503, detail="database unavailable")
 
         memory = InMemoryWorkingMemory()
         for turn in req.history:
@@ -126,6 +151,12 @@ def create_app(stack: ServeStack | None = None):
                 narrator=stack.narrator,
                 working_memory=memory,
             )
+        except Exception:
+            # The serve flow is read-only and guardrailed by construction; a raise
+            # here is model/IO failure at its edges (embed / generate). Contain it:
+            # log server-side, return a clean error, never a traceback.
+            logger.exception("chat turn failed (session=%s)", req.session_id)
+            raise HTTPException(status_code=500, detail="failed to answer the question")
         finally:
             connector.close()
         return AnswerResponse.model_validate(presenter.answer_view(answer))
