@@ -14,10 +14,16 @@ the offline REST profile.
 
 from __future__ import annotations
 
-# Absolute import: the LangGraph server loads this module by file path (no parent
+import dataclasses
+
+# Absolute imports: the LangGraph server loads this module by file path (no parent
 # package), so a relative ``from .app`` would fail. The package is installed
 # (langgraph.json ``dependencies: ["."]``), so the absolute import resolves.
 from governed_bi.api.app import create_app
+from governed_bi.api.stack import build_stack
 
-app = create_app()
+# This app is only ever mounted on the LangGraph server, which fronts the streaming
+# chat graph, so streaming IS available here - advertise it. build_stack defaults
+# can_stream False for the plain REST factory, which has no streaming endpoint.
+app = create_app(dataclasses.replace(build_stack(), can_stream=True))
 """The ASGI app the LangGraph server mounts (see module docstring)."""

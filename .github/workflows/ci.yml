@@ -39,6 +39,8 @@ jobs:
         run: uv run python -m governed_bi.corpus.cli
 
       # -rs surfaces the reason for any skip in the log, so a newly-skipped
-      # integration path is visible in review even when the suite is green.
+      # integration path is visible in review even when the suite is green. Pass
+      # the extras on `uv run` too, so the LangGraph chat-graph + HTTP-API tests
+      # execute here instead of importorskip-skipping.
       - name: Run tests
-        run: uv run pytest -q -rs
+        run: uv run --extra agents --extra api pytest -q -rs

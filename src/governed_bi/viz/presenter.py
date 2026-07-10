@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from ..corpus import validate_corpus
+from ..corpus.ids import derive_column_id
 from ..corpus.schemas import (
     FewShotAsset,
     JoinAsset,
@@ -392,10 +393,13 @@ def knowledge_graph(corpus: "Corpus") -> KnowledgeGraphView:
     Edges: a join to each of its two tables; a metric to its ``base_table``; a
     term to its ``binding`` and to each related term; a rule to each asset in its
     ``scope``; a few-shot to each of its ``bound_terms``. Columns are not separate
-    nodes (they live in :func:`table_views`). Reads the full corpus, so excluded
-    assets are still shown (flagged) for the audit view. An edge whose target is
-    not a node is dropped, so the graph is always internally consistent; a
-    frontend filters/layers by ``node.kind`` (e.g. tables + joins for the ER view).
+    nodes (they live in :func:`table_views`); a binding or scope that targets a
+    column is redirected to the column's owning table so the relationship still
+    shows. Reads the full corpus, so excluded assets are still shown (flagged) for
+    the audit view. Duplicate edges are collapsed (e.g. a self-join), and an edge
+    whose target is not a node is dropped, so the graph is always internally
+    consistent; a frontend filters/layers by ``node.kind`` (tables + joins for the
+    ER view).
     """
     nodes: list[KnowledgeGraphNode] = []
     node_ids: set[str] = set()
@@ -419,20 +423,36 @@ def knowledge_graph(corpus: "Corpus") -> KnowledgeGraphView:
         )
         node_ids.add(asset.id)
 
+    # Columns are not nodes, but a term binding / rule scope may target one; map a
+    # derived column id back to its owning table so such an edge lands on the table
+    # node instead of being silently dropped (the relationship still shows).
+    col_to_table: dict[str, str] = {
+        derive_column_id(table.id, col.physical_name): table.id
+        for table in corpus.tables()
+        for col in table.columns
+    }
+
     edges: list[KnowledgeGraphEdge] = []
+    seen_edge_ids: set[str] = set()
 
     def add_edge(source, target, relation, *, confidence=None, low_confidence=False):
-        if source in node_ids and target in node_ids:
-            edges.append(
-                KnowledgeGraphEdge(
-                    id=f"{source}->{target}:{relation}",
-                    source=source,
-                    target=target,
-                    relation=relation,
-                    confidence=confidence,
-                    low_confidence=low_confidence,
-                )
+        target = col_to_table.get(target, target)  # redirect a column target to its table
+        if source not in node_ids or target not in node_ids:
+            return
+        edge_id = f"{source}->{target}:{relation}"
+        if edge_id in seen_edge_ids:  # dedup (e.g. a self-join, or a repeated scope id)
+            return
+        seen_edge_ids.add(edge_id)
+        edges.append(
+            KnowledgeGraphEdge(
+                id=edge_id,
+                source=source,
+                target=target,
+                relation=relation,
+                confidence=confidence,
+                low_confidence=low_confidence,
             )
+        )
 
     for asset in corpus.assets:
         if isinstance(asset, JoinAsset):

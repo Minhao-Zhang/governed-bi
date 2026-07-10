@@ -96,6 +96,63 @@ def test_knowledge_graph_nodes_edges_and_relations(corpus):
     assert len(join_edges) == 2 * sum(1 for n in kg.nodes if n.kind == "join")
 
 
+def test_knowledge_graph_dedups_self_join_and_redirects_column_targets():
+    # A synthetic corpus exercising two edge-cases the beer_factory corpus lacks:
+    # a self-join (both endpoints the same table) and a term/rule that targets a
+    # column (not a node). Edges must be deduped, and column targets redirected to
+    # the owning table rather than silently dropped.
+    from governed_bi.corpus.loader import Corpus
+    from governed_bi.corpus.schemas import (
+        Column,
+        JoinAsset,
+        LogicalType,
+        RuleAsset,
+        RuleKind,
+        TableAsset,
+        TermAsset,
+        TermBinding,
+    )
+
+    def _col(name):
+        return Column(
+            physical_name=name,
+            physical_type="INTEGER",
+            logical_type=LogicalType.integer,
+            nullable=False,
+            is_unique=False,
+        )
+
+    table = TableAsset(
+        id="tbl_x_employees", db="x", physical_name="employees",
+        columns=[_col("EmployeeID"), _col("ManagerID")],
+    )
+    self_join = JoinAsset(
+        id="join_x_emp_mgr", left_table="tbl_x_employees", right_table="tbl_x_employees",
+        on="employees.ManagerID = employees.EmployeeID",
+    )
+    term = TermAsset(
+        id="term_manager", name="manager",
+        binding=TermBinding(asset_type="column", asset_id="col_x_employees_ManagerID"),
+    )
+    rule = RuleAsset(
+        id="rule_mgr", kind=RuleKind.business_rule, statement="managers matter",
+        scope=["col_x_employees_ManagerID", "col_x_employees_ManagerID"],  # repeated on purpose
+    )
+    kg = presenter.knowledge_graph(Corpus(assets=[table, self_join, term, rule], skills=[]))
+
+    edge_ids = [e.id for e in kg.edges]
+    assert len(edge_ids) == len(set(edge_ids))  # no colliding edge ids
+
+    joins = [e for e in kg.edges if e.relation == "join"]
+    assert len(joins) == 1 and joins[0].target == "tbl_x_employees"  # self-join collapsed
+
+    grounds = [e for e in kg.edges if e.relation == "grounds"]
+    assert len(grounds) == 1 and grounds[0].target == "tbl_x_employees"  # column -> owning table
+
+    scopes = [e for e in kg.edges if e.relation == "scopes"]
+    assert len(scopes) == 1 and scopes[0].target == "tbl_x_employees"  # redirected + deduped
+
+
 def test_answer_view_maps_stamp_and_trace():
     answer = Answer(
         tier=ReliabilityTier.governed,

@@ -141,11 +141,18 @@ def create_app(stack: ServeStack | None = None):
         editor can fix them. Prod PR mode is deferred; the request shape is stable.
         """
         import difflib
-        import re
 
         from pydantic import ValidationError
 
-        from ..corpus import dump_asset, parse_asset, validate_corpus, write_corpus
+        from ..corpus import (
+            dump_asset,
+            is_valid_id,
+            load_corpus,
+            parse_asset,
+            subdir_for_type,
+            validate_corpus,
+            write_corpus,
+        )
 
         if not stack.can_edit:
             raise HTTPException(status_code=403, detail="corpus editing is not enabled")
@@ -157,19 +164,31 @@ def create_app(stack: ServeStack | None = None):
                 status_code=422, detail=f"invalid asset: {exc.error_count()} validation error(s)"
             ) from exc
 
-        # Guard the id: it becomes a filename, so reject path separators / traversal.
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+", asset.id):
-            raise HTTPException(status_code=422, detail="asset id must match [A-Za-z0-9_.-]+")
+        # Enforce the id convention BEFORE any filesystem access: the id becomes a
+        # filename, and a loose id would let the canonical-path lookup below read an
+        # unintended file. is_valid_id also rejects path separators (the regex has
+        # no '/' or '\'), so this subsumes the traversal guard.
+        if not is_valid_id(asset.asset_type, asset.id):
+            raise HTTPException(
+                status_code=422, detail=f"asset id does not match the {asset.asset_type} convention"
+            )
 
-        # Reference-integrity check against the corpus with this asset merged in.
-        merged = [a for a in stack.corpus_full.assets if a.id != asset.id]
+        # Reference-integrity check against the CURRENT on-disk corpus (reloaded, not
+        # the startup snapshot), so a sequence of edits in one process cannot persist
+        # a corpus that breaks integrity, and external edits are seen too.
+        try:
+            current = load_corpus(stack.corpus_root, db=stack.db)
+            existing_assets = list(current.assets)
+        except FileNotFoundError:
+            existing_assets = []  # empty/new corpus tree: this asset is the first
+        merged = [a for a in existing_assets if a.id != asset.id]
         merged.append(asset)
         findings = [str(f) for f in validate_corpus(merged)]
 
-        existing = next(
-            iter((stack.corpus_root / stack.db).glob(f"**/{asset.id}.yaml")), None
-        )
-        old_text = existing.read_text(encoding="utf-8") if existing else ""
+        # Canonical path only (no recursive glob): the asset's own file, never an
+        # arbitrary *.yaml elsewhere under the tree.
+        target = stack.corpus_root / stack.db / subdir_for_type(asset.asset_type) / f"{asset.id}.yaml"
+        old_text = target.read_text(encoding="utf-8") if target.exists() else ""
         new_text = dump_asset(asset)
         diff = "".join(
             difflib.unified_diff(

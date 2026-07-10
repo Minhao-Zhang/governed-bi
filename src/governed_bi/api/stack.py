@@ -14,7 +14,6 @@ is where a Postgres/Redshift profile plugs in later; nothing else here changes.
 
 from __future__ import annotations
 
-import importlib.util
 import logging
 import os
 from dataclasses import dataclass
@@ -112,13 +111,12 @@ def build_stack() -> ServeStack:
     corpus_full = load_corpus(root, db=db)
     generator, embedder, narrator, model_name, has_live = _build_model_stack(settings)
 
-    # Capability flags the frontend adapts to. Streaming is available when the
-    # LangGraph server can host the chat graph (the ``agents`` extra is present);
-    # editing is dev-only file-write (prod PR is deferred). Both take an env
-    # override so a deployment can force them either way.
-    can_stream = _env_flag(
-        "GOVERNED_BI_CAN_STREAM", importlib.util.find_spec("langgraph") is not None
-    )
+    # Capability flags the frontend adapts to. can_stream defaults False: this
+    # shared factory also builds the plain REST app, which has no streaming
+    # endpoint, so streaming is opted in by whoever actually fronts the chat graph
+    # (routes.py, mounted on the LangGraph server) or by the env override. Editing
+    # is dev-only file-write (prod PR is deferred).
+    can_stream = _env_flag("GOVERNED_BI_CAN_STREAM", False)
     can_edit = _env_flag("GOVERNED_BI_ALLOW_EDIT", settings.environment.value == "dev")
 
     return ServeStack(

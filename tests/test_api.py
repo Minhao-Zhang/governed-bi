@@ -8,6 +8,7 @@ SQL generator, no narrator), and no test ever reaches a live model.
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import replace
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from governed_bi.api import create_app  # noqa: E402
 from governed_bi.api.stack import build_stack  # noqa: E402
 
 BIRD_DB = Path(__file__).resolve().parents[1] / "data" / "bird" / "beer_factory.sqlite"
+CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 
 
 @pytest.fixture
@@ -41,9 +43,9 @@ def test_capabilities_reports_offline_dev(client):
     assert body["dialect"] == "sqlite"
     assert body["has_live_model"] is False  # hermetic env: no key -> offline
     assert body["model"] is None  # offline: no model name (locks the live<->model consistency)
-    # can_stream/can_edit are environment-derived (langgraph present, dev); assert
-    # they are well-typed here and pin their exact behavior in the test below.
-    assert isinstance(body["can_stream"], bool)
+    # The plain REST app never advertises streaming (that is the LangGraph server's
+    # job; see test_routes_app_advertises_streaming). can_edit is dev-derived.
+    assert body["can_stream"] is False
     assert isinstance(body["can_edit"], bool)
 
 
@@ -59,6 +61,22 @@ def test_capabilities_flags_reflect_the_stack():
     assert body["can_stream"] is False
     assert body["can_edit"] is False
     assert body["edit_mode"] is None
+
+
+def test_build_stack_defaults_can_stream_false(monkeypatch):
+    # The shared factory builds the plain REST app too, which has no streaming
+    # endpoint, so the default must be False regardless of whether langgraph is
+    # installed. Streaming is opted in by the LangGraph-server routes app / env.
+    monkeypatch.delenv("GOVERNED_BI_CAN_STREAM", raising=False)
+    assert build_stack().can_stream is False
+
+
+def test_routes_app_advertises_streaming():
+    # routes.py is only mounted on the LangGraph server (which fronts the chat
+    # graph), so it flips can_stream on.
+    from governed_bi.api.routes import app as routes_app
+
+    assert TestClient(routes_app).get("/capabilities").json()["can_stream"] is True
 
 
 def test_health_is_green(client):
@@ -225,8 +243,11 @@ _VALID_METRIC = {
 
 
 def _edit_client(tmp_path, **flags):
-    # corpus_root points at a temp dir so writes never touch the committed tree;
-    # validation still runs against the in-memory full corpus loaded by build_stack.
+    # Copy the corpus into a temp dir so edits validate + write against a real
+    # (isolated) corpus and never touch the committed tree. The endpoint reloads
+    # the corpus from corpus_root on each call, so writes and validation stay
+    # consistent within the session.
+    shutil.copytree(CORPUS_ROOT / "beer_factory", tmp_path / "beer_factory")
     stack = replace(build_stack(), corpus_root=tmp_path, db="beer_factory", **flags)
     return TestClient(create_app(stack))
 
@@ -260,6 +281,36 @@ def test_corpus_edit_writes_valid_asset(tmp_path):
     assert body["path"] == "beer_factory/metrics/metric_test_kpi.yaml"
     assert body["diff"]  # a new-file diff
     assert (tmp_path / "beer_factory" / "metrics" / "metric_test_kpi.yaml").exists()
+
+
+def test_corpus_edit_validates_against_current_disk_not_a_stale_snapshot(tmp_path):
+    # Two sequential edits in one process: the second references the asset the
+    # first wrote. Because validation reloads the corpus from disk each call, the
+    # reference resolves and the write succeeds. A startup-snapshot validation
+    # would not see the first write and would wrongly report a dangling reference.
+    client = _edit_client(tmp_path, can_edit=True, edit_mode="file")
+
+    first = client.post("/corpus/edit", json={"asset": _VALID_METRIC})
+    assert first.json()["written"] is True
+
+    term_bound_to_new_metric = {
+        "asset_type": "term",
+        "id": "term_test_kpi",
+        "name": "Test KPI term",
+        "binding": {"asset_type": "metric", "asset_id": "metric_test_kpi"},
+    }
+    second = client.post("/corpus/edit", json={"asset": term_bound_to_new_metric})
+    body = second.json()
+    assert body["written"] is True  # the binding resolves against the just-written metric
+    assert body["findings"] == []
+
+
+def test_corpus_edit_rejects_id_violating_convention(tmp_path):
+    # A well-formed-looking but convention-violating id (no 'metric_' prefix) is
+    # rejected up front, before any filesystem access (closes the info-disclosure).
+    client = _edit_client(tmp_path, can_edit=True, edit_mode="file")
+    bad = {**_VALID_METRIC, "id": "index"}  # valid chars, wrong convention
+    assert client.post("/corpus/edit", json={"asset": bad}).status_code == 422
 
 
 def test_corpus_edit_findings_block_the_write(tmp_path):

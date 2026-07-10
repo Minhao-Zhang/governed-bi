@@ -11,8 +11,9 @@ See ``docs/asset-schemas.md`` and D9 in ``docs/design-decisions.md``.
 
 from __future__ import annotations
 
+from .ids import is_valid_id
 from .loader import Corpus, Skill, load_corpus
-from .serialize import dump_asset, dump_skill, write_corpus
+from .serialize import dump_asset, dump_skill, subdir_for_type, write_corpus
 from .schemas import (
     Asset,
     Column,
@@ -46,9 +47,11 @@ __all__ = [
     "TableAsset",
     "TermAsset",
     "is_green",
+    "is_valid_id",
     "load_corpus",
     "parse_asset",
     "parse_skill_frontmatter",
+    "subdir_for_type",
     "validate_corpus",
     "write_corpus",
 ]

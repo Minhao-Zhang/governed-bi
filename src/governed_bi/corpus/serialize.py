@@ -26,6 +26,16 @@ from .schemas import Asset
 _SUBDIR_BY_TYPE: dict[str, str] = {v: k for k, v in _DIR_ASSET_TYPE.items()}
 
 
+def subdir_for_type(asset_type: str) -> str:
+    """The corpus subdirectory an ``asset_type`` is written to (e.g. ``metrics``).
+
+    The single source of truth for an asset's on-disk location, so callers can
+    compute the canonical ``root/<db>/<subdir>/<id>.yaml`` path without a
+    filesystem search. Raises ``KeyError`` for an unknown type.
+    """
+    return _SUBDIR_BY_TYPE[asset_type]
+
+
 def _yamlify(obj: Any) -> Any:
     """Coerce to YAML-safe primitives. ``Any``-typed values such as a column's
     ``sample_values`` may hold Decimal / datetime / bytes read from a DB; those
