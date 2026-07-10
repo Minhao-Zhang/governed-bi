@@ -116,7 +116,7 @@ def test_cosine_edges():
 
 def test_openai_chat_client_from_config():
     chat = OpenAiChatClient.from_config(ModelConfig())
-    assert chat.model == "gpt-5.6-sol"
+    assert chat.model == "gpt-5.5"
     assert chat.reasoning_effort == "low"
     assert chat.api_key_env == "OPENAI_API_KEY"
     assert isinstance(chat, ChatClient)

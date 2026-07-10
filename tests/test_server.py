@@ -144,14 +144,14 @@ def test_semantic_assurance_axis():
 # --------------------------------------------------------------------------- #
 
 
-def _ask(question, gateway, corpus, settings, identity, **kw):
+def _answer(question, gateway, corpus, settings, identity, **kw):
     return answer_question(
         question, identity, corpus=corpus, gateway=gateway, settings=settings, session_id="s", **kw
     )
 
 
 def test_flow_refuse_gate(mem_gateway, corpus, settings, identity):
-    ans = _ask("How many employees work at the factory?", mem_gateway, corpus, settings, identity)
+    ans = _answer("How many employees work at the factory?", mem_gateway, corpus, settings, identity)
     assert ans.tier is ReliabilityTier.refused
     assert ans.provenance["refused_by"] == "refuse_gate"
     assert ans.escalation  # the curated negative-example escalation blob
@@ -159,7 +159,7 @@ def test_flow_refuse_gate(mem_gateway, corpus, settings, identity):
 
 
 def test_flow_no_coverage_refuses(mem_gateway, corpus, settings, identity):
-    ans = _ask("Tell me about the weather on Mars", mem_gateway, corpus, settings, identity)
+    ans = _answer("Tell me about the weather on Mars", mem_gateway, corpus, settings, identity)
     assert ans.tier is ReliabilityTier.refused
     assert ans.provenance["refused_by"] == "no_coverage"
     # A refusal clears neither axis: nothing safe was executed, nothing delivered.
@@ -175,7 +175,7 @@ def test_flow_policy_block_fails_closed_without_repair(mem_gateway, corpus, sett
         def generate(self, question, retrieval, corpus, *, feedback=(), context=None):
             return GeneratedSql(sql="DROP TABLE customers", tables_used=frozenset())
 
-    ans = _ask("total revenue", mem_gateway, corpus, settings, identity, sql_generator=Rogue())
+    ans = _answer("total revenue", mem_gateway, corpus, settings, identity, sql_generator=Rogue())
     assert ans.tier is ReliabilityTier.refused
     assert ans.provenance["failed_layer"] == "policy_blacklist"
     assert ans.provenance["attempts"] == 1  # no coaching retry
@@ -193,7 +193,7 @@ def test_flow_guardrail_blocks_out_of_scope_table(mem_gateway, corpus, settings,
                 tables_used=frozenset({"tbl_beer_factory_rootbeerreview"}),
             )
 
-    ans = _ask(
+    ans = _answer(
         "total revenue", mem_gateway, corpus, settings, identity, sql_generator=Rogue()
     )
     assert ans.tier is ReliabilityTier.refused
@@ -206,7 +206,7 @@ def test_flow_guardrail_blocks_write(mem_gateway, corpus, settings, identity):
         def generate(self, question, retrieval, corpus, *, feedback=(), context=None):
             return GeneratedSql(sql="DROP TABLE customers", tables_used=frozenset())
 
-    ans = _ask("total revenue", mem_gateway, corpus, settings, identity, sql_generator=Rogue())
+    ans = _answer("total revenue", mem_gateway, corpus, settings, identity, sql_generator=Rogue())
     assert ans.tier is ReliabilityTier.refused
     assert ans.provenance["failed_layer"] == "policy_blacklist"
 
@@ -231,7 +231,7 @@ def test_flow_multitable_rogue_cannot_self_authorize_offscope_table(
                 ),
             )
 
-    ans = _ask("total revenue", mem_gateway, corpus, settings, identity, sql_generator=Rogue())
+    ans = _answer("total revenue", mem_gateway, corpus, settings, identity, sql_generator=Rogue())
     assert ans.tier is ReliabilityTier.refused
     assert ans.provenance["failed_layer"] == "term_semantics"
 
@@ -288,7 +288,7 @@ def test_flow_repairs_after_guardrail_rejection(bird_gateway, corpus, settings, 
                 metric_id="metric_revenue",
             )
 
-    ans = _ask("total revenue", bird_gateway, corpus, settings, identity, sql_generator=RepairingGenerator())
+    ans = _answer("total revenue", bird_gateway, corpus, settings, identity, sql_generator=RepairingGenerator())
     assert ans.tier is ReliabilityTier.lineage  # repaired -> not governed
     assert "SUM(PurchasePrice)" in ans.sql
     assert ans.provenance["attempts"] == 2
@@ -313,7 +313,7 @@ def test_flow_repair_exhaustion_fails_closed(mem_gateway, corpus, settings, iden
                 tables_used=frozenset({"tbl_beer_factory_rootbeerreview"}),
             )
 
-    ans = _ask("total revenue", mem_gateway, corpus, settings, identity, sql_generator=AlwaysBadGenerator())
+    ans = _answer("total revenue", mem_gateway, corpus, settings, identity, sql_generator=AlwaysBadGenerator())
     assert ans.tier is ReliabilityTier.refused
     assert ans.provenance["failed_layer"] == "term_semantics"
     assert ans.provenance["attempts"] == MAX_REPAIR_ATTEMPTS
@@ -331,13 +331,13 @@ def test_flow_no_progress_stops_early(mem_gateway, corpus, settings, identity):
                 tables_used=frozenset({"tbl_beer_factory_rootbeerreview"}),
             )
 
-    ans = _ask("total revenue", mem_gateway, corpus, settings, identity, sql_generator=StubbornGenerator())
+    ans = _answer("total revenue", mem_gateway, corpus, settings, identity, sql_generator=StubbornGenerator())
     assert ans.tier is ReliabilityTier.refused
     assert ans.provenance["attempts"] == 2
 
 
 def test_flow_governed_revenue(bird_gateway, corpus, settings, identity):
-    ans = _ask("What is the total revenue?", bird_gateway, corpus, settings, identity)
+    ans = _answer("What is the total revenue?", bird_gateway, corpus, settings, identity)
     assert ans.tier is ReliabilityTier.governed
     # A clean answer clears both axes: safe + certified (governed is their projection).
     assert ans.safety_clearance is True
@@ -345,6 +345,46 @@ def test_flow_governed_revenue(bird_gateway, corpus, settings, identity):
     assert "SUM(PurchasePrice)" in ans.sql
     assert "total_revenue" in ans.text  # single-cell numeric answer
     assert ans.provenance["metric_id"] == "metric_revenue"
+
+
+def test_flow_carries_executed_result_rows(bird_gateway, corpus, settings, identity):
+    # The executed rows are carried on the Answer for display/audit, not just the
+    # row-count shape - even with no narrator (deterministic path).
+    ans = _answer("What is the total revenue?", bird_gateway, corpus, settings, identity)
+    assert ans.result is not None
+    assert ans.result.columns == ["total_revenue"]
+    assert ans.result.row_count == 1
+    assert ans.result.rows[0][0] == pytest.approx(18496.0)
+
+
+def test_flow_narrator_phrases_the_answer_text(bird_gateway, corpus, settings, identity):
+    # An injected narrator sets the answer TEXT (natural language); the executed
+    # rows are still carried for the audit table regardless of phrasing.
+    from governed_bi.llm import StaticChatClient
+    from governed_bi.server import LlmAnswerNarrator
+
+    narrator = LlmAnswerNarrator(StaticChatClient("Total revenue is $18,496."))
+    ans = _answer(
+        "What is the total revenue?", bird_gateway, corpus, settings, identity, narrator=narrator
+    )
+    assert ans.tier is ReliabilityTier.governed
+    assert ans.text == "Total revenue is $18,496."
+    assert ans.result is not None and ans.result.rows[0][0] == pytest.approx(18496.0)
+
+
+def test_flow_narrator_failure_falls_back_to_render(bird_gateway, corpus, settings, identity):
+    # A model hiccup in the narrator must never turn a governed answer into an
+    # error: the text falls back to the compact deterministic render.
+    class Boom:
+        def narrate(self, *args, **kwargs):
+            raise RuntimeError("model down")
+
+    ans = _answer(
+        "What is the total revenue?", bird_gateway, corpus, settings, identity, narrator=Boom()
+    )
+    assert ans.tier is ReliabilityTier.governed
+    assert "total_revenue" in ans.text  # deterministic render, not an exception
+    assert ans.result is not None  # rows still carried
 
 
 def test_flow_reads_working_memory_without_mutating_it(bird_gateway, corpus, settings, identity):
@@ -356,7 +396,7 @@ def test_flow_reads_working_memory_without_mutating_it(bird_gateway, corpus, set
     wm = InMemoryWorkingMemory()
     wm.append("s", "user", "What is the total revenue?")
     wm.append("s", "assistant", "total_revenue = 18496.0")
-    ans = _ask(
+    ans = _answer(
         "What is the average star rating?", bird_gateway, corpus, settings, identity, working_memory=wm
     )
     assert ans.tier is ReliabilityTier.governed  # follow-up still answered (template path)
@@ -367,7 +407,7 @@ def test_flow_reads_working_memory_without_mutating_it(bird_gateway, corpus, set
 
 
 def test_flow_governed_avg_rating(bird_gateway, corpus, settings, identity):
-    ans = _ask("What is the average star rating?", bird_gateway, corpus, settings, identity)
+    ans = _answer("What is the average star rating?", bird_gateway, corpus, settings, identity)
     assert ans.tier is ReliabilityTier.governed
     assert "AVG(StarRating)" in ans.sql
     assert ans.provenance["min_join_confidence"] == 1.0  # single-table, no joins

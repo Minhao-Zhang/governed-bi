@@ -41,8 +41,14 @@ def _fail(msg: str) -> None:
 
 
 def main() -> None:
+    # Fill OPENAI_API_KEY from a repo-root .env if it is not already in the env
+    # (a real environment variable wins); then check it is present.
+    from governed_bi.config import load_dotenv
+
+    load_dotenv()
     if not os.environ.get("OPENAI_API_KEY"):
-        _fail("OPENAI_API_KEY is not set. Export your key first (it is read from the env, never stored).")
+        _fail("OPENAI_API_KEY is not set. Export it, or put it in a .env at the repo root "
+              "(it is read from the env, never stored).")
     if not BIRD_DB.exists():
         _fail(f"missing demo DB at {BIRD_DB}")
 

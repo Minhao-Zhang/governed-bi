@@ -6,7 +6,7 @@ This directory is split by level of detail so individual Mermaid diagrams are
 easy to review and fix. The diagrams intentionally distinguish implemented code
 from design-level scaffolding.
 
-> **Implementation note:** the whole ask -> answer pipeline is implemented and
+> **Implementation note:** the whole question -> answer pipeline is implemented and
 > tested (corpus, gateway + five-layer guardrails, graph + Steiner planner,
 > retrieval, context assembly, serve flow with self-repair + SQL cache, memory,
 > eval, viz), and both agent harnesses (LangGraph serve DAG, deepagents curator)

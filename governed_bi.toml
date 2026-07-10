@@ -18,9 +18,10 @@ environment = "dev"
 provider = "openai"
 
 # LLM used by the curator proposer and the server SQL generator.
-# gpt-5.6-sol = the GPT-5.6 flagship tier (Terra / Luna are the cheaper tiers; the
-# `gpt-5.6` alias also routes to Sol). Called on the Chat Completions endpoint.
-llm_model = "gpt-5.6-sol"
+# gpt-5.5 = the current generally-available flagship. (gpt-5.6-sol, the GPT-5.6
+# flagship tier, is limited-preview and 404s on accounts without access — switch
+# back to it here once your account is enabled.)
+llm_model = "gpt-5.5"
 llm_reasoning_effort = "low"     # none | low | medium | high | xhigh | max
 
 # Embedding model for the retrieval vector channel and the SQL semantic cache.

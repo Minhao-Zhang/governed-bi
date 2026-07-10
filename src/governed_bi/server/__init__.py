@@ -27,6 +27,7 @@ from __future__ import annotations
 from .answer import (
     Answer,
     ReliabilityTier,
+    ResultTable,
     SemanticAssurance,
     UncertaintySignals,
     assemble,
@@ -36,6 +37,7 @@ from .answer import (
 from .cache import CacheEntry, SqlCache
 from .context import PromptContext, assemble_context
 from .flow import answer_question
+from .narrate import AnswerNarrator, LlmAnswerNarrator
 from .routing import Route, bind_terms, route_intent
 from .sqlgen import (
     GeneratedSql,
@@ -47,11 +49,14 @@ from .sqlgen import (
 
 __all__ = [
     "Answer",
+    "AnswerNarrator",
     "CacheEntry",
     "GeneratedSql",
+    "LlmAnswerNarrator",
     "LlmSqlGenerator",
     "PromptContext",
     "ReliabilityTier",
+    "ResultTable",
     "SemanticAssurance",
     "SqlCache",
     "RepairFeedback",

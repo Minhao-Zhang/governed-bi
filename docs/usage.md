@@ -5,7 +5,7 @@ _[English](usage.md) · [简体中文](usage.zh.md)_
 > New here? The [Walkthrough](walkthrough.md) is a guided clone → first-question
 > tour. This page is the reference quickstart.
 
-The full ask -> answer pipeline runs end to end today over the committed
+The full question -> answer pipeline runs end to end today over the committed
 `beer_factory` database, and needs no model or network: it falls back to
 deterministic offline defaults (a template SQL generator, a hashing embedder).
 This page stays on the runnable surface; for the design behind it, see the
@@ -166,10 +166,10 @@ stored.
 ## Audit cockpit (viz)
 
 A read-only Streamlit cockpit renders the full corpus (Facts + Inference + Audit
-+ excluded assets): a multi-turn **Chat** and a single-shot **Ask** over the
-governed server flow (each answer showing the two-axis reliability stamp + SQL),
-plus corpus health, the table/tier view, the asset listing, and skills. Streamlit
-is the optional `viz` extra:
++ excluded assets): a multi-turn **Chat** over the governed server flow (each
+answer showing the two-axis reliability stamp, the result table, and SQL), plus
+corpus health, the table/tier view, the asset listing, and skills. Streamlit is
+the optional `viz` extra:
 
 ```bash
 uv run --extra viz streamlit run src/governed_bi/viz/app.py

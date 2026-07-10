@@ -145,7 +145,7 @@ def test_flow_miss_then_hit_skips_generation(bird_gateway, corpus, settings, ide
     cache = SqlCache(HashingEmbedder())
     gen = _CountingGenerator()
 
-    def ask():
+    def serve():
         return answer_question(
             REVENUE_Q,
             identity,
@@ -157,13 +157,13 @@ def test_flow_miss_then_hit_skips_generation(bird_gateway, corpus, settings, ide
             cache=cache,
         )
 
-    first = ask()
+    first = serve()
     assert first.tier is ReliabilityTier.governed
     assert gen.n == 1  # miss ran the generator
     assert not first.provenance.get("cache_hit")
     assert len(cache) == 1  # governed answer written back
 
-    second = ask()
+    second = serve()
     assert second.tier is ReliabilityTier.governed
     assert second.provenance["cache_hit"] is True
     assert gen.n == 1  # hit did NOT call the generator again

@@ -44,7 +44,7 @@ is unmeasured.
 
 | Capability | Status | Evidence |
 |---|---|---|
-| SQLite governed serve path (retrieve → context → SQL-gen → 5-layer guardrails → execute → stamp) | **Built** | `uv run pytest` — 265 offline tests |
+| SQLite governed serve path (retrieve → context → SQL-gen → 5-layer guardrails → execute → stamp) | **Built** | `uv run pytest` — 287 offline tests |
 | Corpus contract + validation (typed YAML/MD, ID + reference integrity) | **Built** | `python -m governed_bi.corpus.cli`, CI |
 | Bounded self-repair + two-axis reliability stamp | **Built** | `tests/test_server.py` |
 | Semantic SQL cache (re-guardrail + re-execute on hit, `certified`-only admission) | **Built, off by default** | `tests/test_cache.py` |
@@ -110,7 +110,7 @@ New to the repo? The [walkthrough](docs/walkthrough.md) is a guided clone → fi
 tour. The [quickstart](docs/usage.md) is the reference (validate CLI, programmatic
 corpus API); to write or edit corpus assets, see [corpus authoring](docs/corpus-authoring.md).
 
-Runnable today with no model or network: the full ask -> answer serve pipeline
+Runnable today with no model or network: the full question -> answer serve pipeline
 (retrieval, context assembly, template SQL generation, five-layer guardrails,
 bounded self-repair, reliability stamp) over the committed beer_factory DB, plus
 the curator scaffold, memory, eval, and the read-only viz cockpit. Core
@@ -123,7 +123,7 @@ model doubles without a key.
 ### Models & configuration
 
 Model choices live in one project file, [`governed_bi.toml`](governed_bi.toml),
-parsed by `governed_bi.config.load_settings()`: OpenAI `gpt-5.6-sol` (low reasoning
+parsed by `governed_bi.config.load_settings()`: OpenAI `gpt-5.5` (low reasoning
 effort) for generation/curation and `text-embedding-3-small` for the vector
 channel and SQL cache. All are swappable by editing the file.
 
@@ -132,6 +132,11 @@ uv sync --extra agents          # LangGraph + deepagents + LangChain model clien
 uv sync --extra openai          # (alternative) the minimal raw-openai client only
 export OPENAI_API_KEY=sk-...     # the key is read from the env, never stored
 ```
+
+The key is read from the environment. If you'd rather not export it, copy
+[`.env.example`](.env.example) to `.env` at the repo root and put the key there —
+it is loaded on import and fills in only variables not already set, so an exported
+environment variable always wins. `.env` is git-ignored; never commit a real key.
 
 The model clients are imported lazily behind the `ChatClient` / `Embedder`
 protocols, and each has a deterministic offline default (`StaticChatClient`,

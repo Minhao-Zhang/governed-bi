@@ -2,7 +2,7 @@
 
 Wires the stages into a hard-wired, auditable pipeline with conditional routing:
 
-    ask -> query understanding + term binding -> intent route -> refuse-gate ->
+    question -> query understanding + term binding -> intent route -> refuse-gate ->
     RVGD retrieval -> SQL gen -> Steiner join plan -> five-layer guardrails ->
     execute (as-user) -> answer + reliability stamp
 
@@ -33,7 +33,9 @@ from ..graph import build_graph, join_neighborhood, plan_joins
 from ..retrieval import retrieve
 from .answer import (
     LOW_CONFIDENCE_JOIN,
+    RESULT_PREVIEW_ROWS,
     Answer,
+    ResultTable,
     SemanticAssurance,
     UncertaintySignals,
     assemble,
@@ -46,10 +48,11 @@ from .sqlgen import RepairFeedback, SqlGenerator, TemplateSqlGenerator
 if TYPE_CHECKING:
     from ..config import Settings
     from ..corpus import Corpus
-    from ..gateway import Gateway, Identity
+    from ..gateway import Gateway, Identity, QueryResult
     from ..llm import Embedder
     from ..memory import WorkingMemory
     from .cache import SqlCache
+    from .narrate import AnswerNarrator
 
 from ..corpus.schemas import JoinAsset, NegativeExampleAsset, TableAsset
 
@@ -182,8 +185,38 @@ def _render(result, generated) -> str:
     return f"{result.row_count} row(s) over [{head}]{suffix}"
 
 
+def _result_table(result: "QueryResult") -> ResultTable:
+    """A bounded, display-ready snapshot of the executed result rows.
+
+    Clipped to ``RESULT_PREVIEW_ROWS`` so a wide result never bloats the Answer;
+    ``truncated`` reflects the gateway cap or this preview cap.
+    """
+    rows = list(result.rows[:RESULT_PREVIEW_ROWS])
+    return ResultTable(
+        columns=list(result.columns),
+        rows=rows,
+        row_count=result.row_count,
+        truncated=result.truncated or len(result.rows) > RESULT_PREVIEW_ROWS,
+    )
+
+
+def _answer_text(
+    question: str, sql: str, result: "QueryResult", table: ResultTable, narrator: "AnswerNarrator | None"
+) -> str:
+    """The answer text: a grounded NL phrasing when a narrator is injected, else
+    the compact deterministic render. A narrator failure falls back to the render
+    so a model hiccup never turns a governed answer into an error."""
+    if narrator is None:
+        return _render(result, None)
+    try:
+        return narrator.narrate(question, sql, table)
+    except Exception:
+        return _render(result, None)
+
+
 def _try_cache_hit(
-    cache, question, gateway, identity, settings, allowlist, dialect, graph, base_provenance
+    cache, question, gateway, identity, settings, allowlist, dialect, graph, base_provenance,
+    *, narrator: "AnswerNarrator | None" = None,
 ) -> "Answer | None":
     """Serve a semantic-cache hit, or return None to fall through to the pipeline.
 
@@ -230,7 +263,9 @@ def _try_cache_hit(
         "truncated": result.truncated,
         "cache_hit": True,
     }
-    return assemble(text=_render(result, None), sql=entry.sql, signals=signals, provenance=provenance)
+    table = _result_table(result)
+    text = _answer_text(question, entry.sql, result, table, narrator)
+    return assemble(text=text, sql=entry.sql, signals=signals, provenance=provenance, result=table)
 
 
 def _guardrail_feedback(generated, verdict) -> tuple[RepairFeedback, dict]:
@@ -282,7 +317,8 @@ def _execution_feedback(generated, err: Exception) -> tuple[RepairFeedback, dict
 
 
 def _finalize_success(
-    *, question, graph, generated, result, attempts, base_provenance, dialect, allowlist, licensed, cache
+    *, question, graph, generated, result, attempts, base_provenance, dialect, allowlist, licensed,
+    cache, narrator: "AnswerNarrator | None" = None,
 ) -> "Answer":
     """Stamp + assemble a successful answer, and write back a clean one to the cache.
 
@@ -311,8 +347,10 @@ def _finalize_success(
         "truncated": result.truncated,
         "attempts": attempts,
     }
+    table = _result_table(result)
+    text = _answer_text(question, generated.sql, result, table, narrator)
     answer = assemble(
-        text=_render(result, generated), sql=generated.sql, signals=signals, provenance=provenance
+        text=text, sql=generated.sql, signals=signals, provenance=provenance, result=table
     )
     # Cache admission gates on the *semantic* axis, never on safety alone: only a
     # ``certified`` answer (clean run, no uncertainty flag) is written back, so a
@@ -340,6 +378,7 @@ def answer_question(
     embedder: "Embedder | None" = None,
     cache: "SqlCache | None" = None,
     working_memory: "WorkingMemory | None" = None,
+    narrator: "AnswerNarrator | None" = None,
 ) -> "Answer":
     """Run one question through the serve DAG, fail-closed on any guardrail or
     refuse-gate hit. ``corpus`` should be the ``for_server()`` view.
@@ -351,11 +390,17 @@ def answer_question(
     pure lexical BM25. ``cache`` (optional) is the semantic SQL cache: a hit
     (after the refuse-gate) re-guardrails + re-executes stored SQL and skips
     retrieval/planning/generation; a clean answer is written back on a miss.
-    ``working_memory`` (optional, D8) supplies the prior turns of this
+    This is the **conversational** serve entry: each call is one turn of a
+    session. ``working_memory`` (D8) supplies the prior turns of this
     ``session_id``; when present they are injected into the prompt context so a
-    conversational follow-up can resolve references. This function only *reads*
-    the history - the caller records the new turn after receiving the answer, so
-    the current question is never double-counted as prior context.
+    follow-up can resolve references. This function only *reads* the history - the
+    caller records the new turn after receiving the answer, so the current
+    question is never double-counted as prior context. Omit ``working_memory`` for
+    a **single-round** call (each question independent) - the shape the eval
+    harness uses; every other caller threads a session.
+    ``narrator`` (optional) phrases the executed result into natural language for
+    the answer text; with none, the compact deterministic render is used. Either
+    way the executed rows are carried on ``Answer.result`` for display/audit.
     """
     route = route_intent(question)
     bound_terms = bind_terms(corpus, question)
@@ -383,7 +428,8 @@ def answer_question(
     # generation. A stale or now-blocked hit falls through (fail-closed).
     if cache is not None:
         hit = _try_cache_hit(
-            cache, question, gateway, identity, settings, allowlist, dialect, graph, base_provenance
+            cache, question, gateway, identity, settings, allowlist, dialect, graph, base_provenance,
+            narrator=narrator,
         )
         if hit is not None:
             return hit
@@ -468,6 +514,7 @@ def answer_question(
             allowlist=allowlist,
             licensed=licensed,
             cache=cache,
+            narrator=narrator,
         )
 
     # Exhausted the attempts (or the generator declined / could not improve): fail

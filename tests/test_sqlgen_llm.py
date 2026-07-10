@@ -189,7 +189,7 @@ def test_context_fallback_when_flow_did_not_pass_one(corpus):
 # --------------------------------------------------------------------------- #
 
 
-def _ask(question, gateway, corpus, settings, identity, **kw):
+def _answer(question, gateway, corpus, settings, identity, **kw):
     return answer_question(
         question, identity, corpus=corpus, gateway=gateway, settings=settings, session_id="s", **kw
     )
@@ -197,8 +197,8 @@ def _ask(question, gateway, corpus, settings, identity, **kw):
 
 def test_flow_governed_with_llm_generator(bird_gateway, corpus, settings, identity):
     gen = LlmSqlGenerator(StaticChatClient(REVENUE_SQL), dialect="sqlite")
-    ans = _ask("total revenue", bird_gateway, corpus, settings, identity, sql_generator=gen)
-    assert ans.tier is ReliabilityTier.governed  # clean single-shot -> governed
+    ans = _answer("total revenue", bird_gateway, corpus, settings, identity, sql_generator=gen)
+    assert ans.tier is ReliabilityTier.governed  # clean first attempt -> governed
     assert "SUM(PurchasePrice)" in ans.sql
     assert ans.provenance["attempts"] == 1
 
@@ -207,7 +207,7 @@ def test_flow_llm_repairs_after_guardrail_rejection(bird_gateway, corpus, settin
     # First reply is an off-scope table (L4 blocks); second is valid and executes.
     chat = StaticChatClient(["SELECT StarRating FROM rootbeerreview", REVENUE_SQL])
     gen = LlmSqlGenerator(chat, dialect="sqlite")
-    ans = _ask("total revenue", bird_gateway, corpus, settings, identity, sql_generator=gen)
+    ans = _answer("total revenue", bird_gateway, corpus, settings, identity, sql_generator=gen)
 
     assert ans.tier is ReliabilityTier.lineage  # repaired -> not governed
     assert "SUM(PurchasePrice)" in ans.sql
@@ -219,6 +219,6 @@ def test_flow_llm_repairs_after_guardrail_rejection(bird_gateway, corpus, settin
 
 def test_flow_llm_decline_fails_closed(mem_gateway, corpus, settings, identity):
     gen = LlmSqlGenerator(StaticChatClient("CANNOT_ANSWER"), dialect="sqlite")
-    ans = _ask("total revenue", mem_gateway, corpus, settings, identity, sql_generator=gen)
+    ans = _answer("total revenue", mem_gateway, corpus, settings, identity, sql_generator=gen)
     assert ans.tier is ReliabilityTier.refused
     assert ans.provenance["refused_by"] == "no_coverage"

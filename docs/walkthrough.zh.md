@@ -61,7 +61,7 @@ uv run pytest -q
 ```
 
 离线即为绿灯。装上 harness 与 cockpit 的 extra 后
-（`uv run --extra agents --extra viz pytest`），全部 **270** 个测试都会运行，
+（`uv run --extra agents --extra viz pytest`），全部 **287** 个测试都会运行，
 包括 LangGraph 等价性测试与 Streamlit UI 测试；不装则会跳过少数几个。
 
 ## 4. 提出你的第一个问题
@@ -152,7 +152,7 @@ export OPENAI_API_KEY=sk-...        # 从环境变量读取，绝不存进仓库
 uv run --extra agents --extra viz streamlit run src/governed_bi/viz/app.py
 ```
 
-模型是 `gpt-5.6-sol`、低推理强度（在 [`governed_bi.toml`](../governed_bi.toml) 里
+模型是 `gpt-5.5`、低推理强度（在 [`governed_bi.toml`](../governed_bi.toml) 里
 配置），通过 LangChain 的 `ChatOpenAI` 调用——它会把推理模型路由到 OpenAI 的
 **Responses API**。在聊天里，追问此时会针对对话进行消解（先前的轮次通过引擎的
 工作记忆回灌）。

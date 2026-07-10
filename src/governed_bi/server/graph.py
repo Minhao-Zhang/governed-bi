@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from ..memory import WorkingMemory
     from .answer import Answer
     from .cache import SqlCache
+    from .narrate import AnswerNarrator
     from .sqlgen import SqlGenerator
 
 
@@ -97,6 +98,7 @@ def build_serve_graph(
     embedder: "Embedder | None" = None,
     cache: "SqlCache | None" = None,
     working_memory: "WorkingMemory | None" = None,
+    narrator: "AnswerNarrator | None" = None,
 ):
     """Compile the serve DAG for a (corpus, gateway, settings, ...) deployment.
 
@@ -162,6 +164,7 @@ def build_serve_graph(
             state["dialect"],
             state["graph_obj"],
             state["base_provenance"],
+            narrator=narrator,
         )
         return {"answer": hit} if hit is not None else {}
 
@@ -239,6 +242,7 @@ def build_serve_graph(
             allowlist=state["allowlist"],
             licensed=state["licensed"],
             cache=cache,
+            narrator=narrator,
         )
         return {"answer": answer}
 
@@ -312,6 +316,7 @@ def answer_question_graph(
     embedder: "Embedder | None" = None,
     cache: "SqlCache | None" = None,
     working_memory: "WorkingMemory | None" = None,
+    narrator: "AnswerNarrator | None" = None,
 ) -> "Answer":
     """Build + invoke the serve DAG for one question; return the ``Answer``.
 
@@ -327,6 +332,7 @@ def answer_question_graph(
         embedder=embedder,
         cache=cache,
         working_memory=working_memory,
+        narrator=narrator,
     )
     final = graph.invoke(
         {"question": question, "identity": identity, "session_id": session_id}

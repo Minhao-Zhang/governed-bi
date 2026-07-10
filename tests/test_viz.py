@@ -78,6 +78,25 @@ def test_answer_view_maps_stamp_and_trace():
     assert "SUM(PurchasePrice)" in view.sql
     assert view.provenance["metric_id"] == "metric_revenue"
     assert view.escalation is None
+    assert view.result is None  # this answer carried no result grid
+
+
+def test_answer_view_maps_result_rows():
+    from governed_bi.server.answer import ResultTable
+
+    answer = Answer(
+        tier=ReliabilityTier.governed,
+        text="Total revenue is $18,496.",
+        sql='SELECT SUM(PurchasePrice) AS total_revenue FROM "transaction"',
+        provenance={},
+        result=ResultTable(columns=["total_revenue"], rows=[(18496.0,)], row_count=1),
+    )
+    view = presenter.answer_view(answer)
+    assert view.result is not None
+    assert view.result.columns == ["total_revenue"]
+    assert view.result.rows == [[18496.0]]  # tuples normalised to lists for rendering
+    assert view.result.row_count == 1
+    assert view.result.truncated is False
 
 
 # --------------------------------------------------------------------------- #
@@ -87,7 +106,7 @@ def test_answer_view_maps_stamp_and_trace():
 APP = Path(__file__).resolve().parents[1] / "src" / "governed_bi" / "viz" / "app.py"
 
 
-@pytest.mark.parametrize("view", ["Chat", "Ask", "Health", "Tables", "Assets", "Skills"])
+@pytest.mark.parametrize("view", ["Chat", "Health", "Tables", "Assets", "Skills"])
 def test_streamlit_app_renders_every_view(view):
     pytest.importorskip("streamlit")
     from streamlit.testing.v1 import AppTest

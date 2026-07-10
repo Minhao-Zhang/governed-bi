@@ -3,11 +3,10 @@
 Read-only audit cockpit over the corpus, plus a conversational front end:
 
 - **Chat**: a multi-turn chat over the governed server flow. Each turn shows the
-  answer, its two-axis stamp, the SQL, and the provenance trace; prior turns are
-  fed back through the engine's working memory (D8), so a follow-up can resolve
-  references (with a live model - the offline template generator answers each
-  question independently).
-- **Ask**: the same server flow as a single-shot form.
+  answer, its two-axis stamp, the result table, the SQL, and the provenance trace;
+  prior turns are fed back through the engine's working memory (D8), so a follow-up
+  can resolve references (with a live model - the offline template generator
+  answers each question independently).
 - **Health / Tables / Assets / Skills**: the read-only audit views.
 
 Editing and save-to-PR (D6) are out of scope for this repo: a correction is "edit
@@ -119,11 +118,26 @@ def _render_skills(corpus) -> None:
             st.markdown(skill.body)
 
 
-def _render_answer_view(view, *, provenance_expander: bool = False) -> None:
-    """Render one server answer: the two-axis stamp, text, SQL, and provenance.
+def _render_result_table(result) -> None:
+    """Render the executed rows as a collapsible table under the answer text.
 
-    Shared by the Ask and Chat views so a governed answer looks the same in both.
+    Nothing is shown for a refusal (no result) or an empty grid; a scalar answer
+    is already spelled out in the text, but the table still offers the raw cell.
     """
+    if result is None or not result.rows:
+        return
+    plural = "s" if result.row_count != 1 else ""
+    suffix = ", truncated" if result.truncated else ""
+    with st.expander(f"result ({result.row_count} row{plural}{suffix})", expanded=False):
+        st.dataframe(
+            [dict(zip(result.columns, row)) for row in result.rows],
+            hide_index=True,
+        )
+
+
+def _render_answer_view(view, *, provenance_expander: bool = False) -> None:
+    """Render one server answer: the two-axis stamp, text, result table, SQL, and
+    provenance (the Chat view's per-turn rendering)."""
     _TIER_RENDERER.get(view.tier, st.info)(f"tier: {view.tier}")
     # The two axes the tier collapses, shown side by side so neither is read as the
     # other: safety is a pass/fail gate; assurance is how well-grounded (not "right").
@@ -132,6 +146,7 @@ def _render_answer_view(view, *, provenance_expander: bool = False) -> None:
     axis_cols[1].metric("semantic assurance", view.semantic_assurance)
     if view.text:
         st.write(view.text)
+    _render_result_table(view.result)
     if view.sql:
         st.code(view.sql, language="sql")
     if view.escalation:
@@ -143,7 +158,7 @@ def _render_answer_view(view, *, provenance_expander: bool = False) -> None:
         st.json(view.provenance)
 
 
-def _server_answer(corpus, sqlite_path: Path, question: str, *, session_id: str, generator, embedder, memory):
+def _server_answer(corpus, sqlite_path: Path, question: str, *, session_id: str, generator, embedder, memory, narrator=None):
     """Run one question through the governed server flow against ``sqlite_path``.
 
     A fresh read-only connector per call (cheap for SQLite); the flow sees the
@@ -165,35 +180,20 @@ def _server_answer(corpus, sqlite_path: Path, question: str, *, session_id: str,
             sql_generator=generator,
             embedder=embedder,
             working_memory=memory,
+            narrator=narrator,
         )
     finally:
         connector.close()
 
 
-def _render_ask(corpus, sqlite_path: Path) -> None:
-    st.subheader("Ask (server flow)")
-    if not sqlite_path.exists():
-        st.info(f"No database at {sqlite_path}; set GOVERNED_BI_SQLITE to enable the ask panel.")
-        return
-
-    question = st.text_input("Question", value="What is the total revenue?")
-    if not st.button("Ask") or not question.strip():
-        return
-
-    answer = _server_answer(
-        corpus, sqlite_path, question,
-        session_id="viz-ask", generator=None, embedder=None, memory=None,
-    )
-    _render_answer_view(presenter.answer_view(answer))
-
-
 def _build_chat_generator():
-    """Return ``(generator, embedder, mode_caption)`` for the chat view.
+    """Return ``(generator, embedder, narrator, mode_caption)`` for the chat view.
 
-    Uses the live LangChain client (context-aware follow-ups via working memory)
-    when a key + the ``agents`` extra are available; otherwise the deterministic
-    offline template generator, which answers metric questions independently and
-    ignores conversation history.
+    Uses the live LangChain client (context-aware follow-ups via working memory,
+    plus a natural-language narrator for the answer text) when a key + the
+    ``agents`` extra are available; otherwise the deterministic offline template
+    generator with no narrator (the compact render is used), which answers metric
+    questions independently and ignores conversation history.
     """
     from governed_bi.server import TemplateSqlGenerator
 
@@ -201,24 +201,26 @@ def _build_chat_generator():
         try:
             from governed_bi.config import load_settings
             from governed_bi.llm import LangChainChatClient, LangChainEmbedder
-            from governed_bi.server import LlmSqlGenerator
+            from governed_bi.server import LlmAnswerNarrator, LlmSqlGenerator
 
             models = load_settings().models
             chat = LangChainChatClient.from_config(models)
             return (
                 LlmSqlGenerator(chat, dialect="sqlite"),
                 LangChainEmbedder.from_config(models),
+                LlmAnswerNarrator(chat),
                 f"Live model: {models.llm_model} — follow-ups resolve against the conversation.",
             )
         except Exception as err:  # missing agents extra, bad config, etc.
             return (
-                TemplateSqlGenerator(), None,
+                TemplateSqlGenerator(), None, None,
                 f"Template generator (live model unavailable: {err}).",
             )
     return (
-        TemplateSqlGenerator(), None,
+        TemplateSqlGenerator(), None, None,
         "Offline template generator — answers metric questions independently. "
-        "Set OPENAI_API_KEY (+ the agents extra) for context-aware follow-ups.",
+        "Set OPENAI_API_KEY (in the env or a repo-root .env) + the agents extra "
+        "for context-aware follow-ups.",
     )
 
 
@@ -239,7 +241,7 @@ def _render_chat(corpus, sqlite_path: Path) -> None:
             "generator": _build_chat_generator(),
         }
     chat = st.session_state.chat
-    generator, embedder, mode = chat["generator"]
+    generator, embedder, narrator, mode = chat["generator"]
 
     top = st.container()
     with top:
@@ -269,7 +271,7 @@ def _render_chat(corpus, sqlite_path: Path) -> None:
     answer = _server_answer(
         corpus, sqlite_path, prompt,
         session_id=chat["session_id"], generator=generator, embedder=embedder,
-        memory=chat["memory"],
+        memory=chat["memory"], narrator=narrator,
     )
     view = presenter.answer_view(answer)
     with st.chat_message("assistant"):
@@ -291,11 +293,9 @@ def run(corpus_root: Path, *, db: str, sqlite_path: Path) -> None:
     # The cockpit sees the FULL corpus (Facts + Inference + Audit + excluded).
     corpus = load_corpus(corpus_root, db=db)
 
-    view = st.sidebar.radio("View", ["Chat", "Ask", "Health", "Tables", "Assets", "Skills"])
+    view = st.sidebar.radio("View", ["Chat", "Health", "Tables", "Assets", "Skills"])
     if view == "Chat":
         _render_chat(corpus, sqlite_path)
-    elif view == "Ask":
-        _render_ask(corpus, sqlite_path)
     elif view == "Health":
         _render_health(corpus)
     elif view == "Tables":

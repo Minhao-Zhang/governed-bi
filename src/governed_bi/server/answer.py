@@ -77,6 +77,28 @@ _ASSURANCE_TO_TIER = {
 }
 
 
+# Cap on rows carried in an Answer for display/audit. The gateway already caps
+# the executed result; this bounds what a caller/UI renders (and keeps the Answer
+# light). Tunable.
+RESULT_PREVIEW_ROWS = 50
+
+
+@dataclass(frozen=True)
+class ResultTable:
+    """A bounded snapshot of the executed result grid, for display and audit.
+
+    Carries the actual column names and rows the query returned (clipped to
+    ``RESULT_PREVIEW_ROWS``) so a caller/UI can show the data itself, not just the
+    ``row_count`` shape. ``row_count`` is the full executed count; ``truncated``
+    is True if the gateway cap or the preview cap clipped the rows carried here.
+    """
+
+    columns: list[str]
+    rows: list[tuple]
+    row_count: int
+    truncated: bool = False
+
+
 @dataclass(frozen=True)
 class UncertaintySignals:
     """Flags that fired while answering; any of them lowers the stamp."""
@@ -104,6 +126,7 @@ class Answer:
     # The two explicit axes the tier collapses. Prefer these for new logic.
     safety_clearance: bool = False  # guardrail-passing + executed as principal
     semantic_assurance: SemanticAssurance = SemanticAssurance.none
+    result: "ResultTable | None" = None  # the executed rows (None on refusal)
 
 
 def semantic_assurance(signals: UncertaintySignals) -> SemanticAssurance:
@@ -132,10 +155,11 @@ def assemble(
     sql: str | None,
     signals: UncertaintySignals,
     provenance: dict | None = None,
+    result: "ResultTable | None" = None,
 ) -> Answer:
     """Build a non-refusal answer. Safety is cleared by construction (guardrails
     passed + executed); the semantic axis is derived from ``signals`` and the tier
-    is its projection.
+    is its projection. ``result`` carries the executed rows for display/audit.
     """
     prov = dict(provenance or {})
     prov["uncertainty_flags"] = signals.fired()
@@ -147,6 +171,7 @@ def assemble(
         provenance=prov,
         safety_clearance=True,
         semantic_assurance=assurance,
+        result=result,
     )
 
 

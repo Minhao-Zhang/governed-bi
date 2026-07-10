@@ -106,6 +106,16 @@ class CorpusHealth:
 
 
 @dataclass(frozen=True)
+class ResultTableView:
+    """The executed result grid, ready to render as a table."""
+
+    columns: list[str]
+    rows: list[list]
+    row_count: int
+    truncated: bool
+
+
+@dataclass(frozen=True)
 class AnswerView:
     tier: str  # the collapsed single-axis stamp (kept for a compact badge)
     safety_clearance: bool  # axis 1: guardrails + authorization passed
@@ -114,6 +124,7 @@ class AnswerView:
     sql: str | None
     escalation: str | None
     provenance: dict
+    result: ResultTableView | None = None  # the executed rows (None on refusal)
 
 
 def _provenance_status(asset) -> str | None:
@@ -262,6 +273,14 @@ def answer_view(answer: "Answer") -> AnswerView:
     clearance and semantic assurance mean different things, and the cockpit should
     not let a reviewer read one as the other.
     """
+    result = None
+    if answer.result is not None:
+        result = ResultTableView(
+            columns=list(answer.result.columns),
+            rows=[list(row) for row in answer.result.rows],
+            row_count=answer.result.row_count,
+            truncated=answer.result.truncated,
+        )
     return AnswerView(
         tier=answer.tier.value,
         safety_clearance=answer.safety_clearance,
@@ -270,4 +289,5 @@ def answer_view(answer: "Answer") -> AnswerView:
         sql=answer.sql,
         escalation=answer.escalation,
         provenance=dict(answer.provenance),
+        result=result,
     )

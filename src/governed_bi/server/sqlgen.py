@@ -66,7 +66,7 @@ class SqlGenerator(Protocol):
     Returning ``None`` means "I cannot safely generate this"; the flow then fails
     closed (refuse / clarify) rather than guessing. ``feedback`` carries prior
     failed attempts in this turn so the generator can self-repair; a generator
-    that ignores it simply makes a single-shot attempt. ``context`` is the
+    that ignores it simply makes a single attempt. ``context`` is the
     resolved :class:`~governed_bi.server.context.PromptContext` (schema, joins,
     caveats, skills) the flow assembled; a model-backed generator reads it, the
     deterministic template does not need it.
@@ -103,7 +103,7 @@ class TemplateSqlGenerator:
     ``None``) when no metric was retrieved or its base table is missing.
 
     It is correct-by-construction for its narrow domain, so it ignores
-    ``feedback`` (and ``context``) and makes the same single-shot attempt (the
+    ``feedback`` (and ``context``) and makes the same single attempt (the
     repair loop then stops on no-progress). Self-repair is exercised by a
     feedback-aware (model-backed) generator.
     """

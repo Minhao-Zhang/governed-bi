@@ -98,6 +98,27 @@ def test_governed_matches_plain(bird_gateway, corpus, settings, identity):
     viagraph = answer_question_graph(q, **kw)
     assert plain.tier is ReliabilityTier.governed
     _assert_same(plain, viagraph, provenance_keys=("metric_id", "tables_used", "attempts", "min_join_confidence"))
+    # The executed rows are carried identically on both harnesses.
+    assert plain.result.rows == viagraph.result.rows
+
+
+def test_narrator_and_result_match_plain(bird_gateway, corpus, settings, identity):
+    # The narrator seam threads through the graph the same way it does the plain
+    # flow: a single-response client yields identical text on both harnesses.
+    from governed_bi.server import LlmAnswerNarrator
+
+    q = "What is the total revenue?"
+    plain = answer_question(
+        q, narrator=LlmAnswerNarrator(StaticChatClient("Revenue: $18,496.")),
+        **_kw(bird_gateway, corpus, settings, identity),
+    )
+    viagraph = answer_question_graph(
+        q, narrator=LlmAnswerNarrator(StaticChatClient("Revenue: $18,496.")),
+        **_kw(bird_gateway, corpus, settings, identity),
+    )
+    _assert_same(plain, viagraph, provenance_keys=("metric_id", "tables_used"))
+    assert plain.text == viagraph.text == "Revenue: $18,496."
+    assert plain.result.rows == viagraph.result.rows
 
 
 def test_refuse_gate_matches_plain(mem_gateway, corpus, settings, identity):

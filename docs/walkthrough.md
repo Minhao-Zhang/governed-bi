@@ -63,7 +63,7 @@ uv run pytest -q
 ```
 
 The suite is green offline. With the harness and cockpit extras installed
-(`uv run --extra agents --extra viz pytest`) all **270** tests run, including the
+(`uv run --extra agents --extra viz pytest`) all **287** tests run, including the
 LangGraph-equivalence and the Streamlit UI tests; without them, a handful skip.
 
 ## 4. Ask your first question
@@ -158,11 +158,18 @@ export OPENAI_API_KEY=sk-...        # read from the env, never stored in the rep
 uv run --extra agents --extra viz streamlit run src/governed_bi/viz/app.py
 ```
 
-The model is `gpt-5.6-sol` at low reasoning effort (configured in
+Prefer a file? Copy `.env.example` to `.env` at the repo root and put the key
+there instead of exporting it — it's loaded on import and never overrides a
+variable already set in your shell. `.env` is git-ignored.
+
+The model is `gpt-5.5` at low reasoning effort (configured in
 [`governed_bi.toml`](../governed_bi.toml)), called through LangChain's
 `ChatOpenAI`, which routes reasoning models to the OpenAI **Responses API**. In
 chat, follow-ups now resolve against the conversation (prior turns are fed back
-through the engine's working memory).
+through the engine's working memory), the answer is phrased in **natural
+language**, and the executed rows are shown in a collapsible **result** table
+beneath it. Offline, the answer text falls back to a compact render, but the
+result table still appears — the executed rows are always carried on the answer.
 
 For a scripted live check that prints execution accuracy, refusal, and
 decoy-touch over `beer_factory`, run:

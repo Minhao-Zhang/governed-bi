@@ -122,8 +122,8 @@ class PromptContext:
     skills: list[SkillView] = field(default_factory=list)
     caveats: list[str] = field(default_factory=list)
     # Prior (role, content) turns from working memory (D8), oldest first. Empty
-    # for a single-shot request; a conversational caller passes the session
-    # history so a follow-up ("what about last year?") can resolve against it.
+    # only for a single-round eval call; every conversational caller passes the
+    # session history so a follow-up ("what about last year?") resolves against it.
     conversation: list[tuple[str, str]] = field(default_factory=list)
 
     def allowed_table_names(self) -> frozenset[str]:

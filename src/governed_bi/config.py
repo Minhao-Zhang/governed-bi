@@ -13,6 +13,11 @@ whole system reads one source of truth and a model swap is a config edit, not a
 code change. **The API key is never stored in the file** - it is read from an
 environment variable named by ``ModelConfig.api_key_env`` (default
 ``OPENAI_API_KEY``) at call time. This keeps secrets out of git.
+
+As a local-run convenience, :func:`load_dotenv` also reads a git-ignored ``.env``
+at the repo root and fills in any variables it defines that are **not already
+set** - so a real environment variable always wins and ``.env`` is a fallback,
+never an override. It runs once automatically when the package is imported.
 """
 
 from __future__ import annotations
@@ -61,7 +66,7 @@ class ModelConfig:
     """
 
     provider: str = "openai"
-    llm_model: str = "gpt-5.6-sol"  # GPT-5.6 flagship tier; the `gpt-5.6` alias also routes here
+    llm_model: str = "gpt-5.5"  # GA flagship; gpt-5.6-sol is limited-preview (404s without access)
     llm_reasoning_effort: str = "low"  # none | low | medium | high | xhigh | max (provider-specific)
     llm_max_output_tokens: int | None = None  # None = provider default
     embedding_model: str = "text-embedding-3-small"
@@ -191,3 +196,82 @@ def load_settings(path: str | Path | None = None) -> Settings:
         if k in runtime
     }
     return replace(settings, **overrides) if overrides else settings
+
+
+# --------------------------------------------------------------------------- #
+# .env loading (local-run convenience)
+# --------------------------------------------------------------------------- #
+#
+# The API key (and any other secret) is read from the process environment. For
+# local runs we also read a ``.env`` at the repo root and populate any variables
+# it defines that are not already set - so a real environment variable always
+# wins and ``.env`` is a fallback, never an override. ``.env`` is git-ignored;
+# never commit a real key. Location is overridable via ``GOVERNED_BI_DOTENV``.
+
+_DOTENV_FILENAME = ".env"
+
+
+def _find_dotenv() -> Path | None:
+    """Locate a ``.env``: the ``GOVERNED_BI_DOTENV`` override, else the first
+    ancestor of this file that contains one, else the current directory."""
+    override = os.environ.get("GOVERNED_BI_DOTENV")
+    if override:
+        p = Path(override)
+        return p if p.is_file() else None
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / _DOTENV_FILENAME
+        if candidate.is_file():
+            return candidate
+    cwd_candidate = Path.cwd() / _DOTENV_FILENAME
+    return cwd_candidate if cwd_candidate.is_file() else None
+
+
+def _parse_dotenv(text: str) -> dict[str, str]:
+    """Parse ``KEY=VALUE`` lines into a dict. Blank lines and ``#`` comments are
+    skipped; a leading ``export`` is tolerated; surrounding single/double quotes
+    are stripped; an unquoted trailing `` # comment`` is dropped. Deliberately
+    small - not a full shell parser."""
+    out: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]  # quoted: take verbatim
+        else:
+            hash_at = value.find(" #")  # unquoted: drop an inline comment
+            if hash_at != -1:
+                value = value[:hash_at].rstrip()
+        out[key] = value
+    return out
+
+
+def load_dotenv(path: str | Path | None = None, *, override: bool = False) -> dict[str, str]:
+    """Populate ``os.environ`` from a ``.env`` file; return what was applied.
+
+    A real environment variable wins by default (``setdefault`` semantics): the
+    file only fills in variables that are unset, so exporting a key in the shell
+    always takes precedence over ``.env``. Pass ``override=True`` to let the file
+    replace already-set variables. A missing or unreadable file is a no-op, so
+    this is always safe to call.
+    """
+    resolved = Path(path) if path is not None else _find_dotenv()
+    if resolved is None or not resolved.is_file():
+        return {}
+    try:
+        parsed = _parse_dotenv(resolved.read_text(encoding="utf-8"))
+    except OSError:
+        return {}
+    applied: dict[str, str] = {}
+    for key, value in parsed.items():
+        if override or key not in os.environ:
+            os.environ[key] = value
+            applied[key] = value
+    return applied

@@ -128,7 +128,7 @@ def build_curator_agent(
     """Build the curator deep agent for one database.
 
     ``model`` is a LangChain chat model instance or a ``"provider:model"`` spec
-    (e.g. ``"openai:gpt-5.6-sol"``). ``connector`` is used for Facts profiling;
+    (e.g. ``"openai:gpt-5.5"``). ``connector`` is used for Facts profiling;
     ``gateway`` (read-only) enables the ``run_probe_query`` falsification tool.
     Returns a compiled agent; invoke it with
     ``{"messages": [{"role": "user", "content": "Curate <db>."}]}``. Construction
