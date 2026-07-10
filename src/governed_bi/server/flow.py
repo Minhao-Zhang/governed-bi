@@ -46,6 +46,8 @@ from .routing import bind_terms, route_intent
 from .sqlgen import RepairFeedback, SqlGenerator, TemplateSqlGenerator
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from ..config import Settings
     from ..corpus import Corpus
     from ..gateway import Gateway, Identity, QueryResult
@@ -214,9 +216,27 @@ def _answer_text(
         return _render(result, None)
 
 
+def _emit(on_event: "Callable[[dict], None] | None", stage: str, **detail) -> None:
+    """Fire a best-effort stage-progress event (no-op without a callback).
+
+    The serve flow stays authoritative: a callback that raises must never turn a
+    governed answer into an error, so failures here are swallowed. The payload is
+    a small stable dict ``{"stage": ..., **detail}`` that the LangGraph server
+    maps to a labeled UI stage (see docs/langgraph-rework-plan.md). Stages, in
+    pipeline order: ``route``, ``refuse_gate``, ``cache_hit``, ``retrieve``,
+    ``generate``, ``guardrail``, ``execute``, ``compose``.
+    """
+    if on_event is None:
+        return
+    try:
+        on_event({"stage": stage, **detail})
+    except Exception:
+        pass
+
+
 def _try_cache_hit(
     cache, question, gateway, identity, settings, allowlist, dialect, graph, base_provenance,
-    *, narrator: "AnswerNarrator | None" = None,
+    *, narrator: "AnswerNarrator | None" = None, on_event: "Callable[[dict], None] | None" = None,
 ) -> "Answer | None":
     """Serve a semantic-cache hit, or return None to fall through to the pipeline.
 
@@ -263,6 +283,7 @@ def _try_cache_hit(
         "truncated": result.truncated,
         "cache_hit": True,
     }
+    _emit(on_event, "cache_hit", metric_id=entry.metric_id)
     table = _result_table(result)
     text = _answer_text(question, entry.sql, result, table, narrator)
     return assemble(text=text, sql=entry.sql, signals=signals, provenance=provenance, result=table)
@@ -318,7 +339,7 @@ def _execution_feedback(generated, err: Exception) -> tuple[RepairFeedback, dict
 
 def _finalize_success(
     *, question, graph, generated, result, attempts, base_provenance, dialect, allowlist, licensed,
-    cache, narrator: "AnswerNarrator | None" = None,
+    cache, narrator: "AnswerNarrator | None" = None, on_event: "Callable[[dict], None] | None" = None,
 ) -> "Answer":
     """Stamp + assemble a successful answer, and write back a clean one to the cache.
 
@@ -348,6 +369,7 @@ def _finalize_success(
         "attempts": attempts,
     }
     table = _result_table(result)
+    _emit(on_event, "compose")
     text = _answer_text(question, generated.sql, result, table, narrator)
     answer = assemble(
         text=text, sql=generated.sql, signals=signals, provenance=provenance, result=table
@@ -379,6 +401,7 @@ def answer_question(
     cache: "SqlCache | None" = None,
     working_memory: "WorkingMemory | None" = None,
     narrator: "AnswerNarrator | None" = None,
+    on_event: "Callable[[dict], None] | None" = None,
 ) -> "Answer":
     """Run one question through the serve DAG, fail-closed on any guardrail or
     refuse-gate hit. ``corpus`` should be the ``for_server()`` view.
@@ -401,6 +424,10 @@ def answer_question(
     ``narrator`` (optional) phrases the executed result into natural language for
     the answer text; with none, the compact deterministic render is used. Either
     way the executed rows are carried on ``Answer.result`` for display/audit.
+    ``on_event`` (optional) receives a small ``{"stage": ...}`` dict at each
+    pipeline stage (route / refuse_gate / cache_hit / retrieve / generate /
+    guardrail / execute / compose) for live progress; it is best-effort and never
+    changes the answer (see :func:`_emit`).
     """
     route = route_intent(question)
     bound_terms = bind_terms(corpus, question)
@@ -410,10 +437,12 @@ def answer_question(
         "session_id": session_id,
         "user": identity.user,
     }
+    _emit(on_event, "route", route=route.value)
 
     # Refuse-gate (D5): a curated negative example ends the flow immediately.
     negative = _match_negative_example(corpus, question)
     if negative is not None:
+        _emit(on_event, "refuse_gate", negative_example=negative.id)
         return refusal(
             escalation=negative.escalation,
             provenance={**base_provenance, "refused_by": "refuse_gate", "negative_example": negative.id},
@@ -429,11 +458,12 @@ def answer_question(
     if cache is not None:
         hit = _try_cache_hit(
             cache, question, gateway, identity, settings, allowlist, dialect, graph, base_provenance,
-            narrator=narrator,
+            narrator=narrator, on_event=on_event,
         )
         if hit is not None:
             return hit
 
+    _emit(on_event, "retrieve")
     retrieval = retrieve(corpus, question, embedder=embedder)
 
     generator = sql_generator or TemplateSqlGenerator()
@@ -471,6 +501,7 @@ def answer_question(
     attempts = 0
 
     while attempts < MAX_REPAIR_ATTEMPTS:
+        _emit(on_event, "generate", attempt=attempts + 1)
         generated = generator.generate(
             question, retrieval, corpus, feedback=tuple(feedback), context=context
         )
@@ -489,6 +520,13 @@ def answer_question(
             hard_block_suspect=settings.hard_block_suspect_columns,
             dialect=dialect,
         )
+        _emit(
+            on_event,
+            "guardrail",
+            attempt=attempts,
+            passed=verdict.passed,
+            failed_layer=verdict.failed_layer.value if verdict.failed_layer else None,
+        )
         if not verdict.passed:
             fb, last_refusal = _guardrail_feedback(generated, verdict)
             if not _repairable_guardrail(verdict):
@@ -496,6 +534,7 @@ def answer_question(
             feedback.append(fb)
             continue
 
+        _emit(on_event, "execute", attempt=attempts)
         try:
             result = gateway.execute(generated.sql, identity)
         except Exception as err:  # give the generator a chance to repair, then fail closed
@@ -515,6 +554,7 @@ def answer_question(
             licensed=licensed,
             cache=cache,
             narrator=narrator,
+            on_event=on_event,
         )
 
     # Exhausted the attempts (or the generator declined / could not improve): fail
