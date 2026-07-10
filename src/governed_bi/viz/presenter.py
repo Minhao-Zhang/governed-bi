@@ -18,7 +18,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from ..corpus import validate_corpus
-from ..corpus.ids import derive_column_id
 from ..corpus.schemas import (
     FewShotAsset,
     JoinAsset,
@@ -113,6 +112,39 @@ class ResultTableView:
     rows: list[list]
     row_count: int
     truncated: bool
+
+
+@dataclass(frozen=True)
+class SchemaGraphNode:
+    """A table in the relationship graph (ER-diagram node)."""
+
+    id: str  # table asset id
+    physical_name: str
+    row_count: int | None
+    n_columns: int
+    excluded: bool
+    has_suspect: bool  # any column flagged suspect
+
+
+@dataclass(frozen=True)
+class SchemaGraphEdge:
+    """A join/FK relationship between two tables (ER-diagram edge)."""
+
+    id: str  # join asset id
+    source: str  # left table asset id
+    target: str  # right table asset id
+    on: str  # physical equality, e.g. "transaction.CustomerID = customers.CustomerID"
+    cardinality: str | None
+    confidence: float | None
+    low_confidence: bool  # confidence at or below LOW_CONFIDENCE_JOIN
+
+
+@dataclass(frozen=True)
+class SchemaGraphView:
+    """The table-relationship graph for the ER visualization (nodes + edges)."""
+
+    nodes: list[SchemaGraphNode]
+    edges: list[SchemaGraphEdge]
 
 
 @dataclass(frozen=True)
@@ -264,6 +296,43 @@ def skill_views(corpus: "Corpus") -> list[SkillView]:
         )
         for skill in corpus.skills
     ]
+
+
+def schema_graph(corpus: "Corpus") -> SchemaGraphView:
+    """The table-relationship graph for the ER view: table nodes + join edges.
+
+    Built directly from the corpus assets (``TableAsset`` nodes, ``JoinAsset``
+    edges) rather than the planning graph, so edges carry the curator's join
+    ``confidence`` and ``cardinality`` — a frontend can render a low-confidence
+    join differently. ``source``/``target`` are table-asset ids (equal to the
+    node ids). Reads the full corpus, so ``excluded`` tables are still shown
+    (flagged) for the audit view.
+    """
+    nodes = [
+        SchemaGraphNode(
+            id=table.id,
+            physical_name=table.physical_name,
+            row_count=table.row_count,
+            n_columns=len(table.columns),
+            excluded=table.governance.excluded,
+            has_suspect=any(c.reliability.status.value == "suspect" for c in table.columns),
+        )
+        for table in corpus.tables()
+    ]
+    edges = [
+        SchemaGraphEdge(
+            id=asset.id,
+            source=asset.left_table,
+            target=asset.right_table,
+            on=asset.on,
+            cardinality=asset.cardinality.value if asset.cardinality else None,
+            confidence=asset.confidence,
+            low_confidence=asset.confidence is not None and asset.confidence <= LOW_CONFIDENCE_JOIN,
+        )
+        for asset in corpus.assets
+        if isinstance(asset, JoinAsset)
+    ]
+    return SchemaGraphView(nodes=nodes, edges=edges)
 
 
 def answer_view(answer: "Answer") -> AnswerView:
