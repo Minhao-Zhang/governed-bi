@@ -21,7 +21,7 @@ _[English](usage.md) · [简体中文](usage.zh.md)_
 | Memory（working）+ eval（EX、arms、refuse-gate）+ viz 驾驶舱 | 可运行 | `src/governed_bi/{memory,eval,viz}/` |
 | 模型客户端（原生 OpenAI / LangChain） | 可运行（需启用 `openai` / `agents` 可选依赖组） | `src/governed_bi/llm/` |
 | 智能体 harness（LangGraph 的 serve DAG、deepagents 的 curator） | 可运行（需启用 `agents` 可选依赖组） | `server/graph.py`, `curator/deep_agent.py` |
-| Postgres / Redshift 连接器 | 占位接口（可选依赖组） | `src/governed_bi/gateway/connectors/` |
+| Postgres / Redshift 连接器 | 已实现（需可选依赖组）；离线测试，未连真实库 | `src/governed_bi/gateway/connectors/` |
 
 ## 前置条件
 
@@ -106,9 +106,10 @@ print(table.id, table.asset_type)
 
 ## 连接数据库
 
-gateway 封装了按方言区分的连接器。SQLite 已经实现（只读，带审计日志和强制的行数上限）；
-Postgres 与 Redshift 是位于 `postgres` / `redshift` 可选依赖组之后的占位接口。将它指向
-一个 SQLite 文件，就可以查看数据库目录、对 Facts 层做画像分析，并运行受护栏保护的查询：
+gateway 封装了按方言区分的连接器。SQLite 已充分验证（只读，带审计日志和强制的行数上限）；
+Postgres（`information_schema`）与 Redshift（`svv_*`）也已实现，位于 `postgres` / `redshift`
+可选依赖组之后，并有离线单元测试，但尚未连过真实服务器。将它指向一个 SQLite 文件，
+就可以查看数据库目录、对 Facts 层做画像分析，并运行受护栏保护的查询：
 
 ```python
 from governed_bi.gateway import SqliteConnector, Gateway, Identity

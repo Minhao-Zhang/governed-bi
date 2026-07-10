@@ -31,7 +31,7 @@ _[English](README.md) · [简体中文](README.zh.md)_
 | BIRD-Obfuscation 三臂评测（no-layer / curator / gold） | **部分** | curator 臂已离线评分；混淆 DB + 基线/gold 臂待做 |
 | `CorpusRelease`（不可变、按内容哈希锁定的服务发布） | **仅设计** | 未实现——见[设计决策](docs/design-decisions.zh.md) |
 | 身份 → 查询范围（RLS / 租户隔离） | **仅接口** | 单一身份的 SQLite 展示；强制执行属企业分支范围 |
-| Postgres / Redshift 执行 | **扩展点** | 连接器接口，未实现 |
+| Postgres / Redshift 执行 | **已构建，未经真实测试** | `PostgresConnector`（information_schema）+ `RedshiftConnector`（svv_*）；离线 fake 连接测试，未连真实服务器 |
 
 **诚实的一句话定位：** 一个把模型输出当作不可信的受治理 NL2SQL 内核——它约束可访问的数据面、对生成的 SQL 做结构化校验、将策展与服务分离、并让语义层可审阅。已在 SQLite 上得到验证、以评测为导向；下一个里程碑是证明 curator 构建的资产在混淆 schema 上、相对一个公平的无 corpus 基线，能带来可度量的提升。
 
@@ -54,7 +54,7 @@ src/governed_bi/
   config.py            environment toggles + reusable numbers + model config (ModelConfig, load_settings)
   llm/                 done: ChatClient/Embedder seams (raw OpenAI + LangChain + deterministic offline defaults)
   corpus/              done: schemas, IDs, CI validator, loader, serializer, CLI
-  gateway/             done (SQLite): connector + read-only gateway; Postgres/Redshift seams; five-layer guardrails
+  gateway/             done: SQLite (proven) + Postgres/Redshift connectors (offline-tested); read-only gateway; five-layer guardrails
   curator/             done: Facts profiling, HeuristicProposer + LlmProposer, adversary review, curate loop
   graph/               done: FK graph projection + Steiner-tree join planning + FK join-neighborhood
   retrieval/           done: RVGD BM25 + grounding + vector channel (embedder-gated, RRF fusion)

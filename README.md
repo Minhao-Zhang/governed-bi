@@ -54,7 +54,7 @@ is unmeasured.
 | BIRD-Obfuscation 3-arm eval (no-layer / curator / gold) | **Partial** | curator arm scored offline; obfuscated DBs + baseline/gold arms pending |
 | `CorpusRelease` (immutable, hash-pinned serving release) | **Designed** | not implemented — see [design decisions](docs/design-decisions.md) |
 | Identity → query scope (RLS / tenant isolation) | **Seam only** | single-identity SQLite showcase; enforcement is enterprise-fork scope |
-| Postgres / Redshift execution | **Extension point** | connector seams, not implemented |
+| Postgres / Redshift execution | **Built, not live-tested** | `PostgresConnector` (information_schema) + `RedshiftConnector` (svv_*); offline fake-connection tests, no live server run |
 
 **Honest one-liner:** a governed NL2SQL kernel that treats model output as
 untrusted — it constrains the accessible data surface, validates generated SQL
@@ -82,7 +82,7 @@ src/governed_bi/
   config.py            environment toggles + reusable numbers + model config (ModelConfig, load_settings)
   llm/                 done: ChatClient/Embedder seams (raw OpenAI + LangChain + deterministic offline defaults)
   corpus/              done: schemas, IDs, CI validator, loader, serializer, CLI
-  gateway/             done (SQLite): connector + read-only gateway; Postgres/Redshift seams; five-layer guardrails
+  gateway/             done: SQLite (proven) + Postgres/Redshift connectors (offline-tested); read-only gateway; five-layer guardrails
   curator/             done: Facts profiling, HeuristicProposer + LlmProposer, adversary review, curate loop
   graph/               done: FK graph projection + Steiner-tree join planning + FK join-neighborhood
   retrieval/           done: RVGD BM25 + grounding + vector channel (embedder-gated, RRF fusion)

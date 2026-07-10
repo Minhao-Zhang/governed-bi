@@ -23,7 +23,7 @@ This page stays on the runnable surface; for the design behind it, see the
 | Memory (working) + eval (EX, arms, refuse-gate) + viz cockpit | runnable | `src/governed_bi/{memory,eval,viz}/` |
 | Model clients (raw OpenAI / LangChain) | runnable behind `openai` / `agents` extras | `src/governed_bi/llm/` |
 | Agent harnesses (LangGraph serve DAG, deepagents curator) | runnable behind `agents` extra | `server/graph.py`, `curator/deep_agent.py` |
-| Postgres / Redshift connectors | seam (optional extras) | `src/governed_bi/gateway/connectors/` |
+| Postgres / Redshift connectors | implemented behind optional extras; offline-tested, not run live | `src/governed_bi/gateway/connectors/` |
 
 ## Prerequisites
 
@@ -108,10 +108,12 @@ is allowed to see (Facts + Inference, never Audit, and never an excluded asset).
 
 ## Connect to a database
 
-The gateway wraps a per-dialect connector. SQLite is implemented (read-only, with
-an audit log and a forced row cap); Postgres and Redshift are seams behind the
-`postgres` / `redshift` optional extras. Point it at a SQLite file and you can
-introspect the catalog, profile the Facts tier, and run guarded queries:
+The gateway wraps a per-dialect connector. SQLite is proven (read-only, with an
+audit log and a forced row cap); Postgres (`information_schema`) and Redshift
+(`svv_*`) are implemented behind the `postgres` / `redshift` optional extras and
+unit-tested offline, but not yet run against a live server. Point it at a SQLite
+file and you can introspect the catalog, profile the Facts tier, and run guarded
+queries:
 
 ```python
 from governed_bi.gateway import SqliteConnector, Gateway, Identity

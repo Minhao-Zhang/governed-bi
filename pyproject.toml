@@ -21,7 +21,9 @@ dependencies = [
 # DB connectors beyond SQLite (which is stdlib). Installed only when targeting
 # these engines; the connector code imports the driver lazily.
 postgres = ["psycopg[binary]>=3.1"]
-redshift = ["redshift-connector>=2.1"]
+# Redshift speaks the Postgres wire protocol; RedshiftConnector subclasses
+# PostgresConnector and reuses psycopg (overriding only svv_* catalog introspection).
+redshift = ["psycopg[binary]>=3.1"]
 # The audit/edit cockpit (viz). Streamlit is the current frontend, isolated to
 # governed_bi.viz.app; the UI-agnostic view models in governed_bi.viz.presenter
 # carry no UI dependency, so a different frontend swaps in app.py alone.
