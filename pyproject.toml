@@ -44,6 +44,10 @@ agents = [
     "langchain-openai>=1.0",
     "deepagents>=0.6",
 ]
+# Optional external tracing. LangSmith is native (env-only, no dep). Langfuse is a
+# LangChain callback wired in governed_bi.obs; no-op unless LANGFUSE_* keys are
+# set. See docs/langgraph-rework-plan.md phase 4.
+tracing = ["langfuse>=3.0"]
 
 [dependency-groups]
 dev = [

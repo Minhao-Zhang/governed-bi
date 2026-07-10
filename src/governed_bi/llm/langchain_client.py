@@ -78,7 +78,14 @@ class LangChainChatClient:
         return cls(ChatOpenAI(**kwargs))
 
     def complete(self, system: str, user: str) -> str:
-        message = self.model.invoke([("system", system), ("human", user)])
+        # Attach external-tracing callbacks (Langfuse) when configured; LangSmith
+        # instruments itself from the environment and needs nothing here. Empty
+        # list -> config stays None, so the offline/untraced path is unchanged.
+        from ..obs import tracing_callbacks  # noqa: PLC0415 (lazy: avoid import cost when unused)
+
+        callbacks = tracing_callbacks()
+        config = {"callbacks": callbacks} if callbacks else None
+        message = self.model.invoke([("system", system), ("human", user)], config=config)
         return _message_text(message)
 
 
