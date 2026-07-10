@@ -6,12 +6,12 @@ The build brief + contract for the **governed-bi** frontend. Pair with the
 architecture rationale in [ui-frontend-design.md](ui-frontend-design.md) and the
 runtime decision in [ADR 0001](adr/0001-langgraph-server-chat-runtime.md).
 
-> **Status: contract is the TARGET; backend rework in progress, not ready to
-> build against yet.** The chat runtime moves to a **LangGraph Server** consumed
-> by the **`useStream`** SDK, with corpus/schema/audit as **custom routes** on
-> that server, plus a dev **edit** endpoint and a **full knowledge graph**. See
-> "Built today vs planned" (§8). Start scaffolding (stack, layout) now; wire live
-> data once the backend rework lands.
+> **Status: the backend rework has landed; this contract is live.** Chat is served
+> by a **LangGraph Server** (graph id `serve`) consumed by the **`useStream`** SDK,
+> with corpus/schema/audit as **custom routes** on that same server, a dev **edit**
+> endpoint, and a **full knowledge graph**. Boot it with `langgraph dev` (§2) and
+> build against it directly. Implementation detail is in
+> [langgraph-rework-plan.md](langgraph-rework-plan.md).
 
 ---
 
@@ -55,23 +55,40 @@ uv run --extra agents --extra api langgraph dev   # LangGraph Server at :2024 (c
 ## 3. Chat via `useStream` (LangGraph protocol)
 
 ```tsx
-const stream = useStream<ServeState>({
+type ChatState = { messages: Message[]; answer: GovernedAnswer | null };
+
+const [threadId, setThreadId] = useState<string | null>(null);
+const stream = useStream<ChatState>({
   apiUrl: process.env.NEXT_PUBLIC_LANGGRAPH_URL!,
-  assistantId: process.env.NEXT_PUBLIC_ASSISTANT_ID!,
+  assistantId: process.env.NEXT_PUBLIC_ASSISTANT_ID!, // "serve"
+  threadId, onThreadId: setThreadId,                  // persist the thread id (history)
+  onCustomEvent: (data, { mutate }) => mutate((p) => ({ ...p, stage: data })), // live stages
 });
+stream.submit(
+  { messages: [{ type: "human", content: q }] },
+  { streamMode: ["values", "messages", "custom"] },  // "custom" is required for stages
+);
 ```
-- **Messages / history:** `stream.messages` (thread-backed; reload/rejoin by thread id).
-- **Live steps:** consume node/stage events from the stream and render labeled
-  stages: **Route → Retrieve → Generate SQL → Guardrails → Execute → Compose**
-  (repairs appear as `generate`/`guardrail` re-firing). This reflects actual
-  backend progress, not a timer.
-- **Final answer** arrives as the terminal state; render the **answer card**:
+- **Messages / history:** `stream.messages` (thread-backed; reload/rejoin by
+  `threadId`). Threads are the persistence; the frontend owns no conversation DB.
+- **Live steps:** the graph emits one **custom event** per stage, delivered to the
+  `onCustomEvent(data, { mutate })` option (the run must include `custom` in
+  `streamMode`). Render the labeled rail **Route → Retrieve → Generate SQL →
+  Guardrails → Execute → Compose**; repairs appear as `generate`/`guardrail`
+  re-firing with a higher `attempt`, and `guardrail` events carry `passed` +
+  `failed_layer`. This reflects real backend progress, not a timer.
+- **Final answer** is a custom **`answer` state channel**: read `stream.values.answer`
+  (the `AnswerResponse` shape). Render the **answer card**:
   - Two badges, never one score: `safety_clearance` (bool) + `semantic_assurance`
     (`certified|heuristic|unverified|none`); tier chip green/amber/red.
   - English answer text; collapsible **result table** (`columns`/`rows`,
     truncated note); read-only **SQL**; **provenance/audit drawer** (route,
     tables_used, join_ids, min_join_confidence, attempts, uncertainty_flags, …).
   - Refusal → escalation shown, no SQL/number.
+
+Package note: `@langchain/langgraph-sdk/react` gives `onCustomEvent` +
+`stream.values`; the newer `@langchain/react` superset adds selector hooks
+(`useChannel`) and `stream.respond`. Either works against this server.
 
 (The engine also keeps a non-streaming `POST /chat` fallback for a no-`agents`
 offline profile; `capabilities.can_stream=false` selects it.)
@@ -89,7 +106,8 @@ the rework.
 | `GET /capabilities` | `{ environment, dialect, can_edit, edit_mode, can_stream, has_live_model, model }`; gate UI features on this |
 | `GET /health` | corpus health: counts, `ci_green`, findings, `n_suspect_columns`, `n_excluded`, `n_low_confidence_joins` |
 | `GET /schema` | tables + columns (types, roles, `reliability`, `excluded`, provenance) |
-| `GET /graph` | **full knowledge graph** `{ nodes, edges }` over all asset types (table/column/metric/term/join/rule/few_shot/negative) + references; filter/layer by `node.kind`; joins carry `confidence`/`cardinality`/`low_confidence` |
+| `GET /graph` | **ER graph** `{ nodes, edges }` of tables + join edges (nodes carry `row_count`/`n_columns`/`has_suspect`; edges carry `on`/`cardinality`/`confidence`/`low_confidence`) |
+| `GET /knowledge-graph` | **full knowledge graph** `{ nodes, edges }` over every asset kind (table/join/metric/term/rule/few_shot/negative_example); edges typed `join`/`measures`/`grounds`/`related:*`/`scopes`/`exemplifies`; filter/layer by `node.kind` (tables + joins reproduces the ER view). Columns are in `/schema`, not nodes here |
 | `GET /corpus/assets?type=` | non-table assets (metric/term/join/rule/few_shot/negative) |
 | `GET /skills` | skills (markdown) |
 | `POST /corpus/edit` *(dev only; gated on `can_edit`)* | validate the submitted asset → write YAML (dev) / PR (prod); returns validation + diff |
@@ -125,17 +143,19 @@ path is the same.
 
 ## 8. Built today vs planned
 
-- **Built (earlier phase, offline-tested):** `presenter` view models, REST read
-  endpoints (as a standalone FastAPI), the `stack` factory, a **tables+joins**
-  graph, a non-streaming `/chat`, 8 API tests.
-- **Planned (this rework, needed before handoff):** LangGraph Server +
-  `langgraph.json`, `ServeState` serializability, node→stage streaming,
-  **full knowledge graph** `/graph`, `POST /corpus/edit` (dev), custom-route
-  mounting, Langfuse/Langsmith tracing, re-exported OpenAPI.
-- **Deferred:** prod PR editing, public-demo cost strategy, auth/RLS.
+- **Built (this rework, offline-tested + `langgraph dev`-verified):** LangGraph
+  Server chat graph (`serve`) + `langgraph.json`; a thin `{messages, answer}` chat
+  state (no `ServeState` serialization needed); stage streaming via
+  `get_stream_writer()`; custom routes mounted (`http.app`); `GET /knowledge-graph`
+  (full graph) alongside `GET /graph` (ER); `POST /corpus/edit` (dev); LangSmith +
+  Langfuse tracing (opt-in); re-exported [openapi.json](openapi.json). Plus the
+  earlier `presenter` view models, REST reads, `stack` factory, non-streaming
+  `/chat` fallback.
+- **Deferred:** prod PR editing (dev is file-write today), public-demo cost
+  strategy, auth/RLS, human-gate interrupts (the runtime supports them via
+  `stream.interrupt` + `submit(command.resume)`).
 
-Scaffold the UI (stack, routing, `useStream` skeleton, component shells) now; bind
-to live endpoints as the planned items land.
+Everything above is live behind `langgraph dev`; build against it now.
 
 ---
 

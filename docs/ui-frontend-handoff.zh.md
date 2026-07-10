@@ -6,11 +6,11 @@ _[English](ui-frontend-handoff.md) · [简体中文](ui-frontend-handoff.zh.md)_
 中的架构依据，以及 [ADR 0001](adr/0001-langgraph-server-chat-runtime.zh.md) 中的运行时决策
 配合阅读。
 
-> **状态：契约是 TARGET（既定目标）；后端重构正在进行中——尚不能据此开发。**
-> 聊天运行时会迁移到由 **`useStream`** SDK 消费的 **LangGraph Server**，corpus/schema/
-> 审计作为该服务器上的**自定义路由**，外加一个开发用的编辑端点和一个**完整知识
-> 图谱**。参见"当下已实现 vs. 规划中"（§8）。现在就可以开始搭建脚手架（技术栈、
-> 布局）；等后端重构落地后再接入真实数据。
+> **状态:后端重构已落地,本契约已生效。** 聊天由一台 **LangGraph Server**(图
+> id 为 `serve`)提供,前端用 **`useStream`** SDK 消费;corpus/schema/审计作为同一
+> 台服务器上的**自定义路由**,再加一个开发用编辑端点和一张**完整知识图谱**。用
+> `langgraph dev` 启动它(§2),直接据此开发即可。实现细节见
+> [langgraph-rework-plan.md](langgraph-rework-plan.zh.md)。
 
 ---
 
@@ -55,24 +55,40 @@ uv run --extra agents --extra api langgraph dev   # LangGraph Server at :2024 (c
 ## 3. Chat —— 通过 `useStream`（LangGraph 协议）
 
 ```tsx
-const stream = useStream<ServeState>({
+type ChatState = { messages: Message[]; answer: GovernedAnswer | null };
+
+const [threadId, setThreadId] = useState<string | null>(null);
+const stream = useStream<ChatState>({
   apiUrl: process.env.NEXT_PUBLIC_LANGGRAPH_URL!,
-  assistantId: process.env.NEXT_PUBLIC_ASSISTANT_ID!,
+  assistantId: process.env.NEXT_PUBLIC_ASSISTANT_ID!, // "serve"
+  threadId, onThreadId: setThreadId,                  // 持久化 thread id(即历史记录)
+  onCustomEvent: (data, { mutate }) => mutate((p) => ({ ...p, stage: data })), // 实时阶段
 });
+stream.submit(
+  { messages: [{ type: "human", content: q }] },
+  { streamMode: ["values", "messages", "custom"] },  // 阶段事件需要 "custom"
+);
 ```
-- **消息/历史记录：** `stream.messages`（以线程为后盾；可按线程 id 重新加载/重新
-  加入）。
-- **实时步骤：** 从流中消费节点/阶段事件，并渲染带标签的阶段：**路由（Route）→
-  检索（Retrieve）→ 生成 SQL（Generate SQL）→ 护栏（Guardrails）→ 执行（Execute）
-  → 组装（Compose）**（修复会表现为 `generate`/`guardrail` 的重新触发）。这是
-  *真实的*后端进度，不是一个计时器。
-- **最终答案**以终态的形式到达；渲染出**答案卡片**：
+- **消息/历史记录:** `stream.messages`(以线程为后盾;按 `threadId` 重新加载/重新
+  加入)。线程即持久化,前端不拥有任何对话数据库。
+- **实时步骤:** 图每个阶段发一条**自定义事件**,经 `onCustomEvent(data, { mutate })`
+  这个选项送达(该次 run 的 `streamMode` 必须含 `custom`)。渲染带标签的进度轨:
+  **路由(Route)→ 检索(Retrieve)→ 生成 SQL(Generate SQL)→ 护栏(Guardrails)→
+  执行(Execute)→ 组装(Compose)**;修复表现为 `generate`/`guardrail` 带更高的
+  `attempt` 再次触发,`guardrail` 事件带 `passed` 和 `failed_layer`。这是*真实的*
+  后端进度,不是计时器。
+- **最终答案**是一个自定义的 **`answer` state 通道**:读 `stream.values.answer`
+  (即 `AnswerResponse` 的形状)。渲染出**答案卡片**:
   - 两个徽章，而不是一个分数：`safety_clearance`（布尔值）+ `semantic_assurance`
     （`certified|heuristic|unverified|none`）；档位标签为绿色/黄色/红色。
   - 英文答案文本；可折叠的**结果表格**（`columns`/`rows`，含截断提示）；只读的
     **SQL**；**溯源/审计抽屉**（route、tables_used、join_ids、min_join_confidence、
     attempts、uncertainty_flags 等）。
   - 拒答 → 显示升级提示，不给出 SQL/数字。
+
+包说明:`@langchain/langgraph-sdk/react` 提供 `onCustomEvent` 和 `stream.values`;
+更新的 `@langchain/react` 超集另加选择器 hook(`useChannel`)和 `stream.respond`。
+两者都能对接本服务器。
 
 （engine 还保留了一个非流式的 `POST /chat` 回退方案，用于没有 `agents` 可选依赖组
 的离线模式；`capabilities.can_stream=false` 会选中它。）
@@ -89,7 +105,8 @@ const stream = useStream<ServeState>({
 | `GET /capabilities` | `{ environment, dialect, can_edit, edit_mode, can_stream, has_live_model, model }`——据此控制 UI 功能的启用 |
 | `GET /health` | corpus 健康度：计数、`ci_green`、问题项、`n_suspect_columns`、`n_excluded`、`n_low_confidence_joins` |
 | `GET /schema` | 表 + 列（类型、角色、`reliability`、`excluded`、溯源） |
-| `GET /graph` | **完整知识图谱**，即所有资产类型（table/column/metric/term/join/rule/few_shot/negative）之上的 `{ nodes, edges }` + 引用；可按 `node.kind` 过滤/分层；连接携带 `confidence`/`cardinality`/`low_confidence` |
+| `GET /graph` | **ER 图**,表节点 + 连接边的 `{ nodes, edges }`(节点带 `row_count`/`n_columns`/`has_suspect`;边带 `on`/`cardinality`/`confidence`/`low_confidence`) |
+| `GET /knowledge-graph` | **完整知识图谱**,覆盖每种资产(table/join/metric/term/rule/few_shot/negative_example)的 `{ nodes, edges }`;边带类型 `join`/`measures`/`grounds`/`related:*`/`scopes`/`exemplifies`;按 `node.kind` 过滤/分层(表 + 连接即还原 ER 视图)。列在 `/schema` 里,这里不作为节点 |
 | `GET /corpus/assets?type=` | 非 table 资产（metric/term/join/rule/few_shot/negative） |
 | `GET /skills` | skills（markdown） |
 | `POST /corpus/edit` *（仅 dev；以 `can_edit` 为门槛）* | 校验提交的资产 → 写入 YAML（dev）/ 提交 PR（prod）；返回校验结果 + diff |
@@ -123,17 +140,17 @@ const stream = useStream<ServeState>({
 
 ## 8. 当下已实现 vs. 规划中
 
-- **已实现（更早阶段，离线测试过）：** `presenter` 视图模型、REST 读取端点（作为
-  一个独立的 FastAPI）、`stack` 工厂、一个**表+连接（tables+joins）**图谱、一个非
-  流式的 `/chat`、8 个 API 测试。
-- **规划中（本次重构，真正交接之前必须完成）：** LangGraph Server +
-  `langgraph.json`、`ServeState` 的可序列化性、节点→阶段的流式传输、**完整知识
-  图谱** `/graph`、`POST /corpus/edit`（dev）、自定义路由的挂载、Langfuse/Langsmith
-  追踪、重新导出的 OpenAPI。
-- **推迟：** prod 环境下的 PR 编辑、公开演示的成本策略、鉴权/RLS。
+- **已实现（本次重构,离线测试 + `langgraph dev` 验证过）:** LangGraph Server 聊天
+  图(`serve`)+ `langgraph.json`;一个薄的 `{messages, answer}` 聊天 state(无需
+  序列化 `ServeState`);经 `get_stream_writer()` 的阶段流式;挂载的自定义路由
+  (`http.app`);`GET /knowledge-graph`(完整图)与 `GET /graph`(ER)并存;
+  `POST /corpus/edit`(dev);LangSmith + Langfuse 追踪(按需开启);重新导出的
+  [openapi.json](openapi.json)。外加更早的 `presenter` 视图模型、REST 读取、`stack`
+  工厂、非流式 `/chat` 回退。
+- **推迟:** prod 的 PR 编辑(如今 dev 是直接写文件)、公开演示的成本策略、鉴权/RLS、
+  人审中断(运行时已支持,经 `stream.interrupt` + `submit(command.resume)`)。
 
-现在就搭建 UI 的脚手架（技术栈、路由、`useStream` 骨架、组件外壳）；等规划中的
-各项落地后再绑定到真实端点。
+以上全部在 `langgraph dev` 后面已经跑通,现在就据此开发。
 
 ---
 

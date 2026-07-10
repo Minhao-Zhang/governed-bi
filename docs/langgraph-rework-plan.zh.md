@@ -4,7 +4,7 @@ _[English](langgraph-rework-plan.md) · [简体中文](langgraph-rework-plan.zh.
 
 这是 [ADR 0001](adr/0001-langgraph-server-chat-runtime.zh.md) 里那条运行时决策的落地方案。做法是把 Chat 这一层改成一张跑在 **LangGraph Server** 上的图,前端用 LangChain 的 **`useStream`** SDK 消费;现有的 corpus / schema / 审计这些只读接口,作为自定义路由挂在同一台 server 上。配合看 [ui-frontend-handoff.zh.md](ui-frontend-handoff.zh.md)(前端契约)和 [ui-frontend-design.zh.md](ui-frontend-design.zh.md)(设计取舍)。
 
-状态:未开工。本文是方案本身,依据 LangGraph 1.0 官方文档(2026-07-10 核对)。这里的东西一样都还没实现。
+状态:已实现(2026-07-10)。阶段 1 到 6 均已落地:阶段回调(`server/flow.py`)、chat 图(`api/graph_app.py`)、`langgraph.json` + 自定义路由(`api/routes.py`)+ dev 编辑接口 + 完整知识图、按需追踪(`obs.py`),以及本文档与契约的同步。已离线验证(350+ 测试、ruff 干净),并在 `langgraph dev` 下端到端跑通(自定义路由有响应、`serve` 图已注册)。下面的小节编号就是那份分阶段计划,如今可当作对已建成部分的描述来读。
 
 ---
 

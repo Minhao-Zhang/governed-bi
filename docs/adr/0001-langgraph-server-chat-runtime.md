@@ -51,12 +51,16 @@ frontend via **`useStream`**.
 - Reuses the existing LangGraph serve harness rather than a parallel serve path.
 
 **Negative / costs**
-- **`ServeState` must become checkpoint-serializable.** It currently stashes live
-  objects (the `networkx` graph, the gateway allowlist, pydantic
-  `retrieval`/`context`/`generated`). Persisted channels must be serializable:
-  heavy objects move to deployment deps / per-node rebuilds; only messages +
-  lightweight results are checkpointed. The graph↔`answer_question` equivalence
-  (asserted in tests) must be preserved. This is real, non-trivial work.
+- ~~**`ServeState` must become checkpoint-serializable.**~~ **(Resolved by the
+  implementation, differently.)** The rework does *not* serialize the multi-node
+  `ServeState`. Instead the server graph is a thin **chat** graph whose persisted
+  state is only `{messages, answer}` (both JSON-serializable), and the whole
+  governed pipeline runs inside one node that calls `answer_question` and streams
+  stages via `get_stream_writer()`. The heavy objects (`networkx` graph, allowlist,
+  pydantic `retrieval`/`context`) stay node-local and are never checkpointed, so
+  `server/flow.py` and `server/graph.py` are untouched and the
+  `answer_question`↔graph equivalence still holds. See
+  [langgraph-rework-plan.md](../langgraph-rework-plan.md) §1.
 - **Heavier deployment.** Local `langgraph dev` is easy but **ephemeral**; durable
   persistence needs Postgres (self-host `langgraph up` → Postgres + Redis, or a
   managed LangGraph Platform). A plain FastAPI box would have been lighter for the

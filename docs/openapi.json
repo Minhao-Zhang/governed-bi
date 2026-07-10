@@ -12,7 +12,7 @@
           "meta"
         ],
         "summary": "Capabilities",
-        "description": "What this backend can do \u2014 the UI adapts its affordances to this.",
+        "description": "What this backend can do — the UI adapts its affordances to this.",
         "operationId": "capabilities_capabilities_get",
         "responses": {
           "200": {
@@ -122,6 +122,28 @@
         }
       }
     },
+    "/knowledge-graph": {
+      "get": {
+        "tags": [
+          "schema"
+        ],
+        "summary": "Knowledge Graph",
+        "description": "Full corpus knowledge graph: every asset a node, typed relationships as\nedges. Filter/layer by ``node.kind`` (e.g. tables + joins for the ER view).",
+        "operationId": "knowledge_graph_knowledge_graph_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeGraphResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/corpus/assets": {
       "get": {
         "tags": [
@@ -203,6 +225,48 @@
                   },
                   "type": "array",
                   "title": "Response Skills Skills Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/corpus/edit": {
+      "post": {
+        "tags": [
+          "corpus"
+        ],
+        "summary": "Corpus Edit",
+        "description": "Validate a corpus asset and, in dev, write it to the YAML tree.\n\nGated on ``capabilities.can_edit`` (403 otherwise). The asset is schema-\nvalidated (422 on a bad shape) then reference-checked against the rest of\nthe corpus; findings block the write and are returned with the diff so the\neditor can fix them. Prod PR mode is deferred; the request shape is stable.",
+        "operationId": "corpus_edit_corpus_edit_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -614,6 +678,69 @@
         ],
         "title": "ColumnResponse"
       },
+      "EditRequest": {
+        "properties": {
+          "asset": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Asset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "asset"
+        ],
+        "title": "EditRequest",
+        "description": "A corpus asset to validate and write. ``asset`` is the raw asset mapping\n(same shape as the on-disk YAML), discriminated by its ``asset_type``."
+      },
+      "EditResponse": {
+        "properties": {
+          "written": {
+            "type": "boolean",
+            "title": "Written"
+          },
+          "asset_id": {
+            "type": "string",
+            "title": "Asset Id"
+          },
+          "asset_type": {
+            "type": "string",
+            "title": "Asset Type"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Findings"
+          },
+          "diff": {
+            "type": "string",
+            "title": "Diff"
+          }
+        },
+        "type": "object",
+        "required": [
+          "written",
+          "asset_id",
+          "asset_type",
+          "path",
+          "findings",
+          "diff"
+        ],
+        "title": "EditResponse"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -675,6 +802,130 @@
           "findings"
         ],
         "title": "HealthResponse"
+      },
+      "KnowledgeGraphEdgeResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "target": {
+            "type": "string",
+            "title": "Target"
+          },
+          "relation": {
+            "type": "string",
+            "title": "Relation"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "low_confidence": {
+            "type": "boolean",
+            "title": "Low Confidence",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "source",
+          "target",
+          "relation"
+        ],
+        "title": "KnowledgeGraphEdgeResponse"
+      },
+      "KnowledgeGraphNodeResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "excluded": {
+            "type": "boolean",
+            "title": "Excluded"
+          },
+          "provenance_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provenance Status"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "has_suspect": {
+            "type": "boolean",
+            "title": "Has Suspect",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "label",
+          "excluded",
+          "provenance_status"
+        ],
+        "title": "KnowledgeGraphNodeResponse"
+      },
+      "KnowledgeGraphResponse": {
+        "properties": {
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeGraphNodeResponse"
+            },
+            "type": "array",
+            "title": "Nodes"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeGraphEdgeResponse"
+            },
+            "type": "array",
+            "title": "Edges"
+          }
+        },
+        "type": "object",
+        "required": [
+          "nodes",
+          "edges"
+        ],
+        "title": "KnowledgeGraphResponse"
       },
       "ResultTableResponse": {
         "properties": {

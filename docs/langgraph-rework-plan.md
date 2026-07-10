@@ -9,8 +9,13 @@ with the existing corpus/schema/audit reads mounted as custom routes on the same
 server. Pair with [ui-frontend-handoff.md](ui-frontend-handoff.md) (the frontend
 contract) and [ui-frontend-design.md](ui-frontend-design.md) (rationale).
 
-Status: not started. This document is the plan, grounded in the LangGraph 1.0
-docs (verified 2026-07-10). Nothing here is built yet.
+Status: implemented (2026-07-10). Phases 1 to 6 have landed: the stage callback
+(`server/flow.py`), the chat graph (`api/graph_app.py`), `langgraph.json` + custom
+routes (`api/routes.py`) + the dev edit endpoint + the full knowledge graph, opt-in
+tracing (`obs.py`), and this doc/contract sync. Verified offline (350+ tests, ruff
+clean) and end-to-end under `langgraph dev` (custom routes respond, the `serve`
+graph is registered). The section numbers below are the phase plan; they now read
+as the description of what was built.
 
 ---
 
