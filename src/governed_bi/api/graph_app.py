@@ -29,7 +29,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 
 if TYPE_CHECKING:
-    from .stack import ServeStack
+    from governed_bi.api.stack import ServeStack
 
 
 class ChatState(TypedDict):
@@ -81,7 +81,7 @@ def _working_memory_from(history: list, session_id: str):
     empty-content messages are skipped. Keyed by ``session_id`` (the thread id),
     matching how :func:`answer_question` reads ``working_memory.history``.
     """
-    from ..memory import InMemoryWorkingMemory
+    from governed_bi.memory import InMemoryWorkingMemory
 
     memory = InMemoryWorkingMemory()
     for message in history:
@@ -103,9 +103,11 @@ def build_chat_graph(stack: "ServeStack"):
     """
     from dataclasses import asdict
 
-    from ..gateway import Gateway, SqliteConnector
-    from ..server import answer_question
-    from ..viz import presenter
+    # Absolute imports: the LangGraph server loads this module by file path (no
+    # parent package), so relative imports would fail at call time.
+    from governed_bi.gateway import Gateway, SqliteConnector
+    from governed_bi.server import answer_question
+    from governed_bi.viz import presenter
 
     def answer(state: ChatState, config: RunnableConfig | None = None) -> dict:
         thread_id = ((config or {}).get("configurable") or {}).get("thread_id") or "default"
@@ -159,6 +161,6 @@ def make_graph(config: RunnableConfig | None = None):
     and returns the compiled chat graph. The server calls this once at startup
     with a ``RunnableConfig``; tests may call it with no argument.
     """
-    from .stack import build_stack
+    from governed_bi.api.stack import build_stack
 
     return build_chat_graph(build_stack())

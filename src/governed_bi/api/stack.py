@@ -14,6 +14,7 @@ is where a Postgres/Redshift profile plugs in later; nothing else here changes.
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import os
 from dataclasses import dataclass
@@ -34,6 +35,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger("governed_bi.api")
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    """Read a boolean env override; ``default`` when unset."""
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class ServeStack:
     """Everything the API needs to answer + describe one deployment."""
@@ -49,6 +58,12 @@ class ServeStack:
     narrator: "AnswerNarrator | None"
     model_name: str | None
     has_live_model: bool
+    # Capability flags + corpus location (defaults keep ad-hoc construction simple).
+    corpus_root: Path = Path("corpus")  # where the editable YAML tree lives
+    db: str = "beer_factory"  # subtree selector for writes
+    can_stream: bool = False  # a streaming chat graph is reachable (LangGraph server)
+    can_edit: bool = False  # corpus editing is exposed (dev file-write)
+    edit_mode: str | None = None  # "file" (dev) | "pr" (prod, deferred) | None
 
 
 def _build_model_stack(settings) -> tuple[Any, Any, Any, str | None, bool]:
@@ -97,6 +112,15 @@ def build_stack() -> ServeStack:
     corpus_full = load_corpus(root, db=db)
     generator, embedder, narrator, model_name, has_live = _build_model_stack(settings)
 
+    # Capability flags the frontend adapts to. Streaming is available when the
+    # LangGraph server can host the chat graph (the ``agents`` extra is present);
+    # editing is dev-only file-write (prod PR is deferred). Both take an env
+    # override so a deployment can force them either way.
+    can_stream = _env_flag(
+        "GOVERNED_BI_CAN_STREAM", importlib.util.find_spec("langgraph") is not None
+    )
+    can_edit = _env_flag("GOVERNED_BI_ALLOW_EDIT", settings.environment.value == "dev")
+
     return ServeStack(
         corpus_full=corpus_full,
         corpus_server=corpus_full.for_server(),
@@ -109,4 +133,9 @@ def build_stack() -> ServeStack:
         narrator=narrator,
         model_name=model_name,
         has_live_model=has_live,
+        corpus_root=root,
+        db=db,
+        can_stream=can_stream,
+        can_edit=can_edit,
+        edit_mode="file" if can_edit else None,
     )

@@ -41,7 +41,22 @@ def test_capabilities_reports_offline_dev(client):
     assert body["dialect"] == "sqlite"
     assert body["has_live_model"] is False  # hermetic env: no key -> offline
     assert body["model"] is None  # offline: no model name (locks the live<->model consistency)
-    assert body["can_stream"] is False  # this REST API is request/response
+    # can_stream/can_edit are environment-derived (langgraph present, dev); assert
+    # they are well-typed here and pin their exact behavior in the test below.
+    assert isinstance(body["can_stream"], bool)
+    assert isinstance(body["can_edit"], bool)
+
+
+def test_capabilities_flags_reflect_the_stack():
+    on = TestClient(create_app(replace(build_stack(), can_stream=True, can_edit=True, edit_mode="file")))
+    body = on.get("/capabilities").json()
+    assert body["can_stream"] is True
+    assert body["can_edit"] is True
+    assert body["edit_mode"] == "file"
+
+    off = TestClient(create_app(replace(build_stack(), can_stream=False, can_edit=False, edit_mode=None)))
+    body = off.get("/capabilities").json()
+    assert body["can_stream"] is False
     assert body["can_edit"] is False
     assert body["edit_mode"] is None
 
@@ -75,6 +90,21 @@ def test_graph_nodes_and_edges(client):
     assert {"id", "source", "target", "on", "cardinality", "confidence", "low_confidence"} <= edge.keys()
     # beer_factory joins are all 0.95 -> above the low-confidence threshold.
     assert all(e["low_confidence"] is False for e in graph["edges"])
+
+
+def test_knowledge_graph_nodes_and_edges(client):
+    kg = client.get("/knowledge-graph").json()
+    node_ids = {n["id"] for n in kg["nodes"]}
+    kinds = {n["kind"] for n in kg["nodes"]}
+    assert {"table", "join", "metric", "term"} <= kinds
+    assert "tbl_beer_factory_customers" in node_ids
+    # Every edge connects two real nodes (the builder drops dangling edges).
+    for e in kg["edges"]:
+        assert e["source"] in node_ids
+        assert e["target"] in node_ids
+    relations = {e["relation"] for e in kg["edges"]}
+    assert "join" in relations  # join -> its two tables
+    assert "measures" in relations  # metric -> base_table
 
 
 def test_corpus_assets_and_type_filter(client):
@@ -178,6 +208,69 @@ def test_chat_returns_503_when_db_missing():
     r = client.post("/chat", json={"question": "What is the total revenue?"})
     assert r.status_code == 503
     assert r.json()["detail"] == "database unavailable"  # generic; no path leaked
+
+
+# --------------------------------------------------------------------------- #
+# corpus edit (dev file-write; gated on can_edit) — writes to a temp corpus root
+# --------------------------------------------------------------------------- #
+
+
+_VALID_METRIC = {
+    "asset_type": "metric",
+    "id": "metric_test_kpi",
+    "name": "Test KPI",
+    "base_table": "tbl_beer_factory_transaction",
+    "expression": "count of transactions",
+}
+
+
+def _edit_client(tmp_path, **flags):
+    # corpus_root points at a temp dir so writes never touch the committed tree;
+    # validation still runs against the in-memory full corpus loaded by build_stack.
+    stack = replace(build_stack(), corpus_root=tmp_path, db="beer_factory", **flags)
+    return TestClient(create_app(stack))
+
+
+def test_corpus_edit_disabled_returns_403(tmp_path):
+    client = _edit_client(tmp_path, can_edit=False, edit_mode=None)
+    r = client.post("/corpus/edit", json={"asset": _VALID_METRIC})
+    assert r.status_code == 403
+
+
+def test_corpus_edit_rejects_invalid_asset(tmp_path):
+    client = _edit_client(tmp_path, can_edit=True, edit_mode="file")
+    bad = {"asset_type": "metric", "id": "metric_x"}  # missing name/base_table/expression
+    assert client.post("/corpus/edit", json={"asset": bad}).status_code == 422
+
+
+def test_corpus_edit_rejects_path_traversal_id(tmp_path):
+    client = _edit_client(tmp_path, can_edit=True, edit_mode="file")
+    evil = {**_VALID_METRIC, "id": "../../etc/metric_evil"}
+    assert client.post("/corpus/edit", json={"asset": evil}).status_code == 422
+
+
+def test_corpus_edit_writes_valid_asset(tmp_path):
+    client = _edit_client(tmp_path, can_edit=True, edit_mode="file")
+    r = client.post("/corpus/edit", json={"asset": _VALID_METRIC})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["written"] is True
+    assert body["findings"] == []
+    assert body["asset_id"] == "metric_test_kpi"
+    assert body["path"] == "beer_factory/metrics/metric_test_kpi.yaml"
+    assert body["diff"]  # a new-file diff
+    assert (tmp_path / "beer_factory" / "metrics" / "metric_test_kpi.yaml").exists()
+
+
+def test_corpus_edit_findings_block_the_write(tmp_path):
+    client = _edit_client(tmp_path, can_edit=True, edit_mode="file")
+    broken = {**_VALID_METRIC, "id": "metric_broken", "base_table": "tbl_does_not_exist"}
+    r = client.post("/corpus/edit", json={"asset": broken})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["written"] is False
+    assert any("does not resolve" in f for f in body["findings"])
+    assert not (tmp_path / "beer_factory" / "metrics" / "metric_broken.yaml").exists()
 
 
 def test_cors_allows_configured_origin(monkeypatch):

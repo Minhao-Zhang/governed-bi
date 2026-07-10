@@ -1,0 +1,11 @@
+{
+  "python_version": "3.11",
+  "dependencies": ["."],
+  "graphs": {
+    "serve": "./src/governed_bi/api/graph_app.py:make_graph"
+  },
+  "env": ".env",
+  "http": {
+    "app": "./src/governed_bi/api/routes.py:app"
+  }
+}

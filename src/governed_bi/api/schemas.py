@@ -101,6 +101,31 @@ class SchemaGraphResponse(_View):
     edges: list[SchemaGraphEdgeResponse]
 
 
+# ── knowledge graph (full corpus) ─────────────────────────────────────────── #
+class KnowledgeGraphNodeResponse(_View):
+    id: str
+    kind: str  # table | join | metric | term | rule | few_shot | negative_example
+    label: str
+    excluded: bool
+    provenance_status: str | None
+    confidence: float | None = None
+    has_suspect: bool = False
+
+
+class KnowledgeGraphEdgeResponse(_View):
+    id: str
+    source: str
+    target: str
+    relation: str  # join | measures | grounds | related:<rel> | scopes | exemplifies
+    confidence: float | None = None
+    low_confidence: bool = False
+
+
+class KnowledgeGraphResponse(_View):
+    nodes: list[KnowledgeGraphNodeResponse]
+    edges: list[KnowledgeGraphEdgeResponse]
+
+
 # ── corpus assets + skills ────────────────────────────────────────────────── #
 # The selectable non-table asset types (tables have their own /schema view). Used
 # to constrain the /corpus/assets ?type= filter so unknown values 422 and the
@@ -157,3 +182,20 @@ class AnswerResponse(_View):
     escalation: str | None
     provenance: dict[str, Any]
     result: ResultTableResponse | None
+
+
+# ── corpus edit (dev only; gated on capabilities.can_edit) ────────────────── #
+class EditRequest(BaseModel):
+    """A corpus asset to validate and write. ``asset`` is the raw asset mapping
+    (same shape as the on-disk YAML), discriminated by its ``asset_type``."""
+
+    asset: dict[str, Any]
+
+
+class EditResponse(BaseModel):
+    written: bool  # False when validation blocked the write (see findings)
+    asset_id: str
+    asset_type: str
+    path: str | None  # repo-relative path written (null when not written)
+    findings: list[str]  # reference-integrity findings (empty = clean)
+    diff: str  # unified diff of the YAML file (old vs new)

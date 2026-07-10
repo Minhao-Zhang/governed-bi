@@ -30,7 +30,10 @@ from .schemas import (
     AssetTypeFilter,
     CapabilitiesResponse,
     ChatRequest,
+    EditRequest,
+    EditResponse,
     HealthResponse,
+    KnowledgeGraphResponse,
     SchemaGraphResponse,
     SkillResponse,
     TableResponse,
@@ -75,11 +78,13 @@ def create_app(stack: ServeStack | None = None):
         return CapabilitiesResponse(
             environment=stack.settings.environment.value,
             dialect=stack.dialect,
-            can_edit=False,  # editing is a later phase (env-aware: dev=file, prod=PR)
-            edit_mode=None,
+            can_edit=stack.can_edit,  # dev file-write; prod PR is deferred
+            edit_mode=stack.edit_mode,  # "file" | "pr" | null
             model=stack.model_name,
             has_live_model=stack.has_live_model,
-            can_stream=False,  # this REST API is request/response; streaming is a later phase
+            # Streaming is served by the LangGraph chat graph, not this REST app; the
+            # flag lets the UI pick the streaming path when that server is in front.
+            can_stream=stack.can_stream,
         )
 
     @app.get("/", include_in_schema=False)
@@ -106,6 +111,12 @@ def create_app(stack: ServeStack | None = None):
         """Table-relationship graph for the ER view (nodes + join edges)."""
         return SchemaGraphResponse.model_validate(presenter.schema_graph(stack.corpus_full))
 
+    @app.get("/knowledge-graph", response_model=KnowledgeGraphResponse, tags=["schema"])
+    def knowledge_graph() -> KnowledgeGraphResponse:
+        """Full corpus knowledge graph: every asset a node, typed relationships as
+        edges. Filter/layer by ``node.kind`` (e.g. tables + joins for the ER view)."""
+        return KnowledgeGraphResponse.model_validate(presenter.knowledge_graph(stack.corpus_full))
+
     @app.get("/corpus/assets", response_model=list[AssetRowResponse], tags=["corpus"])
     def corpus_assets(
         asset_type: AssetTypeFilter | None = Query(None, alias="type"),
@@ -119,6 +130,79 @@ def create_app(stack: ServeStack | None = None):
     def skills() -> list[SkillResponse]:
         """Curated skills (rendered markdown bodies)."""
         return [SkillResponse.model_validate(s) for s in presenter.skill_views(stack.corpus_full)]
+
+    @app.post("/corpus/edit", response_model=EditResponse, tags=["corpus"])
+    def corpus_edit(req: EditRequest) -> EditResponse:
+        """Validate a corpus asset and, in dev, write it to the YAML tree.
+
+        Gated on ``capabilities.can_edit`` (403 otherwise). The asset is schema-
+        validated (422 on a bad shape) then reference-checked against the rest of
+        the corpus; findings block the write and are returned with the diff so the
+        editor can fix them. Prod PR mode is deferred; the request shape is stable.
+        """
+        import difflib
+        import re
+
+        from pydantic import ValidationError
+
+        from ..corpus import dump_asset, parse_asset, validate_corpus, write_corpus
+
+        if not stack.can_edit:
+            raise HTTPException(status_code=403, detail="corpus editing is not enabled")
+
+        try:
+            asset = parse_asset(req.asset)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=422, detail=f"invalid asset: {exc.error_count()} validation error(s)"
+            ) from exc
+
+        # Guard the id: it becomes a filename, so reject path separators / traversal.
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", asset.id):
+            raise HTTPException(status_code=422, detail="asset id must match [A-Za-z0-9_.-]+")
+
+        # Reference-integrity check against the corpus with this asset merged in.
+        merged = [a for a in stack.corpus_full.assets if a.id != asset.id]
+        merged.append(asset)
+        findings = [str(f) for f in validate_corpus(merged)]
+
+        existing = next(
+            iter((stack.corpus_root / stack.db).glob(f"**/{asset.id}.yaml")), None
+        )
+        old_text = existing.read_text(encoding="utf-8") if existing else ""
+        new_text = dump_asset(asset)
+        diff = "".join(
+            difflib.unified_diff(
+                old_text.splitlines(keepends=True),
+                new_text.splitlines(keepends=True),
+                fromfile=f"a/{asset.id}.yaml",
+                tofile=f"b/{asset.id}.yaml",
+            )
+        )
+
+        if findings:  # fail closed: never write a corpus that breaks reference integrity
+            return EditResponse(
+                written=False,
+                asset_id=asset.id,
+                asset_type=asset.asset_type,
+                path=None,
+                findings=findings,
+                diff=diff,
+            )
+
+        try:
+            written = write_corpus(stack.corpus_root, stack.db, [asset])
+        except OSError:
+            logger.exception("corpus edit write failed (asset=%s)", asset.id)
+            raise HTTPException(status_code=500, detail="failed to write the asset")
+        return EditResponse(
+            written=True,
+            asset_id=asset.id,
+            asset_type=asset.asset_type,
+            path=str(written[0].relative_to(stack.corpus_root).as_posix()),
+            findings=[],
+            diff=diff,
+        )
 
     @app.post("/chat", response_model=AnswerResponse, tags=["chat"])
     def chat(req: ChatRequest) -> AnswerResponse:

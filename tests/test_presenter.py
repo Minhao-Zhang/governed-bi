@@ -78,6 +78,24 @@ def test_schema_graph_nodes_and_edges(corpus):
     assert all(e.source and e.target for e in graph.edges)
 
 
+def test_knowledge_graph_nodes_edges_and_relations(corpus):
+    kg = presenter.knowledge_graph(corpus)
+    node_ids = {n.id for n in kg.nodes}
+    kinds = {n.kind for n in kg.nodes}
+    # All asset kinds present in beer_factory show up as nodes.
+    assert {"table", "join", "metric", "term"} <= kinds
+    # Tables are nodes here too (unlike asset_rows, which excludes them).
+    assert "tbl_beer_factory_customers" in node_ids
+    # Every edge resolves to real nodes (dangling edges are dropped).
+    assert kg.edges and all(e.source in node_ids and e.target in node_ids for e in kg.edges)
+    relations = {e.relation for e in kg.edges}
+    assert "join" in relations  # join -> its two tables
+    assert "measures" in relations  # metric -> base_table
+    # A join contributes two edges (to left and right table).
+    join_edges = [e for e in kg.edges if e.relation == "join"]
+    assert len(join_edges) == 2 * sum(1 for n in kg.nodes if n.kind == "join")
+
+
 def test_answer_view_maps_stamp_and_trace():
     answer = Answer(
         tier=ReliabilityTier.governed,

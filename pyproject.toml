@@ -32,12 +32,14 @@ api = ["fastapi>=0.115", "uvicorn[standard]>=0.30"]
 # runs on the deterministic offline clients without it; install to use the
 # OpenAI-backed generator, curator proposer, vector retrieval, and SQL cache.
 openai = ["openai>=1.40"]
-# The agent harnesses: server = LangGraph StateGraph DAG, curator = deepagents,
-# with LangChain-backed model/embedding clients. Imported only by the harness
-# modules (governed_bi.server.graph, governed_bi.curator.deep_agent, and the
-# LangChain clients in governed_bi.llm); the deterministic core runs without them.
+# The agent harnesses: server = LangGraph StateGraph DAG + the LangGraph Server
+# chat graph (governed_bi.api.graph_app), curator = deepagents, with LangChain
+# model/embedding clients. Imported only by the harness modules; the deterministic
+# core runs without them. langgraph-cli[inmem] provides the `langgraph dev` server
+# that hosts the chat graph + custom routes (langgraph.json).
 agents = [
     "langgraph>=1.0",
+    "langgraph-cli[inmem]>=0.2",
     "langchain>=1.0",
     "langchain-openai>=1.0",
     "deepagents>=0.6",

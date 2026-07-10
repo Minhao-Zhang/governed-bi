@@ -216,3 +216,6 @@ __marimo__/
 
 # Claude Code agent worktrees (transient, per-agent git worktrees)
 .claude/worktrees/
+
+# LangGraph dev server local state (in-memory checkpointer/ops snapshot)
+.langgraph_api/

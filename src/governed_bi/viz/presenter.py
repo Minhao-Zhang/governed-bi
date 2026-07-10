@@ -148,6 +148,39 @@ class SchemaGraphView:
 
 
 @dataclass(frozen=True)
+class KnowledgeGraphNode:
+    """A corpus asset as a node in the full knowledge graph."""
+
+    id: str
+    kind: str  # asset_type: table | join | metric | term | rule | few_shot | negative_example
+    label: str
+    excluded: bool
+    provenance_status: str | None
+    confidence: float | None = None
+    has_suspect: bool = False  # tables only: any column flagged suspect
+
+
+@dataclass(frozen=True)
+class KnowledgeGraphEdge:
+    """A typed relationship between two corpus assets (ids into the node set)."""
+
+    id: str
+    source: str
+    target: str
+    relation: str  # join | measures | grounds | related:<rel> | scopes | exemplifies
+    confidence: float | None = None
+    low_confidence: bool = False
+
+
+@dataclass(frozen=True)
+class KnowledgeGraphView:
+    """The full corpus knowledge graph (all asset types + their relationships)."""
+
+    nodes: list[KnowledgeGraphNode]
+    edges: list[KnowledgeGraphEdge]
+
+
+@dataclass(frozen=True)
 class AnswerView:
     tier: str  # the collapsed single-axis stamp (kept for a compact badge)
     safety_clearance: bool  # axis 1: guardrails + authorization passed
@@ -333,6 +366,94 @@ def schema_graph(corpus: "Corpus") -> SchemaGraphView:
         if isinstance(asset, JoinAsset)
     ]
     return SchemaGraphView(nodes=nodes, edges=edges)
+
+
+def _kg_label(asset) -> str:
+    """A short human label for a knowledge-graph node."""
+    if isinstance(asset, TableAsset):
+        return asset.physical_name
+    if isinstance(asset, (MetricAsset, TermAsset)):
+        return asset.name
+    if isinstance(asset, JoinAsset):
+        return asset.on
+    if isinstance(asset, RuleAsset):
+        return asset.statement
+    if isinstance(asset, FewShotAsset):
+        return asset.question
+    if isinstance(asset, NegativeExampleAsset):
+        return asset.pattern
+    return asset.id
+
+
+def knowledge_graph(corpus: "Corpus") -> KnowledgeGraphView:
+    """The full-corpus knowledge graph: every asset a node, typed relationships as
+    edges.
+
+    Edges: a join to each of its two tables; a metric to its ``base_table``; a
+    term to its ``binding`` and to each related term; a rule to each asset in its
+    ``scope``; a few-shot to each of its ``bound_terms``. Columns are not separate
+    nodes (they live in :func:`table_views`). Reads the full corpus, so excluded
+    assets are still shown (flagged) for the audit view. An edge whose target is
+    not a node is dropped, so the graph is always internally consistent; a
+    frontend filters/layers by ``node.kind`` (e.g. tables + joins for the ER view).
+    """
+    nodes: list[KnowledgeGraphNode] = []
+    node_ids: set[str] = set()
+    for asset in corpus.assets:
+        governance = getattr(asset, "governance", None)
+        has_suspect = (
+            any(c.reliability.status.value == "suspect" for c in asset.columns)
+            if isinstance(asset, TableAsset)
+            else False
+        )
+        nodes.append(
+            KnowledgeGraphNode(
+                id=asset.id,
+                kind=asset.asset_type,
+                label=_kg_label(asset),
+                excluded=bool(getattr(governance, "excluded", False)),
+                provenance_status=_provenance_status(asset),
+                confidence=getattr(asset, "confidence", None),
+                has_suspect=has_suspect,
+            )
+        )
+        node_ids.add(asset.id)
+
+    edges: list[KnowledgeGraphEdge] = []
+
+    def add_edge(source, target, relation, *, confidence=None, low_confidence=False):
+        if source in node_ids and target in node_ids:
+            edges.append(
+                KnowledgeGraphEdge(
+                    id=f"{source}->{target}:{relation}",
+                    source=source,
+                    target=target,
+                    relation=relation,
+                    confidence=confidence,
+                    low_confidence=low_confidence,
+                )
+            )
+
+    for asset in corpus.assets:
+        if isinstance(asset, JoinAsset):
+            low = asset.confidence is not None and asset.confidence <= LOW_CONFIDENCE_JOIN
+            add_edge(asset.id, asset.left_table, "join", confidence=asset.confidence, low_confidence=low)
+            add_edge(asset.id, asset.right_table, "join", confidence=asset.confidence, low_confidence=low)
+        elif isinstance(asset, MetricAsset):
+            add_edge(asset.id, asset.base_table, "measures", confidence=asset.confidence)
+        elif isinstance(asset, TermAsset):
+            if asset.binding is not None:
+                add_edge(asset.id, asset.binding.asset_id, "grounds", confidence=asset.confidence)
+            for related in asset.related_terms:
+                add_edge(asset.id, related.id, f"related:{related.relation.value}")
+        elif isinstance(asset, RuleAsset):
+            for scope_id in asset.scope:
+                add_edge(asset.id, scope_id, "scopes")
+        elif isinstance(asset, FewShotAsset):
+            for term_id in asset.bound_terms:
+                add_edge(asset.id, term_id, "exemplifies")
+
+    return KnowledgeGraphView(nodes=nodes, edges=edges)
 
 
 def answer_view(answer: "Answer") -> AnswerView:
