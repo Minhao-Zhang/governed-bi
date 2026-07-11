@@ -101,6 +101,19 @@ class PostgresConnector(Connector):
         )
         return [r[0] for r in rows]
 
+    def list_schemas(self) -> list[str]:
+        """User schemas (system + temp schemas excluded), one per db_id in the
+        BIRD-Obfuscation instances. Postgres-specific: SQLite has no schema level.
+        """
+        rows = self._fetchall(
+            "SELECT schema_name FROM information_schema.schemata "
+            "WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast') "
+            "AND schema_name NOT LIKE 'pg_temp_%' "
+            "AND schema_name NOT LIKE 'pg_toast_temp_%' "
+            "ORDER BY schema_name"
+        )
+        return [r[0] for r in rows]
+
     def _column_specs(self, table: str) -> list[tuple[str, str, bool]]:
         """(name, raw data type, nullable) per column. Seam: Redshift overrides
         this for ``svv_*`` views; keep the SQL here only, not inlined elsewhere.

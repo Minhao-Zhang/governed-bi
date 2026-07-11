@@ -50,6 +50,45 @@ def build_facts_corpus(connector: "Connector", db: str, root: Path | str) -> lis
     return write_corpus(root, db, tables)
 
 
+def build_facts_all_schemas(
+    datasource, root: Path | str, *, connector_factory=None
+) -> dict[str, int]:
+    """Profile EVERY schema (one db_id each) into ``root/<schema>/``.
+
+    We assume full read access: connecting yields every schema and every table
+    within it. Lists schemas once, then profiles each into its own subtree,
+    reusing ``datasource`` with ``schema``/``db`` set per schema. Postgres/Redshift
+    only (SQLite has no schema level). Returns ``{schema: n_asset_files_written}``.
+    ``connector_factory`` is injectable for testing; it defaults to
+    :func:`governed_bi.gateway.build_connector`.
+    """
+    if connector_factory is None:
+        from ..gateway import build_connector
+
+        connector_factory = build_connector
+
+    lister = connector_factory(datasource)
+    try:
+        list_schemas = getattr(lister, "list_schemas", None)
+        if list_schemas is None:
+            raise ValueError(
+                f"datasource kind={datasource.kind!r} has no schemas to iterate; "
+                "all-schemas mode needs postgres/redshift"
+            )
+        schemas = list_schemas()
+    finally:
+        lister.close()
+
+    written: dict[str, int] = {}
+    for schema in schemas:
+        connector = connector_factory(replace(datasource, schema=schema, db=schema))
+        try:
+            written[schema] = len(build_facts_corpus(connector, schema, root))
+        finally:
+            connector.close()
+    return written
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI: build the facts-only corpus layer from a configured database.
 
@@ -71,6 +110,12 @@ def main(argv: list[str] | None = None) -> int:
             "corpus root to write into (writes <out>/<db>/...); default data/generated. "
             "Use ../BIRD-corpus for the D13 benchmark corpus repo."
         ),
+    )
+    parser.add_argument(
+        "--all-schemas",
+        dest="all_schemas",
+        action="store_true",
+        help="profile every schema (one db_id each) into <out>/<schema>/; postgres/redshift only",
     )
     # Per-field overrides of [datasource]; omit to use the config file.
     parser.add_argument("--kind", choices=["sqlite", "postgres", "redshift"], help="datasource kind")
@@ -96,6 +141,16 @@ def main(argv: list[str] | None = None) -> int:
     }
     if overrides:
         datasource = replace(datasource, **overrides)
+
+    if args.all_schemas:
+        counts = build_facts_all_schemas(datasource, args.out)
+        nonempty = {s: n for s, n in counts.items() if n}
+        total = sum(counts.values())
+        print(
+            f"[{datasource.kind}] profiled {len(nonempty)} schema(s) "
+            f"({len(counts)} seen) -> {total} facts-only asset file(s) under {args.out}"
+        )
+        return 0
 
     from ..gateway import build_connector
 
