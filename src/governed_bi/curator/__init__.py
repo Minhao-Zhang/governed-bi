@@ -20,6 +20,7 @@ Modules map to the per-DB loop (``docs/curator.md``):
 from __future__ import annotations
 
 from .adversary import review
+from .build import build_facts_corpus
 from .clarify_loop import (
     Responder,
     StaticResponder,
@@ -39,6 +40,7 @@ __all__ = [
     "Proposer",
     "Responder",
     "StaticResponder",
+    "build_facts_corpus",
     "curate",
     "default_parse",
     "emit_clarifications",
