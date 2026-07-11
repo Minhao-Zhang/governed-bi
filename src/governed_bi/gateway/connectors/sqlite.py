@@ -63,9 +63,9 @@ class SqliteConnector(Connector):
         return int(cur.fetchone()[0])
 
     def sample_values(self, table: str, column: str, *, limit: int = 5) -> list[Any]:
+        # Plain LIMIT: first N rows, no DISTINCT/NOT NULL — stops immediately, no scan.
         cur = self._conn.execute(
-            f"SELECT DISTINCT {_ident(column)} FROM {_ident(table)} "
-            f"WHERE {_ident(column)} IS NOT NULL LIMIT ?",
+            f"SELECT {_ident(column)} FROM {_ident(table)} LIMIT ?",
             (limit,),
         )
         return [row[0] for row in cur.fetchall()]

@@ -165,9 +165,9 @@ class PostgresConnector(Connector):
         return int(row[0])
 
     def sample_values(self, table: str, column: str, *, limit: int = 5) -> list[Any]:
+        # Plain LIMIT: first N rows, no DISTINCT/NOT NULL — stops immediately, no scan.
         rows = self._fetchall(
-            f"SELECT DISTINCT {_ident(column)} FROM {self._qualified(table)} "
-            f"WHERE {_ident(column)} IS NOT NULL LIMIT %s",
+            f"SELECT {_ident(column)} FROM {self._qualified(table)} LIMIT %s",
             (limit,),
         )
         return [r[0] for r in rows]

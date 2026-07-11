@@ -69,7 +69,7 @@ class FakeCursor:
         elif norm.startswith("SELECT COUNT(*) FROM"):
             self.description = [col("count")]
             self._rows = [(self._conn.row_count_result,)]
-        elif norm.startswith("SELECT DISTINCT"):
+        elif norm.endswith("LIMIT %s"):  # plain sample_values query
             self.description = [col(self._conn.sample_column_name)]
             self._rows = [(v,) for v in self._conn.sample_values_result]
         else:

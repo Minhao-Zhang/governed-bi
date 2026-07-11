@@ -72,7 +72,11 @@ class Connector(ABC):
 
     @abstractmethod
     def sample_values(self, table: str, column: str, *, limit: int = 5) -> list[Any]:
-        """A few distinct non-null values, for the Facts tier."""
+        """The first ``limit`` values of the column (a plain ``LIMIT``, no scan).
+
+        Cheap by design for data-lake scale: it stops after ``limit`` rows and
+        does not de-duplicate or filter nulls, so values may repeat or be null.
+        """
 
     @abstractmethod
     def is_unique(self, table: str, column: str) -> bool:
