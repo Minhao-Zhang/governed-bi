@@ -2,7 +2,7 @@
 
 _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 
-Settled decisions D1-D15 for the [Agentic BI System](system-overview.md), with
+Settled decisions D1-D14 for the [Agentic BI System](system-overview.md), with
 the alternatives considered and the trade-offs. The **ADR-grade** ones are hard
 to reverse. Treat them as ADRs.
 
@@ -238,19 +238,3 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
 
 - **Alternatives:** a fitted learning curve with fine checkpoints (more compute, and it needs pre-registered breakpoints plus snapshot pinning, so it is deferred as unnecessary for a first result); a CI-enforced file-access firewall for the Simulated SME (rejected as over-complicated, since a careful prompt suffices and residual leakage is accepted and documented).
 - **Consequence:** this refines **D4**'s three arms with a growth dimension. Small-N noise (26 test questions on beer_factory) and a possible collapse toward the **gold** reference are accepted, documented limitations, since gold is a reference line, not a ceiling. Pooling across the 69 BIRD DBs, via **D13**'s multi-DB corpus repo, is what makes the table credible.
-
-## D15: Corpus History via Git
-
-> **Decided (ADR-grade, 2026-07-11)**
->
-> The frontend reads the semantic layer's history straight from the corpus repo's
-> git log, through a read-only server route. Because the corpus is its own git repo
-> (D13) and every growth step is a commit (D14 checkpoints), the history already
-> exists as commits; the engine surfaces it with `GET /corpus/history` (a commit
-> list, scoped by `db` or `asset_id` through `git log -- <path>`) and
-> `GET /corpus/history/{sha}` (one commit's diff). A `can_history` capability flag
-> gates the view. Read-only throughout: `git log` / `git show` via subprocess, no
-> writes.
-
-- **Alternatives:** a separate history/audit database the curator writes to (duplicates git and adds a store to keep in sync, against D9); parsing `.git` with a Python library (a dependency — subprocess `git` keeps the minimal-deps stance).
-- **Consequence:** extends the **D6** read-only audit surface without crossing the 2026-07-08 write/PR boundary, since reading history is introspection, not editing. Needs `git` on the serving host with the corpus mounted as a real checkout; the route degrades to an empty history with `can_history=false` when `GOVERNED_BI_CORPUS` is not a git repo. A per-asset `git log -- <db>/tables/<id>.yaml` shows how one asset evolved and which SME answer changed it; a per-db log shows the growth timeline — the **D14** trajectory, for free.

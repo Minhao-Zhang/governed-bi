@@ -22,7 +22,6 @@ from typing import TYPE_CHECKING, Any
 
 from ..config import DataSourceConfig, load_settings, resolve_corpus_root
 from ..corpus import load_corpus
-from ..corpus.history import is_git_repo
 from ..gateway import Identity
 
 if TYPE_CHECKING:
@@ -65,7 +64,6 @@ class ServeStack:
     can_stream: bool = False  # a streaming chat graph is reachable (LangGraph server)
     can_edit: bool = False  # corpus editing is exposed (dev file-write)
     edit_mode: str | None = None  # "file" (dev) | "pr" (prod, deferred) | None
-    can_history: bool = False  # corpus is a git checkout -> read-only history is readable (D15)
     datasource: DataSourceConfig | None = None  # which DB the serve path executes against
 
     def open_connector(self) -> "Connector":
@@ -161,9 +159,6 @@ def build_stack() -> ServeStack:
     # is dev-only file-write (prod PR is deferred).
     can_stream = _env_flag("GOVERNED_BI_CAN_STREAM", False)
     can_edit = _env_flag("GOVERNED_BI_ALLOW_EDIT", settings.environment.value == "dev")
-    # D15: history is a read-only git-log view; it is available only when the
-    # mounted corpus is a real git checkout, else the route degrades to empty.
-    can_history = is_git_repo(root)
 
     return ServeStack(
         corpus_full=corpus_full,
@@ -182,6 +177,5 @@ def build_stack() -> ServeStack:
         can_stream=can_stream,
         can_edit=can_edit,
         edit_mode="file" if can_edit else None,
-        can_history=can_history,
         datasource=datasource,
     )

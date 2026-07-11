@@ -23,7 +23,6 @@ import logging
 import os
 
 from .. import __version__
-from ..corpus import history
 from ..viz import presenter
 from .schemas import (
     AnswerResponse,
@@ -31,12 +30,9 @@ from .schemas import (
     AssetTypeFilter,
     CapabilitiesResponse,
     ChatRequest,
-    CommitDetailResponse,
-    CommitView,
     EditRequest,
     EditResponse,
     HealthResponse,
-    HistoryResponse,
     KnowledgeGraphResponse,
     SchemaGraphResponse,
     SkillResponse,
@@ -89,9 +85,6 @@ def create_app(stack: ServeStack | None = None):
             # Streaming is served by the LangGraph chat graph, not this REST app; the
             # flag lets the UI pick the streaming path when that server is in front.
             can_stream=stack.can_stream,
-            # True only when the mounted corpus is a git checkout (D15); gates the
-            # /corpus/history view, which otherwise returns an empty history.
-            can_history=stack.can_history,
         )
 
     @app.get("/", include_in_schema=False)
@@ -137,41 +130,6 @@ def create_app(stack: ServeStack | None = None):
     def skills() -> list[SkillResponse]:
         """Curated skills (rendered markdown bodies)."""
         return [SkillResponse.model_validate(s) for s in presenter.skill_views(stack.corpus_full)]
-
-    @app.get("/corpus/history", response_model=HistoryResponse, tags=["corpus"])
-    def corpus_history(
-        db: str | None = None,
-        asset_id: str | None = None,
-        limit: int = 50,
-        skip: int = 0,
-    ) -> HistoryResponse:
-        """The corpus repo's git log, newest first (D15).
-
-        Scope with ``db`` (the D14 growth timeline) or ``asset_id`` (one asset's
-        evolution) — both project to ``git log -- <path>``. Read-only. Returns an
-        empty history (never an error) when the mounted corpus is not a git
-        checkout (``can_history=false``) or a given ``asset_id`` has no file.
-        """
-        if not stack.can_history:
-            return HistoryResponse(commits=[])
-        path = history.resolve_path(stack.corpus_root, db=db, asset_id=asset_id)
-        if asset_id is not None and path is None:
-            return HistoryResponse(commits=[])  # unknown asset -> no history, not a 404
-        limit = max(1, min(limit, 500))  # clamp to a sane page size
-        skip = max(0, skip)
-        commits = history.read_history(stack.corpus_root, path=path, limit=limit, skip=skip)
-        return HistoryResponse(commits=[CommitView.model_validate(c) for c in commits])
-
-    @app.get("/corpus/history/{sha}", response_model=CommitDetailResponse, tags=["corpus"])
-    def corpus_history_commit(sha: str) -> CommitDetailResponse:
-        """One commit's metadata + full unified diff (D15). 404 when history is
-        unavailable (not a git checkout) or the sha is unknown/malformed."""
-        if not stack.can_history:
-            raise HTTPException(status_code=404, detail="corpus history is not available")
-        detail = history.read_commit(stack.corpus_root, sha)
-        if detail is None:
-            raise HTTPException(status_code=404, detail="unknown commit")
-        return CommitDetailResponse.model_validate(detail)
 
     @app.post("/corpus/edit", response_model=EditResponse, tags=["corpus"])
     def corpus_edit(req: EditRequest) -> EditResponse:

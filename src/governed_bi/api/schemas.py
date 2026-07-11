@@ -29,7 +29,6 @@ class CapabilitiesResponse(_View):
     model: str | None  # LLM model name when a live model is wired, else null
     has_live_model: bool
     can_stream: bool  # whether a streaming chat endpoint exists (False for this REST API)
-    can_history: bool  # whether git history is readable (corpus mounted as a git checkout)
 
 
 # ── health ────────────────────────────────────────────────────────────────── #
@@ -200,24 +199,3 @@ class EditResponse(BaseModel):
     path: str | None  # repo-relative path written (null when not written)
     findings: list[str]  # reference-integrity findings (empty = clean)
     diff: str  # unified diff of the YAML file (old vs new)
-
-
-# ── corpus history (read-only git log; gated on capabilities.can_history) ──── #
-class CommitView(_View):
-    sha: str
-    author: str
-    date: str  # ISO-8601 (git --date=iso-strict / %aI)
-    subject: str
-    changed_paths: list[str]  # corpus-relative paths the commit touched
-
-
-class HistoryResponse(_View):
-    commits: list[CommitView]  # newest first; empty when history is unavailable
-
-
-class CommitDetailResponse(_View):
-    sha: str
-    author: str
-    date: str
-    subject: str
-    diff: str  # full unified diff of the commit

@@ -2,7 +2,7 @@
 
 _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 
-面向[Agentic BI 系统](system-overview.zh.md)的已决策事项 D1-D15，并附上已考虑过的
+面向[Agentic BI 系统](system-overview.zh.md)的已决策事项 D1-D14，并附上已考虑过的
 备选方案与权衡。标记为**ADR 级**的决策难以逆转，请将其视为 ADR。
 
 ## D1：目标
@@ -340,26 +340,3 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   （beer_factory 上 26 个测试问题）以及可能出现的向 **gold** 参照坍缩，都是
   被接受且已记录的局限，因为 gold 是一条参照线，而不是上限。借助 **D13** 的
   多库 corpus 仓库，跨 69 个 BIRD 库汇总，才是让这张表可信的关键。
-
-## D15：基于 Git 的 Corpus 历史
-
-> **已决定（ADR 级，2026-07-11）**
->
-> 前端直接从 corpus 仓库的 git log 读取语义层的历史，经由一个只读的服务端
-> 路由。因为 corpus 是它自己独立的 git 仓库（D13），而每一个生长步骤都是
-> 一次 commit（D14 的检查点），历史本就以 commit 的形式存在；引擎以
-> `GET /corpus/history`（一个 commit 列表，通过 `git log -- <path>` 按 `db`
-> 或 `asset_id` 划定范围）和 `GET /corpus/history/{sha}`（单个 commit 的
-> diff）将其呈现出来。一个 `can_history` 能力标志控制该视图的开关。全程
-> 只读：通过 subprocess 调用 `git log` / `git show`，不做任何写入。
-
-- **备选方案：** 一个由 curator 写入的独立历史/审计数据库（这与 git 重复，
-  还多引入一个需保持同步的存储，违背 D9）；用某个 Python 库解析 `.git`
-  （多一个依赖，而 subprocess 调 `git` 保持了最小依赖的立场）。
-- **结果：** 在不越过 2026-07-08 确立的写入/PR 边界的前提下，扩展了 **D6**
-  的只读审计面（audit surface），因为读取历史是内省（introspection），而非
-  编辑。需要服务主机上装有 `git`，且 corpus 以真实的 checkout 形式挂载；当
-  `GOVERNED_BI_CORPUS` 不是一个 git 仓库时，该路由会降级为空历史，并置
-  `can_history=false`。逐资产的 `git log -- <db>/tables/<id>.yaml` 展示某个
-  资产是如何演变的、以及是哪条 SME 回答改变了它；逐库的日志则展示增长
-  时间线，也就是顺带得到的 **D14** 轨迹。

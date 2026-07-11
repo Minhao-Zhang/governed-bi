@@ -47,7 +47,7 @@ uv run --extra agents --extra api langgraph dev   # LangGraph Server at :2024 (c
   和/或 Langfuse（`LANGFUSE_*`）密钥；未设置时不生效。
 - CORS：允许 UI 的来源（`http://localhost:3000`）。
 - 在 `langgraph dev` 下，**本地线程是临时性的**（持久化落在已部署的 Postgres 上）。
-  `/capabilities` 会报告 `has_live_model`、`can_stream`、`can_edit`、`can_history`、
+  `/capabilities` 会报告 `has_live_model`、`can_stream`、`can_edit`、
   `environment`、`dialect`。
 
 ---
@@ -102,7 +102,7 @@ stream.submit(
 
 | 方法 + 路径 | 用途 |
 |---|---|
-| `GET /capabilities` | `{ environment, dialect, can_edit, edit_mode, can_stream, can_history, has_live_model, model }`——据此控制 UI 功能的启用 |
+| `GET /capabilities` | `{ environment, dialect, can_edit, edit_mode, can_stream, has_live_model, model }`——据此控制 UI 功能的启用 |
 | `GET /health` | corpus 健康度：计数、`ci_green`、问题项、`n_suspect_columns`、`n_excluded`、`n_low_confidence_joins` |
 | `GET /schema` | 表 + 列（类型、角色、`reliability`、`excluded`、溯源） |
 | `GET /graph` | **ER 图**,表节点 + 连接边的 `{ nodes, edges }`(节点带 `row_count`/`n_columns`/`has_suspect`;边带 `on`/`cardinality`/`confidence`/`low_confidence`) |
@@ -110,8 +110,6 @@ stream.submit(
 | `GET /corpus/assets?type=` | 非 table 资产（metric/term/join/rule/few_shot/negative） |
 | `GET /skills` | skills（markdown） |
 | `POST /corpus/edit` *（仅 dev；以 `can_edit` 为门槛）* | 校验提交的资产 → 写入 YAML（dev）/ 提交 PR（prod）；返回校验结果 + diff |
-| `GET /corpus/history?db=&asset_id=&limit=&skip=` *（以 `can_history` 为门槛）* | corpus 仓库的 git log，形如 `{ commits: [{ sha, author, date, subject, changed_paths }], … }`；用 `db`（增长时间线）或 `asset_id`（单个资产的演变）划定范围。当挂载的 corpus 不是一个 git checkout 时为空 |
-| `GET /corpus/history/{sha}` *（以 `can_history` 为门槛）* | 单个 commit 的详情 + 统一 diff `{ sha, author, date, subject, diff }` |
 
 ---
 
