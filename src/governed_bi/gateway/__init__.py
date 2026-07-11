@@ -22,6 +22,7 @@ from .connectors import (
     SqliteConnector,
     TableInfo,
 )
+from .factory import build_connector
 from .gateway import AuditEntry, Gateway, Identity
 from .guardrails import ColumnAllowlist, GuardrailLayer, GuardrailVerdict, check, column_allowlist
 
@@ -40,6 +41,7 @@ __all__ = [
     "RedshiftConnector",
     "SqliteConnector",
     "TableInfo",
+    "build_connector",
     "check",
     "column_allowlist",
 ]

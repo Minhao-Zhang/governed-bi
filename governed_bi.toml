@@ -30,3 +30,22 @@ embedding_model = "text-embedding-3-small"
 
 # Environment variable that holds the API key (the key itself never lives here).
 api_key_env = "OPENAI_API_KEY"
+
+[datasource]
+# Which database the engine + curator read. Default: the vendored SQLite fixture,
+# so the offline demo and tests need no change. Built into a Connector by
+# governed_bi.gateway.build_connector; the curator facts builder
+# (python -m governed_bi.curator.build) reads this too.
+kind = "sqlite"                                 # sqlite | postgres | redshift
+db = "beer_factory"                             # db_id / corpus namespace
+sqlite_path = "data/bird/beer_factory.sqlite"   # repo-root-relative
+
+# To profile a BIRD-Obfuscation Postgres instance instead (e.g. the renamed+decoy
+# one), set the fields below. The DSN carries a password, so it is NOT stored
+# here: point dsn_env at an env var holding the full libpq DSN. The renamed+decoy
+# instance is pg_rename_decoy (local docker port 5435; behind the `decoy` compose
+# profile) — see BIRD-Data-Obfuscation/docker-compose.yml and its .env.example.
+#   kind = "postgres"
+#   db = "beer_factory"       # corpus namespace; also the per-db_id schema below
+#   schema = "beer_factory"   # BIRD stores one schema per db_id
+#   dsn_env = "PG_RENAME_DECOY_DSN"

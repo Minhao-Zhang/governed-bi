@@ -25,9 +25,11 @@ CLI::
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..config import load_settings
 from ..corpus.serialize import write_corpus
 from .profile import profile_database
 
@@ -49,35 +51,64 @@ def build_facts_corpus(connector: "Connector", db: str, root: Path | str) -> lis
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI: build the facts-only corpus layer from a SQLite database."""
+    """CLI: build the facts-only corpus layer from a configured database.
+
+    The data source comes from ``[datasource]`` in ``governed_bi.toml`` (see
+    :class:`~governed_bi.config.DataSourceConfig`); the flags below override
+    individual fields for a one-off run, so no config edit is needed to, e.g.,
+    point at the renamed+decoy BIRD Postgres instead of the SQLite fixture.
+    """
     parser = argparse.ArgumentParser(
         prog="python -m governed_bi.curator.build",
-        description="Generate the facts-only corpus layer (no AI) from a database catalog.",
+        description="Generate the facts-only corpus layer (no AI) from a configured database.",
     )
-    parser.add_argument("--db", required=True, help="db_id / corpus namespace, e.g. beer_factory")
-    parser.add_argument(
-        "--sqlite", required=True, type=Path, help="path to the SQLite database file"
-    )
+    parser.add_argument("--config", type=Path, default=None, help="governed_bi.toml (default: auto-locate)")
     parser.add_argument(
         "--out",
         type=Path,
         default=Path("data/generated"),
         help=(
-            "corpus root to write into (writes <out>/<db>/...); "
-            "default data/generated. Use ../BIRD-corpus for the benchmark corpus repo."
+            "corpus root to write into (writes <out>/<db>/...); default data/generated. "
+            "Use ../BIRD-corpus for the D13 benchmark corpus repo."
         ),
     )
+    # Per-field overrides of [datasource]; omit to use the config file.
+    parser.add_argument("--kind", choices=["sqlite", "postgres", "redshift"], help="datasource kind")
+    parser.add_argument("--db", help="db_id / corpus namespace, e.g. beer_factory")
+    parser.add_argument("--sqlite", type=Path, help="SQLite file (kind=sqlite)")
+    parser.add_argument("--dsn", help="libpq DSN (kind=postgres/redshift; prefer --dsn-env)")
+    parser.add_argument("--dsn-env", dest="dsn_env", help="env var holding the DSN")
+    parser.add_argument("--schema", help="postgres/redshift schema")
     args = parser.parse_args(argv)
 
-    from ..gateway.connectors.sqlite import SqliteConnector
+    datasource = load_settings(args.config).datasource
+    overrides = {
+        k: v
+        for k, v in (
+            ("kind", args.kind),
+            ("db", args.db),
+            ("sqlite_path", str(args.sqlite) if args.sqlite else None),
+            ("dsn", args.dsn),
+            ("dsn_env", args.dsn_env),
+            ("schema", args.schema),
+        )
+        if v is not None
+    }
+    if overrides:
+        datasource = replace(datasource, **overrides)
 
-    connector = SqliteConnector(args.sqlite)
+    from ..gateway import build_connector
+
+    connector = build_connector(datasource)
     try:
-        written = build_facts_corpus(connector, args.db, args.out)
+        written = build_facts_corpus(connector, datasource.db, args.out)
     finally:
         connector.close()
 
-    print(f"Wrote {len(written)} facts-only asset file(s) to {args.out / args.db}")
+    print(
+        f"[{datasource.kind}] profiled {datasource.db} -> wrote {len(written)} "
+        f"facts-only asset file(s) to {args.out / datasource.db}"
+    )
     return 0
 
 

@@ -79,6 +79,36 @@ class ModelConfig:
 
 
 @dataclass(frozen=True)
+class DataSourceConfig:
+    """Which database the engine and curator read (the ``[datasource]`` table in
+    ``governed_bi.toml``). One source of truth, so pointing at a different DB - the
+    vendored SQLite fixture, or a BIRD-Obfuscation Postgres instance - is a config
+    edit, not a code change. Built into a ``Connector`` by
+    ``governed_bi.gateway.build_connector``.
+
+    SECURITY: a Postgres/Redshift DSN carries a password, so it is **not** stored
+    here. Set ``dsn_env`` to the name of an environment variable holding the full
+    libpq DSN (read at call time), exactly as the API key is handled. ``dsn`` is an
+    inline fallback for local, secret-free DSNs only.
+    """
+
+    kind: str = "sqlite"  # sqlite | postgres | redshift
+    db: str = "beer_factory"  # db_id / corpus namespace
+    sqlite_path: str = "data/bird/beer_factory.sqlite"  # kind=sqlite; repo-root-relative
+    dsn: str | None = None  # kind=postgres/redshift: inline DSN (local, secret-free only)
+    dsn_env: str | None = None  # ...or the env var holding the DSN (preferred)
+    schema: str | None = None  # postgres/redshift schema; None -> the connector default
+
+    def resolve_dsn(self) -> str | None:
+        """The DSN to dial: inline ``dsn`` if set, else ``$dsn_env``, else None."""
+        if self.dsn:
+            return self.dsn
+        if self.dsn_env:
+            return os.environ.get(self.dsn_env)
+        return None
+
+
+@dataclass(frozen=True)
 class Settings:
     """Runtime configuration. Construct via ``Settings.for_env(...)`` or load a
     project config file with :func:`load_settings`."""
@@ -117,12 +147,23 @@ class Settings:
     # ── Model seam configuration (see load_settings / governed_bi.toml) ──
     models: ModelConfig = field(default_factory=ModelConfig)
 
+    # ── Data source: which DB the engine/curator read (see [datasource]) ──
+    datasource: DataSourceConfig = field(default_factory=DataSourceConfig)
+
     @classmethod
     def for_env(
-        cls, environment: Environment | str, *, models: ModelConfig | None = None
+        cls,
+        environment: Environment | str,
+        *,
+        models: ModelConfig | None = None,
+        datasource: DataSourceConfig | None = None,
     ) -> "Settings":
         env = Environment(environment)
-        base = dict(models=models) if models is not None else {}
+        base: dict = {}
+        if models is not None:
+            base["models"] = models
+        if datasource is not None:
+            base["datasource"] = datasource
         if env is Environment.dev:
             return cls(
                 environment=env,
@@ -199,6 +240,15 @@ def _model_config_from_table(table: dict) -> ModelConfig:
     return ModelConfig(**kwargs)
 
 
+def _datasource_from_table(table: dict) -> DataSourceConfig:
+    """Build a :class:`DataSourceConfig` from a ``[datasource]`` TOML table,
+    ignoring unrecognised keys so a forward-compatible file never crashes an old
+    build (same tolerance as :func:`_model_config_from_table`)."""
+    known = {f for f in DataSourceConfig.__dataclass_fields__}
+    kwargs = {k: v for k, v in table.items() if k in known}
+    return DataSourceConfig(**kwargs)
+
+
 def load_settings(path: str | Path | None = None) -> Settings:
     """Load :class:`Settings` from the project config file.
 
@@ -215,7 +265,8 @@ def load_settings(path: str | Path | None = None) -> Settings:
     runtime = data.get("runtime", {})
     env = runtime.get("environment", Environment.dev.value)
     models = _model_config_from_table(data.get("models", {}))
-    settings = Settings.for_env(env, models=models)
+    datasource = _datasource_from_table(data.get("datasource", {}))
+    settings = Settings.for_env(env, models=models, datasource=datasource)
 
     # Optional [runtime] overrides for the environment toggles, so a deployment
     # can, e.g., soft-warn on suspect columns without switching the whole env.
