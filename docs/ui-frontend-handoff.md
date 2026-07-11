@@ -48,7 +48,7 @@ uv run --extra agents --extra api langgraph dev   # LangGraph Server at :2024 (c
 - CORS: allow the UI origin (`http://localhost:3000`).
 - **Local threads are ephemeral** under `langgraph dev` (durable persistence is the
   deployed Postgres). `/capabilities` reports `has_live_model`, `can_stream`,
-  `can_edit`, `environment`, `dialect`.
+  `can_edit`, `can_history`, `environment`, `dialect`.
 
 ---
 
@@ -103,7 +103,7 @@ the rework.
 
 | Method + path | Purpose |
 |---|---|
-| `GET /capabilities` | `{ environment, dialect, can_edit, edit_mode, can_stream, has_live_model, model }`; gate UI features on this |
+| `GET /capabilities` | `{ environment, dialect, can_edit, edit_mode, can_stream, can_history, has_live_model, model }`; gate UI features on this |
 | `GET /health` | corpus health: counts, `ci_green`, findings, `n_suspect_columns`, `n_excluded`, `n_low_confidence_joins` |
 | `GET /schema` | tables + columns (types, roles, `reliability`, `excluded`, provenance) |
 | `GET /graph` | **ER graph** `{ nodes, edges }` of tables + join edges (nodes carry `row_count`/`n_columns`/`has_suspect`; edges carry `on`/`cardinality`/`confidence`/`low_confidence`) |
@@ -111,6 +111,8 @@ the rework.
 | `GET /corpus/assets?type=` | non-table assets (metric/term/join/rule/few_shot/negative) |
 | `GET /skills` | skills (markdown) |
 | `POST /corpus/edit` *(dev only; gated on `can_edit`)* | validate the submitted asset → write YAML (dev) / PR (prod); returns validation + diff |
+| `GET /corpus/history?db=&asset_id=&limit=&skip=` *(gated on `can_history`)* | the corpus repo's git log as `{ commits: [{ sha, author, date, subject, changed_paths }], … }`; scope with `db` (growth timeline) or `asset_id` (one asset's evolution). Empty when the mounted corpus is not a git checkout |
+| `GET /corpus/history/{sha}` *(gated on `can_history`)* | one commit's detail + unified diff `{ sha, author, date, subject, diff }` |
 
 ---
 
