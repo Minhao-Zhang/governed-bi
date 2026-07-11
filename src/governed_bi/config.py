@@ -161,6 +161,35 @@ def _default_config_path() -> Path | None:
     return None
 
 
+def _repo_root() -> Path:
+    """The repo root: the nearest ancestor of this file that holds
+    ``governed_bi.toml`` or ``pyproject.toml``. Falls back to the package's
+    grandparent (``src/governed_bi/`` -> repo root) if neither is found."""
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / _CONFIG_FILENAME).is_file() or (parent / "pyproject.toml").is_file():
+            return parent
+    return here.parents[2]
+
+
+_CORPUS_ROOT_ENV = "GOVERNED_BI_CORPUS"
+_DEFAULT_CORPUS_ROOT = "corpus"
+
+
+def resolve_corpus_root(value: str | Path | None = None) -> Path:
+    """Resolve the corpus root (D9/D13) to an absolute path.
+
+    Precedence: the explicit ``value`` argument, else ``$GOVERNED_BI_CORPUS``,
+    else ``corpus`` (the vendored beer_factory fixture). An absolute path is used
+    as-is; a **relative** path resolves against the repo root, *not* the process
+    CWD - so the separate corpus repo (D13) is reachable as a sibling checkout via
+    ``GOVERNED_BI_CORPUS=../BIRD-corpus`` regardless of where the process runs.
+    """
+    raw = value if value is not None else os.environ.get(_CORPUS_ROOT_ENV, _DEFAULT_CORPUS_ROOT)
+    p = Path(raw)
+    return p.resolve() if p.is_absolute() else (_repo_root() / p).resolve()
+
+
 def _model_config_from_table(table: dict) -> ModelConfig:
     """Build a :class:`ModelConfig` from a ``[models]`` TOML table, ignoring keys
     it does not recognise so a forward-compatible file never crashes an old build.

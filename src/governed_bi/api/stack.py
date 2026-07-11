@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..config import load_settings
+from ..config import load_settings, resolve_corpus_root
 from ..corpus import load_corpus
 from ..gateway import Identity
 
@@ -100,10 +100,12 @@ def build_stack() -> ServeStack:
     """Assemble the serve stack from environment + ``governed_bi.toml``.
 
     Env overrides (all optional): ``GOVERNED_BI_CORPUS`` (corpus root, default
-    ``corpus``), ``GOVERNED_BI_DB`` (default ``beer_factory``),
-    ``GOVERNED_BI_SQLITE`` (default ``data/bird/beer_factory.sqlite``).
+    ``corpus``; a relative value resolves against the repo root, so the separate
+    D13 corpus repo is reachable as ``../BIRD-corpus``), ``GOVERNED_BI_DB``
+    (default ``beer_factory``), ``GOVERNED_BI_SQLITE`` (default
+    ``data/bird/beer_factory.sqlite``).
     """
-    root = Path(os.environ.get("GOVERNED_BI_CORPUS", "corpus"))
+    root = resolve_corpus_root()
     db = os.environ.get("GOVERNED_BI_DB", "beer_factory")
     sqlite_path = Path(os.environ.get("GOVERNED_BI_SQLITE", "data/bird/beer_factory.sqlite"))
 
