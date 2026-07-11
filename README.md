@@ -63,6 +63,13 @@ reviewable. SQLite-proven and evaluation-oriented; the next milestone is showing
 that curator-built assets measurably beat a fair no-corpus baseline on
 obfuscated schemas.
 
+## Web UI
+
+The frontend lives in a separate repo:
+[Minhao-Zhang/governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui)
+(Next.js, `useStream`). It is currently mock-only and not yet wired end-to-end to
+this backend.
+
 ## Documentation
 
 Start at [`docs/README.md`](docs/README.md). Key docs:

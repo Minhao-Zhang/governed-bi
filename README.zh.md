@@ -35,6 +35,12 @@ _[English](README.md) · [简体中文](README.zh.md)_
 
 **诚实的一句话定位：** 一个把模型输出当作不可信的受治理 NL2SQL 内核——它约束可访问的数据面、对生成的 SQL 做结构化校验、将策展与服务分离、并让语义层可审阅。已在 SQLite 上得到验证、以评测为导向；下一个里程碑是证明 curator 构建的资产在混淆 schema 上、相对一个公平的无 corpus 基线，能带来可度量的提升。
 
+## Web 界面
+
+前端在独立仓库中：
+[Minhao-Zhang/governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui)
+(Next.js、`useStream`)。目前仍是纯 mock,尚未与本后端端到端接通。
+
 ## 文档
 
 从 [`docs/README.md`](docs/README.zh.md) 开始阅读。核心文档：
