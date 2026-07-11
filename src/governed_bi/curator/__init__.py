@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from .adversary import review
 from .build import build_facts_corpus
+from .enrich import enrich_table
 from .clarify_loop import (
     Responder,
     StaticResponder,
@@ -44,6 +45,7 @@ __all__ = [
     "curate",
     "default_parse",
     "emit_clarifications",
+    "enrich_table",
     "profile_database",
     "resolve_clarifications",
     "review",

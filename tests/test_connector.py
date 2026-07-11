@@ -123,14 +123,15 @@ def test_profile_database_emits_facts(conn):
 
     orders = next(t for t in tables if t.id == "tbl_demo_orders")
     assert orders.physical_name == "orders"
-    assert orders.row_count == 3
+    assert orders.row_count is None  # bare-minimum: no COUNT(*) scan
     amount = next(c for c in orders.columns if c.physical_name == "amount")
     assert amount.logical_type == LogicalType.integer
     assert amount.description is None  # Inference tier left for the proposer
 
     customers = next(t for t in tables if t.id == "tbl_demo_customers")
     cust = next(c for c in customers.columns if c.physical_name == "CustomerID")
-    assert cust.is_unique
+    assert cust.is_unique  # catalog-declared PK (no scan)
+    assert cust.sample_values  # cheap LIMIT samples present
 
 
 def test_profile_write_load_round_trip(conn, tmp_path):

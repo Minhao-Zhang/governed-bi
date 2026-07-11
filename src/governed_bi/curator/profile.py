@@ -1,10 +1,20 @@
 """Curator loop step 1 - Profile (Facts, programmatic).
 
-Read the catalog + sample data and emit the **Facts tier** for every table and
-column: physical_name, physical_type, logical_type, nullable, is_unique,
-sample_values, row_count. Deterministic; no LLM; correct in every eval arm.
-These are never proposed and never checked by the adversary (D10). The proposer
-fills the Inference tier (descriptions, roles, joins) on top of this.
+Emit the **Facts tier** for every table and column, cheaply enough to run against
+a large data lake: physical_name, physical_type, logical_type, nullable,
+catalog-declared uniqueness (primary key), and a few sample values. Deterministic;
+no LLM.
+
+**No full-scan aggregates.** We assume table scans are impractical at data-lake
+scale, so profiling never runs a uniqueness ``COUNT(DISTINCT)`` or a ``COUNT(*)``
+row count. ``is_unique`` reflects only the catalog's declared primary key (a free
+metadata read); ``row_count`` is left unset. Sample values come from a bounded
+``LIMIT`` (cheap). The scanned facts - true (non-PK) uniqueness and row count -
+are opt-in per column via :func:`enrich.enrich_table` (partial indexing), for
+when a specific table earns the cost.
+
+These Facts are never proposed and never checked by the adversary (D10). The
+proposer fills the Inference tier (descriptions, roles, joins) on top.
 """
 
 from __future__ import annotations
@@ -42,12 +52,18 @@ def _logical_type(raw: str) -> LogicalType:
     return LogicalType.string
 
 
-def profile_database(connector: "Connector", db: str) -> list[TableAsset]:
-    """Emit Facts-only table assets from the live catalog.
+def profile_database(
+    connector: "Connector", db: str, *, sample_limit: int = 5
+) -> list[TableAsset]:
+    """Emit bare-minimum Facts-only table assets from the catalog + cheap samples.
 
-    The Inference tier (description, role, references, reliability, confidence) is
-    left empty for the proposer. Works against any :class:`Connector`; in dev that
-    is the SQLite BIRD fixture.
+    Per column: name, dtype, logical type, nullability, catalog-declared
+    uniqueness (the primary-key flag), and up to ``sample_limit`` sample values (a
+    bounded ``LIMIT``). Runs no ``COUNT(DISTINCT)`` and no ``COUNT(*)``, so it is
+    safe at data-lake scale; ``row_count`` is left unset and non-PK uniqueness is
+    left to :func:`enrich.enrich_table`. The Inference tier (description, role,
+    references, reliability, confidence) is left empty for the proposer. Works
+    against any :class:`Connector`.
     """
     tables: list[TableAsset] = []
     for name in connector.list_tables():
@@ -58,8 +74,8 @@ def profile_database(connector: "Connector", db: str) -> list[TableAsset]:
                 physical_type=c.data_type,
                 logical_type=_logical_type(c.data_type),
                 nullable=c.nullable,
-                is_unique=connector.is_unique(name, c.name),
-                sample_values=connector.sample_values(name, c.name),
+                is_unique=c.primary_key,  # catalog-declared PK; no scan
+                sample_values=connector.sample_values(name, c.name, limit=sample_limit),
             )
             for c in info.columns
         ]
@@ -68,8 +84,7 @@ def profile_database(connector: "Connector", db: str) -> list[TableAsset]:
                 id=f"tbl_{_slug(db)}_{_slug(name)}",
                 db=db,
                 physical_name=name,
-                row_count=connector.row_count(name),
-                columns=columns,
+                columns=columns,  # row_count left unset (no COUNT(*))
             )
         )
     return tables

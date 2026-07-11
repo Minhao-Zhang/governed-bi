@@ -38,10 +38,11 @@ if TYPE_CHECKING:
 
 
 def build_facts_corpus(connector: "Connector", db: str, root: Path | str) -> list[Path]:
-    """Profile ``db`` through ``connector`` and write the facts-only layer.
+    """Profile ``db`` through ``connector`` and write the bare-minimum facts layer.
 
     Layer 1 of the corpus: :func:`profile_database` emits Facts-only
-    :class:`~governed_bi.corpus.schemas.TableAsset` s (no Inference tier), and
+    :class:`~governed_bi.corpus.schemas.TableAsset` s (name/dtype/nullable/PK +
+    samples, no full scans; no Inference tier), and
     :func:`~governed_bi.corpus.serialize.write_corpus` writes them under
     ``root/<db>/``. No LLM, no network beyond the database. Returns the written
     paths. Connector-agnostic; the CLI wires the SQLite one.

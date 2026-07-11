@@ -37,15 +37,18 @@ def test_build_facts_writes_facts_only_corpus(tmp_path):
     assert len(tables) >= 2
     assert "customers" in {t.physical_name for t in tables}  # a known beer_factory table
 
-    # Facts present; Inference tier empty because no AI ran.
     for t in tables:
-        assert t.description is None
+        assert t.description is None  # Inference tier empty (no AI ran)
+        assert t.row_count is None  # bare-minimum: no COUNT(*)
         assert t.columns, f"{t.physical_name} has no columns"
         for c in t.columns:
-            assert c.physical_name and c.physical_type
+            assert c.physical_name and c.physical_type  # catalog facts present
             assert c.logical_type is not None
-            assert c.description is None
-            assert c.role is None
+            assert c.description is None and c.role is None
+    # PK-derived uniqueness (catalog, no scan) and cheap samples are present.
+    customers = next(t for t in tables if t.physical_name == "customers")
+    assert any(c.is_unique for c in customers.columns)  # at least the PK
+    assert any(c.sample_values for c in customers.columns)  # LIMIT samples
 
 
 def test_cli_main_writes(tmp_path):
@@ -114,5 +117,44 @@ def test_build_facts_all_schemas_rejects_schemaless(tmp_path):
     try:
         with pytest.raises(ValueError, match="no schemas to iterate"):
             build_facts_all_schemas(ds, tmp_path, connector_factory=lambda d: conn)
+    finally:
+        conn.close()
+
+
+def test_enrich_table_partial_columns():
+    """enrich_table backfills scanned facts for selected columns only."""
+    from governed_bi.curator import enrich_table
+    from governed_bi.curator.profile import profile_database
+
+    conn = SqliteConnector(_sqlite_path())
+    try:
+        customers = next(t for t in profile_database(conn, DB) if t.physical_name == "customers")
+        assert customers.row_count is None  # bare-minimum left it unset
+        enriched = enrich_table(conn, customers, columns=["CustomerID"])
+    finally:
+        conn.close()
+
+    assert enriched.row_count and enriched.row_count > 0  # COUNT(*) backfilled
+    cid = next(c for c in enriched.columns if c.physical_name == "CustomerID")
+    assert cid.is_unique is True  # scanned uniqueness
+    # Non-selected columns pass through untouched (partial indexing).
+    e_by_name = {c.physical_name: c for c in enriched.columns}
+    for c in customers.columns:
+        if c.physical_name != "CustomerID":
+            assert e_by_name[c.physical_name] == c
+    assert customers.row_count is None  # input not mutated
+
+
+def test_enrich_table_rejects_unknown_column():
+    import pytest
+
+    from governed_bi.curator import enrich_table
+    from governed_bi.curator.profile import profile_database
+
+    conn = SqliteConnector(_sqlite_path())
+    try:
+        customers = next(t for t in profile_database(conn, DB) if t.physical_name == "customers")
+        with pytest.raises(ValueError, match="not in"):
+            enrich_table(conn, customers, columns=["does_not_exist"])
     finally:
         conn.close()
