@@ -269,20 +269,20 @@ def create_app(stack: ServeStack | None = None):
     def chat(req: ChatRequest) -> AnswerResponse:
         """Answer one turn. Working memory is rebuilt from ``history`` (the API is
         stateless); the caller persists the transcript."""
-        from ..gateway import Gateway, SqliteConnector
+        from ..gateway import Gateway
         from ..memory import InMemoryWorkingMemory
         from ..server import answer_question
-
-        if not stack.sqlite_path.exists():
-            # Log the path server-side; never leak the filesystem layout to clients.
-            logger.error("configured sqlite database is missing: %s", stack.sqlite_path)
-            raise HTTPException(status_code=503, detail="database unavailable")
 
         memory = InMemoryWorkingMemory()
         for turn in req.history:
             memory.append(req.session_id, turn.role, turn.text)
 
-        connector = SqliteConnector(stack.sqlite_path)
+        try:
+            connector = stack.open_connector()  # config-driven: SQLite or Postgres/Redshift
+        except Exception:
+            # Log server-side (may include a path/DSN); never leak it to clients.
+            logger.exception("data source unavailable")
+            raise HTTPException(status_code=503, detail="database unavailable")
         try:
             answer = answer_question(
                 req.question,

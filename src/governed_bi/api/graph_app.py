@@ -105,7 +105,7 @@ def build_chat_graph(stack: "ServeStack"):
 
     # Absolute imports: the LangGraph server loads this module by file path (no
     # parent package), so relative imports would fail at call time.
-    from governed_bi.gateway import Gateway, SqliteConnector
+    from governed_bi.gateway import Gateway
     from governed_bi.server import answer_question
     from governed_bi.viz import presenter
 
@@ -114,15 +114,15 @@ def build_chat_graph(stack: "ServeStack"):
         question, history = _split_question_and_history(state["messages"])
         memory = _working_memory_from(history, thread_id)
 
-        if not stack.sqlite_path.exists():
-            raise RuntimeError("database unavailable")
-
         try:
             writer = get_stream_writer()
         except Exception:  # not in a streaming context (e.g. plain invoke)
             writer = None
 
-        connector = SqliteConnector(stack.sqlite_path)
+        try:
+            connector = stack.open_connector()  # config-driven: SQLite or Postgres/Redshift
+        except Exception as exc:
+            raise RuntimeError("database unavailable") from exc
         try:
             result = answer_question(
                 question,
