@@ -43,6 +43,11 @@ class ProvenanceStatus(str, Enum):
     certified = "certified"  # human signed off (prod only, D6)
 
 
+class ClarificationStatus(str, Enum):
+    open = "open"  # curator asked; awaiting a Responder answer (D12)
+    answered = "answered"  # a human/SME answer was accepted into the asset
+
+
 class ColumnRole(str, Enum):
     primary_key = "primary_key"
     foreign_key = "foreign_key"
@@ -129,16 +134,38 @@ class Provenance(BaseModel):
     built_at: str | None = None
 
 
+class Clarification(_Strict):
+    """A curator-emitted open question about the asset it hangs on (D12).
+
+    ID-tracked by the asset it is attached to (the asset carries the ``id``). It
+    lives on the ``Audit`` tier, which is never injected into the server context,
+    so an open question never leaks to SQL-gen or retrieval — that is the whole
+    reason it lives here. While a question is open the asset still serves a
+    best-effort answer via the Inference tier (low ``confidence`` + a ``suspect``
+    caveat); ``accept_answer`` flips it to ``answered`` once an SME responds.
+    """
+
+    question: str
+    status: ClarificationStatus = ClarificationStatus.open
+    asked_by: str | None = None
+    answer: str | None = None
+    answered_by: str | None = None
+    at: str | None = None
+
+
 class Audit(BaseModel):
     """Audit tier: never injected into the server context (loader contract).
 
     Carries ``provenance`` plus free-form ``*_evidence`` prose, hence
-    ``extra="allow"``.
+    ``extra="allow"``. An optional ``clarification`` records an open question
+    about the asset (D12); because the Audit tier is stripped by
+    ``Corpus.for_server()``, an open question is never served.
     """
 
     model_config = ConfigDict(extra="allow")
 
     provenance: Provenance
+    clarification: Clarification | None = None
 
 
 class Governance(_Strict):

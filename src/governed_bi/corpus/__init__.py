@@ -11,11 +11,14 @@ See ``docs/asset-schemas.md`` and D9 in ``docs/design-decisions.md``.
 
 from __future__ import annotations
 
+from .clarify import accept_answer
 from .ids import is_valid_id
 from .loader import Corpus, Skill, load_corpus
 from .serialize import dump_asset, dump_skill, subdir_for_type, write_corpus
 from .schemas import (
     Asset,
+    Clarification,
+    ClarificationStatus,
     Column,
     FewShotAsset,
     JoinAsset,
@@ -32,10 +35,13 @@ from .validate import Finding, is_green, validate_corpus
 
 __all__ = [
     "Asset",
+    "Clarification",
+    "ClarificationStatus",
     "Column",
     "Corpus",
     "FewShotAsset",
     "Finding",
+    "accept_answer",
     "dump_asset",
     "dump_skill",
     "JoinAsset",
