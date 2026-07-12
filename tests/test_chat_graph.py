@@ -39,7 +39,7 @@ REVENUE_Q = "What is the total revenue?"
 def stack():
     if not BIRD_DB.exists():
         pytest.skip("vendored beer_factory.sqlite not present")
-    corpus_full = load_corpus(CORPUS_ROOT, db="beer_factory")
+    corpus_full = load_corpus(CORPUS_ROOT, schema="beer_factory")
     return ServeStack(
         corpus_full=corpus_full,
         corpus_server=corpus_full.for_server(),

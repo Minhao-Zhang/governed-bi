@@ -53,7 +53,7 @@ def _logical_type(raw: str) -> LogicalType:
 
 
 def profile_database(
-    connector: "Connector", db: str, *, sample_limit: int = 5
+    connector: "Connector", schema: str, *, sample_limit: int = 5
 ) -> list[TableAsset]:
     """Emit bare-minimum Facts-only table assets from the catalog + cheap samples.
 
@@ -63,7 +63,8 @@ def profile_database(
     safe at data-lake scale; ``row_count`` is left unset and non-PK uniqueness is
     left to :func:`enrich.enrich_table`. The Inference tier (description, role,
     references, reliability, confidence) is left empty for the proposer. Works
-    against any :class:`Connector`.
+    against any :class:`Connector`. ``schema`` is the corpus namespace written onto
+    each :class:`TableAsset` (and used in asset ids).
     """
     tables: list[TableAsset] = []
     for name in connector.list_tables():
@@ -81,8 +82,8 @@ def profile_database(
         ]
         tables.append(
             TableAsset(
-                id=f"tbl_{_slug(db)}_{_slug(name)}",
-                db=db,
+                id=f"tbl_{_slug(schema)}_{_slug(name)}",
+                schema=schema,
                 physical_name=name,
                 columns=columns,  # row_count left unset (no COUNT(*))
             )

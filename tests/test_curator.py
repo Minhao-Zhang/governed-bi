@@ -51,7 +51,7 @@ def _orders_table() -> TableAsset:
     """A Facts-only table: one unique *ID, one numeric non-key, one string."""
     return TableAsset(
         id="tbl_demo_orders",
-        db="demo",
+        schema="demo",
         physical_name="orders",
         columns=[
             _facts_column("OrderID", LogicalType.integer, is_unique=True),
@@ -93,7 +93,7 @@ def test_heuristic_proposer_fills_roles_and_provenance():
 def test_heuristic_proposer_marks_foreign_key_when_references_set():
     table = TableAsset(
         id="tbl_demo_lines",
-        db="demo",
+        schema="demo",
         physical_name="lines",
         columns=[
             _facts_column(
@@ -113,7 +113,7 @@ def test_heuristic_proposer_sole_unique_non_id_is_primary_key():
     an *ID name."""
     table = TableAsset(
         id="tbl_demo_codes",
-        db="demo",
+        schema="demo",
         physical_name="codes",
         columns=[
             _facts_column("slug", LogicalType.string, is_unique=True),
@@ -139,7 +139,7 @@ def test_heuristic_proposer_does_not_mutate_input():
 
 
 def test_review_green_on_example_corpus():
-    corpus = load_corpus(EXAMPLE_CORPUS.parent, db=EXAMPLE_CORPUS.name)
+    corpus = load_corpus(EXAMPLE_CORPUS.parent, schema=EXAMPLE_CORPUS.name)
     findings = review(corpus.assets)
     assert findings == [], "\n".join(str(f) for f in findings)
 
@@ -147,7 +147,7 @@ def test_review_green_on_example_corpus():
 def test_review_flags_foreign_key_without_references():
     table = TableAsset(
         id="tbl_demo_bad",
-        db="demo",
+        schema="demo",
         physical_name="bad",
         columns=[
             Column(
@@ -170,7 +170,7 @@ def test_review_flags_foreign_key_without_references():
 
 
 def test_review_flags_missing_provenance():
-    table = TableAsset(id="tbl_demo_noprov", db="demo", physical_name="noprov")  # audit is None
+    table = TableAsset(id="tbl_demo_noprov", schema="demo", physical_name="noprov")  # audit is None
     findings = review([table])
     assert any(f.code == "missing-provenance" for f in findings)
 
@@ -205,7 +205,7 @@ def test_curate_end_to_end_from_profiled_facts():
 
     conn = SqliteConnector(BIRD_DB)
     try:
-        tables = profile_database(conn, db="beer_factory")
+        tables = profile_database(conn, schema="beer_factory")
         result = curate(tables, HeuristicProposer(), connector=conn)
     finally:
         conn.close()

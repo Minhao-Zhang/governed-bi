@@ -41,6 +41,15 @@ class JoinPlan:
     min_confidence: float  # lowest join confidence on the path (-> reliability stamp)
 
 
+@dataclass(frozen=True)
+class MissingJoinPath:
+    """Cross-schema retrieval with no curated join path (D15 missing-edge refusal)."""
+
+    table_ids: frozenset[str]
+    schemas: frozenset[str]
+    reason: str
+
+
 def _join_graph(graph: nx.MultiDiGraph) -> nx.Graph:
     """Undirected weighted projection of the ``JOINS_TO`` edges.
 
@@ -146,3 +155,45 @@ def plan_joins(graph: nx.MultiDiGraph, required_tables: set[str]) -> JoinPlan:
             queue.append(neighbor)
 
     return JoinPlan(join_ids=order, min_confidence=min(confidences) if confidences else 1.0)
+
+
+def detect_missing_join_path(
+    corpus: object,
+    graph: nx.MultiDiGraph,
+    table_ids: set[str],
+    *,
+    multi_schema: bool,
+) -> MissingJoinPath | None:
+    """Refuse descriptor when multi-schema retrieval spans schemas with no join path.
+
+    D15: cross-schema edges are curated only. When ``multi_schema`` is on and the
+    retrieved tables live in **two or more** schemas but ``plan_joins`` cannot
+    connect them, serve must fail closed before SQL generation — not invent a
+    join. Single-schema / SQLite (``multi_schema=False``) and within-schema
+    disconnection return ``None`` so the BIRD path and existing repair behavior
+    stay unchanged.
+    """
+    if not multi_schema or len(table_ids) <= 1:
+        return None
+
+    from ..corpus.schemas import TableAsset
+
+    schemas: set[str] = set()
+    resolved: set[str] = set()
+    for tid in table_ids:
+        asset = corpus.by_id(tid)  # type: ignore[attr-defined]
+        if isinstance(asset, TableAsset):
+            schemas.add(asset.schema)
+            resolved.add(tid)
+    if len(schemas) < 2 or len(resolved) <= 1:
+        return None
+
+    try:
+        plan_joins(graph, resolved)
+    except ValueError as exc:
+        return MissingJoinPath(
+            table_ids=frozenset(resolved),
+            schemas=frozenset(schemas),
+            reason=str(exc),
+        )
+    return None

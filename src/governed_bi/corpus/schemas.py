@@ -226,7 +226,7 @@ class TableAsset(_Strict):
     id: str
 
     # ── Facts ──
-    db: str  # scoping namespace = the connection/database
+    schema: str  # scoping namespace = Postgres/Redshift schema / corpus subtree
     physical_name: str
     row_count: int | None = None
 
@@ -266,7 +266,7 @@ class FewShotAsset(_Strict):
     id: str
 
     # ── Facts ──
-    db: str
+    schema: str
 
     # ── Inference (curator selects/distills a prompt exemplar) ──
     question: str
@@ -359,7 +359,7 @@ class SkillFrontmatter(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     skill_id: str
-    db: str
+    schema: str
     kind: SkillKind
     provenance: Provenance
 

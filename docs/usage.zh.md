@@ -183,7 +183,7 @@ curl -s localhost:8000/chat -H 'content-type: application/json' \
   -d '{"question":"What is the total revenue?"}'
 ```
 
-设置 `GOVERNED_BI_CORPUS`、`GOVERNED_BI_DB` 和 `GOVERNED_BI_SQLITE`，可以让它指向另一个
+设置 `GOVERNED_BI_CORPUS` 和 `GOVERNED_BI_SQLITE`，可以让它指向另一个
 corpus / 数据库。由于展示逻辑位于与 UI 无关的 `governed_bi.viz.presenter` 中（不依赖任何
 UI 框架），一个独立的前端可以消费同样的视图模型——交互式 UI 是一个独立项目，参见
 [docs/ui-frontend-design.md](ui-frontend-design.zh.md)。

@@ -37,7 +37,7 @@ api_key_env = "OPENAI_API_KEY"
 # governed_bi.gateway.build_connector; the curator facts builder
 # (python -m governed_bi.curator.build) reads this too.
 kind = "sqlite"                                 # sqlite | postgres | redshift
-db = "beer_factory"                             # db_id / corpus namespace
+db = "beer_factory"                             # default corpus schema subtree / BIRD db_id
 sqlite_path = "data/bird/beer_factory.sqlite"   # repo-root-relative
 
 # To profile a BIRD-Obfuscation Postgres instance instead (e.g. the renamed+decoy
@@ -45,7 +45,10 @@ sqlite_path = "data/bird/beer_factory.sqlite"   # repo-root-relative
 # here: point dsn_env at an env var holding the full libpq DSN. The renamed+decoy
 # instance is pg_rename_decoy (local docker port 5435; behind the `decoy` compose
 # profile) — see BIRD-Data-Obfuscation/docker-compose.yml and its .env.example.
+# Postgres/Redshift default to multi_schema=true (span all user schemas; D15).
+# Opt out with multi_schema=false + a pinned schema when you need single-schema.
 #   kind = "postgres"
-#   db = "beer_factory"       # corpus namespace; also the per-db_id schema below
-#   schema = "beer_factory"   # BIRD stores one schema per db_id
+#   db = "beer_factory"       # default corpus write subtree / namespace hint
 #   dsn_env = "PG_RENAME_DECOY_DSN"
+#   # multi_schema = false    # optional pin
+#   # schema = "beer_factory" # designated default for bare-ref L4 (optional)

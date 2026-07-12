@@ -7,16 +7,16 @@ YAML assets and Markdown skills, validates them, and exposes different views for
 server runtime and human audit.
 
 D15 renames the corpus namespace field/dir historically named `db` to `schema`
-(`corpus/<schema>/`, `col_<schema>_<table>_<column>`) — decided 2026-07-11, not
-yet built, so the diagrams below and the code still emit `db`; asset IDs are
-unchanged.
+(`corpus/<schema>/`, `col_<schema>_<table>_<column>`). **API/presenter wire and
+on-disk YAML** both use `schema` (`TableAsset.schema`, skill frontmatter). Asset
+IDs are unchanged. Diagram folder labels below use `<schema>/`.
 
 ## Corpus consumption contract
 
 ```mermaid
 flowchart LR
     Git["Git<br/>single source of truth"]
-    Files["corpus/&lt;db&gt;/<br/>tables, joins, terms, metrics,<br/>rules, few-shots, negatives, skills"]
+    Files["corpus/&lt;schema&gt;/<br/>tables, joins, terms, metrics,<br/>rules, few-shots, negatives, skills"]
     Loader["load_corpus()<br/>parse YAML + skill frontmatter"]
     FullCorpus["Corpus<br/>Facts + Inference + Audit + Governance"]
     Validator["validate_corpus()<br/>IDs, duplicates, references"]
@@ -39,8 +39,8 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    Start["load_corpus(root, db?)"] --> Dirs{"db argument?"}
-    Dirs -->|yes| OneDb["load root / db"]
+    Start["load_corpus(root, schema?)"] --> Dirs{"schema argument?"}
+    Dirs -->|yes| OneDb["load root / schema"]
     Dirs -->|no| AllDbs["scan child dirs<br/>skip _generated"]
     OneDb --> AssetDirs["scan asset directories"]
     AllDbs --> AssetDirs
@@ -67,7 +67,7 @@ flowchart TD
     Assets["list[Asset]"] --> IdRegex["ID regex per asset type<br/>ids.is_valid_id()"]
     IdRegex --> Duplicates["duplicate ID check"]
     Duplicates --> Pools["build resolvable pools<br/>tables, metrics, terms, columns"]
-    Pools --> ColumnIds["derive column IDs<br/>col_db_table_column"]
+    Pools --> ColumnIds["derive column IDs<br/>col_schema_table_column"]
     ColumnIds --> RefChecks["reference checks"]
 
     RefChecks --> TableRefs["column.references -> column pool"]
@@ -98,7 +98,7 @@ classDiagram
     class TableAsset {
         asset_type
         id
-        db
+        schema
         physical_name
         row_count
         description
@@ -133,7 +133,7 @@ classDiagram
         audit
     }
     class FewShotAsset {
-        db
+        schema
         question
         sql
         bound_terms
@@ -175,7 +175,7 @@ classDiagram
     }
     class SkillFrontmatter {
         skill_id
-        db
+        schema
         kind
         provenance
     }

@@ -181,7 +181,7 @@ def _table_view(table: TableAsset, *, retrieved: bool) -> TableView:
         grain=table.grain,
         columns=[_column_view(c) for c in table.columns],
         retrieved=retrieved,
-        schema=table.db,
+        schema=table.schema,
     )
 
 

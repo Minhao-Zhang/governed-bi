@@ -13,8 +13,9 @@ Retrieves the **Facts + Inference tiers only** (loader contract); Audit and
 are rebuildable projections under ``corpus/_generated/``.
 
 This slice ships the deterministic lexical (BM25) channel plus the Ground
-expansion; see ``rvgd.py``. Semantic (V), graph (G), and Corrective-RAG
-reranking are later slices.
+expansion; see ``rvgd.py``. On the multi-schema path, ``schema_router`` shortlists
+schemas and expands along curated joins before ``retrieve``. Semantic (V) fusion
+is optional via an embedder; graph (G) and Corrective-RAG reranking are later slices.
 """
 
 from __future__ import annotations
@@ -28,6 +29,12 @@ from .rvgd import (
     retrieve,
     tokenize,
 )
+from .schema_router import (
+    expand_schemas_via_curated_joins,
+    filter_corpus_for_retrieval,
+    route_schemas,
+    shortlist_schemas,
+)
 
 __all__ = [
     "BM25Index",
@@ -36,7 +43,11 @@ __all__ = [
     "asset_document",
     "build_embedding_index",
     "build_index",
+    "expand_schemas_via_curated_joins",
+    "filter_corpus_for_retrieval",
     "fuse_rankings",
     "retrieve",
+    "route_schemas",
+    "shortlist_schemas",
     "tokenize",
 ]

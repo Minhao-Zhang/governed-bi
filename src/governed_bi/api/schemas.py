@@ -17,7 +17,12 @@ from pydantic import BaseModel, ConfigDict, Field
 class _View(BaseModel):
     """Base for response models built from presenter dataclasses via attributes."""
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+
+# Wire namespace field: Python attr ``namespace`` serializes as ``schema`` so we
+# do not shadow ``BaseModel.schema`` (Pydantic warning) while matching the UI.
+_NAMESPACE = Field(validation_alias="schema", serialization_alias="schema")
 
 
 # ── capabilities ──────────────────────────────────────────────────────────── #
@@ -67,7 +72,7 @@ class ColumnResponse(_View):
 class TableResponse(_View):
     id: str
     physical_name: str
-    db: str
+    namespace: str = _NAMESPACE
     row_count: int | None
     description: str | None
     grain: str | None
@@ -91,7 +96,7 @@ class TableSummaryResponse(_View):
     # Lean catalog row: heavy fields (sample_values, evidence, description) dropped.
     id: str
     physical_name: str
-    db: str
+    namespace: str = _NAMESPACE
     row_count: int | None
     n_columns: int
     excluded: bool
@@ -113,6 +118,9 @@ class SchemaGraphNodeResponse(_View):
     n_columns: int
     excluded: bool
     has_suspect: bool
+    namespace: str | None = Field(
+        default=None, validation_alias="schema", serialization_alias="schema"
+    )
 
 
 class SchemaGraphEdgeResponse(_View):
@@ -125,9 +133,40 @@ class SchemaGraphEdgeResponse(_View):
     low_confidence: bool
 
 
+class BoundaryEdgeResponse(_View):
+    id: str
+    in_scope_table: str
+    other_schema: str
+    other_table_id: str
+    other_label: str
+    on: str
+    cardinality: str | None = None
+    confidence: float | None = None
+    low_confidence: bool = False
+
+
+class GraphScopeResponse(_View):
+    schema_ns: str | None = Field(
+        default=None, validation_alias="schema", serialization_alias="schema"
+    )
+    focus: str | None = None
+    radius: int | None = None
+    node_budget: int | None = None
+
+
+class GraphMetaResponse(_View):
+    total_nodes: int
+    returned_nodes: int
+    total_edges: int
+    truncated: bool = False
+    scope: GraphScopeResponse | None = None
+
+
 class SchemaGraphResponse(_View):
     nodes: list[SchemaGraphNodeResponse]
     edges: list[SchemaGraphEdgeResponse]
+    boundary: list[BoundaryEdgeResponse] = Field(default_factory=list)
+    meta: GraphMetaResponse | None = None
 
 
 # ── knowledge graph (full corpus) ─────────────────────────────────────────── #
@@ -139,6 +178,9 @@ class KnowledgeGraphNodeResponse(_View):
     provenance_status: str | None
     confidence: float | None = None
     has_suspect: bool = False
+    namespace: str | None = Field(
+        default=None, validation_alias="schema", serialization_alias="schema"
+    )  # tables only
 
 
 class KnowledgeGraphEdgeResponse(_View):
@@ -153,6 +195,8 @@ class KnowledgeGraphEdgeResponse(_View):
 class KnowledgeGraphResponse(_View):
     nodes: list[KnowledgeGraphNodeResponse]
     edges: list[KnowledgeGraphEdgeResponse]
+    boundary: list[BoundaryEdgeResponse] = Field(default_factory=list)
+    meta: GraphMetaResponse | None = None
 
 
 # ── corpus assets + skills ────────────────────────────────────────────────── #
@@ -173,7 +217,7 @@ class AssetRowResponse(_View):
 class SkillResponse(_View):
     skill_id: str
     kind: str
-    db: str
+    namespace: str = _NAMESPACE
     body: str
 
 

@@ -32,7 +32,7 @@ pytestmark = pytest.mark.skipif(not BIRD_DB.exists(), reason="vendored beer_fact
 
 @pytest.fixture
 def corpus():
-    return load_corpus(CORPUS_ROOT, db="beer_factory").for_server()
+    return load_corpus(CORPUS_ROOT, schema="beer_factory").for_server()
 
 
 @pytest.fixture

@@ -54,7 +54,7 @@ def test_parse_asset_discriminates_by_type():
         {
             "asset_type": "table",
             "id": "tbl_demo_t",
-            "db": "demo",
+            "schema": "demo",
             "physical_name": "t_1",
         }
     )
@@ -67,7 +67,7 @@ def test_parse_asset_rejects_unknown_field():
             {
                 "asset_type": "table",
                 "id": "tbl_demo_t",
-                "db": "demo",
+                "schema": "demo",
                 "physical_name": "t_1",
                 "nonsense_field": True,  # extra="forbid"
             }
@@ -92,7 +92,7 @@ def test_parse_asset_rejects_bad_enum():
 
 
 def test_example_corpus_is_ci_green():
-    corpus = load_corpus(EXAMPLE_DB.parent, db=EXAMPLE_DB.name)
+    corpus = load_corpus(EXAMPLE_DB.parent, schema=EXAMPLE_DB.name)
     findings = validate_corpus(corpus.assets)
     assert is_green(findings), "\n".join(str(f) for f in findings)
     assert len(corpus.tables()) == 5
@@ -100,7 +100,7 @@ def test_example_corpus_is_ci_green():
 
 
 def test_validator_catches_dangling_reference():
-    corpus = load_corpus(EXAMPLE_DB.parent, db=EXAMPLE_DB.name)
+    corpus = load_corpus(EXAMPLE_DB.parent, schema=EXAMPLE_DB.name)
     metric = next(a for a in corpus.assets if a.id == "metric_revenue")
     metric.base_table = "tbl_does_not_exist"
     findings = validate_corpus(corpus.assets)
@@ -113,7 +113,7 @@ def test_validator_catches_dangling_reference():
 
 
 def test_for_server_strips_audit():
-    corpus = load_corpus(EXAMPLE_DB.parent, db=EXAMPLE_DB.name)
+    corpus = load_corpus(EXAMPLE_DB.parent, schema=EXAMPLE_DB.name)
     server_view = corpus.for_server()
     for asset in server_view.assets:
         assert getattr(asset, "audit", None) is None
@@ -123,7 +123,7 @@ def test_for_server_strips_audit():
 
 
 def test_for_server_drops_excluded_columns():
-    corpus = load_corpus(EXAMPLE_DB.parent, db=EXAMPLE_DB.name)
+    corpus = load_corpus(EXAMPLE_DB.parent, schema=EXAMPLE_DB.name)
     tx = next(a for a in corpus.assets if a.id == "tbl_beer_factory_transaction")
     # the PII column ships excluded in the corpus...
     assert any(
@@ -142,9 +142,9 @@ def test_for_server_drops_excluded_columns():
 
 def test_write_corpus_round_trip(tmp_path):
     """Load the example, write it out, load it back: same assets, still green."""
-    src = load_corpus(EXAMPLE_DB.parent, db="beer_factory")
+    src = load_corpus(EXAMPLE_DB.parent, schema="beer_factory")
     write_corpus(tmp_path, "beer_factory", src.assets, src.skills)
-    back = load_corpus(tmp_path, db="beer_factory")
+    back = load_corpus(tmp_path, schema="beer_factory")
 
     assert is_green(validate_corpus(back.assets))
     assert {a.id for a in back.assets} == {a.id for a in src.assets}

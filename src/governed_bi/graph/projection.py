@@ -63,7 +63,7 @@ def build_graph(corpus: "Corpus") -> nx.MultiDiGraph:
                 a.id,
                 kind=NODE_TABLE,
                 physical_name=a.physical_name,
-                db=a.db,
+                schema=a.schema,
                 row_count=a.row_count,
             )
             for col in a.columns:

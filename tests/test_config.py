@@ -26,7 +26,7 @@ _TOUCHED_ENV = (
     "MY_KEY",
     "GOVERNED_BI_CONFIG",
     "GOVERNED_BI_DOTENV",
-    "GOVERNED_BI_DB",
+    "GOVERNED_BI_SQLITE",
     "SINGLE",
 )
 
@@ -189,18 +189,18 @@ def test_dotenv_parses_comments_quotes_and_export(tmp_path, monkeypatch):
                 "# a comment line",
                 "",
                 'export OPENAI_API_KEY="sk-quoted"',
-                "GOVERNED_BI_DB=beer_factory  # inline comment",
+                "GOVERNED_BI_SQLITE=data/bird/beer_factory.sqlite  # inline comment",
                 "SINGLE='value'",
             ]
         ),
         encoding="utf-8",
     )
-    for k in ("OPENAI_API_KEY", "GOVERNED_BI_DB", "SINGLE"):
+    for k in ("OPENAI_API_KEY", "GOVERNED_BI_SQLITE", "SINGLE"):
         monkeypatch.delenv(k, raising=False)
     applied = load_dotenv(env)
     assert applied == {
         "OPENAI_API_KEY": "sk-quoted",
-        "GOVERNED_BI_DB": "beer_factory",
+        "GOVERNED_BI_SQLITE": "data/bird/beer_factory.sqlite",
         "SINGLE": "value",
     }
 

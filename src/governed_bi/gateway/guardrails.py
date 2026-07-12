@@ -84,7 +84,7 @@ def column_allowlist(corpus: "Corpus", *, multi_schema: bool = False) -> ColumnA
     Single-schema (``multi_schema=False``, the default): keys are two-part
     ``physical_name.column`` references - today's behavior, byte-for-byte. When
     ``multi_schema=True`` the keys are three-part ``{schema}.{physical_name}.{column}``
-    (schema = the table's ``db`` field) so a same-named column in two schemas does
+    (schema = the table's ``schema`` field) so a same-named column in two schemas does
     not collide.
     """
     allowed: set[str] = set()
@@ -92,7 +92,7 @@ def column_allowlist(corpus: "Corpus", *, multi_schema: bool = False) -> ColumnA
     for asset in corpus.assets:
         if not isinstance(asset, TableAsset) or asset.governance.excluded:
             continue
-        prefix = f"{asset.db}.{asset.physical_name}" if multi_schema else asset.physical_name
+        prefix = f"{asset.schema}.{asset.physical_name}" if multi_schema else asset.physical_name
         for col in asset.columns:
             if col.governance.excluded:
                 continue

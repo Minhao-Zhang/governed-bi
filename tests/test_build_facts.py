@@ -32,7 +32,7 @@ def test_build_facts_writes_facts_only_corpus(tmp_path):
     assert all(p.suffix == ".yaml" for p in written)
     assert (tmp_path / DB / "tables").is_dir()
 
-    corpus = load_corpus(tmp_path, db=DB)
+    corpus = load_corpus(tmp_path, schema=DB)
     tables = corpus.assets
     assert len(tables) >= 2
     assert "customers" in {t.physical_name for t in tables}  # a known beer_factory table
@@ -104,9 +104,9 @@ def test_build_facts_all_schemas(tmp_path):
     assert not (tmp_path / "public").exists()
 
     # Each subtree is a valid facts-only corpus namespaced to its schema.
-    corpus = load_corpus(tmp_path, db="s_one")
+    corpus = load_corpus(tmp_path, schema="s_one")
     assert [t.physical_name for t in corpus.assets] == ["t"]
-    assert corpus.assets[0].db == "s_one"
+    assert corpus.assets[0].schema == "s_one"
 
 
 def test_build_facts_all_schemas_multi_schema_pins_each_schema(tmp_path):

@@ -104,13 +104,13 @@ stream.submit(
 |---|---|
 | `GET /capabilities` | `{ environment, dialect, can_edit, edit_mode, can_stream, can_scope, can_search, has_live_model, model }`——据此控制 UI 功能的启用 |
 | `GET /health` | corpus 健康度：计数、`ci_green`、问题项、`n_suspect_columns`、`n_excluded`、`n_low_confidence_joins` |
-| `GET /schema` | 表 + 列（类型、角色、`reliability`、`excluded`、溯源）。可选 `?db=&limit=&offset=`（无参 = 全量 dump） |
-| `GET /schema/summary?db=&limit=&offset=` | **精简目录** `{ total, items }`，供虚拟化列表 + 客户端搜索索引使用；每个 item 为 `{ id, physical_name, db, row_count, n_columns, excluded, has_suspect, provenance_status, columns:[{physical_name, physical_type, role, reliability, excluded}] }`（重字段已丢弃；`total` 为分页前计数） |
-| `GET /schema/{table_id}` | 单张表的**完整** `TableResponse`，在打开详情时惰性拉取；未知 id 返回 `404` |
-| `GET /graph` | **ER 图**,表节点 + 连接边的 `{ nodes, edges }`(节点带 `row_count`/`n_columns`/`has_suspect`;边带 `on`/`cardinality`/`confidence`/`low_confidence`) |
-| `GET /knowledge-graph` | **完整知识图谱**,覆盖每种资产(table/join/metric/term/rule/few_shot/negative_example)的 `{ nodes, edges }`;边带类型 `join`/`measures`/`grounds`/`related:*`/`scopes`/`exemplifies`;按 `node.kind` 过滤/分层(表 + 连接即还原 ER 视图)。列在 `/schema` 里,这里不作为节点 |
+| `GET /schema` | 表 + 列（类型、角色、`reliability`、`excluded`、溯源）。命名空间字段为 **`schema`**。可选 `?schema=&limit=&offset=`（无参 = 全量 dump）。**不接受 `?db=`。** |
+| `GET /schema/summary?schema=&limit=&offset=` | **精简目录** `{ total, items }`，供虚拟化列表 + 客户端搜索索引使用；每个 item 为 `{ id, physical_name, schema, row_count, n_columns, excluded, has_suspect, provenance_status, columns:[{physical_name, physical_type, role, reliability, excluded}] }`（重字段已丢弃；`total` 为分页前计数） |
+| `GET /schema/{table_id}` | 单张表的**完整** `TableResponse`（含 `schema`），在打开详情时惰性拉取；未知 id 返回 `404` |
+| `GET /graph` | **ER 图** `{ nodes, edges, boundary?, meta? }`（节点带 `schema`/`row_count`/`n_columns`/`has_suspect`；边带 `on`/`cardinality`/`confidence`/`low_confidence`）。可选 D15 划范围：`?schema=&focus=&radius=&node_budget=`——划范围响应含 `boundary` + `meta`（回显 `scope` 供 `engineScopeMatches`）。无参 = 全图 |
+| `GET /knowledge-graph` | **完整知识图谱** `{ nodes, edges, boundary?, meta? }`；表节点带 `schema`。与 `/graph` 相同的划范围参数，外加 `?kinds=`（逗号分隔） |
 | `GET /corpus/assets?type=` | 非 table 资产（metric/term/join/rule/few_shot/negative） |
-| `GET /skills` | skills（markdown） |
+| `GET /skills` | skills（markdown）；每条带 **`schema`**。部分 corpus 可能为空——形状仍以 OpenAPI / zod 为准 |
 | `POST /corpus/edit` *（仅 dev；以 `can_edit` 为门槛）* | 校验提交的资产 → 写入 YAML（dev）/ 提交 PR（prod）；返回校验结果 + diff |
 
 ---
@@ -167,41 +167,37 @@ stream.submit(
 
 ---
 
-## 10. 多 schema 服务（已决定 —— D15，尚未落地）
+## 10. 多 schema 服务（D15 —— 线上更名 + 图划范围已落地）
 
-引擎正转向**一个数据库容纳多个 schema**，并支持可执行的**跨 schema 连接**
-（[design-decisions.md](design-decisions.zh.md) D15）。这是一个**已决定的方向，
-尚未落地**：上文的当前契约——以及 [openapi.json](openapi.json)——仍使用扁平的
-`db` 字段，并只服务单个 schema。现在请照当前契约开发；把本节视为对前端自己那份
-`DESIGN_QUESTIONS.md` 中导航方案的后端答复。
+引擎连接的是**一个数据库容纳多个 schema**，并支持可执行的**跨 schema 连接**
+（[design-decisions.md](design-decisions.zh.md) D15）。多 schema 服务（限定 SQL +
+护栏 + 缺失边拒答）、**API 线上字段更名**与 **服务端图划范围**已落地；
+[openapi.json](openapi.json) 与之一致。
 
-> **已发布（见 §4）：** 附加的只读层已上线——`GET /schema/summary`、
-> `GET /schema/{table_id}`、`/schema` 上可选的 `?db=&limit=&offset=`，以及
-> `can_scope`/`can_search` 标志。它仍使用扁平的 `db` 字段。**仍受门槛（D15 后端
-> 构建）：** `db → schema` 更名，以及 `focus`/`radius`/`node_budget` 有界图 +
-> `meta`/`boundary` 信封（Phase 2）。
+> **已发布（线上契约 + serve + 图划范围）：**
+> - 命名空间字段为 **`schema`**（`TableResponse` / `TableSummary` /
+>   `SkillResponse` / 图节点）。过滤只用 **`?schema=`**——硬切断，无 `?db=` 别名。
+> - `GET /schema/summary`、`GET /schema/{table_id}`、`can_scope` / `can_search`。
+> - Postgres/Redshift 默认多 schema；SQLite 保持单 schema（BIRD）。
+> - 跨 schema 且无策展 join → 拒答（`refused_by: "missing_edge"`）并带 D12
+>   `clarification_hint`。
+> - **`GET /graph` / `GET /knowledge-graph`** 接受 `?schema=` / `focus` /
+>   `radius` / `node_budget`（KG 另有 `kinds=`）。划范围响应含 `boundary`
+>   （跨 schema 桩边）+ `meta`（截断信息 + 回显 `scope` 供 `engineScopeMatches`）。
+>   无参 = 全图（兼容）。默认：ER 预算 60、KG 150、focus 半径 1；硬上限与之对齐。
+> - **磁盘 corpus：** YAML / `TableAsset.schema`（硬切断；原为 `db`）。加载/写入
+>   API 资产带 `schema=`；serve 加载全部 corpus 子树（无环境变量钉选）。
+> - **Schema 路由器：** 多 schema 服务先短名单 schema，再沿策展跨 schema join
+>   扩展，然后进入 RVGD（provenance 中有 `routed_schemas`）。
+>
+> **仍推迟：**
+> - 服务端 `/search`（按 Q6，客户端 Fuse 仍为默认）。
+> - `DataSourceConfig.db`（BIRD db_id / 默认写入子树）仍与 Postgres pin 字段
+>   `schema` 分开。
 
-预期的契约变化（请与发布协同一致）：
-
-- **`db` → `schema` 字段更名。** `TableResponse.db` 与 `SkillResponse.db` 变为
-  `schema`，ER/知识图谱节点也携带 `schema`。这是**唯一对外可见的 OpenAPI 破坏性
-  变更**——请在引擎发布时于 UI 侧同步更名。**不存在**单独的 `db`/连接层级
-  （数据库是服务端配置常量），因此导航主干是**单条 schema 边栏**，而不是两级的
-  `db → schema` 树。
-- **按需划定范围，而非整仓 dump。** 前端提议的精简、可划范围、分页端点
-  （`/schema/summary?schema=`、`/schema/{id}`，以及图上的
-  `?schema=&focus=&radius=&node_budget=`）被采纳为目标，并以新的能力标志为门槛。
-  以搜索优先的落地页加客户端 Fuse 索引为默认；服务端 `/search` 仍推迟。
-- **跨 schema 连接是可导航、可执行的关系，而非警告。** 由于只有一个数据库，跨
-  schema 连接*确实*能执行，因此前端的 Q7 反转了：把它渲染为可以进入的普通边界，
-  而不是治理警告。旧的跨*数据库*警告情形在这里不存在。
-- **拒答是一等的答案状态。** 当没有已策展的关系为某个问题连接两个 schema 时，引擎
-  会**拒答**，而不是硬造一个连接（D15）。请像现有拒答一样呈现它（升级提示，不给
-  SQL / 不给数字），并可选地作为一个通过澄清循环请求该关系的入口。
-- **新增能力标志**（`can_scope`、`can_search`）让 UI 点亮新流程，并在面对 D15
-  之前的引擎时回退到当前的扁平行为。
-
-以上都不触及聊天传输或答案卡片；它重塑的是 **Schema 标签页**的导航，并更名一个字段。
+对 UI 的契约要点：单条 `schema` 边栏；跨 schema join 可导航；缺失边拒答；当
+`meta.scope` 与请求一致时优先信任引擎划范围（`engineScopeMatches`），旧引擎仍可
+客户端回退。
 
 ---
 
@@ -223,39 +219,19 @@ stream.submit(
 
 ---
 
-## 12. 从哪里开始（现在可做 vs. 依赖后端）
+## 12. 从哪里开始（现在可做 vs. 仍依赖后端）
 
-D15 的多 schema 工作（§10）**已决定但尚未构建**，因此把工作一分为二。
+**现在可对着做：**
 
-**现在可做——客户端侧，向后兼容当前后端与 mock 模式：**
+- 线上命名空间只有 **`schema`**（§4 / [openapi.json](openapi.json)）。UI 发
+  `?schema=`；zod 只认 `schema`（无 `db` 双接受）。
+- `/schema`、`/schema/summary`、`/schema/{id}` 过滤/分页正确。
+- 图端点接受划范围参数并返回 `boundary` / `meta`（§10）。
+- 聊天、拒答（含 `missing_edge`）、`can_edit` 时的编辑。
 
-- `DESIGN_QUESTIONS.md` 的整个 **Phase 1**：以搜索优先的落地页加一个客户端
-  **Fuse** 索引；一个**惰性详情抽屉**（仅在打开某张表时才拉取其完整列/样本值）；
-  一个**虚拟化**的表浏览器；落地页按现有的 `db` 字段分组；以及渲染热点修复
-  （O(E·N) 的 `resolveEndpoints` map、按稳定的 scope key 记忆化 dagre、把
-  fitView-到-全图换成合理默认 + 跳转聚焦）。这些都不需要改动后端——它们跑在当前的
-  `/schema`、`/graph`、`/knowledge-graph` 之上，也能在 mock 模式下运行。
-- **现在后端也已上线（见 §4）：** `/schema/summary`（精简，带 `?db=&limit=&offset=`）、
-  `/schema/{table_id}`（惰性完整详情），以及 `can_scope`/`can_search` 标志。因此
-  Phase 1 可以直接对真实服务端目录做分页、惰性加载详情，而不只是客户端派生的摘要。
-  以 `capabilities.can_scope` 为门槛。
-- 一切已在 `langgraph dev` 后面跑通的东西（§8）：带实时阶段的聊天、答案卡片、
-  溯源抽屉，以及当前的 schema/图视图。
+**仍推迟：**
 
-**依赖 D15 后端构建（见 §10；尚未落地）：**
+- 服务端 `/search`（客户端 Fuse 仍为默认）。
 
-- `db → schema` 字段更名（唯一的破坏性 OpenAPI 变更；已上线的只读层仍用 `db`）。
-- **有界图**层——`/graph` 与 `/knowledge-graph` 上的 `focus`/`radius`/`node_budget`
-  划范围加 `meta` / `boundary` 信封，以及作为服务端划范围导航的 schema 边栏（**Phase 2**）。
-- 服务端 `/search`（客户端 Fuse 索引仍为默认）。
-
-把每一项依赖后端的功能都以 `capabilities.can_scope` / `can_search` 为门槛，并在
-标志缺失时回退到当前的扁平行为，这样 UI 面对当前引擎和 D15 引擎都能不加改动地运行。
-
-**更名协同（唯一的破坏性变更）。** `TableResponse` / `SkillResponse` 以及图节点上的
-`db → schema` 会在后端的一次发布中随版本号一起推出；UI 在同一次发布里更名 zod
-字段，在此之前继续读 `db`。UI 的失败即报（fail-loud）zod `.parse()` 会立刻暴露任何
-不匹配，因此两个仓库不会悄无声息地漂移。
-
-**新工程师的第一步：** 现在就做 Phase 1——它纯客户端、能立刻解决载荷/渲染问题、
-且不依赖后端。Phase 2 与字段更名等 D15 后端构建落地后再做。
+**新工程师第一步：** 对着已落地的 `schema` 线上契约做 Schema 标签页；图上优先信任
+与请求一致的引擎 `meta.scope`。

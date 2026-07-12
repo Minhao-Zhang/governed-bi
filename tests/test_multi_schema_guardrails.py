@@ -1,10 +1,9 @@
-"""D15 increment 2: the schema-qualified guardrail + mode-conditional qualification.
+"""D15: the schema-qualified guardrail + mode-conditional qualification.
 
-These tests exercise the MULTI-SCHEMA capability, which is built behind an explicit
-``multi_schema`` flag and is DORMANT at serve time (the flow pins it False). They run
-against a SYNTHETIC two-schema corpus built directly from ``TableAsset`` objects: a
-same-named table ``orders`` in ``db="schema_a"`` and ``db="schema_b"``, with a curated
-cross-schema ``JoinAsset``.
+These tests exercise the MULTI-SCHEMA capability (Postgres/Redshift default at
+serve time). They run against a SYNTHETIC two-schema corpus built directly from
+``TableAsset`` objects: a same-named table ``orders`` in ``schema="schema_a"`` and
+``schema="schema_b"``, with a curated cross-schema ``JoinAsset``.
 
 The single-schema / SQLite / BIRD path is covered (byte-for-byte) by
 ``test_guardrails.py`` and the rest of the suite; the final test here asserts that
@@ -58,13 +57,13 @@ def _corpus() -> Corpus:
     """
     schema_a = TableAsset(
         id=SCHEMA_A_ORDERS,
-        db="schema_a",
+        schema="schema_a",
         physical_name="orders",
         columns=[_col("order_id"), _col("amount"), _col("region", suspect=True)],
     )
     schema_b = TableAsset(
         id=SCHEMA_B_ORDERS,
-        db="schema_b",
+        schema="schema_b",
         physical_name="orders",
         columns=[_col("order_id"), _col("amount", suspect=True), _col("status")],
     )
@@ -356,7 +355,7 @@ def test_validate_flags_duplicate_db_physical_name():
     dup.assets.append(
         TableAsset(
             id="tbl_schema_a_orders_dup",
-            db="schema_a",
+            schema="schema_a",
             physical_name="orders",
             columns=[_col("order_id")],
         )

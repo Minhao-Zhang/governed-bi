@@ -20,6 +20,8 @@ LangGraph inspects the node's raw parameter annotation to decide whether to
 inject the ``RunnableConfig``, and a stringized annotation defeats that.
 """
 
+import asyncio
+import threading
 from typing import TYPE_CHECKING, Annotated, TypedDict
 
 from langchain_core.messages import AIMessage
@@ -154,13 +156,35 @@ def build_chat_graph(stack: "ServeStack"):
     return builder.compile()
 
 
-def make_graph(config: RunnableConfig | None = None):
-    """Factory referenced by ``langgraph.json`` (``graphs.serve``).
-
-    Builds the serve stack from the environment (see ``api.stack.build_stack``)
-    and returns the compiled chat graph. The server calls this once at startup
-    with a ``RunnableConfig``; tests may call it with no argument.
-    """
+def _build_graph():
+    """Sync build of the serve stack + chat graph (filesystem / config I/O)."""
     from governed_bi.api.stack import build_stack
 
     return build_chat_graph(build_stack())
+
+
+_GRAPH = None
+_GRAPH_LOCK = threading.Lock()
+
+
+def _get_or_build_graph():
+    """Build the chat graph once; safe to call from a worker thread."""
+    global _GRAPH
+    with _GRAPH_LOCK:
+        if _GRAPH is None:
+            _GRAPH = _build_graph()
+        return _GRAPH
+
+
+async def make_graph(config: RunnableConfig | None = None):
+    """Factory referenced by ``langgraph.json`` (``graphs.serve``).
+
+    Builds the serve stack from the environment (see ``api.stack.build_stack``)
+    off the event loop via ``asyncio.to_thread`` so corpus/config filesystem I/O
+    does not trip LangGraph's ASGI blockbuster. The compiled graph is cached for
+    subsequent runs. ``config`` is accepted for the LangGraph factory signature;
+    the stack is environment-driven.
+    """
+    if _GRAPH is not None:
+        return _GRAPH
+    return await asyncio.to_thread(_get_or_build_graph)

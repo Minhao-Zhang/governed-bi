@@ -13,22 +13,22 @@ _[English](README.md) · [简体中文](README.zh.md)_
 
 ```
 corpus/
-  <db>/
-    tables/      tbl_<db>_<name>.yaml      # columns inline
+  <schema>/
+    tables/      tbl_<schema>_<name>.yaml      # columns inline
     joins/       join_<left>_<right>.yaml
-    few-shots/   fs_<db>_<n>.yaml
+    few-shots/   fs_<schema>_<n>.yaml
     terms/       term_<name>.yaml
     metrics/     metric_<name>.yaml
     rules/       rule_<name>.yaml
-    negatives/   neg_<db>_<n>.yaml
+    negatives/   neg_<schema>_<n>.yaml
     skills/      *.md                        # prose gotchas / query-patterns
   _generated/    # search index, embeddings, compiled graph (gitignored)
 ```
 
-> **D15**：`<db>` 层级是 **schema**，而非数据库——一次运行的数据库（属于
-> connection-config 常量，并非语料建模的层级）可容纳多个 schema。D15 将字段 /
-> 目录 `db` 重命名为 `schema`（`corpus/<schema>/`、`tbl_<schema>_<name>`）：已决
-> 定，尚未落地——代码目前仍输出 `db`。
+> **D15**：`<schema>` 层级是 **schema** 命名空间，而非数据库——一次运行的数据库
+> （属于 connection-config 常量，并非语料建模的层级）可容纳多个 schema。磁盘
+> YAML 与 load/write API 使用字段/参数名 `schema`（相对 `db` 的硬切断）。资产
+> ID 不变。
 
 `beer_factory/` 是**完整参考示例**，基于真实的 BIRD `beer_factory` 数据库
 （`data/bird/beer_factory.sqlite`）编写而成。它覆盖了每一种资产类型，并针对该

@@ -133,7 +133,7 @@ class TemplateSqlGenerator:
             if not isinstance(base, TableAsset):
                 continue
             from_ref = (
-                f"{_quote(base.db)}.{_quote(base.physical_name)}"
+                f"{_quote(base.schema)}.{_quote(base.physical_name)}"
                 if self.multi_schema
                 else _quote(base.physical_name)
             )

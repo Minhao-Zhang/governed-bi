@@ -21,8 +21,11 @@ from __future__ import annotations
 from .presenter import (
     AnswerView,
     AssetRow,
+    BoundaryEdge,
     ColumnView,
     CorpusHealth,
+    GraphMeta,
+    GraphScopeApplied,
     KnowledgeGraphEdge,
     KnowledgeGraphNode,
     KnowledgeGraphView,
@@ -40,12 +43,16 @@ from .presenter import (
     skill_views,
     table_views,
 )
+from .scope import ScopeRequest, apply_er_scope, apply_kg_scope
 
 __all__ = [
     "AnswerView",
     "AssetRow",
+    "BoundaryEdge",
     "ColumnView",
     "CorpusHealth",
+    "GraphMeta",
+    "GraphScopeApplied",
     "KnowledgeGraphEdge",
     "KnowledgeGraphNode",
     "KnowledgeGraphView",
@@ -53,9 +60,12 @@ __all__ = [
     "SchemaGraphEdge",
     "SchemaGraphNode",
     "SchemaGraphView",
+    "ScopeRequest",
     "SkillView",
     "TableView",
     "answer_view",
+    "apply_er_scope",
+    "apply_kg_scope",
     "asset_rows",
     "corpus_health",
     "knowledge_graph",

@@ -2,7 +2,7 @@ asset_type: few_shot
 id: fs_beer_factory_001
 
 # ── Facts ──
-db: beer_factory
+schema: beer_factory
 
 # ── Inference ──
 question: "Which root beer brand has the highest average review rating?"

@@ -64,7 +64,7 @@ class ColumnView:
 class TableView:
     id: str
     physical_name: str
-    db: str
+    schema: str  # D15 namespace (corpus ``TableAsset.schema``)
     row_count: int | None
     description: str | None
     grain: str | None
@@ -96,7 +96,7 @@ class TableSummary:
 
     id: str
     physical_name: str
-    db: str
+    schema: str  # D15 namespace (corpus ``TableAsset.schema``)
     row_count: int | None
     n_columns: int
     excluded: bool
@@ -120,7 +120,7 @@ class AssetRow:
 class SkillView:
     skill_id: str
     kind: str
-    db: str
+    schema: str  # D15 namespace (skill ``SkillFrontmatter.schema``)
     body: str
 
 
@@ -155,6 +155,7 @@ class SchemaGraphNode:
     n_columns: int
     excluded: bool
     has_suspect: bool  # any column flagged suspect
+    schema: str | None = None  # D15 namespace (corpus ``TableAsset.schema``)
 
 
 @dataclass(frozen=True)
@@ -176,6 +177,8 @@ class SchemaGraphView:
 
     nodes: list[SchemaGraphNode]
     edges: list[SchemaGraphEdge]
+    boundary: list["BoundaryEdge"] = field(default_factory=list)
+    meta: "GraphMeta | None" = None
 
 
 @dataclass(frozen=True)
@@ -189,6 +192,7 @@ class KnowledgeGraphNode:
     provenance_status: str | None
     confidence: float | None = None
     has_suspect: bool = False  # tables only: any column flagged suspect
+    schema: str | None = None  # tables only: D15 namespace (corpus ``TableAsset.schema``)
 
 
 @dataclass(frozen=True)
@@ -209,6 +213,44 @@ class KnowledgeGraphView:
 
     nodes: list[KnowledgeGraphNode]
     edges: list[KnowledgeGraphEdge]
+    boundary: list["BoundaryEdge"] = field(default_factory=list)
+    meta: "GraphMeta | None" = None
+
+
+@dataclass(frozen=True)
+class GraphScopeApplied:
+    """Echo of the scope the server applied (UI ``engineScopeMatches``)."""
+
+    schema: str | None = None
+    focus: str | None = None
+    radius: int | None = None
+    node_budget: int | None = None
+
+
+@dataclass(frozen=True)
+class GraphMeta:
+    """Envelope metadata for a scoped/bounded graph response."""
+
+    total_nodes: int
+    returned_nodes: int
+    total_edges: int
+    truncated: bool = False
+    scope: GraphScopeApplied | None = None
+
+
+@dataclass(frozen=True)
+class BoundaryEdge:
+    """A curated cross-schema join with one endpoint outside the current scope."""
+
+    id: str
+    in_scope_table: str
+    other_schema: str
+    other_table_id: str
+    other_label: str
+    on: str
+    cardinality: str | None = None
+    confidence: float | None = None
+    low_confidence: bool = False
 
 
 @dataclass(frozen=True)
@@ -295,7 +337,7 @@ def _table_view(table: TableAsset) -> TableView:
     return TableView(
         id=table.id,
         physical_name=table.physical_name,
-        db=table.db,
+        schema=table.schema,
         row_count=table.row_count,
         description=table.description,
         grain=table.grain,
@@ -328,8 +370,8 @@ def table_view_by_id(corpus: "Corpus", table_id: str) -> TableView | None:
     return None
 
 
-def table_summaries(corpus: "Corpus", db: str | None = None) -> list[TableSummary]:
-    """Lean catalog rows, one per table asset, optionally filtered to one ``db``.
+def table_summaries(corpus: "Corpus", schema: str | None = None) -> list[TableSummary]:
+    """Lean catalog rows, one per table asset, optionally filtered to one schema.
 
     Drops the heavy per-column/per-table fields (sample values, evidence,
     descriptions) so the catalog list + client search index stay small; full
@@ -338,13 +380,13 @@ def table_summaries(corpus: "Corpus", db: str | None = None) -> list[TableSummar
     summaries: list[TableSummary] = []
     # id-ordered so offset/limit pagination is stable across processes (see table_views).
     for table in sorted(corpus.tables(), key=lambda t: t.id):
-        if db is not None and table.db != db:
+        if schema is not None and table.schema != schema:
             continue
         summaries.append(
             TableSummary(
                 id=table.id,
                 physical_name=table.physical_name,
-                db=table.db,
+                schema=table.schema,
                 row_count=table.row_count,
                 n_columns=len(table.columns),
                 excluded=table.governance.excluded,
@@ -407,7 +449,7 @@ def skill_views(corpus: "Corpus") -> list[SkillView]:
         SkillView(
             skill_id=skill.frontmatter.skill_id,
             kind=skill.frontmatter.kind.value,
-            db=skill.frontmatter.db,
+            schema=skill.frontmatter.schema,
             body=skill.body,
         )
         for skill in corpus.skills
@@ -432,6 +474,7 @@ def schema_graph(corpus: "Corpus") -> SchemaGraphView:
             n_columns=len(table.columns),
             excluded=table.governance.excluded,
             has_suspect=any(c.reliability.status.value == "suspect" for c in table.columns),
+            schema=table.schema,
         )
         for table in corpus.tables()
     ]
@@ -501,6 +544,7 @@ def knowledge_graph(corpus: "Corpus") -> KnowledgeGraphView:
                 provenance_status=_provenance_status(asset),
                 confidence=getattr(asset, "confidence", None),
                 has_suspect=has_suspect,
+                schema=asset.schema if isinstance(asset, TableAsset) else None,
             )
         )
         node_ids.add(asset.id)

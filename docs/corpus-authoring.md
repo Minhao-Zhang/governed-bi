@@ -38,10 +38,9 @@ table). One `<schema>` folder per schema; a single database may hold many
 schemas (D15).
 
 > **D15**: The folder is a _schema_ namespace, not a database — one database can
-> hold many schemas, joined across via qualified `schema.table` SQL. The rename
-> to `schema` is decided but not yet built, so the placeholders and IDs below
-> still say `db` (`<db>`, `corpus/<db>/`, `col_<db>_...`, the `db:` field); read
-> them as "schema".
+> hold many schemas, joined across via qualified `schema.table` SQL. On-disk YAML
+> and load/write APIs use the field/param name `schema` (hard cut from `db`).
+> Asset IDs such as `tbl_<schema>_<table>` are unchanged.
 
 ## 2. The three tiers (what you fill in)
 
@@ -64,7 +63,7 @@ asset_type: table
 id: tbl_demo_orders
 
 # Facts
-db: demo
+schema: demo
 physical_name: t_1
 row_count: 50000
 
@@ -202,7 +201,7 @@ references assets by ID and never restates their data.
 ```markdown
 ---
 skill_id: skill_demo_routing
-db: demo
+schema: demo
 kind: routing              # routing | gotchas | pattern | domain_overview
 provenance: { source: curator, status: draft, source_refs: [q1] }
 ---

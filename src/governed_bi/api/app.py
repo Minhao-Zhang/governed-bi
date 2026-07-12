@@ -12,9 +12,9 @@ import-time side effects (the stack is assembled only when the factory is called
     uv run --extra api uvicorn --factory governed_bi.api:create_app --reload
 
 Configure via env (see ``api.stack.build_stack``): ``GOVERNED_BI_CORPUS`` /
-``GOVERNED_BI_DB`` / ``GOVERNED_BI_SQLITE``, and ``GOVERNED_BI_CORS_ORIGINS``
-(comma-separated, default ``*``). Import stays free of FastAPI unless this module
-is used, keeping the core install lean.
+``GOVERNED_BI_SQLITE``, and ``GOVERNED_BI_CORS_ORIGINS`` (comma-separated,
+default ``*``). Import stays free of FastAPI unless this module is used, keeping
+the core install lean.
 """
 
 from __future__ import annotations
@@ -43,6 +43,53 @@ from .schemas import (
 from .stack import ServeStack, build_stack
 
 logger = logging.getLogger("governed_bi.api")
+
+
+def _corpus_subtree_for_asset(asset, corpus_root, current) -> str | None:
+    """Which ``corpus/<schema>/`` subtree an edit should write into.
+
+    Tables and few-shots carry ``schema`` on the asset. Other types inherit from
+    an existing on-disk file (same id) or from a referenced table
+    (metric.base_table / join endpoints / term binding).
+    """
+    from pathlib import Path
+
+    from ..corpus import (
+        FewShotAsset,
+        JoinAsset,
+        MetricAsset,
+        TableAsset,
+        TermAsset,
+        subdir_for_type,
+    )
+
+    if isinstance(asset, (TableAsset, FewShotAsset)):
+        return asset.schema
+
+    root = Path(corpus_root)
+    if root.is_dir():
+        for schema_dir in sorted(p for p in root.iterdir() if p.is_dir() and p.name != "_generated"):
+            candidate = schema_dir / subdir_for_type(asset.asset_type) / f"{asset.id}.yaml"
+            if candidate.is_file():
+                return schema_dir.name
+
+    def _table_schema(table_id: str) -> str | None:
+        found = current.by_id(table_id) if current is not None else None
+        return found.schema if isinstance(found, TableAsset) else None
+
+    if isinstance(asset, MetricAsset):
+        return _table_schema(asset.base_table)
+    if isinstance(asset, JoinAsset):
+        return _table_schema(asset.left_table) or _table_schema(asset.right_table)
+    if isinstance(asset, TermAsset) and asset.binding is not None:
+        bound = current.by_id(asset.binding.asset_id) if current is not None else None
+        if isinstance(bound, TableAsset):
+            return bound.schema
+        if isinstance(bound, FewShotAsset):
+            return bound.schema
+        if isinstance(bound, MetricAsset):
+            return _table_schema(bound.base_table)
+    return None
 
 
 def create_app(stack: ServeStack | None = None):
@@ -110,35 +157,35 @@ def create_app(stack: ServeStack | None = None):
 
     @app.get("/schema", response_model=list[TableResponse], tags=["schema"])
     def schema(
-        db: str | None = Query(None),
+        schema: str | None = Query(None, description="Filter to one schema namespace"),
         limit: int | None = Query(None, ge=0),
         offset: int = Query(0, ge=0),
     ) -> list[TableResponse]:
         """Every table with its columns (types, roles, governance flags).
 
-        Param-less this is the full dump (backward-compatible). ``db`` filters to
-        one namespace; ``limit``/``offset`` paginate (default: all rows, offset 0).
+        Param-less this is the full dump (backward-compatible). ``schema`` filters
+        to one namespace; ``limit``/``offset`` paginate (default: all rows, offset 0).
         """
         views = presenter.table_views(stack.corpus_full)
-        if db is not None:
-            views = [v for v in views if v.db == db]
+        if schema is not None:
+            views = [v for v in views if v.schema == schema]
         page = views[offset:] if limit is None else views[offset : offset + limit]
         return [TableResponse.model_validate(t) for t in page]
 
     @app.get("/schema/summary", response_model=SchemaSummaryResponse, tags=["schema"])
     def schema_summary(
-        db: str | None = Query(None),
+        schema: str | None = Query(None, description="Filter to one schema namespace"),
         limit: int | None = Query(None, ge=0),
         offset: int = Query(0, ge=0),
     ) -> SchemaSummaryResponse:
         """Lean catalog for the virtualized table list + the client search index.
 
         Heavy fields (sample_values, evidence, description) are dropped; fetch full
-        detail lazily via ``/schema/{table_id}``. ``db`` filters to one namespace;
-        ``limit``/``offset`` paginate (default: all rows, offset 0); ``total`` is
-        the count BEFORE pagination.
+        detail lazily via ``/schema/{table_id}``. ``schema`` filters to one
+        namespace; ``limit``/``offset`` paginate (default: all rows, offset 0);
+        ``total`` is the count BEFORE pagination.
         """
-        summaries = presenter.table_summaries(stack.corpus_full, db=db)
+        summaries = presenter.table_summaries(stack.corpus_full, schema=schema)
         total = len(summaries)
         page = summaries[offset:] if limit is None else summaries[offset : offset + limit]
         return SchemaSummaryResponse(
@@ -155,15 +202,57 @@ def create_app(stack: ServeStack | None = None):
         return TableResponse.model_validate(view)
 
     @app.get("/graph", response_model=SchemaGraphResponse, tags=["schema"])
-    def graph() -> SchemaGraphResponse:
-        """Table-relationship graph for the ER view (nodes + join edges)."""
-        return SchemaGraphResponse.model_validate(presenter.schema_graph(stack.corpus_full))
+    def graph(
+        schema: str | None = Query(None, description="Filter to one schema namespace"),
+        focus: str | None = Query(None, description="Focus table asset id for a neighborhood"),
+        radius: int | None = Query(None, ge=0, description="BFS hops from focus (default 1)"),
+        node_budget: int | None = Query(None, ge=1, description="Max nodes to return (capped)"),
+    ) -> SchemaGraphResponse:
+        """Table-relationship graph for the ER view (nodes + join edges).
+
+        Optional D15 scope: ``schema`` / ``focus`` / ``radius`` / ``node_budget``.
+        When scoped, the response includes ``boundary`` (cross-schema stubs) and
+        ``meta`` (truncation + echoed scope). Param-less = full graph.
+        """
+        from ..viz.scope import ScopeRequest, apply_er_scope
+
+        base = presenter.schema_graph(stack.corpus_full)
+        scoped = apply_er_scope(
+            base,
+            req=ScopeRequest(
+                schema=schema, focus=focus, radius=radius, node_budget=node_budget
+            ),
+        )
+        return SchemaGraphResponse.model_validate(scoped)
 
     @app.get("/knowledge-graph", response_model=KnowledgeGraphResponse, tags=["schema"])
-    def knowledge_graph() -> KnowledgeGraphResponse:
+    def knowledge_graph(
+        schema: str | None = Query(None, description="Filter to one schema namespace"),
+        focus: str | None = Query(None, description="Focus table asset id for a neighborhood"),
+        radius: int | None = Query(None, ge=0, description="BFS hops from focus (default 1)"),
+        node_budget: int | None = Query(None, ge=1, description="Max nodes to return (capped)"),
+        kinds: str | None = Query(
+            None, description="Comma-separated node kinds to keep (e.g. table,join)"
+        ),
+    ) -> KnowledgeGraphResponse:
         """Full corpus knowledge graph: every asset a node, typed relationships as
-        edges. Filter/layer by ``node.kind`` (e.g. tables + joins for the ER view)."""
-        return KnowledgeGraphResponse.model_validate(presenter.knowledge_graph(stack.corpus_full))
+        edges. Optional D15 scope (same as ``/graph``) plus ``kinds`` pre-filter.
+        When scoped, includes ``boundary`` + ``meta``. Param-less = full graph.
+        """
+        from ..viz.scope import ScopeRequest, apply_kg_scope, parse_kinds
+
+        base = presenter.knowledge_graph(stack.corpus_full)
+        scoped = apply_kg_scope(
+            base,
+            req=ScopeRequest(
+                schema=schema,
+                focus=focus,
+                radius=radius,
+                node_budget=node_budget,
+                kinds=parse_kinds(kinds),
+            ),
+        )
+        return KnowledgeGraphResponse.model_validate(scoped)
 
     @app.get("/corpus/assets", response_model=list[AssetRowResponse], tags=["corpus"])
     def corpus_assets(
@@ -193,6 +282,7 @@ def create_app(stack: ServeStack | None = None):
         from pydantic import ValidationError
 
         from ..corpus import (
+            Corpus,
             dump_asset,
             is_valid_id,
             load_corpus,
@@ -225,18 +315,31 @@ def create_app(stack: ServeStack | None = None):
         # the startup snapshot), so a sequence of edits in one process cannot persist
         # a corpus that breaks integrity, and external edits are seen too.
         try:
-            current = load_corpus(stack.corpus_root, db=stack.db)
+            current = load_corpus(stack.corpus_root)
             existing_assets = list(current.assets)
         except FileNotFoundError:
+            current = Corpus()
             existing_assets = []  # empty/new corpus tree: this asset is the first
         merged = [a for a in existing_assets if a.id != asset.id]
         merged.append(asset)
         findings = [str(f) for f in validate_corpus(merged)]
 
+        write_schema = _corpus_subtree_for_asset(asset, stack.corpus_root, current)
+
         # Canonical path only (no recursive glob): the asset's own file, never an
-        # arbitrary *.yaml elsewhere under the tree.
-        target = stack.corpus_root / stack.db / subdir_for_type(asset.asset_type) / f"{asset.id}.yaml"
-        old_text = target.read_text(encoding="utf-8") if target.exists() else ""
+        # arbitrary *.yaml elsewhere under the tree. When the subtree cannot be
+        # resolved yet (e.g. dangling base_table), still return findings / a
+        # content-only diff; refuse the write below.
+        if write_schema is not None:
+            target = (
+                stack.corpus_root
+                / write_schema
+                / subdir_for_type(asset.asset_type)
+                / f"{asset.id}.yaml"
+            )
+            old_text = target.read_text(encoding="utf-8") if target.exists() else ""
+        else:
+            old_text = ""
         new_text = dump_asset(asset)
         diff = "".join(
             difflib.unified_diff(
@@ -257,8 +360,14 @@ def create_app(stack: ServeStack | None = None):
                 diff=diff,
             )
 
+        if write_schema is None:
+            raise HTTPException(
+                status_code=422,
+                detail="cannot determine corpus/<schema>/ subtree for this asset",
+            )
+
         try:
-            written = write_corpus(stack.corpus_root, stack.db, [asset])
+            written = write_corpus(stack.corpus_root, write_schema, [asset])
         except OSError:
             logger.exception("corpus edit write failed (asset=%s)", asset.id)
             raise HTTPException(status_code=500, detail="failed to write the asset")

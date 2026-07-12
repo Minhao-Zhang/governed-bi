@@ -32,7 +32,7 @@ CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 
 @pytest.fixture
 def graph():
-    corpus = load_corpus(CORPUS_ROOT, db="beer_factory").for_server()
+    corpus = load_corpus(CORPUS_ROOT, schema="beer_factory").for_server()
     return build_graph(corpus)
 
 
@@ -65,7 +65,7 @@ def test_table_node_carries_facts(graph):
     data = graph.nodes["tbl_beer_factory_transaction"]
     assert data["kind"] == NODE_TABLE
     assert data["physical_name"] == "transaction"
-    assert data["db"] == "beer_factory"
+    assert data["schema"] == "beer_factory"
 
 
 # --------------------------------------------------------------------------- #
@@ -128,7 +128,7 @@ def test_no_phantom_nodes_from_excluded_reference():
     b_pk = derive_column_id("tbl_x_b", "id")
     a = TableAsset(
         id="tbl_x_a",
-        db="x",
+        schema="x",
         physical_name="a",
         columns=[
             Column(
@@ -143,7 +143,7 @@ def test_no_phantom_nodes_from_excluded_reference():
     )
     b = TableAsset(
         id="tbl_x_b",
-        db="x",
+        schema="x",
         physical_name="b",
         governance=Governance(excluded=True),
         columns=[

@@ -1,6 +1,6 @@
 """Corpus validation CLI.
 
-Loads a ``corpus/<db>/`` tree, runs the CI reference-integrity + ID checks, and
+Loads a ``corpus/<schema>/`` tree, runs the CI reference-integrity + ID checks, and
 prints findings. A green run is the curator's machine-checkable "done-enough"
 signal (D9). Physical-existence and few-shot leakage checks are skipped here:
 they need a live catalog / the eval split, so they belong to the eval harness.
@@ -33,8 +33,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "A green run is the curator's 'done-enough' signal (D9)."
         ),
         epilog=(
-            "PATH may be a corpus root (validates every <db> under it) or a single "
-            "<db> directory. Exit codes: 0 = green, 1 = findings, 2 = bad usage / path "
+            "PATH may be a corpus root (validates every <schema> under it) or a single "
+            "<schema> directory. Exit codes: 0 = green, 1 = findings, 2 = bad usage / path "
             "not found. Physical-existence and leakage checks are not run here."
         ),
     )
@@ -42,7 +42,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "path",
         nargs="?",
         default="corpus",
-        help="corpus root or a single <db> directory (default: %(default)s)",
+        help="corpus root or a single <schema> directory (default: %(default)s)",
     )
     return parser
 
@@ -55,9 +55,9 @@ def main(argv: list[str] | None = None) -> int:
     if not root.is_dir():
         parser.error(f"path not found: {root}")  # prints usage, exits 2
 
-    # Accept either a corpus root or a single <db> directory.
+    # Accept either a corpus root or a single <schema> directory.
     if (root / "tables").is_dir():
-        corpus = load_corpus(root.parent, db=root.name)
+        corpus = load_corpus(root.parent, schema=root.name)
     else:
         corpus = load_corpus(root)
 

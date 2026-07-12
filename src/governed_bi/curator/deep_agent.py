@@ -84,7 +84,7 @@ def _render_rows(result: Any, limit: int = 20) -> str:
 
 
 def curator_tools(
-    connector: "Connector", db: str, *, gateway: "Gateway | None" = None
+    connector: "Connector", schema: str, *, gateway: "Gateway | None" = None
 ) -> list[Callable[..., str]]:
     """Build the curator's grounded tool set (closures over the DB access).
 
@@ -96,7 +96,7 @@ def curator_tools(
         """Profile the database's Facts tier: for each table, its columns with
         types, uniqueness, and sample values. Read-only; the deterministic
         foundation you must not contradict."""
-        return _render_facts(profile_database(connector, db=db))
+        return _render_facts(profile_database(connector, schema=schema))
 
     tools: list[Callable[..., str]] = [profile_facts]
 
@@ -121,21 +121,21 @@ def build_curator_agent(
     model: Any,
     *,
     connector: "Connector",
-    db: str,
+    schema: str,
     gateway: "Gateway | None" = None,
     system_prompt: str | None = None,
 ):
-    """Build the curator deep agent for one database.
+    """Build the curator deep agent for one corpus schema namespace.
 
     ``model`` is a LangChain chat model instance or a ``"provider:model"`` spec
     (e.g. ``"openai:gpt-5.5"``). ``connector`` is used for Facts profiling;
     ``gateway`` (read-only) enables the ``run_probe_query`` falsification tool.
     Returns a compiled agent; invoke it with
-    ``{"messages": [{"role": "user", "content": "Curate <db>."}]}``. Construction
+    ``{"messages": [{"role": "user", "content": "Curate <schema>."}]}``. Construction
     is offline; running the loop needs a live model.
     """
     return create_deep_agent(
         model=model,
-        tools=curator_tools(connector, db, gateway=gateway),
+        tools=curator_tools(connector, schema, gateway=gateway),
         system_prompt=system_prompt or _CURATOR_PROMPT,
     )

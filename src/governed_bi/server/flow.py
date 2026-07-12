@@ -29,8 +29,8 @@ import sqlglot
 from sqlglot import exp
 
 from ..gateway import GuardrailLayer, check, column_allowlist
-from ..graph import build_graph, join_neighborhood, plan_joins
-from ..retrieval import retrieve
+from ..graph import build_graph, detect_missing_join_path, join_neighborhood, plan_joins
+from ..retrieval import filter_corpus_for_retrieval, retrieve, route_schemas
 from .answer import (
     LOW_CONFIDENCE_JOIN,
     RESULT_PREVIEW_ROWS,
@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from ..config import Settings
     from ..corpus import Corpus
     from ..gateway import Gateway, Identity, QueryResult
+    from ..graph import MissingJoinPath
     from ..llm import Embedder
     from ..memory import WorkingMemory
     from .cache import SqlCache
@@ -81,6 +82,10 @@ _ESCALATION_GUARDRAIL = (
 _ESCALATION_EXECUTION = (
     "The query could not be executed against the database. "
     "Contact the data owner if this persists."
+)
+_ESCALATION_MISSING_EDGE = (
+    "No curated relationship connects the schemas needed for this question. "
+    "Contact the data owner to declare a cross-schema join."
 )
 
 # Refuse-gate tuning: how much a question must overlap a curated example to count
@@ -157,6 +162,28 @@ def _licensed_table_ids(corpus, graph, retrieval, join_ids, *, hops=LICENSE_JOIN
             table_ids.add(join.right_table)
     table_ids |= join_neighborhood(graph, set(retrieval.table_ids), hops=hops)
     return frozenset(tid for tid in table_ids if isinstance(corpus.by_id(tid), TableAsset))
+
+
+def missing_edge_refusal(
+    base_provenance: dict,
+    missing: "MissingJoinPath",
+) -> Answer:
+    """Fail-closed Answer for a D15 cross-schema missing curated join."""
+    return refusal(
+        escalation=_ESCALATION_MISSING_EDGE,
+        provenance={
+            **base_provenance,
+            "refused_by": "missing_edge",
+            "table_ids": sorted(missing.table_ids),
+            "schemas": sorted(missing.schemas),
+            "reason": missing.reason,
+            "clarification_hint": {
+                "kind": "missing_cross_schema_join",
+                "schemas": sorted(missing.schemas),
+                "table_ids": sorted(missing.table_ids),
+            },
+        },
+    )
 
 
 def _suspect_in_scope(sql: str, suspect: frozenset[str], dialect: str | None) -> bool:
@@ -236,7 +263,11 @@ def _emit(on_event: "Callable[[dict], None] | None", stage: str, **detail) -> No
 
 def _try_cache_hit(
     cache, question, gateway, identity, settings, allowlist, dialect, graph, base_provenance,
-    *, narrator: "AnswerNarrator | None" = None, on_event: "Callable[[dict], None] | None" = None,
+    *,
+    multi_schema: bool = False,
+    default_schema: str | None = None,
+    narrator: "AnswerNarrator | None" = None,
+    on_event: "Callable[[dict], None] | None" = None,
 ) -> "Answer | None":
     """Serve a semantic-cache hit, or return None to fall through to the pipeline.
 
@@ -257,6 +288,8 @@ def _try_cache_hit(
         allowed_tables=entry.licensed_tables,
         hard_block_suspect=settings.hard_block_suspect_columns,
         dialect=dialect,
+        multi_schema=multi_schema,
+        default_schema=default_schema,
     )
     if not verdict.passed:
         return None
@@ -449,12 +482,10 @@ def answer_question(
         )
 
     dialect = gateway.catalog().dialect.value
-    # D15 increment 2 is DORMANT: the schema-qualified guardrail capability is
-    # gated on this flag, but multi-schema SERVING is deliberately NOT enabled
-    # here. The eventual value is derived from the datasource
-    # (``settings.datasource.is_multi_schema()``); it is pinned False so the
-    # single-schema / SQLite / BIRD path is byte-for-byte unchanged.
-    multi_schema = False
+    # D15: Postgres/Redshift default to multi-schema (qualified SQL + guardrails).
+    # SQLite stays single-schema so the BIRD graded path is unchanged.
+    multi_schema = settings.datasource.is_multi_schema()
+    default_schema = settings.datasource.schema if multi_schema else None
     allowlist = column_allowlist(corpus, multi_schema=multi_schema)
     graph = build_graph(corpus)
 
@@ -464,15 +495,40 @@ def answer_question(
     if cache is not None:
         hit = _try_cache_hit(
             cache, question, gateway, identity, settings, allowlist, dialect, graph, base_provenance,
-            narrator=narrator, on_event=on_event,
+            multi_schema=multi_schema,
+            default_schema=default_schema,
+            narrator=narrator,
+            on_event=on_event,
         )
         if hit is not None:
             return hit
 
     _emit(on_event, "retrieve")
-    retrieval = retrieve(corpus, question, embedder=embedder)
+    # D15: on multi-schema, shortlist schemas then expand along curated joins
+    # before RVGD so bridge tables in un-mentioned schemas are not dropped.
+    retrieval_corpus = corpus
+    routed_schemas: frozenset[str] | None = None
+    if multi_schema:
+        routed_schemas = route_schemas(corpus, question, embedder=embedder)
+        retrieval_corpus = filter_corpus_for_retrieval(corpus, routed_schemas)
+        _emit(on_event, "schema_route", schemas=sorted(routed_schemas))
+        base_provenance = {
+            **base_provenance,
+            "routed_schemas": sorted(routed_schemas),
+        }
+    retrieval = retrieve(retrieval_corpus, question, embedder=embedder)
 
-    generator = sql_generator or TemplateSqlGenerator()
+    generator = sql_generator or TemplateSqlGenerator(multi_schema=multi_schema)
+
+    # D15 missing-edge: cross-schema retrieval with no curated join path refuses
+    # before generate (do not invent a relationship). Within-schema disconnects
+    # still fall through to the repair / no_coverage path.
+    missing = detect_missing_join_path(
+        corpus, graph, set(retrieval.table_ids), multi_schema=multi_schema
+    )
+    if missing is not None:
+        _emit(on_event, "missing_edge", schemas=sorted(missing.schemas))
+        return missing_edge_refusal(base_provenance, missing)
 
     # L4 licensing scope: retrieval's tables, the Steiner points needed to connect
     # THEM, and their FK join-neighborhood (decoupling L4 from retrieval recall).
@@ -526,6 +582,7 @@ def answer_question(
             hard_block_suspect=settings.hard_block_suspect_columns,
             dialect=dialect,
             multi_schema=multi_schema,
+            default_schema=default_schema,
         )
         _emit(
             on_event,

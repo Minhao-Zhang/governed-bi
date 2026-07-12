@@ -25,7 +25,7 @@ CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 
 @pytest.fixture
 def corpus():
-    return load_corpus(CORPUS_ROOT, db="beer_factory").for_server()
+    return load_corpus(CORPUS_ROOT, schema="beer_factory").for_server()
 
 
 # --------------------------------------------------------------------------- #

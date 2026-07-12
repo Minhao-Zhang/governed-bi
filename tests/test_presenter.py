@@ -21,7 +21,7 @@ CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 @pytest.fixture
 def corpus():
     # The audit surface reads the FULL corpus (Audit + excluded assets), not for_server.
-    return load_corpus(CORPUS_ROOT, db="beer_factory")
+    return load_corpus(CORPUS_ROOT, schema="beer_factory")
 
 
 def test_corpus_health(corpus):
@@ -123,7 +123,7 @@ def test_knowledge_graph_dedups_self_join_and_redirects_column_targets():
         )
 
     table = TableAsset(
-        id="tbl_x_employees", db="x", physical_name="employees",
+        id="tbl_x_employees", schema="x", physical_name="employees",
         columns=[_col("EmployeeID"), _col("ManagerID")],
     )
     self_join = JoinAsset(

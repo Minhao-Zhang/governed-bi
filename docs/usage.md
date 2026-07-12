@@ -188,7 +188,7 @@ curl -s localhost:8000/chat -H 'content-type: application/json' \
   -d '{"question":"What is the total revenue?"}'
 ```
 
-Set `GOVERNED_BI_CORPUS`, `GOVERNED_BI_DB`, and `GOVERNED_BI_SQLITE` to point it
+Set `GOVERNED_BI_CORPUS` and `GOVERNED_BI_SQLITE` to point it
 at a different corpus / database. Because the display logic lives in the
 UI-agnostic `governed_bi.viz.presenter` (no UI dependency), a separate frontend
 can consume the same view models — the interactive UI is a separate project, see

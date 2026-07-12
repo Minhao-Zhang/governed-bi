@@ -24,7 +24,7 @@ REVIEW = "tbl_beer_factory_rootbeerreview"
 
 @pytest.fixture
 def corpus():
-    return load_corpus(CORPUS_ROOT, db="beer_factory").for_server()
+    return load_corpus(CORPUS_ROOT, schema="beer_factory").for_server()
 
 
 # --------------------------------------------------------------------------- #
@@ -151,7 +151,7 @@ def test_term_bound_to_column_grounds_owning_table():
     col_id = derive_column_id("tbl_shop_orders", "LifecycleStatus")
     table = TableAsset(
         id="tbl_shop_orders",
-        db="shop",
+        schema="shop",
         physical_name="orders",
         columns=[
             Column(

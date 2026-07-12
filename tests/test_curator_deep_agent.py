@@ -70,7 +70,7 @@ def test_build_curator_agent_constructs_offline(bird_connector):
     agent = build_curator_agent(
         FakeListChatModel(responses=["done"]),
         connector=bird_connector,
-        db="beer_factory",
+        schema="beer_factory",
         gateway=gateway,
     )
     assert hasattr(agent, "invoke")

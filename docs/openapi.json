@@ -12,7 +12,7 @@
           "meta"
         ],
         "summary": "Capabilities",
-        "description": "What this backend can do — the UI adapts its affordances to this.",
+        "description": "What this backend can do \u2014 the UI adapts its affordances to this.",
         "operationId": "capabilities_capabilities_get",
         "responses": {
           "200": {
@@ -80,11 +80,11 @@
           "schema"
         ],
         "summary": "Schema",
-        "description": "Every table with its columns (types, roles, governance flags).\n\nParam-less this is the full dump (backward-compatible). ``db`` filters to\none namespace; ``limit``/``offset`` paginate (default: all rows, offset 0).",
+        "description": "Every table with its columns (types, roles, governance flags).\n\nParam-less this is the full dump (backward-compatible). ``schema`` filters\nto one namespace; ``limit``/``offset`` paginate (default: all rows, offset 0).",
         "operationId": "schema_schema_get",
         "parameters": [
           {
-            "name": "db",
+            "name": "schema",
             "in": "query",
             "required": false,
             "schema": {
@@ -96,8 +96,10 @@
                   "type": "null"
                 }
               ],
-              "title": "Db"
-            }
+              "description": "Filter to one schema namespace",
+              "title": "Schema"
+            },
+            "description": "Filter to one schema namespace"
           },
           {
             "name": "limit",
@@ -162,11 +164,11 @@
           "schema"
         ],
         "summary": "Schema Summary",
-        "description": "Lean catalog for the virtualized table list + the client search index.\n\nHeavy fields (sample_values, evidence, description) are dropped; fetch full\ndetail lazily via ``/schema/{table_id}``. ``db`` filters to one namespace;\n``limit``/``offset`` paginate (default: all rows, offset 0); ``total`` is\nthe count BEFORE pagination.",
+        "description": "Lean catalog for the virtualized table list + the client search index.\n\nHeavy fields (sample_values, evidence, description) are dropped; fetch full\ndetail lazily via ``/schema/{table_id}``. ``schema`` filters to one\nnamespace; ``limit``/``offset`` paginate (default: all rows, offset 0);\n``total`` is the count BEFORE pagination.",
         "operationId": "schema_summary_schema_summary_get",
         "parameters": [
           {
-            "name": "db",
+            "name": "schema",
             "in": "query",
             "required": false,
             "schema": {
@@ -178,8 +180,10 @@
                   "type": "null"
                 }
               ],
-              "title": "Db"
-            }
+              "description": "Filter to one schema namespace",
+              "title": "Schema"
+            },
+            "description": "Filter to one schema namespace"
           },
           {
             "name": "limit",
@@ -283,8 +287,84 @@
           "schema"
         ],
         "summary": "Graph",
-        "description": "Table-relationship graph for the ER view (nodes + join edges).",
+        "description": "Table-relationship graph for the ER view (nodes + join edges).\n\nOptional D15 scope: ``schema`` / ``focus`` / ``radius`` / ``node_budget``.\nWhen scoped, the response includes ``boundary`` (cross-schema stubs) and\n``meta`` (truncation + echoed scope). Param-less = full graph.",
         "operationId": "graph_graph_get",
+        "parameters": [
+          {
+            "name": "schema",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to one schema namespace",
+              "title": "Schema"
+            },
+            "description": "Filter to one schema namespace"
+          },
+          {
+            "name": "focus",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Focus table asset id for a neighborhood",
+              "title": "Focus"
+            },
+            "description": "Focus table asset id for a neighborhood"
+          },
+          {
+            "name": "radius",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "BFS hops from focus (default 1)",
+              "title": "Radius"
+            },
+            "description": "BFS hops from focus (default 1)"
+          },
+          {
+            "name": "node_budget",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Max nodes to return (capped)",
+              "title": "Node Budget"
+            },
+            "description": "Max nodes to return (capped)"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -292,6 +372,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SchemaGraphResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -305,8 +395,102 @@
           "schema"
         ],
         "summary": "Knowledge Graph",
-        "description": "Full corpus knowledge graph: every asset a node, typed relationships as\nedges. Filter/layer by ``node.kind`` (e.g. tables + joins for the ER view).",
+        "description": "Full corpus knowledge graph: every asset a node, typed relationships as\nedges. Optional D15 scope (same as ``/graph``) plus ``kinds`` pre-filter.\nWhen scoped, includes ``boundary`` + ``meta``. Param-less = full graph.",
         "operationId": "knowledge_graph_knowledge_graph_get",
+        "parameters": [
+          {
+            "name": "schema",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to one schema namespace",
+              "title": "Schema"
+            },
+            "description": "Filter to one schema namespace"
+          },
+          {
+            "name": "focus",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Focus table asset id for a neighborhood",
+              "title": "Focus"
+            },
+            "description": "Focus table asset id for a neighborhood"
+          },
+          {
+            "name": "radius",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "BFS hops from focus (default 1)",
+              "title": "Radius"
+            },
+            "description": "BFS hops from focus (default 1)"
+          },
+          {
+            "name": "node_budget",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Max nodes to return (capped)",
+              "title": "Node Budget"
+            },
+            "description": "Max nodes to return (capped)"
+          },
+          {
+            "name": "kinds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Comma-separated node kinds to keep (e.g. table,join)",
+              "title": "Kinds"
+            },
+            "description": "Comma-separated node kinds to keep (e.g. table,join)"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -314,6 +498,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/KnowledgeGraphResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -611,6 +805,71 @@
           "excluded"
         ],
         "title": "AssetRowResponse"
+      },
+      "BoundaryEdgeResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "in_scope_table": {
+            "type": "string",
+            "title": "In Scope Table"
+          },
+          "other_schema": {
+            "type": "string",
+            "title": "Other Schema"
+          },
+          "other_table_id": {
+            "type": "string",
+            "title": "Other Table Id"
+          },
+          "other_label": {
+            "type": "string",
+            "title": "Other Label"
+          },
+          "on": {
+            "type": "string",
+            "title": "On"
+          },
+          "cardinality": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cardinality"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "low_confidence": {
+            "type": "boolean",
+            "title": "Low Confidence",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "in_scope_table",
+          "other_schema",
+          "other_table_id",
+          "other_label",
+          "on"
+        ],
+        "title": "BoundaryEdgeResponse"
       },
       "CapabilitiesResponse": {
         "properties": {
@@ -968,6 +1227,94 @@
         ],
         "title": "EditResponse"
       },
+      "GraphMetaResponse": {
+        "properties": {
+          "total_nodes": {
+            "type": "integer",
+            "title": "Total Nodes"
+          },
+          "returned_nodes": {
+            "type": "integer",
+            "title": "Returned Nodes"
+          },
+          "total_edges": {
+            "type": "integer",
+            "title": "Total Edges"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated",
+            "default": false
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphScopeResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "total_nodes",
+          "returned_nodes",
+          "total_edges"
+        ],
+        "title": "GraphMetaResponse"
+      },
+      "GraphScopeResponse": {
+        "properties": {
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schema"
+          },
+          "focus": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Focus"
+          },
+          "radius": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Radius"
+          },
+          "node_budget": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Budget"
+          }
+        },
+        "type": "object",
+        "title": "GraphScopeResponse"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1118,6 +1465,17 @@
             "type": "boolean",
             "title": "Has Suspect",
             "default": false
+          },
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schema"
           }
         },
         "type": "object",
@@ -1145,6 +1503,23 @@
             },
             "type": "array",
             "title": "Edges"
+          },
+          "boundary": {
+            "items": {
+              "$ref": "#/components/schemas/BoundaryEdgeResponse"
+            },
+            "type": "array",
+            "title": "Boundary"
+          },
+          "meta": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphMetaResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -1278,6 +1653,17 @@
           "has_suspect": {
             "type": "boolean",
             "title": "Has Suspect"
+          },
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schema"
           }
         },
         "type": "object",
@@ -1306,6 +1692,23 @@
             },
             "type": "array",
             "title": "Edges"
+          },
+          "boundary": {
+            "items": {
+              "$ref": "#/components/schemas/BoundaryEdgeResponse"
+            },
+            "type": "array",
+            "title": "Boundary"
+          },
+          "meta": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphMetaResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -1346,9 +1749,9 @@
             "type": "string",
             "title": "Kind"
           },
-          "db": {
+          "schema": {
             "type": "string",
-            "title": "Db"
+            "title": "Schema"
           },
           "body": {
             "type": "string",
@@ -1359,7 +1762,7 @@
         "required": [
           "skill_id",
           "kind",
-          "db",
+          "schema",
           "body"
         ],
         "title": "SkillResponse"
@@ -1374,9 +1777,9 @@
             "type": "string",
             "title": "Physical Name"
           },
-          "db": {
+          "schema": {
             "type": "string",
-            "title": "Db"
+            "title": "Schema"
           },
           "row_count": {
             "anyOf": [
@@ -1460,7 +1863,7 @@
         "required": [
           "id",
           "physical_name",
-          "db",
+          "schema",
           "row_count",
           "description",
           "grain",
@@ -1482,9 +1885,9 @@
             "type": "string",
             "title": "Physical Name"
           },
-          "db": {
+          "schema": {
             "type": "string",
-            "title": "Db"
+            "title": "Schema"
           },
           "row_count": {
             "anyOf": [
@@ -1532,7 +1935,7 @@
         "required": [
           "id",
           "physical_name",
-          "db",
+          "schema",
           "row_count",
           "n_columns",
           "excluded",

@@ -7,6 +7,13 @@ protocol seams for the durable stores (Episodic / Correction), which stay
 unimplemented by design: more memory often hurts, so they are adopted per-domain
 only when eval justifies them, and when adopted they are PR-gated exactly like
 the corpus.
+
+Schema identity (D15): working memory is session-scoped verbatim turns — any
+table names that appear are whatever SQL/prose the conversation already used
+(qualified ``schema.table`` under multi-schema serve). Durable episodic /
+correction recall, when enabled, keys by identity + question and promotes into
+corpus assets whose IDs already embed the schema namespace
+(``tbl_<schema>_<name>``); there is no separate schema key on these stores.
 """
 
 from __future__ import annotations
@@ -33,6 +40,10 @@ class InMemoryWorkingMemory:
     identity scope: the server mints one session per acting identity (D7), so a
     session id never spans users. ``max_turns`` optionally caps a session's
     history to the most recent N turns to bound growth; ``None`` keeps all turns.
+
+    Under multi-schema serve, prior turns may contain schema-qualified SQL; this
+    store does not parse or re-key them — the prompt context injects the text
+    as-is so follow-ups resolve against the same qualified names.
 
     This is the store the ``before_model`` middleware reads to inject prior
     context; the durable Episodic / Correction stores are deferred (see below).
@@ -66,6 +77,8 @@ class InMemoryWorkingMemory:
 # correction memory is correction-harvesting -> PR to a reference doc; promoted
 # episodic memory is a gated few-shot. One PR-gated corpus, not two governance
 # models, so there is no separate durable store to implement until then.
+# Schema namespace lives on the promoted corpus asset id (``tbl_<schema>_…``),
+# not as a parallel key on these protocols.
 # --------------------------------------------------------------------------- #
 
 
@@ -74,7 +87,8 @@ class EpisodicMemory(Protocol):
     """Past question -> outcome recall, identity-scoped and value-aware (D8).
 
     Off by default; a promoted episode becomes a gated ``few_shot`` asset in the
-    corpus rather than a parallel store.
+    corpus rather than a parallel store. Asset ids already embed the schema
+    namespace, so multi-schema deployments need no extra recall key here.
     """
 
     def recall(self, identity: str, question: str, *, limit: int = 5) -> list[Turn]: ...
@@ -86,7 +100,8 @@ class CorrectionMemory(Protocol):
     """Human corrections, identity-scoped (D8).
 
     Off by default; a harvested correction becomes a PR to a reference doc /
-    corpus asset rather than a parallel store.
+    corpus asset rather than a parallel store. Same schema-via-asset-id rule as
+    :class:`EpisodicMemory`.
     """
 
     def recall(self, identity: str, question: str, *, limit: int = 5) -> list[Turn]: ...

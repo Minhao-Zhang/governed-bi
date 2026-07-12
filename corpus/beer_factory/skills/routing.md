@@ -1,6 +1,6 @@
 ---
 skill_id: skill_beer_factory_routing
-db: beer_factory
+schema: beer_factory
 kind: routing
 provenance: { source: curator, status: draft }
 ---

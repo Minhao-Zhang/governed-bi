@@ -93,21 +93,22 @@ class DataSourceConfig:
     """
 
     kind: str = "sqlite"  # sqlite | postgres | redshift
-    db: str = "beer_factory"  # db_id / corpus namespace
+    db: str = "beer_factory"  # default corpus schema subtree / BIRD db_id
     sqlite_path: str = "data/bird/beer_factory.sqlite"  # kind=sqlite; repo-root-relative
     dsn: str | None = None  # kind=postgres/redshift: inline DSN (local, secret-free only)
     dsn_env: str | None = None  # ...or the env var holding the DSN (preferred)
-    schema: str | None = None  # postgres/redshift schema; None -> the connector default
-    multi_schema: bool = False  # postgres/redshift: span ALL user schemas (see is_multi_schema)
+    schema: str | None = None  # optional designated default for bare-ref L4 resolution
+    multi_schema: bool = True  # postgres/redshift default: span ALL user schemas (D15)
 
     def is_multi_schema(self) -> bool:
         """Whether this data source spans every user schema in one database.
 
-        True only for a Postgres/Redshift source with ``multi_schema`` set: the
-        connector then enumerates and introspects all user schemas (D15). It is an
-        **explicit** signal, deliberately *not* derived from ``schema is None`` -
-        SQLite runs with ``schema=None`` yet is always single-namespace. SQLite is
-        therefore always single-schema regardless of this flag.
+        True for Postgres/Redshift unless ``multi_schema`` is explicitly opted
+        out (``False``). The connector then enumerates and introspects all user
+        schemas (D15); SQL and guardrails use fully-qualified ``schema.table``.
+        SQLite is always single-schema regardless of this flag (BIRD graded path).
+        Opt out with ``multi_schema = false`` plus a pinned ``schema`` when a
+        deployment must stay single-schema on Postgres.
         """
         return self.multi_schema and self.kind.lower() in ("postgres", "redshift")
 
@@ -199,6 +200,27 @@ class Settings:
 _CONFIG_FILENAME = "governed_bi.toml"
 
 
+def _abspath(path: Path | str) -> Path:
+    """Normalize an already-absolute path without ``Path.resolve`` / ``os.getcwd``.
+
+    ``Path.resolve()`` calls ``os.path.realpath``, which uses ``getcwd`` and trips
+    LangGraph's ASGI blockbuster when path helpers run on the event loop. Repo
+    joins and ``__file__`` are already absolute; ``normpath`` collapses ``..``.
+    """
+    p = Path(path)
+    if not p.is_absolute():
+        raise ValueError(f"expected an absolute path, got {p!r}")
+    return Path(os.path.normpath(p))
+
+
+def _package_file() -> Path:
+    """Absolute path to this module, without ``Path.resolve()``."""
+    p = Path(__file__)
+    # ``__file__`` is absolute for normal package imports; keep a rare relative
+    # fallback for frozen/zip loaders (may use CWD - only at import time).
+    return _abspath(p if p.is_absolute() else os.path.abspath(p))
+
+
 def _default_config_path() -> Path | None:
     """Locate ``governed_bi.toml``: the env override, else walk up from here to
     the first ancestor that contains it. Returns None when no file is found (so
@@ -207,22 +229,32 @@ def _default_config_path() -> Path | None:
     if override:
         p = Path(override)
         return p if p.is_file() else None
-    for parent in Path(__file__).resolve().parents:
+    for parent in _package_file().parents:
         candidate = parent / _CONFIG_FILENAME
         if candidate.is_file():
             return candidate
     return None
 
 
-def _repo_root() -> Path:
+def _compute_repo_root() -> Path:
     """The repo root: the nearest ancestor of this file that holds
     ``governed_bi.toml`` or ``pyproject.toml``. Falls back to the package's
     grandparent (``src/governed_bi/`` -> repo root) if neither is found."""
-    here = Path(__file__).resolve()
+    here = _package_file()
     for parent in here.parents:
         if (parent / _CONFIG_FILENAME).is_file() or (parent / "pyproject.toml").is_file():
             return parent
     return here.parents[2]
+
+
+# Resolved once at import (outside request handlers) so later callers never need
+# filesystem walks that block under LangGraph's ASGI detector.
+_REPO_ROOT = _compute_repo_root()
+
+
+def _repo_root() -> Path:
+    """The repo root (see :func:`_compute_repo_root`). Cached at import."""
+    return _REPO_ROOT
 
 
 _CORPUS_ROOT_ENV = "GOVERNED_BI_CORPUS"
@@ -240,7 +272,7 @@ def resolve_corpus_root(value: str | Path | None = None) -> Path:
     """
     raw = value if value is not None else os.environ.get(_CORPUS_ROOT_ENV, _DEFAULT_CORPUS_ROOT)
     p = Path(raw)
-    return p.resolve() if p.is_absolute() else (_repo_root() / p).resolve()
+    return _abspath(p if p.is_absolute() else _repo_root() / p)
 
 
 def _model_config_from_table(table: dict) -> ModelConfig:
@@ -310,12 +342,20 @@ def _find_dotenv() -> Path | None:
     if override:
         p = Path(override)
         return p if p.is_file() else None
-    for parent in Path(__file__).resolve().parents:
+    for parent in _package_file().parents:
         candidate = parent / _DOTENV_FILENAME
         if candidate.is_file():
             return candidate
-    cwd_candidate = Path.cwd() / _DOTENV_FILENAME
-    return cwd_candidate if cwd_candidate.is_file() else None
+    # CWD fallback is a local convenience; skip it under a running event loop
+    # (``Path.cwd`` -> ``getcwd`` trips LangGraph's ASGI blockbuster).
+    try:
+        import asyncio
+
+        asyncio.get_running_loop()
+    except RuntimeError:
+        cwd_candidate = Path.cwd() / _DOTENV_FILENAME
+        return cwd_candidate if cwd_candidate.is_file() else None
+    return None
 
 
 def _parse_dotenv(text: str) -> dict[str, str]:

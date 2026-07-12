@@ -23,7 +23,7 @@ CUSTOMERS = "tbl_beer_factory_customers"
 
 @pytest.fixture
 def corpus():
-    return load_corpus(CORPUS_ROOT, db="beer_factory").for_server()
+    return load_corpus(CORPUS_ROOT, schema="beer_factory").for_server()
 
 
 def _context(corpus, question):

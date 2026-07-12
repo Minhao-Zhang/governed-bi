@@ -74,6 +74,31 @@ def test_build_stack_defaults_can_stream_false(monkeypatch):
     assert build_stack().can_stream is False
 
 
+def test_build_stack_fails_fast_when_sqlite_missing(tmp_path, monkeypatch):
+    # Startup must refuse a missing SQLite file instead of waiting for first chat.
+    monkeypatch.setenv("GOVERNED_BI_DB_KIND", "sqlite")
+    monkeypatch.setenv("GOVERNED_BI_SQLITE", str(tmp_path / "missing.sqlite"))
+    with pytest.raises(RuntimeError, match="datasource sqlite .* unavailable"):
+        build_stack()
+
+
+def test_verify_datasource_fails_fast_on_unreachable_postgres(monkeypatch):
+    # A down Postgres (docker not running) must fail in seconds, not hang ~2min.
+    pytest.importorskip("psycopg")
+    monkeypatch.setenv("GOVERNED_BI_DB_KIND", "postgres")
+    monkeypatch.setenv("GOVERNED_BI_DB_DSN_ENV", "TEST_PG_DSN")
+    # Port 1 is almost never a Postgres listener; short connect_timeout is set by
+    # build_connector / verify_datasource.
+    monkeypatch.setenv(
+        "TEST_PG_DSN",
+        "host=127.0.0.1 port=1 dbname=bird user=bird password=bird",
+    )
+    # build_stack loads corpus first; keep that on the committed fixture.
+    monkeypatch.delenv("GOVERNED_BI_CORPUS", raising=False)
+    with pytest.raises(RuntimeError, match="datasource postgres .* unavailable"):
+        build_stack()
+
+
 def test_routes_app_advertises_streaming():
     # routes.py is only mounted on the LangGraph server (which fronts the chat
     # graph), so it flips can_stream on.
@@ -111,15 +136,17 @@ def test_schema_param_less_is_unchanged(client):
     assert all("sample_values" in c for t in full for c in t["columns"])
 
 
-def test_schema_db_filter_and_pagination(client):
+def test_schema_filter_and_pagination(client):
     all_tables = client.get("/schema").json()
     assert len(all_tables) == 5
-    # db filter: the fixture corpus is a single namespace, so it keeps all rows.
-    assert len(client.get("/schema", params={"db": "beer_factory"}).json()) == 5
-    assert client.get("/schema", params={"db": "nope"}).json() == []
+    assert len(client.get("/schema", params={"schema": "beer_factory"}).json()) == 5
+    assert client.get("/schema", params={"schema": "nope"}).json() == []
+    # Hard cut: ``?db=`` is not a filter (ignored); only ``?schema=`` scopes.
+    assert len(client.get("/schema", params={"db": "nope"}).json()) == 5
     # limit/offset paginate against the same order.
     page = client.get("/schema", params={"limit": 2, "offset": 1}).json()
     assert [t["id"] for t in page] == [t["id"] for t in all_tables[1:3]]
+    assert all("schema" in t and "db" not in t for t in all_tables)
 
 
 def test_schema_summary_shape_and_heavy_fields_absent(client):
@@ -131,7 +158,7 @@ def test_schema_summary_shape_and_heavy_fields_absent(client):
     row = tables["customers"]
     # Lean table-level fields present; heavy ones dropped.
     assert set(row) == {
-        "id", "physical_name", "db", "row_count", "n_columns",
+        "id", "physical_name", "schema", "row_count", "n_columns",
         "excluded", "has_suspect", "provenance_status", "columns",
     }
     assert "description" not in row
@@ -148,11 +175,13 @@ def test_schema_summary_shape_and_heavy_fields_absent(client):
     assert any(c["excluded"] for c in txn["columns"])
 
 
-def test_schema_summary_db_filter(client):
-    assert client.get("/schema/summary", params={"db": "beer_factory"}).json()["total"] == 5
-    empty = client.get("/schema/summary", params={"db": "nope"}).json()
+def test_schema_summary_filter(client):
+    assert client.get("/schema/summary", params={"schema": "beer_factory"}).json()["total"] == 5
+    empty = client.get("/schema/summary", params={"schema": "nope"}).json()
     assert empty["total"] == 0
     assert empty["items"] == []
+    # Hard cut: ``?db=`` does not filter.
+    assert client.get("/schema/summary", params={"db": "nope"}).json()["total"] == 5
 
 
 def test_schema_summary_pagination_total_is_before_paging(client):
@@ -358,7 +387,7 @@ def _edit_client(tmp_path, **flags):
     # the corpus from corpus_root on each call, so writes and validation stay
     # consistent within the session.
     shutil.copytree(CORPUS_ROOT / "beer_factory", tmp_path / "beer_factory")
-    stack = replace(build_stack(), corpus_root=tmp_path, db="beer_factory", **flags)
+    stack = replace(build_stack(), corpus_root=tmp_path, **flags)
     return TestClient(create_app(stack))
 
 

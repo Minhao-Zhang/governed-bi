@@ -30,7 +30,8 @@ from typing import TYPE_CHECKING, Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from ..gateway import check, column_allowlist
-from ..graph import build_graph, plan_joins
+from ..graph import build_graph, detect_missing_join_path, plan_joins
+from ..retrieval import filter_corpus_for_retrieval, route_schemas
 from ..retrieval import retrieve as retrieve_assets
 from .answer import refusal
 from .context import assemble_context
@@ -44,6 +45,7 @@ from .flow import (
     _match_negative_example,
     _repairable_guardrail,
     _try_cache_hit,
+    missing_edge_refusal,
 )
 from .routing import bind_terms, route_intent
 from .sqlgen import TemplateSqlGenerator
@@ -107,15 +109,11 @@ def build_serve_graph(
     ``result["answer"]`` (or use :func:`answer_question_graph`). ``corpus`` should
     be the ``for_server()`` view.
     """
-    generator = sql_generator or TemplateSqlGenerator()
-
-    # D15 increment 2 is DORMANT: the schema-qualified guardrail capability is
-    # gated on this flag, but multi-schema SERVING is deliberately NOT enabled
-    # here. The eventual value is derived from the datasource
-    # (``settings.datasource.is_multi_schema()``); it is pinned False so the
-    # single-schema / SQLite / BIRD path is byte-for-byte unchanged. Mirrors
-    # ``flow.answer_question`` so the two entry points stay Answer-equivalent.
-    multi_schema = False
+    # D15: Postgres/Redshift default to multi-schema; SQLite stays single-schema
+    # (BIRD graded path). Mirrors ``flow.answer_question``.
+    multi_schema = settings.datasource.is_multi_schema()
+    default_schema = settings.datasource.schema if multi_schema else None
+    generator = sql_generator or TemplateSqlGenerator(multi_schema=multi_schema)
 
     # ── Nodes (close over the deployment dependencies) ──
 
@@ -172,13 +170,27 @@ def build_serve_graph(
             state["dialect"],
             state["graph_obj"],
             state["base_provenance"],
+            multi_schema=multi_schema,
+            default_schema=default_schema,
             narrator=narrator,
         )
         return {"answer": hit} if hit is not None else {}
 
     def retrieve_node(state: ServeState) -> dict:
         graph_obj = state["graph_obj"]
-        retrieval = retrieve_assets(corpus, state["question"], embedder=embedder)
+        question = state["question"]
+        retrieval_corpus = corpus
+        base_provenance = state["base_provenance"]
+        if multi_schema:
+            routed = route_schemas(corpus, question, embedder=embedder)
+            retrieval_corpus = filter_corpus_for_retrieval(corpus, routed)
+            base_provenance = {**base_provenance, "routed_schemas": sorted(routed)}
+        retrieval = retrieve_assets(retrieval_corpus, question, embedder=embedder)
+        missing = detect_missing_join_path(
+            corpus, graph_obj, set(retrieval.table_ids), multi_schema=multi_schema
+        )
+        if missing is not None:
+            return {"answer": missing_edge_refusal(base_provenance, missing)}
         try:
             licensing_join_ids = plan_joins(graph_obj, set(retrieval.table_ids)).join_ids
         except ValueError:
@@ -194,7 +206,14 @@ def build_serve_graph(
             history=history,
             multi_schema=multi_schema,
         )
-        return {"retrieval": retrieval, "context": context, "licensed": context.allowed_table_names()}
+        out: dict = {
+            "retrieval": retrieval,
+            "context": context,
+            "licensed": context.allowed_table_names(),
+        }
+        if base_provenance is not state["base_provenance"]:
+            out["base_provenance"] = base_provenance
+        return out
 
     def generate_node(state: ServeState) -> dict:
         generated = generator.generate(
@@ -226,6 +245,7 @@ def build_serve_graph(
             hard_block_suspect=settings.hard_block_suspect_columns,
             dialect=state["dialect"],
             multi_schema=multi_schema,
+            default_schema=default_schema,
         )
         if verdict.passed:
             return {"guard_passed": True}
@@ -277,6 +297,10 @@ def build_serve_graph(
     def after_cache(state: ServeState):
         return END if state.get("answer") is not None else "retrieve"
 
+    def after_retrieve(state: ServeState):
+        # D15 missing-edge refusal short-circuits before generate.
+        return END if state.get("answer") is not None else "generate"
+
     def after_generate(state: ServeState):
         # Declined (None) or no progress on the feedback -> fail closed.
         return "guardrail" if state.get("progress") else "refuse"
@@ -309,7 +333,7 @@ def build_serve_graph(
     builder.add_conditional_edges("refuse_gate", after_refuse_gate, ["prepare", END])
     builder.add_edge("prepare", "cache")
     builder.add_conditional_edges("cache", after_cache, ["retrieve", END])
-    builder.add_edge("retrieve", "generate")
+    builder.add_conditional_edges("retrieve", after_retrieve, ["generate", END])
     builder.add_conditional_edges("generate", after_generate, ["guardrail", "refuse"])
     builder.add_conditional_edges("guardrail", after_guardrail, ["execute", "generate", "refuse"])
     builder.add_conditional_edges("execute", after_execute, ["generate", "refuse", END])

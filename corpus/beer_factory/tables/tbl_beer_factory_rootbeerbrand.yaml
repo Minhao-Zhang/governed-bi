@@ -2,7 +2,7 @@ asset_type: table
 id: tbl_beer_factory_rootbeerbrand
 
 # ── Facts ──
-db: beer_factory
+schema: beer_factory
 physical_name: rootbeerbrand
 row_count: 24
 

@@ -81,7 +81,7 @@ def main() -> None:
     embedder = LangChainEmbedder.from_config(models)
     generator = LlmSqlGenerator(chat, dialect="sqlite")
 
-    corpus = load_corpus(CORPUS_ROOT, db="beer_factory").for_server()
+    corpus = load_corpus(CORPUS_ROOT, schema="beer_factory").for_server()
     settings = Settings.for_env(Environment.dev)
     identity = Identity(user="dev", all_access=True)
     connector = SqliteConnector(BIRD_DB)

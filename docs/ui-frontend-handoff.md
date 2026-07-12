@@ -105,13 +105,13 @@ the rework.
 |---|---|
 | `GET /capabilities` | `{ environment, dialect, can_edit, edit_mode, can_stream, can_scope, can_search, has_live_model, model }`; gate UI features on this |
 | `GET /health` | corpus health: counts, `ci_green`, findings, `n_suspect_columns`, `n_excluded`, `n_low_confidence_joins` |
-| `GET /schema` | tables + columns (types, roles, `reliability`, `excluded`, provenance). Optional `?db=&limit=&offset=` (param-less = the full dump) |
-| `GET /schema/summary?db=&limit=&offset=` | **lean catalog** `{ total, items }` for the virtualized list + client search index; each item `{ id, physical_name, db, row_count, n_columns, excluded, has_suspect, provenance_status, columns:[{physical_name, physical_type, role, reliability, excluded}] }` (heavy fields dropped; `total` is pre-pagination) |
-| `GET /schema/{table_id}` | one table's **full** `TableResponse`, fetched lazily on detail-open; `404` on unknown id |
-| `GET /graph` | **ER graph** `{ nodes, edges }` of tables + join edges (nodes carry `row_count`/`n_columns`/`has_suspect`; edges carry `on`/`cardinality`/`confidence`/`low_confidence`) |
-| `GET /knowledge-graph` | **full knowledge graph** `{ nodes, edges }` over every asset kind (table/join/metric/term/rule/few_shot/negative_example); edges typed `join`/`measures`/`grounds`/`related:*`/`scopes`/`exemplifies`; filter/layer by `node.kind` (tables + joins reproduces the ER view). Columns are in `/schema`, not nodes here |
+| `GET /schema` | tables + columns (types, roles, `reliability`, `excluded`, provenance). Namespace field is **`schema`**. Optional `?schema=&limit=&offset=` (param-less = the full dump). **`?db=` is not accepted.** |
+| `GET /schema/summary?schema=&limit=&offset=` | **lean catalog** `{ total, items }` for the virtualized list + client search index; each item `{ id, physical_name, schema, row_count, n_columns, excluded, has_suspect, provenance_status, columns:[{physical_name, physical_type, role, reliability, excluded}] }` (heavy fields dropped; `total` is pre-pagination) |
+| `GET /schema/{table_id}` | one table's **full** `TableResponse` (includes `schema`), fetched lazily on detail-open; `404` on unknown id |
+| `GET /graph` | **ER graph** `{ nodes, edges, boundary?, meta? }` of tables + join edges (nodes carry `schema` / `row_count` / `n_columns` / `has_suspect`; edges carry `on`/`cardinality`/`confidence`/`low_confidence`). Optional D15 scope: `?schema=&focus=&radius=&node_budget=` — scoped responses include `boundary` + `meta` (echoed `scope` for `engineScopeMatches`). Param-less = full graph |
+| `GET /knowledge-graph` | **full knowledge graph** `{ nodes, edges, boundary?, meta? }` over every asset kind (table/join/metric/term/rule/few_shot/negative_example); table nodes carry `schema`; edges typed `join`/`measures`/`grounds`/`related:*`/`scopes`/`exemplifies`. Same scope params as `/graph`, plus `?kinds=` (comma-separated) |
 | `GET /corpus/assets?type=` | non-table assets (metric/term/join/rule/few_shot/negative) |
-| `GET /skills` | skills (markdown) |
+| `GET /skills` | skills (markdown); each skill carries **`schema`** (wire). Empty on some corpora — shape is in OpenAPI / zod regardless |
 | `POST /corpus/edit` *(dev only; gated on `can_edit`)* | validate the submitted asset → write YAML (dev) / PR (prod); returns validation + diff |
 
 ---
@@ -173,48 +173,45 @@ Everything above is live behind `langgraph dev`; build against it now.
 
 ---
 
-## 10. Multi-schema serving (decided — D15, not yet shipped)
+## 10. Multi-schema serving (D15 — wire rename + graph scoping shipped)
 
-The engine is moving to **one database holding many schemas** with **executable
-cross-schema joins** ([design-decisions.md](design-decisions.md) D15). This is a
-**decided direction, not yet shipped**: today's contract above — and
-[openapi.json](openapi.json) — still uses the flat `db` field and serves a single
-schema. Build against the current contract now; treat this section as the backend
-answers to the navigation proposal in the frontend's own `DESIGN_QUESTIONS.md`.
+The engine connects to **one database holding many schemas** with **executable
+cross-schema joins** ([design-decisions.md](design-decisions.md) D15). Multi-schema
+serve (qualified SQL + guardrails + missing-edge refusal), the **API wire
+rename**, and **server-side graph scoping** are shipped; [openapi.json](openapi.json)
+matches.
 
-> **Shipped since (see §4):** the additive read layer is live — `GET /schema/summary`,
-> `GET /schema/{table_id}`, optional `?db=&limit=&offset=` on `/schema`, and the
-> `can_scope`/`can_search` flags. It still uses the flat `db` field. **Still gated
-> (the D15 backend build):** the `db → schema` rename, and the `focus`/`radius`/`node_budget`
-> bounded graph + `meta`/`boundary` envelope (Phase 2).
+> **Shipped (wire + serve + graph scope):**
+> - Namespace field is **`schema`** on `TableResponse`, `TableSummary`,
+>   `SkillResponse`, and graph nodes. Filters use **`?schema=` only** — no `?db=`
+>   alias (hard cut).
+> - `GET /schema/summary`, `GET /schema/{table_id}`, `can_scope` / `can_search`.
+> - Postgres/Redshift default to multi-schema; SQLite stays single-schema (BIRD).
+> - Cross-schema missing curated join → refuse (`refused_by: "missing_edge"`) with
+>   a D12 `clarification_hint`.
+> - **`GET /graph` / `GET /knowledge-graph`** accept `?schema=` / `focus` /
+>   `radius` / `node_budget` (KG also `kinds=`). Scoped responses include
+>   `boundary` (cross-schema stubs) + `meta` (truncation + echoed `scope` for
+>   `engineScopeMatches`). Param-less = full graph (back-compat). Defaults:
+>   ER budget 60, KG 150, focus radius 1; hard ceilings match.
+> - **On-disk corpus:** YAML / `TableAsset.schema` (hard cut; was `db`). Load/write
+>   APIs take `schema=` on assets; serve loads every corpus subtree (no env pin).
+> - **Schema router:** multi-schema serve shortlists schemas then expands along
+>   curated cross-schema joins before RVGD (`routed_schemas` in provenance).
+>
+> **Still deferred:**
+> - Server `/search` (client Fuse remains default per Q6).
+> - `DataSourceConfig.db` (BIRD db_id / default write subtree) still distinct from
+>   the Postgres pin field `schema`.
 
-Contract changes to expect (coordinate the release in lockstep):
+Contract notes for the UI:
 
-- **`db` → `schema` field rename.** `TableResponse.db` and `SkillResponse.db`
-  become `schema`, and the ER / knowledge-graph nodes carry `schema`. This is the
-  **one externally-visible OpenAPI break** — rename it in the UI in lockstep with
-  the engine release. There is **no** separate `db` / connection level (the
-  database is a server-config constant), so the navigation backbone is a **single
-  schema rail**, not a two-level `db → schema` tree.
-- **Scope-on-demand instead of whole-corpus dumps.** The lean, scopeable,
-  paginated endpoints the frontend proposed (`/schema/summary?schema=`,
-  `/schema/{id}`, and `?schema=&focus=&radius=&node_budget=` on the graphs) are
-  accepted as the target and gated on new capability flags. A search-first landing
-  with a client-side Fuse index is the default; a server `/search` stays deferred.
-- **Cross-schema joins are navigable, executable relationships — not warnings.**
-  With exactly one database, a cross-schema join *does* run, so the frontend's Q7
-  flips: render it as a normal boundary you can traverse into, not a governance
-  warning. The old cross-*database* warning case does not exist here.
-- **Refusal is a first-class answer state.** When no curated relationship connects
-  two schemas for a question, the engine **refuses** rather than guessing a join
-  (D15). Surface it like the existing refusal (escalation, no SQL / no number),
-  and optionally as a prompt to request the relationship via the clarification
-  loop.
-- **New capability flags** (`can_scope`, `can_search`) let the UI light up the new
-  flow and fall back to today's flat behavior against a pre-D15 engine.
-
-None of this touches the chat transport or the answer card; it reshapes the
-**Schema tab** navigation and renames a single field.
+- **Single `schema` rail** — no two-level `db → schema` tree (database is a
+  server-config constant).
+- **Cross-schema joins are navigable**, not warnings (one engine; Q7 flipped).
+- **Refusal** when no curated cross-schema join — surface like other refusals.
+- Prefer engine-scoped graphs when `meta.scope` matches (`engineScopeMatches`);
+  client re-scope remains the fallback for older engines.
 
 ---
 
@@ -236,47 +233,19 @@ The backend owner's answers to the eight questions in the frontend's
 
 ---
 
-## 12. Where to start (build now vs. gated on the backend)
+## 12. Where to start (build now vs. gated)
 
-The D15 multi-schema work (§10) is **decided but not yet built**, so split the work in two.
+**Live now — build against this:**
 
-**Build now — client-side, backward-compatible against today's backend and mock mode:**
+- Wire namespace is **`schema` only** (§4 / [openapi.json](openapi.json)). UI
+  sends `?schema=`; zod requires `schema` (no `db` dual-accept).
+- `/schema`, `/schema/summary`, `/schema/{id}` filter/page correctly.
+- Graph endpoints accept scope params and return `boundary` / `meta` (§10).
+- Chat, refusals (including `missing_edge`), editing when `can_edit`.
 
-- The whole **Phase 1** of `DESIGN_QUESTIONS.md`: a search-first landing with a
-  client **Fuse** index; a **lazy detail sheet** (fetch a table's full
-  columns/samples only when opened); a **virtualized** table browser; group the
-  landing by the existing `db` field; and the render hot-path fixes (the O(E·N)
-  `resolveEndpoints` map, memoizing dagre by a stable scope key, and replacing
-  fitView-to-everything with a sane default + jump-to-focus). None of this needs a
-  backend change — it runs against the current `/schema`, `/graph`,
-  `/knowledge-graph`, and in mock mode.
-- **Now also live on the backend (§4):** `/schema/summary` (lean, with
-  `?db=&limit=&offset=`), `/schema/{table_id}` (lazy full detail), and the
-  `can_scope`/`can_search` flags. So Phase 1 can page the real server catalog and
-  lazy-load detail directly, not only a client-derived summary. Gate on
-  `capabilities.can_scope`.
-- Everything already live behind `langgraph dev` (§8): chat with live stages, the
-  answer card, the provenance drawer, and the current schema/graph views.
+**Still deferred:**
 
-**Gated on the D15 backend build (see §10; not yet shipped):**
+- Server `/search` (client Fuse remains default).
 
-- The `db → schema` field rename (the one breaking OpenAPI change; the shipped
-  read layer still uses `db`).
-- The **bounded-graph** layer — `focus`/`radius`/`node_budget` scoping on `/graph`
-  and `/knowledge-graph` with the `meta` / `boundary` envelope, and the schema rail
-  as server-scoped navigation (**Phase 2**).
-- Server-side `/search` (the client Fuse index stays the default).
-
-Gate every gated item on `capabilities.can_scope` / `can_search` and fall back to
-today's flat behavior when the flags are absent, so the UI runs unchanged against
-both the current engine and the D15 engine.
-
-**Rename coordination (the one breaking change).** `db → schema` on
-`TableResponse` / `SkillResponse` and the graph nodes ships in a single backend
-release with a version bump; the UI renames the zod field in that same release and
-reads `db` until then. The UI's fail-loud zod `.parse()` surfaces any mismatch
-immediately, so the two repos cannot silently drift.
-
-**First move for a new engineer:** do Phase 1 now — it is client-only, fixes the
-payload/render problem immediately, and needs nothing from the backend. Hold
-Phase 2 and the field rename until the D15 backend build lands.
+**First move for a new engineer:** ship Schema-tab UX against the live
+`schema` wire; trust engine `meta.scope` on graphs when it matches the request.

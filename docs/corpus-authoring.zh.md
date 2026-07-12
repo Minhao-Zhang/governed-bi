@@ -27,7 +27,7 @@ corpus/
 
 每个资产对应一个 YAML 文件(列是例外：它们内联在所属的表中)。每个 schema 对应一个 `<schema>` 文件夹；一个数据库可以容纳多个 schema(D15)。
 
-> **D15**：这里的文件夹是一个 schema 命名空间，而非数据库——一个数据库可以容纳多个 schema，跨 schema 之间通过带限定名的 `schema.table` SQL 连接。改名为 `schema` 已经决定，但尚未落地，因此下文的占位符与 ID 仍写作 `db`（`<db>`、`corpus/<db>/`、`col_<db>_...`，以及 `db:` 字段）；请将它们理解为 schema。
+> **D15**：这里的文件夹是一个 schema 命名空间，而非数据库——一个数据库可以容纳多个 schema，跨 schema 之间通过带限定名的 `schema.table` SQL 连接。磁盘 YAML 与加载/写入 API 使用字段/参数名 `schema`（由 `db` 硬切断更名）。资产 ID（如 `tbl_<schema>_<table>`）保持不变。
 
 ## 2. 三个层级(你需要填写的内容)
 
@@ -48,7 +48,7 @@ asset_type: table
 id: tbl_demo_orders
 
 # Facts
-db: demo
+schema: demo
 physical_name: t_1
 row_count: 50000
 
@@ -176,7 +176,7 @@ confidence: 0.7
 ```markdown
 ---
 skill_id: skill_demo_routing
-db: demo
+schema: demo
 kind: routing              # routing | gotchas | pattern | domain_overview
 provenance: { source: curator, status: draft, source_refs: [q1] }
 ---

@@ -63,7 +63,7 @@ def _gap_table(columns: list[Column]) -> TableAsset:
     """A Facts-only table (no description/confidence): a table-level gap too."""
     return TableAsset(
         id="tbl_demo_orders",
-        db="demo",
+        schema="demo",
         physical_name="orders",
         columns=columns,
     )
@@ -222,7 +222,7 @@ def test_resolved_assets_round_trip_through_corpus(tmp_path):
     resolved = resolve_clarifications(emitted, responder)
 
     write_corpus(tmp_path, "demo", resolved)
-    back = load_corpus(tmp_path, db="demo")
+    back = load_corpus(tmp_path, schema="demo")
 
     [table] = back.tables()
     assert table.id == "tbl_demo_orders"

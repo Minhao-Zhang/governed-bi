@@ -46,7 +46,7 @@ def _facts_column(name, logical, *, is_unique, samples=None):
 def _orders_table():
     return TableAsset(
         id="tbl_demo_orders",
-        db="demo",
+        schema="demo",
         physical_name="orders",
         columns=[
             _facts_column("OrderID", LogicalType.integer, is_unique=True, samples=[1, 2, 3]),

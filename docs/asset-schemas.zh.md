@@ -111,7 +111,7 @@ asset_type: table
 id: tbl_beer_factory_customers
 
 # ── Facts (catalog/data) ──
-db: beer_factory                       # scoping namespace = the schema this belongs to (code field still `db`; D15 renames it `schema`)
+schema: beer_factory                   # scoping namespace = Postgres/Redshift schema / corpus subtree
 physical_name: customers               # identifier in the live DB
 row_count: 554
 
@@ -193,7 +193,7 @@ asset_type: few_shot
 id: fs_beer_factory_001
 
 # ── Facts ──
-db: beer_factory
+schema: beer_factory
 
 # ── Inference (curator selects/distills; server-consumed as a prompt exemplar) ──
 question: "Which root beer brand has the highest average review rating?"
@@ -313,7 +313,7 @@ audit:
 ---
 # skills/routing.md
 skill_id: skill_beer_factory_routing
-db: beer_factory
+schema: beer_factory
 kind: routing              # routing | gotchas | pattern | domain_overview
 provenance: { source: curator, status: draft }
 ---

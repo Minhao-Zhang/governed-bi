@@ -94,7 +94,7 @@ execute (as-user) → answer + provenance
 
 The full stage-by-stage design is in [Server](server.md), along with the three points where the curator's inference drives serve behavior.
 
-Per D15, on the multi-schema Postgres / Redshift path a join-aware schema router precedes RVGD retrieval, so retrieval spans schemas; the single-schema path skips it. Decided, not yet built.
+Per D15, on the multi-schema Postgres / Redshift path a join-aware schema router precedes RVGD retrieval, so retrieval spans schemas; the single-schema path skips it. **Shipped** (`retrieval.schema_router`; wired in `flow.py` / `graph.py`).
 
 > **SQL semantic cache fast path**
 >
@@ -107,7 +107,7 @@ Per D15, on the multi-schema Postgres / Redshift path a join-aware schema router
 
 Guardrails, in order (fail-closed on any, all five enforced): syntax → policy blacklist → AST column allowlist → term-semantics → cost. The AST allowlist is scope-aware (resolves each column against its own query scope and blocks star projections); term-semantics licenses the retrieved tables plus their FK join-neighborhood, the join plan's Steiner points (not just the exact retrieved set, so it is decoupled from retrieval recall), and any curated cross-schema join targets, and blocks any table name outside that licensed scope. The cost layer is a structural cross-join guard for now; numeric EXPLAIN-based cost (Postgres / Redshift) is future per-dialect work. Stage-by-stage detail is in [Server](server.md) step 8.
 
-> **D15: L4 scope is schema-qualified and spans schemas.** Cross-schema names are licensed only via a curated join — with none, the engine refuses rather than guessing. The single-schema / SQLite / BIRD path stays bare/unqualified. Decided, not yet built.
+> **D15: L4 scope is schema-qualified and spans schemas.** Cross-schema names are licensed only via a curated join — with none, the engine refuses rather than guessing. The single-schema / SQLite / BIRD path stays bare/unqualified. Guardrail + serve wiring + missing-edge refusal + join-aware schema router are shipped.
 
 > **Bounded self-repair (generation → guardrails → execution)**
 >

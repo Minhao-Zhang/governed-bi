@@ -13,22 +13,22 @@ Full spec: [`docs/asset-schemas.md`](../docs/asset-schemas.md).
 
 ```
 corpus/
-  <db>/
-    tables/      tbl_<db>_<name>.yaml      # columns inline
+  <schema>/
+    tables/      tbl_<schema>_<name>.yaml      # columns inline
     joins/       join_<left>_<right>.yaml
-    few-shots/   fs_<db>_<n>.yaml
+    few-shots/   fs_<schema>_<n>.yaml
     terms/       term_<name>.yaml
     metrics/     metric_<name>.yaml
     rules/       rule_<name>.yaml
-    negatives/   neg_<db>_<n>.yaml
+    negatives/   neg_<schema>_<n>.yaml
     skills/      *.md                        # prose gotchas / query-patterns
   _generated/    # search index, embeddings, compiled graph (gitignored)
 ```
 
-> **D15:** the `<db>` level is a **schema**, not a database — a run's database
-> (a connection-config constant, not a modeled corpus level) may hold many
-> schemas. D15 renames the field/dir `db` → `schema` (`corpus/<schema>/`,
-> `tbl_<schema>_<name>`): decided, not yet built — the code still emits `db`.
+> **D15:** the `<schema>` level is a **schema** namespace, not a database — a run's
+> database (a connection-config constant, not a modeled corpus level) may hold
+> many schemas. On-disk YAML and load/write APIs use the field/param name
+> `schema` (hard cut from `db`). Asset IDs are unchanged.
 
 `beer_factory/` is the **worked example**, authored over the real BIRD
 `beer_factory` database (`data/bird/beer_factory.sqlite`). It exercises every

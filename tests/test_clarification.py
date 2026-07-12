@@ -179,7 +179,7 @@ def test_accept_answer_rejects_unknown_edit_field():
 def test_clarification_never_reaches_server_view():
     table = TableAsset(
         id="tbl_demo_orders",
-        db="demo",
+        schema="demo",
         physical_name="orders",
         columns=[_column_with_open_question()],
         audit=Audit(

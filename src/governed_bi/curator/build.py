@@ -13,7 +13,7 @@ The semantic layer grows in layers, and only the first needs no AI:
   (``clarify_loop.py``) that a human answers, growing the layer over time.
 
 This module builds layer 1 and writes it to a corpus root. The output goes
-wherever the caller points it: ``data/generated/<db>/`` (rebuildable, gitignored)
+wherever the caller points it: ``data/generated/<schema>/`` (rebuildable, gitignored)
 by default, or the separate corpus repo (D13) via ``--out ../BIRD-corpus``.
 
 CLI::
@@ -37,18 +37,18 @@ if TYPE_CHECKING:
     from ..gateway.connectors.base import Connector
 
 
-def build_facts_corpus(connector: "Connector", db: str, root: Path | str) -> list[Path]:
-    """Profile ``db`` through ``connector`` and write the bare-minimum facts layer.
+def build_facts_corpus(connector: "Connector", schema: str, root: Path | str) -> list[Path]:
+    """Profile ``schema`` through ``connector`` and write the bare-minimum facts layer.
 
     Layer 1 of the corpus: :func:`profile_database` emits Facts-only
     :class:`~governed_bi.corpus.schemas.TableAsset` s (name/dtype/nullable/PK +
     samples, no full scans; no Inference tier), and
     :func:`~governed_bi.corpus.serialize.write_corpus` writes them under
-    ``root/<db>/``. No LLM, no network beyond the database. Returns the written
+    ``root/<schema>/``. No LLM, no network beyond the database. Returns the written
     paths. Connector-agnostic; the CLI wires the SQLite one.
     """
-    tables = profile_database(connector, db)
-    return write_corpus(root, db, tables)
+    tables = profile_database(connector, schema)
+    return write_corpus(root, schema, tables)
 
 
 def build_facts_all_schemas(
@@ -116,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=Path("data/generated"),
         help=(
-            "corpus root to write into (writes <out>/<db>/...); default data/generated. "
+            "corpus root to write into (writes <out>/<schema>/...); default data/generated. "
             "Use ../BIRD-corpus for the D13 benchmark corpus repo."
         ),
     )

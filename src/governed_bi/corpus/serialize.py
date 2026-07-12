@@ -1,13 +1,13 @@
 """Serialize parsed corpus assets back to the Git+YAML tree (D9).
 
-The loader reads ``corpus/<db>/`` into typed models; this writes them out again,
+The loader reads ``corpus/<schema>/`` into typed models; this writes them out again,
 closing the profile/curate -> disk -> load round trip. The output is valid YAML
 that ``load_corpus`` reads back to equivalent assets. Tier comments (``# Facts``)
 are not reproduced; they are cosmetic.
 
 Where the output goes is the caller's choice: the curated, human-audited corpus
-is committed under ``corpus/<db>/``; machine-generated output (profiled Facts,
-curator drafts) goes under ``data/generated/<db>/``, which is rebuildable and
+is committed under ``corpus/<schema>/``; machine-generated output (profiled Facts,
+curator drafts) goes under ``data/generated/<schema>/``, which is rebuildable and
 therefore gitignored.
 """
 
@@ -30,7 +30,7 @@ def subdir_for_type(asset_type: str) -> str:
     """The corpus subdirectory an ``asset_type`` is written to (e.g. ``metrics``).
 
     The single source of truth for an asset's on-disk location, so callers can
-    compute the canonical ``root/<db>/<subdir>/<id>.yaml`` path without a
+    compute the canonical ``root/<schema>/<subdir>/<id>.yaml`` path without a
     filesystem search. Raises ``KeyError`` for an unknown type.
     """
     return _SUBDIR_BY_TYPE[asset_type]
@@ -65,28 +65,28 @@ def dump_skill(skill: Skill) -> str:
 
 def write_corpus(
     root: Path | str,
-    db: str,
+    schema: str,
     assets: Iterable[Asset],
     skills: Iterable[Skill] = (),
 ) -> list[Path]:
-    """Write ``assets`` and ``skills`` into ``root/<db>/`` and return the paths.
+    """Write ``assets`` and ``skills`` into ``root/<schema>/`` and return the paths.
 
-    ``db`` selects the subtree, since join / term / metric / rule / negative
-    assets carry no ``db`` field (it is implied by their location). Creates the
+    ``schema`` selects the subtree, since join / term / metric / rule / negative
+    assets carry no ``schema`` field (it is implied by their location). Creates the
     per-type subdirectories as needed.
     """
-    db_dir = Path(root) / db
+    schema_dir = Path(root) / schema
     written: list[Path] = []
 
     for asset in assets:
-        out_dir = db_dir / _SUBDIR_BY_TYPE[asset.asset_type]
+        out_dir = schema_dir / _SUBDIR_BY_TYPE[asset.asset_type]
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / f"{asset.id}.yaml"
         path.write_text(dump_asset(asset), encoding="utf-8")
         written.append(path)
 
     for skill in skills:
-        out_dir = db_dir / "skills"
+        out_dir = schema_dir / "skills"
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / f"{skill.frontmatter.skill_id}.md"
         path.write_text(dump_skill(skill), encoding="utf-8")

@@ -1,4 +1,4 @@
-"""Load a ``corpus/<db>/`` tree and enforce the consumption contract.
+"""Load a ``corpus/<schema>/`` tree and enforce the consumption contract.
 
 Git is the single source of truth (D9); this loader reads the YAML typed assets
 and Markdown skills into memory. The **consumption contract** (docs/asset-schemas
@@ -81,7 +81,7 @@ class Skill:
 
 @dataclass
 class Corpus:
-    """An in-memory corpus for one DB (or several, if loaded together)."""
+    """An in-memory corpus for one schema (or several, if loaded together)."""
 
     assets: list[Asset] = field(default_factory=list)
     skills: list[Skill] = field(default_factory=list)
@@ -127,19 +127,23 @@ def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     return front, body
 
 
-def load_corpus(root: Path, db: str | None = None) -> Corpus:
-    """Load the corpus under ``root`` (a ``corpus/`` dir). If ``db`` is given,
-    load only ``root/<db>``; otherwise load every DB subdirectory."""
+def load_corpus(root: Path, schema: str | None = None) -> Corpus:
+    """Load the corpus under ``root`` (a ``corpus/`` dir). If ``schema`` is given,
+    load only ``root/<schema>``; otherwise load every schema subdirectory."""
     root = Path(root)
-    db_dirs = [root / db] if db else [p for p in root.iterdir() if p.is_dir() and p.name != "_generated"]
+    schema_dirs = (
+        [root / schema]
+        if schema
+        else [p for p in root.iterdir() if p.is_dir() and p.name != "_generated"]
+    )
 
     corpus = Corpus()
-    for db_dir in db_dirs:
+    for schema_dir in schema_dirs:
         for sub, _asset_type in _DIR_ASSET_TYPE.items():
-            for yaml_path in sorted((db_dir / sub).glob("*.yaml")):
+            for yaml_path in sorted((schema_dir / sub).glob("*.yaml")):
                 data = _load_yaml(yaml_path.read_text(encoding="utf-8"))
                 corpus.assets.append(parse_asset(data))
-        for md_path in sorted((db_dir / "skills").glob("*.md")):
+        for md_path in sorted((schema_dir / "skills").glob("*.md")):
             front, body = _split_frontmatter(md_path.read_text(encoding="utf-8"))
             corpus.skills.append(
                 Skill(frontmatter=parse_skill_frontmatter(front), body=body, path=md_path)

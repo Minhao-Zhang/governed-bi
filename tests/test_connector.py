@@ -133,7 +133,7 @@ def test_gateway_executes_and_audits(conn):
 
 
 def test_profile_database_emits_facts(conn):
-    tables = profile_database(conn, db="demo")
+    tables = profile_database(conn, schema="demo")
     ids = {t.id for t in tables}
     assert ids == {"tbl_demo_customers", "tbl_demo_orders"}
 
@@ -152,9 +152,9 @@ def test_profile_database_emits_facts(conn):
 
 def test_profile_write_load_round_trip(conn, tmp_path):
     """Close the loop: profile a DB -> write the tree -> load it back -> validate."""
-    assets = profile_database(conn, db="demo")
+    assets = profile_database(conn, schema="demo")
     write_corpus(tmp_path, "demo", assets)
-    back = load_corpus(tmp_path, db="demo")
+    back = load_corpus(tmp_path, schema="demo")
     assert {a.id for a in back.assets} == {a.id for a in assets}
     assert validate_corpus(back.assets) == []
 
@@ -165,16 +165,16 @@ def test_profile_write_load_round_trip(conn, tmp_path):
 
 
 def test_physical_existence_green(conn):
-    assets = profile_database(conn, db="demo")
+    assets = profile_database(conn, schema="demo")
     findings = validate_corpus(assets, connector=conn)
     assert findings == [], findings
 
 
 def test_physical_existence_flags_missing_table_and_column(conn):
-    ghost = TableAsset(id="tbl_demo_ghost", db="demo", physical_name="ghost")
+    ghost = TableAsset(id="tbl_demo_ghost", schema="demo", physical_name="ghost")
     bad_col = TableAsset(
         id="tbl_demo_ordersx",
-        db="demo",
+        schema="demo",
         physical_name="orders",
         columns=[
             Column(
@@ -205,7 +205,7 @@ def test_real_bird_db_end_to_end():
     try:
         tables = conn.list_tables()
         assert {"customers", "transaction"} <= set(tables)
-        assets = profile_database(conn, db="beer_factory")
+        assets = profile_database(conn, schema="beer_factory")
         assert len(assets) == len(tables)
         # Assets profiled from a DB must pass physical-existence against that DB.
         assert validate_corpus(assets, connector=conn) == []

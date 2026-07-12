@@ -54,10 +54,11 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
 > 撰写，以及逐资产、实际运行的 adversary `refute` · curator 的自评估 train-EX
 > 循环 · 经过混淆处理的 BIRD 评测数据（在 jsonl 数据到位之前，由内置的小型
 > beer_factory 数据集充当替身）· 针对**真实(live)** OpenAI API 的首次运行
-> （目前为止一切都基于离线模型替身运行）· **D15** 多 schema 构建：将 `db`
-> 更名为 `schema`、按模式区分的 schema 限定服务 + 护栏、以及全 schema 覆盖的
-> Postgres 连接器——已决定、尚未构建，因此 serve 路径仍输出 `db` 并只服务单个
-> schema。缺少评测数据，目前还无法通过这些
+> （目前为止一切都基于离线模型替身运行）· **D15** 多 schema 构建继续推进：线上
+> 更名 + 多 schema 服务 + 缺失边拒答 + 服务端图划范围 + 磁盘 YAML `schema` 字段 +
+> 连接感知 schema 路由器均**已落地**。仍推迟：服务端 `/search`（客户端 Fuse），以及将
+> `DataSourceConfig.db` 并入 pin 字段。缺少评测数据，
+> 目前还无法通过这些
 > 评测臂(arm)体现出护城河效应。
 
 > **未决（设计层面）**

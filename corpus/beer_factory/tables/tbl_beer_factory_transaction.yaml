@@ -2,7 +2,7 @@ asset_type: table
 id: tbl_beer_factory_transaction
 
 # ── Facts ──
-db: beer_factory
+schema: beer_factory
 physical_name: transaction
 row_count: 6312
 

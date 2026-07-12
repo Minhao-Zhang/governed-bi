@@ -58,11 +58,12 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
 > / skills) and the live per-asset adversary `refute` · the curator self-eval
 > train-EX loop · the obfuscated BIRD eval data (a small vendored beer_factory set
 > stands in until the jsonl lands) · a first run against a **live** OpenAI API
-> (everything so far uses the offline doubles) · the **D15** multi-schema build:
-> rename `db` → `schema`, mode-conditional schema-qualified serving + guardrail,
-> and a span-all Postgres connector — decided, not yet built, so the serve path
-> still emits `db` and serves a single schema. Without the eval data the arms
-> cannot yet show the moat.
+> (everything so far uses the offline doubles) · the **D15** multi-schema build
+> continues: wire rename + multi-schema serve + missing-edge refusal + server-side
+> graph scoping + on-disk YAML `schema` field + join-aware schema router are
+> **shipped**. Still deferred: server `/search` (client Fuse) and collapsing
+> `DataSourceConfig.db` into the pin field.
+> Without the eval data the arms cannot yet show the moat.
 
 > **Open (design-level)**
 >
