@@ -106,7 +106,14 @@ class TemplateSqlGenerator:
     ``feedback`` (and ``context``) and makes the same single attempt (the
     repair loop then stops on no-progress). Self-repair is exercised by a
     feedback-aware (model-backed) generator.
+
+    ``multi_schema`` (default ``False``) is the mode gate: when ``True`` the
+    emitted ``FROM`` is schema-qualified (``"schema"."table"``); the default
+    single-schema output (a bare quoted physical name) is unchanged.
     """
+
+    def __init__(self, *, multi_schema: bool = False) -> None:
+        self.multi_schema = multi_schema
 
     def generate(
         self,
@@ -125,10 +132,12 @@ class TemplateSqlGenerator:
             base = corpus.by_id(metric.base_table)
             if not isinstance(base, TableAsset):
                 continue
-            sql = (
-                f"SELECT {metric.expression} AS {_alias(metric.name)} "
-                f"FROM {_quote(base.physical_name)}"
+            from_ref = (
+                f"{_quote(base.db)}.{_quote(base.physical_name)}"
+                if self.multi_schema
+                else _quote(base.physical_name)
             )
+            sql = f"SELECT {metric.expression} AS {_alias(metric.name)} FROM {from_ref}"
             return GeneratedSql(
                 sql=sql,
                 tables_used=frozenset({metric.base_table}),
@@ -153,6 +162,36 @@ tables.
 Hard rules (a violation is rejected by a downstream guardrail, so follow them):
 - Use ONLY the physical table and column identifiers listed in the context below. \
 Do not invent, guess, or qualify names with a database/schema prefix.
+- Emit exactly ONE statement, and it MUST be a read-only SELECT (or a WITH ... \
+SELECT). Never DDL/DML (no INSERT/UPDATE/DELETE/DROP/ALTER/etc.).
+- Never SELECT *; project the specific columns you need.
+- NEVER reference a column marked "[SUSPECT - DO NOT USE]". Those are unreliable \
+decoys; using one is a correctness failure.
+- Prefer the metric definitions and gold examples when they fit the question, and \
+follow any guidance in the Skills section.
+- Join only along the join paths listed; prefer high-confidence joins.
+
+Output format:
+- Return ONLY the SQL, with no explanation and no markdown fences.
+- Target SQL dialect: {dialect}.
+- If the question cannot be answered from these tables, return exactly: \
+{cannot_answer}
+"""
+
+# Multi-schema variant (D15, dormant behind the mode gate): the tables live in
+# several schemas of one database, so every reference MUST be fully qualified as
+# ``schema.table`` (the guardrail rejects a bare or ambiguous name). Otherwise
+# identical to the single-schema prompt.
+_SYSTEM_PROMPT_MULTI_SCHEMA = """\
+You are a careful SQL generator for a governed analytics system. You translate a \
+business question into ONE read-only SQL query over a fixed, pre-authorised set of \
+tables that live in several schemas of ONE database.
+
+Hard rules (a violation is rejected by a downstream guardrail, so follow them):
+- Use ONLY the physical table and column identifiers listed in the context below, \
+and write EVERY table reference fully qualified as schema.table (the schema is \
+shown with each table). Do not use a bare table name and do not add a \
+database/catalog prefix beyond the schema.
 - Emit exactly ONE statement, and it MUST be a read-only SELECT (or a WITH ... \
 SELECT). Never DDL/DML (no INSERT/UPDATE/DELETE/DROP/ALTER/etc.).
 - Never SELECT *; project the specific columns you need.
@@ -203,12 +242,20 @@ def _extract_sql(response: str) -> str:
     return text.rstrip(";").strip()
 
 
-def _tables_used(sql: str, physical_to_id: dict[str, str], dialect: str | None) -> frozenset[str]:
+def _tables_used(
+    sql: str,
+    physical_to_id: dict[str, str],
+    dialect: str | None,
+    *,
+    multi_schema: bool = False,
+) -> frozenset[str]:
     """Map the physical table names in ``sql`` back to their asset ids.
 
     Best-effort: a parse failure or an unmapped name yields fewer ids, which only
     affects the reliability stamp's join plan - the guardrails re-parse the SQL
-    independently, so this is never a safety input.
+    independently, so this is never a safety input. In multi-schema mode the map
+    is keyed on the schema-qualified ``schema.table`` name (matching
+    :meth:`PromptContext.physical_to_id`).
     """
     try:
         tree = sqlglot.parse_one(sql, read=dialect)
@@ -216,7 +263,8 @@ def _tables_used(sql: str, physical_to_id: dict[str, str], dialect: str | None) 
         return frozenset()
     ids: set[str] = set()
     for table in tree.find_all(exp.Table):
-        asset_id = physical_to_id.get(table.name)
+        key = f"{table.db}.{table.name}" if multi_schema else table.name
+        asset_id = physical_to_id.get(key)
         if asset_id is not None:
             ids.add(asset_id)
     return frozenset(ids)
@@ -240,9 +288,12 @@ class LlmSqlGenerator:
     protocol.
     """
 
-    def __init__(self, chat: "ChatClient", *, dialect: str | None = None) -> None:
+    def __init__(
+        self, chat: "ChatClient", *, dialect: str | None = None, multi_schema: bool = False
+    ) -> None:
         self.chat = chat
         self.dialect = dialect
+        self.multi_schema = multi_schema
 
     def generate(
         self,
@@ -257,10 +308,14 @@ class LlmSqlGenerator:
         # the retrieved tables only (no FK-neighborhood widening).
         if context is None:
             context = assemble_context(
-                corpus, retrieval, licensed_table_ids=frozenset(retrieval.table_ids)
+                corpus,
+                retrieval,
+                licensed_table_ids=frozenset(retrieval.table_ids),
+                multi_schema=self.multi_schema,
             )
 
-        system = _SYSTEM_PROMPT.format(
+        template = _SYSTEM_PROMPT_MULTI_SCHEMA if self.multi_schema else _SYSTEM_PROMPT
+        system = template.format(
             dialect=self.dialect or "standard SQL", cannot_answer=_CANNOT_ANSWER
         )
         user = (
@@ -279,6 +334,8 @@ class LlmSqlGenerator:
 
         return GeneratedSql(
             sql=sql,
-            tables_used=_tables_used(sql, context.physical_to_id(), self.dialect),
+            tables_used=_tables_used(
+                sql, context.physical_to_id(), self.dialect, multi_schema=self.multi_schema
+            ),
             metric_id=None,
         )

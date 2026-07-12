@@ -109,6 +109,14 @@ def build_serve_graph(
     """
     generator = sql_generator or TemplateSqlGenerator()
 
+    # D15 increment 2 is DORMANT: the schema-qualified guardrail capability is
+    # gated on this flag, but multi-schema SERVING is deliberately NOT enabled
+    # here. The eventual value is derived from the datasource
+    # (``settings.datasource.is_multi_schema()``); it is pinned False so the
+    # single-schema / SQLite / BIRD path is byte-for-byte unchanged. Mirrors
+    # ``flow.answer_question`` so the two entry points stay Answer-equivalent.
+    multi_schema = False
+
     # ── Nodes (close over the deployment dependencies) ──
 
     def ingest(state: ServeState) -> dict:
@@ -147,7 +155,7 @@ def build_serve_graph(
     def prepare(state: ServeState) -> dict:
         return {
             "dialect": gateway.catalog().dialect.value,
-            "allowlist": column_allowlist(corpus),
+            "allowlist": column_allowlist(corpus, multi_schema=multi_schema),
             "graph_obj": build_graph(corpus),
         }
 
@@ -180,7 +188,11 @@ def build_serve_graph(
             working_memory.history(state["session_id"]) if working_memory is not None else ()
         )
         context = assemble_context(
-            corpus, retrieval, licensed_table_ids=licensed_ids, history=history
+            corpus,
+            retrieval,
+            licensed_table_ids=licensed_ids,
+            history=history,
+            multi_schema=multi_schema,
         )
         return {"retrieval": retrieval, "context": context, "licensed": context.allowed_table_names()}
 
@@ -213,6 +225,7 @@ def build_serve_graph(
             allowed_tables=state["licensed"],
             hard_block_suspect=settings.hard_block_suspect_columns,
             dialect=state["dialect"],
+            multi_schema=multi_schema,
         )
         if verdict.passed:
             return {"guard_passed": True}

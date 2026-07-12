@@ -449,7 +449,13 @@ def answer_question(
         )
 
     dialect = gateway.catalog().dialect.value
-    allowlist = column_allowlist(corpus)
+    # D15 increment 2 is DORMANT: the schema-qualified guardrail capability is
+    # gated on this flag, but multi-schema SERVING is deliberately NOT enabled
+    # here. The eventual value is derived from the datasource
+    # (``settings.datasource.is_multi_schema()``); it is pinned False so the
+    # single-schema / SQLite / BIRD path is byte-for-byte unchanged.
+    multi_schema = False
+    allowlist = column_allowlist(corpus, multi_schema=multi_schema)
     graph = build_graph(corpus)
 
     # SQL semantic-cache fast path (D7): a hit re-guardrails + re-executes stored
@@ -486,7 +492,7 @@ def answer_question(
     # follow-up can resolve references; the caller records this turn afterward.
     history = working_memory.history(session_id) if working_memory is not None else ()
     context = assemble_context(
-        corpus, retrieval, licensed_table_ids=licensed_ids, history=history
+        corpus, retrieval, licensed_table_ids=licensed_ids, history=history, multi_schema=multi_schema
     )
     licensed = context.allowed_table_names()
 
@@ -519,6 +525,7 @@ def answer_question(
             allowed_tables=licensed,
             hard_block_suspect=settings.hard_block_suspect_columns,
             dialect=dialect,
+            multi_schema=multi_schema,
         )
         _emit(
             on_event,

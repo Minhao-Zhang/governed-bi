@@ -88,6 +88,30 @@ def validate_corpus(
             findings.append(Finding("duplicate-id", a.id, "id used by more than one asset"))
         seen.add(a.id)
 
+    # -- (db, physical_name) uniqueness ------------------------------------- #
+    # The schema-qualified allowlist / L4 scope key on ``{db}.{physical_name}``
+    # (D15). Two tables sharing a (db, physical_name) make that qualified key
+    # ambiguous - the guardrail could not tell which table a column belongs to.
+    # Same-named tables in DIFFERENT schemas are fine (that is the whole point of
+    # multi-schema); only a collision within one schema is rejected. For a
+    # single-schema corpus this reduces to "physical_name is unique" and is a
+    # no-op for a well-formed one.
+    by_physical: dict[tuple[str, str], list[str]] = {}
+    for a in assets:
+        if isinstance(a, TableAsset):
+            by_physical.setdefault((a.db, a.physical_name), []).append(a.id)
+    for (db, physical_name), owners in by_physical.items():
+        if len(owners) > 1:
+            for owner in owners:
+                findings.append(
+                    Finding(
+                        "ambiguous-physical-table",
+                        owner,
+                        f"(db={db!r}, physical_name={physical_name!r}) is shared by "
+                        f"{sorted(owners)}; the schema-qualified allowlist key is ambiguous",
+                    )
+                )
+
     # -- Build resolvable id sets ------------------------------------------- #
     table_ids = {a.id for a in assets if isinstance(a, TableAsset)}
     metric_ids = {a.id for a in assets if isinstance(a, MetricAsset)}

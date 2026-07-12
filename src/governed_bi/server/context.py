@@ -66,6 +66,7 @@ class TableView:
     grain: str | None
     columns: list[ColumnView]
     retrieved: bool  # True: surfaced by retrieval; False: reachable only via a join
+    schema: str | None = None  # the table's scoping schema (its ``db``); qualifies L4 in multi-schema mode
 
 
 @dataclass(frozen=True)
@@ -125,14 +126,27 @@ class PromptContext:
     # only for a single-round eval call; every conversational caller passes the
     # session history so a follow-up ("what about last year?") resolves against it.
     conversation: list[tuple[str, str]] = field(default_factory=list)
+    # Mode gate (D15). False (default) => single-schema: bare physical names, today's
+    # behavior byte-for-byte. True => the licensed scope is schema-qualified.
+    multi_schema: bool = False
 
     def allowed_table_names(self) -> frozenset[str]:
-        """Physical names of the licensed tables - the L4 ``allowed_tables`` set."""
+        """The licensed tables - the L4 ``allowed_tables`` set.
+
+        Single-schema (default): bare physical names. Multi-schema: schema-qualified
+        ``{schema}.{physical_name}``, matching the guardrail's qualified L4 set.
+        """
+        if self.multi_schema:
+            return frozenset(f"{t.schema}.{t.physical_name}" for t in self.tables)
         return frozenset(t.physical_name for t in self.tables)
 
     def physical_to_id(self) -> dict[str, str]:
         """Map each licensed physical table name back to its asset id (for
-        resolving a generator's declared tables to ids)."""
+        resolving a generator's declared tables to ids). The key is the
+        schema-qualified name in multi-schema mode, matching
+        :meth:`allowed_table_names`."""
+        if self.multi_schema:
+            return {f"{t.schema}.{t.physical_name}": t.id for t in self.tables}
         return {t.physical_name: t.id for t in self.tables}
 
     def render(self) -> str:
@@ -167,6 +181,7 @@ def _table_view(table: TableAsset, *, retrieved: bool) -> TableView:
         grain=table.grain,
         columns=[_column_view(c) for c in table.columns],
         retrieved=retrieved,
+        schema=table.db,
     )
 
 
@@ -189,6 +204,7 @@ def assemble_context(
     licensed_table_ids: frozenset[str] | set[str],
     low_confidence_join: float = LOW_CONFIDENCE_JOIN,
     history: Sequence[tuple[str, str]] = (),
+    multi_schema: bool = False,
 ) -> PromptContext:
     """Resolve retrieval ids + the licensed table scope into a :class:`PromptContext`.
 
@@ -198,6 +214,12 @@ def assemble_context(
     ``retrieved``. Joins shown are every join asset internal to the licensed set,
     so the generator can bridge to a neighbor; low-confidence joins are flagged.
     ``corpus`` is expected to be the ``for_server()`` view.
+
+    ``multi_schema`` (default ``False``) is the mode gate: it is stored on the
+    returned context so :meth:`PromptContext.allowed_table_names` /
+    :meth:`PromptContext.physical_to_id` schema-qualify the licensed scope. It has
+    no effect on the assembled views otherwise, so the single-schema path is
+    unchanged.
     """
     retrieved_order = [tid for tid in retrieval.table_ids if tid in licensed_table_ids]
     retrieved_set = set(retrieved_order)
@@ -284,6 +306,7 @@ def assemble_context(
         skills=skills,
         caveats=caveats,
         conversation=list(history),
+        multi_schema=multi_schema,
     )
 
 
@@ -318,7 +341,10 @@ def _render(ctx: PromptContext) -> str:
     lines.append("## Tables (use ONLY these physical identifiers)")
     for tv in ctx.tables:
         tag = "" if tv.retrieved else "  [reachable only via a join]"
-        header = f"### {tv.physical_name}{tag}"
+        # Multi-schema: present the fully-qualified schema.table the guardrail
+        # requires; single-schema keeps the bare physical name (byte-for-byte).
+        name = f"{tv.schema}.{tv.physical_name}" if ctx.multi_schema else tv.physical_name
+        header = f"### {name}{tag}"
         if tv.grain:
             header += f"  (grain: {tv.grain})"
         lines.append(header)
