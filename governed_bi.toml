@@ -28,9 +28,8 @@ corpus_root = "corpus"
 provider = "openai"
 
 # LLM used by the curator proposer and the server SQL generator.
-# gpt-5.5 = the current generally-available flagship. (gpt-5.6-sol, the GPT-5.6
-# flagship tier, is limited-preview and 404s on accounts without access — switch
-# back to it here once your account is enabled.)
+# gpt-5.6-sol = GPT-5.6 flagship tier (account must have access; else 404).
+# Fall back to gpt-5.5 if your account is GA-only.
 llm_model = "gpt-5.6-sol"
 llm_reasoning_effort = "low" # none | low | medium | high | xhigh | max
 # llm_max_output_tokens = 4096   # omit for provider default

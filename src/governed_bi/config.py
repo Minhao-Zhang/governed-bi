@@ -59,7 +59,7 @@ class ModelConfig:
     """
 
     provider: str = "openai"
-    llm_model: str = "gpt-5.5"  # GA flagship; gpt-5.6-sol is limited-preview (404s without access)
+    llm_model: str = "gpt-5.6-sol"  # project default; swap in governed_bi.toml
     llm_reasoning_effort: str = "low"  # none | low | medium | high | xhigh | max (provider-specific)
     llm_max_output_tokens: int | None = None  # None = provider default
     embedding_model: str = "text-embedding-3-small"
