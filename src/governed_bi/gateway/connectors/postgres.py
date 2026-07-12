@@ -75,8 +75,8 @@ class PostgresConnector(Connector):
             # belt-and-suspenders, this is not a substitute for one.
             self._conn.read_only = True
 
-    def _qualified(self, table: str) -> str:
-        return f"{_ident(self.schema)}.{_ident(table)}"
+    def _qualified(self, table: str, schema: str | None = None) -> str:
+        return f"{_ident(schema or self.schema)}.{_ident(table)}"
 
     # -- cursor helpers: keep all cursor usage here so a fake connection is ---
     # -- trivial to test against ---------------------------------------------
@@ -92,12 +92,12 @@ class PostgresConnector(Connector):
 
     # -- catalog introspection --------------------------------------------- #
 
-    def list_tables(self) -> list[str]:
+    def list_tables(self, schema: str | None = None) -> list[str]:
         rows = self._fetchall(
             "SELECT table_name FROM information_schema.tables "
             "WHERE table_schema = %s AND table_type = 'BASE TABLE' "
             "ORDER BY table_name",
-            (self.schema,),
+            (schema or self.schema,),
         )
         return [r[0] for r in rows]
 
@@ -116,7 +116,7 @@ class PostgresConnector(Connector):
         )
         return [r[0] for r in rows]
 
-    def _column_specs(self, table: str) -> list[tuple[str, str, bool]]:
+    def _column_specs(self, table: str, schema: str | None = None) -> list[tuple[str, str, bool]]:
         """(name, raw data type, nullable) per column. Seam: Redshift overrides
         this for ``svv_*`` views; keep the SQL here only, not inlined elsewhere.
         """
@@ -125,7 +125,7 @@ class PostgresConnector(Connector):
             "FROM information_schema.columns "
             "WHERE table_schema = %s AND table_name = %s "
             "ORDER BY ordinal_position",
-            (self.schema, table),
+            (schema or self.schema, table),
         )
         specs: list[tuple[str, str, bool]] = []
         for name, data_type, is_nullable, char_len in rows:
@@ -133,7 +133,7 @@ class PostgresConnector(Connector):
             specs.append((name, raw_type, is_nullable == "YES"))
         return specs
 
-    def _primary_keys(self, table: str) -> set[str]:
+    def _primary_keys(self, table: str, schema: str | None = None) -> set[str]:
         """Primary-key column names. Seam: Redshift overrides this for ``svv_*``
         views; keep the SQL here only, not inlined elsewhere.
         """
@@ -145,36 +145,39 @@ class PostgresConnector(Connector):
             "AND tc.table_schema = kcu.table_schema "
             "WHERE tc.constraint_type = 'PRIMARY KEY' "
             "AND tc.table_schema = %s AND tc.table_name = %s",
-            (self.schema, table),
+            (schema or self.schema, table),
         )
         return {r[0] for r in rows}
 
-    def describe_table(self, table: str) -> TableInfo:
-        specs = self._column_specs(table)
+    def describe_table(self, table: str, schema: str | None = None) -> TableInfo:
+        specs = self._column_specs(table, schema)
         if not specs:
             raise ValueError(f"table not found: {table}")
-        pks = self._primary_keys(table)
+        pks = self._primary_keys(table, schema)
         columns = [
             ColumnInfo(name=n, data_type=t, nullable=nl, primary_key=(n in pks))
             for (n, t, nl) in specs
         ]
         return TableInfo(name=table, columns=columns)
 
-    def row_count(self, table: str) -> int:
-        row = self._fetchone(f"SELECT COUNT(*) FROM {self._qualified(table)}")
+    def row_count(self, table: str, schema: str | None = None) -> int:
+        row = self._fetchone(f"SELECT COUNT(*) FROM {self._qualified(table, schema)}")
         return int(row[0])
 
-    def sample_values(self, table: str, column: str, *, limit: int = 5) -> list[Any]:
+    def sample_values(
+        self, table: str, column: str, *, limit: int = 5, schema: str | None = None
+    ) -> list[Any]:
         # Plain LIMIT: first N rows, no DISTINCT/NOT NULL — stops immediately, no scan.
         rows = self._fetchall(
-            f"SELECT {_ident(column)} FROM {self._qualified(table)} LIMIT %s",
+            f"SELECT {_ident(column)} FROM {self._qualified(table, schema)} LIMIT %s",
             (limit,),
         )
         return [r[0] for r in rows]
 
-    def is_unique(self, table: str, column: str) -> bool:
+    def is_unique(self, table: str, column: str, schema: str | None = None) -> bool:
         row = self._fetchone(
-            f"SELECT COUNT(*), COUNT(DISTINCT {_ident(column)}) FROM {self._qualified(table)}"
+            f"SELECT COUNT(*), COUNT(DISTINCT {_ident(column)}) "
+            f"FROM {self._qualified(table, schema)}"
         )
         total, distinct = row
         # Non-null values are distinct and cover every row (no nulls). A PK qualifies.

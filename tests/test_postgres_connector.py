@@ -41,7 +41,10 @@ class FakeCursor:
             # DBAPI description entries are 7-tuples; only [0] (name) matters here.
             return (name, None, None, None, None, None, None)
 
-        if "information_schema.tables" in sql:
+        if "information_schema.schemata" in sql:
+            self.description = [col("schema_name")]
+            self._rows = [(name,) for name in self._conn.schemas_result]
+        elif "information_schema.tables" in sql:
             self.description = [col("table_name")]
             self._rows = [(name,) for name in self._conn.tables_result]
         elif "information_schema.columns" in sql:
@@ -104,6 +107,7 @@ class FakeConnection:
         self.closed = False
 
         self.tables_result: list[str] = []
+        self.schemas_result: list[str] = []
         self.columns_result: dict[str, list[tuple]] = {}
         self.pk_result: dict[str, list[str]] = {}
         self.row_count_result = 0
@@ -163,6 +167,77 @@ def test_list_tables_defaults_to_public_schema() -> None:
     pg.list_tables()
     _, params = conn.log[-1]
     assert params == ("public",)
+
+
+def test_list_tables_explicit_schema_arg_targets_that_schema() -> None:
+    # Explicit schema arg overrides the pinned schema for introspection (D15).
+    conn = FakeConnection()
+    pg = PostgresConnector("postgresql://x", connection=conn, schema="analytics")
+    pg.list_tables(schema="beer_factory")
+    _, params = conn.log[-1]
+    assert params == ("beer_factory",)  # explicit arg wins over the pin
+
+
+# --------------------------------------------------------------------------- #
+# list_schemas
+# --------------------------------------------------------------------------- #
+
+
+def test_list_schemas_enumerates_user_schemas() -> None:
+    conn = FakeConnection()
+    conn.schemas_result = ["beer_factory", "public", "sales"]
+    pg = PostgresConnector("postgresql://x", connection=conn)
+
+    schemas = pg.list_schemas()
+
+    assert schemas == ["beer_factory", "public", "sales"]
+    sql, _ = conn.log[-1]
+    assert "information_schema.schemata" in sql
+
+
+# --------------------------------------------------------------------------- #
+# schema-parameterized introspection: default == pinned (regression), explicit
+# schema targets that schema
+# --------------------------------------------------------------------------- #
+
+
+def test_describe_table_default_schema_matches_pin_but_explicit_overrides() -> None:
+    conn = FakeConnection()
+    conn.columns_result["users"] = [("id", "integer", "NO", None)]
+    conn.pk_result["users"] = ["id"]
+    pg = PostgresConnector("postgresql://x", connection=conn, schema="analytics")
+
+    # Default (no schema arg): uses the pinned schema in the column-specs query.
+    pg.describe_table("users")
+    col_calls = [(s, p) for s, p in conn.log if "information_schema.columns" in s]
+    assert col_calls[-1][1] == ("analytics", "users")
+
+    # Explicit schema arg targets that schema instead.
+    pg.describe_table("users", schema="beer_factory")
+    col_calls = [(s, p) for s, p in conn.log if "information_schema.columns" in s]
+    assert col_calls[-1][1] == ("beer_factory", "users")
+
+
+def test_row_count_sample_is_unique_honor_explicit_schema() -> None:
+    conn = FakeConnection()
+    conn.row_count_result = 7
+    conn.sample_values_result = ["a"]
+    conn.uniqueness_result = (7, 7)
+    pg = PostgresConnector("postgresql://x", connection=conn, schema="public")
+
+    # Default keeps today's behavior: pinned schema qualifies the table.
+    pg.row_count("t")
+    assert '"public"."t"' in conn.log[-1][0]
+
+    # Explicit schema qualifies with that schema instead.
+    pg.row_count("t", schema="beer_factory")
+    assert '"beer_factory"."t"' in conn.log[-1][0]
+
+    pg.sample_values("t", "c", limit=1, schema="beer_factory")
+    assert '"beer_factory"."t"' in conn.log[-1][0]
+
+    pg.is_unique("t", "c", schema="beer_factory")
+    assert '"beer_factory"."t"' in conn.log[-1][0]
 
 
 # --------------------------------------------------------------------------- #
@@ -355,3 +430,54 @@ def test_connection_seam_avoids_psycopg_import_entirely(monkeypatch) -> None:
     conn = FakeConnection()
     pg = postgres_mod.PostgresConnector("postgresql://x", connection=conn)
     assert pg.list_tables() == []
+
+
+# --------------------------------------------------------------------------- #
+# LIVE integration: pg_rename_decoy (D15 multi-schema span)
+#
+# Opt-in and self-skipping so the hermetic offline suite stays green: runs only
+# when PG_RENAME_DECOY_DSN is set, psycopg is importable, AND the connection
+# opens. Verifies that one connector spans every user schema and can introspect
+# a specific one (beer_factory) across the schema boundary.
+# --------------------------------------------------------------------------- #
+
+import os  # noqa: E402
+
+
+def _live_pg_connector():
+    """Open a real PostgresConnector against PG_RENAME_DECOY_DSN, or skip.
+
+    Skips (never fails) when the env var is absent, psycopg is not installed, or
+    the connection cannot be opened - keeping the offline suite deterministic.
+    """
+    dsn = os.environ.get("PG_RENAME_DECOY_DSN")
+    if not dsn:
+        pytest.skip("PG_RENAME_DECOY_DSN not set; skipping live Postgres integration test")
+    try:
+        import psycopg  # noqa: F401
+    except ImportError:
+        pytest.skip("psycopg not installed (uv sync --extra postgres); skipping live test")
+    try:
+        # schema unpinned -> span-all-capable, exactly as factory builds it for
+        # a multi_schema datasource.
+        return PostgresConnector(dsn, schema=None)
+    except Exception as e:  # pragma: no cover - environment-dependent
+        pytest.skip(f"could not connect to PG_RENAME_DECOY_DSN: {e}")
+
+
+def test_live_pg_rename_decoy_spans_schemas_and_introspects_beer_factory() -> None:
+    pg = _live_pg_connector()
+    try:
+        schemas = pg.list_schemas()
+        # One connection sees many user schemas, including the beer_factory db_id.
+        assert len(schemas) > 1, f"expected multiple user schemas, got {schemas!r}"
+        assert "beer_factory" in schemas, f"beer_factory not among schemas: {schemas!r}"
+
+        # Introspecting a specific schema across the boundary yields its tables.
+        tables = pg.list_tables(schema="beer_factory")
+        assert tables, "expected beer_factory to expose at least one table"
+        # And a table can be described within that schema.
+        info = pg.describe_table(tables[0], schema="beer_factory")
+        assert info.columns, f"expected columns for {tables[0]!r} in beer_factory"
+    finally:
+        pg.close()

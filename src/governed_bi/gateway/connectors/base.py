@@ -60,27 +60,50 @@ class Connector(ABC):
 
     # -- catalog introspection --------------------------------------------- #
     @abstractmethod
-    def list_tables(self) -> list[str]:
-        """Physical table names, excluding system tables."""
+    def list_schemas(self) -> list[str]:
+        """Every user schema (namespace) this connection can introspect.
+
+        Schema-bearing engines (Postgres/Redshift) enumerate their user schemas -
+        one per db_id in the BIRD-Obfuscation instances - so one connector can
+        span the whole database (D15). Schemaless engines (SQLite) have no schema
+        level, so they return a single logical namespace.
+        """
 
     @abstractmethod
-    def describe_table(self, table: str) -> TableInfo:
-        """Columns (name, raw type, nullability, PK flag) for one table."""
+    def list_tables(self, schema: str | None = None) -> list[str]:
+        """Physical table names, excluding system tables.
+
+        ``schema`` selects which namespace to introspect; ``None`` (the default)
+        means the connector's pinned schema, so single-schema callers are
+        unaffected. Schemaless engines ignore it.
+        """
 
     @abstractmethod
-    def row_count(self, table: str) -> int: ...
+    def describe_table(self, table: str, schema: str | None = None) -> TableInfo:
+        """Columns (name, raw type, nullability, PK flag) for one table.
+
+        ``schema`` defaults to the connector's pinned schema (see
+        :meth:`list_tables`)."""
 
     @abstractmethod
-    def sample_values(self, table: str, column: str, *, limit: int = 5) -> list[Any]:
+    def row_count(self, table: str, schema: str | None = None) -> int: ...
+
+    @abstractmethod
+    def sample_values(
+        self, table: str, column: str, *, limit: int = 5, schema: str | None = None
+    ) -> list[Any]:
         """The first ``limit`` values of the column (a plain ``LIMIT``, no scan).
 
         Cheap by design for data-lake scale: it stops after ``limit`` rows and
         does not de-duplicate or filter nulls, so values may repeat or be null.
+        ``schema`` defaults to the connector's pinned schema.
         """
 
     @abstractmethod
-    def is_unique(self, table: str, column: str) -> bool:
-        """Whether the column's non-null values are distinct (key candidate)."""
+    def is_unique(self, table: str, column: str, schema: str | None = None) -> bool:
+        """Whether the column's non-null values are distinct (key candidate).
+
+        ``schema`` defaults to the connector's pinned schema."""
 
     # -- execution --------------------------------------------------------- #
     @abstractmethod

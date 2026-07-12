@@ -109,11 +109,30 @@ def test_build_facts_all_schemas(tmp_path):
     assert corpus.assets[0].db == "s_one"
 
 
+def test_build_facts_all_schemas_multi_schema_pins_each_schema(tmp_path):
+    # Regression: a multi_schema=True datasource must still profile each schema into
+    # its OWN subtree, not collapse to "public". Mimic build_connector's schema
+    # resolution so multi_schema => schema=None => Postgres coerces to "public";
+    # each iteration must pin its schema (multi_schema=False) or every schema would
+    # be profiled as public (list_tables() == [] there).
+    def factory(d):
+        effective = (None if d.is_multi_schema() else d.schema) or "public"
+        return _FakeConn(effective)
+
+    ds = DataSourceConfig(kind="postgres", dsn="host=x", multi_schema=True)
+    counts = build_facts_all_schemas(ds, tmp_path, connector_factory=factory)
+
+    assert counts == {"public": 0, "s_one": 1, "s_two": 1}
+    assert (tmp_path / "s_one" / "tables" / "tbl_s_one_t.yaml").is_file()
+    assert (tmp_path / "s_two" / "tables" / "tbl_s_two_t.yaml").is_file()
+    assert not (tmp_path / "public").exists()
+
+
 def test_build_facts_all_schemas_rejects_schemaless(tmp_path):
     import pytest
 
     ds = DataSourceConfig(kind="sqlite")
-    conn = SqliteConnector(_sqlite_path())  # no list_schemas
+    conn = SqliteConnector(_sqlite_path())  # rejected by datasource.kind, not a missing method
     try:
         with pytest.raises(ValueError, match="no schemas to iterate"):
             build_facts_all_schemas(ds, tmp_path, connector_factory=lambda d: conn)

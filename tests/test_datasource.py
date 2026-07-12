@@ -49,6 +49,44 @@ def test_load_settings_ignores_unknown_datasource_keys(tmp_path):
     assert load_settings(toml).datasource.kind == "sqlite"
 
 
+# --------------------------------------------------------------------------- #
+# multi_schema (D15): explicit span-all-schemas signal
+# --------------------------------------------------------------------------- #
+
+
+def test_multi_schema_defaults_off_and_is_single_schema():
+    ds = DataSourceConfig(kind="postgres", dsn="host=x")
+    assert ds.multi_schema is False
+    assert ds.is_multi_schema() is False  # off by default
+
+
+def test_is_multi_schema_true_only_for_postgres_redshift_with_flag():
+    assert DataSourceConfig(kind="postgres", multi_schema=True).is_multi_schema() is True
+    assert DataSourceConfig(kind="redshift", multi_schema=True).is_multi_schema() is True
+    # Flag set on the wrong kind does nothing.
+    assert DataSourceConfig(kind="postgres", multi_schema=False).is_multi_schema() is False
+
+
+def test_sqlite_is_never_multi_schema_even_with_flag_and_no_schema():
+    # SQLite runs schema=None but must stay single-schema; the flag is inert.
+    ds = DataSourceConfig(kind="sqlite", schema=None, multi_schema=True)
+    assert ds.is_multi_schema() is False
+
+
+def test_load_settings_parses_multi_schema(tmp_path):
+    toml = tmp_path / "governed_bi.toml"
+    toml.write_text(
+        '[datasource]\n'
+        'kind = "postgres"\n'
+        'dsn_env = "PG_RENAME_DECOY_DSN"\n'
+        'multi_schema = true\n',
+        encoding="utf-8",
+    )
+    ds = load_settings(toml).datasource
+    assert ds.multi_schema is True
+    assert ds.is_multi_schema() is True
+
+
 def test_build_connector_sqlite():
     conn = build_connector(DataSourceConfig(kind="sqlite", db="beer_factory"))
     try:

@@ -44,13 +44,20 @@ def build_connector(datasource: "DataSourceConfig") -> "Connector":
                 "to an env var holding the libpq DSN (e.g. PG_RENAME_DECOY_DSN), or dsn for a "
                 "local secret-free one."
             )
+        # Multi-schema (D15): span-all-capable. schema=None lets the connector
+        # enumerate every schema via list_schemas() and introspect any of them via
+        # the explicit ``schema=`` argument. NB the connector still DEFAULTS
+        # unqualified introspection to "public", so a multi-schema caller must pass
+        # an explicit ``schema=`` per call (see build_facts_all_schemas, which pins
+        # each schema). The default single-schema path pins datasource.schema.
+        schema = None if datasource.is_multi_schema() else datasource.schema
         if kind == "postgres":
             from .connectors.postgres import PostgresConnector
 
-            return PostgresConnector(dsn, schema=datasource.schema)
+            return PostgresConnector(dsn, schema=schema)
         from .connectors.redshift import RedshiftConnector
 
-        return RedshiftConnector(dsn, schema=datasource.schema)
+        return RedshiftConnector(dsn, schema=schema)
 
     raise ValueError(
         f"unknown datasource kind: {datasource.kind!r} (expected sqlite | postgres | redshift)"

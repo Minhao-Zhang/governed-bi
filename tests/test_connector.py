@@ -70,6 +70,22 @@ def test_describe_missing_table_raises(conn):
         conn.describe_table("does_not_exist")
 
 
+def test_sqlite_list_schemas_single_namespace(conn):
+    # SQLite has no schema level: one logical namespace, always.
+    assert conn.list_schemas() == ["main"]
+
+
+def test_sqlite_introspection_ignores_schema_arg(conn):
+    # The schema param exists for interface parity but SQLite ignores it: passing
+    # an arbitrary schema returns the same results as the default (no schema arg).
+    assert conn.list_tables(schema="anything") == conn.list_tables()
+    assert conn.row_count("orders", schema="anything") == conn.row_count("orders")
+    assert (
+        conn.describe_table("customers", schema="anything").name
+        == conn.describe_table("customers").name
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Connector: execution (read-only, row cap)
 # --------------------------------------------------------------------------- #

@@ -35,14 +35,26 @@ class SqliteConnector(Connector):
             # unlike a mode=ro file URI with Windows drive-letter paths.
             self._conn.execute("PRAGMA query_only = ON")
 
-    def list_tables(self) -> list[str]:
+    # SQLite has no schema level; the attached default database is "main".
+    _NAMESPACE = "main"
+
+    def list_schemas(self) -> list[str]:
+        """SQLite has no schemas, so report one logical namespace (``main``).
+
+        Lets schema-aware callers treat SQLite uniformly without special-casing;
+        the ``schema`` parameter on every introspection method is accept-and-ignore.
+        """
+        return [self._NAMESPACE]
+
+    def list_tables(self, schema: str | None = None) -> list[str]:
+        # schema: accepted for interface parity; SQLite has no schema level.
         cur = self._conn.execute(
             "SELECT name FROM sqlite_master "
             "WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
         )
         return [row[0] for row in cur.fetchall()]
 
-    def describe_table(self, table: str) -> TableInfo:
+    def describe_table(self, table: str, schema: str | None = None) -> TableInfo:
         cur = self._conn.execute(f"PRAGMA table_info({_ident(table)})")
         rows = cur.fetchall()  # (cid, name, type, notnull, dflt_value, pk)
         if not rows:
@@ -58,11 +70,13 @@ class SqliteConnector(Connector):
         ]
         return TableInfo(name=table, columns=columns)
 
-    def row_count(self, table: str) -> int:
+    def row_count(self, table: str, schema: str | None = None) -> int:
         cur = self._conn.execute(f"SELECT COUNT(*) FROM {_ident(table)}")
         return int(cur.fetchone()[0])
 
-    def sample_values(self, table: str, column: str, *, limit: int = 5) -> list[Any]:
+    def sample_values(
+        self, table: str, column: str, *, limit: int = 5, schema: str | None = None
+    ) -> list[Any]:
         # Plain LIMIT: first N rows, no DISTINCT/NOT NULL — stops immediately, no scan.
         cur = self._conn.execute(
             f"SELECT {_ident(column)} FROM {_ident(table)} LIMIT ?",
@@ -70,7 +84,7 @@ class SqliteConnector(Connector):
         )
         return [row[0] for row in cur.fetchall()]
 
-    def is_unique(self, table: str, column: str) -> bool:
+    def is_unique(self, table: str, column: str, schema: str | None = None) -> bool:
         cur = self._conn.execute(
             f"SELECT COUNT(*), COUNT(DISTINCT {_ident(column)}) FROM {_ident(table)}"
         )

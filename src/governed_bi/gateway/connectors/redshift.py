@@ -70,8 +70,8 @@ class RedshiftConnector(PostgresConnector):
     # (dsn, schema, read_only, connection, **connect_kwargs) already covers
     # everything Redshift needs -- it is inherited entirely.
 
-    def list_tables(self) -> list[str]:
-        """Physical table names in ``self.schema``, via ``svv_tables``.
+    def list_tables(self, schema: str | None = None) -> list[str]:
+        """Physical table names in ``schema`` (default ``self.schema``), via ``svv_tables``.
 
         ``svv_tables`` is Redshift's permission-aware system view over all
         tables visible to the current user (local, external, and shared);
@@ -81,11 +81,11 @@ class RedshiftConnector(PostgresConnector):
             "SELECT table_name FROM svv_tables "
             "WHERE table_schema = %s AND table_type = 'TABLE' "
             "ORDER BY table_name",
-            (self.schema,),
+            (schema or self.schema,),
         )
         return [row[0] for row in rows]
 
-    def _column_specs(self, table: str) -> list[tuple[str, str, bool]]:
+    def _column_specs(self, table: str, schema: str | None = None) -> list[tuple[str, str, bool]]:
         """Column (name, raw_type, nullable) triples for ``table``, via ``svv_columns``.
 
         Mirrors the parent's raw-type construction: append the declared
@@ -97,7 +97,7 @@ class RedshiftConnector(PostgresConnector):
             "FROM svv_columns "
             "WHERE table_schema = %s AND table_name = %s "
             "ORDER BY ordinal_position",
-            (self.schema, table),
+            (schema or self.schema, table),
         )
         specs: list[tuple[str, str, bool]] = []
         for column_name, data_type, is_nullable, max_length in rows:

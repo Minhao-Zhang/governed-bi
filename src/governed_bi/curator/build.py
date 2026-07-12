@@ -70,19 +70,27 @@ def build_facts_all_schemas(
 
     lister = connector_factory(datasource)
     try:
-        list_schemas = getattr(lister, "list_schemas", None)
-        if list_schemas is None:
+        # list_schemas() is on the Connector ABC now, but only schema-bearing
+        # engines have real schemas to iterate; SQLite reports a single logical
+        # namespace, which is not what all-schemas mode is for.
+        if datasource.kind.lower() not in ("postgres", "redshift"):
             raise ValueError(
                 f"datasource kind={datasource.kind!r} has no schemas to iterate; "
                 "all-schemas mode needs postgres/redshift"
             )
-        schemas = list_schemas()
+        schemas = lister.list_schemas()
     finally:
         lister.close()
 
     written: dict[str, int] = {}
     for schema in schemas:
-        connector = connector_factory(replace(datasource, schema=schema, db=schema))
+        # Pin each schema (multi_schema=False): the span-all datasource above is only
+        # for the single list_schemas() enumeration; profiling one schema needs a
+        # connector pinned to it, or build_connector leaves schema=None -> "public"
+        # and every schema is silently profiled as public.
+        connector = connector_factory(
+            replace(datasource, schema=schema, db=schema, multi_schema=False)
+        )
         try:
             written[schema] = len(build_facts_corpus(connector, schema, root))
         finally:

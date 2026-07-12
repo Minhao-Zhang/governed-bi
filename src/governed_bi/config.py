@@ -98,6 +98,18 @@ class DataSourceConfig:
     dsn: str | None = None  # kind=postgres/redshift: inline DSN (local, secret-free only)
     dsn_env: str | None = None  # ...or the env var holding the DSN (preferred)
     schema: str | None = None  # postgres/redshift schema; None -> the connector default
+    multi_schema: bool = False  # postgres/redshift: span ALL user schemas (see is_multi_schema)
+
+    def is_multi_schema(self) -> bool:
+        """Whether this data source spans every user schema in one database.
+
+        True only for a Postgres/Redshift source with ``multi_schema`` set: the
+        connector then enumerates and introspects all user schemas (D15). It is an
+        **explicit** signal, deliberately *not* derived from ``schema is None`` -
+        SQLite runs with ``schema=None`` yet is always single-namespace. SQLite is
+        therefore always single-schema regardless of this flag.
+        """
+        return self.multi_schema and self.kind.lower() in ("postgres", "redshift")
 
     def resolve_dsn(self) -> str | None:
         """The DSN to dial: inline ``dsn`` if set, else ``$dsn_env``, else None."""
