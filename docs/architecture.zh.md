@@ -91,6 +91,8 @@ execute (as-user) → answer + provenance
 
 完整的分阶段设计见[Server](server.zh.md)，以及 curator 推断驱动 server 行为的三个关键点。
 
+按 D15，在多 schema 的 Postgres / Redshift 路径上，一个连接感知（join-aware）的 schema 路由器会先于 RVGD 检索运行，因此检索会跨越多个 schema；单 schema 路径则跳过它。已决定，尚未构建。
+
 > **SQL 语义缓存快速路径**
 >
 > 对问题做 embedding → 与已缓存 SQL 库做余弦相似度比较，阈值 ≥0.92 → 命中则跳过
@@ -99,7 +101,9 @@ execute (as-user) → answer + provenance
 > 写回缓存。TTL 为 15 分钟。使用单一的全局阈值，这是一个已知的缺口，尚未按领域分别
 > 调优。参见 *Data Agent Memory Design Overview* §5。
 
-护栏按顺序排列（任一触发即失败即拒，五层全部强制执行）：语法 → 策略黑名单 → AST 列许可清单 → term 语义 → 成本。AST 许可清单具备 scope 感知能力（针对每一列自身所在的查询 scope 进行解析，并拦截星号投影）；term 语义会为检索到的表，以及它们的 FK 连接邻域和连接规划所桥接经过的 Steiner 点授权（而不是精确的检索命中集合，因此它与检索召回率相解耦），并拦截跨命名空间的表名。成本层目前是一道结构性的交叉连接防护；基于数值化 EXPLAIN 的成本（Postgres / Redshift）是未来按方言展开的工作。逐阶段细节见[Server](server.zh.md)第 8 步。
+护栏按顺序排列（任一触发即失败即拒，五层全部强制执行）：语法 → 策略黑名单 → AST 列许可清单 → term 语义 → 成本。AST 许可清单具备 scope 感知能力（针对每一列自身所在的查询 scope 进行解析，并拦截星号投影）；term 语义会为检索到的表，以及它们的 FK 连接邻域、连接规划所桥接经过的 Steiner 点（而不是精确的检索命中集合，因此它与检索召回率相解耦），以及任何经策展的跨 schema 连接目标授权，并拦截该授权范围之外的任何表名。成本层目前是一道结构性的交叉连接防护；基于数值化 EXPLAIN 的成本（Postgres / Redshift）是未来按方言展开的工作。逐阶段细节见[Server](server.zh.md)第 8 步。
+
+> **D15：L4 授权范围按 schema 限定，并跨越多个 schema。** 跨 schema 的表名只有经过策展的连接（curated join）才被授权——若不存在这样的连接，引擎宁可拒答也不猜测。单 schema / SQLite / BIRD 路径保持裸写（不加限定）。已决定，尚未构建。
 
 > **有界自修复（生成 → 护栏 → 执行）**
 >
@@ -157,7 +161,7 @@ execute (as-user) → answer + provenance
 - **变体：** 三臂（3-arm）语义评测运行在 **`rename_decoy`** 实例上（晦涩的命名与真实生效的诱饵，此时语义层的价值最大），并以 `base` 作为合理性检查的参照基准。server 始终针对同一个物理数据库执行。各臂之间只有 corpus 不同。
 - 三个臂，全部按 EX 打分：（1）无语义层；（2）curator 构建；（3）gold 语义层（从 manifest 自动推导）。**护城河（moat）= curator 挽回的那部分因混淆导致的准确率下降；臂 3 = 可挽回的上限。** 臂 2 与臂 3 的对比即 curator 的质量。
 - 来自 manifest 与日志的免费行为信号：诱饵触碰率、治理路径遵循率。成本与效率（耗时、token 数、行数；BIRD 的 VES 可复用）会被记录，但不作为核心指标。
-- **拒答关（Refuse-gate）评测：** 一个留出的**不可回答**集合，由跨数据库（cross-DB）与覆盖被移除（removed-coverage）的情形构成（自动生成），外加一个小规模、人工构建的超出范围（out-of-scope）集合。评分维度为**拒答准确率**（能否拒答不可回答的问题）*以及* **误拒率**（false-refusal rate）（在可回答的测试集上）。这正是拒答的精确率与召回率。
+- **拒答关（Refuse-gate）评测：** 一个留出的**不可回答**集合，由跨数据库（cross-DB）与覆盖被移除（removed-coverage）的情形构成（自动生成），外加一个小规模、人工构建的超出范围（out-of-scope）集合。这里的 cross-DB 情形之所以不可回答，只是因为 BIRD 未提供经策展的跨 schema 连接；按 D15，跨 schema 借助一个经策展的连接是*可以*回答的，只是跨 schema 服务未被 BIRD 评分。评分维度为**拒答准确率**（能否拒答不可回答的问题）*以及* **误拒率**（false-refusal rate）（在可回答的测试集上）。这正是拒答的精确率与召回率。
 - **仓库边界：** BIRD-Obfuscation 产出经过验证的数据与 manifest，并明确将“利用这些陷阱（trap）的下游 agent”排除在自身范围之外。而这个下游 agent 正是*本*系统。
 - 之后：在企业级部署上开展规模化检索（retrieval-at-scale）评测（Recall@K / MRR / nDCG，经语义层回答的问题占比）。
 

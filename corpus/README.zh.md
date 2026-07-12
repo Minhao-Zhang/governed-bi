@@ -25,6 +25,11 @@ corpus/
   _generated/    # search index, embeddings, compiled graph (gitignored)
 ```
 
+> **D15**：`<db>` 层级是 **schema**，而非数据库——一次运行的数据库（属于
+> connection-config 常量，并非语料建模的层级）可容纳多个 schema。D15 将字段 /
+> 目录 `db` 重命名为 `schema`（`corpus/<schema>/`、`tbl_<schema>_<name>`）：已决
+> 定，尚未落地——代码目前仍输出 `db`。
+
 `beer_factory/` 是**完整参考示例**，基于真实的 BIRD `beer_factory` 数据库
 （`data/bird/beer_factory.sqlite`）编写而成。它覆盖了每一种资产类型，并针对该
 数据库进行校验（物理存在性）。可将其作为编写自有资产时的参考。

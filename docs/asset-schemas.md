@@ -86,6 +86,8 @@ corpus/
   _generated/    # search index, embeddings, compiled graph (derived, gitignored, rebuildable)
 ```
 
+> **D15**: the corpus namespace `<db>` (directory above, ID formats below) models a **schema**, not a database — one database holds many schemas, and cross-schema joins run as qualified `schema.table` SQL. Renaming the field/dir `db` → `schema` is decided, not yet built; **ID values are unchanged** (`tbl_<schema>_<name>`), so the `<db>` placeholders stand as-is.
+
 ## ID conventions (CI regex-checked)
 
 | Asset | ID format | Example |
@@ -111,7 +113,7 @@ asset_type: table
 id: tbl_beer_factory_customers
 
 # ── Facts (catalog/data) ──
-db: beer_factory                       # scoping namespace = the connection/database this belongs to
+db: beer_factory                       # scoping namespace = the schema this belongs to (code field still `db`; D15 renames it `schema`)
 physical_name: customers               # identifier in the live DB
 row_count: 554
 

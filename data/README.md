@@ -34,7 +34,8 @@ Profiling a DB (and, later, running the curator) writes corpus YAML into
 [`generated/`](generated/) by convention, for example
 `data/generated/beer_factory/tables/*.yaml`. That directory is a rebuildable
 staging area and is gitignored; the curated, human-audited corpus lives in
-`corpus/<db>/`. See [`generated/README.md`](generated/README.md).
+`corpus/<db>/` (D15: the `<db>` corpus namespace is renamed `<schema>`; decided,
+not yet built). See [`generated/README.md`](generated/README.md).
 
 ## Using it
 

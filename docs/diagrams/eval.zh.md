@@ -40,12 +40,14 @@ flowchart LR
 ```mermaid
 flowchart TD
     Answerable["Answerable held-out set"] --> ServerA["Server with refuse-gate"]
-    Unanswerable["Unanswerable held-out set<br/>cross-DB + removed coverage + hand-built"] --> ServerU["Server with refuse-gate"]
+    Unanswerable["Unanswerable held-out set<br/>cross-database (federation, out of scope) + removed coverage + hand-built"] --> ServerU["Server with refuse-gate"]
     ServerA --> FalseRefusal["false_refusal_rate<br/>answerable questions refused"]
     ServerU --> RefusalAccuracy["refusal_accuracy<br/>unanswerable questions refused"]
     FalseRefusal --> RefuseResult["RefuseGateResult"]
     RefusalAccuracy --> RefuseResult
 ```
+
+当存在 curated join 时，跨 schema（cross-schema）问题可在单个 database 内作答；无 curated join 时的拒答（D15）在本 BIRD harness 之外验证——跨 schema 服务不由 BIRD 评分（D14）。
 
 ## 指标与反馈
 

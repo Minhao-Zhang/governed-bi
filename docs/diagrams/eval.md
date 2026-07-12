@@ -41,12 +41,14 @@ flowchart LR
 ```mermaid
 flowchart TD
     Answerable["Answerable held-out set"] --> ServerA["Server with refuse-gate"]
-    Unanswerable["Unanswerable held-out set<br/>cross-DB + removed coverage + hand-built"] --> ServerU["Server with refuse-gate"]
+    Unanswerable["Unanswerable held-out set<br/>cross-database (federation, out of scope) + removed coverage + hand-built"] --> ServerU["Server with refuse-gate"]
     ServerA --> FalseRefusal["false_refusal_rate<br/>answerable questions refused"]
     ServerU --> RefusalAccuracy["refusal_accuracy<br/>unanswerable questions refused"]
     FalseRefusal --> RefuseResult["RefuseGateResult"]
     RefusalAccuracy --> RefuseResult
 ```
+
+Cross-schema questions are answerable within one database when a curated join exists; the no-curated-join refusal (D15) is exercised outside this BIRD harness — cross-schema serving is un-graded by BIRD (D14).
 
 ## Metrics and feedback
 

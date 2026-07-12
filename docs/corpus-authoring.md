@@ -17,7 +17,7 @@ Work against the bundled example as you read: [`corpus/beer_factory/`](../corpus
 
 ## 1. Create the directory layout
 
-Pick a DB namespace (the database/connection the assets describe) and create the
+Pick a schema namespace (the schema the assets describe) and create the
 per-type folders under it:
 
 ```
@@ -34,7 +34,14 @@ corpus/
 ```
 
 One YAML file per asset (columns are the exception: they live inline in their
-table). One `<db>` per database.
+table). One `<schema>` folder per schema; a single database may hold many
+schemas (D15).
+
+> **D15**: The folder is a _schema_ namespace, not a database — one database can
+> hold many schemas, joined across via qualified `schema.table` SQL. The rename
+> to `schema` is decided but not yet built, so the placeholders and IDs below
+> still say `db` (`<db>`, `corpus/<db>/`, `col_<db>_...`, the `db:` field); read
+> them as "schema".
 
 ## 2. The three tiers (what you fill in)
 

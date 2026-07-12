@@ -6,6 +6,11 @@ The corpus package is the implemented center of the repo. It loads Git-tracked
 YAML assets and Markdown skills, validates them, and exposes different views for
 server runtime and human audit.
 
+D15 renames the corpus namespace field/dir historically named `db` to `schema`
+(`corpus/<schema>/`, `col_<schema>_<table>_<column>`) — decided 2026-07-11, not
+yet built, so the diagrams below and the code still emit `db`; asset IDs are
+unchanged.
+
 ## Corpus consumption contract
 
 ```mermaid

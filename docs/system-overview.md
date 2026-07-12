@@ -19,7 +19,7 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
 - Two harnesses over one shared substrate: **curator** (builds the corpus) and **server** (answers). The semantic layer is the moat. Fail-closed.
 - Design notes:
     - [Architecture](architecture.md): full design
-    - [Design decisions](design-decisions.md): D1-D10 with alternatives and trade-offs
+    - [Design decisions](design-decisions.md): D1-D15 with alternatives and trade-offs
     - [Asset schemas](asset-schemas.md): the per-asset YAML field spec (Facts / Inference / Audit tiers)
     - [Curator](curator.md): the build-side proposer + adversary loop
     - [Server](server.md): the serve-side LangGraph flow + guardrails
@@ -29,10 +29,12 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
 
 ## Status
 
-> **Decided (D1-D10)**
+> **Decided (D1-D15)**
 >
 > target · governed unit · eval · grading · refusal · ownership · identity ·
-> memory · corpus contract · curator gate. See [Design decisions](design-decisions.md).
+> memory · corpus contract · curator gate · external review · clarification
+> protocol · corpus-as-own-repo · SME-growth benchmark · multi-schema serving
+> (one DB, many schemas, executable cross-schema joins). See [Design decisions](design-decisions.md).
 
 > **Built (code)**
 >
@@ -56,7 +58,10 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
 > / skills) and the live per-asset adversary `refute` · the curator self-eval
 > train-EX loop · the obfuscated BIRD eval data (a small vendored beer_factory set
 > stands in until the jsonl lands) · a first run against a **live** OpenAI API
-> (everything so far uses the offline doubles). Without the eval data the arms
+> (everything so far uses the offline doubles) · the **D15** multi-schema build:
+> rename `db` → `schema`, mode-conditional schema-qualified serving + guardrail,
+> and a span-all Postgres connector — decided, not yet built, so the serve path
+> still emits `db` and serves a single schema. Without the eval data the arms
 > cannot yet show the moat.
 
 > **Open (design-level)**

@@ -4,6 +4,8 @@ _[English](corpus.md) · [简体中文](corpus.zh.md)_
 
 corpus 包是本仓库已实现的核心。它加载 Git 跟踪的 YAML 资产和 Markdown 技能（skill），对其进行校验，并针对 server 运行时和人工审计分别暴露不同的视图。
 
+D15 将 corpus 命名空间中历史上名为 `db` 的字段/目录重命名为 `schema`（`corpus/<schema>/`、`col_<schema>_<table>_<column>`）——已于 2026-07-11 决定，尚未实现，因此下方图表与代码仍输出 `db`；资产 ID 保持不变。
+
 ## Corpus 消费契约
 
 ```mermaid

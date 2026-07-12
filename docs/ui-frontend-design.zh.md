@@ -196,12 +196,17 @@ _[English](ui-frontend-design.md) · [简体中文](ui-frontend-design.zh.md)_
 ## 9. Schema 与知识图谱视图
 
 - 基于 `GET /graph` 的**知识图谱**（React Flow）：节点按资产类型区分
-  （table/column/metric/term/join/rule/few-shot/negative），边 = 引用关系；
+  （schema/table/column/metric/term/join/rule/few-shot/negative），边 = 引用关系；
   提供**按类型划分的过滤器/图层**以控制密度；低置信度的 join 以及
   suspect/excluded 的资产会以不同样式呈现。点击 → 从 `GET /schema` /
   `GET /corpus/assets` 获取详情。
 - **表浏览器：** 列及其类型、角色（role）、`suspect`/`excluded` 徽章、
   样例值、溯源信息。
+
+> **D15（Multi-Schema Serving）。** D15 新增了一个 schema 命名空间层级
+> （`schema` → `table`；`corpus/<schema>/`），因此知识图谱多出一个 **schema
+> 分组/图层**，且经策展的**跨 schema join**会获得独立的样式/过滤器——按 D15，
+> 跨 schema join 仅限策展来源、且仅限 Postgres。
 
 ---
 

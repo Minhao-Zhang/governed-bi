@@ -13,7 +13,7 @@ accuracy). Enterprise abstractions (identity/RLS, human gate, scoped
 memory/cache) are seamed in but toggled off; enforcement belongs to a private
 enterprise fork, not this engine.
 
-> **Design-first, and honest about maturity.** The design (D1-D10) is well ahead
+> **Design-first, and honest about maturity.** The design (D1-D15) is well ahead
 > of the build (see [`docs/design-decisions.md`](docs/design-decisions.md)). The
 > deterministic core runs end-to-end **offline**; the LangGraph/deepagents
 > harnesses are built but exercised only against deterministic model doubles —
@@ -74,7 +74,7 @@ this backend.
 
 Start at [`docs/README.md`](docs/README.md). Key docs:
 [architecture](docs/architecture.md) ·
-[design decisions (D1-D10)](docs/design-decisions.md) ·
+[design decisions (D1-D15)](docs/design-decisions.md) ·
 [asset schemas](docs/asset-schemas.md) ·
 [curator](docs/curator.md) · [server](docs/server.md) · [viz](docs/viz.md) ·
 [glossary](docs/glossary.md).

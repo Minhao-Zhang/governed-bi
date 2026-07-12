@@ -5,6 +5,10 @@ _[English](curator.md) · [简体中文](curator.zh.md)_
 The curator package is currently a design scaffold. It is the offline build-side
 harness that writes the corpus.
 
+Under D15 the emitted `corpus/<db>/` becomes `corpus/<schema>/` (rename decided
+2026-07-11, not yet built) — a profiled database's schemas each become a corpus
+namespace; the diagrams below still show `db`.
+
 ## Curator build-loop data flow
 
 ```mermaid

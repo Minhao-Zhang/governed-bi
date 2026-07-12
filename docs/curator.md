@@ -10,6 +10,8 @@ offline agent that *produces* the corpus (two-harness split; `deepagents`). Runs
 maintainer**: cold-start plus ongoing drift-repair. Untended corpora rot
 ~95%→65%/month.
 
+> **Multi-schema (D15).** "Per-DB" means one database per run — but that database now holds **many schemas**, and the **schema** (not the database) is the modeled corpus namespace (`schema -> table`). A run curates every schema in the DB plus any curated cross-schema relationships; the emitted `corpus/<db>/` tree becomes `corpus/<schema>/` (rename decided, not built; asset IDs unchanged). The per-DB framing below — Inputs, the loop — is unchanged in scope.
+
 > Implementation: [`src/governed_bi/curator/`](../src/governed_bi/curator/).
 
 > **Build status (scaffold vs seam).** A deterministic **scaffold** runs with no
@@ -60,7 +62,7 @@ Both the proposer's claim/evidence **and** the adversary's verdict/reasons land 
 ## The loop (per DB)
 
 1. **Profile (Facts, programmatic).** *(built)* Read catalog + sample data → emit the Facts tier for every table/column. Deterministic; no LLM; correct in every arm.
-2. **Propose (Inference + skills).** *(heuristic + description/caveat authoring built; joins/terms/metrics/skills still seam)* Proposer hypothesizes descriptions, joins (value-overlap + seed-SQL join patterns), reliability caveats (execute-and-observe against the traps), terms/synonyms, metrics/rules (from `evidence` + recurring computations), and authors **routing/gotcha/pattern skills**. Free exploration is confined to this pocket. The `HeuristicProposer` fills roles/confidence/provenance from Facts; `LlmProposer` layers model-authored descriptions + `suspect` caveats over it; authoring the derived assets (joins/terms/metrics/rules/skills) is the remaining LLM proposer work.
+2. **Propose (Inference + skills).** *(heuristic + description/caveat authoring built; joins/terms/metrics/skills still seam)* Proposer hypothesizes descriptions, joins (value-overlap + seed-SQL join patterns — **within a schema**; cross-schema joins are never FK/overlap-discovered, only curated from SME / example SQL / usage per D15, else the server refuses), reliability caveats (execute-and-observe against the traps), terms/synonyms, metrics/rules (from `evidence` + recurring computations), and authors **routing/gotcha/pattern skills**. Free exploration is confined to this pocket. The `HeuristicProposer` fills roles/confidence/provenance from Facts; `LlmProposer` layers model-authored descriptions + `suspect` caveats over it; authoring the derived assets (joins/terms/metrics/rules/skills) is the remaining LLM proposer work.
 3. **Adversary pass.** *(structural `review` built; per-asset `refute` seam)* Each proposed Inference/skill asset is challenged → accept / revise / reject. Survivors → `draft`. The built `review` is the deterministic structural gate (CI validator + self-consistency); the per-claim refutation with probe queries is the LLM seam.
 4. **Self-eval & repair (inner loop, capped).** *(seam)* Assemble the draft layer → run the server pipeline on the DB's **train** questions → measure EX → diagnose failures → proposer patches (a failed question often *becomes* the gotcha skill that fixes it) → adversary re-checks the patch → repeat until train-EX plateaus or the iteration/budget cap hits. **Train-only.**
 5. **Propose corpus.** *(emit downstream)* CI reference-integrity green ∧ train-EX plateaued → emit (dev auto-accepts; prod opens a PR to the owner, D6).

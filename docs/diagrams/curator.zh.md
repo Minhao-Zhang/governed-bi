@@ -4,6 +4,8 @@ _[English](curator.md) · [简体中文](curator.zh.md)_
 
 curator 包目前是一个设计脚手架。它是负责写入 corpus 的离线构建侧 harness。
 
+在 D15 下，输出的 `corpus/<db>/` 变为 `corpus/<schema>/`（重命名已于 2026-07-11 决定，尚未实现）——被剖析 database 的每个 schema 各自成为一个 corpus 命名空间；下方图表仍显示 `db`。
+
 ## Curator 构建循环数据流
 
 ```mermaid

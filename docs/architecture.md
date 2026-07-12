@@ -94,6 +94,8 @@ execute (as-user) → answer + provenance
 
 The full stage-by-stage design is in [Server](server.md), along with the three points where the curator's inference drives serve behavior.
 
+Per D15, on the multi-schema Postgres / Redshift path a join-aware schema router precedes RVGD retrieval, so retrieval spans schemas; the single-schema path skips it. Decided, not yet built.
+
 > **SQL semantic cache fast path**
 >
 > Embed the question → cosine similarity ≥0.92 against the cached-SQL library →
@@ -103,7 +105,9 @@ The full stage-by-stage design is in [Server](server.md), along with the three p
 > cache on success. TTL 15 min. Single global threshold, a known gap that is
 > not tuned per domain. See the *Data Agent Memory Design Overview* §5.
 
-Guardrails, in order (fail-closed on any, all five enforced): syntax → policy blacklist → AST column allowlist → term-semantics → cost. The AST allowlist is scope-aware (resolves each column against its own query scope and blocks star projections); term-semantics licenses the retrieved tables plus their FK join-neighborhood and the join plan's Steiner points (not just the exact retrieved set, so it is decoupled from retrieval recall) and blocks cross-namespace table names. The cost layer is a structural cross-join guard for now; numeric EXPLAIN-based cost (Postgres / Redshift) is future per-dialect work. Stage-by-stage detail is in [Server](server.md) step 8.
+Guardrails, in order (fail-closed on any, all five enforced): syntax → policy blacklist → AST column allowlist → term-semantics → cost. The AST allowlist is scope-aware (resolves each column against its own query scope and blocks star projections); term-semantics licenses the retrieved tables plus their FK join-neighborhood, the join plan's Steiner points (not just the exact retrieved set, so it is decoupled from retrieval recall), and any curated cross-schema join targets, and blocks any table name outside that licensed scope. The cost layer is a structural cross-join guard for now; numeric EXPLAIN-based cost (Postgres / Redshift) is future per-dialect work. Stage-by-stage detail is in [Server](server.md) step 8.
+
+> **D15: L4 scope is schema-qualified and spans schemas.** Cross-schema names are licensed only via a curated join — with none, the engine refuses rather than guessing. The single-schema / SQLite / BIRD path stays bare/unqualified. Decided, not yet built.
 
 > **Bounded self-repair (generation → guardrails → execution)**
 >
@@ -151,7 +155,7 @@ Guardrails, in order (fail-closed on any, all five enforced): syntax → policy 
 - **Variant:** the 3-arm semantic eval runs on the **`rename_decoy`** instance (cryptic names and live decoys, where the layer's value is maximal), with `base` as a sanity reference. The server always executes against the one physical DB. Only the corpus differs across arms.
 - Three arms, all scored on EX: (1) no semantic layer, (2) curator-built, (3) gold semantic layer (auto-derived from manifest). **Moat = the share of the obfuscation-induced accuracy drop the curator recovers; arm 3 = the recoverable ceiling.** Arm 2 vs 3 = curator quality.
 - Free behavioral signals from the manifest and logs: decoy-touch rate, governed-path adherence. Cost and efficiency (wall-clock, tokens, rows; BIRD's VES is reusable) are logged, not headline.
-- **Refuse-gate eval:** a held-out **unanswerable** set, built from cross-DB and removed-coverage cases (auto-generated) plus a small hand-built out-of-scope set. Scored on **refusal accuracy** (refuses the unanswerable) *and* **false-refusal rate** (on the answerable test set). This is the precision and recall of refusal.
+- **Refuse-gate eval:** a held-out **unanswerable** set, built from cross-DB and removed-coverage cases (auto-generated) plus a small hand-built out-of-scope set. The cross-DB cases are unanswerable here only because BIRD supplies no curated cross-schema joins; per D15 cross-schema *is* answerable with a curated join, though cross-schema serving is un-graded by BIRD. Scored on **refusal accuracy** (refuses the unanswerable) *and* **false-refusal rate** (on the answerable test set). This is the precision and recall of refusal.
 - **Repo boundary:** BIRD-Obfuscation produces validated data and manifests, and explicitly scopes out "the downstream agent that exercises the traps". That downstream agent is *this* system.
 - Later: retrieval-at-scale eval on an enterprise-scale deployment (Recall@K / MRR / nDCG, % answered via semantic layer).
 

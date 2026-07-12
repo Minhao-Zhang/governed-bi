@@ -78,6 +78,9 @@ connection or the eval split, so they belong to the eval harness.
 The same loader, schema, and validator are a small public API. Everything is
 parsed into typed Pydantic models, so a malformed asset fails loudly.
 
+(D15 renames the `db` corpus namespace to `schema`; decided, not yet built —
+these `db=` examples track current code.)
+
 ```python
 from pathlib import Path
 from governed_bi.corpus import load_corpus, validate_corpus, is_green, parse_asset

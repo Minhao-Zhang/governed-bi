@@ -16,7 +16,7 @@ self-built [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) 
 1. [System overview](system-overview.md): what this is, the two harnesses, status.
 2. [Architecture](architecture.md): the full design (spine, kernel, services, storage, flow, eval, environments).
 3. [Diagrams](diagrams.md): Mermaid architecture, data-flow, and user sequence diagrams.
-4. [Design decisions](design-decisions.md): D1-D10 as ADRs, with alternatives and trade-offs.
+4. [Design decisions](design-decisions.md): D1-D15 as ADRs, with alternatives and trade-offs.
 5. [Asset schemas](asset-schemas.md): the per-asset YAML field spec (Facts / Inference / Audit tiers).
 6. [Curator](curator.md): the build-side proposer + adversary loop.
 7. [Server](server.md): the serve-side LangGraph flow + guardrails.

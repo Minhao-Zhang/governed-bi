@@ -10,7 +10,7 @@ _[English](corpus-authoring.md) · [简体中文](corpus-authoring.zh.md)_
 
 ## 1. 创建目录结构
 
-选择一个 DB 命名空间(即这些资产所描述的数据库/连接)，并在其下创建按类型划分的文件夹：
+选择一个 schema 命名空间(即这些资产所描述的 schema)，并在其下创建按类型划分的文件夹：
 
 ```
 corpus/
@@ -25,7 +25,9 @@ corpus/
     skills/      *.md
 ```
 
-每个资产对应一个 YAML 文件(列是例外：它们内联在所属的表中)。每个数据库对应一个 `<db>`。
+每个资产对应一个 YAML 文件(列是例外：它们内联在所属的表中)。每个 schema 对应一个 `<schema>` 文件夹；一个数据库可以容纳多个 schema(D15)。
+
+> **D15**：这里的文件夹是一个 schema 命名空间，而非数据库——一个数据库可以容纳多个 schema，跨 schema 之间通过带限定名的 `schema.table` SQL 连接。改名为 `schema` 已经决定，但尚未落地，因此下文的占位符与 ID 仍写作 `db`（`<db>`、`corpus/<db>/`、`col_<db>_...`，以及 `db:` 字段）；请将它们理解为 schema。
 
 ## 2. 三个层级(你需要填写的内容)
 

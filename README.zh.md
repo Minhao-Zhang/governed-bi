@@ -6,7 +6,7 @@ _[English](README.md) · [简体中文](README.zh.md)_
 
 近期目标是打造一个**在 SQLite 上得到验证的展示系统**（对其他数据库引擎留有方言可插拔的接口），它从一批已知良好的种子查询出发、逐步扩展出一个可审阅的语义层——这是**种子辅助的语义层生长(seed-assisted semantic-layer growth)**，而非零先验的冷启动——并在自建的 [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) 数据集上进行评测（执行准确率）。企业级抽象（身份/RLS、人工把关、按范围限定的记忆/缓存）已经以预留接口(seam)的方式接入，但默认关闭；其**强制执行属于私有的企业分支，而非本引擎**。
 
-> **设计先行，且对成熟度诚实。** 设计（D1-D10）的进展远远领先于构建
+> **设计先行，且对成熟度诚实。** 设计（D1-D15）的进展远远领先于构建
 > （参见 [`docs/design-decisions.md`](docs/design-decisions.zh.md)）。确定性核心可以**离线**端到端运行；LangGraph/deepagents 两个 harness 已经构建，但仅在确定性的模型替身(model doubles)上运行过——**尚未针对任何真实模型跑过**。哪些已被证明、哪些仅是设计，见下方[状态表](#状态)。
 
 ## 三句话讲清楚核心思路
@@ -45,7 +45,7 @@ _[English](README.md) · [简体中文](README.zh.md)_
 
 从 [`docs/README.md`](docs/README.zh.md) 开始阅读。核心文档：
 [架构](docs/architecture.zh.md) ·
-[设计决策(D1-D10)](docs/design-decisions.zh.md) ·
+[设计决策(D1-D15)](docs/design-decisions.zh.md) ·
 [资产模式](docs/asset-schemas.zh.md) ·
 [curator](docs/curator.zh.md) · [server](docs/server.zh.md) · [viz](docs/viz.zh.md) ·
 [术语表](docs/glossary.zh.md)。

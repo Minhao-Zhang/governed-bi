@@ -7,7 +7,8 @@ curator drafts later. Written by `governed_bi.corpus.write_corpus(...)`.
 
 This is a staging area, not the source of truth. It is gitignored because it is
 rebuildable from the database (`profile_database` is deterministic). The curated,
-human-audited corpus that a person accepts lives in `corpus/<db>/` and is
+human-audited corpus that a person accepts lives in `corpus/<db>/` (D15: the
+`<db>` corpus namespace is renamed `<schema>`; decided, not yet built) and is
 committed there (D9).
 
 Typical layout after profiling a DB:

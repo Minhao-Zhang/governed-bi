@@ -11,7 +11,10 @@ doc (English only). Decisions are settled; this is the how and the order.
    primitive (the generalization of the once-sanctioned `certify()`).
 2. **Corpus repo + multi-DB harness (D13, D14).** The semantic layer moves to its
    own git repo, loaded via `GOVERNED_BI_CORPUS`; the benchmark harness iterates
-   `db_id`s, growing one per-DB corpus each and scoring the pooled test set.
+   `db_id`s, growing one per-DB corpus each and scoring the pooled test set. (Per
+   D15, the corpus namespace field is `schema`, not `db`; for BIRD each `db_id`
+   maps to a single schema. `db_id` here is BIRD's dataset/connection identifier
+   and is kept as-is.)
 3. **Curator clarification loop (D12, D14).** The curator detects a knowledge gap
    while working a train question, emits a `Clarification`, receives an answer
    through a `Responder`, and ingests it via `accept_answer → write_corpus →

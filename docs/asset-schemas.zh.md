@@ -84,6 +84,8 @@ corpus/
   _generated/    # search index, embeddings, compiled graph (derived, gitignored, rebuildable)
 ```
 
+> **D15**：corpus 命名空间 `<db>`（上方目录、下方 ID 格式）建模的是一个 **schema**，而非一个数据库——一个数据库容纳多个 schema，跨 schema 的 join 以带限定名的 `schema.table` SQL 执行。将字段/目录名 `db` → `schema` 已决定，但尚未落地；**ID 取值保持不变**（`tbl_<schema>_<name>`），因此下文的 `<db>` 占位符维持原样。
+
 ## ID 约定（CI 用正则表达式检查）
 
 | 资产 | ID 格式 | 示例 |
@@ -109,7 +111,7 @@ asset_type: table
 id: tbl_beer_factory_customers
 
 # ── Facts (catalog/data) ──
-db: beer_factory                       # scoping namespace = the connection/database this belongs to
+db: beer_factory                       # scoping namespace = the schema this belongs to (code field still `db`; D15 renames it `schema`)
 physical_name: customers               # identifier in the live DB
 row_count: 554
 

@@ -18,7 +18,7 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
 - 两个 harness 共享同一套基座：**curator**（构建 corpus）与**server**（负责应答）。语义层是护城河。失败即拒（fail-closed）。
 - 设计文档：
     - [架构](architecture.zh.md)：完整设计
-    - [设计决策](design-decisions.zh.md)：D1-D10，含备选方案与权衡取舍
+    - [设计决策](design-decisions.zh.md)：D1-D15，含备选方案与权衡取舍
     - [资产模式](asset-schemas.zh.md)：按资产划分的 YAML 字段规范（Facts 层 / Inference 层 / Audit 层）
     - [Curator](curator.zh.md)：构建侧的 proposer + adversary 循环
     - [Server](server.zh.md)：服务侧的 LangGraph 流程 + 护栏
@@ -28,10 +28,11 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
 
 ## 状态
 
-> **已决定(D1-D10)**
+> **已决定(D1-D15)**
 >
 > 目标 · 治理单元 · 评测 · 评分 · 拒答 · 归属 · 身份 · 记忆 · corpus 契约 ·
-> curator 关卡。参见[设计决策](design-decisions.zh.md)。
+> curator 关卡 · 外部评审 · 澄清协议 · corpus 独立仓库 · SME 成长基准 ·
+> 多 schema 服务（单库、多 schema、可执行的跨 schema 连接）。参见[设计决策](design-decisions.zh.md)。
 
 > **已构建（代码）**
 >
@@ -53,7 +54,10 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
 > 撰写，以及逐资产、实际运行的 adversary `refute` · curator 的自评估 train-EX
 > 循环 · 经过混淆处理的 BIRD 评测数据（在 jsonl 数据到位之前，由内置的小型
 > beer_factory 数据集充当替身）· 针对**真实(live)** OpenAI API 的首次运行
-> （目前为止一切都基于离线模型替身运行）。缺少评测数据，目前还无法通过这些
+> （目前为止一切都基于离线模型替身运行）· **D15** 多 schema 构建：将 `db`
+> 更名为 `schema`、按模式区分的 schema 限定服务 + 护栏、以及全 schema 覆盖的
+> Postgres 连接器——已决定、尚未构建，因此 serve 路径仍输出 `db` 并只服务单个
+> schema。缺少评测数据，目前还无法通过这些
 > 评测臂(arm)体现出护城河效应。
 
 > **未决（设计层面）**

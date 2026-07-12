@@ -194,12 +194,17 @@ above:
 ## 9. Schema & knowledge-graph view
 
 - **Knowledge graph** (React Flow) over `GET /graph`: nodes typed by asset
-  (table/column/metric/term/join/rule/few-shot/negative), edges = references;
+  (schema/table/column/metric/term/join/rule/few-shot/negative), edges = references;
   **per-type filters/layers** to manage density; low-confidence joins and
   suspect/excluded assets styled distinctly. Click → detail from `GET /schema` /
   `GET /corpus/assets`.
 - **Table browser**: columns with types, roles, `suspect`/`excluded` badges,
   sample values, provenance.
+
+> **D15 (Multi-Schema Serving).** D15 adds a schema namespace level (`schema` →
+> `table`; `corpus/<schema>/`), so the knowledge graph gains a **schema
+> grouping/layer** and curated **cross-schema joins** get a distinct style/filter
+> — cross-schema joins are curated-only and Postgres-only per D15.
 
 ---
 

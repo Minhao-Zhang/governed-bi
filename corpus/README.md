@@ -25,6 +25,11 @@ corpus/
   _generated/    # search index, embeddings, compiled graph (gitignored)
 ```
 
+> **D15:** the `<db>` level is a **schema**, not a database — a run's database
+> (a connection-config constant, not a modeled corpus level) may hold many
+> schemas. D15 renames the field/dir `db` → `schema` (`corpus/<schema>/`,
+> `tbl_<schema>_<name>`): decided, not yet built — the code still emits `db`.
+
 `beer_factory/` is the **worked example**, authored over the real BIRD
 `beer_factory` database (`data/bird/beer_factory.sqlite`). It exercises every
 asset type and validates against that DB (physical-existence). Use it as the

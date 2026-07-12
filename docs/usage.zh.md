@@ -76,6 +76,9 @@ eval harness 的范畴。
 同样的加载器、模式与验证器，构成了一个小型的公共 API。所有内容都会被解析为带类型的
 Pydantic 模型，因此格式有误的资产会立刻失败并报错。
 
+（D15 将 corpus 的 `db` 命名空间改名为 `schema`；已决定、尚未落地——下面这些 `db=`
+示例仍与当前代码保持一致。）
+
 ```python
 from pathlib import Path
 from governed_bi.corpus import load_corpus, validate_corpus, is_green, parse_asset
