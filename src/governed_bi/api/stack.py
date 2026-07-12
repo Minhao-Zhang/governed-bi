@@ -62,6 +62,8 @@ class ServeStack:
     corpus_root: Path = Path("corpus")  # where the editable YAML tree lives
     db: str = "beer_factory"  # subtree selector for writes
     can_stream: bool = False  # a streaming chat graph is reachable (LangGraph server)
+    can_scope: bool = True  # the summary/detail/scoping schema routes are served
+    can_search: bool = False  # a server-side FTS endpoint exists (False: client Fuse)
     can_edit: bool = False  # corpus editing is exposed (dev file-write)
     edit_mode: str | None = None  # "file" (dev) | "pr" (prod, deferred) | None
     datasource: DataSourceConfig | None = None  # which DB the serve path executes against
@@ -175,6 +177,8 @@ def build_stack() -> ServeStack:
         corpus_root=root,
         db=write_db,
         can_stream=can_stream,
+        can_scope=True,  # the summary/detail/scoping schema routes are always served
+        can_search=False,  # no server-side FTS; the client Fuse index is the default
         can_edit=can_edit,
         edit_mode="file" if can_edit else None,
         datasource=datasource,

@@ -76,6 +76,36 @@ class TableView:
 
 
 @dataclass(frozen=True)
+class ColumnSummary:
+    """A lean column row for the catalog list (heavy fields dropped)."""
+
+    physical_name: str
+    physical_type: str
+    role: str | None
+    reliability: str  # "ok" | "suspect"
+    excluded: bool
+
+
+@dataclass(frozen=True)
+class TableSummary:
+    """A lean table row for the virtualized catalog + client search index.
+
+    Heavy fields (``sample_values``, ``evidence``, ``description``) are dropped;
+    full detail is fetched lazily via :func:`table_view_by_id`.
+    """
+
+    id: str
+    physical_name: str
+    db: str
+    row_count: int | None
+    n_columns: int
+    excluded: bool
+    has_suspect: bool  # any column flagged suspect
+    provenance_status: str | None
+    columns: list[ColumnSummary]
+
+
+@dataclass(frozen=True)
 class AssetRow:
     """A one-line view of a non-table asset for listings."""
 
@@ -261,26 +291,78 @@ def _column_view(table: TableAsset, col) -> ColumnView:
     )
 
 
+def _table_view(table: TableAsset) -> TableView:
+    return TableView(
+        id=table.id,
+        physical_name=table.physical_name,
+        db=table.db,
+        row_count=table.row_count,
+        description=table.description,
+        grain=table.grain,
+        confidence=table.confidence,
+        excluded=table.governance.excluded,
+        excluded_reason=table.governance.reason,
+        provenance_status=_provenance_status(table),
+        columns=[_column_view(table, c) for c in table.columns],
+    )
+
+
 def table_views(corpus: "Corpus") -> list[TableView]:
-    """The table view (Facts + Inference side by side), one per table asset."""
-    views: list[TableView] = []
+    """The table view (Facts + Inference side by side), one per table asset.
+
+    Ordered by asset id so paginated ``/schema`` reads stay stable across
+    processes: corpus load order is otherwise filesystem-dependent for a
+    multi-namespace corpus, so ``offset``/``limit`` could skip or repeat rows
+    between workers or a restart."""
+    return [_table_view(table) for table in sorted(corpus.tables(), key=lambda t: t.id)]
+
+
+def table_view_by_id(corpus: "Corpus", table_id: str) -> TableView | None:
+    """The full detail view for one table by asset id, or ``None`` if unknown.
+
+    Reuses the same projection as :func:`table_views`; the caller (the API) turns
+    a ``None`` into a 404."""
     for table in corpus.tables():
-        views.append(
-            TableView(
+        if table.id == table_id:
+            return _table_view(table)
+    return None
+
+
+def table_summaries(corpus: "Corpus", db: str | None = None) -> list[TableSummary]:
+    """Lean catalog rows, one per table asset, optionally filtered to one ``db``.
+
+    Drops the heavy per-column/per-table fields (sample values, evidence,
+    descriptions) so the catalog list + client search index stay small; full
+    detail is fetched lazily via :func:`table_view_by_id`. Reads the full corpus,
+    so ``excluded`` tables are still listed (flagged) for the audit view."""
+    summaries: list[TableSummary] = []
+    # id-ordered so offset/limit pagination is stable across processes (see table_views).
+    for table in sorted(corpus.tables(), key=lambda t: t.id):
+        if db is not None and table.db != db:
+            continue
+        summaries.append(
+            TableSummary(
                 id=table.id,
                 physical_name=table.physical_name,
                 db=table.db,
                 row_count=table.row_count,
-                description=table.description,
-                grain=table.grain,
-                confidence=table.confidence,
+                n_columns=len(table.columns),
                 excluded=table.governance.excluded,
-                excluded_reason=table.governance.reason,
+                has_suspect=any(c.reliability.status.value == "suspect" for c in table.columns),
                 provenance_status=_provenance_status(table),
-                columns=[_column_view(table, c) for c in table.columns],
+                columns=[
+                    ColumnSummary(
+                        physical_name=c.physical_name,
+                        physical_type=c.physical_type,
+                        role=c.role.value if c.role else None,
+                        reliability=c.reliability.status.value,
+                        excluded=c.governance.excluded,
+                    )
+                    for c in table.columns
+                ],
             )
         )
-    return views
+    return summaries
 
 
 def _summary(asset) -> str:

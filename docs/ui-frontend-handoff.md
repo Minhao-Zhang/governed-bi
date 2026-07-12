@@ -103,9 +103,11 @@ the rework.
 
 | Method + path | Purpose |
 |---|---|
-| `GET /capabilities` | `{ environment, dialect, can_edit, edit_mode, can_stream, has_live_model, model }`; gate UI features on this |
+| `GET /capabilities` | `{ environment, dialect, can_edit, edit_mode, can_stream, can_scope, can_search, has_live_model, model }`; gate UI features on this |
 | `GET /health` | corpus health: counts, `ci_green`, findings, `n_suspect_columns`, `n_excluded`, `n_low_confidence_joins` |
-| `GET /schema` | tables + columns (types, roles, `reliability`, `excluded`, provenance) |
+| `GET /schema` | tables + columns (types, roles, `reliability`, `excluded`, provenance). Optional `?db=&limit=&offset=` (param-less = the full dump) |
+| `GET /schema/summary?db=&limit=&offset=` | **lean catalog** `{ total, items }` for the virtualized list + client search index; each item `{ id, physical_name, db, row_count, n_columns, excluded, has_suspect, provenance_status, columns:[{physical_name, physical_type, role, reliability, excluded}] }` (heavy fields dropped; `total` is pre-pagination) |
+| `GET /schema/{table_id}` | one table's **full** `TableResponse`, fetched lazily on detail-open; `404` on unknown id |
 | `GET /graph` | **ER graph** `{ nodes, edges }` of tables + join edges (nodes carry `row_count`/`n_columns`/`has_suspect`; edges carry `on`/`cardinality`/`confidence`/`low_confidence`) |
 | `GET /knowledge-graph` | **full knowledge graph** `{ nodes, edges }` over every asset kind (table/join/metric/term/rule/few_shot/negative_example); edges typed `join`/`measures`/`grounds`/`related:*`/`scopes`/`exemplifies`; filter/layer by `node.kind` (tables + joins reproduces the ER view). Columns are in `/schema`, not nodes here |
 | `GET /corpus/assets?type=` | non-table assets (metric/term/join/rule/few_shot/negative) |
@@ -180,6 +182,12 @@ cross-schema joins** ([design-decisions.md](design-decisions.md) D15). This is a
 schema. Build against the current contract now; treat this section as the backend
 answers to the navigation proposal in the frontend's own `DESIGN_QUESTIONS.md`.
 
+> **Shipped since (see §4):** the additive read layer is live — `GET /schema/summary`,
+> `GET /schema/{table_id}`, optional `?db=&limit=&offset=` on `/schema`, and the
+> `can_scope`/`can_search` flags. It still uses the flat `db` field. **Still gated
+> (the D15 backend build):** the `db → schema` rename, and the `focus`/`radius`/`node_budget`
+> bounded graph + `meta`/`boundary` envelope (Phase 2).
+
 Contract changes to expect (coordinate the release in lockstep):
 
 - **`db` → `schema` field rename.** `TableResponse.db` and `SkillResponse.db`
@@ -242,17 +250,22 @@ The D15 multi-schema work (§10) is **decided but not yet built**, so split the 
   fitView-to-everything with a sane default + jump-to-focus). None of this needs a
   backend change — it runs against the current `/schema`, `/graph`,
   `/knowledge-graph`, and in mock mode.
+- **Now also live on the backend (§4):** `/schema/summary` (lean, with
+  `?db=&limit=&offset=`), `/schema/{table_id}` (lazy full detail), and the
+  `can_scope`/`can_search` flags. So Phase 1 can page the real server catalog and
+  lazy-load detail directly, not only a client-derived summary. Gate on
+  `capabilities.can_scope`.
 - Everything already live behind `langgraph dev` (§8): chat with live stages, the
   answer card, the provenance drawer, and the current schema/graph views.
 
 **Gated on the D15 backend build (see §10; not yet shipped):**
 
-- The `db → schema` field rename (the one breaking OpenAPI change).
-- The scopeable/paginated endpoints (`/schema/summary`, `/schema/{id}`,
-  `?schema=&focus=&radius=&node_budget=`) with the `meta` / `boundary` envelope.
-- The `can_scope` / `can_search` capability flags.
-- Server-scoped graphs, focus/radius bounding, and the schema rail as
-  server-scoped navigation (**Phase 2**).
+- The `db → schema` field rename (the one breaking OpenAPI change; the shipped
+  read layer still uses `db`).
+- The **bounded-graph** layer — `focus`/`radius`/`node_budget` scoping on `/graph`
+  and `/knowledge-graph` with the `meta` / `boundary` envelope, and the schema rail
+  as server-scoped navigation (**Phase 2**).
+- Server-side `/search` (the client Fuse index stays the default).
 
 Gate every gated item on `capabilities.can_scope` / `can_search` and fall back to
 today's flat behavior when the flags are absent, so the UI runs unchanged against

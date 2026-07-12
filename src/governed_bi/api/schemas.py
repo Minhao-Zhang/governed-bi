@@ -29,6 +29,8 @@ class CapabilitiesResponse(_View):
     model: str | None  # LLM model name when a live model is wired, else null
     has_live_model: bool
     can_stream: bool  # whether a streaming chat endpoint exists (False for this REST API)
+    can_scope: bool  # whether the summary/detail/scoping schema routes are served
+    can_search: bool  # whether a server-side FTS endpoint exists (False: client Fuse)
 
 
 # ── health ────────────────────────────────────────────────────────────────── #
@@ -74,6 +76,33 @@ class TableResponse(_View):
     excluded_reason: str | None
     provenance_status: str | None
     columns: list[ColumnResponse]
+
+
+# ── schema summary (lean catalog) ─────────────────────────────────────────── #
+class ColumnSummaryResponse(_View):
+    physical_name: str
+    physical_type: str
+    role: str | None
+    reliability: str  # "ok" | "suspect"
+    excluded: bool
+
+
+class TableSummaryResponse(_View):
+    # Lean catalog row: heavy fields (sample_values, evidence, description) dropped.
+    id: str
+    physical_name: str
+    db: str
+    row_count: int | None
+    n_columns: int
+    excluded: bool
+    has_suspect: bool
+    provenance_status: str | None
+    columns: list[ColumnSummaryResponse]
+
+
+class SchemaSummaryResponse(_View):
+    total: int  # count BEFORE pagination
+    items: list[TableSummaryResponse]
 
 
 # ── relationship graph (ER view) ──────────────────────────────────────────── #

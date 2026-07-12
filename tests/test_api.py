@@ -47,6 +47,9 @@ def test_capabilities_reports_offline_dev(client):
     # job; see test_routes_app_advertises_streaming). can_edit is dev-derived.
     assert body["can_stream"] is False
     assert isinstance(body["can_edit"], bool)
+    # Additive scoping flags: the summary/detail routes are served; no server FTS.
+    assert body["can_scope"] is True
+    assert body["can_search"] is False
 
 
 def test_capabilities_flags_reflect_the_stack():
@@ -96,6 +99,113 @@ def test_schema_exposes_columns_and_governance(client):
     assert cols["CreditCardNumber"]["excluded"] is True
     zip_col = {c["physical_name"]: c for c in tables["customers"]["columns"]}["ZipCode"]
     assert zip_col["reliability"] == "suspect"
+
+
+def test_schema_param_less_is_unchanged(client):
+    # Regression guard: param-less /schema is the byte-for-byte full dump (the
+    # backward-compat contract). Adding optional query params must not change it.
+    full = client.get("/schema").json()
+    assert len(full) == 5
+    # Every table carries the heavy detail fields (this is the full view, not the summary).
+    assert all("description" in t for t in full)
+    assert all("sample_values" in c for t in full for c in t["columns"])
+
+
+def test_schema_db_filter_and_pagination(client):
+    all_tables = client.get("/schema").json()
+    assert len(all_tables) == 5
+    # db filter: the fixture corpus is a single namespace, so it keeps all rows.
+    assert len(client.get("/schema", params={"db": "beer_factory"}).json()) == 5
+    assert client.get("/schema", params={"db": "nope"}).json() == []
+    # limit/offset paginate against the same order.
+    page = client.get("/schema", params={"limit": 2, "offset": 1}).json()
+    assert [t["id"] for t in page] == [t["id"] for t in all_tables[1:3]]
+
+
+def test_schema_summary_shape_and_heavy_fields_absent(client):
+    body = client.get("/schema/summary").json()
+    assert body["total"] == 5
+    assert len(body["items"]) == 5
+    tables = {t["physical_name"]: t for t in body["items"]}
+    assert set(tables) == {"customers", "transaction", "rootbeer", "rootbeerbrand", "rootbeerreview"}
+    row = tables["customers"]
+    # Lean table-level fields present; heavy ones dropped.
+    assert set(row) == {
+        "id", "physical_name", "db", "row_count", "n_columns",
+        "excluded", "has_suspect", "provenance_status", "columns",
+    }
+    assert "description" not in row
+    assert row["n_columns"] == len(row["columns"])
+    assert row["has_suspect"] is True  # customers.ZipCode is suspect
+    # Lean column rows carry only the search/preview fields (no sample_values/evidence).
+    col = row["columns"][0]
+    assert set(col) == {"physical_name", "physical_type", "role", "reliability", "excluded"}
+    assert "sample_values" not in col
+    assert "evidence" not in col
+    # transaction has no suspect column but does have the excluded PII column.
+    txn = tables["transaction"]
+    assert txn["has_suspect"] is False
+    assert any(c["excluded"] for c in txn["columns"])
+
+
+def test_schema_summary_db_filter(client):
+    assert client.get("/schema/summary", params={"db": "beer_factory"}).json()["total"] == 5
+    empty = client.get("/schema/summary", params={"db": "nope"}).json()
+    assert empty["total"] == 0
+    assert empty["items"] == []
+
+
+def test_schema_summary_pagination_total_is_before_paging(client):
+    body = client.get("/schema/summary", params={"limit": 2, "offset": 1}).json()
+    assert body["total"] == 5  # count BEFORE pagination, not the page size
+    assert len(body["items"]) == 2
+    full = client.get("/schema/summary").json()["items"]
+    assert [t["id"] for t in body["items"]] == [t["id"] for t in full[1:3]]
+
+
+def test_schema_lists_are_id_sorted(client):
+    # Stable id order is what makes offset/limit pagination consistent across
+    # workers/restarts (corpus load order is otherwise filesystem-dependent for a
+    # multi-namespace corpus).
+    summary_ids = [t["id"] for t in client.get("/schema/summary").json()["items"]]
+    assert summary_ids == sorted(summary_ids)
+    schema_ids = [t["id"] for t in client.get("/schema").json()]
+    assert schema_ids == sorted(schema_ids)
+
+
+def test_schema_summary_pagination_bounds(client):
+    # offset beyond total -> empty page; total unchanged.
+    beyond = client.get("/schema/summary", params={"offset": 999}).json()
+    assert beyond["total"] == 5 and beyond["items"] == []
+    # limit=0 -> empty page (0 means "none", not "all"); total unchanged.
+    zero = client.get("/schema/summary", params={"limit": 0}).json()
+    assert zero["total"] == 5 and zero["items"] == []
+    # A limit larger than the corpus returns everything.
+    assert len(client.get("/schema/summary", params={"limit": 10000}).json()["items"]) == 5
+    # Negative limit/offset are rejected by the query validators (ge=0).
+    assert client.get("/schema/summary", params={"limit": -1}).status_code == 422
+    assert client.get("/schema/summary", params={"offset": -1}).status_code == 422
+
+
+def test_schema_by_id_found_and_missing(client):
+    tid = "tbl_beer_factory_customers"
+    found = client.get(f"/schema/{tid}")
+    assert found.status_code == 200
+    body = found.json()
+    assert body["id"] == tid
+    assert body["physical_name"] == "customers"
+    # This is the full detail view: heavy fields are present.
+    assert "sample_values" in body["columns"][0]
+    # Unknown id -> 404.
+    missing = client.get("/schema/tbl_does_not_exist")
+    assert missing.status_code == 404
+
+
+def test_capabilities_scope_flags_reflect_the_stack():
+    off = TestClient(create_app(replace(build_stack(), can_scope=False, can_search=True)))
+    body = off.get("/capabilities").json()
+    assert body["can_scope"] is False
+    assert body["can_search"] is True
 
 
 def test_graph_nodes_and_edges(client):

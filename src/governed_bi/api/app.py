@@ -35,8 +35,10 @@ from .schemas import (
     HealthResponse,
     KnowledgeGraphResponse,
     SchemaGraphResponse,
+    SchemaSummaryResponse,
     SkillResponse,
     TableResponse,
+    TableSummaryResponse,
 )
 from .stack import ServeStack, build_stack
 
@@ -85,6 +87,11 @@ def create_app(stack: ServeStack | None = None):
             # Streaming is served by the LangGraph chat graph, not this REST app; the
             # flag lets the UI pick the streaming path when that server is in front.
             can_stream=stack.can_stream,
+            # Additive scoping affordances: the summary/detail routes are served
+            # (can_scope), but there is no server-side FTS (can_search) — the UI
+            # builds its own client-side (Fuse) search index from /schema/summary.
+            can_scope=stack.can_scope,
+            can_search=stack.can_search,
         )
 
     @app.get("/", include_in_schema=False)
@@ -102,9 +109,50 @@ def create_app(stack: ServeStack | None = None):
         return HealthResponse.model_validate(presenter.corpus_health(stack.corpus_full))
 
     @app.get("/schema", response_model=list[TableResponse], tags=["schema"])
-    def schema() -> list[TableResponse]:
-        """Every table with its columns (types, roles, governance flags)."""
-        return [TableResponse.model_validate(t) for t in presenter.table_views(stack.corpus_full)]
+    def schema(
+        db: str | None = Query(None),
+        limit: int | None = Query(None, ge=0),
+        offset: int = Query(0, ge=0),
+    ) -> list[TableResponse]:
+        """Every table with its columns (types, roles, governance flags).
+
+        Param-less this is the full dump (backward-compatible). ``db`` filters to
+        one namespace; ``limit``/``offset`` paginate (default: all rows, offset 0).
+        """
+        views = presenter.table_views(stack.corpus_full)
+        if db is not None:
+            views = [v for v in views if v.db == db]
+        page = views[offset:] if limit is None else views[offset : offset + limit]
+        return [TableResponse.model_validate(t) for t in page]
+
+    @app.get("/schema/summary", response_model=SchemaSummaryResponse, tags=["schema"])
+    def schema_summary(
+        db: str | None = Query(None),
+        limit: int | None = Query(None, ge=0),
+        offset: int = Query(0, ge=0),
+    ) -> SchemaSummaryResponse:
+        """Lean catalog for the virtualized table list + the client search index.
+
+        Heavy fields (sample_values, evidence, description) are dropped; fetch full
+        detail lazily via ``/schema/{table_id}``. ``db`` filters to one namespace;
+        ``limit``/``offset`` paginate (default: all rows, offset 0); ``total`` is
+        the count BEFORE pagination.
+        """
+        summaries = presenter.table_summaries(stack.corpus_full, db=db)
+        total = len(summaries)
+        page = summaries[offset:] if limit is None else summaries[offset : offset + limit]
+        return SchemaSummaryResponse(
+            total=total,
+            items=[TableSummaryResponse.model_validate(s) for s in page],
+        )
+
+    @app.get("/schema/{table_id}", response_model=TableResponse, tags=["schema"])
+    def schema_table(table_id: str) -> TableResponse:
+        """Full detail for one table by asset id (404 when the id is unknown)."""
+        view = presenter.table_view_by_id(stack.corpus_full, table_id)
+        if view is None:
+            raise HTTPException(status_code=404, detail="unknown table id")
+        return TableResponse.model_validate(view)
 
     @app.get("/graph", response_model=SchemaGraphResponse, tags=["schema"])
     def graph() -> SchemaGraphResponse:

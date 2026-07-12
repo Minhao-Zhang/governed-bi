@@ -80,19 +80,196 @@
           "schema"
         ],
         "summary": "Schema",
-        "description": "Every table with its columns (types, roles, governance flags).",
+        "description": "Every table with its columns (types, roles, governance flags).\n\nParam-less this is the full dump (backward-compatible). ``db`` filters to\none namespace; ``limit``/``offset`` paginate (default: all rows, offset 0).",
         "operationId": "schema_schema_get",
+        "parameters": [
+          {
+            "name": "db",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Db"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
+                  "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/TableResponse"
                   },
-                  "type": "array",
                   "title": "Response Schema Schema Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/schema/summary": {
+      "get": {
+        "tags": [
+          "schema"
+        ],
+        "summary": "Schema Summary",
+        "description": "Lean catalog for the virtualized table list + the client search index.\n\nHeavy fields (sample_values, evidence, description) are dropped; fetch full\ndetail lazily via ``/schema/{table_id}``. ``db`` filters to one namespace;\n``limit``/``offset`` paginate (default: all rows, offset 0); ``total`` is\nthe count BEFORE pagination.",
+        "operationId": "schema_summary_schema_summary_get",
+        "parameters": [
+          {
+            "name": "db",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Db"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchemaSummaryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/schema/{table_id}": {
+      "get": {
+        "tags": [
+          "schema"
+        ],
+        "summary": "Schema Table",
+        "description": "Full detail for one table by asset id (404 when the id is unknown).",
+        "operationId": "schema_table_schema__table_id__get",
+        "parameters": [
+          {
+            "name": "table_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Table Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -478,6 +655,14 @@
           "can_stream": {
             "type": "boolean",
             "title": "Can Stream"
+          },
+          "can_scope": {
+            "type": "boolean",
+            "title": "Can Scope"
+          },
+          "can_search": {
+            "type": "boolean",
+            "title": "Can Search"
           }
         },
         "type": "object",
@@ -488,7 +673,9 @@
           "edit_mode",
           "model",
           "has_live_model",
-          "can_stream"
+          "can_stream",
+          "can_scope",
+          "can_search"
         ],
         "title": "CapabilitiesResponse"
       },
@@ -677,6 +864,46 @@
           "evidence"
         ],
         "title": "ColumnResponse"
+      },
+      "ColumnSummaryResponse": {
+        "properties": {
+          "physical_name": {
+            "type": "string",
+            "title": "Physical Name"
+          },
+          "physical_type": {
+            "type": "string",
+            "title": "Physical Type"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          },
+          "reliability": {
+            "type": "string",
+            "title": "Reliability"
+          },
+          "excluded": {
+            "type": "boolean",
+            "title": "Excluded"
+          }
+        },
+        "type": "object",
+        "required": [
+          "physical_name",
+          "physical_type",
+          "role",
+          "reliability",
+          "excluded"
+        ],
+        "title": "ColumnSummaryResponse"
       },
       "EditRequest": {
         "properties": {
@@ -1088,6 +1315,27 @@
         ],
         "title": "SchemaGraphResponse"
       },
+      "SchemaSummaryResponse": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TableSummaryResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "items"
+        ],
+        "title": "SchemaSummaryResponse"
+      },
       "SkillResponse": {
         "properties": {
           "skill_id": {
@@ -1223,6 +1471,76 @@
           "columns"
         ],
         "title": "TableResponse"
+      },
+      "TableSummaryResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "physical_name": {
+            "type": "string",
+            "title": "Physical Name"
+          },
+          "db": {
+            "type": "string",
+            "title": "Db"
+          },
+          "row_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row Count"
+          },
+          "n_columns": {
+            "type": "integer",
+            "title": "N Columns"
+          },
+          "excluded": {
+            "type": "boolean",
+            "title": "Excluded"
+          },
+          "has_suspect": {
+            "type": "boolean",
+            "title": "Has Suspect"
+          },
+          "provenance_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provenance Status"
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/ColumnSummaryResponse"
+            },
+            "type": "array",
+            "title": "Columns"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "physical_name",
+          "db",
+          "row_count",
+          "n_columns",
+          "excluded",
+          "has_suspect",
+          "provenance_status",
+          "columns"
+        ],
+        "title": "TableSummaryResponse"
       },
       "TurnIn": {
         "properties": {
