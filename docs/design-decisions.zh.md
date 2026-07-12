@@ -2,7 +2,7 @@
 
 _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 
-面向[Agentic BI 系统](system-overview.zh.md)的已决策事项 D1-D14，并附上已考虑过的
+面向[Agentic BI 系统](system-overview.zh.md)的已决策事项 D1-D15，并附上已考虑过的
 备选方案与权衡。标记为**ADR 级**的决策难以逆转，请将其视为 ADR。
 
 ## D1：目标
@@ -32,6 +32,11 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 > 证明的是种子辅助那一个；真正的最小种子评测（保留整库、或几乎不给 Q/SQL
 > 监督）属于未来工作。在它落地之前，**不要声称 BIRD 训练集证明了冷启动。**
 > README 定位已据此改写。
+
+> **精化（2026-07-11）：多 schema，但仍非多租户。** 引擎现在的目标是**一个
+> 数据库容纳多个 schema**，并支持可执行的跨 schema 连接与聚合（**D15**）。这
+> 拓宽了引擎的触及范围，但*并不*推翻“并非产品”：身份、RLS 与多租户在本仓库
+> 中仍是默认关闭的接缝（**D7**），交由企业系统去适配，而不在本仓库内构建。
 
 ## D2：治理单元
 
@@ -151,6 +156,10 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 > 泄漏。这正是为什么我们缓存的是 SQL（在每个用户身下重新执行），而绝不
 > 缓存结果本身的原因。
 
+> **D15 未改变这一点（2026-07-11）。** 多 schema 服务**不**引入任何身份或
+> RLS。单一全权限身份仍是开发/展示环境的默认，RLS 仍是一个由企业系统提供、
+> 默认关闭的 gateway 接缝。D15 跨越的是 *schema*，而非*用户*。
+
 ## D8：服务时记忆
 
 > **已决定（ADR 级）**
@@ -214,7 +223,7 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   `metric`、`rule`/`context`、`negative_example`；**markdown** 用于
   skills/gotchas/query-patterns。CI 会强制校验引用完整性（
   `term→metric→column→table` 全部能够解析）以及正则 ID 格式
-  （`tbl_<domain>_<name>` 等）。该检查同时也充当 curator 可机器校验的
+  （`tbl_<schema>_<name>` 等）。该检查同时也充当 curator 可机器校验的
   “足够完成”信号。
 - **列的可靠性是一段文字说明，而不是一个标志。** 没有 `decoy: true` 这种
   字段。curator 会写一段自由文本的**可靠性警示**（"UNRELIABLE: DO NOT
@@ -239,6 +248,10 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 - **备选方案：** 自定义的、由数据库支撑的 schema（会失去 git 的
   diff/PR/审计能力；在数据库里直接编写会破坏“单一可信来源”这一不变式）；
   类型化的诱饵标志位（无法迁移到企业部署场景）。
+- **命名空间字段由 `db` 更名为 `schema`（D15，2026-07-11）。** 历来被命名为 `db`
+  的逐资产命名空间其实一直表示一个 *schema*（每个命名空间对应一个 YAML 子树），
+  现已在各处更名为 `schema`。ID 保持不变——它们本就已嵌入命名空间
+  （`tbl_<schema>_<name>`）——因此这是一次投影修正，而非身份变更。参见 **D15**。
 - 是对**Markdown 优先存储** ADR 的具体化；详见[Architecture](architecture.zh.md)
   §5，逐资产的字段规格参见[Asset schemas](asset-schemas.zh.md)。
 
@@ -317,6 +330,8 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 - **结果：** 这具体化了 **D9**（git 是真实来源），并**推迟了 D11 的
   `CorpusRelease`**，因为不可变、按哈希锁定的*服务*发布是一个独立且更靠后的
   议题。引擎中的 `corpus/beer_factory/` 仍作为供测试使用的示例夹具（fixture）。
+- **被 D15 更名（2026-07-11）：** `<db>/` 子树现为 `<schema>/`；每个部署的 corpus
+  仓库存放其单个数据库的各个 schema。`load_corpus` 照旧读取每个子树，无需改动。
 
 ## D14：BIRD-Obfuscation 上的 SME 增长基准
 
@@ -340,3 +355,27 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   （beer_factory 上 26 个测试问题）以及可能出现的向 **gold** 参照坍缩，都是
   被接受且已记录的局限，因为 gold 是一条参照线，而不是上限。借助 **D13** 的
   多库 corpus 仓库，跨 69 个 BIRD 库汇总，才是让这张表可信的关键。
+- **跨 schema 不在评分范围内（D15）。** BIRD 的 69 个 db_id 是互不相关的独立
+  数据库，之间没有跨库关系，因此跨 *schema* 服务不被本基准评分。该表衡量的是
+  schema 内的增长（在规模化时还有 schema 路由）；跨 schema 的正确性是一个被
+  接受、另行测试的局限。参见 **D15**。
+
+## D15：多 Schema 服务（一个数据库，多个 schema）
+
+> **已决定（ADR 级，2026-07-11）**
+>
+> 一次运行连接**一个数据库**，其中容纳**多个 schema**，每个 schema 各有自己的
+> 表。关系在 schema *内部*很常见，也允许*跨* schema 存在；跨 schema 的连接与
+> 聚合在这一个引擎上是**可执行的**，通过完全限定的 `schema.table` SQL 实现，
+> 而不是联邦查询（federation）。数据库是一个**连接配置常量**，而不是被建模的
+> corpus 层级：corpus 建模的是 **schema → 表**（两级，而非三级）。**身份 / RLS /
+> 多租户不在本仓库范围内**——那个默认关闭的 gateway 接缝（**D7**）予以保留，
+> 由企业系统去适配。历来被命名为 `db` 的 corpus 命名空间字段在各处更名为
+> **`schema`**；资产 ID 保持不变，因为它们本就已嵌入命名空间
+> （`tbl_<schema>_<name>`），所以这是一次投影修正，而非身份变更。
+
+- **跨 schema 关系靠策展得到，绝不靠发现。** 一条跨 schema 的边只作为源自记忆/corpus 的 `join` 资产存在——由 SME 声明、从示例 SQL 蒸馏、或从使用中挖掘——而**绝不**从数据库外键探测、也不从列名猜测。每一种治理型语义层都是这么做的（dbt MetricFlow、LookML、Cube、Malloy 全都是闭世界、仅用已声明连接；在缺失外键的基准如 Spider 2.0 中，猜测外键正是首要失败模式）。由此带来一个需要如实说明的后果：面对一个全新数据库，引擎能立刻回答 schema 内的问题，但**在为某个跨 schema 问题策展出关系之前无法回答它**——若没有已声明的跨 schema 连接，它会**拒答并升级**，而不是硬造一个。这正是教科书式的“策展胜于堆积”资产（数据库永远不会告诉你 `crm.customer ↔ sales.orders`，但 SME 会），并通过 **D12** 澄清循环不断生长。
+- **限定是按模式区分的，以保护被评分的那条路径。** 单 schema 路径（SQLite，也就是 BIRD 评测）逐字保持输出**裸的、未限定的** SQL——SQLite 无法解析 `schema.table`，对它做限定会破坏我们唯一评分的那个分支的执行准确率。只有多 schema 路径（Postgres / Redshift）才做限定，因此**跨 schema 在 v0 是一个仅限 Postgres/Redshift 的能力**，这与它不被 BIRD 评分（见下）相吻合。`DataSourceConfig` 通过一个显式信号区分三种模式——*SQLite 单 schema*、*Postgres 固定单 schema*、*Postgres 全 schema 覆盖*——而绝不以 `schema is None` 为判据（SQLite 本就以 `schema=None` 运行）。
+- **护栏变为按 schema 限定，并仍是唯一的表范围关卡。** 检索与 L4 授权范围覆盖所有 schema：一个 **schema 路由器**先筛选出相关 schema，再**沿着已策展的连接**扩展，使位于第三个 schema 的桥接表不被丢弃（若只按相似度筛选，会造成*虚假*拒答，与上文那种诚实拒答无法区分）。L4 许可集变为完全限定的 `schema.table` 成员判定；一个裸引用只解析到某个指定的默认 schema，并在许可集中该名称跨多个 schema 出现时**因歧义而被拒**——这正是禁止自我授权到范围外 schema 的机制。L3 键变为三段式 `schema.table.column`；L5 的并查集按 `schema.table` 建键。许可的 *ID* 集本就已按 schema 正确（ID 已嵌入 schema），所以这是一次投影修正。只读、强制行数上限与语句超时保持不变——它们位于连接器而非护栏——且**不**使用 `search_path`（L2 禁止 `Command`）；完全限定才是所用机制。
+- **备选方案：** 一个真正三级的 `连接 → schema → 表` 模型并支持跨连接联邦（否决——单个引擎无法跨物理连接做连接；联邦是数仓的问题）；从外键元数据或名称启发式自动发现跨 schema 连接（否决——跨 schema 外键极少存在，而猜测它们在无外键场景中正是主导错误模式）；无条件限定（否决——它会破坏 SQLite/BIRD 被评分的那条路径）。
+- **结果：** 精化了 **D1** 的目标（在一个数据库内具备多 schema 能力，租户隔离仍在范围外）与 **D9** 的 corpus 契约（`db` → `schema`；`<db>/` 子树变为 `<schema>/`）。**跨 schema 服务不被 BIRD 评分**（**D14**），这是一个被接受、已记录的局限，转而以护栏单元测试、一个双 schema 的 Postgres 集成夹具，以及一项校验 `(schema, physical_name)` 唯一性与许可集键无歧义的 CI 检查来覆盖。**状态：已决定，尚未构建**——当前代码仍输出 `db` 并只服务单个 schema，此处描述的内容都尚未落地。（只有 curator 侧的脚手架早于本决策存在：连接器的 `list_schemas` 与 `--all-schemas` 画像器，它们仍为每个 schema 构建一个以 `db` 命名的 corpus。）构建顺序为：更名 + `DataSourceConfig` 解耦 → 按 schema 限定的投影 + 护栏可靠性 + CI（多 schema 模式以此为前置门槛）→ 全 schema 覆盖连接器 + Postgres 集成夹具 → 缺失边拒答并接入 **D12** → schema 路由器 + 连接感知检索；LLM 由粗到细的裁剪 pass 仍推迟在可插拔生成器接缝之后。

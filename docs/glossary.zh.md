@@ -44,3 +44,8 @@ _[English](glossary.md) · [简体中文](glossary.zh.md)_
 | **无语义层臂**（No-layer arm，基线） | 评测的下限：server 在*完全没有 corpus* 的情况下作答，只拿到原始的（被混淆的）schema 和问题。“基线（baseline）”专指这一行。（*避免*：不要用“基线”/“baseline”来指代仅含 Facts 的起点。） |
 | **仅含 Facts 的 corpus**（Facts-only corpus） | 经自动画像分析得到的起始 corpus：物理类型、样本值，以及 FK 候选（`curator/profile.py`），**没有 Inference 层**。它是增长的起点那一行，早于任何 **SME** 交互。 |
 | **Gold 语义层**（Gold semantic layer） | Arm-3 评测基线：一个确定性的去混淆神谕（rename map → real names，decoy manifest → exclusions，original schema → FK graph）。不涉及 AI，也没有所有者；是一条参考线，不是严格上限。仅适用于 BIRD。 |
+| **Schema**（命名空间） | 一次运行所连接的那个数据库内部的单级命名空间（D15）：一个 YAML 子树（`corpus/<schema>/`）以及逐资产的 `schema` 字段。由历来（误）命名为 `db` 的字段更名而来，那个字段一直表示一个 schema。一次运行的数据库本身是连接配置，不是 corpus 的一个层级。 |
+| **跨 schema 关系**（Cross-schema relationship） | 两个端点位于*不同* schema 的 `join` 资产。**只靠策展得到**——由 **SME** 声明、从示例 SQL 蒸馏、或从使用中挖掘；绝不从数据库外键探测、也不从名称猜测。若没有这样的资产，引擎会**拒答**该跨 schema 问题，而不是硬造一个连接（D15）。 |
+| **Schema 路由器**（Schema router） | 检索的前置阶段（D15），在表检索之前先筛选出与问题相关的 schema，使跨越众多 schema 的成千上万张表仍可处理。它**连接感知**：沿着已策展的跨 schema 连接扩展，使位于某个未被提及 schema 的桥接表不被丢弃。 |
+| **限定标识符**（Qualified identifier） | 一个完全限定的 `schema.table`（或 `schema.table.column`）引用。在**多 schema 模式**中贯穿始终——检索、护栏许可集、生成的 SQL 与执行。单 schema 路径保持**裸的/未限定**（D15 按模式区分的限定规则，用以保护 SQLite/BIRD 被评分的那条路径）。 |
+| **多 schema 模式**（Multi-schema mode） | 连接器覆盖该单个数据库内每一个 schema、且跨 schema 连接可执行的运行模式（v0 仅限 Postgres/Redshift）。与*单 schema* 模式（SQLite，或一个固定的单 Postgres schema）不同，后者保持不变并输出裸 SQL。由一个显式信号选择，绝不以 `schema` 未设置为判据。 |

@@ -2,7 +2,7 @@
 
 _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 
-Settled decisions D1-D14 for the [Agentic BI System](system-overview.md), with
+Settled decisions D1-D15 for the [Agentic BI System](system-overview.md), with
 the alternatives considered and the trade-offs. The **ADR-grade** ones are hard
 to reverse. Treat them as ADRs.
 
@@ -30,6 +30,12 @@ Reason: the showcase is the only place with real data, a real evaluator, and no 
 > minimal-seed eval (withholding whole DBs or nearly all Q/SQL supervision) is
 > future work. Until it lands, **do not claim the BIRD train split demonstrates a
 > cold start.** README positioning reworded accordingly.
+
+> **Refined (2026-07-11): multi-schema, still not multi-tenant.** The engine now
+> targets **one database holding many schemas**, including executable cross-schema
+> joins and aggregations (**D15**). This widens the engine's reach but does *not*
+> reverse "not a product": identity, RLS, and multi-tenancy stay toggled-off seams
+> here (**D7**) and are adapted by an enterprise system, not built in this repo.
 
 ## D2: Governed Unit
 
@@ -115,6 +121,11 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 > Episodic memory and result caching leak across users if not identity-scoped.
 > This is why we cache SQL (re-run as each user), never results.
 
+> **Unchanged by D15 (2026-07-11).** Multi-schema serving adds **no** identity or
+> RLS. The single all-access identity stays the dev/showcase default, and RLS
+> stays a toggled-off gateway seam an enterprise system supplies. D15 spans
+> *schemas*, not *users*.
+
 ## D8: Serve-time Memory
 
 > **Decided (ADR-grade)**
@@ -158,11 +169,12 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 > source of truth.** Every other store (graph / vector / BM25 / Postgres) is a
 > **derived, rebuildable projection**, never authored directly, Neo4j included.
 
-- **Asset types (YAML):** `table`, `column`, `join`, `few_shot`, `term`, `metric`, `rule`/`context`, `negative_example`; **markdown** for skills / gotchas / query-patterns. CI enforces reference integrity (`term→metric→column→table` all resolve) and regex IDs (`tbl_<domain>_<name>`, …). That check doubles as the curator's machine-checkable "done-enough" signal.
+- **Asset types (YAML):** `table`, `column`, `join`, `few_shot`, `term`, `metric`, `rule`/`context`, `negative_example`; **markdown** for skills / gotchas / query-patterns. CI enforces reference integrity (`term→metric→column→table` all resolve) and regex IDs (`tbl_<schema>_<name>`, …). That check doubles as the curator's machine-checkable "done-enough" signal.
 - **Column reliability is prose, not a flag.** No `decoy: true`. The curator writes a free-text **reliability caveat** ("UNRELIABLE: DO NOT USE" plus a reason) inferred from data evidence. *Same mechanism in BIRD and enterprise deployments.* In BIRD the decoy manifest lets us *grade* it (decoy-recall / decoy-touch); in the enterprise setting nobody knows ground truth, but the same inference runs. Transferability is the deciding reason.
 - **BIRD scope is not only structure.** BIRD ships an `evidence` field (external-knowledge hints ≈ lightweight rules / derived metrics), so the curator also generates `metric`/`rule`/`term`/`context` for BIRD, seeded by evidence. These are scored end-to-end by EX (Arm 1 vs Arm 2), with **no per-asset gold** for those (gold stays limited to names, FK, and decoy-exclusions per D4). **Synonyms (`term`/`term_relationship`) are in-scope for BIRD too**: the obfuscation's *rewrite* dimension means one concept gets asked multiple ways, so synonym mappings aid paraphrase-robust retrieval. They're consumed via the dictionary engine or in-memory, still no Neo4j.
 - **Graph is a projection (in-memory built; Neo4j deferred).** `join` (+ `term_relationship`, + metric/column lineage) project into a property graph. BIRD uses an **in-memory graph** (networkx) for Steiner-tree planning; **that projection and the Steiner join planner are built** (the planner cost model is a tunable heuristic). **Neo4j is an optional derived projection** for enterprise scale (and a stated learning goal), rebuilt from YAML by a loader, and stays deferred.
 - **Alternatives:** custom DB-backed schema (loses git diff/PR/audit; authoring-in-DB breaks the source-of-truth invariant); typed decoy flag (not transferable to an enterprise deployment).
+- **Namespace field renamed `db` → `schema` (D15, 2026-07-11).** The per-asset namespace historically named `db` always denoted a *schema* (one YAML subtree per namespace); it is renamed `schema` everywhere. IDs are unchanged — they already embed the namespace (`tbl_<schema>_<name>`) — so the rename is a projection fix, not an identity change. See **D15**.
 - Concretizes the **Markdown-first Storage** ADR; detail in [Architecture](architecture.md) §5, per-asset field spec in [Asset schemas](asset-schemas.md).
 
 ## D10: Curator = Proposer + Adversary
@@ -219,6 +231,7 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
 
 - **Alternatives:** keeping the corpus vendored in the engine repo (this couples per-deployment data to engine releases and cannot track many deployments); building the full `CorpusRelease` machinery now (premature, per D11).
 - **Consequence:** this concretizes **D9** (git is the source of truth) and **defers D11 `CorpusRelease`**, since the immutable hash-pinned *serving* release is a separate, later concern. The engine's `corpus/beer_factory/` stays a worked-example fixture for tests.
+- **Renamed by D15 (2026-07-11):** the `<db>/` subtree is now `<schema>/`; each deployment's corpus repo holds the schemas of its one database. `load_corpus` reads every subtree unchanged.
 
 ## D14: SME-growth Benchmark on BIRD-Obfuscation
 
@@ -238,3 +251,26 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
 
 - **Alternatives:** a fitted learning curve with fine checkpoints (more compute, and it needs pre-registered breakpoints plus snapshot pinning, so it is deferred as unnecessary for a first result); a CI-enforced file-access firewall for the Simulated SME (rejected as over-complicated, since a careful prompt suffices and residual leakage is accepted and documented).
 - **Consequence:** this refines **D4**'s three arms with a growth dimension. Small-N noise (26 test questions on beer_factory) and a possible collapse toward the **gold** reference are accepted, documented limitations, since gold is a reference line, not a ceiling. Pooling across the 69 BIRD DBs, via **D13**'s multi-DB corpus repo, is what makes the table credible.
+- **Cross-schema is out of grading scope (D15).** BIRD's 69 db_ids are independent databases with no cross-db relationships, so cross-*schema* serving is un-graded by this benchmark. The table measures within-schema growth (and, at scale, schema-routing); cross-schema correctness is an accepted, separately-tested limitation. See **D15**.
+
+## D15: Multi-Schema Serving (one database, many schemas)
+
+> **Decided (ADR-grade, 2026-07-11)**
+>
+> A run connects to **one database** that holds **many schemas**, each with its
+> own tables. Relationships are common *within* a schema and also allowed
+> *across* schemas, and cross-schema joins and aggregations are **executable** on
+> the single engine via fully-qualified `schema.table` SQL — this is not
+> federation. The database is a **connection-config constant**, not a modeled
+> corpus level: the corpus models **schema → table** (two levels, not three).
+> **Identity / RLS / multi-tenancy stay out of this repo** — the toggled-off
+> gateway seam (**D7**) is retained and an enterprise system adapts it. The corpus
+> namespace field historically named `db` is renamed **`schema`** everywhere;
+> asset IDs are unchanged because they already embed the namespace
+> (`tbl_<schema>_<name>`), so this is a projection fix, not an identity change.
+
+- **Cross-schema relationships are curated, never discovered.** A cross-schema edge exists only as a memory/corpus-sourced `join` asset — SME-declared, distilled from example SQL, or mined from usage — and is **never** probed from database foreign keys or guessed from column names. This is how every governed semantic layer works (dbt MetricFlow, LookML, Cube, Malloy are all closed-world and declared-join-only; missing-FK guessing is the top failure mode in benchmarks like Spider 2.0). The honest consequence: on a fresh database the engine answers within-schema questions immediately, but **cannot answer a cross-schema question until a relationship is curated for it** — with no declared cross-schema join, it **refuses and escalates** rather than invent one. This is the textbook "curation beats accumulation" asset (the database will never reveal `crm.customer ↔ sales.orders`; an SME will) and it grows through the **D12** clarification loop.
+- **Qualification is mode-conditional, to protect the graded path.** The single-schema path (SQLite, i.e. the BIRD eval) keeps emitting **bare, unqualified** SQL byte-for-byte — SQLite cannot resolve `schema.table`, so qualifying it would break execution accuracy on the one arm we grade. Only the multi-schema path (Postgres / Redshift) qualifies, so **cross-schema is a Postgres/Redshift-only capability for v0**, which lines up with its being un-graded by BIRD (below). `DataSourceConfig` distinguishes three modes — *SQLite-single*, *Postgres-pinned-single-schema*, *Postgres-span-all* — by an explicit signal, never by `schema is None` (SQLite already runs with `schema=None`).
+- **The guardrail becomes schema-qualified and remains the sole table-scoping gate.** Retrieval and the L4 license scope span all schemas: a **schema router** shortlists the relevant schemas, then expands **along curated joins** so a bridge table sitting in a third schema is not dropped (a similarity-only shortlist would cause *spurious* refusals indistinguishable from the honest one above). The L4 allow-set becomes fully-qualified `schema.table` membership; a bare reference resolves only to a designated default schema and is **refused as ambiguous** when the licensed set holds that name in more than one schema — this is what forbids a self-authorized off-scope schema. L3 keys become three-part `schema.table.column`; L5 union-find keys on `schema.table`. The licensed *id* set was already schema-correct (IDs embed the schema), so this is a projection fix. Read-only, the forced row cap, and the statement timeout are untouched — they live in the connectors, not the guardrail — and `search_path` is **not** used (L2 forbids `Command`); full qualification is the mechanism.
+- **Alternatives:** a true three-level `connection → schema → table` model with cross-connection federation (rejected — one engine cannot join across physical connections; federation is a warehouse concern); auto-discovering cross-schema joins from FK metadata or name heuristics (rejected — cross-schema FKs rarely exist, and guessing them is the dominant error mode in FK-less settings); unconditional qualification (rejected — it breaks the SQLite/BIRD graded path).
+- **Consequence:** refines **D1**'s target (multi-schema-capable within one database, tenancy still out) and **D9**'s corpus contract (`db` → `schema`; the `<db>/` subtree becomes `<schema>/`). **Cross-schema serving is un-graded by BIRD** (**D14**), an accepted, documented limitation covered instead by guardrail unit tests, a two-schema Postgres integration fixture, and a CI check for `(schema, physical_name)` uniqueness and non-ambiguous allow-set keys. **Status: decided, not yet built** — the *serve* path still emits `db` and serves a single schema, and the schema-qualified serving model, guardrail, and rename described here have not shipped. (Only curator-side scaffolding predates this: the connector's `list_schemas` and the `--all-schemas` profiler, which still build one `db`-namespaced corpus per schema.) The build order is rename + `DataSourceConfig` untangle → schema-qualified projection + guardrail soundness + CI (gate multi-schema mode on this) → span-all connector + Postgres integration fixture → missing-edge refusal wired to **D12** → schema-router + join-aware retrieval; the LLM coarse-to-fine pruning pass stays deferred behind the pluggable generator seam.

@@ -168,3 +168,42 @@ Everything above is live behind `langgraph dev`; build against it now.
 4. **Corpus + health**; **editing** (dev, gated on `can_edit`).
 5. Deploy: Vercel UI + hosted LangGraph Server; resolve the open items in the
    design doc §13.
+
+---
+
+## 10. Multi-schema serving (decided — D15, not yet shipped)
+
+The engine is moving to **one database holding many schemas** with **executable
+cross-schema joins** ([design-decisions.md](design-decisions.md) D15). This is a
+**decided direction, not yet shipped**: today's contract above — and
+[openapi.json](openapi.json) — still uses the flat `db` field and serves a single
+schema. Build against the current contract now; treat this section as the backend
+answers to the navigation proposal in the frontend's own `DESIGN_QUESTIONS.md`.
+
+Contract changes to expect (coordinate the release in lockstep):
+
+- **`db` → `schema` field rename.** `TableResponse.db` and `SkillResponse.db`
+  become `schema`, and the ER / knowledge-graph nodes carry `schema`. This is the
+  **one externally-visible OpenAPI break** — rename it in the UI in lockstep with
+  the engine release. There is **no** separate `db` / connection level (the
+  database is a server-config constant), so the navigation backbone is a **single
+  schema rail**, not a two-level `db → schema` tree.
+- **Scope-on-demand instead of whole-corpus dumps.** The lean, scopeable,
+  paginated endpoints the frontend proposed (`/schema/summary?schema=`,
+  `/schema/{id}`, and `?schema=&focus=&radius=&node_budget=` on the graphs) are
+  accepted as the target and gated on new capability flags. A search-first landing
+  with a client-side Fuse index is the default; a server `/search` stays deferred.
+- **Cross-schema joins are navigable, executable relationships — not warnings.**
+  With exactly one database, a cross-schema join *does* run, so the frontend's Q7
+  flips: render it as a normal boundary you can traverse into, not a governance
+  warning. The old cross-*database* warning case does not exist here.
+- **Refusal is a first-class answer state.** When no curated relationship connects
+  two schemas for a question, the engine **refuses** rather than guessing a join
+  (D15). Surface it like the existing refusal (escalation, no SQL / no number),
+  and optionally as a prompt to request the relationship via the clarification
+  loop.
+- **New capability flags** (`can_scope`, `can_search`) let the UI light up the new
+  flow and fall back to today's flat behavior against a pre-D15 engine.
+
+None of this touches the chat transport or the answer card; it reshapes the
+**Schema tab** navigation and renames a single field.
