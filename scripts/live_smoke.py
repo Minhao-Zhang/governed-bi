@@ -41,14 +41,15 @@ def _fail(msg: str) -> None:
 
 
 def main() -> None:
-    # Fill OPENAI_API_KEY from a repo-root .env if it is not already in the env
-    # (a real environment variable wins); then check it is present.
-    from governed_bi.config import load_dotenv
+    # Fill the API key from a repo-root .env if it is not already in the env
+    # (secrets only; a real environment variable wins); then check it is present.
+    from governed_bi.config import load_dotenv, load_settings
 
     load_dotenv()
-    if not os.environ.get("OPENAI_API_KEY"):
-        _fail("OPENAI_API_KEY is not set. Export it, or put it in a .env at the repo root "
-              "(it is read from the env, never stored).")
+    api_key_env = load_settings(apply_local=False).models.api_key_env
+    if not os.environ.get(api_key_env):
+        _fail(f"{api_key_env} is not set. Export it, or put it in a .env at the repo root "
+              "(secrets only; policy lives in governed_bi.toml).")
     if not BIRD_DB.exists():
         _fail(f"missing demo DB at {BIRD_DB}")
 

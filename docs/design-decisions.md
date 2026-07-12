@@ -222,7 +222,8 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
 > **Decided (ADR-grade, 2026-07-11)**
 >
 > The corpus (the semantic layer) lives in its **own git repository**, separate
-> from the engine. The engine loads it by path (`GOVERNED_BI_CORPUS`), and
+> from the engine. The engine loads it by path (`[paths].corpus_root` in
+> `governed_bi.toml`, optionally overlaid by `governed_bi.local.toml`), and
 > `load_corpus` already reads every `<db>/` subtree, so a multi-DB corpus needs no
 > engine change. That repo's **git history is the source of truth and the
 > benchmark's checkpoint pin**: checkpoint N is the commit SHA after batch N. The

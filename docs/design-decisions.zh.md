@@ -319,7 +319,8 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 > **已决定（ADR 级，2026-07-11）**
 >
 > corpus（即语义层）存放在**自己独立的 git 仓库**中，与引擎分离。引擎通过
-> 路径（`GOVERNED_BI_CORPUS`）加载它，而 `load_corpus` 本就会读取每一个
+> 路径（`governed_bi.toml` 的 `[paths].corpus_root`，可由
+> `governed_bi.local.toml` 覆盖）加载它，而 `load_corpus` 本就会读取每一个
 > `<db>/` 子树，因此多库 corpus 无需改动引擎。该仓库的 **git 历史即真实
 > 来源，也是基准测试的检查点锁定**：检查点 N 就是第 N 批次之后的 commit
 > SHA。这一形态可以推广，因为每个部署都会有自己的 corpus 仓库供引擎指向。

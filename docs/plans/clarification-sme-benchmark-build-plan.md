@@ -10,7 +10,7 @@ doc (English only). Decisions are settled; this is the how and the order.
    `Clarification` block on the `Audit` tier, and an `accept_answer()` write
    primitive (the generalization of the once-sanctioned `certify()`).
 2. **Corpus repo + multi-DB harness (D13, D14).** The semantic layer moves to its
-   own git repo, loaded via `GOVERNED_BI_CORPUS`; the benchmark harness iterates
+   own git repo, loaded via `[paths].corpus_root`; the benchmark harness iterates
    `db_id`s, growing one per-DB corpus each and scoring the pooled test set. (Per
    D15, the corpus namespace field is `schema`, not `db`; for BIRD each `db_id`
    maps to a single schema. `db_id` here is BIRD's dataset/connection identifier
@@ -84,7 +84,7 @@ repo, no network.
 ### Increment 3 — corpus repo + multi-DB harness (WS2)
 
 - Create the separate corpus repo (external; needs a git repo the engine points
-  at via `GOVERNED_BI_CORPUS`). Cannot be created from inside this repo alone.
+  at via `[paths].corpus_root`). Cannot be created from inside this repo alone.
 - A benchmark harness (`eval/` or `scripts/`): a `db_id -> {connector config,
   corpus path}` registry, iterating the BIRD DBs, growing each corpus, scoring the
   pooled test set. Harness-only; not the production serving path.
@@ -107,7 +107,7 @@ repo, no network.
 ## Deferred and why
 
 - **Corpus in its own repo (WS2 external repo)** — needs a new git repository
-  outside this one; set up by the user, then pointed at via `GOVERNED_BI_CORPUS`.
+  outside this one; set up by the user, then pointed at via `[paths].corpus_root`.
 - **Live-model pieces (Simulated SME, NoLayerSolver runs, the real table)** —
   need `OPENAI_API_KEY` and a run; gated exactly like the existing live smoke.
 - **`build_gold_corpus`** — XL, and gated on the BIRD manifest formats + original

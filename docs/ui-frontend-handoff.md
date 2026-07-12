@@ -43,9 +43,10 @@ uv sync --extra agents --extra api                # agents = LangGraph/LangChain
 uv run --extra agents --extra api langgraph dev   # LangGraph Server at :2024 (chat + custom routes)
 ```
 - Live model (NL answers + free-form SQL): set `OPENAI_API_KEY` (env or repo `.env`).
-- Tracing (optional): set Langsmith (`LANGSMITH_API_KEY`, `LANGCHAIN_TRACING_V2=true`)
-  and/or Langfuse (`LANGFUSE_*`) keys, no-op if unset.
-- CORS: allow the UI origin (`http://localhost:3000`).
+- Tracing (optional; see `.env.example`):
+  - LangSmith: `LANGSMITH_API_KEY` + `LANGSMITH_TRACING=true` (or legacy `LANGCHAIN_TRACING_V2=true`)
+  - Langfuse: `uv sync --extra tracing`, then `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`
+- CORS: set `[serve].cors_origins` in `governed_bi.toml` (default includes `http://localhost:3000`).
 - **Local threads are ephemeral** under `langgraph dev` (durable persistence is the
   deployed Postgres). `/capabilities` reports `has_live_model`, `can_stream`,
   `can_edit`, `environment`, `dialect`.

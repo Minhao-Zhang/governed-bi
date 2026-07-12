@@ -11,16 +11,14 @@ import-time side effects (the stack is assembled only when the factory is called
 
     uv run --extra api uvicorn --factory governed_bi.api:create_app --reload
 
-Configure via env (see ``api.stack.build_stack``): ``GOVERNED_BI_CORPUS`` /
-``GOVERNED_BI_SQLITE``, and ``GOVERNED_BI_CORS_ORIGINS`` (comma-separated,
-default ``*``). Import stays free of FastAPI unless this module is used, keeping
-the core install lean.
+Policy comes from ``governed_bi.toml`` (+ optional ``governed_bi.local.toml``);
+secrets from the environment / ``.env``. Import stays free of FastAPI unless this
+module is used, keeping the core install lean.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 
 from .. import __version__
 from ..viz import presenter
@@ -93,7 +91,7 @@ def _corpus_subtree_for_asset(asset, corpus_root, current) -> str | None:
 
 
 def create_app(stack: ServeStack | None = None):
-    """Build the FastAPI app over a serve stack (built from env if not given)."""
+    """Build the FastAPI app over a serve stack (from ``build_stack`` / TOML if not given)."""
     from fastapi import FastAPI, HTTPException, Query
     from fastapi.middleware.cors import CORSMiddleware
 
@@ -104,15 +102,9 @@ def create_app(stack: ServeStack | None = None):
         summary="Governed NL2SQL serve flow + corpus/schema/audit, as JSON.",
     )
 
-    # CORS: default to the local Next.js dev origin so the separate frontend works
-    # out of the box, without a blanket wildcard. Override with
-    # GOVERNED_BI_CORS_ORIGINS (comma-separated; "*" to allow any origin); set it
-    # empty to disable CORS entirely (same-origin only).
-    origins = [
-        o.strip()
-        for o in os.environ.get("GOVERNED_BI_CORS_ORIGINS", "http://localhost:3000").split(",")
-        if o.strip()
-    ]
+    # CORS from [serve].cors_origins in TOML. Empty list disables CORS
+    # (same-origin only); include "*" to allow any origin.
+    origins = list(stack.settings.cors_origins)
     if origins:
         app.add_middleware(
             CORSMiddleware,

@@ -1,32 +1,25 @@
-"""Environment toggles + reusable numbers + model configuration.
+"""Project policy (TOML) + secrets (environment).
 
-Environments are **toggles, not architecture forks** (Architecture §9). The same
-code runs in both; only these switches differ. Bake the abstractions in now so
-prod is a config flip, not a rewrite.
+**Policy** — environment toggles, models, datasource shape, corpus path, serve
+flags — lives in ``governed_bi.toml``, optionally overlaid by a git-ignored
+``governed_bi.local.toml`` beside it. Parsed by :func:`load_settings`.
 
-The numeric defaults are the "reusable numbers" starting points (Architecture
-§7); tune against the BIRD-Obfuscation eval before trusting them.
+**Secrets** — API keys, DSN passwords — live only in the process environment
+(or a git-ignored ``.env`` loaded as a fallback). TOML never stores secret
+values; it only names the env var (``api_key_env``, ``dsn_env``).
 
-Model choices (provider, LLM, embedding) live in a project-level config file
-(``governed_bi.toml`` at the repo root) parsed by :func:`load_settings`, so the
-whole system reads one source of truth and a model swap is a config edit, not a
-code change. **The API key is never stored in the file** - it is read from an
-environment variable named by ``ModelConfig.api_key_env`` (default
-``OPENAI_API_KEY``) at call time. This keeps secrets out of git.
-
-As a local-run convenience, :func:`load_dotenv` also reads a git-ignored ``.env``
-at the repo root and fills in any variables it defines that are **not already
-set** - so a real environment variable always wins and ``.env`` is a fallback,
-never an override. It runs once automatically when the package is imported.
+Precedence: code defaults → ``governed_bi.toml`` → ``governed_bi.local.toml`` →
+secret values read from the environment at call time.
 """
 
 from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 
 class Environment(str, Enum):
@@ -80,11 +73,7 @@ class ModelConfig:
 
 @dataclass(frozen=True)
 class DataSourceConfig:
-    """Which database the engine and curator read (the ``[datasource]`` table in
-    ``governed_bi.toml``). One source of truth, so pointing at a different DB - the
-    vendored SQLite fixture, or a BIRD-Obfuscation Postgres instance - is a config
-    edit, not a code change. Built into a ``Connector`` by
-    ``governed_bi.gateway.build_connector``.
+    """Which database the engine and curator read (the ``[datasource]`` table).
 
     SECURITY: a Postgres/Redshift DSN carries a password, so it is **not** stored
     here. Set ``dsn_env`` to the name of an environment variable holding the full
@@ -107,7 +96,7 @@ class DataSourceConfig:
         out (``False``). The connector then enumerates and introspects all user
         schemas (D15); SQL and guardrails use fully-qualified ``schema.table``.
         SQLite is always single-schema regardless of this flag (BIRD graded path).
-        Opt out with ``multi_schema = false`` plus a pinned ``schema`` when a
+        Opt out with ``multi_schema=False`` plus a pinned ``schema`` when a
         deployment must stay single-schema on Postgres.
         """
         return self.multi_schema and self.kind.lower() in ("postgres", "redshift")
@@ -123,8 +112,8 @@ class DataSourceConfig:
 
 @dataclass(frozen=True)
 class Settings:
-    """Runtime configuration. Construct via ``Settings.for_env(...)`` or load a
-    project config file with :func:`load_settings`."""
+    """Runtime configuration. Construct via ``Settings.for_env(...)`` or
+    :func:`load_settings`."""
 
     environment: Environment
 
@@ -157,11 +146,19 @@ class Settings:
         default_factory=lambda: dict(ROUTE_MEMORY_BUDGETS)
     )
 
-    # ── Model seam configuration (see load_settings / governed_bi.toml) ──
+    # ── Model seam (see [models] in governed_bi.toml) ──
     models: ModelConfig = field(default_factory=ModelConfig)
 
-    # ── Data source: which DB the engine/curator read (see [datasource]) ──
+    # ── Data source (see [datasource]) ──
     datasource: DataSourceConfig = field(default_factory=DataSourceConfig)
+
+    # ── Paths (see [paths]) ──
+    corpus_root: str = "corpus"  # repo-root-relative or absolute (D9/D13)
+
+    # ── Serve / API (see [serve]) ──
+    can_stream: bool = False  # True when a streaming chat graph is fronted
+    allow_edit: bool = True  # corpus file-write; for_env sets False in prod
+    cors_origins: tuple[str, ...] = ("http://localhost:3000",)
 
     @classmethod
     def for_env(
@@ -170,19 +167,32 @@ class Settings:
         *,
         models: ModelConfig | None = None,
         datasource: DataSourceConfig | None = None,
+        corpus_root: str | None = None,
+        can_stream: bool | None = None,
+        allow_edit: bool | None = None,
+        cors_origins: tuple[str, ...] | None = None,
     ) -> "Settings":
         env = Environment(environment)
-        base: dict = {}
+        base: dict[str, Any] = {}
         if models is not None:
             base["models"] = models
         if datasource is not None:
             base["datasource"] = datasource
+        if corpus_root is not None:
+            base["corpus_root"] = corpus_root
+        if can_stream is not None:
+            base["can_stream"] = can_stream
+        if allow_edit is not None:
+            base["allow_edit"] = allow_edit
+        if cors_origins is not None:
+            base["cors_origins"] = cors_origins
         if env is Environment.dev:
             return cls(
                 environment=env,
                 auto_accept_corpus=True,
                 single_all_access_identity=True,
                 hard_block_suspect_columns=True,
+                allow_edit=base.pop("allow_edit", True),
                 **base,
             )
         return cls(
@@ -190,14 +200,24 @@ class Settings:
             auto_accept_corpus=False,
             single_all_access_identity=False,
             hard_block_suspect_columns=False,
+            allow_edit=base.pop("allow_edit", False),
             **base,
         )
 
 
-# The project config file lives at the repo root. Kept here so callers do not
-# hard-code the path; overridable via the ``GOVERNED_BI_CONFIG`` env var (useful
-# for tests and alternate deployments).
+# --------------------------------------------------------------------------- #
+# Paths
+# --------------------------------------------------------------------------- #
+
 _CONFIG_FILENAME = "governed_bi.toml"
+_LOCAL_CONFIG_FILENAME = "governed_bi.local.toml"
+_DOTENV_FILENAME = ".env"
+_DEFAULT_CORPUS_ROOT = "corpus"
+
+# When False, :func:`load_settings` skips ``governed_bi.local.toml``. Tests set
+# this False so a developer's local Postgres/corpus overlay cannot leak into the
+# hermetic suite. Production and local runs leave it True.
+APPLY_LOCAL_OVERLAY = True
 
 
 def _abspath(path: Path | str) -> Path:
@@ -222,13 +242,8 @@ def _package_file() -> Path:
 
 
 def _default_config_path() -> Path | None:
-    """Locate ``governed_bi.toml``: the env override, else walk up from here to
-    the first ancestor that contains it. Returns None when no file is found (so
-    callers fall back to built-in defaults)."""
-    override = os.environ.get("GOVERNED_BI_CONFIG")
-    if override:
-        p = Path(override)
-        return p if p.is_file() else None
+    """Locate ``governed_bi.toml``: walk up from this package to the first
+    ancestor that contains it. Returns None when no file is found."""
     for parent in _package_file().parents:
         candidate = parent / _CONFIG_FILENAME
         if candidate.is_file():
@@ -257,63 +272,114 @@ def _repo_root() -> Path:
     return _REPO_ROOT
 
 
-_CORPUS_ROOT_ENV = "GOVERNED_BI_CORPUS"
-_DEFAULT_CORPUS_ROOT = "corpus"
-
-
 def resolve_corpus_root(value: str | Path | None = None) -> Path:
-    """Resolve the corpus root (D9/D13) to an absolute path.
+    """Resolve a corpus root path to an absolute path.
 
-    Precedence: the explicit ``value`` argument, else ``$GOVERNED_BI_CORPUS``,
-    else ``corpus`` (the vendored beer_factory fixture). An absolute path is used
+    ``None`` uses the default ``corpus`` fixture path. An absolute path is used
     as-is; a **relative** path resolves against the repo root, *not* the process
-    CWD - so the separate corpus repo (D13) is reachable as a sibling checkout via
-    ``GOVERNED_BI_CORPUS=../BIRD-corpus`` regardless of where the process runs.
+    CWD - so a sibling checkout is reachable as ``../BIRD-corpus`` regardless of
+    where the process runs. Pass ``settings.corpus_root`` from :func:`load_settings`
+    for the configured value.
     """
-    raw = value if value is not None else os.environ.get(_CORPUS_ROOT_ENV, _DEFAULT_CORPUS_ROOT)
+    raw = _DEFAULT_CORPUS_ROOT if value is None else value
     p = Path(raw)
     return _abspath(p if p.is_absolute() else _repo_root() / p)
 
 
-def _model_config_from_table(table: dict) -> ModelConfig:
-    """Build a :class:`ModelConfig` from a ``[models]`` TOML table, ignoring keys
-    it does not recognise so a forward-compatible file never crashes an old build.
-    """
-    known = {f for f in ModelConfig.__dataclass_fields__}
-    kwargs = {k: v for k, v in table.items() if k in known}
-    return ModelConfig(**kwargs)
+# --------------------------------------------------------------------------- #
+# TOML loading
+# --------------------------------------------------------------------------- #
 
 
-def _datasource_from_table(table: dict) -> DataSourceConfig:
-    """Build a :class:`DataSourceConfig` from a ``[datasource]`` TOML table,
-    ignoring unrecognised keys so a forward-compatible file never crashes an old
-    build (same tolerance as :func:`_model_config_from_table`)."""
-    known = {f for f in DataSourceConfig.__dataclass_fields__}
-    kwargs = {k: v for k, v in table.items() if k in known}
-    return DataSourceConfig(**kwargs)
+def _merge_tables(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Deep-merge TOML tables; overlay wins on conflicts. Non-table values replace."""
+    out = dict(base)
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _merge_tables(out[key], value)
+        else:
+            out[key] = value
+    return out
 
 
-def load_settings(path: str | Path | None = None) -> Settings:
-    """Load :class:`Settings` from the project config file.
+def _known_kwargs(cls: type, table: dict[str, Any]) -> dict[str, Any]:
+    """Keep only keys that are fields on ``cls`` (forward-compatible TOML)."""
+    known = {f.name for f in fields(cls)}
+    return {k: v for k, v in table.items() if k in known}
 
-    Reads ``[runtime].environment`` (default ``dev``) and the ``[models]`` table
-    from ``governed_bi.toml``. Missing file or missing tables fall back to the
-    built-in defaults, so this is always safe to call. The API key is **not** read
-    here - :meth:`ModelConfig.api_key` reads it from the environment on demand.
+
+def _model_config_from_table(table: dict[str, Any]) -> ModelConfig:
+    return ModelConfig(**_known_kwargs(ModelConfig, table))
+
+
+def _datasource_from_table(table: dict[str, Any]) -> DataSourceConfig:
+    return DataSourceConfig(**_known_kwargs(DataSourceConfig, table))
+
+
+def _cors_origins_from(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return tuple(o.strip() for o in value.split(",") if o.strip())
+    if isinstance(value, list):
+        return tuple(str(o).strip() for o in value if str(o).strip())
+    raise TypeError(f"cors_origins must be a string or list, got {type(value).__name__}")
+
+
+def _load_toml(path: Path) -> dict[str, Any]:
+    return tomllib.loads(path.read_text(encoding="utf-8"))
+
+
+def load_settings(
+    path: str | Path | None = None,
+    *,
+    apply_local: bool | None = None,
+) -> Settings:
+    """Load :class:`Settings` from the project config file (+ optional local overlay).
+
+    Reads ``governed_bi.toml`` (or ``path``). When ``apply_local`` is true (the
+    default unless :data:`APPLY_LOCAL_OVERLAY` is False), also merges
+    ``governed_bi.local.toml`` from the same directory if it exists — local wins.
+    Missing file or missing tables fall back to built-in defaults. Secret values
+    are **not** read here; :meth:`ModelConfig.api_key` and
+    :meth:`DataSourceConfig.resolve_dsn` read them on demand.
     """
     resolved = Path(path) if path is not None else _default_config_path()
     if resolved is None or not resolved.is_file():
         return Settings.for_env(Environment.dev)
 
-    data = tomllib.loads(resolved.read_text(encoding="utf-8"))
+    data = _load_toml(resolved)
+    use_local = APPLY_LOCAL_OVERLAY if apply_local is None else apply_local
+    if use_local:
+        local_path = resolved.parent / _LOCAL_CONFIG_FILENAME
+        if local_path.is_file():
+            data = _merge_tables(data, _load_toml(local_path))
+
     runtime = data.get("runtime", {})
     env = runtime.get("environment", Environment.dev.value)
     models = _model_config_from_table(data.get("models", {}))
     datasource = _datasource_from_table(data.get("datasource", {}))
-    settings = Settings.for_env(env, models=models, datasource=datasource)
+
+    paths = data.get("paths", {})
+    corpus_root = paths.get("corpus_root", _DEFAULT_CORPUS_ROOT)
+
+    serve = data.get("serve", {})
+    can_stream = bool(serve["can_stream"]) if "can_stream" in serve else None
+    allow_edit = bool(serve["allow_edit"]) if "allow_edit" in serve else None
+    cors_origins = (
+        _cors_origins_from(serve["cors_origins"]) if "cors_origins" in serve else None
+    )
+
+    settings = Settings.for_env(
+        env,
+        models=models,
+        datasource=datasource,
+        corpus_root=str(corpus_root),
+        can_stream=can_stream,
+        allow_edit=allow_edit,
+        cors_origins=cors_origins,
+    )
 
     # Optional [runtime] overrides for the environment toggles, so a deployment
-    # can, e.g., soft-warn on suspect columns without switching the whole env.
+    # can soft-warn on suspect columns without switching the whole env.
     overrides = {
         k: runtime[k]
         for k in ("auto_accept_corpus", "single_all_access_identity", "hard_block_suspect_columns")
@@ -323,29 +389,20 @@ def load_settings(path: str | Path | None = None) -> Settings:
 
 
 # --------------------------------------------------------------------------- #
-# .env loading (local-run convenience)
+# .env loading (secrets only — local-run convenience)
 # --------------------------------------------------------------------------- #
-#
-# The API key (and any other secret) is read from the process environment. For
-# local runs we also read a ``.env`` at the repo root and populate any variables
-# it defines that are not already set - so a real environment variable always
-# wins and ``.env`` is a fallback, never an override. ``.env`` is git-ignored;
-# never commit a real key. Location is overridable via ``GOVERNED_BI_DOTENV``.
-
-_DOTENV_FILENAME = ".env"
 
 
 def _find_dotenv() -> Path | None:
-    """Locate a ``.env``: the ``GOVERNED_BI_DOTENV`` override, else the first
-    ancestor of this file that contains one, else the current directory."""
-    override = os.environ.get("GOVERNED_BI_DOTENV")
-    if override:
-        p = Path(override)
-        return p if p.is_file() else None
-    for parent in _package_file().parents:
-        candidate = parent / _DOTENV_FILENAME
+    """Locate a ``.env`` next to the project config / repo root, else CWD."""
+    config = _default_config_path()
+    if config is not None:
+        candidate = config.parent / _DOTENV_FILENAME
         if candidate.is_file():
             return candidate
+    repo_candidate = _repo_root() / _DOTENV_FILENAME
+    if repo_candidate.is_file():
+        return repo_candidate
     # CWD fallback is a local convenience; skip it under a running event loop
     # (``Path.cwd`` -> ``getcwd`` trips LangGraph's ASGI blockbuster).
     try:
@@ -388,11 +445,12 @@ def _parse_dotenv(text: str) -> dict[str, str]:
 def load_dotenv(path: str | Path | None = None, *, override: bool = False) -> dict[str, str]:
     """Populate ``os.environ`` from a ``.env`` file; return what was applied.
 
+    Intended for **secrets only** (API keys, DSN values). Policy belongs in TOML.
+
     A real environment variable wins by default (``setdefault`` semantics): the
     file only fills in variables that are unset, so exporting a key in the shell
     always takes precedence over ``.env``. Pass ``override=True`` to let the file
-    replace already-set variables. A missing or unreadable file is a no-op, so
-    this is always safe to call.
+    replace already-set variables. A missing or unreadable file is a no-op.
     """
     resolved = Path(path) if path is not None else _find_dotenv()
     if resolved is None or not resolved.is_file():

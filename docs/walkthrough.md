@@ -168,7 +168,9 @@ uv run --extra agents --extra api uvicorn --factory governed_bi.api:create_app
 
 Prefer a file? Copy `.env.example` to `.env` at the repo root and put the key
 there instead of exporting it — it's loaded on import and never overrides a
-variable already set in your shell. `.env` is git-ignored.
+variable already set in your shell. `.env` holds **secrets only**; policy
+(models, datasource, corpus path) lives in
+[`governed_bi.toml`](../governed_bi.toml) / `governed_bi.local.toml`.
 
 The model is `gpt-5.5` at low reasoning effort (configured in
 [`governed_bi.toml`](../governed_bi.toml)), called through LangChain's

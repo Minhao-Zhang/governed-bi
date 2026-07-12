@@ -101,16 +101,20 @@ def build_facts_all_schemas(
 def main(argv: list[str] | None = None) -> int:
     """CLI: build the facts-only corpus layer from a configured database.
 
-    The data source comes from ``[datasource]`` in ``governed_bi.toml`` (see
-    :class:`~governed_bi.config.DataSourceConfig`); the flags below override
-    individual fields for a one-off run, so no config edit is needed to, e.g.,
-    point at the renamed+decoy BIRD Postgres instead of the SQLite fixture.
+    The data source comes from ``[datasource]`` in ``governed_bi.toml`` (and
+    optional ``governed_bi.local.toml``); the flags below override individual
+    fields for a one-off run without editing those files.
     """
     parser = argparse.ArgumentParser(
         prog="python -m governed_bi.curator.build",
         description="Generate the facts-only corpus layer (no AI) from a configured database.",
     )
-    parser.add_argument("--config", type=Path, default=None, help="governed_bi.toml (default: auto-locate)")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="governed_bi.toml (default: auto-locate; local overlay still applies)",
+    )
     parser.add_argument(
         "--out",
         type=Path,

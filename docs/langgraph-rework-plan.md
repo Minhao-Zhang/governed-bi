@@ -113,7 +113,7 @@ class ChatState(TypedDict):
 
 Runtime dependencies (never persisted): the `ServeStack` (corpus views,
 settings, generator, embedder, narrator, identity, sqlite path). The graph
-factory builds the stack from env at server startup and closes it over the node,
+factory builds the stack from ``load_settings()`` / TOML at server startup and closes it over the node,
 exactly as `build_serve_graph` already closes over its deps. Per-run values
 (`thread_id` used as the working-memory `session_id`) come from the node's
 `config`. Nothing heavy enters a state channel.
@@ -137,7 +137,7 @@ except the final human turn, replay them into an `InMemoryWorkingMemory` keyed b
 ```
 
 - `serve` is the `assistantId` the frontend passes to `useStream`.
-- `make_graph(config)` builds the stack from env and returns the compiled chat
+- `make_graph(config)` builds the stack via ``load_settings()`` / TOML and returns the compiled chat
   graph (compiled without a checkpointer).
 - `http.app` mounts the existing read routes plus the dev edit route. The server
   merges them with its own `/threads` and `/runs`, so the UI has one origin.
@@ -256,8 +256,9 @@ dict equals `presenter.answer_view(answer_question(...))` for the same input.
   negative) plus references, filterable by `node.kind`. This is a `presenter`
   addition (`knowledge_graph()` alongside `schema_graph()`), consumed by the
   React Flow view.
-- Write `langgraph.json`. Set `capabilities.can_stream = True` when served via the
-  graph; the REST fallback stays `False`.
+- Write `langgraph.json`. The LangGraph-mounted app (`api/routes.py`) forces
+  `can_stream=True`; the plain REST factory keeps the TOML `[serve].can_stream`
+  default (`false`).
 
 Acceptance: `uv run --extra agents --extra api langgraph dev` boots; `/livez` and
 the custom routes respond on the server port (2024); a `useStream` smoke client
@@ -266,10 +267,10 @@ connects to `serve` and receives an answer plus stage events;
 
 ### Phase 4: observability
 
-- LangSmith: native, via env (`LANGSMITH_API_KEY`, `LANGCHAIN_TRACING_V2=true`).
-  No code beyond documenting the env.
-- Langfuse: attach a `CallbackHandler` to the graph config, behind a new
-  `tracing` extra. No-op when the keys are unset.
+- LangSmith: native, via env (`LANGSMITH_API_KEY`, `LANGSMITH_TRACING=true` or
+  legacy `LANGCHAIN_TRACING_V2=true`). See `.env.example`.
+- Langfuse: attach a `CallbackHandler` to the model client, behind the
+  `tracing` extra (`LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`). No-op when unset.
 
 Acceptance: with keys set, a chat run appears in each tool; with keys unset the
 suite and server behave identically.

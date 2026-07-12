@@ -25,6 +25,7 @@ def test_tracing_callbacks_empty_when_only_one_key_set(monkeypatch):
 
 def test_langsmith_enabled_reflects_env(monkeypatch):
     monkeypatch.delenv("LANGCHAIN_TRACING_V2", raising=False)
+    monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
     monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
     assert obs.langsmith_enabled() is False
 
@@ -35,3 +36,11 @@ def test_langsmith_enabled_reflects_env(monkeypatch):
     # Tracing flag off -> disabled even with a key present.
     monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")
     assert obs.langsmith_enabled() is False
+
+
+def test_langsmith_enabled_accepts_langsmith_tracing(monkeypatch):
+    # Current LangSmith docs use LANGSMITH_TRACING (not LANGCHAIN_TRACING_V2).
+    monkeypatch.delenv("LANGCHAIN_TRACING_V2", raising=False)
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "ls-test")
+    assert obs.langsmith_enabled() is True

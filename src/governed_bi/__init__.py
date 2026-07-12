@@ -13,8 +13,8 @@ from .config import load_dotenv
 
 __version__ = "0.1.0"
 
-# Local-run convenience: read a git-ignored ``.env`` at the repo root, filling in
-# only variables not already set (a real environment variable always wins). This
-# is why ``OPENAI_API_KEY`` can live in ``.env`` instead of the shell. See
+# Local-run convenience: read a git-ignored ``.env`` (secrets only) at the repo
+# root, filling in only variables not already set. Policy lives in
+# ``governed_bi.toml`` / ``governed_bi.local.toml``. See
 # ``governed_bi.config.load_dotenv``.
 load_dotenv()

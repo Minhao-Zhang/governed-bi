@@ -63,7 +63,7 @@ class ChatState(TypedDict):
 - `messages` 装的是 `BaseMessage` 对象,序列化器能处理。助手那一轮是一条 `AIMessage`,正文是英文答案(拒答时是升级说明),结构化载荷挂在 `additional_kwargs["governed_bi"]`。
 - `answer` 是 `presenter.answer_view(...)` 经 `dataclasses.asdict(...)` 序列化后的结果,形状和 REST 已经暴露的 `AnswerResponse` 一致(两轴印章、sql、结果表、来源)。纯 dict、没有自定义类,所以能在 checkpointer 里来回过。
 
-运行时依赖(绝不持久化):`ServeStack`(corpus 各视图、settings、generator、embedder、narrator、identity、sqlite 路径)。图工厂在 server 启动时从环境变量拼出这个 stack,闭包进节点,和 `build_serve_graph` 现在闭包它的依赖是同一套做法。每轮才定的值(`thread_id`,当作工作记忆的 `session_id`)从节点的 `config` 里取。没有任何重对象进 state 通道。
+运行时依赖(绝不持久化):`ServeStack`(corpus 各视图、settings、generator、embedder、narrator、identity、sqlite 路径)。图工厂在 server 启动时用 `load_settings()` / TOML 拼出这个 stack,闭包进节点,和 `build_serve_graph` 现在闭包它的依赖是同一套做法。每轮才定的值(`thread_id`,当作工作记忆的 `session_id`)从节点的 `config` 里取。没有任何重对象进 state 通道。
 
 工作记忆(D8)从线程里重建:遍历 `state["messages"]`,去掉最后那条人类消息,把其余回放进一个以 `thread_id` 为键的 `InMemoryWorkingMemory`。持久化的线程本身就是历史,所以不用单独接一套 history。
 
@@ -82,7 +82,7 @@ class ChatState(TypedDict):
 ```
 
 - `serve` 就是前端传给 `useStream` 的 `assistantId`。
-- `make_graph(config)` 从环境变量拼 stack,返回已编译的 chat 图(编译时不传 checkpointer)。
+- `make_graph(config)` 用 `load_settings()` / TOML 拼 stack,返回已编译的 chat 图(编译时不传 checkpointer)。
 - `http.app` 挂上现有的只读路由加上 dev 版编辑路由。server 会把它们和自己的 `/threads`、`/runs` 合并,前端因此只面对一个 origin。
 
 ---
@@ -170,14 +170,14 @@ def make_graph(config: RunnableConfig):
 - 重构 `api/app.py`,把只读接口挪进一个可挂载的应用 `api/routes.py:app`(一个 FastAPI 实例)。REST `POST /chat` 留在那里,作为离线/无 `agents` 的兜底。
 - 加 `POST /corpus/edit`(仅 dev,按 `capabilities.can_edit` 门控):用 `validate_corpus` 校验提交的资产,用 corpus 序列化器写出原样 YAML,返回校验结果和一个 diff。生产环境的 PR 模式暂缓;路由形状不变。
 - 把 `/graph` 从现在的「表+连接」视图,扩成覆盖所有资产类型(table/column/metric/term/join/rule/few_shot/negative)加引用关系的 **完整知识图**,可按 `node.kind` 过滤。这是 `presenter` 的一个新增(在 `schema_graph()` 旁边加 `knowledge_graph()`),给 React Flow 视图消费。
-- 写 `langgraph.json`。经图提供服务时把 `capabilities.can_stream` 设为 `True`;REST 兜底保持 `False`。
+- 写 `langgraph.json`。LangGraph 挂载的 app（`api/routes.py`）会强制 `can_stream=True`；纯 REST 工厂沿用 TOML `[serve].can_stream` 默认值（`false`）。
 
 验收:`uv run --extra agents --extra api langgraph dev` 能起来;`/livez` 和各自定义路由在 server 端口(2024)有响应;一个 `useStream` 冒烟客户端连到 `serve`,收到答案和阶段事件;`POST /corpus/edit` 在临时 corpus 里跑通一次校验过的编辑。
 
 ### 阶段 4:可观测性
 
-- LangSmith:原生,走环境变量(`LANGSMITH_API_KEY`、`LANGCHAIN_TRACING_V2=true`)。除了把环境变量写进文档,不需要额外代码。
-- Langfuse:给图 config 挂一个 `CallbackHandler`,放在新的 `tracing` extra 后面。key 没设时是 no-op。
+- LangSmith:原生,走环境变量(`LANGSMITH_API_KEY`、`LANGSMITH_TRACING=true` 或旧名 `LANGCHAIN_TRACING_V2=true`)。见 `.env.example`。
+- Langfuse:给模型客户端挂一个 `CallbackHandler`,放在 `tracing` extra 后面(`LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`)。key 没设时是 no-op。
 
 验收:设了 key,一次 chat run 在两个工具里都出现;没设 key,测试和 server 行为完全一致。
 

@@ -43,9 +43,10 @@ uv run --extra agents --extra api langgraph dev   # LangGraph Server at :2024 (c
 ```
 - 真实模型（自然语言应答 + 自由格式 SQL）：设置 `OPENAI_API_KEY`（环境变量或仓库
   根目录下的 `.env`）。
-- 追踪（可选）：设置 Langsmith（`LANGSMITH_API_KEY`、`LANGCHAIN_TRACING_V2=true`）
-  和/或 Langfuse（`LANGFUSE_*`）密钥；未设置时不生效。
-- CORS：允许 UI 的来源（`http://localhost:3000`）。
+- 追踪（可选；见 `.env.example`）：
+  - LangSmith：`LANGSMITH_API_KEY` + `LANGSMITH_TRACING=true`（或旧名 `LANGCHAIN_TRACING_V2=true`）
+  - Langfuse：`uv sync --extra tracing`，再设 `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`
+- CORS：在 `governed_bi.toml` 的 `[serve].cors_origins` 中配置（默认含 `http://localhost:3000`）。
 - 在 `langgraph dev` 下，**本地线程是临时性的**（持久化落在已部署的 Postgres 上）。
   `/capabilities` 会报告 `has_live_model`、`can_stream`、`can_edit`、
   `environment`、`dialect`。

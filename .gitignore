@@ -150,6 +150,8 @@ activemq-data/
 # Environments
 .env
 .envrc
+# Local policy overlay (secrets stay in .env; see governed_bi.toml header)
+governed_bi.local.toml
 .venv
 env/
 venv/

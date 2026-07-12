@@ -144,19 +144,20 @@ model it uses the deterministic template generator (metric / KPI questions):
 
 ```python
 from pathlib import Path
-from governed_bi.config import Settings, Environment
+from governed_bi.config import load_settings
 from governed_bi.corpus import load_corpus
 from governed_bi.gateway import SqliteConnector, Gateway, Identity
 from governed_bi.server import answer_question
 
-corpus = load_corpus(Path("corpus"), db="beer_factory").for_server()
-conn = SqliteConnector("data/bird/beer_factory.sqlite")
+settings = load_settings()
+corpus = load_corpus(Path(settings.corpus_root), db="beer_factory").for_server()
+conn = SqliteConnector(settings.datasource.sqlite_path)
 ans = answer_question(
     "What is the total revenue?",
     Identity(user="dev", all_access=True),
     corpus=corpus,
     gateway=Gateway(conn),
-    settings=Settings.for_env(Environment.dev),
+    settings=settings,
     session_id="s",
 )
 print(ans.tier, ans.sql, ans.text)  # -> ReliabilityTier.governed  SELECT ...  total_revenue = ...
@@ -165,8 +166,8 @@ print(ans.tier, ans.sql, ans.text)  # -> ReliabilityTier.governed  SELECT ...  t
 To use a real OpenAI model (LLM generator, embeddings, SQL cache) or the LangGraph
 serve harness (`answer_question_graph`) and the deepagents curator, install the
 `agents` extra and inject the clients - see the **Models & configuration** section
-of the [README](../README.md). The API key is read from `OPENAI_API_KEY`, never
-stored.
+of the [README](../README.md). The API key is read from the env var named by
+`[models].api_key_env` (default `OPENAI_API_KEY`), never stored.
 
 ## Audit surface (viz presenter + API)
 
@@ -188,10 +189,11 @@ curl -s localhost:8000/chat -H 'content-type: application/json' \
   -d '{"question":"What is the total revenue?"}'
 ```
 
-Set `GOVERNED_BI_CORPUS` and `GOVERNED_BI_SQLITE` to point it
-at a different corpus / database. Because the display logic lives in the
-UI-agnostic `governed_bi.viz.presenter` (no UI dependency), a separate frontend
-can consume the same view models — the interactive UI is a separate project, see
+Policy comes from [`governed_bi.toml`](../governed_bi.toml) (corpus path,
+datasource, serve flags). Local overrides go in git-ignored
+`governed_bi.local.toml`. Because the display logic lives in the UI-agnostic
+`governed_bi.viz.presenter` (no UI dependency), a separate frontend can consume
+the same view models — the interactive UI is a separate project, see
 [docs/ui-frontend-design.md](ui-frontend-design.md).
 
 ## Run the tests

@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from governed_bi.api import create_app  # noqa: E402
 from governed_bi.api.stack import build_stack  # noqa: E402
+from governed_bi.config import DataSourceConfig, load_settings  # noqa: E402
 
 BIRD_DB = Path(__file__).resolve().parents[1] / "data" / "bird" / "beer_factory.sqlite"
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
@@ -66,37 +67,44 @@ def test_capabilities_flags_reflect_the_stack():
     assert body["edit_mode"] is None
 
 
-def test_build_stack_defaults_can_stream_false(monkeypatch):
+def test_build_stack_defaults_can_stream_false():
     # The shared factory builds the plain REST app too, which has no streaming
-    # endpoint, so the default must be False regardless of whether langgraph is
-    # installed. Streaming is opted in by the LangGraph-server routes app / env.
-    monkeypatch.delenv("GOVERNED_BI_CAN_STREAM", raising=False)
+    # endpoint, so the committed [serve].can_stream default must be False.
+    # Streaming is opted in by the LangGraph-server routes app.
     assert build_stack().can_stream is False
 
 
-def test_build_stack_fails_fast_when_sqlite_missing(tmp_path, monkeypatch):
+def test_build_stack_fails_fast_when_sqlite_missing(tmp_path):
     # Startup must refuse a missing SQLite file instead of waiting for first chat.
-    monkeypatch.setenv("GOVERNED_BI_DB_KIND", "sqlite")
-    monkeypatch.setenv("GOVERNED_BI_SQLITE", str(tmp_path / "missing.sqlite"))
+    settings = replace(
+        load_settings(apply_local=False),
+        datasource=DataSourceConfig(
+            kind="sqlite",
+            sqlite_path=str(tmp_path / "missing.sqlite"),
+        ),
+    )
     with pytest.raises(RuntimeError, match="datasource sqlite .* unavailable"):
-        build_stack()
+        build_stack(settings)
 
 
 def test_verify_datasource_fails_fast_on_unreachable_postgres(monkeypatch):
     # A down Postgres (docker not running) must fail in seconds, not hang ~2min.
     pytest.importorskip("psycopg")
-    monkeypatch.setenv("GOVERNED_BI_DB_KIND", "postgres")
-    monkeypatch.setenv("GOVERNED_BI_DB_DSN_ENV", "TEST_PG_DSN")
     # Port 1 is almost never a Postgres listener; short connect_timeout is set by
     # build_connector / verify_datasource.
     monkeypatch.setenv(
         "TEST_PG_DSN",
         "host=127.0.0.1 port=1 dbname=bird user=bird password=bird",
     )
-    # build_stack loads corpus first; keep that on the committed fixture.
-    monkeypatch.delenv("GOVERNED_BI_CORPUS", raising=False)
+    settings = replace(
+        load_settings(apply_local=False),
+        datasource=DataSourceConfig(
+            kind="postgres",
+            dsn_env="TEST_PG_DSN",
+        ),
+    )
     with pytest.raises(RuntimeError, match="datasource postgres .* unavailable"):
-        build_stack()
+        build_stack(settings)
 
 
 def test_routes_app_advertises_streaming():
@@ -463,8 +471,11 @@ def test_corpus_edit_findings_block_the_write(tmp_path):
     assert not (tmp_path / "beer_factory" / "metrics" / "metric_broken.yaml").exists()
 
 
-def test_cors_allows_configured_origin(monkeypatch):
-    monkeypatch.setenv("GOVERNED_BI_CORS_ORIGINS", "https://app.example.com")
-    client = TestClient(create_app())
+def test_cors_allows_configured_origin():
+    settings = replace(
+        load_settings(apply_local=False),
+        cors_origins=("https://app.example.com",),
+    )
+    client = TestClient(create_app(build_stack(settings)))
     r = client.get("/capabilities", headers={"Origin": "https://app.example.com"})
     assert r.headers.get("access-control-allow-origin") == "https://app.example.com"

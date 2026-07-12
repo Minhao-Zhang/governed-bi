@@ -1,17 +1,27 @@
 # Project-level configuration for governed-bi.
 #
-# One source of truth for model choices and environment toggles, parsed by
-# governed_bi.config.load_settings(). Swapping a model is an edit here, not a
-# code change.
+# One source of truth for all non-secret policy, parsed by
+# governed_bi.config.load_settings(). Local overrides go in the git-ignored
+# governed_bi.local.toml beside this file (same tables; local wins on merge).
 #
-# SECURITY: never put an API key in this file. The key is read at call time from
-# the environment variable named by [models].api_key_env (default OPENAI_API_KEY).
+# SECURITY: never put an API key or DSN password in this file. Secrets live in
+# the environment (or a git-ignored .env). This file only names the env var
+# ([models].api_key_env, [datasource].dsn_env).
 
 [runtime]
 # dev  = BIRD scale: auto-accept corpus, single all-access identity, hard-block
 #        suspect columns, files + SQLite.
 # prod = enterprise scale: PR + owner + CI, real user + gateway RLS, soft-warn.
 environment = "dev"
+# Optional per-toggle overrides (otherwise follow environment defaults above):
+# auto_accept_corpus = true
+# single_all_access_identity = true
+# hard_block_suspect_columns = true
+
+[paths]
+# Corpus root (D9/D13). Relative values resolve against the repo root, not CWD,
+# so a sibling checkout works as corpus_root = "../BIRD-corpus".
+corpus_root = "corpus"
 
 [models]
 # Provider-agnostic by shape; OpenAI by current project decision.
@@ -21,12 +31,14 @@ provider = "openai"
 # gpt-5.5 = the current generally-available flagship. (gpt-5.6-sol, the GPT-5.6
 # flagship tier, is limited-preview and 404s on accounts without access — switch
 # back to it here once your account is enabled.)
-llm_model = "gpt-5.5"
-llm_reasoning_effort = "low"     # none | low | medium | high | xhigh | max
+llm_model = "gpt-5.6-sol"
+llm_reasoning_effort = "low" # none | low | medium | high | xhigh | max
+# llm_max_output_tokens = 4096   # omit for provider default
 
 # Embedding model for the retrieval vector channel and the SQL semantic cache.
 # The search space is small, so a compact model is enough; swap freely.
 embedding_model = "text-embedding-3-small"
+# embedding_dimensions = 1536    # omit for model default
 
 # Environment variable that holds the API key (the key itself never lives here).
 api_key_env = "OPENAI_API_KEY"
@@ -36,19 +48,29 @@ api_key_env = "OPENAI_API_KEY"
 # so the offline demo and tests need no change. Built into a Connector by
 # governed_bi.gateway.build_connector; the curator facts builder
 # (python -m governed_bi.curator.build) reads this too.
-kind = "sqlite"                                 # sqlite | postgres | redshift
-db = "beer_factory"                             # default corpus schema subtree / BIRD db_id
-sqlite_path = "data/bird/beer_factory.sqlite"   # repo-root-relative
+kind = "sqlite"                               # sqlite | postgres | redshift
+db = "beer_factory"                           # default corpus schema subtree / BIRD db_id
+sqlite_path = "data/bird/beer_factory.sqlite" # repo-root-relative
 
 # To profile a BIRD-Obfuscation Postgres instance instead (e.g. the renamed+decoy
-# one), set the fields below. The DSN carries a password, so it is NOT stored
-# here: point dsn_env at an env var holding the full libpq DSN. The renamed+decoy
-# instance is pg_rename_decoy (local docker port 5435; behind the `decoy` compose
-# profile) — see BIRD-Data-Obfuscation/docker-compose.yml and its .env.example.
+# one), put the switch in governed_bi.local.toml (git-ignored) and the DSN
+# password in .env. Example local overlay:
+#   [datasource]
+#   kind = "postgres"
+#   db = "beer_factory"
+#   dsn_env = "PG_RENAME_DECOY_DSN"
 # Postgres/Redshift default to multi_schema=true (span all user schemas; D15).
 # Opt out with multi_schema=false + a pinned schema when you need single-schema.
-#   kind = "postgres"
-#   db = "beer_factory"       # default corpus write subtree / namespace hint
-#   dsn_env = "PG_RENAME_DECOY_DSN"
-#   # multi_schema = false    # optional pin
-#   # schema = "beer_factory" # designated default for bare-ref L4 (optional)
+#   # multi_schema = false
+#   # schema = "beer_factory"
+
+[serve]
+# Capability flags the API / frontend adapt to.
+# can_stream: REST factory default. The LangGraph-mounted app (api/routes.py)
+# forces can_stream=True regardless of this value.
+can_stream = false
+allow_edit = true                        # corpus file-write (dev); set false for prod-like
+cors_origins = ["http://localhost:3000"]
+
+# Memory / cache / few-shot numeric gates (Architecture §7) are still code
+# defaults on Settings today — not yet loaded from this file.

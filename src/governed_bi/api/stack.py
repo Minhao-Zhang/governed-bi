@@ -1,31 +1,24 @@
-"""Build the serve stack for the API from configuration/environment.
+"""Build the serve stack for the API from ``load_settings()``.
 
 One place that assembles everything a request needs — corpus (full + server
 view), settings, identity, the SQLite path, and the model stack (SQL generator +
-embedder + narrator) — driven by config, so the same API binary runs the three
-profiles (local-dev / public-demo / internal) by configuration alone. The model
-stack is live (LangChain, needs the ``agents`` extra + a key) when
-``OPENAI_API_KEY`` is set, else the deterministic offline default (template SQL,
-no narration), the same live-vs-offline split the engine uses elsewhere.
-
-Near-term the data source is SQLite (the committed fixture). The connector seam
-is where a Postgres/Redshift profile plugs in later; nothing else here changes.
+embedder + narrator) — driven by project TOML (+ optional local overlay). The
+model stack is live (LangChain, needs the ``agents`` extra + a key) when the
+configured API key is set, else the deterministic offline default.
 """
 
 from __future__ import annotations
 
 import logging
-import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..config import DataSourceConfig, load_settings, resolve_corpus_root
+from ..config import DataSourceConfig, Settings, load_settings, resolve_corpus_root
 from ..corpus import load_corpus
 from ..gateway import Identity
 
 if TYPE_CHECKING:
-    from ..config import Settings
     from ..corpus import Corpus
     from ..gateway.connectors.base import Connector
     from ..llm import Embedder
@@ -33,14 +26,6 @@ if TYPE_CHECKING:
     from ..server.sqlgen import SqlGenerator
 
 logger = logging.getLogger("governed_bi.api")
-
-
-def _env_flag(name: str, default: bool) -> bool:
-    """Read a boolean env override; ``default`` when unset."""
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True)
@@ -70,10 +55,9 @@ class ServeStack:
     def open_connector(self, *, connect_timeout: float | None = None) -> "Connector":
         """Open a fresh read-only connector for one request (caller closes it).
 
-        Built from ``datasource`` (config-driven, D-datasource) so the serve path
-        can target SQLite or a Postgres/Redshift instance without a code change.
-        Falls back to the SQLite fixture path for ad-hoc stacks that set no
-        datasource (e.g. some tests).
+        Built from ``datasource`` (config-driven) so the serve path can target
+        SQLite or a Postgres/Redshift instance without a code change. Falls back
+        to the SQLite fixture path for ad-hoc stacks that set no datasource.
 
         ``connect_timeout`` (seconds) is forwarded to Postgres/Redshift dials;
         omit it to use the factory default (a short fail-fast timeout).
@@ -115,21 +99,22 @@ class ServeStack:
         except Exception as exc:
             logger.error(
                 "Datasource %s unreachable at startup: %s. "
-                "Start the DB (e.g. docker compose for pg_rename_decoy) or switch "
-                "back to the SQLite fixture (unset GOVERNED_BI_DB_KIND / kind=sqlite).",
+                "Start the DB (e.g. docker compose for pg_rename_decoy) or set "
+                "[datasource] kind = \"sqlite\" in governed_bi.toml / "
+                "governed_bi.local.toml.",
                 label,
                 exc,
             )
             raise RuntimeError(f"datasource {label} unavailable: {exc}") from exc
 
 
-def _build_model_stack(settings) -> tuple[Any, Any, Any, str | None, bool]:
+def _build_model_stack(settings: Settings) -> tuple[Any, Any, Any, str | None, bool]:
     """(generator, embedder, narrator, model_name, has_live_model).
 
     Live LangChain clients when a key + the ``agents`` extra are present; else the
     deterministic offline default (template generator, no embedder/narrator).
     """
-    if os.environ.get("OPENAI_API_KEY"):
+    if settings.models.api_key():
         try:
             from ..llm import LangChainChatClient, LangChainEmbedder
             from ..server import LlmAnswerNarrator, LlmSqlGenerator
@@ -152,58 +137,30 @@ def _build_model_stack(settings) -> tuple[Any, Any, Any, str | None, bool]:
             # A key was set (live intended) but the stack failed to build; make the
             # silent downgrade to offline observable rather than a mystery.
             logger.warning(
-                "OPENAI_API_KEY is set but the live model stack failed to build; "
+                "%s is set but the live model stack failed to build; "
                 "falling back to the offline profile",
+                settings.models.api_key_env,
                 exc_info=True,
             )
     return (None, None, None, None, False)
 
 
-def build_stack() -> ServeStack:
-    """Assemble the serve stack from environment + ``governed_bi.toml``.
+def build_stack(settings: Settings | None = None) -> ServeStack:
+    """Assemble the serve stack from :func:`load_settings` (or an explicit Settings).
 
-    Env overrides (all optional): ``GOVERNED_BI_CORPUS`` (corpus root; a relative
-    value resolves against the repo root, so the D13 corpus repo is reachable as
-    ``../BIRD-corpus``); and the data source: ``GOVERNED_BI_DB_KIND``
-    (sqlite|postgres|redshift), ``GOVERNED_BI_DB_DSN`` / ``GOVERNED_BI_DB_DSN_ENV``
-    (the libpq DSN or the env var holding it), and ``GOVERNED_BI_SQLITE`` (the
-    SQLite file for the sqlite kind). The corpus always loads every schema
-    subtree under the root. Postgres/Redshift default to multi-schema (D15); no
-    schema pin is required. The committed default is the SQLite fixture; a local
-    ``.env`` points the server at Postgres.
+    Corpus root, datasource, and serve flags all come from Settings — edit
+    ``governed_bi.toml`` or ``governed_bi.local.toml``, not the environment.
+    Secrets (API key, DSN) remain in the environment / ``.env``.
     """
-    root = resolve_corpus_root()
-    settings = load_settings()
+    settings = settings if settings is not None else load_settings()
+    datasource = settings.datasource
+    root = resolve_corpus_root(settings.corpus_root)
 
-    # Data source: which DB the serve path executes against. Start from the
-    # [datasource] config (committed default = the SQLite fixture, so tests/offline
-    # are unchanged) and layer env overrides on top, so a local .env can point the
-    # running server at Postgres/Redshift without editing the committed config.
-    # Postgres/Redshift span all user schemas by default (D15); pin with
-    # ``multi_schema = false`` + ``schema = "..."`` in toml when needed.
-    base_ds = settings.datasource
-    datasource = replace(
-        base_ds,
-        kind=os.environ.get("GOVERNED_BI_DB_KIND", base_ds.kind),
-        dsn=os.environ.get("GOVERNED_BI_DB_DSN", base_ds.dsn),
-        dsn_env=os.environ.get("GOVERNED_BI_DB_DSN_ENV", base_ds.dsn_env),
-        sqlite_path=os.environ.get("GOVERNED_BI_SQLITE", base_ds.sqlite_path),
-    )
-    # Keep settings.datasource in sync with env overrides so the serve path
-    # (flow/graph) reads the effective kind / multi_schema flag.
-    settings = replace(settings, datasource=datasource)
-
-    # Corpus: always every schema subtree under the root (D15 — no env pin).
+    # Corpus: always every schema subtree under the root (D15).
     corpus_full = load_corpus(root)
     generator, embedder, narrator, model_name, has_live = _build_model_stack(settings)
 
-    # Capability flags the frontend adapts to. can_stream defaults False: this
-    # shared factory also builds the plain REST app, which has no streaming
-    # endpoint, so streaming is opted in by whoever actually fronts the chat graph
-    # (routes.py, mounted on the LangGraph server) or by the env override. Editing
-    # is dev-only file-write (prod PR is deferred).
-    can_stream = _env_flag("GOVERNED_BI_CAN_STREAM", False)
-    can_edit = _env_flag("GOVERNED_BI_ALLOW_EDIT", settings.environment.value == "dev")
+    can_edit = settings.allow_edit
 
     # Resolve sqlite_path against the repo root when relative, matching
     # build_connector, so the stack's path and the probe agree.
@@ -226,14 +183,14 @@ def build_stack() -> ServeStack:
         model_name=model_name,
         has_live_model=has_live,
         corpus_root=root,
-        can_stream=can_stream,
+        can_stream=settings.can_stream,
         can_scope=True,  # the summary/detail/scoping schema routes are always served
         can_search=False,  # no server-side FTS; the client Fuse index is the default
         can_edit=can_edit,
         edit_mode="file" if can_edit else None,
         datasource=datasource,
     )
-    # Fail fast when .env points at Postgres/Redshift that isn't up (or a missing
+    # Fail fast when TOML points at Postgres/Redshift that isn't up (or a missing
     # SQLite file). Without this, the first chat turn hangs on TCP connect.
     stack.verify_datasource()
     return stack

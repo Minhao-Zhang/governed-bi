@@ -130,10 +130,12 @@ model doubles without a key.
 
 ### Models & configuration
 
-Model choices live in one project file, [`governed_bi.toml`](governed_bi.toml),
-parsed by `governed_bi.config.load_settings()`: OpenAI `gpt-5.5` (low reasoning
-effort) for generation/curation and `text-embedding-3-small` for the vector
-channel and SQL cache. All are swappable by editing the file.
+All non-secret policy lives in one project file,
+[`governed_bi.toml`](governed_bi.toml), parsed by
+`governed_bi.config.load_settings()`: environment toggles, models, datasource
+shape, corpus path, and serve flags. Local machine overrides go in a git-ignored
+`governed_bi.local.toml` beside it (same tables; local wins on merge). Secrets
+(API keys, DSN passwords) live only in the environment or a git-ignored `.env`.
 
 ```bash
 uv sync --extra agents          # LangGraph + deepagents + LangChain model clients
@@ -145,6 +147,21 @@ The key is read from the environment. If you'd rather not export it, copy
 [`.env.example`](.env.example) to `.env` at the repo root and put the key there —
 it is loaded on import and fills in only variables not already set, so an exported
 environment variable always wins. `.env` is git-ignored; never commit a real key.
+To point at Postgres locally without editing the committed TOML, put the
+`[datasource]` switch in `governed_bi.local.toml` and the DSN value in `.env`.
+
+Optional observability (also documented in [`.env.example`](.env.example)):
+
+```bash
+# LangSmith (native; no extra package)
+export LANGSMITH_TRACING=true          # or LANGCHAIN_TRACING_V2=true
+export LANGSMITH_API_KEY=lsv2_...
+
+# Langfuse (LangChain callback)
+uv sync --extra tracing
+export LANGFUSE_PUBLIC_KEY=pk-lf-...
+export LANGFUSE_SECRET_KEY=sk-lf-...
+```
 
 The model clients are imported lazily behind the `ChatClient` / `Embedder`
 protocols, and each has a deterministic offline default (`StaticChatClient`,

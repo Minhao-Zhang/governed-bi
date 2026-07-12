@@ -179,11 +179,11 @@ def _get_or_build_graph():
 async def make_graph(config: RunnableConfig | None = None):
     """Factory referenced by ``langgraph.json`` (``graphs.serve``).
 
-    Builds the serve stack from the environment (see ``api.stack.build_stack``)
-    off the event loop via ``asyncio.to_thread`` so corpus/config filesystem I/O
-    does not trip LangGraph's ASGI blockbuster. The compiled graph is cached for
-    subsequent runs. ``config`` is accepted for the LangGraph factory signature;
-    the stack is environment-driven.
+    Builds the serve stack from ``load_settings()`` (``governed_bi.toml`` +
+    optional local overlay) off the event loop via ``asyncio.to_thread`` so
+    corpus/config filesystem I/O does not trip LangGraph's ASGI blockbuster.
+    The compiled graph is cached for subsequent runs. ``config`` is accepted for
+    the LangGraph factory signature; the stack is TOML-driven.
     """
     if _GRAPH is not None:
         return _GRAPH
