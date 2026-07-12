@@ -207,3 +207,63 @@ Contract changes to expect (coordinate the release in lockstep):
 
 None of this touches the chat transport or the answer card; it reshapes the
 **Schema tab** navigation and renames a single field.
+
+---
+
+## 11. Resolved: the frontend's open questions (`DESIGN_QUESTIONS.md` §9)
+
+The backend owner's answers to the eight questions in the frontend's
+`DESIGN_QUESTIONS.md`. Where an answer changes the contract, §10 already carries it.
+
+| # | Question | Answer |
+|---|---|---|
+| Q1 | Two-level `db → schema` tree, or flat? | **Flat.** One database holds many schemas; the corpus models `schema → table` and there is no `db` / connection level (the database is a server-config constant). Navigate by the single `schema` rail; do **not** build a two-level tree. |
+| Q2 | Do real deployments put hundreds of tables in one schema? | Not in BIRD (~11 tables/schema; beer_factory = 9), but **yes** in real enterprise schemas. So the schema rail alone nearly covers BIRD scale; **Phase 2** (focus/radius + within-namespace sub-grouping) is mandatory only for large single schemas — build it when a target corpus needs it. Phase 1 is worth doing regardless. |
+| Q3 | Wire field `schema` or `schema_name`? | **`schema`** (domain-accurate; `/schema` is a route path, and a zod `schema` key is fine). Fall back to `schema_name` only if the zod ergonomics bite, and never split the token. |
+| Q4 | `node_budget` sizing; who enforces? | **Server-enforced hard ceiling; the client may request a lower value.** Start near **50–60 ER cards** and **~150 semantic-graph glyphs** — DOM-weight guesses to measure on target hardware, not final numbers. |
+| Q5 | Within-namespace sub-grouping key? | **Connected component** (join-reachability = query-relevant clusters) is most meaningful to auditors; **table-name prefix** is the cheap deterministic default; **grain** needs curator input. Default to connected-component with a name-prefix fallback. |
+| Q6 | Is server `/search` worth building? | **Not at expected sizes.** A client Fuse index over `/schema/summary` is sufficient; server FTS is real, unspecified work and stays deferred (interesting only at tens-of-thousands-of-tables scale). |
+| Q7 | Cross-db boundary as a governance warning? | **No — it flips.** With one database a cross-*schema* join executes, so render it as a normal navigable relationship (§10). Cross-*database* (federation) is out of scope and does not occur here. |
+| Q8 | Can the engine return a stable truncation order? | **Yes.** When `node_budget` truncates a neighborhood the survivors are deterministic: **BFS from the focus node, ordered by edge confidence desc, then id asc**. Cached scopes and "expand" never reshuffle. |
+
+---
+
+## 12. Where to start (build now vs. gated on the backend)
+
+The D15 multi-schema work (§10) is **decided but not yet built**, so split the work in two.
+
+**Build now — client-side, backward-compatible against today's backend and mock mode:**
+
+- The whole **Phase 1** of `DESIGN_QUESTIONS.md`: a search-first landing with a
+  client **Fuse** index; a **lazy detail sheet** (fetch a table's full
+  columns/samples only when opened); a **virtualized** table browser; group the
+  landing by the existing `db` field; and the render hot-path fixes (the O(E·N)
+  `resolveEndpoints` map, memoizing dagre by a stable scope key, and replacing
+  fitView-to-everything with a sane default + jump-to-focus). None of this needs a
+  backend change — it runs against the current `/schema`, `/graph`,
+  `/knowledge-graph`, and in mock mode.
+- Everything already live behind `langgraph dev` (§8): chat with live stages, the
+  answer card, the provenance drawer, and the current schema/graph views.
+
+**Gated on the D15 backend build (see §10; not yet shipped):**
+
+- The `db → schema` field rename (the one breaking OpenAPI change).
+- The scopeable/paginated endpoints (`/schema/summary`, `/schema/{id}`,
+  `?schema=&focus=&radius=&node_budget=`) with the `meta` / `boundary` envelope.
+- The `can_scope` / `can_search` capability flags.
+- Server-scoped graphs, focus/radius bounding, and the schema rail as
+  server-scoped navigation (**Phase 2**).
+
+Gate every gated item on `capabilities.can_scope` / `can_search` and fall back to
+today's flat behavior when the flags are absent, so the UI runs unchanged against
+both the current engine and the D15 engine.
+
+**Rename coordination (the one breaking change).** `db → schema` on
+`TableResponse` / `SkillResponse` and the graph nodes ships in a single backend
+release with a version bump; the UI renames the zod field in that same release and
+reads `db` until then. The UI's fail-loud zod `.parse()` surfaces any mismatch
+immediately, so the two repos cannot silently drift.
+
+**First move for a new engineer:** do Phase 1 now — it is client-only, fixes the
+payload/render problem immediately, and needs nothing from the backend. Hold
+Phase 2 and the field rename until the D15 backend build lands.

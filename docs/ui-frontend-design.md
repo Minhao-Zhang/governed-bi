@@ -6,12 +6,15 @@ A separate **Next.js + React + Tailwind CSS v4 + TypeScript** frontend for the
 `governed-bi` engine, built on the **LangChain frontend SDK (`useStream`)** over a
 **LangGraph Server**, plus the corpus/schema/audit routes the server exposes.
 
-> **Status: design finalized; backend rework pending.** The decisions below are
-> locked (see §2). The backend still needs the LangGraph-Server wiring, the
-> `ServeState` serializability refactor, the full knowledge-graph serializer, the
-> edit endpoint, and the tracing hooks; see §5 and the phase list (§14). The
-> handoff contract is [ui-frontend-handoff.md](ui-frontend-handoff.md); the pivot
-> is recorded in [ADR 0001](adr/0001-langgraph-server-chat-runtime.md).
+> **Status: the backend rework has landed; the contract is live.** The design
+> decisions below are locked (§2). The LangGraph-Server chat runtime, the custom
+> corpus/schema/audit routes, the full knowledge-graph serializer, the dev edit
+> endpoint, and tracing have all shipped (this doc's §5 and phase list §14 predate
+> that and now read as rationale/history). **A new frontend engineer should start
+> from the handoff — [ui-frontend-handoff.md](ui-frontend-handoff.md):** §9 (build
+> order), §11 (resolved open questions), and §12 (build now vs. gated on the D15
+> multi-schema backend build). The runtime pivot is recorded in
+> [ADR 0001](adr/0001-langgraph-server-chat-runtime.md).
 
 ---
 

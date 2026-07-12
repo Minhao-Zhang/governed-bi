@@ -6,10 +6,12 @@ _[English](ui-frontend-design.md) · [简体中文](ui-frontend-design.zh.md)_
 前端，构建在 **LangGraph Server** 之上的 **LangChain 前端 SDK（`useStream`）**，外加
 该 server 暴露的 corpus/schema/audit 路由。
 
-> **状态：设计已定稿；后端重构待完成。** 下文的决策均已锁定（见 §2）。后端仍需要
-> LangGraph-Server 接线（wiring）、`ServeState` 的可序列化性重构、完整的知识图谱
-> 序列化器、编辑端点，以及 tracing hooks——见 §5 与阶段列表（§14）。交接契约见
-> [ui-frontend-handoff.zh.md](ui-frontend-handoff.zh.md)；此次转向记录在
+> **状态：后端重构已落地；契约已生效。** 下文的决策均已锁定（见 §2）。LangGraph-Server
+> 聊天运行时、自定义的 corpus/schema/audit 路由、完整的知识图谱序列化器、dev 编辑端点
+> 以及 tracing 均已发布（本文 §5 与阶段列表 §14 早于这些改动，如今更多作为依据/历史阅读）。
+> **新前端工程师应从交接文档入手——[ui-frontend-handoff.zh.md](ui-frontend-handoff.zh.md)：**
+> §9（构建顺序）、§11（已解决的未决问题）、§12（现在可做 vs. 依赖 D15 多 schema
+> 后端构建）。此次运行时转向记录在
 > [ADR 0001](adr/0001-langgraph-server-chat-runtime.zh.md) 中。
 
 ---
