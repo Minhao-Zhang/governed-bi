@@ -2,9 +2,9 @@ name: CI
 
 # Enforce the PR-gated governance narrative the docs describe: corpus validation
 # (D9) + the full test suite must pass on every push/PR. The deterministic core
-# runs offline (no OpenAI key, no network); the harness + api extras are
-# installed so the LangGraph-equivalence and HTTP-API tests RUN here rather than
-# being silently skipped.
+# runs offline (no OpenAI key, no network); all deps live in core (no
+# optional-dependency extras), so the LangGraph-equivalence and HTTP-API tests RUN
+# here rather than being silently skipped.
 on:
   push:
     branches: [main]
@@ -21,11 +21,12 @@ jobs:
         with:
           python-version: "3.13"
 
-      # Core + `agents` (LangGraph/deepagents/LangChain harnesses) + `api`
-      # (FastAPI). Installing the extras is what makes the LangGraph-equivalence
-      # and HTTP-API tests execute instead of `importorskip`-skipping.
-      - name: Sync (with agents + api extras)
-        run: uv sync --extra agents --extra api
+      # All deps live in core (no optional-dependency extras), so a plain sync
+      # installs the LangGraph/deepagents/LangChain harnesses + FastAPI — which is
+      # what makes the LangGraph-equivalence and HTTP-API tests execute instead of
+      # `importorskip`-skipping.
+      - name: Sync (all deps)
+        run: uv sync
 
       # The governed end-to-end tests execute against the committed BIRD database.
       # Fail loudly if it is ever removed, rather than letting the highest-value
@@ -39,8 +40,6 @@ jobs:
         run: uv run python -m governed_bi.corpus.cli
 
       # -rs surfaces the reason for any skip in the log, so a newly-skipped
-      # integration path is visible in review even when the suite is green. Pass
-      # the extras on `uv run` too, so the LangGraph chat-graph + HTTP-API tests
-      # execute here instead of importorskip-skipping.
+      # integration path is visible in review even when the suite is green.
       - name: Run tests
-        run: uv run --extra agents --extra api pytest -q -rs
+        run: uv run pytest -q -rs

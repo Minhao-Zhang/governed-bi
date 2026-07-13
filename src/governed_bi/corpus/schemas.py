@@ -21,10 +21,22 @@ and human-appended provenance entries vary.
 
 from __future__ import annotations
 
+import warnings
 from enum import Enum
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+
+# `schema` is our canonical, domain-accurate field name (D15) on several assets. It
+# harmlessly shadows the deprecated ``BaseModel.schema()`` method — nothing calls
+# that (JSON schema uses ``model_json_schema()``). Silence only that specific
+# pydantic warning rather than rename the field across corpus/API/UI. Scoped to the
+# exact message so genuine field-shadow mistakes still surface.
+warnings.filterwarnings(
+    "ignore",
+    message=r'Field name "schema".*shadows an attribute',
+    category=UserWarning,
+)
 
 # --------------------------------------------------------------------------- #
 # Enums (the CI-checked value sets)
