@@ -9,7 +9,7 @@ Two protocols the rest of the system programs against:
 
 Two implementations of each:
 
-- OpenAI-backed (:class:`OpenAiChatClient`, :class:`OpenAiEmbedder`): the real
+- OpenAI-backed (:class:`OpenAiEmbedder`): the real
   clients. ``openai`` is imported **lazily** inside the methods, so importing this
   module never requires the dependency; construct via ``from_config(ModelConfig)``
   and the API key is read from the environment at call time (never stored).
@@ -90,67 +90,6 @@ def _require_openai():
             "`uv sync --extra openai` (or `pip install 'governed-bi[openai]'`)."
         ) from err
     return openai
-
-
-class OpenAiChatClient:
-    """:class:`ChatClient` over the OpenAI chat completions API.
-
-    Model + reasoning effort come from :class:`ModelConfig`. The client is created
-    lazily on first use so construction needs no key; the key is read from the
-    configured environment variable when a call is made.
-    """
-
-    def __init__(
-        self,
-        *,
-        model: str,
-        reasoning_effort: str | None = None,
-        max_output_tokens: int | None = None,
-        api_key_env: str = "OPENAI_API_KEY",
-    ) -> None:
-        self.model = model
-        self.reasoning_effort = reasoning_effort
-        self.max_output_tokens = max_output_tokens
-        self.api_key_env = api_key_env
-        self._client = None
-
-    @classmethod
-    def from_config(cls, models: "ModelConfig") -> "OpenAiChatClient":
-        return cls(
-            model=models.llm_model,
-            reasoning_effort=models.llm_reasoning_effort,
-            max_output_tokens=models.llm_max_output_tokens,
-            api_key_env=models.api_key_env,
-        )
-
-    def _ensure_client(self):
-        if self._client is None:
-            import os  # noqa: PLC0415
-
-            openai = _require_openai()
-            key = os.environ.get(self.api_key_env)
-            if not key:
-                raise RuntimeError(
-                    f"No API key in ${self.api_key_env}. Set it before calling the LLM."
-                )
-            self._client = openai.OpenAI(api_key=key)
-        return self._client
-
-    def complete(self, system: str, user: str) -> str:
-        client = self._ensure_client()
-        kwargs: dict = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        }
-        if self.reasoning_effort:
-            kwargs["reasoning_effort"] = self.reasoning_effort
-        if self.max_output_tokens:
-            kwargs["max_completion_tokens"] = self.max_output_tokens
-        response = client.chat.completions.create(**kwargs)
-        return (response.choices[0].message.content or "").strip()
 
 
 class OpenAiEmbedder:

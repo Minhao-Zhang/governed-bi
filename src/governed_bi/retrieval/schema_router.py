@@ -170,6 +170,79 @@ def route_schemas(
     return expand_schemas_via_curated_joins(corpus, seeds)
 
 
+def _schema_pick_summary(corpus: "Corpus", schema: str, *, max_tables: int = 15) -> str:
+    """Compact one-block summary of a schema for the LLM picker: name + tables
+    (physical name + short description). Kept small to bound context."""
+    tables = [
+        a for a in corpus.assets if isinstance(a, TableAsset) and a.schema == schema
+    ]
+    tables.sort(key=lambda a: a.physical_name)
+    lines = [f"schema: {schema}"]
+    for a in tables[:max_tables]:
+        desc = (a.description or "").strip().replace("\n", " ")
+        if len(desc) > 90:
+            desc = desc[:90] + "…"
+        lines.append(f"  - {a.physical_name}" + (f": {desc}" if desc else ""))
+    if len(tables) > max_tables:
+        lines.append(f"  … ({len(tables) - max_tables} more tables)")
+    return "\n".join(lines)
+
+
+def select_schema(
+    corpus: "Corpus",
+    question: str,
+    candidates: list[str],
+    *,
+    chat,
+    max_tables: int = 15,
+) -> str:
+    """LLM picks the single best schema from ``candidates`` (pipeline-design §5.1).
+
+    Retrieval has already shortlisted ``candidates`` (BM25, ~top-3). This node
+    shows the LLM each candidate's tables and asks for exactly one schema name,
+    so the serve path can scope to a single schema (no cross-schema joins).
+
+    Deterministic guards: 0 candidates → ``""``; 1 candidate → it, no LLM call.
+    On an unparseable / out-of-set reply, falls back to ``candidates[0]`` (the
+    top BM25 rank) rather than raising.
+    """
+    if not candidates:
+        return ""
+    if len(candidates) == 1:
+        return candidates[0]
+
+    summaries = "\n\n".join(
+        _schema_pick_summary(corpus, s, max_tables=max_tables) for s in candidates
+    )
+    system = (
+        "You route a natural-language question to exactly ONE database schema. "
+        "You are given candidate schemas and their tables. Reply with ONLY the "
+        "single schema name (verbatim, no punctuation) that can answer the "
+        "question. It must be exactly one of the candidate names."
+    )
+    user = (
+        f"Question: {question}\n\n"
+        f"Candidate schemas:\n{summaries}\n\n"
+        f"Answer with exactly one of: {', '.join(candidates)}"
+    )
+    try:
+        reply = (chat.complete(system, user) or "").strip()
+    except Exception:
+        return candidates[0]
+
+    # Exact, then case-insensitive, then substring — else fall back to top rank.
+    if reply in candidates:
+        return reply
+    low = reply.lower()
+    for c in candidates:
+        if c.lower() == low:
+            return c
+    for c in candidates:
+        if c.lower() in low or low in c.lower():
+            return c
+    return candidates[0]
+
+
 def filter_corpus_for_retrieval(corpus: "Corpus", schemas: frozenset[str]) -> "Corpus":
     """Subset of ``corpus`` whose assets are in scope for the routed schemas.
 

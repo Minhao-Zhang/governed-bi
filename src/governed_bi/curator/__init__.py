@@ -21,14 +21,15 @@ from __future__ import annotations
 
 from .adversary import review
 from .build import build_facts_corpus
-from .enrich import enrich_table
-from .clarify_loop import (
+from .clarifications import (
+    ClarificationRecord,
     Responder,
     StaticResponder,
-    default_parse,
-    emit_clarifications,
-    resolve_clarifications,
+    load_clarifications,
+    upsert_clarification_record,
+    write_clarifications,
 )
+from .enrich import enrich_table
 from .llm_proposer import LlmProposer
 from .loop import CurationResult, curate
 from .pipeline import build_curated_corpus, build_curated_corpus_with_sme
@@ -37,6 +38,7 @@ from .proposer import HeuristicProposer, Proposer
 from .sme import SimulatedSme, assert_brief_no_leakage, build_sme_brief
 
 __all__ = [
+    "ClarificationRecord",
     "CurationResult",
     "HeuristicProposer",
     "LlmProposer",
@@ -50,10 +52,10 @@ __all__ = [
     "build_facts_corpus",
     "build_sme_brief",
     "curate",
-    "default_parse",
-    "emit_clarifications",
     "enrich_table",
+    "load_clarifications",
     "profile_database",
-    "resolve_clarifications",
     "review",
+    "upsert_clarification_record",
+    "write_clarifications",
 ]

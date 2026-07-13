@@ -16,7 +16,6 @@ from governed_bi.llm import (
     ChatClient,
     Embedder,
     HashingEmbedder,
-    OpenAiChatClient,
     OpenAiEmbedder,
     StaticChatClient,
     cosine,
@@ -114,14 +113,6 @@ def test_cosine_edges():
 # --------------------------------------------------------------------------- #
 
 
-def test_openai_chat_client_from_config():
-    chat = OpenAiChatClient.from_config(ModelConfig())
-    assert chat.model == "gpt-5.6-sol"
-    assert chat.reasoning_effort == "low"
-    assert chat.api_key_env == "OPENAI_API_KEY"
-    assert isinstance(chat, ChatClient)
-
-
 def test_openai_embedder_from_config():
     emb = OpenAiEmbedder.from_config(ModelConfig(embedding_dimensions=256))
     assert emb.model == "text-embedding-3-small"
@@ -129,9 +120,3 @@ def test_openai_embedder_from_config():
     assert isinstance(emb, Embedder)
 
 
-def test_openai_chat_client_without_key_raises(monkeypatch):
-    """A call with no key fails loudly (never silently, never with a bad request)."""
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    chat = OpenAiChatClient.from_config(ModelConfig())
-    with pytest.raises((RuntimeError, ModuleNotFoundError)):
-        chat.complete("system", "user")

@@ -433,35 +433,20 @@ name = "governed-bi"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "deepagents" },
+    { name = "fastapi" },
+    { name = "langchain" },
+    { name = "langchain-openai" },
+    { name = "langfuse" },
+    { name = "langgraph" },
+    { name = "langgraph-cli", extra = ["inmem"] },
     { name = "networkx" },
+    { name = "openai" },
+    { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "sqlglot" },
-]
-
-[package.optional-dependencies]
-agents = [
-    { name = "deepagents" },
-    { name = "langchain" },
-    { name = "langchain-openai" },
-    { name = "langgraph" },
-    { name = "langgraph-cli", extra = ["inmem"] },
-]
-api = [
-    { name = "fastapi" },
     { name = "uvicorn", extra = ["standard"] },
-]
-openai = [
-    { name = "openai" },
-]
-postgres = [
-    { name = "psycopg", extra = ["binary"] },
-]
-redshift = [
-    { name = "psycopg", extra = ["binary"] },
-]
-tracing = [
-    { name = "langfuse" },
 ]
 
 [package.dev-dependencies]
@@ -473,23 +458,21 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "deepagents", marker = "extra == 'agents'", specifier = ">=0.6" },
-    { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.115" },
-    { name = "langchain", marker = "extra == 'agents'", specifier = ">=1.0" },
-    { name = "langchain-openai", marker = "extra == 'agents'", specifier = ">=1.0" },
-    { name = "langfuse", marker = "extra == 'tracing'", specifier = ">=3.0" },
-    { name = "langgraph", marker = "extra == 'agents'", specifier = ">=1.0" },
-    { name = "langgraph-cli", extras = ["inmem"], marker = "extra == 'agents'", specifier = ">=0.2" },
+    { name = "deepagents", specifier = ">=0.6" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "langchain", specifier = ">=1.0" },
+    { name = "langchain-openai", specifier = ">=1.0" },
+    { name = "langfuse", specifier = ">=3.0" },
+    { name = "langgraph", specifier = ">=1.0" },
+    { name = "langgraph-cli", extras = ["inmem"], specifier = ">=0.2" },
     { name = "networkx", specifier = ">=3.3" },
-    { name = "openai", marker = "extra == 'openai'", specifier = ">=1.40" },
-    { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.1" },
-    { name = "psycopg", extras = ["binary"], marker = "extra == 'redshift'", specifier = ">=3.1" },
+    { name = "openai", specifier = ">=1.40" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "sqlglot", specifier = ">=25.0" },
-    { name = "uvicorn", extras = ["standard"], marker = "extra == 'api'", specifier = ">=0.30" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
-provides-extras = ["postgres", "redshift", "api", "openai", "agents", "tracing"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -10,7 +10,7 @@ The semantic layer grows in layers, and only the first needs no AI:
 - **Layer 2 - Inference.** The proposer + adversary (D10, ``loop.py``) add
   descriptions, roles, joins, reliability caveats on top.
 - **Layer 3 - Clarifications.** Gaps the curator cannot fill become SME questions
-  (``clarify_loop.py``) that a human answers, growing the layer over time.
+  (``clarifications.py``) that a human answers, growing the layer over time.
 
 This module builds layer 1 and writes it to a corpus root. The output goes
 wherever the caller points it: ``data/generated/<schema>/`` (rebuildable, gitignored)

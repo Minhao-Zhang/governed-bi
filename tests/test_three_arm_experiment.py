@@ -7,11 +7,15 @@ from pathlib import Path
 import pytest
 
 from governed_bi.curator.asset_bag import AssetBag
+from governed_bi.curator.clarifications import (
+    ClarificationRecord,
+    StaticResponder,
+    write_clarifications,
+)
 from governed_bi.curator.pipeline import build_curated_corpus, build_curated_corpus_with_sme
 from governed_bi.curator.profile import profile_database
 from governed_bi.curator.seed import extract_joins_from_sql, seed_from_train_sql
 from governed_bi.curator.sme import assert_brief_no_leakage, build_sme_brief
-from governed_bi.curator.clarify_loop import StaticResponder
 from governed_bi.eval.baseline_solver import no_layer_solver
 from governed_bi.eval.dataset import EvalItem
 from governed_bi.gateway import Gateway, SqliteConnector
@@ -188,6 +192,9 @@ def test_build_curated_corpus_seed_only(bird_connector, tmp_path: Path):
     assert (root / "beer_factory" / "tables").exists()
     joins_dir = root / "beer_factory" / "joins"
     assert joins_dir.exists() and any(joins_dir.iterdir())
+    assert (root / "run_manifest.json").exists()
+    # Agent-authored ledger is not pre-created; seed-only leaves it missing.
+    assert not (root / "clarifications.jsonl").exists()
 
 
 def test_build_curated_corpus_with_sme_folds_human(bird_connector, tmp_path: Path):
@@ -208,6 +215,18 @@ def test_build_curated_corpus_with_sme_folds_human(bird_connector, tmp_path: Pat
         run_agent=False,
         dialect="sqlite",
     )
+    # Plant an agent-style ledger (offline path does not invent questions).
+    write_clarifications(
+        a2 / "clarifications.jsonl",
+        [
+            ClarificationRecord(
+                id="q001",
+                scope="table:customers",
+                question="Who are the customers?",
+                raised_by=["t1"],
+            )
+        ],
+    )
     responder = StaticResponder(default="Customers who bought root beer.")
     a3 = build_curated_corpus_with_sme(
         bird_connector,
@@ -218,6 +237,7 @@ def test_build_curated_corpus_with_sme_folds_human(bird_connector, tmp_path: Pat
         responder=responder,
         a2_root=a2,
         model=None,
+        seed_ledger_if_empty=False,
     )
     # At least one table/column should carry human provenance after resolve.
     from governed_bi.corpus import load_corpus
@@ -232,6 +252,52 @@ def test_build_curated_corpus_with_sme_folds_human(bird_connector, tmp_path: Pat
             if col.audit and col.audit.provenance.source is ProvenanceSource.human:
                 human = True
     assert human
+
+    import json
+
+    manifest = json.loads((a3 / "run_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["fold_mode"] == "deterministic"
+    assert manifest["ledger_source"] == "agent"
+    assert manifest["agent_ran"] is False
+
+
+def test_deep_agent_invoke_receives_tracing_callbacks(bird_connector, tmp_path: Path, monkeypatch):
+    """The curator deep agent must run with Langfuse callbacks in its config, or
+    its (majority) LLM volume is invisible to the dashboard. Regression guard."""
+    from governed_bi.curator import deep_agent as da_mod
+    from governed_bi.curator import pipeline as pipe_mod
+
+    class _RecordingAgent:
+        def __init__(self):
+            self.configs: list = []
+
+        def invoke(self, payload, config=None):
+            self.configs.append(config)
+            return {}
+
+    rec = _RecordingAgent()
+    monkeypatch.setattr(da_mod, "build_curator_agent", lambda *a, **k: rec)
+    monkeypatch.setattr(pipe_mod, "tracing_callbacks", lambda: ["LF_SENTINEL"])
+
+    gateway = Gateway(bird_connector)
+    train = [
+        EvalItem(question="How many customers?", sql="SELECT COUNT(*) FROM customers", question_id="t1")
+    ]
+    pipe_mod.build_curated_corpus(
+        bird_connector,
+        gateway,
+        "beer_factory",
+        train,
+        tmp_path / "corpus_a2",
+        run_agent=True,
+        model=object(),
+        dialect="sqlite",
+    )
+
+    assert rec.configs, "deep agent was never invoked"
+    assert rec.configs[0].get("callbacks") == ["LF_SENTINEL"], (
+        f"tracing callbacks not threaded into agent.invoke config: {rec.configs[0]}"
+    )
 
 
 def test_sme_clarifications_logged(bird_connector, tmp_path: Path):
@@ -253,6 +319,17 @@ def test_sme_clarifications_logged(bird_connector, tmp_path: Path):
         tmp_path / "corpus_a2",
         run_agent=False,
         dialect="sqlite",
+    )
+    write_clarifications(
+        a2 / "clarifications.jsonl",
+        [
+            ClarificationRecord(
+                id="q001",
+                scope="table:customers",
+                question="Who are the customers?",
+                raised_by=["t1"],
+            )
+        ],
     )
     responder = StaticResponder(default="Customers who bought root beer.")
     a3 = build_curated_corpus_with_sme(
@@ -277,6 +354,7 @@ def test_sme_clarifications_logged(bird_connector, tmp_path: Path):
     }
     for r in rows:
         assert expected_keys <= set(r), f"missing keys in {r}"
+        assert r["table_id"], f"table_id should resolve for scope {r.get('scope')}"
 
     answered = [r for r in rows if r["status"] == "answered"]
     assert answered, "expected at least one answered clarification"

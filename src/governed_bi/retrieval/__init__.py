@@ -33,6 +33,7 @@ from .schema_router import (
     expand_schemas_via_curated_joins,
     filter_corpus_for_retrieval,
     route_schemas,
+    select_schema,
     shortlist_schemas,
 )
 
@@ -48,6 +49,7 @@ __all__ = [
     "fuse_rankings",
     "retrieve",
     "route_schemas",
+    "select_schema",
     "shortlist_schemas",
     "tokenize",
 ]

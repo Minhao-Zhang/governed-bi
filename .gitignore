@@ -224,3 +224,4 @@ __marimo__/
 
 # Experiment run artifacts (generations, corpora, summaries)
 runs/
+tmp_agent_run/

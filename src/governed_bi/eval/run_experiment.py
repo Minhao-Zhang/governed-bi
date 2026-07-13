@@ -318,25 +318,37 @@ def run_experiment(
         corpus_a3 = existing_a3
     else:
         if skip_agent:
-            from ..curator.clarify_loop import StaticResponder
+            from ..curator.clarifications import StaticResponder
 
             responder = StaticResponder(
                 default="Domain column used in analytics; treat as reliable unless samples conflict."
             )
+            build_curated_corpus_with_sme(
+                connector,
+                gateway,
+                db_id,
+                train,
+                corpus_a3,
+                responder=responder,
+                a2_root=corpus_a2,
+                model=None,
+                run_agent_repass=False,
+                seed_ledger_if_empty=True,
+            )
         else:
-            responder = SimulatedSme(chat, brief)
-
-        build_curated_corpus_with_sme(
-            connector,
-            gateway,
-            db_id,
-            train,
-            corpus_a3,
-            responder=responder,
-            a2_root=corpus_a2,
-            model=None,
-            run_agent_repass=False,
-        )
+            responder = SimulatedSme(chat, brief, gateway=gateway)
+            build_curated_corpus_with_sme(
+                connector,
+                gateway,
+                db_id,
+                train,
+                corpus_a3,
+                responder=responder,
+                a2_root=corpus_a2,
+                model=lc_model,
+                run_agent_repass=True,
+                seed_ledger_if_empty=False,
+            )
 
     # --- Solvers ---
     a1 = no_layer_solver(connector, gateway, chat, schema=db_id, dialect="postgres")

@@ -1,6 +1,6 @@
 """Simulated SME for the three-arm experiment (A3).
 
-An eval-only :class:`~governed_bi.curator.clarify_loop.Responder` briefed with
+An eval-only :class:`~governed_bi.curator.clarifications.Responder` briefed with
 domain meaning from BIRD database_description CSVs + train question/evidence.
 Never receives gold SQL or held-out test questions.
 """
@@ -78,14 +78,26 @@ def build_sme_brief(
         except OSError as err:
             sections.append(f"(failed to read {path.name}: {err})")
 
+    # ALL unique evidence hints — never capped. In BIRD the ``evidence`` field is
+    # the key domain hint (e.g. "higher CSS ranking value = higher prospect"), so
+    # dropping any (the old 40-question cap did) starves the SME of exactly what it
+    # needs to answer. Deduped to stay compact.
+    seen_ev: set[str] = set()
+    evidences: list[str] = []
+    for item in train_items:
+        ev = (item.evidence or "").strip()
+        if ev and ev not in seen_ev:
+            seen_ev.add(ev)
+            evidences.append(ev)
+    if evidences:
+        sections.append("")
+        sections.append("## Domain hints (evidence attached to analyst questions)")
+        sections.extend(f"- {ev}" for ev in evidences)
+
     sections.append("")
     sections.append("## Example analyst questions (train only; for domain context)")
     for item in train_items[:max_train_questions]:
-        evidence = (item.evidence or "").strip()
-        line = f"- {item.question}"
-        if evidence:
-            line += f" (evidence: {evidence})"
-        sections.append(line)
+        sections.append(f"- {item.question}")
 
     return "\n".join(sections)
 
@@ -128,18 +140,79 @@ def _sanitize_sme_answer(text: str) -> str:
     )
 
 
-class SimulatedSme:
-    """Live-LLM :class:`Responder` briefed with :func:`build_sme_brief`."""
+def build_sme_agent(model, *, gateway, brief: str):
+    """A read-only deep-agent SME.
 
-    def __init__(self, chat: "ChatClient", brief: str) -> None:
+    The SME answers from the brief (domain descriptions + all evidence) and may
+    **probe the live DB read-only** (`run_probe_query`) to verify a claim before
+    answering — the same way a real SME would sanity-check against the data. It
+    holds no write tools: it cannot touch the corpus.
+    """
+    from deepagents import create_deep_agent
+
+    from .deep_agent import _CURATOR_IDENTITY, _render_rows
+
+    def run_probe_query(sql: str) -> str:
+        """Run a read-only SELECT to check the actual data before answering.
+        Returns rows (truncated) or an error string. Never mutates data."""
+        try:
+            result = gateway.execute(sql, _CURATOR_IDENTITY)
+        except Exception as err:  # noqa: BLE001 — surface as a tool result
+            return f"error: {err}"
+        return _render_rows(result)
+
+    return create_deep_agent(model=model, tools=[run_probe_query], system_prompt=brief)
+
+
+def _last_message_text(result) -> str:
+    msgs = result.get("messages") if isinstance(result, dict) else None
+    if not msgs:
+        return ""
+    last = msgs[-1]
+    content = getattr(last, "content", None)
+    if content is None and isinstance(last, dict):
+        content = last.get("content")
+    if isinstance(content, list):  # some models return content as parts
+        content = " ".join(
+            str(p.get("text", p)) if isinstance(p, dict) else str(p) for p in content
+        )
+    return content or ""
+
+
+class SimulatedSme:
+    """SME :class:`Responder` briefed with :func:`build_sme_brief`.
+
+    With a live LangChain model + a gateway it runs as a **read-only deep agent**
+    that can probe the DB to verify its answers; otherwise (offline / no gateway)
+    it falls back to a single-shot completion. Never receives write tools.
+    """
+
+    def __init__(self, chat: "ChatClient", brief: str, *, gateway=None) -> None:
         self.chat = chat
         self.brief = brief
+        self._agent = None
+        model = getattr(chat, "model", None)  # LangChainChatClient exposes .model
+        if gateway is not None and model is not None:
+            try:
+                self._agent = build_sme_agent(model, gateway=gateway, brief=brief)
+            except Exception:  # noqa: BLE001 — degrade to single-shot, never crash curation
+                self._agent = None
 
     def answer(self, question: str) -> str:
         user = (
             "Answer the following curator clarification in plain prose only "
-            "(no SQL).\n\n"
+            "(no SQL). You may run read-only probe queries to check the data "
+            "first if it helps.\n\n"
             f"Clarification: {question}"
         )
-        raw = self.chat.complete(self.brief, user)
+        if self._agent is not None:
+            from ..obs import tracing_callbacks
+
+            result = self._agent.invoke(
+                {"messages": [{"role": "user", "content": user}]},
+                config={"recursion_limit": 40, "callbacks": tracing_callbacks()},
+            )
+            raw = _last_message_text(result)
+        else:
+            raw = self.chat.complete(self.brief, user)
         return _sanitize_sme_answer(raw)

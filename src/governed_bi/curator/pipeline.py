@@ -1,31 +1,59 @@
 """Curator orchestration for the three-arm experiment (A2 / A3).
 
-Chains Facts profile → deterministic seed → deep-agent curation → write_corpus
-into a fresh output directory (never overwrites an existing BIRD-corpus tree).
+Phase A: Facts profile → deterministic seed → deep-agent explore (all pairs +
+``clarifications.jsonl`` via ``FilesystemBackend``) → validate fix pass → write.
+Phase B: SME-answered ledger → deep-agent ingest (same tools, ingest prompt) →
+validate → write A3. Offline/tests may use a deterministic fold only when
+``model`` is None; mechanical ledger seeding requires explicit opt-in.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
 
+from ..corpus.validate import validate_corpus
+from ..obs import tracing_callbacks
 from .asset_bag import AssetBag
-from .clarify_loop import emit_clarifications, resolve_clarifications
+from .clarifications import (
+    ClarificationRecord,
+    ClarificationRecordStatus,
+    clarifications_path,
+    fill_clarifications_with_responder,
+    load_clarifications,
+    seed_gap_clarifications,
+    write_clarifications,
+)
 from .profile import profile_database
+from .prompts import _PHASE_A_PROMPT, _PHASE_B_PROMPT
 from .seed import SeedBundle, seed_from_train_sql
 
 if TYPE_CHECKING:
     from ..eval.dataset import EvalItem
     from ..gateway import Gateway
     from ..gateway.connectors.base import Connector
-    from .clarify_loop import Responder
+    from .clarifications import Responder
+
+_READ_TOOLS = frozenset({"read_corpus", "run_probe_query"})
+_WRITE_TOOLS = frozenset(
+    {
+        "upsert_join",
+        "upsert_metric",
+        "upsert_term",
+        "upsert_few_shot",
+        "annotate_table",
+        "annotate_column",
+    }
+)
 
 
 def _render_train_batch(items: Sequence["EvalItem"], *, max_pairs: int = 40) -> str:
     lines = ["## Train (question, gold SQL, evidence) pairs — curate from these"]
     for i, item in enumerate(items[:max_pairs], 1):
         evidence = (item.evidence or "").strip()
-        lines.append(f"{i}. Q: {item.question}")
+        qid = item.question_id or f"t{i}"
+        lines.append(f"{i}. id={qid} Q: {item.question}")
         if evidence:
             lines.append(f"   evidence: {evidence}")
         lines.append(f"   sql: {item.sql}")
@@ -50,17 +78,111 @@ def _apply_seed(bag: AssetBag, seed: SeedBundle) -> dict[str, int]:
     return {"joins_ok": joins_ok, "joins_fail": joins_fail, "metrics_ok": metrics_ok}
 
 
+def _empty_tool_counts() -> dict[str, Any]:
+    return {
+        "read": {name: 0 for name in sorted(_READ_TOOLS)},
+        "write": {name: 0 for name in sorted(_WRITE_TOOLS)},
+        "other": 0,
+        "read_total": 0,
+        "write_total": 0,
+    }
+
+
+def _count_tool_calls(result: Any) -> dict[str, Any]:
+    """Tally domain tool calls, split into read vs write."""
+    counts = _empty_tool_counts()
+    messages = []
+    if isinstance(result, dict):
+        messages = result.get("messages") or []
+    for msg in messages:
+        tool_calls = getattr(msg, "tool_calls", None) or []
+        if not tool_calls and isinstance(msg, dict):
+            tool_calls = msg.get("tool_calls") or []
+        for tc in tool_calls:
+            name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
+            if name in _READ_TOOLS:
+                counts["read"][name] = counts["read"].get(name, 0) + 1
+                counts["read_total"] += 1
+            elif name in _WRITE_TOOLS:
+                counts["write"][name] = counts["write"].get(name, 0) + 1
+                counts["write_total"] += 1
+            elif name:
+                counts["other"] += 1
+    return counts
+
+
+def _write_run_manifest(out_root: Path, payload: dict) -> None:
+    path = out_root / "run_manifest.json"
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def _write_validate_findings(out_root: Path, findings) -> None:
+    path = out_root / "validate_findings.jsonl"
+    with path.open("w", encoding="utf-8") as fh:
+        for f in findings:
+            fh.write(
+                json.dumps(
+                    {"code": f.code, "asset_id": f.asset_id, "message": f.message},
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+
+
+def _invoke_agent(
+    agent: Any,
+    *,
+    user: str,
+    max_agent_steps: int,
+) -> tuple[Any | None, dict[str, Any], str | None]:
+    """Invoke agent; return (result, tool_counts, error_string)."""
+    result = None
+    error = None
+    try:
+        result = agent.invoke(
+            {"messages": [{"role": "user", "content": user}]},
+            config={
+                "recursion_limit": max(max_agent_steps * 4, 100),
+                "callbacks": tracing_callbacks(),
+            },
+        )
+    except Exception as err:
+        error = f"{type(err).__name__}: {err}"
+        print(f"deep-agent stopped early ({error})")
+    return result, _count_tool_calls(result), error
+
+
+def _validate_fix_pass(
+    agent: Any | None,
+    bag: AssetBag,
+    *,
+    connector: "Connector",
+    out_root: Path,
+    max_agent_steps: int,
+) -> tuple[list, dict[str, Any], str | None]:
+    """Run validate_corpus; optionally one agent fix pass. Returns findings + counts."""
+    findings = validate_corpus(bag.all_assets(), connector=connector)
+    _write_validate_findings(out_root, findings)
+    fix_counts = _empty_tool_counts()
+    fix_error = None
+    if findings and agent is not None:
+        summary = "\n".join(f"- {f.code} [{f.asset_id}]: {f.message}" for f in findings[:40])
+        user = (
+            "validate_corpus reported the following findings. Fix them with the "
+            f"write tools (do not edit clarifications.jsonl unless needed):\n{summary}"
+        )
+        _result, fix_counts, fix_error = _invoke_agent(
+            agent, user=user, max_agent_steps=max(max_agent_steps // 2, 8)
+        )
+        findings = validate_corpus(bag.all_assets(), connector=connector)
+        _write_validate_findings(out_root, findings)
+    return findings, fix_counts, fix_error
+
+
 def _run_adversary_signal(
     bag: AssetBag, *, connector: "Connector", out_root: Path
 ) -> list[dict]:
-    """Structural adversary as a *signal* (design §1): record findings, never gate.
-
-    Writes ``adversary_findings.jsonl`` under ``out_root`` and stamps each
-    finding onto the matching asset's Audit as free-form evidence. Assets are
-    never dropped; confidence is gently reduced when a finding names them.
-    """
-    import json
-
+    """Structural adversary as a *signal* (design §1): record findings, never gate."""
     from .adversary import review
 
     findings = review(bag.all_assets(), connector=connector)
@@ -78,7 +200,6 @@ def _run_adversary_signal(
             by_id.setdefault(f.asset_id, []).append(f"{f.code}: {f.message}")
 
     for asset_id, notes in by_id.items():
-        # Tables
         for name, table in list(bag.tables.items()):
             if table.id != asset_id:
                 continue
@@ -92,7 +213,6 @@ def _run_adversary_signal(
                         status=ProvenanceStatus.proposed,
                     )
                 )
-            # Audit.extra="allow" — attach adversary signal without schema change.
             data = audit.model_dump(mode="python")
             data["adversary_findings"] = notes
             new_audit = Audit.model_validate(data)
@@ -147,11 +267,7 @@ def _corpora_differ(a2_root: Path, a3_root: Path, schema: str) -> bool:
 def _mark_columns_absent_from_gold(
     bag: AssetBag, sqls: Sequence[str], *, dialect: str = "postgres"
 ) -> int:
-    """Heuristic decoy defense: columns never referenced by train gold SQL.
-
-    Train gold never touches decoys/traps, so catalog columns absent from all
-    train SQL are strong suspect candidates. Returns how many were newly marked.
-    """
+    """Heuristic decoy defense: columns never referenced by train gold SQL."""
     import sqlglot
     from sqlglot import exp
 
@@ -169,7 +285,6 @@ def _mark_columns_absent_from_gold(
         for col in table.columns:
             if col.physical_name.lower() in referenced:
                 continue
-            # Keep primary-key-ish columns; do not mark unique keys as decoys.
             if col.is_unique:
                 continue
             before = bag.suspect_count()
@@ -181,6 +296,51 @@ def _mark_columns_absent_from_gold(
             if bag.suspect_count() > before:
                 marked += 1
     return marked
+
+
+def _write_sme_clarifications_log(
+    records: Sequence[ClarificationRecord],
+    out_root: Path,
+    *,
+    schema: str,
+    tables: Sequence | None = None,
+) -> int:
+    """Durable audit log of the SME clarification round-trip (ledger shape)."""
+    by_name = {t.physical_name: t for t in (tables or [])}
+    path = out_root / "sme_clarifications.jsonl"
+    rows = []
+    for rec in records:
+        table = None
+        column = None
+        table_id = None
+        if rec.scope.startswith("table:"):
+            rest = rec.scope[len("table:") :]
+            if "." in rest:
+                table, column = rest.split(".", 1)
+            else:
+                table = rest
+            if table in by_name:
+                table_id = by_name[table].id
+        rows.append(
+            {
+                "schema": schema,
+                "table_id": table_id,
+                "table": table,
+                "column": column,
+                "question": rec.question,
+                "answer": rec.answer,
+                "answered_by": rec.answered_by,
+                "asked_by": ",".join(rec.raised_by) if rec.raised_by else None,
+                "status": rec.status.value,
+                "at": None,
+                "id": rec.id,
+                "scope": rec.scope,
+            }
+        )
+    with path.open("w", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return len(rows)
 
 
 def build_curated_corpus(
@@ -195,12 +355,12 @@ def build_curated_corpus(
     max_agent_steps: int = 25,
     run_agent: bool = True,
 ) -> Path:
-    """Profile → seed → (optional) deep-agent → write A2 corpus under ``out_root``.
+    """Phase A: profile → seed → explore agent → validate → write A2 corpus.
 
-    Returns the corpus root path written (``out_root`` itself; assets land in
-    ``out_root/<schema>/``). When ``run_agent`` is False or ``model`` is None,
-    only the deterministic seed + absent-from-gold suspect pass run (useful for
-    offline tests and resume).
+    Does **not** pre-create ``clarifications.jsonl`` — the agent must
+    ``write_file`` it (FilesystemBackend rejects write-to-existing). An empty
+    missing ledger after Phase A is visible in the manifest
+    (``clarification_count: 0``, ``ledger_source: missing``).
     """
     out_root = Path(out_root)
     out_root.mkdir(parents=True, exist_ok=True)
@@ -216,78 +376,75 @@ def build_curated_corpus(
         )
     _mark_columns_absent_from_gold(bag, [it.sql for it in train_items], dialect=dialect)
 
+    tool_counts = _empty_tool_counts()
+    fix_counts = _empty_tool_counts()
+    agent_error: str | None = None
+    fix_error: str | None = None
+    agent = None
+    agent_ran = False
+
     if run_agent and model is not None:
         from .deep_agent import build_curator_agent
 
+        agent_ran = True
         agent = build_curator_agent(
-            model, connector=connector, schema=schema, gateway=gateway, bag=bag
+            model,
+            connector=connector,
+            schema=schema,
+            gateway=gateway,
+            bag=bag,
+            run_dir=out_root,
+            system_prompt=_PHASE_A_PROMPT,
         )
         user = "\n\n".join(
             [
-                f"Curate schema `{schema}`. Persist surviving Inference assets via tools.",
+                f"Curate schema `{schema}`. Work pair-by-pair; persist via tools.",
                 seed.render(),
                 _render_train_batch(train_items),
+                "Create /clarifications.jsonl for genuine unknowns "
+                "(write_file on first create; grep before add; edit_file to broaden/merge).",
                 "Mark decoy/trap columns suspect. Propose at least the verified seed joins.",
-                "Stop once you have verified the seed joins and marked obvious decoys.",
+                "Stop once pairs are covered, seed joins verified, and obvious decoys marked.",
             ]
         )
-        try:
-            agent.invoke(
-                {"messages": [{"role": "user", "content": user}]},
-                config={"recursion_limit": max(max_agent_steps * 4, 100)},
-            )
-        except Exception as err:
-            # Persist whatever the agent wrote before hitting a step/recursion
-            # ceiling; seed + suspect pass already ground the corpus.
-            print(f"deep-agent stopped early ({type(err).__name__}: {err})")
+        _result, tool_counts, agent_error = _invoke_agent(
+            agent, user=user, max_agent_steps=max_agent_steps
+        )
 
-    # Adversary as signal (not a gate): findings recorded, assets kept.
+    findings, fix_counts, fix_error = _validate_fix_pass(
+        agent if agent_ran else None,
+        bag,
+        connector=connector,
+        out_root=out_root,
+        max_agent_steps=max_agent_steps,
+    )
     _run_adversary_signal(bag, connector=connector, out_root=out_root)
-
     bag.write(out_root)
+
+    ledger = load_clarifications(clarifications_path(out_root))
+    if clarifications_path(out_root).exists():
+        ledger_source = "agent" if agent_ran else "preexisting"
+    else:
+        ledger_source = "missing"
+
+    _write_run_manifest(
+        out_root,
+        {
+            "phase": "A",
+            "schema": schema,
+            "agent_ran": agent_ran,
+            "ledger_source": ledger_source,
+            "clarification_count": len(ledger),
+            "seed": seed_stats,
+            "tool_calls": tool_counts,
+            "fix_pass_tool_calls": fix_counts,
+            "error": agent_error,
+            "fix_pass_error": fix_error,
+            "validate_finding_count": len(findings),
+            "clarifications_path": str(clarifications_path(out_root)),
+        },
+    )
     return out_root
-
-
-def _write_sme_clarifications(tables, out_root: Path) -> int:
-    """Durable audit log of the SME clarification round-trip.
-
-    Mirrors ``adversary_findings.jsonl``: one JSONL row per clarification found
-    on the resolved assets — the question, the verbatim SME ``answer``, and who
-    answered — so the exchange survives even though the A3 corpus under ``runs/``
-    is git-ignored/ephemeral, and the leakage invariant (no gold SQL/answer in an
-    SME reply) is auditable after the fact. Returns the row count.
-    """
-    import json
-
-    def _row(table, column):
-        node = column if column is not None else table
-        clar = node.audit.clarification
-        return {
-            "schema": table.schema,
-            "table_id": table.id,
-            "table": table.physical_name,
-            "column": None if column is None else column.physical_name,
-            "question": clar.question,
-            "answer": clar.answer,
-            "answered_by": clar.answered_by,
-            "asked_by": clar.asked_by,
-            "status": clar.status.value,
-            "at": clar.at,
-        }
-
-    records: list[dict] = []
-    for t in tables:
-        if t.audit and t.audit.clarification:
-            records.append(_row(t, None))
-        for col in t.columns:
-            if col.audit and col.audit.clarification:
-                records.append(_row(t, col))
-
-    path = out_root / "sme_clarifications.jsonl"
-    with path.open("w", encoding="utf-8") as fh:
-        for rec in records:
-            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    return len(records)
 
 
 def build_curated_corpus_with_sme(
@@ -302,19 +459,27 @@ def build_curated_corpus_with_sme(
     model: Any | None = None,
     dialect: str = "postgres",
     max_agent_steps: int = 15,
-    run_agent_repass: bool = False,
+    run_agent_repass: bool | None = None,
+    seed_ledger_if_empty: bool = False,
 ) -> Path:
-    """A2 assets → clarifications → Simulated SME → write A3 corpus.
+    """Phase B: answered clarifications ledger → ingest → write A3 corpus.
 
-    When ``a2_root`` is provided, loads table assets from that corpus (plus any
-    joins/metrics already written there) rather than rebuilding A2. Otherwise
-    builds A2 first into a sibling ``corpus_a2`` under the parent of ``out_root``.
+    Requires an agent-authored (or explicitly planted) open ledger. Mechanical
+    ``seed_gap_clarifications`` runs **only** when ``seed_ledger_if_empty=True``
+    (opt-in for ``--skip-agent``); the default path raises if the ledger is empty.
+
+    When ``model`` is set, ``run_agent_repass`` defaults to True and the ingest
+    agent folds answers (no silent deterministic fold). When ``model`` is None,
+    a deterministic scope-based fold is used for offline tests.
     """
     from ..corpus.loader import load_corpus
-    from ..corpus.schemas import ClarificationStatus, TableAsset
+    from ..corpus.schemas import TableAsset
 
     out_root = Path(out_root)
     out_root.mkdir(parents=True, exist_ok=True)
+
+    if run_agent_repass is None:
+        run_agent_repass = model is not None
 
     if a2_root is None:
         a2_root = out_root.parent / "corpus_a2"
@@ -329,39 +494,38 @@ def build_curated_corpus_with_sme(
             max_agent_steps=max_agent_steps,
             run_agent=model is not None,
         )
+    a2_root = Path(a2_root)
 
-    corpus = load_corpus(Path(a2_root), schema=schema)
+    corpus = load_corpus(a2_root, schema=schema)
     tables = [a for a in corpus.assets if isinstance(a, TableAsset)]
     other = [a for a in corpus.assets if not isinstance(a, TableAsset)]
 
-    clarified = emit_clarifications(tables)
+    ledger_path = clarifications_path(a2_root)
+    records = load_clarifications(ledger_path)
+    open_records = [r for r in records if r.status is ClarificationRecordStatus.open]
+    ledger_source = "agent" if open_records else "missing"
 
-    def _has_open(tables_in) -> bool:
-        for t in tables_in:
-            if (
-                t.audit
-                and t.audit.clarification
-                and t.audit.clarification.status is ClarificationStatus.open
-            ):
-                return True
-            for c in t.columns:
-                if (
-                    c.audit
-                    and c.audit.clarification
-                    and c.audit.clarification.status is ClarificationStatus.open
-                ):
-                    return True
-        return False
+    if not open_records and seed_ledger_if_empty:
+        # Offline/--skip-agent scaffolding only: synthesize gap questions so the
+        # deterministic fold has something to do.
+        records = seed_gap_clarifications(tables)
+        write_clarifications(ledger_path, records)
+        open_records = [
+            r for r in records if r.status is ClarificationRecordStatus.open
+        ]
+        ledger_source = "seed_gap"
+        if not open_records:
+            raise RuntimeError("seed_ledger_if_empty produced no open clarifications")
+    # An empty ledger from a real agent run is NOT a failure: the agent resolved
+    # everything itself, so the SME round-trip has nothing to fold and A3 == A2.
+    # A true agent no-op is distinguishable via the Phase-A manifest's write_total.
 
-    # Guarantee at least one open clarification so A3 cannot be a no-op copy of A2
-    # when the agent left every description high-confidence.
-    if not _has_open(clarified):
-        clarified = emit_clarifications(tables, confidence_threshold=1.01)
+    answered = fill_clarifications_with_responder(records, responder)
+    write_clarifications(ledger_path, answered)
+    write_clarifications(clarifications_path(out_root), answered)
+    _write_sme_clarifications_log(answered, out_root, schema=schema, tables=tables)
 
-    resolved = resolve_clarifications(clarified, responder)
-    _write_sme_clarifications(resolved, out_root)
-
-    bag = AssetBag.from_tables(schema, resolved)
+    bag = AssetBag.from_tables(schema, tables)
     for asset in other:
         if asset.asset_type == "join":
             bag.joins[asset.id] = asset  # type: ignore[assignment]
@@ -372,30 +536,81 @@ def build_curated_corpus_with_sme(
         elif asset.asset_type == "few_shot":
             bag.few_shots[asset.id] = asset  # type: ignore[assignment]
 
-    if run_agent_repass and model is not None:
+    tool_counts = _empty_tool_counts()
+    fix_counts = _empty_tool_counts()
+    agent_error: str | None = None
+    fix_error: str | None = None
+    agent = None
+    agent_ran = False
+    applied = 0
+    fold_mode = "none"
+
+    if not open_records:
+        fold_mode = "none"  # no clarifications → nothing to fold; A3 == A2
+    elif run_agent_repass and model is not None:
         from .deep_agent import build_curator_agent
 
+        agent_ran = True
+        fold_mode = "agent"
         agent = build_curator_agent(
-            model, connector=connector, schema=schema, gateway=gateway, bag=bag
+            model,
+            connector=connector,
+            schema=schema,
+            gateway=gateway,
+            bag=bag,
+            run_dir=out_root,
+            system_prompt=_PHASE_B_PROMPT,
+            certified_writes=True,
         )
-        agent.invoke(
-            {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": (
-                            f"SME answers have been folded into `{schema}`. "
-                            "Refine joins/suspect flags if needed; keep human-certified "
-                            "descriptions."
-                        ),
-                    }
-                ]
-            },
-            config={"recursion_limit": max(max_agent_steps * 2, 40)},
+        user = (
+            f"Ingest answered clarifications for schema `{schema}`. "
+            "Read /clarifications.jsonl and fold each answered record into the "
+            "corpus via annotate/upsert tools with certified=true."
         )
+        _result, tool_counts, agent_error = _invoke_agent(
+            agent, user=user, max_agent_steps=max_agent_steps
+        )
+        # Count successful certified writes via tool totals; also apply any
+        # unanswered leftovers is NOT done — agent owns the fold.
+        applied = tool_counts["write_total"]
+    else:
+        fold_mode = "deterministic"
+        applied = bag.apply_answered_clarifications(answered)
 
+    # pair:/query:-scoped answers (trap / annotation-error findings) don't map to a
+    # table/column asset, so the fold above skips them. Land them as governance
+    # rules so the caveat reaches the served corpus instead of dying in the ledger.
+    caveats_recorded = bag.record_caveats(answered)
+
+    findings, fix_counts, fix_error = _validate_fix_pass(
+        agent if agent_ran else None,
+        bag,
+        connector=connector,
+        out_root=out_root,
+        max_agent_steps=max_agent_steps,
+    )
     bag.write(out_root)
-    if not _corpora_differ(Path(a2_root), out_root, schema):
+
+    _write_run_manifest(
+        out_root,
+        {
+            "phase": "B",
+            "schema": schema,
+            "agent_ran": agent_ran,
+            "ledger_source": ledger_source,
+            "fold_mode": fold_mode,
+            "clarifications_applied": applied,
+            "caveats_recorded": caveats_recorded,
+            "clarification_count": len(answered),
+            "tool_calls": tool_counts,
+            "fix_pass_tool_calls": fix_counts,
+            "error": agent_error,
+            "fix_pass_error": fix_error,
+            "validate_finding_count": len(findings),
+        },
+    )
+
+    if open_records and not _corpora_differ(a2_root, out_root, schema):
         raise RuntimeError(
             f"A3 corpus is identical to A2 at {out_root}; SME round-trip produced no edits"
         )
