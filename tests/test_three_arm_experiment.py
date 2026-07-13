@@ -232,3 +232,55 @@ def test_build_curated_corpus_with_sme_folds_human(bird_connector, tmp_path: Pat
             if col.audit and col.audit.provenance.source is ProvenanceSource.human:
                 human = True
     assert human
+
+
+def test_sme_clarifications_logged(bird_connector, tmp_path: Path):
+    import json
+
+    gateway = Gateway(bird_connector)
+    train = [
+        EvalItem(
+            question="How many customers?",
+            sql="SELECT COUNT(*) FROM customers",
+            question_id="t1",
+        )
+    ]
+    a2 = build_curated_corpus(
+        bird_connector,
+        gateway,
+        "beer_factory",
+        train,
+        tmp_path / "corpus_a2",
+        run_agent=False,
+        dialect="sqlite",
+    )
+    responder = StaticResponder(default="Customers who bought root beer.")
+    a3 = build_curated_corpus_with_sme(
+        bird_connector,
+        gateway,
+        "beer_factory",
+        train,
+        tmp_path / "corpus_a3",
+        responder=responder,
+        a2_root=a2,
+        model=None,
+    )
+
+    log = a3 / "sme_clarifications.jsonl"
+    assert log.exists(), "sme_clarifications.jsonl was not written"
+    rows = [json.loads(ln) for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    assert rows, "expected at least one logged clarification"
+
+    expected_keys = {
+        "schema", "table_id", "table", "column", "question",
+        "answer", "answered_by", "asked_by", "status", "at",
+    }
+    for r in rows:
+        assert expected_keys <= set(r), f"missing keys in {r}"
+
+    answered = [r for r in rows if r["status"] == "answered"]
+    assert answered, "expected at least one answered clarification"
+    assert all(r["question"] for r in answered), "every answered row must record the question"
+    # The verbatim SME answer is captured (this is what makes leakage auditable).
+    assert any("root beer" in (r["answer"] or "") for r in answered)
+    assert all(r["answered_by"] for r in answered)

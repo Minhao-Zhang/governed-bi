@@ -248,6 +248,48 @@ def build_curated_corpus(
     return out_root
 
 
+def _write_sme_clarifications(tables, out_root: Path) -> int:
+    """Durable audit log of the SME clarification round-trip.
+
+    Mirrors ``adversary_findings.jsonl``: one JSONL row per clarification found
+    on the resolved assets — the question, the verbatim SME ``answer``, and who
+    answered — so the exchange survives even though the A3 corpus under ``runs/``
+    is git-ignored/ephemeral, and the leakage invariant (no gold SQL/answer in an
+    SME reply) is auditable after the fact. Returns the row count.
+    """
+    import json
+
+    def _row(table, column):
+        node = column if column is not None else table
+        clar = node.audit.clarification
+        return {
+            "schema": table.schema,
+            "table_id": table.id,
+            "table": table.physical_name,
+            "column": None if column is None else column.physical_name,
+            "question": clar.question,
+            "answer": clar.answer,
+            "answered_by": clar.answered_by,
+            "asked_by": clar.asked_by,
+            "status": clar.status.value,
+            "at": clar.at,
+        }
+
+    records: list[dict] = []
+    for t in tables:
+        if t.audit and t.audit.clarification:
+            records.append(_row(t, None))
+        for col in t.columns:
+            if col.audit and col.audit.clarification:
+                records.append(_row(t, col))
+
+    path = out_root / "sme_clarifications.jsonl"
+    with path.open("w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    return len(records)
+
+
 def build_curated_corpus_with_sme(
     connector: "Connector",
     gateway: "Gateway",
@@ -317,6 +359,7 @@ def build_curated_corpus_with_sme(
         clarified = emit_clarifications(tables, confidence_threshold=1.01)
 
     resolved = resolve_clarifications(clarified, responder)
+    _write_sme_clarifications(resolved, out_root)
 
     bag = AssetBag.from_tables(schema, resolved)
     for asset in other:
