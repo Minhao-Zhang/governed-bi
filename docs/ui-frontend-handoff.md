@@ -12,6 +12,13 @@ runtime decision in [ADR 0001](adr/0001-langgraph-server-chat-runtime.md).
 > endpoint, and a **full knowledge graph**. Boot it with `langgraph dev` (§2) and
 > build against it directly. Implementation detail is in
 > [langgraph-rework-plan.md](langgraph-rework-plan.md).
+>
+> **Incoming design change — read §13 before touching the answer card.** The new
+> [pipeline-design.md](pipeline-design.md) reworks how low-confidence answers
+> are delivered: most refusals become **delivered-but-graded** answers the UI must
+> render with a reliability treatment, not hide. Some of that contract is already
+> live (the two-axis stamp, `graded_delivery`); some is gated on backend work. §13
+> is the single source of truth for it.
 
 ---
 
@@ -85,7 +92,11 @@ stream.submit(
   - English answer text; collapsible **result table** (`columns`/`rows`,
     truncated note); read-only **SQL**; **provenance/audit drawer** (route,
     tables_used, join_ids, min_join_confidence, attempts, uncertainty_flags, …).
-  - Refusal → escalation shown, no SQL/number.
+  - **Three answer states, not two — see §13.** A hard **refusal** (`sql == null`)
+    shows escalation, no SQL/number. A **graded delivery** (`sql != null` +
+    `semantic_assurance ∈ {unverified, none}`) shows the SQL/result **with a
+    reliability warning treatment**. A clean answer renders normally. Do not gate
+    the alternate branch on `tier === "refused"` alone.
 
 Package note: `@langchain/langgraph-sdk/react` gives `onCustomEvent` +
 `stream.values`; the newer `@langchain/react` superset adds selector hooks
@@ -250,3 +261,156 @@ The backend owner's answers to the eight questions in the frontend's
 
 **First move for a new engineer:** ship Schema-tab UX against the live
 `schema` wire; trust engine `meta.scope` on graphs when it matches the request.
+
+---
+
+## 13. Reliability & deliver-and-grade (new design)
+
+Source: [pipeline-design.md](pipeline-design.md) §6 (reliability), §5.1 (schema pick),
+§1 (pinned corpus). Motivation: the three-arm experiment
+([plans/three-arm-experiment-plan.md](plans/three-arm-experiment-plan.md)) showed
+that on one DB the curated arm lost accuracy **entirely because it refused
+answerable questions** — the exact behavior §6 removes. So this is not cosmetic:
+the reliability treatment is the product surface for the engine's core decision to
+answer-with-a-caveat instead of refuse.
+
+This section is the **single source of truth** for the reliability contract. It
+**supersedes** the "surface like other refusals" guidance for `missing_edge` in
+§10/§12 — that case is being reclassified (below).
+
+### 13.1 The model: safety is binary, assurance is graded
+
+Two independent axes (both already on `AnswerResponse`):
+
+- **`safety_clearance: boolean` — hard, never graded away.** False ⇒ the query
+  failed a safety gate (**L2 policy**: DDL/DML/injection, or the curated
+  **negative-example** refuse-gate). A safety failure is **never delivered** at any
+  reliability score. There is no "lower the number and run it anyway" for safety.
+- **`semantic_assurance: certified | heuristic | unverified | none` — graded.**
+  This is the reliability indicator to color on. Driven by
+  `provenance.uncertainty_flags` (fired signals): `low_confidence_join`
+  (join-plan confidence < 0.7), `suspect_in_scope` (a curator-flagged decoy/suspect
+  column was used), `repaired` (took >1 generate attempt), `fenced_raw_fallback`.
+  No flags → `certified`; `fenced_raw_fallback` → `unverified`; any other flag →
+  `heuristic`.
+
+`tier` (`governed | lineage | fenced_raw | refused`) is a **strict 1:1 projection**
+of `semantic_assurance` — keep rendering it as a chip, but branch logic on the two
+axes above, not on `tier`.
+
+### 13.2 The three render states (exact rules)
+
+| State | How to detect | Render |
+|---|---|---|
+| **Clean answer** | `sql != null` and `semantic_assurance ∈ {certified, heuristic}` | Normal answer card; green/neutral tier chip. `heuristic` = mild caution note. |
+| **Graded delivery** | `sql != null` and (`semantic_assurance ∈ {unverified, none}` **or** `provenance.graded_delivery === true`) | **Show the SQL + result table**, wrapped in a distinct **warning treatment** (amber/red border + banner): *"We produced this answer but could not fully verify it."* Plus the **why line** (§13.4). This is the new state most UIs get wrong by hiding it. |
+| **Hard refusal** | `sql == null` (always `tier=refused`, `safety_clearance=false`, `result=null`) | Current refusal box: escalation text, no SQL/number. |
+
+Key invariant to rely on: **a hard refusal always has `sql == null`/`result == null`;
+a graded delivery always carries real `sql` + `result`.** So `sql == null` is the
+reliable discriminator between "refused" and "delivered (at any assurance)". Do not
+use `tier === "refused"` as the gate — a graded delivery is `tier = fenced_raw`, not
+`refused`, but it must still look cautionary.
+
+### 13.3 What's live vs. what the backend still owes you
+
+- **Live in the contract today:** both axes; `provenance.graded_delivery` marker;
+  `provenance.uncertainty_flags`; the `graded_delivery` **stream event**; and the
+  whole deliver-and-grade code path (`server/answer.py::graded_delivery`,
+  `_finish_unsuccessful`). You can build 13.1–13.4 against the current shapes now.
+- **Inert until a flag flips:** deliver-and-grade is behind the engine setting
+  **`grade_semantic_failures`**, which **defaults `false` in serving** (it's on only
+  in the eval harness). Until the backend turns it on for serve, every semantic
+  failure still arrives as a **hard refusal** (`sql=null`) — so the graded-delivery
+  branch is correct but simply won't fire yet. **Rollout coupling: the §13.2 UI must
+  land before/with that flag flip**, or users will suddenly get `fenced_raw` answers
+  with only a faint badge to warn them.
+- **Refused_by reasons** (in `provenance.refused_by`): `refuse_gate`, `no_coverage`,
+  `guardrail`, `execution`, `missing_edge`. When `grade_semantic_failures` is on,
+  only `refuse_gate` and the **policy_blacklist** guardrail stay hard refusals; the
+  rest (`no_coverage`, repairable `guardrail`, `execution`, `missing_edge`) become
+  graded deliveries. **`missing_edge` reclassified:** it is no longer a hard refusal
+  (superseding §10/§12) — it becomes a single-schema answer or a graded delivery.
+
+### 13.4 The "why" line (turn flags into plain language)
+
+A graded delivery must tell the user *why* it's flagged, on the card (not only in the
+drawer). Map `provenance.uncertainty_flags` → text:
+
+- `low_confidence_join` → "Joined tables on a relationship we're not fully sure of."
+- `suspect_in_scope` → "Used a column that may be unreliable (flagged during curation)."
+- `repaired` → "Needed multiple attempts to produce valid SQL."
+- `fenced_raw_fallback` → "Fell back to a raw query without the governed layer."
+
+`min_join_confidence` and `attempts` are already in `provenance` (and already render
+in the drawer). If `suspect_columns` is added to `provenance` (see 13.6) name the
+specific column.
+
+### 13.5 Contract additions to request from the backend (not live yet)
+
+Small, additive; none break existing shapes:
+
+1. **`delivery: "governed" | "graded" | "refused"`** on `AnswerResponse` — a
+   first-class field so the UI branches on it instead of inferring from
+   `sql == null` + `tier` + rummaging `provenance.graded_delivery`. Recommended.
+2. **`provenance.suspect_columns: string[]`** — so the why-line can name the column.
+3. **`provenance.selected_schema` (+ `candidate_schemas`)** — see 13.6.
+4. **`provenance.corpus_version` (git hash)** — see 13.7.
+
+Until (1) lands, derive `delivery` client-side per §13.2. Fields (2)–(4) render for
+free once present (provenance is an open `Record`; add to the drawer's
+`PREFERRED_ORDER` for placement).
+
+### 13.6 Schema selection display (gated on backend)
+
+Design target (§5.1): retrieval shortlists ~3 schemas → an **LLM node picks one** →
+downstream uses only that schema; the UI shows which schema answered.
+
+- **Not built yet.** The engine today does a deterministic **BM25 shortlist +
+  curated-join expansion into a set** (`schema_router.route_schemas`), exposed as
+  `provenance.routed_schemas` (an unordered set) and a `schema_route` stream event.
+  There is **no single "selected" schema, no candidate ranking/scores, and no LLM
+  pick**.
+- **UI now (interim):** you may show `provenance.routed_schemas` as "schemas
+  considered", and add a **"Selecting schema"** step to the stage stepper (one
+  `STAGE_ALIASES` entry mapping the existing `schema_route` event — no component
+  change).
+- **UI later (after backend adds the LLM-pick + `selected_schema`):** a small chip
+  on the answer card — "answered using schema `X`" — and the candidate list in the
+  drawer. Single-schema DBs (SQLite/BIRD) never show this.
+
+### 13.7 Corpus version indicator (gated on backend)
+
+Design (§1): production inference reads a **pinned corpus git hash**, never the live
+working copy. For reproducibility/trust the answer should show which corpus version
+produced it.
+
+- **Nothing exists today** — no corpus hash/version field anywhere in the contract.
+  Needs backend wiring (corpus loader → `provenance.corpus_version` → presenter)
+  before any UI.
+- **UI (once present):** a quiet "corpus @ `abc1234`" indicator in the provenance
+  drawer or chat header. Low priority; trivial once the field ships.
+
+### 13.8 SME clarification surface (scope decision — may be out of scope here)
+
+Design (§4): an async round-trip where a **human SME answers the curator's open
+clarification questions**, folded back via `accept_answer`.
+
+- **Nothing exists** in the UI (the corpus "Edit" button is a `toast()` stub, though
+  `POST /corpus/edit` + `EditResponse` plumbing is real).
+- **Open decision, do not assume:** per [scope boundaries](design-decisions.md)
+  corpus-edit + save-to-PR is owned by the enterprise app / git+CI, **not** this
+  repo. So the SME-answering UI may belong elsewhere. If it *is* in scope for
+  `governed-bi-ui`, it is the largest net-new surface: a list of open clarifications
+  (question, target asset, context) → an answer form → submit → `accept_answer`
+  → show the resulting corpus diff. Confirm ownership before building.
+
+### 13.9 Build order for §13
+
+1. **Answer card three-state rendering + reliability treatment + why-line** (13.2,
+   13.4) — pure UI against the live contract; the highest-value change. Reuses the
+   existing `ReliabilityStamp` and open `provenance`.
+2. Request the **`delivery`** field (13.5#1); switch the branch to it when it lands.
+3. Add the **"Selecting schema"** stepper alias and interim `routed_schemas` display
+   (13.6); the answer-time chip waits on the backend LLM-pick.
+4. Corpus-version indicator (13.7) and SME surface (13.8) — gated / decision-pending.

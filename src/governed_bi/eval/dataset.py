@@ -21,6 +21,9 @@ class EvalItem:
     question: str
     sql: str  # gold reference SQL, executed to produce the ground-truth result set
     answerable_by_template: bool = False
+    question_id: str | None = None
+    difficulty: str | None = None
+    evidence: str | None = None
 
 
 # Gold SQL is written in the live (un-obfuscated) beer_factory identifiers and

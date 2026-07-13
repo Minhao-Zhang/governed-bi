@@ -39,6 +39,7 @@ from .answer import (
     SemanticAssurance,
     UncertaintySignals,
     assemble,
+    graded_delivery,
     refusal,
 )
 from .context import assemble_context
@@ -370,9 +371,73 @@ def _execution_feedback(generated, err: Exception) -> tuple[RepairFeedback, dict
     return fb, refusal_record
 
 
+_HARD_REFUSE_LAYERS = frozenset({GuardrailLayer.policy_blacklist.value})
+
+
+def _finish_unsuccessful(
+    *,
+    settings: "Settings",
+    gateway: "Gateway",
+    identity: "Identity",
+    last_refusal: dict,
+    attempts: int,
+    base_provenance: dict,
+    question: str,
+    on_event: "Callable[[dict], None] | None" = None,
+) -> "Answer":
+    """Hard-refuse safety failures; §6 deliver-and-grade semantic ones when enabled."""
+    record = dict(last_refusal)
+    escalation = record.pop("escalation", _ESCALATION_NO_COVERAGE)
+    refused_by = record.get("refused_by", "no_coverage")
+    failed_layer = record.get("failed_layer")
+    sql = record.get("sql")
+    provenance = {**base_provenance, **record, "attempts": attempts}
+
+    # Safety stays binary hard-reject (pipeline-design §5.2).
+    hard = refused_by == "refuse_gate" or failed_layer in _HARD_REFUSE_LAYERS
+    if hard or not sql or not settings.grade_semantic_failures:
+        _emit(on_event, "refuse", refused_by=refused_by, failed_layer=failed_layer)
+        return refusal(escalation=escalation, provenance=provenance)
+
+    # §6: deliver the last generated SQL with unverified assurance. Try to
+    # execute for a complete answer; if execute fails, still return the SQL so
+    # eval can grade it (and the UI can show an unverified payload).
+    _emit(
+        on_event,
+        "graded_delivery",
+        refused_by=refused_by,
+        failed_layer=failed_layer,
+    )
+    try:
+        result = gateway.execute(sql, identity)
+        table = _result_table(result)
+        text = (
+            f"(unverified) Executed after semantic failure "
+            f"({refused_by}/{failed_layer or 'n/a'})."
+        )
+        return graded_delivery(
+            sql=sql,
+            provenance=provenance,
+            result=table,
+            text=text,
+        )
+    except Exception as err:
+        provenance = {**provenance, "graded_delivery_execute_error": str(err)}
+        return graded_delivery(
+            sql=sql,
+            provenance=provenance,
+            result=None,
+            text=(
+                f"(unverified) SQL retained after semantic failure "
+                f"({refused_by}/{failed_layer or 'n/a'}); execution failed."
+            ),
+        )
+
+
 def _finalize_success(
     *, question, graph, generated, result, attempts, base_provenance, dialect, allowlist, licensed,
     cache, narrator: "AnswerNarrator | None" = None, on_event: "Callable[[dict], None] | None" = None,
+    coverage_best_effort: bool = False,
 ) -> "Answer":
     """Stamp + assemble a successful answer, and write back a clean one to the cache.
 
@@ -389,7 +454,8 @@ def _finalize_success(
     signals = UncertaintySignals(
         low_confidence_join=min_confidence < LOW_CONFIDENCE_JOIN,
         suspect_in_scope=_suspect_in_scope(generated.sql, allowlist.suspect, dialect),
-        repaired=attempts > 1,
+        fenced_raw_fallback=coverage_best_effort,
+        repaired=attempts > 1 or coverage_best_effort,
     )
     provenance = {
         **base_provenance,
@@ -400,6 +466,7 @@ def _finalize_success(
         "row_count": result.row_count,
         "truncated": result.truncated,
         "attempts": attempts,
+        "coverage_best_effort": coverage_best_effort,
     }
     table = _result_table(result)
     _emit(on_event, "compose")
@@ -561,6 +628,7 @@ def answer_question(
     seen_sql: set[str] = set()
     last_refusal: dict = {"refused_by": "no_coverage", "escalation": _ESCALATION_NO_COVERAGE}
     attempts = 0
+    coverage_best_effort = False
 
     while attempts < MAX_REPAIR_ATTEMPTS:
         _emit(on_event, "generate", attempt=attempts + 1)
@@ -568,7 +636,38 @@ def answer_question(
             question, retrieval, corpus, feedback=tuple(feedback), context=context
         )
         attempts += 1
-        if generated is None:
+        # §6: a bare coverage decline has no SQL to grade — force one best-effort
+        # emit (decline disallowed) so deliver-and-grade can still run.
+        if (
+            generated is None
+            and settings.grade_semantic_failures
+            and not coverage_best_effort
+            and not last_refusal.get("sql")
+        ):
+            coverage_best_effort = True
+            _emit(on_event, "coverage_best_effort")
+            feedback.append(
+                RepairFeedback(
+                    sql="",
+                    stage="coverage",
+                    reason=(
+                        "Prior decline is not allowed under deliver-and-grade. "
+                        "Emit a best-effort read-only SELECT from the licensed "
+                        "tables; the answer will be marked unverified."
+                    ),
+                )
+            )
+            generated = generator.generate(
+                question,
+                retrieval,
+                corpus,
+                feedback=tuple(feedback),
+                context=context,
+                allow_decline=False,
+            )
+            if generated is None:
+                break
+        elif generated is None:
             break  # the generator declined; keep the most informative refusal so far
         if generated.sql in seen_sql:
             break  # no progress on the feedback; stop repairing
@@ -593,6 +692,8 @@ def answer_question(
         )
         if not verdict.passed:
             fb, last_refusal = _guardrail_feedback(generated, verdict)
+            if coverage_best_effort:
+                last_refusal = {**last_refusal, "coverage_best_effort": True}
             if not _repairable_guardrail(verdict):
                 break  # hard policy block: fail closed, don't coach a retry
             feedback.append(fb)
@@ -603,6 +704,8 @@ def answer_question(
             result = gateway.execute(generated.sql, identity)
         except Exception as err:  # give the generator a chance to repair, then fail closed
             fb, last_refusal = _execution_feedback(generated, err)
+            if coverage_best_effort:
+                last_refusal = {**last_refusal, "coverage_best_effort": True}
             feedback.append(fb)
             continue
 
@@ -619,9 +722,17 @@ def answer_question(
             cache=cache,
             narrator=narrator,
             on_event=on_event,
+            coverage_best_effort=coverage_best_effort,
         )
 
-    # Exhausted the attempts (or the generator declined / could not improve): fail
-    # closed with the most recent failure reason.
-    escalation = last_refusal.pop("escalation")
-    return refusal(escalation=escalation, provenance={**base_provenance, **last_refusal, "attempts": attempts})
+    # Exhausted attempts (or generator declined): §6 graded delivery or hard refuse.
+    return _finish_unsuccessful(
+        settings=settings,
+        gateway=gateway,
+        identity=identity,
+        last_refusal=last_refusal,
+        attempts=attempts,
+        base_provenance=base_provenance,
+        question=question,
+        on_event=on_event,
+    )

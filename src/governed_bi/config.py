@@ -126,6 +126,12 @@ class Settings:
     # ── Server: suspect-column enforcement (Server §"three points" #1) ──
     hard_block_suspect_columns: bool  # dev/BIRD: True; prod/enterprise: soft-warn + drop reliability tier
 
+    # ── pipeline-design §6: deliver-and-grade semantic failures ──
+    # When True, coverage / L3–L5 repair-exhaustion / execution-exhaustion
+    # return the last generated SQL with ``semantic_assurance=unverified``
+    # instead of a hard refusal. L2 policy + curated refuse-gate stay hard.
+    grade_semantic_failures: bool = False
+
     # ── Memory (D8) — working always on; episodic/correction off until eval earns it ──
     working_memory: bool = True
     episodic_memory: bool = False
@@ -382,7 +388,12 @@ def load_settings(
     # can soft-warn on suspect columns without switching the whole env.
     overrides = {
         k: runtime[k]
-        for k in ("auto_accept_corpus", "single_all_access_identity", "hard_block_suspect_columns")
+        for k in (
+            "auto_accept_corpus",
+            "single_all_access_identity",
+            "hard_block_suspect_columns",
+            "grade_semantic_failures",
+        )
         if k in runtime
     }
     return replace(settings, **overrides) if overrides else settings

@@ -97,12 +97,13 @@ def test_events_refuse_gate(mem_gateway, corpus, settings, identity):
 
 def test_events_no_coverage_stops_after_declined_generate(mem_gateway, corpus, settings, identity):
     # The template generator declines (no metric), so the loop breaks after one
-    # generate: no guardrail/execute/compose, and the answer is a refusal.
+    # generate: no guardrail/execute/compose. The answer is a refusal, and a
+    # `refuse` stage event is emitted (consistent with the other refusal paths).
     rec = _Recorder()
     ans = _answer("Tell me about the weather on Mars", mem_gateway, corpus, settings, identity, on_event=rec)
     assert ans.tier is ReliabilityTier.refused
-    assert rec.stages == ["route", "retrieve", "generate"]
-    assert rec.events[-1]["attempt"] == 1
+    assert rec.stages == ["route", "retrieve", "generate", "refuse"]
+    assert rec.events[-2]["attempt"] == 1  # declined on the first generate attempt
 
 
 # --------------------------------------------------------------------------- #

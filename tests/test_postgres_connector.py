@@ -330,8 +330,8 @@ def test_execute_sets_statement_timeout_in_milliseconds() -> None:
 
     pg.execute("SELECT id FROM users", timeout_s=2.5)
 
-    timeout_calls = [params for sql, params in conn.log if "statement_timeout" in sql]
-    assert timeout_calls == [(2500,)]
+    timeout_sqls = [sql for sql, _params in conn.log if "statement_timeout" in sql]
+    assert timeout_sqls == ["SET statement_timeout = 2500"]
 
 
 def test_execute_applies_row_cap_and_marks_truncated() -> None:

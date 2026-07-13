@@ -29,6 +29,7 @@ The **curator reads ``train_final.jsonl`` only**; grading is on held-out
 from __future__ import annotations
 
 from .arms import Arm, ArmResult, Solver, flow_solver, run_arm, run_arms
+from .baseline_solver import no_layer_solver
 from .bird_loader import available_dbs, load_bird_items
 from .dataset import BEER_FACTORY_EVAL, BEER_FACTORY_UNANSWERABLE, EvalItem
 from .ex import execution_match
@@ -48,6 +49,7 @@ __all__ = [
     "flow_refuser",
     "flow_solver",
     "load_bird_items",
+    "no_layer_solver",
     "run_arm",
     "run_arms",
 ]

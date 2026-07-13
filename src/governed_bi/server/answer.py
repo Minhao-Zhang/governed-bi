@@ -186,3 +186,33 @@ def refusal(*, escalation: str, provenance: dict | None = None) -> Answer:
         safety_clearance=False,
         semantic_assurance=SemanticAssurance.none,
     )
+
+
+def graded_delivery(
+    *,
+    sql: str,
+    provenance: dict | None = None,
+    result: "ResultTable | None" = None,
+    text: str | None = None,
+) -> Answer:
+    """pipeline-design §6: deliver SQL with ``unverified`` assurance instead of refusing.
+
+    Used when a *semantic* failure (coverage / L3–L5 repair exhaustion / execution
+    exhaustion) would formerly hard-refuse, but a generated SQL exists to grade.
+    Safety failures (L2, curated refuse-gate) must not call this.
+    """
+    prov = dict(provenance or {})
+    prov["graded_delivery"] = True
+    prov.setdefault("uncertainty_flags", [])
+    if "fenced_raw_fallback" not in prov["uncertainty_flags"]:
+        prov["uncertainty_flags"] = list(prov["uncertainty_flags"]) + ["fenced_raw_fallback"]
+    return Answer(
+        tier=ReliabilityTier.fenced_raw,
+        text=text,
+        sql=sql,
+        provenance=prov,
+        escalation=None,
+        safety_clearance=False,  # did not clear the full guardrail path
+        semantic_assurance=SemanticAssurance.unverified,
+        result=result,
+    )

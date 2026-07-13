@@ -68,13 +68,25 @@ def dataset_dir(tmp_path: Path) -> Path:
 
 def test_filters_by_db_id_and_maps_question_and_sql(dataset_dir: Path):
     items = load_bird_items(dataset_dir, "beer_factory")
-    assert items == [
-        EvalItem("What is the total revenue?", 'SELECT SUM(PurchasePrice) FROM "transaction"'),
-        EvalItem("How many customers are there?", "SELECT COUNT(*) FROM customers"),
-    ]
+    assert len(items) == 2
+    assert items[0].question == "What is the total revenue?"
+    assert items[0].sql == 'SELECT SUM(PurchasePrice) FROM "transaction"'
+    assert items[0].question_id == "0"
+    assert items[0].difficulty == "simple"
+    assert items[1].question == "How many customers are there?"
+    assert items[1].sql == "SELECT COUNT(*) FROM customers"
     # It maps sql_sqlite (the un-obfuscated gold), not sql_base / sql_rename.
     assert all(it.sql for it in items)
     assert not any("decoy" in it.sql for it in items)
+
+
+def test_gold_sql_field_selects_sql_rename(dataset_dir: Path):
+    items = load_bird_items(dataset_dir, "beer_factory", gold_sql_field="sql_rename")
+    assert [it.sql for it in items] == [
+        "SELECT SUM(PurchasePrice) FROM decoy",
+        "SELECT COUNT(*) FROM decoy_c",
+    ]
+
 
 
 def test_filters_out_other_db_ids(dataset_dir: Path):

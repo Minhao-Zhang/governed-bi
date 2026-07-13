@@ -40,6 +40,7 @@ from .flow import (
     _ESCALATION_NO_COVERAGE,
     _execution_feedback,
     _finalize_success,
+    _finish_unsuccessful,
     _guardrail_feedback,
     _licensed_table_ids,
     _match_negative_example,
@@ -48,7 +49,7 @@ from .flow import (
     missing_edge_refusal,
 )
 from .routing import bind_terms, route_intent
-from .sqlgen import TemplateSqlGenerator
+from .sqlgen import RepairFeedback, TemplateSqlGenerator
 
 if TYPE_CHECKING:
     from ..config import Settings
@@ -88,6 +89,7 @@ class ServeState(TypedDict, total=False):
     progress: bool
     guard_passed: bool
     guard_repairable: bool
+    coverage_best_effort: bool
     answer: Any  # the terminal Answer
 
 
@@ -133,6 +135,7 @@ def build_serve_graph(
             "feedback": [],
             "seen_sql": [],
             "last_refusal": {"refused_by": "no_coverage", "escalation": _ESCALATION_NO_COVERAGE},
+            "coverage_best_effort": False,
         }
 
     def refuse_gate(state: ServeState) -> dict:
@@ -224,6 +227,52 @@ def build_serve_graph(
             context=state["context"],
         )
         attempts = state["attempts"] + 1
+        coverage_best_effort = bool(state.get("coverage_best_effort"))
+        feedback = list(state["feedback"])
+        # §6: force one best-effort emit when a coverage decline would otherwise
+        # leave nothing to deliver-and-grade.
+        if (
+            generated is None
+            and settings.grade_semantic_failures
+            and not coverage_best_effort
+            and not (state.get("last_refusal") or {}).get("sql")
+        ):
+            coverage_best_effort = True
+            feedback.append(
+                RepairFeedback(
+                    sql="",
+                    stage="coverage",
+                    reason=(
+                        "Prior decline is not allowed under deliver-and-grade. "
+                        "Emit a best-effort read-only SELECT from the licensed "
+                        "tables; the answer will be marked unverified."
+                    ),
+                )
+            )
+            generated = generator.generate(
+                state["question"],
+                state["retrieval"],
+                corpus,
+                feedback=tuple(feedback),
+                context=state["context"],
+                allow_decline=False,
+            )
+            if generated is None:
+                return {
+                    "generated": None,
+                    "attempts": attempts,
+                    "progress": False,
+                    "coverage_best_effort": True,
+                    "feedback": feedback,
+                }
+            return {
+                "generated": generated,
+                "attempts": attempts,
+                "seen_sql": state["seen_sql"] + [generated.sql],
+                "progress": True,
+                "coverage_best_effort": True,
+                "feedback": feedback,
+            }
         if generated is None:
             return {"generated": None, "attempts": attempts, "progress": False}
         if generated.sql in state["seen_sql"]:  # no progress on the feedback
@@ -250,6 +299,8 @@ def build_serve_graph(
         if verdict.passed:
             return {"guard_passed": True}
         fb, last_refusal = _guardrail_feedback(generated, verdict)
+        if state.get("coverage_best_effort"):
+            last_refusal = {**last_refusal, "coverage_best_effort": True}
         return {
             "guard_passed": False,
             "guard_repairable": _repairable_guardrail(verdict),
@@ -263,6 +314,8 @@ def build_serve_graph(
             result = gateway.execute(generated.sql, state["identity"])
         except Exception as err:  # give the generator a chance to repair, then fail closed
             fb, last_refusal = _execution_feedback(generated, err)
+            if state.get("coverage_best_effort"):
+                last_refusal = {**last_refusal, "coverage_best_effort": True}
             return {"feedback": state["feedback"] + [fb], "last_refusal": last_refusal}
         answer = _finalize_success(
             question=state["question"],
@@ -276,16 +329,20 @@ def build_serve_graph(
             licensed=state["licensed"],
             cache=cache,
             narrator=narrator,
+            coverage_best_effort=bool(state.get("coverage_best_effort")),
         )
         return {"answer": answer}
 
     def refuse_node(state: ServeState) -> dict:
-        last = dict(state["last_refusal"])
-        escalation = last.pop("escalation")
         return {
-            "answer": refusal(
-                escalation=escalation,
-                provenance={**state["base_provenance"], **last, "attempts": state["attempts"]},
+            "answer": _finish_unsuccessful(
+                settings=settings,
+                gateway=gateway,
+                identity=state["identity"],
+                last_refusal=state["last_refusal"],
+                attempts=state["attempts"],
+                base_provenance=state["base_provenance"],
+                question=state["question"],
             )
         }
 

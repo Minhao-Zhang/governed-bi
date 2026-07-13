@@ -4,8 +4,9 @@ Each line of ``<split>_final.jsonl`` is one JSON object carrying both the
 obfuscated (``sql_rename`` / ``sql_base``) and the un-obfuscated (``sql_sqlite``)
 gold SQL, keyed by ``db_id`` / ``question`` / ``question_id`` / ``difficulty`` /
 ``evidence``. For the **beer_factory-first** pass (D14) the arms run against the
-vendored un-obfuscated database, so we map ``sql_sqlite`` -- the gold that
-executes against those live identifiers -- into ``EvalItem.sql``.
+vendored un-obfuscated database, so the default ``gold_sql_field`` is
+``sql_sqlite``. The three-arm experiment on ``pg_rename_decoy`` passes
+``gold_sql_field="sql_rename"`` instead.
 
 The dataset directory is a **parameter**, never a hardcoded sibling-repo path:
 the real files live outside this repo and are pointed at by the caller, while
@@ -20,6 +21,7 @@ from pathlib import Path
 from .dataset import EvalItem
 
 _SPLITS = ("test", "train")
+_DEFAULT_GOLD_SQL_FIELD = "sql_sqlite"
 
 
 def _rows_path(dataset_dir: Path | str, split: str) -> Path:
@@ -42,31 +44,44 @@ def _iter_rows(dataset_dir: Path | str, split: str):
 
 
 def load_bird_items(
-    dataset_dir: Path | str, db_id: str, *, split: str = "test"
+    dataset_dir: Path | str,
+    db_id: str,
+    *,
+    split: str = "test",
+    gold_sql_field: str = _DEFAULT_GOLD_SQL_FIELD,
 ) -> list[EvalItem]:
     """Load the BIRD rows for one ``db_id`` as :class:`EvalItem` gold (D14).
 
     Reads ``<dataset_dir>/<split>_final.jsonl``, keeps rows whose ``db_id``
-    matches, and maps ``question`` + ``sql_sqlite`` (the un-obfuscated gold used
-    for the beer_factory-first pass) into an :class:`EvalItem`.
+    matches, and maps ``question`` + the chosen gold SQL field into an
+    :class:`EvalItem`. Also preserves ``question_id``, ``difficulty``, and
+    ``evidence`` when present.
 
     Raises ``ValueError`` for an unknown ``split``, ``FileNotFoundError`` if the
     split file is missing, and ``ValueError`` (naming the ``question_id``) if a
-    matching row lacks ``question`` or ``sql_sqlite``.
+    matching row lacks ``question`` or the chosen gold SQL field.
     """
     items: list[EvalItem] = []
     for row in _iter_rows(dataset_dir, split):
         if row.get("db_id") != db_id:
             continue
+        qid = row.get("question_id", "<unknown>")
         try:
             question = row["question"]
-            sql = row["sql_sqlite"]
+            sql = row[gold_sql_field]
         except KeyError as exc:
-            qid = row.get("question_id", "<unknown>")
             raise ValueError(
                 f"BIRD row question_id={qid} (db_id={db_id}) is missing {exc.args[0]!r}"
             ) from exc
-        items.append(EvalItem(question=question, sql=sql))
+        items.append(
+            EvalItem(
+                question=question,
+                sql=sql,
+                question_id=None if qid == "<unknown>" else str(qid),
+                difficulty=row.get("difficulty"),
+                evidence=row.get("evidence"),
+            )
+        )
     return items
 
 

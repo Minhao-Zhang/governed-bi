@@ -74,6 +74,12 @@ class PostgresConnector(Connector):
             # a read-only DB role is still required in production as the real
             # belt-and-suspenders, this is not a substitute for one.
             self._conn.read_only = True
+        # Pin unqualified names to the target schema (single-schema / BIRD eval).
+        # Skipped when ``schema`` is the default ``public`` or the caller spans
+        # all schemas (factory passes ``schema=None`` in multi-schema mode).
+        if schema and schema != "public" and connection is None:
+            with self._conn.cursor() as cur:
+                cur.execute(f"SET search_path TO {_ident(schema)}, public")
 
     def _qualified(self, table: str, schema: str | None = None) -> str:
         return f"{_ident(schema or self.schema)}.{_ident(table)}"
@@ -186,8 +192,13 @@ class PostgresConnector(Connector):
     # -- execution --------------------------------------------------------- #
 
     def execute(self, sql: str, *, max_rows: int = 1000, timeout_s: float = 30.0) -> QueryResult:
+        # ``SET`` cannot take a bound parameter in Postgres (``$1`` is a
+        # syntax error); interpolate a validated integer millisecond value.
+        timeout_ms = int(timeout_s * 1000)
+        if timeout_ms < 0:
+            raise ValueError(f"timeout_s must be non-negative, got {timeout_s!r}")
         with self._conn.cursor() as cur:
-            cur.execute("SET statement_timeout = %s", (int(timeout_s * 1000),))
+            cur.execute(f"SET statement_timeout = {timeout_ms}")
             cur.execute(sql)  # read-only connection -> writes raise
             columns = [d[0] for d in cur.description] if cur.description else []
             fetched = cur.fetchmany(max_rows + 1)

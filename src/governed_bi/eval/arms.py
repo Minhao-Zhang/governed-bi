@@ -61,7 +61,9 @@ class Solver(Protocol):
 def _touches_suspect(sql: str, suspect_columns: frozenset[str], dialect: str) -> bool:
     if not suspect_columns:
         return False
-    suspect_bare = {ref.split(".", 1)[1] for ref in suspect_columns}
+    suspect_bare = {
+        (ref.split(".", 1)[1] if "." in ref else ref) for ref in suspect_columns
+    }
     try:
         tree = sqlglot.parse_one(sql, read=dialect)
     except Exception:
@@ -132,11 +134,16 @@ def flow_solver(
     """A :class:`Solver` that drives the server flow (the curator arm).
 
     Returns the flow's generated SQL, or ``None`` when the flow refuses (a
-    refusal is not a governed-path answer and scores as unsolved).
+    refusal is not a governed-path answer and scores as unsolved). After each
+    ``solve``, ``last_solve_meta`` holds audit fields from ``Answer.provenance``
+    (``refused_by``, ``failed_layer``, ``graded_delivery``, …).
     """
     from ..server import answer_question
 
     class _FlowSolver:
+        def __init__(self) -> None:
+            self.last_solve_meta: dict = {}
+
         def solve(self, question: str) -> str | None:
             answer = answer_question(
                 question,
@@ -147,6 +154,17 @@ def flow_solver(
                 session_id=session_id,
                 sql_generator=sql_generator,
             )
+            prov = dict(answer.provenance or {})
+            self.last_solve_meta = {
+                "refused_by": prov.get("refused_by"),
+                "failed_layer": prov.get("failed_layer"),
+                "graded_delivery": bool(prov.get("graded_delivery")),
+                "coverage_best_effort": bool(prov.get("coverage_best_effort")),
+                "tier": answer.tier.value,
+                "semantic_assurance": answer.semantic_assurance.value,
+                "safety_clearance": answer.safety_clearance,
+                "attempts": prov.get("attempts"),
+            }
             return answer.sql
 
     return _FlowSolver()

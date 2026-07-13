@@ -194,6 +194,41 @@ def test_repair_exhaustion_matches_plain(mem_gateway, corpus, settings, identity
     _assert_same(plain, viagraph, provenance_keys=("refused_by", "failed_layer", "attempts"))
 
 
+def test_grade_semantic_failures_matches_plain(mem_gateway, corpus, settings, identity):
+    from dataclasses import replace
+
+    from governed_bi.server.flow import MAX_REPAIR_ATTEMPTS
+
+    settings = replace(settings, grade_semantic_failures=True)
+
+    class AlwaysBad:
+        def __init__(self):
+            self.n = 0
+
+        def generate(self, question, retrieval, corpus, *, feedback=(), context=None):
+            self.n += 1
+            return GeneratedSql(
+                sql=f"SELECT StarRating AS c{self.n} FROM rootbeerreview",
+                tables_used=frozenset({"tbl_beer_factory_rootbeerreview"}),
+            )
+
+    plain = answer_question(
+        "total revenue", **_kw(mem_gateway, corpus, settings, identity, sql_generator=AlwaysBad())
+    )
+    viagraph = answer_question_graph(
+        "total revenue", **_kw(mem_gateway, corpus, settings, identity, sql_generator=AlwaysBad())
+    )
+    assert plain.tier is ReliabilityTier.fenced_raw
+    assert plain.provenance["graded_delivery"] is True
+    assert plain.provenance["attempts"] == MAX_REPAIR_ATTEMPTS
+    assert plain.sql is not None
+    _assert_same(
+        plain,
+        viagraph,
+        provenance_keys=("refused_by", "failed_layer", "attempts", "graded_delivery"),
+    )
+
+
 def test_llm_decline_matches_plain(mem_gateway, corpus, settings, identity):
     def make_gen():
         return LlmSqlGenerator(StaticChatClient("CANNOT_ANSWER"), dialect="sqlite")

@@ -80,6 +80,7 @@ class SqlGenerator(Protocol):
         *,
         feedback: tuple[RepairFeedback, ...] = (),
         context: "PromptContext | None" = None,
+        allow_decline: bool = True,
     ) -> GeneratedSql | None:
         ...
 
@@ -123,6 +124,7 @@ class TemplateSqlGenerator:
         *,
         feedback: tuple[RepairFeedback, ...] = (),
         context: "PromptContext | None" = None,
+        allow_decline: bool = True,
     ) -> GeneratedSql | None:
         metric_ids = getattr(retrieval, "metric_ids", [])
         for metric_id in metric_ids:
@@ -206,6 +208,58 @@ Output format:
 - Target SQL dialect: {dialect}.
 - If the question cannot be answered from these tables, return exactly: \
 {cannot_answer}
+"""
+
+# pipeline-design §6: when declines are disallowed, force a best-effort SELECT so
+# coverage gaps can still be delivered (and graded) as ``unverified``.
+_SYSTEM_PROMPT_FORCE = """\
+You are a careful SQL generator for a governed analytics system. You translate a \
+business question into ONE read-only SQL query over a fixed, pre-authorised set of \
+tables.
+
+Hard rules (a violation is rejected by a downstream guardrail, so follow them):
+- Use ONLY the physical table and column identifiers listed in the context below. \
+Do not invent, guess, or qualify names with a database/schema prefix.
+- Emit exactly ONE statement, and it MUST be a read-only SELECT (or a WITH ... \
+SELECT). Never DDL/DML (no INSERT/UPDATE/DELETE/DROP/ALTER/etc.).
+- Never SELECT *; project the specific columns you need.
+- NEVER reference a column marked "[SUSPECT - DO NOT USE]". Those are unreliable \
+decoys; using one is a correctness failure.
+- Prefer the metric definitions and gold examples when they fit the question, and \
+follow any guidance in the Skills section.
+- Join only along the join paths listed; prefer high-confidence joins.
+
+Output format:
+- Return ONLY the SQL, with no explanation and no markdown fences.
+- Target SQL dialect: {dialect}.
+- You MUST emit a SELECT even if uncertain. Do not refuse and do not return a \
+decline token — a best-effort query is required.
+"""
+
+_SYSTEM_PROMPT_MULTI_SCHEMA_FORCE = """\
+You are a careful SQL generator for a governed analytics system. You translate a \
+business question into ONE read-only SQL query over a fixed, pre-authorised set of \
+tables that live in several schemas of ONE database.
+
+Hard rules (a violation is rejected by a downstream guardrail, so follow them):
+- Use ONLY the physical table and column identifiers listed in the context below, \
+and write EVERY table reference fully qualified as schema.table (the schema is \
+shown with each table). Do not use a bare table name and do not add a \
+database/catalog prefix beyond the schema.
+- Emit exactly ONE statement, and it MUST be a read-only SELECT (or a WITH ... \
+SELECT). Never DDL/DML (no INSERT/UPDATE/DELETE/DROP/ALTER/etc.).
+- Never SELECT *; project the specific columns you need.
+- NEVER reference a column marked "[SUSPECT - DO NOT USE]". Those are unreliable \
+decoys; using one is a correctness failure.
+- Prefer the metric definitions and gold examples when they fit the question, and \
+follow any guidance in the Skills section.
+- Join only along the join paths listed; prefer high-confidence joins.
+
+Output format:
+- Return ONLY the SQL, with no explanation and no markdown fences.
+- Target SQL dialect: {dialect}.
+- You MUST emit a SELECT even if uncertain. Do not refuse and do not return a \
+decline token — a best-effort query is required.
 """
 
 
@@ -303,6 +357,7 @@ class LlmSqlGenerator:
         *,
         feedback: tuple[RepairFeedback, ...] = (),
         context: "PromptContext | None" = None,
+        allow_decline: bool = True,
     ) -> GeneratedSql | None:
         # Standalone fallback: if the flow did not pass a context, build one from
         # the retrieved tables only (no FK-neighborhood widening).
@@ -314,10 +369,16 @@ class LlmSqlGenerator:
                 multi_schema=self.multi_schema,
             )
 
-        template = _SYSTEM_PROMPT_MULTI_SCHEMA if self.multi_schema else _SYSTEM_PROMPT
-        system = template.format(
-            dialect=self.dialect or "standard SQL", cannot_answer=_CANNOT_ANSWER
-        )
+        if allow_decline:
+            template = _SYSTEM_PROMPT_MULTI_SCHEMA if self.multi_schema else _SYSTEM_PROMPT
+            system = template.format(
+                dialect=self.dialect or "standard SQL", cannot_answer=_CANNOT_ANSWER
+            )
+        else:
+            template = (
+                _SYSTEM_PROMPT_MULTI_SCHEMA_FORCE if self.multi_schema else _SYSTEM_PROMPT_FORCE
+            )
+            system = template.format(dialect=self.dialect or "standard SQL")
         user = (
             f"Context:\n{context.render()}\n\n"
             f"Question: {question}"

@@ -31,8 +31,10 @@ from .clarify_loop import (
 )
 from .llm_proposer import LlmProposer
 from .loop import CurationResult, curate
+from .pipeline import build_curated_corpus, build_curated_corpus_with_sme
 from .profile import profile_database
 from .proposer import HeuristicProposer, Proposer
+from .sme import SimulatedSme, assert_brief_no_leakage, build_sme_brief
 
 __all__ = [
     "CurationResult",
@@ -40,8 +42,13 @@ __all__ = [
     "LlmProposer",
     "Proposer",
     "Responder",
+    "SimulatedSme",
     "StaticResponder",
+    "assert_brief_no_leakage",
+    "build_curated_corpus",
+    "build_curated_corpus_with_sme",
     "build_facts_corpus",
+    "build_sme_brief",
     "curate",
     "default_parse",
     "emit_clarifications",

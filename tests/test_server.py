@@ -201,6 +201,87 @@ def test_flow_guardrail_blocks_out_of_scope_table(mem_gateway, corpus, settings,
     assert ans.provenance["failed_layer"] == "term_semantics"
 
 
+def test_flow_grade_semantic_failures_delivers_sql(mem_gateway, corpus, settings, identity):
+    # pipeline-design §6: L3/L4 repair exhaustion delivers SQL with unverified
+    # assurance instead of a hard refusal (eval grades the payload).
+    from dataclasses import replace
+
+    settings = replace(settings, grade_semantic_failures=True)
+
+    class Rogue:
+        def generate(self, question, retrieval, corpus, *, feedback=(), context=None):
+            return GeneratedSql(
+                sql="SELECT StarRating FROM rootbeerreview",
+                tables_used=frozenset({"tbl_beer_factory_rootbeerreview"}),
+            )
+
+    ans = _answer(
+        "total revenue", mem_gateway, corpus, settings, identity, sql_generator=Rogue()
+    )
+    assert ans.tier is ReliabilityTier.fenced_raw
+    assert ans.semantic_assurance is SemanticAssurance.unverified
+    assert ans.safety_clearance is False
+    assert ans.sql == "SELECT StarRating FROM rootbeerreview"
+    assert ans.provenance["graded_delivery"] is True
+    assert ans.provenance["refused_by"] == "guardrail"
+    assert ans.provenance["failed_layer"] == "term_semantics"
+
+
+def test_flow_grade_semantic_failures_keeps_policy_hard(mem_gateway, corpus, settings, identity):
+    from dataclasses import replace
+
+    settings = replace(settings, grade_semantic_failures=True)
+
+    class Rogue:
+        def generate(self, question, retrieval, corpus, *, feedback=(), context=None):
+            return GeneratedSql(sql="DROP TABLE customers", tables_used=frozenset())
+
+    ans = _answer("total revenue", mem_gateway, corpus, settings, identity, sql_generator=Rogue())
+    assert ans.tier is ReliabilityTier.refused
+    assert ans.sql is None
+    assert ans.provenance.get("graded_delivery") is not True
+    assert ans.provenance["failed_layer"] == "policy_blacklist"
+
+
+def test_flow_grade_semantic_failures_keeps_refuse_gate(mem_gateway, corpus, settings, identity):
+    from dataclasses import replace
+
+    settings = replace(settings, grade_semantic_failures=True)
+    ans = _answer(
+        "How many employees work at the factory?", mem_gateway, corpus, settings, identity
+    )
+    assert ans.tier is ReliabilityTier.refused
+    assert ans.sql is None
+    assert ans.provenance["refused_by"] == "refuse_gate"
+
+
+def test_flow_coverage_decline_best_effort_delivers(mem_gateway, corpus, settings, identity):
+    # §6: CANNOT_ANSWER under grade_semantic_failures forces one best-effort emit.
+    from dataclasses import replace
+
+    from governed_bi.llm import StaticChatClient
+    from governed_bi.server import LlmSqlGenerator
+
+    settings = replace(settings, grade_semantic_failures=True)
+    # First call declines; forced retry returns in-scope revenue SQL.
+    gen = LlmSqlGenerator(
+        StaticChatClient(
+            [
+                "CANNOT_ANSWER",
+                'SELECT SUM("PurchasePrice") AS total_revenue FROM "transaction"',
+            ]
+        ),
+        dialect="sqlite",
+    )
+    ans = _answer(
+        "total revenue", mem_gateway, corpus, settings, identity, sql_generator=gen
+    )
+    assert ans.sql is not None
+    assert ans.provenance.get("coverage_best_effort") is True
+    assert ans.semantic_assurance is SemanticAssurance.unverified
+    assert ans.tier is ReliabilityTier.fenced_raw
+
+
 def test_flow_guardrail_blocks_write(mem_gateway, corpus, settings, identity):
     class Rogue:
         def generate(self, question, retrieval, corpus, *, feedback=(), context=None):

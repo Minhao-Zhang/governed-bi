@@ -221,3 +221,6 @@ __marimo__/
 
 # LangGraph dev server local state (in-memory checkpointer/ops snapshot)
 .langgraph_api/
+
+# Experiment run artifacts (generations, corpora, summaries)
+runs/

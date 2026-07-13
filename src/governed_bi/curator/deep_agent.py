@@ -12,6 +12,8 @@ the curator agent is a deep agent over a small set of grounded tools:
 - ``run_probe_query`` - a **read-only** SQL probe against the gateway, the
   falsification primitive the adversary/proposer uses to confirm or refute a claim
   before asserting it (this is the ``refute`` seam, done by the model live).
+- Write/propose tools (when an :class:`~governed_bi.curator.asset_bag.AssetBag`
+  is supplied) that mutate the local Inference-tier corpus in memory.
 
 The model is a LangChain chat model (or a ``"provider:model"`` spec), so it plugs
 straight into deepagents; production passes the OpenAI model from
@@ -36,6 +38,7 @@ from .profile import profile_database
 if TYPE_CHECKING:
     from ..gateway import Gateway
     from ..gateway.connectors.base import Connector
+    from .asset_bag import AssetBag
 
 # The curator runs with a maximum-autonomy, all-access identity (it profiles and
 # probes raw tables). Probes still go through the read-only gateway.
@@ -55,6 +58,12 @@ suggests it is unreliable or a decoy.
 (read-only SQL) to try to falsify it. Keep only claims that survive.
 4. Ground everything you write in Facts or a probe result. Do not invent columns, \
 values, or relationships you have not observed.
+5. When write tools are available, persist surviving claims via propose_join, \
+propose_metric, propose_term, propose_few_shot, set_column_description, \
+set_table_description, and mark_column_suspect. Prefer verifying seed candidates \
+over inventing new ones. Train gold SQL never references decoy/trap columns — \
+columns that appear in the catalog but never in working SQL are strong suspect \
+candidates.
 """
 
 
@@ -84,12 +93,17 @@ def _render_rows(result: Any, limit: int = 20) -> str:
 
 
 def curator_tools(
-    connector: "Connector", schema: str, *, gateway: "Gateway | None" = None
+    connector: "Connector",
+    schema: str,
+    *,
+    gateway: "Gateway | None" = None,
+    bag: "AssetBag | None" = None,
 ) -> list[Callable[..., str]]:
     """Build the curator's grounded tool set (closures over the DB access).
 
     Always includes ``profile_facts``; includes ``run_probe_query`` when a
-    read-only ``gateway`` is supplied (the falsification primitive).
+    read-only ``gateway`` is supplied; includes write/propose tools when an
+    :class:`AssetBag` is supplied.
     """
 
     def profile_facts() -> str:
@@ -114,6 +128,85 @@ def curator_tools(
 
         tools.append(run_probe_query)
 
+    if bag is not None:
+
+        def propose_join(
+            left_table: str,
+            right_table: str,
+            on: str,
+            cardinality: str = "many_to_one",
+            confidence: float = 0.7,
+        ) -> str:
+            """Record a JoinAsset between two physical tables (ON equality)."""
+            return bag.propose_join(
+                left_table, right_table, on, cardinality=cardinality, confidence=confidence
+            )
+
+        def propose_metric(
+            name: str, base_table: str, expression: str, confidence: float = 0.6
+        ) -> str:
+            """Record a MetricAsset (aggregate expression over a base table)."""
+            return bag.propose_metric(
+                name, base_table, expression, confidence=confidence
+            )
+
+        def propose_term(
+            name: str,
+            binding_asset_type: str = "table",
+            binding_asset_id: str = "",
+            confidence: float = 0.6,
+        ) -> str:
+            """Record a TermAsset mapping business language to an asset."""
+            return bag.propose_term(
+                name,
+                binding_asset_type=binding_asset_type,
+                binding_asset_id=binding_asset_id or None,
+                confidence=confidence,
+            )
+
+        def propose_few_shot(
+            question: str,
+            sql: str,
+            complexity: str = "simple",
+            confidence: float = 0.7,
+        ) -> str:
+            """Record a FewShotAsset exemplar (question + working SQL)."""
+            return bag.propose_few_shot(
+                question, sql, complexity=complexity, confidence=confidence
+            )
+
+        def set_column_description(
+            table: str, column: str, description: str, confidence: float = 0.7
+        ) -> str:
+            """Set the Inference-tier description for one column."""
+            return bag.set_column_description(
+                table, column, description, confidence=confidence
+            )
+
+        def set_table_description(
+            table: str, description: str, confidence: float = 0.7
+        ) -> str:
+            """Set the Inference-tier description for one table."""
+            return bag.set_table_description(table, description, confidence=confidence)
+
+        def mark_column_suspect(
+            table: str, column: str, note: str = "DO NOT USE — likely decoy/trap"
+        ) -> str:
+            """Flag a column as suspect/decoy so the serve path hard-blocks it."""
+            return bag.mark_column_suspect(table, column, note=note)
+
+        tools.extend(
+            [
+                propose_join,
+                propose_metric,
+                propose_term,
+                propose_few_shot,
+                set_column_description,
+                set_table_description,
+                mark_column_suspect,
+            ]
+        )
+
     return tools
 
 
@@ -123,6 +216,7 @@ def build_curator_agent(
     connector: "Connector",
     schema: str,
     gateway: "Gateway | None" = None,
+    bag: "AssetBag | None" = None,
     system_prompt: str | None = None,
 ):
     """Build the curator deep agent for one corpus schema namespace.
@@ -130,12 +224,12 @@ def build_curator_agent(
     ``model`` is a LangChain chat model instance or a ``"provider:model"`` spec
     (e.g. ``"openai:gpt-5.5"``). ``connector`` is used for Facts profiling;
     ``gateway`` (read-only) enables the ``run_probe_query`` falsification tool.
-    Returns a compiled agent; invoke it with
-    ``{"messages": [{"role": "user", "content": "Curate <schema>."}]}``. Construction
+    ``bag`` enables Inference-tier write tools. Returns a compiled agent; invoke
+    it with ``{"messages": [{"role": "user", "content": "..."}]}``. Construction
     is offline; running the loop needs a live model.
     """
     return create_deep_agent(
         model=model,
-        tools=curator_tools(connector, schema, gateway=gateway),
+        tools=curator_tools(connector, schema, gateway=gateway, bag=bag),
         system_prompt=system_prompt or _CURATOR_PROMPT,
     )
