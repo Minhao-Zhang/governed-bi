@@ -281,6 +281,49 @@
         }
       }
     },
+    "/columns/{column_id}/related": {
+      "get": {
+        "tags": [
+          "schema"
+        ],
+        "summary": "Column Related",
+        "description": "Every semantic-layer item that touches one physical column (handoff \u00a714).\n\n``column_id`` is the derived id ``col_<table>_<physical_name>``. Returns\nterms binding it, rules scoping it, FK in/out, joins whose predicate touches\nit (resolved server-side), and metrics on its table (table-grain only).\n``404`` when the id does not resolve to a known column.",
+        "operationId": "column_related_columns__column_id__related_get",
+        "parameters": [
+          {
+            "name": "column_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Column Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ColumnRelatedResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/graph": {
       "get": {
         "tags": [
@@ -979,6 +1022,142 @@
         ],
         "title": "ChatRequest"
       },
+      "ColumnIdentityResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "table_id": {
+            "type": "string",
+            "title": "Table Id"
+          },
+          "table_physical_name": {
+            "type": "string",
+            "title": "Table Physical Name"
+          },
+          "schema": {
+            "type": "string",
+            "title": "Schema"
+          },
+          "physical_name": {
+            "type": "string",
+            "title": "Physical Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "table_id",
+          "table_physical_name",
+          "schema",
+          "physical_name"
+        ],
+        "title": "ColumnIdentityResponse"
+      },
+      "ColumnRefResponse": {
+        "properties": {
+          "column_id": {
+            "type": "string",
+            "title": "Column Id"
+          },
+          "table_id": {
+            "type": "string",
+            "title": "Table Id"
+          },
+          "physical_name": {
+            "type": "string",
+            "title": "Physical Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "column_id",
+          "table_id",
+          "physical_name"
+        ],
+        "title": "ColumnRefResponse"
+      },
+      "ColumnRelatedMetaResponse": {
+        "properties": {
+          "column_resolvable": {
+            "type": "boolean",
+            "title": "Column Resolvable"
+          }
+        },
+        "type": "object",
+        "required": [
+          "column_resolvable"
+        ],
+        "title": "ColumnRelatedMetaResponse"
+      },
+      "ColumnRelatedResponse": {
+        "properties": {
+          "column": {
+            "$ref": "#/components/schemas/ColumnIdentityResponse"
+          },
+          "terms": {
+            "items": {
+              "$ref": "#/components/schemas/RelatedTermResponse"
+            },
+            "type": "array",
+            "title": "Terms"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/RelatedRuleResponse"
+            },
+            "type": "array",
+            "title": "Rules"
+          },
+          "fk_out": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ColumnRefResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fk_in": {
+            "items": {
+              "$ref": "#/components/schemas/ColumnRefResponse"
+            },
+            "type": "array",
+            "title": "Fk In"
+          },
+          "joins": {
+            "items": {
+              "$ref": "#/components/schemas/RelatedJoinResponse"
+            },
+            "type": "array",
+            "title": "Joins"
+          },
+          "metrics": {
+            "items": {
+              "$ref": "#/components/schemas/RelatedMetricResponse"
+            },
+            "type": "array",
+            "title": "Metrics"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/ColumnRelatedMetaResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "column",
+          "terms",
+          "rules",
+          "fk_out",
+          "fk_in",
+          "joins",
+          "metrics",
+          "meta"
+        ],
+        "title": "ColumnRelatedResponse"
+      },
       "ColumnResponse": {
         "properties": {
           "physical_name": {
@@ -1528,6 +1707,188 @@
           "edges"
         ],
         "title": "KnowledgeGraphResponse"
+      },
+      "RelatedJoinResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "left_table": {
+            "type": "string",
+            "title": "Left Table"
+          },
+          "right_table": {
+            "type": "string",
+            "title": "Right Table"
+          },
+          "other_table_id": {
+            "type": "string",
+            "title": "Other Table Id"
+          },
+          "on": {
+            "type": "string",
+            "title": "On"
+          },
+          "cardinality": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cardinality"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "low_confidence": {
+            "type": "boolean",
+            "title": "Low Confidence"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "left_table",
+          "right_table",
+          "other_table_id",
+          "on",
+          "cardinality",
+          "confidence",
+          "low_confidence"
+        ],
+        "title": "RelatedJoinResponse"
+      },
+      "RelatedMetricResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "granularity": {
+            "type": "string",
+            "title": "Granularity"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "granularity"
+        ],
+        "title": "RelatedMetricResponse"
+      },
+      "RelatedRuleResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "statement": {
+            "type": "string",
+            "title": "Statement"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "provenance_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provenance Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "statement",
+          "confidence",
+          "provenance_status"
+        ],
+        "title": "RelatedRuleResponse"
+      },
+      "RelatedTermResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "synonyms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Synonyms"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "provenance_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provenance Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "synonyms",
+          "confidence",
+          "provenance_status"
+        ],
+        "title": "RelatedTermResponse"
       },
       "ResultTableResponse": {
         "properties": {

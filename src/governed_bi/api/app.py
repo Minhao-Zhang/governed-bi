@@ -28,10 +28,18 @@ from .schemas import (
     AssetTypeFilter,
     CapabilitiesResponse,
     ChatRequest,
+    ColumnIdentityResponse,
+    ColumnRefResponse,
+    ColumnRelatedMetaResponse,
+    ColumnRelatedResponse,
     EditRequest,
     EditResponse,
     HealthResponse,
     KnowledgeGraphResponse,
+    RelatedJoinResponse,
+    RelatedMetricResponse,
+    RelatedRuleResponse,
+    RelatedTermResponse,
     SchemaGraphResponse,
     SchemaSummaryResponse,
     SkillResponse,
@@ -192,6 +200,33 @@ def create_app(stack: ServeStack | None = None):
         if view is None:
             raise HTTPException(status_code=404, detail="unknown table id")
         return TableResponse.model_validate(view)
+
+    @app.get(
+        "/columns/{column_id}/related",
+        response_model=ColumnRelatedResponse,
+        tags=["schema"],
+    )
+    def column_related(column_id: str) -> ColumnRelatedResponse:
+        """Every semantic-layer item that touches one physical column (handoff §14).
+
+        ``column_id`` is the derived id ``col_<table>_<physical_name>``. Returns
+        terms binding it, rules scoping it, FK in/out, joins whose predicate touches
+        it (resolved server-side), and metrics on its table (table-grain only).
+        ``404`` when the id does not resolve to a known column.
+        """
+        view = presenter.related_to_column(stack.corpus_full, column_id)
+        if view is None:
+            raise HTTPException(status_code=404, detail="unknown column id")
+        return ColumnRelatedResponse(
+            column=ColumnIdentityResponse.model_validate(view.column),
+            terms=[RelatedTermResponse.model_validate(t) for t in view.terms],
+            rules=[RelatedRuleResponse.model_validate(r) for r in view.rules],
+            fk_out=ColumnRefResponse.model_validate(view.fk_out) if view.fk_out else None,
+            fk_in=[ColumnRefResponse.model_validate(r) for r in view.fk_in],
+            joins=[RelatedJoinResponse.model_validate(j) for j in view.joins],
+            metrics=[RelatedMetricResponse.model_validate(m) for m in view.metrics],
+            meta=ColumnRelatedMetaResponse(column_resolvable=view.column_resolvable),
+        )
 
     @app.get("/graph", response_model=SchemaGraphResponse, tags=["schema"])
     def graph(

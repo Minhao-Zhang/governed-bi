@@ -184,3 +184,89 @@ def test_answer_view_maps_result_rows():
     assert view.result.rows == [[18496.0]]  # tuples normalised to lists for rendering
     assert view.result.row_count == 1
     assert view.result.truncated is False
+
+
+# --------------------------------------------------------------------------- #
+# related_to_column (handoff §14): column -> semantic-layer items
+# --------------------------------------------------------------------------- #
+
+
+def test_related_to_column_fk_and_joins(corpus):
+    # A PK referenced by two other tables: fk_in has both, fk_out is None.
+    view = presenter.related_to_column(corpus, "col_beer_factory_customers_CustomerID")
+    assert view is not None
+    assert view.column.table_id == "tbl_beer_factory_customers"
+    assert view.column.physical_name == "CustomerID"
+    assert view.column.schema == "beer_factory"
+    assert view.fk_out is None  # a PK does not itself reference anything
+    fk_in_ids = {r.column_id for r in view.fk_in}
+    assert fk_in_ids == {
+        "col_beer_factory_transaction_CustomerID",
+        "col_beer_factory_rootbeerreview_CustomerID",
+    }
+    # The join is resolved from the physical ON predicate, not a col-id match.
+    join_ids = {j.id for j in view.joins}
+    assert "join_transaction_customers" in join_ids
+    tc = next(j for j in view.joins if j.id == "join_transaction_customers")
+    assert tc.other_table_id == "tbl_beer_factory_transaction"
+    assert tc.cardinality == "many_to_one"
+    # customers has no metric on it (metrics are on transaction / rootbeerreview).
+    assert view.metrics == []
+
+
+def test_related_to_column_fk_out_and_table_grain_metric(corpus):
+    view = presenter.related_to_column(corpus, "col_beer_factory_transaction_CustomerID")
+    assert view is not None
+    assert view.fk_out is not None
+    assert view.fk_out.column_id == "col_beer_factory_customers_CustomerID"
+    assert view.fk_out.table_id == "tbl_beer_factory_customers"
+    assert view.fk_in == []  # nothing references transaction.CustomerID
+    # metric_revenue.base_table == this column's table -> surfaced at table grain.
+    assert [(m.id, m.granularity) for m in view.metrics] == [("metric_revenue", "table")]
+
+
+def test_related_to_column_unknown_returns_none(corpus):
+    assert presenter.related_to_column(corpus, "col_nope_missing") is None
+
+
+def test_related_to_column_terms_and_rules():
+    # No column-level term binding / rule scope in the beer_factory corpus, so
+    # build a tiny synthetic corpus to exercise those two branches directly.
+    from governed_bi.corpus import Corpus, RuleAsset, TableAsset, TermAsset
+    from governed_bi.corpus.schemas import Column, RuleKind, TermBinding
+
+    col_id = "col_shop_orders_status"
+    table = TableAsset(
+        id="tbl_shop_orders",
+        schema="shop",
+        physical_name="orders",
+        columns=[
+            Column(
+                physical_name="status",
+                physical_type="TEXT",
+                logical_type="string",
+                nullable=False,
+                is_unique=False,
+            )
+        ],
+    )
+    term = TermAsset(
+        id="term_status",
+        name="order status",
+        synonyms=["state"],
+        binding=TermBinding(asset_type="column", asset_id=col_id),
+    )
+    rule = RuleAsset(
+        id="rule_status_values",
+        kind=RuleKind.constraint,
+        scope=[col_id],
+        statement="status is one of 'open' | 'shipped' | 'cancelled'.",
+    )
+    corpus = Corpus(assets=[table, term, rule])
+
+    view = presenter.related_to_column(corpus, col_id)
+    assert view is not None
+    assert [t.id for t in view.terms] == ["term_status"]
+    assert view.terms[0].synonyms == ["state"]
+    assert [r.id for r in view.rules] == ["rule_status_values"]
+    assert view.rules[0].kind == "constraint"

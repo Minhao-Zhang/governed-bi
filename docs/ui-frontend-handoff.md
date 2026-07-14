@@ -122,6 +122,7 @@ the rework.
 | `GET /schema/{table_id}` | one table's **full** `TableResponse` (includes `schema`), fetched lazily on detail-open; `404` on unknown id |
 | `GET /graph` | **ER graph** `{ nodes, edges, boundary?, meta? }` of tables + join edges (nodes carry `schema` / `row_count` / `n_columns` / `has_suspect`; edges carry `on`/`cardinality`/`confidence`/`low_confidence`). Optional D15 scope: `?schema=&focus=&radius=&node_budget=` — scoped responses include `boundary` + `meta` (echoed `scope` for `engineScopeMatches`). Param-less = full graph |
 | `GET /knowledge-graph` | **full knowledge graph** `{ nodes, edges, boundary?, meta? }` over every asset kind (table/join/metric/term/rule/few_shot/negative_example); table nodes carry `schema`; edges typed `join`/`measures`/`grounds`/`related:*`/`scopes`/`exemplifies`. Same scope params as `/graph`, plus `?kinds=` (comma-separated) |
+| `GET /columns/{column_id}/related` | every semantic-layer item that touches one physical column: `terms`, `rules`, `fk_out`, `fk_in`, `joins` (resolved server-side), `metrics` (table-grain). `column_id` = `col_<table>_<physical_name>`. Full contract in **§14** |
 | `GET /corpus/assets?type=` | non-table assets (metric/term/join/rule/few_shot/negative) |
 | `GET /skills` | skills (markdown); each skill carries **`schema`** (wire). Empty on some corpora — shape is in OpenAPI / zod regardless |
 | `POST /corpus/edit` *(dev only; gated on `can_edit`)* | validate the submitted asset → write YAML (dev) / PR (prod); returns validation + diff |
@@ -414,3 +415,140 @@ clarification questions**, folded back via `accept_answer`.
 3. Add the **"Selecting schema"** stepper alias and interim `routed_schemas` display
    (13.6); the answer-time chip waits on the backend LLM-pick.
 4. Corpus-version indicator (13.7) and SME surface (13.8) — gated / decision-pending.
+
+---
+
+## 14. Column → related semantic items
+
+Lets the UI do **"click a column → see every semantic-layer asset that touches it."**
+The corpus already holds all these links at column granularity; `presenter.knowledge_graph`
+**collapses** them to table grain (a column-targeted binding/scope is redirected up to
+its owning table via `col_to_table`, so `/knowledge-graph` never exposes the column).
+This endpoint surfaces the column grain **without** disturbing that graph.
+
+> **Status: live.** `GET /columns/{column_id}/related` is implemented
+> (`presenter.related_to_column`, `ColumnRelatedResponse`) and in
+> [openapi.json](openapi.json). **Phase 1 of the UI still needs nothing from the
+> backend** — FK in/out is already on `ColumnResponse.references`, and joins can be
+> shown at table grain from `/schema` + `/graph`. The **rich per-column view**
+> (terms, rules, rule scope, precise join-touches-this-column) uses this endpoint.
+
+### 14.1 Endpoint
+
+`GET /columns/{column_id}/related`
+
+- `column_id` is the **derived** column id: `col_<table_id without the 'tbl_' prefix>_<physical_name>`
+  — e.g. `col_beer_factory_customers_CustomerID` (see `corpus.ids.derive_column_id`).
+  This is the **same id** used by `Column.references`, `TermBinding.asset_id`, and
+  `RuleAsset.scope` entries.
+- `404` when the id does not resolve to a known column.
+
+### 14.2 Response (`ColumnRelatedResponse`)
+
+```jsonc
+{
+  "column": {
+    "id": "col_beer_factory_customers_CustomerID",
+    "table_id": "tbl_beer_factory_customers",
+    "table_physical_name": "customers",
+    "schema": "beer_factory",          // namespace field, same convention as elsewhere
+    "physical_name": "CustomerID"
+  },
+  "terms": [                            // TermAsset.binding targets this column (KG relation: "grounds")
+    { "id": "term_customer_id", "name": "customer id", "synonyms": ["cust id"],
+      "confidence": 0.9, "provenance_status": "draft" }
+  ],
+  "rules": [                            // RuleAsset with this column id in `scope` (KG relation: "scopes")
+    { "id": "rule_active_customer", "kind": "business_rule",
+      "statement": "…", "confidence": 0.8, "provenance_status": "draft" }
+  ],
+  "fk_out": {                           // this column's own Column.references, resolved; null if not an FK
+    "column_id": "col_beer_factory_orders_CustomerID",
+    "table_id": "tbl_beer_factory_orders", "physical_name": "CustomerID"
+  },
+  "fk_in": [                            // columns elsewhere whose `references` == this column
+    { "column_id": "col_beer_factory_orders_CustomerID",
+      "table_id": "tbl_beer_factory_orders", "physical_name": "CustomerID" }
+  ],
+  "joins": [                            // JoinAsset whose ON predicate touches this column (resolved server-side)
+    { "id": "join_customers_orders", "left_table": "tbl_beer_factory_customers",
+      "right_table": "tbl_beer_factory_orders", "other_table_id": "tbl_beer_factory_orders",
+      "on": "customers.CustomerID = orders.CustomerID",
+      "cardinality": "one_to_many", "confidence": 0.95, "low_confidence": false }
+  ],
+  "metrics": [                          // table-grain ONLY — see 14.4
+    { "id": "metric_customer_count", "name": "customer count", "granularity": "table" }
+  ],
+  "meta": { "column_resolvable": true }
+}
+```
+
+All list fields are `[]` (never `null`) when empty; `fk_out` is the only nullable
+field. Each item carries its `provenance_status` / `confidence` so the UI can flag
+`draft`/low-confidence links the same way it does elsewhere.
+
+### 14.3 Id-scheme rule (the one gotcha)
+
+Two different column identifier schemes coexist — get this right or joins won't line up:
+
+- **Asset-id scheme** — `col_<table>_<physical_name>` (from `derive_column_id`). Used
+  by `TermBinding.asset_id`, `RuleAsset.scope`, and `Column.references`. `terms`,
+  `rules`, `fk_out`, and `fk_in` key on this directly.
+- **Physical-predicate scheme** — `JoinAsset.on` is a raw SQL equality string over
+  **physical** names (`"customers.CustomerID = orders.CustomerID"`), **not** col ids.
+  So `joins` are resolved **server-side**: each `JoinAsset` already carries
+  `left_table` / `right_table` as **asset ids**, so the server parses `on` into
+  `(physical_table, physical_column)` pairs and maps them back to col ids via
+  `derive_column_id` against those two endpoint tables. **The frontend must not match
+  a `col_` id against `on` strings itself** — the strings are physical, and physical
+  names can collide across schemas.
+
+### 14.4 Metrics are table-grain only
+
+`MetricAsset` has `base_table` (a table id) + `expression` (semantic prose, not SQL);
+there is **no structured physical column**. So `metrics` returns metrics whose
+`base_table` is this column's table, tagged `"granularity": "table"`. The UI must
+label these **"metrics on this table,"** not "metrics using this column." Column-precise
+metric resolution is out of scope until SQL-gen-level expression resolution exists.
+
+### 14.5 Why an endpoint, not column nodes in `/knowledge-graph`
+
+Rejected: adding column nodes to the global KG. The KG is node-budget capped (KG
+default/ceiling **150**; §10) and **"columns are not nodes"** is an invariant that
+`viz/scope.py`, boundary detection, and the ER-view filter all rely on. A real schema
+has far more than 150 columns, so column nodes would blow the budget and truncation
+would start dropping real assets. A **focused per-column endpoint** is cheaper and
+leaves the graph invariant intact. (If a graph rendering is ever wanted, prefer
+`/knowledge-graph?focus=<col_id>` semantics over globally materializing column nodes.)
+
+### 14.6 Build order for §14
+
+1. **Phase 1 (no backend work):** column-detail panel showing FK in/out from
+   `ColumnResponse.references` + joins at table grain from `/graph`. Ship now.
+2. **Phase 2 (this endpoint — live):** wire `GET /columns/{column_id}/related`; render
+   terms, rules, server-resolved joins, and table-grain metrics. `zod`-validate the
+   response against `ColumnRelatedResponse` in [openapi.json](openapi.json).
+
+---
+
+## 15. Governance ledger on the answer (contract clarification)
+
+Raised during the column discussion; recorded here because it's a live contract point,
+not a column feature.
+
+- **Agent serve path:** `answer.provenance.governance_ledger` **is** populated — a list
+  of `{action, verdict, sql, allowed, licensed_ids, layer, reason, result, attempt}`
+  records — and flows through `presenter.answer_view` (which copies the whole
+  provenance dict) into `AnswerResponse.provenance`. `server/agent.py` even has a
+  belt-and-suspenders fallback that attaches it when missing. So on the agent path the
+  frontend's `buildStepsFromLedger` has its durable source: the trace survives a page
+  reload and a non-streaming answer, independent of the live event stream.
+- **Deterministic flow path:** builds no ledger, so `governance_ledger` is **absent**
+  there by design. Legacy `{stage}` events + the fixed stepper remain that path's trace
+  (§3), unchanged.
+- **If the ledger looked missing on the agent path,** it was most likely an older build
+  or a flow-path answer — confirm which path/build before treating it as a backend gap.
+
+`provenance` is an open `Record`; `governance_ledger` renders for free once the drawer
+knows to look for it (add it to the drawer's `PREFERRED_ORDER` for deterministic
+placement).

@@ -199,6 +199,69 @@ class KnowledgeGraphResponse(_View):
     meta: GraphMetaResponse | None = None
 
 
+# ── column → related semantic items (handoff §14) ─────────────────────────── #
+class ColumnRefResponse(_View):
+    column_id: str
+    table_id: str
+    physical_name: str
+
+
+class ColumnIdentityResponse(_View):
+    id: str
+    table_id: str
+    table_physical_name: str
+    namespace: str = _NAMESPACE
+    physical_name: str
+
+
+class RelatedTermResponse(_View):
+    id: str
+    name: str
+    synonyms: list[str]
+    confidence: float | None
+    provenance_status: str | None
+
+
+class RelatedRuleResponse(_View):
+    id: str
+    kind: str
+    statement: str
+    confidence: float | None
+    provenance_status: str | None
+
+
+class RelatedJoinResponse(_View):
+    id: str
+    left_table: str
+    right_table: str
+    other_table_id: str
+    on: str
+    cardinality: str | None
+    confidence: float | None
+    low_confidence: bool
+
+
+class RelatedMetricResponse(_View):
+    id: str
+    name: str
+    granularity: str  # always "table" — metrics resolve only to their base table
+
+
+class ColumnRelatedMetaResponse(_View):
+    column_resolvable: bool
+
+
+class ColumnRelatedResponse(_View):
+    column: ColumnIdentityResponse
+    terms: list[RelatedTermResponse]
+    rules: list[RelatedRuleResponse]
+    fk_out: ColumnRefResponse | None
+    fk_in: list[ColumnRefResponse]
+    joins: list[RelatedJoinResponse]
+    metrics: list[RelatedMetricResponse]
+    meta: ColumnRelatedMetaResponse
+
+
 # ── corpus assets + skills ────────────────────────────────────────────────── #
 # The selectable non-table asset types (tables have their own /schema view). Used
 # to constrain the /corpus/assets ?type= filter so unknown values 422 and the

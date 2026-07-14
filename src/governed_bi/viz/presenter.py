@@ -14,6 +14,7 @@ server never sees.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -251,6 +252,77 @@ class BoundaryEdge:
     cardinality: str | None = None
     confidence: float | None = None
     low_confidence: bool = False
+
+
+@dataclass(frozen=True)
+class ColumnRef:
+    """A resolved column identity (used for FK in/out targets)."""
+
+    column_id: str
+    table_id: str
+    physical_name: str
+
+
+@dataclass(frozen=True)
+class ColumnIdentity:
+    """The resolved identity of the queried column."""
+
+    id: str
+    table_id: str
+    table_physical_name: str
+    schema: str
+    physical_name: str
+
+
+@dataclass(frozen=True)
+class RelatedTermView:
+    id: str
+    name: str
+    synonyms: list[str]
+    confidence: float | None
+    provenance_status: str | None
+
+
+@dataclass(frozen=True)
+class RelatedRuleView:
+    id: str
+    kind: str
+    statement: str
+    confidence: float | None
+    provenance_status: str | None
+
+
+@dataclass(frozen=True)
+class RelatedJoinView:
+    id: str
+    left_table: str
+    right_table: str
+    other_table_id: str  # the endpoint that is NOT the queried column's table
+    on: str
+    cardinality: str | None
+    confidence: float | None
+    low_confidence: bool
+
+
+@dataclass(frozen=True)
+class RelatedMetricView:
+    id: str
+    name: str
+    granularity: str  # always "table" — metrics have no structured physical column
+
+
+@dataclass(frozen=True)
+class ColumnRelatedView:
+    """Every semantic-layer item that touches one physical column (handoff §14)."""
+
+    column: ColumnIdentity
+    terms: list[RelatedTermView]
+    rules: list[RelatedRuleView]
+    fk_out: ColumnRef | None
+    fk_in: list[ColumnRef]
+    joins: list[RelatedJoinView]
+    metrics: list[RelatedMetricView]
+    column_resolvable: bool
 
 
 @dataclass(frozen=True)
@@ -600,6 +672,163 @@ def knowledge_graph(corpus: "Corpus") -> KnowledgeGraphView:
                 add_edge(asset.id, term_id, "exemplifies")
 
     return KnowledgeGraphView(nodes=nodes, edges=edges)
+
+
+def _parse_join_columns(on: str) -> list[tuple[str, str]]:
+    """Parse a physical ON predicate into ``(physical_table, physical_column)`` pairs.
+
+    ``JoinAsset.on`` is a raw physical equality string, e.g.
+    ``"transaction.CustomerID = customers.CustomerID"`` — physical names, not asset
+    ids (handoff §14.3). Handles composite predicates joined by ``AND`` and strips
+    identifier quoting (``"t"."c"``, `` `t`.`c` ``, ``[t].[c]``). Best-effort: a
+    clause it cannot split into ``table.column`` is skipped, so an unparseable join
+    simply does not match rather than erroring.
+    """
+    pairs: list[tuple[str, str]] = []
+    for clause in re.split(r"\s+and\s+", on, flags=re.IGNORECASE):
+        for side in clause.split("="):
+            token = re.sub(r'[`"\[\]()]', "", side).strip()
+            if "." not in token:
+                continue
+            tbl, _, col = token.rpartition(".")
+            tbl = tbl.split(".")[-1]  # drop a schema qualifier if present
+            if tbl and col:
+                pairs.append((tbl, col))
+    return pairs
+
+
+def related_to_column(corpus: "Corpus", column_id: str) -> ColumnRelatedView | None:
+    """Every semantic-layer item bound to one physical column (handoff §14).
+
+    Returns ``None`` when ``column_id`` does not resolve to a known column (the API
+    turns that into a 404). ``column_id`` is the derived id
+    ``col_<table>_<physical_name>`` (:func:`corpus.ids.derive_column_id`), the same
+    id used by ``Column.references``, ``TermBinding.asset_id``, and ``RuleAsset.scope``.
+
+    Reads the full corpus (like the other audit-surface views), so items on excluded
+    assets still show. Joins are resolved server-side from the physical ON predicate
+    against each ``JoinAsset``'s ``left_table`` / ``right_table`` (which are asset
+    ids), never by string-matching a col id against ``on`` — see §14.3.
+    """
+    tables = corpus.tables()
+    table_by_id = {t.id: t for t in tables}
+
+    # Forward index: derived col id -> (owning table, column). Built once; every
+    # col-id lookup (the query target, references targets) resolves against it.
+    col_index: dict[str, tuple[TableAsset, object]] = {
+        derive_column_id(t.id, c.physical_name): (t, c) for t in tables for c in t.columns
+    }
+
+    found = col_index.get(column_id)
+    if found is None:
+        return None
+    table, col = found
+
+    identity = ColumnIdentity(
+        id=column_id,
+        table_id=table.id,
+        table_physical_name=table.physical_name,
+        schema=table.schema,
+        physical_name=col.physical_name,
+    )
+
+    def _ref(target_col_id: str) -> ColumnRef | None:
+        hit = col_index.get(target_col_id)
+        if hit is None:
+            return None
+        t, c = hit
+        return ColumnRef(column_id=target_col_id, table_id=t.id, physical_name=c.physical_name)
+
+    # FK out: this column's own reference (a col id) resolved to an identity.
+    fk_out = _ref(col.references) if col.references else None
+
+    # FK in: any column elsewhere that references this one.
+    fk_in: list[ColumnRef] = []
+    for t in tables:
+        for c in t.columns:
+            if c.references == column_id:
+                ref = _ref(derive_column_id(t.id, c.physical_name))
+                if ref is not None:
+                    fk_in.append(ref)
+    fk_in.sort(key=lambda r: r.column_id)
+
+    terms: list[RelatedTermView] = []
+    rules: list[RelatedRuleView] = []
+    metrics: list[RelatedMetricView] = []
+    joins: list[RelatedJoinView] = []
+
+    for asset in corpus.assets:
+        if isinstance(asset, TermAsset):
+            b = asset.binding
+            if b is not None and b.asset_type == "column" and b.asset_id == column_id:
+                terms.append(
+                    RelatedTermView(
+                        id=asset.id,
+                        name=asset.name,
+                        synonyms=list(asset.synonyms),
+                        confidence=asset.confidence,
+                        provenance_status=_provenance_status(asset),
+                    )
+                )
+        elif isinstance(asset, RuleAsset):
+            if column_id in asset.scope:
+                rules.append(
+                    RelatedRuleView(
+                        id=asset.id,
+                        kind=asset.kind.value,
+                        statement=asset.statement,
+                        confidence=asset.confidence,
+                        provenance_status=_provenance_status(asset),
+                    )
+                )
+        elif isinstance(asset, MetricAsset):
+            if asset.base_table == table.id:
+                metrics.append(
+                    RelatedMetricView(id=asset.id, name=asset.name, granularity="table")
+                )
+        elif isinstance(asset, JoinAsset):
+            # Map each physical (table, column) in the ON predicate back to a col id
+            # via the join's endpoint tables (asset ids), then test against the target.
+            endpoints = {
+                table_by_id[tid].physical_name: tid
+                for tid in (asset.left_table, asset.right_table)
+                if tid in table_by_id
+            }
+            touches = any(
+                endpoints.get(phys_tbl) == table.id and phys_col == col.physical_name
+                for phys_tbl, phys_col in _parse_join_columns(asset.on)
+            )
+            if touches:
+                other = asset.right_table if asset.left_table == table.id else asset.left_table
+                joins.append(
+                    RelatedJoinView(
+                        id=asset.id,
+                        left_table=asset.left_table,
+                        right_table=asset.right_table,
+                        other_table_id=other,
+                        on=asset.on,
+                        cardinality=asset.cardinality.value if asset.cardinality else None,
+                        confidence=asset.confidence,
+                        low_confidence=asset.confidence is not None
+                        and asset.confidence <= LOW_CONFIDENCE_JOIN,
+                    )
+                )
+
+    terms.sort(key=lambda t: t.id)
+    rules.sort(key=lambda r: r.id)
+    metrics.sort(key=lambda m: m.id)
+    joins.sort(key=lambda j: j.id)
+
+    return ColumnRelatedView(
+        column=identity,
+        terms=terms,
+        rules=rules,
+        fk_out=fk_out,
+        fk_in=fk_in,
+        joins=joins,
+        metrics=metrics,
+        column_resolvable=True,
+    )
 
 
 def answer_view(answer: "Answer") -> AnswerView:

@@ -479,3 +479,31 @@ def test_cors_allows_configured_origin():
     client = TestClient(create_app(build_stack(settings)))
     r = client.get("/capabilities", headers={"Origin": "https://app.example.com"})
     assert r.headers.get("access-control-allow-origin") == "https://app.example.com"
+
+
+# --------------------------------------------------------------------------- #
+# column -> related semantic items (handoff §14)
+# --------------------------------------------------------------------------- #
+
+
+def test_column_related_resolves_fk_and_joins(client):
+    r = client.get("/columns/col_beer_factory_customers_CustomerID/related")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["column"]["id"] == "col_beer_factory_customers_CustomerID"
+    assert body["column"]["schema"] == "beer_factory"  # namespace serializes as `schema`
+    assert body["column"]["table_physical_name"] == "customers"
+    assert body["fk_out"] is None
+    assert {r_["column_id"] for r_ in body["fk_in"]} == {
+        "col_beer_factory_transaction_CustomerID",
+        "col_beer_factory_rootbeerreview_CustomerID",
+    }
+    assert "join_transaction_customers" in {j["id"] for j in body["joins"]}
+    assert body["meta"]["column_resolvable"] is True
+    # empty relations are [], never null
+    assert body["metrics"] == []
+    assert isinstance(body["terms"], list)
+
+
+def test_column_related_unknown_is_404(client):
+    assert client.get("/columns/col_does_not_exist/related").status_code == 404
