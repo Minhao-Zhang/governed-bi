@@ -138,6 +138,13 @@ Guardrails, in order (fail-closed on any, all five enforced): syntax → policy 
 > result meta, and the stamp derivation). You cannot execute (or refuse) without
 > a record. It lives on `Answer` provenance now; a durable sink is a seam for
 > later.
+>
+> Since Amendment 2 the ledger also **streams live**: `agent_core` runs
+> `agent.stream(...)` and re-emits each governed action through `on_event` as a
+> typed step event (`rail` / `tool` / `final`), so the UI renders a per-attempt
+> live audit of the loop. The `run_query` event detail is the ledger entry itself,
+> so the live stream and the stored ledger cannot drift. Contract:
+> [`docs/plans/agent-step-visualization.md`](plans/agent-step-visualization.md).
 
 > **Refusal & best-effort (two concurrent gates, not a waterfall)**
 >

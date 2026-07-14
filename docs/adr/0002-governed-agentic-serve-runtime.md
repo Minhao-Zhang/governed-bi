@@ -327,3 +327,41 @@ have to justify it alone).
 **Open (Amendment 1):** seed retrieval budget (reuse flow defaults); prompt-window
 size on large enterprise schemas (BIRD is fine); whether `search_corpus` content
 retrieval shares the flow's retriever or gets its own top-k.
+
+## Amendment 2 (2026-07-14): the governance ledger streams live
+
+**Status:** Implemented (P1) — landed with the agent path behind `agent_serve`.
+
+**What.** The append-only governance ledger (Inv #10) is now emitted as a **live
+event stream**, not only attached to the finished `Answer`. Per turn, the agent
+path pushes three event kinds through the existing `on_event` callback (consumed
+by the frontend on `stream_mode="custom"`):
+
+- `rail` — each deterministic outer step (`route`, `refuse_gate`, `cache`, `assemble`);
+- `tool` — each governed action inside the agent loop (`search_corpus` /
+  `inspect_schema` / `sample_rows` / `run_query`), as a `start` then an
+  `ok` / `blocked` / `error` / `cap` / `miss` resolve, paired by tool-call id;
+- `final` — the terminal answer's two-axis stamp.
+
+Each event carries `{seq, kind, step, status, id?, detail, serve_path?}`; the
+first event of a turn tags `serve_path:"agent"` so the UI picks the timeline
+renderer over the flow's fixed stepper. Governed-tool `detail` is built **from the
+ledger entry**, so the live stream and the final `governance_ledger` on
+`Answer.provenance` cannot drift — the live step view *is* the ledger, streamed
+early. This turns Inv #10 from a post-hoc audit dump into a per-attempt live audit
+of the repair loop, which is the observability half of this ADR's thesis made into
+a product surface.
+
+**How.** `GovEventStream` (`server/governance.py`) is a per-turn emitter over the
+raw `on_event` callback (monotonic `seq`, `serve_path` tag, best-effort). `agent_core_node`
+switched `agent.invoke` → `agent.stream(stream_mode=["updates","values"])`:
+model-node tool calls become `start` events, tools-node results become resolves,
+and the final accumulated state is the last `values` chunk. Events are re-emitted
+from the outer node through the captured callback (**not** `get_stream_writer()`
+inside the agent), so emission is in one place and thread-safe past the ToolNode
+worker thread. The shared finalize helpers run with `on_event=None` on this path
+so only the rich contract is emitted. The deterministic flow path is unchanged —
+it keeps emitting the legacy `{stage}` events.
+
+Frontend spec + full event contract: [`docs/plans/agent-step-visualization.md`](../plans/agent-step-visualization.md).
+Tests: `tests/test_agent_step_events.py`.

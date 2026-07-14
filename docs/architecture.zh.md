@@ -129,6 +129,12 @@ execute (as-user) → answer + provenance
 > 的规范化 SQL + 逐层 L1-L5 裁决 + 授权的表 + 结果元信息，以及标记的推导）。没有
 > 记录，就无法执行（或拒答）。它目前挂在 `Answer` 的 provenance 上；一个持久化的
 > 落地端（sink）是留待日后的接缝（seam）。
+>
+> 自 Amendment 2 起，账本还会**实时流式输出**：`agent_core` 运行 `agent.stream(...)`，
+> 并通过 `on_event` 把每个受治理动作重新发出为一条有类型的步骤事件（`rail` / `tool`
+> / `final`），于是 UI 能对整个循环渲染出逐次尝试的实时审计。`run_query` 事件的
+> detail 就是账本条目本身，因此实时流与已存账本不会漂移。契约见
+> [`docs/plans/agent-step-visualization.md`](plans/agent-step-visualization.md)。
 
 > **拒答与尽力而为（两个并发的关口，而非瀑布式流程）**
 >

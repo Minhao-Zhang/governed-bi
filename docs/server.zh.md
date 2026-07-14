@@ -56,6 +56,8 @@ _[English](server.md) · [简体中文](server.zh.md)_
 
 **Amendment 1：为语义层播种（seed）。** 首次线上 A/B 显示，纯工具（tools-only）的 agent 相较于 flow *发生了退化*，因为 P1 的工具只暴露了名称，而没有暴露任何经策展的语义层（few-shots、连接的 `ON` 子句、metric 表达式、terms、rules）。修复办法：一个确定性的 **`assemble` 节点在 `agent_core` 之前运行**，用 flow 所使用的*同一份*语义层上下文（`PromptContext.render()`）作为一个 `## Governed context` 区块为 agent 播种，并用基础的（检索到的 + FK 邻域 + Steiner）表范围预填充 `licensed` 通道。工具由此变成**精炼（refinement），而非发现（discovery）**。这是 flow 的*确定性* L4 下限（而非 agent 声称的），因此播种得到的范围严格 ≥ flow 的范围，且绝不会是自行授权的。参见 ADR 0002 Amendment 1 以及 [`docs/plans/agentic-serve-ab-results.md`](plans/agentic-serve-ab-results.md)。
 
+**实时治理事件流（Amendment 2）。** 治理账本会实时流式输出，而不只是附在最终答案上。`agent_core` 运行的是 `agent.stream(...)`（而非 `invoke`），并通过既有的 `on_event` 回调把每一个受治理动作重新发出为一条有类型的事件：`rail` 对应每个外层步骤（`route` / `refuse_gate` / `cache` / `assemble`），`tool` 对应每次 `search_corpus` / `inspect_schema` / `sample_rows` / `run_query`（先发 `start`，再发 `ok` / `blocked` / `error` / `cap` / `miss` 的结果事件，按 tool-call id 配对），以及一条携带双轴标记的 `final`。每条事件的形状是 `{seq, kind, step, status, id?, detail, serve_path?}`；`run_query` / `sample_rows` 的 `detail` 就是**账本条目本身**，因此实时视图与最终的 `governance_ledger` 不会发生漂移。`GovEventStream`（`server.governance`）是每轮的发射器；flow 路径保持不变，仍发出旧式的 `{stage}` 事件。这就是 UI 渲染为实时步骤时间线的那层审计面，契约与前端方案见 [`docs/plans/agent-step-visualization.md`](plans/agent-step-visualization.md)。
+
 ## curator 推断驱动 server 行为的三个关键点
 
 Inference 层起的是*引导*作用，不是装饰。这正是 server 区别于通用 text-to-SQL 流水线的地方。

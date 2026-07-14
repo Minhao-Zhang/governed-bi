@@ -87,29 +87,43 @@ picks the renderer.
 block) is what makes a repair loop legible ("attempt 1 blocked by
 term_semantics, attempt 2 ran").
 
-## Backend work (this repo — separate task, not part of the frontend change)
+## Backend work (this repo) — DONE (2026-07-14)
 
-The frontend engineer can build against a recorded event trace; these are the
-backend emit points that produce it.
+Implemented on `feat/governed-agentic-serve-runtime`. The frontend engineer can
+build against the live contract (or the recorded trace the tests capture); these
+are the emit points that produce it.
 
-1. **Outer rails** (`server/agent.py::build_serve_rails`): the `ingest`,
-   `refuse_gate`, `cache_lookup`, `assemble`, and finalize paths already call
-   `_emit`. Extend each to the payload above (add `seq`, `kind`, `status`,
-   `detail`), and emit `serve_path` on the first event.
-2. **Agent loop** (`server/agent.py::agent_core_node`): switch `agent.invoke(...)`
-   to **`agent.stream(..., stream_mode=["updates","custom"])`** and, for each
-   chunk, map the tool call / tool result to a `kind:"tool"` event and re-emit it
-   through the outer `get_stream_writer()`. Re-emitting from the outer node (vs.
-   calling `get_stream_writer()` deep inside the tools/middleware) keeps the
-   mapping in one place and guarantees the events reach the top-level stream.
-   - **Verify during implementation:** whether `get_stream_writer()` propagates
-     from inside `create_agent` middleware/tools to the top-level custom stream.
-     If it does, emitting directly from `wrap_tool_call` (which already has the
-     guardrail verdict + ledger data) is simpler. If it does not, use the
-     `agent.stream` re-emit fallback above. Either way the event contract is
-     identical.
-3. Reuse the ledger record shape so the event `detail` and the final
-   `governance_ledger` never drift.
+1. **Emitter** (`server/governance.py::GovEventStream`): a per-turn object that
+   wraps the raw `on_event` callback, stamps the monotonic `seq`, tags the first
+   event with `serve_path:"agent"`, and exposes `rail()` / `tool()` / `final()`.
+   Best-effort (a raising sink never breaks a governed answer). The deterministic
+   flow keeps using the bare `_emit` legacy `{stage}` shape, so the two paths
+   never collide.
+2. **Outer rails** (`server/agent.py::build_serve_rails`): `ingest`,
+   `refuse_gate`, `cache_lookup`, and `assemble` now emit `rail` events; every
+   terminal answer (success, refusal, graded delivery, cache hit) emits one
+   `final` event carrying the answer stamp. The shared finalize helpers are
+   called with `on_event=None` on the agent path so only the rich contract is
+   emitted.
+3. **Agent loop** (`server/agent.py::agent_core_node`): switched
+   `agent.invoke(...)` → `agent.stream(..., stream_mode=["updates","values"])`.
+   Model-node tool calls become `tool … start` events; tools-node ToolMessages
+   become `tool … ok/blocked/error/cap/miss` resolves (paired by tool-call `id`,
+   trivial because tools are forced sequential — G1). The final accumulated state
+   comes from the last `values` chunk (replaces the old `invoke` return value).
+   - **`get_stream_writer()` propagation — resolved:** we do **not** rely on it.
+     Events are re-emitted from the outer node through the `on_event` callable
+     captured as a closure (the same channel the flow path already uses), which
+     is thread-safe regardless of the ToolNode worker thread. So the emit point
+     is one place and no `get_stream_writer()` call happens inside the agent's
+     middleware/tools.
+4. Governed-tool (`run_query` / `sample_rows`) event `detail` is built **from the
+   ledger entry**, so the live event and the final `governance_ledger` cannot
+   drift (verified by a test asserting the run_query event count equals the
+   ledger's run_query count).
+
+Tests: `tests/test_agent_step_events.py` (emitter contract + an end-to-end repair
+loop trace + negative-example refusal).
 
 ## Frontend design (the change to implement)
 
@@ -330,12 +344,17 @@ So the timeline is demoable offline (USE_MOCKS) and testable:
 - Add `MOCK_AGENT_EVENTS: GovEvent[]` to `lib/mock/fixtures.ts` (a scripted trajectory: `assemble/ok` → `search_corpus/ok` → `inspect_schema/ok` → `run_query start→blocked(term_semantics)` → `run_query start→ok` → `finalize/ok`).
 - In `useChat`, when a `USE_AGENT_MOCK` flag (or a question keyword) is set, replay `MOCK_AGENT_EVENTS` on the existing `STAGE_INTERVAL_MS` timer through `reduceSteps`, set `servePath:"agent"`, and resolve to `MOCK_ANSWER`. Keeps the mock a faithful stand-in (mirrors the `use-chat.ts` docstring intent).
 
-### Step 8 — backend companion (this repo — separate task; front end can build on the mock/fixtures first)
+### Step 8 — backend companion (this repo) — DONE
 
-- `server/agent.py::agent_core_node`: switch `agent.invoke(...)` → `agent.stream(..., stream_mode=["updates","custom"])`; maintain a `seq` counter and a per-tool `id`; map each tool call/result chunk to a `GovEvent` and emit through the outer `get_stream_writer()`. Emit `serve_path:"agent"` on the first event.
-- Outer rails (`ingest`/`refuse_gate`/`cache_lookup`/`assemble`/finalize): upgrade the existing `_emit(...)` calls to the full payload (`seq/kind/status/detail`).
-- `server/middleware.py`: the ledger record already holds `attempt/verdict/layer/reason/sql/allowed`; reuse it as the `run_query` event `detail` so live == audit.
-- Flow path (`server/flow.py`): leave as-is; it keeps emitting the legacy `{stage}` events (frontend Step 3 still handles them → classic stepper).
+Landed on `feat/governed-agentic-serve-runtime` (see "Backend work" above for the
+detail). Summary of what the frontend now receives:
+
+- `agent_core_node` streams the loop via `agent.stream(stream_mode=["updates","values"])`, emitting `tool` start/resolve events (paired by tool-call `id`) and re-emitting through the captured `on_event` callable (no `get_stream_writer()` inside the agent).
+- Rails (`ingest`/`refuse_gate`/`cache`/`assemble`) emit `rail` events; every terminal emits one `final` event with the stamp.
+- `run_query`/`sample_rows` event `detail` is the ledger entry (`attempt/verdict/layer/reason/sql/allowed/rows`), so live == audit.
+- Flow path (`server/flow.py`) unchanged: still emits legacy `{stage}` events → frontend Step 3's `else if (typeof ev.stage === "string")` branch → classic stepper.
+
+**Note on `id`:** the backend sets `id` = the LangChain tool-call id on `tool` events (start and resolve share it), which is exactly what `reduceSteps` keys on. `rail`/`final` events carry no `id`, so they key on `${step}:${seq}` (each is one-shot, no start/resolve pair).
 
 ### File-by-file checklist
 
@@ -375,6 +394,9 @@ So the timeline is demoable offline (USE_MOCKS) and testable:
   or keep them separate?
 - Show the normalized SQL inline per `run_query` attempt, or only on expand
   (per the Q5 egress posture, SQL is fine to show; result rows already show)?
-- How much of `search_corpus` content (few-shots surfaced) to reveal, if any.
-- Backend: confirm `get_stream_writer()` propagation from inside `create_agent`
-  (decides emit-in-middleware vs. re-emit-in-node); does not change this contract.
+- How much of `search_corpus` content (few-shots surfaced) to reveal, if any. The
+  backend currently emits only `query` on `search_corpus` (counts omitted to avoid
+  parsing the rendered tool string); add structured counts later if the UI wants
+  them.
+- ~~Backend: confirm `get_stream_writer()` propagation~~ — resolved: the backend
+  re-emits through the captured `on_event` callable, so no propagation dependency.
