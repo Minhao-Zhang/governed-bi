@@ -18,6 +18,7 @@ from .answer import (
     LOW_CONFIDENCE_JOIN,
     RESULT_PREVIEW_ROWS,
     Answer,
+    ReliabilityTier,
     ResultTable,
     SemanticAssurance,
     UncertaintySignals,
@@ -249,6 +250,104 @@ def _emit(on_event: "Callable[[dict], None] | None", stage: str, **detail) -> No
         on_event({"stage": stage, **detail})
     except Exception:
         pass
+
+
+# Ledger ``verdict`` → the step-event ``status`` the UI renders. Keeps the live
+# stream and the final ``governance_ledger`` from drifting (Inv #10).
+_LEDGER_STATUS = {
+    "pass": "ok",
+    "block": "blocked",
+    "error": "error",
+    "cap": "cap",
+    "deny": "blocked",
+}
+
+
+class GovEventStream:
+    """Emit the rich agent step-event contract over a raw ``on_event`` callback.
+
+    One instance per turn (call :meth:`reset` at the turn boundary). Stamps a
+    monotonic ``seq`` so the frontend can order events, and tags the first event
+    of the turn with ``serve_path`` so the UI picks the agent renderer (see
+    docs/plans/agent-step-visualization.md). This is the *agent* path's emitter;
+    the deterministic flow keeps using the bare :func:`_emit` legacy ``{stage}``
+    shape, so extending one never disturbs the other.
+
+    Best-effort like :func:`_emit`: a callback that raises must never turn a
+    governed answer into an error, so failures are swallowed.
+    """
+
+    def __init__(self, on_event: "Callable[[dict], None] | None", *, serve_path: str = "agent"):
+        self._on_event = on_event
+        self._serve_path = serve_path
+        self._seq = 0
+        self._started = False
+
+    def reset(self) -> None:
+        """Start a fresh turn: reset the sequence and the serve_path tag."""
+        self._seq = 0
+        self._started = False
+
+    def _emit_event(
+        self,
+        kind: str,
+        step: str,
+        status: str,
+        *,
+        step_id: str | None = None,
+        label: str | None = None,
+        detail: dict | None = None,
+    ) -> None:
+        if self._on_event is None:
+            return
+        payload: dict = {"seq": self._seq, "kind": kind, "step": step, "status": status}
+        self._seq += 1
+        if step_id is not None:
+            payload["id"] = step_id
+        if label is not None:
+            payload["label"] = label
+        payload["detail"] = {k: v for k, v in (detail or {}).items() if v is not None}
+        if not self._started:
+            payload["serve_path"] = self._serve_path
+            self._started = True
+        try:
+            self._on_event(payload)
+        except Exception:
+            pass
+
+    def rail(self, step: str, status: str = "ok", *, label: str | None = None, **detail) -> None:
+        """A deterministic outer-rail step (route/refuse_gate/cache/assemble)."""
+        self._emit_event("rail", step, status, label=label, detail=detail)
+
+    def tool(
+        self,
+        step: str,
+        status: str,
+        *,
+        step_id: str | None = None,
+        label: str | None = None,
+        **detail,
+    ) -> None:
+        """A governed-tool action inside the agent loop (start or resolve)."""
+        self._emit_event("tool", step, status, step_id=step_id, label=label, detail=detail)
+
+    def final(self, answer: "Answer", *, step: str = "finalize") -> None:
+        """The terminal answer's stamp — the two axes + provenance the UI renders."""
+        prov = answer.provenance or {}
+        status = "refused" if answer.tier is ReliabilityTier.refused else "ok"
+        self._emit_event(
+            "final",
+            step,
+            status,
+            detail={
+                "tier": answer.tier.value,
+                "semantic_assurance": answer.semantic_assurance.value,
+                "safety_clearance": answer.safety_clearance,
+                "tables_used": prov.get("tables_used"),
+                "min_join_confidence": prov.get("min_join_confidence"),
+                "coverage_best_effort": prov.get("coverage_best_effort"),
+            },
+        )
 
 
 def _try_cache_hit(

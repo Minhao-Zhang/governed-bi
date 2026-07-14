@@ -14,10 +14,11 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from langchain.agents import create_agent
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 
+from ..corpus.schemas import TableAsset
 from ..gateway import column_allowlist
 from ..graph import build_graph, detect_missing_join_path, plan_joins
 from ..retrieval import filter_corpus_for_retrieval, retrieve, route_schemas
@@ -26,7 +27,8 @@ from .context import assemble_context
 from .governance import (
     _ESCALATION_GUARDRAIL,
     _ESCALATION_NO_COVERAGE,
-    _emit,
+    _LEDGER_STATUS,
+    GovEventStream,
     _finalize_success,
     _finish_unsuccessful,
     _licensed_table_ids,
@@ -193,8 +195,28 @@ def build_serve_rails(
     # Closures — not state channels (ADR 0001 / finding #7).
     graph_obj = build_graph(corpus)
     allowlist = column_allowlist(corpus, multi_schema=multi_schema)
+    # One rich-event emitter for the whole turn (reset in `ingest`); the agent path
+    # emits the {seq,kind,step,status,detail} contract, never the flow's legacy
+    # {stage} shape (docs/plans/agent-step-visualization.md).
+    events = GovEventStream(on_event)
+
+    def _column_count(table_id: str) -> int:
+        asset = corpus.by_id(table_id)
+        if not isinstance(asset, TableAsset):
+            asset = next(
+                (a for a in corpus.assets if isinstance(a, TableAsset) and a.physical_name == table_id),
+                None,
+            )
+        if not isinstance(asset, TableAsset):
+            return 0
+        return sum(
+            1
+            for c in asset.columns
+            if not getattr(getattr(c, "governance", None), "excluded", False)
+        )
 
     def ingest(state: ServeRailsState) -> dict:
+        events.reset()  # new turn: fresh seq + serve_path tag
         question = state["question"]
         route = route_intent(question)
         bound_terms = bind_terms(corpus, question)
@@ -205,7 +227,7 @@ def build_serve_rails(
             "user": identity.user,
             "runtime": "agent",
         }
-        _emit(on_event, "route", route=route.value)
+        events.rail("route", intent=route.value)
         return {
             "base_provenance": base,
             "session_id": state.get("session_id") or session_id,
@@ -214,7 +236,7 @@ def build_serve_rails(
     def refuse_gate(state: ServeRailsState) -> dict:
         negative = _match_negative_example(corpus, state["question"])
         if negative is not None:
-            _emit(on_event, "refuse_gate", negative_example=negative.id)
+            events.rail("refuse_gate", "refused", negative_example=negative.id)
             ans = refusal(
                 escalation=negative.escalation,
                 provenance={
@@ -223,7 +245,9 @@ def build_serve_rails(
                     "negative_example": negative.id,
                 },
             )
+            events.final(ans)
             return {"answer": ans, "outcome": "refuse"}
+        events.rail("refuse_gate", "ok")
         return {"outcome": "continue"}
 
     def after_refuse(state: ServeRailsState) -> Literal["prepare", "__end__"]:
@@ -252,8 +276,12 @@ def build_serve_rails(
             corpus, graph_obj, set(retrieval.table_ids), multi_schema=multi_schema
         )
         if missing is not None:
-            _emit(on_event, "missing_edge", schemas=sorted(missing.schemas))
-            return {"answer": missing_edge_refusal(base_provenance, missing), "outcome": "refuse"}
+            events.rail(
+                "assemble", "refused", missing_edge=True, schemas=sorted(missing.schemas)
+            )
+            ans = missing_edge_refusal(base_provenance, missing)
+            events.final(ans)
+            return {"answer": ans, "outcome": "refuse"}
         try:
             licensing_join_ids = plan_joins(graph_obj, set(retrieval.table_ids)).join_ids
         except ValueError:
@@ -266,7 +294,13 @@ def build_serve_rails(
             history=history,
             multi_schema=multi_schema,
         )
-        _emit(on_event, "assemble", tables=len(context.tables), few_shots=len(context.few_shots))
+        events.rail(
+            "assemble",
+            "ok",
+            schema=default_schema if not multi_schema else None,
+            tables=len(context.tables),
+            few_shots=len(context.few_shots),
+        )
         out: dict = {
             "context_block": context.render(),
             "seed_licensed": sorted(licensed_ids),
@@ -295,14 +329,142 @@ def build_serve_rails(
             multi_schema=multi_schema,
             default_schema=default_schema,
             narrator=narrator,
-            on_event=on_event,
+            on_event=None,  # agent path emits the rich contract below, not {stage}
         )
         if hit is not None:
+            events.rail("cache", "hit", metric_id=hit.provenance.get("metric_id"))
+            events.final(hit)
             return {"answer": hit, "outcome": "finalize"}
         return {"outcome": "miss"}
 
     def after_cache(state: ServeRailsState) -> Literal["assemble", "__end__"]:
         return END if state.get("outcome") == "finalize" else "assemble"
+
+    def _tool_start_detail(step: str, args: dict) -> dict:
+        if step == "search_corpus":
+            return {"query": args.get("query")}
+        if step in ("inspect_schema", "sample_rows"):
+            return {"table_id": args.get("table_id")}
+        if step == "run_query":
+            return {"sql": args.get("sql")}
+        return {}
+
+    def _resolve_tool(step, args, entry, tcid, licensed_delta, attempt):
+        """Emit one tool-resolve event; return the updated run_query attempt count.
+
+        For governed tools the ledger ``entry`` is the source of truth (verdict /
+        layer / reason / sql / rows), so the live event and the final
+        ``governance_ledger`` never drift (Inv #10). Exploration tools have no
+        ledger entry — their detail is reconstructed from args + the licensed delta.
+        """
+        entry = entry or {}
+        if step == "run_query":
+            attempt += 1
+            verdict = entry.get("verdict")
+            result = entry.get("result") or {}
+            events.tool(
+                "run_query",
+                _LEDGER_STATUS.get(verdict, "ok"),
+                step_id=tcid,
+                attempt=attempt,
+                sql=entry.get("sql") or args.get("sql"),
+                verdict=verdict,
+                layer=entry.get("layer"),
+                reason=entry.get("reason"),
+                allowed=entry.get("allowed"),
+                rows=result.get("row_count"),
+            )
+        elif step == "sample_rows":
+            verdict = entry.get("verdict")
+            result = entry.get("result") or {}
+            events.tool(
+                "sample_rows",
+                _LEDGER_STATUS.get(verdict, "ok"),
+                step_id=tcid,
+                table_id=args.get("table_id") or entry.get("table_id"),
+                rows=result.get("row_count"),
+                reason=entry.get("reason"),
+            )
+        elif step == "inspect_schema":
+            table_id = args.get("table_id")
+            licensed = bool(licensed_delta)
+            events.tool(
+                "inspect_schema",
+                "ok" if licensed else "miss",
+                step_id=tcid,
+                table_id=table_id,
+                columns=_column_count(table_id) if licensed else 0,
+                licensed=licensed,
+            )
+        elif step == "search_corpus":
+            events.tool("search_corpus", "ok", step_id=tcid, query=args.get("query"))
+        else:
+            events.tool(step, "ok", step_id=tcid)
+        return attempt
+
+    def _stream_agent(agent, init: dict, config: dict) -> dict:
+        """Consume ``agent.stream`` to emit live tool events; return the final state.
+
+        Tool calls are forced sequential (G1), so each ``tools`` super-step carries
+        exactly one ToolMessage (+ at most one ledger entry), which makes pairing a
+        model-node ``start`` with its ``tools``-node ``resolve`` trivial. The final
+        accumulated state comes from the last ``values`` chunk (replaces
+        ``agent.invoke``'s return value)."""
+        final_state: dict = dict(init)
+        pending: dict[str, dict] = {}  # tool_call_id → {"step","args"}
+        attempt = 0
+        try:
+            for mode, chunk in agent.stream(
+                init, config=config, stream_mode=["updates", "values"]
+            ):
+                if mode == "values":
+                    if isinstance(chunk, dict):
+                        final_state = chunk
+                    continue
+                if not isinstance(chunk, dict):
+                    continue
+                for update in chunk.values():
+                    if not isinstance(update, dict):
+                        continue
+                    ledger_iter = iter(
+                        e for e in (update.get("ledger") or []) if isinstance(e, dict)
+                    )
+                    licensed_delta = update.get("licensed") or []
+                    for msg in update.get("messages") or []:
+                        if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+                            for tc in msg.tool_calls:
+                                tcid = tc.get("id")
+                                step = tc.get("name") or "tool"
+                                args = tc.get("args") or {}
+                                pending[tcid] = {"step": step, "args": args}
+                                events.tool(
+                                    step, "start", step_id=tcid, **_tool_start_detail(step, args)
+                                )
+                        elif isinstance(msg, ToolMessage):
+                            tcid = getattr(msg, "tool_call_id", None)
+                            info = pending.pop(tcid, None) or {}
+                            step = info.get("step") or "tool"
+                            args = info.get("args") or {}
+                            entry = next(ledger_iter, None) if step in ("run_query", "sample_rows") else None
+                            attempt = _resolve_tool(step, args, entry, tcid, licensed_delta, attempt)
+        except GovernanceHardStop as e:
+            # Pair the L2 block with its pending run_query start so the row resolves
+            # instead of hanging (the exception raised inside wrap_tool_call before
+            # the tools-node update was streamed).
+            tcid = next(iter(pending), None)
+            events.tool(
+                "run_query",
+                "blocked",
+                step_id=tcid,
+                attempt=sum(1 for x in e.ledger if x.get("action") == "run_query"),
+                sql=e.entry.get("sql"),
+                verdict="block",
+                layer=e.entry.get("layer"),
+                reason=e.entry.get("reason"),
+                allowed=e.entry.get("allowed"),
+            )
+            raise
+        return final_state
 
     def agent_core_node(state: ServeRailsState) -> dict:
         question = state["question"]
@@ -326,13 +488,14 @@ def build_serve_rails(
         )
 
         try:
-            final = agent.invoke(
+            final = _stream_agent(
+                agent,
                 {
                     "messages": [HumanMessage(content=question)],
                     "licensed": seed_licensed,
                     "ledger": [],
                 },
-                config={"recursion_limit": AGENT_RECURSION_LIMIT},
+                {"recursion_limit": AGENT_RECURSION_LIMIT},
             )
         except GovernanceHardStop as e:
             ledger = list(e.ledger)
@@ -348,6 +511,7 @@ def build_serve_rails(
                     "governance_ledger": ledger,
                 },
             )
+            events.final(ans)
             return {"answer": ans, "outcome": "refuse"}
         except GraphRecursionError:
             # Step budget exhausted without a final answer → fail closed (§6),
@@ -366,8 +530,9 @@ def build_serve_rails(
                 base_provenance={**state["base_provenance"], "recursion_exhausted": True},
                 question=question,
                 narrator=narrator,
-                on_event=on_event,
+                on_event=None,
             )
+            events.final(ans)
             return {"answer": ans, "outcome": "refuse"}
 
         ledger = list(final.get("ledger") or [])
@@ -401,13 +566,14 @@ def build_serve_rails(
                 base_provenance={**state["base_provenance"], "governance_ledger": ledger},
                 question=question,
                 narrator=narrator,
-                on_event=on_event,
+                on_event=None,
             )
             if ans.provenance.get("governance_ledger") is None:
                 ans = replace(
                     ans,
                     provenance={**ans.provenance, "governance_ledger": ledger},
                 )
+            events.final(ans)
             return {"answer": ans, "outcome": "refuse"}
 
         result = result_from_ledger(pass_entry)
@@ -428,8 +594,9 @@ def build_serve_rails(
                 base_provenance=state["base_provenance"],
                 question=question,
                 narrator=narrator,
-                on_event=on_event,
+                on_event=None,
             )
+            events.final(ans)
             return {"answer": ans, "outcome": "refuse"}
 
         generated = GeneratedSql(
@@ -454,9 +621,10 @@ def build_serve_rails(
             licensed=licensed_phys,
             cache=cache,
             narrator=narrator,
-            on_event=on_event,
+            on_event=None,
             ledger=ledger,
         )
+        events.final(ans)
         return {"answer": ans, "outcome": "finalize"}
 
     builder = StateGraph(ServeRailsState)
