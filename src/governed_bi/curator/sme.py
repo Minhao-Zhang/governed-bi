@@ -172,10 +172,18 @@ def _last_message_text(result) -> str:
     content = getattr(last, "content", None)
     if content is None and isinstance(last, dict):
         content = last.get("content")
-    if isinstance(content, list):  # some models return content as parts
-        content = " ".join(
-            str(p.get("text", p)) if isinstance(p, dict) else str(p) for p in content
-        )
+    if isinstance(content, list):  # reasoning models return content as typed parts
+        # Keep only text parts. A reasoning part (`{'type': 'reasoning',
+        # 'encrypted_content': ...}`) has no "text" key; stringifying it whole
+        # would leak the model's encrypted chain-of-thought into the authored
+        # rule (matches _message_text in llm/langchain_client.py).
+        parts = [
+            p["text"]
+            for p in content
+            if isinstance(p, dict) and isinstance(p.get("text"), str)
+        ]
+        parts += [p for p in content if isinstance(p, str)]
+        content = " ".join(parts)
     return content or ""
 
 

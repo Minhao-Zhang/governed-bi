@@ -371,6 +371,28 @@ def test_sme_runs_as_deep_agent_with_probe(bird_connector):
     assert scripted.i >= 2, "expected a probe turn then an answer turn (real ReAct loop)"
 
 
+def test_last_message_text_strips_reasoning_parts():
+    """A reasoning model's content is a list of typed parts; the reasoning part
+    carries encrypted CoT and no "text" key. It must be dropped, not stringified
+    into the SME answer (which becomes a rule statement)."""
+    from governed_bi.curator.sme import _last_message_text
+
+    reasoning_part = {
+        "id": "rs_0cd149",
+        "type": "reasoning",
+        "summary": [],
+        "content": [],
+        "encrypted_content": "gAAAAABsecretcothatmustnotleak",
+    }
+    text_part = {"type": "text", "text": "Use `review > 2` to match the gold interpretation."}
+    result = {"messages": [AIMessage(content=[reasoning_part, text_part])]}
+
+    out = _last_message_text(result)
+    assert out == "Use `review > 2` to match the gold interpretation."
+    assert "encrypted_content" not in out
+    assert "gAAAAAB" not in out
+
+
 def test_pair_scoped_clarification_becomes_rule(bird_connector, tmp_path: Path):
     """A pair:/query:-scoped answered clarification (trap/annotation-error finding)
     must land as a governance RuleAsset in the served corpus, not die in the ledger."""
