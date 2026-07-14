@@ -15,10 +15,15 @@ enterprise fork, not this engine.
 
 > **Design-first, and honest about maturity.** The design (D1-D15) is well ahead
 > of the build (see [`docs/design-decisions.md`](docs/design-decisions.md)). The
-> deterministic core runs end-to-end **offline**; the LangGraph/deepagents
-> harnesses are built but exercised only against deterministic model doubles —
-> **nothing has yet run against a live model**. See the [status table](#status)
-> for what is proven vs. designed vs. seamed.
+> deterministic serve flow runs end-to-end and stays the code default; the serve
+> runtime is now moving toward a **governed agentic core** ([ADR
+> 0002](docs/adr/0002-governed-agentic-serve-runtime.md), *Proposed*), whose P0/P1
+> have landed behind the off-by-default `agent_serve` flag. Live-model A/B runs
+> now exist (see [agentic-serve A/B
+> results](docs/plans/agentic-serve-ab-results.md) and the [three-arm
+> experiment](docs/plans/three-arm-experiment-results.md)); the P2 cutover to a
+> key-required, single-path runtime is not yet done. See the [status
+> table](#status) for what is proven vs. designed vs. seamed.
 
 ## The idea in three lines
 
@@ -37,20 +42,21 @@ enterprise fork, not this engine.
 
 ## Status
 
-What is proven vs. designed vs. merely seamed. The single biggest open risk is
-that **the LLM generator and curator have never run against a live model** — every
-test below uses deterministic offline doubles, so real generation/curation quality
-is unmeasured.
+What is proven vs. designed vs. merely seamed. The deterministic serve flow is the
+code default; the [ADR-0002](docs/adr/0002-governed-agentic-serve-runtime.md)
+governed agentic core is the in-progress direction (P0/P1 landed behind the
+off-by-default `agent_serve` flag). Live-model A/B runs now exist, so generation
+quality is no longer wholly unmeasured; see the linked results docs.
 
 | Capability | Status | Evidence |
 |---|---|---|
-| SQLite governed serve path (retrieve → context → SQL-gen → 5-layer guardrails → execute → stamp) | **Built** | `uv run --extra agents --extra api pytest` — 321 offline tests |
+| SQLite governed serve flow (retrieve → context → SQL-gen → 5-layer guardrails → execute → stamp) | **Built (code default)** | `uv run --extra agents --extra api pytest`, 321+ tests |
+| Governed agentic serve core (ADR 0002: `create_agent` + governance middleware + read-only tools) | **P0/P1 landed behind `agent_serve` (Proposed; default off)** | [ADR 0002](docs/adr/0002-governed-agentic-serve-runtime.md); `server/agent.py`, `tools.py`, `middleware.py`, `governance.py` |
 | Corpus contract + validation (typed YAML/MD, ID + reference integrity) | **Built** | `python -m governed_bi.corpus.cli`, CI |
 | Bounded self-repair + two-axis reliability stamp | **Built** | `tests/test_server.py` |
 | Semantic SQL cache (re-guardrail + re-execute on hit, `certified`-only admission) | **Built, off by default** | `tests/test_cache.py` |
-| LangGraph server harness (Answer-equivalent to the core flow) | **Built, offline only** | `tests/test_serve_graph.py` equivalence |
 | deepagents curator harness | **Construction-only** | `tests/test_curator_deep_agent.py` (no live run) |
-| Live-model generation / curation quality | **Unproven** | needs `OPENAI_API_KEY` + a run |
+| Live-model serve generation (deterministic flow vs. agentic core A/B) | **Run** | [agentic-serve A/B results](docs/plans/agentic-serve-ab-results.md), [three-arm experiment](docs/plans/three-arm-experiment-results.md) |
 | BIRD-Obfuscation 3-arm eval (no-layer / curator / gold) | **Partial** | curator arm scored offline; obfuscated DBs + baseline/gold arms pending |
 | `CorpusRelease` (immutable, hash-pinned serving release) | **Designed** | not implemented — see [design decisions](docs/design-decisions.md) |
 | Identity → query scope (RLS / tenant isolation) | **Seam only** | single-identity SQLite showcase; enforcement is enterprise-fork scope |
@@ -94,7 +100,7 @@ src/governed_bi/
   graph/               done: FK graph projection + Steiner-tree join planning + FK join-neighborhood
   retrieval/           done: RVGD BM25 + grounding + vector channel (embedder-gated, RRF fusion)
   memory/              done: working memory (D8); episodic/correction protocol seams
-  server/              done: serve DAG, routing, context assembly, SQL gen (template + LLM), self-repair, SQL cache, stamp; LangGraph harness in graph.py
+  server/              done: serve flow (flow.py), routing, context assembly, SQL gen, self-repair, SQL cache, stamp; ADR-0002 agentic core: agent.py + tools.py (read-only governed tools) + middleware.py (guardrail+audit interception) + governance.py (shared checks/licensing); graph.py + template serve path slated for removal at P2
   curator/             + deep_agent.py: the deepagents build harness
   eval/                done: execution accuracy, arm harness, refuse-gate
   viz/                 done: read-only audit surface — UI-agnostic presenter view models (no UI dependency)
@@ -117,16 +123,19 @@ New to the repo? The [walkthrough](docs/walkthrough.md) is a guided clone → fi
 tour. The [quickstart](docs/usage.md) is the reference (validate CLI, programmatic
 corpus API); to write or edit corpus assets, see [corpus authoring](docs/corpus-authoring.md).
 
-Runnable today with no model or network: the full question -> answer serve pipeline
-(retrieval, context assembly, template SQL generation, five-layer guardrails,
-bounded self-repair, reliability stamp) over the committed beer_factory DB, plus
-the curator scaffold, memory, eval, and the read-only audit surface (presenter
-view models + the `governed_bi.api` HTTP API). Core
-dependencies are intentionally minimal (pydantic, pyyaml, networkx, sqlglot);
-the Postgres/Redshift connectors are optional extras. The agent harnesses
-(server = LangGraph `StateGraph`, curator = deepagents, with LangChain model
-clients) live behind the `agents` extra and run on the deterministic offline
-model doubles without a key.
+Runnable today with no model or network: the deterministic serve flow's
+question -> answer pipeline (retrieval, context assembly, template SQL generation,
+five-layer guardrails, bounded self-repair, reliability stamp) over the committed
+beer_factory DB, plus the curator scaffold, memory, eval, and the read-only audit
+surface (presenter view models + the `governed_bi.api` HTTP API). The ADR-0002
+agentic serve core is moving toward key-required (its CI/offline determinism comes
+from a `FakeListChatModel` agent harness, not the template path); the P2 cutover
+that removes the offline template serve path is not yet done. Core dependencies
+are intentionally minimal (pydantic, pyyaml, networkx, sqlglot); the
+Postgres/Redshift connectors are optional extras. The agent harnesses (curator =
+deepagents, serve agentic core = `create_agent`, with LangChain model clients)
+live behind the `agents` extra; without a key they run on deterministic model
+doubles (`FakeListChatModel` / `StaticChatClient`).
 
 ### Models & configuration
 
@@ -165,14 +174,17 @@ export LANGFUSE_SECRET_KEY=sk-lf-...
 
 The model clients are imported lazily behind the `ChatClient` / `Embedder`
 protocols, and each has a deterministic offline default (`StaticChatClient`,
-`HashingEmbedder`) so tests and the default pipeline need neither the dependency
-nor a key. To use a real model, build a LangChain client and inject it:
+`HashingEmbedder`) so tests and the default deterministic flow need neither the
+dependency nor a key. To use a real model with the deterministic flow, build a
+LangChain client and inject it (the ADR-0002 agentic serve core, under
+`agent_serve`, is moving to key-required, see [ADR
+0002](docs/adr/0002-governed-agentic-serve-runtime.md)):
 
 ```python
 from governed_bi.config import load_settings
 from governed_bi.llm import LangChainChatClient, LangChainEmbedder
 from governed_bi.server import LlmSqlGenerator, SqlCache
-from governed_bi.server.graph import answer_question_graph  # LangGraph harness
+from governed_bi.server.graph import answer_question_graph  # deterministic flow harness (P2-removal)
 
 models = load_settings().models
 chat = LangChainChatClient.from_config(models)

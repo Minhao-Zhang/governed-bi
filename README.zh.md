@@ -7,7 +7,7 @@ _[English](README.md) · [简体中文](README.zh.md)_
 近期目标是打造一个**在 SQLite 上得到验证的展示系统**（对其他数据库引擎留有方言可插拔的接口），它从一批已知良好的种子查询出发、逐步扩展出一个可审阅的语义层——这是**种子辅助的语义层生长(seed-assisted semantic-layer growth)**，而非零先验的冷启动——并在自建的 [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) 数据集上进行评测（执行准确率）。企业级抽象（身份/RLS、人工把关、按范围限定的记忆/缓存）已经以预留接口(seam)的方式接入，但默认关闭；其**强制执行属于私有的企业分支，而非本引擎**。
 
 > **设计先行，且对成熟度诚实。** 设计（D1-D15）的进展远远领先于构建
-> （参见 [`docs/design-decisions.md`](docs/design-decisions.zh.md)）。确定性核心可以**离线**端到端运行；LangGraph/deepagents 两个 harness 已经构建，但仅在确定性的模型替身(model doubles)上运行过——**尚未针对任何真实模型跑过**。哪些已被证明、哪些仅是设计，见下方[状态表](#状态)。
+> （参见 [`docs/design-decisions.md`](docs/design-decisions.zh.md)）。确定性的 serve 流程可端到端运行，并保持为代码默认；serve 运行时如今正转向一个**受治理的 agentic 核心**（[ADR 0002](docs/adr/0002-governed-agentic-serve-runtime.md)，*提议中*），其 P0/P1 已落在默认关闭的 `agent_serve` 标志位之后。真实模型的 A/B 运行已经跑过（见 [agentic-serve A/B 结果](docs/plans/agentic-serve-ab-results.md)与[三臂实验](docs/plans/three-arm-experiment-results.md)）；切换到需要 key、单一路径运行时的 P2 尚未完成。哪些已被证明、哪些仅是设计，见下方[状态表](#状态)。
 
 ## 三句话讲清楚核心思路
 
@@ -17,17 +17,17 @@ _[English](README.md) · [简体中文](README.zh.md)_
 
 ## 状态
 
-哪些已被证明、哪些仅是设计、哪些只是预留接口。**最大的未决风险是：LLM 生成器与 curator 从未针对真实模型运行过**——下表所有测试都使用确定性离线替身，因此真实的生成/策展质量尚未被度量。
+哪些已被证明、哪些仅是设计、哪些只是预留接口。确定性的 serve 流程是代码默认；[ADR-0002](docs/adr/0002-governed-agentic-serve-runtime.md) 的受治理 agentic 核心是进行中的方向（P0/P1 已落在默认关闭的 `agent_serve` 标志位之后）。真实模型的 A/B 运行已经跑过，因此生成质量不再是完全未经度量的；参见所链接的结果文档。
 
 | 能力 | 状态 | 证据 |
 |---|---|---|
-| SQLite 受治理服务路径（检索 → 上下文 → SQL 生成 → 五层护栏 → 执行 → 标记） | **已构建** | `uv run --extra agents --extra api pytest`——321 个离线测试 |
+| SQLite 受治理服务流程（检索 → 上下文 → SQL 生成 → 五层护栏 → 执行 → 标记） | **已构建（代码默认）** | `uv run --extra agents --extra api pytest`，321+ 测试 |
+| 受治理的 agentic 服务核心（ADR 0002：`create_agent` + 治理 middleware + 只读工具） | **P0/P1 已落在 `agent_serve` 之后（提议中；默认关闭）** | [ADR 0002](docs/adr/0002-governed-agentic-serve-runtime.md)；`server/agent.py`、`tools.py`、`middleware.py`、`governance.py` |
 | corpus 契约 + 校验（类型化 YAML/MD、ID + 引用完整性） | **已构建** | `python -m governed_bi.corpus.cli`、CI |
 | 有界自修复 + 双轴可靠性标记 | **已构建** | `tests/test_server.py` |
 | 语义 SQL 缓存（命中时重新过护栏 + 重新执行，仅 `certified` 准入） | **已构建，默认关闭** | `tests/test_cache.py` |
-| LangGraph 服务 harness（与核心 flow 的 Answer 等价） | **已构建，仅离线** | `tests/test_serve_graph.py` 等价性 |
 | deepagents curator harness | **仅构建** | `tests/test_curator_deep_agent.py`（无真实运行） |
-| 真实模型的生成/策展质量 | **未证明** | 需要 `OPENAI_API_KEY` + 一次真实运行 |
+| 真实模型的服务生成（确定性流程 vs. agentic 核心 A/B） | **已运行** | [agentic-serve A/B 结果](docs/plans/agentic-serve-ab-results.md)、[三臂实验](docs/plans/three-arm-experiment-results.md) |
 | BIRD-Obfuscation 三臂评测（no-layer / curator / gold） | **部分** | curator 臂已离线评分；混淆 DB + 基线/gold 臂待做 |
 | `CorpusRelease`（不可变、按内容哈希锁定的服务发布） | **仅设计** | 未实现——见[设计决策](docs/design-decisions.zh.md) |
 | 身份 → 查询范围（RLS / 租户隔离） | **仅接口** | 单一身份的 SQLite 展示；强制执行属企业分支范围 |
@@ -65,7 +65,7 @@ src/governed_bi/
   graph/               done: FK graph projection + Steiner-tree join planning + FK join-neighborhood
   retrieval/           done: RVGD BM25 + grounding + vector channel (embedder-gated, RRF fusion)
   memory/              done: working memory (D8); episodic/correction protocol seams
-  server/              done: serve DAG, routing, context assembly, SQL gen (template + LLM), self-repair, SQL cache, stamp; LangGraph harness in graph.py
+  server/              done: serve flow (flow.py), routing, context assembly, SQL gen, self-repair, SQL cache, stamp; ADR-0002 agentic core: agent.py + tools.py (read-only governed tools) + middleware.py (guardrail+audit interception) + governance.py (shared checks/licensing); graph.py + template serve path slated for removal at P2
   curator/             + deep_agent.py: the deepagents build harness
   eval/                done: execution accuracy, arm harness, refuse-gate
   viz/                 done: read-only audit surface — UI-agnostic presenter view models (no UI dependency)
@@ -88,14 +88,16 @@ uv run pytest                             # run the test suite
 [快速上手](docs/usage.zh.md)是参考（validate CLI、可编程调用的 corpus API）；要编写或
 编辑 corpus 资产，参见 [corpus 编写](docs/corpus-authoring.zh.md)。
 
-今天就可以在没有模型、没有网络的情况下运行：在已提交的 beer_factory 数据库上，
-完整的问题到答案的 serve 流程（检索、上下文组装、模板化 SQL 生成、五层护栏、
-受限自修复、可靠性标记）都能跑通，此外还有 curator 脚手架、memory、eval，以及
-只读的审计面（presenter 视图模型 + `governed_bi.api` HTTP API）。核心依赖刻意保持精简（pydantic、pyyaml、networkx、sqlglot）；
-Postgres/Redshift 连接器是可选的 extra。两个 agent harness（server 是 LangGraph
-的 `StateGraph`，curator 是 deepagents，两者都配合 LangChain 模型客户端）都放在
-`agents` extra 背后，且在没有 key 的情况下，也能在确定性的离线模型替身(double)
-上运行。
+今天就可以在没有模型、没有网络的情况下运行：确定性 serve 流程的问题到答案流水线
+（检索、上下文组装、模板化 SQL 生成、五层护栏、受限自修复、可靠性标记）在已提交
+的 beer_factory 数据库上都能跑通，此外还有 curator 脚手架、memory、eval，以及只读
+的审计面（presenter 视图模型 + `governed_bi.api` HTTP API）。ADR-0002 的 agentic
+serve 核心正转向需要 key（它的 CI/离线确定性来自一个 `FakeListChatModel` agent
+harness，而非模板路径）；移除离线模板 serve 路径的 P2 切换尚未完成。核心依赖刻意
+保持精简（pydantic、pyyaml、networkx、sqlglot）；Postgres/Redshift 连接器是可选的
+extra。这些 agent harness（curator = deepagents，serve agentic 核心 = `create_agent`，
+两者都配合 LangChain 模型客户端）都放在 `agents` extra 背后；没有 key 时，它们在
+确定性的模型替身（`FakeListChatModel` / `StaticChatClient`）上运行。
 
 ### 模型与配置
 
@@ -131,14 +133,15 @@ export LANGFUSE_SECRET_KEY=sk-lf-...
 
 模型客户端是藏在 `ChatClient` / `Embedder` 协议(protocol)背后惰性导入的，且
 各自都有一个确定性的离线默认实现（`StaticChatClient`、`HashingEmbedder`），
-因此测试和默认流水线既不需要这个依赖，也不需要 key。若要使用真实模型，构建一个
-LangChain 客户端并注入即可：
+因此测试和默认的确定性流程既不需要这个依赖，也不需要 key。若要在确定性流程中使用
+真实模型，构建一个 LangChain 客户端并注入即可（ADR-0002 的 agentic serve 核心在
+`agent_serve` 之下正转向需要 key，见 [ADR 0002](docs/adr/0002-governed-agentic-serve-runtime.md)）：
 
 ```python
 from governed_bi.config import load_settings
 from governed_bi.llm import LangChainChatClient, LangChainEmbedder
 from governed_bi.server import LlmSqlGenerator, SqlCache
-from governed_bi.server.graph import answer_question_graph  # LangGraph harness
+from governed_bi.server.graph import answer_question_graph  # deterministic flow harness (P2-removal)
 
 models = load_settings().models
 chat = LangChainChatClient.from_config(models)

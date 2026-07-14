@@ -2,7 +2,7 @@
 
 _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 
-Settled decisions D1-D15 for the [Agentic BI System](system-overview.md), with
+Settled decisions D1-D16 for the [Agentic BI System](system-overview.md), with
 the alternatives considered and the trade-offs. The **ADR-grade** ones are hard
 to reverse. Treat them as ADRs.
 
@@ -275,3 +275,49 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
 - **The guardrail becomes schema-qualified and remains the sole table-scoping gate.** Retrieval and the L4 license scope span all schemas: a **schema router** shortlists the relevant schemas, then expands **along curated joins** so a bridge table sitting in a third schema is not dropped (a similarity-only shortlist would cause *spurious* refusals indistinguishable from the honest one above). The L4 allow-set becomes fully-qualified `schema.table` membership; a bare reference resolves only to a designated default schema and is **refused as ambiguous** when the licensed set holds that name in more than one schema — this is what forbids a self-authorized off-scope schema. L3 keys become three-part `schema.table.column`; L5 union-find keys on `schema.table`. The licensed *id* set was already schema-correct (IDs embed the schema), so this is a projection fix. Read-only, the forced row cap, and the statement timeout are untouched — they live in the connectors, not the guardrail — and `search_path` is **not** used (L2 forbids `Command`); full qualification is the mechanism.
 - **Alternatives:** a true three-level `connection → schema → table` model with cross-connection federation (rejected — one engine cannot join across physical connections; federation is a warehouse concern); auto-discovering cross-schema joins from FK metadata or name heuristics (rejected — cross-schema FKs rarely exist, and guessing them is the dominant error mode in FK-less settings); unconditional qualification (rejected — it breaks the SQLite/BIRD graded path).
 - **Consequence:** refines **D1**'s target (multi-schema-capable within one database, tenancy still out) and **D9**'s corpus contract (`db` → `schema`; the `<db>/` subtree becomes `<schema>/`). **Cross-schema serving is un-graded by BIRD** (**D14**), an accepted, documented limitation covered instead by guardrail unit tests, a two-schema Postgres integration fixture, and a CI check for `(schema, physical_name)` uniqueness and non-ambiguous allow-set keys. **Status: building in verified increments (from 2026-07-12).** Shipped: increment 1, the gateway foundation (span-all connector + `multi_schema` config); increment 2, the schema-qualified guardrail (L3/L4/L5 keyed on `schema.table`); increment 3, multi-schema as the Postgres/Redshift **serve default** (qualified SQL-gen + guardrails wired; SQLite stays single-schema for BIRD); increment 4, **missing-edge refusal** (cross-schema retrieval with no curated `JoinAsset` refuses before generate, with a D12 `clarification_hint`); increment 5, **API wire rename** (`db` → `schema` on presenter/OpenAPI responses and `?schema=` filters only — no `?db=` alias; graph **nodes** carry `schema`); increment 6, **server-side graph scoping** (`?schema=` / `focus` / `radius` / `node_budget` on `/graph` and `/knowledge-graph`, plus KG `kinds=`, with `boundary` + `meta.scope` envelope; param-less remains the full graph); increment 7, **on-disk YAML rename** (`TableAsset` / `FewShotAsset` / skill frontmatter field `db` → `schema`; `load_corpus`/`write_corpus`serve always loads every `corpus/<schema>/` subtree); and increment 8, **join-aware schema router** (BM25 schema shortlist + curated cross-schema join expansion before RVGD on the multi-schema path; single-schema/SQLite unchanged). Still deferred: server `/search` (client Fuse remains default per Q6), and collapsing `DataSourceConfig.db` (BIRD db_id / default write subtree) into the pin field. The LLM coarse-to-fine pruning pass stays deferred behind the pluggable generator seam.
+
+## D16: Governed Agentic Serve Core
+
+> **Proposed (ADR-grade, 2026-07-13).** Full rationale, invariants, and phased
+> migration in [ADR 0002](adr/0002-governed-agentic-serve-runtime.md); A/B results
+> in [agentic-serve-ab-results.md](plans/agentic-serve-ab-results.md).
+>
+> Serve is reworked from a deterministic single-shot DAG into a **governed
+> agentic core**: an outer deterministic `StateGraph` (thin governance rails)
+> wrapping an inner bounded `create_agent` reasoning loop over **read-only,
+> guardrailed tools**. This **reverses** the prior "serve stays a deterministic
+> DAG, never an autonomous ReAct loop" invariant (pipeline-design §5/§8) and
+> replaces it with **"serve's *authority* is deterministic; its *reasoning* may be
+> agentic."** Autonomy is granted for *how to find the answer*, never for *what may
+> execute*, *what is trusted*, or *what goes unrecorded*.
+
+- **Governance moves from convention to construction.** Every data touch passes
+  through `AgentMiddleware` (`wrap_tool_call` normalizes → runs the L1-L5 guardrail
+  → writes an **append-only audit ledger** entry; `wrap_model_call` scopes tools by
+  identity). The agent never calls the gateway directly and never sets its own
+  stamp: `safety_clearance` / `semantic_assurance` are computed by deterministic
+  `finalize` code from what actually happened. Enforcement and audit share one
+  interception point, so you can never execute (or refuse) without a record.
+- **Rollout is flag-gated and deterministic-by-default.** The agentic path lands
+  behind an `agent_serve` flag; the deterministic flow stays the default until the
+  P2 cutover, when `TemplateSqlGenerator` (serve), the `flow.py` monolith, and the
+  stale `server/graph.py` are deleted and an LLM key becomes mandatory. CI/offline
+  determinism moves to a `FakeListChatModel` agent harness; equivalence tests
+  change from "same `Answer`" to "same governance invariants."
+- **Relation to D5.** D5's **bounded self-repair loop** becomes the agent's
+  tool-reflection loop, with the `run_query` attempt cap (=3) enforced in
+  `wrap_tool_call` instead of a hand-rolled `while` loop. D5's **invariants are
+  preserved**: the refuse-gate still runs before the agent; safety stays hard
+  (L2 policy blocks are non-repairable hard stops, mirroring `_NON_REPAIRABLE_LAYERS`);
+  the two-axis stamp is unchanged with `safety_clearance` binary-hard and only
+  `semantic_assurance` graded; the gold-leakage boundary and pinned-corpus serving
+  (D11/D13) hold.
+- **Alternatives:** keep the 1-node wrapper (no observability/retry/HITL, blind
+  generation persists); a hand-wired StateGraph tool loop instead of
+  `create_agent` + middleware (unnecessary bespoke wiring once middleware was
+  verified to enforce the guardrail at the tool boundary); keep the deterministic
+  template path in parallel (the same two-implementations drift trap). See ADR 0002.
+- **Status: Proposed; P0/P1 landed behind the `agent_serve` flag, P2 cutover pending.** Mechanism verified by a 2026-07-13 spike
+  (`wrap_tool_call` state updates + ledger writes on the pinned stack); Amendment 1
+  adds a deterministic `assemble` node that seeds the agent with the curated
+  semantic layer so it cannot regress below the flow.

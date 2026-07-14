@@ -2,7 +2,7 @@
 
 _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 
-面向[Agentic BI 系统](system-overview.zh.md)的已决策事项 D1-D15，并附上已考虑过的
+面向[Agentic BI 系统](system-overview.zh.md)的已决策事项 D1-D16，并附上已考虑过的
 备选方案与权衡。标记为**ADR 级**的决策难以逆转，请将其视为 ADR。
 
 ## D1：目标
@@ -380,3 +380,43 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 - **护栏变为按 schema 限定，并仍是唯一的表范围关卡。** 检索与 L4 授权范围覆盖所有 schema：一个 **schema 路由器**先筛选出相关 schema，再**沿着已策展的连接**扩展，使位于第三个 schema 的桥接表不被丢弃（若只按相似度筛选，会造成*虚假*拒答，与上文那种诚实拒答无法区分）。L4 许可集变为完全限定的 `schema.table` 成员判定；一个裸引用只解析到某个指定的默认 schema，并在许可集中该名称跨多个 schema 出现时**因歧义而被拒**——这正是禁止自我授权到范围外 schema 的机制。L3 键变为三段式 `schema.table.column`；L5 的并查集按 `schema.table` 建键。许可的 *ID* 集本就已按 schema 正确（ID 已嵌入 schema），所以这是一次投影修正。只读、强制行数上限与语句超时保持不变——它们位于连接器而非护栏——且**不**使用 `search_path`（L2 禁止 `Command`）；完全限定才是所用机制。
 - **备选方案：** 一个真正三级的 `连接 → schema → 表` 模型并支持跨连接联邦（否决——单个引擎无法跨物理连接做连接；联邦是数仓的问题）；从外键元数据或名称启发式自动发现跨 schema 连接（否决——跨 schema 外键极少存在，而猜测它们在无外键场景中正是主导错误模式）；无条件限定（否决——它会破坏 SQLite/BIRD 被评分的那条路径）。
 - **结果：** 精化了 **D1** 的目标（在一个数据库内具备多 schema 能力，租户隔离仍在范围外）与 **D9** 的 corpus 契约（`db` → `schema`；`<db>/` 子树变为 `<schema>/`）。**跨 schema 服务不被 BIRD 评分**（**D14**），这是一个被接受、已记录的局限，转而以护栏单元测试、一个双 schema 的 Postgres 集成夹具，以及一项校验 `(schema, physical_name)` 唯一性与许可集键无歧义的 CI 检查来覆盖。**状态：正按已验证的增量推进（自 2026-07-12）。** 已发布：增量 1，网关基础（全 schema 覆盖连接器 + `multi_schema` 配置）；增量 2，按 schema 限定的护栏（L3/L4/L5 以 `schema.table` 建键）；增量 3，Postgres/Redshift **默认多 schema 服务**（限定 SQL + 护栏已接入；SQLite 保持单 schema 以服务 BIRD）；增量 4，**缺失边拒答**（跨 schema 检索无策展 `JoinAsset` 时在 generate 前拒答，并带 D12 `clarification_hint`）；增量 5，**API 线上字段更名**（presenter/OpenAPI 响应与过滤只用 `schema` / `?schema=`——硬切断，无 `?db=` 别名；图**节点**已带 `schema`）；增量 6，**服务端图划范围**（`/graph` 与 `/knowledge-graph` 上的 `?schema=` / `focus` / `radius` / `node_budget`，KG 另有 `kinds=`，以及 `boundary` + `meta.scope` 信封；无参仍为全图）；增量 7，**磁盘 YAML 更名**（`TableAsset` / `FewShotAsset` / skill frontmatter 字段 `db` → `schema`；`load_corpus`/`write_corpus`；serve 始终加载每一个 `corpus/<schema>/` 子树；以及增量 8，**连接感知 schema 路由器**（多 schema 路径上，在 RVGD 之前做 BM25 schema 短名单 + 沿策展跨 schema join 扩展；单 schema/SQLite 不变）。仍推迟：服务端 `/search`（按 Q6，客户端 Fuse 仍为默认），以及将 `DataSourceConfig.db`（BIRD db_id / 默认写入子树）并入 pin 字段。LLM 由粗到细的裁剪 pass 仍推迟在可插拔生成器接缝之后。
+
+## D16：受治理的 Agentic 服务核心
+
+> **提议中（ADR 级，2026-07-13）。** 完整的理据、不变式与分阶段迁移见
+> [ADR 0002](adr/0002-governed-agentic-serve-runtime.md)；A/B 结果见
+> [agentic-serve-ab-results.md](plans/agentic-serve-ab-results.md)。
+>
+> serve 从一张确定性的单次 DAG 重做为一个**受治理的 agentic 核心**：外层是一张
+> 确定性的 `StateGraph`（很薄的治理护栏），包裹着内层一个有界的 `create_agent`
+> 推理循环，后者运行在**只读、带护栏的工具**之上。这**逆转**了此前“serve 保持
+> 为一张确定性 DAG，绝不做自主 ReAct 循环”的不变式（pipeline-design §5/§8），
+> 代之以**“serve 的*权限*是确定性的；它的*推理*可以是 agentic 的。”** 自主权
+> 只授予*如何找到答案*，绝不授予*什么可以执行*、*什么被信任*、或*什么可以不被
+> 记录*。
+
+- **治理从约定变为构造。** 每一次数据触碰都经过 `AgentMiddleware`
+  （`wrap_tool_call` 先归一化 → 运行 L1-L5 护栏 → 写入一条**仅追加的审计账本**
+  记录；`wrap_model_call` 按身份为工具划范围）。agent 从不直接调用 gateway，也
+  从不设置自己的标记：`safety_clearance` / `semantic_assurance` 由确定性的
+  `finalize` 代码依据实际发生的事情计算得出。执行与审计共用同一个拦截点，所以
+  你绝不可能不留记录就执行（或拒答）。
+- **铺开受标志位门控，默认仍是确定性的。** agentic 路径落在一个 `agent_serve`
+  标志位之后；确定性流程保持为默认，直到 P2 切换为止；届时
+  `TemplateSqlGenerator`（serve）、`flow.py` 巨石以及陈旧的 `server/graph.py`
+  都会被删除，LLM key 变为必需。CI/离线的确定性改由一个 `FakeListChatModel`
+  agent harness 提供；等价性测试从“同一个 `Answer`”改为“同一套治理不变式”。
+- **与 D5 的关系。** D5 的**有界自修复循环**变为 agent 的工具反思循环，其中
+  `run_query` 的尝试上限（=3）由 `wrap_tool_call` 强制，而不再是手写的 `while`
+  循环。D5 的**不变式得到保留**：拒答关卡仍在 agent 之前运行；安全仍是硬性的
+  （L2 策略阻断是不可修复的硬停，对应 `_NON_REPAIRABLE_LAYERS`）；双轴标记保持
+  不变，`safety_clearance` 是二元硬判定，只有 `semantic_assurance` 被分级；gold
+  泄漏边界与锁定 corpus 的服务（D11/D13）依然成立。
+- **备选方案：** 保留单节点包装器（没有可观测性/重试/HITL，盲目生成依旧存在）；
+  用一张手工接线的 StateGraph 工具循环替代 `create_agent` + middleware（一旦已
+  验证 middleware 能在工具边界强制护栏，这种定制接线就没有必要）；并行保留确定性
+  模板路径（还是那个两套实现漂移的陷阱）。参见 ADR 0002。
+- **状态：提议中；P0/P1 已落在 `agent_serve` 标志位之后，P2 切换待定。** 机制已由
+  一次 2026-07-13 的 spike 验证（在锁定的技术栈上，`wrap_tool_call` 的 state
+  更新 + 账本写入）；修订 1 增加了一个确定性的 `assemble` 节点，用经过策展的语义
+  层为 agent 提供初始输入，使它无法退化到低于原流程的水平。

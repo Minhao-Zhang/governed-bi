@@ -5,6 +5,14 @@ join" behavior of **D15** and extends the reliability model of **D2**. The
 decisions marked **(ADR candidate)** below should graduate to numbered ADRs
 (D16+) in [design-decisions.md](design-decisions.md) once code lands._
 
+> **§5 and the §8 "deterministic DAG / never ReAct" invariant are superseded by
+> [ADR 0002](adr/0002-governed-agentic-serve-runtime.md).** Serve is being
+> reworked into a *governed agentic core*: its **authority stays deterministic**
+> (middleware-intercepted read-only tools + a deterministic reliability stamp),
+> but its **reasoning may be agentic** (a bounded `create_agent` loop). The safety
+> invariants below (L2 + refuse-gate hard, two-axis stamp, gold-leakage boundary,
+> pinned corpus) are preserved.
+
 This document records the intended end-to-end shape of the system as agreed in
 design discussion. It is the target, not a description of current committed
 code; a **Delta from today** section at the end lists what still has to be
@@ -174,7 +182,13 @@ the response and UI.
 - **Gold SQL/answers never reach the serve path**, and the SME never sees them
   (leakage boundary).
 - **Facts stay deterministic**; Inference stays labeled as inferred.
-- **Serve stays a deterministic DAG**; LLM appears only as bounded node
-  operations, never as an autonomous loop.
+- **Serve's *authority* is deterministic; its *reasoning* may be agentic**
+  ([ADR 0002](adr/0002-governed-agentic-serve-runtime.md)). This replaces the
+  earlier "deterministic DAG, never an autonomous loop" invariant: the LLM may
+  now run a bounded agentic loop, but every data touch passes through
+  middleware-intercepted read-only tools and the reliability stamp is set by
+  deterministic code the agent cannot influence. Governance is enforced by
+  construction (interception + audit ledger + deterministic stamp), not by
+  forbidding autonomy.
 - **Production inference reads a reviewed, merged, pinned corpus revision** — the
   live working copy is never served in production.

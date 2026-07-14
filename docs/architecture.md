@@ -9,7 +9,7 @@ in [Design decisions](design-decisions.md).
 ## 1. Design Spine (Non-negotiables)
 
 1. **Two planes.** A semantic/control plane holds business meaning as versioned config and markdown, published offline via PR/CI. It stays separate from a data plane that executes only guardrail-passed SQL. Meaning is defined once and owned by humans.
-2. **Deterministic DAG + conditional routing, not autonomous ReAct.** The question can be wide, but the SQL must be narrow. Routing is hard-wired and auditable. Free exploration is confined to a controlled pocket.
+2. **Serve's *authority* is deterministic; its *reasoning* may be agentic.** The question can be wide, but the SQL must be narrow. Authority (what may execute, what is trusted, what goes recorded) is hard-wired and auditable; the reasoning that finds the answer may run as a bounded agentic loop confined to governed, read-only tools. [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) (Proposed) reverses the earlier "never an autonomous ReAct loop" form of this spine, separating autonomy-in-reasoning from autonomy-in-authority; only the latter stays forbidden.
 3. **Fail-closed.** Out-of-scope, missing-coverage, or tripped-guardrail returns a refusal or a clarifying question, never a confident wrong number.
 
 ## 2. Two Harnesses over One Shared Substrate
@@ -24,7 +24,7 @@ Curator and server have opposite risk profiles. They use different harnesses but
 | Autonomy | maximum (explore) | minimum (fail-closed) |
 | Harness | `deepagents` | `LangGraph` + middleware |
 
-*Built:* both harnesses exist behind the `agents` extra, over LangChain-backed model clients. Server = `server.graph` (a LangGraph `StateGraph` DAG, Answer-equivalent to the plain `answer_question`); curator = `curator.deep_agent` (a deepagents agent over Facts-profiling + read-only-probe tools, construction verified offline, live run model-gated).
+*Built:* both harnesses exist behind the `agents` extra, over LangChain-backed model clients. Server today is the deterministic flow (`server.flow::answer_question`, the code default); `server.graph` is a stale, unused LangGraph `StateGraph` DAG (was Answer-equivalent to `answer_question`, has since drifted) slated for deletion. The [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) direction (Proposed) is a third path, `server.agent` (thin outer deterministic rails wrapping a `create_agent` reasoning loop governed by middleware), landed behind the `agent_serve` config flag (default off); both serve paths call one shared governance core. The first live A/B against the deterministic flow is recorded in [agentic-serve A/B results](plans/agentic-serve-ab-results.md). Curator = `curator.deep_agent` (a deepagents agent over Facts-profiling + read-only-probe tools, construction verified offline, live run model-gated).
 
 > **Curator = permanent maintainer**
 >
@@ -71,7 +71,7 @@ Fork only the harness, but share the substrate. Sharing has three directions, an
 
 Markdown-first. The graph earns its place only for joins and lineage. A heavy LLM knowledge graph is deferred. Rationale: curation and structure beat representation sophistication. Anthropic's null result showed raw-corpus grep moved accuracy <1pt. See the *Data Agent Memory Design Overview*.
 
-*Built today:* retrieval runs the pure-Python **BM25** lexical channel plus deterministic grounding over the corpus relationships, and a **vector / semantic channel** (embeddings, fused with BM25 via Reciprocal Rank Fusion) behind an injected `Embedder` seam, off unless an embedder is passed. The FK graph is the in-memory `networkx` projection that drives Steiner join planning; Neo4j stays the enterprise-scale projection. Model choices (the OpenAI `gpt-5.5` LLM and `text-embedding-3-small` embedder, both swappable) live in a project config file (`governed_bi.toml`, parsed by `config.load_settings`); the API key is read from the environment, never stored. The clients live in `governed_bi.llm` behind `ChatClient` / `Embedder` protocols, each with a deterministic offline default so the pipeline runs with no model or network.
+*Built today:* retrieval runs the pure-Python **BM25** lexical channel plus deterministic grounding over the corpus relationships, and a **vector / semantic channel** (embeddings, fused with BM25 via Reciprocal Rank Fusion) behind an injected `Embedder` seam, off unless an embedder is passed. The FK graph is the in-memory `networkx` projection that drives Steiner join planning; Neo4j stays the enterprise-scale projection. Model choices (the OpenAI `gpt-5.5` LLM and `text-embedding-3-small` embedder, both swappable) live in a project config file (`governed_bi.toml`, parsed by `config.load_settings`); the API key is read from the environment, never stored. The clients live in `governed_bi.llm` behind `ChatClient` / `Embedder` protocols, each with a deterministic offline default so the pipeline runs with no model or network. (The no-model *serve* mode is on its way out: per [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) P2, the agentic core requires a real key and CI determinism moves to a `FakeListChatModel` agent harness rather than an offline serve default.)
 
 > **Corpus contract = Git+YAML typed assets, curator-authored / human-audited (D9)**
 >
@@ -117,6 +117,27 @@ Guardrails, in order (fail-closed on any, all five enforced): syntax → policy 
 > un-vetted SQL never runs. It stops early when the generator repeats a query
 > (no progress) and fails closed after a small cap. A repaired answer is stamped
 > `lineage`, not `governed`.
+>
+> On the [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) agentic path
+> (Proposed; `agent_serve` flag) this hand-rolled `while attempts < 3` loop is
+> replaced by the agent's own tool-reflection loop: `run_query` is a governed,
+> read-only tool, its per-turn attempt cap enforced in `wrap_tool_call`, with
+> failures returned to the agent as a `ToolMessage` to reflect on. The guardrail
+> and stamp are unchanged (the same shared governance core runs at the tool
+> boundary), so autonomy widens for *how to find the answer*, never for what may
+> execute.
+
+> **Governance ledger (agentic path)**
+>
+> On the [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) path,
+> enforcement and audit share one interception point: the `wrap_tool_call`
+> middleware that guardrails a call also records it. Each turn accumulates an
+> append-only ledger, one entry per governed action (refuse-gate result, tools
+> offered, each exploration's surfaced / `excluded`-filtered assets, each
+> `run_query`'s normalized SQL + per-layer L1-L5 verdict + licensed tables +
+> result meta, and the stamp derivation). You cannot execute (or refuse) without
+> a record. It lives on `Answer` provenance now; a durable sink is a seam for
+> later.
 
 > **Refusal & best-effort (two concurrent gates, not a waterfall)**
 >

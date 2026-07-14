@@ -2,6 +2,17 @@
 
 _[English](langgraph-rework-plan.md) · [简体中文](langgraph-rework-plan.zh.md)_
 
+> **Partially superseded by [ADR 0002](adr/0002-governed-agentic-serve-runtime.md).**
+> The LangGraph-Server scaffolding this plan builds (the server, threads /
+> checkpoints, the custom read routes (`api/routes.py`), and the custom-event
+> streaming rail) is **reused unchanged**. What is replaced is the *packaging*:
+> the single `answer` node that wraps `flow.py::answer_question` (the "one node
+> runs the whole pipeline" design described below) gives way to the ADR 0002
+> **`assemble → agent_core`** rails (a deterministic context-assembly node feeding
+> a governed `create_agent` loop). Consequently `server/flow.py` and
+> `server/graph.py` are **slated for deletion at P2**, not "untouched" as §1 and §7
+> state.
+
 The implementation plan for the runtime decision in
 [ADR 0001](adr/0001-langgraph-server-chat-runtime.md). It turns the chat surface
 into a **LangGraph Server** graph consumed by the LangChain **`useStream`** SDK,

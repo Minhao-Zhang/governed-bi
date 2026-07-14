@@ -2,6 +2,9 @@
 
 _[English](langgraph-rework-plan.md) · [简体中文](langgraph-rework-plan.zh.md)_
 
+> **已被 [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) 部分取代。**
+> 本方案搭起的 LangGraph-Server 脚手架(server、threads / checkpoints、自定义只读路由(`api/routes.py`),以及自定义事件的流式通道)**原样复用**。被替换的是*封装方式*:那个包裹 `flow.py::answer_question` 的单一 `answer` 节点(即下文所述「一个节点跑完整条流水线」的设计)让位给 ADR 0002 的 **`assemble → agent_core`** 轨道(一个确定性的上下文装配节点,喂给一个受治理的 `create_agent` 循环)。因此 `server/flow.py` 与 `server/graph.py` **将在 P2 被删除**,而非 §1 与 §7 所说的「保持不动」。
+
 这是 [ADR 0001](adr/0001-langgraph-server-chat-runtime.zh.md) 里那条运行时决策的落地方案。做法是把 Chat 这一层改成一张跑在 **LangGraph Server** 上的图,前端用 LangChain 的 **`useStream`** SDK 消费;现有的 corpus / schema / 审计这些只读接口,作为自定义路由挂在同一台 server 上。配合看 [ui-frontend-handoff.zh.md](ui-frontend-handoff.zh.md)(前端契约)和 [ui-frontend-design.zh.md](ui-frontend-design.zh.md)(设计取舍)。
 
 状态:已实现(2026-07-10)。阶段 1 到 6 均已落地:阶段回调(`server/flow.py`)、chat 图(`api/graph_app.py`)、`langgraph.json` + 自定义路由(`api/routes.py`)+ dev 编辑接口 + 完整知识图、按需追踪(`obs.py`),以及本文档与契约的同步。已离线验证(350+ 测试、ruff 干净),并在 `langgraph dev` 下端到端跑通(自定义路由有响应、`serve` 图已注册)。下面的小节编号就是那份分阶段计划,如今可当作对已建成部分的描述来读。
