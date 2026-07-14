@@ -126,19 +126,37 @@ def build_chat_graph(stack: "ServeStack"):
         except Exception as exc:
             raise RuntimeError("database unavailable") from exc
         try:
-            result = answer_question(
-                question,
-                stack.identity,
-                corpus=stack.corpus_server,
-                gateway=Gateway(connector),
-                settings=stack.settings,
-                session_id=thread_id,
-                sql_generator=stack.generator,
-                embedder=stack.embedder,
-                narrator=stack.narrator,
-                working_memory=memory,
-                on_event=writer,
-            )
+            gateway = Gateway(connector)
+            if stack.use_agent_serve:
+                from governed_bi.server.agent import answer_question_agent
+
+                result = answer_question_agent(
+                    question,
+                    stack.identity,
+                    corpus=stack.corpus_server,
+                    gateway=gateway,
+                    settings=stack.settings,
+                    session_id=thread_id,
+                    model=stack.chat_model,
+                    embedder=stack.embedder,
+                    narrator=stack.narrator,
+                    working_memory=memory,
+                    on_event=writer,
+                )
+            else:
+                result = answer_question(
+                    question,
+                    stack.identity,
+                    corpus=stack.corpus_server,
+                    gateway=gateway,
+                    settings=stack.settings,
+                    session_id=thread_id,
+                    sql_generator=stack.generator,
+                    embedder=stack.embedder,
+                    narrator=stack.narrator,
+                    working_memory=memory,
+                    on_event=writer,
+                )
         finally:
             connector.close()
 

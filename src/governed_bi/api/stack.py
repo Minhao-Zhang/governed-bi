@@ -51,6 +51,12 @@ class ServeStack:
     can_edit: bool = False  # corpus editing is exposed (dev file-write)
     edit_mode: str | None = None  # "file" (dev) | "pr" (prod, deferred) | None
     datasource: DataSourceConfig | None = None  # which DB the serve path executes against
+    chat_model: Any | None = None  # raw LangChain BaseChatModel for agent_serve (P1)
+
+    @property
+    def use_agent_serve(self) -> bool:
+        """True when the flagged agentic path should run (key + flag + model)."""
+        return bool(self.settings.agent_serve and self.has_live_model and self.chat_model is not None)
 
     def open_connector(self, *, connect_timeout: float | None = None) -> "Connector":
         """Open a fresh read-only connector for one request (caller closes it).
@@ -108,11 +114,12 @@ class ServeStack:
             raise RuntimeError(f"datasource {label} unavailable: {exc}") from exc
 
 
-def _build_model_stack(settings: Settings) -> tuple[Any, Any, Any, str | None, bool]:
-    """(generator, embedder, narrator, model_name, has_live_model).
+def _build_model_stack(settings: Settings) -> tuple[Any, Any, Any, str | None, bool, Any]:
+    """(generator, embedder, narrator, model_name, has_live_model, chat_model).
 
     Live LangChain clients when a key + the ``agents`` extra are present; else the
     deterministic offline default (template generator, no embedder/narrator).
+    ``chat_model`` is the raw LangChain model for the agentic serve path.
     """
     if settings.models.api_key():
         try:
@@ -132,6 +139,7 @@ def _build_model_stack(settings: Settings) -> tuple[Any, Any, Any, str | None, b
                 LlmAnswerNarrator(chat),
                 models.llm_model,
                 True,
+                chat.model,
             )
         except Exception:  # missing agents extra / bad config -> offline fallback
             # A key was set (live intended) but the stack failed to build; make the
@@ -142,7 +150,7 @@ def _build_model_stack(settings: Settings) -> tuple[Any, Any, Any, str | None, b
                 settings.models.api_key_env,
                 exc_info=True,
             )
-    return (None, None, None, None, False)
+    return (None, None, None, None, False, None)
 
 
 def build_stack(settings: Settings | None = None) -> ServeStack:
@@ -158,7 +166,9 @@ def build_stack(settings: Settings | None = None) -> ServeStack:
 
     # Corpus: always every schema subtree under the root (D15).
     corpus_full = load_corpus(root)
-    generator, embedder, narrator, model_name, has_live = _build_model_stack(settings)
+    generator, embedder, narrator, model_name, has_live, chat_model = _build_model_stack(
+        settings
+    )
 
     can_edit = settings.allow_edit
 
@@ -189,6 +199,7 @@ def build_stack(settings: Settings | None = None) -> ServeStack:
         can_edit=can_edit,
         edit_mode="file" if can_edit else None,
         datasource=datasource,
+        chat_model=chat_model,
     )
     # Fail fast when TOML points at Postgres/Redshift that isn't up (or a missing
     # SQLite file). Without this, the first chat turn hangs on TCP connect.

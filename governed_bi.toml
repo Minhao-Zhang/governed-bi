@@ -17,6 +17,7 @@ environment = "dev"
 # auto_accept_corpus = true
 # single_all_access_identity = true
 # hard_block_suspect_columns = true
+# agent_serve = false  # ADR 0002: governed agentic core (requires API key)
 
 [paths]
 # Corpus root (D9/D13). Relative values resolve against the repo root, not CWD,

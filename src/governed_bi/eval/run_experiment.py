@@ -24,7 +24,7 @@ from ..corpus import load_corpus
 from ..corpus.schemas import ReliabilityStatus, TableAsset
 from ..gateway import Gateway, Identity
 from ..gateway.connectors.postgres import PostgresConnector
-from .arms import _touches_suspect, flow_solver
+from .arms import _touches_suspect, agent_solver, flow_solver
 from .baseline_solver import no_layer_solver
 from .bird_loader import load_bird_items
 from .hash_grade import (
@@ -188,6 +188,7 @@ def run_experiment(
     out_dir: Path,
     max_agent_steps: int = 25,
     skip_agent: bool = False,
+    agent_serve: bool = False,
     limit: int | None = None,
     resume_a2: Path | None = None,
 ) -> dict[str, Any]:
@@ -244,6 +245,7 @@ def run_experiment(
         settings,
         hard_block_suspect_columns=False,
         grade_semantic_failures=True,
+        agent_serve=agent_serve,
     )
 
     # Live self-check: re-exec a sample of gold SQL and confirm hash_grade matches
@@ -357,9 +359,15 @@ def run_experiment(
 
     corpus2 = load_corpus(corpus_a2, schema=db_id)
     corpus3 = load_corpus(corpus_a3, schema=db_id)
-    gen = LlmSqlGenerator(chat, dialect="postgres", multi_schema=False)
-    a2 = flow_solver(corpus2, gateway, settings, identity, sql_generator=gen)
-    a3 = flow_solver(corpus3, gateway, settings, identity, sql_generator=gen)
+    # A/B: the ADR-0002 agentic serve core (flagged) vs. the deterministic flow.
+    # Only the layered arms (curator/gold) route through serve; A1 is model-only.
+    if settings.agent_serve and lc_model is not None:
+        a2 = agent_solver(corpus2, gateway, settings, identity, model=lc_model)
+        a3 = agent_solver(corpus3, gateway, settings, identity, model=lc_model)
+    else:
+        gen = LlmSqlGenerator(chat, dialect="postgres", multi_schema=False)
+        a2 = flow_solver(corpus2, gateway, settings, identity, sql_generator=gen)
+        a3 = flow_solver(corpus3, gateway, settings, identity, sql_generator=gen)
 
     suspect_a1 = trap_cols
     suspect_a2 = _suspect_from_corpus(corpus_a2, db_id) | trap_cols
@@ -424,6 +432,8 @@ def run_experiment(
         "created_at_utc": _utc_ts(),
         "max_agent_steps": max_agent_steps,
         "skip_agent": skip_agent,
+        "agent_serve": agent_serve,
+        "serve_path": "agent_core" if agent_serve else "flow",
         "model": settings.models.llm_model,
     }
     (run_root / "manifest.json").write_text(
@@ -454,6 +464,12 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Deterministic seed-only curation + StaticChatClient (offline smoke)",
     )
+    parser.add_argument(
+        "--agent-serve",
+        action="store_true",
+        help="Route the curator/gold arms through the ADR-0002 agentic serve core "
+        "(create_agent + governance middleware) instead of the deterministic flow",
+    )
     parser.add_argument("--limit", type=int, default=None, help="Cap test questions")
     parser.add_argument(
         "--resume-a2",
@@ -473,6 +489,7 @@ def main(argv: list[str] | None = None) -> None:
         out_dir=run_dir,
         max_agent_steps=args.max_agent_steps,
         skip_agent=args.skip_agent,
+        agent_serve=args.agent_serve,
         limit=args.limit,
         resume_a2=args.resume_a2,
     )

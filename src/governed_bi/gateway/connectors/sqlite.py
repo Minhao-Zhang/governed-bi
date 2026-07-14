@@ -29,7 +29,12 @@ class SqliteConnector(Connector):
         if read_only and not is_memory and not self.path.exists():
             # Do not silently create a new DB when a read-only open was requested.
             raise FileNotFoundError(f"database not found: {self.path}")
-        self._conn = sqlite3.connect(":memory:" if is_memory else str(self.path))
+        self._conn = sqlite3.connect(
+            ":memory:" if is_memory else str(self.path),
+            # LangGraph ToolNode runs tools on a worker thread; allow the same
+            # connection (we still serialize tool calls via parallel_tool_calls=False).
+            check_same_thread=False,
+        )
         if read_only:
             # Enforced by SQLite; writes then raise. Portable across platforms,
             # unlike a mode=ro file URI with Windows drive-letter paths.

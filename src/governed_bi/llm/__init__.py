@@ -19,15 +19,19 @@ from .client import (
     StaticChatClient,
     cosine,
 )
+from .fake import FakeToolModel, ai_tool_turn, tool_call
 from .langchain_client import LangChainChatClient, LangChainEmbedder
 
 __all__ = [
     "ChatClient",
     "Embedder",
+    "FakeToolModel",
     "HashingEmbedder",
     "LangChainChatClient",
     "LangChainEmbedder",
     "OpenAiEmbedder",
     "StaticChatClient",
+    "ai_tool_turn",
     "cosine",
+    "tool_call",
 ]

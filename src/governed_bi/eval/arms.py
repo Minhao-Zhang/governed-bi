@@ -168,3 +168,60 @@ def flow_solver(
             return answer.sql
 
     return _FlowSolver()
+
+
+def agent_solver(
+    corpus: "Corpus",
+    gateway: "Gateway",
+    settings: "Settings",
+    identity: "Identity",
+    *,
+    model,
+    embedder=None,
+    session_id: str = "eval",
+) -> Solver:
+    """A :class:`Solver` that drives the ADR-0002 agentic serve core (ledger arm).
+
+    Mirrors :func:`flow_solver` but routes through ``answer_question_agent`` (the
+    ``create_agent`` + governance-middleware path). The outer rails graph is built
+    once and invoked per question; each ``solve`` is independent (no working memory
+    / cache), matching the single-round eval contract. ``last_solve_meta`` carries
+    the same audit fields as ``flow_solver`` plus the governance-ledger length.
+    """
+    from ..server.agent import build_serve_rails
+
+    graph = build_serve_rails(
+        corpus=corpus,
+        gateway=gateway,
+        settings=settings,
+        identity=identity,
+        model=model,
+        embedder=embedder,
+        session_id=session_id,
+    )
+
+    class _AgentSolver:
+        def __init__(self) -> None:
+            self.last_solve_meta: dict = {}
+
+        def solve(self, question: str) -> str | None:
+            final = graph.invoke({"question": question, "session_id": session_id})
+            answer = final.get("answer")
+            if answer is None:
+                self.last_solve_meta = {"refused_by": "no_coverage"}
+                return None
+            prov = dict(answer.provenance or {})
+            self.last_solve_meta = {
+                "refused_by": prov.get("refused_by"),
+                "failed_layer": prov.get("failed_layer"),
+                "graded_delivery": bool(prov.get("graded_delivery")),
+                "coverage_best_effort": bool(prov.get("coverage_best_effort")),
+                "tier": answer.tier.value,
+                "semantic_assurance": answer.semantic_assurance.value,
+                "safety_clearance": answer.safety_clearance,
+                "attempts": prov.get("attempts"),
+                "ledger_len": len(prov.get("governance_ledger") or []),
+            }
+            return answer.sql
+
+    return _AgentSolver()

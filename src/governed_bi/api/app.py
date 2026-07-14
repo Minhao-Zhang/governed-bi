@@ -391,18 +391,35 @@ def create_app(stack: ServeStack | None = None):
             logger.exception("data source unavailable")
             raise HTTPException(status_code=503, detail="database unavailable")
         try:
-            answer = answer_question(
-                req.question,
-                stack.identity,
-                corpus=stack.corpus_server,
-                gateway=Gateway(connector),
-                settings=stack.settings,
-                session_id=req.session_id,
-                sql_generator=stack.generator,
-                embedder=stack.embedder,
-                narrator=stack.narrator,
-                working_memory=memory,
-            )
+            gateway = Gateway(connector)
+            if stack.use_agent_serve:
+                from ..server.agent import answer_question_agent
+
+                answer = answer_question_agent(
+                    req.question,
+                    stack.identity,
+                    corpus=stack.corpus_server,
+                    gateway=gateway,
+                    settings=stack.settings,
+                    session_id=req.session_id,
+                    model=stack.chat_model,
+                    embedder=stack.embedder,
+                    narrator=stack.narrator,
+                    working_memory=memory,
+                )
+            else:
+                answer = answer_question(
+                    req.question,
+                    stack.identity,
+                    corpus=stack.corpus_server,
+                    gateway=gateway,
+                    settings=stack.settings,
+                    session_id=req.session_id,
+                    sql_generator=stack.generator,
+                    embedder=stack.embedder,
+                    narrator=stack.narrator,
+                    working_memory=memory,
+                )
         except Exception:
             # The serve flow is read-only and guardrailed by construction; a raise
             # here is model/IO failure at its edges (embed / generate). Contain it:
