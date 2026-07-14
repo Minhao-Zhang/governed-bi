@@ -32,6 +32,34 @@ _[English](server.md) · [简体中文](server.zh.md)_
 
 **自修复（第 7-9 步构成一个有界循环）。** 生成、护栏与执行以 **agent 自身的工具反思循环（tool-reflection loop）**方式运行：一次失败的 `run_query`（被护栏拦截的裁决或一次执行报错）会作为 `ToolMessage` 返回，供 agent 读取并重试，每次尝试都会重新过护栏，因此未经审查的 SQL 永远不会被执行。`run_query` 的**尝试次数上限**（3）在 `wrap_tool_call` 中强制执行，外层图的 `recursion_limit` 则限界整轮对话；一旦耗尽，则回落到分级交付（graded delivery）或拒答。经过修复的答案的 `semantic_assurance` 为 `heuristic`（档位 `lineage`），绝不会是 `certified`/`governed`。**并非所有失败都可修复：** 一个硬性策略/DDL 阻断（L2 `policy_blacklist`）是硬性停止，绝不回传劝导，因为把它回传给 agent 只是施压让它规避策略；范围失败（L3/L4）按决定保持可重试（FK 邻域 + 重试是刻意的降低误拒机制；[D11](design-decisions.zh.md#d11开放决策外部评审2026-07-09)）。这能够从畸形的 SQL 中恢复，且从不放行未经检查的查询；但它无法捕捉*看似合理却错误*的 SQL（语法有效、在许可清单内，但计算逻辑是错的），这正是双轴标记以及拒答 / 仅 SQL 路径存在的原因。护栏是安全/治理层面的关卡，不是正确性的判定者（oracle）。
 
+运行时应答路径概览:
+
+```mermaid
+flowchart TD
+    Ask["Question + identity + session_id"] --> Ingest["Ingest<br/>attach working memory + RLS scope"]
+    Ingest --> Bind["Query understanding<br/>bind terms to canonical assets"]
+    Bind --> Route{"Intent route<br/>nl2sql / kpi_lookup / knowledge_qa / deep_analysis<br/>shared pipeline; per-route retrieval + memory budgets"}
+    Route --> Cache{"SQL semantic cache<br/>cosine gate 0.92?"}
+
+    Cache -->|hit| Reexecute["Re-execute cached SQL<br/>as current identity"]
+    Cache -->|miss| Assemble["Assemble<br/>RVGD retrieval, Steiner-tree join planning,<br/>seed Governed context + licensed table scope"]
+    Assemble --> AgentCore{"agent_core: create_agent tool loop<br/>GovernanceMiddleware.wrap_tool_call gates every call"}
+    Bind --> RefuseGate{"Refuse-gate<br/>negative example match?"}
+
+    RefuseGate -->|match| Refuse["Refuse / clarify<br/>fail closed"]
+    RefuseGate -->|no match| AgentCore
+    AgentCore -->|search_corpus / inspect_schema / sample_rows| AgentCore
+    AgentCore -->|run_query blocked, attempts remain| AgentCore
+    AgentCore -->|run_query blocked: attempt cap or recursion_limit exhausted| Refuse
+    AgentCore -->|run_query passes five guardrails| Execute["Gateway.execute()<br/>read-only, forced LIMIT/timeout, audit"]
+    Reexecute --> Execute
+    Execute --> Result["Rows + provenance"]
+    Result --> Stamp["Finalize<br/>two-axis reliability stamp"]
+    Stamp --> User["Answer to user"]
+    Execute --> Audit["Audit/replay log"]
+    Stamp --> CacheWrite["Cache successful SQL text<br/>TTL 15 minutes"]
+```
+
 ## Agentic 路径（ADR 0002）
 
 SQL 生成与执行的中段（上文第 6-9 步）就是一个有界的 `create_agent` 推理循环。确定性的**轨道（rails）**包裹着它：`ingest → refuse_gate → prepare → cache → assemble → agent_core`，随后是一个确定性的 `finalize`（双轴标记 + 缓存写回），或者分级交付 / 拒答。refuse-gate 仍然在 agent **之前**运行，标记仍然由 agent 无法影响的确定性代码计算。

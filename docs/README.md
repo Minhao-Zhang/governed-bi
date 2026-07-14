@@ -15,13 +15,12 @@ self-built [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) 
 
 1. [System overview](system-overview.md): what this is, the two harnesses, status.
 2. [Architecture](architecture.md): the full design (spine, kernel, services, storage, flow, eval, environments).
-3. [Diagrams](diagrams.md): Mermaid architecture, data-flow, and user sequence diagrams.
-4. [Design decisions](design-decisions.md): D1-D15 as ADRs, with alternatives and trade-offs.
-5. [Asset schemas](asset-schemas.md): the per-asset YAML field spec (Facts / Inference / Audit tiers).
-6. [Curator](curator.md): the build-side proposer + adversary loop.
-7. [Server](server.md): the serve-side LangGraph flow + guardrails.
-8. [Viz](viz.md): the read-only audit surface — the presenter view models plus the `governed_bi.api` HTTP API to browse the layer and chat with the governed server (the interactive UI is a separate project).
-9. [Glossary](glossary.md): canonical terms.
+3. [Design decisions](design-decisions.md): D1-D15 as ADRs, with alternatives and trade-offs.
+4. [Asset schemas](asset-schemas.md): the per-asset YAML field spec (Facts / Inference / Audit tiers).
+5. [Curator](curator.md): the build-side proposer + adversary loop.
+6. [Server](server.md): the serve-side LangGraph flow + guardrails.
+7. [Viz](viz.md): the read-only audit surface — the presenter view models plus the `governed_bi.api` HTTP API to browse the layer and chat with the governed server (the interactive UI is a separate project).
+8. [Glossary](glossary.md): canonical terms.
 
 [External design sources](references.md) that ground the design.
 
@@ -45,7 +44,6 @@ today (the corpus layer and the dev workflow):
 | Doc | Package area |
 |---|---|
 | [Asset schemas](asset-schemas.md), [Design decisions](design-decisions.md) D9 | `src/governed_bi/corpus/` |
-| [Diagrams](diagrams.md) | End-to-end map across `src/governed_bi/` and `corpus/` |
 | [Curator](curator.md) | `src/governed_bi/curator/` |
 | [Server](server.md), [Architecture](architecture.md) §6 | `src/governed_bi/server/`, `gateway/`, `graph/`, `retrieval/`, `memory/` |
 | [Architecture](architecture.md) §8 | `src/governed_bi/eval/` |

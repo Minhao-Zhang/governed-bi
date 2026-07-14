@@ -69,6 +69,29 @@ Both the proposer's claim/evidence **and** the adversary's verdict/reasons land 
 
 **Done-enough criterion:** `CI green ∧ (train-EX plateaued ∨ cap)`. The built `curate` loop enforces the machine-checkable half (`CI green`, capped rounds); the train-EX half arrives with the self-eval seam (step 4).
 
+The build loop at a glance:
+
+```mermaid
+flowchart TD
+    Inputs["Per-DB inputs<br/>live catalog/data + train seed queries"] --> Profile["Profile facts<br/>programmatic table/column facts"]
+    Profile --> Propose["Proposer<br/>descriptions, joins, terms,<br/>metrics, rules, skills, caveats"]
+    Propose --> Adversary{"Adversary refutes<br/>model-authored claims"}
+    Adversary -->|reject| Propose
+    Adversary -->|revise| Propose
+    Adversary -->|accept| Draft["Draft corpus<br/>proposed to draft"]
+    Draft --> SelfEval["Self-eval on train questions<br/>run server pipeline; measure EX"]
+    SelfEval --> Plateau{"Train EX plateau<br/>or cap hit?"}
+    Plateau -->|no| Diagnose["Diagnose failures<br/>patch assets/skills"]
+    Diagnose --> Propose
+    Plateau -->|yes| Validate["validate_corpus()<br/>CI reference integrity"]
+    Validate --> Green{"CI green?"}
+    Green -->|no| Diagnose
+    Green -->|yes| Emit["Emit corpus/&lt;db&gt;/"]
+    Emit --> Mode{"Environment"}
+    Mode -->|dev / BIRD| AutoAccept["Auto-accept draft"]
+    Mode -->|prod / enterprise| PullRequest["Open PR for human certification"]
+```
+
 ## Reliability inference (Phase 2 detail)
 
 *(Built: `LlmProposer` flags `suspect` + a "DO NOT USE" note from the table's Facts. The structured-signal scoring below is the fuller design the prompt approximates.)* The curator flags an unreliable column via **general data-quality anomalies, not BIRD-trap-specific detectors** (P2, so it transfers to an enterprise deployment; BIRD's traps merely validate that the signals fire). Each signal contributes to a confidence score. A column is marked `suspect` only above a threshold, and the adversary independently tries to refute each caveat before it commits.

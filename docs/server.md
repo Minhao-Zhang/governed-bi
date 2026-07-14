@@ -38,6 +38,34 @@ The outer rails and the agent's `GovernanceMiddleware` **share one governance co
 
 **Self-repair (steps 7-9 as a bounded loop).** Generation, guardrails, and execution run as the agent's own **tool-reflection loop**: a failed `run_query` (a blocked guardrail verdict or an execution error) returns as a `ToolMessage` the agent can read and retry, each attempt re-guardrailed so un-vetted SQL never runs. A `run_query` **attempt cap** (3) is enforced in `wrap_tool_call`, and the outer graph's `recursion_limit` bounds the whole turn; exhaustion falls through to graded delivery or refuse. A repaired answer has `heuristic` semantic assurance (tier `lineage`), never `certified`/`governed`. **Not every failure is repairable:** a hard policy/DDL block (L2 `policy_blacklist`) is a hard stop, never coached back, because feeding it back to the agent is only pressure to evade the policy. Scope failures (L3/L4) stay retryable by decision (the FK-neighborhood + retry is deliberate false-refusal reduction; [D11](design-decisions.md#d11-external-review-2026-07-09)). This recovers malformed SQL without ever emitting an unchecked query; it cannot catch *plausible-but-wrong* SQL (valid, in-allowlist, but the wrong computation), which is exactly why the two-axis stamp and the refuse / SQL-only paths exist. The guardrails are a safety/governance gate, not a correctness oracle.
 
+The runtime answer path at a glance:
+
+```mermaid
+flowchart TD
+    Ask["Question + identity + session_id"] --> Ingest["Ingest<br/>attach working memory + RLS scope"]
+    Ingest --> Bind["Query understanding<br/>bind terms to canonical assets"]
+    Bind --> Route{"Intent route<br/>nl2sql / kpi_lookup / knowledge_qa / deep_analysis<br/>shared pipeline; per-route retrieval + memory budgets"}
+    Route --> Cache{"SQL semantic cache<br/>cosine gate 0.92?"}
+
+    Cache -->|hit| Reexecute["Re-execute cached SQL<br/>as current identity"]
+    Cache -->|miss| Assemble["Assemble<br/>RVGD retrieval, Steiner-tree join planning,<br/>seed Governed context + licensed table scope"]
+    Assemble --> AgentCore{"agent_core: create_agent tool loop<br/>GovernanceMiddleware.wrap_tool_call gates every call"}
+    Bind --> RefuseGate{"Refuse-gate<br/>negative example match?"}
+
+    RefuseGate -->|match| Refuse["Refuse / clarify<br/>fail closed"]
+    RefuseGate -->|no match| AgentCore
+    AgentCore -->|search_corpus / inspect_schema / sample_rows| AgentCore
+    AgentCore -->|run_query blocked, attempts remain| AgentCore
+    AgentCore -->|run_query blocked: attempt cap or recursion_limit exhausted| Refuse
+    AgentCore -->|run_query passes five guardrails| Execute["Gateway.execute()<br/>read-only, forced LIMIT/timeout, audit"]
+    Reexecute --> Execute
+    Execute --> Result["Rows + provenance"]
+    Result --> Stamp["Finalize<br/>two-axis reliability stamp"]
+    Stamp --> User["Answer to user"]
+    Execute --> Audit["Audit/replay log"]
+    Stamp --> CacheWrite["Cache successful SQL text<br/>TTL 15 minutes"]
+```
+
 ## The agentic path (ADR 0002)
 
 The SQL-gen-and-execute middle (steps 6-9 above) is a bounded `create_agent` reasoning loop. The deterministic **rails** wrap it: `ingest → refuse_gate → prepare → cache → assemble → agent_core`, then a deterministic `finalize` (two-axis stamp + cache write) or graded-delivery / refuse. The refuse-gate still runs **before** the agent, and the stamp is still computed by deterministic code the agent cannot influence.

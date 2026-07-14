@@ -10,13 +10,12 @@ _[English](README.md) · [简体中文](README.zh.md)_
 
 1. [系统总览](system-overview.zh.md)：这是什么、两个 harness、当前状态。
 2. [架构](architecture.zh.md)：完整设计（主干(spine)、内核(kernel)、服务、存储、流程、评测、环境）。
-3. [图表](diagrams.zh.md)：Mermaid 架构图、数据流图与用户序列图。
-4. [设计决策](design-decisions.zh.md)：以 ADR 形式呈现的 D1-D15，包含备选方案与权衡。
-5. [资产模式](asset-schemas.zh.md)：每个资产的 YAML 字段规范（Facts 层 / Inference 层 / Audit 层）。
-6. [Curator](curator.zh.md)：构建侧的 proposer + adversary 循环。
-7. [Server](server.zh.md)：服务侧的 LangGraph 流程 + 护栏(guardrails)。
-8. [Viz](viz.zh.md)：只读审计面(surface)——presenter 视图模型加上 `governed_bi.api` HTTP API，用于浏览语义层并与受治理 server 对话（交互式 UI 是一个独立项目）。
-9. [术语表](glossary.zh.md)：规范术语。
+3. [设计决策](design-decisions.zh.md)：以 ADR 形式呈现的 D1-D15，包含备选方案与权衡。
+4. [资产模式](asset-schemas.zh.md)：每个资产的 YAML 字段规范（Facts 层 / Inference 层 / Audit 层）。
+5. [Curator](curator.zh.md)：构建侧的 proposer + adversary 循环。
+6. [Server](server.zh.md)：服务侧的 LangGraph 流程 + 护栏(guardrails)。
+7. [Viz](viz.zh.md)：只读审计面(surface)——presenter 视图模型加上 `governed_bi.api` HTTP API，用于浏览语义层并与受治理 server 对话（交互式 UI 是一个独立项目）。
+8. [术语表](glossary.zh.md)：规范术语。
 
 支撑本设计的[外部设计资料来源](references.zh.md)。
 
@@ -39,7 +38,6 @@ _[English](README.md) · [简体中文](README.zh.md)_
 | 文档 | 对应的包区域 |
 |---|---|
 | [资产模式](asset-schemas.zh.md)、[设计决策](design-decisions.zh.md) D9 | `src/governed_bi/corpus/` |
-| [图表](diagrams.zh.md) | 横跨 `src/governed_bi/` 与 `corpus/` 的端到端映射 |
 | [Curator](curator.zh.md) | `src/governed_bi/curator/` |
 | [Server](server.zh.md)、[架构](architecture.zh.md) §6 | `src/governed_bi/server/`、`gateway/`、`graph/`、`retrieval/`、`memory/` |
 | [架构](architecture.zh.md) §8 | `src/governed_bi/eval/` |

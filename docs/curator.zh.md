@@ -99,6 +99,29 @@ Proposer 的论断/证据**以及** adversary 的裁定/理由，都会落入该
 构建的 `curate` 循环强制执行了可机器检查的那一半（`CI green`、有上限的轮次）；
 train-EX 的那一半则要靠 self-eval 这个 seam（第 4 步）才能实现。
 
+构建循环概览:
+
+```mermaid
+flowchart TD
+    Inputs["Per-DB inputs<br/>live catalog/data + train seed queries"] --> Profile["Profile facts<br/>programmatic table/column facts"]
+    Profile --> Propose["Proposer<br/>descriptions, joins, terms,<br/>metrics, rules, skills, caveats"]
+    Propose --> Adversary{"Adversary refutes<br/>model-authored claims"}
+    Adversary -->|reject| Propose
+    Adversary -->|revise| Propose
+    Adversary -->|accept| Draft["Draft corpus<br/>proposed to draft"]
+    Draft --> SelfEval["Self-eval on train questions<br/>run server pipeline; measure EX"]
+    SelfEval --> Plateau{"Train EX plateau<br/>or cap hit?"}
+    Plateau -->|no| Diagnose["Diagnose failures<br/>patch assets/skills"]
+    Diagnose --> Propose
+    Plateau -->|yes| Validate["validate_corpus()<br/>CI reference integrity"]
+    Validate --> Green{"CI green?"}
+    Green -->|no| Diagnose
+    Green -->|yes| Emit["Emit corpus/&lt;db&gt;/"]
+    Emit --> Mode{"Environment"}
+    Mode -->|dev / BIRD| AutoAccept["Auto-accept draft"]
+    Mode -->|prod / enterprise| PullRequest["Open PR for human certification"]
+```
+
 ## 可靠性推断（Phase 2 细节）
 
 *(已构建：`LlmProposer` 从该表的 Facts 出发标记 `suspect` 并附一条“DO NOT
