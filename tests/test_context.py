@@ -13,7 +13,7 @@ from governed_bi.corpus import load_corpus
 from governed_bi.graph import build_graph, plan_joins
 from governed_bi.retrieval import retrieve
 from governed_bi.server.context import PromptContext, assemble_context
-from governed_bi.server.flow import _licensed_table_ids
+from governed_bi.server.governance import _licensed_table_ids
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 
@@ -35,6 +35,59 @@ def _context(corpus, question):
         join_ids = []
     licensed_ids = _licensed_table_ids(corpus, graph, retrieval, join_ids)
     return assemble_context(corpus, retrieval, licensed_table_ids=licensed_ids), retrieval
+
+
+def test_governance_rules_reach_context_by_licensed_scope():
+    # A global rule always applies; a table-scoped rule applies only when its
+    # table is licensed. This is the wiring that carries Phase B SME caveats into
+    # the agent's seeded context (they were previously dropped by retrieval).
+    from governed_bi.corpus import Corpus
+    from governed_bi.corpus.schemas import (
+        Column,
+        LogicalType,
+        Reliability,
+        RuleAsset,
+        RuleKind,
+        TableAsset,
+    )
+    from governed_bi.retrieval import RetrievalResult
+
+    def _tbl(tid: str) -> TableAsset:
+        return TableAsset(
+            id=tid,
+            schema="s",
+            physical_name=tid.split("_")[-1],
+            columns=[
+                Column(
+                    physical_name="x",
+                    physical_type="INTEGER",
+                    logical_type=LogicalType.integer,
+                    nullable=True,
+                    is_unique=False,
+                    reliability=Reliability(),
+                )
+            ],
+        )
+
+    licensed_tbl, other_tbl = _tbl("tbl_s_orders"), _tbl("tbl_s_other")
+    corpus = Corpus(
+        assets=[
+            licensed_tbl,
+            other_tbl,
+            RuleAsset(id="rule_global", kind=RuleKind.business_rule, scope=[], statement="always exclude test rows"),
+            RuleAsset(id="rule_scoped", kind=RuleKind.context, scope=["tbl_s_orders"], statement="amount is in cents"),
+            RuleAsset(id="rule_offscope", kind=RuleKind.context, scope=["tbl_s_other"], statement="should not appear"),
+        ]
+    )
+    retrieval = RetrievalResult(question="q", table_ids=["tbl_s_orders"])
+    ctx = assemble_context(corpus, retrieval, licensed_table_ids=frozenset({"tbl_s_orders"}))
+
+    assert any("always exclude test rows" in r for r in ctx.rules)  # global
+    assert any("amount is in cents" in r for r in ctx.rules)  # scoped to a licensed table
+    assert not any("should not appear" in r for r in ctx.rules)  # scoped elsewhere
+    block = ctx.render()
+    assert "## Governance rules (must honour)" in block
+    assert "amount is in cents" in block
 
 
 def test_allowed_table_names_match_licensed_physical_names(corpus):

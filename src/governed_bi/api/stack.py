@@ -23,7 +23,6 @@ if TYPE_CHECKING:
     from ..gateway.connectors.base import Connector
     from ..llm import Embedder
     from ..server import AnswerNarrator
-    from ..server.sqlgen import SqlGenerator
 
 logger = logging.getLogger("governed_bi.api")
 
@@ -38,7 +37,6 @@ class ServeStack:
     dialect: str
     sqlite_path: Path
     identity: Identity
-    generator: "SqlGenerator | None"
     embedder: "Embedder | None"
     narrator: "AnswerNarrator | None"
     model_name: str | None
@@ -51,12 +49,7 @@ class ServeStack:
     can_edit: bool = False  # corpus editing is exposed (dev file-write)
     edit_mode: str | None = None  # "file" (dev) | "pr" (prod, deferred) | None
     datasource: DataSourceConfig | None = None  # which DB the serve path executes against
-    chat_model: Any | None = None  # raw LangChain BaseChatModel for agent_serve (P1)
-
-    @property
-    def use_agent_serve(self) -> bool:
-        """True when the flagged agentic path should run (key + flag + model)."""
-        return bool(self.settings.agent_serve and self.has_live_model and self.chat_model is not None)
+    chat_model: Any | None = None  # raw LangChain BaseChatModel driving the agent core
 
     def open_connector(self, *, connect_timeout: float | None = None) -> "Connector":
         """Open a fresh read-only connector for one request (caller closes it).
@@ -114,43 +107,40 @@ class ServeStack:
             raise RuntimeError(f"datasource {label} unavailable: {exc}") from exc
 
 
-def _build_model_stack(settings: Settings) -> tuple[Any, Any, Any, str | None, bool, Any]:
-    """(generator, embedder, narrator, model_name, has_live_model, chat_model).
+def _build_model_stack(settings: Settings) -> tuple[Any, Any, str | None, bool, Any]:
+    """(embedder, narrator, model_name, has_live_model, chat_model).
 
-    Live LangChain clients when a key + the ``agents`` extra are present; else the
-    deterministic offline default (template generator, no embedder/narrator).
-    ``chat_model`` is the raw LangChain model for the agentic serve path.
+    Live LangChain clients when a key + the ``agents`` extra are present; else all
+    ``None`` / ``has_live_model=False``. The agentic serve core needs a real
+    model, so a no-model stack builds fine for the read-only audit API but cannot
+    answer questions — the serve entry points fail closed (``make_graph`` raises
+    at startup, ``/chat`` returns 503). ``chat_model`` is the raw LangChain model
+    the agent core drives; the narrator wraps the same client.
     """
     if settings.models.api_key():
         try:
             from ..llm import LangChainChatClient, LangChainEmbedder
-            from ..server import LlmAnswerNarrator, LlmSqlGenerator
+            from ..server import LlmAnswerNarrator
 
             models = settings.models
-            ds = settings.datasource
             chat = LangChainChatClient.from_config(models)
             return (
-                LlmSqlGenerator(
-                    chat,
-                    dialect=ds.kind,
-                    multi_schema=ds.is_multi_schema(),
-                ),
                 LangChainEmbedder.from_config(models),
                 LlmAnswerNarrator(chat),
                 models.llm_model,
                 True,
                 chat.model,
             )
-        except Exception:  # missing agents extra / bad config -> offline fallback
+        except Exception:  # missing agents extra / bad config -> no-model stack
             # A key was set (live intended) but the stack failed to build; make the
-            # silent downgrade to offline observable rather than a mystery.
+            # silent downgrade observable rather than a mystery.
             logger.warning(
                 "%s is set but the live model stack failed to build; "
-                "falling back to the offline profile",
+                "serve will fail closed until it is fixed",
                 settings.models.api_key_env,
                 exc_info=True,
             )
-    return (None, None, None, None, False, None)
+    return (None, None, None, False, None)
 
 
 def build_stack(settings: Settings | None = None) -> ServeStack:
@@ -166,9 +156,7 @@ def build_stack(settings: Settings | None = None) -> ServeStack:
 
     # Corpus: always every schema subtree under the root (D15).
     corpus_full = load_corpus(root)
-    generator, embedder, narrator, model_name, has_live, chat_model = _build_model_stack(
-        settings
-    )
+    embedder, narrator, model_name, has_live, chat_model = _build_model_stack(settings)
 
     can_edit = settings.allow_edit
 
@@ -187,7 +175,6 @@ def build_stack(settings: Settings | None = None) -> ServeStack:
         dialect=datasource.kind,  # sqlite | postgres | redshift (matches the Dialect enum)
         sqlite_path=sqlite_path,
         identity=Identity(user="demo", all_access=True),
-        generator=generator,
         embedder=embedder,
         narrator=narrator,
         model_name=model_name,

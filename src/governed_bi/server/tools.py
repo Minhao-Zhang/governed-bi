@@ -124,6 +124,26 @@ def render_terms(corpus: "Corpus", term_ids: list) -> list[str]:
     return lines
 
 
+def render_rules(corpus: "Corpus", rule_ids: list) -> list[str]:
+    """Governance rules / caveats (Phase B SME output) that bear on the query.
+
+    A rule's ``scope`` names the asset ids it applies to (empty = global); its
+    ``statement`` is the human caveat the model must honour (e.g. a trap column
+    or an annotation correction). Surfacing these is what carries the curator's
+    Phase B governance decisions into the agent's context.
+    """
+    from ..corpus.schemas import RuleAsset
+
+    lines: list[str] = []
+    for rid in rule_ids:
+        r = corpus.by_id(rid)
+        if isinstance(r, RuleAsset):
+            kind = getattr(r.kind, "value", r.kind)
+            scope = f" (applies to: {', '.join(r.scope)})" if r.scope else ""
+            lines.append(f"  [{kind}] {r.statement}{scope}")
+    return lines
+
+
 def render_result(result) -> str:
     """Compact executed-result text for tool feedback."""
     if result.row_count == 0:
@@ -181,6 +201,9 @@ def make_tools(
         tm = render_terms(corpus, r.term_ids)
         if tm:
             out += ["", "terms:", *tm]
+        rl = render_rules(corpus, r.rule_ids)
+        if rl:
+            out += ["", "governance rules (must honour):", *rl]
         return "\n".join(out)
 
     @tool

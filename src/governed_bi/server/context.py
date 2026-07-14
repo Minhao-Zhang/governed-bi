@@ -32,6 +32,7 @@ from ..corpus.schemas import (
     JoinAsset,
     MetricAsset,
     ReliabilityStatus,
+    RuleAsset,
     TableAsset,
     TermAsset,
 )
@@ -122,6 +123,9 @@ class PromptContext:
     few_shots: list[FewShotView] = field(default_factory=list)
     skills: list[SkillView] = field(default_factory=list)
     caveats: list[str] = field(default_factory=list)
+    # Governance rules (Phase B SME caveats) in scope for the licensed tables:
+    # global rules always, table-scoped rules when their table is licensed.
+    rules: list[str] = field(default_factory=list)
     # Prior (role, content) turns from working memory (D8), oldest first. Empty
     # only for a single-round eval call; every conversational caller passes the
     # session history so a follow-up ("what about last year?") resolves against it.
@@ -296,6 +300,19 @@ def assemble_context(
                 note = col.caveat or "flagged unreliable"
                 caveats.append(f"{tv.physical_name}.{col.physical_name}: {note}")
 
+    # Governance rules (Phase B SME caveats): a global rule (empty scope) always
+    # applies; a scoped rule applies when any of its scope asset ids is in the
+    # licensed set. Rules are "always honour", so this is independent of lexical
+    # retrieval — the licensed scope is what gates them into the prompt.
+    rules: list[str] = []
+    for asset in corpus.assets:
+        if not isinstance(asset, RuleAsset):
+            continue
+        if asset.scope and not any(sid in licensed_table_ids for sid in asset.scope):
+            continue
+        kind = asset.kind.value if hasattr(asset.kind, "value") else asset.kind
+        rules.append(f"({kind}) {asset.statement}")
+
     return PromptContext(
         question=retrieval.question,
         tables=tables,
@@ -305,6 +322,7 @@ def assemble_context(
         few_shots=few_shots,
         skills=skills,
         caveats=caveats,
+        rules=rules,
         conversation=list(history),
         multi_schema=multi_schema,
     )
@@ -387,6 +405,12 @@ def _render(ctx: PromptContext) -> str:
         lines.append("## Reliability caveats (DO NOT USE these columns)")
         for c in ctx.caveats:
             lines.append(f"  {c}")
+
+    if ctx.rules:
+        lines.append("")
+        lines.append("## Governance rules (must honour)")
+        for r in ctx.rules:
+            lines.append(f"  {r}")
 
     if ctx.few_shots:
         lines.append("")

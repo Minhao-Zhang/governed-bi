@@ -21,6 +21,7 @@ from langgraph.graph import END, START, StateGraph
 from ..corpus.schemas import TableAsset
 from ..gateway import column_allowlist
 from ..graph import build_graph, detect_missing_join_path, plan_joins
+from ..obs import tracing_callbacks
 from ..retrieval import filter_corpus_for_retrieval, retrieve, route_schemas
 from .answer import refusal
 from .context import assemble_context
@@ -38,7 +39,6 @@ from .governance import (
 )
 from .middleware import (
     AGENT_RECURSION_LIMIT,
-    RUN_QUERY_CAP,
     GovernanceHardStop,
     GovernanceMiddleware,
     licensed_physical_names,
@@ -464,6 +464,12 @@ def build_serve_rails(
                 allowed=e.entry.get("allowed"),
             )
             raise
+        except GraphRecursionError as e:
+            # Step budget exhausted: carry the accumulated ledger (from the last
+            # streamed `values` chunk) to the caller so the audit trail survives
+            # the exhaustion path instead of being reported as empty (Inv #10).
+            e.partial_state = final_state  # type: ignore[attr-defined]
+            raise
         return final_state
 
     def agent_core_node(state: ServeRailsState) -> dict:
@@ -495,7 +501,10 @@ def build_serve_rails(
                     "licensed": seed_licensed,
                     "ledger": [],
                 },
-                {"recursion_limit": AGENT_RECURSION_LIMIT},
+                {
+                    "recursion_limit": AGENT_RECURSION_LIMIT,
+                    "callbacks": tracing_callbacks(),  # Langfuse; [] when unconfigured
+                },
             )
         except GovernanceHardStop as e:
             ledger = list(e.ledger)
@@ -513,9 +522,15 @@ def build_serve_rails(
             )
             events.final(ans)
             return {"answer": ans, "outcome": "refuse"}
-        except GraphRecursionError:
+        except GraphRecursionError as e:
             # Step budget exhausted without a final answer → fail closed (§6),
-            # never crash the caller (the eval arm / a live turn).
+            # never crash the caller (the eval arm / a live turn). Recover the
+            # accumulated ledger from the exhausted stream (attached by
+            # `_stream_agent`) so the refusal still carries its real audit trail
+            # and attempt count, not an empty placeholder (Inv #10).
+            partial = getattr(e, "partial_state", None) or {}
+            ledger = list(partial.get("ledger") or [])
+            attempts = sum(1 for x in ledger if x.get("action") == "run_query")
             ans = _finish_unsuccessful(
                 settings=settings,
                 gateway=gateway,
@@ -524,10 +539,14 @@ def build_serve_rails(
                     "refused_by": "exhausted",
                     "escalation": _ESCALATION_NO_COVERAGE,
                     "reason": f"agent exceeded {AGENT_RECURSION_LIMIT}-step budget",
-                    "governance_ledger": [],
+                    "governance_ledger": ledger,
                 },
-                attempts=RUN_QUERY_CAP,
-                base_provenance={**state["base_provenance"], "recursion_exhausted": True},
+                attempts=attempts,
+                base_provenance={
+                    **state["base_provenance"],
+                    "recursion_exhausted": True,
+                    "governance_ledger": ledger,
+                },
                 question=question,
                 narrator=narrator,
                 on_event=None,
@@ -677,7 +696,8 @@ def answer_question_agent(
         {
             "question": question,
             "session_id": session_id,
-        }
+        },
+        config={"callbacks": tracing_callbacks()},  # Langfuse; [] when unconfigured
     )
     answer = final.get("answer")
     if answer is None:

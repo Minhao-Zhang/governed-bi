@@ -1,22 +1,25 @@
 """Live-model smoke run — the one action that punctures the self-consistent bubble.
 
-Everything in the test suite uses deterministic offline doubles, so real
-generation quality is unmeasured. This script swaps in the real OpenAI-backed
-LangChain clients (per ``governed_bi.toml``) and runs the existing eval harness
-over the committed, un-obfuscated beer_factory DB + hand-authored corpus:
+Everything in the test suite uses deterministic offline doubles (``FakeToolModel``),
+so real generation quality is unmeasured. This script swaps in the real
+OpenAI-backed LangChain clients (per ``governed_bi.toml``) and runs the existing
+eval harness over the committed, un-obfuscated beer_factory DB + hand-authored
+corpus, through the **agentic serve core** (ADR 0002 — the only serve path):
 
-  - the **curator arm** (server flow + LLM SQL generator): execution accuracy,
-    decoy-touch rate, governed-path adherence over ``BEER_FACTORY_EVAL``;
-  - the **refuse-gate**: refusal accuracy on the unanswerable set + the
-    false-refusal cost on the answerable set;
+  - the **curator arm** (``agent_solver`` = create_agent + governance middleware):
+    execution accuracy, decoy-touch rate, governed-path adherence over
+    ``BEER_FACTORY_EVAL``;
+  - the **refuse-gate** (``agent_refuser``): refusal accuracy on the unanswerable
+    set + the false-refusal cost on the answerable set;
   - a few **sample answers** printed with the two-axis stamp.
 
 This is a *smoke test of the real path*, not the headline benchmark: the corpus,
 gold set, and DB are all self-authored and un-obfuscated, so a high EX here only
 proves the plumbing works end-to-end against a live model. The real moat proof is
-the obfuscated BIRD three-arm eval (still pending the obfuscated DBs).
+the obfuscated BIRD three-arm eval.
 
-Run it (needs the ``agents`` extra + a key; real API spend, ~a dozen small calls):
+Run it (needs the ``agents`` extra + a key; real API spend — the agent path makes
+several small model calls per question):
 
     export OPENAI_API_KEY=sk-...
     uv run --extra agents python scripts/live_smoke.py
@@ -66,13 +69,13 @@ def main() -> None:
         BEER_FACTORY_EVAL,
         BEER_FACTORY_UNANSWERABLE,
         Arm,
+        agent_refuser,
+        agent_solver,
         eval_refuse_gate,
-        flow_refuser,
-        flow_solver,
         run_arm,
     )
     from governed_bi.gateway import Gateway, Identity, SqliteConnector, column_allowlist
-    from governed_bi.server import LlmSqlGenerator, answer_question
+    from governed_bi.server.agent import answer_question_agent
 
     models = load_settings(REPO_ROOT / "governed_bi.toml").models
     print(f"models: llm={models.llm_model} (effort={models.llm_reasoning_effort}) "
@@ -80,7 +83,7 @@ def main() -> None:
 
     chat = LangChainChatClient.from_config(models)
     embedder = LangChainEmbedder.from_config(models)
-    generator = LlmSqlGenerator(chat, dialect="sqlite")
+    model = chat.model  # raw LangChain BaseChatModel the agent core drives
 
     corpus = load_corpus(CORPUS_ROOT, schema="beer_factory").for_server()
     settings = Settings.for_env(Environment.dev)
@@ -90,17 +93,17 @@ def main() -> None:
     suspect = column_allowlist(corpus).suspect
 
     try:
-        # ── Curator arm: EX + free behavioral signals, LLM generator ──
-        solver = flow_solver(corpus, gateway, settings, identity, sql_generator=generator)
+        # ── Curator arm: EX + free behavioral signals, agentic serve core ──
+        solver = agent_solver(corpus, gateway, settings, identity, model=model, embedder=embedder)
         arm = run_arm(Arm.curator, gateway, BEER_FACTORY_EVAL, solver,
                       suspect_columns=suspect, dialect="sqlite")
-        print("== curator arm (LLM SQL generator, BM25 retrieval) ==")
+        print("== curator arm (agentic serve core: create_agent + governance) ==")
         print(f"  execution accuracy : {arm.ex:.2f}  ({arm.n} items)")
         print(f"  decoy-touch rate   : {arm.decoy_touch_rate:.2f}")
         print(f"  governed-path adher: {arm.governed_path_adherence:.2f}\n")
 
         # ── Refuse-gate: recall on unanswerable, false-refusal on answerable ──
-        refuser = flow_refuser(corpus, gateway, settings, identity, sql_generator=generator)
+        refuser = agent_refuser(corpus, gateway, settings, identity, model=model, embedder=embedder)
         rg = eval_refuse_gate(
             answerable=[item.question for item in BEER_FACTORY_EVAL],
             unanswerable=BEER_FACTORY_UNANSWERABLE,
@@ -111,11 +114,11 @@ def main() -> None:
         print(f"  false-refusal rate : {rg.false_refusal_rate:.2f}  (want 0)\n")
 
         # ── Sample answers, with vector retrieval + the two-axis stamp ──
-        print("== sample answers (LLM gen + vector retrieval) ==")
+        print("== sample answers (agent core + vector retrieval) ==")
         for question in [item.question for item in BEER_FACTORY_EVAL] + [BEER_FACTORY_UNANSWERABLE[0]]:
-            ans = answer_question(
+            ans = answer_question_agent(
                 question, identity, corpus=corpus, gateway=gateway, settings=settings,
-                session_id="live-smoke", sql_generator=generator, embedder=embedder,
+                session_id="live-smoke", model=model, embedder=embedder,
             )
             print(f"  Q: {question}")
             print(f"     safety={ans.safety_clearance} assurance={ans.semantic_assurance.value} "

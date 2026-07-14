@@ -132,9 +132,6 @@ class Settings:
     # instead of a hard refusal. L2 policy + curated refuse-gate stay hard.
     grade_semantic_failures: bool = False
 
-    # ── ADR 0002: agentic serve runtime (flagged; default off until P2 cutover) ──
-    agent_serve: bool = False
-
     # ── Memory (D8) — working always on; episodic/correction off until eval earns it ──
     working_memory: bool = True
     episodic_memory: bool = False
@@ -396,7 +393,6 @@ def load_settings(
             "single_all_access_identity",
             "hard_block_suspect_columns",
             "grade_semantic_failures",
-            "agent_serve",
         )
         if k in runtime
     }

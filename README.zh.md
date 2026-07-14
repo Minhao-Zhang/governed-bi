@@ -131,30 +131,29 @@ export LANGFUSE_PUBLIC_KEY=pk-lf-...
 export LANGFUSE_SECRET_KEY=sk-lf-...
 ```
 
-模型客户端是藏在 `ChatClient` / `Embedder` 协议(protocol)背后惰性导入的，且
-各自都有一个确定性的离线默认实现（`StaticChatClient`、`HashingEmbedder`），
-因此测试和默认的确定性流程既不需要这个依赖，也不需要 key。若要在确定性流程中使用
-真实模型，构建一个 LangChain 客户端并注入即可（ADR-0002 的 agentic serve 核心在
-`agent_serve` 之下正转向需要 key，见 [ADR 0002](docs/adr/0002-governed-agentic-serve-runtime.md)）：
+Serve 就是 **agentic 核心**（ADR 0002——`create_agent` + governance 中间件），
+不再有确定性流程兜底。因此回答问题必须有一个真实模型：`build_stack()` 在没有 key
+时也能构建（只读的审计 API 仍可运行），但 serve 进程（`langgraph dev`）会在启动时
+fail-closed，`/chat` 在未配置模型前返回 503。Embedding 仍保留确定性离线默认实现
+（`HashingEmbedder`），eval 的 baseline arm 也仍走 `ChatClient` seam，所以离线测试
+既不需要这个依赖，也不需要 key。若要直接用真实模型驱动 agent 核心：
 
 ```python
 from governed_bi.config import load_settings
 from governed_bi.llm import LangChainChatClient, LangChainEmbedder
-from governed_bi.server import LlmSqlGenerator, SqlCache
-from governed_bi.server.graph import answer_question_graph  # deterministic flow harness (P2-removal)
+from governed_bi.server.agent import answer_question_agent
 
 models = load_settings().models
 chat = LangChainChatClient.from_config(models)
-answer = answer_question_graph(
+answer = answer_question_agent(
     question, identity, corpus=corpus, gateway=gateway, settings=settings, session_id=sid,
-    sql_generator=LlmSqlGenerator(chat, dialect="sqlite"),
+    model=chat.model,  # agent 核心驱动的原始 LangChain 模型
     embedder=LangChainEmbedder.from_config(models),
-    cache=SqlCache(LangChainEmbedder.from_config(models)),
 )
 ```
 
 要跑一遍**真实**路径（离线测试唯一无法覆盖的部分），运行 live smoke 脚本——
-它会用 LLM 生成器 + 真实 embedding 在 beer_factory 上跑一遍，并报告
+它会用 agent 核心 + 真实 embedding 在 beer_factory 上跑一遍，并报告
 EX / 拒答 / 诱饵触碰：
 
 ```bash

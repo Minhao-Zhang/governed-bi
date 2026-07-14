@@ -1,15 +1,15 @@
-"""Tests for the LangGraph Server chat graph (rework phase 2; api/graph_app.py).
+"""Tests for the LangGraph Server chat graph (api/graph_app.py).
 
-The graph wraps the governed flow in a thin {messages, answer} chat shell. These
-assert it answers, streams stage events, stays Answer-equivalent to a direct
-answer_question call, and rebuilds working memory from the thread. Gated on
-langgraph (the agents extra); the executed cases use the committed beer_factory
-DB (skipped if absent).
+The graph wraps the governed agentic serve core in a thin {messages, answer} chat
+shell. Answering a turn now requires a live model (agent-only serve, ADR 0002),
+so the end-to-end invoke/stream cases are live-only and skipped in the hermetic
+suite — offline coverage of the agent rails lives in the agent tests, and live
+coverage in scripts/live_smoke.py. The pure message-splitting helpers stay
+offline.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -25,14 +25,19 @@ from governed_bi.api.graph_app import (  # noqa: E402
 from governed_bi.api.stack import ServeStack  # noqa: E402
 from governed_bi.config import Environment, Settings  # noqa: E402
 from governed_bi.corpus import load_corpus  # noqa: E402
-from governed_bi.gateway import Gateway, Identity, SqliteConnector  # noqa: E402
-from governed_bi.server import answer_question  # noqa: E402
-from governed_bi.viz import presenter  # noqa: E402
+from governed_bi.gateway import Identity  # noqa: E402
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 BIRD_DB = Path(__file__).resolve().parents[1] / "data" / "bird" / "beer_factory.sqlite"
 
 REVENUE_Q = "What is the total revenue?"
+
+# Answering a turn drives the agent core, which needs a live model; the hermetic
+# suite has none, so these are opt-in (set GOVERNED_BI_LIVE_SERVE + a real key and
+# disable the conftest strip to run them).
+requires_live_serve = pytest.mark.skip(
+    reason="agent-only serve needs a live model; covered by scripts/live_smoke.py"
+)
 
 
 @pytest.fixture
@@ -47,7 +52,6 @@ def stack():
         dialect="sqlite",
         sqlite_path=BIRD_DB,
         identity=Identity(user="demo", all_access=True),
-        generator=None,
         embedder=None,
         narrator=None,
         model_name=None,
@@ -60,7 +64,7 @@ def _cfg(thread_id: str) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# Pure helpers
+# Pure helpers (offline)
 # --------------------------------------------------------------------------- #
 
 
@@ -81,10 +85,47 @@ def test_split_question_raises_without_human():
 
 
 # --------------------------------------------------------------------------- #
-# Invoke
+# Graph wiring smoke (offline via FakeToolModel — this is the `langgraph dev`
+# graphs.serve path: chat graph node → answer_question_agent → agent core →
+# {messages, answer}). A scripted trajectory stands in for a live model so a
+# wiring regression is caught in CI without a key; answer QUALITY stays live-only.
 # --------------------------------------------------------------------------- #
 
 
+def test_graph_answers_governed_turn_with_fake_model(stack):
+    from dataclasses import replace
+
+    from governed_bi.llm.fake import FakeToolModel, ai_tool_turn
+
+    turns = [
+        ai_tool_turn("inspect_schema", {"table_id": "tbl_beer_factory_transaction"}, "c1"),
+        ai_tool_turn(
+            "run_query",
+            {"sql": 'SELECT SUM("PurchasePrice") AS total_revenue FROM "transaction"'},
+            "c2",
+        ),
+        AIMessage(content="done"),
+    ]
+    live = replace(stack, chat_model=FakeToolModel(responses=turns), has_live_model=True)
+    graph = build_chat_graph(live)
+    result = graph.invoke({"messages": [HumanMessage(REVENUE_Q)]}, _cfg("wiring"))
+
+    assert result["answer"]["tier"] == "governed"
+    sql = result["answer"]["sql"] or ""
+    # SQL is normalized (quoted identifiers) by the middleware, so match loosely.
+    assert "SUM" in sql.upper() and "PurchasePrice" in sql
+    last = result["messages"][-1]
+    assert isinstance(last, AIMessage)
+    assert last.additional_kwargs["governed_bi"]["tier"] == "governed"
+    assert last.content  # rendered answer text
+
+
+# --------------------------------------------------------------------------- #
+# End-to-end serve turn (live-only: needs a real model)
+# --------------------------------------------------------------------------- #
+
+
+@requires_live_serve
 def test_invoke_returns_governed_answer_and_message(stack):
     graph = build_chat_graph(stack)
     result = graph.invoke({"messages": [HumanMessage(REVENUE_Q)]}, _cfg("t1"))
@@ -99,6 +140,7 @@ def test_invoke_returns_governed_answer_and_message(stack):
     assert last.content  # the English answer text
 
 
+@requires_live_serve
 def test_invoke_refusal_has_no_sql(stack):
     graph = build_chat_graph(stack)
     result = graph.invoke(
@@ -109,55 +151,8 @@ def test_invoke_refusal_has_no_sql(stack):
     assert result["answer"]["escalation"]
 
 
-# --------------------------------------------------------------------------- #
-# Streaming stage events
-# --------------------------------------------------------------------------- #
-
-
-def test_stream_emits_labeled_stage_events(stack):
-    graph = build_chat_graph(stack)
-    stages = []
-    for mode, data in graph.stream(
-        {"messages": [HumanMessage(REVENUE_Q)]}, _cfg("t3"), stream_mode=["updates", "custom"]
-    ):
-        if mode == "custom":
-            stages.append(data["stage"])
-    assert stages == ["route", "retrieve", "generate", "guardrail", "execute", "compose"]
-
-
-# --------------------------------------------------------------------------- #
-# Equivalence with the direct flow
-# --------------------------------------------------------------------------- #
-
-
-def test_graph_answer_equals_direct_answer_question(stack):
-    graph = build_chat_graph(stack)
-    graph_answer = graph.invoke({"messages": [HumanMessage(REVENUE_Q)]}, _cfg("teq"))["answer"]
-
-    conn = SqliteConnector(BIRD_DB)
-    try:
-        direct = answer_question(
-            REVENUE_Q,
-            stack.identity,
-            corpus=stack.corpus_server,
-            gateway=Gateway(conn),
-            settings=stack.settings,
-            session_id="teq",
-        )
-    finally:
-        conn.close()
-    assert graph_answer == asdict(presenter.answer_view(direct))
-
-
-# --------------------------------------------------------------------------- #
-# Working memory from the thread
-# --------------------------------------------------------------------------- #
-
-
+@requires_live_serve
 def test_prior_turns_are_replayed_as_working_memory(stack):
-    # A multi-turn thread: the node answers the last human turn (a follow-up) with
-    # the earlier turns rebuilt as working memory, and still returns a governed
-    # answer (template path). This exercises _split + _working_memory_from.
     graph = build_chat_graph(stack)
     result = graph.invoke(
         {

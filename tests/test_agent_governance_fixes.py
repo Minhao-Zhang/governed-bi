@@ -199,6 +199,53 @@ def test_hard_stop_preserves_prior_ledger(corpus, bird_gateway, settings, identi
 
 
 # --------------------------------------------------------------------------- #
+# recursion exhaustion preserves the accumulated ledger (Inv #10)
+# --------------------------------------------------------------------------- #
+
+
+def test_recursion_exhaustion_preserves_ledger(corpus, bird_gateway, settings, identity):
+    # A trailing tool-call turn repeats forever (FakeToolModel replays its last
+    # message), so the agent never returns a terminal answer and blows the step
+    # budget → GraphRecursionError. The refusal must still carry the real ledger
+    # (run_query pass + sample_rows entries) and attempt count, not an empty one.
+    # Many distinct turns (unique tool_call ids so add_messages doesn't dedup)
+    # so the step budget (40) is exhausted well before the script runs out —
+    # avoids the last-message replay reusing an id.
+    turns = [
+        ai_tool_turn("inspect_schema", {"table_id": TXN}, "c1"),
+        ai_tool_turn(
+            "run_query",
+            {"sql": 'SELECT SUM("PurchasePrice") AS total_revenue FROM "transaction"'},
+            "c2",
+        ),
+    ]
+    turns += [
+        ai_tool_turn("sample_rows", {"table_id": TXN, "n": 1}, f"s{i}")
+        for i in range(30)
+    ]
+    ans = answer_question_agent(
+        "total revenue",
+        identity,
+        corpus=corpus,
+        gateway=bird_gateway,
+        settings=settings,
+        session_id="recursion-ledger",
+        model=FakeToolModel(responses=turns),
+    )
+    assert ans.tier.value == "refused"
+    assert ans.provenance.get("recursion_exhausted") is True
+    ledger = ans.provenance.get("governance_ledger") or []
+    assert ledger, "exhaustion refusal lost the accumulated governance ledger"
+    # The passing run_query the agent managed before exhausting is in the trail.
+    assert any(
+        e.get("action") == "run_query" and e.get("verdict") == "pass" for e in ledger
+    )
+    assert ans.provenance.get("attempts") == sum(
+        1 for e in ledger if e.get("action") == "run_query"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # #4 working memory injected into system prompt
 # --------------------------------------------------------------------------- #
 

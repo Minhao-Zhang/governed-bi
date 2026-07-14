@@ -1,7 +1,9 @@
-"""Shared governance helpers used by the deterministic flow and the agent path.
+"""Shared governance helpers for the agentic serve core (ADR 0002).
 
-Extracted so middleware / outer rails and ``flow.answer_question`` cannot drift
-(ADR 0002 Q4). Call sites outside ``server/`` keep importing via ``flow`` re-exports.
+The single source of truth for the fail-closed paths (refuse-gate matching, L4
+licensing scope, cache re-guardrailing, answer finalization, the two-axis stamp,
+and the live event stream) that ``server.agent``'s outer rails + middleware call,
+so governance decisions live in exactly one place and cannot drift.
 """
 
 from __future__ import annotations
@@ -26,7 +28,6 @@ from .answer import (
     graded_delivery,
     refusal,
 )
-from .sqlgen import RepairFeedback
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -35,15 +36,9 @@ if TYPE_CHECKING:
     from ..corpus import Corpus
     from ..gateway import Gateway, Identity, QueryResult
     from ..graph import MissingJoinPath
-    from .cache import SqlCache
     from .narrate import AnswerNarrator
 
 from ..corpus.schemas import JoinAsset, NegativeExampleAsset, TableAsset
-
-# How many times SQL generation may be retried within one turn before failing
-# closed. Each retry feeds the prior failure (guardrail reason / execution error)
-# back to the generator. Tune against the eval.
-MAX_REPAIR_ATTEMPTS = 3
 
 # How many FK-join hops out from the retrieved tables L4 licensing extends (see
 # _licensed_tables). 1 admits a retrieved table's direct FK neighbors; raising it
@@ -60,10 +55,6 @@ _ESCALATION_GUARDRAIL = (
     "The generated query was blocked by a safety guardrail. "
     "Rephrase the question or contact the data owner."
 )
-_ESCALATION_EXECUTION = (
-    "The query could not be executed against the database. "
-    "Contact the data owner if this persists."
-)
 _ESCALATION_MISSING_EDGE = (
     "No curated relationship connects the schemas needed for this question. "
     "Contact the data owner to declare a cross-schema join."
@@ -77,14 +68,10 @@ _STOPWORDS = frozenset(
     "the their there to what when where which who why with work works".split()
 )
 
-# Guardrail failures the repair loop must NOT coach a retry around: feeding a hard
-# policy/DDL block back to the generator is just pressure to evade the policy, not
-# a fixable syntax slip. Scope failures (L3 column allowlist / L4 term-semantics)
-# stay repairable *by decision* (2026-07-09, design-decisions D11): the
-# FK-neighborhood + repair loop is the design's deliberate false-refusal-reduction
-# mechanism (see guardrails docstring). Only L2 fails closed without a retry.
-_NON_REPAIRABLE_LAYERS = frozenset({GuardrailLayer.policy_blacklist})
-
+# L2 (policy_blacklist) is the hard, fail-closed layer: a hard policy/DDL block is
+# never delivered/graded, regardless of settings.grade_semantic_failures. Scope
+# failures (L3/L4) may be graded-and-delivered as unverified (pipeline-design §6);
+# safety stays binary.
 _HARD_REFUSE_LAYERS = frozenset({GuardrailLayer.policy_blacklist.value})
 
 
@@ -409,45 +396,6 @@ def _try_cache_hit(
     table = _result_table(result)
     text = _answer_text(question, entry.sql, result, table, narrator)
     return assemble(text=text, sql=entry.sql, signals=signals, provenance=provenance, result=table)
-
-
-def _guardrail_feedback(generated, verdict) -> tuple[RepairFeedback, dict]:
-    """The (repair-feedback, refusal-record) pair for a guardrail rejection.
-
-    Shared by the plain loop (``answer_question``) and the LangGraph DAG so both
-    describe a block identically.
-    """
-    layer = verdict.failed_layer.value if verdict.failed_layer else None
-    fb = RepairFeedback(sql=generated.sql, stage="guardrail", reason=f"{layer}: {verdict.reason}")
-    refusal_record = {
-        "refused_by": "guardrail",
-        "escalation": _ESCALATION_GUARDRAIL,
-        "failed_layer": layer,
-        "reason": verdict.reason,
-        "sql": generated.sql,
-    }
-    return fb, refusal_record
-
-
-def _repairable_guardrail(verdict) -> bool:
-    """Whether a guardrail rejection may be fed back for another attempt.
-
-    A hard policy block (L2) fails closed immediately; everything else is repaired
-    within the attempt cap.
-    """
-    return verdict.failed_layer not in _NON_REPAIRABLE_LAYERS
-
-
-def _execution_feedback(generated, err: Exception) -> tuple[RepairFeedback, dict]:
-    """The (repair-feedback, refusal-record) pair for an execution error."""
-    fb = RepairFeedback(sql=generated.sql, stage="execution", reason=str(err))
-    refusal_record = {
-        "refused_by": "execution",
-        "escalation": _ESCALATION_EXECUTION,
-        "error": str(err),
-        "sql": generated.sql,
-    }
-    return fb, refusal_record
 
 
 def _finish_unsuccessful(

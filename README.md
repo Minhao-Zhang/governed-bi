@@ -172,32 +172,31 @@ export LANGFUSE_PUBLIC_KEY=pk-lf-...
 export LANGFUSE_SECRET_KEY=sk-lf-...
 ```
 
-The model clients are imported lazily behind the `ChatClient` / `Embedder`
-protocols, and each has a deterministic offline default (`StaticChatClient`,
-`HashingEmbedder`) so tests and the default deterministic flow need neither the
-dependency nor a key. To use a real model with the deterministic flow, build a
-LangChain client and inject it (the ADR-0002 agentic serve core, under
-`agent_serve`, is moving to key-required, see [ADR
-0002](docs/adr/0002-governed-agentic-serve-runtime.md)):
+Serve is the **agentic core** (ADR 0002 — `create_agent` + governance middleware);
+there is no deterministic-flow fallback. Answering a question therefore requires
+a live model: `build_stack()` builds fine with no key (the read-only audit API
+still runs), but the serve process (`langgraph dev`) fails closed at startup and
+`/chat` returns 503 until a model is configured. Embeddings keep a deterministic
+offline default (`HashingEmbedder`), and the eval baseline arm still uses the
+`ChatClient` seam, so the offline test suite needs neither the dependency nor a
+key. To drive the agent core directly with a real model:
 
 ```python
 from governed_bi.config import load_settings
 from governed_bi.llm import LangChainChatClient, LangChainEmbedder
-from governed_bi.server import LlmSqlGenerator, SqlCache
-from governed_bi.server.graph import answer_question_graph  # deterministic flow harness (P2-removal)
+from governed_bi.server.agent import answer_question_agent
 
 models = load_settings().models
 chat = LangChainChatClient.from_config(models)
-answer = answer_question_graph(
+answer = answer_question_agent(
     question, identity, corpus=corpus, gateway=gateway, settings=settings, session_id=sid,
-    sql_generator=LlmSqlGenerator(chat, dialect="sqlite"),
+    model=chat.model,  # the raw LangChain model the agent core drives
     embedder=LangChainEmbedder.from_config(models),
-    cache=SqlCache(LangChainEmbedder.from_config(models)),
 )
 ```
 
 To exercise the **real** path (the one thing the offline tests can't), run the
-live smoke script — it drives the LLM generator + real embeddings over
+live smoke script — it drives the agent core + real embeddings over
 beer_factory and reports EX / refusal / decoy-touch:
 
 ```bash

@@ -28,12 +28,12 @@ The **curator reads ``train_final.jsonl`` only**; grading is on held-out
 
 from __future__ import annotations
 
-from .arms import Arm, ArmResult, Solver, flow_solver, run_arm, run_arms
+from .arms import Arm, ArmResult, Solver, agent_solver, run_arm, run_arms
 from .baseline_solver import no_layer_solver
 from .bird_loader import available_dbs, load_bird_items
 from .dataset import BEER_FACTORY_EVAL, BEER_FACTORY_UNANSWERABLE, EvalItem
 from .ex import execution_match
-from .refuse_gate import RefuseGateResult, eval_refuse_gate, flow_refuser
+from .refuse_gate import RefuseGateResult, agent_refuser, eval_refuse_gate
 
 __all__ = [
     "Arm",
@@ -43,11 +43,11 @@ __all__ = [
     "EvalItem",
     "RefuseGateResult",
     "Solver",
+    "agent_refuser",
+    "agent_solver",
     "available_dbs",
     "eval_refuse_gate",
     "execution_match",
-    "flow_refuser",
-    "flow_solver",
     "load_bird_items",
     "no_layer_solver",
     "run_arm",

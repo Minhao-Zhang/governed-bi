@@ -13,7 +13,7 @@ entry, single DB round-trip).
 from __future__ import annotations
 
 import operator
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated
 
 import sqlglot
 from langchain.agents.middleware import AgentMiddleware, AgentState

@@ -11,10 +11,10 @@ declines/refuses) and scores EX plus the free behavioral signals:
 
 The three arms differ only by the corpus/solver they use: (1) no semantic layer,
 (2) curator-built layer, (3) gold layer. Arm 2 vs 1 is the moat proof; Arm 2 vs 3
-is curator quality. This module supplies the reusable scorer (``run_arm``) and a
-``flow_solver`` that drives the deterministic server flow as the curator arm; the
-no-layer (LLM baseline) and gold (manifest oracle) solvers plug into the same
-``run_arms`` orchestrator when available.
+is curator quality. This module supplies the reusable scorer (``run_arm``) and
+``agent_solver``, which drives the agentic serve core (ADR 0002) as the curator/
+gold arm; the no-layer (LLM baseline) and gold (manifest oracle) solvers plug
+into the same ``run_arms`` orchestrator when available.
 """
 
 from __future__ import annotations
@@ -32,7 +32,6 @@ if TYPE_CHECKING:
     from ..config import Settings
     from ..corpus import Corpus
     from ..gateway import Gateway, Identity
-    from ..server.sqlgen import SqlGenerator
     from .dataset import EvalItem
 
 
@@ -122,54 +121,6 @@ def run_arms(
     }
 
 
-def flow_solver(
-    corpus: "Corpus",
-    gateway: "Gateway",
-    settings: "Settings",
-    identity: "Identity",
-    *,
-    session_id: str = "eval",
-    sql_generator: "SqlGenerator | None" = None,
-) -> Solver:
-    """A :class:`Solver` that drives the server flow (the curator arm).
-
-    Returns the flow's generated SQL, or ``None`` when the flow refuses (a
-    refusal is not a governed-path answer and scores as unsolved). After each
-    ``solve``, ``last_solve_meta`` holds audit fields from ``Answer.provenance``
-    (``refused_by``, ``failed_layer``, ``graded_delivery``, …).
-    """
-    from ..server import answer_question
-
-    class _FlowSolver:
-        def __init__(self) -> None:
-            self.last_solve_meta: dict = {}
-
-        def solve(self, question: str) -> str | None:
-            answer = answer_question(
-                question,
-                identity,
-                corpus=corpus,
-                gateway=gateway,
-                settings=settings,
-                session_id=session_id,
-                sql_generator=sql_generator,
-            )
-            prov = dict(answer.provenance or {})
-            self.last_solve_meta = {
-                "refused_by": prov.get("refused_by"),
-                "failed_layer": prov.get("failed_layer"),
-                "graded_delivery": bool(prov.get("graded_delivery")),
-                "coverage_best_effort": bool(prov.get("coverage_best_effort")),
-                "tier": answer.tier.value,
-                "semantic_assurance": answer.semantic_assurance.value,
-                "safety_clearance": answer.safety_clearance,
-                "attempts": prov.get("attempts"),
-            }
-            return answer.sql
-
-    return _FlowSolver()
-
-
 def agent_solver(
     corpus: "Corpus",
     gateway: "Gateway",
@@ -205,7 +156,12 @@ def agent_solver(
             self.last_solve_meta: dict = {}
 
         def solve(self, question: str) -> str | None:
-            final = graph.invoke({"question": question, "session_id": session_id})
+            from ..obs import tracing_callbacks
+
+            final = graph.invoke(
+                {"question": question, "session_id": session_id},
+                config={"callbacks": tracing_callbacks()},
+            )
             answer = final.get("answer")
             if answer is None:
                 self.last_solve_meta = {"refused_by": "no_coverage"}

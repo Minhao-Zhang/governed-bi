@@ -25,6 +25,13 @@ from governed_bi.config import DataSourceConfig, load_settings  # noqa: E402
 BIRD_DB = Path(__file__).resolve().parents[1] / "data" / "bird" / "beer_factory.sqlite"
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 
+# Agent-only serve (ADR 0002): answering a /chat turn needs a live model, which
+# the hermetic suite forbids. These end-to-end answer cases are live-only; the
+# read-only API surface (schema/graph/corpus/capabilities) stays fully offline.
+requires_live_serve = pytest.mark.skip(
+    reason="agent-only serve needs a live model; covered by scripts/live_smoke.py"
+)
+
 
 @pytest.fixture
 def client() -> TestClient:
@@ -290,6 +297,7 @@ def test_skills(client):
 # --------------------------------------------------------------------------- #
 
 
+@requires_live_serve
 @pytest.mark.skipif(not BIRD_DB.exists(), reason="vendored beer_factory.sqlite not present")
 def test_chat_governed_answer_carries_result(client):
     r = client.post("/chat", json={"question": "What is the total revenue?", "session_id": "s"})
@@ -306,6 +314,7 @@ def test_chat_governed_answer_carries_result(client):
     assert body["provenance"]["metric_id"] == "metric_revenue"
 
 
+@requires_live_serve
 @pytest.mark.skipif(not BIRD_DB.exists(), reason="vendored beer_factory.sqlite not present")
 def test_chat_refuses_out_of_scope(client):
     r = client.post(
@@ -318,6 +327,7 @@ def test_chat_refuses_out_of_scope(client):
     assert body["escalation"]
 
 
+@requires_live_serve
 @pytest.mark.skipif(not BIRD_DB.exists(), reason="vendored beer_factory.sqlite not present")
 def test_chat_accepts_history_turns(client):
     # Exercises the working-memory rebuild loop (the stateless-chat mechanism).
@@ -367,8 +377,12 @@ def test_chat_rejects_invalid_history_role(client):
 
 
 def test_chat_returns_503_when_db_missing():
-    # Inject a stack pointing at a nonexistent DB; no DB file needed for this test.
-    stack = replace(build_stack(), sqlite_path=Path("does/not/exist.sqlite"))
+    # Inject a stack with a (dummy) model so the request clears the live-model
+    # gate and reaches the DB open, then point at a nonexistent DB. The model is
+    # never invoked (connector open fails first), so any non-None sentinel works.
+    stack = replace(
+        build_stack(), sqlite_path=Path("does/not/exist.sqlite"), chat_model=object()
+    )
     client = TestClient(create_app(stack))
     r = client.post("/chat", json={"question": "What is the total revenue?"})
     assert r.status_code == 503

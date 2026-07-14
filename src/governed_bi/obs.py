@@ -9,10 +9,13 @@ Two tracers, both opt-in by environment and both no-ops when unset:
   LangChain-native path.
 - **Langfuse** is attached as a LangChain callback via :func:`tracing_callbacks`,
   returned only when the ``tracing`` extra is installed *and* the ``LANGFUSE_*``
-  keys are set. Both the REST ``/chat`` and the LangGraph chat graph route model
-  calls through the same :class:`~governed_bi.llm.LangChainChatClient`, so wiring
-  the callback there covers every path (best-effort: generations are recorded;
-  cross-call trace grouping is left to LangSmith).
+  keys are set. It is spliced into ``config={"callbacks": ...}`` at each run
+  boundary: the agentic serve rails (``server.agent`` — outer ``graph.invoke`` +
+  the inner ``agent.stream``) and the curator/SME deep agents thread it into
+  their invoke config, and the single-shot ``LangChainChatClient.complete`` path
+  attaches it per model call. Callbacks passed at the outer ``graph.invoke``
+  propagate to child runs, so an agentic turn groups as one Langfuse trace;
+  standalone ``.complete`` calls (e.g. the narrator) record as separate spans.
 
 Nothing here imports langfuse at module load, so the base install and the offline
 profile are unaffected. See ``.env.example`` for the variable names.

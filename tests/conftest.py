@@ -25,8 +25,18 @@ import governed_bi.config as _config
 # Disable local TOML overlay for the hermetic suite (module flag, not an env var).
 _config.APPLY_LOCAL_OVERLAY = False
 
-# Secret that must not leak from a developer's .env into the hermetic suite.
-_STRIPPED_ENV = ("OPENAI_API_KEY",)
+# Secrets/toggles that must not leak from a developer's .env into the hermetic
+# suite: the model key (would flip offline paths onto the live model) and the
+# external-tracing switches (would make tests phone home to Langfuse/LangSmith
+# now that the agent path threads tracing_callbacks() into its run config).
+_STRIPPED_ENV = (
+    "OPENAI_API_KEY",
+    "LANGFUSE_PUBLIC_KEY",
+    "LANGFUSE_SECRET_KEY",
+    "LANGSMITH_API_KEY",
+    "LANGSMITH_TRACING",
+    "LANGCHAIN_TRACING_V2",
+)
 
 
 @pytest.fixture(scope="session", autouse=True)

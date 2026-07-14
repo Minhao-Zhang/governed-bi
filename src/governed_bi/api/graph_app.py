@@ -3,8 +3,9 @@
 A thin **chat** graph the LangChain ``useStream`` SDK consumes over the LangGraph
 Server protocol. Its persisted state is only ``{messages, answer}`` (both
 JSON-serializable), and the whole governed pipeline runs inside a single node,
-which calls :func:`governed_bi.server.flow.answer_question` and streams stage
-progress through ``get_stream_writer()``. The heavy per-turn objects (the
+which calls :func:`governed_bi.server.agent.answer_question_agent` (agent-only
+serve, ADR 0002) and streams step progress through ``get_stream_writer()``. The
+heavy per-turn objects (the
 ``networkx`` graph, the allowlist, retrieval/context) stay as locals in that
 node and never enter a state channel, so nothing here has to be made
 checkpoint-serializable (this is why the ADR 0001 "``ServeState`` serializability"
@@ -108,7 +109,7 @@ def build_chat_graph(stack: "ServeStack"):
     # Absolute imports: the LangGraph server loads this module by file path (no
     # parent package), so relative imports would fail at call time.
     from governed_bi.gateway import Gateway
-    from governed_bi.server import answer_question
+    from governed_bi.server.agent import answer_question_agent
     from governed_bi.viz import presenter
 
     def answer(state: ChatState, config: RunnableConfig | None = None) -> dict:
@@ -127,36 +128,19 @@ def build_chat_graph(stack: "ServeStack"):
             raise RuntimeError("database unavailable") from exc
         try:
             gateway = Gateway(connector)
-            if stack.use_agent_serve:
-                from governed_bi.server.agent import answer_question_agent
-
-                result = answer_question_agent(
-                    question,
-                    stack.identity,
-                    corpus=stack.corpus_server,
-                    gateway=gateway,
-                    settings=stack.settings,
-                    session_id=thread_id,
-                    model=stack.chat_model,
-                    embedder=stack.embedder,
-                    narrator=stack.narrator,
-                    working_memory=memory,
-                    on_event=writer,
-                )
-            else:
-                result = answer_question(
-                    question,
-                    stack.identity,
-                    corpus=stack.corpus_server,
-                    gateway=gateway,
-                    settings=stack.settings,
-                    session_id=thread_id,
-                    sql_generator=stack.generator,
-                    embedder=stack.embedder,
-                    narrator=stack.narrator,
-                    working_memory=memory,
-                    on_event=writer,
-                )
+            result = answer_question_agent(
+                question,
+                stack.identity,
+                corpus=stack.corpus_server,
+                gateway=gateway,
+                settings=stack.settings,
+                session_id=thread_id,
+                model=stack.chat_model,
+                embedder=stack.embedder,
+                narrator=stack.narrator,
+                working_memory=memory,
+                on_event=writer,
+            )
         finally:
             connector.close()
 
@@ -175,10 +159,21 @@ def build_chat_graph(stack: "ServeStack"):
 
 
 def _build_graph():
-    """Sync build of the serve stack + chat graph (filesystem / config I/O)."""
+    """Sync build of the serve stack + chat graph (filesystem / config I/O).
+
+    Agent-only serve (ADR 0002): the chat graph needs a live model. Fail closed at
+    startup with a clear message rather than booting a serve process that would
+    503 on every turn.
+    """
     from governed_bi.api.stack import build_stack
 
-    return build_chat_graph(build_stack())
+    stack = build_stack()
+    if stack.chat_model is None:
+        raise RuntimeError(
+            "agentic serve requires a live model but none is configured; set "
+            f"{stack.settings.models.api_key_env} (and install the 'agents' extra)"
+        )
+    return build_chat_graph(stack)
 
 
 _GRAPH = None

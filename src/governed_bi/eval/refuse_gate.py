@@ -9,20 +9,20 @@ needs a held-out **unanswerable** set: cross-DB + removed-coverage cases
 - **false-refusal rate**: refuses the answerable (a precision cost)
 
 The scorer takes a ``refused`` predicate (question -> bool) so it is decoupled
-from the server; ``flow_refuser`` adapts the deterministic server flow.
+from the server; ``agent_refuser`` adapts the agentic serve core (ADR 0002).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..config import Settings
     from ..corpus import Corpus
     from ..gateway import Gateway, Identity
-    from ..server.sqlgen import SqlGenerator
+    from ..llm import Embedder
 
 
 @dataclass(frozen=True)
@@ -51,29 +51,32 @@ def eval_refuse_gate(
     )
 
 
-def flow_refuser(
+def agent_refuser(
     corpus: "Corpus",
     gateway: "Gateway",
     settings: "Settings",
     identity: "Identity",
     *,
+    model: Any,
+    embedder: "Embedder | None" = None,
     session_id: str = "eval",
-    sql_generator: "SqlGenerator | None" = None,
 ) -> Callable[[str], bool]:
-    """A ``refused`` predicate that runs the server flow and reports whether it
-    returned a refusal (any fail-closed path: refuse-gate or guardrail veto)."""
-    from ..server import answer_question
+    """A ``refused`` predicate that runs the agentic serve core (ADR 0002) and
+    reports whether it returned a refusal (any fail-closed path: refuse-gate,
+    guardrail veto, missing-edge, or coverage exhaustion). Needs a live model."""
+    from ..server.agent import answer_question_agent
     from ..server.answer import ReliabilityTier
 
     def refused(question: str) -> bool:
-        answer = answer_question(
+        answer = answer_question_agent(
             question,
             identity,
             corpus=corpus,
             gateway=gateway,
             settings=settings,
             session_id=session_id,
-            sql_generator=sql_generator,
+            model=model,
+            embedder=embedder,
         )
         return answer.tier is ReliabilityTier.refused
 

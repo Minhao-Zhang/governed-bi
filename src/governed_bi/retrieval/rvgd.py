@@ -164,6 +164,7 @@ class RetrievalResult:
     term_ids: list[str] = field(default_factory=list)
     metric_ids: list[str] = field(default_factory=list)
     few_shot_ids: list[str] = field(default_factory=list)
+    rule_ids: list[str] = field(default_factory=list)
     scores: dict[str, float] = field(default_factory=dict)
 
 
@@ -236,6 +237,7 @@ def retrieve(
     term_ids: list[str] = []
     metric_ids: list[str] = []
     few_shot_ids: list[str] = []
+    rule_ids: list[str] = []
     for asset_id in selected:
         asset = corpus.by_id(asset_id)
         if isinstance(asset, TableAsset):
@@ -246,6 +248,8 @@ def retrieve(
             metric_ids.append(asset_id)
         elif isinstance(asset, FewShotAsset):
             few_shot_ids.append(asset_id)
+        elif isinstance(asset, RuleAsset):
+            rule_ids.append(asset_id)
 
     table_ids = _ordered(table_ids)
 
@@ -272,5 +276,6 @@ def retrieve(
         term_ids=_ordered(term_ids),
         metric_ids=_ordered(metric_ids),
         few_shot_ids=_ordered(few_shot_ids),
+        rule_ids=_ordered(rule_ids),
         scores=scores,
     )
