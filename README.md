@@ -2,215 +2,160 @@
 
 _[English](README.md) · [简体中文](README.zh.md)_
 
-An agentic BI / Generative-BI system: natural-language questions → **grounded,
-governed, auditable** answers over relational data.
+An agentic BI system: it answers natural-language questions over a relational
+database with **grounded, governed, auditable** SQL. Point it at a live
+**Postgres** database, give it a model key, and ask a question. It retrieves the
+relevant slice of a curated semantic layer, generates SQL, runs it through five
+guardrail layers, executes it read-only, and returns the answer with an audit
+trail.
 
-Near-term target is a **SQLite-proven showcase** (with dialect-pluggable seams
-for other engines) that grows a reviewable semantic layer from a seed of
-known-good queries (this is *seed-assisted semantic-layer growth*, not a
-zero-prior cold start), evaluated on the self-built [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) dataset (execution
-accuracy). Enterprise abstractions (identity/RLS, human gate, scoped
-memory/cache) are seamed in but toggled off; enforcement belongs to a private
-enterprise fork, not this engine.
+The connector layer is dialect-pluggable: Postgres is the exercised-live path,
+Redshift is seamed, and SQLite is kept only as the offline test / CI substrate,
+not a runtime we ask anyone to deploy.
 
-> **Design-first, and honest about maturity.** The design (D1-D16) is well ahead
-> of the build (see [`docs/design-decisions.md`](docs/design-decisions.md)). Serve
-> is the **governed agentic core** ([ADR
-> 0002](docs/adr/0002-governed-agentic-serve-runtime.md)): a deterministic outer
-> "rails" graph wraps a bounded `create_agent` loop over governed read-only
-> tools, and it is now the sole serve path. The deterministic flow it replaced
-> has been deleted. Live-model A/B runs already compared the two (see
-> [agentic-serve A/B results](docs/plans/agentic-serve-ab-results.md)), and a
-> live three-arm run on an obfuscated Postgres DB now shows the corpus lifting
-> execution accuracy and driving decoy-touch to zero (see
-> [three-arm experiment](docs/plans/three-arm-experiment-results.md)) — but it is
-> single-seed, small-N, and was run on the since-removed deterministic path, so
-> the moat is **directional, not yet conclusive**. See the [status
-> table](#status) for what is proven vs. designed vs. seamed.
+## How it works
 
-## The idea in three lines
+- **Two harnesses, one substrate.** A `curator` (build) *produces* a semantic
+  layer (the corpus) from a seed of known-good `(question, SQL)` pairs; a
+  `server` (serve) *consumes* it to answer. Opposite risk profiles, one shared
+  corpus.
+- **The corpus is the moat.** Git-tracked typed YAML assets + Markdown skills,
+  curator-authored and human-audited. Git is the single source of truth; the
+  graph / vector / BM25 stores are rebuildable projections.
+- **Fail-closed.** Out-of-scope, missing coverage, or a tripped guardrail returns
+  a refusal or a clarifying question, never a confident wrong number. Answers
+  carry two separate stamps: `safety_clearance` (did it pass the guardrails) and
+  `semantic_assurance` (how well-grounded), never collapsed into one trust score.
 
-- **Two harnesses over one shared substrate.** A `curator` (build) *produces*
-  the corpus; a `server` (serve) *consumes* it to answer. Opposite risk
-  profiles, one substrate.
-- **The corpus is the intended moat**: a hypothesis the eval must prove, not yet
-  a demonstrated result. Git-tracked YAML typed assets + Markdown skills,
-  curator-authored and human-audited. Git is the single source of truth; graph /
-  vector / BM25 stores are rebuildable projections.
-- **Fail-closed.** Out-of-scope / missing-coverage / tripped-guardrail returns a
-  refusal or a clarifying question, never a confident wrong number. Guardrails are
-  a safety gate, **not a correctness oracle**, so answers carry two separate
-  stamps: `safety_clearance` (did it pass the guardrails) and `semantic_assurance`
-  (how well-grounded), never collapsed into one "trust score".
-
-## Status
-
-What is proven vs. designed vs. merely seamed. Serve is the
-[ADR-0002](docs/adr/0002-governed-agentic-serve-runtime.md) governed agentic
-core, the sole serve path; the deterministic flow it replaced has been
-deleted. Live-model A/B runs already exist, so generation quality is no longer
-wholly unmeasured; see the linked results docs.
-
-| Capability | Status | Evidence |
-|---|---|---|
-| SQLite governed agentic serve core (ADR 0002: deterministic rails graph + `create_agent` + governance middleware + read-only tools → retrieve → context → SQL-gen → 5-layer guardrails → execute → stamp) | **Built (sole serve path)** | `uv run pytest`, 470 tests (462 passing, 8 live-only skipped); [ADR 0002](docs/adr/0002-governed-agentic-serve-runtime.md); `server/agent.py`, `tools.py`, `middleware.py`, `governance.py` |
-| Corpus contract + validation (typed YAML/MD, ID + reference integrity) | **Built** | `python -m governed_bi.corpus.cli`, CI |
-| Bounded self-repair + two-axis reliability stamp | **Built** | `tests/test_server.py` |
-| Semantic SQL cache (re-guardrail + re-execute on hit, `certified`-only admission) | **Built, off by default** | `tests/test_cache.py` |
-| deepagents curator harness | **Construction-only** | `tests/test_curator_deep_agent.py` (no live run) |
-| Live-model serve generation (deterministic flow vs. agentic core A/B) | **Run** | [agentic-serve A/B results](docs/plans/agentic-serve-ab-results.md) |
-| BIRD-Obfuscation multi-arm eval (no-layer / curator / +SME) run live on an obfuscated Postgres DB | **Run, not yet conclusive** | v4 `restaurant`/`pg_rename_decoy`, single seed, N=23: EX 0.217 → 0.304 → 0.348, decoy-touch 0.609 → 0.0 ([three-arm results](docs/plans/three-arm-experiment-results.md)). Blockers: ≥3 seeds; a re-run under the agentic serve path (v4 used the since-removed `flow`); a gold reference arm |
-| `CorpusRelease` (immutable, hash-pinned serving release) | **Designed** | not implemented; see [design decisions](docs/design-decisions.md) |
-| Identity → query scope (RLS / tenant isolation) | **Seam only** | single-identity SQLite showcase; enforcement is enterprise-fork scope |
-| Postgres / Redshift execution | **Postgres run live; Redshift offline-only** | `PostgresConnector` (information_schema) exercised live end-to-end in the v4 three-arm run on `pg_rename_decoy`; `RedshiftConnector` (svv_*) still has offline fake-connection tests only |
-
-**Honest one-liner:** a governed NL2SQL kernel that treats model output as
-untrusted: it constrains the accessible data surface, validates generated SQL
-structurally, separates curation from serving, and keeps the semantic layer
-reviewable. SQLite-proven and evaluation-oriented; a first live three-arm run on
-an obfuscated Postgres DB shows curator-built assets beating a no-corpus baseline
-(and erasing decoy-touch), so the next milestone is hardening that from
-directional to conclusive — multiple seeds and a re-run under the current agentic
-serve path.
-
-## Web UI
-
-The frontend lives in a separate repo:
-[Minhao-Zhang/governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui)
-(Next.js, `useStream`). It targets this backend's streaming chat contract but has
-not yet been wired live end-to-end against it.
-
-## Documentation
-
-Start at [`docs/README.md`](docs/README.md). Key docs:
-[architecture](docs/architecture.md) ·
-[design decisions (D1-D16)](docs/design-decisions.md) ·
-[asset schemas](docs/asset-schemas.md) ·
-[curator](docs/curator.md) · [server](docs/server.md) · [viz](docs/viz.md) ·
-[glossary](docs/glossary.md).
-
-## Repo layout
-
-```
-docs/                  design docs (canonical)
-data/bird/             beer_factory.sqlite (BIRD, CC BY-SA 4.0; see NOTICE)
-corpus/                the semantic layer (Git = source of truth); worked example under beer_factory/
-src/governed_bi/
-  config.py            environment toggles + reusable numbers + model config (ModelConfig, load_settings)
-  llm/                 done: ChatClient/Embedder seams (raw OpenAI + LangChain + deterministic offline defaults)
-  corpus/              done: schemas, IDs, CI validator, loader, serializer, CLI
-  gateway/             done: SQLite (proven) + Postgres/Redshift connectors (offline-tested); read-only gateway; five-layer guardrails
-  curator/             done: Facts profiling, HeuristicProposer + LlmProposer, adversary review, curate loop
-  graph/               done: FK graph projection + Steiner-tree join planning + FK join-neighborhood
-  retrieval/           done: RVGD BM25 + grounding + vector channel (embedder-gated, RRF fusion)
-  memory/              done: working memory (D8); episodic/correction protocol seams
-  server/              done: ADR-0002 governed agentic core (sole serve path): agent.py (outer deterministic rails StateGraph wrapping the `create_agent` loop; entry point `answer_question_agent`), tools.py (read-only governed tools: search_corpus/inspect_schema/sample_rows/run_query), middleware.py (guardrail+audit interception), governance.py (shared checks/licensing), plus routing, context assembly, SQL-gen helpers, SQL cache, stamp; the old deterministic flow (flow.py) and the stale unused DAG (graph.py) are deleted
-  curator/             + deep_agent.py: the deepagents build harness
-  eval/                done: execution accuracy, arm harness, refuse-gate
-  viz/                 done: read-only audit surface (UI-agnostic presenter view models; no UI dependency)
-tests/                 unit + end-to-end suites across all of the above
-```
-
-Modules carry docstrings that point back to the design docs and decision IDs.
-
-## Usage & development
+## Quickstart
 
 Requires [uv](https://docs.astral.sh/uv/) and Python 3.13.
 
 ```bash
-uv sync                                   # create .venv, install deps + package
+uv sync                       # create .venv, install everything
+```
+
+**1. Point at your database.** The committed default is the SQLite fixture. To
+serve a real Postgres database, add a git-ignored `governed_bi.local.toml` beside
+[`governed_bi.toml`](governed_bi.toml):
+
+```toml
+[datasource]
+kind = "postgres"
+db = "your_schema"       # corpus subtree / db id
+dsn_env = "PG_DSN"       # names the env var that holds the DSN
+```
+
+**2. Set your secrets** in a git-ignored `.env` at the repo root (never commit
+these):
+
+```bash
+OPENAI_API_KEY=sk-...
+PG_DSN=host=... port=5432 dbname=... user=... password=...
+```
+
+**3. Serve and ask.** Serving is agent-only and requires a live model, so it
+**fails closed without a key**:
+
+```bash
+uv run langgraph dev          # starts the `serve` graph; POST questions to /chat
+```
+
+See [walkthrough](docs/walkthrough.md) for a guided first-question tour and
+[usage](docs/usage.md) for the full reference. To drive the agent core directly
+from Python, see [`docs/server.md`](docs/server.md).
+
+## Configuration
+
+All non-secret policy lives in one file, [`governed_bi.toml`](governed_bi.toml)
+(parsed by `governed_bi.config.load_settings()`): runtime toggles, models,
+datasource, corpus path, serve flags. Machine-local overrides go in a git-ignored
+`governed_bi.local.toml` (same tables; local wins). Secrets (API keys, DSN
+passwords) live only in the environment or a git-ignored `.env`, which is loaded
+on import and never overrides an already-exported variable.
+
+Optional tracing (LangSmith or Langfuse) is documented in
+[`.env.example`](.env.example).
+
+## Development
+
+Everything except live serving runs offline with no model and no network, over
+the vendored SQLite fixture:
+
+```bash
 uv run python -m governed_bi.corpus.cli   # validate the corpus (ID + reference integrity)
 uv run pytest                             # run the test suite
+uv run python scripts/live_smoke.py       # end-to-end over a real model (needs OPENAI_API_KEY)
 ```
 
-New to the repo? The [walkthrough](docs/walkthrough.md) is a guided clone → first-question
-tour. The [quickstart](docs/usage.md) is the reference (validate CLI, programmatic
-corpus API); to write or edit corpus assets, see [corpus authoring](docs/corpus-authoring.md).
+The offline suite exercises the serve core against deterministic model doubles,
+so it needs neither a key nor a network. All dependencies (LangGraph, deepagents,
+LangChain, OpenAI, Langfuse, psycopg) live in `[project.dependencies]`, so a
+plain `uv sync` installs everything both harnesses need.
 
-Runnable today with no model or network: the corpus validator/CLI, the curator
-scaffold, memory, eval, and the read-only audit surface (presenter view models +
-the `governed_bi.api` HTTP API) all build and run offline over the committed
-beer_factory DB. Serve itself is agent-only: the ADR-0002 governed agentic core
-(`server/agent.py`) is the sole path, and it fails closed without a live model;
-the offline test suite exercises it against deterministic model doubles
-(`FakeListChatModel` / `StaticChatClient`), not a real one. Dependencies are not
-split into optional extras: LangGraph, deepagents, LangChain, OpenAI, and Langfuse,
-plus the Postgres/Redshift connectors (psycopg), all live in
-`[project.dependencies]`, so a plain `uv sync` installs everything both harnesses
-(curator = deepagents, serve agentic core = `create_agent`) need.
+## Status
 
-### Models & configuration
+Built and tested: the governed agentic serve core ([ADR
+0002](docs/adr/0002-governed-agentic-serve-runtime.md): a deterministic rails
+graph wrapping a bounded `create_agent` loop over read-only tools, with guardrail
++ audit middleware), the corpus contract and validator, the five-layer
+guardrails, the curator, retrieval, eval harness, semantic SQL cache, and the
+read-only audit API.
 
-All non-secret policy lives in one project file,
-[`governed_bi.toml`](governed_bi.toml), parsed by
-`governed_bi.config.load_settings()`: environment toggles, models, datasource
-shape, corpus path, and serve flags. Local machine overrides go in a git-ignored
-`governed_bi.local.toml` beside it (same tables; local wins on merge). Secrets
-(API keys, DSN passwords) live only in the environment or a git-ignored `.env`.
+The corpus-as-moat claim has a first live result on an obfuscated Postgres
+database: curator-built assets lift execution accuracy over a no-corpus baseline
+and drive decoy-column touches to zero. But it is single-seed and small-N, so
+the result is directional, not yet conclusive. Hardening it (multiple seeds,
+a gold-reference arm) is the current milestone. Full numbers and method:
+[three-arm results](docs/plans/three-arm-experiment-results.md) ·
+[agentic-serve A/B](docs/plans/agentic-serve-ab-results.md).
 
-```bash
-uv sync                          # installs everything: LangGraph + deepagents + LangChain + OpenAI + Langfuse
-export OPENAI_API_KEY=sk-...     # the key is read from the env, never stored
+Designed but not yet built: `CorpusRelease` (immutable, hash-pinned serving
+release). Seamed but toggled off (enterprise-fork scope): identity → query scope
+(RLS / tenant isolation), the human approval gate, scoped memory/cache. Redshift
+has offline connector tests only.
+
+## Web UI
+
+The frontend is a separate repo:
+[Minhao-Zhang/governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui)
+(Next.js, `useStream`). It targets this backend's streaming chat contract; it is
+not yet wired live end-to-end.
+
+## Documentation
+
+Start at [`docs/README.md`](docs/README.md). Key docs:
+[architecture](docs/architecture.md) · [design decisions](docs/design-decisions.md) ·
+[asset schemas](docs/asset-schemas.md) · [curator](docs/curator.md) ·
+[server](docs/server.md) · [viz](docs/viz.md) · [glossary](docs/glossary.md).
+
+## Repo layout
+
 ```
-
-The key is read from the environment. If you'd rather not export it, copy
-[`.env.example`](.env.example) to `.env` at the repo root and put the key there.
-It is loaded on import and fills in only variables not already set, so an exported
-environment variable always wins. `.env` is git-ignored; never commit a real key.
-To point at Postgres locally without editing the committed TOML, put the
-`[datasource]` switch in `governed_bi.local.toml` and the DSN value in `.env`.
-
-Optional observability (also documented in [`.env.example`](.env.example)):
-
-```bash
-# LangSmith (native; no extra package)
-export LANGSMITH_TRACING=true          # or LANGCHAIN_TRACING_V2=true
-export LANGSMITH_API_KEY=lsv2_...
-
-# Langfuse (LangChain callback)
-uv sync
-export LANGFUSE_PUBLIC_KEY=pk-lf-...
-export LANGFUSE_SECRET_KEY=sk-lf-...
-```
-
-Serve is the **agentic core** (ADR 0002: `create_agent` + governance middleware);
-there is no deterministic-flow fallback. Answering a question therefore requires
-a live model: `build_stack()` builds fine with no key (the read-only audit API
-still runs), but the serve process (`langgraph dev`) fails closed at startup and
-`/chat` returns 503 until a model is configured. Embeddings keep a deterministic
-offline default (`HashingEmbedder`), and the eval baseline arm still uses the
-`ChatClient` seam, so the offline test suite needs neither the dependency nor a
-key. To drive the agent core directly with a real model:
-
-```python
-from governed_bi.config import load_settings
-from governed_bi.llm import LangChainChatClient, LangChainEmbedder
-from governed_bi.server.agent import answer_question_agent
-
-models = load_settings().models
-chat = LangChainChatClient.from_config(models)
-answer = answer_question_agent(
-    question, identity, corpus=corpus, gateway=gateway, settings=settings, session_id=sid,
-    model=chat.model,  # the raw LangChain model the agent core drives
-    embedder=LangChainEmbedder.from_config(models),
-)
-```
-
-To exercise the **real** path (the one thing the offline tests can't), run the
-live smoke script. It drives the agent core + real embeddings over
-beer_factory and reports EX / refusal / decoy-touch:
-
-```bash
-export OPENAI_API_KEY=sk-...
-uv run python scripts/live_smoke.py
+docs/               design docs (canonical)
+corpus/             the semantic layer (Git = source of truth); worked example under beer_factory/
+data/bird/          beer_factory.sqlite: offline test/CI fixture (BIRD, CC BY-SA 4.0; see NOTICE)
+src/governed_bi/
+  config.py         environment toggles, models, datasource shape (load_settings)
+  llm/              ChatClient / Embedder seams (OpenAI + LangChain + offline defaults)
+  corpus/           schemas, IDs, CI validator, loader, serializer, CLI
+  gateway/          connectors (SQLite / Postgres / Redshift), read-only gateway, five-layer guardrails
+  curator/          Facts profiling, proposers, adversary review, curate loop, deepagents build harness
+  graph/            FK graph projection + Steiner-tree join planning
+  retrieval/        BM25 + grounding + vector channel (RRF fusion)
+  memory/           working memory; episodic/correction seams
+  server/           the ADR-0002 governed agentic core (sole serve path): agent, tools, middleware, governance, cache, stamp
+  eval/             execution accuracy, arm harness, refuse-gate
+  viz/              read-only audit surface (UI-agnostic presenter view models)
+tests/              unit + end-to-end suites
 ```
 
 ## License
 
-Code in this repository is under the MIT License (see [LICENSE](LICENSE)),
-© 2026 Minhao Zhang.
+Code is under the MIT License (see [LICENSE](LICENSE)), © 2026 Minhao Zhang.
 
-Bundled data is third-party and separately licensed. `data/bird/beer_factory.sqlite`
-is the `beer_factory` database from the [BIRD benchmark](https://bird-bench.github.io/),
-included unmodified under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/);
-see [`data/bird/NOTICE`](data/bird/NOTICE). The MIT license does not cover the data.
+Bundled data is third-party and separately licensed:
+`data/bird/beer_factory.sqlite` is the `beer_factory` database from the
+[BIRD benchmark](https://bird-bench.github.io/), included unmodified under
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/); see
+[`data/bird/NOTICE`](data/bird/NOTICE). The MIT license does not cover the data.
