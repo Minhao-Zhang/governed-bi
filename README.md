@@ -13,17 +13,20 @@ accuracy). Enterprise abstractions (identity/RLS, human gate, scoped
 memory/cache) are seamed in but toggled off; enforcement belongs to a private
 enterprise fork, not this engine.
 
-> **Design-first, and honest about maturity.** The design (D1-D15) is well ahead
+> **Design-first, and honest about maturity.** The design (D1-D16) is well ahead
 > of the build (see [`docs/design-decisions.md`](docs/design-decisions.md)). Serve
 > is the **governed agentic core** ([ADR
 > 0002](docs/adr/0002-governed-agentic-serve-runtime.md)): a deterministic outer
 > "rails" graph wraps a bounded `create_agent` loop over governed read-only
 > tools, and it is now the sole serve path. The deterministic flow it replaced
 > has been deleted. Live-model A/B runs already compared the two (see
-> [agentic-serve A/B results](docs/plans/agentic-serve-ab-results.md) and the
-> [three-arm experiment](docs/plans/three-arm-experiment-results.md)); the
-> obfuscated BIRD 3-arm eval that would prove the corpus moat is still partial.
-> See the [status table](#status) for what is proven vs. designed vs. seamed.
+> [agentic-serve A/B results](docs/plans/agentic-serve-ab-results.md)), and a
+> live three-arm run on an obfuscated Postgres DB now shows the corpus lifting
+> execution accuracy and driving decoy-touch to zero (see
+> [three-arm experiment](docs/plans/three-arm-experiment-results.md)) — but it is
+> single-seed, small-N, and was run on the since-removed deterministic path, so
+> the moat is **directional, not yet conclusive**. See the [status
+> table](#status) for what is proven vs. designed vs. seamed.
 
 ## The idea in three lines
 
@@ -55,31 +58,33 @@ wholly unmeasured; see the linked results docs.
 | Bounded self-repair + two-axis reliability stamp | **Built** | `tests/test_server.py` |
 | Semantic SQL cache (re-guardrail + re-execute on hit, `certified`-only admission) | **Built, off by default** | `tests/test_cache.py` |
 | deepagents curator harness | **Construction-only** | `tests/test_curator_deep_agent.py` (no live run) |
-| Live-model serve generation (deterministic flow vs. agentic core A/B) | **Run** | [agentic-serve A/B results](docs/plans/agentic-serve-ab-results.md), [three-arm experiment](docs/plans/three-arm-experiment-results.md) |
-| BIRD-Obfuscation 3-arm eval (no-layer / curator / gold) | **Partial** | curator arm scored offline; obfuscated DBs + baseline/gold arms pending |
+| Live-model serve generation (deterministic flow vs. agentic core A/B) | **Run** | [agentic-serve A/B results](docs/plans/agentic-serve-ab-results.md) |
+| BIRD-Obfuscation multi-arm eval (no-layer / curator / +SME) run live on an obfuscated Postgres DB | **Run, not yet conclusive** | v4 `restaurant`/`pg_rename_decoy`, single seed, N=23: EX 0.217 → 0.304 → 0.348, decoy-touch 0.609 → 0.0 ([three-arm results](docs/plans/three-arm-experiment-results.md)). Blockers: ≥3 seeds; a re-run under the agentic serve path (v4 used the since-removed `flow`); a gold reference arm |
 | `CorpusRelease` (immutable, hash-pinned serving release) | **Designed** | not implemented; see [design decisions](docs/design-decisions.md) |
 | Identity → query scope (RLS / tenant isolation) | **Seam only** | single-identity SQLite showcase; enforcement is enterprise-fork scope |
-| Postgres / Redshift execution | **Built, not live-tested** | `PostgresConnector` (information_schema) + `RedshiftConnector` (svv_*); offline fake-connection tests, no live server run |
+| Postgres / Redshift execution | **Postgres run live; Redshift offline-only** | `PostgresConnector` (information_schema) exercised live end-to-end in the v4 three-arm run on `pg_rename_decoy`; `RedshiftConnector` (svv_*) still has offline fake-connection tests only |
 
 **Honest one-liner:** a governed NL2SQL kernel that treats model output as
 untrusted: it constrains the accessible data surface, validates generated SQL
 structurally, separates curation from serving, and keeps the semantic layer
-reviewable. SQLite-proven and evaluation-oriented; the next milestone is showing
-that curator-built assets measurably beat a fair no-corpus baseline on
-obfuscated schemas.
+reviewable. SQLite-proven and evaluation-oriented; a first live three-arm run on
+an obfuscated Postgres DB shows curator-built assets beating a no-corpus baseline
+(and erasing decoy-touch), so the next milestone is hardening that from
+directional to conclusive — multiple seeds and a re-run under the current agentic
+serve path.
 
 ## Web UI
 
 The frontend lives in a separate repo:
 [Minhao-Zhang/governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui)
-(Next.js, `useStream`). It is currently mock-only and not yet wired end-to-end to
-this backend.
+(Next.js, `useStream`). It targets this backend's streaming chat contract but has
+not yet been wired live end-to-end against it.
 
 ## Documentation
 
 Start at [`docs/README.md`](docs/README.md). Key docs:
 [architecture](docs/architecture.md) ·
-[design decisions (D1-D15)](docs/design-decisions.md) ·
+[design decisions (D1-D16)](docs/design-decisions.md) ·
 [asset schemas](docs/asset-schemas.md) ·
 [curator](docs/curator.md) · [server](docs/server.md) · [viz](docs/viz.md) ·
 [glossary](docs/glossary.md).

@@ -6,8 +6,8 @@ _[English](README.md) · [简体中文](README.zh.md)_
 
 近期目标是打造一个**在 SQLite 上得到验证的展示系统**（对其他数据库引擎留有方言可插拔的接口），它从一批已知良好的种子查询出发、逐步扩展出一个可审阅的语义层——这是**种子辅助的语义层生长（seed-assisted semantic-layer growth）**，而非零先验的冷启动——并在自建的 [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) 数据集上进行评测（执行准确率）。企业级抽象（身份/RLS、人工把关、按范围限定的记忆/缓存）已经以预留接口（seam）的方式接入，但默认关闭；其**强制执行属于私有的企业分支，而非本引擎**。
 
-> **设计先行，且对成熟度诚实。** 设计（D1-D15）的进展远远领先于构建
-> （参见 [`docs/design-decisions.md`](docs/design-decisions.zh.md)）。serve 就是**受治理的 agentic 核心**（[ADR 0002](docs/adr/0002-governed-agentic-serve-runtime.md)）：一个确定性的外层"rails"图包着一个受限的 `create_agent` 循环，循环之下是若干只读的受治理工具；它如今是唯一的 serve 路径，此前被取代的确定性流程已经删除。真实模型的 A/B 运行已经把两者跑过对比（见 [agentic-serve A/B 结果](docs/plans/agentic-serve-ab-results.md)与[三臂实验](docs/plans/three-arm-experiment-results.md)）；能证明 corpus 护城河的混淆版 BIRD 三臂评测仍只做了一部分。哪些已被证明、哪些仅是设计，见下方[状态表](#状态)。
+> **设计先行，且对成熟度诚实。** 设计（D1-D16）的进展远远领先于构建
+> （参见 [`docs/design-decisions.md`](docs/design-decisions.zh.md)）。serve 就是**受治理的 agentic 核心**（[ADR 0002](docs/adr/0002-governed-agentic-serve-runtime.md)）：一个确定性的外层"rails"图包着一个受限的 `create_agent` 循环，循环之下是若干只读的受治理工具；它如今是唯一的 serve 路径，此前被取代的确定性流程已经删除。真实模型的 A/B 运行已经把两者跑过对比（见 [agentic-serve A/B 结果](docs/plans/agentic-serve-ab-results.md)）；一次在混淆版 Postgres 库上的真实三臂运行也已显示 corpus 抬升了执行准确率、并把 decoy-touch 压到 0（见[三臂实验](docs/plans/three-arm-experiment-results.md)）——但它是单一随机种子、样本量小，且跑在已被移除的确定性路径上，所以护城河目前是**方向性的、尚不能下定论**。哪些已被证明、哪些仅是设计，见下方[状态表](#状态)。
 
 ## 三句话讲清楚核心思路
 
@@ -26,25 +26,25 @@ _[English](README.md) · [简体中文](README.zh.md)_
 | 有界自修复 + 双轴可靠性标记 | **已构建** | `tests/test_server.py` |
 | 语义 SQL 缓存（命中时重新过护栏 + 重新执行，仅 `certified` 准入） | **已构建，默认关闭** | `tests/test_cache.py` |
 | deepagents curator harness | **仅构建** | `tests/test_curator_deep_agent.py`（无真实运行） |
-| 真实模型的服务生成（确定性流程 vs. agentic 核心 A/B） | **已运行** | [agentic-serve A/B 结果](docs/plans/agentic-serve-ab-results.md)、[三臂实验](docs/plans/three-arm-experiment-results.md) |
-| BIRD-Obfuscation 三臂评测（no-layer / curator / gold） | **部分** | curator 臂已离线评分；混淆 DB + 基线/gold 臂待做 |
+| 真实模型的服务生成（确定性流程 vs. agentic 核心 A/B） | **已运行** | [agentic-serve A/B 结果](docs/plans/agentic-serve-ab-results.md) |
+| 在混淆版 Postgres 库上真实运行的多臂评测（no-layer / curator / +SME） | **已运行，尚不能下定论** | v4 `restaurant`/`pg_rename_decoy`，单一种子，N=23：EX 0.217 → 0.304 → 0.348，decoy-touch 0.609 → 0.0（[三臂结果](docs/plans/three-arm-experiment-results.md)）。阻塞项：≥3 个种子；在当前 agentic serve 路径上重跑（v4 用的是已移除的 `flow`）；一个 gold 参照臂 |
 | `CorpusRelease`（不可变、按内容哈希锁定的服务发布） | **仅设计** | 未实现——见[设计决策](docs/design-decisions.zh.md) |
 | 身份 → 查询范围（RLS / 租户隔离） | **仅接口** | 单一身份的 SQLite 展示；强制执行属企业分支范围 |
-| Postgres / Redshift 执行 | **已构建，未经真实测试** | `PostgresConnector`（information_schema）+ `RedshiftConnector`（svv_*）；离线 fake 连接测试，未连真实服务器 |
+| Postgres / Redshift 执行 | **Postgres 已真实运行；Redshift 仅离线** | `PostgresConnector`（information_schema）已在 v4 三臂运行（`pg_rename_decoy`）中端到端真实执行；`RedshiftConnector`（svv_*）仍只有离线 fake 连接测试 |
 
-**诚实的一句话定位：** 一个把模型输出当作不可信的受治理 NL2SQL 内核——它约束可访问的数据面、对生成的 SQL 做结构化校验、将策展与服务分离、并让语义层可审阅。已在 SQLite 上得到验证、以评测为导向；下一个里程碑是证明 curator 构建的资产在混淆 schema 上、相对一个公平的无 corpus 基线，能带来可度量的提升。
+**诚实的一句话定位：** 一个把模型输出当作不可信的受治理 NL2SQL 内核——它约束可访问的数据面、对生成的 SQL 做结构化校验、将策展与服务分离、并让语义层可审阅。已在 SQLite 上得到验证、以评测为导向；一次在混淆版 Postgres 库上的真实三臂运行已显示 curator 构建的资产能击败无 corpus 基线（并把 decoy-touch 清零），因此下一个里程碑是把这个结论从"方向性"夯实为"可下定论"——多个随机种子，并在当前的 agentic serve 路径上重跑。
 
 ## Web 界面
 
 前端在独立仓库中：
 [Minhao-Zhang/governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui)
-（Next.js、`useStream`）。目前仍是纯 mock，尚未与本后端端到端接通。
+（Next.js、`useStream`）。它面向本后端的流式对话契约开发，但尚未与本后端端到端实测接通。
 
 ## 文档
 
 从 [`docs/README.md`](docs/README.zh.md) 开始阅读。核心文档：
 [架构](docs/architecture.zh.md) ·
-[设计决策(D1-D15)](docs/design-decisions.zh.md) ·
+[设计决策(D1-D16)](docs/design-decisions.zh.md) ·
 [资产模式](docs/asset-schemas.zh.md) ·
 [curator](docs/curator.zh.md) · [server](docs/server.zh.md) · [viz](docs/viz.zh.md) ·
 [术语表](docs/glossary.zh.md)。
