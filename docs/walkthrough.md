@@ -3,10 +3,12 @@
 _[English](walkthrough.md) · [简体中文](walkthrough.zh.md)_
 
 A start-to-finish tour: install the repo, validate the example corpus, and ask
-your first question — both over the HTTP API and from Python. Everything here runs
-**offline** (no API key, no network) against the committed `beer_factory`
-database, using the deterministic template SQL generator. A final optional step
-shows how to switch on a live model.
+your first question — both over the HTTP API and from Python. Cloning, corpus
+validation, and the test suite run **offline** (no API key, no network) against
+the committed `beer_factory` database. Serve is **agent-only** (ADR 0002), so
+asking a question needs a live model and fails closed without one — set an
+OpenAI API key before step 4. A final step covers the model configuration and
+a scripted live check.
 
 By the end you'll have seen the two things that make this more than a
 text-to-SQL demo: a **governed answer** (with its two-axis reliability stamp and
@@ -18,7 +20,9 @@ the exact SQL) and a **refusal** (fail-closed when a question is out of scope).
 - Python 3.13 — uv fetches it automatically if you don't have it
 - `git`
 
-Optional, only for the live-model step at the end: an OpenAI API key.
+Required for step 4: an OpenAI API key. Serve is agent-only, so answering a
+question needs a live model; the read-only audit endpoints (`/health`,
+`/schema`, `/graph`, …) work with no key.
 
 ## 1. Clone and install
 
@@ -62,9 +66,9 @@ CI green: 16 assets, 1 skills, 0 findings.
 uv run pytest -q
 ```
 
-The suite is green offline. With the harness and API extras installed
-(`uv run --extra agents --extra api pytest`) all **321** tests run, including the
-LangGraph-equivalence and the HTTP API tests; without them, a handful skip.
+The suite is green offline. All **470** tests run by default (`uv run pytest`):
+**462 pass** and **8 skip** — the skips are live-model-only checks (agent
+generation quality), covered instead by `scripts/live_smoke.py`.
 
 ## 4. Ask your first question
 
@@ -73,8 +77,12 @@ exact same governed server flow.
 
 ### 4a. Over the HTTP API (recommended)
 
+Serve needs a live model (there is no offline fallback for answering); the
+read-only endpoints (`/health`, `/schema`, `/graph`, …) don't:
+
 ```bash
-uv run --extra api uvicorn --factory governed_bi.api:create_app
+export OPENAI_API_KEY=sk-...        # read from the env, never stored in the repo
+uv run uvicorn --factory governed_bi.api:create_app
 ```
 
 This serves the governed API at http://localhost:8000 (interactive docs at
@@ -85,12 +93,14 @@ curl -s localhost:8000/chat -H 'content-type: application/json' \
   -d '{"question":"What is the total revenue?"}'
 ```
 
-You'll get a governed answer whose JSON carries:
+You'll get a governed answer whose JSON carries (the agent core calls the
+model to generate the SQL, so exact phrasing can vary run to run — this is a
+representative example):
 
 - **tier: governed**
 - **safety_clearance: true**  ·  **semantic_assurance: certified**
-- the answer: `total_revenue = 18496.0`
-- the SQL it ran: `SELECT SUM(PurchasePrice) AS total_revenue FROM "transaction"`
+- the answer, e.g. `total_revenue = 18496.0`
+- the SQL it ran, e.g. `SELECT SUM(PurchasePrice) AS total_revenue FROM "transaction"`
 - a **provenance** trace (route, metric, tables, join confidence)
 
 Now ask something the semantic layer does **not** cover:
@@ -103,7 +113,8 @@ curl -s localhost:8000/chat -H 'content-type: application/json' \
 Instead of guessing, the system **refuses**:
 
 - **tier: refused**
-- an escalation message: _"not answerable from this data - contact &lt;owner&gt;"_
+- an escalation message: _"This question is outside the governed semantic
+  layer. Contact the data owner to add coverage."_
 - no SQL, no number
 
 That refusal is the point: there is no employee/payroll data in scope, so a
@@ -114,30 +125,35 @@ The API is stateless — to keep a conversation going, send prior turns back as
 
 ### 4b. From Python
 
-The same flow as a small API you could embed in your own app:
+The same flow as a small API you could embed in your own app. It needs a live
+model — the raw LangChain model is passed in as `model=`:
 
 ```python
 from governed_bi.config import Settings, Environment
 from governed_bi.corpus import load_corpus
 from governed_bi.gateway import SqliteConnector, Gateway, Identity
-from governed_bi.server import answer_question
+from governed_bi.llm import LangChainChatClient
+from governed_bi.server.agent import answer_question_agent
 
-corpus = load_corpus("corpus", db="beer_factory").for_server()
+settings = Settings.for_env(Environment.dev)
+corpus = load_corpus("corpus", schema="beer_factory").for_server()
 conn = SqliteConnector("data/bird/beer_factory.sqlite")
+chat = LangChainChatClient.from_config(settings.models)  # needs OPENAI_API_KEY
 
-ans = answer_question(
+ans = answer_question_agent(
     "What is the total revenue?",
     Identity(user="demo", all_access=True),
     corpus=corpus,
     gateway=Gateway(conn),
-    settings=Settings.for_env(Environment.dev),
+    settings=settings,
     session_id="demo",
+    model=chat.model,  # the raw LangChain model the agent core drives
 )
-print(ans.tier.value)            # governed
+print(ans.tier.value)            # governed (usually — live-model output can vary)
 print(ans.safety_clearance)      # True
-print(ans.semantic_assurance.value)  # certified
-print(ans.sql)                   # SELECT SUM(PurchasePrice) AS total_revenue FROM "transaction"
-print(ans.text)                  # total_revenue = 18496.0
+print(ans.semantic_assurance.value)  # certified / heuristic
+print(ans.sql)                   # e.g. SELECT SUM(PurchasePrice) AS total_revenue FROM "transaction"
+print(ans.text)                  # e.g. total_revenue = 18496.0
 conn.close()
 ```
 
@@ -155,37 +171,28 @@ conn.close()
   curated out-of-scope pattern all fail closed. The counterweight — not refusing
   answerable questions — is measured by the eval's false-refusal rate.
 
-## 6. (Optional) Go live with a real model
+## 6. Model configuration and the live smoke script
 
-Offline, the deterministic template generator answers metric/KPI questions and
-ignores conversation. To use a real model — which enables free-form SQL and
-context-aware follow-ups in chat — set a key and install the `agents` extra:
-
-```bash
-export OPENAI_API_KEY=sk-...        # read from the env, never stored in the repo
-uv run --extra agents --extra api uvicorn --factory governed_bi.api:create_app
-```
-
-Prefer a file? Copy `.env.example` to `.env` at the repo root and put the key
-there instead of exporting it — it's loaded on import and never overrides a
+Prefer a file over exporting the key? Copy `.env.example` to `.env` at the repo
+root and put it there instead — it's loaded on import and never overrides a
 variable already set in your shell. `.env` holds **secrets only**; policy
 (models, datasource, corpus path) lives in
 [`governed_bi.toml`](../governed_bi.toml) / `governed_bi.local.toml`.
 
-The model is `gpt-5.5` at low reasoning effort (configured in
-[`governed_bi.toml`](../governed_bi.toml)), called through LangChain's
-`ChatOpenAI`, which routes reasoning models to the OpenAI **Responses API**. Over
-`/chat`, follow-ups now resolve against the conversation (prior turns are fed back
-through the engine's working memory), the answer is phrased in **natural
-language**, and the executed rows are returned in the response's **result** field.
-Offline, the answer text falls back to a compact render, but the `result` rows are
-still present — the executed rows are always carried on the answer.
+The model is `gpt-5.6-sol` at low reasoning effort (configured in
+[`governed_bi.toml`](../governed_bi.toml); fall back to `gpt-5.5` if your
+account is GA-only), called through LangChain's `ChatOpenAI`, which routes
+reasoning models to the OpenAI **Responses API**. Over `/chat`, follow-ups
+resolve against the conversation (prior turns are fed back through the
+engine's working memory), the answer is phrased in **natural language**, and
+the executed rows are returned in the response's **result** field — the
+executed rows are always carried on the answer.
 
 For a scripted live check that prints execution accuracy, refusal, and
 decoy-touch over `beer_factory`, run:
 
 ```bash
-uv run --extra agents python scripts/live_smoke.py
+uv run python scripts/live_smoke.py
 ```
 
 ## Next steps

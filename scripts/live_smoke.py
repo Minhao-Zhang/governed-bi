@@ -18,11 +18,11 @@ gold set, and DB are all self-authored and un-obfuscated, so a high EX here only
 proves the plumbing works end-to-end against a live model. The real moat proof is
 the obfuscated BIRD three-arm eval.
 
-Run it (needs the ``agents`` extra + a key; real API spend — the agent path makes
-several small model calls per question):
+Run it (needs a key; real API spend — the agent path makes several small model
+calls per question):
 
     export OPENAI_API_KEY=sk-...
-    uv run --extra agents python scripts/live_smoke.py
+    uv run python scripts/live_smoke.py
 
 Nothing here is imported by the package or the tests; it is a manual entrypoint.
 """
@@ -61,7 +61,7 @@ def main() -> None:
     try:
         from governed_bi.llm import LangChainChatClient, LangChainEmbedder
     except ImportError as err:
-        _fail(f"the `agents` extra is not installed ({err}). Run: uv sync --extra agents")
+        _fail(f"LangChain/deepagents deps failed to import ({err}). Run: uv sync")
 
     from governed_bi.config import Environment, Settings, load_settings
     from governed_bi.corpus import load_corpus

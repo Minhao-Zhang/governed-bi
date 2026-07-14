@@ -2,8 +2,9 @@
 
 _[English](server.md) · [简体中文](server.zh.md)_
 
-服务阶段的 DAG 已经实现。这些图表对应 `docs/server.md`，以及
-`src/governed_bi/server/`（包括 `server/graph.py` 中的 LangGraph harness）、
+服务阶段的 StateGraph 已经实现。这些图表对应 `docs/server.md`，以及
+`src/governed_bi/server/`（agentic 轨道（rails）与 `GovernanceMiddleware`
+位于 `server/agent.py` 和 `server/middleware.py`）、
 `gateway/`、`retrieval/`、`graph/` 中已构建的模块。
 
 ## 回答流水线
@@ -16,19 +17,19 @@ flowchart TD
     Route --> Cache{"SQL semantic cache<br/>cosine gate 0.92?"}
 
     Cache -->|hit| Reexecute["Re-execute cached SQL<br/>as current identity"]
-    Cache -->|miss| Retrieve["RVGD retrieval<br/>R exact, V semantic, G graph, D dictionary"]
-    Retrieve --> JoinPlan["Steiner-tree join planning<br/>penalize low-confidence joins"]
-    JoinPlan --> Generate["SQL generation<br/>physical identifiers only"]
-    Generate --> Guardrails{"Five guardrails pass?"}
+    Cache -->|miss| Assemble["Assemble<br/>RVGD retrieval, Steiner-tree join planning,<br/>seed Governed context + licensed table scope"]
+    Assemble --> AgentCore{"agent_core: create_agent tool loop<br/>GovernanceMiddleware.wrap_tool_call gates every call"}
     Bind --> RefuseGate{"Refuse-gate<br/>negative example match?"}
 
     RefuseGate -->|match| Refuse["Refuse / clarify<br/>fail closed"]
-    RefuseGate -->|no match| Guardrails
-    Guardrails -->|no| Refuse
-    Guardrails -->|yes| Execute["Gateway.execute()<br/>read-only, forced LIMIT/timeout, audit"]
+    RefuseGate -->|no match| AgentCore
+    AgentCore -->|search_corpus / inspect_schema / sample_rows| AgentCore
+    AgentCore -->|run_query blocked, attempts remain| AgentCore
+    AgentCore -->|run_query blocked: attempt cap or recursion_limit exhausted| Refuse
+    AgentCore -->|run_query passes five guardrails| Execute["Gateway.execute()<br/>read-only, forced LIMIT/timeout, audit"]
     Reexecute --> Execute
     Execute --> Result["Rows + provenance"]
-    Result --> Stamp["Answer composition<br/>reliability stamp"]
+    Result --> Stamp["Finalize<br/>two-axis reliability stamp"]
     Stamp --> User["Answer to user"]
     Execute --> Audit["Audit/replay log"]
     Stamp --> CacheWrite["Cache successful SQL text<br/>TTL 15 minutes"]
@@ -40,34 +41,37 @@ flowchart TD
 sequenceDiagram
     autonumber
     actor User
-    participant Server as Server DAG
+    participant Rails as Server rails (StateGraph)
     participant Corpus as Server-visible Corpus
-    participant Retrieval as RVGD / Graph
-    participant Guardrails as Guardrails + Refuse-gate
+    participant Agent as create_agent (agent_core)
+    participant MW as GovernanceMiddleware
     participant Gateway as Governed Gateway
     participant DB as Relational DB
 
-    User->>Server: Ask question with identity
-    Server->>Corpus: Load Facts + Inference context
-    Server->>Server: Bind terms and choose intent route
-    Server->>Retrieval: Retrieve assets, skills, and join paths
-    Retrieval-->>Server: Context + join plan + uncertainty signals
-    Server->>Server: Generate SQL
-    par Hard SQL checks
-        Server->>Guardrails: syntax, policy, AST, semantics, cost
-    and Curated refusal check
-        Server->>Guardrails: negative-example semantic match
-    end
-    alt any check fails
-        Guardrails-->>Server: veto
-        Server-->>User: Refusal or clarifying question
-    else checks pass
-        Guardrails-->>Server: pass
-        Server->>Gateway: Execute SQL as user
-        Gateway->>DB: Read-only query under RLS
-        DB-->>Gateway: Rows
-        Gateway-->>Server: QueryResult + audit metadata
-        Server-->>User: Answer + provenance + reliability stamp
+    User->>Rails: Ask question with identity
+    Rails->>Corpus: Load Facts + Inference context; match negative examples
+    alt refuse-gate match
+        Rails-->>User: Refusal or clarifying question
+    else no match
+        Rails->>Rails: Assemble: RVGD retrieval, Steiner join plan,<br/>seed Governed context + licensed table scope
+        Rails->>Agent: agent_core(Governed context, licensed scope)
+        loop bounded by recursion_limit
+            Agent->>MW: call a governed tool
+            MW->>MW: normalize call, run L1-L5 guardrails<br/>over current licensed set, write ledger entry
+            alt search_corpus / inspect_schema / sample_rows
+                MW-->>Agent: expand licensed set + result
+            else run_query blocked (guardrail veto or attempt cap)
+                MW-->>Agent: ToolMessage: blocked, retry or stop
+            else run_query passes guardrails
+                MW->>Gateway: execute SQL as user
+                Gateway->>DB: Read-only query under RLS
+                DB-->>Gateway: Rows
+                Gateway-->>MW: QueryResult + audit metadata
+                MW-->>Agent: rows + ledger entry
+            end
+        end
+        Agent-->>Rails: final rows + governance ledger, or budget exhausted
+        Rails-->>User: Answer + provenance + reliability stamp
     end
 ```
 
@@ -79,7 +83,7 @@ sequenceDiagram
     actor User
     participant Server
     participant Cache as SQL cache
-    participant Pipeline as Full pipeline
+    participant Pipeline as Agent core (assemble + tool loop)
     participant Gateway
 
     User->>Server: Ask repeated or similar question
@@ -92,7 +96,7 @@ sequenceDiagram
         Server-->>User: Answer from fresh execution
     else miss
         Cache-->>Server: None
-        Server->>Pipeline: retrieval, planning, generation, guardrails
+        Server->>Pipeline: assemble Governed context, run agent tool loop
         Pipeline-->>Server: guarded SQL + answer
         Server->>Cache: write_back(question, sql, identity)
         Server-->>User: Answer
@@ -158,8 +162,8 @@ stateDiagram-v2
 
 ```mermaid
 flowchart TD
-    SQL["Generated SQL"] --> Syntax{"1. syntax<br/>valid SQL parse?"}
-    Syntax -->|fail| Veto["veto / fail closed"]
+    SQL["Agent-written SQL<br/>(run_query tool call)"] --> Syntax{"1. syntax<br/>valid SQL parse?"}
+    Syntax -->|fail| Veto["veto / fail closed<br/>(wrap_tool_call blocks the call)"]
     Syntax -->|pass| Policy{"2. policy blacklist<br/>read-only only?"}
     Policy -->|fail| Veto
     Policy -->|pass| AST{"3. AST column allowlist<br/>known, non-excluded,<br/>suspect policy respected?"}
@@ -168,5 +172,5 @@ flowchart TD
     Semantics -->|fail| Veto
     Semantics -->|pass| Cost{"5. cost / EXPLAIN<br/>under budget?"}
     Cost -->|fail| Veto
-    Cost -->|pass| Pass["pass to Gateway.execute()"]
+    Cost -->|pass| Pass["pass; run_query executes via Gateway.execute()"]
 ```

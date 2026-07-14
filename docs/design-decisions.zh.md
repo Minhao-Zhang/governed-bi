@@ -277,7 +277,7 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   `review`，以及一个 `proposed -> draft` 的 `curate` 提升循环），再加上
   **LLM proposer**（`LlmProposer`：在 heuristic 的基础上撰写描述与
   `suspect` 可靠性警示，Facts 保持不变），以及**deepagents 构建
-  harness**（`curator/deep_agent.py`，位于 `agents` extra 之后：一个
+  harness**（`curator/deep_agent.py`：一个
   运行在 Facts 画像分析 + 只读探测工具之上的 deep agent；其构建过程已
   离线验证，自主运行则受模型门控）。仍是接缝的有：join/term/metric/
   rule/skill 的 LLM 撰写、逐资产实时的 adversary `refute`，以及自评估的
@@ -383,9 +383,9 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 
 ## D16：受治理的 Agentic 服务核心
 
-> **提议中（ADR 级，2026-07-13）。** 完整的理据、不变式与分阶段迁移见
-> [ADR 0002](adr/0002-governed-agentic-serve-runtime.md)；A/B 结果见
-> [agentic-serve-ab-results.md](plans/agentic-serve-ab-results.md)。
+> **已决定（ADR 级，2026-07-13；切换已于 2026-07-14 落地）。** 完整的理据、
+> 不变式与分阶段迁移见 [ADR 0002](adr/0002-governed-agentic-serve-runtime.md)；
+> A/B 结果见 [agentic-serve-ab-results.md](plans/agentic-serve-ab-results.md)。
 >
 > serve 从一张确定性的单次 DAG 重做为一个**受治理的 agentic 核心**：外层是一张
 > 确定性的 `StateGraph`（很薄的治理护栏），包裹着内层一个有界的 `create_agent`
@@ -401,11 +401,13 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   从不设置自己的标记：`safety_clearance` / `semantic_assurance` 由确定性的
   `finalize` 代码依据实际发生的事情计算得出。执行与审计共用同一个拦截点，所以
   你绝不可能不留记录就执行（或拒答）。
-- **铺开受标志位门控，默认仍是确定性的。** agentic 路径落在一个 `agent_serve`
-  标志位之后；确定性流程保持为默认，直到 P2 切换为止；届时
-  `TemplateSqlGenerator`（serve）、`flow.py` 巨石以及陈旧的 `server/graph.py`
-  都会被删除，LLM key 变为必需。CI/离线的确定性改由一个 `FakeListChatModel`
-  agent harness 提供；等价性测试从“同一个 `Answer`”改为“同一套治理不变式”。
+- **P2 切换已完成，agentic 核心现在是唯一的 serve 路径。** `agent_serve` 标志位
+  ——此前在 P0/P1 期间用于把 agentic 路径放在确定性流程之后门控——已被**移除**：
+  不再有开关，serve 始终运行 agent。`TemplateSqlGenerator`（serve）、`flow.py`
+  巨石以及陈旧的 `server/graph.py` 均已**删除**，LLM key 现已成为必需：没有可用
+  的实时模型时，serve 会在启动时失败即拒，`/chat` 返回 `503`。CI/离线的确定性
+  改由一个 `FakeListChatModel` agent harness 提供；等价性测试已从“同一个
+  `Answer`”改为“同一套治理不变式”。
 - **与 D5 的关系。** D5 的**有界自修复循环**变为 agent 的工具反思循环，其中
   `run_query` 的尝试上限（=3）由 `wrap_tool_call` 强制，而不再是手写的 `while`
   循环。D5 的**不变式得到保留**：拒答关卡仍在 agent 之前运行；安全仍是硬性的
@@ -416,7 +418,7 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   用一张手工接线的 StateGraph 工具循环替代 `create_agent` + middleware（一旦已
   验证 middleware 能在工具边界强制护栏，这种定制接线就没有必要）；并行保留确定性
   模板路径（还是那个两套实现漂移的陷阱）。参见 ADR 0002。
-- **状态：提议中；P0/P1 已落在 `agent_serve` 标志位之后，P2 切换待定。** 机制已由
-  一次 2026-07-13 的 spike 验证（在锁定的技术栈上，`wrap_tool_call` 的 state
-  更新 + 账本写入）；修订 1 增加了一个确定性的 `assemble` 节点，用经过策展的语义
-  层为 agent 提供初始输入，使它无法退化到低于原流程的水平。
+- **状态：已实现；P2 切换已于 2026-07-14 落地到 `main`（commit `d2fdd6a`）。**
+  机制已由一次 2026-07-13 的 spike 验证（在锁定的技术栈上，`wrap_tool_call` 的
+  state 更新 + 账本写入）；修订 1 增加了一个确定性的 `assemble` 节点，用经过
+  策展的语义层为 agent 提供初始输入，使它无法退化到低于原流程的水平。

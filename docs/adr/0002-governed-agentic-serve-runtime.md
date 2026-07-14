@@ -2,7 +2,8 @@
 
 _[English](0002-governed-agentic-serve-runtime.md) · 简体中文 (pending)_
 
-- **Status:** Proposed — grilled & refined in design review 2026-07-13
+- **Status:** Accepted / Implemented. Grilled & refined in design review
+  2026-07-13; cutover landed on `main` 2026-07-14 (commit `d2fdd6a`).
 - **Deciders:** project owner + design session
 - **Related:** [0001](0001-langgraph-server-chat-runtime.md),
   [pipeline-design.md](../pipeline-design.md) (§5, §6, §8),
@@ -365,3 +366,19 @@ it keeps emitting the legacy `{stage}` events.
 
 Frontend spec + full event contract: [`docs/plans/agent-step-visualization.md`](../plans/agent-step-visualization.md).
 Tests: `tests/test_agent_step_events.py`.
+
+## Implementation note (2026-07-14): P2 cutover landed on `main`
+
+**Status:** Implemented, commit `d2fdd6a` on `main`.
+
+The Phase 2 cutover described above shipped: the agentic core is now the
+**only** serve path. `server/flow.py` (`answer_question`) and the stale unused
+`server/graph.py` DAG are both deleted; the chat graph and `/chat` always run
+`answer_question_agent`; and the now-vestigial `agent_serve` flag is gone: there
+is no toggle, and the agent path is unconditional. With no live model
+configured, serve **fails closed at startup** (`make_graph` raises) rather than
+falling back to a deterministic or template path, and `/chat` returns `503`.
+Governance (guardrails L1–L5, the refuse-gate, L4 licensing, the two-axis
+stamp, the ledger) is unchanged and shared. Eval's `flow_solver`/`flow_refuser`
+are replaced by `agent_solver`/`agent_refuser`, adding refuse-gate coverage on
+the agent path; `run_experiment` is agent-only.

@@ -6,10 +6,11 @@ _[English](usage.md) · [简体中文](usage.zh.md)_
 > tour. This page is the reference quickstart.
 
 The full question -> answer pipeline runs end to end today over the committed
-`beer_factory` database, and needs no model or network: it falls back to
-deterministic offline defaults (a template SQL generator, a hashing embedder).
-This page stays on the runnable surface; for the design behind it, see the
-[design docs](README.md).
+`beer_factory` database. Corpus validation, the gateway, and retrieval need no
+model or network (the embedder still falls back to a deterministic hashing
+default); serve is **agent-only** (ADR 0002) and fails closed without a live
+model. This page stays on the runnable surface; for the design behind it, see
+the [design docs](README.md).
 
 | Area | Status | Where |
 |---|---|---|
@@ -19,11 +20,11 @@ This page stays on the runnable surface; for the design behind it, see the
 | Curator: Facts profiling, heuristic + LLM proposer, adversary, curate loop | runnable | `src/governed_bi/curator/` |
 | Graph projection + Steiner join planning | runnable | `src/governed_bi/graph/` |
 | Retrieval (BM25 + grounding, + embedder-gated vector channel) | runnable | `src/governed_bi/retrieval/` |
-| Serve flow (route, context, SQL gen, guardrails, self-repair, cache, stamp) | runnable | `src/governed_bi/server/` |
+| Serve (agentic core: route, context, governed tools, guardrails, self-repair, cache, stamp) | runnable, needs a live model | `src/governed_bi/server/` |
 | Memory (working) + eval (EX, arms, refuse-gate) + viz presenter (audit view models) | runnable | `src/governed_bi/{memory,eval,viz}/` |
-| Model clients (raw OpenAI / LangChain) | runnable behind `openai` / `agents` extras | `src/governed_bi/llm/` |
-| Agent harnesses (LangGraph serve DAG, deepagents curator) | runnable behind `agents` extra | `server/graph.py`, `curator/deep_agent.py` |
-| Postgres / Redshift connectors | implemented behind optional extras; offline-tested, not run live | `src/governed_bi/gateway/connectors/` |
+| Model clients (raw OpenAI / LangChain) | runnable (installed by a plain `uv sync`, no extra) | `src/governed_bi/llm/` |
+| Agent harnesses (LangGraph governed serve core, deepagents curator) | runnable (installed by a plain `uv sync`, no extra) | `server/agent.py`, `curator/deep_agent.py` |
+| Postgres / Redshift connectors | implemented (psycopg-backed, plain `uv sync`); offline-tested, not run live | `src/governed_bi/gateway/connectors/` |
 
 ## Prerequisites
 
@@ -86,7 +87,7 @@ from pathlib import Path
 from governed_bi.corpus import load_corpus, validate_corpus, is_green, parse_asset
 
 # Load a DB's corpus (YAML assets + Markdown skills) into typed models.
-corpus = load_corpus(Path("corpus"), db="beer_factory")
+corpus = load_corpus(Path("corpus"), schema="beer_factory")
 print(len(corpus.assets), "assets;", len(corpus.skills), "skills")
 
 # Run the same checks the CLI runs.
@@ -100,7 +101,7 @@ server_view = corpus.for_server()
 table = parse_asset({
     "asset_type": "table",
     "id": "tbl_demo_orders",
-    "db": "demo",
+    "schema": "demo",
     "physical_name": "t_1",
 })
 print(table.id, table.asset_type)
@@ -113,7 +114,7 @@ is allowed to see (Facts + Inference, never Audit, and never an excluded asset).
 
 The gateway wraps a per-dialect connector. SQLite is proven (read-only, with an
 audit log and a forced row cap); Postgres (`information_schema`) and Redshift
-(`svv_*`) are implemented behind the `postgres` / `redshift` optional extras and
+(`svv_*`) are implemented (both ride psycopg, installed by a plain `uv sync`) and
 unit-tested offline, but not yet run against a live server. Point it at a SQLite
 file and you can introspect the catalog, profile the Facts tier, and run guarded
 queries:
@@ -123,7 +124,7 @@ from governed_bi.gateway import SqliteConnector, Gateway, Identity
 from governed_bi.curator.profile import profile_database
 
 conn = SqliteConnector("data/bird/mydb.sqlite")     # opens read-only
-tables = profile_database(conn, db="mydb")           # Facts-tier table assets
+tables = profile_database(conn, schema="mydb")       # Facts-tier table assets
 gw = Gateway(conn)
 result = gw.execute(
     "SELECT COUNT(*) FROM some_table",
@@ -138,36 +139,42 @@ physical-existence check (every `physical_name` exists in the live catalog).
 
 ## Ask a question (serve pipeline)
 
-The serve flow routes a question, retrieves + assembles context, generates SQL,
-runs the five guardrail layers, executes as-user, and stamps the answer. With no
-model it uses the deterministic template generator (metric / KPI questions):
+Serve is agent-only (ADR 0002): `create_agent` + `GovernanceMiddleware` +
+governed read-only tools, wrapped by an outer LangGraph rails graph that
+routes the question, checks the semantic cache, runs the agent core, and
+stamps the answer. There is no deterministic fallback for answering: it needs
+a live model, and fails closed rather than guessing without one:
 
 ```python
 from pathlib import Path
 from governed_bi.config import load_settings
 from governed_bi.corpus import load_corpus
 from governed_bi.gateway import SqliteConnector, Gateway, Identity
-from governed_bi.server import answer_question
+from governed_bi.llm import LangChainChatClient
+from governed_bi.server.agent import answer_question_agent
 
 settings = load_settings()
-corpus = load_corpus(Path(settings.corpus_root), db="beer_factory").for_server()
+corpus = load_corpus(Path(settings.corpus_root), schema="beer_factory").for_server()
 conn = SqliteConnector(settings.datasource.sqlite_path)
-ans = answer_question(
+chat = LangChainChatClient.from_config(settings.models)  # needs OPENAI_API_KEY
+ans = answer_question_agent(
     "What is the total revenue?",
     Identity(user="dev", all_access=True),
     corpus=corpus,
     gateway=Gateway(conn),
     settings=settings,
     session_id="s",
+    model=chat.model,  # the raw LangChain model the agent core drives
 )
 print(ans.tier, ans.sql, ans.text)  # -> ReliabilityTier.governed  SELECT ...  total_revenue = ...
 ```
 
-To use a real OpenAI model (LLM generator, embeddings, SQL cache) or the LangGraph
-serve harness (`answer_question_graph`) and the deepagents curator, install the
-`agents` extra and inject the clients - see the **Models & configuration** section
-of the [README](../README.md). The API key is read from the env var named by
-`[models].api_key_env` (default `OPENAI_API_KEY`), never stored.
+This needs a real key and the client injected as shown above — the agent
+harnesses (curator and serve) are installed by a plain `uv sync`, no extra
+required; see the **Models & configuration** section of the
+[README](../README.md) for the full setup. The API key is read from the env
+var named by `[models].api_key_env` (default `OPENAI_API_KEY`), never stored.
+The deepagents curator needs the same key.
 
 ## Audit surface (viz presenter + API)
 
@@ -176,13 +183,17 @@ UI-agnostic pieces: the `governed_bi.viz.presenter` view models (corpus health,
 the table/tier view, the relationship/knowledge graph, the asset listing,
 skills, and an answer's two-axis reliability stamp — no UI dependency), and the
 `governed_bi.api` FastAPI HTTP/JSON API that serves those view models plus the
-governed serve flow at `POST /chat`. To run the API (optional `api` extra):
+governed agent core at `POST /chat`. The view-model endpoints (`/health`,
+`/schema`, `/graph`, `/corpus/assets`, `/skills`, …) need no model; `/chat`
+does, and returns `503` without one. To run the API:
 
 ```bash
-uv run --extra api uvicorn --factory governed_bi.api:create_app
+uv run uvicorn --factory governed_bi.api:create_app
 ```
 
-Then open the interactive docs at http://localhost:8000/docs, or POST a question:
+Then open the interactive docs at http://localhost:8000/docs, or POST a
+question (needs `OPENAI_API_KEY` set — the agent harness is installed by a
+plain `uv sync`):
 
 ```bash
 curl -s localhost:8000/chat -H 'content-type: application/json' \

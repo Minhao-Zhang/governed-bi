@@ -8,15 +8,13 @@ _[English](server.md) · [简体中文](server.zh.md)_
 
 ## 形态
 
-服务运行时正在**被改造为一个受治理的 agentic 内核**（[ADR 0002](adr/0002-governed-agentic-serve-runtime.md)，*Proposed*）。其组织原则是**权限（authority）是确定性的；推理（reasoning）则可以是 agentic 的**。ADR 0002 推翻了旧的 design-spine #2 不变式（「绝不是自主式 ReAct 循环」）。自主性只授予*如何找到答案*，绝不授予*什么可以执行*或*什么被信任*：agent 自由推理，但每一次工具调用都要经过中间件（middleware），由它运行护栏并记录审计，且答案由 agent 无法影响的确定性代码打上标记。
+服务运行时现在就是**一个受治理的 agentic 内核**（[ADR 0002](adr/0002-governed-agentic-serve-runtime.md)）。其组织原则是**权限（authority）是确定性的；推理（reasoning）则可以是 agentic 的**。ADR 0002 推翻了旧的 design-spine #2 不变式（「绝不是自主式 ReAct 循环」）。自主性只授予*如何找到答案*，绝不授予*什么可以执行*或*什么被信任*：agent 自由推理，但每一次工具调用都要经过中间件（middleware），由它运行护栏并记录审计，且答案由 agent 无法影响的确定性代码打上标记。
 
-下文描述的两条路径**共享同一个治理内核**（`check` / 列许可清单 / licensed-table / refuse-gate / stamp 等辅助函数），因此护栏不会在二者之间发生漂移。
+外层轨道（rails）与 agent 的 `GovernanceMiddleware` **共享同一个治理内核**（`check` / 列许可清单 / licensed-table / refuse-gate / stamp 等辅助函数），因此护栏不会在二者之间发生漂移。
 
-> *已实现（当前现状）：* 位于 **`agent_serve`** 配置开关之后的两条服务路径（默认关闭；本地覆盖配置（overlay）可将其开启）。
-> - **确定性流程（代码默认）。** `server.flow.answer_question` 是纯粹的确定性参考实现；`server.graph.build_serve_graph` / `answer_question_graph` 则是与之等价的 **LangGraph `StateGraph`** harness（节点：ingest → refuse_gate → prepare → cache → retrieve+context → generate → guardrail → execute → stamp；自修复循环（self-repair loop）就是图上回到 `generate` 的一个环）。两者按构造对 `Answer` 是等价的（图节点调用的是同一组辅助函数），测试中有相应断言。
-> - **Agentic 路径（P0/P1 已落地，受开关控制）。** 当 `agent_serve` 开启*且*存在真实（live）模型时，`server.agent` 会编译一个外层的确定性 `StateGraph`（`ingest → refuse_gate → prepare → cache → assemble → agent_core`），它包裹起一个内层的 LangChain `create_agent` 推理循环。治理由 `GovernanceMiddleware`（`server.middleware`）承载；四个受治理工具位于 `server.tools`；`llm.fake` 提供一个 `FakeListChatModel` harness 用于 CI 的确定性。
+> *已实现（当前现状）：* agentic 内核是**唯一**的服务路径：P2 切换已经落地，确定性流程（`server.flow`）与 `agent_serve` 开关都已被移除。`server.agent` 会编译一个外层的确定性 `StateGraph`（`ingest → refuse_gate → prepare → cache → assemble → agent_core`），它包裹起一个内层的 LangChain `create_agent` 推理循环；公开的入口函数是 `answer_question_agent`。治理由 `GovernanceMiddleware`（`server.middleware`）承载；四个受治理工具位于 `server.tools`；`llm.fake` 提供一个 `FakeListChatModel` harness 用于 CI 的确定性。
 >
-> P2 切换（删除 flow / 模板路径并强制要求真实 key）**尚未**完成；确定性流程仍然存在，并且是默认运行的路径。参见 ADR 0002 以及 [`docs/plans/agentic-serve-ab-results.md`](plans/agentic-serve-ab-results.md) 中的 A/B 结果。
+> 回答问题现在必须有真实（live）模型：`build_stack()` 在没有模型时仍可构建（只读的审计 API 仍可运行），但 LangGraph 服务进程（`make_graph`）会在启动时失败即拒（fail closed），`/chat` 在模型配置完成之前始终返回 503。参见 ADR 0002 以及 [`docs/plans/agentic-serve-ab-results.md`](plans/agentic-serve-ab-results.md) 中的 A/B 结果。
 
 ## 流程
 
@@ -27,18 +25,16 @@ _[English](server.md) · [简体中文](server.zh.md)_
 5. **RVGD 检索**：R 精确匹配 / V 语义 / G 图 / D 词典。四阶段重排，受 token 预算约束，并有 Corrective-RAG 回退。**仅限 Facts 层与 Inference 层**（加载器契约（loader contract））；Audit 层与 `excluded` 资产永不被检索。*已实现：* 纯 Python 的 **BM25** 词法通道，加上确定性接地（grounding）（一个已绑定的 term 会带出它的目标对象，一个 metric 会带出它的基表，一张 table 会带出它的列），以及 **V（向量）通道**（`retrieval.embedding`）：注入的 `Embedder`（OpenAI `text-embedding-3-small`，或确定性的离线 `HashingEmbedder`）按余弦相似度排序，并通过 Reciprocal Rank Fusion 与 BM25 融合。除非传入了 embedder，否则该通道关闭，因此默认是纯 BM25。图通道（G）与 Corrective-RAG 重排仍是后续切片。
    - **上下文组装（context assembly）**（`server.context.assemble_context`）：检索返回的是 id；该步骤将 L4 授权的表范围解析为一个 `PromptContext`（物理 schema、带置信度的连接路径、terms、metrics、suspect 列告诫、gold 标准样例、skills）。护栏的 `allowed_tables` 由此派生，因此**生成器能看到的，正是 L4 所允许的**。
 6. **Steiner 树连接规划**：在推断出的 FK 图上进行。
-7. **SQL 生成**（一个可插拔的扩展点（pluggable seam），`SqlGenerator`）：设计愿景中的生成器在 LLM 之上叠加一个系统提示（角色 → schema 约束 → 安全 → 输出），输出**经过混淆的物理标识符**。*已实现：* `TemplateSqlGenerator`（确定性，单表 metric 聚合，不依赖模型）以及 `LlmSqlGenerator`（读取 `PromptContext`，调用注入的 `ChatClient` = OpenAI `gpt-5.5` low，对修复循环具有反馈感知能力，并以 `CANNOT_ANSWER` 哨兵值拒答）。运行哪一个，在确定性流程上由注入方式决定。**即将移除（ADR 0002，Q4/P2）：** 模板式 / 无模型的服务模式将被取消：agentic 路径需要真实模型，CI 的确定性转由 `FakeListChatModel` harness 提供。`SqlGenerator` 扩展点由 agent 的受治理工具 `run_query`（见下文）取代。
+7. **SQL 生成发生在 agent 自身的工具循环内部**，不再是一个独立的可插拔扩展点：agent 自己在系统提示的引导下写出一条 SELECT，字段用的是**经过混淆的物理标识符**（参考下文的 `## Governed context` 区块，见[Agentic 路径](#agentic-路径adr-0002)），再交给受治理的 `run_query` 工具。不再存在模板式 / 无模型的服务模式：agentic 路径需要真实模型，CI 的确定性改由 `FakeListChatModel` harness 提供。`server.sqlgen` 现在只保留 agent 内核与可靠性标记仍需要的、与 flow 无关的值对象（`GeneratedSql`、`_tables_used`、`_extract_sql`）。
 8. **五层护栏**（`wrap_tool_call`，任一环节失败即拒，五层全部强制执行）：语法 → 策略黑名单 → AST 列许可清单 → term 语义 → 成本。**L3 具备 scope 感知能力**（sqlglot `traverse_scope`）：它针对每个列自身所在的查询 scope 进行解析，检查每一个列节点（包括裸的 `HAVING` 引用以及 `USING` / `NATURAL` 连接键），并拦截许可清单无法背书的星号投影（`SELECT *` / `t.*`）。**L4（term 语义）**授权的范围是检索到的表，加上它们的 FK 连接邻域（一跳，可调），以及连接规划所桥接经过的 Steiner 点，而不是精确的检索命中集合，因此它与词法检索的召回率相解耦；在**多 schema 模式**下，它的授权范围跨越多个 schema：只有当一条**经过策展**的连接桥接过去时，跨 schema 的表名才会被授权（源自 memory，绝不靠 FK 发现），否则引擎会**拒答**而非猜测。限定（qualification）是按模式区分的（**D15**）：单 schema / SQLite / BIRD 路径保持**裸的、未限定的** SQL，只有多 schema 的 Postgres / Redshift 路径才做限定。L3 仍然守卫每一个列，因此扩大表范围绝不会泄漏 `excluded` 或 `suspect` 列（邻居表只会暴露它自身已被允许的列）。**L5** 是一道结构性的交叉连接 / 笛卡尔积防护；基于数值化 EXPLAIN 的成本（Postgres / Redshift）是未来按方言展开的工作。refuse-gate 与其**并发**运行（D5）。
 9. **以用户身份执行**：gateway 的 RLS、强制 LIMIT/超时、审计/重放。
 10. **应答与可靠性标记（reliability stamp）**：一个**双轴**标记——`safety_clearance`（护栏 + 授权已通过，一个闸门）与 `semantic_assurance`（`certified` → `heuristic` → `unverified`，接地程度如何）。单轴档位（governed → lineage → fenced-raw）是二者的紧凑投影。高风险（high-stakes）→ 签核（sign-off）/ 仅 SQL（SQL-only）。
 
-**自修复（第 7-9 步构成一个有界循环）。** 生成、护栏与执行以循环方式运行：*可修复的*护栏拒绝或执行报错会反馈给生成器，供其再次尝试，每次尝试都会重新过护栏，因此未经审查的 SQL 永远不会被执行。当生成器已无法再改进（重复输出同一条查询）时会提前停止，并在达到一个较小的次数上限后失败即拒。经过修复的答案的 `semantic_assurance` 为 `heuristic`（档位 `lineage`），绝不会是 `certified`/`governed`。**并非所有失败都可修复：** 一个硬性策略/DDL 阻断（L2 `policy_blacklist`）会立即失败即拒，因为把它回传只是施压让生成器规避策略；范围失败（L3/L4）按决定保持可修复（FK 邻域 + 修复循环是刻意的降低误拒机制；[D11](design-decisions.zh.md#d11开放决策外部评审2026-07-09)）。这能够从畸形的 SQL 中恢复，且从不放行未经检查的查询；但它无法捕捉*看似合理却错误*的 SQL（语法有效、在许可清单内，但计算逻辑是错的），这正是双轴标记以及拒答 / 仅 SQL 路径存在的原因。护栏是安全/治理层面的关卡，不是正确性的判定者（oracle）。
+**自修复（第 7-9 步构成一个有界循环）。** 生成、护栏与执行以 **agent 自身的工具反思循环（tool-reflection loop）**方式运行：一次失败的 `run_query`（被护栏拦截的裁决或一次执行报错）会作为 `ToolMessage` 返回，供 agent 读取并重试，每次尝试都会重新过护栏，因此未经审查的 SQL 永远不会被执行。`run_query` 的**尝试次数上限**（3）在 `wrap_tool_call` 中强制执行，外层图的 `recursion_limit` 则限界整轮对话；一旦耗尽，则回落到分级交付（graded delivery）或拒答。经过修复的答案的 `semantic_assurance` 为 `heuristic`（档位 `lineage`），绝不会是 `certified`/`governed`。**并非所有失败都可修复：** 一个硬性策略/DDL 阻断（L2 `policy_blacklist`）是硬性停止，绝不回传劝导，因为把它回传给 agent 只是施压让它规避策略；范围失败（L3/L4）按决定保持可重试（FK 邻域 + 重试是刻意的降低误拒机制；[D11](design-decisions.zh.md#d11开放决策外部评审2026-07-09)）。这能够从畸形的 SQL 中恢复，且从不放行未经检查的查询；但它无法捕捉*看似合理却错误*的 SQL（语法有效、在许可清单内，但计算逻辑是错的），这正是双轴标记以及拒答 / 仅 SQL 路径存在的原因。护栏是安全/治理层面的关卡，不是正确性的判定者（oracle）。
 
-> *Agentic 路径：* 这个手写的 `while attempts < N` 循环变成了 **agent 自身的工具反思循环（tool-reflection loop）**（一次失败的 `run_query` 会作为 `ToolMessage` 返回，供 agent 读取并重试），并保持同样的失败即拒纪律：`run_query` 的**尝试次数上限**（3）在 `wrap_tool_call` 中强制执行，L2 策略阻断是硬性停止（绝不回传劝导），且每一次尝试在执行前都会重新过护栏。外层图由一个 `recursion_limit` 限界；一旦耗尽，则回落到分级交付（graded delivery）或拒答。
+## Agentic 路径（ADR 0002）
 
-## Agentic 路径（ADR 0002，受开关控制）
-
-当 `agent_serve` 开启时，SQL 生成与执行的中段（上文第 6-9 步）被替换为一个有界的 `create_agent` 推理循环。确定性的**轨道（rails）**保持不变：`ingest → refuse_gate → prepare → cache → assemble → agent_core`，随后是一个确定性的 `finalize`（双轴标记 + 缓存写回），或者分级交付 / 拒答。refuse-gate 仍然在 agent **之前**运行，标记仍然由 agent 无法影响的确定性代码计算。
+SQL 生成与执行的中段（上文第 6-9 步）就是一个有界的 `create_agent` 推理循环。确定性的**轨道（rails）**包裹着它：`ingest → refuse_gate → prepare → cache → assemble → agent_core`，随后是一个确定性的 `finalize`（双轴标记 + 缓存写回），或者分级交付 / 拒答。refuse-gate 仍然在 agent **之前**运行，标记仍然由 agent 无法影响的确定性代码计算。
 
 **受治理工具（仅只读，`server.tools`）。** agent *只能*通过四个工具行动：
 
@@ -54,9 +50,9 @@ _[English](server.md) · [简体中文](server.zh.md)_
 
 **存续下来的不变式：** **护栏仍然在任何执行之前于中间件中运行**：同样的五层，失败即拒，只是现在在*工具边界*（`wrap_tool_call`）而不是某个图节点上强制执行。授权来自**受治理的探索，而非 agent 的声称**：`allowed_tables` 是本轮通过受治理工具所暴露的表集合（经 FK 扩展），因此一个失控的 agent 无法自行授权一个 `excluded` 表；L3 仍然守卫每一个列。
 
-**Amendment 1：为语义层播种（seed）。** 首次线上 A/B 显示，纯工具（tools-only）的 agent 相较于 flow *发生了退化*，因为 P1 的工具只暴露了名称，而没有暴露任何经策展的语义层（few-shots、连接的 `ON` 子句、metric 表达式、terms、rules）。修复办法：一个确定性的 **`assemble` 节点在 `agent_core` 之前运行**，用 flow 所使用的*同一份*语义层上下文（`PromptContext.render()`）作为一个 `## Governed context` 区块为 agent 播种，并用基础的（检索到的 + FK 邻域 + Steiner）表范围预填充 `licensed` 通道。工具由此变成**精炼（refinement），而非发现（discovery）**。这是 flow 的*确定性* L4 下限（而非 agent 声称的），因此播种得到的范围严格 ≥ flow 的范围，且绝不会是自行授权的。参见 ADR 0002 Amendment 1 以及 [`docs/plans/agentic-serve-ab-results.md`](plans/agentic-serve-ab-results.md)。
+**Amendment 1：为语义层播种（seed）。** 首次线上 A/B 显示，纯工具（tools-only）的 agent 相较于（已被移除的）确定性 flow *发生了退化*，因为 P1 的工具只暴露了名称，而没有暴露任何经策展的语义层（few-shots、连接的 `ON` 子句、metric 表达式、terms、rules）。修复办法：一个确定性的 **`assemble` 节点在 `agent_core` 之前运行**，用同一份语义层上下文（`PromptContext.render()`）作为一个 `## Governed context` 区块为 agent 播种，并用基础的（检索到的 + FK 邻域 + Steiner）表范围预填充 `licensed` 通道。工具由此变成**精炼（refinement），而非发现（discovery）**。这正是护栏所执行的那道*确定性* L4 下限（而非 agent 声称的），因此播种得到的范围严格 ≥ 该下限，且绝不会是自行授权的。参见 ADR 0002 Amendment 1 以及 [`docs/plans/agentic-serve-ab-results.md`](plans/agentic-serve-ab-results.md)。
 
-**实时治理事件流（Amendment 2）。** 治理账本会实时流式输出，而不只是附在最终答案上。`agent_core` 运行的是 `agent.stream(...)`（而非 `invoke`），并通过既有的 `on_event` 回调把每一个受治理动作重新发出为一条有类型的事件：`rail` 对应每个外层步骤（`route` / `refuse_gate` / `cache` / `assemble`），`tool` 对应每次 `search_corpus` / `inspect_schema` / `sample_rows` / `run_query`（先发 `start`，再发 `ok` / `blocked` / `error` / `cap` / `miss` 的结果事件，按 tool-call id 配对），以及一条携带双轴标记的 `final`。每条事件的形状是 `{seq, kind, step, status, id?, detail, serve_path?}`；`run_query` / `sample_rows` 的 `detail` 就是**账本条目本身**，因此实时视图与最终的 `governance_ledger` 不会发生漂移。`GovEventStream`（`server.governance`）是每轮的发射器；flow 路径保持不变，仍发出旧式的 `{stage}` 事件。这就是 UI 渲染为实时步骤时间线的那层审计面，契约与前端方案见 [`docs/plans/agent-step-visualization.md`](plans/agent-step-visualization.md)。
+**实时治理事件流（Amendment 2）。** 治理账本会实时流式输出，而不只是附在最终答案上。`agent_core` 运行的是 `agent.stream(...)`（而非 `invoke`），并通过既有的 `on_event` 回调把每一个受治理动作重新发出为一条有类型的事件：`rail` 对应每个外层步骤（`route` / `refuse_gate` / `cache` / `assemble`），`tool` 对应每次 `search_corpus` / `inspect_schema` / `sample_rows` / `run_query`（先发 `start`，再发 `ok` / `blocked` / `error` / `cap` / `miss` 的结果事件，按 tool-call id 配对），以及一条携带双轴标记的 `final`。每条事件的形状是 `{seq, kind, step, status, id?, detail, serve_path?}`；`run_query` / `sample_rows` 的 `detail` 就是**账本条目本身**，因此实时视图与最终的 `governance_ledger` 不会发生漂移。`GovEventStream`（`server.governance`）是这套契约每轮的发射器。这就是 UI 渲染为实时步骤时间线的那层审计面，契约与前端方案见 [`docs/plans/agent-step-visualization.md`](plans/agent-step-visualization.md)。
 
 ## curator 推断驱动 server 行为的三个关键点
 

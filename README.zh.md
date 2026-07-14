@@ -4,25 +4,24 @@ _[English](README.md) · [简体中文](README.zh.md)_
 
 一个 agentic BI / Generative-BI 系统：自然语言问题 → 基于关系型数据的**接地（grounded）、受治理（governed）、可审计（auditable）**的答案。
 
-近期目标是打造一个**在 SQLite 上得到验证的展示系统**（对其他数据库引擎留有方言可插拔的接口），它从一批已知良好的种子查询出发、逐步扩展出一个可审阅的语义层——这是**种子辅助的语义层生长(seed-assisted semantic-layer growth)**，而非零先验的冷启动——并在自建的 [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) 数据集上进行评测（执行准确率）。企业级抽象（身份/RLS、人工把关、按范围限定的记忆/缓存）已经以预留接口(seam)的方式接入，但默认关闭；其**强制执行属于私有的企业分支，而非本引擎**。
+近期目标是打造一个**在 SQLite 上得到验证的展示系统**（对其他数据库引擎留有方言可插拔的接口），它从一批已知良好的种子查询出发、逐步扩展出一个可审阅的语义层——这是**种子辅助的语义层生长（seed-assisted semantic-layer growth）**，而非零先验的冷启动——并在自建的 [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) 数据集上进行评测（执行准确率）。企业级抽象（身份/RLS、人工把关、按范围限定的记忆/缓存）已经以预留接口（seam）的方式接入，但默认关闭；其**强制执行属于私有的企业分支，而非本引擎**。
 
 > **设计先行，且对成熟度诚实。** 设计（D1-D15）的进展远远领先于构建
-> （参见 [`docs/design-decisions.md`](docs/design-decisions.zh.md)）。确定性的 serve 流程可端到端运行，并保持为代码默认；serve 运行时如今正转向一个**受治理的 agentic 核心**（[ADR 0002](docs/adr/0002-governed-agentic-serve-runtime.md)，*提议中*），其 P0/P1 已落在默认关闭的 `agent_serve` 标志位之后。真实模型的 A/B 运行已经跑过（见 [agentic-serve A/B 结果](docs/plans/agentic-serve-ab-results.md)与[三臂实验](docs/plans/three-arm-experiment-results.md)）；切换到需要 key、单一路径运行时的 P2 尚未完成。哪些已被证明、哪些仅是设计，见下方[状态表](#状态)。
+> （参见 [`docs/design-decisions.md`](docs/design-decisions.zh.md)）。serve 就是**受治理的 agentic 核心**（[ADR 0002](docs/adr/0002-governed-agentic-serve-runtime.md)）：一个确定性的外层"rails"图包着一个受限的 `create_agent` 循环，循环之下是若干只读的受治理工具；它如今是唯一的 serve 路径，此前被取代的确定性流程已经删除。真实模型的 A/B 运行已经把两者跑过对比（见 [agentic-serve A/B 结果](docs/plans/agentic-serve-ab-results.md)与[三臂实验](docs/plans/three-arm-experiment-results.md)）；能证明 corpus 护城河的混淆版 BIRD 三臂评测仍只做了一部分。哪些已被证明、哪些仅是设计，见下方[状态表](#状态)。
 
 ## 三句话讲清楚核心思路
 
-- **两套 harness 共享同一个基座(substrate)。** `curator`（构建）*生成*corpus；`server`（服务）*使用*corpus 来回答问题。二者风险特征相反，却共享同一个基座。
-- **corpus 是预期的护城河**——这是一个有待评测证明的**假设**，而非已被证实的结果。Git 跟踪的 YAML 类型化资产，加上 Markdown 技能(skill)文档，由 curator 撰写、经人工审核。Git 是唯一真实来源(source of truth)；graph、vector、BM25 存储都是可重建的投影(projection)。
-- **失败即拒（fail-closed）。** 超出范围/覆盖缺失/触发护栏，都只会返回拒答或澄清性问题，绝不会给出一个自信却错误的数字。护栏是安全闸门，**不是正确性判官(correctness oracle)**——因此答案携带两个相互独立的标记：`safety_clearance`（是否通过护栏）与 `semantic_assurance`（接地程度如何），二者绝不折叠成单一的"可信度分数"。
+- **两套 harness 共享同一个基座（substrate）。** `curator`（构建）*生成*corpus；`server`（服务）*使用*corpus 来回答问题。二者风险特征相反，却共享同一个基座。
+- **corpus 是预期的护城河**——这是一个有待评测证明的**假设**，而非已被证实的结果。Git 跟踪的 YAML 类型化资产，加上 Markdown 技能（skill）文档，由 curator 撰写、经人工审核。Git 是唯一真实来源（source of truth）；graph、vector、BM25 存储都是可重建的投影（projection）。
+- **失败即拒（fail-closed）。** 超出范围/覆盖缺失/触发护栏，都只会返回拒答或澄清性问题，绝不会给出一个自信却错误的数字。护栏是安全闸门，**不是正确性判官（correctness oracle）**——因此答案携带两个相互独立的标记：`safety_clearance`（是否通过护栏）与 `semantic_assurance`（接地程度如何），二者绝不折叠成单一的"可信度分数"。
 
 ## 状态
 
-哪些已被证明、哪些仅是设计、哪些只是预留接口。确定性的 serve 流程是代码默认；[ADR-0002](docs/adr/0002-governed-agentic-serve-runtime.md) 的受治理 agentic 核心是进行中的方向（P0/P1 已落在默认关闭的 `agent_serve` 标志位之后）。真实模型的 A/B 运行已经跑过，因此生成质量不再是完全未经度量的；参见所链接的结果文档。
+哪些已被证明、哪些仅是设计、哪些只是预留接口。serve 就是 [ADR-0002](docs/adr/0002-governed-agentic-serve-runtime.md) 的受治理 agentic 核心，也是唯一的 serve 路径；被它取代的确定性流程已经删除。真实模型的 A/B 运行已经跑过，因此生成质量不再是完全未经度量的；参见所链接的结果文档。
 
 | 能力 | 状态 | 证据 |
 |---|---|---|
-| SQLite 受治理服务流程（检索 → 上下文 → SQL 生成 → 五层护栏 → 执行 → 标记） | **已构建（代码默认）** | `uv run --extra agents --extra api pytest`，321+ 测试 |
-| 受治理的 agentic 服务核心（ADR 0002：`create_agent` + 治理 middleware + 只读工具） | **P0/P1 已落在 `agent_serve` 之后（提议中；默认关闭）** | [ADR 0002](docs/adr/0002-governed-agentic-serve-runtime.md)；`server/agent.py`、`tools.py`、`middleware.py`、`governance.py` |
+| SQLite 受治理 agentic 服务核心（ADR 0002：确定性 rails 图 + `create_agent` + 治理 middleware + 只读工具 → 检索 → 上下文 → SQL 生成 → 五层护栏 → 执行 → 标记） | **已构建（唯一的 serve 路径）** | `uv run pytest`，470 个测试（462 个通过，8 个仅限实时模型而跳过）；[ADR 0002](docs/adr/0002-governed-agentic-serve-runtime.md)；`server/agent.py`、`tools.py`、`middleware.py`、`governance.py` |
 | corpus 契约 + 校验（类型化 YAML/MD、ID + 引用完整性） | **已构建** | `python -m governed_bi.corpus.cli`、CI |
 | 有界自修复 + 双轴可靠性标记 | **已构建** | `tests/test_server.py` |
 | 语义 SQL 缓存（命中时重新过护栏 + 重新执行，仅 `certified` 准入） | **已构建，默认关闭** | `tests/test_cache.py` |
@@ -39,7 +38,7 @@ _[English](README.md) · [简体中文](README.zh.md)_
 
 前端在独立仓库中：
 [Minhao-Zhang/governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui)
-(Next.js、`useStream`)。目前仍是纯 mock,尚未与本后端端到端接通。
+（Next.js、`useStream`）。目前仍是纯 mock，尚未与本后端端到端接通。
 
 ## 文档
 
@@ -65,10 +64,10 @@ src/governed_bi/
   graph/               done: FK graph projection + Steiner-tree join planning + FK join-neighborhood
   retrieval/           done: RVGD BM25 + grounding + vector channel (embedder-gated, RRF fusion)
   memory/              done: working memory (D8); episodic/correction protocol seams
-  server/              done: serve flow (flow.py), routing, context assembly, SQL gen, self-repair, SQL cache, stamp; ADR-0002 agentic core: agent.py + tools.py (read-only governed tools) + middleware.py (guardrail+audit interception) + governance.py (shared checks/licensing); graph.py + template serve path slated for removal at P2
+  server/              done: ADR-0002 governed agentic core (sole serve path): agent.py (outer deterministic rails StateGraph wrapping the `create_agent` loop; entry point `answer_question_agent`), tools.py (read-only governed tools: search_corpus/inspect_schema/sample_rows/run_query), middleware.py (guardrail+audit interception), governance.py (shared checks/licensing), plus routing, context assembly, SQL-gen helpers, SQL cache, stamp; the old deterministic flow (flow.py) and the stale unused DAG (graph.py) are deleted
   curator/             + deep_agent.py: the deepagents build harness
   eval/                done: execution accuracy, arm harness, refuse-gate
-  viz/                 done: read-only audit surface — UI-agnostic presenter view models (no UI dependency)
+  viz/                 done: read-only audit surface (UI-agnostic presenter view models; no UI dependency)
 tests/                 unit + end-to-end suites across all of the above
 ```
 
@@ -88,16 +87,15 @@ uv run pytest                             # run the test suite
 [快速上手](docs/usage.zh.md)是参考（validate CLI、可编程调用的 corpus API）；要编写或
 编辑 corpus 资产，参见 [corpus 编写](docs/corpus-authoring.zh.md)。
 
-今天就可以在没有模型、没有网络的情况下运行：确定性 serve 流程的问题到答案流水线
-（检索、上下文组装、模板化 SQL 生成、五层护栏、受限自修复、可靠性标记）在已提交
-的 beer_factory 数据库上都能跑通，此外还有 curator 脚手架、memory、eval，以及只读
-的审计面（presenter 视图模型 + `governed_bi.api` HTTP API）。ADR-0002 的 agentic
-serve 核心正转向需要 key（它的 CI/离线确定性来自一个 `FakeListChatModel` agent
-harness，而非模板路径）；移除离线模板 serve 路径的 P2 切换尚未完成。核心依赖刻意
-保持精简（pydantic、pyyaml、networkx、sqlglot）；Postgres/Redshift 连接器是可选的
-extra。这些 agent harness（curator = deepagents，serve agentic 核心 = `create_agent`，
-两者都配合 LangChain 模型客户端）都放在 `agents` extra 背后；没有 key 时，它们在
-确定性的模型替身（`FakeListChatModel` / `StaticChatClient`）上运行。
+今天就可以在没有模型、没有网络的情况下运行：corpus 校验器/CLI、curator 脚手架、
+memory、eval，以及只读的审计面（presenter 视图模型 + `governed_bi.api` HTTP API），
+都能在已提交的 beer_factory 数据库上离线构建、离线运行。serve 本身是纯智能体路径：
+ADR-0002 的受治理 agentic 核心（`server/agent.py`）是唯一路径，没有实时模型就会
+失败即拒；离线测试套件是在确定性的模型替身（`FakeListChatModel` / `StaticChatClient`）
+上跑它，而非真实模型。依赖没有拆分成可选 extra：LangGraph、deepagents、LangChain、
+OpenAI、Langfuse，以及 Postgres/Redshift 连接器（psycopg），全都在
+`[project.dependencies]` 里，所以一次普通的 `uv sync` 就能装齐两套 harness
+（curator = deepagents，serve agentic 核心 = `create_agent`）所需的一切。
 
 ### 模型与配置
 
@@ -108,8 +106,7 @@ extra。这些 agent harness（curator = deepagents，serve agentic 核心 = `cr
 只放在环境变量或 git-ignored 的 `.env` 里。
 
 ```bash
-uv sync --extra agents          # LangGraph + deepagents + LangChain model clients
-uv sync --extra openai          # (alternative) the minimal raw-openai client only
+uv sync                          # installs everything: LangGraph + deepagents + LangChain + OpenAI + Langfuse
 export OPENAI_API_KEY=sk-...     # the key is read from the env, never stored
 ```
 
@@ -126,7 +123,7 @@ export LANGSMITH_TRACING=true          # 或 LANGCHAIN_TRACING_V2=true
 export LANGSMITH_API_KEY=lsv2_...
 
 # Langfuse（LangChain callback）
-uv sync --extra tracing
+uv sync
 export LANGFUSE_PUBLIC_KEY=pk-lf-...
 export LANGFUSE_SECRET_KEY=sk-lf-...
 ```
@@ -158,7 +155,7 @@ EX / 拒答 / 诱饵触碰：
 
 ```bash
 export OPENAI_API_KEY=sk-...
-uv run --extra agents python scripts/live_smoke.py
+uv run python scripts/live_smoke.py
 ```
 
 ## 许可证

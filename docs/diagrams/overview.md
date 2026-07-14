@@ -18,7 +18,7 @@ flowchart LR
 
     subgraph "Documented scaffolds"
         CuratorPkg["curator package<br/>profile, proposer, adversary, loop"]
-        ServerPkg["server package<br/>routing, cache, middleware, flow, answer"]
+        ServerPkg["server package<br/>routing, cache, middleware, agent rails, answer"]
         GatewayPkg["gateway package<br/>identity, query result, guardrails"]
         GraphPkg["graph package<br/>projection, join planner"]
         RetrievalPkg["retrieval package<br/>RVGD contract"]
@@ -46,7 +46,7 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    Analyst["User / analyst"] --> Server["Server harness<br/>deterministic LangGraph DAG"]
+    Analyst["User / analyst"] --> Server["Server harness<br/>deterministic rails + governed agent loop"]
     Reviewer["Human reviewer / owner"] --> Viz["Review surface<br/>presenter view models + API (read-only)<br/>+ separate interactive UI for edit + PR"]
 
     subgraph ControlPlane["Semantic / control plane"]
@@ -109,10 +109,11 @@ flowchart TB
     subgraph ServeHarness["Server harness: serve time"]
         Route["route_intent()"]
         Cache["semantic SQL cache"]
-        Retrieve["RVGD retrieval"]
-        Plan["plan_joins()"]
-        Guard["guardrails.check()"]
-        Answer["answer_question()"]
+        Assemble["assemble()<br/>RVGD retrieve + plan_joins + context"]
+        Agent["agent_core()<br/>create_agent reasoning loop"]
+        Tools["governed tools<br/>search_corpus, inspect_schema,<br/>sample_rows, run_query"]
+        Guard["GovernanceMiddleware<br/>wrap_tool_call"]
+        Answer["finalize()<br/>reliability stamp"]
     end
 
     subgraph SharedSubstrate["Shared substrate"]
@@ -126,8 +127,12 @@ flowchart TB
     Profile --> Proposer --> Adversary --> CurateLoop
     CurateLoop -- writes --> Corpus
     Corpus --> ServerCorpus
-    ServerCorpus --> Retrieve
-    Route --> Cache --> Retrieve --> Plan --> Guard --> Answer
+    ServerCorpus --> Assemble
+    Route --> Cache --> Assemble --> Agent
+    Agent -- tool call --> Tools
+    Tools -- gated by --> Guard
+    Guard -- ledger + result --> Agent
+    Agent -- passing SQL --> Answer
     Answer --> Gateway
     Eval -. runs .-> Answer
     Answer -. corrections .-> Memory

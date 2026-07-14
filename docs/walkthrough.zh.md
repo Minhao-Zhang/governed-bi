@@ -3,9 +3,11 @@
 _[English](walkthrough.md) · [简体中文](walkthrough.zh.md)_
 
 一次从头到尾的完整走查：安装仓库、校验示例 corpus，然后提出你的第一个问题——
-既通过 HTTP API，也从 Python 里。这里的所有步骤都可**离线**运行（无需 API key、
-无需网络），针对已随仓库提交的 `beer_factory` 数据库，使用确定性的模板 SQL
-生成器。最后有一个可选步骤，演示如何切换到真实模型。
+既通过 HTTP API，也从 Python 里。克隆、校验 corpus、运行测试都可**离线**运行
+（无需 API key、无需网络），针对已随仓库提交的 `beer_factory` 数据库。serve
+现在是**纯智能体路径**（ADR 0002），提问需要实时模型，没有模型就会失败即拒。
+在进入第 4 步之前先设置好 OpenAI API key。最后一步会讲模型配置，以及一次
+脚本化的真实检查。
 
 走完之后，你会看到让本项目区别于普通 text-to-SQL 演示的两件事：一个**受治理的
 答案**（带双轴可靠性标记与它实际运行的 SQL），以及一次**拒答**（当问题超出范围时
@@ -17,7 +19,8 @@ _[English](walkthrough.md) · [简体中文](walkthrough.zh.md)_
 - Python 3.13——如果没有，uv 会自动获取
 - `git`
 
-可选，仅用于最后的真实模型步骤：一个 OpenAI API key。
+第 4 步需要：一个 OpenAI API key。serve 现在是纯智能体路径，提问需要实时模型；
+只读的审计端点（`/health`、`/schema`、`/graph` 等）不需要 key。
 
 ## 1. 克隆并安装
 
@@ -60,9 +63,9 @@ CI green: 16 assets, 1 skills, 0 findings.
 uv run pytest -q
 ```
 
-离线即为绿灯。装上 harness 与 API 的 extra 后
-（`uv run --extra agents --extra api pytest`），全部 **321** 个测试都会运行，
-包括 LangGraph 等价性测试与 HTTP API 测试；不装则会跳过少数几个。
+离线即为绿灯。全部 **470** 个测试默认就会运行（`uv run pytest`）：
+**462 个通过**、**8 个跳过**：跳过的都是只能靠实时模型才能验证的检查
+（智能体生成质量），改由 `scripts/live_smoke.py` 来覆盖。
 
 ## 4. 提出你的第一个问题
 
@@ -70,8 +73,12 @@ uv run pytest -q
 
 ### 4a. 通过 HTTP API（推荐）
 
+serve 需要实时模型（回答问题没有离线兜底）；只读端点（`/health`、`/schema`、
+`/graph` 等）不需要：
+
 ```bash
-uv run --extra api uvicorn --factory governed_bi.api:create_app
+export OPENAI_API_KEY=sk-...        # 从环境变量读取，绝不存进仓库
+uv run uvicorn --factory governed_bi.api:create_app
 ```
 
 这会在 http://localhost:8000 上提供受治理的 API（交互式文档在
@@ -82,12 +89,13 @@ curl -s localhost:8000/chat -H 'content-type: application/json' \
   -d '{"question":"What is the total revenue?"}'
 ```
 
-你会得到一个受治理答案，其 JSON 里带有：
+你会得到一个受治理答案（智能体核心会调用模型来生成 SQL，所以每次运行的具体措辞
+可能不同，下面是一个具有代表性的示例），其 JSON 里带有：
 
 - **tier: governed**
 - **safety_clearance: true** · **semantic_assurance: certified**
-- 答案：`total_revenue = 18496.0`
-- 它运行的 SQL：`SELECT SUM(PurchasePrice) AS total_revenue FROM "transaction"`
+- 答案，例如：`total_revenue = 18496.0`
+- 它运行的 SQL，例如：`SELECT SUM(PurchasePrice) AS total_revenue FROM "transaction"`
 - 一个 **provenance** 轨迹（路由、指标、涉及的表、连接置信度）
 
 现在问一个语义层**并不**覆盖的问题：
@@ -100,7 +108,8 @@ curl -s localhost:8000/chat -H 'content-type: application/json' \
 系统不会去猜，而是**拒答**：
 
 - **tier: refused**
-- 一条升级提示：_"not answerable from this data - contact &lt;owner&gt;"_
+- 一条升级提示：_"This question is outside the governed semantic layer.
+  Contact the data owner to add coverage."_
 - 没有 SQL，没有数字
 
 这次拒答正是重点：范围内没有员工/薪酬数据，因此一个受治理的系统会如实说明，
@@ -111,30 +120,35 @@ curl -s localhost:8000/chat -H 'content-type: application/json' \
 
 ### 4b. 从 Python
 
-同一条流程，作为一个可以嵌进你自己应用的小型 API：
+同一条流程，作为一个可以嵌进你自己应用的小型 API。它需要实时模型，原生的
+LangChain 模型通过 `model=` 传入：
 
 ```python
 from governed_bi.config import Settings, Environment
 from governed_bi.corpus import load_corpus
 from governed_bi.gateway import SqliteConnector, Gateway, Identity
-from governed_bi.server import answer_question
+from governed_bi.llm import LangChainChatClient
+from governed_bi.server.agent import answer_question_agent
 
-corpus = load_corpus("corpus", db="beer_factory").for_server()
+settings = Settings.for_env(Environment.dev)
+corpus = load_corpus("corpus", schema="beer_factory").for_server()
 conn = SqliteConnector("data/bird/beer_factory.sqlite")
+chat = LangChainChatClient.from_config(settings.models)  # 需要 OPENAI_API_KEY
 
-ans = answer_question(
+ans = answer_question_agent(
     "What is the total revenue?",
     Identity(user="demo", all_access=True),
     corpus=corpus,
     gateway=Gateway(conn),
-    settings=Settings.for_env(Environment.dev),
+    settings=settings,
     session_id="demo",
+    model=chat.model,  # 智能体核心实际驱动的、原生的 LangChain 模型
 )
-print(ans.tier.value)            # governed
+print(ans.tier.value)            # governed（通常如此，实时模型的输出会有波动）
 print(ans.safety_clearance)      # True
-print(ans.semantic_assurance.value)  # certified
-print(ans.sql)                   # SELECT SUM(PurchasePrice) AS total_revenue FROM "transaction"
-print(ans.text)                  # total_revenue = 18496.0
+print(ans.semantic_assurance.value)  # certified / heuristic
+print(ans.sql)                   # 例如：SELECT SUM(PurchasePrice) AS total_revenue FROM "transaction"
+print(ans.text)                  # 例如：total_revenue = 18496.0
 conn.close()
 ```
 
@@ -149,27 +163,25 @@ conn.close()
 - **拒答是一项特性。** 覆盖缺失、触发护栏、或命中一条经过整理的越界模式，都会失败
   即拒。它的制衡面——不去拒答那些本可回答的问题——由评测里的误拒率来度量。
 
-## 6.（可选）切换到真实模型
+## 6. 模型配置与真实检查脚本
 
-离线时，确定性的模板生成器只回答指标/KPI 类问题，并忽略对话上下文。要使用真实
-模型——它能启用自由形式的 SQL，以及聊天里带上下文的追问——设置一个 key 并装上
-`agents` extra：
+不想 export key？把 `.env.example` 复制成仓库根目录下的 `.env`，把 key 写在
+那里，它会在导入时被加载，且绝不会覆盖你 shell 里已经设置的同名变量。`.env`
+里**只放密钥**；策略（模型、数据源、corpus 路径）都放在
+[`governed_bi.toml`](../governed_bi.toml) / `governed_bi.local.toml` 里。
 
-```bash
-export OPENAI_API_KEY=sk-...        # 从环境变量读取，绝不存进仓库
-uv run --extra agents --extra api uvicorn --factory governed_bi.api:create_app
-```
-
-模型是 `gpt-5.5`、低推理强度（在 [`governed_bi.toml`](../governed_bi.toml) 里
-配置），通过 LangChain 的 `ChatOpenAI` 调用——它会把推理模型路由到 OpenAI 的
-**Responses API**。通过 `/chat`，追问此时会针对对话进行消解（先前的轮次通过引擎的
-工作记忆回灌）。
+模型是 `gpt-5.6-sol`、低推理强度（在 [`governed_bi.toml`](../governed_bi.toml)
+里配置；如果你的账号只有 GA 权限，就回退到 `gpt-5.5`），通过 LangChain 的
+`ChatOpenAI` 调用，它会把推理模型路由到 OpenAI 的 **Responses API**。通过
+`/chat`，追问会针对对话进行消解（先前的轮次通过引擎的工作记忆回灌），答案会以
+**自然语言**表述，而实际执行的行会出现在响应的 **result** 字段里；执行过的行
+始终会附在答案上。
 
 想要一次脚本化的真实检查（在 `beer_factory` 上打印执行准确率、拒答与诱饵触碰），
 运行：
 
 ```bash
-uv run --extra agents python scripts/live_smoke.py
+uv run python scripts/live_smoke.py
 ```
 
 ## 下一步

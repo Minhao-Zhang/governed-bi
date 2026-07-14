@@ -61,6 +61,11 @@ frontend via **`useStream`**.
   `server/flow.py` and `server/graph.py` are untouched and the
   `answer_question`↔graph equivalence still holds. See
   [langgraph-rework-plan.md](../langgraph-rework-plan.md) §1.
+  _(Forward pointer: this deterministic single-node framing was the runtime at
+  the time of this decision; serve has since been cut over to the
+  [ADR 0002](0002-governed-agentic-serve-runtime.md) governed agentic core,
+  which replaced `answer_question`/`server/flow.py` and the stale
+  `server/graph.py` DAG.)_
 - **Heavier deployment.** Local `langgraph dev` is easy but **ephemeral**; durable
   persistence needs Postgres (self-host `langgraph up` → Postgres + Redis, or a
   managed LangGraph Platform). A plain FastAPI box would have been lighter for the

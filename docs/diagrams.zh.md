@@ -4,7 +4,7 @@ _[English](diagrams.md) · [简体中文](diagrams.zh.md)_
 
 本目录按细节粒度拆分，以便单独审阅和修正每一张 Mermaid 图。这些图特意区分了已实现的代码与设计层脚手架。
 
-> **实现说明：**从提问到应答的整条流水线均已实现并通过测试（corpus、gateway 及五层护栏、graph 与 Steiner 规划器、retrieval、上下文组装、带自修复循环和 SQL 缓存的 serve 流程、memory、eval、viz），且两套 agent harness（LangGraph serve DAG、deepagents curator）都已实现，置于 `agents` extra 之后。这些图展示的是契约；少数标注为“future”的节点是预留接口(seam)（例如 Neo4j、实时模型编目）。
+> **实现说明：**从提问到应答的整条流水线均已实现并通过测试（corpus、gateway 及五层护栏、graph 与 Steiner 规划器、retrieval、上下文组装、带自修复循环和 SQL 缓存的 serve 流程、memory、eval、viz），且两套 agent harness（LangGraph serve DAG、deepagents curator）都已实现（由一次普通的 `uv sync` 安装）。这些图展示的是契约；少数标注为“future”的节点是预留接口(seam)（例如 Neo4j、实时模型编目）。
 
 ## 按复杂度分级的推荐阅读顺序
 

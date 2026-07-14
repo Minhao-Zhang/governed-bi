@@ -22,7 +22,7 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
     - [Design decisions](design-decisions.md): D1-D15 with alternatives and trade-offs
     - [Asset schemas](asset-schemas.md): the per-asset YAML field spec (Facts / Inference / Audit tiers)
     - [Curator](curator.md): the build-side proposer + adversary loop
-    - [Server](server.md): the serve-side flow + guardrails (deterministic flow today; the flagged [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) agentic core is the in-progress direction)
+    - [Server](server.md): the serve-side agent + guardrails (the [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) governed agentic core is now the sole serve path; the earlier deterministic flow is retired)
     - [Viz](viz.md): the read-only audit surface — the presenter view models + the `governed_bi.api` HTTP API to browse the layer + chat with the server
     - [Glossary](glossary.md): canonical terms
 - Grounded in the [external design sources](references.md).
@@ -41,22 +41,21 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
 > corpus (schemas / loader / validate / serialize) · graph projection + Steiner
 > join planner (in-memory networkx) · gateway + five-layer guardrails · RVGD
 > retrieval (BM25 + ground expansion, plus an embedder-gated vector channel fused
-> with BM25 via RRF) · retrieval→context assembly · the deterministic serve flow
-> (refuse-gate, template AND LLM SQL-gen, bounded self-repair, SQL semantic cache,
-> reliability stamp, the code default) · the flagged [ADR 0002](adr/0002-governed-agentic-serve-runtime.md)
-> agentic core (`server.agent`: deterministic rails + `create_agent` + governance
-> middleware + read-only tools, behind `agent_serve`, default off) sharing **one**
-> governance core with the flow · working memory · the eval scaffold · the
+> with BM25 via RRF) · retrieval→context assembly · the [ADR 0002](adr/0002-governed-agentic-serve-runtime.md)
+> governed agentic serve core (`server.agent`: deterministic rails +
+> `create_agent` + governance middleware + read-only tools), the sole serve
+> path since the P2 cutover · working memory · the eval scaffold · the
 > read-only viz presenter view models + the `governed_bi.api` HTTP API · model
 > config (`governed_bi.toml`) and the `ChatClient` / `Embedder` seams (raw OpenAI +
 > LangChain + deterministic offline defaults) · the LLM curator proposer
 > (descriptions + `suspect` caveats) · the **deepagents curator harness**
-> (`curator.deep_agent`, construction). The core slice runs end-to-end with no
-> model or network, and CI determinism for the agent path comes from a
-> `FakeListChatModel` agent harness. (`server.graph`, the old LangGraph serve DAG,
-> once Answer-equivalent to the plain flow, is now stale and unused, slated for
-> deletion; the template / no-model *serve* path is being removed per ADR 0002 P2,
-> which requires a key.)
+> (`curator.deep_agent`, construction). The corpus/curator/retrieval slice runs
+> end-to-end with no model or network, and CI determinism for the agent path
+> comes from a `FakeListChatModel` agent harness. (The earlier deterministic
+> serve flow, `server.flow`, and the stale, unused `server.graph` DAG are
+> deleted; serve now fails closed with no live model: `build_stack()` still
+> builds offline for the read-only audit API, but the serve process raises at
+> startup and `/chat` returns 503 until a model is configured.)
 
 > **Pending (code)**
 >

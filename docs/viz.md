@@ -18,7 +18,7 @@ own the interactive editor or the PR orchestration.
 > Implementation: [`src/governed_bi/viz/`](../src/governed_bi/viz/) (read-only).
 > `presenter.py` holds UI-agnostic view models; [`governed_bi.api`](../src/governed_bi/api/)
 > (optional `api` extra) serves them over HTTP/JSON. Run it with
-> `uv run --extra api uvicorn --factory governed_bi.api:create_app` (interactive
+> `uv run uvicorn --factory governed_bi.api:create_app` (interactive
 > docs at http://localhost:8000/docs).
 
 ## Scope: engine vs product

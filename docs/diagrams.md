@@ -10,7 +10,7 @@ from design-level scaffolding.
 > tested (corpus, gateway + five-layer guardrails, graph + Steiner planner,
 > retrieval, context assembly, serve flow with self-repair + SQL cache, memory,
 > eval, viz), and both agent harnesses (LangGraph serve DAG, deepagents curator)
-> are built behind the `agents` extra. These diagrams show the contracts; a few
+> are installed by a plain `uv sync`. These diagrams show the contracts; a few
 > nodes labelled "future" are seams (e.g. Neo4j, live-model curation).
 
 ## Recommended reading by complexity
