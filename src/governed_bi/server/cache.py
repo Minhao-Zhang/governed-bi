@@ -39,8 +39,9 @@ DEFAULT_TTL_SECONDS = 15 * 60
 class CacheEntry:
     """One cached question -> SQL association (SQL text only, no results).
 
-    The reliability stamp is **not** cached: the flow re-derives it fresh from the
-    current corpus on a hit (over ``tables_used``), so the stamp cannot go stale.
+    The reliability stamp is **not** cached: the agent core re-derives it fresh
+    from the current corpus on a hit (over ``tables_used``), so the stamp cannot
+    go stale.
     """
 
     question: str

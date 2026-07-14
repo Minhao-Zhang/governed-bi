@@ -196,8 +196,9 @@ def build_serve_rails(
     graph_obj = build_graph(corpus)
     allowlist = column_allowlist(corpus, multi_schema=multi_schema)
     # One rich-event emitter for the whole turn (reset in `ingest`); the agent path
-    # emits the {seq,kind,step,status,detail} contract, never the flow's legacy
-    # {stage} shape (docs/plans/agent-step-visualization.md).
+    # emits the {seq,kind,step,status,detail} contract, never the legacy {stage}
+    # shape governance.py's on_event helpers still accept but which agent.py never
+    # feeds a callback into (docs/plans/agent-step-visualization.md).
     events = GovEventStream(on_event)
 
     def _column_count(table_id: str) -> int:
@@ -257,9 +258,10 @@ def build_serve_rails(
         return {}
 
     def assemble(state: ServeRailsState) -> dict:
-        """Amendment 1: run the flow's front half and seed the semantic layer.
+        """Amendment 1: run the deterministic front half and seed the semantic layer.
 
-        Reuses the exact deterministic assembly the flow feeds its generator, so
+        Reuses the exact deterministic assembly (retrieval + licensing +
+        ``assemble_context``) that used to feed the old template generator, so
         the agent starts at parity (context + base licensed scope), then refines.
         """
         question = state["question"]

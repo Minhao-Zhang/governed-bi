@@ -1,8 +1,8 @@
-"""FastAPI HTTP interface over the governed serve flow + corpus/audit views.
+"""FastAPI HTTP interface over the governed serve agent + corpus/audit views.
 
 A thin, **stateless** JSON API: read endpoints serialize the ``viz.presenter``
 view models (schema, relationship graph, corpus assets, skills, health); ``/chat``
-runs one turn through ``answer_question`` with working memory rebuilt from the
+runs one turn through ``answer_question_agent`` with working memory rebuilt from the
 turns the caller sends. It is the interface a separate frontend (Next.js) consumes
 — see ``docs/ui-frontend-design.md``.
 

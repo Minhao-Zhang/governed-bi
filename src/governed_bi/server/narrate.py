@@ -1,11 +1,11 @@
 """Server step (optional): phrase an executed result into natural language.
 
-After the guardrails pass and the query executes, the flow renders a *compact*
-textual answer (``flow._render``) - fine for a single number, but only a
-"N row(s) over [cols]" shape for a table. When a model client is available, this
-optional seam replaces that with a grounded natural-language sentence or two,
-phrased from the actual rows - so the chat surfaces plain English *and* the audit
-table, not just a shape.
+After the guardrails pass and the query executes, the agent core renders a
+*compact* textual answer (``server.governance._render``) - fine for a single
+number, but only a "N row(s) over [cols]" shape for a table. When a model
+client is available, this optional seam replaces that with a grounded
+natural-language sentence or two, phrased from the actual rows - so the chat
+surfaces plain English *and* the audit table, not just a shape.
 
 Grounded by construction: the narrator is shown only the question, the SQL, and
 the (already bounded) result grid, and is told to state only what the rows show
@@ -14,7 +14,7 @@ already-governed result** - it never changes the SQL, the guardrail verdict, or
 the reliability stamp, so it cannot turn a refusal into an answer or move an
 answer's tier. The client is injected behind the :class:`ChatClient` protocol
 (tests use a scripted ``StaticChatClient``; production a LangChain client), and
-when no narrator is supplied the flow falls back to the compact render.
+when no narrator is supplied the agent core falls back to the compact render.
 """
 
 from __future__ import annotations

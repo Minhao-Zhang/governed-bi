@@ -530,8 +530,9 @@ def _layer_terms(
 
     ``allowed_tables`` is the set of table names the server licensed for this
     question: the tables surfaced by retrieval and their join-plan Steiner points
-    (see ``server.flow``). A base table outside that set means the SQL wandered
-    past the semantically grounded scope, so it is blocked fail-closed.
+    (see ``server.agent``, ``server.governance._licensed_table_ids``). A base table
+    outside that set means the SQL wandered past the semantically grounded scope,
+    so it is blocked fail-closed.
 
     Scope-aware (via ``traverse_scope``): a real base table is a ``Table`` source
     in some scope, while a CTE is a derived ``Scope`` in the scope that references

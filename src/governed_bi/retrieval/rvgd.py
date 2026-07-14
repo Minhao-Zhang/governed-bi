@@ -151,7 +151,7 @@ class BM25Index:
 
 @dataclass(frozen=True)
 class RetrievalResult:
-    """Typed, deterministic retrieval output (the contract the server flow reads).
+    """Typed, deterministic retrieval output (the contract the agent core, ``server.agent``, reads).
 
     ``scores`` maps asset id -> BM25 score for the selected assets that scored
     above zero; grounded additions (bound targets, base tables, columns) that

@@ -1,20 +1,24 @@
 """Server: the serve harness (``LangGraph`` + middleware).
 
 The online governed agent that *consumes* the corpus to answer, **fail-closed
-and auditable**. A deterministic LangGraph DAG with conditional routing, never
-autonomous ReAct (design-spine #2: the question can be wide, the SQL must be
-narrow).
+and auditable** (ADR 0002): a thin deterministic outer ``StateGraph`` wraps an
+inner ``create_agent`` reasoning loop. Authority stays deterministic — what may
+execute, what is trusted — even though the reasoning inside the loop is
+agentic (design-spine #2, as reversed by ADR 0002: the question can be wide,
+but the SQL that runs is still gated by deterministic guardrails).
 
 Middleware: ``before_model`` injects context (working memory, RLS scope,
 semantic-layer router); ``wrap_tool_call`` runs the guardrails and is where
 fail-closed lives.
 
-Modules map to the flow (``docs/server.md``):
+Modules map to the pipeline (``docs/server.md``):
 
 - ``routing``: query understanding, term binding, intent route.
 - ``sqlgen``: SQL generation (deterministic template + LLM seam).
 - ``cache``: SQL semantic-cache fast path.
-- ``flow``: the deterministic DAG wiring the stages together.
+- ``agent``: the governed agentic core + outer deterministic rails (ADR 0002);
+  entry point ``answer_question_agent``.
+- ``governance``: shared stamping/refusal/cache-hit helpers the agent core calls.
 - ``middleware``: before_model / wrap_tool_call hooks.
 - ``answer``: answer assembly + reliability stamp.
 

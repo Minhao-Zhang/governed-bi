@@ -87,7 +87,7 @@ def join_neighborhood(
     Used by the server to decouple L4 licensing from retrieval recall: a table the
     lexical retriever missed but the answer legitimately needs (a near FK neighbor
     of a retrieved table) is still licensed. This is safe because L3 guards every
-    column independently; see ``server.flow._licensed_tables``.
+    column independently; see ``server.governance._licensed_table_ids``.
     """
     ug = _join_graph(graph)
     reached = {t for t in table_ids if t in ug}

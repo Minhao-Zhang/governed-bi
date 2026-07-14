@@ -1,7 +1,7 @@
-"""Tests for the SQL semantic-cache fast path (server.cache + flow wiring).
+"""Tests for the SQL semantic-cache fast path (server.cache + server.governance wiring).
 
-The embedder is the deterministic HashingEmbedder (no network). Flow integration
-executes against the committed beer_factory DB (skipped if absent).
+The embedder is the deterministic HashingEmbedder (no network). The cache-hit
+integration test executes against the committed beer_factory DB (skipped if absent).
 """
 
 from __future__ import annotations

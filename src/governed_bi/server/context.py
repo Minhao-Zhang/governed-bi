@@ -10,7 +10,7 @@ and it is where the semantic layer's value is injected into an answer.
 
 **The tables it presents are exactly the L4-licensed set** (the retrieved tables
 plus their FK join-neighborhood and the Steiner points the plan bridges through).
-The flow derives the guardrail's ``allowed_tables`` from
+The agent core derives the guardrail's ``allowed_tables`` from
 :meth:`PromptContext.allowed_table_names`, so *what the model can see is exactly
 what the guardrail will permit* - no wider, no narrower. L3 still guards every
 column independently, so widening to neighbor tables never exposes an excluded or
@@ -212,7 +212,7 @@ def assemble_context(
 ) -> PromptContext:
     """Resolve retrieval ids + the licensed table scope into a :class:`PromptContext`.
 
-    ``licensed_table_ids`` is the L4 scope the flow computes (retrieved tables +
+    ``licensed_table_ids`` is the L4 scope the agent core computes (retrieved tables +
     FK join-neighborhood + Steiner points). Tables are ordered retrieval-first
     (in retrieval order) then the remaining licensed tables (sorted), each flagged
     ``retrieved``. Joins shown are every join asset internal to the licensed set,

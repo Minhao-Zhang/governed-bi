@@ -23,8 +23,8 @@ projection is kept 1:1 with ``semantic_assurance`` so the two never drift.
 The thresholds and the signal set are **uncalibrated heuristics** - a first cut to
 be tuned against the eval (which boundary catches the wrong answers without
 over-refusing), not calibrated probabilities. The mapping here is deterministic
-and testable; the flow (``server.flow``) feeds it the signals it accumulated while
-running the DAG.
+and testable; the agent core (``server.agent``) feeds it the signals it
+accumulated while running the outer ``StateGraph`` + inner agent loop.
 """
 
 from __future__ import annotations

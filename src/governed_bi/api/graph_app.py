@@ -82,7 +82,7 @@ def _working_memory_from(history: list, session_id: str):
 
     Human messages map to the ``user`` role, everything else to ``assistant``;
     empty-content messages are skipped. Keyed by ``session_id`` (the thread id),
-    matching how :func:`answer_question` reads ``working_memory.history``.
+    matching how :func:`answer_question_agent` reads ``working_memory.history``.
     """
     from governed_bi.memory import InMemoryWorkingMemory
 

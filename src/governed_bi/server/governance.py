@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 from ..corpus.schemas import JoinAsset, NegativeExampleAsset, TableAsset
 
 # How many FK-join hops out from the retrieved tables L4 licensing extends (see
-# _licensed_tables). 1 admits a retrieved table's direct FK neighbors; raising it
+# _licensed_table_ids). 1 admits a retrieved table's direct FK neighbors; raising it
 # widens the licensed table scope further. Tunable heuristic; tune against the
 # eval's false_refusal_rate vs. any scope-widening cost.
 LICENSE_JOIN_HOPS = 1
@@ -257,8 +257,11 @@ class GovEventStream:
     monotonic ``seq`` so the frontend can order events, and tags the first event
     of the turn with ``serve_path`` so the UI picks the agent renderer (see
     docs/plans/agent-step-visualization.md). This is the *agent* path's emitter;
-    the deterministic flow keeps using the bare :func:`_emit` legacy ``{stage}``
-    shape, so extending one never disturbs the other.
+    the shared helpers below (:func:`_try_cache_hit`, :func:`_finalize_success`,
+    :func:`_finish_unsuccessful`) still accept an ``on_event`` callback and fall
+    back to the bare :func:`_emit` legacy ``{stage}`` shape when one is passed,
+    but ``server.agent`` always passes ``on_event=None`` there and drives this
+    emitter instead, so extending one never disturbs the other.
 
     Best-effort like :func:`_emit`: a callback that raises must never turn a
     governed answer into an error, so failures are swallowed.
@@ -474,8 +477,9 @@ def _finalize_success(
     """Stamp + assemble a successful answer, and write back a clean one to the cache.
 
     The stamp reflects the joins the executed SQL actually needs and whether it
-    took a repair to get here (a repaired answer is lineage, not governed). Shared
-    by ``answer_question`` and the LangGraph DAG so both stamp identically.
+    took a repair to get here (a repaired answer is lineage, not governed). Kept
+    here in ``server.governance`` (rather than inline in ``server.agent``) so the
+    stamping logic stays centralized and testable on its own.
     ``ledger`` (optional) attaches the agent governance ledger to provenance (Inv #10).
     """
     try:

@@ -1,8 +1,9 @@
 """Governance-invariant contract (ADR 0002 / build guide P0.3).
 
-These assert governance outcomes that both the current deterministic flow and the
-agent path must satisfy. Model-independent cases use a rogue SqlGenerator or the
-refuse-gate; the agent path uses FakeToolModel trajectories.
+These assert governance outcomes the sole serve path (``answer_question_agent``)
+must satisfy: the refuse-gate case never invokes the model at all, and the
+policy/safety cases drive ``answer_question_agent`` with scripted
+``FakeToolModel`` trajectories.
 """
 
 from __future__ import annotations
@@ -107,7 +108,7 @@ def test_invariant_l2_sql_hard_refuses_on_agent_path(
 
 
 # --------------------------------------------------------------------------- #
-# Safety-clearance stamping matches today's flow
+# Safety-clearance stamping matches the agent core's guarantees
 # --------------------------------------------------------------------------- #
 
 
