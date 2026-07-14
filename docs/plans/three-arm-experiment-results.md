@@ -1,99 +1,105 @@
-# Three-Arm Experiment: Results (v3 — supersedes v1, v2)
+# Three-Arm Experiment: Results (v4 — supersedes v1–v3)
 
-_Recorded 2026-07-13. Companion to [three-arm-experiment-plan.md](three-arm-experiment-plan.md)
-and [curator-rework-plan.md](curator-rework-plan.md). Raw `runs/` artifacts are
+_Recorded 2026-07-14 (run `20260714T020041Z`, executed 2026-07-13 evening local).
+Companion to [three-arm-experiment-plan.md](three-arm-experiment-plan.md) and
+[curator-rework-plan.md](curator-rework-plan.md). Raw `runs/` artifacts are
 git-ignored/ephemeral — this doc is the durable record._
 
-> **v3 supersedes v2.** v3 is the first run with the finished curator: SME as a
-> read-only **deep agent**, the SME brief carrying **all** evidence (not a 40-cap),
-> and `pair:`/`query:`-scoped clarifications landing as **`RuleAsset`s**. v1 (broken
-> curator, seed-only) and v2 (real curator, capped SME brief) numbers are retired.
+> **v4 supersedes v3 and is the canonical benchmark going forward.** The reference
+> DB is now **`restaurant`** on `pg_rename_decoy`, a clean single-seed run of the
+> finished curator (crosschecks + gold-hash + leakage all verified below). The v3
+> point estimates on `cs_semester` / `ice_hockey_draft` are **retired** — they are
+> not the reference numbers anymore. What carries forward from v1–v3 is the
+> **method** and the **variance lesson** (single-seed deltas are directional, not
+> conclusive), not their figures.
 
 ## TL;DR
 
-- **Curation lifts EX substantially on BOTH databases now** — cs_semester
-  0.348 → 0.565 (**+0.217**), ice_hockey 0.176 → 0.824 (**+0.647**).
-- **But the numbers are high-variance run-to-run.** A2 (Phase-A curation only) is
-  produced by the same code as v2, yet it jumped v2→v3 (cs 0.348 → 0.565; ice
-  0.471 → 0.824). The cause is **agent nondeterminism**: the deep agent did more
-  work this run (94 / 106 write-tool calls vs v2's 56 / 58). Trust the *direction*
-  (curation helps, more where the schema is deceptive), not any single point
-  estimate. **Multiple seeds are now clearly required.**
-- **A3 = A2 this run** — the SME round-trip added no EX. Its `pair:`/`query:`
-  caveats *did* land as rules (3 / 6), and its table/column answers folded, but
-  none flipped an EX outcome at this N.
+- **Curation lifts EX and eliminates decoy-touch.** A1 → A2 EX **0.217 → 0.304**
+  (**+0.087**); decoy-touch **0.609 → 0.0**. The decoy elimination is the cleaner
+  governance signal at this N than the EX bump.
+- **The SME round-trip added 8 certified rules for +0.043 EX.** A3 EX **0.348**
+  (+0.043 over A2, +0.130 over A1). A2 produced **zero** rules; A3 folded **8**
+  SME-authored (`source: human`, `status: certified`) rules — yet raw EX barely
+  moved. Consistent with v3's "A3 ≈ A2" pattern: the SME value is not showing up in
+  execution accuracy at N=23.
+- **The run is internally clean.** EX cross-check agreement **1.0** on all arms;
+  gold-hash self-check **5/5**; train/test disjoint and SME brief leakage-checked.
+  So the numbers are trustworthy *for this seed* — the open risk is variance across
+  seeds, not this run's integrity.
 
-## Numbers (execution accuracy, lenient)
+## Numbers (execution accuracy, lenient = strict this run)
 
-| DB | A1 | A2 | A3 | Δ A2−A1 | agent clarifications | caveats→rules |
+| Arm | EX | Δ vs A1 | Δ vs A2 | refusal | decoy-touch | SME rules |
 |---|---|---|---|---|---|---|
-| cs_semester | 0.348 | **0.565** | 0.565 | +0.217 | 3 | 3 |
-| ice_hockey_draft | 0.176 | **0.824** | 0.824 | +0.647 | 6 | 6 |
+| A1 baseline | 0.217 | — | — | 0.0 | 0.609 | — |
+| A2 curated | **0.304** | +0.087 | — | 0.0 | 0.0 | 0 |
+| A3 + SME | **0.348** | +0.130 | +0.043 | 0.0 | 0.0 | 8 |
 
-Phase A `write_total` = 94 (cs) / 106 (ice); `ledger_source=agent`, `fold_mode=agent`.
-decoy-touch → 0 under curation on both (ice A1 0.059 → 0).
+`lenient == strict` on every arm (no partial-credit gap). Difficulty labels are
+absent for `restaurant` (all `unknown`), so there is no by-difficulty breakdown.
 
 ## Setup
 
 - Arms: **A1** no-layer · **A2** deep-agent curator over all train `(question, gold
-  SQL)` pairs · **A3** A2 + Simulated SME (now a **read-only deep agent** that can
+  SQL)` pairs · **A3** A2 + Simulated SME (read-only deep agent with
   `run_probe_query`), folded back by the ingest agent.
-- DBs: `cs_semester` (test 23) / `ice_hockey_draft` (test 17) on `pg_rename_decoy`,
-  single-schema per run. Model `gpt-5.6-sol`, live, tracing (Langfuse) on.
-- SME brief now includes **all** unique BIRD evidence hints (uncapped).
-- Grading: `eval/hash_grade.py` (byte-for-byte vs reference `_db.py`) +
-  `execution_match` crosscheck. `grade_semantic_failures=true` (§6).
+- DB: **`restaurant`** on `pg_rename_decoy` (`127.0.0.1:5435`), single schema.
+  `n_train = 94`, `n_test = 23`. Model `gpt-5.6-sol`, live.
+- Serve path: **`flow`** (deterministic pipeline, `agent_serve=false`); curator
+  `max_agent_steps = 25`. `grade_semantic_failures=true` (§6): coverage / L3–L5 /
+  execution-exhaustion deliver SQL with unverified assurance; L2 + refuse-gate stay
+  hard. Refusal rate was 0.0 on all arms regardless.
+- Grading: `eval/hash_grade.py` (byte-for-byte vs reference `_db.py`) with an
+  `execution_match` cross-check.
 
 ## Findings
 
-### 1. Schema deceptiveness still drives the size of the lift
-ice_hockey (FK-columns disguised as values: `PlayerInfo.height`/`.weight` →
-`height_info`/`weight_info`) gets the bigger lift (+0.647) than cs_semester
-(+0.217). The mechanism is unchanged from v1's SQL-level trace; a richer curated
-corpus (94–106 writes this run) simply captures more of it.
+### 1. Curation's clearest win here is decoy avoidance, not EX
+A1 touches a decoy/suspect (renamed) column on **61%** of questions; A2 and A3 touch
+one on **0%**. EX rises a modest +0.087 at the same time. At N=23 the decoy-touch
+collapse is the stronger, lower-variance evidence that the governed layer is steering
+generation onto the intended columns — EX is the noisier proxy for the same effect.
 
-### 2. Run-to-run variance is large — the headline caveat
-A2 is Phase-A-only and its code did not change v2→v3, yet EX moved +0.217 (cs) and
-+0.353 (ice). This is the **deep agent's nondeterminism**: how thoroughly it
-explores and how many assets it commits varies per run. Consequently **single-run
-deltas are not trustworthy** — the qualitative pattern (curation helps; more on
-deceptive schemas) is, the exact numbers are not. Scaling to ≥3 seeds with
-mean±spread is now the top priority.
+### 2. The SME arm still adds no EX — now with 8 rules on the table
+A3 folded 8 SME-certified rules (e.g. a dataset-specific `review > 2` interpretation)
+and moved EX only +0.043 over A2. This repeats v3's result on two other DBs: the SME
+round-trip lands real, correct knowledge in the served corpus, but it does not flip
+EX outcomes at this N. Whether its value is in reliability/coverage rather than raw
+EX remains the open question (v3 Finding 4).
 
-### 3. The pair→rule fix works live
-`pair:`/`query:`-scoped clarifications (trap / annotation-error findings) were
-recorded as `RuleAsset`s: 3 (cs) / 6 (ice), confirmed in the manifest
-(`caveats_recorded`) and on disk (`corpus_a3/<db>/rules/`). The knowledge now
-reaches the served corpus instead of dying in the ledger.
-
-### 4. The SME arm added no EX this run
-A3 = A2 on both DBs. The SME answers folded (table/column annotations + caveat
-rules) but changed no EX outcome. Possible reasons: A2 was already strong; the
-remaining test failures aren't ones the SME's caveats address; or the value is in
-reliability/coverage rather than raw EX at N=17/23. Worth watching across seeds.
+### 3. Internal validity checks all pass
+EX cross-check (hash grader vs `execution_match`) agrees **1.0** on all three arms;
+the gold-hash self-check matched **5/5** sampled gold rows; `train_test_disjoint` and
+`sme_brief_checked` are both true. Nothing in this run's plumbing is suspect — the
+caveats below are about statistical power, not correctness.
 
 ## Threats to validity
 
-- **High run-to-run variance** (Finding 2) + **tiny N** (17 / 23), single seed —
-  the two together mean the point estimates are indicative, not conclusive.
-- **Grader** is the self-contained hash compare (validated on a sample, not run
-  head-to-head with the reference at full scale).
-- **Recurring agent error:** `KeyError: 'cs_semester.RA'` and
-  `'tbl_cs_semester_course'` this run (v2 had `'train_6985'`) — caught and recorded
-  (non-fatal), but they truncate an agent turn early, likely a dict-lookup bug in a
-  tool (qualified name / asset id), and may contribute to the variance.
-
-## Post-v3 status of the rework (all landed)
-SME = read-only deep agent; all-evidence brief; `pair:`/`query:` → `RuleAsset`;
-empty-ledger non-fatal; proactive-clarification prompt; deps consolidated (tracing
-live); SME-sees-gold-SQL documented as a non-issue. See
-[curator-rework-plan.md](curator-rework-plan.md) §11–§12.
+- **Single seed, tiny N (23), single DB.** The point estimates are indicative, not
+  conclusive. The v1–v3 lesson stands: A2 is deterministic code but its output
+  varies run-to-run with the deep agent's exploration, so a single-seed delta can
+  move materially. **≥3 seeds with mean±spread is still the blocker before any number
+  is quotable.**
+- **Grader** is the self-contained hash compare, validated on a 5-row sample rather
+  than head-to-head with the reference at full scale.
+- **No difficulty stratification** for `restaurant` (labels absent), so the lift
+  cannot be attributed to easy vs hard questions.
 
 ## Next steps (in priority order)
-1. **Scale N / seeds** — ≥3 seeds with mean±spread; the variance in Finding 2
-   makes this the blocker before any number is quotable.
-2. **Fix the recurring agent `KeyError`** (dict lookup on a qualified name / asset
-   id) — it truncates curation and adds variance.
-3. **Data-lake run** — 2 schemas live, blind routing via the LLM `select_schema`
+1. **Scale N / seeds** — ≥3 seeds on `restaurant` with mean±spread; this gates every
+   quotable number.
+2. **Explain the SME-adds-no-EX pattern** (Finding 2, now seen on three DBs) —
+   measure reliability/coverage deltas, not just EX, and inspect which test failures
+   the SME rules *should* have fixed.
+3. **Re-run under the agent serve path** (`agent_serve=true`) once parity is
+   confirmed, to compare against this `flow` baseline.
+4. **Data-lake run** — 2 schemas live, blind routing via the LLM `select_schema`
    node (§5.1), once wired into `flow.py`.
-4. More opaque-schema DBs; investigate why the SME arm adds no EX (Finding 4).
+
+---
+
+_Prior versions (retired): v1 broken/seed-only curator; v2 real curator, capped SME
+brief; v3 finished curator on `cs_semester` (0.348 → 0.565) and `ice_hockey_draft`
+(0.176 → 0.824). Their figures are superseded by this `restaurant` run and are kept
+only as historical context in git history._
