@@ -6,9 +6,8 @@ _[English](0002-governed-agentic-serve-runtime.md) · 简体中文 (pending)_
   2026-07-13; cutover landed on `main` 2026-07-14 (commit `d2fdd6a`).
 - **Deciders:** project owner + design session
 - **Related:** [0001](0001-langgraph-server-chat-runtime.md),
-  [pipeline-design.md](../pipeline-design.md) (§5, §6, §8),
-  [design-decisions.md](../design-decisions.md) (D2, D5, D11, D15),
-  [langgraph-rework-plan.md](../langgraph-rework-plan.md)
+  [pipeline-design.md](../pipeline-design.md) (§8 invariants; the serve §§5–7 it once had are removed),
+  [design-decisions.md](../design-decisions.md) (D2, D5, D11, D15)
 - **Supersedes:** the pipeline-design §8 invariant *"Serve stays a deterministic
   DAG; LLM appears only as bounded node operations, never as an autonomous loop"*
   and the §5 framing *"LLM = node classifier, never ReAct."*
@@ -422,3 +421,19 @@ the agent path; `run_experiment` is agent-only.
    entire question-answering turn is one Langfuse trace, and cost/token
    aggregation is no longer double-counted. LangSmith is unaffected; it
    self-instruments from the environment.
+
+## Amendment 4 (2026-07-14): HITL clarification shipped server-side
+
+**Status:** Implemented (server side); durable persistence still deferred.
+
+The Q6 row (the "no clarification (the model guesses)" line above) and Phase 3
+listed HITL (`interrupt()` + checkpointer) as deferred. The **interrupt mechanism
+has since landed server-side**: `server/tools.py::ask_user` calls `interrupt()`,
+`server/clarify.py` carries the clarification request/response shapes,
+`api/graph_app.py` handles the `ClarificationPending` resume loop, and `stack.py`
+wires `can_clarify` + a `clarify_checkpointer` (covered by
+`tests/test_serve_clarify.py`). What remains deferred is only the **durable**
+checkpointer (Postgres) — today's checkpointer is in-memory, so a clarification
+does not survive a process restart. The frontend build is tracked in
+[hitl-clarification-contract.md](../plans/hitl-clarification-contract.md). So
+"Open questions → HITL" now scopes to *durable persistence*, not the mechanism.

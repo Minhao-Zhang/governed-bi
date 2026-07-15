@@ -1,30 +1,28 @@
 # End-to-End Pipeline Design: Curator → Serve
 
-_Status: agreed 2026-07-12. Supersedes the "refuse on undeclared cross-schema
-join" behavior of **D15** and extends the reliability model of **D2**. The
-decisions marked **(ADR candidate)** below should graduate to numbered ADRs
-(D16+) in [design-decisions.md](design-decisions.md) once code lands._
+_Status: agreed 2026-07-12; the **serve half has since shipped differently**, so
+its original sections (Phase D DAG, single-schema LLM pick, grade-don't-refuse)
+are **removed** from this doc. What remains describes the **curator / build side**
+(§0–§3) — still the intended pipeline — plus the preserved invariants (§8). Serve
+is authoritatively covered by [ADR 0002](adr/0002-governed-agentic-serve-runtime.md),
+[D5 / D12–D16](design-decisions.md), and [server.md](server.md)._
 
-> **§5 and the §8 "deterministic DAG / never ReAct" invariant are superseded by
-> [ADR 0002](adr/0002-governed-agentic-serve-runtime.md).** Serve is being
-> reworked into a *governed agentic core*: its **authority stays deterministic**
-> (middleware-intercepted read-only tools + a deterministic reliability stamp),
-> but its **reasoning may be agentic** (a bounded `create_agent` loop). The safety
-> invariants below (L2 + refuse-gate hard, two-axis stamp, gold-leakage boundary,
-> pinned corpus) are preserved.
+> **One removed idea, flagged:** the earlier "reverse D15's missing-edge refuse"
+> proposal did **not** ship. A cross-schema question with no curated join still
+> **refuses** (D15); only coverage / L3–L5 / execution failures deliver-and-grade
+> on the `semantic_assurance` axis (D5). Serve's authority stays deterministic
+> while its reasoning is a bounded agentic loop (ADR 0002).
 
-This document records the intended end-to-end shape of the system as agreed in
-design discussion. It is the target, not a description of current committed
-code; a **Delta from today** section at the end lists what still has to be
-built. It deliberately does not include the ad-hoc uncommitted code currently in
-the working tree.
+This document records the intended shape of the **curator / build side** as agreed
+in design discussion. It is the target for that side, not a description of current
+committed code.
 
 ## 0. The two phases
 
 The system has a **build-time curator** (offline, exploratory, LLM-heavy) and a
-**serve-time inference path** (online, deterministic, guardrailed). They share
-one artifact: the **corpus** (the governed semantic layer). The corpus is
-authored by the curator and consumed, read-only, by serve.
+**serve-time inference path** (online, guardrailed). They share one artifact: the
+**corpus** (the governed semantic layer). The corpus is authored by the curator
+and consumed, read-only, by serve.
 
 ## 1. Governance model: PR gate + version pinning, not an inline adversary
 
@@ -42,7 +40,7 @@ at write time.
   production is always pinned to a reviewed, merged revision.
 - Consequence: the existing **adversary** (Facts/Inference refutation) is
   **demoted from a hard gate to a signal**. Its refutations no longer block a
-  write; instead they become inputs to the reliability score (§5). Facts remain
+  write; instead they become inputs to the reliability score. Facts remain
   deterministic; Inference remains labeled as inferred, but is not gated inline.
 
 Rationale: an inline adversarial gate is the right tool when a corpus grows
@@ -87,93 +85,17 @@ Already exists: `curator/profile.py::profile_database` →
 The curator is the *only* place that uses the gold SQL. Gold answers never reach
 the serve path (the leakage boundary).
 
-## 4. Phase C — Asynchronous SME clarification round-trip
+## 4. Phase C — SME clarification round-trip
 
-**(ADR candidate.)** The clarification loop is **asynchronous**, not the current
-in-process emit-then-resolve helper.
-
-1. The curator **persists** its open clarification questions to a durable store
-   (a worksheet/queue artifact), then the run can exit.
-2. A **subject-matter expert answers out of band** — a human via a worksheet/UI,
-   or a Simulated SME (LLM stand-in) in eval. The SME sees domain context only,
-   never the gold SQL/answer (leakage invariant).
-3. The curator **resumes**, folds each answer into the corpus via the existing
-   `corpus/clarify.py::accept_answer` primitive (which re-stamps provenance to
-   `human`/`certified`), and **re-runs** its inference over the enriched corpus.
-
-This round-trip *is* the curator process: explore → ask → (async wait) → fold →
-re-explore, terminating on a bounded number of rounds or when no new open
-questions are produced.
-
-## 5. Phase D — Serve (deterministic LangGraph DAG)
-
-Serve stays a **deterministic LangGraph DAG — never autonomous ReAct**
-(`server/graph.py`, mirrored by `server/flow.py`). LLM calls are **bounded
-classifiers/generators at specific nodes**, not drivers.
-
-### 5.1 Schema selection node
-
-When the database holds multiple schemas:
-
-1. Retrieval **shortlists ~3 candidate schemas** (BM25, optionally embedding-RRF).
-2. A dedicated **LLM node is shown those candidate schemas + their details and
-   picks the single schema most likely to answer the question.**
-3. Everything downstream (retrieval, generation, guardrails, execution) operates
-   on **that one schema only.**
-
-Rationale: most questions are answerable within a single schema. Committing to
-one schema early removes the cross-schema join problem for the common case.
-BM25/embeddings are the *shortlister*; the LLM is the *selector* — both are
-needed. (Executable cross-schema joins via curated `JoinAsset` paths remain a
-separate, later capability; they are not the default path.)
-
-### 5.2 Guardrails and the two-axis outcome
-
-Guardrail layers L1–L5 (`gateway/guardrails.py`) still run. Every answer carries
-the existing two-axis stamp from `server/answer.py`, surfaced in
-`api/schemas.py::AnswerResponse`:
-
-- **`safety_clearance` (boolean, hard).** Driven by the **L2 policy layer**
-  (single `SELECT`, no DDL/DML/injection) and the curated negative-example
-  refuse-gate. These **stay hard rejects** — a query that fails safety is never
-  delivered at any reliability score. "Lower the number and run it anyway" must
-  not apply to safety.
-- **`semantic_assurance` (graded: certified / heuristic / unverified / none).**
-  This is where the reliability model lives (§6).
-
-## 6. Reliability model: grade the assurance axis, don't hard-reject
-
-**(ADR candidate. Reverses D15's "refuse on missing cross-schema edge".)**
-
-Today, semantic/coverage failures hard-reject. Instead:
-
-- Maintain a **reliability score / indicator per answered question** on the
-  `semantic_assurance` axis. It **decreases** as the answer fails semantic and
-  coverage checks — low join-plan confidence, suspect (decoy) columns in scope,
-  L3/L4/L5 repair exhaustion, corrective-RAG/fallback, repeated repairs, **and
-  the demoted adversary's refutations from §1**.
-- The answer is **still delivered.** Below a threshold, `semantic_assurance`
-  drops to `unverified`, and the UI **colors it differently** so the user knows
-  the answer was produced but is not reliable.
-- **Safety failures are exempt** — they remain binary hard rejects (§5.2). Only
-  the semantic/coverage class of former hard-rejects becomes graded.
-
-The two-axis stamp already models exactly this separation; the change is
-behavioral (deliver-and-grade instead of refuse) plus threshold→color wiring in
-the response and UI.
-
-## 7. Delta from today (what still has to be built)
-
-| Area | Today (committed baseline) | Target (this design) |
-|---|---|---|
-| Ingestion (§2) | `profile_database` exists, Facts-only | keep as-is |
-| Curator engine (§3) | deterministic propose→refute→promote; deep-agent scaffold **unwired**; no Q&A-pair input | wire deep agent; ingest batch of (question, gold SQL); deterministic join extraction from gold SQL |
-| Governance (§1) | inline adversary is a hard gate | adversary → signal; trust via engineer review + PR gate + inference reads pinned git hash |
-| SME loop (§4) | synchronous, in-process emit/resolve | asynchronous persist → SME answers → resume → fold via `accept_answer` → re-run |
-| Schema pick (§5.1) | BM25 shortlist + curated-join expansion, else **hard refuse** | shortlist ~3 → **LLM picks one** → single-schema downstream |
-| Reliability (§6) | two-axis stamp exists but only grades answers that already cleared guardrails; semantic failures hard-reject | grade the assurance axis; deliver-and-color former semantic hard-rejects; safety stays hard |
-| Safety (§5.2) | L2 + negative-example gate hard-reject | unchanged (stays hard) |
-| Single-schema / SQLite BIRD path | unchanged | unchanged |
+See **[D12 (Clarification Protocol)](design-decisions.md#d12-clarification-protocol)**
+and **[D14 (SME-growth benchmark, + 2026-07-15 amendment)](design-decisions.md#d14-sme-growth-benchmark-on-bird-obfuscation)**
+for the current design: the curator records open clarification questions, a
+pluggable **Responder** (a human SME in production, a Simulated SME in eval)
+answers them from domain context only (never the gold SQL — the leakage
+invariant), and the answers fold back into the corpus. The async
+persist → answer → resume shape originally sketched here is realized via the
+`clarifications.jsonl` ledger + `fill_clarifications_with_responder`, not the
+schema-layer `accept_answer` primitive this section once named.
 
 ## 8. Preserved invariants (non-negotiable)
 

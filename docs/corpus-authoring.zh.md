@@ -4,7 +4,7 @@ _[English](corpus-authoring.md) · [简体中文](corpus-authoring.zh.md)_
 
 如何手动编写并校验 corpus 资产。[资产模式](asset-schemas.zh.md)页是逐字段的参考文档；本页则是面向任务的操作指南。
 
-在建成后的系统中，curator 代理会生成这些资产，adversary 对其进行检查，再由人工审核结果(D9、D10)。目前这一切都还没有运行起来，所以现在你需要手动编写资产：用于给 corpus 播种、构建测试夹具(fixtures)，或者修正未来 curator 产出的结果。无论出于哪种目的，规则都是一样的。Git 跟踪的 YAML 和 Markdown 文件**才是**事实来源(source of truth)；编辑它们就是在编辑语义层。图(graph)、向量(vector)和 BM25 存储都是可重建的投影，绝不能直接编辑。
+在建成后的系统中，curator 代理会生成这些资产，adversary 对其进行检查，再由人工审核结果(D9、D10)。今天已有一套确定性的 proposer/adversary 脚手架在运行（Facts 画像、启发式 + LLM proposer、结构化 adversary `review`、`curate` 晋升循环）；自主自评修复循环与逐资产 LLM `refute` 仍是接缝。你仍会手动编写资产：用于给 corpus 播种、构建测试夹具(fixtures)，或者修正 curator 产出的结果。无论出于哪种目的，规则都是一样的。Git 跟踪的 YAML 和 Markdown 文件**才是**事实来源(source of truth)；编辑它们就是在编辑语义层。图(graph)、向量(vector)和 BM25 存储都是可重建的投影，绝不能直接编辑。
 
 阅读本文时，可以对照内置的示例进行操作：[`corpus/beer_factory/`](../corpus/beer_factory)。
 
@@ -14,14 +14,14 @@ _[English](corpus-authoring.md) · [简体中文](corpus-authoring.zh.md)_
 
 ```
 corpus/
-  <db>/
-    tables/      tbl_<db>_<name>.yaml      # columns are inline
+  <schema>/
+    tables/      tbl_<schema>_<name>.yaml      # columns are inline
     joins/       join_<left>_<right>.yaml
     metrics/     metric_<name>.yaml
     terms/       term_<name>.yaml
     rules/       rule_<name>.yaml
-    few-shots/   fs_<db>_<n>.yaml
-    negatives/   neg_<db>_<n>.yaml
+    few-shots/   fs_<schema>_<n>.yaml
+    negatives/   neg_<schema>_<n>.yaml
     skills/      *.md
 ```
 
@@ -116,7 +116,7 @@ confidence: 0.8
 | `term.related_terms[].id` | 某个术语的 id | `term_customer` |
 | `rule.scope[]` | 任意资产的 id | `tbl_demo_orders` |
 
-列本身没有自己的 `id` 字段；loader(加载器)会按照 `col_<db>_<table>_<physical>` 的格式自动派生一个。因此，`tbl_demo_customers` 中物理名为 `c_0` 的主键，其 id 就是 `col_demo_customers_c_0`，也就是上面 `references` 所指向的目标。
+列本身没有自己的 `id` 字段；loader(加载器)会按照 `col_<schema>_<table>_<physical>` 的格式自动派生一个。因此，`tbl_demo_customers` 中物理名为 `c_0` 的主键，其 id 就是 `col_demo_customers_c_0`，也就是上面 `references` 所指向的目标。
 
 一个指标和一个术语，与上面的资产相互关联：
 

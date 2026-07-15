@@ -10,7 +10,7 @@ offline agent that *produces* the corpus (two-harness split; `deepagents`). Runs
 maintainer**: cold-start plus ongoing drift-repair. Untended corpora rot
 ~95%→65%/month.
 
-> **Multi-schema (D15).** "Per-DB" means one database per run — but that database now holds **many schemas**, and the **schema** (not the database) is the modeled corpus namespace (`schema -> table`). A run curates every schema in the DB plus any curated cross-schema relationships; the emitted `corpus/<db>/` tree becomes `corpus/<schema>/` (rename decided, not built; asset IDs unchanged). The per-DB framing below — Inputs, the loop — is unchanged in scope.
+> **Multi-schema (D15).** "Per-DB" means one database per run — but that database now holds **many schemas**, and the **schema** (not the database) is the modeled corpus namespace (`schema -> table`). A run curates every schema in the DB plus any curated cross-schema relationships; the emitted corpus tree is `corpus/<schema>/` (the `db`→`schema` rename shipped, D15 increment 7; asset IDs unchanged). The per-DB framing below — Inputs, the loop — is unchanged in scope.
 
 > Implementation: [`src/governed_bi/curator/`](../src/governed_bi/curator/).
 
@@ -39,7 +39,7 @@ maintainer**: cold-start plus ongoing drift-repair. Untended corpora rot
 ## Inputs / outputs
 
 - **Inputs (per DB):** the live DB (catalog + data); that DB's seed queries (`train_final.jsonl`: question + gold SQL + BIRD `evidence`). **Train only, never test (the leakage wall).**
-- **Output:** the `corpus/<db>/` tree of YAML typed assets + Markdown skills, each carrying provenance.
+- **Output:** the `corpus/<schema>/` tree of YAML typed assets + Markdown skills, each carrying provenance.
 
 ## Proposer + adversary (D10)
 

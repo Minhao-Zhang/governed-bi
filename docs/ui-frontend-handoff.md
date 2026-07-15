@@ -10,8 +10,9 @@ runtime decision in [ADR 0001](adr/0001-langgraph-server-chat-runtime.md).
 > by a **LangGraph Server** (graph id `serve`) consumed by the **`useStream`** SDK,
 > with corpus/schema/audit as **custom routes** on that same server, a dev **edit**
 > endpoint, and a **full knowledge graph**. Boot it with `langgraph dev` (§2) and
-> build against it directly. Implementation detail is in
-> [langgraph-rework-plan.md](langgraph-rework-plan.md).
+> build against it directly. Runtime rationale is in
+> [ADR 0001](adr/0001-langgraph-server-chat-runtime.md) and
+> [ADR 0002](adr/0002-governed-agentic-serve-runtime.md).
 >
 > **Incoming design change — read §13 before touching the answer card.** The new
 > [pipeline-design.md](pipeline-design.md) reworks how low-confidence answers
@@ -79,12 +80,15 @@ stream.submit(
 ```
 - **Messages / history:** `stream.messages` (thread-backed; reload/rejoin by
   `threadId`). Threads are the persistence; the frontend owns no conversation DB.
-- **Live steps:** the graph emits one **custom event** per stage, delivered to the
+- **Live steps:** the graph emits typed governance events, delivered to the
   `onCustomEvent(data, { mutate })` option (the run must include `custom` in
-  `streamMode`). Render the labeled rail **Route → Retrieve → Generate SQL →
-  Guardrails → Execute → Compose**; repairs appear as `generate`/`guardrail`
-  re-firing with a higher `attempt`, and `guardrail` events carry `passed` +
-  `failed_layer`. This reflects real backend progress, not a timer.
+  `streamMode`). The current shape is `{seq, kind: "rail"|"tool"|"final", step,
+  status, id?, detail, serve_path?}` from `GovEventStream` — a **dynamic rail +
+  agent tool-loop** (`search_corpus` / `inspect_schema` / `sample_rows` /
+  `run_query`), **not** a fixed 6-stage list. See
+  **[agent-step-visualization.md](plans/agent-step-visualization.md)** for the
+  authoritative event contract and the `buildStepsFromLedger` mapping. This
+  reflects real backend progress, not a timer.
 - **Final answer** is a custom **`answer` state channel**: read `stream.values.answer`
   (the `AnswerResponse` shape). Render the **answer card**:
   - Two badges, never one score: `safety_clearance` (bool) + `semantic_assurance`
@@ -102,8 +106,9 @@ Package note: `@langchain/langgraph-sdk/react` gives `onCustomEvent` +
 `stream.values`; the newer `@langchain/react` superset adds selector hooks
 (`useChannel`) and `stream.respond`. Either works against this server.
 
-(The engine also keeps a non-streaming `POST /chat` fallback for a no-`agents`
-offline profile; `capabilities.can_stream=false` selects it.)
+(`POST /chat` is a non-streaming REST alternative to the LangGraph stream — but
+**not an offline fallback**: per ADR 0002 serve is agent-only, so `/chat` also
+requires a live model and returns `503` without one.)
 
 ---
 
@@ -115,7 +120,7 @@ the rework.
 
 | Method + path | Purpose |
 |---|---|
-| `GET /capabilities` | `{ environment, dialect, can_edit, edit_mode, can_stream, can_scope, can_search, has_live_model, model }`; gate UI features on this |
+| `GET /capabilities` | `{ environment, dialect, can_edit, edit_mode, can_stream, can_scope, can_search, can_clarify, has_live_model, model }`; gate UI features on this |
 | `GET /health` | corpus health: counts, `ci_green`, findings, `n_suspect_columns`, `n_excluded`, `n_low_confidence_joins` |
 | `GET /schema` | tables + columns (types, roles, `reliability`, `excluded`, provenance). Namespace field is **`schema`**. Optional `?schema=&limit=&offset=` (param-less = the full dump). **`?db=` is not accepted.** |
 | `GET /schema/summary?schema=&limit=&offset=` | **lean catalog** `{ total, items }` for the virtualized list + client search index; each item `{ id, physical_name, schema, row_count, n_columns, excluded, has_suspect, provenance_status, columns:[{physical_name, physical_type, role, reliability, excluded}] }` (heavy fields dropped; `total` is pre-pagination) |
@@ -164,11 +169,16 @@ path is the same.
   `get_stream_writer()`; custom routes mounted (`http.app`); `GET /knowledge-graph`
   (full graph) alongside `GET /graph` (ER); `POST /corpus/edit` (dev); LangSmith +
   Langfuse tracing (opt-in); re-exported [openapi.json](openapi.json). Plus the
-  earlier `presenter` view models, REST reads, `stack` factory, non-streaming
-  `/chat` fallback.
+  earlier `presenter` view models, REST reads, `stack` factory, and the
+  non-streaming `/chat` REST endpoint (also requires a live model).
+- **Shipped since (server side):** human-gate **clarification interrupts** —
+  `interrupt()` in `server/tools.py::ask_user`, resume via `submit(command.resume)`,
+  gated by `capabilities.can_clarify` (contract:
+  [hitl-clarification-contract.md](plans/hitl-clarification-contract.md)). The
+  **frontend** build is what's still open; durable (Postgres) checkpointing of an
+  interrupt is deferred.
 - **Deferred:** prod PR editing (dev is file-write today), public-demo cost
-  strategy, auth/RLS, human-gate interrupts (the runtime supports them via
-  `stream.interrupt` + `submit(command.resume)`).
+  strategy, auth/RLS, durable HITL persistence.
 
 Everything above is live behind `langgraph dev`; build against it now.
 
@@ -267,13 +277,14 @@ The backend owner's answers to the eight questions in the frontend's
 
 ## 13. Reliability & deliver-and-grade (new design)
 
-Source: [pipeline-design.md](pipeline-design.md) §6 (reliability), §5.1 (schema pick),
-§1 (pinned corpus). Motivation: the three-arm experiment
-([plans/three-arm-experiment-plan.md](plans/three-arm-experiment-plan.md)) showed
-that on one DB the curated arm lost accuracy **entirely because it refused
-answerable questions** — the exact behavior §6 removes. So this is not cosmetic:
-the reliability treatment is the product surface for the engine's core decision to
-answer-with-a-caveat instead of refuse.
+Source: [D5 (two-axis stamp + graded delivery)](design-decisions.md#d5-refusal--best-effort);
+pinned-corpus context in [pipeline-design.md §1](pipeline-design.md). Motivation:
+the reliability treatment is the product surface for the engine's
+**deliver-and-grade** decision — a coverage / L3–L5 / execution failure delivers
+the SQL with an `unverified` stamp instead of refusing, so the curated arm isn't
+penalized for answerable questions it can only answer with a caveat. (A missing
+cross-schema **join** still hard-refuses per D15; only that coverage/repair class
+is graded.)
 
 This section is the **single source of truth** for the reliability contract. It
 **supersedes** the "surface like other refusals" guidance for `missing_edge` in
@@ -543,11 +554,9 @@ not a column feature.
   belt-and-suspenders fallback that attaches it when missing. So on the agent path the
   frontend's `buildStepsFromLedger` has its durable source: the trace survives a page
   reload and a non-streaming answer, independent of the live event stream.
-- **Deterministic flow path:** builds no ledger, so `governance_ledger` is **absent**
-  there by design. Legacy `{stage}` events + the fixed stepper remain that path's trace
-  (§3), unchanged.
-- **If the ledger looked missing on the agent path,** it was most likely an older build
-  or a flow-path answer — confirm which path/build before treating it as a backend gap.
+- **There is only one serve path now.** The ADR 0002 P2 cutover deleted the
+  deterministic flow, so **every** served answer carries a governance ledger; a
+  ledger that looks missing means an older build, not a second path.
 
 `provenance` is an open `Record`; `governance_ledger` renders for free once the drawer
 knows to look for it (add it to the drawer's `PREFERRED_ORDER` for deterministic

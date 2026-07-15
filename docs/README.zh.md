@@ -10,7 +10,7 @@ _[English](README.md) · [简体中文](README.zh.md)_
 
 1. [系统总览](system-overview.zh.md)：这是什么、两个 harness、当前状态。
 2. [架构](architecture.zh.md)：完整设计（主干(spine)、内核(kernel)、服务、存储、流程、评测、环境）。
-3. [设计决策](design-decisions.zh.md)：以 ADR 形式呈现的 D1-D15，包含备选方案与权衡。
+3. [设计决策](design-decisions.zh.md)：以 ADR 形式呈现的 D1-D16（+ 2026-07-15 审计处置），包含备选方案与权衡。
 4. [资产模式](asset-schemas.zh.md)：每个资产的 YAML 字段规范（Facts 层 / Inference 层 / Audit 层）。
 5. [Curator](curator.zh.md)：构建侧的 proposer + adversary 循环。
 6. [Server](server.zh.md)：服务侧的 LangGraph 流程 + 护栏(guardrails)。
@@ -30,7 +30,7 @@ _[English](README.md) · [简体中文](README.zh.md)_
 ## 主干（不可妥协项）
 
 - **两个平面(planes)。** 语义/控制平面（版本化配置 + markdown，通过 PR/CI 发布）与数据平面相互分离，后者只执行通过护栏检查的 SQL。语义只定义一次，由人类掌控。
-- **确定性 DAG + 条件路由，而非自主式 ReAct。** 问题可以很宽泛，但 SQL 必须收窄。
+- **权限是确定性的；推理可以是 agentic 的。** 问题可以很宽泛、模型在一个有界的 agentic 循环里推理，但*什么能执行、什么被信任、什么被记录*由中间件固定，而非模型自行裁量（ADR 0002 反转了此前"绝不自主循环"的规则）。但 SQL 必须收窄。
 - **失败即拒（fail-closed）。** 超出范围(out-of-scope)/覆盖缺失(missing-coverage)/触发护栏(tripped-guardrail)，任何一种情况都只会返回拒答或澄清性问题，绝不会给出一个自信却错误的数字。
 
 ## 文档与代码的对应关系

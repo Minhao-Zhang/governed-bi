@@ -14,7 +14,7 @@ _[English](server.md) · [简体中文](server.zh.md)_
 
 > *已实现（当前现状）：* agentic 内核是**唯一**的服务路径：P2 切换已经落地，确定性流程（`server.flow`）与 `agent_serve` 开关都已被移除。`server.agent` 会编译一个外层的确定性 `StateGraph`（`ingest → refuse_gate → prepare → cache → assemble → agent_core → narrate`），它包裹起一个内层的 LangChain `create_agent` 推理循环；公开的入口函数是 `answer_question_agent`。治理由 `GovernanceMiddleware`（`server.middleware`）承载；四个受治理工具位于 `server.tools`；`llm.fake` 提供一个 `FakeListChatModel` harness 用于 CI 的确定性。
 >
-> 回答问题现在必须有真实（live）模型：`build_stack()` 在没有模型时仍可构建（只读的审计 API 仍可运行），但 LangGraph 服务进程（`make_graph`）会在启动时失败即拒（fail closed），`/chat` 在模型配置完成之前始终返回 503。参见 ADR 0002 以及 [`docs/plans/agentic-serve-ab-results.md`](plans/agentic-serve-ab-results.md) 中的 A/B 结果。
+> 回答问题现在必须有真实（live）模型：`build_stack()` 在没有模型时仍可构建（只读的审计 API 仍可运行），但 LangGraph 服务进程（`make_graph`）会在启动时失败即拒（fail closed），`/chat` 在模型配置完成之前始终返回 503。参见 ADR 0002；当前评测数字见 [`three-arm-experiment-results.md`](plans/three-arm-experiment-results.md)。
 
 ## 流程
 
@@ -83,7 +83,7 @@ SQL 生成与执行的中段（上文第 6-9 步）就是一个有界的 `create
 
 **存续下来的不变式：** **护栏仍然在任何执行之前于中间件中运行**：同样的五层，失败即拒，只是现在在*工具边界*（`wrap_tool_call`）而不是某个图节点上强制执行。授权来自**受治理的探索，而非 agent 的声称**：`allowed_tables` 是本轮通过受治理工具所暴露的表集合（经 FK 扩展），因此一个失控的 agent 无法自行授权一个 `excluded` 表；L3 仍然守卫每一个列。
 
-**Amendment 1：为语义层播种（seed）。** 首次线上 A/B 显示，纯工具（tools-only）的 agent 相较于（已被移除的）确定性 flow *发生了退化*，因为 P1 的工具只暴露了名称，而没有暴露任何经策展的语义层（few-shots、连接的 `ON` 子句、metric 表达式、terms、rules）。修复办法：一个确定性的 **`assemble` 节点在 `agent_core` 之前运行**，用同一份语义层上下文（`PromptContext.render()`）作为一个 `## Governed context` 区块为 agent 播种，并用基础的（检索到的 + FK 邻域 + Steiner）表范围预填充 `licensed` 通道。工具由此变成**精炼（refinement），而非发现（discovery）**。这正是护栏所执行的那道*确定性* L4 下限（而非 agent 声称的），因此播种得到的范围严格 ≥ 该下限，且绝不会是自行授权的。参见 ADR 0002 Amendment 1 以及 [`docs/plans/agentic-serve-ab-results.md`](plans/agentic-serve-ab-results.md)。
+**Amendment 1：为语义层播种（seed）。** 首次线上 A/B 显示，纯工具（tools-only）的 agent 相较于（已被移除的）确定性 flow *发生了退化*，因为 P1 的工具只暴露了名称，而没有暴露任何经策展的语义层（few-shots、连接的 `ON` 子句、metric 表达式、terms、rules）。修复办法：一个确定性的 **`assemble` 节点在 `agent_core` 之前运行**，用同一份语义层上下文（`PromptContext.render()`）作为一个 `## Governed context` 区块为 agent 播种，并用基础的（检索到的 + FK 邻域 + Steiner）表范围预填充 `licensed` 通道。工具由此变成**精炼（refinement），而非发现（discovery）**。这正是护栏所执行的那道*确定性* L4 下限（而非 agent 声称的），因此播种得到的范围严格 ≥ 该下限，且绝不会是自行授权的。参见 ADR 0002 Amendment 1。
 
 **实时治理事件流（Amendment 2）。** 治理账本会实时流式输出，而不只是附在最终答案上。`agent_core` 运行的是 `agent.stream(...)`（而非 `invoke`），并通过既有的 `on_event` 回调把每一个受治理动作重新发出为一条有类型的事件：`rail` 对应每个外层步骤（`route` / `refuse_gate` / `cache` / `assemble`），`tool` 对应每次 `search_corpus` / `inspect_schema` / `sample_rows` / `run_query`（先发 `start`，再发 `ok` / `blocked` / `error` / `cap` / `miss` 的结果事件，按 tool-call id 配对），以及一条携带双轴标记的 `final`。每条事件的形状是 `{seq, kind, step, status, id?, detail, serve_path?}`；`run_query` / `sample_rows` 的 `detail` 就是**账本条目本身**，因此实时视图与最终的 `governance_ledger` 不会发生漂移。`GovEventStream`（`server.governance`）是这套契约每轮的发射器。这就是 UI 渲染为实时步骤时间线的那层审计面，契约与前端方案见 [`docs/plans/agent-step-visualization.md`](plans/agent-step-visualization.md)。
 

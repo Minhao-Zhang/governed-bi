@@ -18,7 +18,7 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
 - 两个 harness 共享同一套基座：**curator**（构建 corpus）与**server**（负责应答）。语义层是护城河。失败即拒（fail-closed）。
 - 设计文档：
     - [架构](architecture.zh.md)：完整设计
-    - [设计决策](design-decisions.zh.md)：D1-D15，含备选方案与权衡取舍
+    - [设计决策](design-decisions.zh.md)：D1-D16（+ 2026-07-15 审计处置），含备选方案与权衡取舍
     - [资产模式](asset-schemas.zh.md)：按资产划分的 YAML 字段规范（Facts 层 / Inference 层 / Audit 层）
     - [Curator](curator.zh.md)：构建侧的 proposer + adversary 循环
     - [Server](server.zh.md)：服务侧的 agent + 护栏（[ADR 0002](adr/0002-governed-agentic-serve-runtime.md) 受治理 agentic 内核如今已是唯一的服务路径；此前的确定性流程已退役）
@@ -28,7 +28,7 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
 
 ## 状态
 
-> **已决定(D1-D15)**
+> **已决定(D1-D16 + 2026-07-15 审计处置)**
 >
 > 目标 · 治理单元 · 评测 · 评分 · 拒答 · 归属 · 身份 · 记忆 · corpus 契约 ·
 > curator 关卡 · 外部评审 · 澄清协议 · corpus 独立仓库 · SME 成长基准 ·
@@ -56,9 +56,9 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
 >
 > 对 Inference 层剩余资产 (joins / terms / metrics / rules / skills) 的 LLM
 > 撰写，以及逐资产、实际运行的 adversary `refute` · curator 的自评估 train-EX
-> 循环 · 经过混淆处理的 BIRD 评测数据（在 jsonl 数据到位之前，由内置的小型
-> beer_factory 数据集充当替身）· 针对**真实(live)** OpenAI API 的首次运行
-> （目前为止一切都基于离线模型替身运行）· **D15** 多 schema 构建继续推进：线上
+> 循环 · **完整**规模的经混淆 BIRD 评测 jsonl（在数据到位之前，由内置的小型
+> beer_factory 数据集充当替身；三臂评测框架已在本地 Postgres 上以真实模型实际运行）
+> · **D15** 多 schema 构建继续推进：线上
 > 更名 + 多 schema 服务 + 缺失边拒答 + 服务端图划范围 + 磁盘 YAML `schema` 字段 +
 > 连接感知 schema 路由器均**已落地**。仍推迟：服务端 `/search`（客户端 Fuse），以及将
 > `DataSourceConfig.db` 并入 pin 字段。缺少评测数据，

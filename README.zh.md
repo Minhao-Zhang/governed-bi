@@ -83,9 +83,9 @@ uv run python scripts/live_smoke.py       # end-to-end over a real model (needs 
 
 「corpus 即护城河」这一论断，已经在一个混淆版 Postgres 数据库上跑出了第一个真实结果：curator
 构建的资产相比无 corpus 基线提升了执行准确率，并把 decoy-touch 压到零。但它只用了单一随机种子、
-样本量也小，所以这个结果是方向性的，尚不能下定论。把它坐实（多个随机种子、一个 gold 参照臂）是
-当前的里程碑。完整数据与方法见：[三臂实验结果](docs/plans/three-arm-experiment-results.md) ·
-[agentic-serve A/B 结果](docs/plans/agentic-serve-ab-results.md)。
+样本量也小，所以这个结果是方向性的，尚不能下定论。当前的里程碑是**规模化运行**——把全部 69 个
+BIRD 库作为 Postgres schema 加载（8,134 训练 / 2,030 测试），用大规模留出测试集取代单种子差值
+作为证据单位（见[审计处置](docs/design-decisions.md#audit-dispositions-2026-07-15)）。完整数据与方法见：[三臂实验结果](docs/plans/three-arm-experiment-results.md)。
 
 仅设计、尚未构建：`CorpusRelease`（不可变、按内容哈希锁定的服务发布）。已接入预留接口（seam）但
 默认关闭（属于企业分支范围）：身份 → 查询范围（RLS / 租户隔离）、人工审批闸门、按范围限定的

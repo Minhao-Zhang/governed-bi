@@ -9,7 +9,7 @@ heavy per-turn objects (the
 ``networkx`` graph, the allowlist, retrieval/context) stay as locals in that
 node and never enter a state channel, so nothing here has to be made
 checkpoint-serializable (this is why the ADR 0001 "``ServeState`` serializability"
-consequence does not apply; see docs/langgraph-rework-plan.md).
+consequence does not apply).
 
 Requires the ``agents`` extra (langgraph + langchain-core). Imported by path from
 ``langgraph.json`` (``graphs.serve``) and by tests; it is intentionally *not*

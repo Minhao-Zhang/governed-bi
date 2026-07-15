@@ -68,36 +68,55 @@ governance:
 
 升级路径：curator 标记为 `suspect` → 人类审核（D6） → 维持原状，或升级为 `excluded`。这一机制**排除在自主评测 arm 之外**（以使 Arm 2 保持纯 curator）；它是面向企业级部署的人机协同治理能力。
 
+## 澄清（一个 Audit 层字段块，D12）
+
+当 curator 无法从 Facts + 批次中解决某个问题时，它**记录该问题而非臆测**，作为资产 **Audit 层**上的一个 `clarification` 块。因其属于 Audit 层，它**绝不注入 server 的上下文**（见上文消费契约）——一个未决问题无法泄漏进 SQL 生成或检索。问题未决期间，资产仍从其 Inference 层给出尽力而为的答案（低 `confidence` + 一条 `suspect` 警示）；一个 **Responder**（生产中是人类 **SME**，评测中是 **Simulated SME**）作答，`accept_answer` 将其翻转为 `answered` 并重新盖上 provenance。参见 [D12](design-decisions.zh.md#d12-clarification-protocol)。
+
+```yaml
+# 在任意资产的 audit 块下
+audit:
+  provenance: { source: curator, status: draft }
+  clarification:
+    question: "`kunde_id` 是客户 id，还是内部账户 id？"
+    status: open            # open | answered
+    asked_by: curator
+    answer: null            # Responder 给出的自由文本回复
+    answered_by: null       # SME / responder 的 id
+    at: null                # 作答时的 ISO 时间戳
+```
+
+> 注意：这个逐资产的 `Clarification`（内嵌在 schema 中，`corpus/schemas.py`）与 curator 运行时的 `clarifications.jsonl` **账本**（`curator/clarifications.py`，SME 往返实际迭代的对象）不同。账本驱动批次往返；此字段块是挂在相关资产上、可持久、带 ID 追踪的记录。
+
 ## 目录结构
 
 ```
 corpus/
-  <db>/
-    tables/      tbl_<db>_<name>.yaml      # columns inline
+  <schema>/
+    tables/      tbl_<schema>_<name>.yaml      # columns inline
     joins/       join_<left>_<right>.yaml
-    few-shots/   fs_<db>_<n>.yaml
+    few-shots/   fs_<schema>_<n>.yaml
     terms/       term_<name>.yaml
     metrics/     metric_<name>.yaml
     rules/       rule_<name>.yaml
-    negatives/   neg_<db>_<n>.yaml
+    negatives/   neg_<schema>_<n>.yaml
     skills/      *.md                        # prose gotchas / query-patterns (not typed assets)
   _generated/    # search index, embeddings, compiled graph (derived, gitignored, rebuildable)
 ```
 
-> **D15**：corpus 命名空间 `<db>`（上方目录、下方 ID 格式）建模的是一个 **schema**，而非一个数据库——一个数据库容纳多个 schema，跨 schema 的 join 以带限定名的 `schema.table` SQL 执行。将字段/目录名 `db` → `schema` 已决定，但尚未落地；**ID 取值保持不变**（`tbl_<schema>_<name>`），因此下文的 `<db>` 占位符维持原样。
+> **D15**：corpus 命名空间 `<schema>`（上方目录、下方 ID 格式）建模的是一个 **schema**，而非一个数据库——一个数据库容纳多个 schema，跨 schema 的 join 以带限定名的 `schema.table` SQL 执行。字段/目录名为 `schema`（`db` → `schema` 改名**已落地**，D15 增量 7）；ID 为 `tbl_<schema>_<name>`。
 
 ## ID 约定（CI 用正则表达式检查）
 
 | 资产 | ID 格式 | 示例 |
 |---|---|---|
-| table | `tbl_<db>_<name>` | `tbl_beer_factory_customers` |
-| column *（内联；ID 由 loader 推导）* | `col_<db>_<table>_<physical>` | `col_beer_factory_customers_CustomerID` |
+| table | `tbl_<schema>_<name>` | `tbl_beer_factory_customers` |
+| column *（内联；ID 由 loader 推导）* | `col_<schema>_<table>_<physical>` | `col_beer_factory_customers_CustomerID` |
 | join | `join_<left>_<right>` | `join_transaction_customers` |
-| few_shot | `fs_<db>_<n>` | `fs_beer_factory_001` |
+| few_shot | `fs_<schema>_<n>` | `fs_beer_factory_001` |
 | term | `term_<name>` | `term_revenue` |
 | metric | `metric_<name>` | `metric_revenue` |
 | rule | `rule_<name>` | `rule_boolean_flags` |
-| negative_example | `neg_<db>_<n>` | `neg_beer_factory_001` |
+| negative_example | `neg_<schema>_<n>` | `neg_beer_factory_001` |
 
 **物理 ↔ 含义桥梁**贯穿每一个表/列：`physical_name` 是该字段在实际数据库中存在的标识符（在 BIRD 中经过混淆处理，在企业数据中则本身就晦涩难懂）。SQL 输出的正是这个标识符；而 Inference 层承载的是它的*含义*。curator 的全部工作，就是为晦涩难懂的物理名称填充含义，这一点在 BIRD 与企业级部署中完全相同。
 

@@ -2,7 +2,7 @@
 
 _[English](0001-langgraph-server-chat-runtime.md) · [简体中文](0001-langgraph-server-chat-runtime.zh.md)_
 
-- **Status:** Accepted (2026-07-10)
+- **Status:** Accepted (2026-07-10); superseded in part by [ADR 0002](0002-governed-agentic-serve-runtime.md) (2026-07-14) — the runtime choice (LangGraph Server + `useStream`) still stands; the single-node `answer_question` framing was replaced.
 - **Deciders:** project owner + design session
 - **Related:** [ui-frontend-design.md](../ui-frontend-design.md), [ui-frontend-handoff.md](../ui-frontend-handoff.md)
 
@@ -59,8 +59,7 @@ frontend via **`useStream`**.
   stages via `get_stream_writer()`. The heavy objects (`networkx` graph, allowlist,
   pydantic `retrieval`/`context`) stay node-local and are never checkpointed, so
   `server/flow.py` and `server/graph.py` are untouched and the
-  `answer_question`↔graph equivalence still holds. See
-  [langgraph-rework-plan.md](../langgraph-rework-plan.md) §1.
+  `answer_question`↔graph equivalence still holds.
   _(Forward pointer: this deterministic single-node framing was the runtime at
   the time of this decision; serve has since been cut over to the
   [ADR 0002](0002-governed-agentic-serve-runtime.md) governed agentic core,

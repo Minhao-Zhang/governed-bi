@@ -5,9 +5,10 @@ Read-only, RLS-as-user, credential-isolated, forced LIMIT/timeout, audit/replay
 the guardrails (server ``wrap_tool_call``).
 
 The gateway wraps a per-dialect ``Connector``: SQLite is proven against the
-committed fixture; Postgres and Redshift are implemented behind optional extras
-and unit-tested offline, but not yet run against a live server. See
-``docs/server.md`` steps 8-9 and ``docs/architecture.md``.
+committed fixture; Postgres is exercised live by the eval harness
+(``eval/run_experiment.py``) and unit-tested offline; Redshift is implemented but
+not yet run against a live cluster. See ``docs/server.md`` steps 8-9 and
+``docs/architecture.md``.
 """
 
 from __future__ import annotations

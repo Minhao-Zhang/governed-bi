@@ -79,9 +79,6 @@ connection or the eval split, so they belong to the eval harness.
 The same loader, schema, and validator are a small public API. Everything is
 parsed into typed Pydantic models, so a malformed asset fails loudly.
 
-(D15 renames the `db` corpus namespace to `schema`; decided, not yet built —
-these `db=` examples track current code.)
-
 ```python
 from pathlib import Path
 from governed_bi.corpus import load_corpus, validate_corpus, is_green, parse_asset
@@ -113,9 +110,11 @@ is allowed to see (Facts + Inference, never Audit, and never an excluded asset).
 ## Connect to a database
 
 The gateway wraps a per-dialect connector. SQLite is proven (read-only, with an
-audit log and a forced row cap); Postgres (`information_schema`) and Redshift
-(`svv_*`) are implemented (both ride psycopg, installed by a plain `uv sync`) and
-unit-tested offline, but not yet run against a live server. Point it at a SQLite
+audit log and a forced row cap); Postgres (`information_schema`) is exercised live
+by the eval harness (`eval/run_experiment.py`, against a local BIRD-Obfuscation
+Postgres) and unit-tested offline; Redshift (`svv_*`) reuses the Postgres path but
+is not yet run against a live cluster (both ride psycopg, installed by a plain `uv
+sync`). Point it at a SQLite
 file and you can introspect the catalog, profile the Facts tier, and run guarded
 queries:
 

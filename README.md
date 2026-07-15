@@ -109,10 +109,13 @@ read-only audit API.
 The corpus-as-moat claim has a first live result on an obfuscated Postgres
 database: curator-built assets lift execution accuracy over a no-corpus baseline
 and drive decoy-column touches to zero. But it is single-seed and small-N, so
-the result is directional, not yet conclusive. Hardening it (multiple seeds,
-a gold-reference arm) is the current milestone. Full numbers and method:
-[three-arm results](docs/plans/three-arm-experiment-results.md) ·
-[agentic-serve A/B](docs/plans/agentic-serve-ab-results.md).
+the result is directional, not yet conclusive. The current milestone is the
+**scale run** — all 69 BIRD DBs loaded as Postgres schemas (8,134 train /
+2,030 test), where the large held-out test set replaces single-seed deltas as the
+unit of evidence (see
+[audit dispositions](docs/design-decisions.md#audit-dispositions-2026-07-15)).
+Full numbers and method:
+[three-arm results](docs/plans/three-arm-experiment-results.md).
 
 Designed but not yet built: `CorpusRelease` (immutable, hash-pinned serving
 release). Seamed but toggled off (enterprise-fork scope): identity → query scope

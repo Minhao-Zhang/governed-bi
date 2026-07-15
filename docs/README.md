@@ -15,10 +15,10 @@ self-built [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) 
 
 1. [System overview](system-overview.md): what this is, the two harnesses, status.
 2. [Architecture](architecture.md): the full design (spine, kernel, services, storage, flow, eval, environments).
-3. [Design decisions](design-decisions.md): D1-D15 as ADRs, with alternatives and trade-offs.
+3. [Design decisions](design-decisions.md): D1-D16 (+ 2026-07-15 audit dispositions) as ADRs, with alternatives and trade-offs.
 4. [Asset schemas](asset-schemas.md): the per-asset YAML field spec (Facts / Inference / Audit tiers).
 5. [Curator](curator.md): the build-side proposer + adversary loop.
-6. [Server](server.md): the serve-side LangGraph flow + guardrails.
+6. [Server](server.md): the serve-side governed agentic core + guardrails.
 7. [Viz](viz.md): the read-only audit surface — the presenter view models plus the `governed_bi.api` HTTP API to browse the layer and chat with the governed server (the interactive UI is a separate project).
 8. [Glossary](glossary.md): canonical terms.
 
@@ -36,7 +36,7 @@ today (the corpus layer and the dev workflow):
 ## The spine (non-negotiables)
 
 - **Two planes.** A semantic/control plane (versioned config + markdown, published via PR/CI) stays separate from a data plane that executes only guardrail-passed SQL. Meaning is defined once and owned by humans.
-- **Deterministic DAG + conditional routing, not autonomous ReAct.** The question can be wide; the SQL must be narrow.
+- **Authority is deterministic; reasoning may be agentic.** The question can be wide and the model reasons in a bounded agentic loop, but *what may execute, what is trusted, and what is recorded* is fixed by middleware, not model discretion (ADR 0002 reversed the earlier "never an autonomous loop" rule). The SQL must be narrow.
 - **Fail-closed.** Out-of-scope / missing-coverage / tripped-guardrail returns a refusal or a clarifying question, never a confident wrong number.
 
 ## How the docs map to the code

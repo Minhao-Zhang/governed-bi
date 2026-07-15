@@ -4,6 +4,17 @@ Working implementation plan for the decisions recorded as
 [D12-D14](../design-decisions.md). This is a working doc, not a canonical design
 doc (English only). Decisions are settled; this is the how and the order.
 
+> **Status (2026-07-15).** Increments 1–2 (offline foundation + curator
+> clarification loop) are **shipped**. Increment 3 (corpus repo + multi-DB
+> harness) is the still-open **scale run** (Audit dispositions R1: 69 schemas,
+> 8,134 train / 2,030 test). Increment 4's Simulated SME is shipped, **but its
+> gold arm is superseded**: the de-obfuscation `build_gold_corpus` oracle is
+> **retired** and the ceiling is redefined as a *test-aware SME oracle* (index-
+> scoped retrieval, pull-based) — see the
+> [D14 amendment](../design-decisions.md#d14-sme-growth-benchmark-on-bird-obfuscation)
+> and [Audit dispositions R-gold](../design-decisions.md#audit-dispositions-2026-07-15).
+> Treat the `round 1 / round 2 / gold` framing below as replaced by that ladder.
+
 ## The four workstreams
 
 1. **Engine core (D12).** The two primitives the engine owns: a typed

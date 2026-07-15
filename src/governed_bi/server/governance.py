@@ -266,7 +266,7 @@ def _emit(on_event: "Callable[[dict], None] | None", stage: str, **detail) -> No
     The serve flow stays authoritative: a callback that raises must never turn a
     governed answer into an error, so failures here are swallowed. The payload is
     a small stable dict ``{"stage": ..., **detail}`` that the LangGraph server
-    maps to a labeled UI stage (see docs/langgraph-rework-plan.md). Stages, in
+    maps to a labeled UI stage (see docs/plans/agent-step-visualization.md). Stages, in
     pipeline order: ``route``, ``refuse_gate``, ``cache_hit``, ``retrieve``,
     ``generate``, ``guardrail``, ``execute``, ``compose``.
     """

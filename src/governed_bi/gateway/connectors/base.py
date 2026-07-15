@@ -8,9 +8,11 @@ A connector has two jobs (Architecture §3-4):
 
 It is **dialect-aware** so ``sqlglot`` can parse, validate, and transpile SQL
 against the right grammar, and so catalog introspection uses the right system
-tables. SQLite is proven against the committed fixture; Postgres and Redshift are
-implemented behind optional extras and unit-tested offline (against a fake
-connection), but not yet run against a live server.
+tables. SQLite is proven against the committed fixture; **Postgres is exercised
+live** by the eval harness (``eval/run_experiment.py`` runs the three arms against
+a local BIRD-Obfuscation Postgres) and is also unit-tested offline against a fake
+connection; Redshift shares the Postgres path but is **not yet run against a live
+cluster**.
 """
 
 from __future__ import annotations

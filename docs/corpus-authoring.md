@@ -6,9 +6,12 @@ How to write and validate corpus assets by hand. The [asset schemas](asset-schem
 page is the field-by-field reference; this page is the task-oriented walkthrough.
 
 In the finished system the curator agent generates these assets and an
-adversary checks them, then a human audits the result (D9, D10). None of that
-runs yet, so today you author assets by hand: to seed a corpus, to build test
-fixtures, or to correct what a future curator produced. Either way the rule is
+adversary checks them, then a human audits the result (D9, D10). A deterministic
+proposer/adversary scaffold runs today (Facts profiling, heuristic + LLM
+proposers, the structural adversary `review`, and the `curate` promote loop); the
+autonomous self-eval repair loop and per-asset LLM `refute` are still seams. You
+still author assets by hand: to seed a corpus, to build test fixtures, or to
+correct what the curator produced. Either way the rule is
 the same. The Git-tracked YAML and Markdown files **are** the source of truth;
 editing them is editing the semantic layer. The graph, vector, and BM25 stores
 are rebuildable projections and are never edited directly.
@@ -22,14 +25,14 @@ per-type folders under it:
 
 ```
 corpus/
-  <db>/
-    tables/      tbl_<db>_<name>.yaml      # columns are inline
+  <schema>/
+    tables/      tbl_<schema>_<name>.yaml      # columns are inline
     joins/       join_<left>_<right>.yaml
     metrics/     metric_<name>.yaml
     terms/       term_<name>.yaml
     rules/       rule_<name>.yaml
-    few-shots/   fs_<db>_<n>.yaml
-    negatives/   neg_<db>_<n>.yaml
+    few-shots/   fs_<schema>_<n>.yaml
+    negatives/   neg_<schema>_<n>.yaml
     skills/      *.md
 ```
 
@@ -134,7 +137,7 @@ References must resolve to an existing asset. The IDs follow fixed conventions
 | `rule.scope[]` | any asset id | `tbl_demo_orders` |
 
 Columns have no `id` field of their own; the loader derives one as
-`col_<db>_<table>_<physical>`. So the primary key of `tbl_demo_customers` with
+`col_<schema>_<table>_<physical>`. So the primary key of `tbl_demo_customers` with
 physical name `c_0` is `col_demo_customers_c_0`, which is what `references` above
 points to.
 

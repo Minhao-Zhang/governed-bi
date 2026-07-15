@@ -73,6 +73,10 @@ class InMemoryWorkingMemory:
 # --------------------------------------------------------------------------- #
 # Durable stores (off by default, D8): protocol seams only.
 #
+# (Profile — the 4th store in Architecture §7's blueprint — is budgeted in config
+# (ROUTE_MEMORY_BUDGETS + profile_ttl_days) but has no protocol seam here; it is
+# the lowest-priority durable store, unbuilt.)
+#
 # These arrive as gated projections of the corpus when eval justifies them:
 # correction memory is correction-harvesting -> PR to a reference doc; promoted
 # episodic memory is a gated few-shot. One PR-gated corpus, not two governance

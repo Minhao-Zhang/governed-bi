@@ -70,36 +70,55 @@ Distinct from the curator's `reliability.status: suspect`:
 
 Escalation path: curator flags `suspect` → human reviews (D6) → leaves it, or escalates to `excluded`. Kept **out of the autonomous eval arms** (so Arm 2 stays pure-curator); it's the human-in-the-loop governance capability for enterprise deployments.
 
+## Clarifications (an Audit-tier block, D12)
+
+A curator that cannot resolve a question from Facts + the batch **records it instead of guessing**, as a `clarification` block on the asset's **Audit tier**. Because it is Audit-tier, it is **never injected into the server's context** (per the consumption contract above) — an open question cannot leak into SQL-gen or retrieval. While a question is open the asset still serves a best-effort answer from its Inference tier (low `confidence` + a `suspect` caveat); a **Responder** (a human **SME** in prod, a **Simulated SME** in eval) answers it, and `accept_answer` flips it to `answered`, re-stamping provenance. See [D12](design-decisions.md#d12-clarification-protocol).
+
+```yaml
+# on any asset, under its audit block
+audit:
+  provenance: { source: curator, status: draft }
+  clarification:
+    question: "Is `kunde_id` the customer id, or an internal account id?"
+    status: open            # open | answered
+    asked_by: curator
+    answer: null            # a Responder's free-text reply, once given
+    answered_by: null       # the SME / responder id
+    at: null                # ISO timestamp when answered
+```
+
+> Note: this per-asset `Clarification` (schema-embedded, `corpus/schemas.py`) is distinct from the curator's run-time `clarifications.jsonl` **ledger** (`curator/clarifications.py`) that the SME round-trip actually iterates. The ledger drives the batch round-trip; this block is the durable, ID-tracked record on the asset it concerns.
+
 ## Directory layout
 
 ```
 corpus/
-  <db>/
-    tables/      tbl_<db>_<name>.yaml      # columns inline
+  <schema>/
+    tables/      tbl_<schema>_<name>.yaml      # columns inline
     joins/       join_<left>_<right>.yaml
-    few-shots/   fs_<db>_<n>.yaml
+    few-shots/   fs_<schema>_<n>.yaml
     terms/       term_<name>.yaml
     metrics/     metric_<name>.yaml
     rules/       rule_<name>.yaml
-    negatives/   neg_<db>_<n>.yaml
+    negatives/   neg_<schema>_<n>.yaml
     skills/      *.md                        # prose gotchas / query-patterns (not typed assets)
   _generated/    # search index, embeddings, compiled graph (derived, gitignored, rebuildable)
 ```
 
-> **D15**: the corpus namespace `<db>` (directory above, ID formats below) models a **schema**, not a database — one database holds many schemas, and cross-schema joins run as qualified `schema.table` SQL. Renaming the field/dir `db` → `schema` is decided, not yet built; **ID values are unchanged** (`tbl_<schema>_<name>`), so the `<db>` placeholders stand as-is.
+> **D15**: the corpus namespace `<schema>` (directory above, ID formats below) models a **schema**, not a database — one database holds many schemas, and cross-schema joins run as qualified `schema.table` SQL. The field/dir is named `schema` (the `db` → `schema` rename **shipped**, D15 increment 7); IDs are `tbl_<schema>_<name>`.
 
 ## ID conventions (CI regex-checked)
 
 | Asset | ID format | Example |
 |---|---|---|
-| table | `tbl_<db>_<name>` | `tbl_beer_factory_customers` |
-| column *(inline; id derived by loader)* | `col_<db>_<table>_<physical>` | `col_beer_factory_customers_CustomerID` |
+| table | `tbl_<schema>_<name>` | `tbl_beer_factory_customers` |
+| column *(inline; id derived by loader)* | `col_<schema>_<table>_<physical>` | `col_beer_factory_customers_CustomerID` |
 | join | `join_<left>_<right>` | `join_transaction_customers` |
-| few_shot | `fs_<db>_<n>` | `fs_beer_factory_001` |
+| few_shot | `fs_<schema>_<n>` | `fs_beer_factory_001` |
 | term | `term_<name>` | `term_revenue` |
 | metric | `metric_<name>` | `metric_revenue` |
 | rule | `rule_<name>` | `rule_boolean_flags` |
-| negative_example | `neg_<db>_<n>` | `neg_beer_factory_001` |
+| negative_example | `neg_<schema>_<n>` | `neg_beer_factory_001` |
 
 The **physical ↔ meaning bridge** runs through every table/column: `physical_name` is the identifier as it exists in the live DB (obfuscated for BIRD, cryptic in enterprise data). SQL emits this; the Inference tier carries the *meaning*. The curator's whole job is filling meaning for cryptic physical names, and this is identical in BIRD and enterprise deployments.
 

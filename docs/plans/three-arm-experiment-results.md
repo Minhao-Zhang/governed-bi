@@ -1,10 +1,9 @@
 # Three-Arm Experiment: Results (v5 — supersedes v1–v4)
 
 _Recorded 2026-07-14 (run `20260715T010412Z_restaurant`, executed 2026-07-14
-evening local). Companion to [three-arm-experiment-plan.md](three-arm-experiment-plan.md),
-[curator-rework-plan.md](curator-rework-plan.md), and
-[agentic-serve-ab-results.md](agentic-serve-ab-results.md). Raw `runs/` artifacts
-are git-ignored/ephemeral — this doc is the durable record._
+evening local). Method and decisions: [design-decisions.md](../design-decisions.md)
+(D4 grading · D14 SME-growth benchmark + 2026-07-15 amendment · Audit dispositions).
+Raw `runs/` artifacts are git-ignored/ephemeral — this doc is the durable record._
 
 > **v5 is the first full end-to-end run on the _agent_ serve path — now the only
 > serve path** (the [ADR 0002](../adr/0002-governed-agentic-serve-runtime.md) P2
@@ -55,9 +54,10 @@ absent for `restaurant` (all `unknown`), so there is no by-difficulty breakdown.
 | A3 SME | 0.348 | **0.522** |
 
 The agent path ties-or-beats the flow at every arm and pulls decisively ahead at
-A3 — directionally consistent with the [agent-vs-flow A/B](agentic-serve-ab-results.md)
-(agent ≥ flow in 4/4 arm comparisons), now with a larger A3 gap. Both are single
-seeds, so the gap is not yet an effect size.
+A3 — directionally consistent with the earlier agent-vs-flow A/B (agent ≥ flow in
+4/4 arm comparisons; the flow path is now deleted, so that comparison is
+historical), now with a larger A3 gap. Both are single seeds, so the gap is not
+yet an effect size.
 
 ## How we ran it
 
@@ -182,6 +182,20 @@ trustworthy. **However**, A3's post-fold **validation fix-pass** crashed with
    fix that A2 misses? Turns Finding 2 from an aggregate delta into a mechanism.
 4. **Data-lake run** — 2 schemas live, blind routing via the LLM `select_schema`
    node (§5.1).
+
+## Known limitations (of this benchmark)
+
+Recorded from the 2026-07-15 audit; full detail in [design-decisions →
+Audit dispositions](../design-decisions.md#audit-dispositions-2026-07-15) and the
+[D14 amendment](../design-decisions.md#d14-sme-growth-benchmark-on-bird-obfuscation).
+
+- **Refuse-gate untested by EX.** Every BIRD question is answerable, so the arms
+  never trigger a refusal and the **false-refusal rate is unmeasured** here.
+- **Single-seed until scale.** Per-DB deltas are directional; the fix is the
+  69-schema / 2,030-test scale run, not more small-DB seeds.
+- **No gold ceiling line.** The de-obfuscation gold arm is retired; the recoverable
+  ceiling is redefined as a **test-aware SME oracle** (not yet implemented).
+- **Cross-schema is un-graded** (BIRD's db_ids are independent databases; D15).
 
 ---
 

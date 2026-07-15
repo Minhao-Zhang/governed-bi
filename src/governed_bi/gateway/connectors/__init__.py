@@ -1,11 +1,12 @@
 """Database connectors: the per-dialect read-only data boundary.
 
-SQLite is implemented and tested against the committed fixture. Postgres and
-Redshift are implemented too (``information_schema`` / ``svv_*`` introspection,
-read-only execution with a statement timeout) behind the ``postgres`` /
-``redshift`` optional extras, and unit-tested offline against a fake connection -
-but not yet run against a live server/cluster. The DB drivers are imported
-lazily, so importing these classes never requires the extra to be installed. See
+SQLite is implemented and tested against the committed fixture. Postgres
+(``information_schema`` introspection, read-only execution with a statement
+timeout) is **exercised live** by the eval harness (``eval/run_experiment.py``,
+against a local BIRD-Obfuscation Postgres) and is also unit-tested offline against
+a fake connection. Redshift reuses the Postgres path (``svv_*`` introspection) but
+is **not yet run against a live cluster**. The DB drivers are imported lazily, so
+importing these classes never requires the driver to be installed. See
 ``base.Connector`` for the interface every dialect implements.
 """
 
