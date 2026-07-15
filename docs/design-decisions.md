@@ -94,7 +94,7 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 
 - **Alternative:** fail-closed the moment coverage runs out (safe but misses the long tail, and makes the agent guess whether it's out of scope).
 - **Consequence:** refusal is driven by a curated signal, not a coverage heuristic. Two caveats: the stamp needs teeth, because a footer alone is weak against silent wrong answers; and BIRD won't test the refuse-gate, which needs a held-out unanswerable set.
-- **Built:** the fail-closed refuse-gate and a **two-axis reliability stamp** are implemented. The stamp reports two independent axes so neither is mistaken for the other: `safety_clearance` (guardrails + authorization passed — a *gate*, true for every delivered answer, false for every refusal) and `semantic_assurance` (`certified` / `heuristic` / `unverified` — how well-grounded the answer is, the axis that should drive automatic delivery). The legacy single-axis tier (`governed` / `lineage` / `fenced_raw` / `refused`) is kept as their 1:1 projection for compact display. A **bounded self-repair loop** feeds a *repairable* guardrail rejection (syntax + column/table scope — L3/L4 stay repairable [by decision, D11](#d11-external-review-2026-07-09)) or an execution error back to the generator before refusing; a repaired answer is `heuristic`, never `certified`. A **hard policy/DDL block (L2 `policy_blacklist`) fails closed immediately** — feeding it back would only coach the generator to evade the policy. Cache admission gates on `semantic_assurance == certified`, never on safety alone. The thresholds and the uncertainty-signal set are **uncalibrated heuristics**, to be tuned on the eval. `certified` / `governed` means safe + in-scope + no uncertainty flag fired, **not** "verified correct": the guardrails are a safety/governance gate, not a correctness oracle, so plausible-but-wrong SQL is caught by the stamp + fail-closed, not by a proof of correctness.
+- **Built:** the fail-closed refuse-gate and a **two-axis reliability stamp** are implemented. The stamp reports two independent axes so neither is mistaken for the other: `safety_clearance` (guardrails + authorization passed — a *gate*, true for every delivered answer, false for every refusal) and `semantic_assurance` (`certified` / `heuristic` / `unverified` — how well-grounded the answer is, the axis that should drive automatic delivery). The legacy single-axis tier (`governed` / `lineage` / `fenced_raw` / `refused`) is kept as their 1:1 projection for compact display. A **bounded self-repair loop** feeds a *repairable* guardrail rejection (syntax + column/table scope — L3/L4 stay repairable [by decision, D11](#d11-external-review-2026-07-09)) or an execution error back to the generator before refusing; a repaired answer is `heuristic`, never `certified`. A **hard policy/DDL block (L2 `policy_blacklist`) fails closed immediately** — feeding it back would only coach the generator to evade the policy. Cache admission gates on `semantic_assurance == certified`, never on safety alone. The thresholds and the uncertainty-signal set are **uncalibrated heuristics**, to be tuned on the eval. `certified` / `governed` means safe + in-scope + no uncertainty flag fired, **not** "verified correct": the guardrails are a safety/governance gate, not a correctness oracle, so plausible-but-wrong SQL is caught by the stamp + fail-closed, not by a proof of correctness. **The `certified` label overclaims for a BI audience and is scheduled for rename + EX-calibration** — see [Audit dispositions (2026-07-15)](#audit-dispositions-2026-07-15), R2.
 
 ## D6: Ownership & Human Gate
 
@@ -136,7 +136,7 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 
 - **Reason:** more memory often hurts (EnterpriseMem-Bench: episodic swung +14pp to −16pp; retrieval biases the model). Working memory is the one universal win.
 - **Consequence:** the memory/corpus distinction collapses. Correction memory ≈ correction-harvesting→PR-to-reference-doc; promoted episodic ≈ gated few-shots. One PR-gated corpus, not two governance models. See the *Data Agent Memory Design Overview*.
-- **Built:** working memory is implemented as an in-process, session-scoped store (`InMemoryWorkingMemory`), the store the `before_model` middleware reads to inject prior context. Episodic and correction memory are **off-by-default protocol seams** (`EpisodicMemory` / `CorrectionMemory`), not implemented, consistent with "adopt per-domain only when eval earns it".
+- **Built:** working memory is implemented as an in-process, session-scoped store (`InMemoryWorkingMemory`), the store the `before_model` middleware reads to inject prior context. Episodic and correction memory are **off-by-default protocol seams** (`EpisodicMemory` / `CorrectionMemory`), not implemented, consistent with "adopt per-domain only when eval earns it". **Profile** memory — the 4th store in Architecture §7's blueprint — exists only as config (a route budget + `profile_ttl_days`); it has no store protocol seam yet and is the lowest-priority durable store.
 
 ## Two-harness Split (ADR-grade, cross-cutting)
 
@@ -254,6 +254,68 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
 - **Consequence:** this refines **D4**'s three arms with a growth dimension. Small-N noise (26 test questions on beer_factory) and a possible collapse toward the **gold** reference are accepted, documented limitations, since gold is a reference line, not a ceiling. Pooling across the 69 BIRD DBs, via **D13**'s multi-DB corpus repo, is what makes the table credible.
 - **Cross-schema is out of grading scope (D15).** BIRD's 69 db_ids are independent databases with no cross-db relationships, so cross-*schema* serving is un-graded by this benchmark. The table measures within-schema growth (and, at scale, schema-routing); cross-schema correctness is an accepted, separately-tested limitation. See **D15**.
 
+- **Amendment (2026-07-15) — the arm ladder and a redefined ceiling.** The
+  benchmark is run as a **train + test** measurement at each stage, and the
+  headline is the **train↔test gap** — train accuracy alone is contaminated when
+  few-shots are distilled from train pairs, so the gap (not raw train accuracy) is
+  what measures generalization. The ladder:
+  1. **facts-only** — bare-minimum metadata (the floor).
+  2. **autonomous curator** — the agent explores and self-curates with **no SME
+     answers**; isolates what the agent recovers *alone*.
+  3. **SME (train-bounded), by round** — a **Simulated SME** with access to
+     **training questions + evidence only** answers clarifications; measured after
+     each round (r1, r2, …). The growth axis.
+  4. **test-aware SME oracle (the ceiling)** — a Simulated SME that has seen the
+     held-out **test questions + their evidence hints (never the test gold SQL)**
+     in its retrieval index. A **deliberately-leaky oracle**, walled off from the
+     fair arms (1–3) and reported only as the dashed
+     "recoverable ceiling" line. **Replaces the retired de-obfuscation gold arm**
+     (see [Audit dispositions → R-gold](#audit-dispositions-2026-07-15)), which was
+     never a true ceiling.
+  Two properties make this ceiling informative. It is **< 1.0 by design** (the
+  agent still mis-generates SQL under perfect knowledge), so it decomposes the
+  result: `1.0 − ceiling` = the agent's irreducible SQL-gen error; `ceiling − SME`
+  = the test-relevant knowledge a train-bounded SME cannot reach. The ceiling is
+  **elicitation-bounded** (see the SME design below), so it is a *practical* upper
+  bound — best achievable given the curator's questions plus an SME who can see the
+  test bank — not the theoretical maximum. Deferred implementation.
+- **Simulated SME design (2026-07-15).** Knowledge transfer is **pull-based**: the
+  curator must *ask* — the SME is a strictly reactive **Responder** that answers,
+  says it doesn't know, or adds *tightly-related* context, but never proactively
+  dumps the corpus. So the curator's **questioning ability is itself part of what
+  the fair arm (A3) measures** — and the ceiling stays elicitation-bounded, because
+  it does not change this.
+  - **Mechanism = retrieval tools, not a stuffed brief.** The SME gets a
+    BM25/regex tool + a vector-search tool over the question bank (questions +
+    evidence + SQL), plus the existing read-only `run_probe_query`. This replaces
+    `build_sme_brief`'s dump of *all* train evidence into the system prompt, which
+    does not scale to 69 schemas / 8k questions.
+  - **Index scope is the fair↔ceiling knob *and* the leakage boundary.** The
+    **fair** SME indexes **train only** (questions + evidence + SQL); the
+    **ceiling** SME's index additionally holds the **test questions + test
+    evidence — but never test gold SQL**. The invariant is enforced at index-build
+    time (topology, not trust): test SQL that is never indexed cannot leak.
+  - **This makes the SME train-SQL-aware — a deliberate role change.** Previously
+    only the curator read train SQL; now the SME can too. Its answers stay
+    domain-shaped (prose, no query recipes) via `_sanitize_sme_answer` + the
+    *reusable-asset-only* fold (SME answers may become descriptions / terms / joins
+    / metrics / rules / reliability caveats, never a test-question few-shot).
+  - **Validity caveat to measure: train↔test near-duplicate inflation.** Because
+    the ceiling SME reads train SQL and sees test questions, a test question with a
+    near-twin in train lets the SME surface the twin's pattern — so the ceiling
+    partly reflects **train-test question similarity**, not pure semantic
+    recoverability. Reuse the same BM25/vector to report the train↔test similarity
+    distribution (or dedup near-twins) alongside the ceiling number.
+  - **Reliability voiced naturally, never "decoy".** The SME simulates a real
+    expert's reliability knowledge in plain terms ("that column is unreliable for
+    revenue — prefer `net_total`") and must never use benchmark words like *decoy*
+    / *trap*: naming the obfuscation construct is unrealistic and a subtle leak
+    toward the de-obfuscation key.
+  - **Touch-points:** `curator/sme.py` — replace the stuffed brief with the two
+    retrieval tools, scope the index by split, drop the "decoy or trap" instruction
+    in `_SME_SYSTEM_RULES`, and add a no-"decoy" guard beside
+    `assert_brief_no_leakage`.
+
 ## D15: Multi-Schema Serving (one database, many schemas)
 
 > **Decided (ADR-grade, 2026-07-11)**
@@ -280,14 +342,15 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
 
 > **Decided (ADR-grade, 2026-07-13; cutover landed 2026-07-14).** Full rationale,
 > invariants, and phased migration in
-> [ADR 0002](adr/0002-governed-agentic-serve-runtime.md); A/B results in
-> [agentic-serve-ab-results.md](plans/agentic-serve-ab-results.md).
+> [ADR 0002](adr/0002-governed-agentic-serve-runtime.md); the historical
+> agent-vs-flow A/B (flow now deleted) is summarized in
+> [three-arm results](plans/three-arm-experiment-results.md).
 >
 > Serve is reworked from a deterministic single-shot DAG into a **governed
 > agentic core**: an outer deterministic `StateGraph` (thin governance rails)
 > wrapping an inner bounded `create_agent` reasoning loop over **read-only,
 > guardrailed tools**. This **reverses** the prior "serve stays a deterministic
-> DAG, never an autonomous ReAct loop" invariant (pipeline-design §5/§8) and
+> DAG, never an autonomous ReAct loop" invariant (pipeline-design §8) and
 > replaces it with **"serve's *authority* is deterministic; its *reasoning* may be
 > agentic."** Autonomy is granted for *how to find the answer*, never for *what may
 > execute*, *what is trusted*, or *what goes unrecorded*.
@@ -325,3 +388,116 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
   ledger writes on the pinned stack); Amendment 1 adds a deterministic `assemble`
   node that seeds the agent with the curated semantic layer so it cannot regress
   below the flow.
+
+## Audit dispositions (2026-07-15)
+
+> **Reviewed.** An internal architecture audit (`audit-2026-07-15.html`, EN +
+> `audit-2026-07-15.zh.html`) raised nine findings. Dispositions below; each
+> refines an existing decision rather than opening a new axis. Findings are
+> referenced by their audit IDs (R1–R9).
+
+- **R1 — Seed variance is resolved by scale, not by more seeds on small DBs
+  (refines [D4](#d4-grading) / [D14](#d14-sme-growth-benchmark-on-bird-obfuscation)).**
+  The single-seed fragility of the headline EX number is addressed by running the
+  SME-growth benchmark at full scale: all 69 BIRD DBs loaded as 69 Postgres
+  schemas, **8,134 train / 2,030 test** (see [architecture — Eval](architecture.md)).
+  With N≈2,030 held-out test questions, per-arm EX becomes statistically stable and
+  a 23-question single-DB delta stops being the unit of evidence. *Status: planned,
+  gated on the multi-schema experiment ([D15](#d15-multi-schema-serving-one-database-many-schemas)).*
+
+- **R2 — The `certified` label overclaims and will be renamed + calibrated
+  (refines [D5](#d5-refusal--best-effort)).** `semantic_assurance = certified`
+  reads to a BI user as "verified correct," but it means only "safe + in-scope +
+  no uncertainty flag fired." Accepted: rename to a grounding-oriented term (e.g.
+  `grounded`) and **calibrate the thresholds and uncertainty-signal set against
+  actual EX** once the scale run exists — i.e. measure what fraction of stamped
+  answers are in fact correct. *Status: accepted, scheduled (needs the scale run
+  first).*
+
+- **R3 — User-feedback loop: discussed 2026-07-15; direction set, build deferred
+  (refines [D8](#d8-serve-time-memory)).** Outcome of the design session:
+  - **Purpose = evaluation + development, not personalization.** *Evaluation:*
+    recorded interactions become a production quality signal run against metrics —
+    the only window into live correctness beyond offline BIRD EX. *Development:*
+    interactions are mined **passively** for semantic-layer improvement (e.g. a
+    user rephrasing a near-identical question, or correcting an answer). *Not
+    personalization:* per-user tailoring is rejected — engine not product (D1),
+    and it invites the degenerate-feedback-loop failure the source flags.
+  - **Feedback is a validated hypothesis, never a direct edit.** A signal is run
+    against the query/result to test whether it actually improves the semantic
+    layer, and only then enters the corpus **via the existing PR-gated path**
+    (`memory/store.py`: "one PR-gated corpus, not two governance models"). No
+    auto-learning, no parallel store — this is the guard against the degenerate
+    loop (audit R2/R6 concern).
+  - **Capture-first, interpret-later.** Record all interaction types now (glossary:
+    **Interaction signal**, with **Correction signal** the high-trust subtype);
+    defer the trust-tiering/interpretation logic until real usage shows what
+    correlates with a wrong answer.
+  - **v0 mechanism = Langfuse + LangSmith; a dedicated interaction log is deferred.**
+    No backend/UI captures user interactions today, so a first-class interaction
+    log is not yet feasible; use the tracers' feedback/scores API on the per-turn
+    trace for what can be captured now. A dedicated, queryable, vendor-independent
+    **interaction log** (keyed by turn + `corpus_release_hash`) is required future
+    work — part of a broader internal-systems / backend build, and a soft
+    dependency on CorpusRelease (D11).
+  *Status: direction set; v0 rides Langfuse/LangSmith; the dedicated interaction
+  log + mining pipeline are deferred to the internal-systems build.*
+
+- **R4 — Live execution: the audit note was stale; corrected.** Postgres **is**
+  run live. `eval/run_experiment.py` executes the three arms against a local
+  Postgres (BIRD-Obfuscation `pg_rename_decoy`, `127.0.0.1:5435`) with a live
+  model — the working daily eval path, not an offline double. Connector docstrings
+  (`gateway/connectors/{base,__init__}.py`, `gateway/__init__.py`), `usage.md`,
+  and `system-overview.md` are corrected accordingly. **Redshift** remains
+  genuinely unverified against a live cluster. Sub-points on the "one defensible
+  run" milestone: **(4.1) live-model runs** — already happening (see above);
+  **(4.2) the gold reference arm** — see R-gold below.
+
+- **R-gold — Gold reference arm: resolved 2026-07-15 — de-obfuscation oracle
+  retired; the ceiling is redefined as a *test-aware SME oracle* (refines
+  [D4](#d4-grading) / [D14](#d14-sme-growth-benchmark-on-bird-obfuscation)).** The
+  `gold.py` de-obfuscation oracle (rename-map read-back) is **not a ceiling** — by
+  its own docstring, Arm 2's skills can exceed it — and on the identity-rename DBs
+  it is a near no-op. It is **retired**. The recoverable ceiling is redefined as a
+  **test-aware SME oracle**: a **Simulated SME** that holds the held-out **test
+  questions + their evidence hints (never the test gold SQL)** in its retrieval
+  index. This is a genuine upper bound on the SME axis,
+  because the test set touches knowledge the train pairs never surface — a
+  train-bounded SME structurally cannot reach it. Full ladder + properties
+  recorded as the [D14 amendment (2026-07-15)](#d14-sme-growth-benchmark-on-bird-obfuscation).
+  Follow-ups (deferred, decision-only now): delete `eval/gold.py` + the `Arm.gold`
+  member (dead), and give the SME **BM25/vector retrieval tools scoped by split**
+  (train-only = fair; + test questions/evidence, never test SQL = ceiling — see the
+  [D14 amendment](#d14-sme-growth-benchmark-on-bird-obfuscation)).
+  *Status: decided; implementation deferred.*
+
+- **R5 — Cost / latency / token observability: the substrate already exists via
+  Langfuse + LangSmith (refines [D16](#d16-governed-agentic-serve-core)).** Both
+  tracers are wired ([`obs.py`](../src/governed_bi/obs.py)); both capture per-trace
+  tokens, cost, and latency and aggregate them in their own dashboards, and an
+  agentic turn groups as one trace. The gap is **not capture** but that tracing is
+  env-opt-in (off in the CI/offline profile) and not surfaced in the product's own
+  governance view. *Status: rely on Langfuse/LangSmith for now; a native
+  aggregate/monitoring/alerting view is future work (deferred).*
+
+- **R6 — Curator adversary `refute()` + self-eval/repair loop: deferred
+  (refines [D10](#d10-curator--proposer--adversary)).** Confirmed unbuilt;
+  `refute()` is `NotImplementedError` and the structural `review()` remains
+  signal-only in `curator/pipeline.py` (annotates audit notes, docks confidence,
+  never gates). Explicitly deferred for now. *Status: deferred.*
+
+- **R7 — The refuse-gate is untested by the BIRD EX number — documented eval
+  limitation (refines [D5](#d5-refusal--best-effort) /
+  [D14](#d14-sme-growth-benchmark-on-bird-obfuscation)).** BIRD questions are all
+  answerable, so the three-arm EX metric never exercises the refuse-gate and the
+  **false-refusal rate is unmeasured** by it. The held-out unanswerable set (D5) is
+  the separate instrument — minimally covered today (a small hand-built
+  beer_factory set) and skipped in CI (needs a live model). This is an accepted,
+  documented limitation of the current eval; closing it is part of the scale run.
+  *Status: documented limitation.*
+
+- **R8 / R9 — Design fragmentation and egress governance: no change of position.**
+  R8 (two clarification representations, two curator orchestration paths, orphaned
+  `.pyc`) is a maintainability signal to clean up opportunistically, not a decision.
+  R9 (egress/privacy — "send everything," ADR 0002 Q5) remains deferred to the
+  enterprise-fork scope. *Status: unchanged (deferred / cleanup).*

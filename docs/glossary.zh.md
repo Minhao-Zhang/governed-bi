@@ -23,27 +23,29 @@ _[English](glossary.md) · [简体中文](glossary.zh.md)_
 | **Server**（服务代理） | 在线的治理型代理，*使用*corpus 来回答问题。失败即拒（fail-closed）、可审计。 |
 | **工具**（Tool） | 模型可自行决定调用的编码函数。 |
 | **钩子**（Hook，中间件） | 在循环事件上触发的确定性代码，用于注入上下文和/或否决动作。 |
-| **记忆**（Memory） | 四类存储：Working（工作记忆）/ Profile（用户画像）/ Episodic（情景记忆）/ Correction（纠错记忆）。 |
+| **记忆**（Memory） | 设计上的四类存储（架构 §7）：**Working**（已实现，会话级）外加三类默认关闭、仅在评估证明其价值后才按域采用的持久存储——**Profile**（用户画像）、**Episodic**（情景）、**Correction**（纠错）。目前仅 Working 已实现；Episodic/Correction 为尚未实现的协议接缝；Profile 仅有配置（路由预算 + `profile_ttl_days`，尚无存储接缝——优先级最低的持久存储）。 |
 | **Working memory**（工作记忆） | 按会话逐字保留的上下文（checkpointer）。是临时性的，按身份限定作用域。 |
 | **治理路径**（Governed path） | 从语义层出发回答问题（默认方式）。 |
 | **探索路径**（Discovery path） | 针对语义层未覆盖的问题进行受限的原始数据探索。 |
 | **晋升循环**（Promotion loop） | 经人工评审后，将发现的模式提炼为已认证的治理数据集/指标。 |
 | **语义平面 / 数据平面**（Semantic plane / data plane） | 离线含义（通过 PR/CI 发布）与在线执行（受护栏把关）的对照。 |
 | **反例**（Negative example） | 一种经人工整理的模式，用于标记某类问题在当前数据下无法回答，并触发预先设定的升级处理流程。 |
-| **可靠性标记**（Reliability stamp） | 溯源注脚中，对尽力而为的答案所加的来源档位与置信度标记。 |
+| **可靠性标记**（Reliability stamp） | 对已交付答案的双轴可靠性标记（D5）：`safety_clearance`（布尔硬关卡——护栏 + 授权通过）与 `semantic_assurance`（`certified` / `heuristic` / `unverified`——有据程度）。旧的单轴档位（`governed` / `lineage` / `fenced_raw` / `refused`）仅作为 1:1 紧凑投影保留。`certified` 意为安全 + 在范围内，**而非**已验证正确，且已排期改名 + 按 EX 校准（审计处置 R2）。 |
 | **可靠性警示**（Reliability caveat） | 由 AI 推断、写在*列*上的自由文本警示，说明该列可能不可靠（`UNRELIABLE. DO NOT USE` 加上原因说明）。属于 corpus 一侧、由 curator 撰写的内容，与答案一侧的**可靠性标记**不同。它取代了带类型的诱饵标志，从而使该机制可以迁移到企业级部署中。 |
 | **治理排除**（Governance exclusion） | 人工在列/表上设置的 `governance.excluded` 布尔字段，含义是“永不呈现”：该资产会从 server 能看到的一切内容中移除，覆盖所有环境，且是永久性的。由人工撰写（D6），与 curator 通过 AI 推断得到的**可靠性警示**不同。 |
+| **交互信号**（Interaction signal） | 对某次已服务答案上用户动作的一条记录——一个**纠正信号**、一次重新表述的追问、一次重新生成、一次放弃，或一个显式评分——用于*评估*（生产质量，对一系列指标运行）与*开发*（被动改进语义层）。**原始**记录（先记录），置信度分级/解释推迟到真实使用显示出哪些信号与错误答案相关之后。v0 依托 Langfuse/LangSmith 的轨迹反馈；一个专用、可查询、以 turn + corpus-release 哈希为键的交互日志是未来工作。 |
+| **纠正信号**（Correction signal） | **交互信号**的高置信子类：由*用户发起*、指出答案在某个具体可命名之处出错的观察（例如“营收应剔除退款”）。不同于**澄清问题**（由 curator 发起、*提给*人类）与**纠正记忆 / Correction memory**（一种存储）。纠正信号是一个*假设*：必须先对查询验证、并通过人工 PR 把关，才能改动 corpus——绝非自动编辑。 |
 | **澄清问题**（Clarification question） | 由 curator 提出、带 ID 追踪的、针对某个 corpus 资产的开放问题（例如“被重命名的列 `kunde_id` 是什么含义？”），等待 **Responder** 作答。它不同于**可靠性警示**（后者是 curator 自己的判断）：澄清问题是*提给人类*的，并期待对方给出回答。 |
 | **Responder**（应答者） | 一个可插拔的角色，负责用*自由文本*外加可选的资源来回答**澄清问题**，从不做结构化编辑。它有两种实现，且都在引擎核心之外：生产环境中的人类 **SME**，以及评测中的 **Simulated SME**。 |
 | **SME**（领域专家） | 生产环境中的人类 **Responder**：一位非技术的领域专家，用自由文本回答**澄清问题**。从不直接编辑 corpus，也不直接提 PR。 |
 | **澄清答复**（Clarification answer） | **Responder** 针对**澄清问题**给出的自由文本回复（外加可选的资源）。在它进入 git 之前，会有一个*解析步骤*（由 curator/LLM 或一位数据工程师完成）把它转换成结构化的 corpus 编辑。其中的资源会落地为 `source_refs`。 |
-| **Simulated SME**（模拟领域专家） | 评测框架中的一种 **Responder**：一个 LLM，被告知某个数据集的*领域含义*（各表/各列代表什么），且以 SME 知识的形式呈现，而非一份去混淆映射表，并逐个回答**澄清问题**。它从不会拿到留出的**测试**问题的 gold SQL（这是唯一的硬性防泄漏不变式）。在极限情况下，它可能逼近**Gold 语义层**，这是一个已被接受并记录在案的局限，因为 gold 是一条参考线，而不是上限。 |
+| **Simulated SME**（模拟领域专家） | 评测框架中的一种 **Responder**：一个 LLM，被告知某个数据集的*领域含义*（各表/各列代表什么），且以 SME 知识的形式呈现，而非一份去混淆映射表，并逐个回答**澄清问题**。它从不会拿到留出的**测试**问题的 gold SQL（这是唯一的硬性防泄漏不变式）。*公平*的 Simulated SME 受**训练集约束**（仅训练问题 + evidence）；另有一个把测试问题 + evidence 纳入其**检索索引**（仍绝不看其 gold SQL）的**测试感知**变体，是**可恢复上限**背后的预言机，仅作上界线报告。它通过对题库的 **BM25 + 向量检索工具**工作（索引范围 = 公平↔上限旋钮，也是泄漏边界），而非塞满的 brief。知识是**拉取式**的：只回答 curator 所问（可说不知道，或补充紧密相关的上下文），绝不主动倾倒整个 corpus——故 curator 的发问能力是 A3 所衡量的一部分。它以自然的领域口吻表达可靠性（“不可靠——请用 `net_total`”），绝不使用 *decoy* / *trap* 之类的基准词。 |
 | **执行准确率**（Execution accuracy，EX） | 智能体的结果与 gold 一致，通过重新执行 gold SQL 加以验证。 |
 | **治理路径遵循率**（Governed-path adherence） | 通过语义层（而非原始表）解决的问题占比。 |
 | **诱饵触碰率**（Decoy-touch rate） | 智能体使用了清单标记的虚假列/表的问题占比。 |
 | **无语义层臂**（No-layer arm，基线） | 评测的下限：server 在*完全没有 corpus* 的情况下作答，只拿到原始的（被混淆的）schema 和问题。“基线（baseline）”专指这一行。（*避免*：不要用“基线”/“baseline”来指代仅含 Facts 的起点。） |
 | **仅含 Facts 的 corpus**（Facts-only corpus） | 经自动画像分析得到的起始 corpus：物理类型、样本值，以及 FK 候选（`curator/profile.py`），**没有 Inference 层**。它是增长的起点那一行，早于任何 **SME** 交互。 |
-| **Gold 语义层**（Gold semantic layer） | Arm-3 评测基线：一个确定性的去混淆神谕（rename map → real names，decoy manifest → exclusions，original schema → FK graph）。不涉及 AI，也没有所有者；是一条参考线，不是严格上限。仅适用于 BIRD。 |
+| **可恢复上限**（Recoverable ceiling，测试感知 SME 预言机） | 评测的虚线上界：一个把留出**测试问题 + evidence 提示（绝不看测试 gold SQL）**纳入其检索索引的 **Simulated SME**。一个**刻意泄漏的预言机**，与公平臂隔离；`1.0 − 上限` 是 agent 不可约的 SQL 生成误差，`上限 − SME` 是受训练集约束的 SME 无法企及、与测试相关的知识。取代**已退役**的去混淆"Gold 语义层"（rename-map 回读 → real names + 诱饵排除 + FK 图），后者从来不是真正的上限，因为 curator 技能就能超过它。BIRD 增长基准概念。 |
 | **Schema**（命名空间） | 一次运行所连接的那个数据库内部的单级命名空间（D15）：一个 YAML 子树（`corpus/<schema>/`）以及逐资产的 `schema` 字段。由历来（误）命名为 `db` 的字段更名而来，那个字段一直表示一个 schema。一次运行的数据库本身是连接配置，不是 corpus 的一个层级。 |
 | **跨 schema 关系**（Cross-schema relationship） | 两个端点位于*不同* schema 的 `join` 资产。**只靠策展得到**——由 **SME** 声明、从示例 SQL 蒸馏、或从使用中挖掘；绝不从数据库外键探测、也不从名称猜测。若没有这样的资产，引擎会**拒答**该跨 schema 问题，而不是硬造一个连接（D15）。 |
 | **Schema 路由器**（Schema router） | 检索的前置阶段（D15），在表检索之前先筛选出与问题相关的 schema，使跨越众多 schema 的成千上万张表仍可处理。它**连接感知**：沿着已策展的跨 schema 连接扩展，使位于某个未被提及 schema 的桥接表不被丢弃。 |
