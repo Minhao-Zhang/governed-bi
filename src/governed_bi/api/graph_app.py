@@ -23,7 +23,7 @@ inject the ``RunnableConfig``, and a stringized annotation defeats that.
 
 import asyncio
 import threading
-from typing import TYPE_CHECKING, Annotated, TypedDict
+from typing import TYPE_CHECKING, Annotated, Any, TypedDict
 
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
@@ -96,21 +96,23 @@ def _working_memory_from(history: list, session_id: str):
     return memory
 
 
-def build_chat_graph(stack: "ServeStack"):
+def build_chat_graph(stack: "ServeStack", *, checkpointer: Any = None):
     """Compile the chat graph for a serve stack.
 
     One ``answer`` node runs the governed flow and returns the assistant message
-    plus the governed answer dict. Compiled **without** a checkpointer: on
-    LangGraph Server the runtime injects persistence. For a standalone/local
-    checkpointer, compile the builder yourself.
+    plus the governed answer dict. Compiled **without** a checkpointer by default:
+    on LangGraph Server the runtime injects persistence. Pass ``checkpointer`` for
+    standalone/local use or to exercise the ask_user HITL interrupt/resume round
+    trip (which needs the outer graph to be checkpointed).
     """
     from dataclasses import asdict
 
     # Absolute imports: the LangGraph server loads this module by file path (no
     # parent package), so relative imports would fail at call time.
     from governed_bi.gateway import Gateway
-    from governed_bi.server.agent import answer_question_agent
+    from governed_bi.server.agent import ClarificationPending, answer_question_agent
     from governed_bi.viz import presenter
+    from langgraph.types import interrupt
 
     def answer(state: ChatState, config: RunnableConfig | None = None) -> dict:
         thread_id = ((config or {}).get("configurable") or {}).get("thread_id") or "default"
@@ -122,27 +124,48 @@ def build_chat_graph(stack: "ServeStack"):
         except Exception:  # not in a streaming context (e.g. plain invoke)
             writer = None
 
-        try:
-            connector = stack.open_connector()  # config-driven: SQLite or Postgres/Redshift
-        except Exception as exc:
-            raise RuntimeError("database unavailable") from exc
-        try:
-            gateway = Gateway(connector)
-            result = answer_question_agent(
-                question,
-                stack.identity,
-                corpus=stack.corpus_server,
-                gateway=gateway,
-                settings=stack.settings,
-                session_id=thread_id,
-                model=stack.chat_model,
-                embedder=stack.embedder,
-                narrator=stack.narrator,
-                working_memory=memory,
-                on_event=writer,
-            )
-        finally:
-            connector.close()
+        # Serve-time HITL: a per-turn inner thread, stable across the outer graph's
+        # re-execution on resume (contract §2). Keyed by the human-turn count so a
+        # new turn gets a fresh inner thread and never resumes a stale pause.
+        n_human = sum(1 for m in state["messages"] if getattr(m, "type", None) == "human")
+        clarify_thread = f"{thread_id}:{n_human}"
+
+        # Run the turn; if the agent pauses on ask_user, surface a client interrupt
+        # and loop back with the answer. When clarify is off (no checkpointer),
+        # answer_question_agent never returns ClarificationPending, so this runs once.
+        resume: Any = None
+        while True:
+            try:
+                connector = stack.open_connector()  # SQLite or Postgres/Redshift
+            except Exception as exc:
+                raise RuntimeError("database unavailable") from exc
+            try:
+                gateway = Gateway(connector)
+                result = answer_question_agent(
+                    question,
+                    stack.identity,
+                    corpus=stack.corpus_server,
+                    gateway=gateway,
+                    settings=stack.settings,
+                    session_id=thread_id,
+                    model=stack.chat_model,
+                    embedder=stack.embedder,
+                    narrator=stack.narrator,
+                    working_memory=memory,
+                    on_event=writer,
+                    clarify_checkpointer=stack.clarify_checkpointer,
+                    clarify_thread=clarify_thread,
+                    clarify_resume=resume,
+                )
+            finally:
+                connector.close()
+            if isinstance(result, ClarificationPending):
+                # Raises GraphInterrupt on the first pass (client sees
+                # stream.interrupt.value); returns the ClarificationResponse when
+                # the outer graph is resumed via stream.respond(...).
+                resume = interrupt(result.request)
+                continue
+            break
 
         view = asdict(presenter.answer_view(result))
         text = view.get("text") or view.get("escalation") or ""
@@ -155,7 +178,7 @@ def build_chat_graph(stack: "ServeStack"):
     builder.add_node("answer", answer)
     builder.add_edge(START, "answer")
     builder.add_edge("answer", END)
-    return builder.compile()
+    return builder.compile(checkpointer=checkpointer) if checkpointer else builder.compile()
 
 
 def _build_graph():

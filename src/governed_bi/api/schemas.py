@@ -36,6 +36,7 @@ class CapabilitiesResponse(_View):
     can_stream: bool  # whether a streaming chat endpoint exists (False for this REST API)
     can_scope: bool  # whether the summary/detail/scoping schema routes are served
     can_search: bool  # whether a server-side FTS endpoint exists (False: client Fuse)
+    can_clarify: bool = False  # whether serve-time HITL (ask_user interrupts) is available
 
 
 # ── health ────────────────────────────────────────────────────────────────── #

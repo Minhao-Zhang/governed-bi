@@ -100,7 +100,7 @@ with
 START → ingest → refuse_gate ──(neg match)────────────────► REFUSE   (HARD)
                      │
                      ▼
-              prepare → cache ──(hit, re-guardrailed)──────► END
+              prepare → cache ──(hit, re-guardrailed)──────► narrate ─► END
                      │
                      ▼
                ┌───────────────────────────────────────┐
@@ -116,6 +116,10 @@ START → ingest → refuse_gate ──(neg match)──────────
                two-axis stamp             ▼
                + cache write)            END
                      │
+                     ▼
+                 narrate  (LLM re-phrases the delivered answer; no-op for
+                     │      refusals / no narrator; a narrator failure keeps
+                     │      the deterministic finalize text)
                      ▼
                     END
 ```
@@ -382,3 +386,39 @@ Governance (guardrails L1–L5, the refuse-gate, L4 licensing, the two-axis
 stamp, the ledger) is unchanged and shared. Eval's `flow_solver`/`flow_refuser`
 are replaced by `agent_solver`/`agent_refuser`, adding refuse-gate coverage on
 the agent path; `run_experiment` is agent-only.
+
+## Amendment 3: narration as a node + single-handler tracing
+
+**Status:** Implemented.
+
+**What.** Two fixes to the agent-path rails, orthogonal to governance:
+
+1. **Narration is a dedicated `narrate` node**, appended after `agent_core`
+   (and after a cache hit): `ingest → refuse_gate → prepare → cache → assemble
+   → agent_core → narrate`. Previously the LLM narrator was invoked as a side
+   call buried inside the finalizers (`_finalize_success` / `_try_cache_hit` /
+   `_finish_unsuccessful`, via `_answer_text`); those finalizers now emit only
+   the deterministic fallback text, and `narrate_answer` (`server/governance.py`)
+   does the LLM phrasing from the `narrate` node. **Why:** the narrator's model
+   call becomes a first-class, individually-traced graph step instead of a loose
+   model call not attributable to any node. Both the cache-hit path (`cache →
+   narrate`) and the agent path (`agent_core → narrate`) flow through it, so
+   cached and freshly-generated answers finalize identically. It is a no-op for
+   refusals (refuse-gate match, missing-edge: no result grid to phrase) and
+   when no narrator is configured; a narrator failure keeps the deterministic
+   text. A graded-delivery (unverified) answer keeps its "⚠️ Unverified" banner.
+2. **One tracing (Langfuse) handler per turn, inherited downstream.** External
+   tracing (`obs.tracing_callbacks()`) is now attached once, at the outer
+   `graph.invoke` in `answer_question_agent`, and inherited by everything below
+   it via the LangChain run context. This fixes two bugs: the inner
+   `agent.stream(...)` in `agent_core` no longer attaches its own second
+   handler (a second handler logged every model call twice — same LangChain
+   `run_id` → two Langfuse generations under different parents → ~2x trace
+   cost/tokens); and `LangChainChatClient.complete()` (`llm/langchain_client.py`)
+   now inherits the ambient run's callbacks when called inside a graph node
+   (the serve-path narrator and the multi-schema schema router), instead of
+   opening a detached root Langfuse trace. It only attaches its own handler
+   when invoked standalone (eval baseline solver, curator). **Net effect:** the
+   entire question-answering turn is one Langfuse trace, and cost/token
+   aggregation is no longer double-counted. LangSmith is unaffected; it
+   self-instruments from the environment.

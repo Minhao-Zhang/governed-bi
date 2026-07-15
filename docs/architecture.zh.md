@@ -86,7 +86,7 @@ Markdown 优先。图（graph）只有在连接与血缘场景中才值得使用
 ```
 ask → supervisor → query understanding → intent route → SQL cache check →
 RVGD retrieval → Steiner-tree join plan → SQL gen → five-layer guardrails →
-execute (as-user) → answer + provenance
+execute (as-user) → narrate → answer + provenance
 ```
 
 完整的分阶段设计见[Server](server.zh.md)，以及 curator 推断驱动 server 行为的三个关键点。
@@ -135,6 +135,12 @@ execute (as-user) → answer + provenance
 > / `final`），于是 UI 能对整个循环渲染出逐次尝试的实时审计。`run_query` 事件的
 > detail 就是账本条目本身，因此实时流与已存账本不会漂移。契约见
 > [`docs/plans/agent-step-visualization.md`](plans/agent-step-visualization.md)。
+>
+> 自 Amendment 3 起，可观测性（observability）也收敛为**每轮只有一个被继承的追踪
+> handler**：Langfuse 只在外层 `graph.invoke` 处附加一次，并被其下的一切继承，
+> 包括 `narrate` 节点的模型调用（叙述现在是它自己的图步骤，而不是深藏在收尾环节
+> 内部的一次旁路调用）以及内层的 `agent.stream`。因此一轮问答就是一条 Langfuse
+> trace，模型调用的成本/token 不会被重复计入。
 
 > **拒答与尽力而为（两个并发的关口，而非瀑布式流程）**
 >

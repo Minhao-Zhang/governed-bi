@@ -78,14 +78,26 @@ class LangChainChatClient:
         return cls(ChatOpenAI(**kwargs))
 
     def complete(self, system: str, user: str) -> str:
-        # Attach external-tracing callbacks (Langfuse) when configured; LangSmith
-        # instruments itself from the environment and needs nothing here. Empty
-        # list -> config stays None, so the offline/untraced path is unchanged.
-        from ..obs import tracing_callbacks  # noqa: PLC0415 (lazy: avoid import cost when unused)
+        # Trace nesting: when this runs *inside* a LangGraph/LangChain run (e.g. the
+        # serve-path narrator or schema router, called from a graph node), the
+        # parent run already carries the tracing callbacks. Inherit them via the
+        # ambient RunnableConfig — invoking with our *own* fresh handler would
+        # override that inheritance and open a disconnected root trace, so the whole
+        # question-answering turn would no longer group as one trace. Only attach a
+        # handler when there is no active run (standalone .complete: eval baseline,
+        # curator). LangSmith instruments itself from the environment either way.
+        from langchain_core.runnables.config import ensure_config  # noqa: PLC0415
 
-        callbacks = tracing_callbacks()
-        config = {"callbacks": callbacks} if callbacks else None
-        message = self.model.invoke([("system", system), ("human", user)], config=config)
+        messages = [("system", system), ("human", user)]
+        if ensure_config().get("callbacks"):
+            # Inside a run: let LangChain propagate the parent trace via contextvar.
+            message = self.model.invoke(messages)
+        else:
+            from ..obs import tracing_callbacks  # noqa: PLC0415 (lazy: avoid import cost when unused)
+
+            callbacks = tracing_callbacks()
+            config = {"callbacks": callbacks} if callbacks else None
+            message = self.model.invoke(messages, config=config)
         return _message_text(message)
 
 

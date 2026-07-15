@@ -326,7 +326,8 @@ def test_serve_rails_state_is_thin():
     assert "allowlist" not in keys
     assert "graph_obj" not in keys
     assert "identity" not in keys
-    # Amendment 1 adds context_block (str) + seed_licensed (list of ids) — both
+    # Amendment 1 adds context_block (str) + seed_licensed (list of ids); the HITL
+    # branch adds clarification (a plain ClarificationRequest dict) — all
     # serializable primitives, not heavy objects, so finding #7 still holds.
     assert keys <= {
         "question",
@@ -336,4 +337,5 @@ def test_serve_rails_state_is_thin():
         "seed_licensed",
         "answer",
         "outcome",
+        "clarification",
     }

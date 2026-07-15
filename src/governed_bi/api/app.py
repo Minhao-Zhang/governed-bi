@@ -139,6 +139,9 @@ def create_app(stack: ServeStack | None = None):
             # builds its own client-side (Fuse) search index from /schema/summary.
             can_scope=stack.can_scope,
             can_search=stack.can_search,
+            # Serve-time HITL: the agent may ask a clarifying question mid-turn via
+            # a LangGraph interrupt the UI answers with stream.respond (streaming path).
+            can_clarify=stack.can_clarify,
         )
 
     @app.get("/", include_in_schema=False)

@@ -89,7 +89,7 @@ Markdown-first. The graph earns its place only for joins and lineage. A heavy LL
 ```
 ask → supervisor → query understanding → intent route → SQL cache check →
 RVGD retrieval → Steiner-tree join plan → SQL gen → five-layer guardrails →
-execute (as-user) → answer + provenance
+execute (as-user) → narrate → answer + provenance
 ```
 
 The full stage-by-stage design is in [Server](server.md), along with the three points where the curator's inference drives serve behavior.
@@ -145,6 +145,13 @@ Guardrails, in order (fail-closed on any, all five enforced): syntax → policy 
 > live audit of the loop. The `run_query` event detail is the ledger entry itself,
 > so the live stream and the stored ledger cannot drift. Contract:
 > [`docs/plans/agent-step-visualization.md`](plans/agent-step-visualization.md).
+>
+> Since Amendment 3, observability also collapses to **one inherited tracing
+> handler per turn**: Langfuse is attached once at the outer `graph.invoke` and
+> inherited by everything below it, including the `narrate` node's model call
+> (narration is now its own graph step, not a side-call inside finalization) and
+> the inner `agent.stream`. A turn is therefore one Langfuse trace with no
+> doubled model-call cost/tokens.
 
 > **Refusal & best-effort (two concurrent gates, not a waterfall)**
 >

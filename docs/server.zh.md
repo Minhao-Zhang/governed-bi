@@ -12,7 +12,7 @@ _[English](server.md) · [简体中文](server.zh.md)_
 
 外层轨道（rails）与 agent 的 `GovernanceMiddleware` **共享同一个治理内核**（`check` / 列许可清单 / licensed-table / refuse-gate / stamp 等辅助函数），因此护栏不会在二者之间发生漂移。
 
-> *已实现（当前现状）：* agentic 内核是**唯一**的服务路径：P2 切换已经落地，确定性流程（`server.flow`）与 `agent_serve` 开关都已被移除。`server.agent` 会编译一个外层的确定性 `StateGraph`（`ingest → refuse_gate → prepare → cache → assemble → agent_core`），它包裹起一个内层的 LangChain `create_agent` 推理循环；公开的入口函数是 `answer_question_agent`。治理由 `GovernanceMiddleware`（`server.middleware`）承载；四个受治理工具位于 `server.tools`；`llm.fake` 提供一个 `FakeListChatModel` harness 用于 CI 的确定性。
+> *已实现（当前现状）：* agentic 内核是**唯一**的服务路径：P2 切换已经落地，确定性流程（`server.flow`）与 `agent_serve` 开关都已被移除。`server.agent` 会编译一个外层的确定性 `StateGraph`（`ingest → refuse_gate → prepare → cache → assemble → agent_core → narrate`），它包裹起一个内层的 LangChain `create_agent` 推理循环；公开的入口函数是 `answer_question_agent`。治理由 `GovernanceMiddleware`（`server.middleware`）承载；四个受治理工具位于 `server.tools`；`llm.fake` 提供一个 `FakeListChatModel` harness 用于 CI 的确定性。
 >
 > 回答问题现在必须有真实（live）模型：`build_stack()` 在没有模型时仍可构建（只读的审计 API 仍可运行），但 LangGraph 服务进程（`make_graph`）会在启动时失败即拒（fail closed），`/chat` 在模型配置完成之前始终返回 503。参见 ADR 0002 以及 [`docs/plans/agentic-serve-ab-results.md`](plans/agentic-serve-ab-results.md) 中的 A/B 结果。
 
@@ -54,7 +54,8 @@ flowchart TD
     AgentCore -->|run_query passes five guardrails| Execute["Gateway.execute()<br/>read-only, forced LIMIT/timeout, audit"]
     Reexecute --> Execute
     Execute --> Result["Rows + provenance"]
-    Result --> Stamp["Finalize<br/>two-axis reliability stamp"]
+    Result --> Narrate["Narrate<br/>LLM phrases the delivered answer"]
+    Narrate --> Stamp["Finalize<br/>two-axis reliability stamp"]
     Stamp --> User["Answer to user"]
     Execute --> Audit["Audit/replay log"]
     Stamp --> CacheWrite["Cache successful SQL text<br/>TTL 15 minutes"]
@@ -62,7 +63,11 @@ flowchart TD
 
 ## Agentic 路径（ADR 0002）
 
-SQL 生成与执行的中段（上文第 6-9 步）就是一个有界的 `create_agent` 推理循环。确定性的**轨道（rails）**包裹着它：`ingest → refuse_gate → prepare → cache → assemble → agent_core`，随后是一个确定性的 `finalize`（双轴标记 + 缓存写回），或者分级交付 / 拒答。refuse-gate 仍然在 agent **之前**运行，标记仍然由 agent 无法影响的确定性代码计算。
+SQL 生成与执行的中段（上文第 6-9 步）就是一个有界的 `create_agent` 推理循环。确定性的**轨道（rails）**包裹着它：`ingest → refuse_gate → prepare → cache → assemble → agent_core → narrate`，随后是一个确定性的 `finalize`（双轴标记 + 缓存写回），或者分级交付 / 拒答。refuse-gate 仍然在 agent **之前**运行，标记仍然由 agent 无法影响的确定性代码计算。
+
+**叙述（narration）现在是一个专门的 `narrate` 节点。** 无论是缓存命中路径（`cache → narrate`）还是 agent 路径（`agent_core → narrate`），都会在进入 `finalize` 之前流经这个节点，因此缓存命中与新生成的答案会被同样地措辞。`narrate` 调用 `narrate_answer`（`server.governance`），借助 LLM narrator 把已交付答案的文本重新表述为有依据的英文；finalizer 本身现在只产出确定性的兜底文本。把它做成一个节点、而不是深藏在 finalizer 内部的一次旁路调用，意味着 narrator 的模型调用成为一个一等的、可单独追踪的图步骤。对于拒答（没有结果表可供措辞）以及未配置 narrator 的情形，它是空操作；narrator 失败时会保留确定性文本。
+
+**每轮只有一个追踪（tracing）handler。** 外部追踪（Langfuse，经由 `obs.tracing_callbacks()`）现在只在 `answer_question_agent` 的外层 `graph.invoke` 处附加一次，并通过 LangChain 的运行上下文（ambient run context）被其下的一切继承（内层的 `agent.stream`，以及从图节点——例如 `narrate` 与多 schema 的 schema 路由器——内部发起的 `LangChainChatClient.complete()` 调用）。因此一轮问答就是一条 Langfuse trace，模型调用的成本/token 不会被重复计入；只有在图运行之外的独立 `.complete()` 调用（评测基线、curator）才会重新附加一个 handler。LangSmith 不受影响；它总是从环境自我埋点（self-instrument）。
 
 **受治理工具（仅只读，`server.tools`）。** agent *只能*通过四个工具行动：
 

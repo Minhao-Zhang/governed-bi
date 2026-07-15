@@ -17,6 +17,7 @@ from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command
 
 from ..corpus.schemas import TableAsset
 from ..gateway import column_allowlist
@@ -36,6 +37,7 @@ from .governance import (
     _match_negative_example,
     _try_cache_hit,
     missing_edge_refusal,
+    narrate_answer,
 )
 from .middleware import (
     AGENT_RECURSION_LIMIT,
@@ -44,6 +46,7 @@ from .middleware import (
     licensed_physical_names,
     result_from_ledger,
 )
+from .clarify import new_clarification_id, parse_response
 from .routing import bind_terms, route_intent
 from .sqlgen import GeneratedSql, _tables_used
 from .tools import make_tools
@@ -77,6 +80,48 @@ returns BLOCKED or an error, read it, fix the SQL, and retry (max 3). Never gues
 an identifier. Call tools **one at a time**.
 """
 
+_ESCALATION_CLARIFY_DECLINED = (
+    "I needed one clarification to answer this safely, but didn't receive an "
+    "answer, so I stopped rather than guess. Re-ask with the detail and I'll continue."
+)
+
+
+class ClarificationPending:
+    """Returned by :func:`answer_question_agent` instead of an ``Answer`` when the
+    inner agent paused on ``ask_user``. The caller (the chat-graph node) turns
+    ``request`` into a client-visible ``interrupt`` and calls back with the answer
+    (contract: docs/plans/hitl-clarification-contract.md §2)."""
+
+    __slots__ = ("request",)
+
+    def __init__(self, request: dict) -> None:
+        self.request = request
+
+
+def _extract_clarifications(messages: list | None) -> list[dict]:
+    """Recover the turn's answered clarifications from the inner agent's final
+    messages, pairing each ``ask_user`` call with its answer ToolMessage. Robust to
+    multiple clarifications in one turn (provenance, contract §7)."""
+    asks: dict[str, dict] = {}
+    for m in messages or []:
+        if isinstance(m, AIMessage):
+            for tc in getattr(m, "tool_calls", None) or []:
+                if tc.get("name") == "ask_user":
+                    asks[tc.get("id")] = tc.get("args") or {}
+    out: list[dict] = []
+    for m in messages or []:
+        if isinstance(m, ToolMessage) and getattr(m, "tool_call_id", None) in asks:
+            question = asks[m.tool_call_id].get("question", "")
+            out.append(
+                {
+                    "clarification_id": new_clarification_id(question),
+                    "question": question,
+                    "answer": str(m.content),
+                    "answered_by": "user",
+                }
+            )
+    return out
+
 
 class ServeRailsState(TypedDict, total=False):
     """Outer rails state for one question. Thin — only serializable primitives
@@ -89,7 +134,8 @@ class ServeRailsState(TypedDict, total=False):
     context_block: str
     seed_licensed: list
     answer: Any
-    outcome: str  # "finalize" | "refuse" | "continue" | "miss"
+    outcome: str  # "finalize" | "refuse" | "continue" | "miss" | "clarify"
+    clarification: dict  # ClarificationRequest to surface, when outcome == "clarify"
 
 
 def _physical_to_id_map(corpus: "Corpus", *, multi_schema: bool) -> dict[str, str]:
@@ -119,14 +165,22 @@ def build_agent_core(
     default_schema: str | None,
     embedder: "Embedder | None" = None,
     system_prompt: str = SYSTEM_PROMPT,
+    enable_clarify: bool = False,
+    checkpointer: Any = None,
 ):
-    """Assemble ``create_agent`` with governed tools + middleware."""
+    """Assemble ``create_agent`` with governed tools + middleware.
+
+    ``enable_clarify`` adds the ``ask_user`` HITL tool and requires ``checkpointer``
+    (``interrupt`` needs one to pause/resume). Both default off, so the
+    eval/offline path builds the identical agent it always has.
+    """
     tools = make_tools(
         corpus,
         gateway,
         identity,
         embedder=embedder,
         multi_schema=multi_schema,
+        enable_clarify=enable_clarify,
     )
     mw = GovernanceMiddleware(
         corpus,
@@ -149,6 +203,7 @@ def build_agent_core(
         tools=tools,
         middleware=[mw],
         system_prompt=system_prompt,
+        checkpointer=checkpointer,
     )
 
 
@@ -187,8 +242,18 @@ def build_serve_rails(
     narrator: "AnswerNarrator | None" = None,
     on_event: "Callable[[dict], None] | None" = None,
     session_id: str = "agent",
+    clarify_checkpointer: Any = None,
+    clarify_thread: str | None = None,
+    clarify_resume: Any = None,
 ):
-    """Compile the outer deterministic StateGraph wrapping the agent core."""
+    """Compile the outer deterministic StateGraph wrapping the agent core.
+
+    HITL clarification (contract: docs/plans/hitl-clarification-contract.md) is on
+    only when ``clarify_checkpointer`` is set — then ``agent_core`` runs the inner
+    agent on that checkpointer + ``clarify_thread`` so ``ask_user``'s ``interrupt``
+    can pause/resume. ``clarify_resume`` (a ``ClarificationResponse``) resumes a
+    paused inner agent. All three default off/None, leaving the eval path
+    byte-for-byte unchanged."""
     multi_schema = settings.datasource.is_multi_schema()
     default_schema = settings.datasource.schema if multi_schema else None
     dialect = gateway.catalog().dialect.value
@@ -330,7 +395,7 @@ def build_serve_rails(
             state["base_provenance"],
             multi_schema=multi_schema,
             default_schema=default_schema,
-            narrator=narrator,
+            narrator=None,  # narration is a dedicated graph node (see narrate_node)
             on_event=None,  # agent path emits the rich contract below, not {stage}
         )
         if hit is not None:
@@ -339,8 +404,10 @@ def build_serve_rails(
             return {"answer": hit, "outcome": "finalize"}
         return {"outcome": "miss"}
 
-    def after_cache(state: ServeRailsState) -> Literal["assemble", "__end__"]:
-        return END if state.get("outcome") == "finalize" else "assemble"
+    def after_cache(state: ServeRailsState) -> Literal["assemble", "narrate"]:
+        # A cache hit is a delivered answer → phrase it in the narrate node too, so
+        # cached and freshly-generated answers take the identical finalization path.
+        return "narrate" if state.get("outcome") == "finalize" else "assemble"
 
     def _tool_start_detail(step: str, args: dict) -> dict:
         if step == "search_corpus":
@@ -349,6 +416,10 @@ def build_serve_rails(
             return {"table_id": args.get("table_id")}
         if step == "run_query":
             return {"sql": args.get("sql")}
+        if step == "ask_user":
+            # Timeline row for the clarification (contract §5); the active prompt is
+            # the interrupt value, this is the passive "asking…" step.
+            return {"question": args.get("question"), "why": args.get("why")}
         return {}
 
     def _resolve_tool(step, args, entry, tcid, licensed_delta, attempt):
@@ -412,7 +483,10 @@ def build_serve_rails(
         model-node ``start`` with its ``tools``-node ``resolve`` trivial. The final
         accumulated state comes from the last ``values`` chunk (replaces
         ``agent.invoke``'s return value)."""
-        final_state: dict = dict(init)
+        # ``init`` is the fresh input dict, or a ``Command(resume=...)`` on the
+        # HITL resume path — which isn't a mapping, so start empty and let the
+        # first ``values`` chunk populate it.
+        final_state: dict = dict(init) if isinstance(init, dict) else {}
         pending: dict[str, dict] = {}  # tool_call_id → {"step","args"}
         attempt = 0
         try:
@@ -482,6 +556,7 @@ def build_serve_rails(
         if context_block:
             system_prompt = f"{SYSTEM_PROMPT}\n\n## Governed context\n{context_block}"
 
+        clarify_on = clarify_checkpointer is not None
         agent = build_agent_core(
             corpus,
             gateway,
@@ -493,21 +568,52 @@ def build_serve_rails(
             default_schema=default_schema,
             embedder=embedder,
             system_prompt=system_prompt,
+            enable_clarify=clarify_on,
+            checkpointer=clarify_checkpointer,
         )
 
+        # One tracing handler per turn: it is attached at the outer graph.invoke
+        # (answer_question_agent) and propagates into this inner agent.stream via the
+        # run context. Attaching a *second* handler here logged every model call
+        # twice (same LangChain run_id → two Langfuse generations under different
+        # parents → ~2x trace cost/tokens), so inherit rather than re-attach.
+        inner_cfg: dict = {
+            "recursion_limit": AGENT_RECURSION_LIMIT,
+        }
+        agent_input: Any = {
+            "messages": [HumanMessage(content=question)],
+            "licensed": seed_licensed,
+            "ledger": [],
+        }
+        if clarify_on:
+            inner_cfg["configurable"] = {"thread_id": clarify_thread}
+            snap = agent.get_state(inner_cfg)
+            if snap.next and getattr(snap, "interrupts", None):
+                # The inner agent is paused on an ask_user from a prior pass.
+                request = snap.interrupts[0].value
+                if clarify_resume is None:
+                    # Outer graph re-ran before interrupt() returned the answer;
+                    # re-surface the same request (contract §2 re-execution).
+                    return {"outcome": "clarify", "clarification": request}
+                parsed = parse_response(clarify_resume)
+                if parsed["declined"]:
+                    ledger = list((snap.values or {}).get("ledger") or [])
+                    ans = refusal(
+                        escalation=_ESCALATION_CLARIFY_DECLINED,
+                        provenance={
+                            **state["base_provenance"],
+                            "refused_by": "clarification_declined",
+                            "clarification_id": request.get("clarification_id"),
+                            "governance_ledger": ledger,
+                        },
+                    )
+                    events.final(ans)
+                    return {"answer": ans, "outcome": "refuse"}
+                # Resume the paused inner agent with the user's answer.
+                agent_input = Command(resume=clarify_resume)
+
         try:
-            final = _stream_agent(
-                agent,
-                {
-                    "messages": [HumanMessage(content=question)],
-                    "licensed": seed_licensed,
-                    "ledger": [],
-                },
-                {
-                    "recursion_limit": AGENT_RECURSION_LIMIT,
-                    "callbacks": tracing_callbacks(),  # Langfuse; [] when unconfigured
-                },
-            )
+            final = _stream_agent(agent, agent_input, inner_cfg)
         except GovernanceHardStop as e:
             ledger = list(e.ledger)
             entry = e.entry
@@ -550,11 +656,26 @@ def build_serve_rails(
                     "governance_ledger": ledger,
                 },
                 question=question,
-                narrator=narrator,
+                narrator=None,  # narration deferred to narrate_node
                 on_event=None,
             )
             events.final(ans)
             return {"answer": ans, "outcome": "refuse"}
+
+        if clarify_on:
+            # The inner agent may have paused on a fresh ask_user this pass; bubble
+            # it up so the chat-graph node surfaces it as a client interrupt.
+            snap2 = agent.get_state(inner_cfg)
+            if snap2.next and getattr(snap2, "interrupts", None):
+                return {"outcome": "clarify", "clarification": snap2.interrupts[0].value}
+            # Otherwise fold the turn's answered clarifications into provenance (§7),
+            # so both success and refusal finalizers below carry them.
+            answered = _extract_clarifications(final.get("messages"))
+            if answered:
+                state["base_provenance"] = {
+                    **state["base_provenance"],
+                    "clarifications": answered,
+                }
 
         ledger = list(final.get("ledger") or [])
         sql, tables_used, pass_entry = extract_final_sql(
@@ -586,7 +707,7 @@ def build_serve_rails(
                 attempts=attempts or 0,
                 base_provenance={**state["base_provenance"], "governance_ledger": ledger},
                 question=question,
-                narrator=narrator,
+                narrator=None,  # narration deferred to narrate_node
                 on_event=None,
             )
             if ans.provenance.get("governance_ledger") is None:
@@ -614,7 +735,7 @@ def build_serve_rails(
                 attempts=sum(1 for e in ledger if e.get("action") == "run_query"),
                 base_provenance=state["base_provenance"],
                 question=question,
-                narrator=narrator,
+                narrator=None,  # narration deferred to narrate_node
                 on_event=None,
             )
             events.final(ans)
@@ -641,12 +762,27 @@ def build_serve_rails(
             allowlist=allowlist,
             licensed=licensed_phys,
             cache=cache,
-            narrator=narrator,
+            narrator=None,  # narration deferred to narrate_node
             on_event=None,
             ledger=ledger,
         )
         events.final(ans)
         return {"answer": ans, "outcome": "finalize"}
+
+    def narrate_node(state: ServeRailsState) -> dict:
+        """Phrase the delivered answer into grounded English — a first-class graph
+        step so the narrator's model call is one trace span under the turn (not a
+        side call inside finalization). No-op for refusals / cache-miss passthrough
+        (no ``answer`` with a result grid) and when no narrator is configured; a
+        narrator failure keeps the deterministic finalizer text (see
+        ``narrate_answer``)."""
+        answer = state.get("answer")
+        if answer is None:
+            return {}
+        narrated = narrate_answer(answer, state["question"], narrator)
+        if narrated is answer:
+            return {}
+        return {"answer": narrated}
 
     builder = StateGraph(ServeRailsState)
     builder.add_node("ingest", ingest)
@@ -655,13 +791,15 @@ def build_serve_rails(
     builder.add_node("cache", cache_lookup)
     builder.add_node("assemble", assemble)
     builder.add_node("agent_core", agent_core_node)
+    builder.add_node("narrate", narrate_node)
     builder.add_edge(START, "ingest")
     builder.add_edge("ingest", "refuse_gate")
     builder.add_conditional_edges("refuse_gate", after_refuse, ["prepare", END])
     builder.add_edge("prepare", "cache")
-    builder.add_conditional_edges("cache", after_cache, ["assemble", END])
+    builder.add_conditional_edges("cache", after_cache, ["assemble", "narrate"])
     builder.add_conditional_edges("assemble", after_assemble, ["agent_core", END])
-    builder.add_edge("agent_core", END)
+    builder.add_edge("agent_core", "narrate")
+    builder.add_edge("narrate", END)
     return builder.compile()
 
 
@@ -679,8 +817,17 @@ def answer_question_agent(
     working_memory: "WorkingMemory | None" = None,
     narrator: "AnswerNarrator | None" = None,
     on_event: "Callable[[dict], None] | None" = None,
-) -> "Answer":
-    """Run one question through the agentic serve rails (flagged path)."""
+    clarify_checkpointer: Any = None,
+    clarify_thread: str | None = None,
+    clarify_resume: Any = None,
+) -> "Answer | ClarificationPending":
+    """Run one question through the agentic serve rails.
+
+    Returns an ``Answer`` normally, or a :class:`ClarificationPending` when the
+    inner agent paused on ``ask_user`` (HITL, contract §2). Clarification is active
+    only when ``clarify_checkpointer`` is passed; the eval path calls this without
+    it and always gets an ``Answer``.
+    """
     graph = build_serve_rails(
         corpus=corpus,
         gateway=gateway,
@@ -693,6 +840,9 @@ def answer_question_agent(
         narrator=narrator,
         on_event=on_event,
         session_id=session_id,
+        clarify_checkpointer=clarify_checkpointer,
+        clarify_thread=clarify_thread,
+        clarify_resume=clarify_resume,
     )
     final = graph.invoke(
         {
@@ -701,6 +851,8 @@ def answer_question_agent(
         },
         config={"callbacks": tracing_callbacks()},  # Langfuse; [] when unconfigured
     )
+    if final.get("outcome") == "clarify":
+        return ClarificationPending(final.get("clarification") or {})
     answer = final.get("answer")
     if answer is None:
         return refusal(

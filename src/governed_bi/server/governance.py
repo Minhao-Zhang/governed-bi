@@ -9,6 +9,7 @@ so governance decisions live in exactly one place and cannot drift.
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import sqlglot
@@ -219,6 +220,44 @@ def _answer_text(
         return narrator.narrate(question, sql, table)
     except Exception:
         return _render(result, None)
+
+
+def _unverified_prefix(provenance: dict) -> str:
+    """The graded-delivery caveat banner (pipeline-design §6).
+
+    Shared by the deterministic finalizer text and the LLM ``narrate`` node so the
+    two phrasings of an unverified answer never drift.
+    """
+    refused_by = provenance.get("refused_by", "?")
+    failed_layer = provenance.get("failed_layer")
+    return (
+        f"⚠️ Unverified — this answer did not pass the governed layer "
+        f"({refused_by}/{failed_layer or 'n/a'}); treat it with caution.\n\n"
+    )
+
+
+def narrate_answer(
+    answer: "Answer", question: str, narrator: "AnswerNarrator | None"
+) -> "Answer":
+    """Re-phrase a delivered answer's text with the LLM narrator.
+
+    The serve graph's dedicated ``narrate`` node calls this so the narrator's model
+    call is a first-class graph step (one trace span under the turn), not a side
+    call buried inside finalization. Only answers carrying an executed result grid
+    are narrated; refusals (no ``result``) and the no-narrator path return the
+    answer unchanged, and a narrator failure keeps the deterministic text so a
+    model hiccup never turns a governed answer into an error. A graded-delivery
+    answer keeps its unverified banner, identical to the deterministic path.
+    """
+    if narrator is None or answer is None or answer.result is None:
+        return answer
+    try:
+        body = narrator.narrate(question, answer.sql or "", answer.result)
+    except Exception:
+        return answer
+    if answer.semantic_assurance is SemanticAssurance.unverified:
+        body = _unverified_prefix(answer.provenance or {}) + body
+    return replace(answer, text=body)
 
 
 def _emit(on_event: "Callable[[dict], None] | None", stage: str, **detail) -> None:
@@ -444,11 +483,7 @@ def _finish_unsuccessful(
         # ran read-only and already cleared L1/L2 safety (safety hard-refuses
         # earlier at the `hard` gate), so it's safe to show.
         answer_text = _answer_text(question, sql, result, table, narrator)
-        text = (
-            f"⚠️ Unverified — this answer did not pass the governed layer "
-            f"({refused_by}/{failed_layer or 'n/a'}); treat it with caution.\n\n"
-            f"{answer_text}"
-        )
+        text = _unverified_prefix(provenance) + answer_text
         return graded_delivery(
             sql=sql,
             provenance=provenance,

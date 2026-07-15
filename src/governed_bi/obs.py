@@ -12,10 +12,12 @@ Two tracers, both opt-in by environment and both no-ops when unset:
   keys are set. It is spliced into ``config={"callbacks": ...}`` at each run
   boundary: the agentic serve rails (``server.agent`` — outer ``graph.invoke`` +
   the inner ``agent.stream``) and the curator/SME deep agents thread it into
-  their invoke config, and the single-shot ``LangChainChatClient.complete`` path
-  attaches it per model call. Callbacks passed at the outer ``graph.invoke``
-  propagate to child runs, so an agentic turn groups as one Langfuse trace;
-  standalone ``.complete`` calls (e.g. the narrator) record as separate spans.
+  their invoke config. Callbacks passed at the outer ``graph.invoke`` propagate to
+  child runs, so an agentic turn groups as one Langfuse trace.
+  ``LangChainChatClient.complete`` inherits that active run's callbacks when called
+  from inside a graph node (the serve-path narrator + schema router), so those
+  model calls nest under the same turn's trace instead of opening a new root; it
+  only attaches its own handler when invoked standalone (eval baseline, curator).
 
 Nothing here imports langfuse at module load, so the base install and the offline
 profile are unaffected. See ``.env.example`` for the variable names.

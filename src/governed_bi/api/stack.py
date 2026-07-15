@@ -50,6 +50,8 @@ class ServeStack:
     edit_mode: str | None = None  # "file" (dev) | "pr" (prod, deferred) | None
     datasource: DataSourceConfig | None = None  # which DB the serve path executes against
     chat_model: Any | None = None  # raw LangChain BaseChatModel driving the agent core
+    can_clarify: bool = False  # serve-time HITL (ask_user) is available (streaming + live model)
+    clarify_checkpointer: Any | None = None  # inner-agent saver for interrupt/resume (in-mem, per process)
 
     def open_connector(self, *, connect_timeout: float | None = None) -> "Connector":
         """Open a fresh read-only connector for one request (caller closes it).
@@ -160,6 +162,18 @@ def build_stack(settings: Settings | None = None) -> ServeStack:
 
     can_edit = settings.allow_edit
 
+    # Serve-time HITL (ask_user -> interrupt) needs a checkpointer for the inner
+    # agent to pause/resume; it is only reachable via the streaming chat graph
+    # (graph_app), never the REST /chat path (no outer checkpointer there). The
+    # saver is in-memory / per-process for v1 (durable Postgres is deferred).
+    clarify_checkpointer = None
+    can_clarify = False
+    if has_live:
+        from langgraph.checkpoint.memory import InMemorySaver
+
+        clarify_checkpointer = InMemorySaver()
+        can_clarify = bool(settings.can_stream)
+
     # Resolve sqlite_path against the repo root when relative, matching
     # build_connector, so the stack's path and the probe agree.
     sqlite_path = Path(datasource.sqlite_path)
@@ -187,6 +201,8 @@ def build_stack(settings: Settings | None = None) -> ServeStack:
         edit_mode="file" if can_edit else None,
         datasource=datasource,
         chat_model=chat_model,
+        can_clarify=can_clarify,
+        clarify_checkpointer=clarify_checkpointer,
     )
     # Fail fast when TOML points at Postgres/Redshift that isn't up (or a missing
     # SQLite file). Without this, the first chat turn hangs on TCP connect.

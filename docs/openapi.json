@@ -965,6 +965,11 @@
           "can_search": {
             "type": "boolean",
             "title": "Can Search"
+          },
+          "can_clarify": {
+            "type": "boolean",
+            "title": "Can Clarify",
+            "default": false
           }
         },
         "type": "object",

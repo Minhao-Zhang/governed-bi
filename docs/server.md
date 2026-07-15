@@ -18,7 +18,7 @@ The serve runtime runs as **a governed agentic core** ([ADR 0002](adr/0002-gover
 
 The outer rails and the agent's `GovernanceMiddleware` **share one governance core** (`check` / column-allowlist / licensed-table / refuse-gate / stamp helpers), so the guardrails cannot drift between them.
 
-> *Built (today's reality):* the agentic core is the **only** serve path: the P2 cutover has landed, and the deterministic flow (`server.flow`) plus the `agent_serve` flag are both gone. `server.agent` compiles an outer deterministic `StateGraph` (`ingest → refuse_gate → prepare → cache → assemble → agent_core`) that wraps an inner LangChain `create_agent` reasoning loop; the public entry point is `answer_question_agent`. Governance rides on `GovernanceMiddleware` (`server.middleware`); the four governed tools live in `server.tools`; `llm.fake` supplies a `FakeListChatModel` harness for CI determinism.
+> *Built (today's reality):* the agentic core is the **only** serve path: the P2 cutover has landed, and the deterministic flow (`server.flow`) plus the `agent_serve` flag are both gone. `server.agent` compiles an outer deterministic `StateGraph` (`ingest → refuse_gate → prepare → cache → assemble → agent_core → narrate`) that wraps an inner LangChain `create_agent` reasoning loop; the public entry point is `answer_question_agent`. Governance rides on `GovernanceMiddleware` (`server.middleware`); the four governed tools live in `server.tools`; `llm.fake` supplies a `FakeListChatModel` harness for CI determinism.
 >
 > Answering a question now requires a live model: `build_stack()` still builds without one (the read-only audit API keeps running), but the LangGraph serve process (`make_graph`) fails closed at startup, and REST `/chat` returns 503, until a model is configured. See ADR 0002 and the A/B results in [`docs/plans/agentic-serve-ab-results.md`](plans/agentic-serve-ab-results.md).
 
@@ -60,7 +60,8 @@ flowchart TD
     AgentCore -->|run_query passes five guardrails| Execute["Gateway.execute()<br/>read-only, forced LIMIT/timeout, audit"]
     Reexecute --> Execute
     Execute --> Result["Rows + provenance"]
-    Result --> Stamp["Finalize<br/>two-axis reliability stamp"]
+    Result --> Narrate["Narrate<br/>LLM phrases the delivered answer"]
+    Narrate --> Stamp["Finalize<br/>two-axis reliability stamp"]
     Stamp --> User["Answer to user"]
     Execute --> Audit["Audit/replay log"]
     Stamp --> CacheWrite["Cache successful SQL text<br/>TTL 15 minutes"]
@@ -68,7 +69,11 @@ flowchart TD
 
 ## The agentic path (ADR 0002)
 
-The SQL-gen-and-execute middle (steps 6-9 above) is a bounded `create_agent` reasoning loop. The deterministic **rails** wrap it: `ingest → refuse_gate → prepare → cache → assemble → agent_core`, then a deterministic `finalize` (two-axis stamp + cache write) or graded-delivery / refuse. The refuse-gate still runs **before** the agent, and the stamp is still computed by deterministic code the agent cannot influence.
+The SQL-gen-and-execute middle (steps 6-9 above) is a bounded `create_agent` reasoning loop. The deterministic **rails** wrap it: `ingest → refuse_gate → prepare → cache → assemble → agent_core → narrate`, then a deterministic `finalize` (two-axis stamp + cache write) or graded-delivery / refuse. The refuse-gate still runs **before** the agent, and the stamp is still computed by deterministic code the agent cannot influence.
+
+**Narration is a dedicated `narrate` node.** Both a cache hit (`cache → narrate`) and the agent path (`agent_core → narrate`) flow through it before `finalize`, so cached and freshly-generated answers get phrased identically. `narrate` calls `narrate_answer` (`server.governance`) to re-phrase the delivered answer's text into grounded English via the LLM narrator; the finalizers themselves emit only the deterministic fallback text. Making it a node rather than a side-call buried in the finalizers means the narrator's model call is a first-class, individually-traced graph step. It is a no-op for refusals (no result grid to phrase) and when no narrator is configured; a narrator failure keeps the deterministic text.
+
+**One tracing handler per turn.** External tracing (Langfuse, via `obs.tracing_callbacks()`) is attached once, at the outer `graph.invoke` in `answer_question_agent`, and inherited everywhere below it (the inner `agent.stream`, and `LangChainChatClient.complete()` calls made from graph nodes such as `narrate` and the multi-schema schema router) via the ambient LangChain run context. A turn is therefore one Langfuse trace with no doubled model-call cost/tokens; a handler is attached fresh only for standalone `.complete()` calls outside a graph run (eval baseline, curator). LangSmith is unaffected; it self-instruments from the environment.
 
 **Governed tools (read-only ONLY, `server.tools`).** The agent can act *only* through four tools:
 

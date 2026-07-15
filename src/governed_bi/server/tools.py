@@ -13,10 +13,16 @@ from typing import TYPE_CHECKING, Annotated, Any
 
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import InjectedToolCallId, tool
-from langgraph.types import Command
+from langgraph.types import Command, interrupt
 
 from ..corpus.schemas import TableAsset
 from ..retrieval import retrieve
+from .clarify import clarification_request, parse_response
+
+# Sentinel the agent sees when the user declines a clarification. The rails
+# short-circuit to a refusal before the agent runs again (contract §4), so this
+# is a defensive fallback only.
+CLARIFY_DECLINED = "USER_DECLINED: the user did not answer; do not guess."
 
 if TYPE_CHECKING:
     from ..corpus import Corpus
@@ -163,11 +169,17 @@ def make_tools(
     *,
     embedder: "Embedder | None" = None,
     multi_schema: bool = False,
+    enable_clarify: bool = False,
 ):
-    """Factory: four governed tools closed over deployment deps.
+    """Factory: the governed read-only tools closed over deployment deps.
 
     ``gateway`` / ``identity`` are accepted for signature symmetry with the
     middleware (which owns execution for ``run_query`` / ``sample_rows``).
+
+    ``enable_clarify`` adds the ``ask_user`` HITL tool (serve path only); it calls
+    ``interrupt`` and therefore needs the inner agent compiled with a checkpointer
+    (see ``build_agent_core``). The eval/offline path leaves it off, so the tool
+    set and behaviour are unchanged there.
     """
     _ = gateway, identity  # owned by GovernanceMiddleware for data-touching tools
 
@@ -260,4 +272,22 @@ def make_tools(
             "run_query must be intercepted by GovernanceMiddleware (Inv #2)"
         )
 
-    return [search_corpus, inspect_schema, sample_rows, run_query]
+    @tool
+    def ask_user(question: str, why: str) -> str:
+        """Ask the user ONE short clarifying question and wait for their answer.
+
+        Use ONLY when the question is genuinely ambiguous and the governed context
+        cannot resolve it (e.g. two competing definitions of a term) — never for
+        things you can answer by inspecting the schema or corpus. State plainly in
+        ``why`` what is ambiguous. Returns the user's answer; continue with it.
+        """
+        response = interrupt(clarification_request(question, why))
+        parsed = parse_response(response)
+        if parsed["declined"]:
+            return CLARIFY_DECLINED
+        return parsed["answer"]
+
+    tools = [search_corpus, inspect_schema, sample_rows, run_query]
+    if enable_clarify:
+        tools.append(ask_user)
+    return tools
