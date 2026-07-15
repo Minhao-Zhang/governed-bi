@@ -14,9 +14,13 @@ protocols the rest of the system programs against, so:
 - tests inject LangChain's own fakes (``FakeListChatModel``,
   ``DeterministicFakeEmbedding``) - no network, no key.
 
-``langchain_openai`` is imported lazily inside ``from_config`` so importing this
-module needs only ``langchain-core`` (pulled in by the ``agents`` extra), and the
-raw-``openai`` clients remain available for a minimal-dependency deployment.
+The provider SDK is imported lazily inside ``from_config`` (keyed on
+``ModelConfig.provider``) so importing this module needs only ``langchain-core``
+(pulled in by the ``agents`` extra), and the raw-``openai`` clients remain
+available for a minimal-dependency deployment. ``provider = "openai"`` builds
+``ChatOpenAI`` / ``OpenAIEmbeddings``; ``provider = "bedrock"`` builds
+``ChatBedrockConverse`` / ``BedrockEmbeddings`` from ``langchain-aws`` (the
+``bedrock`` extra: ``uv sync --extra bedrock``).
 """
 
 from __future__ import annotations
@@ -26,6 +30,18 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..config import ModelConfig
+
+
+def _require_langchain_aws() -> None:
+    """Fail with a clear install hint when the ``bedrock`` extra is missing."""
+    try:
+        import langchain_aws  # noqa: F401, PLC0415
+    except ModuleNotFoundError as err:  # pragma: no cover - exercised only sans dep
+        raise ModuleNotFoundError(
+            "provider = \"bedrock\" needs the 'langchain-aws' package. Install the "
+            "extra: `uv sync --extra bedrock` (or `pip install "
+            "'governed-bi[bedrock]'`)."
+        ) from err
 
 
 def _message_text(message: Any) -> str:
@@ -64,6 +80,9 @@ class LangChainChatClient:
 
     @classmethod
     def from_config(cls, models: "ModelConfig") -> "LangChainChatClient":
+        if models.provider == "bedrock":
+            return cls(_build_bedrock_chat(models))
+
         from langchain_openai import ChatOpenAI  # noqa: PLC0415 (lazy: needs the agents extra)
 
         kwargs: dict[str, Any] = {"model": models.llm_model}
@@ -113,6 +132,9 @@ class LangChainEmbedder:
 
     @classmethod
     def from_config(cls, models: "ModelConfig") -> "LangChainEmbedder":
+        if models.provider == "bedrock":
+            return cls(_build_bedrock_embeddings(models))
+
         from langchain_openai import OpenAIEmbeddings  # noqa: PLC0415 (lazy)
 
         kwargs: dict[str, Any] = {"model": models.embedding_model}
@@ -130,3 +152,41 @@ class LangChainEmbedder:
 
     def embed_one(self, text: str) -> list[float]:
         return list(self.model.embed_query(text))
+
+
+# --------------------------------------------------------------------------- #
+# AWS Bedrock builders (langchain-aws; the ``bedrock`` extra)
+# --------------------------------------------------------------------------- #
+#
+# Credentials are NOT passed here: ChatBedrockConverse / BedrockEmbeddings resolve
+# them through boto3's default chain (env AWS_* vars, shared profile, or an
+# instance/task role). ``api_key_env`` still gates going live in the stack builder
+# — point it at whichever variable must be set for this deployment. Region falls
+# back to boto3's own default (``AWS_REGION`` / ``AWS_DEFAULT_REGION``) when
+# ``models.region`` is unset.
+
+
+def _build_bedrock_chat(models: "ModelConfig") -> Any:
+    _require_langchain_aws()
+    from langchain_aws import ChatBedrockConverse  # noqa: PLC0415 (lazy: bedrock extra)
+
+    kwargs: dict[str, Any] = {"model": models.llm_model}
+    if models.region:
+        kwargs["region_name"] = models.region
+    if models.llm_max_output_tokens:
+        kwargs["max_tokens"] = models.llm_max_output_tokens
+    # Reasoning ("thinking") config on Bedrock is model-family specific — the
+    # Converse request field differs between Anthropic and Nova — so it is not
+    # auto-translated from ``llm_reasoning_effort`` here. Set it per deployment
+    # via a local overlay if a specific model needs it.
+    return ChatBedrockConverse(**kwargs)
+
+
+def _build_bedrock_embeddings(models: "ModelConfig") -> Any:
+    _require_langchain_aws()
+    from langchain_aws import BedrockEmbeddings  # noqa: PLC0415 (lazy: bedrock extra)
+
+    kwargs: dict[str, Any] = {"model_id": models.embedding_model}
+    if models.region:
+        kwargs["region_name"] = models.region
+    return BedrockEmbeddings(**kwargs)

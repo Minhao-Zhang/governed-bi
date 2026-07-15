@@ -2,7 +2,15 @@
 
 _[English](README.md) · [简体中文](README.zh.md)_
 
-A small, real BIRD SQLite database, vendored for development and tests.
+A small, real BIRD SQLite database, vendored **only as a demo and test/CI
+fixture**.
+
+> **Not a starting point for real work.** This DB exists so the offline demo,
+> the walkthrough, and the test suite have something concrete to run against
+> with zero setup. If you are building an actual BI deployment, do **not** build
+> on `beer_factory` — point `[datasource]` at your own database (in a git-ignored
+> `governed_bi.local.toml`) and author a corpus for *that* schema under
+> `corpus/<schema>/`. Leave this fixture in place as the demo/CI backbone.
 
 ## What's here
 
@@ -15,12 +23,13 @@ Intentionally excluded: BIRD's `database_description/` CSVs (human-written colum
 descriptions) and every other BIRD database. The descriptions are left out on
 purpose, since inferring meaning is the curator's job.
 
-It is the **un-obfuscated (base)** DB with real table/column names, which is what
-you want for building and verifying the engine (catalog introspection, Facts
-profiling, physical-existence checks, real query execution). It does not exercise
-the curator's core job (inferring meaning for cryptic names), so the moat
-evaluation still needs the obfuscated `rename_decoy` variant + manifests from
-BIRD-Obfuscation later.
+It is the **un-obfuscated (base)** DB with real table/column names. That is why
+the test suite and CI point at it: real names + real rows exercise the engine's
+mechanics (catalog introspection, Facts profiling, physical-existence checks,
+real query execution) deterministically. For the same reason it is a poor stand-in
+for real work — it does not exercise the curator's core job (inferring meaning for
+cryptic names), so the moat evaluation uses the obfuscated `rename_decoy` variant +
+manifests from BIRD-Obfuscation instead.
 
 ## Adding another DB later
 

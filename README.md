@@ -32,12 +32,14 @@ not a runtime we ask anyone to deploy.
 Requires [uv](https://docs.astral.sh/uv/) and Python 3.13.
 
 ```bash
-uv sync                       # create .venv, install everything
+uv sync                       # create .venv, install the default (OpenAI) stack
+uv sync --extra bedrock       # ...or add the AWS Bedrock provider
 ```
 
-**1. Point at your database.** The committed default is the SQLite fixture. To
-serve a real Postgres database, add a git-ignored `governed_bi.local.toml` beside
-[`governed_bi.toml`](governed_bi.toml):
+**1. Point at your database.** The committed default is a bundled SQLite fixture
+(`beer_factory`) that exists **only for the demo and tests** — don't build real
+work on it. For anything beyond the demo, serve your own database by adding a
+git-ignored `governed_bi.local.toml` beside [`governed_bi.toml`](governed_bi.toml):
 
 ```toml
 [datasource]
@@ -89,9 +91,11 @@ uv run python scripts/live_smoke.py       # end-to-end over a real model (needs 
 ```
 
 The offline suite exercises the serve core against deterministic model doubles,
-so it needs neither a key nor a network. All dependencies (LangGraph, deepagents,
-LangChain, OpenAI, Langfuse, psycopg) live in `[project.dependencies]`, so a
-plain `uv sync` installs everything both harnesses need.
+so it needs neither a key nor a network. Everything both harnesses need for the
+default OpenAI stack (LangGraph, deepagents, LangChain, OpenAI, Langfuse, psycopg)
+lives in `[project.dependencies]`, so a plain `uv sync` installs it all. The one
+extra is `bedrock` (`uv sync --extra bedrock`): it pulls `langchain-aws` + boto3
+for the AWS Bedrock provider — set `provider = "bedrock"` in `[models]` to use it.
 
 ## Status
 

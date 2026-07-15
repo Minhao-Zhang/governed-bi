@@ -6,10 +6,11 @@ readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "MIT" }
 authors = [{ name = "Minhao Zhang" }]
-# All runtime deps live here (no optional-dependency extras): a plain `uv sync`
-# installs everything, so dev never hits a "feature silently off because its extra
-# wasn't installed" bug (e.g. Langfuse tracing). Split back into extras only when
-# packaging for prod / first publish.
+# Core + agent deps live here (no extra): a plain `uv sync` installs everything the
+# default OpenAI-backed stack needs, so dev never hits a "feature silently off
+# because its extra wasn't installed" bug (e.g. Langfuse tracing). The one extra is
+# `bedrock` (AWS Bedrock provider) — an alternate LLM/embedding backend that pulls a
+# heavy boto3 tree most runs don't need. See [project.optional-dependencies].
 dependencies = [
     # --- Core engine (deterministic) ---
     # Corpus asset schemas (Facts / Inference / Audit tiers) and validation.
@@ -35,6 +36,15 @@ dependencies = [
     "deepagents>=0.6",
     # --- External tracing (Langfuse callback; LangSmith is env-native, no dep) ---
     "langfuse>=3.0",
+]
+
+[project.optional-dependencies]
+# AWS Bedrock LLM + embedding provider. Opt in with `uv sync --extra bedrock`
+# (or `pip install 'governed-bi[bedrock]'`), then set provider = "bedrock" in the
+# [models] table. langchain-aws pulls boto3, hence keeping it out of the default
+# install. Credentials come from boto3's standard chain (env / profile / role).
+bedrock = [
+    "langchain-aws>=1.0",
 ]
 
 [dependency-groups]

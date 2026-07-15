@@ -52,19 +52,24 @@ class ModelConfig:
     """Which models the LLM and embedding seams call, and where the key lives.
 
     Provider-agnostic by shape, OpenAI by default (the current project decision).
-    The concrete clients live in ``governed_bi.llm``; this record only names what
-    they should use, so swapping a model is a config edit. ``api_key_env`` names
-    an environment variable - the key itself is **never** stored here or in the
-    config file.
+    ``provider`` selects the concrete client the ``governed_bi.llm`` seam builds:
+    ``"openai"`` (default) or ``"bedrock"`` (AWS Bedrock via the ``bedrock`` extra).
+    This record only names what they should use, so swapping a model — or a whole
+    provider — is a config edit. ``api_key_env`` names an environment variable -
+    the key itself is **never** stored here or in the config file. For Bedrock,
+    boto3 resolves credentials from the standard chain (env / profile / role);
+    point ``api_key_env`` at whichever variable must be present to go live (e.g.
+    ``AWS_BEARER_TOKEN_BEDROCK`` or ``AWS_ACCESS_KEY_ID``).
     """
 
-    provider: str = "openai"
+    provider: str = "openai"  # openai | bedrock
     llm_model: str = "gpt-5.6-sol"  # project default; swap in governed_bi.toml
     llm_reasoning_effort: str = "low"  # none | low | medium | high | xhigh | max (provider-specific)
     llm_max_output_tokens: int | None = None  # None = provider default
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int | None = None  # None = model default (1536 for -3-small)
     api_key_env: str = "OPENAI_API_KEY"
+    region: str | None = None  # Bedrock only: AWS region; None = boto3 default (AWS_REGION)
 
     def api_key(self) -> str | None:
         """Read the API key from the configured environment variable, or None."""

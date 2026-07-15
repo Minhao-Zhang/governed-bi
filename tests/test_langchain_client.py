@@ -50,6 +50,36 @@ def test_chat_client_from_config_builds_chat_openai(monkeypatch):
     assert isinstance(chat, ChatClient)
 
 
+def test_chat_client_from_config_builds_bedrock():
+    pytest.importorskip("langchain_aws")  # the `bedrock` extra
+    from langchain_aws import ChatBedrockConverse
+
+    models = ModelConfig(
+        provider="bedrock",
+        llm_model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        region="us-east-1",
+    )
+    chat = LangChainChatClient.from_config(models)
+    assert isinstance(chat.model, ChatBedrockConverse)
+    assert chat.model.model_id == models.llm_model
+    assert isinstance(chat, ChatClient)
+
+
+def test_embedder_from_config_builds_bedrock():
+    pytest.importorskip("langchain_aws")  # the `bedrock` extra
+    from langchain_aws import BedrockEmbeddings
+
+    models = ModelConfig(
+        provider="bedrock",
+        embedding_model="amazon.titan-embed-text-v2:0",
+        region="us-east-1",
+    )
+    emb = LangChainEmbedder.from_config(models)
+    assert isinstance(emb.model, BedrockEmbeddings)
+    assert emb.model.model_id == models.embedding_model
+    assert isinstance(emb, Embedder)
+
+
 # --------------------------------------------------------------------------- #
 # LangChainEmbedder
 # --------------------------------------------------------------------------- #

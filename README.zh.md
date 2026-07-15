@@ -17,10 +17,12 @@ _[English](README.md) · [简体中文](README.zh.md)_
 需要 [uv](https://docs.astral.sh/uv/) 与 Python 3.13。
 
 ```bash
-uv sync                       # create .venv, install everything
+uv sync                       # 创建 .venv，安装默认（OpenAI）栈
+uv sync --extra bedrock       # ……或额外装上 AWS Bedrock provider
 ```
 
-**1. 指向你的数据库。** 已提交的默认配置是 SQLite fixture。要服务一个真实的 Postgres 数据库，在
+**1. 指向你的数据库。** 已提交的默认配置是一个随附的 SQLite fixture（`beer_factory`），它**只为
+demo 和测试而存在**——不要在它之上做真正的开发。除 demo 以外的任何用途，都应服务你自己的数据库：在
 [`governed_bi.toml`](governed_bi.toml) 旁边添加一个 git-ignored 的 `governed_bi.local.toml`：
 
 ```toml
@@ -67,8 +69,10 @@ uv run python scripts/live_smoke.py       # end-to-end over a real model (needs 
 ```
 
 离线测试套件是拿确定性的模型替身（model double）跑 serve 核心，因此既不需要 key，也不需要网络。
-所有依赖（LangGraph、deepagents、LangChain、OpenAI、Langfuse、psycopg）都在
-`[project.dependencies]` 里，所以一次普通的 `uv sync` 就能装齐两套 harness 都需要的一切。
+默认 OpenAI 栈下两套 harness 需要的一切依赖（LangGraph、deepagents、LangChain、OpenAI、Langfuse、psycopg）
+都在 `[project.dependencies]` 里，所以一次普通的 `uv sync` 就能装齐。唯一的 extra 是 `bedrock`
+（`uv sync --extra bedrock`）：它会拉入 `langchain-aws` + boto3，用于 AWS Bedrock provider——
+在 `[models]` 里设 `provider = "bedrock"` 即可启用。
 
 ## 状态
 

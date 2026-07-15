@@ -42,11 +42,23 @@ embedding_model = "text-embedding-3-small"
 # Environment variable that holds the API key (the key itself never lives here).
 api_key_env = "OPENAI_API_KEY"
 
+# To run on AWS Bedrock instead, install the extra (`uv sync --extra bedrock`) and
+# switch the provider — typically in the git-ignored governed_bi.local.toml:
+#   [models]
+#   provider = "bedrock"
+#   llm_model = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"  # Bedrock model id
+#   embedding_model = "amazon.titan-embed-text-v2:0"            # Bedrock embedding id
+#   region = "us-east-1"                                        # omit for AWS_REGION default
+#   api_key_env = "AWS_BEARER_TOKEN_BEDROCK"  # any var that must be set to go live;
+#                                             # boto3 also honors AWS_ACCESS_KEY_ID / profile / role
+
 [datasource]
-# Which database the engine + curator read. Default: the vendored SQLite fixture,
-# so the offline demo and tests need no change. Built into a Connector by
-# governed_bi.gateway.build_connector; the curator facts builder
-# (python -m governed_bi.curator.build) reads this too.
+# Which database the engine + curator read. Default: the vendored SQLite fixture
+# (data/bird/beer_factory.sqlite) — a DEMO / TEST fixture only, so the offline demo
+# and CI need no setup. For real work, do NOT build on beer_factory: override this
+# table in a git-ignored governed_bi.local.toml to point at your own DB, and author
+# a corpus for that schema. Built into a Connector by gateway.build_connector; the
+# curator facts builder (python -m governed_bi.curator.build) reads this too.
 kind = "sqlite"                               # sqlite | postgres | redshift
 db = "beer_factory"                           # default corpus schema subtree / BIRD db_id
 sqlite_path = "data/bird/beer_factory.sqlite" # repo-root-relative
