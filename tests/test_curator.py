@@ -134,6 +134,27 @@ def test_heuristic_proposer_does_not_mutate_input():
 
 
 # --------------------------------------------------------------------------- #
+# AssetBag.read_corpus
+# --------------------------------------------------------------------------- #
+
+
+def test_read_corpus_unknown_table_returns_error_not_raises():
+    """Regression: the fix-pass agent calls ``read_corpus(table="restaurant")``
+    using the *schema* name (the bag is keyed by physical table names), which
+    used to raise ``KeyError`` before the unknown-table guard ran — crashing the
+    whole A3 fix-pass. It must return a recoverable error string instead."""
+    from governed_bi.curator.asset_bag import AssetBag
+
+    bag = AssetBag.from_tables("restaurant", [_orders_table()])
+    # ``restaurant`` is the schema, not a physical table (which is ``orders``).
+    out = bag.read_corpus(table="restaurant")
+    assert out.startswith("error: unknown table='restaurant'")
+    assert "orders" in out  # lists known tables so the agent can self-correct
+    # The valid table still renders.
+    assert "[table] orders" in bag.read_corpus(table="orders")
+
+
+# --------------------------------------------------------------------------- #
 # Adversary
 # --------------------------------------------------------------------------- #
 

@@ -105,13 +105,13 @@ class AssetBag:
             return kinds is None or k in kinds
 
         if want("table"):
+            if table is not None and table not in self.tables:
+                return f"error: unknown table={table!r}; known={sorted(self.tables)}"
             tables = (
                 [self.tables[table]]
                 if table is not None
                 else list(self.tables.values())
             )
-            if table is not None and table not in self.tables:
-                return f"error: unknown table={table!r}; known={sorted(self.tables)}"
             for t in tables:
                 header = t.physical_name
                 if t.row_count is not None:
