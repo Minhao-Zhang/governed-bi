@@ -5,6 +5,16 @@ agentic serve core) and its [Amendment 1](../adr/0002-governed-agentic-serve-run
 (seed-then-refine). Question: **does the governed agent serve path beat the
 deterministic flow on EX, at equal governance?** Runs: 2026-07-13/14._
 
+> **Update 2026-07-14 — the flow path is deleted; this A/B is now historical.**
+> The [ADR 0002](../adr/0002-governed-agentic-serve-runtime.md) P2 cutover removed
+> `flow.py` (commit `d2fdd6a`), so the flow-vs-agent A/B below **cannot be
+> re-run**. The agent path has since been measured on its own, full end-to-end, in
+> [three-arm-experiment-results.md](three-arm-experiment-results.md) **v5**
+> (`restaurant`, single seed): A1 0.217 → A2 0.348 → A3 **0.522**, decoy 0.39 →
+> 0.0 — the agent A3 (0.522) is above both the A/B agent number (0.435) and the
+> flow baseline (0.348). v5 is the canonical current-system record; the tables
+> below remain the last direct agent-vs-flow measurement.
+
 ## TL;DR
 
 - The governed **layer** works on a fresh, decoy-obfuscated schema (restaurant):
