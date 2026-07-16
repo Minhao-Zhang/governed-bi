@@ -99,6 +99,10 @@ repo, no network.
 - A benchmark harness (`eval/` or `scripts/`): a `db_id -> {connector config,
   corpus path}` registry, iterating the BIRD DBs, growing each corpus, scoring the
   pooled test set. Harness-only; not the production serving path.
+- Before running: clear the schema-qualification risk this multi-DB regime
+  introduces (single-DB eval runs `multi_schema=False`; 69 schemas in one
+  database is `multi_schema=True`, with the opposite qualifier rule). See
+  [schema-qualification-scale-risk.md](schema-qualification-scale-risk.md).
 
 ### Increment 4 — Simulated SME + arm/table runner (WS4)
 

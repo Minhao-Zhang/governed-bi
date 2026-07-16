@@ -1,0 +1,81 @@
+# Schema-qualification risk on the scale run
+
+_Status: **OPEN** — prep item, not yet actioned. Surfaced 2026-07-16 while
+diagnosing the `curated_sme` fix-pass crash ([eval-ladder-results.md
+§Findings 4](eval-ladder-results.md#4-internal-validity-passes-one-non-scoring-defect-a3-fix-pass-crash));
+determined to be a **separate** issue from that `KeyError`. Relevant to the
+[69-schema / 2,030-test scale run](eval-ladder-results.md#known-limitations-of-this-benchmark)
+that is the open Increment-3 item in
+[clarification-sme-benchmark-build-plan.md](clarification-sme-benchmark-build-plan.md)._
+
+## The concern
+
+Single-schema and multi-schema mode have opposite rules about whether a
+table reference may carry a schema qualifier. In single-schema mode
+(`multi_schema=False`, today's default) the L4 guardrail rejects any
+schema/catalog-qualified table reference outright, fail-closed — see the
+`if src.db or src.catalog` branch in
+[guardrails.py:561-564](../../src/governed_bi/gateway/guardrails.py#L561-L564).
+In multi-schema mode (`multi_schema=True`) the licensed names are themselves
+schema-qualified `{schema}.{table}`, and a *bare* reference resolves only to
+the configured `default_schema` — or is refused as ambiguous when the bare
+name exists in more than one licensed schema — per
+[guardrails.py:569-602](../../src/governed_bi/gateway/guardrails.py#L569-L602).
+A model that guesses the wrong qualification convention for the mode it is
+actually running in gets its SQL refused by L4, not executed.
+
+## Why it matters for the scale run
+
+Today's single-DB eval pins `multi_schema=False` unconditionally when it
+builds the `DataSourceConfig` —
+[run_experiment.py:240-246](../../src/governed_bi/eval/run_experiment.py#L240-L246).
+The upcoming scale run loads all 69 BIRD `db_id`s as Postgres schemas inside
+one database, which is exactly the `multi_schema=True` regime. That flips the
+qualification convention the model must follow, and the flip has to be
+threaded correctly: `DataSourceConfig.multi_schema` → the guardrail's
+`check(..., multi_schema=, default_schema=)` gate → `PromptContext.multi_schema`
+and `allowed_table_names()` (schema-qualifies the licensed set only when the
+flag is set) — [context.py:135](../../src/governed_bi/analyst/context.py#L135),
+[context.py:137-145](../../src/governed_bi/analyst/context.py#L137-L145) —
+→ the rendered table headers the agent actually reads, which switch between
+bare `physical_name` and `schema.physical_name` at
+[context.py:359-365](../../src/governed_bi/analyst/context.py#L359-L365).
+
+If any hop in that chain is missed, or the rendered prompt doesn't make the
+active convention unambiguous, the failure mode is silent: not a crash,
+just L4 refusals that read as lower execution accuracy. That would corrupt the
+headline scale-run EX number in a way that's easy to misattribute to a
+model/corpus weakness rather than a harness bug — the exact kind of
+regression the single-DB eval can't catch, because it never exercises
+`multi_schema=True`.
+
+## Not the curated_sme fix-pass crash
+
+Worth stating explicitly, since both surfaced in the same investigation: the
+`curated_sme` fix-pass `KeyError: 'restaurant'` is a hard, uncaught exception
+inside `agent.invoke` during the curator's Phase-B fix-pass (caught by
+`_invoke_agent`, [pipeline.py:253](../../src/governed_bi/curator/pipeline.py#L253);
+the full traceback is now captured there rather than just the class + message).
+The guardrail and tools described above only ever turn a schema-qualification
+mistake into a recoverable `"error:"` string or a `GuardrailVerdict` refusal —
+never a raised `KeyError` — so qualification confusion is not, and cannot be,
+the cause of that crash. This doc tracks the separate serve-path, EX-quality
+risk; the fix-pass crash is tracked as its own item in
+[eval-ladder-results.md §Next steps #1](eval-ladder-results.md#next-steps-in-priority-order).
+
+## What to verify before the scale run
+
+- Confirm the mode flag flows end-to-end: `DataSourceConfig.multi_schema` →
+  guardrail `check(..., multi_schema=, default_schema=)` → the
+  licensed-scope/context the agent is shown (`PromptContext.multi_schema`,
+  `allowed_table_names()`, and the rendered table header — the three sites
+  cited above).
+- Confirm the agent's context/prompt states the active qualification
+  convention plainly: bare names in single-schema, `schema.table` in
+  multi-schema — not just implied by the table header format.
+- Add an instrumentation counter to the run summary that separates "refused
+  because of a schema-qualification mismatch" from other L4/refusal reasons,
+  so a silent EX hit is visible in `summary.json` rather than buried in an
+  aggregate refusal rate.
+- Consider a small pre-flight check — 2-3 schemas under `multi_schema=True` —
+  before committing to the full 69-schema run.
