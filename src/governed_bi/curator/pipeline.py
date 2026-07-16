@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+import traceback
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
 
@@ -267,8 +268,15 @@ def _invoke_agent(
             },
         )
     except Exception as err:
-        error = f"{type(err).__name__}: {err}"
-        print(f"deep-agent stopped early ({error})")
+        # Keep the FULL traceback, not just class + message. The bare
+        # "KeyError: 'restaurant'" that lands in run_manifest.json is
+        # un-diagnosable on its own (it hides which frame keyed on the schema);
+        # the manifest is the only durable artifact once runs/ is swept, so the
+        # frame has to be captured here or it is lost. The short form still goes
+        # to stdout for a readable progress line.
+        short = f"{type(err).__name__}: {err}"
+        error = f"{short}\n{traceback.format_exc()}"
+        print(f"deep-agent stopped early ({short})")
     return result, _count_tool_calls(result), error
 
 
