@@ -16,7 +16,7 @@ Adapted from *《从数据到智能》* Ch.3, with the authoring model inverted.
 
 ## Two principles (the backbone)
 
-- **P1: Three field tiers.** Every asset's fields split into **Facts** (read from the catalog/data, never inferred), **Inference** (curator writes, or gold fills; this is the semantic layer), and **Audit** (why the inference was made, for reference only). Different tiers follow different rules (below).
+- **P1: Three field tiers.** Every asset's fields split into **Facts** (read from the catalog/data, never inferred), **Inference** (curator writes; this is the semantic layer), and **Audit** (why the inference was made, for reference only). Different tiers follow different rules (below).
 - **P2: Universal fields, project-specific values only.** No field name is ever BIRD-specific. BIRD, enterprise deployments, and any future project share the *exact same schema*; only the values (which DB, which SQL dialect, which `source_refs`) differ. BIRD-eval-specific rules (e.g. leakage guards) live in the eval harness, never in the schema.
 
 ## Two representations: YAML for structure, Markdown for procedure
@@ -31,31 +31,30 @@ Why both: you can't CI-check or graph-project a prose blob, and you can't cleanl
 > **Skills are the highest-value output, and curator-only**
 >
 > Anthropic's result: same model, **<21% without skills, 95%+ with them**.
-> That's the single biggest lever. Skills have **no gold counterpart** (nothing
-> in the manifests derives them), so **Arm 3 has no skills**. That is exactly
-> why the curator (Arm 2) can *beat* the gold ceiling on skill-sensitive
-> questions (D4).
+> That's the single biggest lever. Skills have **no oracle counterpart** (nothing
+> built derives them for any rung of the eval ladder), so even the `ceiling`
+> rung has no skills. That is exactly why the `curated` arm can *beat* the
+> recoverable ceiling on skill-sensitive questions (D4).
 
 ## The consumption contract (who reads which tier)
 
 | Consumer | Facts | Inference | Audit |
 |---|---|---|---|
-| **Server** (SQL generation) | ✅ | ✅ | ❌ **never injected** |
+| **Analyst** (SQL generation) | ✅ | ✅ | ❌ **never injected** |
 | **Viz / audit surface** | ✅ | ✅ | ✅ |
-| **Gold-diff** (Arm 2 vs Arm 3) | n/a (identical in all arms) | ✅ the diff target | n/a |
 | **Retrieval index** (R/V/G/D) | ✅ | ✅ | ❌ |
 
-The loader enforces the contract: the server's context is built from Facts + Inference only. Audit-tier prose (evidence, provenance) can therefore be as verbose as humans need without costing the server tokens or adding noise. If Audit ever bloats the files, the escape hatch is a sidecar (not needed at BIRD scale).
+The loader enforces the contract: the Analyst's context is built from Facts + Inference only. Audit-tier prose (evidence, provenance) can therefore be as verbose as humans need without costing the Analyst tokens or adding noise. If Audit ever bloats the files, the escape hatch is a sidecar (not needed at BIRD scale).
 
 ## Governance overrides (human-authored, outside the three tiers)
 
-One field is authored by neither the catalog nor the curator, but by a **human owner** (D6): `governance.excluded`. On a column or table, when a human sets it `true` after review, the asset is **removed entirely** from everything the server sees (retrieval, the presented schema, the graph) in **all environments, no toggle, permanently**. It is still shown in the viz/audit surface (marked, with reason) so the exclusion is auditable, and guardrail L3 hard-blocks it as defense-in-depth.
+One field is authored by neither the catalog nor the curator, but by a **human owner** (D6): `governance.excluded`. On a column or table, when a human sets it `true` after review, the asset is **removed entirely** from everything the Analyst sees (retrieval, the presented schema, the graph) in **all environments, no toggle, permanently**. It is still shown in the viz/audit surface (marked, with reason) so the exclusion is auditable, and guardrail L3 hard-blocks it as defense-in-depth.
 
 ```yaml
 # on tbl_beer_factory_transaction, column CreditCardNumber
 governance:
   excluded: true
-  reason: "PII (payment card number); never surface to the server"
+  reason: "PII (payment card number); never surface to the Analyst"
   by: minhaoz
   at: "2026-07-08"
 ```
@@ -68,11 +67,11 @@ Distinct from the curator's `reliability.status: suspect`:
 | Means | "looks unreliable" | "decided: never use" |
 | Serve effect | soft-warn or hard-block (env-toggle) | **removed entirely**, all envs, no toggle |
 
-Escalation path: curator flags `suspect` → human reviews (D6) → leaves it, or escalates to `excluded`. Kept **out of the autonomous eval arms** (so Arm 2 stays pure-curator); it's the human-in-the-loop governance capability for enterprise deployments.
+Escalation path: curator flags `suspect` → human reviews (D6) → leaves it, or escalates to `excluded`. Kept **out of the autonomous eval ladder** (so the `curated` arm stays pure-curator); it's the human-in-the-loop governance capability for enterprise deployments.
 
 ## Clarifications (an Audit-tier block, D12)
 
-A curator that cannot resolve a question from Facts + the batch **records it instead of guessing**, as a `clarification` block on the asset's **Audit tier**. Because it is Audit-tier, it is **never injected into the server's context** (per the consumption contract above) — an open question cannot leak into SQL-gen or retrieval. While a question is open the asset still serves a best-effort answer from its Inference tier (low `confidence` + a `suspect` caveat); a **Responder** (a human **SME** in prod, a **Simulated SME** in eval) answers it, and `accept_answer` flips it to `answered`, re-stamping provenance. See [D12](design-decisions.md#d12-clarification-protocol).
+A curator that cannot resolve a question from Facts + the batch **records it instead of guessing**, as a `clarification` block on the asset's **Audit tier**. Because it is Audit-tier, it is **never injected into the Analyst's context** (per the consumption contract above) — an open question cannot leak into SQL-gen or retrieval. While a question is open the asset still serves a best-effort answer from its Inference tier (low `confidence` + a `suspect` caveat); a **Responder** (a human **SME** in prod, a **Simulated SME** in eval) answers it, and `accept_answer` flips it to `answered`, re-stamping provenance. See [D12](design-decisions.md#d12-clarification-protocol).
 
 ```yaml
 # on any asset, under its audit block
@@ -136,7 +135,7 @@ schema: beer_factory                   # scoping namespace = Postgres/Redshift s
 physical_name: customers               # identifier in the live DB
 row_count: 554
 
-# ── Inference (curator writes / gold fills; server-consumed) ──
+# ── Inference (curator writes; Analyst-consumed) ──
 description: "One row per customer of the root beer factory."
 grain: "one row = one customer"
 confidence: 0.9
@@ -153,7 +152,7 @@ columns:
     description: "unique customer identifier"
     role: primary_key                  # primary_key | foreign_key | key | measure | dimension
     references: null                   # col id if FK
-    reliability: { status: ok, note: null }   # status: ok | suspect ; note: prose (server-visible)
+    reliability: { status: ok, note: null }   # status: ok | suspect ; note: prose (Analyst-visible)
     confidence: 0.95
 
   - # Facts
@@ -171,8 +170,8 @@ columns:
       status: suspect
       note: "Stored as INTEGER, so leading zeros are lost. Unreliable as a postal key or for display; cast/pad before use."
     confidence: 0.6
-    # Governance (human-authored override; not curator, not gold)
-    governance: { excluded: false }    # human sets true → asset removed everywhere the server sees
+    # Governance (human-authored override; not curator-authored)
+    governance: { excluded: false }    # human sets true → asset removed everywhere the Analyst sees
     # Audit
     audit:
       reliability_evidence: "declared INTEGER; east-coast ZIPs with leading zeros cannot round-trip"
@@ -216,7 +215,7 @@ id: fs_beer_factory_001
 # ── Facts ──
 schema: beer_factory
 
-# ── Inference (curator selects/distills; server-consumed as a prompt exemplar) ──
+# ── Inference (curator selects/distills; Analyst-consumed as a prompt exemplar) ──
 question: "Which root beer brand has the highest average review rating?"
 sql: |
   SELECT b.BrandName, AVG(r.StarRating) AS avg_rating
@@ -328,7 +327,7 @@ audit:
 
 ## Asset: `skill` (Markdown, not YAML)
 
-Prose procedural knowledge per domain. Frontmatter carries the same provenance as YAML assets (auditable, but no gold). The body is retrieved and injected into the server prompt.
+Prose procedural knowledge per domain. Frontmatter carries the same provenance as YAML assets (auditable, but no gold). The body is retrieved and injected into the Analyst's prompt.
 
 ```markdown
 ---
@@ -364,7 +363,7 @@ rolls up to `rootbeerbrand`.
 - `transaction.CreditCardNumber` is PII and is excluded; never select it.
 ```
 
-Skills reference typed assets by ID; they do **not** restate the assets' data. A skill is pure curator value-add: there is no gold skill to diff against.
+Skills reference typed assets by ID; they do **not** restate the assets' data. A skill is pure curator value-add: there is no oracle-derived skill to diff against.
 
 ---
 
@@ -391,9 +390,9 @@ CI validates the corpus and its pass doubles as the curator's machine-checkable 
 
 BIRD uses an in-memory graph (networkx) for Steiner planning; Neo4j is the optional enterprise-scale projection.
 
-## Gold vs curator (the same schema, two fillers)
+## Curator vs the retired gold filler
 
-- **Curator (Arm 2)** fills the Inference tier by *inference*: descriptions, roles, `references`, `reliability`, `confidence`, with `audit.*_evidence` recording why.
-- **Gold (Arm 3)** fills the *same* Inference fields deterministically from the manifests: real names (rename map), FK graph (original schema), and any `reliability.status=suspect` flags the manifest records, with `provenance.source: gold`, `confidence: 1.0`.
-- Facts are identical across arms (read from the catalog). The gold-diff compares the Inference tier only.
-- **Skills (Markdown) are curator-only**: no manifest derives them, so Arm 3 has none. This is the mechanism by which Arm 2 can *exceed* the gold ceiling on skill-sensitive questions.
+- **Curator (the `curated` arm)** fills the Inference tier by *inference*: descriptions, roles, `references`, `reliability`, `confidence`, with `audit.*_evidence` recording why.
+- There is no manifest-based oracle filler for the Inference tier anymore. A retired de-obfuscation "gold" arm once filled the *same* Inference fields deterministically from the manifests (real names via the rename map, the original-schema FK graph, and any `reliability.status=suspect` flags the manifest recorded), with `provenance.source: gold`, `confidence: 1.0` — it is **removed**: it was never a true ceiling, since curator skills could exceed it on skill-sensitive questions. (`ProvenanceSource.gold` survives in the schema only as a legacy enum value.)
+- Facts are identical across every rung of the eval ladder (read from the catalog); only Inference and Skills vary.
+- **Skills (Markdown) are curator-only**: nothing else in the ladder derives them, including the designed-but-not-built `ceiling` rung's test-aware Simulated SME. This is the mechanism by which the `curated` arm can *exceed* even the recoverable ceiling on skill-sensitive questions.

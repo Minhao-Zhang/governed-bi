@@ -5,7 +5,7 @@ obfuscated (``sql_rename`` / ``sql_base``) and the un-obfuscated (``sql_sqlite``
 gold SQL, keyed by ``db_id`` / ``question`` / ``question_id`` / ``difficulty`` /
 ``evidence``. For the **beer_factory-first** pass (D14) the arms run against the
 vendored un-obfuscated database, so the default ``gold_sql_field`` is
-``sql_sqlite``. The three-arm experiment on ``pg_rename_decoy`` passes
+``sql_sqlite``. The eval-ladder experiment on ``pg_rename_decoy`` passes
 ``gold_sql_field="sql_rename"`` instead.
 
 The dataset directory is a **parameter**, never a hardcoded sibling-repo path:

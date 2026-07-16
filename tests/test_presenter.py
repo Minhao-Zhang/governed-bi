@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from governed_bi.corpus import load_corpus
-from governed_bi.server.answer import Answer, ReliabilityTier
+from governed_bi.analyst.answer import Answer, ReliabilityTier
 from governed_bi.viz import presenter
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
@@ -20,7 +20,7 @@ CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 
 @pytest.fixture
 def corpus():
-    # The audit surface reads the FULL corpus (Audit + excluded assets), not for_server.
+    # The audit surface reads the FULL corpus (Audit + excluded assets), not for_analyst.
     return load_corpus(CORPUS_ROOT, schema="beer_factory")
 
 
@@ -169,7 +169,7 @@ def test_answer_view_maps_stamp_and_trace():
 
 
 def test_answer_view_maps_result_rows():
-    from governed_bi.server.answer import ResultTable
+    from governed_bi.analyst.answer import ResultTable
 
     answer = Answer(
         tier=ReliabilityTier.governed,

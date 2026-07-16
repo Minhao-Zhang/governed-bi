@@ -18,8 +18,8 @@ self-built [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) 
 3. [Design decisions](design-decisions.md): D1-D16 (+ 2026-07-15 audit dispositions) as ADRs, with alternatives and trade-offs.
 4. [Asset schemas](asset-schemas.md): the per-asset YAML field spec (Facts / Inference / Audit tiers).
 5. [Curator](curator.md): the build-side proposer + adversary loop. For the exact prompts, see [Curator LLM-call walkthrough](curator-llm-call.md).
-6. [Server](server.md): the serve-side governed agentic core + guardrails. For the exact prompts, see [Server LLM-call walkthrough](server-llm-call.md).
-7. [Viz](viz.md): the read-only audit surface — the presenter view models plus the `governed_bi.api` HTTP API to browse the layer and chat with the governed server (the interactive UI is a separate project).
+6. [Analyst](analyst.md): the serve-side governed agentic core + guardrails. For the exact prompts, see [Analyst LLM-call walkthrough](analyst-llm-call.md).
+7. [Viz](viz.md): the read-only audit surface — the presenter view models plus the `governed_bi.api` HTTP API to browse the layer and chat with the governed Analyst (the interactive UI is a separate project).
 8. [Glossary](glossary.md): canonical terms.
 
 [External design sources](references.md) that ground the design.
@@ -45,7 +45,7 @@ today (the corpus layer and the dev workflow):
 |---|---|
 | [Asset schemas](asset-schemas.md), [Design decisions](design-decisions.md) D9 | `src/governed_bi/corpus/` |
 | [Curator](curator.md) | `src/governed_bi/curator/` |
-| [Server](server.md), [Architecture](architecture.md) §6 | `src/governed_bi/server/`, `gateway/`, `graph/`, `retrieval/`, `memory/` |
+| [Analyst](analyst.md), [Architecture](architecture.md) §6 | `src/governed_bi/analyst/`, `gateway/`, `graph/`, `retrieval/`, `memory/` |
 | [Architecture](architecture.md) §8 | `src/governed_bi/eval/` |
 | [Viz](viz.md) | `src/governed_bi/viz/` |
 | [Architecture](architecture.md) §9 (environment toggles) | `src/governed_bi/config.py` |

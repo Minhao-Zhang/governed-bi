@@ -18,8 +18,8 @@ from governed_bi.config import Environment, Settings
 from governed_bi.corpus import load_corpus
 from governed_bi.gateway import Gateway, Identity, SqliteConnector
 from governed_bi.retrieval import retrieve
-from governed_bi.server import Route, bind_terms, route_intent
-from governed_bi.server.answer import (
+from governed_bi.analyst import Route, bind_terms, route_intent
+from governed_bi.analyst.answer import (
     ReliabilityTier,
     SemanticAssurance,
     UncertaintySignals,
@@ -33,7 +33,7 @@ BIRD_DB = Path(__file__).resolve().parents[1] / "data" / "bird" / "beer_factory.
 
 @pytest.fixture
 def corpus():
-    return load_corpus(CORPUS_ROOT, schema="beer_factory").for_server()
+    return load_corpus(CORPUS_ROOT, schema="beer_factory").for_analyst()
 
 
 @pytest.fixture
@@ -101,7 +101,7 @@ def test_reliability_tier_fenced_raw():
 
 def test_semantic_assurance_axis():
     # The epistemic axis, distinct from safety, that the tier projects.
-    assert semantic_assurance(UncertaintySignals()) is SemanticAssurance.certified
+    assert semantic_assurance(UncertaintySignals()) is SemanticAssurance.grounded
     assert semantic_assurance(UncertaintySignals(repaired=True)) is SemanticAssurance.heuristic
     assert (
         semantic_assurance(UncertaintySignals(fenced_raw_fallback=True))
@@ -120,8 +120,8 @@ def test_licenses_fk_neighbor_not_retrieved(corpus):
     # licensed too, so an answer that legitimately needs one is not refused just
     # because the lexical retriever under-recalled.
     from governed_bi.graph import build_graph, plan_joins
-    from governed_bi.server.context import assemble_context
-    from governed_bi.server.governance import _licensed_table_ids
+    from governed_bi.analyst.context import assemble_context
+    from governed_bi.analyst.governance import _licensed_table_ids
 
     graph = build_graph(corpus)
     retrieval = retrieve(corpus, "total revenue")

@@ -305,7 +305,7 @@ def test_chat_governed_answer_carries_result(client):
     body = r.json()
     assert body["tier"] == "governed"
     assert body["safety_clearance"] is True
-    assert body["semantic_assurance"] == "certified"
+    assert body["semantic_assurance"] == "grounded"
     assert "SUM(PurchasePrice)" in body["sql"]
     # Offline profile: no narrator -> compact render; rows are still carried.
     assert "total_revenue" in body["text"]

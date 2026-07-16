@@ -58,7 +58,7 @@ def build_facts_all_schemas(
 
     We assume full read access: connecting yields every schema and every table
     within it. Lists schemas once, then profiles each into its own subtree,
-    reusing ``datasource`` with ``schema``/``db`` set per schema. Postgres/Redshift
+    reusing ``datasource`` with ``schema``/``corpus_pin`` set per schema. Postgres/Redshift
     only (SQLite has no schema level). Returns ``{schema: n_asset_files_written}``.
     ``connector_factory`` is injectable for testing; it defaults to
     :func:`governed_bi.gateway.build_connector`.
@@ -89,7 +89,7 @@ def build_facts_all_schemas(
         # connector pinned to it, or build_connector leaves schema=None -> "public"
         # and every schema is silently profiled as public.
         connector = connector_factory(
-            replace(datasource, schema=schema, db=schema, multi_schema=False)
+            replace(datasource, schema=schema, corpus_pin=schema, multi_schema=False)
         )
         try:
             written[schema] = len(build_facts_corpus(connector, schema, root))
@@ -144,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
         k: v
         for k, v in (
             ("kind", args.kind),
-            ("db", args.db),
+            ("corpus_pin", args.db),
             ("sqlite_path", str(args.sqlite) if args.sqlite else None),
             ("dsn", args.dsn),
             ("dsn_env", args.dsn_env),
@@ -169,13 +169,13 @@ def main(argv: list[str] | None = None) -> int:
 
     connector = build_connector(datasource)
     try:
-        written = build_facts_corpus(connector, datasource.db, args.out)
+        written = build_facts_corpus(connector, datasource.corpus_pin, args.out)
     finally:
         connector.close()
 
     print(
-        f"[{datasource.kind}] profiled {datasource.db} -> wrote {len(written)} "
-        f"facts-only asset file(s) to {args.out / datasource.db}"
+        f"[{datasource.kind}] profiled {datasource.corpus_pin} -> wrote {len(written)} "
+        f"facts-only asset file(s) to {args.out / datasource.corpus_pin}"
     )
     return 0
 

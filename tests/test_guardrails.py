@@ -15,7 +15,7 @@ from governed_bi.corpus import load_corpus
 from governed_bi.gateway import GuardrailLayer, check, column_allowlist
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
-ALLOWLIST = column_allowlist(load_corpus(CORPUS_ROOT, schema="beer_factory").for_server())
+ALLOWLIST = column_allowlist(load_corpus(CORPUS_ROOT, schema="beer_factory").for_analyst())
 
 
 def _check(sql: str, *, hard_block_suspect: bool = True):

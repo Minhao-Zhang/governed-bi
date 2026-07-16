@@ -49,8 +49,8 @@ EDGE_DERIVED_FROM = "DERIVED_FROM"
 def build_graph(corpus: "Corpus") -> nx.MultiDiGraph:
     """Build the property graph from a parsed corpus. Rebuildable at any time.
 
-    Pass the ``Corpus.for_server()`` view so ``governance.excluded`` assets are
-    already absent (D6): the server-facing graph must not surface excluded
+    Pass the ``Corpus.for_analyst()`` view so ``governance.excluded`` assets are
+    already absent (D6): the Analyst-facing graph must not surface excluded
     tables/columns, same as retrieval and the presented schema.
     """
     g = nx.MultiDiGraph()
@@ -89,10 +89,10 @@ def build_graph(corpus: "Corpus") -> nx.MultiDiGraph:
                 expression=a.expression,
             )
 
-    # Pass 2: cross-asset edges. Endpoints are guarded: for_server() can drop an
+    # Pass 2: cross-asset edges. Endpoints are guarded: for_analyst() can drop an
     # excluded table/column while a surviving FK reference or join still points at
     # it, and networkx would otherwise auto-create a bare, kind-less node,
-    # re-materializing the excluded asset in the server-facing graph. Skipping such
+    # re-materializing the excluded asset in the Analyst-facing graph. Skipping such
     # an edge keeps the graph free of both phantom nodes and excluded assets.
     def _edge(u: str, v: str, **attrs: object) -> None:
         if u in g and v in g:

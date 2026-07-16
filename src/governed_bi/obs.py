@@ -10,7 +10,7 @@ Two tracers, both opt-in by environment and both no-ops when unset:
 - **Langfuse** is attached as a LangChain callback via :func:`tracing_callbacks`,
   returned only when the ``tracing`` extra is installed *and* the ``LANGFUSE_*``
   keys are set. It is spliced into ``config={"callbacks": ...}`` at each run
-  boundary: the agentic serve rails (``server.agent`` — outer ``graph.invoke`` +
+  boundary: the agentic serve rails (``analyst.agent`` — outer ``graph.invoke`` +
   the inner ``agent.stream``) and the curator/SME deep agents thread it into
   their invoke config. Callbacks passed at the outer ``graph.invoke`` propagate to
   child runs, so an agentic turn groups as one Langfuse trace.

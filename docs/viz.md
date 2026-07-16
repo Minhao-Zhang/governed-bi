@@ -78,7 +78,7 @@ and the audit trail becomes **three-party: proposer -> adversary -> human**.
 Built here (read-only) as `presenter` view models, computed from the corpus and
 served over HTTP/JSON by `governed_bi.api` for a separate UI to render:
 
-- **Chat**. A multi-turn conversation over the governed server flow (served at
+- **Chat**. A multi-turn conversation over the governed Analyst flow (served at
   `POST /chat`); each answer shows the two-axis stamp, the SQL, and the provenance
   trace, and follow-ups are fed back through working memory (D8).
 - **Corpus health**. Asset counts, CI status, and the flags a reviewer
@@ -92,7 +92,6 @@ served over HTTP/JSON by `governed_bi.api` for a separate UI to render:
 Design vision, not built here (a fuller audit surface, or the downstream product):
 
 - **FK graph** (join projection, edges styled by confidence).
-- **Gold-diff** (BIRD: curator vs gold per asset).
 - **Search** (BM25 plus optional semantic search).
 - The **editable** forms and the **save -> PR** button (see the write path above).
 
@@ -105,4 +104,4 @@ editing or PR orchestration.
 
 Links: [Design decisions](design-decisions.md) (D6 ownership, D9 corpus contract,
 D10 curator), [Asset schemas](asset-schemas.md), [Curator](curator.md),
-[Server](server.md).
+[Analyst](analyst.md).

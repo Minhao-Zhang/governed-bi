@@ -150,7 +150,7 @@ class Clarification(_Strict):
     """A curator-emitted open question about the asset it hangs on (D12).
 
     ID-tracked by the asset it is attached to (the asset carries the ``id``). It
-    lives on the ``Audit`` tier, which is never injected into the server context,
+    lives on the ``Audit`` tier, which is never injected into the Analyst context,
     so an open question never leaks to SQL-gen or retrieval — that is the whole
     reason it lives here. While a question is open the asset still serves a
     best-effort answer via the Inference tier (low ``confidence`` + a ``suspect``
@@ -166,12 +166,12 @@ class Clarification(_Strict):
 
 
 class Audit(BaseModel):
-    """Audit tier: never injected into the server context (loader contract).
+    """Audit tier: never injected into the Analyst context (loader contract).
 
     Carries ``provenance`` plus free-form ``*_evidence`` prose, hence
     ``extra="allow"``. An optional ``clarification`` records an open question
     about the asset (D12); because the Audit tier is stripped by
-    ``Corpus.for_server()``, an open question is never served.
+    ``Corpus.for_analyst()``, an open question is never served.
     """
 
     model_config = ConfigDict(extra="allow")
@@ -183,7 +183,7 @@ class Audit(BaseModel):
 class Governance(_Strict):
     """Human-authored override, outside the three tiers (D6).
 
-    ``excluded=true`` removes the asset from everything the server sees, in all
+    ``excluded=true`` removes the asset from everything the Analyst sees, in all
     environments, permanently. Distinct from the curator's ``reliability``.
     """
 
@@ -197,7 +197,7 @@ class Reliability(_Strict):
     """AI-inferred reliability caveat on a column (curator-authored)."""
 
     status: ReliabilityStatus = ReliabilityStatus.ok
-    note: str | None = None  # prose caveat, server-visible ("UNRELIABLE ...")
+    note: str | None = None  # prose caveat, Analyst-visible ("UNRELIABLE ...")
 
 
 # --------------------------------------------------------------------------- #

@@ -15,7 +15,7 @@ from governed_bi.gateway.connectors.sqlite import SqliteConnector
 def test_default_datasource_is_sqlite_beer_factory():
     ds = Settings.for_env("dev").datasource
     assert ds.kind == "sqlite"
-    assert ds.db == "beer_factory"
+    assert ds.corpus_pin == "beer_factory"
 
 
 def test_resolve_dsn_precedence(monkeypatch):
@@ -32,7 +32,7 @@ def test_load_settings_parses_datasource(tmp_path):
     toml.write_text(
         '[datasource]\n'
         'kind = "postgres"\n'
-        'db = "beer_factory"\n'
+        'corpus_pin = "beer_factory"\n'
         'schema = "beer_factory"\n'
         'dsn_env = "PG_RENAME_DECOY_DSN"\n',
         encoding="utf-8",
@@ -89,7 +89,7 @@ def test_load_settings_parses_multi_schema_opt_out(tmp_path):
 
 
 def test_build_connector_sqlite():
-    conn = build_connector(DataSourceConfig(kind="sqlite", db="beer_factory"))
+    conn = build_connector(DataSourceConfig(kind="sqlite", corpus_pin="beer_factory"))
     try:
         assert isinstance(conn, SqliteConnector)
         assert "customers" in conn.list_tables()

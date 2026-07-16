@@ -1,7 +1,7 @@
 # Frontend spec: visualizing the agent's steps (governed serve stream)
 
-_Implementation spec for the UI change. Backend: this repo (`server/agent.py`,
-`server/middleware.py`, `server/tools.py`, `api/graph_app.py`). Frontend: the
+_Implementation spec for the UI change. Backend: this repo (`analyst/agent.py`,
+`analyst/middleware.py`, `analyst/tools.py`, `api/graph_app.py`). Frontend: the
 sibling `governed-bi-ui` repo (Next.js + LangChain `useStream`). Companion to
 [ui-frontend-handoff.md](../ui-frontend-handoff.md); relates to
 [ADR 0002](../adr/0002-governed-agentic-serve-runtime.md) and
@@ -93,19 +93,19 @@ Implemented on `feat/governed-agentic-serve-runtime`. The frontend engineer can
 build against the live contract (or the recorded trace the tests capture); these
 are the emit points that produce it.
 
-1. **Emitter** (`server/governance.py::GovEventStream`): a per-turn object that
+1. **Emitter** (`analyst/governance.py::GovEventStream`): a per-turn object that
    wraps the raw `on_event` callback, stamps the monotonic `seq`, tags the first
    event with `serve_path:"agent"`, and exposes `rail()` / `tool()` / `final()`.
    Best-effort (a raising sink never breaks a governed answer). The deterministic
    flow keeps using the bare `_emit` legacy `{stage}` shape, so the two paths
    never collide.
-2. **Outer rails** (`server/agent.py::build_serve_rails`): `ingest`,
+2. **Outer rails** (`analyst/agent.py::build_serve_rails`): `ingest`,
    `refuse_gate`, `cache_lookup`, and `assemble` now emit `rail` events; every
    terminal answer (success, refusal, graded delivery, cache hit) emits one
    `final` event carrying the answer stamp. The shared finalize helpers are
    called with `on_event=None` on the agent path so only the rich contract is
    emitted.
-3. **Agent loop** (`server/agent.py::agent_core_node`): switched
+3. **Agent loop** (`analyst/agent.py::agent_core_node`): switched
    `agent.invoke(...)` → `agent.stream(..., stream_mode=["updates","values"])`.
    Model-node tool calls become `tool … start` events; tools-node ToolMessages
    become `tool … ok/blocked/error/cap/miss` resolves (paired by tool-call `id`,
@@ -352,7 +352,7 @@ detail). Summary of what the frontend now receives:
 - `agent_core_node` streams the loop via `agent.stream(stream_mode=["updates","values"])`, emitting `tool` start/resolve events (paired by tool-call `id`) and re-emitting through the captured `on_event` callable (no `get_stream_writer()` inside the agent).
 - Rails (`ingest`/`refuse_gate`/`cache`/`assemble`) emit `rail` events; every terminal emits one `final` event with the stamp.
 - `run_query`/`sample_rows` event `detail` is the ledger entry (`attempt/verdict/layer/reason/sql/allowed/rows`), so live == audit.
-- Flow path (`server/flow.py`) unchanged: still emits legacy `{stage}` events → frontend Step 3's `else if (typeof ev.stage === "string")` branch → classic stepper.
+- Flow path (`analyst/flow.py`) unchanged: still emits legacy `{stage}` events → frontend Step 3's `else if (typeof ev.stage === "string")` branch → classic stepper.
 
 **Note on `id`:** the backend sets `id` = the LangChain tool-call id on `tool` events (start and resolve share it), which is exactly what `reduceSteps` keys on. `rail`/`final` events carry no `id`, so they key on `${step}:${seq}` (each is one-shot, no start/resolve pair).
 

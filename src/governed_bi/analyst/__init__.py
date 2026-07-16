@@ -1,4 +1,4 @@
-"""Server: the serve harness (``LangGraph`` + middleware).
+"""Analyst: the serve harness (``LangGraph`` + middleware).
 
 The online governed agent that *consumes* the corpus to answer, **fail-closed
 and auditable** (ADR 0002): a thin deterministic outer ``StateGraph`` wraps an
@@ -11,7 +11,7 @@ Middleware: ``before_model`` injects context (working memory, RLS scope,
 semantic-layer router); ``wrap_tool_call`` runs the guardrails and is where
 fail-closed lives.
 
-Modules map to the pipeline (``docs/server.md``):
+Modules map to the pipeline (``docs/analyst.md``):
 
 - ``routing``: query understanding, term binding, intent route.
 - ``sqlgen``: SQL generation (deterministic template + LLM seam).

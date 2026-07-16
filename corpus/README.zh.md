@@ -36,8 +36,8 @@ corpus/
 
 ## 字段档位
 
-每个资产都拆分为 **Facts**（目录事实，绝不推断）、**Inference**（curator 编写 /
-gold 填充的语义层）与 **Audit**（说明原因，绝不注入 server 上下文）三个层级。
+每个资产都拆分为 **Facts**（目录事实，绝不推断）、**Inference**（curator 编写的语义层）与
+**Audit**（说明原因，绝不注入 Analyst 上下文）三个层级。
 此外还有仅供人工使用的 **Governance** 覆盖项。
 
 ## 校验

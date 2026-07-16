@@ -47,7 +47,7 @@ def stack():
     corpus_full = load_corpus(CORPUS_ROOT, schema="beer_factory")
     return ServeStack(
         corpus_full=corpus_full,
-        corpus_server=corpus_full.for_server(),
+        corpus_analyst=corpus_full.for_analyst(),
         settings=Settings.for_env(Environment.dev),
         dialect="sqlite",
         sqlite_path=BIRD_DB,

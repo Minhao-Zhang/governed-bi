@@ -39,7 +39,7 @@ requires_live_serve = pytest.mark.skip(
 
 @pytest.fixture
 def corpus():
-    return load_corpus(CORPUS_ROOT, schema="beer_factory").for_server()
+    return load_corpus(CORPUS_ROOT, schema="beer_factory").for_analyst()
 
 
 @pytest.fixture
@@ -101,7 +101,7 @@ def test_gold_self_solver_scores_perfect_ex(gateway):
         def solve(self, question):
             return next((it.sql for it in BEER_FACTORY_EVAL if it.question == question), None)
 
-    result = run_arm(Arm.gold, gateway, BEER_FACTORY_EVAL, GoldSolver())
+    result = run_arm(Arm.baseline, gateway, BEER_FACTORY_EVAL, GoldSolver())
     assert result.ex == 1.0
     assert result.governed_path_adherence == 1.0
 
@@ -112,7 +112,7 @@ def test_curator_arm_via_agent(corpus, gateway, settings, identity):
     # the decoy-touch rate at zero. Live-only: the agent needs a real model.
     solver = agent_solver(corpus, gateway, settings, identity, model=None)
     suspect = column_allowlist(corpus).suspect
-    result = run_arm(Arm.curator, gateway, BEER_FACTORY_EVAL, solver, suspect_columns=suspect)
+    result = run_arm(Arm.curated, gateway, BEER_FACTORY_EVAL, solver, suspect_columns=suspect)
     assert result.decoy_touch_rate == 0.0
 
 

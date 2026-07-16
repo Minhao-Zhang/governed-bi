@@ -38,8 +38,8 @@ reference for authoring your own.
 ## Field tiers
 
 Every asset splits into **Facts** (catalog truth, never inferred), **Inference**
-(the semantic layer the curator writes / gold fills), and **Audit** (why, never
-injected into the server context). Plus a human-only **Governance** override.
+(the semantic layer the curator writes), and **Audit** (why, never
+injected into the Analyst context). Plus a human-only **Governance** override.
 
 ## Validate
 

@@ -1,9 +1,9 @@
-"""Server step 5b: retrieval -> prompt context assembly.
+"""Analyst step 5b: retrieval -> prompt context assembly.
 
 Retrieval returns asset *ids*; a SQL generator needs the resolved *meaning* -
 the schema text, join paths, business terms, metrics, reliability caveats, gold
 exemplars, and skills - laid out as one context bundle. This module builds that
-bundle deterministically from the ``for_server()`` corpus and a
+bundle deterministically from the ``for_analyst()`` corpus and a
 :class:`~governed_bi.retrieval.RetrievalResult`, so it is unit-testable with no
 model and no network. It is the contract every :class:`SqlGenerator` reads from,
 and it is where the semantic layer's value is injected into an answer.
@@ -17,7 +17,7 @@ column independently, so widening to neighbor tables never exposes an excluded o
 suspect column.
 
 The three points where curator inference drives serve behavior all land here
-(``docs/server.md``): reliability caveats become explicit "DO NOT USE" lines,
+(``docs/analyst.md``): reliability caveats become explicit "DO NOT USE" lines,
 join ``confidence`` is annotated (and low-confidence joins flagged), and skills
 are included verbatim.
 """
@@ -217,7 +217,7 @@ def assemble_context(
     (in retrieval order) then the remaining licensed tables (sorted), each flagged
     ``retrieved``. Joins shown are every join asset internal to the licensed set,
     so the generator can bridge to a neighbor; low-confidence joins are flagged.
-    ``corpus`` is expected to be the ``for_server()`` view.
+    ``corpus`` is expected to be the ``for_analyst()`` view.
 
     ``multi_schema`` (default ``False``) is the mode gate: it is stored on the
     returned context so :meth:`PromptContext.allowed_table_names` /

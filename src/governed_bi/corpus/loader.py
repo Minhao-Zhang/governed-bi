@@ -4,7 +4,7 @@ Git is the single source of truth (D9); this loader reads the YAML typed assets
 and Markdown skills into memory. The **consumption contract** (docs/asset-schemas
 "who reads which tier") is enforced here:
 
-- ``Corpus.for_server()`` strips the Audit tier and drops ``governance.excluded``
+- ``Corpus.for_analyst()`` strips the Audit tier and drops ``governance.excluded``
   assets — this is what SQL-gen and the retrieval index are allowed to see.
 - The Viz/audit surface uses the full ``Corpus`` (Facts + Inference + Audit).
 
@@ -92,10 +92,10 @@ class Corpus:
     def tables(self) -> list[TableAsset]:
         return [a for a in self.assets if isinstance(a, TableAsset)]
 
-    def for_server(self) -> "Corpus":
-        """Return the server-visible view: Audit stripped, ``excluded`` removed.
+    def for_analyst(self) -> "Corpus":
+        """Return the Analyst-visible view: Audit stripped, ``excluded`` removed.
 
-        Enforces the loader contract so the server context is Facts + Inference
+        Enforces the loader contract so the Analyst context is Facts + Inference
         only (never Audit) and never sees a human-excluded asset.
         """
         visible: list[Asset] = []

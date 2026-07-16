@@ -142,7 +142,7 @@ def test_read_corpus_unknown_table_returns_error_not_raises():
     """Regression: the fix-pass agent calls ``read_corpus(table="restaurant")``
     using the *schema* name (the bag is keyed by physical table names), which
     used to raise ``KeyError`` before the unknown-table guard ran — crashing the
-    whole A3 fix-pass. It must return a recoverable error string instead."""
+    whole curated_sme fix-pass. It must return a recoverable error string instead."""
     from governed_bi.curator.asset_bag import AssetBag
 
     bag = AssetBag.from_tables("restaurant", [_orders_table()])

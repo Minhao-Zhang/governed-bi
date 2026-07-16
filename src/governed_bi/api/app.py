@@ -416,7 +416,7 @@ def create_app(stack: ServeStack | None = None):
         stateless); the caller persists the transcript."""
         from ..gateway import Gateway
         from ..memory import InMemoryWorkingMemory
-        from ..server.agent import answer_question_agent
+        from ..analyst.agent import answer_question_agent
 
         if stack.chat_model is None:
             # Agent-only serve (ADR 0002): no deterministic offline fallback. Fail
@@ -438,7 +438,7 @@ def create_app(stack: ServeStack | None = None):
             answer = answer_question_agent(
                 req.question,
                 stack.identity,
-                corpus=stack.corpus_server,
+                corpus=stack.corpus_analyst,
                 gateway=gateway,
                 settings=stack.settings,
                 session_id=req.session_id,

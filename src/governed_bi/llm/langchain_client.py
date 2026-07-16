@@ -1,13 +1,13 @@
 """LangChain-backed implementations of the model seams.
 
-The project's harnesses are the LangChain stack (server = LangGraph, curator =
+The project's harnesses are the LangChain stack (analyst = LangGraph, curator =
 deepagents), which are built on LangChain chat models. So the stack-native model
 client wraps a LangChain ``BaseChatModel`` / ``Embeddings`` rather than calling a
 provider SDK directly. These adapters expose that behind the same
 :class:`~governed_bi.llm.ChatClient` / :class:`~governed_bi.llm.Embedder`
 protocols the rest of the system programs against, so:
 
-- the server generator, curator proposer, retrieval, and cache are unchanged;
+- the analyst generator, curator proposer, retrieval, and cache are unchanged;
 - production runs on LangChain (tracing, structured output, provider swap via
   ``init_chat_model``), and the same LangChain model instance can be handed to
   deepagents / a LangGraph node;

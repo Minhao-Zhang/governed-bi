@@ -12,8 +12,8 @@ from governed_bi.corpus import load_corpus
 from governed_bi.corpus.schemas import TableAsset
 from governed_bi.gateway import Gateway, Identity, SqliteConnector
 from governed_bi.llm.fake import FakeToolModel, ai_tool_turn
-from governed_bi.server.agent import build_agent_core
-from governed_bi.server.tools import make_tools, render_retrieval
+from governed_bi.analyst.agent import build_agent_core
+from governed_bi.analyst.tools import make_tools, render_retrieval
 from governed_bi.retrieval import retrieve
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
@@ -23,7 +23,7 @@ TXN = "tbl_beer_factory_transaction"
 
 @pytest.fixture
 def corpus():
-    return load_corpus(CORPUS_ROOT, schema="beer_factory").for_server()
+    return load_corpus(CORPUS_ROOT, schema="beer_factory").for_analyst()
 
 
 @pytest.fixture
@@ -56,7 +56,7 @@ def test_search_corpus_skips_excluded(corpus_full, bird_gateway, identity):
         for a in corpus_full.assets
         if isinstance(a, TableAsset) and a.governance.excluded
     }
-    tools = {t.name: t for t in make_tools(corpus_full.for_server(), bird_gateway, identity)}
+    tools = {t.name: t for t in make_tools(corpus_full.for_analyst(), bird_gateway, identity)}
     out = tools["search_corpus"].invoke({"query": "transaction revenue"})
     for eid in excluded_ids:
         assert eid not in out

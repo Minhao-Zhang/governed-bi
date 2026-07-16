@@ -3,18 +3,17 @@
 Near-term eval = the BIRD-Obfuscation dataset (verified ground truth). Headline
 metric = **execution accuracy (EX)** vs gold; no hand-grading of semantic layers.
 
-Three arms, all scored on EX (run on the ``rename_decoy`` instance; ``base`` as
-sanity reference, since only the corpus differs across arms, the physical DB is
-one):
+The eval ladder, all scored on EX (run on the ``rename_decoy`` instance; ``base``
+as sanity reference, since only the corpus differs across rungs, the physical DB
+is one):
 
-1. no semantic layer
-2. curator-built layer
-3. gold layer (deterministic de-obfuscation oracle)
+- ``baseline``: deterministic, DB-derivable corpus only (no curator LLM).
+- ``curated``: curator-built Inference tier + train-SQL-derived seed joins/few-shots.
+- ``curated_sme``: ``curated`` + Simulated-SME clarification round(s).
+- ``ceiling``: test-aware oracle reference line — designed, not built.
 
-Moat = the share of the obfuscation-induced accuracy drop the curator recovers;
-Arm 3 = the recoverable *reference line* (not a strict ceiling, since Arm 2 can
-beat it on skill-sensitive questions where gold has no skills). Arm 2 vs 3 =
-curator quality.
+Moat = the share of the obfuscation-induced accuracy drop the curator recovers
+(``baseline`` -> ``curated``); the SME lift is ``curated`` -> ``curated_sme``.
 
 The **curator reads ``train_final.jsonl`` only**; grading is on held-out
 ``test_final.jsonl`` (disjoint seeded split = structural leakage prevention).
@@ -22,14 +21,12 @@ The **curator reads ``train_final.jsonl`` only**; grading is on held-out
 - ``ex``: execution-accuracy scoring vs gold SQL.
 - ``arms``: the arm harness (EX + free behavioral signals) and solvers.
 - ``dataset``: a small vendored beer_factory gold set until the BIRD jsonl lands.
-- ``gold``: Arm 3, the deterministic de-obfuscation oracle (needs manifests).
 - ``refuse_gate``: refusal recall / false-refusal rate on an unanswerable set.
 """
 
 from __future__ import annotations
 
 from .arms import Arm, ArmResult, Solver, agent_solver, run_arm, run_arms
-from .baseline_solver import no_layer_solver
 from .bird_loader import available_dbs, load_bird_items
 from .dataset import BEER_FACTORY_EVAL, BEER_FACTORY_UNANSWERABLE, EvalItem
 from .ex import execution_match
@@ -49,7 +46,6 @@ __all__ = [
     "eval_refuse_gate",
     "execution_match",
     "load_bird_items",
-    "no_layer_solver",
     "run_arm",
     "run_arms",
 ]

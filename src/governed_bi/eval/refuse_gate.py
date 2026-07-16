@@ -9,7 +9,7 @@ needs a held-out **unanswerable** set: cross-DB + removed-coverage cases
 - **false-refusal rate**: refuses the answerable (a precision cost)
 
 The scorer takes a ``refused`` predicate (question -> bool) so it is decoupled
-from the server; ``agent_refuser`` adapts the agentic serve core (ADR 0002).
+from the Analyst; ``agent_refuser`` adapts the agentic serve core (ADR 0002).
 """
 
 from __future__ import annotations
@@ -64,8 +64,8 @@ def agent_refuser(
     """A ``refused`` predicate that runs the agentic serve core (ADR 0002) and
     reports whether it returned a refusal (any fail-closed path: refuse-gate,
     guardrail veto, missing-edge, or coverage exhaustion). Needs a live model."""
-    from ..server.agent import answer_question_agent
-    from ..server.answer import ReliabilityTier
+    from ..analyst.agent import answer_question_agent
+    from ..analyst.answer import ReliabilityTier
 
     def refused(question: str) -> bool:
         answer = answer_question_agent(

@@ -12,7 +12,7 @@ The governed-bi UI needs, for the chat surface: **live per-step progress** from
 the backend (which governed stage is running, including guardrail/repair events),
 **stored conversation history**, and a full-featured, resumable agent UI, while keeping
 the answer itself un-streamed (answers are short). The serve path is already a
-**LangGraph `StateGraph`** (`server.graph.build_serve_graph`), Answer-equivalent
+**LangGraph `StateGraph`** (`analyst.graph.build_serve_graph`), Answer-equivalent
 to the plain `answer_question`.
 
 Two viable ways to deliver live progress + persistence to a Next.js frontend:
@@ -58,13 +58,13 @@ frontend via **`useStream`**.
   governed pipeline runs inside one node that calls `answer_question` and streams
   stages via `get_stream_writer()`. The heavy objects (`networkx` graph, allowlist,
   pydantic `retrieval`/`context`) stay node-local and are never checkpointed, so
-  `server/flow.py` and `server/graph.py` are untouched and the
+  `analyst/flow.py` and `analyst/graph.py` are untouched and the
   `answer_question`↔graph equivalence still holds.
   _(Forward pointer: this deterministic single-node framing was the runtime at
   the time of this decision; serve has since been cut over to the
   [ADR 0002](0002-governed-agentic-serve-runtime.md) governed agentic core,
-  which replaced `answer_question`/`server/flow.py` and the stale
-  `server/graph.py` DAG.)_
+  which replaced `answer_question`/`analyst/flow.py` and the stale
+  `analyst/graph.py` DAG.)_
 - **Heavier deployment.** Local `langgraph dev` is easy but **ephemeral**; durable
   persistence needs Postgres (self-host `langgraph up` → Postgres + Redis, or a
   managed LangGraph Platform). A plain FastAPI box would have been lighter for the

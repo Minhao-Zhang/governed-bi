@@ -114,7 +114,7 @@ def test_validator_catches_dangling_reference():
 
 def test_for_server_strips_audit():
     corpus = load_corpus(EXAMPLE_DB.parent, schema=EXAMPLE_DB.name)
-    server_view = corpus.for_server()
+    server_view = corpus.for_analyst()
     for asset in server_view.assets:
         assert getattr(asset, "audit", None) is None
         if isinstance(asset, TableAsset):
@@ -130,7 +130,7 @@ def test_for_server_drops_excluded_columns():
         c.physical_name == "CreditCardNumber" and c.governance.excluded for c in tx.columns
     )
     # ...and must be absent from the server view.
-    server_view = corpus.for_server()
+    server_view = corpus.for_analyst()
     tx_view = next(a for a in server_view.assets if a.id == "tbl_beer_factory_transaction")
     assert all(c.physical_name != "CreditCardNumber" for c in tx_view.columns)
 

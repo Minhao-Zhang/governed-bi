@@ -6,7 +6,7 @@ The build-side agent for the [Agentic BI System](system-overview.md). It is the
 offline agent that *produces* the corpus (two-harness split; `deepagents`). Runs
 **per-DB, independently**. Writes the corpus defined in
 [Asset schemas](asset-schemas.md); the serve-side counterpart is the
-[Server](server.md). It is not a one-shot bootstrapper but a **permanent
+[Analyst](analyst.md). It is not a one-shot bootstrapper but a **permanent
 maintainer**: cold-start plus ongoing drift-repair. Untended corpora rot
 ~95%→65%/month.
 
@@ -25,7 +25,7 @@ maintainer**: cold-start plus ongoing drift-repair. Untended corpora rot
 > model-authored **descriptions + reliability caveats** (`suspect` + a "DO NOT USE"
 > note) via an injected `ChatClient` (OpenAI `gpt-5.5` low), never touching Facts
 > and degrading to the base proposal on a malformed response. Those caveats are
-> the lever that makes the curator arm (Arm 2) beat the no-layer arm (Arm 1). Still
+> the lever that makes the `curated` arm beat the `baseline` arm. Still
 > seams: LLM authoring of **joins / terms / metrics / rules / skills**, the
 > **per-asset adversary `refute`** (probe queries), and the **self-eval train-EX
 > loop**. The **deepagents harness** itself is built (`curator/deep_agent.py`):
@@ -62,9 +62,9 @@ Both the proposer's claim/evidence **and** the adversary's verdict/reasons land 
 ## The loop (per DB)
 
 1. **Profile (Facts, programmatic).** *(built)* Read catalog + sample data → emit the Facts tier for every table/column. Deterministic; no LLM; correct in every arm.
-2. **Propose (Inference + skills).** *(heuristic + description/caveat authoring built; joins/terms/metrics/skills still seam)* Proposer hypothesizes descriptions, joins (value-overlap + seed-SQL join patterns — **within a schema**; cross-schema joins are never FK/overlap-discovered, only curated from SME / example SQL / usage per D15, else the server refuses), reliability caveats (execute-and-observe against the traps), terms/synonyms, metrics/rules (from `evidence` + recurring computations), and authors **routing/gotcha/pattern skills**. Free exploration is confined to this pocket. The `HeuristicProposer` fills roles/confidence/provenance from Facts; `LlmProposer` layers model-authored descriptions + `suspect` caveats over it; authoring the derived assets (joins/terms/metrics/rules/skills) is the remaining LLM proposer work.
+2. **Propose (Inference + skills).** *(heuristic + description/caveat authoring built; joins/terms/metrics/skills still seam)* Proposer hypothesizes descriptions, joins (value-overlap + seed-SQL join patterns — **within a schema**; cross-schema joins are never FK/overlap-discovered, only curated from SME / example SQL / usage per D15, else the Analyst refuses), reliability caveats (execute-and-observe against the traps), terms/synonyms, metrics/rules (from `evidence` + recurring computations), and authors **routing/gotcha/pattern skills**. Free exploration is confined to this pocket. The `HeuristicProposer` fills roles/confidence/provenance from Facts; `LlmProposer` layers model-authored descriptions + `suspect` caveats over it; authoring the derived assets (joins/terms/metrics/rules/skills) is the remaining LLM proposer work.
 3. **Adversary pass.** *(structural `review` built; per-asset `refute` seam)* Each proposed Inference/skill asset is challenged → accept / revise / reject. Survivors → `draft`. The built `review` is the deterministic structural gate (CI validator + self-consistency); the per-claim refutation with probe queries is the LLM seam.
-4. **Self-eval & repair (inner loop, capped).** *(seam)* Assemble the draft layer → run the server pipeline on the DB's **train** questions → measure EX → diagnose failures → proposer patches (a failed question often *becomes* the gotcha skill that fixes it) → adversary re-checks the patch → repeat until train-EX plateaus or the iteration/budget cap hits. **Train-only.**
+4. **Self-eval & repair (inner loop, capped).** *(seam)* Assemble the draft layer → run the Analyst pipeline on the DB's **train** questions → measure EX → diagnose failures → proposer patches (a failed question often *becomes* the gotcha skill that fixes it) → adversary re-checks the patch → repeat until train-EX plateaus or the iteration/budget cap hits. **Train-only.**
 5. **Propose corpus.** *(emit downstream)* CI reference-integrity green ∧ train-EX plateaued → emit (dev auto-accepts; prod opens a PR to the owner, D6).
 
 **Done-enough criterion:** `CI green ∧ (train-EX plateaued ∨ cap)`. The built `curate` loop enforces the machine-checkable half (`CI green`, capped rounds); the train-EX half arrives with the self-eval seam (step 4).
@@ -79,14 +79,14 @@ flowchart TD
     Adversary -->|reject| Propose
     Adversary -->|revise| Propose
     Adversary -->|accept| Draft["Draft corpus<br/>proposed to draft"]
-    Draft --> SelfEval["Self-eval on train questions<br/>run server pipeline; measure EX"]
+    Draft --> SelfEval["Self-eval on train questions<br/>run Analyst pipeline; measure EX"]
     SelfEval --> Plateau{"Train EX plateau<br/>or cap hit?"}
     Plateau -->|no| Diagnose["Diagnose failures<br/>patch assets/skills"]
     Diagnose --> Propose
     Plateau -->|yes| Validate["validate_corpus()<br/>CI reference integrity"]
     Validate --> Green{"CI green?"}
     Green -->|no| Diagnose
-    Green -->|yes| Emit["Emit corpus/&lt;db&gt;/"]
+    Green -->|yes| Emit["Emit corpus/&lt;schema&gt;/"]
     Emit --> Mode{"Environment"}
     Mode -->|dev / BIRD| AutoAccept["Auto-accept draft"]
     Mode -->|prod / enterprise| PullRequest["Open PR for human certification"]
@@ -104,7 +104,7 @@ flowchart TD
 | **Distributional implausibility** | values wrong for the apparent meaning | sparse-perturb / null |
 | **Usage corroboration** (weak, never standalone) | unused while a near-synonym twin is used | (strengthens the above) |
 
-**False-positive guards:** a confidence threshold; the adversary refutes ("unreliable, or just rare / legitimately different?"); flag only when a clear real alternative (the used twin) exists; in the enterprise setting a false positive only degrades the stamp, it never blocks (server env-toggle). **Usage (#5) is corroborating-only.** Never flag on "unused" alone (rare ≠ fake, and it wouldn't transfer). **Grading (BIRD):** decoy-recall + false-positive rate, both from the manifest.
+**False-positive guards:** a confidence threshold; the adversary refutes ("unreliable, or just rare / legitimately different?"); flag only when a clear real alternative (the used twin) exists; in the enterprise setting a false positive only degrades the stamp, it never blocks (Analyst env-toggle). **Usage (#5) is corroborating-only.** Never flag on "unused" alone (rare ≠ fake, and it wouldn't transfer). **Grading (BIRD):** decoy-recall + false-positive rate, both from the manifest.
 
 ## Distillation discipline (curation beats accumulation)
 

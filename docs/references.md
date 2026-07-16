@@ -18,4 +18,4 @@ vault / upstream projects); listed here so the in-text references resolve.
 
 BIRD-Obfuscation (upstream) produces the data + manifests. **This repo is the
 downstream agent** that consumes them: it builds the semantic layer (curator),
-answers questions (server), and is graded on execution accuracy.
+answers questions (analyst), and is graded on execution accuracy.

@@ -1,4 +1,4 @@
-"""Simulated SME for the three-arm experiment (A3).
+"""Simulated SME for the eval ladder (the curated_sme arm).
 
 An eval-only :class:`~governed_bi.curator.clarifications.Responder` briefed with
 domain meaning from BIRD database_description CSVs + train question/evidence.

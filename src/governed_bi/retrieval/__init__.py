@@ -1,4 +1,4 @@
-"""RVGD retrieval (Server step 5).
+"""RVGD retrieval (Analyst step 5).
 
 Four retrieval modes, four-stage rerank, token-budgeted, Corrective-RAG
 fallback:

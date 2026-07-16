@@ -60,7 +60,7 @@ api_key_env = "OPENAI_API_KEY"
 # a corpus for that schema. Built into a Connector by gateway.build_connector; the
 # curator facts builder (python -m governed_bi.curator.build) reads this too.
 kind = "sqlite"                               # sqlite | postgres | redshift
-db = "beer_factory"                           # default corpus schema subtree / BIRD db_id
+corpus_pin = "beer_factory"                   # default corpus schema subtree / BIRD db_id
 sqlite_path = "data/bird/beer_factory.sqlite" # repo-root-relative
 
 # To profile a BIRD-Obfuscation Postgres instance instead (e.g. the renamed+decoy
@@ -68,7 +68,7 @@ sqlite_path = "data/bird/beer_factory.sqlite" # repo-root-relative
 # password in .env. Example local overlay:
 #   [datasource]
 #   kind = "postgres"
-#   db = "beer_factory"
+#   corpus_pin = "beer_factory"
 #   dsn_env = "PG_RENAME_DECOY_DSN"
 # Postgres/Redshift default to multi_schema=true (span all user schemas; D15).
 # Opt out with multi_schema=false + a pinned schema when you need single-schema.

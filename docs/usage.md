@@ -20,10 +20,10 @@ the [design docs](README.md).
 | Curator: Facts profiling, heuristic + LLM proposer, adversary, curate loop | runnable | `src/governed_bi/curator/` |
 | Graph projection + Steiner join planning | runnable | `src/governed_bi/graph/` |
 | Retrieval (BM25 + grounding, + embedder-gated vector channel) | runnable | `src/governed_bi/retrieval/` |
-| Serve (agentic core: route, context, governed tools, guardrails, self-repair, cache, stamp) | runnable, needs a live model | `src/governed_bi/server/` |
-| Memory (working) + eval (EX, arms, refuse-gate) + viz presenter (audit view models) | runnable | `src/governed_bi/{memory,eval,viz}/` |
+| Serve (agentic core: route, context, governed tools, guardrails, self-repair, cache, stamp) | runnable, needs a live model | `src/governed_bi/analyst/` |
+| Memory (working) + eval (EX, ladder, refuse-gate) + viz presenter (audit view models) | runnable | `src/governed_bi/{memory,eval,viz}/` |
 | Model clients (raw OpenAI / LangChain) | runnable (installed by a plain `uv sync`, no extra) | `src/governed_bi/llm/` |
-| Agent harnesses (LangGraph governed serve core, deepagents curator) | runnable (installed by a plain `uv sync`, no extra) | `server/agent.py`, `curator/deep_agent.py` |
+| Agent harnesses (LangGraph governed serve core, deepagents curator) | runnable (installed by a plain `uv sync`, no extra) | `analyst/agent.py`, `curator/deep_agent.py` |
 | Postgres / Redshift connectors | implemented (psycopg-backed, plain `uv sync`); offline-tested, not run live | `src/governed_bi/gateway/connectors/` |
 
 ## Prerequisites
@@ -91,8 +91,8 @@ print(len(corpus.assets), "assets;", len(corpus.skills), "skills")
 findings = validate_corpus(corpus.assets)
 assert is_green(findings), findings
 
-# The server-visible view: Audit tier stripped, governance.excluded removed.
-server_view = corpus.for_server()
+# The Analyst-visible view: Audit tier stripped, governance.excluded removed.
+analyst_view = corpus.for_analyst()
 
 # Parse a single asset from a dict (raises pydantic.ValidationError if invalid).
 table = parse_asset({
@@ -104,7 +104,7 @@ table = parse_asset({
 print(table.id, table.asset_type)
 ```
 
-`Corpus.for_server()` is the consumption contract in code: it is what the server
+`Corpus.for_analyst()` is the consumption contract in code: it is what the Analyst
 is allowed to see (Facts + Inference, never Audit, and never an excluded asset).
 
 ## Connect to a database
@@ -150,10 +150,10 @@ from governed_bi.config import load_settings
 from governed_bi.corpus import load_corpus
 from governed_bi.gateway import SqliteConnector, Gateway, Identity
 from governed_bi.llm import LangChainChatClient
-from governed_bi.server.agent import answer_question_agent
+from governed_bi.analyst.agent import answer_question_agent
 
 settings = load_settings()
-corpus = load_corpus(Path(settings.corpus_root), schema="beer_factory").for_server()
+corpus = load_corpus(Path(settings.corpus_root), schema="beer_factory").for_analyst()
 conn = SqliteConnector(settings.datasource.sqlite_path)
 chat = LangChainChatClient.from_config(settings.models)  # needs OPENAI_API_KEY
 ans = answer_question_agent(

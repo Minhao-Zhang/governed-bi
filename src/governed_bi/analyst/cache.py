@@ -1,4 +1,4 @@
-"""Server step 4: the SQL semantic-cache fast path (D7 / Architecture section 6).
+"""Analyst step 4: the SQL semantic-cache fast path (D7 / Architecture section 6).
 
 Embed the question, match it against previously-answered questions by cosine, and
 on a hit reuse the stored SQL. Two invariants from the design:

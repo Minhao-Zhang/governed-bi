@@ -92,7 +92,7 @@ stream.submit(
 - **Final answer** is a custom **`answer` state channel**: read `stream.values.answer`
   (the `AnswerResponse` shape). Render the **answer card**:
   - Two badges, never one score: `safety_clearance` (bool) + `semantic_assurance`
-    (`certified|heuristic|unverified|none`); tier chip green/amber/red.
+    (`grounded|heuristic|unverified|none`); tier chip green/amber/red.
   - English answer text; collapsible **result table** (`columns`/`rows`,
     truncated note); read-only **SQL**; **provenance/audit drawer** (route,
     tables_used, join_ids, min_join_confidence, attempts, uncertainty_flags, …).
@@ -172,11 +172,12 @@ path is the same.
   earlier `presenter` view models, REST reads, `stack` factory, and the
   non-streaming `/chat` REST endpoint (also requires a live model).
 - **Shipped since (server side):** human-gate **clarification interrupts** —
-  `interrupt()` in `server/tools.py::ask_user`, resume via `submit(command.resume)`,
+  `interrupt()` in `analyst/tools.py::ask_user`, resume via `submit(command.resume)`,
   gated by `capabilities.can_clarify` (contract:
-  [hitl-clarification-contract.md](plans/hitl-clarification-contract.md)). The
-  **frontend** build is what's still open; durable (Postgres) checkpointing of an
-  interrupt is deferred.
+  [hitl-clarification-contract.md](plans/hitl-clarification-contract.md)). For the
+  frontend's build status, see [`governed-bi-ui`](https://github.com/Minhao-Zhang/governed-bi-ui)
+  — it is not tracked here. Durable (Postgres) checkpointing of an interrupt is
+  deferred.
 - **Deferred:** prod PR editing (dev is file-write today), public-demo cost
   strategy, auth/RLS, durable HITL persistence.
 
@@ -224,8 +225,8 @@ matches.
 >
 > **Still deferred:**
 > - Server `/search` (client Fuse remains default per Q6).
-> - `DataSourceConfig.db` (BIRD db_id / default write subtree) still distinct from
->   the Postgres pin field `schema`.
+> - `DataSourceConfig.corpus_pin` (BIRD db_id / default write subtree) still
+>   distinct from the Postgres pin field `schema`.
 
 Contract notes for the UI:
 
@@ -298,23 +299,23 @@ Two independent axes (both already on `AnswerResponse`):
   failed a safety gate (**L2 policy**: DDL/DML/injection, or the curated
   **negative-example** refuse-gate). A safety failure is **never delivered** at any
   reliability score. There is no "lower the number and run it anyway" for safety.
-- **`semantic_assurance: certified | heuristic | unverified | none` — graded.**
+- **`semantic_assurance: grounded | heuristic | unverified | none` — graded.**
   This is the reliability indicator to color on. Driven by
   `provenance.uncertainty_flags` (fired signals): `low_confidence_join`
   (join-plan confidence < 0.7), `suspect_in_scope` (a curator-flagged decoy/suspect
   column was used), `repaired` (took >1 generate attempt), `fenced_raw_fallback`.
-  No flags → `certified`; `fenced_raw_fallback` → `unverified`; any other flag →
+  No flags → `grounded`; `fenced_raw_fallback` → `unverified`; any other flag →
   `heuristic`.
 
-`tier` (`governed | lineage | fenced_raw | refused`) is a **strict 1:1 projection**
-of `semantic_assurance` — keep rendering it as a chip, but branch logic on the two
-axes above, not on `tier`.
+`tier` (`governed | lineage | fenced_raw | refused`) is a legacy, **display-only
+1:1 projection** of `semantic_assurance` — keep rendering it as a chip, but branch
+logic on the two axes above, not on `tier`.
 
 ### 13.2 The three render states (exact rules)
 
 | State | How to detect | Render |
 |---|---|---|
-| **Clean answer** | `sql != null` and `semantic_assurance ∈ {certified, heuristic}` | Normal answer card; green/neutral tier chip. `heuristic` = mild caution note. |
+| **Clean answer** | `sql != null` and `semantic_assurance ∈ {grounded, heuristic}` | Normal answer card; green/neutral tier chip. `heuristic` = mild caution note. |
 | **Graded delivery** | `sql != null` and (`semantic_assurance ∈ {unverified, none}` **or** `provenance.graded_delivery === true`) | **Show the SQL + result table**, wrapped in a distinct **warning treatment** (amber/red border + banner): *"We produced this answer but could not fully verify it."* Plus the **why line** (§13.4). This is the new state most UIs get wrong by hiding it. |
 | **Hard refusal** | `sql == null` (always `tier=refused`, `safety_clearance=false`, `result=null`) | Current refusal box: escalation text, no SQL/number. |
 
@@ -328,7 +329,7 @@ use `tier === "refused"` as the gate — a graded delivery is `tier = fenced_raw
 
 - **Live in the contract today:** both axes; `provenance.graded_delivery` marker;
   `provenance.uncertainty_flags`; the `graded_delivery` **stream event**; and the
-  whole deliver-and-grade code path (`server/answer.py::graded_delivery`,
+  whole deliver-and-grade code path (`analyst/answer.py::graded_delivery`,
   `_finish_unsuccessful`). You can build 13.1–13.4 against the current shapes now.
 - **Inert until a flag flips:** deliver-and-grade is behind the engine setting
   **`grade_semantic_failures`**, which **defaults `false` in serving** (it's on only
@@ -550,7 +551,7 @@ not a column feature.
 - **Agent serve path:** `answer.provenance.governance_ledger` **is** populated — a list
   of `{action, verdict, sql, allowed, licensed_ids, layer, reason, result, attempt}`
   records — and flows through `presenter.answer_view` (which copies the whole
-  provenance dict) into `AnswerResponse.provenance`. `server/agent.py` even has a
+  provenance dict) into `AnswerResponse.provenance`. `analyst/agent.py` even has a
   belt-and-suspenders fallback that attaches it when missing. So on the agent path the
   frontend's `buildStepsFromLedger` has its durable source: the trace survives a page
   reload and a non-streaming answer, independent of the live event stream.

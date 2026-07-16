@@ -87,7 +87,7 @@ class DataSourceConfig:
     """
 
     kind: str = "sqlite"  # sqlite | postgres | redshift
-    db: str = "beer_factory"  # default corpus schema subtree / BIRD db_id
+    corpus_pin: str = "beer_factory"  # default corpus schema subtree / BIRD db_id
     sqlite_path: str = "data/bird/beer_factory.sqlite"  # kind=sqlite; repo-root-relative
     dsn: str | None = None  # kind=postgres/redshift: inline DSN (local, secret-free only)
     dsn_env: str | None = None  # ...or the env var holding the DSN (preferred)
@@ -128,7 +128,7 @@ class Settings:
     # ── D7 identity / RLS ──
     single_all_access_identity: bool  # dev: True; prod: False (real user + gateway RLS)
 
-    # ── Server: suspect-column enforcement (Server §"three points" #1) ──
+    # ── Analyst: suspect-column enforcement (Analyst §"three points" #1) ──
     hard_block_suspect_columns: bool  # dev/BIRD: True; prod/enterprise: soft-warn + drop reliability tier
 
     # ── pipeline-design §6: deliver-and-grade semantic failures ──

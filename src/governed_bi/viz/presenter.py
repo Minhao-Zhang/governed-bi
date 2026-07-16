@@ -7,9 +7,9 @@ separate frontend renders them; swapping frontends touches only the renderer,
 never this module. This repo ships no bundled UI.
 
 It reads the **full** corpus (Facts + Inference + Audit, including
-``governance.excluded`` assets), not the ``for_server()`` view: the point of the
+``governance.excluded`` assets), not the ``for_analyst()`` view: the point of the
 audit surface is to show the tiers, the provenance, and the exclusions that the
-server never sees.
+Analyst never sees.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from ..corpus.schemas import (
 
 if TYPE_CHECKING:
     from ..corpus import Corpus
-    from ..server.answer import Answer
+    from ..analyst.answer import Answer
 
 # A join at or below this confidence is flagged in the health view (tunable).
 LOW_CONFIDENCE_JOIN = 0.7
@@ -220,7 +220,7 @@ class KnowledgeGraphView:
 
 @dataclass(frozen=True)
 class GraphScopeApplied:
-    """Echo of the scope the server applied (UI ``engineScopeMatches``)."""
+    """Echo of the scope the Analyst applied (UI ``engineScopeMatches``)."""
 
     schema: str | None = None
     focus: str | None = None
@@ -327,9 +327,9 @@ class ColumnRelatedView:
 
 @dataclass(frozen=True)
 class AnswerView:
-    tier: str  # the collapsed single-axis stamp (kept for a compact badge)
-    safety_clearance: bool  # axis 1: guardrails + authorization passed
-    semantic_assurance: str  # axis 2: how well-grounded (drives delivery), not "is it right"
+    tier: str  # display-only projection (ReliabilityTier) for a compact badge; NOT canonical
+    safety_clearance: bool  # axis 1 (canonical): guardrails + authorization passed
+    semantic_assurance: str  # axis 2 (canonical): how well-grounded (drives delivery), not "is it right"
     text: str | None
     sql: str | None
     escalation: str | None
@@ -832,9 +832,10 @@ def related_to_column(corpus: "Corpus", column_id: str) -> ColumnRelatedView | N
 
 
 def answer_view(answer: "Answer") -> AnswerView:
-    """Map a server ``Answer`` to display fields: the two stamp axes + trace.
+    """Map an Analyst ``Answer`` to display fields: the two canonical stamp axes,
+    plus the display-only ``tier`` projection for a compact badge, + trace.
 
-    Surfacing both axes (not just the collapsed tier) is deliberate - safety
+    Surfacing both axes (not just the display-only tier) is deliberate - safety
     clearance and semantic assurance mean different things, and the audit surface
     should not let a reviewer read one as the other.
     """

@@ -83,6 +83,14 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 > **Dropped for the enterprise fork / the metric-governance half**. No ground-truth gold
 > exists there, so that setting runs Arm 1 vs Arm 2 only.
 
+> **Superseded by the eval ladder (terminology refactor, see [D14
+> amendment](#d14-sme-growth-benchmark-on-bird-obfuscation)).** Arm 1 → `baseline`;
+> Arm 2 → `curated` (+ `curated_sme` once SME rounds are scored). Arm 3's
+> manifest-derived "gold" oracle above is **retired** — see
+> [R-gold](#audit-dispositions-2026-07-15) — and the recoverable ceiling is
+> redefined as a `ceiling`: a test-aware **Simulated SME** oracle, not a
+> de-obfuscation read-back.
+
 ## D5: Refusal & Best-effort
 
 > **Decided (ADR-grade)**
@@ -94,7 +102,7 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 
 - **Alternative:** fail-closed the moment coverage runs out (safe but misses the long tail, and makes the agent guess whether it's out of scope).
 - **Consequence:** refusal is driven by a curated signal, not a coverage heuristic. Two caveats: the stamp needs teeth, because a footer alone is weak against silent wrong answers; and BIRD won't test the refuse-gate, which needs a held-out unanswerable set.
-- **Built:** the fail-closed refuse-gate and a **two-axis reliability stamp** are implemented. The stamp reports two independent axes so neither is mistaken for the other: `safety_clearance` (guardrails + authorization passed — a *gate*, true for every delivered answer, false for every refusal) and `semantic_assurance` (`certified` / `heuristic` / `unverified` — how well-grounded the answer is, the axis that should drive automatic delivery). The legacy single-axis tier (`governed` / `lineage` / `fenced_raw` / `refused`) is kept as their 1:1 projection for compact display. A **bounded self-repair loop** feeds a *repairable* guardrail rejection (syntax + column/table scope — L3/L4 stay repairable [by decision, D11](#d11-external-review-2026-07-09)) or an execution error back to the generator before refusing; a repaired answer is `heuristic`, never `certified`. A **hard policy/DDL block (L2 `policy_blacklist`) fails closed immediately** — feeding it back would only coach the generator to evade the policy. Cache admission gates on `semantic_assurance == certified`, never on safety alone. The thresholds and the uncertainty-signal set are **uncalibrated heuristics**, to be tuned on the eval. `certified` / `governed` means safe + in-scope + no uncertainty flag fired, **not** "verified correct": the guardrails are a safety/governance gate, not a correctness oracle, so plausible-but-wrong SQL is caught by the stamp + fail-closed, not by a proof of correctness. **The `certified` label overclaims for a BI audience and is scheduled for rename + EX-calibration** — see [Audit dispositions (2026-07-15)](#audit-dispositions-2026-07-15), R2.
+- **Built:** the fail-closed refuse-gate and a **two-axis reliability stamp** are implemented. The stamp reports two independent axes so neither is mistaken for the other: `safety_clearance` (guardrails + authorization passed — a *gate*, true for every delivered answer, false for every refusal) and `semantic_assurance` (`grounded` / `heuristic` / `unverified` — how well-grounded the answer is, the axis that should drive automatic delivery). The legacy single-axis tier (`governed` / `lineage` / `fenced_raw` / `refused`) is retired as a canonical vocabulary; where it is still surfaced at all, it is only a **display-only projection** of the two axes, never a parallel concept. A **bounded self-repair loop** feeds a *repairable* guardrail rejection (syntax + column/table scope — L3/L4 stay repairable [by decision, D11](#d11-external-review-2026-07-09)) or an execution error back to the generator before refusing; a repaired answer is `heuristic`, never `grounded`. A **hard policy/DDL block (L2 `policy_blacklist`) fails closed immediately** — feeding it back would only coach the generator to evade the policy. Cache admission gates on `semantic_assurance == grounded`, never on safety alone. The thresholds and the uncertainty-signal set are **uncalibrated heuristics**, to be tuned on the eval. `grounded` means safe + in-scope + no uncertainty flag fired, **not** "verified correct": the guardrails are a safety/governance gate, not a correctness oracle, so plausible-but-wrong SQL is caught by the stamp + fail-closed, not by a proof of correctness. **The label overclaimed for a BI audience: renamed `certified` → `grounded`** — see [Audit dispositions (2026-07-15)](#audit-dispositions-2026-07-15), R2.
 
 ## D6: Ownership & Human Gate
 
@@ -142,7 +150,7 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 
 > **Decided (ADR-grade)**
 >
-> Curator (build, `deepagents`) and server (serve, `LangGraph` + middleware) are
+> Curator (build, `deepagents`) and Analyst (serve, `LangGraph` + middleware) are
 > separate harnesses over one shared substrate; fork only the harness.
 
 - **Alternatives:** one unified agent (can't satisfy opposite risk profiles); two fully separate systems (the corpus drifts between build and serve).
@@ -171,7 +179,7 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 
 - **Asset types (YAML):** `table`, `column`, `join`, `few_shot`, `term`, `metric`, `rule`/`context`, `negative_example`; **markdown** for skills / gotchas / query-patterns. CI enforces reference integrity (`term→metric→column→table` all resolve) and regex IDs (`tbl_<schema>_<name>`, …). That check doubles as the curator's machine-checkable "done-enough" signal.
 - **Column reliability is prose, not a flag.** No `decoy: true`. The curator writes a free-text **reliability caveat** ("UNRELIABLE: DO NOT USE" plus a reason) inferred from data evidence. *Same mechanism in BIRD and enterprise deployments.* In BIRD the decoy manifest lets us *grade* it (decoy-recall / decoy-touch); in the enterprise setting nobody knows ground truth, but the same inference runs. Transferability is the deciding reason.
-- **BIRD scope is not only structure.** BIRD ships an `evidence` field (external-knowledge hints ≈ lightweight rules / derived metrics), so the curator also generates `metric`/`rule`/`term`/`context` for BIRD, seeded by evidence. These are scored end-to-end by EX (Arm 1 vs Arm 2), with **no per-asset gold** for those (gold stays limited to names, FK, and decoy-exclusions per D4). **Synonyms (`term`/`term_relationship`) are in-scope for BIRD too**: the obfuscation's *rewrite* dimension means one concept gets asked multiple ways, so synonym mappings aid paraphrase-robust retrieval. They're consumed via the dictionary engine or in-memory, still no Neo4j.
+- **BIRD scope is not only structure.** BIRD ships an `evidence` field (external-knowledge hints ≈ lightweight rules / derived metrics), so the curator also generates `metric`/`rule`/`term`/`context` for BIRD, seeded by evidence. These are scored end-to-end by EX (`baseline` vs `curated`), with **no per-asset gold** for those (gold stays limited to names, FK, and decoy-exclusions per D4). **Synonyms (`term`/`term_relationship`) are in-scope for BIRD too**: the obfuscation's *rewrite* dimension means one concept gets asked multiple ways, so synonym mappings aid paraphrase-robust retrieval. They're consumed via the dictionary engine or in-memory, still no Neo4j.
 - **Graph is a projection (in-memory built; Neo4j deferred).** `join` (+ `term_relationship`, + metric/column lineage) project into a property graph. BIRD uses an **in-memory graph** (networkx) for Steiner-tree planning; **that projection and the Steiner join planner are built** (the planner cost model is a tunable heuristic). **Neo4j is an optional derived projection** for enterprise scale (and a stated learning goal), rebuilt from YAML by a loader, and stays deferred.
 - **Alternatives:** custom DB-backed schema (loses git diff/PR/audit; authoring-in-DB breaks the source-of-truth invariant); typed decoy flag (not transferable to an enterprise deployment).
 - **Namespace field renamed `db` → `schema` (D15, 2026-07-11).** The per-asset namespace historically named `db` always denoted a *schema* (one YAML subtree per namespace); it is renamed `schema` everywhere. IDs are unchanged — they already embed the namespace (`tbl_<schema>_<name>`) — so the rename is a projection fix, not an identity change. See **D15**.
@@ -190,14 +198,14 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 
 - **Alternative:** a single-agent curator (cheaper, but self-review is weak: a model rarely refutes its own plausible inference, and that's where owner-less layers silently rot).
 - **Consequence:** dev = adversary is the only reviewer (auto-accept on pass); prod = automated first-line reviewer before human certification (D6). Proposer claim + adversary verdict both land in the asset `audit` block → the viz/audit surface.
-- **Built:** the deterministic scaffold (programmatic Facts profiling, a `HeuristicProposer` for roles / confidence / provenance, an adversary `review` wrapping the CI validator, and a `curate` promote loop `proposed -> draft`), plus the **LLM proposer** (`LlmProposer`: authors descriptions + `suspect` reliability caveats over the heuristic, Facts untouched) and the **deepagents build harness** (`curator/deep_agent.py`: a deep agent over Facts-profiling + read-only-probe tools; construction verified offline, the autonomous run model-gated). Still seams: LLM authoring of joins / terms / metrics / rules / skills, the live per-asset adversary `refute`, and the self-eval train-EX loop; those are what make Arm 2 beat Arm 1. See [Curator](curator.md).
+- **Built:** the deterministic scaffold (programmatic Facts profiling, a `HeuristicProposer` for roles / confidence / provenance, an adversary `review` wrapping the CI validator, and a `curate` promote loop `proposed -> draft`), plus the **LLM proposer** (`LlmProposer`: authors descriptions + `suspect` reliability caveats over the heuristic, Facts untouched) and the **deepagents build harness** (`curator/deep_agent.py`: a deep agent over Facts-profiling + read-only-probe tools; construction verified offline, the autonomous run model-gated). Still seams: LLM authoring of joins / terms / metrics / rules / skills, the live per-asset adversary `refute`, and the self-eval train-EX loop; those are what make `curated` beat `baseline`. See [Curator](curator.md).
 
 ## D11: External review (2026-07-09)
 
 Raised by an independent project review (2026-07-09). Recorded here so each item is settled deliberately, not by default. Several items are already reconciled above — the cold-start wording in D1, and the two-axis stamp + L2-immediate-refuse in D5. The remaining items below.
 
-- **Repair by failure class (L3/L4 boundary) — DECIDED (2026-07-09): keep repairable.** `policy_blacklist` (L2) fails closed without a retry (feeding a DDL/policy block back only coaches evasion). The question was whether **column-allowlist (L3) and term-semantics (L4) scope failures should also refuse immediately** (the review's position: coaching a model past a scope block is pressure to find a query that passes while staying analytically wrong). **Decision: L3/L4 stay repairable.** The FK-neighborhood widening + repair loop is a deliberate *false-refusal-reduction* mechanism for retrieval under-recall, a repaired answer is already `heuristic` (never `certified`), and the attempt cap + no-progress guard bound the loop. Revisit if the live eval shows repair coaching inflating plausible-but-wrong answers.
-- **`CorpusRelease` — an immutable, certified serving contract.** Git is the source of truth, but source control alone is not a *publication* contract: the server does not currently distinguish draft from certified assets at serve time, pin a corpus content hash, or record a release in each answer. Proposed: a `CorpusRelease` artifact (version + content hash + certified asset IDs + build/adversary evidence + timestamp); the curator writes only staging, CI builds a release, the server reads only a pinned release, every answer/audit event records the release hash. **Scope question:** a lightweight release hash + server pin is arguably an engine-level serving-correctness primitive (in scope here); the full "CI builds release, owners approve" workflow is product (enterprise-fork scope). **Decision pending**, but **partly addressed by D13**: for the benchmark, a separate corpus repo plus a git-SHA-per-checkpoint pins corpus state and defers the full release artifact.
+- **Repair by failure class (L3/L4 boundary) — DECIDED (2026-07-09): keep repairable.** `policy_blacklist` (L2) fails closed without a retry (feeding a DDL/policy block back only coaches evasion). The question was whether **column-allowlist (L3) and term-semantics (L4) scope failures should also refuse immediately** (the review's position: coaching a model past a scope block is pressure to find a query that passes while staying analytically wrong). **Decision: L3/L4 stay repairable.** The FK-neighborhood widening + repair loop is a deliberate *false-refusal-reduction* mechanism for retrieval under-recall, a repaired answer is already `heuristic` (never `grounded`), and the attempt cap + no-progress guard bound the loop. Revisit if the live eval shows repair coaching inflating plausible-but-wrong answers.
+- **`CorpusRelease` — an immutable, certified serving contract.** Git is the source of truth, but source control alone is not a *publication* contract: the Analyst does not currently distinguish draft from certified assets at serve time, pin a corpus content hash, or record a release in each answer. Proposed: a `CorpusRelease` artifact (version + content hash + certified asset IDs + build/adversary evidence + timestamp); the curator writes only staging, CI builds a release, the Analyst reads only a pinned release, every answer/audit event records the release hash. **Scope question:** a lightweight release hash + a serve-time pin is arguably an engine-level serving-correctness primitive (in scope here); the full "CI builds release, owners approve" workflow is product (enterprise-fork scope). **Decision pending**, but **partly addressed by D13**: for the benchmark, a separate corpus repo plus a git-SHA-per-checkpoint pins corpus state and defers the full release artifact.
 - **Structured-intent SQL cache.** The semantic cache currently keys on an embedding-similarity gate. The review notes a global cosine threshold is a weak equivalence test (two questions can differ in period, denominator, entity, or metric). Proposed: key on structured intent (`corpus_release_hash + identity scope + metric ID + normalized dims/filters + join-plan fingerprint + policy version`), or restrict to exact normalized-query caching until that exists. The cache is off by default, so this is not urgent. **Decision pending.**
 
 ## D12: Clarification Protocol
@@ -259,13 +267,13 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
   headline is the **train↔test gap** — train accuracy alone is contaminated when
   few-shots are distilled from train pairs, so the gap (not raw train accuracy) is
   what measures generalization. The ladder:
-  1. **facts-only** — bare-minimum metadata (the floor).
-  2. **autonomous curator** — the agent explores and self-curates with **no SME
-     answers**; isolates what the agent recovers *alone*.
-  3. **SME (train-bounded), by round** — a **Simulated SME** with access to
+  1. **`baseline`** (was "facts-only") — bare-minimum metadata (the floor).
+  2. **`curated`** (autonomous curator) — the agent explores and self-curates with
+     **no SME answers**; isolates what the agent recovers *alone*.
+  3. **`curated_sme`**, by round — a **Simulated SME** with access to
      **training questions + evidence only** answers clarifications; measured after
      each round (r1, r2, …). The growth axis.
-  4. **test-aware SME oracle (the ceiling)** — a Simulated SME that has seen the
+  4. **`ceiling`** (test-aware SME oracle) — a Simulated SME that has seen the
      held-out **test questions + their evidence hints (never the test gold SQL)**
      in its retrieval index. A **deliberately-leaky oracle**, walled off from the
      fair arms (1–3) and reported only as the dashed
@@ -274,17 +282,18 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
      never a true ceiling.
   Two properties make this ceiling informative. It is **< 1.0 by design** (the
   agent still mis-generates SQL under perfect knowledge), so it decomposes the
-  result: `1.0 − ceiling` = the agent's irreducible SQL-gen error; `ceiling − SME`
-  = the test-relevant knowledge a train-bounded SME cannot reach. The ceiling is
-  **elicitation-bounded** (see the SME design below), so it is a *practical* upper
-  bound — best achievable given the curator's questions plus an SME who can see the
-  test bank — not the theoretical maximum. Deferred implementation.
+  result: `1.0 − ceiling` = the agent's irreducible SQL-gen error; `ceiling −
+  curated_sme` = the test-relevant knowledge a train-bounded SME cannot reach. The
+  ceiling is **elicitation-bounded** (see the SME design below), so it is a
+  *practical* upper bound — best achievable given the curator's questions plus an
+  SME who can see the test bank — not the theoretical maximum. Deferred
+  implementation.
 - **Simulated SME design (2026-07-15).** Knowledge transfer is **pull-based**: the
   curator must *ask* — the SME is a strictly reactive **Responder** that answers,
   says it doesn't know, or adds *tightly-related* context, but never proactively
   dumps the corpus. So the curator's **questioning ability is itself part of what
-  the fair arm (A3) measures** — and the ceiling stays elicitation-bounded, because
-  it does not change this.
+  the `curated_sme` arm measures** — and the ceiling stays elicitation-bounded,
+  because it does not change this.
   - **Mechanism = retrieval tools, not a stuffed brief.** The SME gets a
     BM25/regex tool + a vector-search tool over the question bank (questions +
     evidence + SQL), plus the existing read-only `run_probe_query`. This replaces
@@ -336,7 +345,7 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
 - **Qualification is mode-conditional, to protect the graded path.** The single-schema path (SQLite, i.e. the BIRD eval) keeps emitting **bare, unqualified** SQL byte-for-byte — SQLite cannot resolve `schema.table`, so qualifying it would break execution accuracy on the one arm we grade. Only the multi-schema path (Postgres / Redshift) qualifies, so **cross-schema is a Postgres/Redshift-only capability for v0**, which lines up with its being un-graded by BIRD (below). `DataSourceConfig` distinguishes three modes — *SQLite-single*, *Postgres-pinned-single-schema*, *Postgres-span-all* — by an explicit signal, never by `schema is None` (SQLite already runs with `schema=None`).
 - **The guardrail becomes schema-qualified and remains the sole table-scoping gate.** Retrieval and the L4 license scope span all schemas: a **schema router** shortlists the relevant schemas, then expands **along curated joins** so a bridge table sitting in a third schema is not dropped (a similarity-only shortlist would cause *spurious* refusals indistinguishable from the honest one above). The L4 allow-set becomes fully-qualified `schema.table` membership; a bare reference resolves only to a designated default schema and is **refused as ambiguous** when the licensed set holds that name in more than one schema — this is what forbids a self-authorized off-scope schema. L3 keys become three-part `schema.table.column`; L5 union-find keys on `schema.table`. The licensed *id* set was already schema-correct (IDs embed the schema), so this is a projection fix. Read-only, the forced row cap, and the statement timeout are untouched — they live in the connectors, not the guardrail — and `search_path` is **not** used (L2 forbids `Command`); full qualification is the mechanism.
 - **Alternatives:** a true three-level `connection → schema → table` model with cross-connection federation (rejected — one engine cannot join across physical connections; federation is a warehouse concern); auto-discovering cross-schema joins from FK metadata or name heuristics (rejected — cross-schema FKs rarely exist, and guessing them is the dominant error mode in FK-less settings); unconditional qualification (rejected — it breaks the SQLite/BIRD graded path).
-- **Consequence:** refines **D1**'s target (multi-schema-capable within one database, tenancy still out) and **D9**'s corpus contract (`db` → `schema`; the `<db>/` subtree becomes `<schema>/`). **Cross-schema serving is un-graded by BIRD** (**D14**), an accepted, documented limitation covered instead by guardrail unit tests, a two-schema Postgres integration fixture, and a CI check for `(schema, physical_name)` uniqueness and non-ambiguous allow-set keys. **Status: building in verified increments (from 2026-07-12).** Shipped: increment 1, the gateway foundation (span-all connector + `multi_schema` config); increment 2, the schema-qualified guardrail (L3/L4/L5 keyed on `schema.table`); increment 3, multi-schema as the Postgres/Redshift **serve default** (qualified SQL-gen + guardrails wired; SQLite stays single-schema for BIRD); increment 4, **missing-edge refusal** (cross-schema retrieval with no curated `JoinAsset` refuses before generate, with a D12 `clarification_hint`); increment 5, **API wire rename** (`db` → `schema` on presenter/OpenAPI responses and `?schema=` filters only — no `?db=` alias; graph **nodes** carry `schema`); increment 6, **server-side graph scoping** (`?schema=` / `focus` / `radius` / `node_budget` on `/graph` and `/knowledge-graph`, plus KG `kinds=`, with `boundary` + `meta.scope` envelope; param-less remains the full graph); increment 7, **on-disk YAML rename** (`TableAsset` / `FewShotAsset` / skill frontmatter field `db` → `schema`; `load_corpus`/`write_corpus`serve always loads every `corpus/<schema>/` subtree); and increment 8, **join-aware schema router** (BM25 schema shortlist + curated cross-schema join expansion before RVGD on the multi-schema path; single-schema/SQLite unchanged). Still deferred: server `/search` (client Fuse remains default per Q6), and collapsing `DataSourceConfig.db` (BIRD db_id / default write subtree) into the pin field. The LLM coarse-to-fine pruning pass stays deferred behind the pluggable generator seam.
+- **Consequence:** refines **D1**'s target (multi-schema-capable within one database, tenancy still out) and **D9**'s corpus contract (`db` → `schema`; the `<db>/` subtree becomes `<schema>/`). **Cross-schema serving is un-graded by BIRD** (**D14**), an accepted, documented limitation covered instead by guardrail unit tests, a two-schema Postgres integration fixture, and a CI check for `(schema, physical_name)` uniqueness and non-ambiguous allow-set keys. **Status: building in verified increments (from 2026-07-12).** Shipped: increment 1, the gateway foundation (span-all connector + `multi_schema` config); increment 2, the schema-qualified guardrail (L3/L4/L5 keyed on `schema.table`); increment 3, multi-schema as the Postgres/Redshift **serve default** (qualified SQL-gen + guardrails wired; SQLite stays single-schema for BIRD); increment 4, **missing-edge refusal** (cross-schema retrieval with no curated `JoinAsset` refuses before generate, with a D12 `clarification_hint`); increment 5, **API wire rename** (`db` → `schema` on presenter/OpenAPI responses and `?schema=` filters only — no `?db=` alias; graph **nodes** carry `schema`); increment 6, **server-side graph scoping** (`?schema=` / `focus` / `radius` / `node_budget` on `/graph` and `/knowledge-graph`, plus KG `kinds=`, with `boundary` + `meta.scope` envelope; param-less remains the full graph); increment 7, **on-disk YAML rename** (`TableAsset` / `FewShotAsset` / skill frontmatter field `db` → `schema`; `load_corpus`/`write_corpus`serve always loads every `corpus/<schema>/` subtree); and increment 8, **join-aware schema router** (BM25 schema shortlist + curated cross-schema join expansion before RVGD on the multi-schema path; single-schema/SQLite unchanged). Still deferred: server `/search` (client Fuse remains default per Q6). **`DataSourceConfig.db`'s collapse into a single pin field is now done** (terminology refactor): the field is renamed `corpus_pin` (unifying the BIRD `db_id` and the default write subtree). The LLM coarse-to-fine pruning pass stays deferred behind the pluggable generator seam.
 
 ## D16: Governed Agentic Serve Core
 
@@ -344,7 +353,7 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
 > invariants, and phased migration in
 > [ADR 0002](adr/0002-governed-agentic-serve-runtime.md); the historical
 > agent-vs-flow A/B (flow now deleted) is summarized in
-> [three-arm results](plans/three-arm-experiment-results.md).
+> [experiment results](plans/eval-ladder-results.md).
 >
 > Serve is reworked from a deterministic single-shot DAG into a **governed
 > agentic core**: an outer deterministic `StateGraph` (thin governance rails)
@@ -366,7 +375,7 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
   `agent_serve` flag, used to gate the agentic path behind the deterministic
   flow during P0/P1, is **removed**; there is no toggle, and serve always runs
   the agent. `TemplateSqlGenerator` (serve), the `flow.py` monolith, and the
-  stale `server/graph.py` are **deleted**, and an LLM key is now mandatory: with
+  stale `analyst/graph.py` are **deleted**, and an LLM key is now mandatory: with
   no live model, serve fails closed at startup and `/chat` returns `503`.
   CI/offline determinism runs on a `FakeListChatModel` agent harness; equivalence
   tests moved from "same `Answer`" to "same governance invariants."
@@ -405,14 +414,15 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
   a 23-question single-DB delta stops being the unit of evidence. *Status: planned,
   gated on the multi-schema experiment ([D15](#d15-multi-schema-serving-one-database-many-schemas)).*
 
-- **R2 — The `certified` label overclaims and will be renamed + calibrated
-  (refines [D5](#d5-refusal--best-effort)).** `semantic_assurance = certified`
-  reads to a BI user as "verified correct," but it means only "safe + in-scope +
-  no uncertainty flag fired." Accepted: rename to a grounding-oriented term (e.g.
-  `grounded`) and **calibrate the thresholds and uncertainty-signal set against
-  actual EX** once the scale run exists — i.e. measure what fraction of stamped
-  answers are in fact correct. *Status: accepted, scheduled (needs the scale run
-  first).*
+- **R2 — The `certified` label overclaimed and has been renamed to `grounded`;
+  calibration is still pending (refines [D5](#d5-refusal--best-effort)).**
+  `semantic_assurance = certified` read to a BI user as "verified correct," but it
+  meant only "safe + in-scope + no uncertainty flag fired." **Renamed**:
+  `semantic_assurance` now reports `grounded` (formerly `certified`) / `heuristic`
+  / `unverified`. Still pending: **calibrate the thresholds and uncertainty-signal
+  set against actual EX** once the scale run exists — i.e. measure what fraction
+  of stamped answers are in fact correct. *Status: renamed; calibration scheduled
+  (needs the scale run first).*
 
 - **R3 — User-feedback loop: discussed 2026-07-15; direction set, build deferred
   (refines [D8](#d8-serve-time-memory)).** Outcome of the design session:
@@ -444,7 +454,8 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
   log + mining pipeline are deferred to the internal-systems build.*
 
 - **R4 — Live execution: the audit note was stale; corrected.** Postgres **is**
-  run live. `eval/run_experiment.py` executes the three arms against a local
+  run live. `eval/run_experiment.py` executes the eval-ladder arms (`baseline` /
+  `curated` / `curated_sme`) against a local
   Postgres (BIRD-Obfuscation `pg_rename_decoy`, `127.0.0.1:5435`) with a live
   model — the working daily eval path, not an offline double. Connector docstrings
   (`gateway/connectors/{base,__init__}.py`, `gateway/__init__.py`), `usage.md`,
@@ -457,7 +468,7 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
   retired; the ceiling is redefined as a *test-aware SME oracle* (refines
   [D4](#d4-grading) / [D14](#d14-sme-growth-benchmark-on-bird-obfuscation)).** The
   `gold.py` de-obfuscation oracle (rename-map read-back) is **not a ceiling** — by
-  its own docstring, Arm 2's skills can exceed it — and on the identity-rename DBs
+  its own docstring, the curated arm's skills can exceed it — and on the identity-rename DBs
   it is a near no-op. It is **retired**. The recoverable ceiling is redefined as a
   **test-aware SME oracle**: a **Simulated SME** that holds the held-out **test
   questions + their evidence hints (never the test gold SQL)** in its retrieval
@@ -465,20 +476,44 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
   because the test set touches knowledge the train pairs never surface — a
   train-bounded SME structurally cannot reach it. Full ladder + properties
   recorded as the [D14 amendment (2026-07-15)](#d14-sme-growth-benchmark-on-bird-obfuscation).
-  Follow-ups (deferred, decision-only now): delete `eval/gold.py` + the `Arm.gold`
-  member (dead), and give the SME **BM25/vector retrieval tools scoped by split**
-  (train-only = fair; + test questions/evidence, never test SQL = ceiling — see the
-  [D14 amendment](#d14-sme-growth-benchmark-on-bird-obfuscation)).
-  *Status: decided; implementation deferred.*
+  Follow-ups: `eval/gold.py` + the `Arm.gold` member are **now deleted**
+  (terminology refactor). Still deferred: give the SME **BM25/vector retrieval
+  tools scoped by split** (train-only = fair; + test questions/evidence, never test
+  SQL = ceiling — see the
+  [D14 amendment](#d14-sme-growth-benchmark-on-bird-obfuscation)), and build the
+  `ceiling` arm itself.
+  *Status: gold retirement done; SME retrieval tools + ceiling arm deferred.*
 
-- **R5 — Cost / latency / token observability: the substrate already exists via
-  Langfuse + LangSmith (refines [D16](#d16-governed-agentic-serve-core)).** Both
-  tracers are wired ([`obs.py`](../src/governed_bi/obs.py)); both capture per-trace
-  tokens, cost, and latency and aggregate them in their own dashboards, and an
-  agentic turn groups as one trace. The gap is **not capture** but that tracing is
-  env-opt-in (off in the CI/offline profile) and not surfaced in the product's own
-  governance view. *Status: rely on Langfuse/LangSmith for now; a native
-  aggregate/monitoring/alerting view is future work (deferred).*
+- **R5 — Cost / latency / token observability: captured in the tracers, but not in
+  the product's own durable record (refines [D16](#d16-governed-agentic-serve-core)).**
+  Both tracers are wired ([`obs.py`](../src/governed_bi/obs.py)); both capture
+  per-trace tokens, cost, and latency and aggregate them in their own dashboards,
+  and an agentic turn groups as one trace. Two distinct gaps remain — and the
+  earlier "the gap is not capture but surfacing" framing understated the first:
+  - **In-app capture gap.** Latency, tokens, and cost live **only** in the vendor
+    traces. The product's own governance ledger
+    ([`analyst/middleware.py`](../src/governed_bi/analyst/middleware.py)) records a
+    `verdict` per data-touching tool (`pass` / `block` / `error` / `cap` / `deny`)
+    but carries **no timing, no token/cost, and no timestamp**, and it is not
+    durably persisted (it rides the in-memory checkpointer; durable Postgres is
+    deferred). The sqlite connector's one `time.monotonic()` is a timeout deadline,
+    discarded, not a recorded duration. So with tracing off — its default in the
+    CI/offline profile, and a **silent no-op** when the keys are unset — there is
+    **no vendor-independent record** of latency or cost, and tool-call error rate
+    is derivable (from `verdict`) but never computed.
+  - **Surfacing / aggregation gap.** No native metrics/health surface (p50/p95
+    turn latency, tool error / block / refusal rate, cache hit rate,
+    503-no-model rate), no alerting/SLOs, and no in-product governance view of any
+    of it.
+  Direction (future work, deferred): (1) add `duration_ms` + `ts` to each ledger
+  entry and a DB-execute duration on `QueryResult`; (2) capture model
+  `usage_metadata` (tokens/cost) into the turn record; (3) persist the ledger to
+  the vendor-independent **interaction log** (see R3, keyed by turn +
+  `corpus_release_hash`); (4) expose an OpenTelemetry/Prometheus `/metrics` +
+  `/health` surface with alerting; (5) make tracing **fail-loud** (a startup check)
+  in the prod profile so it never runs blind. *Status: rely on Langfuse/LangSmith
+  for now; in-app durable capture + a native aggregate/monitoring/alerting view are
+  future work (deferred).*
 
 - **R6 — Curator adversary `refute()` + self-eval/repair loop: deferred
   (refines [D10](#d10-curator--proposer--adversary)).** Confirmed unbuilt;
@@ -489,7 +524,7 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
 - **R7 — The refuse-gate is untested by the BIRD EX number — documented eval
   limitation (refines [D5](#d5-refusal--best-effort) /
   [D14](#d14-sme-growth-benchmark-on-bird-obfuscation)).** BIRD questions are all
-  answerable, so the three-arm EX metric never exercises the refuse-gate and the
+  answerable, so the eval ladder's EX metric never exercises the refuse-gate and the
   **false-refusal rate is unmeasured** by it. The held-out unanswerable set (D5) is
   the separate instrument — minimally covered today (a small hand-built
   beer_factory set) and skipped in CI (needs a live model). This is an accepted,

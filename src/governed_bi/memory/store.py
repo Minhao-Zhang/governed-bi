@@ -37,7 +37,7 @@ class InMemoryWorkingMemory:
     """Process-local working memory: verbatim turns per session (D8).
 
     Ephemeral by design (lost on restart) and **session-scoped**, which is the
-    identity scope: the server mints one session per acting identity (D7), so a
+    identity scope: the Analyst mints one session per acting identity (D7), so a
     session id never spans users. ``max_turns`` optionally caps a session's
     history to the most recent N turns to bound growth; ``None`` keeps all turns.
 

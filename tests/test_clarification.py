@@ -189,7 +189,7 @@ def test_clarification_never_reaches_server_view():
             clarification=Clarification(question="What grain is this table?"),
         ),
     )
-    server_view = Corpus(assets=[table]).for_server()
+    server_view = Corpus(assets=[table]).for_analyst()
     tbl_view = server_view.by_id("tbl_demo_orders")
 
     # Audit (hence every clarification) is stripped from the server view.

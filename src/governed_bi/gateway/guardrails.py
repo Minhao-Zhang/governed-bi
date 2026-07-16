@@ -1,4 +1,4 @@
-"""Five-layer SQL guardrails (Server step 8; Architecture section 6).
+"""Five-layer SQL guardrails (Analyst step 8; Architecture section 6).
 
 Ordered, fail-closed on any layer:
 
@@ -10,7 +10,7 @@ Ordered, fail-closed on any layer:
 5. **cost** structural cross-join / cartesian-product guard; numeric
    EXPLAIN-based cost (Postgres / Redshift) is future per-dialect work.
 
-These run in the server's ``wrap_tool_call`` middleware. The refuse-gate (D5)
+These run in the Analyst's ``wrap_tool_call`` middleware. The refuse-gate (D5)
 runs *concurrently*, not as a sixth layer.
 
 Fail-closed policy and its cost: several layers include deliberate policy blocks
@@ -20,12 +20,12 @@ base+derived scope (the allowlist cannot vouch for columns the query never
 enumerates or attribute a bare name it cannot resolve); L4/L5 block NATURAL joins
 and cross-namespace / db-qualified names. Each trades a false-refusal cost for
 zero column leakage. That cost is not meant to be paid by the user: a
-feedback-aware generator recovers via the server's repair loop (the block is fed
+feedback-aware generator recovers via the Analyst's repair loop (the block is fed
 back as ``RepairFeedback`` and the SQL is regenerated), and the eval's refuse-gate
 ``false_refusal_rate`` is the counterweight metric that keeps the blocks honest.
 
 Build status: all five layers are enforced. L4 (term-semantics) runs only when
-the caller passes ``allowed_tables`` (the server's retrieval scope); with no
+the caller passes ``allowed_tables`` (the Analyst's retrieval scope); with no
 scope it is skipped, so a corpus-only unit check still exercises L1 to L3 and L5.
 """
 
@@ -76,7 +76,7 @@ class ColumnAllowlist:
 
 
 def column_allowlist(corpus: "Corpus", *, multi_schema: bool = False) -> ColumnAllowlist:
-    """Build the L3 allowlist from a corpus (pass the ``for_server()`` view).
+    """Build the L3 allowlist from a corpus (pass the ``for_analyst()`` view).
 
     Physical names are used because the SQL under inspection is in the live
     (obfuscated) identifiers, not asset ids.
@@ -528,9 +528,9 @@ def _layer_terms(
 ) -> GuardrailVerdict:
     """L4: every base table the query touches is within the retrieved scope.
 
-    ``allowed_tables`` is the set of table names the server licensed for this
+    ``allowed_tables`` is the set of table names the analyst licensed for this
     question: the tables surfaced by retrieval and their join-plan Steiner points
-    (see ``server.agent``, ``server.governance._licensed_table_ids``). A base table
+    (see ``analyst.agent``, ``analyst.governance._licensed_table_ids``). A base table
     outside that set means the SQL wandered past the semantically grounded scope,
     so it is blocked fail-closed.
 

@@ -14,9 +14,9 @@ in [Design decisions](design-decisions.md).
 
 ## 2. Two Harnesses over One Shared Substrate
 
-Curator and server have opposite risk profiles. They use different harnesses but share everything below the loop.
+Curator and Analyst have opposite risk profiles. They use different harnesses but share everything below the loop.
 
-| | Curator (build) | Server (serve) |
+| | Curator (build) | Analyst (serve) |
 |---|---|---|
 | Output | a durable artifact (the corpus) | an answer to a user |
 | Checked by | a human, before it ships | nobody (the user can't verify) |
@@ -24,7 +24,7 @@ Curator and server have opposite risk profiles. They use different harnesses but
 | Autonomy | maximum (explore) | minimum (fail-closed) |
 | Harness | `deepagents` | `LangGraph` + middleware |
 
-*Built:* both harnesses are installed by a plain `uv sync` (no extra), over LangChain-backed model clients. Server is the [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) governed agentic core, `server.agent` (thin outer deterministic rails wrapping a `create_agent` reasoning loop governed by middleware). It has been the sole serve path since the P2 cutover; the earlier deterministic flow (`server.flow::answer_question`) and the stale, unused `server.graph` DAG are deleted. No live model is fail-closed: `build_stack()` still builds offline for the read-only audit API, but the serve process raises at startup and `/chat` returns 503 until a model is configured. The first live A/B against the (now-removed) deterministic flow motivated [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) Amendment 1; current eval numbers are in [three-arm results](plans/three-arm-experiment-results.md). Curator = `curator.deep_agent` (a deepagents agent over Facts-profiling + read-only-probe tools, construction verified offline, live run model-gated).
+*Built:* both harnesses are installed by a plain `uv sync` (no extra), over LangChain-backed model clients. The Analyst is the [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) governed agentic core, `analyst.agent` (thin outer deterministic rails wrapping a `create_agent` reasoning loop governed by middleware; the module was `server/`, renamed `analyst/` post-cutover — "server" now names infra only: `LangGraph Server`, the HTTP/ASGI process). It has been the sole serve path since the P2 cutover; the earlier deterministic flow (`server.flow::answer_question`) and the stale, unused `server.graph` DAG were deleted under the old module name, before that rename. No live model is fail-closed: `build_stack()` still builds offline for the read-only audit API, but the serve process raises at startup and `/chat` returns 503 until a model is configured. The first live A/B against the (now-removed) deterministic flow motivated [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) Amendment 1; current eval numbers are in [experiment results](plans/eval-ladder-results.md). Curator = `curator.deep_agent` (a deepagents agent over Facts-profiling + read-only-probe tools, construction verified offline, live run model-gated).
 
 > **Curator = permanent maintainer**
 >
@@ -50,8 +50,8 @@ Curator and server have opposite risk profiles. They use different harnesses but
 
 Fork only the harness, but share the substrate. Sharing has three directions, and they tell you where the contracts live:
 
-- **Curator writes → server reads:** semantic layer, skills, metadata/indexes. Contract: publish/certify (versioned).
-- **Server writes → curator reads:** audit log, corrections, episodic signals. Contract: harvest (closes the loop).
+- **Curator writes → Analyst reads:** semantic layer, skills, metadata/indexes. Contract: publish/certify (versioned).
+- **Analyst writes → curator reads:** audit log, corrections, episodic signals. Contract: harvest (closes the loop).
 - **Both read one definition:** gateway policy, eval set and ground truth, identity/access model, tool registry, provenance format.
 
 1. **Gateway service**: access, policy enforcement, and audit (one boundary, two permission profiles).
@@ -84,7 +84,7 @@ Markdown-first. The graph earns its place only for joins and lineage. A heavy LL
 > DO NOT USE"), not a typed decoy flag, so the mechanism transfers to an enterprise deployment.
 > See D9 in [Design decisions](design-decisions.md).
 
-## 6. Runtime Query Flow (Server)
+## 6. Runtime Query Flow (Analyst)
 
 ```
 ask → supervisor → query understanding → intent route → SQL cache check →
@@ -92,9 +92,9 @@ RVGD retrieval → Steiner-tree join plan → SQL gen → five-layer guardrails 
 execute (as-user) → narrate → answer + provenance
 ```
 
-The full stage-by-stage design is in [Server](server.md), along with the three points where the curator's inference drives serve behavior.
+The full stage-by-stage design is in [Analyst](analyst.md), along with the three points where the curator's inference drives serve behavior.
 
-Per D15, on the multi-schema Postgres / Redshift path a join-aware schema router precedes RVGD retrieval, so retrieval spans schemas; the single-schema path skips it. **Shipped** (`retrieval.schema_router`; wired in `server.agent`).
+Per D15, on the multi-schema Postgres / Redshift path a join-aware schema router precedes RVGD retrieval, so retrieval spans schemas; the single-schema path skips it. **Shipped** (`retrieval.schema_router`; wired in `analyst.agent`).
 
 > **SQL semantic cache fast path**
 >
@@ -105,7 +105,7 @@ Per D15, on the multi-schema Postgres / Redshift path a join-aware schema router
 > cache on success. TTL 15 min. Single global threshold, a known gap that is
 > not tuned per domain. See the *Data Agent Memory Design Overview* §5.
 
-Guardrails, in order (fail-closed on any, all five enforced): syntax → policy blacklist → AST column allowlist → term-semantics → cost. The AST allowlist is scope-aware (resolves each column against its own query scope and blocks star projections); term-semantics licenses the retrieved tables plus their FK join-neighborhood, the join plan's Steiner points (not just the exact retrieved set, so it is decoupled from retrieval recall), and any curated cross-schema join targets, and blocks any table name outside that licensed scope. The cost layer is a structural cross-join guard for now; numeric EXPLAIN-based cost (Postgres / Redshift) is future per-dialect work. Stage-by-stage detail is in [Server](server.md) step 8.
+Guardrails, in order (fail-closed on any, all five enforced): syntax → policy blacklist → AST column allowlist → term-semantics → cost. The AST allowlist is scope-aware (resolves each column against its own query scope and blocks star projections); term-semantics licenses the retrieved tables plus their FK join-neighborhood, the join plan's Steiner points (not just the exact retrieved set, so it is decoupled from retrieval recall), and any curated cross-schema join targets, and blocks any table name outside that licensed scope. The cost layer is a structural cross-join guard for now; numeric EXPLAIN-based cost (Postgres / Redshift) is future per-dialect work. Stage-by-stage detail is in [Analyst](analyst.md) step 8.
 
 > **D15: L4 scope is schema-qualified and spans schemas.** Cross-schema names are licensed only via a curated join — with none, the engine refuses rather than guessing. The single-schema / SQLite / BIRD path stays bare/unqualified. Guardrail + serve wiring + missing-edge refusal + join-aware schema router are shipped.
 
@@ -117,8 +117,9 @@ Guardrails, in order (fail-closed on any, all five enforced): syntax → policy 
 > agent as a `ToolMessage` to reflect on and retry, rather than refusing
 > outright; every attempt is re-guardrailed, so un-vetted SQL never runs. The
 > per-turn attempt cap (3) is enforced in `wrap_tool_call`, and the outer graph
-> is bounded by a `recursion_limit`; exhaustion fails closed. A repaired answer
-> is stamped `lineage`, not `governed`.
+> is bounded by a `recursion_limit`; exhaustion fails closed. A repaired answer's
+> `semantic_assurance` drops to `heuristic`, not `grounded` (in the retired,
+> display-only single-axis tier: `lineage`, not `governed`).
 >
 > This is the [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) mechanism.
 > The earlier hand-rolled `while attempts < 3` cycle (generation → guardrails →
@@ -157,7 +158,17 @@ Guardrails, in order (fail-closed on any, all five enforced): syntax → policy 
 >
 > - **Refuse-gate** (curated negative examples): match → canned escalation blob (owner contact). This is the fail-closed path.
 > - **Hard guardrails** (`wrap_tool_call`): can veto any query regardless.
-> - **Best-effort otherwise:** governed → lineage → fenced-raw, with a **reliability stamp** (provenance tier plus the uncertainty flags that fired). The tiers are uncalibrated governance/uncertainty heuristics, tuned on the eval: `governed` means safe, in-scope, and no uncertainty flag, **not** verified-correct. The guardrails are a safety/governance gate, not a correctness oracle, so a plausible-but-wrong query (valid, in-allowlist, wrong computation) is caught here and by the fail-closed paths, not at a guardrail. Give the stamp teeth: low-reliability answers get differential handling.
+> - **Best-effort otherwise:** delivered with a **reliability stamp** —
+>   `semantic_assurance` (`grounded` / `heuristic` / `unverified`) plus the
+>   uncertainty flags that fired. The legacy single-axis tier (`governed` /
+>   `lineage` / `fenced_raw` / `refused`) survives only as a display-only 1:1
+>   projection of this axis, never a second vocabulary. The boundaries are
+>   uncalibrated governance/uncertainty heuristics, tuned on the eval: `grounded`
+>   means safe, in-scope, and no uncertainty flag, **not** verified-correct. The
+>   guardrails are a safety/governance gate, not a correctness oracle, so a
+>   plausible-but-wrong query (valid, in-allowlist, wrong computation) is caught
+>   here and by the fail-closed paths, not at a guardrail. Give the stamp teeth:
+>   low-reliability answers get differential handling.
 > - **High-stakes** (leadership/PII): human sign-off or return-SQL-only.
 
 ## 7. Memory Policy
@@ -187,8 +198,8 @@ Guardrails, in order (fail-closed on any, all five enforced): syntax → policy 
 - Near-term: [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) (4 DB versions, ~10k verified Q&A, decoy manifest, rename map) supplies verified ground truth. See *BIRD Bench Obfuscation Methodology*.
 - Headline metric: execution accuracy vs gold. No hand-grading of semantic layers.
 - **Split (adopt BIRD-Obfuscation's):** per-DB **80/20 seeded holdout**: 8,134 train / 2,030 test, all 69 DBs in both. The **curator reads `train_final.jsonl` only** (distilled, not dumped) → grade on held-out `test_final.jsonl`. Leakage is structurally prevented by the disjoint seeded split.
-- **Variant:** the 3-arm semantic eval runs on the **`rename_decoy`** instance (cryptic names and live decoys, where the layer's value is maximal), with `base` as a sanity reference. The server always executes against the one physical DB. Only the corpus differs across arms.
-- Arms scored on EX (the ladder per the [D14 amendment](design-decisions.md#d14-sme-growth-benchmark-on-bird-obfuscation), 2026-07-15): (1) no-layer floor, (2) autonomous curator, (3) SME by round — with a **test-aware SME oracle** as the dashed *recoverable ceiling*. The de-obfuscation "gold" oracle is **retired** (it was never a true ceiling — curator skills can exceed it). **Moat = the share of the obfuscation-induced accuracy drop the curator recovers.**
+- **Variant:** the semantic eval runs on the **`rename_decoy`** instance (cryptic names and live decoys, where the layer's value is maximal), with `base` as a sanity reference. The Analyst always executes against the one physical DB. Only the corpus differs across arms.
+- Arms scored on EX, an eval ladder (per [terminology-refactor.md](plans/terminology-refactor.md), refining the [D14 amendment](design-decisions.md#d14-sme-growth-benchmark-on-bird-obfuscation), 2026-07-15): `baseline` (deterministic, DB-derivable corpus only — names, types, sample values, FK candidates — no curator LLM), `curated` (curator LLM Inference tier + train-SQL-derived seed joins/few-shots), `curated_sme` (`curated` + Simulated-SME clarification rounds) — with a **test-aware SME oracle** as the dashed *`ceiling`*, designed but not yet built. The de-obfuscation "gold" oracle is **retired** (it was never a true ceiling — curator skills can exceed it). **Moat = the share of the obfuscation-induced accuracy drop the curator recovers.** Current run numbers (recorded under the old `A1/A2/A3` labels) are in [experiment results](plans/eval-ladder-results.md).
 - Free behavioral signals from the manifest and logs: decoy-touch rate, governed-path adherence. Cost and efficiency (wall-clock, tokens, rows; BIRD's VES is reusable) are logged, not headline.
 - **Refuse-gate eval:** a held-out **unanswerable** set, built from cross-DB and removed-coverage cases (auto-generated) plus a small hand-built out-of-scope set. The cross-DB cases are unanswerable here only because BIRD supplies no curated cross-schema joins; per D15 cross-schema *is* answerable with a curated join, though cross-schema serving is un-graded by BIRD. Scored on **refusal accuracy** (refuses the unanswerable) *and* **false-refusal rate** (on the answerable test set). This is the precision and recall of refusal.
 - **Repo boundary:** BIRD-Obfuscation produces validated data and manifests, and explicitly scopes out "the downstream agent that exercises the traps". That downstream agent is *this* system.

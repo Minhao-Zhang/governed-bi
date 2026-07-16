@@ -1,4 +1,4 @@
-"""Server step 10: answer assembly + reliability stamp (D5).
+"""Analyst step 10: answer assembly + reliability stamp (D5).
 
 The stamp reports on **two independent axes** (kept explicit so callers never
 mistake one for the other):
@@ -8,22 +8,24 @@ mistake one for the other):
   assembled answer by construction (nothing reaches assembly until the five
   guardrail layers pass and execution succeeds) and false for every refusal. It
   says nothing about whether the number is right.
-- ``semantic_assurance`` (enum): how well-grounded the answer is - ``certified``
+- ``semantic_assurance`` (enum): how well-grounded the answer is - ``grounded``
   (clean run, no uncertainty flag), ``heuristic`` (a low-confidence join, suspect
   column in scope, Corrective-RAG, or a *repaired* query fired a flag),
   ``unverified`` (fenced-raw fallback), or ``none`` (refused). This is the axis
   that should drive automatic-delivery decisions and cache admission - an answer is
   never delivered/cached merely because it is *safe*.
 
-``ReliabilityTier`` is the single-axis **projection** of these two that older
-callers read (``governed`` == cleared + ``certified``, ``lineage`` == cleared +
+The two-axis stamp above is the **canonical** reliability vocabulary.
+``ReliabilityTier`` is a **display-only** single-axis projection of it, kept only
+for a compact UI badge and the fail-closed refusal check, never a second
+vocabulary (``governed`` == cleared + ``grounded``, ``lineage`` == cleared +
 ``heuristic``, ``fenced_raw`` == ``unverified``, ``refused`` == not cleared). The
 projection is kept 1:1 with ``semantic_assurance`` so the two never drift.
 
 The thresholds and the signal set are **uncalibrated heuristics** - a first cut to
 be tuned against the eval (which boundary catches the wrong answers without
 over-refusing), not calibrated probabilities. The mapping here is deterministic
-and testable; the agent core (``server.agent``) feeds it the signals it
+and testable; the agent core (``analyst.agent``) feeds it the signals it
 accumulated while running the outer ``StateGraph`` + inner agent loop.
 """
 
@@ -41,36 +43,41 @@ LOW_CONFIDENCE_JOIN = 0.7
 class SemanticAssurance(str, Enum):
     """How well-grounded the answer is - the epistemic axis, distinct from safety.
 
-    Drives automatic-delivery and cache-admission decisions. ``certified`` is a
+    Drives automatic-delivery and cache-admission decisions. ``grounded`` is a
     clean run (NOT a verified-correct claim); any uncertainty flag drops it to
     ``heuristic``; a fenced-raw fallback is ``unverified``; a refusal is ``none``.
     Boundaries are uncalibrated heuristics tuned on the eval.
     """
 
-    certified = "certified"  # clean run: no uncertainty flag fired
+    grounded = "grounded"  # clean run: no uncertainty flag fired
     heuristic = "heuristic"  # an uncertainty flag fired (low-conf join, suspect, repaired, ...)
     unverified = "unverified"  # fenced-raw fallback
     none = "none"  # refused: nothing delivered
 
 
 class ReliabilityTier(str, Enum):
-    """Single-axis **projection** of (safety_clearance, semantic_assurance).
+    """Display-only single-axis projection of (safety_clearance, semantic_assurance).
 
-    Kept for callers/UI that read one stamp; ``governed`` == cleared + certified,
-    ``lineage`` == cleared + heuristic, ``fenced_raw`` == unverified, ``refused``
-    == not cleared. Prefer the two explicit axes on :class:`Answer` for new logic.
+    NOT a canonical reliability vocabulary - the two-axis stamp on :class:`Answer`
+    is canonical; this exists only so a compact UI badge or the fail-closed
+    refusal check has one value to read. ``governed`` == cleared + ``grounded``,
+    ``lineage`` == cleared + ``heuristic``, ``fenced_raw`` == ``unverified``,
+    ``refused`` == not cleared. New logic should read the two explicit axes on
+    :class:`Answer`, not this tier.
     """
 
-    governed = "governed"  # high stamp: safe + in-scope + no uncertainty flag fired
-    lineage = "lineage"  # medium stamp: an uncertainty flag fired
-    fenced_raw = "fenced_raw"  # low stamp: fenced-raw fallback
-    refused = "refused"  # fail-closed
+    governed = "governed"  # display label: safe + in-scope + no uncertainty flag fired
+    lineage = "lineage"  # display label: an uncertainty flag fired
+    fenced_raw = "fenced_raw"  # display label: fenced-raw fallback
+    refused = "refused"  # fail-closed (also used structurally to detect a refusal)
 
 
-# The tier is the collapsed view of semantic_assurance (for a cleared answer) or
-# ``refused`` (for one that never cleared). Single source of truth for the mapping.
+# Display-only collapse of semantic_assurance (for a cleared answer) into one
+# tier label, or ``refused`` (for one that never cleared). Single source of truth
+# for the mapping so the projection and the two axes never drift; this table does
+# not make the tier a second reliability vocabulary.
 _ASSURANCE_TO_TIER = {
-    SemanticAssurance.certified: ReliabilityTier.governed,
+    SemanticAssurance.grounded: ReliabilityTier.governed,
     SemanticAssurance.heuristic: ReliabilityTier.lineage,
     SemanticAssurance.unverified: ReliabilityTier.fenced_raw,
     SemanticAssurance.none: ReliabilityTier.refused,
@@ -118,12 +125,12 @@ class UncertaintySignals:
 
 @dataclass(frozen=True)
 class Answer:
-    tier: ReliabilityTier  # the single-axis projection (see ReliabilityTier)
+    tier: ReliabilityTier  # display-only single-axis projection (see ReliabilityTier)
     text: str | None
     sql: str | None
     provenance: dict  # source tier + confidence + which uncertainty flags fired
     escalation: str | None = None  # populated on refuse (canned blob)
-    # The two explicit axes the tier collapses. Prefer these for new logic.
+    # The two canonical axes; the tier above is a display-only collapse of these.
     safety_clearance: bool = False  # guardrail-passing + executed as principal
     semantic_assurance: SemanticAssurance = SemanticAssurance.none
     result: "ResultTable | None" = None  # the executed rows (None on refusal)
@@ -131,7 +138,7 @@ class Answer:
 
 def semantic_assurance(signals: UncertaintySignals) -> SemanticAssurance:
     """Map accumulated uncertainty to the epistemic axis. A clean run is
-    ``certified`` (no flag fired, NOT verified correct); any fired flag drops to
+    ``grounded`` (no flag fired, NOT verified correct); any fired flag drops to
     ``heuristic``; a fenced-raw fallback drops to ``unverified``. Uncalibrated
     heuristic, tuned against the eval.
     """
@@ -139,12 +146,13 @@ def semantic_assurance(signals: UncertaintySignals) -> SemanticAssurance:
         return SemanticAssurance.unverified
     if signals.any_fired():
         return SemanticAssurance.heuristic
-    return SemanticAssurance.certified
+    return SemanticAssurance.grounded
 
 
 def reliability_tier(signals: UncertaintySignals) -> ReliabilityTier:
-    """The single-axis tier for a cleared answer: the projection of
-    :func:`semantic_assurance`. Kept for callers/UI reading one stamp.
+    """The display-only tier for a cleared answer: the projection of
+    :func:`semantic_assurance`. Kept for callers/UI reading one compact stamp,
+    never a second reliability vocabulary.
     """
     return _ASSURANCE_TO_TIER[semantic_assurance(signals)]
 

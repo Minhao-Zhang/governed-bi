@@ -17,8 +17,8 @@ from governed_bi.config import Environment, Settings
 from governed_bi.corpus import load_corpus
 from governed_bi.gateway import Gateway, Identity, SqliteConnector
 from governed_bi.llm.fake import FakeToolModel, ai_tool_turn
-from governed_bi.server.agent import answer_question_agent
-from governed_bi.server.answer import ReliabilityTier, SemanticAssurance
+from governed_bi.analyst.agent import answer_question_agent
+from governed_bi.analyst.answer import ReliabilityTier, SemanticAssurance
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 BIRD_DB = Path(__file__).resolve().parents[1] / "data" / "bird" / "beer_factory.sqlite"
@@ -27,7 +27,7 @@ TXN = "tbl_beer_factory_transaction"
 
 @pytest.fixture
 def corpus():
-    return load_corpus(CORPUS_ROOT, schema="beer_factory").for_server()
+    return load_corpus(CORPUS_ROOT, schema="beer_factory").for_analyst()
 
 
 @pytest.fixture
@@ -135,5 +135,5 @@ def test_invariant_safety_clearance_on_agent_path(
     )
     assert ans.tier is ReliabilityTier.governed
     assert ans.safety_clearance is True
-    assert ans.semantic_assurance is SemanticAssurance.certified
+    assert ans.semantic_assurance is SemanticAssurance.grounded
     assert ans.sql is not None

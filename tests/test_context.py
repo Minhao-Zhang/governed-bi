@@ -1,4 +1,4 @@
-"""Tests for retrieval -> prompt context assembly (server.context).
+"""Tests for retrieval -> prompt context assembly (analyst.context).
 
 Runs against the committed beer_factory corpus (no DB needed).
 """
@@ -12,8 +12,8 @@ import pytest
 from governed_bi.corpus import load_corpus
 from governed_bi.graph import build_graph, plan_joins
 from governed_bi.retrieval import retrieve
-from governed_bi.server.context import PromptContext, assemble_context
-from governed_bi.server.governance import _licensed_table_ids
+from governed_bi.analyst.context import PromptContext, assemble_context
+from governed_bi.analyst.governance import _licensed_table_ids
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 
@@ -23,7 +23,7 @@ CUSTOMERS = "tbl_beer_factory_customers"
 
 @pytest.fixture
 def corpus():
-    return load_corpus(CORPUS_ROOT, schema="beer_factory").for_server()
+    return load_corpus(CORPUS_ROOT, schema="beer_factory").for_analyst()
 
 
 def _context(corpus, question):
@@ -125,7 +125,7 @@ def test_metric_resolved_over_physical_base_table(corpus):
 
 
 def test_excluded_column_never_appears(corpus):
-    # The PII CreditCardNumber column is governance.excluded -> for_server() drops
+    # The PII CreditCardNumber column is governance.excluded -> for_analyst() drops
     # it, so context must never surface it.
     ctx, _ = _context(corpus, "total revenue")
     all_cols = {c.physical_name for t in ctx.tables for c in t.columns}

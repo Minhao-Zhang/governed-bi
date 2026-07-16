@@ -280,7 +280,7 @@ def test_phase_b_agent_ingests_with_certified_provenance(bird_connector, tmp_pat
 
 def test_phase_b_empty_ledger_is_noop_not_failure(bird_connector, tmp_path: Path):
     """An empty ledger (agent resolved everything, asked nothing) is acceptable:
-    Phase B no-ops and A3 == A2 rather than raising. Zero SME questions is OK."""
+    Phase B no-ops and curated_sme == curated rather than raising. Zero SME questions is OK."""
     import json
 
     gateway = Gateway(bird_connector)

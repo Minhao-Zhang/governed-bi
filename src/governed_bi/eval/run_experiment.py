@@ -1,4 +1,4 @@
-"""One-command three-arm accuracy experiment (plan W4/W5).
+"""One-command eval-ladder accuracy experiment (plan W4/W5).
 
 Run::
 
@@ -25,7 +25,6 @@ from ..corpus.schemas import ReliabilityStatus, TableAsset
 from ..gateway import Gateway, Identity
 from ..gateway.connectors.postgres import PostgresConnector
 from .arms import _touches_suspect, agent_solver
-from .baseline_solver import no_layer_solver
 from .bird_loader import load_bird_items
 from .hash_grade import (
     crosscheck_execution_match,
@@ -201,9 +200,10 @@ def run_experiment(
     max_agent_steps: int = 25,
     skip_agent: bool = False,
     limit: int | None = None,
-    resume_a2: Path | None = None,
+    resume_curated: Path | None = None,
 ) -> dict[str, Any]:
-    """Run A1/A2/A3 for one DB; write generations + summary under ``out_dir``."""
+    """Run baseline/curated/curated_sme for one DB; write generations + summary
+    under ``out_dir``."""
     load_dotenv()
     dataset_dir = bird_dir / "eval_dataset"
     train = load_bird_items(
@@ -239,7 +239,7 @@ def run_experiment(
     base_settings = load_settings()
     datasource = DataSourceConfig(
         kind="postgres",
-        db=db_id,
+        corpus_pin=db_id,
         schema=db_id,
         dsn=pg_dsn,
         multi_schema=False,
@@ -284,30 +284,38 @@ def run_experiment(
 
     run_root = out_dir
     run_root.mkdir(parents=True, exist_ok=True)
-    corpus_a2 = run_root / "corpus_a2"
-    corpus_a3 = run_root / "corpus_a3"
+    corpus_baseline = run_root / "corpus_baseline"
+    corpus_curated = run_root / "corpus_curated"
+    corpus_curated_sme = run_root / "corpus_curated_sme"
 
-    # --- A2 corpus ---
-    from ..curator.pipeline import build_curated_corpus, build_curated_corpus_with_sme
+    # --- baseline corpus (D5: deterministic-max, DB-derivable only; no LLM) ---
+    from ..curator.pipeline import (
+        build_baseline_corpus,
+        build_curated_corpus,
+        build_curated_corpus_with_sme,
+    )
     from ..curator.sme import SimulatedSme, assert_brief_no_leakage, build_sme_brief
 
-    if resume_a2 is not None:
-        corpus_a2 = Path(resume_a2)
+    build_baseline_corpus(connector, db_id, corpus_baseline)
+
+    # --- curated corpus ---
+    if resume_curated is not None:
+        corpus_curated = Path(resume_curated)
     else:
         build_curated_corpus(
             connector,
             gateway,
             db_id,
             train,
-            corpus_a2,
+            corpus_curated,
             model=None if skip_agent else lc_model,
             dialect="postgres",
             max_agent_steps=max_agent_steps,
             run_agent=not skip_agent,
         )
 
-    # --- A3 corpus (SME) ---
-    # Always rebuild + assert the SME brief (even on --resume-a2) so leakage
+    # --- curated_sme corpus ---
+    # Always rebuild + assert the SME brief (even on --resume-curated) so leakage
     # invariants execute for every headline number.
     desc_dir = (
         bird_dir
@@ -325,9 +333,13 @@ def run_experiment(
     )
     brief_checked = True
 
-    existing_a3 = corpus_a2.parent / "corpus_a3"
-    if resume_a2 is not None and existing_a3.is_dir() and any(existing_a3.rglob("*.yaml")):
-        corpus_a3 = existing_a3
+    existing_curated_sme = corpus_curated.parent / "corpus_curated_sme"
+    if (
+        resume_curated is not None
+        and existing_curated_sme.is_dir()
+        and any(existing_curated_sme.rglob("*.yaml"))
+    ):
+        corpus_curated_sme = existing_curated_sme
     else:
         if skip_agent:
             from ..curator.clarifications import StaticResponder
@@ -340,9 +352,9 @@ def run_experiment(
                 gateway,
                 db_id,
                 train,
-                corpus_a3,
+                corpus_curated_sme,
                 responder=responder,
-                a2_root=corpus_a2,
+                a2_root=corpus_curated,
                 model=None,
                 run_agent_repass=False,
                 seed_ledger_if_empty=True,
@@ -354,38 +366,41 @@ def run_experiment(
                 gateway,
                 db_id,
                 train,
-                corpus_a3,
+                corpus_curated_sme,
                 responder=responder,
-                a2_root=corpus_a2,
+                a2_root=corpus_curated,
                 model=lc_model,
                 run_agent_repass=True,
                 seed_ledger_if_empty=False,
             )
 
     # --- Solvers ---
-    a1 = no_layer_solver(connector, gateway, chat, schema=db_id, dialect="postgres")
-
-    corpus2 = load_corpus(corpus_a2, schema=db_id)
-    corpus3 = load_corpus(corpus_a3, schema=db_id)
-    # The layered arms (curator/gold) route through the agentic serve core (ADR
-    # 0002 — the only serve path). A1 is model-only. ``--skip-agent`` has no live
-    # model, so the layered arms degrade to a trivial refuse-all (offline smoke).
+    # Every rung of the eval ladder routes through the same agentic serve core
+    # (ADR 0002 — the only serve path); rungs differ only by the corpus fed in.
+    # ``--skip-agent`` has no live model, so every rung degrades to a trivial
+    # refuse-all (offline smoke).
+    baseline_corpus_loaded = load_corpus(corpus_baseline, schema=db_id)
+    curated_corpus_loaded = load_corpus(corpus_curated, schema=db_id)
+    curated_sme_corpus_loaded = load_corpus(corpus_curated_sme, schema=db_id)
     if lc_model is not None:
-        a2 = agent_solver(corpus2, gateway, settings, identity, model=lc_model)
-        a3 = agent_solver(corpus3, gateway, settings, identity, model=lc_model)
+        baseline = agent_solver(baseline_corpus_loaded, gateway, settings, identity, model=lc_model)
+        curated = agent_solver(curated_corpus_loaded, gateway, settings, identity, model=lc_model)
+        curated_sme = agent_solver(
+            curated_sme_corpus_loaded, gateway, settings, identity, model=lc_model
+        )
     else:
-        a2 = a3 = _RefuseAllSolver()
+        baseline = curated = curated_sme = _RefuseAllSolver()
 
-    suspect_a1 = trap_cols
-    suspect_a2 = _suspect_from_corpus(corpus_a2, db_id) | trap_cols
-    suspect_a3 = _suspect_from_corpus(corpus_a3, db_id) | trap_cols
+    suspect_baseline = _suspect_from_corpus(corpus_baseline, db_id) | trap_cols
+    suspect_curated = _suspect_from_corpus(corpus_curated, db_id) | trap_cols
+    suspect_curated_sme = _suspect_from_corpus(corpus_curated_sme, db_id) | trap_cols
 
     summaries: dict[str, ArmSummary] = {}
     crosschecks: dict[str, dict] = {}
     for arm_name, solver, suspects in (
-        ("a1_baseline", a1, suspect_a1),
-        ("a2_curated", a2, suspect_a2),
-        ("a3_sme", a3, suspect_a3),
+        ("baseline", baseline, suspect_baseline),
+        ("curated", curated, suspect_curated),
+        ("curated_sme", curated_sme, suspect_curated_sme),
     ):
         gens, summary, xtra = _run_arm_generations(
             arm=arm_name,
@@ -402,17 +417,23 @@ def run_experiment(
         summaries[arm_name] = summary
         crosschecks[arm_name] = xtra
 
-    a1s, a2s, a3s = summaries["a1_baseline"], summaries["a2_curated"], summaries["a3_sme"]
+    baseline_s = summaries["baseline"]
+    curated_s = summaries["curated"]
+    curated_sme_s = summaries["curated_sme"]
     result = {
         "db_id": db_id,
         "n_train": len(train),
         "n_test": len(test),
         "arms": {k: asdict(v) for k, v in summaries.items()},
         "deltas": {
-            "a2_minus_a1_ex": a2s.ex_lenient - a1s.ex_lenient,
-            "a3_minus_a2_ex": a3s.ex_lenient - a2s.ex_lenient,
-            "a2_minus_a1_decoy_touch": a2s.decoy_touch_rate - a1s.decoy_touch_rate,
-            "a3_minus_a2_decoy_touch": a3s.decoy_touch_rate - a2s.decoy_touch_rate,
+            "curated_minus_baseline_ex": curated_s.ex_lenient - baseline_s.ex_lenient,
+            "curated_sme_minus_curated_ex": curated_sme_s.ex_lenient - curated_s.ex_lenient,
+            "curated_minus_baseline_decoy_touch": (
+                curated_s.decoy_touch_rate - baseline_s.decoy_touch_rate
+            ),
+            "curated_sme_minus_curated_decoy_touch": (
+                curated_sme_s.decoy_touch_rate - curated_s.decoy_touch_rate
+            ),
         },
         "ex_crosscheck": crosschecks,
         "gold_hash_self_check": gold_check,
@@ -451,7 +472,7 @@ def run_experiment(
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Three-arm BIRD accuracy experiment")
+    parser = argparse.ArgumentParser(description="Eval-ladder BIRD accuracy experiment")
     parser.add_argument("--db", required=True, help="BIRD db_id / Postgres schema")
     parser.add_argument(
         "--bird-dir",
@@ -472,10 +493,10 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--limit", type=int, default=None, help="Cap test questions")
     parser.add_argument(
-        "--resume-a2",
+        "--resume-curated",
         type=Path,
         default=None,
-        help="Reuse an existing corpus_a2 directory",
+        help="Reuse an existing corpus_curated directory",
     )
     args = parser.parse_args(argv)
 
@@ -490,7 +511,7 @@ def main(argv: list[str] | None = None) -> None:
         max_agent_steps=args.max_agent_steps,
         skip_agent=args.skip_agent,
         limit=args.limit,
-        resume_a2=args.resume_a2,
+        resume_curated=args.resume_curated,
     )
     print(json.dumps(result["arms"], indent=2))
     print("deltas:", json.dumps(result["deltas"], indent=2))

@@ -58,7 +58,7 @@ repo, no network.
     `Clarification` model (`status`, `question`, `asked_by?`, `answer?`,
     `answered_by?`, `at?`), and an optional `clarification: Clarification | None`
     field on the `Audit` tier (never served, so questions never leak to the
-    server). Reuse the existing Inference tier + low `confidence` + `suspect`
+    Analyst). Reuse the existing Inference tier + low `confidence` + `suspect`
     caveat for the provisional guess; no new field for that.
   - `corpus/clarify.py` (new): `accept_answer(asset, *, by, answer, edits=None,
     reason=None, at=None, status=certified)` returns a deep copy with the
@@ -69,7 +69,7 @@ repo, no network.
     `accept_answer`.
   - `tests/test_clarification.py`: an asset with an open clarification →
     `accept_answer` → assert answered, provenance `source=human`, edits applied,
-    and that the clarification never appears in `for_server()`.
+    and that the clarification never appears in `for_analyst()`.
 
 - **WS4 partial — `bird_loader`.**
   - `eval/bird_loader.py` (new): `load_bird_items(dataset_dir, db_id,

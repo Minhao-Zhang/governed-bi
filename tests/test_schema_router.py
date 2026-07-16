@@ -161,9 +161,9 @@ def test_route_schemas_recorded_in_provenance(monkeypatch):
     from governed_bi.gateway import Gateway, Identity, SqliteConnector
     from governed_bi.llm.fake import FakeToolModel
     from governed_bi.retrieval import RetrievalResult
-    from governed_bi.server.agent import answer_question_agent
+    from governed_bi.analyst.agent import answer_question_agent
 
-    corpus = _three_schema_bridge().for_server()
+    corpus = _three_schema_bridge().for_analyst()
     settings = replace(
         Settings.for_env(Environment.dev),
         datasource=DataSourceConfig(kind="postgres", dsn="host=x"),
@@ -182,7 +182,7 @@ def test_route_schemas_recorded_in_provenance(monkeypatch):
     # The agentic assemble node stamps routed_schemas from route_schemas(); a
     # no-op model (answers without a query) yields a no-coverage refusal that
     # still carries that provenance — no live model, no DB tables needed.
-    monkeypatch.setattr("governed_bi.server.agent.retrieve", _fake_retrieve)
+    monkeypatch.setattr("governed_bi.analyst.agent.retrieve", _fake_retrieve)
 
     conn = SqliteConnector(":memory:")
     try:

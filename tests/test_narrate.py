@@ -1,4 +1,4 @@
-"""Tests for the natural-language narrator (server.narrate).
+"""Tests for the natural-language narrator (analyst.narrate).
 
 The narrator is a presentation layer over an already-governed result: it phrases
 the executed rows into English, is grounded only in what it is shown, and never
@@ -9,8 +9,8 @@ conformance, and the deterministic fallbacks.
 from __future__ import annotations
 
 from governed_bi.llm import StaticChatClient
-from governed_bi.server.answer import ResultTable
-from governed_bi.server.narrate import AnswerNarrator, LlmAnswerNarrator
+from governed_bi.analyst.answer import ResultTable
+from governed_bi.analyst.narrate import AnswerNarrator, LlmAnswerNarrator
 
 
 def test_narrator_returns_model_phrasing():

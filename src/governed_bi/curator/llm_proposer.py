@@ -5,7 +5,7 @@ determine (roles, provenance) and deliberately leaves ``description`` and
 reliability caveats to a model. This module is that model-backed proposer. It is
 where the semantic layer earns its keep: precise column/table descriptions and,
 critically, the **reliability caveats that flag unreliable / misleading columns**
-(``reliability.status = suspect`` + a "DO NOT USE" note), which the server injects
+(``reliability.status = suspect`` + a "DO NOT USE" note), which the Analyst injects
 into SQL generation and enforces at guardrail L3 - the lever that wins the
 decoy-touch metric.
 

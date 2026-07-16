@@ -8,7 +8,7 @@ one all-access identity; in an enterprise deployment it fronts real per-user RLS
 Those differences come from ``config.Settings``, not separate code paths.
 
 Guardrails (syntax / policy / AST allowlist / term-semantics / cost) run in the
-server middleware *before* SQL reaches ``execute``; this class assumes the SQL it
+Analyst middleware *before* SQL reaches ``execute``; this class assumes the SQL it
 receives has already passed them.
 """
 

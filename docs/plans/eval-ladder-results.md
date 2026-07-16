@@ -1,4 +1,4 @@
-# Three-Arm Experiment: Results (v5 — supersedes v1–v4)
+# Experiment Results (v5 — supersedes v1–v4)
 
 _Recorded 2026-07-14 (run `20260715T010412Z_restaurant`, executed 2026-07-14
 evening local). Method and decisions: [design-decisions.md](../design-decisions.md)
@@ -8,13 +8,30 @@ Raw `runs/` artifacts are git-ignored/ephemeral — this doc is the durable reco
 > **v5 is the first full end-to-end run on the _agent_ serve path — now the only
 > serve path** (the [ADR 0002](../adr/0002-governed-agentic-serve-runtime.md) P2
 > cutover deleted `flow.py` on 2026-07-14, commit `d2fdd6a`). Every prior
-> three-arm number (v1–v4) was scored on the retired deterministic **flow** path.
+> number (v1–v4) was scored on the retired deterministic **flow** path.
 > v5 is therefore the canonical record of the *shipped* system; **v4's flow
 > figures are kept below only as the flow-path baseline** for the agent-vs-flow
 > comparison, because that comparison can no longer be re-run (flow is gone).
 > **Still a single seed** — the ≥3-seed blocker from v4 is unchanged; v5's
 > headline finding (SME finally moved EX) is a signal to replicate, not a result
 > to quote.
+
+> **Terminology since superseded — read this before the numbers below.** This
+> doc predates the [terminology refactor](terminology-refactor.md) and uses the
+> arm labels current at recording time: `A1` (renamed `baseline`), `A2`
+> (renamed `curated`), `A3` (renamed `curated_sme`); the retired de-obfuscation
+> `gold` oracle is superseded by `ceiling`. **The mapping is a label rename
+> only for `A2`/`A3`/`gold`; it is not a like-for-like rename for `A1`.** The
+> `A1` scored here is the old raw-dump "no-layer" solver — the model goes
+> straight to SQL with no semantic layer and no samples, over a **different,
+> now-deleted serve mechanism**. The new `baseline` arm is a redefinition, not
+> a relabeling: a deterministic, script-built corpus (table/column names,
+> types, **sample values**, FK candidates — no curator LLM, no train-SQL-derived
+> assets) served through the **same Analyst path as every other arm**, closing
+> the "no content" vs. "no governed path" confound the old `A1` had. The new
+> `baseline` has not been run under this benchmark; do not read any number below
+> as its score. See [terminology-refactor.md](terminology-refactor.md) for the
+> full ladder and rename map.
 
 ## TL;DR
 

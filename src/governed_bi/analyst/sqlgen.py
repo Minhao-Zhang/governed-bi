@@ -4,7 +4,7 @@ Historically this module also held the deterministic-flow SQL generators
 (``TemplateSqlGenerator`` / ``LlmSqlGenerator`` behind a ``SqlGenerator``
 protocol + ``RepairFeedback``). The flow serve path is gone (ADR 0002 — the
 agent generates SQL itself via its tool loop), so only two flow-independent
-helpers remain and are consumed by ``server.agent`` / ``server.governance``:
+helpers remain and are consumed by ``analyst.agent`` / ``analyst.governance``:
 
 - :class:`GeneratedSql` — a generated statement plus the table-asset ids it
   reads from (the agent core builds one to hand the shared finalizer).

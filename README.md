@@ -16,8 +16,8 @@ not a runtime we ask anyone to deploy.
 ## How it works
 
 - **Two harnesses, one substrate.** A `curator` (build) *produces* a semantic
-  layer (the corpus) from a seed of known-good `(question, SQL)` pairs; a
-  `server` (serve) *consumes* it to answer. Opposite risk profiles, one shared
+  layer (the corpus) from a seed of known-good `(question, SQL)` pairs; an
+  `analyst` (serve) *consumes* it to answer. Opposite risk profiles, one shared
   corpus.
 - **The corpus is the moat.** Git-tracked typed YAML assets + Markdown skills,
   curator-authored and human-audited. Git is the single source of truth; the
@@ -44,7 +44,7 @@ git-ignored `governed_bi.local.toml` beside [`governed_bi.toml`](governed_bi.tom
 ```toml
 [datasource]
 kind = "postgres"
-db = "your_schema"       # corpus subtree / db id
+corpus_pin = "your_schema"       # corpus subtree / BIRD db_id
 dsn_env = "PG_DSN"       # names the env var that holds the DSN
 ```
 
@@ -65,7 +65,7 @@ uv run langgraph dev          # starts the `serve` graph; POST questions to /cha
 
 See [walkthrough](docs/walkthrough.md) for a guided first-question tour and
 [usage](docs/usage.md) for the full reference. To drive the agent core directly
-from Python, see [`docs/server.md`](docs/server.md).
+from Python, see [`docs/analyst.md`](docs/analyst.md).
 
 ## Configuration
 
@@ -115,7 +115,7 @@ the result is directional, not yet conclusive. The current milestone is the
 unit of evidence (see
 [audit dispositions](docs/design-decisions.md#audit-dispositions-2026-07-15)).
 Full numbers and method:
-[three-arm results](docs/plans/three-arm-experiment-results.md).
+[experiment results](docs/plans/eval-ladder-results.md).
 
 Designed but not yet built: `CorpusRelease` (immutable, hash-pinned serving
 release). Seamed but toggled off (enterprise-fork scope): identity → query scope
@@ -126,15 +126,15 @@ has offline connector tests only.
 
 The frontend is a separate repo:
 [Minhao-Zhang/governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui)
-(Next.js, `useStream`). It targets this backend's streaming chat contract; it is
-not yet wired live end-to-end.
+(Next.js, `useStream`), which targets this backend's streaming chat contract. For
+its current build status, see that repo — it is not tracked here.
 
 ## Documentation
 
 Start at [`docs/README.md`](docs/README.md). Key docs:
 [architecture](docs/architecture.md) · [design decisions](docs/design-decisions.md) ·
 [asset schemas](docs/asset-schemas.md) · [curator](docs/curator.md) ·
-[server](docs/server.md) · [viz](docs/viz.md) · [glossary](docs/glossary.md).
+[analyst](docs/analyst.md) · [viz](docs/viz.md) · [glossary](docs/glossary.md).
 
 ## Repo layout
 
@@ -151,7 +151,7 @@ src/governed_bi/
   graph/            FK graph projection + Steiner-tree join planning
   retrieval/        BM25 + grounding + vector channel (RRF fusion)
   memory/           working memory; episodic/correction seams
-  server/           the ADR-0002 governed agentic core (sole serve path): agent, tools, middleware, governance, cache, stamp
+  analyst/          the ADR-0002 governed agentic core (sole serve path): agent, tools, middleware, governance, cache, stamp
   eval/             execution accuracy, arm harness, refuse-gate
   viz/              read-only audit surface (UI-agnostic presenter view models)
 tests/              unit + end-to-end suites

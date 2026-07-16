@@ -2,8 +2,9 @@
 
 _Status: **AGREED; server side IMPLEMENTED** (2026-07-14). The six §11 decisions
 are accepted; the engine honours this contract (see "Server implementation
-status" below). The **frontend side is open** — this doc is the source of truth
-for it. Owner: engine (server, done) + `governed-bi-ui` (to build).
+status" below). This doc is the source of truth for the **frontend contract**; for
+the frontend's build status, see [`governed-bi-ui`](https://github.com/Minhao-Zhang/governed-bi-ui)
+— it is not tracked here.
 Companion to [agent-step-visualization.md](agent-step-visualization.md) (the live
 governance-event stream this extends) and
 [ADR 0002](../adr/0002-governed-agentic-serve-runtime.md) (the agentic serve core;
@@ -205,9 +206,9 @@ resolve, listed so the frontend team knows they exist:
 
 The engine side is built and tested offline; the frontend is the remaining work.
 
-- **`ask_user` tool** — `server/tools.py` (added only when `enable_clarify`), calls
+- **`ask_user` tool** — `analyst/tools.py` (added only when `enable_clarify`), calls
   `interrupt(clarification_request(...))`. Payload builder + response parser:
-  `server/clarify.py` (the §3/§4 shapes; `clarification_id` is deterministic in the
+  `analyst/clarify.py` (the §3/§4 shapes; `clarification_id` is deterministic in the
   question so a re-run re-derives it — no clock/RNG).
 - **Interrupt/resume plumbing** — the inner `create_agent` runs on a per-turn
   in-memory checkpointer (`ServeStack.clarify_checkpointer`); the chat-graph

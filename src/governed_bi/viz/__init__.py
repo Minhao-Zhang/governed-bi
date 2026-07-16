@@ -1,10 +1,10 @@
 """Viz: UI-agnostic view models for the read-only audit surface (review side, D6).
 
-``presenter`` turns the corpus and server answers into plain, frozen view models
+``presenter`` turns the corpus and Analyst answers into plain, frozen view models
 (corpus health, the table/tier view, the asset listing, skills, the relationship
 graph, and an answer's two-axis reliability stamp) with **no UI dependency**. It
 reads the full corpus (Facts + Inference + Audit + ``governance.excluded``
-assets), unlike the server's ``for_server`` view.
+assets), unlike the Analyst's ``for_analyst`` view.
 
 These view models are the stable contract the HTTP API (``governed_bi.api``)
 serializes as JSON and a separate frontend renders; this repo ships no bundled UI,

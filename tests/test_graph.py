@@ -32,7 +32,7 @@ CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 
 @pytest.fixture
 def graph():
-    corpus = load_corpus(CORPUS_ROOT, schema="beer_factory").for_server()
+    corpus = load_corpus(CORPUS_ROOT, schema="beer_factory").for_analyst()
     return build_graph(corpus)
 
 
@@ -113,13 +113,13 @@ def test_metric_derived_from_base_table(graph):
 
 
 def test_excluded_column_absent_in_server_graph(graph):
-    """The PII column is governance.excluded, so for_server() drops it and the
+    """The PII column is governance.excluded, so for_analyst() drops it and the
     server-facing graph must not contain its node."""
     assert "col_beer_factory_transaction_CreditCardNumber" not in graph.nodes
 
 
 def test_no_phantom_nodes_from_excluded_reference():
-    """for_server() can leave a join/FK pointing at an excluded asset; build_graph
+    """for_analyst() can leave a join/FK pointing at an excluded asset; build_graph
     must not resurface it as a bare, kind-less node."""
     from governed_bi.corpus import Corpus
     from governed_bi.corpus.ids import derive_column_id
@@ -158,7 +158,7 @@ def test_no_phantom_nodes_from_excluded_reference():
     )
     join = JoinAsset(id="join_a_b", left_table="tbl_x_a", right_table="tbl_x_b", on="a.b_id = b.id")
 
-    g = build_graph(Corpus(assets=[a, b, join]).for_server())
+    g = build_graph(Corpus(assets=[a, b, join]).for_analyst())
     assert [n for n, d in g.nodes(data=True) if "kind" not in d] == []  # no phantom nodes
     assert "tbl_x_b" not in g.nodes  # excluded table did not resurface
     assert b_pk not in g.nodes

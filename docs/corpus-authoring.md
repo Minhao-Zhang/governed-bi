@@ -52,7 +52,7 @@ tier a field belongs to tells you whether you should be writing it:
 
 - **Facts**: read from the catalog and data (`physical_name`, `physical_type`, `nullable`, `is_unique`, `sample_values`, `row_count`). In the real loop these are generated programmatically and never edited. When authoring by hand, fill them from the actual database.
 - **Inference**: the semantic layer, the part that carries meaning (`description`, `role`, `references`, `cardinality`, `expression`, `confidence`, and so on). This is the work.
-- **Audit**: why the inference was made (`audit.provenance` plus free-text `*_evidence`). Never shown to the server; keep it as verbose as you like.
+- **Audit**: why the inference was made (`audit.provenance` plus free-text `*_evidence`). Never shown to the Analyst; keep it as verbose as you like.
 - **Governance**: `governance.excluded`, set only by a human owner. See step 7.
 
 ## 3. Add a table (with columns)
@@ -178,12 +178,12 @@ a caveat, not a typed flag, so the same mechanism works everywhere.
 ```
 
 At serve time a `suspect` column is hard-blocked in dev and soft-warned in an
-enterprise deployment. See [server.md](server.md).
+enterprise deployment. See [Analyst](analyst.md).
 
 ## 7. Governance exclusion (human only)
 
 Distinct from a reliability caveat: a human owner can remove an asset from
-everything the server sees, permanently, in all environments.
+everything the Analyst sees, permanently, in all environments.
 
 ```yaml
     governance:
@@ -193,7 +193,7 @@ everything the server sees, permanently, in all environments.
       at: "2026-07-08"
 ```
 
-`Corpus.for_server()` drops these, so an excluded column never reaches
+`Corpus.for_analyst()` drops these, so an excluded column never reaches
 retrieval, the presented schema, or SQL generation.
 
 ## 8. Skills (Markdown, not YAML)

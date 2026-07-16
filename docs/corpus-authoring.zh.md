@@ -35,7 +35,7 @@ corpus/
 
 - **Facts**：从目录(catalog)和数据中读取(`physical_name`、`physical_type`、`nullable`、`is_unique`、`sample_values`、`row_count`)。在真实的流程中，这些字段由程序自动生成，永远不会手动编辑。手动编写时，请根据实际数据库来填写它们。
 - **Inference**：语义层，也就是承载含义的部分(`description`、`role`、`references`、`cardinality`、`expression`、`confidence` 等)。这才是真正要做的工作。
-- **Audit**：说明为什么会做出该推断(`audit.provenance`，以及自由文本形式的 `*_evidence`)。永远不会展示给 server；可以尽可能详细地填写。
+- **Audit**：说明为什么会做出该推断(`audit.provenance`，以及自由文本形式的 `*_evidence`)。永远不会展示给 Analyst；可以尽可能详细地填写。
 - **Governance**：`governance.excluded`，只能由人工负责人设置。参见第 7 步。
 
 ## 3. 添加一张表(含列)
@@ -153,11 +153,11 @@ confidence: 0.7
       note: "UNRELIABLE - DO NOT USE. values look tampered."
 ```
 
-在 serve 阶段，被标记为 `suspect` 的列在 dev 环境中会被硬性阻止(hard-blocked)，在企业级部署中则只给出软性警告(soft-warned)。参见[server.md](server.zh.md)。
+在 serve 阶段，被标记为 `suspect` 的列在 dev 环境中会被硬性阻止(hard-blocked)，在企业级部署中则只给出软性警告(soft-warned)。参见[Analyst](analyst.zh.md)。
 
 ## 7. Governance 排除(仅限人工)
 
-这与可靠性警示不同：人工负责人可以将某个资产从 server 所能看到的一切内容中永久移除，且在所有环境中都生效。
+这与可靠性警示不同：人工负责人可以将某个资产从 Analyst 所能看到的一切内容中永久移除，且在所有环境中都生效。
 
 ```yaml
     governance:
@@ -167,7 +167,7 @@ confidence: 0.7
       at: "2026-07-08"
 ```
 
-`Corpus.for_server()` 会丢弃这些资产，因此被排除的列永远不会进入检索(retrieval)、呈现的模式(schema)，或 SQL 生成环节。
+`Corpus.for_analyst()` 会丢弃这些资产，因此被排除的列永远不会进入检索(retrieval)、呈现的模式(schema)，或 SQL 生成环节。
 
 ## 8. Skills(Markdown，而不是 YAML)
 

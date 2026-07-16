@@ -6,7 +6,7 @@ OpenAI-backed LangChain clients (per ``governed_bi.toml``) and runs the existing
 eval harness over the committed, un-obfuscated beer_factory DB + hand-authored
 corpus, through the **agentic serve core** (ADR 0002 — the only serve path):
 
-  - the **curator arm** (``agent_solver`` = create_agent + governance middleware):
+  - the **curated arm** (``agent_solver`` = create_agent + governance middleware):
     execution accuracy, decoy-touch rate, governed-path adherence over
     ``BEER_FACTORY_EVAL``;
   - the **refuse-gate** (``agent_refuser``): refusal accuracy on the unanswerable
@@ -16,7 +16,7 @@ corpus, through the **agentic serve core** (ADR 0002 — the only serve path):
 This is a *smoke test of the real path*, not the headline benchmark: the corpus,
 gold set, and DB are all self-authored and un-obfuscated, so a high EX here only
 proves the plumbing works end-to-end against a live model. The real moat proof is
-the obfuscated BIRD three-arm eval.
+the obfuscated BIRD eval-ladder run.
 
 Run it (needs a key; real API spend — the agent path makes several small model
 calls per question):
@@ -75,7 +75,7 @@ def main() -> None:
         run_arm,
     )
     from governed_bi.gateway import Gateway, Identity, SqliteConnector, column_allowlist
-    from governed_bi.server.agent import answer_question_agent
+    from governed_bi.analyst.agent import answer_question_agent
 
     models = load_settings(REPO_ROOT / "governed_bi.toml").models
     print(f"models: llm={models.llm_model} (effort={models.llm_reasoning_effort}) "
@@ -85,7 +85,7 @@ def main() -> None:
     embedder = LangChainEmbedder.from_config(models)
     model = chat.model  # raw LangChain BaseChatModel the agent core drives
 
-    corpus = load_corpus(CORPUS_ROOT, schema="beer_factory").for_server()
+    corpus = load_corpus(CORPUS_ROOT, schema="beer_factory").for_analyst()
     settings = Settings.for_env(Environment.dev)
     identity = Identity(user="dev", all_access=True)
     connector = SqliteConnector(BIRD_DB)
@@ -93,11 +93,11 @@ def main() -> None:
     suspect = column_allowlist(corpus).suspect
 
     try:
-        # ── Curator arm: EX + free behavioral signals, agentic serve core ──
+        # ── Curated arm: EX + free behavioral signals, agentic serve core ──
         solver = agent_solver(corpus, gateway, settings, identity, model=model, embedder=embedder)
-        arm = run_arm(Arm.curator, gateway, BEER_FACTORY_EVAL, solver,
+        arm = run_arm(Arm.curated, gateway, BEER_FACTORY_EVAL, solver,
                       suspect_columns=suspect, dialect="sqlite")
-        print("== curator arm (agentic serve core: create_agent + governance) ==")
+        print("== curated arm (agentic serve core: create_agent + governance) ==")
         print(f"  execution accuracy : {arm.ex:.2f}  ({arm.n} items)")
         print(f"  decoy-touch rate   : {arm.decoy_touch_rate:.2f}")
         print(f"  governed-path adher: {arm.governed_path_adherence:.2f}\n")

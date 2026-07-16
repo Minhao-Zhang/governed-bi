@@ -1,6 +1,6 @@
 """Build the serve stack for the API from ``load_settings()``.
 
-One place that assembles everything a request needs — corpus (full + server
+One place that assembles everything a request needs — corpus (full + analyst
 view), settings, identity, the SQLite path, and the model stack (SQL generator +
 embedder + narrator) — driven by project TOML (+ optional local overlay). The
 model stack is live (LangChain, needs the ``agents`` extra + a key) when the
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from ..corpus import Corpus
     from ..gateway.connectors.base import Connector
     from ..llm import Embedder
-    from ..server import AnswerNarrator
+    from ..analyst import AnswerNarrator
 
 logger = logging.getLogger("governed_bi.api")
 
@@ -32,7 +32,7 @@ class ServeStack:
     """Everything the API needs to answer + describe one deployment."""
 
     corpus_full: "Corpus"  # audit view (Facts + Inference + Audit, excluded shown)
-    corpus_server: "Corpus"  # for_server() view (what SQL-gen may see)
+    corpus_analyst: "Corpus"  # for_analyst() view (what SQL-gen may see)
     settings: "Settings"
     dialect: str
     sqlite_path: Path
@@ -122,7 +122,7 @@ def _build_model_stack(settings: Settings) -> tuple[Any, Any, str | None, bool, 
     if settings.models.api_key():
         try:
             from ..llm import LangChainChatClient, LangChainEmbedder
-            from ..server import LlmAnswerNarrator
+            from ..analyst import LlmAnswerNarrator
 
             models = settings.models
             chat = LangChainChatClient.from_config(models)
@@ -184,7 +184,7 @@ def build_stack(settings: Settings | None = None) -> ServeStack:
 
     stack = ServeStack(
         corpus_full=corpus_full,
-        corpus_server=corpus_full.for_server(),
+        corpus_analyst=corpus_full.for_analyst(),
         settings=settings,
         dialect=datasource.kind,  # sqlite | postgres | redshift (matches the Dialect enum)
         sqlite_path=sqlite_path,

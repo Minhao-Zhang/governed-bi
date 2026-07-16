@@ -22,8 +22,8 @@ from governed_bi.corpus.schemas import (
 from governed_bi.gateway import Gateway, Identity, SqliteConnector
 from governed_bi.graph import build_graph, detect_missing_join_path
 from governed_bi.retrieval import RetrievalResult
-from governed_bi.server.agent import answer_question_agent
-from governed_bi.server.answer import ReliabilityTier
+from governed_bi.analyst.agent import answer_question_agent
+from governed_bi.analyst.answer import ReliabilityTier
 
 SCHEMA_A_ORDERS = "tbl_schema_a_orders"
 SCHEMA_B_ORDERS = "tbl_schema_b_orders"
@@ -139,7 +139,7 @@ def test_agent_refuses_missing_edge(monkeypatch):
     # agent core runs — so it is deterministic and needs no live model (model=None
     # is never reached).
     a, b = _tables()
-    corpus = Corpus(assets=[a, b]).for_server()
+    corpus = Corpus(assets=[a, b]).for_analyst()
     settings = _pg_settings()
     assert settings.datasource.is_multi_schema()
 
@@ -153,7 +153,7 @@ def test_agent_refuses_missing_edge(monkeypatch):
             scores={},
         )
 
-    monkeypatch.setattr("governed_bi.server.agent.retrieve", _fake_retrieve)
+    monkeypatch.setattr("governed_bi.analyst.agent.retrieve", _fake_retrieve)
 
     conn = SqliteConnector(":memory:")
     try:

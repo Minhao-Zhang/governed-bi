@@ -1,4 +1,4 @@
-"""Tests for the SQL semantic-cache fast path (server.cache + server.governance wiring).
+"""Tests for the SQL semantic-cache fast path (analyst.cache + analyst.governance wiring).
 
 The embedder is the deterministic HashingEmbedder (no network). The cache-hit
 integration test executes against the committed beer_factory DB (skipped if absent).
@@ -14,8 +14,8 @@ from governed_bi.config import Environment, Settings
 from governed_bi.corpus import load_corpus
 from governed_bi.gateway import Gateway, Identity, SqliteConnector, column_allowlist
 from governed_bi.llm import HashingEmbedder
-from governed_bi.server import SqlCache
-from governed_bi.server.governance import _try_cache_hit
+from governed_bi.analyst import SqlCache
+from governed_bi.analyst.governance import _try_cache_hit
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 BIRD_DB = Path(__file__).resolve().parents[1] / "data" / "bird" / "beer_factory.sqlite"
@@ -25,7 +25,7 @@ REVENUE_Q = "What is the total revenue?"
 
 @pytest.fixture
 def corpus():
-    return load_corpus(CORPUS_ROOT, schema="beer_factory").for_server()
+    return load_corpus(CORPUS_ROOT, schema="beer_factory").for_analyst()
 
 
 @pytest.fixture

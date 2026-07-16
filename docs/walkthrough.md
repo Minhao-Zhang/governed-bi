@@ -73,7 +73,7 @@ generation quality), covered instead by `scripts/live_smoke.py`.
 ## 4. Ask your first question
 
 There are two ways in: the HTTP API, and a few lines of Python. Both drive the
-exact same governed server flow.
+exact same governed Analyst flow.
 
 ### 4a. Over the HTTP API (recommended)
 
@@ -98,7 +98,7 @@ model to generate the SQL, so exact phrasing can vary run to run — this is a
 representative example):
 
 - **tier: governed**
-- **safety_clearance: true**  ·  **semantic_assurance: certified**
+- **safety_clearance: true**  ·  **semantic_assurance: grounded**
 - the answer, e.g. `total_revenue = 18496.0`
 - the SQL it ran, e.g. `SELECT SUM(PurchasePrice) AS total_revenue FROM "transaction"`
 - a **provenance** trace (route, metric, tables, join confidence)
@@ -133,10 +133,10 @@ from governed_bi.config import Settings, Environment
 from governed_bi.corpus import load_corpus
 from governed_bi.gateway import SqliteConnector, Gateway, Identity
 from governed_bi.llm import LangChainChatClient
-from governed_bi.server.agent import answer_question_agent
+from governed_bi.analyst.agent import answer_question_agent
 
 settings = Settings.for_env(Environment.dev)
-corpus = load_corpus("corpus", schema="beer_factory").for_server()
+corpus = load_corpus("corpus", schema="beer_factory").for_analyst()
 conn = SqliteConnector("data/bird/beer_factory.sqlite")
 chat = LangChainChatClient.from_config(settings.models)  # needs OPENAI_API_KEY
 
@@ -151,7 +151,7 @@ ans = answer_question_agent(
 )
 print(ans.tier.value)            # governed (usually — live-model output can vary)
 print(ans.safety_clearance)      # True
-print(ans.semantic_assurance.value)  # certified / heuristic
+print(ans.semantic_assurance.value)  # grounded / heuristic
 print(ans.sql)                   # e.g. SELECT SUM(PurchasePrice) AS total_revenue FROM "transaction"
 print(ans.text)                  # e.g. total_revenue = 18496.0
 conn.close()
@@ -161,10 +161,10 @@ conn.close()
 
 - **The two-axis stamp is the honest part.** `safety_clearance` is a gate — did
   the SQL pass all five guardrail layers and execute as the requesting principal?
-  `semantic_assurance` (`certified` / `heuristic` / `unverified`) is *how
+  `semantic_assurance` (`grounded` / `heuristic` / `unverified`) is *how
   well-grounded* the answer is. They are kept separate on purpose: a query can be
   perfectly safe and still be the wrong computation, so "safe" is never read as
-  "correct". (See [server.md](server.md).)
+  "correct". (See [Analyst](analyst.md).)
 - **You can audit the SQL.** The model's output is treated as untrusted; what
   actually ran is shown, and it only touches columns/tables the corpus licenses.
 - **The refusal is a feature.** Missing coverage, a tripped guardrail, or a
@@ -201,4 +201,4 @@ uv run python scripts/live_smoke.py
 - [Corpus authoring](corpus-authoring.md) — write and validate your own assets.
 - [System overview](system-overview.md) → [Architecture](architecture.md) —
   the design behind all of this.
-- [Server](server.md) — the serve flow, guardrails, and reliability stamp in depth.
+- [Analyst](analyst.md) — the serve flow, guardrails, and reliability stamp in depth.

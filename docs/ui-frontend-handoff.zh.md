@@ -84,7 +84,7 @@ stream.submit(
 - **最终答案**是一个自定义的 **`answer` state 通道**:读 `stream.values.answer`
   (即 `AnswerResponse` 的形状)。渲染出**答案卡片**:
   - 两个徽章，而不是一个分数：`safety_clearance`（布尔值）+ `semantic_assurance`
-    （`certified|heuristic|unverified|none`）；档位标签为绿色/黄色/红色。
+    （`grounded|heuristic|unverified|none`）；档位标签为绿色/黄色/红色。
   - 英文答案文本；可折叠的**结果表格**（`columns`/`rows`，含截断提示）；只读的
     **SQL**；**溯源/审计抽屉**（route、tables_used、join_ids、min_join_confidence、
     attempts、uncertainty_flags 等）。
@@ -155,10 +155,11 @@ stream.submit(
   [openapi.json](openapi.json)。外加更早的 `presenter` 视图模型、REST 读取、`stack`
   工厂,以及非流式的 `/chat` REST 端点(同样需要真实模型)。
 - **后端已上线(server 侧):** 人工把关的**澄清中断(clarification interrupts)**——
-  `server/tools.py::ask_user` 中的 `interrupt()`,经 `submit(command.resume)` 恢复,
+  `analyst/tools.py::ask_user` 中的 `interrupt()`,经 `submit(command.resume)` 恢复,
   以 `capabilities.can_clarify` 为门槛(契约见
-  [hitl-clarification-contract.md](plans/hitl-clarification-contract.md))。**前端**
-  这部分仍待构建;中断的持久化(Postgres)检查点仍推迟。
+  [hitl-clarification-contract.md](plans/hitl-clarification-contract.md))。前端的构建
+  进度请以 [`governed-bi-ui`](https://github.com/Minhao-Zhang/governed-bi-ui) 为准——本仓库
+  不再跟踪。中断的持久化(Postgres)检查点仍推迟。
 - **推迟:** prod 的 PR 编辑(如今 dev 是直接写文件)、公开演示的成本策略、鉴权/RLS、
   持久化的人审(HITL)状态。
 
@@ -202,8 +203,8 @@ stream.submit(
 >
 > **仍推迟：**
 > - 服务端 `/search`（按 Q6，客户端 Fuse 仍为默认）。
-> - `DataSourceConfig.db`（BIRD db_id / 默认写入子树）仍与 Postgres pin 字段
->   `schema` 分开。
+> - `DataSourceConfig.corpus_pin`（BIRD db_id / 默认写入子树）仍与 Postgres pin
+>   字段 `schema` 分开。
 
 对 UI 的契约要点：单条 `schema` 边栏；跨 schema join 可导航；缺失边拒答；当
 `meta.scope` 与请求一致时优先信任引擎划范围（`engineScopeMatches`），旧引擎仍可
@@ -268,22 +269,22 @@ stream.submit(
   查询没有通过某道安全关卡(**L2 策略**:DDL/DML/注入,或经过策展的**反例**拒答
   关卡)。安全失败在**任何**可靠性分数下都**绝不会被交付**。不存在"把分数调低然后
   照样跑"这种事。
-- **`semantic_assurance: certified | heuristic | unverified | none` —— 分级的。**
+- **`semantic_assurance: grounded | heuristic | unverified | none` —— 分级的。**
   这才是应当据以着色的可靠性指标。由 `provenance.uncertainty_flags`(触发的信号)
   驱动:`low_confidence_join`(join 计划置信度 < 0.7)、`suspect_in_scope`(用到了
   curator 标记过的诱饵/可疑列)、`repaired`(超过 1 次生成尝试)、
-  `fenced_raw_fallback`。没有任何标志 → `certified`;`fenced_raw_fallback` →
+  `fenced_raw_fallback`。没有任何标志 → `grounded`;`fenced_raw_fallback` →
   `unverified`;其他任意标志 → `heuristic`。
 
 `tier`(`governed | lineage | fenced_raw | refused`)是 `semantic_assurance` 的
-**严格一一映射**——继续把它渲染成一个档位标签(chip),但分支逻辑要落在上面这两个
-轴上,而不是 `tier` 上。
+一个遗留的、**只用于展示的一一映射**——继续把它渲染成一个档位标签(chip),但
+分支逻辑要落在上面这两个轴上,而不是 `tier` 上。
 
 ### 13.2 三种渲染状态(精确规则)
 
 | 状态 | 如何判定 | 渲染方式 |
 |---|---|---|
-| **正常答案** | `sql != null` 且 `semantic_assurance ∈ {certified, heuristic}` | 正常的答案卡片;绿色/中性档位标签。`heuristic` = 一条轻量的提醒。 |
+| **正常答案** | `sql != null` 且 `semantic_assurance ∈ {grounded, heuristic}` | 正常的答案卡片;绿色/中性档位标签。`heuristic` = 一条轻量的提醒。 |
 | **分级交付** | `sql != null` 且(`semantic_assurance ∈ {unverified, none}` **或** `provenance.graded_delivery === true`) | **照常展示 SQL + 结果表格**,但包裹在一个明显不同的**警示处理**里(琥珀色/红色边框 + 横幅):*"We produced this answer but could not fully verify it."* 外加**"为什么"这一行**(§13.4)。这是大多数 UI 会做错——直接把它隐藏掉——的新状态。 |
 | **硬性拒答** | `sql == null`(始终 `tier=refused`、`safety_clearance=false`、`result=null`) | 现有的拒答框:升级提示文字,没有 SQL/数字。 |
 
@@ -296,7 +297,7 @@ stream.submit(
 
 - **契约里今天已经上线的:** 两个轴;`provenance.graded_delivery` 标记;
   `provenance.uncertainty_flags`;`graded_delivery` **流事件**;以及整条交付并
-  分级的代码路径(`server/answer.py::graded_delivery`、`_finish_unsuccessful`)。
+  分级的代码路径(`analyst/answer.py::graded_delivery`、`_finish_unsuccessful`)。
   §13.1–13.4 可以直接对着现有的这些形状去构建。
 - **闲置,等一个开关翻转:** 交付并分级功能藏在引擎设置
   **`grade_semantic_failures`** 后面,该设置**在服务时默认 `false`**(目前只在
@@ -513,7 +514,7 @@ SQL);**没有**结构化的物理列。所以 `metrics` 返回的是 `base_table
 - **Agent serve 路径:** `answer.provenance.governance_ledger` **确实**被填充了——
   一份 `{action, verdict, sql, allowed, licensed_ids, layer, reason, result,
   attempt}` 记录的列表——并通过 `presenter.answer_view`(它会把整个 provenance
-  字典原样拷贝过去)流入 `AnswerResponse.provenance`。`server/agent.py` 甚至还有
+  字典原样拷贝过去)流入 `AnswerResponse.provenance`。`analyst/agent.py` 甚至还有
   一道双重保险的兜底逻辑,在缺失时把它补上。所以在 agent 路径上,前端的
   `buildStepsFromLedger` 有了它稳固的数据来源:这条轨迹能撑过一次页面刷新,也能
   撑过一次非流式的答案,不依赖实时事件流。

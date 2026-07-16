@@ -1,15 +1,23 @@
-"""Curator orchestration for the three-arm experiment (A2 / A3).
+"""Curator orchestration for the eval ladder (``baseline`` / ``curated`` / ``curated_sme``).
 
-Phase A: Facts profile → deterministic seed → deep-agent explore (all pairs +
-``clarifications.jsonl`` via ``FilesystemBackend``) → validate fix pass → write.
-Phase B: SME-answered ledger → deep-agent ingest (same tools, ingest prompt) →
-validate → write A3. Offline/tests may use a deterministic fold only when
-``model`` is None; mechanical ledger seeding requires explicit opt-in.
+``build_baseline_corpus``: deterministic, DB-derivable corpus only (names,
+types, sample values, naming-convention FK candidates) — no curator LLM, no
+train-SQL seeding. The eval floor (plan: ``docs/plans/terminology-refactor.md``).
+
+``build_curated_corpus`` (Phase A / ``curated``): Facts profile → deterministic
+train-SQL seed → deep-agent explore (all pairs + ``clarifications.jsonl`` via
+``FilesystemBackend``) → validate fix pass → write.
+
+``build_curated_corpus_with_sme`` (Phase B / ``curated_sme``): SME-answered
+ledger → deep-agent ingest (same tools, ingest prompt) → validate → write.
+Offline/tests may use a deterministic fold only when ``model`` is None;
+mechanical ledger seeding requires explicit opt-in.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
 
@@ -30,6 +38,7 @@ from .prompts import _PHASE_A_PROMPT, _PHASE_B_PROMPT
 from .seed import SeedBundle, seed_from_train_sql
 
 if TYPE_CHECKING:
+    from ..corpus.schemas import TableAsset
     from ..eval.dataset import EvalItem
     from ..gateway import Gateway
     from ..gateway.connectors.base import Connector
@@ -76,6 +85,117 @@ def _apply_seed(bag: AssetBag, seed: SeedBundle) -> dict[str, int]:
         if msg.startswith("ok:"):
             metrics_ok += 1
     return {"joins_ok": joins_ok, "joins_fail": joins_fail, "metrics_ok": metrics_ok}
+
+
+def _norm_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def _fk_candidates_from_names(
+    tables: Sequence["TableAsset"],
+) -> list[tuple[str, str, str]]:
+    """Naming-convention FK guesses over Facts alone: no train SQL, no LLM.
+
+    A column named ``<other>_id`` (or ``<other>Id``) that is not its own
+    table's primary key is proposed as a foreign key to another table's
+    primary-key column, when a table whose (normalized, singular-or-plural)
+    name matches ``<other>`` exists. This is the same cheap prior a human
+    skimming the catalog would form from names alone — it is the
+    ``baseline`` arm's only source of relationship candidates (D5: baseline
+    is deterministic-max, DB-derivable only; the train-SQL-derived
+    :func:`seed_from_train_sql` joins belong to ``curated``, not here).
+
+    Returns ``(left_table, right_table, on)`` triples of physical names.
+    """
+    pk_by_table: dict[str, str] = {}
+    for t in tables:
+        for c in t.columns:
+            if c.is_unique:
+                pk_by_table.setdefault(t.physical_name, c.physical_name)
+
+    norm_table_names = {_norm_name(name): name for name in pk_by_table}
+
+    candidates: list[tuple[str, str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for t in tables:
+        own_pk = pk_by_table.get(t.physical_name)
+        for c in t.columns:
+            if c.physical_name == own_pk:
+                continue  # not a candidate for its own primary key
+            m = re.match(r"^(.+?)[_]?id$", c.physical_name, re.IGNORECASE)
+            if not m:
+                continue
+            stem = _norm_name(m.group(1))
+            if not stem:
+                continue
+            target = (
+                norm_table_names.get(stem)
+                or norm_table_names.get(stem + "s")
+                or (norm_table_names.get(stem[:-1]) if stem.endswith("s") else None)
+            )
+            if not target or target == t.physical_name:
+                continue
+            target_pk = pk_by_table.get(target)
+            if not target_pk:
+                continue
+            on = f"{t.physical_name}.{c.physical_name} = {target}.{target_pk}"
+            key = (t.physical_name, target, on)
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(key)
+    return candidates
+
+
+def _apply_fk_candidates(bag: AssetBag, tables: Sequence["TableAsset"]) -> dict[str, int]:
+    """Materialise naming-convention FK candidates. Low, honest confidence: an
+    unverified prior, not a measured or SME-confirmed relationship."""
+    ok = fail = 0
+    for left, right, on in _fk_candidates_from_names(tables):
+        msg = bag.propose_join(left, right, on, confidence=0.3)
+        if msg.startswith("ok:"):
+            ok += 1
+        else:
+            fail += 1
+    return {"fk_candidates_ok": ok, "fk_candidates_fail": fail}
+
+
+def build_baseline_corpus(
+    connector: "Connector",
+    schema: str,
+    out_root: Path | str,
+    *,
+    sample_limit: int = 5,
+) -> Path:
+    """The ``baseline`` arm (plan D5): deterministic-max, DB-derivable only.
+
+    Everything a script can pull from the database with **no curator LLM**:
+    names, types, sample values (:func:`profile_database`'s default
+    ``sample_limit``) and naming-convention FK candidates
+    (:func:`_fk_candidates_from_names`). Deliberately does **not** call
+    :func:`seed_from_train_sql` and proposes no few-shots — anything learned
+    from the train ``(question, SQL)`` pairs belongs to ``curated``, not
+    ``baseline``. Served through the same :func:`~governed_bi.eval.arms.agent_solver`
+    path as every other rung.
+    """
+    out_root = Path(out_root)
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    tables = profile_database(connector, schema=schema, sample_limit=sample_limit)
+    bag = AssetBag.from_tables(schema, tables)
+    fk_stats = _apply_fk_candidates(bag, tables)
+    bag.write(out_root)
+
+    _write_run_manifest(
+        out_root,
+        {
+            "phase": "baseline",
+            "schema": schema,
+            "sample_limit": sample_limit,
+            "fk_candidates": fk_stats,
+        },
+    )
+    return out_root
 
 
 def _empty_tool_counts() -> dict[str, Any]:
@@ -248,7 +368,7 @@ def _run_adversary_signal(
 
 
 def _corpora_differ(a2_root: Path, a3_root: Path, schema: str) -> bool:
-    """True when A3 is not a byte-identical copy of A2 (A3 acceptance)."""
+    """True when curated_sme is not a byte-identical copy of curated (curated_sme acceptance)."""
     import hashlib
 
     def _fingerprint(root: Path) -> str:
@@ -355,7 +475,7 @@ def build_curated_corpus(
     max_agent_steps: int = 25,
     run_agent: bool = True,
 ) -> Path:
-    """Phase A: profile → seed → explore agent → validate → write A2 corpus.
+    """Phase A: profile → seed → explore agent → validate → write curated corpus.
 
     Does **not** pre-create ``clarifications.jsonl`` — the agent must
     ``write_file`` it (FilesystemBackend rejects write-to-existing). An empty
@@ -462,7 +582,7 @@ def build_curated_corpus_with_sme(
     run_agent_repass: bool | None = None,
     seed_ledger_if_empty: bool = False,
 ) -> Path:
-    """Phase B: answered clarifications ledger → ingest → write A3 corpus.
+    """Phase B: answered clarifications ledger → ingest → write curated_sme corpus.
 
     Requires an agent-authored (or explicitly planted) open ledger. Mechanical
     ``seed_gap_clarifications`` runs **only** when ``seed_ledger_if_empty=True``
@@ -517,7 +637,7 @@ def build_curated_corpus_with_sme(
         if not open_records:
             raise RuntimeError("seed_ledger_if_empty produced no open clarifications")
     # An empty ledger from a real agent run is NOT a failure: the agent resolved
-    # everything itself, so the SME round-trip has nothing to fold and A3 == A2.
+    # everything itself, so the SME round-trip has nothing to fold and curated_sme == curated.
     # A true agent no-op is distinguishable via the Phase-A manifest's write_total.
 
     answered = fill_clarifications_with_responder(records, responder)
@@ -546,7 +666,7 @@ def build_curated_corpus_with_sme(
     fold_mode = "none"
 
     if not open_records:
-        fold_mode = "none"  # no clarifications → nothing to fold; A3 == A2
+        fold_mode = "none"  # no clarifications → nothing to fold; curated_sme == curated
     elif run_agent_repass and model is not None:
         from .deep_agent import build_curator_agent
 
@@ -612,6 +732,6 @@ def build_curated_corpus_with_sme(
 
     if open_records and not _corpora_differ(a2_root, out_root, schema):
         raise RuntimeError(
-            f"A3 corpus is identical to A2 at {out_root}; SME round-trip produced no edits"
+            f"curated_sme corpus is identical to curated at {out_root}; SME round-trip produced no edits"
         )
     return out_root

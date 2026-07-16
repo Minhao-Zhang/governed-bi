@@ -3,7 +3,7 @@
 A thin **chat** graph the LangChain ``useStream`` SDK consumes over the LangGraph
 Server protocol. Its persisted state is only ``{messages, answer}`` (both
 JSON-serializable), and the whole governed pipeline runs inside a single node,
-which calls :func:`governed_bi.server.agent.answer_question_agent` (agent-only
+which calls :func:`governed_bi.analyst.agent.answer_question_agent` (agent-only
 serve, ADR 0002) and streams step progress through ``get_stream_writer()``. The
 heavy per-turn objects (the
 ``networkx`` graph, the allowlist, retrieval/context) stay as locals in that
@@ -110,7 +110,7 @@ def build_chat_graph(stack: "ServeStack", *, checkpointer: Any = None):
     # Absolute imports: the LangGraph server loads this module by file path (no
     # parent package), so relative imports would fail at call time.
     from governed_bi.gateway import Gateway
-    from governed_bi.server.agent import ClarificationPending, answer_question_agent
+    from governed_bi.analyst.agent import ClarificationPending, answer_question_agent
     from governed_bi.viz import presenter
     from langgraph.types import interrupt
 
@@ -144,7 +144,7 @@ def build_chat_graph(stack: "ServeStack", *, checkpointer: Any = None):
                 result = answer_question_agent(
                     question,
                     stack.identity,
-                    corpus=stack.corpus_server,
+                    corpus=stack.corpus_analyst,
                     gateway=gateway,
                     settings=stack.settings,
                     session_id=thread_id,

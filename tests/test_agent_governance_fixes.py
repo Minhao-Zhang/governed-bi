@@ -12,18 +12,18 @@ from governed_bi.corpus import load_corpus
 from governed_bi.gateway import Gateway, Identity, SqliteConnector
 from governed_bi.llm.fake import FakeToolModel, ai_tool_turn, tool_call
 from governed_bi.memory import InMemoryWorkingMemory
-from governed_bi.server.agent import (
+from governed_bi.analyst.agent import (
     ServeRailsState,
     answer_question_agent,
     build_agent_core,
     extract_final_sql,
 )
-from governed_bi.server.middleware import (
+from governed_bi.analyst.middleware import (
     AGENT_RECURSION_LIMIT,
     GovernanceHardStop,
     GovernanceMiddleware,
 )
-from governed_bi.server.sqlgen import _tables_used
+from governed_bi.analyst.sqlgen import _tables_used
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 BIRD_DB = Path(__file__).resolve().parents[1] / "data" / "bird" / "beer_factory.sqlite"
@@ -32,7 +32,7 @@ TXN = "tbl_beer_factory_transaction"
 
 @pytest.fixture
 def corpus():
-    return load_corpus(CORPUS_ROOT, schema="beer_factory").for_server()
+    return load_corpus(CORPUS_ROOT, schema="beer_factory").for_analyst()
 
 
 @pytest.fixture
@@ -258,14 +258,14 @@ def test_working_memory_reaches_agent_prompt(corpus, bird_gateway, settings, ide
     captured: dict = {}
 
     real_build = __import__(
-        "governed_bi.server.agent", fromlist=["build_agent_core"]
+        "governed_bi.analyst.agent", fromlist=["build_agent_core"]
     ).build_agent_core
 
     def spy_build(*args, **kwargs):
         captured["system_prompt"] = kwargs.get("system_prompt")
         return real_build(*args, **kwargs)
 
-    monkeypatch.setattr("governed_bi.server.agent.build_agent_core", spy_build)
+    monkeypatch.setattr("governed_bi.analyst.agent.build_agent_core", spy_build)
 
     turns = [
         ai_tool_turn("inspect_schema", {"table_id": TXN}, "c1"),

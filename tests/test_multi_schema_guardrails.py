@@ -27,7 +27,7 @@ from governed_bi.corpus.schemas import (
 from governed_bi.corpus.validate import validate_corpus
 from governed_bi.gateway import GuardrailLayer, check, column_allowlist
 from governed_bi.retrieval import RetrievalResult
-from governed_bi.server.context import assemble_context
+from governed_bi.analyst.context import assemble_context
 
 SCHEMA_A_ORDERS = "tbl_schema_a_orders"
 SCHEMA_B_ORDERS = "tbl_schema_b_orders"

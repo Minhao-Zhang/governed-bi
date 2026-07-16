@@ -1,7 +1,7 @@
-"""Server step (optional): phrase an executed result into natural language.
+"""Analyst step (optional): phrase an executed result into natural language.
 
 After the guardrails pass and the query executes, the agent core renders a
-*compact* textual answer (``server.governance._render``) - fine for a single
+*compact* textual answer (``analyst.governance._render``) - fine for a single
 number, but only a "N row(s) over [cols]" shape for a table. When a model
 client is available, this optional seam replaces that with a grounded
 natural-language sentence or two, phrased from the actual rows - so the chat

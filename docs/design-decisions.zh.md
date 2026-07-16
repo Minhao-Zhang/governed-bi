@@ -92,6 +92,12 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 > 舍弃**。那里不存在标准答案（ground-truth gold），因此该场景只跑分支 1
 > 对比分支 2。
 
+> **被评测阶梯取代（术语重构，见 [D14 修订](#d14bird-obfuscation-上的-sme-增长基准)）。**
+> 分支 1 → `baseline`；分支 2 → `curated`（在 SME 轮次纳入评分后再加上
+> `curated_sme`）。上文分支 3 的、由清单派生的 "gold" 预言机已**退役**——见
+> [R-gold](#审计处置2026-07-15)——可恢复上限被重定义为 `ceiling`：一个测试
+> 感知的 **Simulated SME** 预言机，而非去混淆回读。
+
 ## D5：拒答与尽力而为
 
 > **已决定（ADR 级）**
@@ -110,19 +116,20 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 - **已构建：** 失败即拒的拒答关卡与一个**双轴可靠性标记**均已实现。该标记
   报告两个相互独立的轴，以免二者被混淆：`safety_clearance`（护栏 + 授权已
   通过——这是一个*闸门*，对每个交付的答案都为真、对每个拒答都为假）与
-  `semantic_assurance`（`certified` / `heuristic` / `unverified`——答案接地
+  `semantic_assurance`（`grounded` / `heuristic` / `unverified`——答案接地
   程度如何，即应当驱动是否自动交付的那个轴）。旧的单轴档位（`governed` /
-  `lineage` / `fenced_raw` / `refused`）作为二者的一一对应投影保留，用于紧凑
-  展示。一个**有界的自修复循环**会把*可修复的*护栏拒绝（语法 + 列/表范围——
+  `lineage` / `fenced_raw` / `refused`）已作为规范词汇退役；如今它若还出现，
+  也只是双轴标记的**纯展示层投影**，绝非并行的另一个概念。一个**有界的
+  自修复循环**会把*可修复的*护栏拒绝（语法 + 列/表范围——
   L3/L4 按决定保持可修复，[D11](#d11开放决策外部评审2026-07-09)）或执行错误
-  回传给生成器，然后才拒答；修复后的答案是 `heuristic`，绝不会是 `certified`。
+  回传给生成器，然后才拒答；修复后的答案是 `heuristic`，绝不会是 `grounded`。
   **一个硬性策略/DDL 阻断（L2 `policy_blacklist`）现在会立即失败即拒**——把它
-  回传只会诱导生成器去规避策略。缓存准入以 `semantic_assurance == certified`
+  回传只会诱导生成器去规避策略。缓存准入以 `semantic_assurance == grounded`
   为门槛，绝不只凭安全。各档位阈值和不确定性信号集合都是**未经校准的启发式
-  规则**，需要在评估中调优。`certified` / `governed` 表示安全 + 在范围内 +
+  规则**，需要在评估中调优。`grounded` 表示安全 + 在范围内 +
   未触发任何不确定性标志，**并不**表示“已验证正确”：护栏是安全/治理关卡，
   不是正确性判定者（oracle），所以看似合理但实际错误的 SQL 是靠标记机制 +
-  失败即拒来拦截的，而不是靠对正确性的证明。**对 BI 受众而言 `certified` 标签夸大其词，已排期改名 + 按 EX 校准**——见[审计处置（2026-07-15）](#审计处置2026-07-15)，R2。
+  失败即拒来拦截的，而不是靠对正确性的证明。**对 BI 受众而言该标签夸大其词：已将 `certified` 改名为 `grounded`**——见[审计处置（2026-07-15）](#审计处置2026-07-15)，R2。
 
 ## D6：所有权与人工关卡
 
@@ -188,7 +195,7 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 
 > **已决定（ADR 级）**
 >
-> curator（构建，`deepagents`）与 server（服务，`LangGraph` + 中间件）是
+> curator（构建，`deepagents`）与 Analyst（服务，`LangGraph` + 中间件）是
 > 架设在同一套共享基座之上的两个独立 harness；只对 harness 本身做分支
 > （fork）。
 
@@ -236,7 +243,7 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 - **BIRD 的范围不只是结构。** BIRD 提供了一个 `evidence` 字段（外部知识
   提示，大致相当于轻量规则/派生指标），因此 curator 也会为 BIRD 生成由
   evidence 播种而来的 `metric`/`rule`/`term`/`context`。这些资产按 EX
-  做端到端评分（分支 1 对比分支 2），且**没有逐资产的 gold**（按 D4，
+  做端到端评分（`baseline` 对比 `curated`），且**没有逐资产的 gold**（按 D4，
   gold 仍只限于名称、FK 以及诱饵排除）。**同义词（`term`/
   `term_relationship`）同样在 BIRD 的范围之内**：混淆的*改写*维度意味着
   同一个概念会被用多种方式提问，因此同义词映射有助于提升对同义改述的
@@ -283,14 +290,14 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   运行在 Facts 画像分析 + 只读探测工具之上的 deep agent；其构建过程已
   离线验证，自主运行则受模型门控）。仍是接缝的有：join/term/metric/
   rule/skill 的 LLM 撰写、逐资产实时的 adversary `refute`，以及自评估的
-  train-EX 循环；正是这些让分支 2 能够胜过分支 1。参见[Curator](curator.zh.md)。
+  train-EX 循环；正是这些让 `curated` 能够胜过 `baseline`。参见[Curator](curator.zh.md)。
 
 ## D11：开放决策（外部评审，2026-07-09）
 
 由一次独立的项目评审（2026-07-09）提出。记录于此，以便每一项都被审慎地拍板、而非默认略过。（评审中的部分条目——D1 的冷启动措辞、D5 的双轴标记与 L2 立即拒答——已在上文调和。）
 
-- **按失败类别修复（L3/L4 边界）——已决定（2026-07-09）：保持可修复。** `policy_blacklist`（L2）不经重试直接失败即拒（把 DDL/策略阻断回传只会诱导规避）。曾经的问题是：**列白名单（L3）与 term-semantics（L4）范围失败是否也应立即拒答**（评审立场：诱导模型绕过范围阻断，等于施压让它去找一个能过关却在分析上仍然错误的查询）。**决定：L3/L4 保持可修复。** FK 邻域扩展 + 修复循环是针对检索欠召回的一种刻意的*降低误拒*机制，修复后的答案已是 `heuristic`（绝不会是 `certified`），且尝试上限 + 无进展保护为循环设界。若真实评测显示修复诱导抬高了"看似合理却错误"的答案，再重新考虑。
-- **`CorpusRelease`——一份不可变、经认证的服务契约。** Git 是真实来源，但仅靠版本控制并不构成*发布*契约：服务端目前在服务时并不区分草稿与已认证资产、不锁定 corpus 内容哈希、也不在每个答案中记录发布版本。提议：一个 `CorpusRelease` 工件（版本 + 内容哈希 + 已认证资产 ID + 构建/adversary 证据 + 时间戳）；curator 只写暂存区，CI 构建发布，服务端只读取锁定的发布，每个答案/审计事件都记录发布哈希。**范围问题：** 轻量的发布哈希 + 服务端锁定，可以说是引擎级的服务正确性原语（属本仓库范围）；而完整的"CI 构建发布、owner 审批"工作流则是产品（企业分支范围）。**决策待定**，但**已被 D13 部分解决**：就基准测试而言，一个独立的 corpus 仓库加上每个检查点一个 git SHA，锁定了 corpus 状态，并推迟了完整的发布工件。
+- **按失败类别修复（L3/L4 边界）——已决定（2026-07-09）：保持可修复。** `policy_blacklist`（L2）不经重试直接失败即拒（把 DDL/策略阻断回传只会诱导规避）。曾经的问题是：**列白名单（L3）与 term-semantics（L4）范围失败是否也应立即拒答**（评审立场：诱导模型绕过范围阻断，等于施压让它去找一个能过关却在分析上仍然错误的查询）。**决定：L3/L4 保持可修复。** FK 邻域扩展 + 修复循环是针对检索欠召回的一种刻意的*降低误拒*机制，修复后的答案已是 `heuristic`（绝不会是 `grounded`），且尝试上限 + 无进展保护为循环设界。若真实评测显示修复诱导抬高了"看似合理却错误"的答案，再重新考虑。
+- **`CorpusRelease`——一份不可变、经认证的服务契约。** Git 是真实来源，但仅靠版本控制并不构成*发布*契约：Analyst 目前在服务时并不区分草稿与已认证资产、不锁定 corpus 内容哈希、也不在每个答案中记录发布版本。提议：一个 `CorpusRelease` 工件（版本 + 内容哈希 + 已认证资产 ID + 构建/adversary 证据 + 时间戳）；curator 只写暂存区，CI 构建发布，Analyst 只读取锁定的发布，每个答案/审计事件都记录发布哈希。**范围问题：** 轻量的发布哈希 + 服务时锁定，可以说是引擎级的服务正确性原语（属本仓库范围）；而完整的"CI 构建发布、owner 审批"工作流则是产品（企业分支范围）。**决策待定**，但**已被 D13 部分解决**：就基准测试而言，一个独立的 corpus 仓库加上每个检查点一个 git SHA，锁定了 corpus 状态，并推迟了完整的发布工件。
 - **结构化意图的 SQL 缓存。** 语义缓存目前以嵌入相似度阈值为键。评审指出全局余弦阈值是一个很弱的等价性判据（两个问题可能在时间段、分母、实体或指标上不同）。提议：以结构化意图为键（`corpus_release_hash + 身份范围 + 指标 ID + 归一化维度/过滤 + join 计划指纹 + 策略版本`），或在此之前只做精确归一化查询缓存。该缓存默认关闭，故不紧急。**决策待定。**
 
 ## D12：澄清协议
@@ -366,22 +373,22 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 - **修订（2026-07-15）—— 臂阶梯与重定义的上限。** 本基准在每个阶段都作**训练 + 测试**
   两项测量，头号指标是**训练↔测试差值**——当 few-shot 从训练对蒸馏而来时，训练准确率本身
   被污染，故是这个差值（而非原始训练准确率）在衡量泛化。阶梯：
-  1. **仅事实**——最小元数据（下限）。
-  2. **自主策展**——agent 探索并自我策展，**无 SME 作答**；隔离出 agent *独自*能恢复什么。
-  3. **SME（受训练集约束），按轮次**——一个 **Simulated SME**，仅有**训练问题 + evidence**
+  1. **`baseline`**（原"仅事实"）——最小元数据（下限）。
+  2. **`curated`**（自主策展）——agent 探索并自我策展，**无 SME 作答**；隔离出 agent *独自*能恢复什么。
+  3. **`curated_sme`**，按轮次——一个 **Simulated SME**，仅有**训练问题 + evidence**
      访问权，回答澄清；每轮（r1、r2……）测量。此为增长轴。
-  4. **测试感知 SME 预言机（上限）**——一个把留出**测试问题 + evidence 提示（绝不看测试
+  4. **`ceiling`**（测试感知 SME 预言机）——一个把留出**测试问题 + evidence 提示（绝不看测试
      gold SQL）**纳入其检索索引的 Simulated SME。一个**刻意泄漏的预言机**，与
      公平臂（1–3）隔离，仅作虚线"可恢复上限"报告。**取代退役的去混淆 gold 臂**
      （见[审计处置 → R-gold](#审计处置2026-07-15)），后者从来不是真正的上限。
   两个性质使该上限有信息量。它**按设计 < 1.0**（agent 在完美知识下仍会误生成 SQL），故它
-  分解了结果：`1.0 − 上限` = agent 不可约的 SQL 生成误差；`上限 − SME` = 受训练集约束的 SME
-  无法企及的、与测试相关的知识。该上限是**受发问约束（elicitation-bounded）**的（见下方 SME 设计），
+  分解了结果：`1.0 − 上限` = agent 不可约的 SQL 生成误差；`上限 − curated_sme` = 受训练集约束的
+  SME 无法企及的、与测试相关的知识。该上限是**受发问约束（elicitation-bounded）**的（见下方 SME 设计），
   故它是一个*实用*上界——在 curator 的发问 + 一个能看到测试题库的 SME 之下所能达到的最好，
   而非理论最大值。实现暂缓。
 - **Simulated SME 设计（2026-07-15）。** 知识传递是**拉取式**的：curator 必须*发问*——SME 是一个
   严格被动的 **Responder**，面对一个问题它作答、说不知道、或补充*紧密相关*的上下文，但绝不主动
-  倾倒 corpus。于是 curator 的**发问能力本身成为公平臂（A3）所衡量的一部分**——上限也保持受发问
+  倾倒 corpus。于是 curator 的**发问能力本身成为 `curated_sme` 臂所衡量的一部分**——上限也保持受发问
   约束，因为它并不改变这一点。
   - **机制 = 检索工具，而非塞满的 brief。** SME 获得一个 BM25/正则工具 + 一个向量检索工具，
     检索题库（问题 + evidence + SQL），外加既有的只读 `run_probe_query`。这取代 `build_sme_brief`
@@ -420,14 +427,14 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 - **限定是按模式区分的，以保护被评分的那条路径。** 单 schema 路径（SQLite，也就是 BIRD 评测）逐字保持输出**裸的、未限定的** SQL——SQLite 无法解析 `schema.table`，对它做限定会破坏我们唯一评分的那个分支的执行准确率。只有多 schema 路径（Postgres / Redshift）才做限定，因此**跨 schema 在 v0 是一个仅限 Postgres/Redshift 的能力**，这与它不被 BIRD 评分（见下）相吻合。`DataSourceConfig` 通过一个显式信号区分三种模式——*SQLite 单 schema*、*Postgres 固定单 schema*、*Postgres 全 schema 覆盖*——而绝不以 `schema is None` 为判据（SQLite 本就以 `schema=None` 运行）。
 - **护栏变为按 schema 限定，并仍是唯一的表范围关卡。** 检索与 L4 授权范围覆盖所有 schema：一个 **schema 路由器**先筛选出相关 schema，再**沿着已策展的连接**扩展，使位于第三个 schema 的桥接表不被丢弃（若只按相似度筛选，会造成*虚假*拒答，与上文那种诚实拒答无法区分）。L4 许可集变为完全限定的 `schema.table` 成员判定；一个裸引用只解析到某个指定的默认 schema，并在许可集中该名称跨多个 schema 出现时**因歧义而被拒**——这正是禁止自我授权到范围外 schema 的机制。L3 键变为三段式 `schema.table.column`；L5 的并查集按 `schema.table` 建键。许可的 *ID* 集本就已按 schema 正确（ID 已嵌入 schema），所以这是一次投影修正。只读、强制行数上限与语句超时保持不变——它们位于连接器而非护栏——且**不**使用 `search_path`（L2 禁止 `Command`）；完全限定才是所用机制。
 - **备选方案：** 一个真正三级的 `连接 → schema → 表` 模型并支持跨连接联邦（否决——单个引擎无法跨物理连接做连接；联邦是数仓的问题）；从外键元数据或名称启发式自动发现跨 schema 连接（否决——跨 schema 外键极少存在，而猜测它们在无外键场景中正是主导错误模式）；无条件限定（否决——它会破坏 SQLite/BIRD 被评分的那条路径）。
-- **结果：** 精化了 **D1** 的目标（在一个数据库内具备多 schema 能力，租户隔离仍在范围外）与 **D9** 的 corpus 契约（`db` → `schema`；`<db>/` 子树变为 `<schema>/`）。**跨 schema 服务不被 BIRD 评分**（**D14**），这是一个被接受、已记录的局限，转而以护栏单元测试、一个双 schema 的 Postgres 集成夹具，以及一项校验 `(schema, physical_name)` 唯一性与许可集键无歧义的 CI 检查来覆盖。**状态：正按已验证的增量推进（自 2026-07-12）。** 已发布：增量 1，网关基础（全 schema 覆盖连接器 + `multi_schema` 配置）；增量 2，按 schema 限定的护栏（L3/L4/L5 以 `schema.table` 建键）；增量 3，Postgres/Redshift **默认多 schema 服务**（限定 SQL + 护栏已接入；SQLite 保持单 schema 以服务 BIRD）；增量 4，**缺失边拒答**（跨 schema 检索无策展 `JoinAsset` 时在 generate 前拒答，并带 D12 `clarification_hint`）；增量 5，**API 线上字段更名**（presenter/OpenAPI 响应与过滤只用 `schema` / `?schema=`——硬切断，无 `?db=` 别名；图**节点**已带 `schema`）；增量 6，**服务端图划范围**（`/graph` 与 `/knowledge-graph` 上的 `?schema=` / `focus` / `radius` / `node_budget`，KG 另有 `kinds=`，以及 `boundary` + `meta.scope` 信封；无参仍为全图）；增量 7，**磁盘 YAML 更名**（`TableAsset` / `FewShotAsset` / skill frontmatter 字段 `db` → `schema`；`load_corpus`/`write_corpus`；serve 始终加载每一个 `corpus/<schema>/` 子树；以及增量 8，**连接感知 schema 路由器**（多 schema 路径上，在 RVGD 之前做 BM25 schema 短名单 + 沿策展跨 schema join 扩展；单 schema/SQLite 不变）。仍推迟：服务端 `/search`（按 Q6，客户端 Fuse 仍为默认），以及将 `DataSourceConfig.db`（BIRD db_id / 默认写入子树）并入 pin 字段。LLM 由粗到细的裁剪 pass 仍推迟在可插拔生成器接缝之后。
+- **结果：** 精化了 **D1** 的目标（在一个数据库内具备多 schema 能力，租户隔离仍在范围外）与 **D9** 的 corpus 契约（`db` → `schema`；`<db>/` 子树变为 `<schema>/`）。**跨 schema 服务不被 BIRD 评分**（**D14**），这是一个被接受、已记录的局限，转而以护栏单元测试、一个双 schema 的 Postgres 集成夹具，以及一项校验 `(schema, physical_name)` 唯一性与许可集键无歧义的 CI 检查来覆盖。**状态：正按已验证的增量推进（自 2026-07-12）。** 已发布：增量 1，网关基础（全 schema 覆盖连接器 + `multi_schema` 配置）；增量 2，按 schema 限定的护栏（L3/L4/L5 以 `schema.table` 建键）；增量 3，Postgres/Redshift **默认多 schema 服务**（限定 SQL + 护栏已接入；SQLite 保持单 schema 以服务 BIRD）；增量 4，**缺失边拒答**（跨 schema 检索无策展 `JoinAsset` 时在 generate 前拒答，并带 D12 `clarification_hint`）；增量 5，**API 线上字段更名**（presenter/OpenAPI 响应与过滤只用 `schema` / `?schema=`——硬切断，无 `?db=` 别名；图**节点**已带 `schema`）；增量 6，**服务端图划范围**（`/graph` 与 `/knowledge-graph` 上的 `?schema=` / `focus` / `radius` / `node_budget`，KG 另有 `kinds=`，以及 `boundary` + `meta.scope` 信封；无参仍为全图）；增量 7，**磁盘 YAML 更名**（`TableAsset` / `FewShotAsset` / skill frontmatter 字段 `db` → `schema`；`load_corpus`/`write_corpus`；serve 始终加载每一个 `corpus/<schema>/` 子树；以及增量 8，**连接感知 schema 路由器**（多 schema 路径上，在 RVGD 之前做 BM25 schema 短名单 + 沿策展跨 schema join 扩展；单 schema/SQLite 不变）。仍推迟：服务端 `/search`（按 Q6，客户端 Fuse 仍为默认）。**`DataSourceConfig.db` 并入单一 pin 字段现已完成**（术语重构）：该字段已更名为 `corpus_pin`（统一了 BIRD db_id 与默认写入子树）。LLM 由粗到细的裁剪 pass 仍推迟在可插拔生成器接缝之后。
 
 ## D16：受治理的 Agentic 服务核心
 
 > **已决定（ADR 级，2026-07-13；切换已于 2026-07-14 落地）。** 完整的理据、
 > 不变式与分阶段迁移见 [ADR 0002](adr/0002-governed-agentic-serve-runtime.md)；
 > 历史性的 agent-vs-flow A/B（flow 现已删除）总结见
-> [三臂结果](plans/three-arm-experiment-results.md)。
+> [实验结果](plans/eval-ladder-results.md)。
 >
 > serve 从一张确定性的单次 DAG 重做为一个**受治理的 agentic 核心**：外层是一张
 > 确定性的 `StateGraph`（很薄的治理护栏），包裹着内层一个有界的 `create_agent`
@@ -446,7 +453,7 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 - **P2 切换已完成，agentic 核心现在是唯一的 serve 路径。** `agent_serve` 标志位
   ——此前在 P0/P1 期间用于把 agentic 路径放在确定性流程之后门控——已被**移除**：
   不再有开关，serve 始终运行 agent。`TemplateSqlGenerator`（serve）、`flow.py`
-  巨石以及陈旧的 `server/graph.py` 均已**删除**，LLM key 现已成为必需：没有可用
+  巨石以及陈旧的 `analyst/graph.py` 均已**删除**，LLM key 现已成为必需：没有可用
   的实时模型时，serve 会在启动时失败即拒，`/chat` 返回 `503`。CI/离线的确定性
   改由一个 `FakeListChatModel` agent harness 提供；等价性测试已从“同一个
   `Answer`”改为“同一套治理不变式”。
@@ -478,11 +485,12 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   变得统计稳定，一个 23 题的单库差值不再是证据单位。*状态：已计划，取决于多 schema
   实验（D15）。*
 
-- **R2 —— `certified` 标签夸大其词，将改名并校准（细化 D5）。**
-  `semantic_assurance = certified` 在 BI 用户看来意为"已验证正确"，但它仅表示"安全 +
-  在范围内 + 未触发不确定性标记"。已接受：改名为一个面向"有据"的词（如 `grounded`），
-  并在规模运行就绪后**对阈值与不确定性信号集按真实 EX 校准**——即测量被打标的答案
-  实际正确的比例。*状态：已接受，已排期（需先有规模运行）。*
+- **R2 —— `certified` 标签夸大其词，已改名为 `grounded`；校准仍暂缓（细化 D5）。**
+  `semantic_assurance = certified` 在 BI 用户看来意为"已验证正确"，但它其实仅表示"安全 +
+  在范围内 + 未触发不确定性标记"。**已改名**：`semantic_assurance` 现在报告
+  `grounded`（原 `certified`） / `heuristic` / `unverified`。仍暂缓的是：在规模运行
+  就绪后**对阈值与不确定性信号集按真实 EX 校准**——即测量被打标的答案实际正确的
+  比例。*状态：已改名；校准已排期（需先有规模运行）。*
 
 - **R3 —— 用户反馈闭环：已于 2026-07-15 讨论；方向已定，构建暂缓（细化 D8）。**
   设计讨论的结论：
@@ -507,7 +515,8 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 
 - **R4 —— 线上执行：审计注记已过时，已更正。** Postgres **确实**在线上运行。
   `eval/run_experiment.py` 以真实模型对本地 Postgres（BIRD-Obfuscation
-  `pg_rename_decoy`，`127.0.0.1:5435`）执行三臂——这是每日评测的实际路径，不是离线替身。
+  `pg_rename_decoy`，`127.0.0.1:5435`）执行评测阶梯的各臂（`baseline` / `curated` /
+  `curated_sme`）——这是每日评测的实际路径，不是离线替身。
   连接器 docstring（`gateway/connectors/{base,__init__}.py`、`gateway/__init__.py`）、
   `usage.md` 与 `system-overview.md` 已相应更正。**Redshift** 仍未对真实集群验证。
   关于"一次站得住脚的运行"里程碑的两个子点：**(4.1) 实模型运行**——已在进行（见上）；
@@ -515,20 +524,35 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 
 - **R-gold —— gold 参照臂：已于 2026-07-15 解决——去混淆预言机退役，上限重定义为
   *测试感知 SME 预言机*（细化 D4 / D14）。** `gold.py` 的去混淆预言机（rename-map 回读）
-  **不是上限**——按其自身 docstring，Arm 2 的技能就能超过它——且在同义重命名库上几乎是
+  **不是上限**——按其自身 docstring，策展臂（`curated`）的技能就能超过它——且在同义重命名库上几乎是
   空操作。它已**退役**。可恢复上限重定义为**测试感知 SME 预言机**：一个**Simulated SME**，
   它把留出的**测试问题 + 其 evidence 提示（但绝不看测试 gold SQL）**纳入其检索索引。
   这是 SME 轴上真正的上界，因为测试集触及训练对从未暴露的知识——一个受训练集
-  约束的 SME 在结构上无法企及。完整的臂阶梯与性质记于 D14 修订。后续（现仅决策、实现暂缓）：
-  删除 `eval/gold.py` + `Arm.gold` 成员（死代码），并给 SME **按 split 限定范围的 BM25/向量检索工具**
-  （仅训练集 = 公平；+ 测试问题/evidence、绝不含测试 SQL = 上限——见 D14 修订）。
-  *状态：已决策；实现暂缓。*
+  约束的 SME 在结构上无法企及。完整的臂阶梯与性质记于 D14 修订。后续：`eval/gold.py` 与
+  `Arm.gold` 成员**现已删除**（术语重构）。仍暂缓：给 SME **按 split 限定范围的 BM25/向量检索工具**
+  （仅训练集 = 公平；+ 测试问题/evidence、绝不含测试 SQL = 上限——见 D14 修订），以及构建 `ceiling`
+  臂本身。
+  *状态：gold 退役已完成；SME 检索工具 + ceiling 臂暂缓。*
 
-- **R5 —— 成本 / 延迟 / token 可观测性：基座已通过 Langfuse + LangSmith 存在（细化 D16）。**
+- **R5 —— 成本 / 延迟 / token 可观测性：追踪器里有，但产品自身的持久记录里没有（细化 D16）。**
   两个追踪器都已接线（[`obs.py`](../src/governed_bi/obs.py)）；两者都逐轨迹捕获
-  token、成本与延迟并在各自仪表盘中聚合，一次智能体轮次归组为一条轨迹。缺口**不在捕获**，
-  而在于追踪按环境变量选择性开启（CI/离线画像中关闭），且未在产品自身的治理视图中呈现。
-  *状态：暂靠 Langfuse/LangSmith；原生聚合/监控/告警视图为未来工作（暂缓）。*
+  token、成本与延迟并在各自仪表盘中聚合，一次智能体轮次归组为一条轨迹。仍有两个不同的缺口——
+  此前「缺口不在捕获，而在呈现」的说法低估了第一个：
+  - **应用内捕获缺口。** 延迟、token、成本**只**存在于厂商轨迹里。产品自身的治理台账
+    （[`analyst/middleware.py`](../src/governed_bi/analyst/middleware.py)）逐次记录每个触数据工具的
+    `verdict`（`pass` / `block` / `error` / `cap` / `deny`），但**不含耗时、不含 token/成本、
+    不含时间戳**，且未做持久化（它挂在内存 checkpointer 上；持久化的 Postgres 仍暂缓）。sqlite
+    连接器里那一处 `time.monotonic()` 只是超时判定，用完即弃，并非记录下来的耗时。于是一旦追踪关闭
+    ——这是 CI/离线画像的默认，而密钥未设时它是**静默空操作**——就**没有任何独立于厂商的记录**
+    留住延迟或成本，工具调用错误率虽可从 `verdict` 推导却从未被计算。
+  - **呈现 / 聚合缺口。** 没有原生的指标/健康面（轮次延迟 p50/p95、工具错误 / 拦截 / 拒答率、
+    缓存命中率、503-无模型率），没有告警/SLO，产品内也没有任何治理视图呈现这些。
+  方向（未来工作，暂缓）：（1）给每条台账记录加上 `duration_ms` + `ts`，并在 `QueryResult` 上加
+  DB 执行耗时；（2）把模型 `usage_metadata`（token/成本）记入轮次记录；（3）把台账持久化到那份
+  独立于厂商的**交互日志**（见 R3，以轮次 + `corpus_release_hash` 为键）；（4）提供
+  OpenTelemetry/Prometheus 的 `/metrics` + `/health` 面并配告警；（5）在生产画像下让追踪
+  **显式报错**（启动时自检），使其永不盲跑。*状态：暂靠 Langfuse/LangSmith；应用内持久捕获与
+  原生聚合/监控/告警视图均为未来工作（暂缓）。*
 
 - **R6 —— 策展器对抗 `refute()` + 自评/修复循环：暂缓（细化 D10）。**
   确认未建；`refute()` 是 `NotImplementedError`，结构化 `review()` 在
@@ -536,7 +560,7 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   *状态：暂缓。*
 
 - **R7 —— 拒答闸门未被 BIRD EX 数字检验——记为当前评测的局限（细化 D5 / D14）。**
-  BIRD 问题全部可答，故三臂 EX 指标从不触发拒答闸门，其**误拒率也未被其测量**。留出的
+  BIRD 问题全部可答，故评测阶梯的 EX 指标从不触发拒答闸门，其**误拒率也未被其测量**。留出的
   不可答集（D5）是单独的工具——今天覆盖极少（一个小型手写 beer_factory 集）且在 CI 中
   被跳过（需实模型）。这是当前评测被接受、被记录的局限；补齐它是规模运行的一部分。
   *状态：已记录局限。*

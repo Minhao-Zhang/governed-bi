@@ -1,4 +1,4 @@
-"""Server steps 2-3: query understanding, term binding, intent routing.
+"""Analyst steps 2-3: query understanding, term binding, intent routing.
 
 Term binding resolves business language via ``term`` assets: synonyms map varied
 phrasings to the canonical asset (strong routing, not an LLM guess). Intent

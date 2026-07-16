@@ -1,4 +1,4 @@
-"""RVGD retrieval over the server-visible corpus view (docs/server.md step 5).
+"""RVGD retrieval over the Analyst-visible corpus view (docs/analyst.md step 5).
 
 This slice implements the deterministic core of RVGD: a pure-Python **BM25**
 index over the corpus assets (the "V"/lexical channel) plus a small **Ground**
@@ -12,7 +12,7 @@ expansion that walks the same relationships the graph projection encodes
 - **table -> columns**: a selected ``table`` contributes its column ids, using
   the loader's column-id derivation (``corpus.ids.derive_column_id``).
 
-Input is expected to be ``Corpus.for_server()`` so the tier contract is
+Input is expected to be ``Corpus.for_analyst()`` so the tier contract is
 structurally guaranteed (no Audit, no ``governance.excluded`` assets); the index
 is built from whatever assets the passed corpus exposes. The index is a
 rebuildable projection, so it is rebuilt per call rather than cached here.
@@ -151,7 +151,7 @@ class BM25Index:
 
 @dataclass(frozen=True)
 class RetrievalResult:
-    """Typed, deterministic retrieval output (the contract the agent core, ``server.agent``, reads).
+    """Typed, deterministic retrieval output (the contract the agent core, ``analyst.agent``, reads).
 
     ``scores`` maps asset id -> BM25 score for the selected assets that scored
     above zero; grounded additions (bound targets, base tables, columns) that
@@ -191,7 +191,7 @@ def retrieve(
        its columns.
     3. Partition the selected ids into the typed id lists (score desc, id asc).
 
-    ``corpus`` is expected to be a ``Corpus.for_server()`` view.
+    ``corpus`` is expected to be a ``Corpus.for_analyst()`` view.
     """
     index = build_index(corpus)
     ranked = index.rank(question)

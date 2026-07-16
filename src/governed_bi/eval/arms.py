@@ -1,20 +1,25 @@
-"""The three-arm eval harness (Architecture section 8; D4).
+"""The eval-ladder harness (Architecture section 8; D4; terminology-refactor).
 
 Runs a set of questions through a *solver* (question -> SQL, or None if it
 declines/refuses) and scores EX plus the free behavioral signals:
 
 - **decoy-touch rate**: share of produced queries that reference a
-  manifest-flagged fake column (Server "three points" #1 drives this to 0 in dev
-  via the suspect hard-block). Computed here from the corpus suspect set.
+  manifest-flagged fake column (Analyst "three points" #1 drives this to 0 in
+  dev via the suspect hard-block). Computed here from the corpus suspect set.
 - **governed-path adherence**: share of questions the solver actually answered
   (produced SQL for) rather than refused.
 
-The three arms differ only by the corpus/solver they use: (1) no semantic layer,
-(2) curator-built layer, (3) gold layer. Arm 2 vs 1 is the moat proof; Arm 2 vs 3
-is curator quality. This module supplies the reusable scorer (``run_arm``) and
-``agent_solver``, which drives the agentic serve core (ADR 0002) as the curator/
-gold arm; the no-layer (LLM baseline) and gold (manifest oracle) solvers plug
-into the same ``run_arms`` orchestrator when available.
+The eval ladder's fair rungs differ only by the corpus fed into the *same*
+serve path: ``baseline`` (deterministic, DB-derivable corpus, no curator LLM),
+``curated`` (curator-built Inference tier + train-SQL-derived assets), and
+``curated_sme`` (``curated`` + Simulated-SME clarification rounds). ``baseline``
+vs ``curated`` is the moat proof; ``curated`` vs ``curated_sme`` is the SME
+lift. This module supplies the reusable scorer (``run_arm``) and
+``agent_solver``, which drives the agentic serve core (ADR 0002) for every
+fair rung — ``run_arms`` scores whichever rungs the caller supplies solvers for.
+The ``ceiling`` rung (a test-aware oracle) is designed, not built (see
+``docs/plans/terminology-refactor.md``); it intentionally has no ``Arm`` member
+or solver here.
 """
 
 from __future__ import annotations
@@ -36,9 +41,11 @@ if TYPE_CHECKING:
 
 
 class Arm(str, Enum):
-    no_layer = "no_layer"  # Arm 1
-    curator = "curator"  # Arm 2
-    gold = "gold"  # Arm 3
+    baseline = "baseline"  # deterministic-max, DB-derivable only; no curator LLM
+    curated = "curated"  # curator LLM layer + train-SQL-derived seed joins/few-shots
+    curated_sme = "curated_sme"  # curated + Simulated-SME clarification round(s)
+    # ``ceiling`` (test-aware oracle) is designed, not built — no enum member /
+    # solver until it exists (docs/plans/terminology-refactor.md).
 
 
 @dataclass(frozen=True)
@@ -111,7 +118,7 @@ def run_arms(
     dialect: str = "sqlite",
 ) -> dict[Arm, ArmResult]:
     """Score every provided arm. Callers supply the solvers they can run (e.g.
-    just the curator arm in dev); the no-layer and gold arms plug in the same way
+    just the ``curated`` arm in dev); the other fair rungs plug in the same way
     once their solvers exist."""
     return {
         arm: run_arm(
@@ -131,15 +138,17 @@ def agent_solver(
     embedder=None,
     session_id: str = "eval",
 ) -> Solver:
-    """A :class:`Solver` that drives the ADR-0002 agentic serve core (ledger arm).
+    """A :class:`Solver` that drives the ADR-0002 agentic serve core.
 
-    Mirrors :func:`flow_solver` but routes through ``answer_question_agent`` (the
-    ``create_agent`` + governance-middleware path). The outer rails graph is built
-    once and invoked per question; each ``solve`` is independent (no working memory
-    / cache), matching the single-round eval contract. ``last_solve_meta`` carries
-    the same audit fields as ``flow_solver`` plus the governance-ledger length.
+    Routes through ``answer_question_agent`` (the ``create_agent`` +
+    governance-middleware path) — the one serve path shared by every fair rung
+    of the eval ladder (``baseline`` / ``curated`` / ``curated_sme``). The outer
+    rails graph is built once and invoked per question; each ``solve`` is
+    independent (no working memory / cache), matching the single-round eval
+    contract. ``last_solve_meta`` carries audit fields plus the
+    governance-ledger length.
     """
-    from ..server.agent import build_serve_rails
+    from ..analyst.agent import build_serve_rails
 
     graph = build_serve_rails(
         corpus=corpus,

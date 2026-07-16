@@ -2,7 +2,7 @@
 
 The single source of truth for the fail-closed paths (refuse-gate matching, L4
 licensing scope, cache re-guardrailing, answer finalization, the two-axis stamp,
-and the live event stream) that ``server.agent``'s outer rails + middleware call,
+and the live event stream) that ``analyst.agent``'s outer rails + middleware call,
 so governance decisions live in exactly one place and cannot drift.
 """
 
@@ -299,7 +299,7 @@ class GovEventStream:
     the shared helpers below (:func:`_try_cache_hit`, :func:`_finalize_success`,
     :func:`_finish_unsuccessful`) still accept an ``on_event`` callback and fall
     back to the bare :func:`_emit` legacy ``{stage}`` shape when one is passed,
-    but ``server.agent`` always passes ``on_event=None`` there and drives this
+    but ``analyst.agent`` always passes ``on_event=None`` there and drives this
     emitter instead, so extending one never disturbs the other.
 
     Best-effort like :func:`_emit`: a callback that raises must never turn a
@@ -513,7 +513,7 @@ def _finalize_success(
 
     The stamp reflects the joins the executed SQL actually needs and whether it
     took a repair to get here (a repaired answer is lineage, not governed). Kept
-    here in ``server.governance`` (rather than inline in ``server.agent``) so the
+    here in ``analyst.governance`` (rather than inline in ``analyst.agent``) so the
     stamping logic stays centralized and testable on its own.
     ``ledger`` (optional) attaches the agent governance ledger to provenance (Inv #10).
     """
@@ -549,9 +549,9 @@ def _finalize_success(
         text=text, sql=generated.sql, signals=signals, provenance=provenance, result=table
     )
     # Cache admission gates on the *semantic* axis, never on safety alone: only a
-    # ``certified`` answer (clean run, no uncertainty flag) is written back, so a
+    # ``grounded`` answer (clean run, no uncertainty flag) is written back, so a
     # later hit is always high-assurance. Cache SQL text only, never results (D7).
-    if cache is not None and answer.semantic_assurance is SemanticAssurance.certified:
+    if cache is not None and answer.semantic_assurance is SemanticAssurance.grounded:
         cache.put(
             question,
             generated.sql,

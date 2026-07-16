@@ -4,7 +4,7 @@ The corpus is the moat. Git is the single source of truth; every other store
 (graph / vector / BM25 / Postgres) is a rebuildable projection. This package
 holds the schema, ID conventions, CI validator, and loader — the concrete,
 fully-specified pieces. The curator (``governed_bi.curator``) writes the corpus;
-the server (``governed_bi.server``) consumes the ``for_server()`` view.
+the analyst (``governed_bi.analyst``) consumes the ``for_analyst()`` view.
 
 See ``docs/asset-schemas.md`` and D9 in ``docs/design-decisions.md``.
 """

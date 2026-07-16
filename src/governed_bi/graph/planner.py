@@ -1,9 +1,9 @@
-"""Steiner-tree join planning (Server step 6).
+"""Steiner-tree join planning (Analyst step 6).
 
 Given the tables a query needs, find the minimum-cost set of joins that connects
 them over the inferred FK graph. Low-``confidence`` inferred joins get a **cost
 penalty**; the lowest join confidence on the chosen path **propagates to the
-reliability stamp** (Server "three points" #2).
+reliability stamp** (Analyst "three points" #2).
 
 The plan is an approximate minimum Steiner tree over the undirected projection of
 the ``JOINS_TO`` edges. Intermediate tables the query did not ask for may appear
@@ -84,10 +84,10 @@ def join_neighborhood(
     nodes and BFS from each input id up to ``hops`` hops. Input ids that are not
     table nodes in the graph are ignored (they contribute nothing). Deterministic.
 
-    Used by the server to decouple L4 licensing from retrieval recall: a table the
+    Used by the analyst to decouple L4 licensing from retrieval recall: a table the
     lexical retriever missed but the answer legitimately needs (a near FK neighbor
     of a retrieved table) is still licensed. This is safe because L3 guards every
-    column independently; see ``server.governance._licensed_table_ids``.
+    column independently; see ``analyst.governance._licensed_table_ids``.
     """
     ug = _join_graph(graph)
     reached = {t for t in table_ids if t in ug}

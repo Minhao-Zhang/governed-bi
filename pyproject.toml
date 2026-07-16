@@ -19,7 +19,7 @@ dependencies = [
     "pyyaml>=6.0",
     # In-memory property graph + Steiner-tree join planning (BIRD scale).
     "networkx>=3.3",
-    # SQL parsing for the AST column-allowlist guardrail (server L3).
+    # SQL parsing for the AST column-allowlist guardrail (analyst L3).
     "sqlglot>=25.0",
     # --- DB connectors (Postgres + Redshift both ride psycopg; drivers lazy-imported) ---
     "psycopg[binary]>=3.1",

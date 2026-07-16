@@ -1,4 +1,4 @@
-"""Offline tests for three-arm experiment pieces (baseline, seed, bag, SME, pipeline)."""
+"""Offline tests for eval-ladder pieces (baseline, seed, bag, SME, pipeline)."""
 
 from __future__ import annotations
 
@@ -12,11 +12,14 @@ from governed_bi.curator.clarifications import (
     StaticResponder,
     write_clarifications,
 )
-from governed_bi.curator.pipeline import build_curated_corpus, build_curated_corpus_with_sme
+from governed_bi.curator.pipeline import (
+    build_baseline_corpus,
+    build_curated_corpus,
+    build_curated_corpus_with_sme,
+)
 from governed_bi.curator.profile import profile_database
 from governed_bi.curator.seed import extract_joins_from_sql, seed_from_train_sql
 from governed_bi.curator.sme import assert_brief_no_leakage, build_sme_brief
-from governed_bi.eval.baseline_solver import no_layer_solver
 from governed_bi.eval.dataset import EvalItem
 from governed_bi.gateway import Gateway, SqliteConnector
 from governed_bi.llm import StaticChatClient
@@ -121,24 +124,32 @@ def test_asset_bag_propose_join_and_suspect(bird_connector, tmp_path: Path):
     assert (tmp_path / "beer_factory" / "joins").exists()
 
 
-def test_no_layer_solver_returns_sql(bird_connector):
-    gateway = Gateway(bird_connector)
-    chat = StaticChatClient(responses='SELECT COUNT(*) FROM "customers"')
-    solver = no_layer_solver(
-        bird_connector, gateway, chat, schema="beer_factory", dialect="sqlite"
-    )
-    sql = solver.solve("How many customers?")
-    assert sql is not None
-    assert "SELECT" in sql.upper()
+def test_build_baseline_corpus_is_deterministic_db_derivable(bird_connector, tmp_path: Path):
+    """The baseline arm (D5): no curator LLM, no train-SQL seeding — just Facts
+    (names/types/sample values) plus naming-convention FK candidates."""
+    import json
 
+    from governed_bi.corpus import load_corpus
 
-def test_no_layer_solver_refuses(bird_connector):
-    gateway = Gateway(bird_connector)
-    chat = StaticChatClient(responses="CANNOT_ANSWER")
-    solver = no_layer_solver(
-        bird_connector, gateway, chat, schema="beer_factory", dialect="sqlite"
-    )
-    assert solver.solve("anything") is None
+    root = build_baseline_corpus(bird_connector, "beer_factory", tmp_path / "corpus_baseline")
+
+    assert (root / "beer_factory" / "tables").exists()
+    corpus = load_corpus(root, schema="beer_factory")
+    tables = [a for a in corpus.assets if a.asset_type == "table"]
+    assert tables
+    for t in tables:
+        assert t.description is None  # Inference tier untouched: no LLM ran
+        for c in t.columns:
+            assert c.description is None
+
+    # transaction.CustomerID -> customers.CustomerID is derivable from column
+    # naming alone (no train SQL involved).
+    joins = [a for a in corpus.assets if a.asset_type == "join"]
+    assert any("transaction" in j.on and "customers" in j.on for j in joins)
+
+    manifest = json.loads((root / "run_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["phase"] == "baseline"
+    assert manifest["fk_candidates"]["fk_candidates_ok"] >= 1
 
 
 def test_sme_brief_leakage_guard(tmp_path: Path):

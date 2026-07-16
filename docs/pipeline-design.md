@@ -5,7 +5,7 @@ its original sections (Phase D DAG, single-schema LLM pick, grade-don't-refuse)
 are **removed** from this doc. What remains describes the **curator / build side**
 (§0–§3) — still the intended pipeline — plus the preserved invariants (§8). Serve
 is authoritatively covered by [ADR 0002](adr/0002-governed-agentic-serve-runtime.md),
-[D5 / D12–D16](design-decisions.md), and [server.md](server.md)._
+[D5 / D12–D16](design-decisions.md), and [analyst.md](analyst.md)._
 
 > **One removed idea, flagged:** the earlier "reverse D15's missing-edge refuse"
 > proposal did **not** ship. A cross-schema question with no curated join still

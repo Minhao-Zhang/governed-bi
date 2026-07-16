@@ -32,7 +32,7 @@ from .clarifications import (
 from .enrich import enrich_table
 from .llm_proposer import LlmProposer
 from .loop import CurationResult, curate
-from .pipeline import build_curated_corpus, build_curated_corpus_with_sme
+from .pipeline import build_baseline_corpus, build_curated_corpus, build_curated_corpus_with_sme
 from .profile import profile_database
 from .proposer import HeuristicProposer, Proposer
 from .sme import SimulatedSme, assert_brief_no_leakage, build_sme_brief
@@ -47,6 +47,7 @@ __all__ = [
     "SimulatedSme",
     "StaticResponder",
     "assert_brief_no_leakage",
+    "build_baseline_corpus",
     "build_curated_corpus",
     "build_curated_corpus_with_sme",
     "build_facts_corpus",

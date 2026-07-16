@@ -33,7 +33,7 @@ The serve runtime under-uses LangGraph and its reasoning is deterministic-but-bl
   250-line monolith `flow.py::answer_question`. LangGraph is used only for thread
   persistence + custom-event streaming — **no** node-level orchestration,
   per-node observability, per-node retry, or human-in-the-loop.
-- **A real DAG exists but is unused and stale.** `server/graph.py::build_serve_graph`
+- **A real DAG exists but is unused and stale.** `analyst/graph.py::build_serve_graph`
   is a 9-node `StateGraph`, but nothing in the serve path imports it, and it has
   drifted from `flow.py` (no `graded_delivery`; `narrator` behind). We maintain
   two implementations and deploy the dumber packaging of the worse one.
@@ -152,7 +152,7 @@ reliability stamp. It reasons; the middleware and the rails govern.
    default) so "the agent wandered" is visible in the stamp.
 5. **The reliability stamp is deterministic** — `safety_clearance` /
    `semantic_assurance` are computed by `finalize` from what actually happened,
-   **never self-reported**. The agent cannot claim `certified`.
+   **never self-reported**. The agent cannot claim `grounded`.
 6. **`safety_clearance` stays binary-hard** — only `semantic_assurance` is graded
    (§6 deliver-and-grade unchanged).
 7. **Bounded** — `recursion_limit ≈ 15` + `run_query` attempt cap = 3; exhaustion
@@ -252,7 +252,7 @@ exists to kill the two-implementations drift (`flow.py` monolith vs. stale
   ledger on `Answer`. A/B on BIRD.
 - **Phase 2 — cutover.** Make the agent core the only serve path; require a key;
   delete `TemplateSqlGenerator` (serve), the `flow.py` monolith, and the stale
-  `server/graph.py`.
+  `analyst/graph.py`.
 - **Phase 3 — deferred branches.** HITL (`interrupt()` + durable checkpointer),
   durable audit sink (Q3-b/c), data-privacy/egress governance (Q5).
 
@@ -261,7 +261,7 @@ exists to kill the two-implementations drift (`flow.py` monolith vs. stale
 - HITL scope + the durable checkpointer (Postgres) backing.
 - Durable audit sink shape (Q3-c) and retention.
 - Data-privacy / egress governance (Q5).
-- `recursion_limit` / model-tier tuning against the eval; the eval / three-arm
+- `recursion_limit` / model-tier tuning against the eval; the eval / eval-ladder
   interaction for a nondeterministic agent (seeds, temperature 0).
 - Migration sequencing detail now that the deterministic DAG is retired, not
   deployed.
@@ -270,8 +270,8 @@ exists to kill the two-implementations drift (`flow.py` monolith vs. stale
 
 **Status:** Proposed — blocks P2. **Trigger:** the first live serve-path A/B
 (fixed corpus, `cs_semester`, N=15) showed the agent core **regressing** vs. the
-deterministic flow — A2/A3 flow EX 0.667 vs. agent 0.267, and A2==A3 (curation
-added nothing through the agent).
+deterministic flow — curated/curated_sme flow EX 0.667 vs. agent 0.267, and
+curated==curated_sme (curation added nothing through the agent).
 
 **Root cause.** The P1 tools exposed only *names*: `search_corpus` → asset
 ids+scores, `inspect_schema` → columns. They surfaced **none** of the curated
@@ -279,7 +279,8 @@ semantic layer's high-value content — **few-shot exemplars (Q→gold-SQL), joi
 `ON` clauses, metric expressions, term mappings, rules/caveats** — which the flow
 injects via `assemble_context` → `PromptContext.render()`. So the agent did
 NL→SQL over bare schema (≈ the no-layer baseline), and everything curation
-enriches (joins from gold SQL, few-shots, rules — the A2→A3 delta) was invisible.
+enriches (joins from gold SQL, few-shots, rules — the curated→curated_sme delta)
+was invisible.
 This gap originated in ADR's own tool table + the build guide sketching
 `search_corpus` to return ids, not content.
 
@@ -356,7 +357,7 @@ early. This turns Inv #10 from a post-hoc audit dump into a per-attempt live aud
 of the repair loop, which is the observability half of this ADR's thesis made into
 a product surface.
 
-**How.** `GovEventStream` (`server/governance.py`) is a per-turn emitter over the
+**How.** `GovEventStream` (`analyst/governance.py`) is a per-turn emitter over the
 raw `on_event` callback (monotonic `seq`, `serve_path` tag, best-effort). `agent_core_node`
 switched `agent.invoke` → `agent.stream(stream_mode=["updates","values"])`:
 model-node tool calls become `start` events, tools-node results become resolves,
@@ -375,8 +376,8 @@ Tests: `tests/test_agent_step_events.py`.
 **Status:** Implemented, commit `d2fdd6a` on `main`.
 
 The Phase 2 cutover described above shipped: the agentic core is now the
-**only** serve path. `server/flow.py` (`answer_question`) and the stale unused
-`server/graph.py` DAG are both deleted; the chat graph and `/chat` always run
+**only** serve path. `analyst/flow.py` (`answer_question`) and the stale unused
+`analyst/graph.py` DAG are both deleted; the chat graph and `/chat` always run
 `answer_question_agent`; and the now-vestigial `agent_serve` flag is gone: there
 is no toggle, and the agent path is unconditional. With no live model
 configured, serve **fails closed at startup** (`make_graph` raises) rather than
@@ -397,7 +398,7 @@ the agent path; `run_experiment` is agent-only.
    → agent_core → narrate`. Previously the LLM narrator was invoked as a side
    call buried inside the finalizers (`_finalize_success` / `_try_cache_hit` /
    `_finish_unsuccessful`, via `_answer_text`); those finalizers now emit only
-   the deterministic fallback text, and `narrate_answer` (`server/governance.py`)
+   the deterministic fallback text, and `narrate_answer` (`analyst/governance.py`)
    does the LLM phrasing from the `narrate` node. **Why:** the narrator's model
    call becomes a first-class, individually-traced graph step instead of a loose
    model call not attributable to any node. Both the cache-hit path (`cache →
@@ -428,12 +429,14 @@ the agent path; `run_experiment` is agent-only.
 
 The Q6 row (the "no clarification (the model guesses)" line above) and Phase 3
 listed HITL (`interrupt()` + checkpointer) as deferred. The **interrupt mechanism
-has since landed server-side**: `server/tools.py::ask_user` calls `interrupt()`,
-`server/clarify.py` carries the clarification request/response shapes,
+has since landed server-side**: `analyst/tools.py::ask_user` calls `interrupt()`,
+`analyst/clarify.py` carries the clarification request/response shapes,
 `api/graph_app.py` handles the `ClarificationPending` resume loop, and `stack.py`
 wires `can_clarify` + a `clarify_checkpointer` (covered by
 `tests/test_serve_clarify.py`). What remains deferred is only the **durable**
 checkpointer (Postgres) — today's checkpointer is in-memory, so a clarification
-does not survive a process restart. The frontend build is tracked in
-[hitl-clarification-contract.md](../plans/hitl-clarification-contract.md). So
+does not survive a process restart. The frontend contract is in
+[hitl-clarification-contract.md](../plans/hitl-clarification-contract.md); the
+frontend's build status lives in [`governed-bi-ui`](https://github.com/Minhao-Zhang/governed-bi-ui),
+not here. So
 "Open questions → HITL" now scopes to *durable persistence*, not the mechanism.

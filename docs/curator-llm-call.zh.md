@@ -18,7 +18,7 @@
 的确定性脚手架（画像、播种、校验）：
 
 - **(1) 画像增强（profiling enrichment）**，通过 `LlmProposer` 完成：每张表调用
-  一次 `chat.complete`，产出 JSON 形式的描述与 suspect 标记。这与服务端 schema
+  一次 `chat.complete`，产出 JSON 形式的描述与 suspect 标记。这与 Analyst 的 schema
   路由器/narrator 走的是同一个单次调用 seam（`chat.complete(system, user)` →
   `LangChainChatClient` 构建 `[("system", system), ("human", user)]`）。
 - **(2) Phase A deep agent**：从 (question, gold SQL) 配对出发撰写语义层，并维护
@@ -27,14 +27,14 @@
   溯源（certified provenance）。系统提示：`_PHASE_B_PROMPT`。
 
 这两个 deep agent 都由 `deep_agent.build_curator_agent` 构建，它包装的是
-`deepagents.create_deep_agent`，一套与服务端 `create_agent` 不同的 harness：它
+`deepagents.create_deep_agent`，一套与 Analyst 的 `create_agent` 不同的 harness：它
 加装了一个文件系统式的暂存区（scratchpad，`FilesystemBackend`），让 agent 能用
 内置的 `ls` / `read_file` / `write_file` / `edit_file` / `grep` 工具读写
 `/clarifications.jsonl`，与 curator 自身的接地工具（grounded tools）并用。
 
 **旁白：Simulated SME 不在本文范围内。** 在 Phase A 与 Phase B 之间，一个只用于
 评测的组件（`curator/sme.py`、`build_sme_brief`）扮演回答 `clarifications.jsonl`
-的人类角色。它有自己的模型调用与系统提示，但它是三臂实验（three-arm experiment）
+的人类角色。它有自己的模型调用与系统提示，但它是评测阶梯实验（eval-ladder experiment）
 的测试 harness，并不属于生产策展流水线的一部分。如果需要它的提示形态，请直接
 查看源文件。
 
@@ -270,15 +270,15 @@ Phase B 自身的工具调用会跳过它们。
    `read_corpus` / `run_probe_query` / `upsert_*` / `annotate_*` / 文件工具，
    边写入资产边更新 `/clarifications.jsonl`。
 5. **校验 + 可选的修复轮**（确定性的 `validate_corpus`，只有存在发现
-   （findings）时才会再多跑一次 agent 调用）→ 写出 **A2 corpus**。
+   （findings）时才会再多跑一次 agent 调用）→ 写出 **`curated`** corpus。
 6. *（旁白，本文范围之外）* Simulated SME（或真实 SME）回答
    `/clarifications.jsonl`。
 7. **(3) Phase B deep agent**，运行一次 agent，系统提示为 `_PHASE_B_PROMPT`，
    用户任务 = 上文那条固定的 ingest 指令；把已回答的记录折叠进 corpus，标记
    `certified=true`。
-8. 再次**校验** → 写出 **A3 corpus**。
+8. 再次**校验** → 写出 **`curated_sme`** corpus。
 
 **另见：** [Curator](curator.zh.md) 了解 proposer/adversary 设计与溯源生命周期；
-[Pipeline design](pipeline-design.md) 了解 Phase A/B 如何契合三臂实验；
+[Pipeline design](pipeline-design.md) 了解 Phase A/B 如何契合评测阶梯实验；
 [Asset schemas](asset-schemas.zh.md) 了解 `upsert_*` / `annotate_*` 实际写入的
 内容。

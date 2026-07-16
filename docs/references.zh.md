@@ -15,4 +15,4 @@ _[English](references.md) · [简体中文](references.zh.md)_
 
 ## 仓库边界
 
-BIRD-Obfuscation（上游）负责产出数据和清单。**本仓库是下游代理**，负责消费这些数据：构建语义层（curator）、回答问题（server），并依据执行准确率（execution accuracy）评分。
+BIRD-Obfuscation（上游）负责产出数据和清单。**本仓库是下游代理**，负责消费这些数据：构建语义层（curator）、回答问题（analyst），并依据执行准确率（execution accuracy）评分。

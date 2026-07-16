@@ -1,7 +1,7 @@
 """The curator build harness as a deepagents agent (D10; docs/curator.md).
 
 The curator is the design's **maximum-autonomy** harness (opposite risk profile to
-the fail-closed server): it explores a database and authors the Inference-tier
+the fail-closed Analyst): it explores a database and authors the Inference-tier
 semantic layer. That "explore + plan + act over many steps" shape is exactly what
 ``deepagents`` provides (planning tool, filesystem scratchpad via
 ``FilesystemBackend``), so the curator agent is a deep agent over a small set of

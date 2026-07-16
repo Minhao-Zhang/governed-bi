@@ -1,7 +1,7 @@
 """Tests for the RVGD retrieval slice: BM25 index + Ground expansion.
 
 Runs against the committed ``corpus/beer_factory`` semantic layer (its
-``for_server()`` view), so no live database is needed.
+``for_analyst()`` view), so no live database is needed.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ REVIEW = "tbl_beer_factory_rootbeerreview"
 
 @pytest.fixture
 def corpus():
-    return load_corpus(CORPUS_ROOT, schema="beer_factory").for_server()
+    return load_corpus(CORPUS_ROOT, schema="beer_factory").for_analyst()
 
 
 # --------------------------------------------------------------------------- #
@@ -108,7 +108,7 @@ def test_selected_tables_contribute_their_columns(corpus):
 
 def test_excluded_column_never_reaches_column_ids(corpus):
     # transaction is grounded in for this query; its PII column is governance.excluded
-    # and dropped by for_server(), so it must not appear as a retrieved column.
+    # and dropped by for_analyst(), so it must not appear as a retrieved column.
     result = retrieve(corpus, "total revenue by brand")
     assert TRANSACTION in result.table_ids
     assert "col_beer_factory_transaction_CreditCardNumber" not in result.column_ids

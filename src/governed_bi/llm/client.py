@@ -3,7 +3,7 @@
 Two protocols the rest of the system programs against:
 
 - :class:`ChatClient` - one system+user prompt in, one completion string out.
-  The server SQL generator and the curator proposer call this.
+  The Analyst SQL generator and the curator proposer call this.
 - :class:`Embedder` - texts in, vectors out. The retrieval vector channel and the
   SQL semantic cache call this.
 

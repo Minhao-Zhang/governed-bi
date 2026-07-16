@@ -20,7 +20,7 @@ scaffolding around them (profiling, seeding, validation):
 
 - **(1) Profiling enrichment** via `LlmProposer`: one `chat.complete` call per table,
   producing descriptions and suspect flags as JSON. This is the same single-shot seam
-  as the server's schema router/narrator (`chat.complete(system, user)` →
+  as the Analyst's schema router/narrator (`chat.complete(system, user)` →
   `LangChainChatClient` builds `[("system", system), ("human", user)]`).
 - **(2) Phase A deep agent**: authors the semantic layer from (question, gold SQL)
   pairs and maintains `clarifications.jsonl`. System prompt: `_PHASE_A_PROMPT`.
@@ -28,7 +28,7 @@ scaffolding around them (profiling, seeding, validation):
   with certified provenance. System prompt: `_PHASE_B_PROMPT`.
 
 Both deep agents are built by `deep_agent.build_curator_agent`, which wraps
-`deepagents.create_deep_agent`, a different harness from the server's `create_agent`:
+`deepagents.create_deep_agent`, a different harness from the Analyst's `create_agent`:
 it adds a filesystem scratchpad (`FilesystemBackend`) so the agent can read/write
 `/clarifications.jsonl` with the built-in `ls` / `read_file` / `write_file` /
 `edit_file` / `grep` tools, alongside the curator's own grounded tools.
@@ -36,7 +36,7 @@ it adds a filesystem scratchpad (`FilesystemBackend`) so the agent can read/writ
 **Aside: the Simulated SME is out of scope here.** Between Phase A and Phase B, an
 eval-only component (`curator/sme.py`, `build_sme_brief`) plays the human responder who
 answers `clarifications.jsonl`. It has its own model call and its own system prompt,
-but it is a test harness for the three-arm experiment, not part of the production
+but it is a test harness for the eval-ladder experiment, not part of the production
 curation pipeline. See the source file directly if you need its prompt shape.
 
 ## (1) Profiling enrichment: `LlmProposer`
@@ -270,15 +270,15 @@ Method step 4 above.
    `read_corpus` / `run_probe_query` / `upsert_*` / `annotate_*` / file tools
    repeatedly, writing assets and `/clarifications.jsonl` as it goes.
 5. **Validate + optional fix pass** (deterministic `validate_corpus`, then one more
-   agent invocation only if findings exist) → **A2 corpus** written.
+   agent invocation only if findings exist) → the **`curated`** corpus is written.
 6. *(Aside, out of scope for this doc)* the Simulated SME (or a real SME) answers
    `/clarifications.jsonl`.
 7. **(3) Phase B deep agent**, one agent run, system prompt `_PHASE_B_PROMPT`, user
    task = the fixed ingest instruction above; folds answered records into the corpus
    with `certified=true`.
-8. **Validate** again → **A3 corpus** written.
+8. **Validate** again → the **`curated_sme`** corpus is written.
 
 **See also:** [Curator](curator.md) for the proposer/adversary design and the
 provenance lifecycle; [Pipeline design](pipeline-design.md) for how Phase A/B fit the
-three-arm experiment; [Asset schemas](asset-schemas.md) for what `upsert_*` /
+eval-ladder experiment; [Asset schemas](asset-schemas.md) for what `upsert_*` /
 `annotate_*` actually write.

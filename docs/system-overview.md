@@ -16,14 +16,14 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
 
 ## Key points
 
-- Two harnesses over one shared substrate: **curator** (builds the corpus) and **server** (answers). The semantic layer is the moat. Fail-closed.
+- Two harnesses over one shared substrate: **curator** (builds the corpus) and **analyst** (answers). The semantic layer is the moat. Fail-closed.
 - Design notes:
     - [Architecture](architecture.md): full design
     - [Design decisions](design-decisions.md): D1-D16 (+ 2026-07-15 audit dispositions) with alternatives and trade-offs
     - [Asset schemas](asset-schemas.md): the per-asset YAML field spec (Facts / Inference / Audit tiers)
     - [Curator](curator.md): the build-side proposer + adversary loop
-    - [Server](server.md): the serve-side agent + guardrails (the [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) governed agentic core is now the sole serve path; the earlier deterministic flow is retired)
-    - [Viz](viz.md): the read-only audit surface — the presenter view models + the `governed_bi.api` HTTP API to browse the layer + chat with the server
+    - [Analyst](analyst.md): the serve-side agent + guardrails (the [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) governed agentic core is now the sole serve path; the earlier deterministic flow is retired)
+    - [Viz](viz.md): the read-only audit surface — the presenter view models + the `governed_bi.api` HTTP API to browse the layer + chat with the analyst
     - [Glossary](glossary.md): canonical terms
 - Grounded in the [external design sources](references.md).
 
@@ -42,7 +42,7 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
 > join planner (in-memory networkx) · gateway + five-layer guardrails · RVGD
 > retrieval (BM25 + ground expansion, plus an embedder-gated vector channel fused
 > with BM25 via RRF) · retrieval→context assembly · the [ADR 0002](adr/0002-governed-agentic-serve-runtime.md)
-> governed agentic serve core (`server.agent`: deterministic rails +
+> governed agentic serve core (`analyst.agent`: deterministic rails +
 > `create_agent` + governance middleware + read-only tools), the sole serve
 > path since the P2 cutover · working memory · the eval scaffold · the
 > read-only viz presenter view models + the `governed_bi.api` HTTP API · model
@@ -62,23 +62,23 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
 > LLM authoring of the remaining Inference assets (joins / terms / metrics / rules
 > / skills) and the live per-asset adversary `refute` · the curator self-eval
 > train-EX loop · the **full** obfuscated BIRD eval jsonl at scale (a small
-> vendored beer_factory set stands in until it lands; the live three-arm harness
+> vendored beer_factory set stands in until it lands; the live eval-ladder harness
 > already runs against a local Postgres with a live model) · the **D15** multi-schema build
 > continues: wire rename + multi-schema serve + missing-edge refusal + server-side
 > graph scoping + on-disk YAML `schema` field + join-aware schema router are
-> **shipped**. Still deferred: server `/search` (client Fuse) and collapsing
-> `DataSourceConfig.db` into the pin field.
+> **shipped**. Still deferred: server `/search` (client Fuse). `DataSourceConfig.db`
+> has since collapsed into `corpus_pin`.
 > Without the eval data the arms cannot yet show the moat.
 
 > **Open (design-level)**
 >
 > - Reliability-inference signals: the exact evidence the curator uses (deepens Curator Phase 2)
 > - Refuse-gate + negative-example curation + held-out unanswerable set
-> - Server tool registry (few, sharp): the exact tool list (flow in [Server](server.md))
+> - Analyst tool registry (few, sharp): the exact tool list (flow in [Analyst](analyst.md))
 > - Curator exploration tactics: probe-query strategies (loop in [Curator](curator.md))
 >
 > *Parked (development, per "design-first"):* build ordering / critical path.
 > *Resolved → notes/decisions:* storage layout (D9) · gold auto-derivation (D4)
 > · train/test split (§8) · corpus schemas ([Asset schemas](asset-schemas.md))
-> · curator loop ([Curator](curator.md)) · server flow ([Server](server.md))
+> · curator loop ([Curator](curator.md)) · analyst flow ([Analyst](analyst.md))
 > · viz/audit ([Viz](viz.md)).

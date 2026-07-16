@@ -69,7 +69,7 @@ uv run pytest -q
 
 ## 4. 提出你的第一个问题
 
-有两种入口：HTTP API，或者几行 Python。两者驱动的是完全相同的受治理服务流程。
+有两种入口：HTTP API，或者几行 Python。两者驱动的是完全相同的受治理 Analyst 流程。
 
 ### 4a. 通过 HTTP API（推荐）
 
@@ -93,7 +93,7 @@ curl -s localhost:8000/chat -H 'content-type: application/json' \
 可能不同，下面是一个具有代表性的示例），其 JSON 里带有：
 
 - **tier: governed**
-- **safety_clearance: true** · **semantic_assurance: certified**
+- **safety_clearance: true** · **semantic_assurance: grounded**
 - 答案，例如：`total_revenue = 18496.0`
 - 它运行的 SQL，例如：`SELECT SUM(PurchasePrice) AS total_revenue FROM "transaction"`
 - 一个 **provenance** 轨迹（路由、指标、涉及的表、连接置信度）
@@ -128,10 +128,10 @@ from governed_bi.config import Settings, Environment
 from governed_bi.corpus import load_corpus
 from governed_bi.gateway import SqliteConnector, Gateway, Identity
 from governed_bi.llm import LangChainChatClient
-from governed_bi.server.agent import answer_question_agent
+from governed_bi.analyst.agent import answer_question_agent
 
 settings = Settings.for_env(Environment.dev)
-corpus = load_corpus("corpus", schema="beer_factory").for_server()
+corpus = load_corpus("corpus", schema="beer_factory").for_analyst()
 conn = SqliteConnector("data/bird/beer_factory.sqlite")
 chat = LangChainChatClient.from_config(settings.models)  # 需要 OPENAI_API_KEY
 
@@ -146,7 +146,7 @@ ans = answer_question_agent(
 )
 print(ans.tier.value)            # governed（通常如此，实时模型的输出会有波动）
 print(ans.safety_clearance)      # True
-print(ans.semantic_assurance.value)  # certified / heuristic
+print(ans.semantic_assurance.value)  # grounded / heuristic
 print(ans.sql)                   # 例如：SELECT SUM(PurchasePrice) AS total_revenue FROM "transaction"
 print(ans.text)                  # 例如：total_revenue = 18496.0
 conn.close()
@@ -155,9 +155,9 @@ conn.close()
 ## 5. 你正在看的是什么
 
 - **双轴标记是最诚实的部分。** `safety_clearance` 是一道闸门——这条 SQL 是否通过了
-  全部五层护栏、并以请求者身份执行？`semantic_assurance`（`certified` /
+  全部五层护栏、并以请求者身份执行？`semantic_assurance`（`grounded` /
   `heuristic` / `unverified`）则是答案的*接地程度*。二者刻意分开：一条查询可以
-  完全安全，却仍是错误的计算，所以"安全"绝不能被读成"正确"。（见 [server.md](server.zh.md)。）
+  完全安全，却仍是错误的计算，所以"安全"绝不能被读成"正确"。（见 [Analyst](analyst.zh.md)。）
 - **你可以审计这条 SQL。** 模型的输出被当作不可信；实际运行的 SQL 会被展示，而且它
   只会触及 corpus 授权的列/表。
 - **拒答是一项特性。** 覆盖缺失、触发护栏、或命中一条经过整理的越界模式，都会失败
@@ -189,4 +189,4 @@ uv run python scripts/live_smoke.py
 - [用法](usage.zh.md)——更完整的快速上手（校验 CLI、corpus API、gateway）。
 - [Corpus 撰写](corpus-authoring.zh.md)——逐步撰写并校验你自己的资产。
 - [系统总览](system-overview.zh.md) → [架构](architecture.zh.md)——这一切背后的设计。
-- [Server](server.zh.md)——深入服务流程、护栏与可靠性标记。
+- [Analyst](analyst.zh.md)——深入服务流程、护栏与可靠性标记。
