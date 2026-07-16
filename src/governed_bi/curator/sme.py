@@ -24,8 +24,8 @@ Rules you MUST follow:
 - Answer only from the brief below and ordinary domain sense. Do NOT invent \
 columns, tables, or labels that are not in the brief.
 - Never write database queries. Describe meaning in prose only.
-- If a column looks like a decoy or trap, say so explicitly and recommend not \
-using it.
+- If a column looks unreliable or misleading for analysis, say so explicitly and \
+recommend not using it (name a more reliable column if one exists).
 - If you are unsure, say you are unsure rather than fabricating a definition.
 """
 

@@ -17,8 +17,8 @@ self-built [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) 
 2. [Architecture](architecture.md): the full design (spine, kernel, services, storage, flow, eval, environments).
 3. [Design decisions](design-decisions.md): D1-D16 (+ 2026-07-15 audit dispositions) as ADRs, with alternatives and trade-offs.
 4. [Asset schemas](asset-schemas.md): the per-asset YAML field spec (Facts / Inference / Audit tiers).
-5. [Curator](curator.md): the build-side proposer + adversary loop.
-6. [Server](server.md): the serve-side governed agentic core + guardrails.
+5. [Curator](curator.md): the build-side proposer + adversary loop. For the exact prompts, see [Curator LLM-call walkthrough](curator-llm-call.md).
+6. [Server](server.md): the serve-side governed agentic core + guardrails. For the exact prompts, see [Server LLM-call walkthrough](server-llm-call.md).
 7. [Viz](viz.md): the read-only audit surface — the presenter view models plus the `governed_bi.api` HTTP API to browse the layer and chat with the governed server (the interactive UI is a separate project).
 8. [Glossary](glossary.md): canonical terms.
 

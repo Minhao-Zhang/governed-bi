@@ -403,7 +403,7 @@ class AssetBag:
                 except ValueError:
                     return f"error: invalid role={role!r}"
             if suspect is True or (reliability is not None and reliability == "suspect"):
-                suspect_note = note or "DO NOT USE — likely decoy/trap"
+                suspect_note = note or "DO NOT USE — unreliable for analysis"
                 if not suspect_note.startswith("DO NOT USE"):
                     suspect_note = f"DO NOT USE — {suspect_note}"
                 updates["reliability"] = Reliability(
@@ -459,7 +459,7 @@ class AssetBag:
         )
 
     def mark_column_suspect(
-        self, table: str, column: str, *, note: str = "DO NOT USE — likely decoy/trap"
+        self, table: str, column: str, *, note: str = "DO NOT USE — unreliable for analysis"
     ) -> str:
         return self.annotate_column(table, column, suspect=True, note=note)
 

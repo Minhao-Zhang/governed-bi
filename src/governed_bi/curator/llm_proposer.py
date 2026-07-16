@@ -4,7 +4,7 @@
 determine (roles, provenance) and deliberately leaves ``description`` and
 reliability caveats to a model. This module is that model-backed proposer. It is
 where the semantic layer earns its keep: precise column/table descriptions and,
-critically, the **reliability caveats that flag decoy / unreliable columns**
+critically, the **reliability caveats that flag unreliable / misleading columns**
 (``reliability.status = suspect`` + a "DO NOT USE" note), which the server injects
 into SQL generation and enforces at guardrail L3 - the lever that wins the
 decoy-touch metric.
@@ -34,13 +34,13 @@ _SYSTEM_PROMPT = """\
 You are a data curator authoring the semantic layer for a governed analytics \
 system. Given one table's catalog Facts (physical names, types, sample values, \
 inferred roles), write concise, accurate business descriptions and flag any \
-column that looks unreliable or like a decoy.
+column that looks unreliable or misleading for analysis.
 
 Rules:
 - Ground every description in the Facts shown. Do not invent columns, values, or \
 relationships you cannot see.
 - Flag a column as "suspect" ONLY when the Facts suggest it is unreliable, \
-ambiguous, or a decoy (e.g. a plausible-looking name whose samples contradict it). \
+ambiguous, or misleading (e.g. a plausible-looking name whose samples contradict it). \
 For a suspect column, write a short note starting with "DO NOT USE".
 - Keep descriptions to one sentence.
 

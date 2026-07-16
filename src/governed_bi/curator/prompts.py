@@ -55,7 +55,7 @@ from the record) on those writes.
 3. Do not invent new open questions. Prefer editing existing assets over \
 duplicating them. Use run_probe_query only if an answer still needs a data check.
 4. Focus on table:/column:/join:/metric: scoped answers. Answers scoped pair: or \
-query: (trap / annotation-error findings) are recorded as governance rules \
+query: (data-quality or annotation-error findings) are recorded as governance rules \
 automatically — you do not need to act on those.
 5. Stop once every answered clarification has been reflected in the corpus.
 """

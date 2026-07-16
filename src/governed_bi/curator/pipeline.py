@@ -291,7 +291,7 @@ def _mark_columns_absent_from_gold(
             bag.mark_column_suspect(
                 table.physical_name,
                 col.physical_name,
-                note="DO NOT USE — never referenced by working train SQL (likely decoy)",
+                note="DO NOT USE — never referenced by working train SQL (likely unreliable)",
             )
             if bag.suspect_count() > before:
                 marked += 1
@@ -403,8 +403,8 @@ def build_curated_corpus(
                 _render_train_batch(train_items),
                 "Create /clarifications.jsonl for genuine unknowns "
                 "(write_file on first create; grep before add; edit_file to broaden/merge).",
-                "Mark decoy/trap columns suspect. Propose at least the verified seed joins.",
-                "Stop once pairs are covered, seed joins verified, and obvious decoys marked.",
+                "Mark unreliable or misleading columns suspect. Propose at least the verified seed joins.",
+                "Stop once pairs are covered, seed joins verified, and obviously unreliable columns marked.",
             ]
         )
         _result, tool_counts, agent_error = _invoke_agent(

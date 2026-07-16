@@ -321,7 +321,7 @@ def _layer_columns(
             ref = f"{physical}.{name}"
             if ref in suspect:
                 if hard_block_suspect:
-                    return _fail(layer, f"suspect (decoy) column blocked: {ref}")
+                    return _fail(layer, f"suspect (unreliable) column blocked: {ref}")
                 continue
             if ref in allowed:
                 continue
@@ -340,7 +340,7 @@ def _layer_columns(
             candidate_suspect if multi_schema else (candidate_suspect and not candidate_allowed)
         )
         if hard_block_suspect and block_suspect:
-            return _fail(layer, f"suspect (decoy) column blocked: {name}")
+            return _fail(layer, f"suspect (unreliable) column blocked: {name}")
         if candidate_allowed or candidate_suspect:
             continue
         if base:
@@ -369,7 +369,7 @@ def _layer_columns(
             candidate_allowed = any(f"{p}.{key}" in allowed for p in base)
             candidate_suspect = any(f"{p}.{key}" in suspect for p in base)
             if hard_block_suspect and candidate_suspect and not candidate_allowed:
-                return _fail(layer, f"suspect (decoy) column blocked: {key}")
+                return _fail(layer, f"suspect (unreliable) column blocked: {key}")
             if candidate_allowed or candidate_suspect:
                 continue
             return _fail(layer, f"column not in the allowlist: {key}")
