@@ -154,6 +154,64 @@ def test_read_corpus_unknown_table_returns_error_not_raises():
     assert "[table] orders" in bag.read_corpus(table="orders")
 
 
+def test_validate_flags_join_on_column_not_in_either_table():
+    """Regression: join endpoint ids were checked, but the ``on`` SQL was not, so
+    a typo'd/hallucinated column passed CI green and only mis-joined at serve time.
+    validate_corpus now parses ``on`` and flags a column in neither joined table."""
+    from governed_bi.corpus.schemas import JoinAsset
+    from governed_bi.corpus.validate import validate_corpus
+
+    customers = TableAsset(
+        id="tbl_demo_customers",
+        schema="demo",
+        physical_name="customers",
+        columns=[_facts_column("CustomerID", LogicalType.integer, is_unique=True)],
+    )
+    orders = TableAsset(
+        id="tbl_demo_orders2",
+        schema="demo",
+        physical_name="orders",
+        columns=[_facts_column("CustomerID", LogicalType.integer, is_unique=False)],
+    )
+    good = JoinAsset(
+        id="join_demo_ok",
+        left_table="tbl_demo_orders2",
+        right_table="tbl_demo_customers",
+        on="orders.CustomerID = customers.CustomerID",
+    )
+    assert validate_corpus([customers, orders, good]) == []  # resolves -> green
+
+    bad = JoinAsset(
+        id="join_demo_bad",
+        left_table="tbl_demo_orders2",
+        right_table="tbl_demo_customers",
+        on="orders.CustomerID = customers.Ghost",  # Ghost is in neither table
+    )
+    findings = validate_corpus([customers, orders, bad])
+    assert [f.code for f in findings] == ["join-on-unresolved"]
+    assert "Ghost" in findings[0].message
+
+
+def test_upsert_term_updates_in_place_when_name_is_existing_id():
+    """Regression for the 6->12 doubling: a fix-pass that echoes a finding's
+    asset_id as the term ``name`` must update that term in place, not mint a
+    slugged duplicate (term_demo_x -> term_demo_term_demo_x)."""
+    from governed_bi.curator.asset_bag import AssetBag
+
+    bag = AssetBag.from_tables("demo", [_orders_table()])
+    bag.upsert_term("revenue", binding_asset_type="column", binding_asset_id="orders.amount")
+    assert set(bag.terms) == {"term_demo_revenue"}
+
+    # Agent echoes the asset id as `name` while correcting the binding.
+    msg = bag.upsert_term(
+        "term_demo_revenue", binding_asset_type="column", binding_asset_id="orders.note"
+    )
+    assert msg == "ok: wrote term_demo_revenue"
+    assert set(bag.terms) == {"term_demo_revenue"}  # no duplicate minted
+    assert bag.terms["term_demo_revenue"].name == "revenue"  # display name preserved
+    assert bag.terms["term_demo_revenue"].binding.asset_id == "col_demo_orders_note"
+
+
 def test_upsert_term_coerces_and_rejects_column_binding():
     """Regression: the curator agent does not know the ``col_<table>_<column>``
     id derivation, so left to free text it wrote ``term.binding.asset_id`` as
@@ -189,26 +247,49 @@ def test_upsert_term_coerces_and_rejects_column_binding():
     assert validate_corpus(bag.all_assets()) == []
 
 
-def test_repair_term_bindings_resolves_malformed_in_place():
-    """Deterministic reference repair: a term carrying a legacy malformed column
-    binding is rewritten to the canonical id in place, so the fix-pass never has
-    to hand a machine-fixable dangling ref to a stochastic agent."""
-    from governed_bi.corpus.schemas import TermAsset, TermBinding
+def test_repair_references_resolves_malformed_across_asset_types():
+    """Deterministic reference repair: legacy malformed refs across every
+    coercible type (term binding, metric.base_table, rule.scope) are rewritten to
+    canonical ids in place, so the fix-pass never hands a machine-fixable dangling
+    ref to a stochastic agent."""
+    from governed_bi.corpus.schemas import (
+        MetricAsset,
+        RuleAsset,
+        RuleKind,
+        TermAsset,
+        TermBinding,
+    )
     from governed_bi.corpus.validate import validate_corpus
     from governed_bi.curator.asset_bag import AssetBag
 
     bag = AssetBag.from_tables("demo", [_orders_table()])
-    # Plant a term with the malformed binding the old fix-pass produced.
+    # term binding written as tbl_x.col (the old fix-pass shape)
     bag.terms["term_demo_total"] = TermAsset(
         id="term_demo_total",
         name="total",
         binding=TermBinding(asset_type="column", asset_id="tbl_demo_orders.amount"),
     )
-    assert len(validate_corpus(bag.all_assets())) == 1  # dangling before repair
+    # metric.base_table written as the physical name instead of the table id
+    bag.metrics["metric_demo_n"] = MetricAsset(
+        id="metric_demo_n", name="n", base_table="orders", expression="count(*)"
+    )
+    # rule.scope entry written as a physical column spelling
+    bag.rules["rule_demo_1"] = RuleAsset(
+        id="rule_demo_1",
+        kind=RuleKind.context,
+        statement="amount is net",
+        scope=["orders.amount"],
+    )
+    assert len(validate_corpus(bag.all_assets())) == 3  # all three dangle
 
-    assert bag.repair_term_bindings() == 1
+    assert bag.repair_references() == 3
     assert bag.terms["term_demo_total"].binding.asset_id == "col_demo_orders_amount"
+    assert bag.metrics["metric_demo_n"].base_table == "tbl_demo_orders"
+    assert bag.rules["rule_demo_1"].scope == ["col_demo_orders_amount"]
     assert validate_corpus(bag.all_assets()) == []
+
+    # Back-compat alias still works.
+    assert bag.repair_term_bindings() == 0  # already canonical
 
 
 # --------------------------------------------------------------------------- #

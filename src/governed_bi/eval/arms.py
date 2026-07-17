@@ -72,8 +72,8 @@ def _touches_suspect(sql: str, suspect_columns: frozenset[str], dialect: str) ->
     }
     try:
         tree = sqlglot.parse_one(sql, read=dialect)
-    except Exception:
-        return False
+    except sqlglot.errors.SqlglotError:
+        return False  # unparseable SQL can't be inspected; a non-parse bug is not swallowed
     return any(col.name in suspect_bare for col in tree.find_all(exp.Column))
 
 

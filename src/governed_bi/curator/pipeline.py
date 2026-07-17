@@ -20,7 +20,7 @@ import json
 import re
 import traceback
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from ..corpus.validate import validate_corpus
 from ..obs import tracing_callbacks
@@ -281,7 +281,7 @@ def _invoke_agent(
 
 
 def _validate_fix_pass(
-    agent: Any | None,
+    make_agent: "Callable[[], Any] | None",
     bag: AssetBag,
     *,
     connector: "Connector",
@@ -289,24 +289,32 @@ def _validate_fix_pass(
     max_agent_steps: int,
 ) -> tuple[list, dict[str, Any], str | None]:
     """Run validate_corpus; deterministically repair what we can; then optionally
-    one agent fix pass for whatever survives. Returns findings + counts."""
-    # Reference integrity is machine-fixable — repair coercible term bindings in
-    # code before spending (and risking a crash on) a stochastic agent pass.
-    repaired = bag.repair_term_bindings()
+    one agent fix pass for whatever survives. Returns findings + counts.
+
+    ``make_agent`` is a factory (not a prebuilt agent): the fix-pass gets a
+    *fresh* agent so it never shares mutable state — notably the filesystem
+    backend — with the fold invoke that ran before it. The shared corpus lives
+    in ``bag``, which is passed explicitly; nothing else should carry across.
+    """
+    # Reference integrity is machine-fixable — repair coercible references
+    # (term bindings, column.references, metric.base_table, join endpoints,
+    # rule.scope) in code before spending (and risking a crash on) a stochastic
+    # agent pass.
+    repaired = bag.repair_references()
     if repaired:
-        print(f"fix-pass: repaired {repaired} term binding(s) deterministically")
+        print(f"fix-pass: repaired {repaired} dangling reference(s) deterministically")
     findings = validate_corpus(bag.all_assets(), connector=connector)
     _write_validate_findings(out_root, findings)
     fix_counts = _empty_tool_counts()
     fix_error = None
-    if findings and agent is not None:
+    if findings and make_agent is not None:
         summary = "\n".join(f"- {f.code} [{f.asset_id}]: {f.message}" for f in findings[:40])
         user = (
             "validate_corpus reported the following findings. Fix them with the "
             f"write tools (do not edit clarifications.jsonl unless needed):\n{summary}"
         )
         _result, fix_counts, fix_error = _invoke_agent(
-            agent, user=user, max_agent_steps=max(max_agent_steps // 2, 8)
+            make_agent(), user=user, max_agent_steps=max(max_agent_steps // 2, 8)
         )
         findings = validate_corpus(bag.all_assets(), connector=connector)
         _write_validate_findings(out_root, findings)
@@ -409,8 +417,8 @@ def _mark_columns_absent_from_gold(
     for sql in sqls:
         try:
             tree = sqlglot.parse_one(sql, read=dialect)
-        except Exception:
-            continue
+        except sqlglot.errors.SqlglotError:
+            continue  # unparseable gold SQL is tolerated; a non-parse bug is not
         for col in tree.find_all(exp.Column):
             referenced.add(col.name.lower())
 
@@ -514,22 +522,24 @@ def build_curated_corpus(
     fix_counts = _empty_tool_counts()
     agent_error: str | None = None
     fix_error: str | None = None
-    agent = None
+    make_agent: "Callable[[], Any] | None" = None
     agent_ran = False
 
     if run_agent and model is not None:
         from .deep_agent import build_curator_agent
 
+        def make_agent() -> Any:  # fresh agent per invoke — no shared fs/state
+            return build_curator_agent(
+                model,
+                connector=connector,
+                schema=schema,
+                gateway=gateway,
+                bag=bag,
+                run_dir=out_root,
+                system_prompt=_PHASE_A_PROMPT,
+            )
+
         agent_ran = True
-        agent = build_curator_agent(
-            model,
-            connector=connector,
-            schema=schema,
-            gateway=gateway,
-            bag=bag,
-            run_dir=out_root,
-            system_prompt=_PHASE_A_PROMPT,
-        )
         user = "\n\n".join(
             [
                 f"Curate schema `{schema}`. Work pair-by-pair; persist via tools.",
@@ -542,11 +552,11 @@ def build_curated_corpus(
             ]
         )
         _result, tool_counts, agent_error = _invoke_agent(
-            agent, user=user, max_agent_steps=max_agent_steps
+            make_agent(), user=user, max_agent_steps=max_agent_steps
         )
 
     findings, fix_counts, fix_error = _validate_fix_pass(
-        agent if agent_ran else None,
+        make_agent if agent_ran else None,
         bag,
         connector=connector,
         out_root=out_root,
@@ -674,7 +684,7 @@ def build_curated_corpus_with_sme(
     fix_counts = _empty_tool_counts()
     agent_error: str | None = None
     fix_error: str | None = None
-    agent = None
+    make_agent: "Callable[[], Any] | None" = None
     agent_ran = False
     applied = 0
     fold_mode = "none"
@@ -684,25 +694,27 @@ def build_curated_corpus_with_sme(
     elif run_agent_repass and model is not None:
         from .deep_agent import build_curator_agent
 
+        def make_agent() -> Any:  # fresh agent per invoke — no shared fs/state
+            return build_curator_agent(
+                model,
+                connector=connector,
+                schema=schema,
+                gateway=gateway,
+                bag=bag,
+                run_dir=out_root,
+                system_prompt=_PHASE_B_PROMPT,
+                certified_writes=True,
+            )
+
         agent_ran = True
         fold_mode = "agent"
-        agent = build_curator_agent(
-            model,
-            connector=connector,
-            schema=schema,
-            gateway=gateway,
-            bag=bag,
-            run_dir=out_root,
-            system_prompt=_PHASE_B_PROMPT,
-            certified_writes=True,
-        )
         user = (
             f"Ingest answered clarifications for schema `{schema}`. "
             "Read /clarifications.jsonl and fold each answered record into the "
             "corpus via annotate/upsert tools with certified=true."
         )
         _result, tool_counts, agent_error = _invoke_agent(
-            agent, user=user, max_agent_steps=max_agent_steps
+            make_agent(), user=user, max_agent_steps=max_agent_steps
         )
         # Count successful certified writes via tool totals; also apply any
         # unanswered leftovers is NOT done — agent owns the fold.
@@ -717,7 +729,7 @@ def build_curated_corpus_with_sme(
     caveats_recorded = bag.record_caveats(answered)
 
     findings, fix_counts, fix_error = _validate_fix_pass(
-        agent if agent_ran else None,
+        make_agent if agent_ran else None,
         bag,
         connector=connector,
         out_root=out_root,

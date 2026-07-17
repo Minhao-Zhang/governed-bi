@@ -110,8 +110,8 @@ def extract_joins_from_sql(sql: str, *, dialect: str = "postgres") -> list[JoinC
     """Pull ``JOIN … ON`` edges from one gold SQL string (physical names only)."""
     try:
         tree = sqlglot.parse_one(sql, read=dialect)
-    except Exception:
-        return []
+    except sqlglot.errors.SqlglotError:
+        return []  # unparseable gold SQL is tolerated; a non-parse bug is not
     aliases = _alias_map(tree)
     out: list[JoinCandidate] = []
     seen: set[tuple[str, str, str]] = set()
@@ -146,8 +146,8 @@ def extract_metrics_from_sql(sql: str, *, dialect: str = "postgres") -> list[Met
     """Pull simple aggregate expressions (SUM/AVG/COUNT/MIN/MAX) as metric seeds."""
     try:
         tree = sqlglot.parse_one(sql, read=dialect)
-    except Exception:
-        return []
+    except sqlglot.errors.SqlglotError:
+        return []  # unparseable gold SQL is tolerated; a non-parse bug is not
     aliases = _alias_map(tree)
     tables = list(tree.find_all(exp.Table))
     if not tables:

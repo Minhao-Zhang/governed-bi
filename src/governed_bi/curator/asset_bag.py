@@ -249,7 +249,12 @@ class AssetBag:
         base_id = self.table_id(base_table)
         if base_id is None:
             return f"error: unknown base_table={base_table!r}; known={sorted(self.tables)}"
-        mid = f"metric_{_slug(self.schema)}_{_slug(name)}"
+        # Address an existing metric by id (see upsert_term) to update in place.
+        if name in self.metrics:
+            mid = name
+            name = self.metrics[mid].name
+        else:
+            mid = f"metric_{_slug(self.schema)}_{_slug(name)}"
         try:
             asset = MetricAsset.model_validate(
                 {
@@ -334,7 +339,15 @@ class AssetBag:
         certified: bool = False,
         answered_by: str | None = None,
     ) -> str:
-        tid = f"term_{_slug(self.schema)}_{_slug(name)}"
+        # Address an existing asset by id: when the caller passes a term id as
+        # ``name`` (e.g. a fix-pass echoing a finding's asset_id), update that
+        # asset in place instead of minting a slugged duplicate — the mechanism
+        # behind the 6->12 dangling-ref doubling.
+        if name in self.terms:
+            tid = name
+            name = self.terms[tid].name
+        else:
+            tid = f"term_{_slug(self.schema)}_{_slug(name)}"
         binding = None
         if binding_asset_id:
             resolved, err = self._resolve_binding(binding_asset_type, binding_asset_id)
@@ -627,32 +640,110 @@ class AssetBag:
                 n += 1
         return n
 
-    def repair_term_bindings(self) -> int:
-        """Deterministically re-resolve every term binding to its canonical id.
+    def _table_id_index(self) -> dict[str, str]:
+        """Map a table id or physical name to its canonical table id."""
+        index: dict[str, str] = {}
+        for t in self.tables.values():
+            index[t.id] = t.id
+            index[t.physical_name] = t.id
+        return index
 
-        Reference integrity is machine-checkable, so it is machine-fixable: a
-        coercible ``term.binding.asset_id`` (e.g. ``tbl_x.col`` /
-        ``physical.col``) is rewritten to the loader-derived id in place. Bindings
-        that cannot be resolved at all are left untouched (a genuine gap for the
-        agent / a human, not a formatting slip). Returns the number rewritten.
-        Runs before the agent fix-pass so a stochastic LLM is never handed a
-        deterministic reference problem.
+    def _all_asset_ids(self) -> set[str]:
+        """Every canonical id a reference may legitimately point at."""
+        ids = {a.id for a in self.all_assets()}
+        ids |= set(self._column_id_index().values())
+        return ids
+
+    def repair_references(self) -> int:
+        """Deterministically re-resolve every coercible dangling reference to its
+        canonical id, in place.
+
+        Reference integrity is machine-checkable, so it is machine-fixable. A
+        reference written in a spelling the model guesses (``tbl_x.col`` /
+        ``physical.col`` for columns, a physical name for a table) is rewritten to
+        the loader-derived id; a reference that already resolves, or that cannot
+        be resolved at all, is left untouched (a genuine gap for the agent /
+        human, not a formatting slip). Covers ``column.references``,
+        ``metric.base_table``, ``join.left/right_table``, ``term.binding`` and
+        ``rule.scope``. Returns the number of fields rewritten. Runs before the
+        agent fix-pass so a stochastic LLM is never handed a deterministic
+        reference problem.
         """
-        repaired = 0
+        col_idx = self._column_id_index()
+        col_ids = set(col_idx.values())
+        tbl_idx = self._table_id_index()
+        tbl_ids = set(tbl_idx.values())
+        n = 0
+
+        # column.references -> a column id
+        for name, t in list(self.tables.items()):
+            new_cols = []
+            changed = False
+            for c in t.columns:
+                ref = c.references
+                if ref and ref not in col_ids and col_idx.get(ref):
+                    c = c.model_copy(update={"references": col_idx[ref]})
+                    changed = True
+                    n += 1
+                new_cols.append(c)
+            if changed:
+                self.tables[name] = t.model_copy(update={"columns": new_cols})
+
+        # metric.base_table -> a table id
+        for mid, m in list(self.metrics.items()):
+            if m.base_table not in tbl_ids and tbl_idx.get(m.base_table):
+                self.metrics[mid] = m.model_copy(update={"base_table": tbl_idx[m.base_table]})
+                n += 1
+
+        # join.left_table / right_table -> table ids
+        for jid, j in list(self.joins.items()):
+            updates = {}
+            for endpoint in ("left_table", "right_table"):
+                cur = getattr(j, endpoint)
+                if cur not in tbl_ids and tbl_idx.get(cur):
+                    updates[endpoint] = tbl_idx[cur]
+            if updates:
+                self.joins[jid] = j.model_copy(update=updates)
+                n += len(updates)
+
+        # term.binding.asset_id -> canonical id (column/table/metric)
         for tid, term in list(self.terms.items()):
             if term.binding is None:
                 continue
             resolved, err = self._resolve_binding(
                 term.binding.asset_type, term.binding.asset_id
             )
-            if err is not None or resolved is None:
-                continue  # unresolvable -> leave for the agent / human
-            if resolved == term.binding.asset_id:
-                continue  # already canonical
-            new_binding = term.binding.model_copy(update={"asset_id": resolved})
-            self.terms[tid] = term.model_copy(update={"binding": new_binding})
-            repaired += 1
-        return repaired
+            if err is not None or resolved is None or resolved == term.binding.asset_id:
+                continue
+            self.terms[tid] = term.model_copy(
+                update={"binding": term.binding.model_copy(update={"asset_id": resolved})}
+            )
+            n += 1
+
+        # rule.scope[] -> any canonical asset id
+        valid_any = self._all_asset_ids()
+        for rid, r in list(self.rules.items()):
+            new_scope = []
+            changed = False
+            for s in r.scope:
+                if s in valid_any:
+                    new_scope.append(s)
+                    continue
+                fixed = col_idx.get(s) or tbl_idx.get(s)
+                if fixed:
+                    new_scope.append(fixed)
+                    changed = True
+                    n += 1
+                else:
+                    new_scope.append(s)  # unresolvable -> leave for agent / human
+            if changed:
+                self.rules[rid] = r.model_copy(update={"scope": new_scope})
+
+        return n
+
+    # Back-compat: term-only entry point (superseded by repair_references).
+    def repair_term_bindings(self) -> int:
+        return self.repair_references()
 
     def suspect_count(self) -> int:
         n = 0

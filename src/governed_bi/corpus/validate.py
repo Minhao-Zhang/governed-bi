@@ -8,6 +8,9 @@ module checks everything verifiable *from the corpus alone*:
 - Reference resolution: ``column.references``, ``term.binding.asset_id``,
   ``term.related_terms[].id``, ``metric.base_table``, ``rule.scope[]``,
   ``join.left_table`` / ``right_table`` all resolve to existing assets.
+- Join ``on``-clause columns: parsed with ``sqlglot`` and confirmed to belong to
+  one of the join's two tables (corpus-only; catches typo'd/hallucinated columns
+  that would otherwise mis-join at serve time).
 
 Enum validity is enforced upstream at parse time (``schemas.parse_asset``), so
 by the time assets reach here their enum fields are already valid.
@@ -162,11 +165,62 @@ def validate_corpus(
                         )
                     )
 
+    # -- Join on-clause columns resolve to the joined tables (corpus-only) --- #
+    # Endpoint ids are checked above; the ``on`` SQL is not. A typo'd or
+    # hallucinated column in ``on`` otherwise passes CI green and only surfaces
+    # (or silently mis-joins) at serve time. Parse it here -- no live catalog
+    # needed -- and confirm each referenced column belongs to one of the two
+    # joined tables.
+    _check_join_on_columns(assets, findings)
+
     # -- Physical existence (optional; needs a live catalog) ---------------- #
     if connector is not None:
         _check_physical_existence(assets, connector, findings)
 
     return findings
+
+
+def _check_join_on_columns(assets: list[Asset], findings: list[Finding]) -> None:
+    import sqlglot
+    from sqlglot import exp
+
+    tables_by_id = {a.id: a for a in assets if isinstance(a, TableAsset)}
+    for a in assets:
+        if not isinstance(a, JoinAsset):
+            continue
+        left = tables_by_id.get(a.left_table)
+        right = tables_by_id.get(a.right_table)
+        if left is None or right is None:
+            continue  # dangling endpoint already reported above
+        cols_by_physical = {
+            left.physical_name: {c.physical_name for c in left.columns},
+            right.physical_name: {c.physical_name for c in right.columns},
+        }
+        union = set().union(*cols_by_physical.values())
+        try:
+            tree = sqlglot.parse_one(a.on)
+        except Exception:
+            findings.append(
+                Finding("join-on-unparseable", a.id, f"join.on is not parseable SQL: {a.on!r}")
+            )
+            continue
+        for col in tree.find_all(exp.Column):
+            qualifier = col.table  # physical table name, per the schema contract
+            name = col.name
+            # A recognised qualifier scopes the check to that table; an alias or
+            # unknown qualifier falls back to the union (lenient -- we only want
+            # to catch columns that exist in NEITHER joined table).
+            pool = cols_by_physical.get(qualifier, union)
+            if name not in pool:
+                where = f"{qualifier}.{name}" if qualifier else name
+                findings.append(
+                    Finding(
+                        "join-on-unresolved",
+                        a.id,
+                        f"join.on column '{where}' is not a column of "
+                        f"{left.physical_name!r} or {right.physical_name!r}",
+                    )
+                )
 
 
 def _check_physical_existence(
