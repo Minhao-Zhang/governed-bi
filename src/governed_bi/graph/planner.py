@@ -161,19 +161,17 @@ def detect_missing_join_path(
     corpus: object,
     graph: nx.MultiDiGraph,
     table_ids: set[str],
-    *,
-    multi_schema: bool,
 ) -> MissingJoinPath | None:
-    """Refuse descriptor when multi-schema retrieval spans schemas with no join path.
+    """Refuse descriptor when retrieval spans schemas with no curated join path.
 
-    D15: cross-schema edges are curated only. When ``multi_schema`` is on and the
-    retrieved tables live in **two or more** schemas but ``plan_joins`` cannot
-    connect them, serve must fail closed before SQL generation — not invent a
-    join. Single-schema / SQLite (``multi_schema=False``) and within-schema
-    disconnection return ``None`` so the BIRD path and existing repair behavior
-    stay unchanged.
+    D15: cross-schema edges are curated only. When the retrieved tables live in
+    **two or more** schemas but ``plan_joins`` cannot connect them, serve must fail
+    closed before SQL generation — not invent a join. A single retrieved table, a
+    single-schema retrieval (the BIRD path), and within-schema disconnection all
+    return ``None`` (the distinct-schema count below gates that), so existing
+    repair behavior is unchanged.
     """
-    if not multi_schema or len(table_ids) <= 1:
+    if len(table_ids) <= 1:
         return None
 
     from ..corpus.schemas import TableAsset

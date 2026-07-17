@@ -382,7 +382,6 @@ class GovEventStream:
 def _try_cache_hit(
     cache, question, gateway, identity, settings, allowlist, dialect, graph, base_provenance,
     *,
-    multi_schema: bool = False,
     default_schema: str | None = None,
     narrator: "AnswerNarrator | None" = None,
     on_event: "Callable[[dict], None] | None" = None,
@@ -406,7 +405,6 @@ def _try_cache_hit(
         allowed_tables=entry.licensed_tables,
         hard_block_suspect=settings.hard_block_suspect_columns,
         dialect=dialect,
-        multi_schema=multi_schema,
         default_schema=default_schema,
     )
     if not verdict.passed:

@@ -67,9 +67,12 @@ class ServeStack:
         if ds is None or ds.kind == "sqlite":
             # sqlite: open the stack's path (kept in sync with the datasource), so
             # an ad-hoc ``replace(stack, sqlite_path=...)`` still selects the DB.
+            # Pass the serving schema (the ATTACH alias); None falls back to the
+            # file-name stem inside the connector.
             from ..gateway import SqliteConnector
 
-            return SqliteConnector(self.sqlite_path)
+            schema = ds.serving_schema() if ds is not None else None
+            return SqliteConnector(self.sqlite_path, schema=schema)
         from ..gateway import build_connector
 
         if connect_timeout is None:

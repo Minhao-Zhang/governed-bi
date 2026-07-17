@@ -83,9 +83,7 @@ def test_detect_missing_join_path_cross_schema_no_join():
     a, b = _tables()
     corpus = Corpus(assets=[a, b])
     graph = build_graph(corpus)
-    missing = detect_missing_join_path(
-        corpus, graph, {SCHEMA_A_ORDERS, SCHEMA_B_ORDERS}, multi_schema=True
-    )
+    missing = detect_missing_join_path(corpus, graph, {SCHEMA_A_ORDERS, SCHEMA_B_ORDERS})
     assert missing is not None
     assert missing.schemas == frozenset({"schema_a", "schema_b"})
     assert missing.table_ids == frozenset({SCHEMA_A_ORDERS, SCHEMA_B_ORDERS})
@@ -96,22 +94,7 @@ def test_detect_none_when_curated_cross_schema_join_exists():
     corpus = Corpus(assets=[a, b, _cross_join()])
     graph = build_graph(corpus)
     assert (
-        detect_missing_join_path(
-            corpus, graph, {SCHEMA_A_ORDERS, SCHEMA_B_ORDERS}, multi_schema=True
-        )
-        is None
-    )
-
-
-def test_detect_none_when_single_schema_mode():
-    # SQLite / BIRD path: never missing-edge refuse (preserve byte-for-byte behavior).
-    a, b = _tables()
-    corpus = Corpus(assets=[a, b])
-    graph = build_graph(corpus)
-    assert (
-        detect_missing_join_path(
-            corpus, graph, {SCHEMA_A_ORDERS, SCHEMA_B_ORDERS}, multi_schema=False
-        )
+        detect_missing_join_path(corpus, graph, {SCHEMA_A_ORDERS, SCHEMA_B_ORDERS})
         is None
     )
 
@@ -127,9 +110,7 @@ def test_detect_none_when_tables_share_one_schema():
     corpus = Corpus(assets=[a, other])
     graph = build_graph(corpus)
     assert (
-        detect_missing_join_path(
-            corpus, graph, {SCHEMA_A_ORDERS, "tbl_schema_a_items"}, multi_schema=True
-        )
+        detect_missing_join_path(corpus, graph, {SCHEMA_A_ORDERS, "tbl_schema_a_items"})
         is None
     )
 
@@ -141,7 +122,9 @@ def test_agent_refuses_missing_edge(monkeypatch):
     a, b = _tables()
     corpus = Corpus(assets=[a, b]).for_analyst()
     settings = _pg_settings()
-    assert settings.datasource.is_multi_schema()
+    # The synthetic corpus spans two schemas with no curated join, so `assemble`
+    # must refuse before the model runs.
+    assert len({x.schema for x in corpus.assets if isinstance(x, TableAsset)}) == 2
 
     def _fake_retrieve(corpus_arg, question, *, embedder=None):
         return RetrievalResult(

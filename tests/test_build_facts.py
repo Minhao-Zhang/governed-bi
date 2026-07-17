@@ -109,17 +109,17 @@ def test_build_facts_all_schemas(tmp_path):
     assert corpus.assets[0].schema == "s_one"
 
 
-def test_build_facts_all_schemas_multi_schema_pins_each_schema(tmp_path):
-    # Regression: a multi_schema=True datasource must still profile each schema into
-    # its OWN subtree, not collapse to "public". Mimic build_connector's schema
-    # resolution so multi_schema => schema=None => Postgres coerces to "public";
-    # each iteration must pin its schema (multi_schema=False) or every schema would
-    # be profiled as public (list_tables() == [] there).
+def test_build_facts_all_schemas_pins_each_schema(tmp_path):
+    # Regression: a span-all (schema=None) datasource must still profile each schema
+    # into its OWN subtree, not collapse to "public". Mimic build_connector's schema
+    # resolution so a span-all source => serving_schema() is None => Postgres coerces
+    # to "public"; each iteration must pin its schema (via replace) or every schema
+    # would be profiled as public (list_tables() == [] there).
     def factory(d):
-        effective = (None if d.is_multi_schema() else d.schema) or "public"
+        effective = d.serving_schema() or "public"
         return _FakeConn(effective)
 
-    ds = DataSourceConfig(kind="postgres", dsn="host=x", multi_schema=True)
+    ds = DataSourceConfig(kind="postgres", dsn="host=x")
     counts = build_facts_all_schemas(ds, tmp_path, connector_factory=factory)
 
     assert counts == {"public": 0, "s_one": 1, "s_two": 1}

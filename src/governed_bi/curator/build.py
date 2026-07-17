@@ -84,12 +84,12 @@ def build_facts_all_schemas(
 
     written: dict[str, int] = {}
     for schema in schemas:
-        # Pin each schema (multi_schema=False): the span-all datasource above is only
-        # for the single list_schemas() enumeration; profiling one schema needs a
-        # connector pinned to it, or build_connector leaves schema=None -> "public"
-        # and every schema is silently profiled as public.
+        # Pin each schema: the span-all datasource above is only for the single
+        # list_schemas() enumeration; profiling one schema needs a connector pinned
+        # to it, or build_connector leaves schema=None -> "public" and every schema
+        # is silently profiled as public.
         connector = connector_factory(
-            replace(datasource, schema=schema, corpus_pin=schema, multi_schema=False)
+            replace(datasource, schema=schema, corpus_pin=schema)
         )
         try:
             written[schema] = len(build_facts_corpus(connector, schema, root))

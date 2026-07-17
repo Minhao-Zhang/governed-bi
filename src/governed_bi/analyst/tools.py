@@ -64,9 +64,9 @@ def render_retrieval(result) -> str:
     return "\n".join(lines)
 
 
-def render_columns(asset: TableAsset, *, multi_schema: bool = False) -> str:
+def render_columns(asset: TableAsset) -> str:
     """Columns + types for ``inspect_schema`` (physical identifiers the SQL must use)."""
-    qual = f"{asset.schema}.{asset.physical_name}" if multi_schema else asset.physical_name
+    qual = f"{asset.schema}.{asset.physical_name}"
     lines = [
         f"table_id: {asset.id}",
         f"physical: {qual}",
@@ -168,7 +168,6 @@ def make_tools(
     identity: "Identity",
     *,
     embedder: "Embedder | None" = None,
-    multi_schema: bool = False,
     enable_clarify: bool = False,
 ):
     """Factory: the governed read-only tools closed over deployment deps.
@@ -244,7 +243,7 @@ def make_tools(
                 "licensed": [asset.id],
                 "messages": [
                     ToolMessage(
-                        content=render_columns(asset, multi_schema=multi_schema),
+                        content=render_columns(asset),
                         tool_call_id=tool_call_id,
                     )
                 ],

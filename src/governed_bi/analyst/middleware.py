@@ -62,22 +62,14 @@ class GovernanceHardStop(Exception):
         self.ledger = prior
 
 
-def licensed_physical_names(
-    corpus: "Corpus",
-    licensed_ids: list | set,
-    *,
-    multi_schema: bool = False,
-) -> set[str]:
-    """Project licensed asset ids to physical table names for ``check`` L4."""
+def licensed_physical_names(corpus: "Corpus", licensed_ids: list | set) -> set[str]:
+    """Project licensed asset ids to schema-qualified table names for ``check`` L4."""
     names: set[str] = set()
     for tid in licensed_ids:
         asset = corpus.by_id(tid)
         if not isinstance(asset, TableAsset):
             continue
-        if multi_schema:
-            names.add(f"{asset.schema}.{asset.physical_name}")
-        else:
-            names.add(asset.physical_name)
+        names.add(f"{asset.schema}.{asset.physical_name}")
     return names
 
 
@@ -138,7 +130,6 @@ class GovernanceMiddleware(AgentMiddleware):
         identity: "Identity",
         *,
         dialect: str,
-        multi_schema: bool,
         default_schema: str | None,
         settings: "Settings",
     ):
@@ -146,9 +137,8 @@ class GovernanceMiddleware(AgentMiddleware):
         self._corpus = corpus
         self._gateway = gateway
         self._identity = identity
-        self._allowlist = column_allowlist(corpus, multi_schema=multi_schema)
+        self._allowlist = column_allowlist(corpus)
         self._dialect = dialect
-        self._multi = multi_schema
         self._default = default_schema
         self._settings = settings
 
@@ -262,9 +252,7 @@ class GovernanceMiddleware(AgentMiddleware):
                     }
                 )
 
-        allowed_tables = licensed_physical_names(
-            self._corpus, licensed_ids, multi_schema=self._multi
-        )
+        allowed_tables = licensed_physical_names(self._corpus, licensed_ids)
         verdict = check(
             sql,
             allowed_columns=set(self._allowlist.allowed),
@@ -272,7 +260,6 @@ class GovernanceMiddleware(AgentMiddleware):
             allowed_tables=frozenset(allowed_tables),
             hard_block_suspect=self._settings.hard_block_suspect_columns,
             dialect=self._dialect,
-            multi_schema=self._multi,
             default_schema=self._default,
         )
         if not verdict.passed:
@@ -349,11 +336,7 @@ class GovernanceMiddleware(AgentMiddleware):
         if asset.id not in set(licensed_ids):
             return None, f"{asset.id}: not licensed this turn — call inspect_schema first"
 
-        prefix = (
-            f"{asset.schema}.{asset.physical_name}"
-            if self._multi
-            else asset.physical_name
-        )
+        prefix = f"{asset.schema}.{asset.physical_name}"
         # Only columns in the L3 allowlist — never excluded/suspect (Inv #2).
         cols: list[str] = []
         for col in asset.columns:
@@ -367,11 +350,7 @@ class GovernanceMiddleware(AgentMiddleware):
         if not cols:
             return None, f"{asset.id}: no allowlisted columns to sample"
 
-        qual = (
-            f"{_quote_ident(asset.schema)}.{_quote_ident(asset.physical_name)}"
-            if self._multi
-            else _quote_ident(asset.physical_name)
-        )
+        qual = f"{_quote_ident(asset.schema)}.{_quote_ident(asset.physical_name)}"
         sql = f"SELECT {', '.join(cols)} FROM {qual} LIMIT {n}"
         try:
             sql = sqlglot.transpile(

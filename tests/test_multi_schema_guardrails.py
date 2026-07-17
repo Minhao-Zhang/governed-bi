@@ -1,13 +1,13 @@
-"""D15: the schema-qualified guardrail + mode-conditional qualification.
+"""D15: the schema-qualified guardrail.
 
-These tests exercise the MULTI-SCHEMA capability (Postgres/Redshift default at
-serve time). They run against a SYNTHETIC two-schema corpus built directly from
-``TableAsset`` objects: a same-named table ``orders`` in ``schema="schema_a"`` and
-``schema="schema_b"``, with a curated cross-schema ``JoinAsset``.
+The engine is uniformly schema-qualified (``schema.table`` everywhere). These
+tests exercise the cross-schema scenarios that model reaches — a corpus that
+spans more than one schema — against a SYNTHETIC two-schema corpus built directly
+from ``TableAsset`` objects: a same-named table ``orders`` in ``schema="schema_a"``
+and ``schema="schema_b"``, with a curated cross-schema ``JoinAsset``.
 
-The single-schema / SQLite / BIRD path is covered (byte-for-byte) by
-``test_guardrails.py`` and the rest of the suite; the final test here asserts that
-``multi_schema=False`` reproduces today's single-schema behavior exactly.
+The single-schema BIRD path (one schema, resolved through ``default_schema``) is
+covered by ``test_guardrails.py`` and the rest of the suite.
 """
 
 from __future__ import annotations
@@ -85,7 +85,7 @@ def corpus() -> Corpus:
 
 @pytest.fixture
 def allowlist(corpus):
-    return column_allowlist(corpus, multi_schema=True)
+    return column_allowlist(corpus)
 
 
 def _check_ms(sql, allowlist, allowed_tables, *, hard_block_suspect=True, default_schema=None):
@@ -96,7 +96,6 @@ def _check_ms(sql, allowlist, allowed_tables, *, hard_block_suspect=True, defaul
         allowed_tables=frozenset(allowed_tables),
         hard_block_suspect=hard_block_suspect,
         dialect="sqlite",
-        multi_schema=True,
         default_schema=default_schema,
     )
 
@@ -120,7 +119,6 @@ def test_allowed_table_names_are_schema_qualified(corpus):
         corpus,
         retrieval,
         licensed_table_ids=frozenset({SCHEMA_A_ORDERS, SCHEMA_B_ORDERS}),
-        multi_schema=True,
     )
     assert ctx.allowed_table_names() == {"schema_a.orders", "schema_b.orders"}
     assert ctx.physical_to_id()["schema_a.orders"] == SCHEMA_A_ORDERS
@@ -270,7 +268,6 @@ def test_cross_schema_join_is_licensed_and_allowed(corpus, allowlist):
         corpus,
         retrieval,
         licensed_table_ids=frozenset({SCHEMA_A_ORDERS, SCHEMA_B_ORDERS}),
-        multi_schema=True,
     )
     # The curated JoinAsset (both endpoints licensed) is presented as a join path.
     assert any(j.on == "schema_a.orders.order_id = schema_b.orders.order_id" for j in ctx.joins)
@@ -307,36 +304,12 @@ def test_cross_schema_pair_without_link_is_still_a_cartesian(allowlist):
 
 
 # --------------------------------------------------------------------------- #
-# multi_schema=False reproduces today's single-schema behavior exactly
+# A qualified reference to a licensed schema.table is allowed
 # --------------------------------------------------------------------------- #
 
 
-def test_single_schema_mode_reproduces_today_behavior(corpus):
-    single = column_allowlist(corpus)  # multi_schema=False (default): two-part keys
-    assert all(ref.count(".") == 1 for ref in single.allowed | single.suspect)
-
-    def _single(sql, allowed_tables):
-        return check(
-            sql,
-            allowed_columns=set(single.allowed),
-            suspect_columns=single.suspect,
-            allowed_tables=frozenset(allowed_tables),
-            hard_block_suspect=True,
-            dialect="sqlite",
-        )  # multi_schema defaults to False
-
-    # A schema-qualified name is rejected as cross-namespace - exactly today's L4.
-    blocked = _single("SELECT o.order_id FROM schema_a.orders AS o", {"orders"})
-    assert not blocked.passed
-    assert blocked.failed_layer is GuardrailLayer.term_semantics
-
-    # A bare name in scope passes (bare column resolves against the sole base table).
-    assert _single("SELECT o.order_id FROM orders AS o", {"orders"}).passed
-
-
-def test_multi_schema_allows_what_single_schema_blocks(allowlist):
-    # The same schema-qualified query single-schema rejects is allowed under the
-    # mode gate when its (schema, table) is licensed.
+def test_qualified_reference_to_licensed_table_passes(allowlist):
+    # A schema-qualified query is allowed when its (schema, table) is licensed.
     verdict = _check_ms(
         "SELECT o.order_id FROM schema_a.orders AS o", allowlist, {"schema_a.orders"}
     )

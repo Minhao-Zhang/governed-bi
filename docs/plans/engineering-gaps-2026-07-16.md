@@ -57,16 +57,16 @@ Left untouched by request; recorded here so they are not lost.
 - **Discussion:** Raise the sample, or do a one-off full alignment run to bless
   the grader, then keep the cheap 5-row check as a per-run canary.
 
-### #9 — `multi_schema=True` never exercised end-to-end
-- **Where:** [`run_experiment.py`](../../src/governed_bi/eval/run_experiment.py) pins `multi_schema=False`. Already tracked in
-  [`schema-qualification-scale-risk.md`](schema-qualification-scale-risk.md).
-- **What:** The 69-schema scale run is `multi_schema=True`, a regime the eval
-  harness has never run end-to-end; the mode-flag threading is unverified
-  (guardrail unit logic *is* tested).
-- **Why deferred:** Verification needs the live multi-schema DB. (Instrumentation
-  — a refusal-reason counter — and a 2–3 schema pre-flight are the offline-ish
-  prep already noted in the scale-risk doc.)
-- **Discussion:** Do the pre-flight + counter before committing to the full 69.
+### #9 — `multi_schema=True` never exercised end-to-end — **RESOLVED 2026-07-17**
+- **Where:** [`run_experiment.py`](../../src/governed_bi/eval/run_experiment.py) no longer pins a mode flag; the flag is gone.
+- **What (original):** The 69-schema scale run was `multi_schema=True`, a regime the
+  eval harness had never run end-to-end; the mode-flag threading was unverified.
+- **Resolution:** The `multi_schema` flag was removed — the engine is uniformly
+  schema-qualified, so there is no second mode to exercise. A single-DB run and the
+  69-schema run are now the same shape; the only difference is how many schemas are
+  present. See [`schema-qualification-scale-risk.md`](schema-qualification-scale-risk.md) §Resolution.
+- **Still worth doing:** the refusal-reason counter in `summary.json` (independently
+  useful for diagnosing the scale run) and a 2–3 schema pre-flight before the full 69.
 
 ### #11 — single seed everywhere
 - **Where:** documented in [`eval-ladder-results.md`](eval-ladder-results.md) (Threats to validity / Known limitations).

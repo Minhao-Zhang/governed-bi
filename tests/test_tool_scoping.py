@@ -75,8 +75,7 @@ def test_inspect_schema_rejects_unknown_and_licenses(corpus, bird_gateway, setti
         FakeToolModel(responses=turns),
         settings=settings,
         dialect="sqlite",
-        multi_schema=False,
-        default_schema=None,
+        default_schema="beer_factory",
     )
     final = agent.invoke({"messages": [HumanMessage("x")], "licensed": [], "ledger": []})
     assert TXN in final["licensed"]
@@ -99,8 +98,7 @@ def test_sample_rows_requires_license(corpus, bird_gateway, settings, identity):
         FakeToolModel(responses=turns),
         settings=settings,
         dialect="sqlite",
-        multi_schema=False,
-        default_schema=None,
+        default_schema="beer_factory",
     )
     final = agent.invoke({"messages": [HumanMessage("x")], "licensed": [], "ledger": []})
     texts = [str(getattr(m, "content", "")) for m in final["messages"]]

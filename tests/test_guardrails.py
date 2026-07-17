@@ -15,16 +15,21 @@ from governed_bi.corpus import load_corpus
 from governed_bi.gateway import GuardrailLayer, check, column_allowlist
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
-ALLOWLIST = column_allowlist(load_corpus(CORPUS_ROOT, schema="beer_factory").for_analyst())
+SCHEMA = "beer_factory"
+ALLOWLIST = column_allowlist(load_corpus(CORPUS_ROOT, schema=SCHEMA).for_analyst())
 
 
 def _check(sql: str, *, hard_block_suspect: bool = True):
+    # The engine is uniformly schema-qualified: the allowlist keys are
+    # ``schema.table.column`` and a bare table reference resolves through
+    # ``default_schema`` (here the corpus's ``beer_factory`` schema).
     return check(
         sql,
         allowed_columns=set(ALLOWLIST.allowed),
         suspect_columns=ALLOWLIST.suspect,
         hard_block_suspect=hard_block_suspect,
         dialect="sqlite",
+        default_schema=SCHEMA,
     )
 
 
@@ -113,7 +118,7 @@ def test_subquery_select_passes():
 
 def test_allowlist_shape():
     # The PII column ships governance.excluded, so it is in neither set.
-    assert "customers.ZipCode" in ALLOWLIST.suspect
+    assert "beer_factory.customers.ZipCode" in ALLOWLIST.suspect
     assert all("CreditCardNumber" not in ref for ref in ALLOWLIST.allowed | ALLOWLIST.suspect)
 
 
@@ -212,13 +217,16 @@ def test_single_table_select_passes_cost_guard():
 
 
 def _check_scoped(sql: str, allowed_tables):
+    # Licensed names are schema-qualified; qualify the bare names the tests pass.
+    qualified = frozenset(f"{SCHEMA}.{t}" for t in allowed_tables)
     return check(
         sql,
         allowed_columns=set(ALLOWLIST.allowed),
         suspect_columns=ALLOWLIST.suspect,
-        allowed_tables=frozenset(allowed_tables),
+        allowed_tables=qualified,
         hard_block_suspect=True,
         dialect="sqlite",
+        default_schema=SCHEMA,
     )
 
 
@@ -346,8 +354,10 @@ def test_correlated_subquery_resolves_and_passes():
 
 
 def test_schema_qualified_table_is_blocked_by_term_semantics():
-    # A db/schema-qualified name reaches outside the licensed namespace.
-    verdict = _check_scoped("SELECT c.First FROM secret_db.customers AS c", {"customers"})
+    # A schema-qualified name in a schema outside the licensed scope is rejected by
+    # L4. (Select a literal so L3 has no column to block first — a column of the
+    # off-scope table would fail the qualified allowlist at L3.)
+    verdict = _check_scoped("SELECT 1 AS n FROM secret_db.customers AS c", {"customers"})
     assert not verdict.passed
     assert verdict.failed_layer is GuardrailLayer.term_semantics
 

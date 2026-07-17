@@ -92,19 +92,24 @@ class DataSourceConfig:
     dsn: str | None = None  # kind=postgres/redshift: inline DSN (local, secret-free only)
     dsn_env: str | None = None  # ...or the env var holding the DSN (preferred)
     schema: str | None = None  # optional designated default for bare-ref L4 resolution
-    multi_schema: bool = True  # postgres/redshift default: span ALL user schemas (D15)
 
-    def is_multi_schema(self) -> bool:
-        """Whether this data source spans every user schema in one database.
+    def serving_schema(self) -> str | None:
+        """The schema tables are qualified under — the always-on multi-schema model.
 
-        True for Postgres/Redshift unless ``multi_schema`` is explicitly opted
-        out (``False``). The connector then enumerates and introspects all user
-        schemas (D15); SQL and guardrails use fully-qualified ``schema.table``.
-        SQLite is always single-schema regardless of this flag (BIRD graded path).
-        Opt out with ``multi_schema=False`` plus a pinned ``schema`` when a
-        deployment must stay single-schema on Postgres.
+        Every deployment serves schema-qualified ``schema.table`` (D15). This
+        returns the schema a *bare* reference resolves to (``default_schema`` in
+        the guardrails / analyst), or ``None`` when the source spans every schema
+        with no single default (a bare reference then fails closed).
+
+        - SQLite has no native schema level, so the connector ATTACHes the file
+          under a fake schema alias (``corpus_pin``); that alias is the serving
+          schema, and ``schema.table`` resolves against the attachment.
+        - Postgres / Redshift: the pinned ``schema`` (e.g. a single ``db_id`` for
+          the eval harness), or ``None`` to span every user schema in the database.
         """
-        return self.multi_schema and self.kind.lower() in ("postgres", "redshift")
+        if self.kind.lower() == "sqlite":
+            return self.schema or self.corpus_pin
+        return self.schema
 
     def resolve_dsn(self) -> str | None:
         """The DSN to dial: inline ``dsn`` if set, else ``$dsn_env``, else None."""

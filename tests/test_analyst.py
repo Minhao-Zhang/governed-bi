@@ -132,7 +132,8 @@ def test_licenses_fk_neighbor_not_retrieved(corpus):
     # The guardrail's allowed_tables is the context's physical names, so check that.
     licensed = assemble_context(corpus, retrieval, licensed_table_ids=licensed_ids).allowed_table_names()
 
-    assert "transaction" in licensed  # the retrieved table
-    assert "customers" in licensed  # 1-hop FK neighbor retrieval never surfaced
-    assert "rootbeer" in licensed  # 1-hop FK neighbor retrieval never surfaced
-    assert "rootbeerreview" not in licensed  # 3 hops out: still not licensed
+    # Names are schema-qualified (the engine is uniformly multi-schema).
+    assert "beer_factory.transaction" in licensed  # the retrieved table
+    assert "beer_factory.customers" in licensed  # 1-hop FK neighbor retrieval never surfaced
+    assert "beer_factory.rootbeer" in licensed  # 1-hop FK neighbor retrieval never surfaced
+    assert "beer_factory.rootbeerreview" not in licensed  # 3 hops out: still not licensed

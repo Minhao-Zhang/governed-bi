@@ -138,7 +138,7 @@ class ServeRailsState(TypedDict, total=False):
     clarification: dict  # ClarificationRequest to surface, when outcome == "clarify"
 
 
-def _physical_to_id_map(corpus: "Corpus", *, multi_schema: bool) -> dict[str, str]:
+def _physical_to_id_map(corpus: "Corpus") -> dict[str, str]:
     from ..corpus.schemas import TableAsset
 
     out: dict[str, str] = {}
@@ -148,8 +148,7 @@ def _physical_to_id_map(corpus: "Corpus", *, multi_schema: bool) -> dict[str, st
         gov = getattr(asset, "governance", None)
         if gov is not None and getattr(gov, "excluded", False):
             continue
-        key = f"{asset.schema}.{asset.physical_name}" if multi_schema else asset.physical_name
-        out[key] = asset.id
+        out[f"{asset.schema}.{asset.physical_name}"] = asset.id
     return out
 
 
@@ -161,7 +160,6 @@ def build_agent_core(
     *,
     settings: "Settings",
     dialect: str,
-    multi_schema: bool,
     default_schema: str | None,
     embedder: "Embedder | None" = None,
     system_prompt: str = SYSTEM_PROMPT,
@@ -179,7 +177,6 @@ def build_agent_core(
         gateway,
         identity,
         embedder=embedder,
-        multi_schema=multi_schema,
         enable_clarify=enable_clarify,
     )
     mw = GovernanceMiddleware(
@@ -187,7 +184,6 @@ def build_agent_core(
         gateway,
         identity,
         dialect=dialect,
-        multi_schema=multi_schema,
         default_schema=default_schema,
         settings=settings,
     )
@@ -212,18 +208,18 @@ def extract_final_sql(
     *,
     corpus: "Corpus",
     dialect: str,
-    multi_schema: bool = False,
+    default_schema: str | None = None,
 ) -> tuple[str | None, frozenset[str], dict | None]:
     """Last passing ``run_query``: sql, tables_used from SQL parse (G3), ledger entry."""
     ledger = list(final.get("ledger") or [])
-    phys_to_id = _physical_to_id_map(corpus, multi_schema=multi_schema)
+    phys_to_id = _physical_to_id_map(corpus)
     for entry in reversed(ledger):
         if entry.get("action") == "run_query" and entry.get("verdict") == "pass":
             sql = entry.get("sql")
             if not sql:
                 continue
             tables_used = _tables_used(
-                sql, phys_to_id, dialect, multi_schema=multi_schema
+                sql, phys_to_id, dialect, default_schema=default_schema
             )
             return sql, tables_used, entry
     return None, frozenset(), None
@@ -254,12 +250,31 @@ def build_serve_rails(
     can pause/resume. ``clarify_resume`` (a ``ClarificationResponse``) resumes a
     paused inner agent. All three default off/None, leaving the eval path
     byte-for-byte unchanged."""
-    multi_schema = settings.datasource.is_multi_schema()
-    default_schema = settings.datasource.schema if multi_schema else None
+    # Bare references resolve to the serving schema (the SQLite ATTACH alias, or the
+    # pinned Postgres schema); None means the source spans every schema, so a bare
+    # reference fails closed.
+    default_schema = settings.datasource.serving_schema()
     dialect = gateway.catalog().dialect.value
     # Closures — not state channels (ADR 0001 / finding #7).
     graph_obj = build_graph(corpus)
-    allowlist = column_allowlist(corpus, multi_schema=multi_schema)
+    allowlist = column_allowlist(corpus)
+    # Schema routing (shortlist + curated cross-schema expansion) only earns its keep
+    # when the corpus actually spans multiple schemas (the scale run); a single-db
+    # corpus skips it. Cheap to compute once here from the licensed table assets.
+    _corpus_schemas = {a.schema for a in corpus.assets if isinstance(a, TableAsset)}
+    spans_schemas = len(_corpus_schemas) > 1
+    # A pinned serving schema (SQLite ATTACH alias / pinned Postgres schema) must be
+    # one the corpus actually holds tables for; otherwise the qualified allowlist
+    # keys never match and EVERY query silently false-refuses. Catch that config
+    # drift loudly here, where the datasource and corpus first meet. (None = span
+    # all schemas, so there is nothing to reconcile.)
+    if default_schema is not None and _corpus_schemas and default_schema not in _corpus_schemas:
+        raise ValueError(
+            f"serving schema {default_schema!r} has no tables in the corpus "
+            f"(schemas present: {sorted(_corpus_schemas)}). Align the datasource "
+            "`schema`/`corpus_pin` with the loaded corpus, or leave `schema` unset "
+            "to span all schemas."
+        )
     # One rich-event emitter for the whole turn (reset in `ingest`); the agent path
     # emits the {seq,kind,step,status,detail} contract, never the legacy {stage}
     # shape governance.py's on_event helpers still accept but which agent.py never
@@ -334,13 +349,13 @@ def build_serve_rails(
         history = list(working_memory.history(sid)) if working_memory is not None else []
         base_provenance = state["base_provenance"]
         retrieval_corpus = corpus
-        if multi_schema:
+        if spans_schemas:
             routed = route_schemas(corpus, question, embedder=embedder)
             retrieval_corpus = filter_corpus_for_retrieval(corpus, routed)
             base_provenance = {**base_provenance, "routed_schemas": sorted(routed)}
         retrieval = retrieve(retrieval_corpus, question, embedder=embedder)
         missing = detect_missing_join_path(
-            corpus, graph_obj, set(retrieval.table_ids), multi_schema=multi_schema
+            corpus, graph_obj, set(retrieval.table_ids)
         )
         if missing is not None:
             events.rail(
@@ -359,12 +374,11 @@ def build_serve_rails(
             retrieval,
             licensed_table_ids=licensed_ids,
             history=history,
-            multi_schema=multi_schema,
         )
         events.rail(
             "assemble",
             "ok",
-            schema=default_schema if not multi_schema else None,
+            schema=default_schema,
             tables=len(context.tables),
             few_shots=len(context.few_shots),
         )
@@ -393,7 +407,6 @@ def build_serve_rails(
             dialect,
             graph_obj,
             state["base_provenance"],
-            multi_schema=multi_schema,
             default_schema=default_schema,
             narrator=None,  # narration is a dedicated graph node (see narrate_node)
             on_event=None,  # agent path emits the rich contract below, not {stage}
@@ -564,7 +577,6 @@ def build_serve_rails(
             model,
             settings=settings,
             dialect=dialect,
-            multi_schema=multi_schema,
             default_schema=default_schema,
             embedder=embedder,
             system_prompt=system_prompt,
@@ -679,7 +691,7 @@ def build_serve_rails(
 
         ledger = list(final.get("ledger") or [])
         sql, tables_used, pass_entry = extract_final_sql(
-            final, corpus=corpus, dialect=dialect, multi_schema=multi_schema
+            final, corpus=corpus, dialect=dialect, default_schema=default_schema
         )
         if not sql or pass_entry is None:
             last = next(
@@ -748,9 +760,7 @@ def build_serve_rails(
         )
         attempts = sum(1 for e in ledger if e.get("action") == "run_query")
         # Cache licensed set = physical names of tables the SQL actually touched.
-        licensed_phys = frozenset(
-            licensed_physical_names(corpus, tables_used, multi_schema=multi_schema)
-        )
+        licensed_phys = frozenset(licensed_physical_names(corpus, tables_used))
         ans = _finalize_success(
             question=question,
             graph=graph_obj,

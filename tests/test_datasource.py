@@ -50,42 +50,28 @@ def test_load_settings_ignores_unknown_datasource_keys(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# multi_schema (D15): Postgres/Redshift span-all by default
+# serving_schema (D15): the engine is uniformly schema-qualified
 # --------------------------------------------------------------------------- #
 
 
-def test_multi_schema_defaults_on_for_postgres():
-    ds = DataSourceConfig(kind="postgres", dsn="host=x")
-    assert ds.multi_schema is True
-    assert ds.is_multi_schema() is True
-
-
-def test_is_multi_schema_true_for_postgres_redshift_unless_opted_out():
-    assert DataSourceConfig(kind="postgres").is_multi_schema() is True
-    assert DataSourceConfig(kind="redshift").is_multi_schema() is True
-    assert DataSourceConfig(kind="postgres", multi_schema=False).is_multi_schema() is False
-
-
-def test_sqlite_is_never_multi_schema_even_with_flag_and_no_schema():
-    # SQLite runs schema=None but must stay single-schema; the flag is inert.
-    ds = DataSourceConfig(kind="sqlite", schema=None, multi_schema=True)
-    assert ds.is_multi_schema() is False
-
-
-def test_load_settings_parses_multi_schema_opt_out(tmp_path):
-    toml = tmp_path / "governed_bi.toml"
-    toml.write_text(
-        '[datasource]\n'
-        'kind = "postgres"\n'
-        'dsn_env = "PG_RENAME_DECOY_DSN"\n'
-        'multi_schema = false\n'
-        'schema = "beer_factory"\n',
-        encoding="utf-8",
+def test_serving_schema_postgres_is_pinned_schema_or_none():
+    # None spans every schema (bare refs fail closed); a pin scopes a single db_id.
+    assert DataSourceConfig(kind="postgres", dsn="host=x").serving_schema() is None
+    assert (
+        DataSourceConfig(kind="postgres", dsn="host=x", schema="beer_factory").serving_schema()
+        == "beer_factory"
     )
-    ds = load_settings(toml).datasource
-    assert ds.multi_schema is False
-    assert ds.is_multi_schema() is False
-    assert ds.schema == "beer_factory"
+    assert DataSourceConfig(kind="redshift", schema="sales").serving_schema() == "sales"
+
+
+def test_serving_schema_sqlite_defaults_to_corpus_pin():
+    # SQLite has no native schema level, so the ATTACH alias (the fake schema) is
+    # the pinned schema, else the corpus_pin.
+    assert DataSourceConfig(kind="sqlite", corpus_pin="beer_factory").serving_schema() == "beer_factory"
+    assert (
+        DataSourceConfig(kind="sqlite", corpus_pin="beer_factory", schema="explicit").serving_schema()
+        == "explicit"
+    )
 
 
 def test_build_connector_sqlite():

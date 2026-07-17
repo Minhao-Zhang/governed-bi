@@ -38,15 +38,16 @@ def _tables_used(
     physical_to_id: dict[str, str],
     dialect: str | None,
     *,
-    multi_schema: bool = False,
+    default_schema: str | None = None,
 ) -> frozenset[str]:
     """Map the physical table names in ``sql`` back to their asset ids.
 
     Best-effort: a parse failure or an unmapped name yields fewer ids, which only
     affects the reliability stamp's join plan - the guardrails re-parse the SQL
-    independently, so this is never a safety input. In multi-schema mode the map
-    is keyed on the schema-qualified ``schema.table`` name (matching
-    :meth:`PromptContext.physical_to_id`).
+    independently, so this is never a safety input. The map is keyed on the
+    schema-qualified ``schema.table`` name (matching
+    :meth:`PromptContext.physical_to_id`); a bare reference resolves through
+    ``default_schema``.
     """
     try:
         tree = sqlglot.parse_one(sql, read=dialect)
@@ -54,7 +55,8 @@ def _tables_used(
         return frozenset()
     ids: set[str] = set()
     for table in tree.find_all(exp.Table):
-        key = f"{table.db}.{table.name}" if multi_schema else table.name
+        schema = table.db or default_schema or ""
+        key = f"{schema}.{table.name}"
         asset_id = physical_to_id.get(key)
         if asset_id is not None:
             ids.add(asset_id)

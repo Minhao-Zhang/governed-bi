@@ -1,6 +1,14 @@
 # Schema-qualification risk on the scale run
 
-_Status: **OPEN** — prep item, not yet actioned. Surfaced 2026-07-16 while
+_Status: **RESOLVED 2026-07-17** — dissolved at the source rather than mitigated.
+The dual `multi_schema` mode is gone: the engine is now uniformly schema-qualified
+(`schema.table` everywhere), so there is no convention to flip between modes and no
+end-to-end flag to thread. SQLite fakes its schema by `ATTACH`-ing the file under
+the `corpus_pin` alias; Postgres pins one schema (a `db_id`) or spans all with none.
+The prep items below are retained for history — the flow they asked to verify no
+longer exists. See "Resolution" at the end._
+
+_Original status: OPEN — prep item, not yet actioned. Surfaced 2026-07-16 while
 diagnosing the `curated_sme` fix-pass crash ([eval-ladder-results.md
 §Findings 4](eval-ladder-results.md#4-internal-validity-passes-one-non-scoring-defect-a3-fix-pass-crash));
 determined to be a **separate** issue from that `KeyError`. Relevant to the
@@ -83,3 +91,30 @@ risk; the fix-pass crash is tracked as its own item in
   aggregate refusal rate.
 - Consider a small pre-flight check — 2-3 schemas under `multi_schema=True` —
   before committing to the full 69-schema run.
+
+## Resolution (2026-07-17)
+
+The `multi_schema` flag was removed entirely. There is now a single qualification
+convention, so the failure mode this doc tracked — a model guessing the wrong
+convention for the mode it is running in, silently refused at L4 — cannot occur.
+
+What changed:
+
+- `DataSourceConfig` drops `multi_schema` / `is_multi_schema()` and gains
+  `serving_schema()` — the schema a bare reference resolves to (the SQLite `ATTACH`
+  alias, the pinned Postgres schema, or `None` to span all).
+- The guardrail (`column_allowlist`, `_layer_terms`, `_layer_columns`,
+  `_layer_cartesian`, `check`) is always schema-qualified; `default_schema` is
+  always the serving schema, so a bare reference still resolves fail-closed.
+- `PromptContext` drops its `multi_schema` field; `allowed_table_names()` and the
+  rendered table headers are always `schema.table`.
+- The SQLite connector `ATTACH`es the file under the `corpus_pin` alias, so a
+  generated `schema.table` executes natively (read-only preserved). The BIRD
+  corpus already stored `schema: <db_id>`, so **no corpus regeneration was needed**.
+- The scale run's eval harness no longer pins `multi_schema=False`; a single-DB
+  run is just "one schema present," identical in shape to the 69-schema run.
+
+Of the prep items above, the instrumentation counter that separates refusal
+reasons in `summary.json` remains independently useful for diagnosing the scale
+run and is not made moot by this change; the flag-threading and convention-in-
+prompt items are.

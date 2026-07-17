@@ -93,7 +93,12 @@ def test_governance_rules_reach_context_by_licensed_scope():
 def test_allowed_table_names_match_licensed_physical_names(corpus):
     ctx, _ = _context(corpus, "total revenue")
     # retrieval surfaces transaction; its 1-hop neighborhood adds customers + rootbeer.
-    assert ctx.allowed_table_names() == {"transaction", "customers", "rootbeer"}
+    # Names are schema-qualified (the engine is uniformly multi-schema).
+    assert ctx.allowed_table_names() == {
+        "beer_factory.transaction",
+        "beer_factory.customers",
+        "beer_factory.rootbeer",
+    }
 
 
 def test_retrieved_flag_distinguishes_neighbor_tables(corpus):
@@ -106,8 +111,8 @@ def test_retrieved_flag_distinguishes_neighbor_tables(corpus):
 
 def test_physical_to_id_round_trips(corpus):
     ctx, _ = _context(corpus, "total revenue")
-    assert ctx.physical_to_id()["transaction"] == TRANSACTION
-    assert ctx.physical_to_id()["customers"] == CUSTOMERS
+    assert ctx.physical_to_id()["beer_factory.transaction"] == TRANSACTION
+    assert ctx.physical_to_id()["beer_factory.customers"] == CUSTOMERS
 
 
 def test_columns_resolved_with_facts(corpus):

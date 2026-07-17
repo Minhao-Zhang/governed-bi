@@ -70,9 +70,37 @@ def test_describe_missing_table_raises(conn):
         conn.describe_table("does_not_exist")
 
 
-def test_sqlite_list_schemas_single_namespace(conn):
-    # SQLite has no schema level: one logical namespace, always.
-    assert conn.list_schemas() == ["main"]
+def test_sqlite_list_schemas_reports_fake_schema_alias(conn):
+    # SQLite has no schema level, so the connector fakes one: the ATTACH alias,
+    # derived from the file-name stem ("demo.sqlite" -> "demo").
+    assert conn.list_schemas() == ["demo"]
+
+
+def test_sqlite_qualified_reference_resolves_through_attach(bird_db):
+    # A generated ``schema.table`` (the always-qualified contract) resolves against
+    # the attachment, and bare / main references still resolve to the same data.
+    c = SqliteConnector(bird_db, schema="demo")
+    try:
+        qualified = c.execute("SELECT COUNT(*) AS n FROM demo.customers").rows
+        bare = c.execute("SELECT COUNT(*) AS n FROM customers").rows
+        assert qualified == bare == [(3,)]
+    finally:
+        c.close()
+
+
+def test_sqlite_reserved_word_schema_alias_fails_loudly(bird_db):
+    # A schema alias that is a SQL reserved word cannot serve as an UNQUOTED
+    # qualifier (the form generated SQL uses), so it must fail loudly at
+    # construction rather than silently false-refuse every query at run time.
+    with pytest.raises(ValueError, match="not usable as an unqualified SQL qualifier"):
+        SqliteConnector(bird_db, schema="order")
+
+
+def test_sqlite_dotted_schema_alias_fails_loudly(bird_db):
+    # A dotted alias parses as ``catalog.schema`` in a qualified reference, so it is
+    # likewise rejected at construction.
+    with pytest.raises(ValueError, match="not usable as an unqualified SQL qualifier"):
+        SqliteConnector(bird_db, schema="beer.factory")
 
 
 def test_sqlite_introspection_ignores_schema_arg(conn):

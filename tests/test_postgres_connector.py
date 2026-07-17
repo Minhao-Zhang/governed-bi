@@ -458,8 +458,8 @@ def _live_pg_connector():
     except ImportError:
         pytest.skip("psycopg not installed (uv sync --extra postgres); skipping live test")
     try:
-        # schema unpinned -> span-all-capable, exactly as factory builds it for
-        # a multi_schema datasource.
+        # schema unpinned -> span-all-capable, exactly as the factory builds it
+        # for a datasource with no pinned schema.
         return PostgresConnector(dsn, schema=None)
     except Exception as e:  # pragma: no cover - environment-dependent
         pytest.skip(f"could not connect to PG_RENAME_DECOY_DSN: {e}")

@@ -70,9 +70,8 @@ sqlite_path = "data/bird/beer_factory.sqlite" # repo-root-relative
 #   kind = "postgres"
 #   corpus_pin = "beer_factory"
 #   dsn_env = "PG_RENAME_DECOY_DSN"
-# Postgres/Redshift default to multi_schema=true (span all user schemas; D15).
-# Opt out with multi_schema=false + a pinned schema when you need single-schema.
-#   # multi_schema = false
+# The engine is uniformly schema-qualified (D15). Leave `schema` unset to span all
+# user schemas; pin one to scope a single db_id (bare refs then resolve to it).
 #   # schema = "beer_factory"
 
 [serve]

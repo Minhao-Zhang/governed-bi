@@ -51,8 +51,7 @@ def _agent(corpus, gateway, identity, settings, responses):
         FakeToolModel(responses=responses),
         settings=settings,
         dialect="sqlite",
-        multi_schema=False,
-        default_schema=None,
+        default_schema="beer_factory",
     )
 
 

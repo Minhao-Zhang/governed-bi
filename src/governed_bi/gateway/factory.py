@@ -46,7 +46,9 @@ def build_connector(
         path = Path(datasource.sqlite_path)
         if not path.is_absolute():
             path = _repo_root() / path
-        return SqliteConnector(path)
+        # Fake the schema (see SqliteConnector): ATTACH the file under this alias so
+        # generated ``schema.table`` SQL resolves, uniform with Postgres.
+        return SqliteConnector(path, schema=datasource.serving_schema())
 
     if kind in ("postgres", "redshift"):
         dsn = datasource.resolve_dsn()
@@ -56,14 +58,13 @@ def build_connector(
                 "to an env var holding the libpq DSN (e.g. PG_RENAME_DECOY_DSN), or dsn for a "
                 "local secret-free one."
             )
-        # Multi-schema (D15): span-all by default for postgres/redshift.
-        # schema=None lets the connector enumerate every schema via list_schemas()
-        # and introspect any of them via the explicit ``schema=`` argument. NB the
-        # connector still DEFAULTS unqualified introspection to "public", so a
-        # multi-schema caller must pass an explicit ``schema=`` per call (see
-        # build_facts_all_schemas, which pins each schema). Opt out with
-        # multi_schema=False to pin datasource.schema.
-        schema = None if datasource.is_multi_schema() else datasource.schema
+        # D15: schema-qualified everywhere. A pinned ``schema`` (e.g. one db_id for
+        # the eval harness) scopes introspection and bare-ref resolution; ``None``
+        # spans every user schema (the connector enumerates via list_schemas() and
+        # introspects any via the explicit ``schema=`` argument, defaulting
+        # unqualified introspection to "public", so a span-all caller must pass an
+        # explicit ``schema=`` per call — see build_facts_all_schemas).
+        schema = datasource.serving_schema()
         connect_kwargs: dict = {}
         if connect_timeout is not None:
             # libpq wants an integer second count.

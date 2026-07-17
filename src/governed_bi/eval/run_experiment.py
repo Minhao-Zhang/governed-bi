@@ -313,7 +313,6 @@ def run_experiment(
         corpus_pin=db_id,
         schema=db_id,
         dsn=pg_dsn,
-        multi_schema=False,
     )
     settings = Settings.for_env(
         Environment.dev,

@@ -75,24 +75,22 @@ class ColumnAllowlist:
     suspect: frozenset[str]
 
 
-def column_allowlist(corpus: "Corpus", *, multi_schema: bool = False) -> ColumnAllowlist:
+def column_allowlist(corpus: "Corpus") -> ColumnAllowlist:
     """Build the L3 allowlist from a corpus (pass the ``for_analyst()`` view).
 
     Physical names are used because the SQL under inspection is in the live
     (obfuscated) identifiers, not asset ids.
 
-    Single-schema (``multi_schema=False``, the default): keys are two-part
-    ``physical_name.column`` references - today's behavior, byte-for-byte. When
-    ``multi_schema=True`` the keys are three-part ``{schema}.{physical_name}.{column}``
-    (schema = the table's ``schema`` field) so a same-named column in two schemas does
-    not collide.
+    Keys are three-part ``{schema}.{physical_name}.{column}`` (schema = the table's
+    ``schema`` field) — the engine is uniformly schema-qualified, so a same-named
+    column in two schemas never collides.
     """
     allowed: set[str] = set()
     suspect: set[str] = set()
     for asset in corpus.assets:
         if not isinstance(asset, TableAsset) or asset.governance.excluded:
             continue
-        prefix = f"{asset.schema}.{asset.physical_name}" if multi_schema else asset.physical_name
+        prefix = f"{asset.schema}.{asset.physical_name}"
         for col in asset.columns:
             if col.governance.excluded:
                 continue
@@ -194,22 +192,19 @@ def _is_projection_star(select: exp.Select) -> bool:
     return False
 
 
-def _physical_of(src: exp.Table, multi_schema: bool, default_schema: str | None) -> str:
-    """The physical identity of a base table source.
+def _physical_of(src: exp.Table, default_schema: str | None) -> str:
+    """The schema-qualified physical identity ``{schema}.{table}`` of a base source.
 
-    Single-schema: the bare physical name (today's behavior). Multi-schema: the
-    schema-qualified ``{schema}.{table}``, where the schema is the source's own
-    ``db`` qualifier or, for a bare reference, the designated ``default_schema``
-    (empty string when neither is known, so it fails closed against the allowlist).
+    The schema is the source's own ``db`` qualifier or, for a bare reference, the
+    designated ``default_schema`` (empty string when neither is known, so it fails
+    closed against the allowlist).
     """
-    if not multi_schema:
-        return src.name
     schema = src.db or default_schema or ""
     return f"{schema}.{src.name}"
 
 
 def _scope_sources(
-    scope: object, *, multi_schema: bool = False, default_schema: str | None = None
+    scope: object, *, default_schema: str | None = None
 ) -> tuple[dict[str, str | None], set[str], set[str]]:
     """Resolve one scope's sources (never flattened across the query).
 
@@ -221,15 +216,15 @@ def _scope_sources(
     - ``derived_outputs`` is the set of column names the scope's derived sources
       project, used to validate a bare column that can only come from one of them.
 
-    Physical identities are bare names in single-schema mode and schema-qualified
-    ``{schema}.{table}`` in multi-schema mode (see :func:`_physical_of`).
+    Physical identities are schema-qualified ``{schema}.{table}`` (see
+    :func:`_physical_of`).
     """
     resolved: dict[str, str | None] = {}
     base: set[str] = set()
     derived_outputs: set[str] = set()
     for name, src in scope.sources.items():
         if isinstance(src, exp.Table):
-            physical = _physical_of(src, multi_schema, default_schema)
+            physical = _physical_of(src, default_schema)
             resolved[name] = physical
             resolved.setdefault(src.name, physical)
             base.add(physical)
@@ -245,7 +240,6 @@ def _layer_columns(
     suspect: set[str],
     hard_block_suspect: bool,
     *,
-    multi_schema: bool = False,
     default_schema: str | None = None,
 ) -> GuardrailVerdict:
     """L3: every referenced column resolves to an allowed physical column.
@@ -276,7 +270,7 @@ def _layer_columns(
 
     by_select = {id(scope.expression): scope for scope in scopes}
     cache = {
-        id(scope): _scope_sources(scope, multi_schema=multi_schema, default_schema=default_schema)
+        id(scope): _scope_sources(scope, default_schema=default_schema)
         for scope in scopes
     }
 
@@ -303,7 +297,7 @@ def _layer_columns(
 
         qualifier = column.table
         if qualifier:
-            if multi_schema and column.db:
+            if column.db:
                 # An explicit ``schema.table.column`` reference. Fail closed unless
                 # that (schema, table) is actually a source in this query's FROM:
                 # otherwise a column of an off-scope table would slip past L3 (its
@@ -331,14 +325,11 @@ def _layer_columns(
         _resolved, base, derived_outputs = cache[id(scope)]
         candidate_allowed = any(f"{p}.{name}" in allowed for p in base)
         candidate_suspect = any(f"{p}.{name}" in suspect for p in base)
-        # In multi_schema mode, same-named columns across in-scope schemas are
-        # routine, so a bare name matching a suspect column in ANY in-scope base
-        # must fail closed: the DB could bind it to the decoy (leftmost-table
-        # resolution) and the caller should qualify instead. Single-schema keeps the
-        # historical "an allowed match wins" behavior byte-for-byte.
-        block_suspect = (
-            candidate_suspect if multi_schema else (candidate_suspect and not candidate_allowed)
-        )
+        # Same-named columns across in-scope schemas are routine, so a bare name
+        # matching a suspect column in ANY in-scope base must fail closed: the DB
+        # could bind it to the decoy (leftmost-table resolution) and the caller
+        # should qualify instead.
+        block_suspect = candidate_suspect
         if hard_block_suspect and block_suspect:
             return _fail(layer, f"suspect (unreliable) column blocked: {name}")
         if candidate_allowed or candidate_suspect:
@@ -424,7 +415,7 @@ def _uf_union(parent: dict[str, str], a: str, b: str) -> None:
 
 
 def _layer_cartesian(
-    root: exp.Expression, *, multi_schema: bool = False, default_schema: str | None = None
+    root: exp.Expression, *, default_schema: str | None = None
 ) -> GuardrailVerdict:
     """L5: structural cost guard against unconstrained cross joins.
 
@@ -453,7 +444,7 @@ def _layer_cartesian(
             continue  # e.g. a set-operation scope has no FROM of its own
 
         base = {
-            name: _physical_of(src, multi_schema, default_schema)
+            name: _physical_of(src, default_schema)
             for name, src in scope.sources.items()
             if isinstance(src, exp.Table)
         }
@@ -473,14 +464,14 @@ def _layer_cartesian(
         # self-join, and each bare qualifier still maps to its own source.
         ref: dict[str, str] = {}
         physical_uses = Counter(
-            _physical_of(src, multi_schema, default_schema)
+            _physical_of(src, default_schema)
             for src in scope.sources.values()
             if isinstance(src, exp.Table)
         )
         for name, src in scope.sources.items():
             ref[name] = name
             if isinstance(src, exp.Table):
-                physical = _physical_of(src, multi_schema, default_schema)
+                physical = _physical_of(src, default_schema)
                 if src.name != name and physical_uses[physical] == 1:
                     ref.setdefault(src.name, name)
 
@@ -523,7 +514,6 @@ def _layer_terms(
     root: exp.Expression,
     allowed_tables: set[str],
     *,
-    multi_schema: bool = False,
     default_schema: str | None = None,
 ) -> GuardrailVerdict:
     """L4: every base table the query touches is within the retrieved scope.
@@ -539,34 +529,17 @@ def _layer_terms(
     it. Checking only ``Table`` sources means a nested CTE cannot borrow an
     out-of-scope table's name to slip that table past the gate.
 
-    Single-schema (``multi_schema=False``, the default): the licensed names are
-    bare physical names, and *any* schema/catalog qualifier is rejected because
-    the connection is a single database - today's behavior, byte-for-byte.
-
-    Multi-schema (``multi_schema=True``): the licensed names are schema-qualified
-    ``{schema}.{table}``. A schema-qualified reference is allowed when its
-    ``(schema, table)`` is in the licensed set; a three-part ``catalog.schema.table``
-    is still rejected (one database). A *bare* reference resolves ONLY to the
-    designated ``default_schema`` (falling back to the sole licensed schema when
-    no default is configured) and is REFUSED AS AMBIGUOUS when the licensed set
-    holds that bare name in more than one schema - this is what forbids a
-    self-authorized off-scope schema.
+    The licensed names are schema-qualified ``{schema}.{table}``. A schema-qualified
+    reference is allowed when its ``(schema, table)`` is in the licensed set; a
+    three-part ``catalog.schema.table`` is still rejected (one database). A *bare*
+    reference resolves ONLY to the designated ``default_schema`` (falling back to the
+    sole licensed schema when no default is configured) and is REFUSED AS AMBIGUOUS
+    when the licensed set holds that bare name in more than one schema — this is what
+    forbids a self-authorized off-scope schema.
     """
     layer = GuardrailLayer.term_semantics
-    if not multi_schema:
-        for scope in traverse_scope(root):
-            for src in scope.sources.values():
-                if not isinstance(src, exp.Table):
-                    continue
-                if src.db or src.catalog:
-                    # The connection is a single database; a schema/catalog-qualified
-                    # name reaches outside the licensed namespace. Fail closed.
-                    return _fail(layer, f"cross-namespace table reference not allowed: {src.sql()}")
-                if src.name not in allowed_tables:
-                    return _fail(layer, f"table outside the retrieved scope: {src.name}")
-        return _pass()
 
-    # Multi-schema: index the licensed qualified names by their bare table name so
+    # Index the licensed qualified names by their bare table name so
     # a bare reference can be resolved / flagged as cross-schema-ambiguous.
     schemas_by_name: dict[str, set[str]] = {}
     for qualified in allowed_tables:
@@ -610,25 +583,21 @@ def check(
     suspect_columns: frozenset[str] = frozenset(),
     allowed_tables: frozenset[str] | None = None,
     dialect: str | None = None,
-    multi_schema: bool = False,
     default_schema: str | None = None,
 ) -> GuardrailVerdict:
     """Run the layers in order; return on the first failure (fail-closed).
 
-    ``allowed_columns`` / ``suspect_columns`` are physical ``table.column``
-    references (build them with :func:`column_allowlist`). ``hard_block_suspect``
-    is the dev/prod suspect toggle. ``allowed_tables`` (physical table names)
-    drives L4 (term-semantics); when ``None``, L4 is skipped (e.g. a
-    corpus-only unit check with no retrieval scope). ``dialect`` is the sqlglot
-    dialect name (e.g. ``"sqlite"``) for parsing.
+    ``allowed_columns`` / ``suspect_columns`` are physical schema-qualified
+    ``schema.table.column`` references (build them with :func:`column_allowlist`).
+    ``hard_block_suspect`` is the dev/prod suspect toggle. ``allowed_tables``
+    (qualified ``schema.table`` names) drives L4 (term-semantics); when ``None``,
+    L4 is skipped (e.g. a corpus-only unit check with no retrieval scope).
+    ``dialect`` is the sqlglot dialect name (e.g. ``"sqlite"``) for parsing.
 
-    ``multi_schema`` is the mode gate (default ``False`` => today's single-schema /
-    single-namespace behavior, byte-for-byte). When ``True``, the allowlist keys,
-    licensed table names, and layer bookkeeping are all schema-qualified (see
-    :func:`column_allowlist`, :func:`_layer_terms`, :func:`_layer_columns`,
-    :func:`_layer_cartesian`), and ``default_schema`` is the schema a bare
-    (unqualified) table reference resolves to. Both are inert when
-    ``multi_schema`` is ``False``.
+    The engine is uniformly schema-qualified: allowlist keys, licensed table names,
+    and layer bookkeeping are all ``schema.``-prefixed (see :func:`column_allowlist`,
+    :func:`_layer_terms`, :func:`_layer_columns`, :func:`_layer_cartesian`), and
+    ``default_schema`` is the schema a bare (unqualified) reference resolves to.
     """
     verdict, statements = _layer_syntax(sql, dialect)
     if not verdict.passed:
@@ -643,7 +612,6 @@ def check(
         allowed_columns,
         set(suspect_columns),
         hard_block_suspect,
-        multi_schema=multi_schema,
         default_schema=default_schema,
     )
     if not verdict.passed:
@@ -653,10 +621,9 @@ def check(
         verdict = _layer_terms(
             statements[0],
             set(allowed_tables),
-            multi_schema=multi_schema,
             default_schema=default_schema,
         )
         if not verdict.passed:
             return verdict
 
-    return _layer_cartesian(statements[0], multi_schema=multi_schema, default_schema=default_schema)
+    return _layer_cartesian(statements[0], default_schema=default_schema)

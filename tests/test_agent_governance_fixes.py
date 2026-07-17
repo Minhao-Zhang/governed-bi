@@ -60,8 +60,7 @@ def _agent(corpus, gateway, identity, settings, responses):
         FakeToolModel(responses=responses),
         settings=settings,
         dialect="sqlite",
-        multi_schema=False,
-        default_schema=None,
+        default_schema="beer_factory",
     )
 
 
@@ -125,7 +124,7 @@ def test_extract_final_sql_parses_tables_used_not_all_licensed(corpus):
         ],
     }
     sql, tables_used, entry = extract_final_sql(
-        final, corpus=corpus, dialect="sqlite", multi_schema=False
+        final, corpus=corpus, dialect="sqlite", default_schema="beer_factory"
     )
     assert sql is not None
     assert tables_used == frozenset({TXN})
