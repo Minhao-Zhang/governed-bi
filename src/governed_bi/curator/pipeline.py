@@ -381,7 +381,7 @@ def _run_adversary_signal(
     return records
 
 
-def _corpora_differ(a2_root: Path, a3_root: Path, schema: str) -> bool:
+def _corpora_differ(curated_root: Path, curated_sme_root: Path, schema: str) -> bool:
     """True when curated_sme is not a byte-identical copy of curated (curated_sme acceptance)."""
     import hashlib
 
@@ -395,7 +395,7 @@ def _corpora_differ(a2_root: Path, a3_root: Path, schema: str) -> bool:
             h.update(path.read_bytes())
         return h.hexdigest()
 
-    return _fingerprint(a2_root) != _fingerprint(a3_root)
+    return _fingerprint(curated_root) != _fingerprint(curated_sme_root)
 
 
 def _mark_columns_absent_from_gold(
@@ -589,7 +589,7 @@ def build_curated_corpus_with_sme(
     out_root: Path | str,
     *,
     responder: "Responder",
-    a2_root: Path | str | None = None,
+    curated_root: Path | str | None = None,
     model: Any | None = None,
     dialect: str = "postgres",
     max_agent_steps: int = 15,
@@ -615,26 +615,26 @@ def build_curated_corpus_with_sme(
     if run_agent_repass is None:
         run_agent_repass = model is not None
 
-    if a2_root is None:
-        a2_root = out_root.parent / "corpus_a2"
+    if curated_root is None:
+        curated_root = out_root.parent / "corpus_curated"
         build_curated_corpus(
             connector,
             gateway,
             schema,
             train_items,
-            a2_root,
+            curated_root,
             model=model,
             dialect=dialect,
             max_agent_steps=max_agent_steps,
             run_agent=model is not None,
         )
-    a2_root = Path(a2_root)
+    curated_root = Path(curated_root)
 
-    corpus = load_corpus(a2_root, schema=schema)
+    corpus = load_corpus(curated_root, schema=schema)
     tables = [a for a in corpus.assets if isinstance(a, TableAsset)]
     other = [a for a in corpus.assets if not isinstance(a, TableAsset)]
 
-    ledger_path = clarifications_path(a2_root)
+    ledger_path = clarifications_path(curated_root)
     records = load_clarifications(ledger_path)
     open_records = [r for r in records if r.status is ClarificationRecordStatus.open]
     ledger_source = "agent" if open_records else "missing"
@@ -744,7 +744,7 @@ def build_curated_corpus_with_sme(
         },
     )
 
-    if open_records and not _corpora_differ(a2_root, out_root, schema):
+    if open_records and not _corpora_differ(curated_root, out_root, schema):
         raise RuntimeError(
             f"curated_sme corpus is identical to curated at {out_root}; SME round-trip produced no edits"
         )

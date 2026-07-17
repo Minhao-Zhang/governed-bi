@@ -79,7 +79,7 @@ def test_adversary_signal_writes_findings(bird_connector, tmp_path: Path):
 
     tables = profile_database(bird_connector, schema="beer_factory")
     bag = AssetBag.from_tables("beer_factory", tables)
-    out = tmp_path / "a2"
+    out = tmp_path / "curated"
     out.mkdir()
     findings = _run_adversary_signal(bag, connector=bird_connector, out_root=out)
     assert (out / "adversary_findings.jsonl").exists()
@@ -195,7 +195,7 @@ def test_build_curated_corpus_seed_only(bird_connector, tmp_path: Path):
         gateway,
         "beer_factory",
         train,
-        tmp_path / "corpus_a2",
+        tmp_path / "corpus_curated",
         model=None,
         dialect="sqlite",
         run_agent=False,
@@ -217,18 +217,18 @@ def test_build_curated_corpus_with_sme_folds_human(bird_connector, tmp_path: Pat
             question_id="t1",
         )
     ]
-    a2 = build_curated_corpus(
+    curated = build_curated_corpus(
         bird_connector,
         gateway,
         "beer_factory",
         train,
-        tmp_path / "corpus_a2",
+        tmp_path / "corpus_curated",
         run_agent=False,
         dialect="sqlite",
     )
     # Plant an agent-style ledger (offline path does not invent questions).
     write_clarifications(
-        a2 / "clarifications.jsonl",
+        curated / "clarifications.jsonl",
         [
             ClarificationRecord(
                 id="q001",
@@ -239,14 +239,14 @@ def test_build_curated_corpus_with_sme_folds_human(bird_connector, tmp_path: Pat
         ],
     )
     responder = StaticResponder(default="Customers who bought root beer.")
-    a3 = build_curated_corpus_with_sme(
+    curated_sme = build_curated_corpus_with_sme(
         bird_connector,
         gateway,
         "beer_factory",
         train,
-        tmp_path / "corpus_a3",
+        tmp_path / "corpus_curated_sme",
         responder=responder,
-        a2_root=a2,
+        curated_root=curated,
         model=None,
         seed_ledger_if_empty=False,
     )
@@ -254,7 +254,7 @@ def test_build_curated_corpus_with_sme_folds_human(bird_connector, tmp_path: Pat
     from governed_bi.corpus import load_corpus
     from governed_bi.corpus.schemas import ProvenanceSource
 
-    corpus = load_corpus(a3, schema="beer_factory")
+    corpus = load_corpus(curated_sme, schema="beer_factory")
     human = False
     for asset in corpus.tables():
         if asset.audit and asset.audit.provenance.source is ProvenanceSource.human:
@@ -266,7 +266,7 @@ def test_build_curated_corpus_with_sme_folds_human(bird_connector, tmp_path: Pat
 
     import json
 
-    manifest = json.loads((a3 / "run_manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((curated_sme / "run_manifest.json").read_text(encoding="utf-8"))
     assert manifest["fold_mode"] == "deterministic"
     assert manifest["ledger_source"] == "agent"
     assert manifest["agent_ran"] is False
@@ -299,7 +299,7 @@ def test_deep_agent_invoke_receives_tracing_callbacks(bird_connector, tmp_path: 
         gateway,
         "beer_factory",
         train,
-        tmp_path / "corpus_a2",
+        tmp_path / "corpus_curated",
         run_agent=True,
         model=object(),
         dialect="sqlite",
@@ -322,17 +322,17 @@ def test_sme_clarifications_logged(bird_connector, tmp_path: Path):
             question_id="t1",
         )
     ]
-    a2 = build_curated_corpus(
+    curated = build_curated_corpus(
         bird_connector,
         gateway,
         "beer_factory",
         train,
-        tmp_path / "corpus_a2",
+        tmp_path / "corpus_curated",
         run_agent=False,
         dialect="sqlite",
     )
     write_clarifications(
-        a2 / "clarifications.jsonl",
+        curated / "clarifications.jsonl",
         [
             ClarificationRecord(
                 id="q001",
@@ -343,18 +343,18 @@ def test_sme_clarifications_logged(bird_connector, tmp_path: Path):
         ],
     )
     responder = StaticResponder(default="Customers who bought root beer.")
-    a3 = build_curated_corpus_with_sme(
+    curated_sme = build_curated_corpus_with_sme(
         bird_connector,
         gateway,
         "beer_factory",
         train,
-        tmp_path / "corpus_a3",
+        tmp_path / "corpus_curated_sme",
         responder=responder,
-        a2_root=a2,
+        curated_root=curated,
         model=None,
     )
 
-    log = a3 / "sme_clarifications.jsonl"
+    log = curated_sme / "sme_clarifications.jsonl"
     assert log.exists(), "sme_clarifications.jsonl was not written"
     rows = [json.loads(ln) for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
     assert rows, "expected at least one logged clarification"

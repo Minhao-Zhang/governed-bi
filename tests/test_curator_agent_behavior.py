@@ -74,7 +74,7 @@ def test_phase_a_agent_authors_ledger_and_annotates(bird_connector, tmp_path: Pa
     gateway = Gateway(bird_connector)
     tables = profile_database(bird_connector, schema="beer_factory")
     bag = AssetBag.from_tables("beer_factory", tables)
-    run_dir = tmp_path / "corpus_a2"
+    run_dir = tmp_path / "corpus_curated"
     run_dir.mkdir()
 
     line = (
@@ -144,7 +144,7 @@ def test_phase_a_agent_edit_broadens_same_id(bird_connector, tmp_path: Path):
     bag = AssetBag.from_tables(
         "beer_factory", profile_database(bird_connector, schema="beer_factory")
     )
-    run_dir = tmp_path / "corpus_a2"
+    run_dir = tmp_path / "corpus_curated"
     run_dir.mkdir()
     old = (
         '{"id":"q001","scope":"table:customers","question":"Who are customers?",'
@@ -205,17 +205,17 @@ def test_phase_b_agent_ingests_with_certified_provenance(bird_connector, tmp_pat
             question_id="t1",
         )
     ]
-    a2 = build_curated_corpus(
+    curated = build_curated_corpus(
         bird_connector,
         gateway,
         "beer_factory",
         train,
-        tmp_path / "corpus_a2",
+        tmp_path / "corpus_curated",
         run_agent=False,
         dialect="sqlite",
     )
     write_clarifications(
-        a2 / "clarifications.jsonl",
+        curated / "clarifications.jsonl",
         [
             ClarificationRecord(
                 id="q001",
@@ -247,14 +247,14 @@ def test_phase_b_agent_ingests_with_certified_provenance(bird_connector, tmp_pat
             AIMessage(content="ingested"),
         ]
     )
-    a3 = build_curated_corpus_with_sme(
+    curated_sme = build_curated_corpus_with_sme(
         bird_connector,
         gateway,
         "beer_factory",
         train,
-        tmp_path / "corpus_a3",
+        tmp_path / "corpus_curated_sme",
         responder=StaticResponder(default="Customers who bought root beer."),
-        a2_root=a2,
+        curated_root=curated,
         model=model,
         run_agent_repass=True,
         seed_ledger_if_empty=False,
@@ -264,13 +264,13 @@ def test_phase_b_agent_ingests_with_certified_provenance(bird_connector, tmp_pat
     from governed_bi.corpus import load_corpus
     from governed_bi.corpus.schemas import ProvenanceSource, ProvenanceStatus
 
-    manifest = json.loads((a3 / "run_manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((curated_sme / "run_manifest.json").read_text(encoding="utf-8"))
     assert manifest["fold_mode"] == "agent"
     assert manifest["agent_ran"] is True
     assert manifest["ledger_source"] == "agent"
     assert manifest["tool_calls"]["write_total"] >= 1
 
-    corpus = load_corpus(a3, schema="beer_factory")
+    corpus = load_corpus(curated_sme, schema="beer_factory")
     customers = next(t for t in corpus.tables() if t.physical_name == "customers")
     assert customers.description == "Customers who bought root beer."
     assert customers.audit is not None
@@ -291,28 +291,28 @@ def test_phase_b_empty_ledger_is_noop_not_failure(bird_connector, tmp_path: Path
             question_id="t1",
         )
     ]
-    a2 = build_curated_corpus(
+    curated = build_curated_corpus(
         bird_connector,
         gateway,
         "beer_factory",
         train,
-        tmp_path / "corpus_a2",
+        tmp_path / "corpus_curated",
         run_agent=False,
         dialect="sqlite",
     )
-    a3 = build_curated_corpus_with_sme(
+    curated_sme = build_curated_corpus_with_sme(
         bird_connector,
         gateway,
         "beer_factory",
         train,
-        tmp_path / "corpus_a3",
+        tmp_path / "corpus_curated_sme",
         responder=StaticResponder(default="x"),
-        a2_root=a2,
+        curated_root=curated,
         model=None,
         seed_ledger_if_empty=False,
     )
-    assert (a3 / "beer_factory" / "tables").exists()
-    manifest = json.loads((a3 / "run_manifest.json").read_text(encoding="utf-8"))
+    assert (curated_sme / "beer_factory" / "tables").exists()
+    manifest = json.loads((curated_sme / "run_manifest.json").read_text(encoding="utf-8"))
     assert manifest["fold_mode"] == "none"
     assert manifest["clarifications_applied"] == 0
 
@@ -333,7 +333,7 @@ def test_phase_a_manifest_marks_missing_ledger(bird_connector, tmp_path: Path):
         gateway,
         "beer_factory",
         train,
-        tmp_path / "corpus_a2",
+        tmp_path / "corpus_curated",
         run_agent=False,
         dialect="sqlite",
     )
@@ -407,9 +407,9 @@ def test_pair_scoped_clarification_becomes_rule(bird_connector, tmp_path: Path):
             question_id="t1",
         )
     ]
-    a2 = build_curated_corpus(
+    curated = build_curated_corpus(
         bird_connector, gateway, "beer_factory", train,
-        tmp_path / "corpus_a2", run_agent=False, dialect="sqlite",
+        tmp_path / "corpus_curated", run_agent=False, dialect="sqlite",
     )
     rec = ClarificationRecord(
         id="q001",
@@ -418,15 +418,15 @@ def test_pair_scoped_clarification_becomes_rule(bird_connector, tmp_path: Path):
         status=ClarificationRecordStatus.open,
         raised_by=["t1"],
     )
-    write_clarifications(clarifications_path(a2), [rec])
+    write_clarifications(clarifications_path(curated), [rec])
 
-    a3 = build_curated_corpus_with_sme(
+    curated_sme = build_curated_corpus_with_sme(
         bird_connector, gateway, "beer_factory", train,
-        tmp_path / "corpus_a3",
+        tmp_path / "corpus_curated_sme",
         responder=StaticResponder(default="This pair is mislabeled; treat as an annotation error."),
-        a2_root=a2, model=None,
+        curated_root=curated, model=None,
     )
-    corpus = load_corpus(a3, schema="beer_factory")
+    corpus = load_corpus(curated_sme, schema="beer_factory")
     rules = [a for a in corpus.assets if a.asset_type == "rule"]
     assert rules, "pair-scoped clarification should have become a RuleAsset"
     assert "mislabeled" in rules[0].statement.lower() or "annotation" in rules[0].statement.lower()
