@@ -12,7 +12,14 @@ import pytest
 
 from governed_bi.corpus import Corpus, load_corpus
 from governed_bi.corpus.ids import derive_column_id
-from governed_bi.corpus.schemas import Column, LogicalType, TableAsset, TermAsset, TermBinding
+from governed_bi.corpus.schemas import (
+    Column,
+    FewShotAsset,
+    LogicalType,
+    TableAsset,
+    TermAsset,
+    TermBinding,
+)
 from governed_bi.retrieval import BM25Index, RetrievalResult, retrieve, tokenize
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
@@ -34,9 +41,21 @@ def corpus():
 
 def test_tokenize_lowercases_and_splits_on_non_alphanumeric():
     assert tokenize("Total Revenue, by Brand!") == ["total", "revenue", "by", "brand"]
-    assert tokenize("SUM(PurchasePrice)") == ["sum", "purchaseprice"]
     assert tokenize("") == []
     assert tokenize("   \t\n ") == []
+
+
+def test_tokenize_splits_camelcase_and_stems_plurals():
+    # camelCase / PascalCase physical names split into their words...
+    assert tokenize("SUM(PurchasePrice)") == ["sum", "purchase", "price"]
+    assert tokenize("CustomerID") == ["customer", "id"]
+    assert tokenize("StarRating") == ["star", "rating"]
+    # ...and simple plurals collapse so a query term matches the singular name.
+    assert tokenize("transactions") == ["transaction"]
+    assert tokenize("companies") == ["company"]
+    # -ss words and short tokens are left alone.
+    assert tokenize("address") == ["address"]
+    assert tokenize("is") == ["is"]
 
 
 def test_bm25_ranks_matching_document_first():
@@ -174,3 +193,98 @@ def test_term_bound_to_column_grounds_owning_table():
     assert "term_churned" in res.term_ids
     assert "tbl_shop_orders" in res.table_ids
     assert col_id in res.column_ids
+
+
+def _plain_table(tid: str, physical: str, *, desc: str = "") -> TableAsset:
+    return TableAsset(
+        id=tid,
+        schema="shop",
+        physical_name=physical,
+        description=desc,
+        columns=[
+            Column(
+                physical_name="id",
+                physical_type="int",
+                logical_type=LogicalType.integer,
+                nullable=False,
+                is_unique=True,
+            )
+        ],
+    )
+
+
+def test_per_type_budget_keeps_tables_when_few_shots_flood():
+    # A pile of few-shots whose questions all match the query would fill a single
+    # pooled top-k and starve the table (whose gold SQL the few-shots do not name,
+    # so grounding cannot rescue it). Per-type budgets keep the table its slot.
+    table = _plain_table("tbl_shop_widgets", "widgets", desc="widget catalog")
+    few_shots = [
+        FewShotAsset(
+            id=f"fs_{i:02d}",
+            schema="shop",
+            question="widget widget widget report count",
+            sql="SELECT 1",  # references no real table -> no grounding rescue
+        )
+        for i in range(12)
+    ]
+    res = retrieve(Corpus(assets=[table, *few_shots]), "widget report count")
+    assert "tbl_shop_widgets" in res.table_ids  # survived the few-shot flood
+    assert len(res.few_shot_ids) <= 3  # few-shot budget capped
+
+
+def test_few_shot_grounds_its_referenced_tables():
+    # The target table does NOT lexically match the query, so BM25 never surfaces
+    # it directly; only the matching few-shot's gold SQL points at it. Grounding
+    # the few-shot's tables must pull it into scope.
+    table = _plain_table("tbl_shop_orders", "orders", desc="zzz unrelated words")
+    fs = FewShotAsset(
+        id="fs_orders",
+        schema="shop",
+        question="how many purchases were made",
+        sql="SELECT COUNT(*) FROM orders",
+    )
+    res = retrieve(Corpus(assets=[table, fs]), "how many purchases were made")
+    assert "fs_orders" in res.few_shot_ids
+    assert "tbl_shop_orders" in res.table_ids  # grounded from the few-shot's SQL
+
+
+@pytest.mark.xfail(
+    reason="field weights are flat (_SEMANTIC_BOOST=1) for now; preferring the "
+    "curated description over a matching raw/decoy name is a production-tuning "
+    "target (raise _SEMANTIC_BOOST). Kept as an executable spec of the goal.",
+    strict=False,
+)
+def test_curated_semantics_outrank_a_decoy_raw_name():
+    # Governed-BI thesis: the curated description is the trusted match surface; a
+    # raw / decoy physical name must NOT outrank it. The real table has an opaque
+    # (obfuscated) name but a description that matches the question; the decoy has
+    # an attractive camelCase name that tokenizes straight onto the query but a
+    # description that does not. Under flat weights the decoy's raw name actually
+    # WINS (this is the regression the boost must overcome), so this is xfail until
+    # the boost is tuned up on the obfuscated eval.
+    real = _plain_table("tbl_real", "t_042", desc="monthly sales revenue by region")
+    decoy = _plain_table("tbl_decoy", "TotalRevenue", desc="internal audit log, do not use")
+    res = retrieve(Corpus(assets=[real, decoy]), "total revenue")
+    assert res.scores["tbl_real"] > res.scores["tbl_decoy"]
+
+
+def test_confidence_breaks_ties_toward_more_trusted_asset():
+    # Two terms with identical text score identically; the higher-confidence one
+    # must order first (mild prior — ties only).
+    low = TermAsset(id="term_low", name="vip", synonyms=[], confidence=0.5)
+    high = TermAsset(id="term_high", name="vip", synonyms=[], confidence=0.95)
+    res = retrieve(Corpus(assets=[low, high]), "vip")
+    assert res.scores["term_low"] == res.scores["term_high"]  # a genuine tie
+    assert res.term_ids[0] == "term_high"  # confidence, not id, wins the tie
+
+
+def test_vector_weight_scales_semantic_channel():
+    from governed_bi.retrieval.embedding import fuse_rankings
+
+    lexical = [("a", 9.0), ("b", 1.0)]
+    semantic = [("b", 9.0), ("a", 1.0)]
+    # Equal weight: a and b tie on rank-sum, so id breaks the tie (a first).
+    assert [i for i, _ in fuse_rankings(lexical, semantic)] == ["a", "b"]
+    # Down-weight semantic: lexical's top (a) wins outright.
+    down = fuse_rankings(lexical, semantic, weights=[1.0, 0.1])
+    assert down[0][0] == "a" and down[0][1] > down[1][1]

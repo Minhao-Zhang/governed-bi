@@ -18,6 +18,7 @@ from governed_bi.retrieval import (
     route_schemas,
     shortlist_schemas,
 )
+from governed_bi.retrieval.schema_router import list_schemas, schema_document, schema_documents
 
 
 def _col(name: str) -> Column:
@@ -104,6 +105,14 @@ def _three_schema_bridge() -> Corpus:
             join_ops_finance,
         ]
     )
+
+
+def test_schema_documents_single_pass_matches_per_schema():
+    # The O(assets) batch build must be identical to per-schema schema_document.
+    corpus = _three_schema_bridge()
+    batch = schema_documents(corpus)
+    per = {s: schema_document(corpus, s) for s in list_schemas(corpus)}
+    assert batch == per
 
 
 def test_shortlist_prefers_lexically_matching_schema():

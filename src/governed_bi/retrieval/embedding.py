@@ -50,18 +50,30 @@ def build_embedding_index(corpus: "Corpus", embedder: "Embedder") -> EmbeddingIn
     return EmbeddingIndex(dict(zip(ids, vectors)))
 
 
-def fuse_rankings(*rankings: list[tuple[str, float]], k: int = 60) -> list[tuple[str, float]]:
+def fuse_rankings(
+    *rankings: list[tuple[str, float]],
+    k: int = 60,
+    weights: list[float] | None = None,
+) -> list[tuple[str, float]]:
     """Reciprocal Rank Fusion of one or more ranked ``(id, score)`` lists.
 
-    Each list contributes ``1 / (k + rank)`` (1-based rank) per id; contributions
-    sum across lists. The raw per-channel scores are ignored (only positions
-    matter), so lexical BM25 scores and cosine similarities combine without any
-    normalization. Ties break by id ascending, so the result is deterministic.
-    ``k=60`` is the conventional RRF constant.
+    Each list contributes ``weight * 1 / (k + rank)`` (1-based rank) per id;
+    contributions sum across lists. The raw per-channel scores are ignored (only
+    positions matter), so lexical BM25 scores and cosine similarities combine
+    without any normalization. Ties break by id ascending, so the result is
+    deterministic. ``k=60`` is the conventional RRF constant.
+
+    ``weights`` (one per ranking, defaulting to all ``1.0``) tunes the channels'
+    relative pull — e.g. ``weights=[1.0, 0.5]`` trusts lexical over semantic. It
+    scales only the RRF contributions, so fusion stays normalization-free.
     """
+    if weights is None:
+        weights = [1.0] * len(rankings)
+    if len(weights) != len(rankings):
+        raise ValueError(f"weights ({len(weights)}) must match rankings ({len(rankings)})")
     scores: dict[str, float] = {}
-    for ranking in rankings:
+    for weight, ranking in zip(weights, rankings):
         for position, (doc_id, _score) in enumerate(ranking):
-            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + position + 1)
+            scores[doc_id] = scores.get(doc_id, 0.0) + weight * (1.0 / (k + position + 1))
     fused = sorted(scores.items(), key=lambda pair: (-pair[1], pair[0]))
     return fused

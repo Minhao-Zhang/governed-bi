@@ -23,7 +23,12 @@ from ..corpus.schemas import TableAsset
 from ..gateway import column_allowlist
 from ..graph import build_graph, detect_missing_join_path, plan_joins
 from ..obs import tracing_callbacks
-from ..retrieval import filter_corpus_for_retrieval, retrieve, route_schemas
+from ..retrieval import (
+    expand_schemas_via_curated_joins,
+    filter_corpus_for_retrieval,
+    retrieve,
+    shortlist_schemas,
+)
 from .answer import refusal
 from .context import assemble_context
 from .governance import (
@@ -350,9 +355,19 @@ def build_serve_rails(
         base_provenance = state["base_provenance"]
         retrieval_corpus = corpus
         if spans_schemas:
-            routed = route_schemas(corpus, question, embedder=embedder)
+            # Shortlist, then expand along curated cross-schema joins. Record both
+            # counts so a scale run can see how aggressively the shortlist prunes
+            # and how far join-expansion widens it back (silent over/under-routing
+            # would otherwise be invisible in the EX number).
+            shortlisted = shortlist_schemas(corpus, question, embedder=embedder)
+            routed = expand_schemas_via_curated_joins(corpus, set(shortlisted))
             retrieval_corpus = filter_corpus_for_retrieval(corpus, routed)
-            base_provenance = {**base_provenance, "routed_schemas": sorted(routed)}
+            base_provenance = {
+                **base_provenance,
+                "routed_schemas": sorted(routed),
+                "shortlisted_schemas": sorted(shortlisted),
+                "total_schemas": len(_corpus_schemas),
+            }
         retrieval = retrieve(retrieval_corpus, question, embedder=embedder)
         missing = detect_missing_join_path(
             corpus, graph_obj, set(retrieval.table_ids)

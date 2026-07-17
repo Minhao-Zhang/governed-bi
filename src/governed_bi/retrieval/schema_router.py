@@ -83,6 +83,35 @@ def schema_document(corpus: "Corpus", schema: str) -> str:
     return " ".join(p for p in parts if p)
 
 
+def schema_documents(corpus: "Corpus") -> dict[str, str]:
+    """All per-schema documents in a **single pass** over the corpus.
+
+    Equivalent to ``{s: schema_document(corpus, s) for s in list_schemas(corpus)}``
+    but O(assets) instead of O(schemas × assets) — it buckets each asset into its
+    schema once rather than rescanning the whole corpus per schema.
+    """
+    table_schema = {
+        a.id: a.schema for a in corpus.assets if isinstance(a, TableAsset)
+    }
+    parts: dict[str, list[str]] = {s: [s] for s in list_schemas(corpus)}
+    for a in corpus.assets:
+        if isinstance(a, TableAsset):
+            parts[a.schema].append(asset_document(a))
+        elif isinstance(a, MetricAsset):
+            s = table_schema.get(a.base_table)
+            if s in parts:
+                parts[s].append(asset_document(a))
+        elif isinstance(a, FewShotAsset):
+            if a.schema in parts:
+                parts[a.schema].append(asset_document(a))
+        elif isinstance(a, TermAsset):
+            owner = _term_binding_table(corpus, a)
+            s = table_schema.get(owner) if owner else None
+            if s in parts:
+                parts[s].append(asset_document(a))
+    return {s: " ".join(p for p in ps if p) for s, ps in parts.items()}
+
+
 def shortlist_schemas(
     corpus: "Corpus",
     question: str,
@@ -101,19 +130,22 @@ def shortlist_schemas(
     if len(schemas) == 1:
         return schemas
 
-    docs = {s: schema_document(corpus, s) for s in schemas}
+    docs = schema_documents(corpus)
     ranked = BM25Index.from_documents(docs).rank(question)
     if embedder is not None and ranked:
         from ..llm import cosine
         from .embedding import fuse_rankings
 
+        # Batch every schema document into ONE embed call (was one call per
+        # schema — O(schemas) round-trips on the hot path).
+        named = [(s, docs[s]) for s in docs if docs[s].strip()]
         q_vec = embedder.embed_one(question)
-        emb_ranked: list[tuple[str, float]] = []
-        for s, text in docs.items():
-            if not text.strip():
-                continue
-            emb_ranked.append((s, cosine(q_vec, embedder.embed_one(text))))
-        emb_ranked = [(s, sc) for s, sc in emb_ranked if sc > 0.0]
+        vecs = embedder.embed([text for _s, text in named])
+        emb_ranked = [
+            (s, sc)
+            for (s, _text), vec in zip(named, vecs)
+            if (sc := cosine(q_vec, vec)) > 0.0
+        ]
         emb_ranked.sort(key=lambda p: (-p[1], p[0]))
         if emb_ranked:
             ranked = fuse_rankings(ranked, emb_ranked)
