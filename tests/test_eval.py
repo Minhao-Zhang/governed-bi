@@ -121,6 +121,19 @@ def test_curator_arm_via_agent(corpus, gateway, settings, identity):
 # --------------------------------------------------------------------------- #
 
 
+def test_eval_refuse_gate_scoring_math():
+    """Offline: the scorer's two rates are computed independently — refusal
+    accuracy on the unanswerable set, false-refusal on the answerable set — with
+    no model. A predicate that refuses only questions containing 'weather'."""
+    answerable = ["revenue?", "customers?", "weather?"]  # 1 of 3 wrongly refused
+    unanswerable = ["staff weather", "payroll weather", "salary"]  # 2 of 3 refused
+    result = eval_refuse_gate(answerable, unanswerable, lambda q: "weather" in q)
+    assert result.false_refusal_rate == pytest.approx(1 / 3)
+    assert result.refusal_accuracy == pytest.approx(2 / 3)
+    # Empty answerable set -> 0.0 false-refusal (no division by zero).
+    assert eval_refuse_gate([], unanswerable, lambda q: True).false_refusal_rate == 0.0
+
+
 @requires_live_serve
 def test_refuse_gate_scores(corpus, gateway, settings, identity):
     answerable = [it.question for it in BEER_FACTORY_EVAL if it.answerable_by_template]

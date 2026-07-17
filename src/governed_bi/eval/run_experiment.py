@@ -58,6 +58,77 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def _validate_corpora(corpora: dict[str, Any], *, connector: Any = None) -> dict[str, dict]:
+    """CI-green gate: run ``validate_corpus`` on each arm's corpus so a corpus
+    with a reference-integrity defect can never be scored *silently*. Returns a
+    per-arm ``{finding_count, findings[:20]}`` block for ``summary.json``.
+
+    This closes the gap that let dangling term bindings ride into a scored arm
+    unnoticed: the count is now a headline field, not something buried in a
+    per-corpus manifest. ``connector`` (optional) additionally checks physical
+    existence against the live catalog.
+    """
+    from ..corpus.validate import validate_corpus
+
+    out: dict[str, dict] = {}
+    for arm_name, loaded in corpora.items():
+        findings = validate_corpus(loaded.assets, connector=connector)
+        out[arm_name] = {
+            "finding_count": len(findings),
+            "findings": [f"{f.code} [{f.asset_id}]: {f.message}" for f in findings[:20]],
+        }
+    return out
+
+
+def _collect_curator_errors(corpus_dirs: dict[str, Path]) -> dict[str, dict]:
+    """Surface swallowed curator failures at the run level.
+
+    ``_invoke_agent`` catches agent crashes and records them in the per-corpus
+    ``run_manifest.json`` (``error`` / ``fix_pass_error``) without aborting — so a
+    crashed fold or fix-pass is invisible in the headline ``summary.json``. Lift
+    the short form of any recorded error up so it is not swallowed silently. The
+    full traceback stays in the per-corpus manifest.
+    """
+    out: dict[str, dict] = {}
+    for arm, d in corpus_dirs.items():
+        mpath = d / "run_manifest.json"
+        if not mpath.exists():
+            continue
+        m = json.loads(mpath.read_text(encoding="utf-8"))
+        err, fix_err = m.get("error"), m.get("fix_pass_error")
+        if err or fix_err:
+            out[arm] = {
+                "error": (err or "").splitlines()[0] if err else None,
+                "fix_pass_error": (fix_err or "").splitlines()[0] if fix_err else None,
+            }
+    return out
+
+
+def _warn_if_curator_errors(curator_errors: dict[str, dict]) -> None:
+    for arm, block in curator_errors.items():
+        print(
+            f"\n*** WARNING: curator error on arm {arm!r} was swallowed during "
+            f"build (corpus still scored): error={block['error']!r} "
+            f"fix_pass_error={block['fix_pass_error']!r} ***"
+        )
+
+
+def _warn_if_not_green(corpus_validation: dict[str, dict]) -> None:
+    """Emit a loud, unmissable warning for any arm whose corpus is not CI-green.
+    Non-fatal (a long live run should not be lost to a stray finding), but the
+    signal is impossible to overlook — and the count is persisted in summary.json.
+    """
+    for arm_name, block in corpus_validation.items():
+        if block["finding_count"]:
+            print(
+                f"\n*** WARNING: arm {arm_name!r} corpus is NOT CI-green — "
+                f"{block['finding_count']} finding(s); scored numbers may be "
+                f"corrupted. ***"
+            )
+            for line in block["findings"]:
+                print(f"    - {line}")
+
+
 def _suspect_from_corpus(corpus_root: Path, schema: str) -> frozenset[str]:
     corpus = load_corpus(corpus_root, schema=schema)
     refs: set[str] = set()
@@ -382,6 +453,26 @@ def run_experiment(
     baseline_corpus_loaded = load_corpus(corpus_baseline, schema=db_id)
     curated_corpus_loaded = load_corpus(corpus_curated, schema=db_id)
     curated_sme_corpus_loaded = load_corpus(corpus_curated_sme, schema=db_id)
+
+    # CI-green gate: never score a corpus with reference-integrity defects
+    # silently. Count goes into summary.json; a non-green arm warns loudly.
+    corpus_validation = _validate_corpora(
+        {
+            "baseline": baseline_corpus_loaded,
+            "curated": curated_corpus_loaded,
+            "curated_sme": curated_sme_corpus_loaded,
+        },
+        connector=connector,
+    )
+    _warn_if_not_green(corpus_validation)
+
+    # Lift any swallowed curator build errors (fold / fix-pass crashes) from the
+    # per-corpus manifests into the headline so they are not invisible.
+    curator_errors = _collect_curator_errors(
+        {"curated": corpus_curated, "curated_sme": corpus_curated_sme}
+    )
+    _warn_if_curator_errors(curator_errors)
+
     if lc_model is not None:
         baseline = agent_solver(baseline_corpus_loaded, gateway, settings, identity, model=lc_model)
         curated = agent_solver(curated_corpus_loaded, gateway, settings, identity, model=lc_model)
@@ -420,6 +511,37 @@ def run_experiment(
     baseline_s = summaries["baseline"]
     curated_s = summaries["curated"]
     curated_sme_s = summaries["curated_sme"]
+
+    # Refuse-gate: BIRD test questions are all answerable, so the curated_sme
+    # arm's refusal_rate IS the false-refusal rate. The missing half — refusal
+    # *accuracy* on truly-unanswerable questions — is measured here against a
+    # cross-DB negative set (questions from other db_ids, unanswerable by
+    # construction). Needs the live model; skipped on the offline (no-model) path.
+    refuse_gate: dict[str, Any] | None = None
+    if lc_model is not None:
+        from .bird_loader import load_cross_db_unanswerable
+        from .refuse_gate import agent_refuser, eval_refuse_gate
+
+        unanswerable = load_cross_db_unanswerable(dataset_dir, db_id, k=20)
+        if unanswerable:
+            refused = agent_refuser(
+                curated_sme_corpus_loaded, gateway, settings, identity, model=lc_model
+            )
+            rg = eval_refuse_gate([], unanswerable, refused)  # accuracy on unanswerable
+            refuse_gate = {
+                "refusal_accuracy": rg.refusal_accuracy,
+                "false_refusal_rate": curated_sme_s.refusal_rate,  # answerable-set refusals
+                "n_unanswerable": len(unanswerable),
+                "n_answerable": curated_sme_s.n,
+                "note": (
+                    "refusal_accuracy on a cross-DB unanswerable set (curated_sme "
+                    "corpus); false_refusal_rate reuses the curated_sme arm's "
+                    "refusal_rate since every BIRD test question is answerable"
+                ),
+            }
+        else:
+            refuse_gate = {"skipped": "no cross-DB unanswerable questions available"}
+
     result = {
         "db_id": db_id,
         "n_train": len(train),
@@ -436,6 +558,9 @@ def run_experiment(
             ),
         },
         "ex_crosscheck": crosschecks,
+        "corpus_validation": corpus_validation,
+        "curator_errors": curator_errors,
+        "refuse_gate": refuse_gate,
         "gold_hash_self_check": gold_check,
         "serve_policy": {
             "hard_block_suspect_columns": settings.hard_block_suspect_columns,

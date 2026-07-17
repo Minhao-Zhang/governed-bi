@@ -92,3 +92,34 @@ def available_dbs(dataset_dir: Path | str, split: str = "test") -> set[str]:
         for row in _iter_rows(dataset_dir, split)
         if (db_id := row.get("db_id")) is not None
     }
+
+
+def load_cross_db_unanswerable(
+    dataset_dir: Path | str, db_id: str, *, k: int = 20, split: str = "test"
+) -> list[str]:
+    """Questions drawn from *other* ``db_id``s — a model-free negative set for the
+    refuse-gate eval (Architecture section 8, "cross-DB cases").
+
+    A question written against a different schema/domain is, by construction,
+    unanswerable for ``db_id``: the Analyst should refuse it. Round-robins across
+    the other DBs (deterministic order — no RNG) so the ``k`` sampled questions
+    span domains rather than all coming from whichever DB is first in the file.
+    """
+    by_db: dict[str, list[str]] = {}
+    for row in _iter_rows(dataset_dir, split):
+        other = row.get("db_id")
+        if other is None or other == db_id:
+            continue
+        q = row.get("question")
+        if q:
+            by_db.setdefault(other, []).append(q)
+    out: list[str] = []
+    cursors = {d: 0 for d in by_db}
+    while len(out) < k and any(cursors[d] < len(by_db[d]) for d in by_db):
+        for d in sorted(by_db):
+            if len(out) >= k:
+                break
+            if cursors[d] < len(by_db[d]):
+                out.append(by_db[d][cursors[d]])
+                cursors[d] += 1
+    return out

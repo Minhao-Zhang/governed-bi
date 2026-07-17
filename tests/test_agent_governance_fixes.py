@@ -20,10 +20,8 @@ from governed_bi.analyst.agent import (
 )
 from governed_bi.analyst.middleware import (
     AGENT_RECURSION_LIMIT,
-    GovernanceHardStop,
     GovernanceMiddleware,
 )
-from governed_bi.analyst.sqlgen import _tables_used
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 BIRD_DB = Path(__file__).resolve().parents[1] / "data" / "bird" / "beer_factory.sqlite"

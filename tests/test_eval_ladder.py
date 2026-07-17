@@ -27,6 +27,73 @@ from governed_bi.llm import StaticChatClient
 BIRD_DB = Path(__file__).resolve().parents[1] / "data" / "bird" / "beer_factory.sqlite"
 
 
+def test_validate_corpora_gate_counts_findings_per_arm():
+    """The CI-green gate must surface a per-arm finding count so a corpus with a
+    reference-integrity defect can never be scored silently (the exact hole that
+    let dangling term bindings ride into a scored arm)."""
+    from types import SimpleNamespace
+
+    from governed_bi.corpus.schemas import LogicalType, TableAsset, TermAsset, TermBinding
+    from governed_bi.eval.run_experiment import _validate_corpora
+
+    def _tbl() -> TableAsset:
+        from governed_bi.corpus.schemas import Column
+
+        return TableAsset(
+            id="tbl_demo_orders",
+            schema="demo",
+            physical_name="orders",
+            columns=[
+                Column(
+                    physical_name="amount",
+                    physical_type="DECIMAL",
+                    logical_type=LogicalType.decimal,
+                    nullable=True,
+                    is_unique=False,
+                )
+            ],
+        )
+
+    clean = SimpleNamespace(assets=[_tbl()])
+    dangling = SimpleNamespace(
+        assets=[
+            _tbl(),
+            TermAsset(
+                id="term_demo_x",
+                name="x",
+                binding=TermBinding(asset_type="column", asset_id="col_does_not_exist"),
+            ),
+        ]
+    )
+    out = _validate_corpora({"baseline": clean, "curated": dangling})
+    assert out["baseline"]["finding_count"] == 0
+    assert out["curated"]["finding_count"] == 1
+    assert "dangling-ref" in out["curated"]["findings"][0]
+
+
+def test_collect_curator_errors_lifts_swallowed_failures(tmp_path):
+    """A fix-pass crash is swallowed into the per-corpus manifest; the collector
+    lifts its short form into the headline so it is not silently lost."""
+    import json
+
+    from governed_bi.eval.run_experiment import _collect_curator_errors
+
+    clean_dir = tmp_path / "corpus_curated"
+    crashed_dir = tmp_path / "corpus_curated_sme"
+    clean_dir.mkdir()
+    crashed_dir.mkdir()
+    (clean_dir / "run_manifest.json").write_text(
+        json.dumps({"error": None, "fix_pass_error": None}), encoding="utf-8"
+    )
+    (crashed_dir / "run_manifest.json").write_text(
+        json.dumps({"error": None, "fix_pass_error": "KeyError: 'x'\n  File ...\n  ..."}),
+        encoding="utf-8",
+    )
+    out = _collect_curator_errors({"curated": clean_dir, "curated_sme": crashed_dir})
+    assert "curated" not in out  # no error -> not surfaced
+    assert out["curated_sme"]["fix_pass_error"] == "KeyError: 'x'"  # first line only
+
+
 @pytest.fixture
 def bird_connector():
     if not BIRD_DB.exists():

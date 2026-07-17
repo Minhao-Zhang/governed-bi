@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from governed_bi.eval import EvalItem, available_dbs, load_bird_items
+from governed_bi.eval import available_dbs, load_bird_items
+from governed_bi.eval.bird_loader import load_cross_db_unanswerable
 
 # Three rows spanning two db_ids, each carrying the real BIRD key set.
 _ROWS = [
@@ -86,6 +87,18 @@ def test_gold_sql_field_selects_sql_rename(dataset_dir: Path):
         "SELECT SUM(PurchasePrice) FROM decoy",
         "SELECT COUNT(*) FROM decoy_c",
     ]
+
+
+def test_cross_db_unanswerable_pulls_only_other_dbs(dataset_dir: Path):
+    """The refuse-gate negative set must exclude the target db's questions and
+    draw from the others (unanswerable by construction)."""
+    qs = load_cross_db_unanswerable(dataset_dir, "beer_factory", k=10)
+    assert qs == ["How many movies are rated?"]  # only the movie_platform row
+    # And the reverse: target movie_platform -> the two beer_factory questions.
+    other = load_cross_db_unanswerable(dataset_dir, "movie_platform", k=10)
+    assert set(other) == {"What is the total revenue?", "How many customers are there?"}
+    # k caps the result.
+    assert len(load_cross_db_unanswerable(dataset_dir, "movie_platform", k=1)) == 1
 
 
 
