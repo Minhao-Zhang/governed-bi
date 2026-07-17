@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>治理式 BI · 工程缺口审计 2026-07-16</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@500;700;900&family=Noto+Sans+SC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0b0d10; --bg-2:#101318; --panel:#141820; --panel-2:#171c25;
+    --ink:#ece9e1; --ink-dim:#b7bcc4; --muted:#7f858f; --faint:#565c66;
+    --line:rgba(255,255,255,.075); --line-2:rgba(255,255,255,.13);
+    --accent:#e0a24a; --accent-soft:#f0c887; --ok:#4fb6a2;
+    --high:#e15561; --med:#e0a24a; --low:#6f95cf;
+    --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+    --serif:'Noto Serif SC',Georgia,serif;
+    --sans:'Noto Sans SC',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    font-family:var(--sans); background:var(--bg); color:var(--ink);
+    line-height:1.75; font-weight:300; -webkit-font-smoothing:antialiased;
+    letter-spacing:.01em; overflow-x:hidden;
+  }
+  /* atmospheric layers */
+  body::before{
+    content:""; position:fixed; inset:0; z-index:-2;
+    background:
+      radial-gradient(1100px 620px at 78% -8%, rgba(224,162,74,.11), transparent 60%),
+      radial-gradient(900px 700px at -6% 106%, rgba(111,149,207,.08), transparent 55%),
+      linear-gradient(180deg,#0b0d10,#0a0c0f 60%,#090b0e);
+  }
+  body::after{
+    content:""; position:fixed; inset:0; z-index:-1; pointer-events:none; opacity:.5;
+    background-image:
+      linear-gradient(var(--line) 1px,transparent 1px),
+      linear-gradient(90deg,var(--line) 1px,transparent 1px);
+    background-size:64px 64px;
+    -webkit-mask-image:radial-gradient(ellipse 120% 90% at 50% 0%,#000 30%,transparent 78%);
+    mask-image:radial-gradient(ellipse 120% 90% at 50% 0%,#000 30%,transparent 78%);
+  }
+  .grain{position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.045;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");}
+
+  .wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+
+  /* ---------- masthead ---------- */
+  header{padding:88px 0 46px;border-bottom:1px solid var(--line-2);position:relative}
+  .kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.42em;
+    text-transform:uppercase;color:var(--accent);font-weight:500}
+  .kicker .dot{display:inline-block;width:6px;height:6px;border-radius:50%;
+    background:var(--accent);margin-right:12px;vertical-align:middle;
+    box-shadow:0 0 14px 2px rgba(224,162,74,.7)}
+  h1{font-family:var(--serif);font-weight:900;color:var(--ink);
+    font-size:clamp(38px,6.4vw,74px);line-height:1.04;letter-spacing:.01em;
+    margin:24px 0 20px}
+  h1 .em{color:var(--accent);font-style:normal}
+  .lede{font-size:17px;color:var(--ink-dim);max-width:60ch;font-weight:300}
+  .meta{margin-top:34px;display:flex;flex-wrap:wrap;gap:10px 28px;
+    font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .meta b{color:var(--ink-dim);font-weight:500}
+
+  /* ---------- summary strip ---------- */
+  .strip{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;
+    background:var(--line-2);border:1px solid var(--line-2);
+    margin:52px 0 10px;border-radius:3px;overflow:hidden}
+  .stat{background:var(--panel);padding:26px 24px}
+  .stat .n{font-family:var(--serif);font-weight:900;font-size:44px;line-height:1;color:var(--ink)}
+  .stat .n.amber{color:var(--accent)} .stat .n.red{color:var(--high)}
+  .stat .l{font-size:12.5px;color:var(--muted);margin-top:12px;letter-spacing:.02em}
+
+  /* ---------- controls ---------- */
+  .controls{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    margin:44px 0 8px;padding-bottom:18px;border-bottom:1px solid var(--line)}
+  .controls .lbl{font-family:var(--mono);font-size:11px;letter-spacing:.24em;
+    text-transform:uppercase;color:var(--faint)}
+  .seg{display:flex;border:1px solid var(--line-2);border-radius:999px;overflow:hidden}
+  .seg button{font-family:var(--mono);font-size:12.5px;background:transparent;
+    color:var(--muted);border:0;padding:9px 18px;cursor:pointer;transition:.22s}
+  .seg button:hover{color:var(--ink)}
+  .seg button.on{background:var(--accent);color:#1a1206;font-weight:700}
+  .legend{margin-left:auto;display:flex;gap:18px;font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .legend i{width:9px;height:9px;border-radius:2px;display:inline-block}
+  .lg-high{background:var(--high)} .lg-med{background:var(--med)} .lg-low{background:var(--low)}
+
+  /* ---------- theme section ---------- */
+  section{margin-top:64px}
+  .sec-head{display:flex;align-items:baseline;gap:18px;margin-bottom:8px}
+  .sec-head .idx{font-family:var(--mono);font-size:13px;color:var(--accent);font-weight:700}
+  .sec-head h2{font-family:var(--serif);font-weight:700;font-size:27px;color:var(--ink);letter-spacing:.01em}
+  .sec-sub{color:var(--muted);font-size:14px;margin-bottom:26px;padding-left:34px;max-width:64ch}
+
+  /* ---------- gap card ---------- */
+  .card{position:relative;background:linear-gradient(180deg,var(--panel),var(--bg-2));
+    border:1px solid var(--line);border-left-width:3px;border-radius:4px;
+    padding:26px 30px 26px 32px;margin-bottom:16px;
+    opacity:0;transform:translateY(18px);transition:opacity .7s ease,transform .7s ease,border-color .3s}
+  .card.show{opacity:1;transform:none}
+  .card:hover{border-color:var(--line-2)}
+  .card[data-sev=high]{border-left-color:var(--high)}
+  .card[data-sev=med]{border-left-color:var(--med)}
+  .card[data-sev=low]{border-left-color:var(--low)}
+  .card.hide{display:none}
+
+  .c-top{display:flex;align-items:flex-start;gap:16px;margin-bottom:14px}
+  .c-num{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--faint);
+    border:1px solid var(--line-2);border-radius:3px;padding:4px 8px;flex:none;margin-top:2px}
+  .c-title{font-family:var(--serif);font-weight:700;font-size:20px;color:var(--ink);line-height:1.35}
+  .chips{margin-left:auto;display:flex;gap:7px;flex-wrap:wrap;flex:none;padding-top:3px}
+  .chip{font-family:var(--mono);font-size:10.5px;letter-spacing:.04em;padding:4px 9px;
+    border-radius:999px;border:1px solid var(--line-2);color:var(--ink-dim);white-space:nowrap}
+  .chip.sev-high{background:rgba(225,85,97,.13);border-color:rgba(225,85,97,.4);color:#f2a0a7}
+  .chip.sev-med{background:rgba(224,162,74,.13);border-color:rgba(224,162,74,.4);color:var(--accent-soft)}
+  .chip.sev-low{background:rgba(111,149,207,.13);border-color:rgba(111,149,207,.4);color:#a7c0e6}
+  .chip.off{background:rgba(79,182,162,.12);border-color:rgba(79,182,162,.38);color:#8fd7c8}
+  .chip.env{background:rgba(127,133,143,.12);color:var(--muted)}
+  .chip.doc{border-style:dashed;color:var(--muted)}
+
+  .c-body{padding-left:0}
+  .row{display:grid;grid-template-columns:76px 1fr;gap:14px;padding:9px 0;
+    border-top:1px solid var(--line);font-size:14.5px}
+  .row:first-of-type{border-top:0}
+  .row .k{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--faint);padding-top:4px}
+  .row .v{color:var(--ink-dim);font-weight:300}
+  .row.fix .v{color:var(--ink)}
+  code,.ev{font-family:var(--mono);font-size:12.5px;color:var(--accent-soft);
+    background:rgba(224,162,74,.08);padding:1.5px 6px;border-radius:3px;
+    border:1px solid rgba(224,162,74,.14);word-break:break-all}
+  .ev-plain{font-family:var(--mono);font-size:12px;color:var(--muted);background:transparent;border:0;padding:0}
+  mark{background:transparent;color:var(--ok);font-weight:500}
+
+  /* ---------- footer ---------- */
+  footer{margin:78px 0 60px;padding-top:40px;border-top:1px solid var(--line-2)}
+  .rec{background:linear-gradient(135deg,rgba(224,162,74,.09),rgba(224,162,74,.02));
+    border:1px solid rgba(224,162,74,.28);border-radius:5px;padding:30px 32px}
+  .rec .tag{font-family:var(--mono);font-size:11px;letter-spacing:.28em;text-transform:uppercase;color:var(--accent)}
+  .rec h3{font-family:var(--serif);font-weight:700;font-size:23px;margin:12px 0 12px;color:var(--ink)}
+  .rec p{color:var(--ink-dim);font-size:15px;max-width:70ch}
+  .rec .bundle{margin-top:18px;display:flex;gap:10px;flex-wrap:wrap}
+  .rec .bundle span{font-family:var(--mono);font-size:12px;padding:7px 13px;border-radius:4px;
+    background:rgba(255,255,255,.04);border:1px solid var(--line-2);color:var(--ink-dim)}
+  .rec .bundle span b{color:var(--accent);font-weight:700}
+  .sig{margin-top:32px;font-family:var(--mono);font-size:11.5px;color:var(--faint);
+    display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+
+  @media(max-width:720px){
+    .strip{grid-template-columns:repeat(2,1fr)}
+    .row{grid-template-columns:1fr;gap:3px}
+    .chips{margin-left:0;width:100%}
+    .c-top{flex-wrap:wrap}
+    .legend{width:100%;margin-left:0}
+  }
+</style>
+</head>
+<body>
+<div class="grain"></div>
+
+<div class="wrap">
+  <header>
+    <div class="kicker"><span class="dot"></span>Governed-BI · Engineering Gap Audit</div>
+    <h1>工程缺口审计<br><span class="em">语料完整性</span>与静默失败</h1>
+    <p class="lede">一次以工程视角、而非评测策略视角的盘点。核心结论:今天修掉的悬空绑定不是孤例,而是一条"语料完整性靠随机 agent 兜底、失败又被静默吞掉"的系统性接缝的症状。以下 13 项按主题归类,并标注哪些可在测试环境就绪前离线推进。</p>
+    <div class="meta">
+      <span><b>日期</b> 2026-07-16</span>
+      <span><b>范围</b> curator / analyst / eval 管线</span>
+      <span><b>快照</b> commit 5228f87 (main)</span>
+      <span><b>规模</b> 77 源文件 · 44 测试</span>
+    </div>
+  </header>
+
+  <div class="strip">
+    <div class="stat"><div class="n">13</div><div class="l">已识别缺口</div></div>
+    <div class="stat"><div class="n amber">8</div><div class="l">可离线推进</div></div>
+    <div class="stat"><div class="n red">4</div><div class="l">高危</div></div>
+    <div class="stat"><div class="n">5</div><div class="l">主题分区</div></div>
+  </div>
+
+  <div class="controls">
+    <span class="lbl">筛选</span>
+    <div class="seg" id="seg">
+      <button class="on" data-f="all">全部 (13)</button>
+      <button data-f="off">仅可离线 (8)</button>
+      <button data-f="high">仅高危 (4)</button>
+    </div>
+    <div class="legend">
+      <span><i class="lg-high"></i>高</span>
+      <span><i class="lg-med"></i>中</span>
+      <span><i class="lg-low"></i>低</span>
+    </div>
+  </div>
+
+  <!-- ===================== THEME A ===================== -->
+  <section>
+    <div class="sec-head"><span class="idx">A</span><h2>语料完整性:强度不足,过度依赖随机性</h2></div>
+    <p class="sec-sub">引用完整性本是可机器校验、可机器修复的问题,当前却在打分前不校验、修复又交给随机 agent。这是今天那个 bug 的真正温床。</p>
+
+    <div class="card" data-sev="high" data-off="1">
+      <div class="c-top">
+        <span class="c-num">01</span>
+        <span class="c-title">打分前缺少 CI 绿灯门禁</span>
+        <span class="chips"><span class="chip sev-high">高危</span><span class="chip off">可离线</span></span>
+      </div>
+      <div class="c-body">
+        <div class="row"><span class="k">证据</span><span class="v"><span class="ev-plain">src/governed_bi/eval/run_experiment.py</span> — 全程未调用 <code>validate_corpus</code></span></div>
+        <div class="row"><span class="k">现象</span><span class="v"><code>run_experiment</code> 构建 baseline / curated / curated_sme 三臂语料后直接打分,从不在打分前对语料跑一次校验。这正是那 12 条悬空 term 绑定能无声混入被打分 A3 语料的通道。</span></div>
+        <div class="row"><span class="k">影响</span><span class="v">带引用完整性缺陷的语料会照常产出 EX 数字,且没有任何信号——headline 数字可能被语料 bug 污染而无人察觉。</span></div>
+        <div class="row fix"><span class="k">建议</span><span class="v">打分前逐臂调用 <code>validate_corpus</code>,把 <code>validate_finding_count</code> 写进 <code>summary.json</code>;非绿灯时 fail-closed 或显著告警。用 beer_factory 的 SQLite 夹具即可离线单测。</span></div>
+      </div>
+    </div>
+
+    <div class="card" data-sev="med" data-off="1">
+      <div class="c-top">
+        <span class="c-num">02</span>
+        <span class="c-title">确定性引用修复只覆盖 term 绑定</span>
+        <span class="chips"><span class="chip sev-med">中</span><span class="chip off">可离线</span></span>
+      </div>
+      <div class="c-body">
+        <div class="row"><span class="k">证据</span><span class="v"><code>asset_bag.repair_term_bindings()</code>(今日新增,仅处理 <code>term.binding</code>)</span></div>
+        <div class="row"><span class="k">现象</span><span class="v">其余可确定性修复的悬空引用——<code>column.references</code>、<code>metric.base_table</code>、join 两端、<code>rule.scope</code>——仍旧交给随机的 agent fix-pass 去猜。</span></div>
+        <div class="row"><span class="k">影响</span><span class="v">只有 term 一类被兜住;其余类型一旦悬空,又会落回那条会崩溃、会造重复的随机修复路径。</span></div>
+        <div class="row fix"><span class="k">建议</span><span class="v">抽象出通用 <code>repair_references()</code>,把所有可解析的引用类型都在代码里确定性修复,让整个 fix-pass 摆脱随机性。</span></div>
+      </div>
+    </div>
+
+    <div class="card" data-sev="med" data-off="1">
+      <div class="c-top">
+        <span class="c-num">03</span>
+        <span class="c-title">join 的 on 子句在离线阶段从不校验</span>
+        <span class="chips"><span class="chip sev-med">中偏高</span><span class="chip off">可离线</span></span>
+      </div>
+      <div class="c-body">
+        <div class="row"><span class="k">证据</span><span class="v"><code>corpus/validate.py</code> — on 列存在性注释为"deferred to the eval harness / 需活库"</span></div>
+        <div class="row"><span class="k">现象</span><span class="v">validate 只校验 join 两端的 id,不校验 <code>on</code> 子句引用的列是否属于这两张表;<code>on</code> 是一段原始 SQL,离线从不解析。</span></div>
+        <div class="row"><span class="k">影响</span><span class="v">一个 <code>on</code> 列写错或幻觉的 join 会离线 CI 全绿,只在服务期暴露——或更糟,静默错连。</span></div>
+        <div class="row fix"><span class="k">建议</span><span class="v"><code>sqlglot</code> 已是依赖,用它解析 <code>on</code>,校验列归属于 join 的两张表。无需活库。</span></div>
+      </div>
+    </div>
+
+    <div class="card" data-sev="med" data-off="1">
+      <div class="c-top">
+        <span class="c-num">04</span>
+        <span class="c-title">写工具按 slug(name) 创建,无法按 id 更新</span>
+        <span class="chips"><span class="chip sev-med">中</span><span class="chip off">可离线 · 改动较大</span></span>
+      </div>
+      <div class="c-body">
+        <div class="row"><span class="k">证据</span><span class="v"><code>asset_bag.upsert_term / upsert_metric …</code> — <code>tid = f"term_{schema}_{slug(name)}"</code></span></div>
+        <div class="row"><span class="k">现象</span><span class="v"><code>upsert_*</code> 用 <code>slug(name)</code> 当键;agent 被要求"修复资产 X"时会新建一个,而非编辑 X。</span></div>
+        <div class="row"><span class="k">影响</span><span class="v">这正是 6 → 12 翻倍的机制。工具接口缺少按 id 寻址的更新语义。</span></div>
+        <div class="row fix"><span class="k">建议</span><span class="v">增加按 <code>asset_id</code> 寻址的更新路径;或让 <code>upsert</code> 在传入既有 id 时执行原地更新。</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== THEME B ===================== -->
+  <section>
+    <div class="sec-head"><span class="idx">B</span><h2>静默失败 / fail-open</h2></div>
+    <p class="sec-sub">失败被降级为字符串、run 照常继续。单独看每处都合理,叠加缺口 #1 后就成了"坏语料被静默打分"的完整链条。</p>
+
+    <div class="card" data-sev="high" data-off="1">
+      <div class="c-top">
+        <span class="c-num">05</span>
+        <span class="c-title">_invoke_agent 吞掉 agent 崩溃</span>
+        <span class="chips"><span class="chip sev-high">高危</span><span class="chip off">可离线</span></span>
+      </div>
+      <div class="c-body">
+        <div class="row"><span class="k">证据</span><span class="v"><code>curator/pipeline.py:253</code> — <code>except Exception</code> → 记为字符串,run 继续</span></div>
+        <div class="row"><span class="k">现象</span><span class="v"><code>agent.invoke</code> 的任何异常被捕获、记进 <code>fix_pass_error</code>,run 照常往下走。与缺口 #1 叠加,fix-pass 崩溃或空跑都不会阻断流程。</span></div>
+        <div class="row"><span class="k">影响</span><span class="v">失败不可见——一个静默空跑的 fix-pass 会留下坏语料被打分。</span></div>
+        <div class="row fix"><span class="k">建议</span><span class="v">与 #1 的绿灯门禁配合;崩溃 / 空跑要么 fail-closed,要么升级为显式的 run 级信号,而非只写进一个易被忽略的字段。</span></div>
+      </div>
+    </div>
+
+    <div class="card" data-sev="med" data-off="1">
+      <div class="c-top">
+        <span class="c-num">06</span>
+        <span class="c-title">fold 与 fix-pass 复用同一 agent 实例</span>
+        <span class="chips"><span class="chip sev-med">中</span><span class="chip off">可离线</span></span>
+      </div>
+      <div class="c-body">
+        <div class="row"><span class="k">证据</span><span class="v"><code>pipeline.py:549 / 720</code> — <code>_validate_fix_pass(agent if agent_ran …)</code></span></div>
+        <div class="row"><span class="k">现象</span><span class="v">Phase B 的 fold 与随后的 fix-pass 复用同一个已编译 agent,跨两次 <code>invoke</code> 的共享状态脆弱;最初那个 KeyError 就与这种复用相关。</span></div>
+        <div class="row"><span class="k">影响</span><span class="v">难以复现的随机崩溃;状态耦合让 fix-pass 的行为依赖 fold 留下的痕迹。</span></div>
+        <div class="row fix"><span class="k">建议</span><span class="v">每次 <code>invoke</code> 重建 agent,或显式隔离两次调用的状态。</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== THEME C ===================== -->
+  <section>
+    <div class="sec-head"><span class="idx">C</span><h2>对抗式校验只是桩</h2></div>
+    <p class="sec-sub">文档里的"独立 LLM 对手"是设计的一道防线,代码里还是空的。</p>
+
+    <div class="card" data-sev="med" data-off="0">
+      <div class="c-top">
+        <span class="c-num">07</span>
+        <span class="c-title">refute() 是 NotImplementedError</span>
+        <span class="chips"><span class="chip sev-med">中</span><span class="chip env">需测试环境</span></span>
+      </div>
+      <div class="c-body">
+        <div class="row"><span class="k">证据</span><span class="v"><code>curator/adversary.py:104</code> — <code>refute() raise NotImplementedError</code></span></div>
+        <div class="row"><span class="k">现象</span><span class="v">设计里的"独立 LLM 对手 / refute-first"未落地,管线只跑结构化的 <code>review()</code> 信号。</span></div>
+        <div class="row"><span class="k">影响</span><span class="v">文档化的对抗式校验与实现之间存在缺口;curated 资产缺了"独立反驳"这道防线。</span></div>
+        <div class="row fix"><span class="k">建议</span><span class="v">落地 refute-first agent(需活模型);在此之前,文档应明确 <code>review()</code> 是当前唯一在跑的信号。</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== THEME D ===================== -->
+  <section>
+    <div class="sec-head"><span class="idx">D</span><h2>评测台的工程缺口</h2></div>
+    <p class="sec-sub">这些多与规模跑的可信度相关,部分已在文档追踪(标记 <span style="font-family:var(--mono);font-size:11px;color:var(--muted)">◇ 已追踪</span>),但仍是工程上未闭合的项。</p>
+
+    <div class="card" data-sev="med" data-off="0">
+      <div class="c-top">
+        <span class="c-num">08</span>
+        <span class="c-title">grader 自检仅在 5 行样本上验证</span>
+        <span class="chips"><span class="chip sev-med">中</span><span class="chip env">需环境</span></span>
+      </div>
+      <div class="c-body">
+        <div class="row"><span class="k">证据</span><span class="v"><code>run_experiment.py:264</code> — <code>sample=min(5, len(test))</code></span></div>
+        <div class="row"><span class="k">现象</span><span class="v">gold-hash 自检只在 5 行样本上与参考实现比对,不是全量 head-to-head。</span></div>
+        <div class="row"><span class="k">影响</span><span class="v">normalizer 漂移 / 边角用例可能逃过自检。</span></div>
+        <div class="row fix"><span class="k">建议</span><span class="v">扩大抽样,或做一次全量对齐运行作为基线。</span></div>
+      </div>
+    </div>
+
+    <div class="card" data-sev="high" data-off="0">
+      <div class="c-top">
+        <span class="c-num">09</span>
+        <span class="c-title">multi_schema=True 端到端从未在评测台跑通</span>
+        <span class="chips"><span class="chip sev-high">高危</span><span class="chip env">布线可离线 · 验证需环境</span><span class="chip doc">◇ 已追踪</span></span>
+      </div>
+      <div class="c-body">
+        <div class="row"><span class="k">证据</span><span class="v"><code>run_experiment.py:240-246</code> 硬编码 <code>multi_schema=False</code>;<span class="ev-plain">docs/plans/schema-qualification-scale-risk.md</span></span></div>
+        <div class="row"><span class="k">现象</span><span class="v">69-schema 规模跑属于 <code>multi_schema=True</code>,而评测台从未在该模式下端到端跑过;mode-flag 从 <code>DataSourceConfig</code> → guardrail → context 的线路未验证(guardrail 单元逻辑已测,评测台布线未测)。</span></div>
+        <div class="row"><span class="k">影响</span><span class="v">任一环节漏接会表现为静默的 L4 拒绝,拉低 EX,却被误读为模型 / 语料弱点——恰好污染规模跑的 headline。</span></div>
+        <div class="row fix"><span class="k">建议</span><span class="v">给 <code>summary.json</code> 加"因限定不匹配而拒绝"的计数器;先跑 2-3 schema 预检,再上全量 69。</span></div>
+      </div>
+    </div>
+
+    <div class="card" data-sev="med" data-off="0">
+      <div class="c-top">
+        <span class="c-num">10</span>
+        <span class="c-title">拒答门禁的误拒率无法度量</span>
+        <span class="chips"><span class="chip sev-med">中</span><span class="chip env">需构造负样本</span><span class="chip doc">◇ 已追踪</span></span>
+      </div>
+      <div class="c-body">
+        <div class="row"><span class="k">证据</span><span class="v"><span class="ev-plain">eval-ladder-results.md</span> · 已知限制(BIRD 每题皆可答)</span></div>
+        <div class="row"><span class="k">现象</span><span class="v">所有 BIRD 题都可答,评测从不触发拒答,误拒率(false-refusal)无从测量。</span></div>
+        <div class="row"><span class="k">影响</span><span class="v">拒答的召回可测、精度不可测——一半的门禁质量是盲区。</span></div>
+        <div class="row fix"><span class="k">建议</span><span class="v">构造 held-out 不可答集(跨库 + 移除覆盖 + 手写域外),度量拒答准确率与误拒率。</span></div>
+      </div>
+    </div>
+
+    <div class="card" data-sev="high" data-off="0">
+      <div class="c-top">
+        <span class="c-num">11</span>
+        <span class="c-title">全流程单一随机种子,无方差</span>
+        <span class="chips"><span class="chip sev-high">高危</span><span class="chip env">需环境</span><span class="chip doc">◇ 已追踪</span></span>
+      </div>
+      <div class="c-body">
+        <div class="row"><span class="k">证据</span><span class="v"><span class="ev-plain">eval-ladder-results.md</span> · Threats to validity(single seed)</span></div>
+        <div class="row"><span class="k">现象</span><span class="v">所有臂都只有单一种子;curated 虽是确定性代码,其 deep-agent 探索却 run-to-run 会变。</span></div>
+        <div class="row"><span class="k">影响</span><span class="v">任何 delta 只是方向性、不可下结论;v5 里"SME 首次抬升 EX"尤其需要复现才能站住。</span></div>
+        <div class="row fix"><span class="k">建议</span><span class="v">≥3 种子跑,报告 mean±spread,再引用任何数字。</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== THEME E ===================== -->
+  <section>
+    <div class="sec-head"><span class="idx">E</span><h2>卫生 / 小项</h2></div>
+    <p class="sec-sub">不紧急,但会持续制造噪音或掩盖真实 bug。</p>
+
+    <div class="card" data-sev="low" data-off="1">
+      <div class="c-top">
+        <span class="c-num">12</span>
+        <span class="c-title">68 处宽泛 except 吞异常</span>
+        <span class="chips"><span class="chip sev-low">低偏中</span><span class="chip off">可离线</span></span>
+      </div>
+      <div class="c-body">
+        <div class="row"><span class="k">证据</span><span class="v"><code>src/</code> 下 68 处 <code>except Exception</code> / 裸 <code>except</code></span></div>
+        <div class="row"><span class="k">现象</span><span class="v">部分是合理的(如 <code>run_probe_query</code> 把异常转成给模型的 <code>error:</code> 字符串),但这种模式整体上会掩盖 bug。</span></div>
+        <div class="row"><span class="k">影响</span><span class="v">真实 bug 被降级为字符串,难以定位。</span></div>
+        <div class="row fix"><span class="k">建议</span><span class="v">审计 curator / eval 路径上的宽泛捕获,收窄异常类型,或至少记录结构化上下文。</span></div>
+      </div>
+    </div>
+
+    <div class="card" data-sev="low" data-off="1">
+      <div class="c-top">
+        <span class="c-num">13</span>
+        <span class="c-title">已删除模块的残留字节码</span>
+        <span class="chips"><span class="chip sev-low">低</span><span class="chip off">可离线</span></span>
+      </div>
+      <div class="c-body">
+        <div class="row"><span class="k">证据</span><span class="v"><code>__pycache__/gold.cpython-313.pyc</code>(<code>gold.py</code> 已删)</span></div>
+        <div class="row"><span class="k">现象</span><span class="v">已退休模块留下的 <code>.pyc</code> 残留。</span></div>
+        <div class="row"><span class="k">影响</span><span class="v">纯卫生问题;可能误导 grep / 导入。</span></div>
+        <div class="row fix"><span class="k">建议</span><span class="v">清理 <code>__pycache__</code>;确认 <code>.gitignore</code> 已覆盖。</span></div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="rec">
+      <div class="tag">推荐先做 · 离线加固包</div>
+      <h3>语料完整性:离线、确定性、绝不静默跳过</h3>
+      <p>把 <b>#1 + #2 + #3</b> 作为一个连贯的离线加固包一起做:打分前强制校验、把确定性修复扩展到所有引用类型、离线校验 join 的 on 子句。这三项直接封住今天那个悬空绑定 bug 暴露的接缝,且完全不依赖测试环境——正好填满等待环境就绪的窗口期。</p>
+      <div class="bundle">
+        <span><b>#1</b> CI 绿灯门禁</span>
+        <span><b>#2</b> 通用引用修复</span>
+        <span><b>#3</b> join on 子句离线校验</span>
+      </div>
+    </div>
+    <div class="sig">
+      <span>治理式 BI · 工程缺口审计</span>
+      <span>2026-07-16 · commit 5228f87 · 快照非结论,随代码演进</span>
+    </div>
+  </footer>
+</div>
+
+<script>
+  // staggered reveal
+  const cards=[...document.querySelectorAll('.card')];
+  const io=new IntersectionObserver((es)=>{
+    es.forEach(e=>{if(e.isIntersecting){
+      const i=cards.filter(c=>!c.classList.contains('hide')).indexOf(e.target);
+      e.target.style.transitionDelay=Math.min(i,6)*55+'ms';
+      e.target.classList.add('show'); io.unobserve(e.target);
+    }});
+  },{threshold:.12});
+  cards.forEach(c=>io.observe(c));
+
+  // filter
+  const seg=document.getElementById('seg');
+  seg.addEventListener('click',e=>{
+    const b=e.target.closest('button'); if(!b)return;
+    [...seg.children].forEach(x=>x.classList.remove('on')); b.classList.add('on');
+    const f=b.dataset.f;
+    cards.forEach(c=>{
+      const show = f==='all' || (f==='off'&&c.dataset.off==='1') || (f==='high'&&c.dataset.sev==='high');
+      c.classList.toggle('hide',!show);
+      if(show && !c.classList.contains('show')) c.classList.add('show');
+    });
+  });
+</script>
+</body>
+</html>
