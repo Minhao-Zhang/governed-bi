@@ -266,6 +266,64 @@ class AssetBag:
         self.metrics[mid] = asset
         return f"ok: wrote {mid}"
 
+    def _column_id_index(self) -> dict[str, str]:
+        """Map every spelling the model plausibly emits for a column to its
+        canonical loader-derived id.
+
+        The model does not know the ``col_<table>_<column>`` derivation
+        (``ids.derive_column_id``); left to free text it guesses
+        ``<table_id>.<column>`` or ``<physical_table>.<column>``. Coercing those
+        here is what keeps ``term.binding.asset_id`` from dangling.
+        """
+        from ..corpus.ids import derive_column_id
+
+        index: dict[str, str] = {}
+        for t in self.tables.values():
+            for c in t.columns:
+                cid = derive_column_id(t.id, c.physical_name)
+                index[cid] = cid  # canonical id
+                index[f"{t.id}.{c.physical_name}"] = cid  # tbl_x.col
+                index[f"{t.physical_name}.{c.physical_name}"] = cid  # physical.col
+        return index
+
+    def _resolve_binding(
+        self, asset_type: str, asset_id: str
+    ) -> tuple[str | None, str | None]:
+        """Resolve/coerce a term binding to a real asset id. Returns
+        ``(resolved_id, error)``; ``error`` is a ready-to-return string when the
+        binding cannot be made to resolve. Never persists a dangling reference."""
+        if asset_type == "column":
+            index = self._column_id_index()
+            if asset_id in index:
+                return index[asset_id], None
+            sample = sorted(set(index.values()))[:8]
+            return None, (
+                f"error: binding column {asset_id!r} does not resolve. Pass a "
+                f"physical 'table.column' or a col_* id, e.g. {sample}"
+            )
+        if asset_type == "table":
+            by_id = {t.id for t in self.tables.values()}
+            by_physical = {t.physical_name: t.id for t in self.tables.values()}
+            if asset_id in by_id:
+                return asset_id, None
+            if asset_id in by_physical:
+                return by_physical[asset_id], None
+            return None, (
+                f"error: binding table {asset_id!r} does not resolve; "
+                f"known={sorted(by_physical)}"
+            )
+        if asset_type == "metric":
+            if asset_id in self.metrics:
+                return asset_id, None
+            return None, (
+                f"error: binding metric {asset_id!r} does not resolve; "
+                f"known={sorted(self.metrics)}"
+            )
+        return None, (
+            f"error: invalid binding_asset_type={asset_type!r} "
+            "(expected column/table/metric)"
+        )
+
     def upsert_term(
         self,
         name: str,
@@ -279,7 +337,10 @@ class AssetBag:
         tid = f"term_{_slug(self.schema)}_{_slug(name)}"
         binding = None
         if binding_asset_id:
-            binding = {"asset_type": binding_asset_type, "asset_id": binding_asset_id}
+            resolved, err = self._resolve_binding(binding_asset_type, binding_asset_id)
+            if err is not None:
+                return err
+            binding = {"asset_type": binding_asset_type, "asset_id": resolved}
         try:
             asset = TermAsset.model_validate(
                 {
@@ -565,6 +626,33 @@ class AssetBag:
             if msg.startswith("ok:"):
                 n += 1
         return n
+
+    def repair_term_bindings(self) -> int:
+        """Deterministically re-resolve every term binding to its canonical id.
+
+        Reference integrity is machine-checkable, so it is machine-fixable: a
+        coercible ``term.binding.asset_id`` (e.g. ``tbl_x.col`` /
+        ``physical.col``) is rewritten to the loader-derived id in place. Bindings
+        that cannot be resolved at all are left untouched (a genuine gap for the
+        agent / a human, not a formatting slip). Returns the number rewritten.
+        Runs before the agent fix-pass so a stochastic LLM is never handed a
+        deterministic reference problem.
+        """
+        repaired = 0
+        for tid, term in list(self.terms.items()):
+            if term.binding is None:
+                continue
+            resolved, err = self._resolve_binding(
+                term.binding.asset_type, term.binding.asset_id
+            )
+            if err is not None or resolved is None:
+                continue  # unresolvable -> leave for the agent / human
+            if resolved == term.binding.asset_id:
+                continue  # already canonical
+            new_binding = term.binding.model_copy(update={"asset_id": resolved})
+            self.terms[tid] = term.model_copy(update={"binding": new_binding})
+            repaired += 1
+        return repaired
 
     def suspect_count(self) -> int:
         n = 0

@@ -52,10 +52,14 @@ regression the single-DB eval can't catch, because it never exercises
 ## Not the curated_sme fix-pass crash
 
 Worth stating explicitly, since both surfaced in the same investigation: the
-`curated_sme` fix-pass `KeyError: 'restaurant'` is a hard, uncaught exception
+`curated_sme` fix-pass `KeyError: 'restaurant'` was a hard exception raised
 inside `agent.invoke` during the curator's Phase-B fix-pass (caught by
-`_invoke_agent`, [pipeline.py:253](../../src/governed_bi/curator/pipeline.py#L253);
-the full traceback is now captured there rather than just the class + message).
+`_invoke_agent`, [pipeline.py:253](../../src/governed_bi/curator/pipeline.py#L253)).
+**Resolved 2026-07-16** — it was an unguarded `read_corpus` lookup on an unknown
+table name (fixed `31c9018`), and the dangling term bindings it left unrepaired
+are now prevented at the source (`upsert_term` binding validation) and
+deterministically repaired before the agent fix-pass. See
+[eval-ladder-results.md §Next steps #1](eval-ladder-results.md#next-steps-in-priority-order).
 The guardrail and tools described above only ever turn a schema-qualification
 mistake into a recoverable `"error:"` string or a `GuardrailVerdict` refusal —
 never a raised `KeyError` — so qualification confusion is not, and cannot be,

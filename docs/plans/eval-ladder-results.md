@@ -169,7 +169,13 @@ trustworthy. **However**, A3's post-fold **validation fix-pass** crashed with
   A3 corpus carries 12 broken term bindings.
 - The crash is **A3-only and systematic** (A2's fix-pass ran fine; A3's will crash
   every seed), so it should be fixed before the multi-seed run to keep the SME arm
-  clean. Tracked separately.
+  clean. Tracked separately. **RESOLVED 2026-07-16** — see Next steps #1. The
+  crash was an unguarded `read_corpus` lookup (fixed `31c9018`); the underlying
+  dangling term bindings are now prevented + deterministically repaired, so the
+  SME arm ships zero broken bindings. Note the fix-pass was *not* actually
+  systematic: the crash was a stochastic agent action, and even a non-crashing
+  fix-pass left the 12 refs unrepaired (it re-slugged asset ids into duplicate
+  terms). The deterministic repair removes the reliance on the agent entirely.
 
 ## Threats to validity
 
@@ -190,8 +196,15 @@ trustworthy. **However**, A3's post-fold **validation fix-pass** crashed with
   the retired flow.
 
 ## Next steps (in priority order)
-1. **Fix the A3 fix-pass `KeyError: 'restaurant'`** and the dangling term bindings
-   it fails to repair — cheap, systematic, and it dirties every A3 corpus.
+1. ~~**Fix the A3 fix-pass `KeyError: 'restaurant'`** and the dangling term bindings
+   it fails to repair.~~ **DONE (2026-07-16).** The `KeyError` was already fixed
+   2026-07-14 (`read_corpus` guards the lookup, commit `31c9018`); the remaining
+   dangling term bindings are now fixed at the source: `upsert_term` coerces a
+   resolvable `table.column` binding to the canonical `col_*` id and refuses an
+   unresolvable one (never persisting a dangling ref), and `_validate_fix_pass`
+   runs `repair_term_bindings()` deterministically before the agent — so a
+   stochastic LLM is never handed a machine-fixable reference problem. Verified
+   6→0 dangling refs on the `restaurant` corpus; regression tests added.
 2. **Scale N / seeds** — ≥3 seeds on `restaurant` with mean±spread; this gates
    every quotable number and decides Finding 2 (does SME really move EX on the
    agent path, or was 0.522 a lucky draw?).

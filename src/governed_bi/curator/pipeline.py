@@ -288,7 +288,13 @@ def _validate_fix_pass(
     out_root: Path,
     max_agent_steps: int,
 ) -> tuple[list, dict[str, Any], str | None]:
-    """Run validate_corpus; optionally one agent fix pass. Returns findings + counts."""
+    """Run validate_corpus; deterministically repair what we can; then optionally
+    one agent fix pass for whatever survives. Returns findings + counts."""
+    # Reference integrity is machine-fixable — repair coercible term bindings in
+    # code before spending (and risking a crash on) a stochastic agent pass.
+    repaired = bag.repair_term_bindings()
+    if repaired:
+        print(f"fix-pass: repaired {repaired} term binding(s) deterministically")
     findings = validate_corpus(bag.all_assets(), connector=connector)
     _write_validate_findings(out_root, findings)
     fix_counts = _empty_tool_counts()

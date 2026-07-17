@@ -159,7 +159,11 @@ def curator_tools(
             certified: bool = False,
             answered_by: str = "",
         ) -> str:
-            """Record a validated TermAsset mapping business language to an asset."""
+            """Record a validated TermAsset mapping business language to an asset.
+            For a column binding, set binding_asset_type='column' and pass
+            binding_asset_id as the physical 'table.column' (e.g. 'geografisch.landkreis');
+            for a table binding pass the physical table name. The binding is
+            validated against the live corpus and rejected if it does not resolve."""
             return bag.upsert_term(
                 name,
                 binding_asset_type=binding_asset_type,
