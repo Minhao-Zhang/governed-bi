@@ -153,7 +153,7 @@ def _run_arm_generations(
     bird_dir: Path,
     suspect_columns: frozenset[str],
     dialect: str,
-) -> tuple[list[dict[str, Any]], ArmSummary]:
+) -> tuple[list[dict[str, Any]], ArmSummary, dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     n_correct = 0
     n_strict = 0
@@ -300,12 +300,14 @@ def run_experiment(
     if db_id not in schemas:
         connector.close()
         raise RuntimeError(f"schema {db_id!r} not on pg_rename_decoy; have {schemas[:20]}")
-    # Smoke SELECT through the gateway.
+    # Smoke SELECT through the gateway to confirm the schema is queryable end-to-end.
     gateway = Gateway(connector, max_rows=200_000, timeout_s=60.0)
     identity = Identity(user="eval", all_access=True)
-    smoke = gateway.execute(f'SELECT 1 AS n FROM "{db_id}"."{connector.list_tables()[0]}" LIMIT 1', identity)
-    if smoke.row_count < 1 and smoke.rows is not None:
-        pass  # empty table is still a valid connection
+    tables = connector.list_tables()
+    if not tables:
+        connector.close()
+        raise RuntimeError(f"schema {db_id!r} has no tables to smoke-test")
+    gateway.execute(f'SELECT 1 AS n FROM "{db_id}"."{tables[0]}" LIMIT 1', identity)
 
     base_settings = load_settings()
     datasource = DataSourceConfig(
@@ -333,7 +335,17 @@ def run_experiment(
     gold_check = validate_gold_hashes_live(
         test, gold_hashes, gateway, identity, sample=min(5, len(test))
     )
-    if gold_check["n_checked"] and gold_check["agree_rate"] < 1.0:
+    # Fail closed when NOTHING was checkable: n_checked==0 means the "prove the
+    # normalizer agrees with precomputed gold before scoring" gate never ran (e.g.
+    # a db_id/split/dsn_key filter mismatch in load_gold_hashes) — silently
+    # skipping it would then score every arm as missing_gold_hash with no signal.
+    if not gold_check["n_checked"]:
+        raise RuntimeError(
+            "hash_grade self-check verified 0 gold rows (n_checked=0): no test item "
+            "had a usable gold hash + SQL. Check the db_id / split / dsn_key filters "
+            f"in load_gold_hashes before trusting any score. {gold_check}"
+        )
+    if gold_check["agree_rate"] < 1.0:
         raise RuntimeError(
             f"hash_grade self-check failed against live gold SQL: {gold_check}"
         )
@@ -627,18 +639,25 @@ def main(argv: list[str] | None = None) -> None:
     bird_dir = args.bird_dir.resolve()
     run_dir = args.out / f"{_utc_ts()}_{args.db}"
     print(f"run dir: {run_dir}")
-    result = run_experiment(
-        db_id=args.db,
-        bird_dir=bird_dir,
-        pg_dsn=args.pg_dsn,
-        out_dir=run_dir,
-        max_agent_steps=args.max_agent_steps,
-        skip_agent=args.skip_agent,
-        limit=args.limit,
-        resume_curated=args.resume_curated,
-    )
-    print(json.dumps(result["arms"], indent=2))
-    print("deltas:", json.dumps(result["deltas"], indent=2))
+    try:
+        result = run_experiment(
+            db_id=args.db,
+            bird_dir=bird_dir,
+            pg_dsn=args.pg_dsn,
+            out_dir=run_dir,
+            max_agent_steps=args.max_agent_steps,
+            skip_agent=args.skip_agent,
+            limit=args.limit,
+            resume_curated=args.resume_curated,
+        )
+        print(json.dumps(result["arms"], indent=2))
+        print("deltas:", json.dumps(result["deltas"], indent=2))
+    finally:
+        # Deterministic trace delivery: this is a short-lived process, so flush the
+        # background exporter rather than trusting the atexit hook (LF1).
+        from ..obs import flush_tracing
+
+        flush_tracing()
 
 
 if __name__ == "__main__":

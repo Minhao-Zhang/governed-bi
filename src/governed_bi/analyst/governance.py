@@ -69,11 +69,21 @@ _STOPWORDS = frozenset(
     "the their there to what when where which who why with work works".split()
 )
 
-# L2 (policy_blacklist) is the hard, fail-closed layer: a hard policy/DDL block is
-# never delivered/graded, regardless of settings.grade_semantic_failures. Scope
-# failures (L3/L4) may be graded-and-delivered as unverified (pipeline-design §6);
-# safety stays binary.
-_HARD_REFUSE_LAYERS = frozenset({GuardrailLayer.policy_blacklist.value})
+# Layers whose failure is NEVER graded-and-delivered (re-executed as "unverified"),
+# regardless of settings.grade_semantic_failures — the safety/confidentiality set:
+#   - L2 policy_blacklist: DDL/DML/dangerous-function blocks (hard by design).
+#   - L3 ast_column_allowlist: also gates governance.excluded + suspect columns, a
+#     CONFIDENTIALITY control; graded-delivering an L3 failure would re-execute SQL
+#     that touches a hidden column and return its rows (audit finding S2). L3 stays
+#     *repairable mid-loop* (the agent retries on a BLOCKED ToolMessage, D5/D11) —
+#     only the FINAL disposition is hard, so an exhausted L3 refuses, never leaks.
+# L4/L5 (retrieval scope / cartesian) remain graded-and-delivered (pipeline-design §6).
+_HARD_REFUSE_LAYERS = frozenset(
+    {
+        GuardrailLayer.policy_blacklist.value,
+        GuardrailLayer.ast_column_allowlist.value,
+    }
+)
 
 
 def _tokens(text: str) -> list[str]:

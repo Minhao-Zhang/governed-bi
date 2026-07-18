@@ -215,7 +215,7 @@ def apply_er_scope(view: SchemaGraphView, *, req: ScopeRequest) -> SchemaGraphVi
         len(kept_sorted),
         len(edges_sorted),
         req,
-        effective_budget=budget if narrowing or req.node_budget is not None else budget,
+        effective_budget=budget,
         effective_radius=effective_radius,
     )
     # Echo the budget that was applied when narrowing (including default).

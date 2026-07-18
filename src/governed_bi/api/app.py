@@ -334,8 +334,9 @@ def create_app(stack: ServeStack | None = None):
 
         # Enforce the id convention BEFORE any filesystem access: the id becomes a
         # filename, and a loose id would let the canonical-path lookup below read an
-        # unintended file. is_valid_id also rejects path separators (the regex has
-        # no '/' or '\'), so this subsumes the traversal guard.
+        # unintended file. NOTE: is_valid_id guards only the id; the write DIRECTORY
+        # comes from ``asset.schema``, which is validated separately (``SchemaName``
+        # rejects separators/``..``) and re-checked in ``write_corpus``.
         if not is_valid_id(asset.asset_type, asset.id):
             raise HTTPException(
                 status_code=422, detail=f"asset id does not match the {asset.asset_type} convention"

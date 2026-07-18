@@ -11,6 +11,7 @@ channels — so a future checkpointer stays thin.
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from langchain.agents import create_agent
@@ -336,11 +337,8 @@ def build_serve_rails(
         events.rail("refuse_gate", "ok")
         return {"outcome": "continue"}
 
-    def after_refuse(state: ServeRailsState) -> Literal["prepare", "__end__"]:
-        return END if state.get("outcome") == "refuse" else "prepare"
-
-    def prepare(state: ServeRailsState) -> dict:
-        return {}
+    def after_refuse(state: ServeRailsState) -> Literal["cache", "__end__"]:
+        return END if state.get("outcome") == "refuse" else "cache"
 
     def assemble(state: ServeRailsState) -> dict:
         """Amendment 1: run the deterministic front half and seed the semantic layer.
@@ -465,7 +463,7 @@ def build_serve_rails(
             result = entry.get("result") or {}
             events.tool(
                 "run_query",
-                _LEDGER_STATUS.get(verdict, "ok"),
+                _LEDGER_STATUS.get(verdict, "error"),
                 step_id=tcid,
                 attempt=attempt,
                 sql=entry.get("sql") or args.get("sql"),
@@ -480,7 +478,7 @@ def build_serve_rails(
             result = entry.get("result") or {}
             events.tool(
                 "sample_rows",
-                _LEDGER_STATUS.get(verdict, "ok"),
+                _LEDGER_STATUS.get(verdict, "error"),
                 step_id=tcid,
                 table_id=args.get("table_id") or entry.get("table_id"),
                 rows=result.get("row_count"),
@@ -583,6 +581,14 @@ def build_serve_rails(
         system_prompt = SYSTEM_PROMPT
         if context_block:
             system_prompt = f"{SYSTEM_PROMPT}\n\n## Governed context\n{context_block}"
+        # Ground relative-date reasoning ("today", "this month", "last quarter") in
+        # the machine's LOCAL wall-clock time, stamped per turn (never import-time).
+        now_local = datetime.now().astimezone()
+        system_prompt = (
+            f"{system_prompt}\n\n## Current time\n"
+            f"The current date and time is {now_local.strftime('%Y-%m-%d %H:%M:%S %Z (UTC%z)')} "
+            f"(the user's local time). Resolve any relative dates in the question against it."
+        )
 
         clarify_on = clarify_checkpointer is not None
         agent = build_agent_core(
@@ -689,6 +695,11 @@ def build_serve_rails(
             events.final(ans)
             return {"answer": ans, "outcome": "refuse"}
 
+        # Local provenance copy — never mutate the input state in place (a LangGraph
+        # node returns updates, it does not edit `state`; the in-place write would
+        # bite once a checkpointer or a parallel branch is added). Finalizers below
+        # read this local.
+        base_provenance = state["base_provenance"]
         if clarify_on:
             # The inner agent may have paused on a fresh ask_user this pass; bubble
             # it up so the chat-graph node surfaces it as a client interrupt.
@@ -699,10 +710,7 @@ def build_serve_rails(
             # so both success and refusal finalizers below carry them.
             answered = _extract_clarifications(final.get("messages"))
             if answered:
-                state["base_provenance"] = {
-                    **state["base_provenance"],
-                    "clarifications": answered,
-                }
+                base_provenance = {**base_provenance, "clarifications": answered}
 
         ledger = list(final.get("ledger") or [])
         sql, tables_used, pass_entry = extract_final_sql(
@@ -732,7 +740,7 @@ def build_serve_rails(
                 identity=identity,
                 last_refusal=last_refusal,
                 attempts=attempts or 0,
-                base_provenance={**state["base_provenance"], "governance_ledger": ledger},
+                base_provenance={**base_provenance, "governance_ledger": ledger},
                 question=question,
                 narrator=None,  # narration deferred to narrate_node
                 on_event=None,
@@ -760,7 +768,7 @@ def build_serve_rails(
                     "governance_ledger": ledger,
                 },
                 attempts=sum(1 for e in ledger if e.get("action") == "run_query"),
-                base_provenance=state["base_provenance"],
+                base_provenance=base_provenance,
                 question=question,
                 narrator=None,  # narration deferred to narrate_node
                 on_event=None,
@@ -782,7 +790,7 @@ def build_serve_rails(
             generated=generated,
             result=result,
             attempts=attempts,
-            base_provenance=state["base_provenance"],
+            base_provenance=base_provenance,
             dialect=dialect,
             allowlist=allowlist,
             licensed=licensed_phys,
@@ -812,15 +820,13 @@ def build_serve_rails(
     builder = StateGraph(ServeRailsState)
     builder.add_node("ingest", ingest)
     builder.add_node("refuse_gate", refuse_gate)
-    builder.add_node("prepare", prepare)
     builder.add_node("cache", cache_lookup)
     builder.add_node("assemble", assemble)
     builder.add_node("agent_core", agent_core_node)
     builder.add_node("narrate", narrate_node)
     builder.add_edge(START, "ingest")
     builder.add_edge("ingest", "refuse_gate")
-    builder.add_conditional_edges("refuse_gate", after_refuse, ["prepare", END])
-    builder.add_edge("prepare", "cache")
+    builder.add_conditional_edges("refuse_gate", after_refuse, ["cache", END])
     builder.add_conditional_edges("cache", after_cache, ["assemble", "narrate"])
     builder.add_conditional_edges("assemble", after_assemble, ["agent_core", END])
     builder.add_edge("agent_core", "narrate")

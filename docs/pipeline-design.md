@@ -9,9 +9,13 @@ is authoritatively covered by [ADR 0002](adr/0002-governed-agentic-serve-runtime
 
 > **One removed idea, flagged:** the earlier "reverse D15's missing-edge refuse"
 > proposal did **not** ship. A cross-schema question with no curated join still
-> **refuses** (D15); only coverage / L3–L5 / execution failures deliver-and-grade
-> on the `semantic_assurance` axis (D5). Serve's authority stays deterministic
-> while its reasoning is a bounded agentic loop (ADR 0002).
+> **refuses** (D15); only coverage / **L4–L5** scope / execution failures
+> deliver-and-grade on the `semantic_assurance` axis (D5). **L3 (column allowlist)
+> is a hard refusal, never graded** — it also gates `governance.excluded` / suspect
+> columns, so re-executing an L3-blocked query would leak hidden-column rows
+> (it stays *repairable mid-loop*; only the final disposition is hard). Serve's
+> authority stays deterministic while its reasoning is a bounded agentic loop
+> (ADR 0002).
 
 This document records the intended shape of the **curator / build side** as agreed
 in design discussion. It is the target for that side, not a description of current
@@ -99,8 +103,9 @@ schema-layer `accept_answer` primitive this section once named.
 
 ## 8. Preserved invariants (non-negotiable)
 
-- **Safety is never graded away.** L2 policy + curated negative-example gate stay
-  hard rejects.
+- **Safety / confidentiality is never graded away.** L2 policy + the curated
+  negative-example gate + **L3 column-allowlist** (it gates excluded/suspect
+  columns) stay hard rejects; only L4/L5 scope failures deliver-and-grade.
 - **Gold SQL/answers never reach the serve path**, and the SME never sees them
   (leakage boundary).
 - **Facts stay deterministic**; Inference stays labeled as inferred.

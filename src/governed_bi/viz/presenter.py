@@ -831,6 +831,31 @@ def related_to_column(corpus: "Corpus", column_id: str) -> ColumnRelatedView | N
     )
 
 
+def _redact_provenance_for_client(provenance: dict) -> dict:
+    """Drop bulk result rows from the governance ledger before it leaves the API.
+
+    The middleware ledger snapshots full executed rows (up to ``max_rows``) so
+    ``finalize`` can reuse them without a second round-trip; that internal record
+    must not be shipped verbatim to the client. The ``Answer`` already carries a
+    bounded ``result`` preview, so here the ledger keeps ``columns`` /
+    ``row_count`` / ``truncated`` for audit but drops the row bodies (D7: never
+    return result rows to the client beyond the bounded preview)."""
+    out = dict(provenance)
+    ledger = out.get("governance_ledger")
+    if isinstance(ledger, list):
+        redacted: list = []
+        for entry in ledger:
+            if isinstance(entry, dict) and isinstance(entry.get("result"), dict):
+                res = dict(entry["result"])
+                if res.get("rows"):
+                    res["rows"] = []
+                    res["rows_redacted"] = True
+                entry = {**entry, "result": res}
+            redacted.append(entry)
+        out["governance_ledger"] = redacted
+    return out
+
+
 def answer_view(answer: "Answer") -> AnswerView:
     """Map an Analyst ``Answer`` to display fields: the two canonical stamp axes,
     plus the display-only ``tier`` projection for a compact badge, + trace.
@@ -854,6 +879,6 @@ def answer_view(answer: "Answer") -> AnswerView:
         text=answer.text,
         sql=answer.sql,
         escalation=answer.escalation,
-        provenance=dict(answer.provenance),
+        provenance=_redact_provenance_for_client(answer.provenance),
         result=result,
     )

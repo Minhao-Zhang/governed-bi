@@ -75,6 +75,13 @@ def write_corpus(
     assets carry no ``schema`` field (it is implied by their location). Creates the
     per-type subdirectories as needed.
     """
+    # Defense in depth against path traversal: ``schema`` names a directory under
+    # ``root``. Asset schemas are validated at parse (``SchemaName``), but callers
+    # may pass ``schema`` from elsewhere, so refuse a separator / ``..`` / absolute
+    # name here too — string-level so no ``os.getcwd``/``realpath`` (which trips
+    # LangGraph's ASGI detector on the request path).
+    if "/" in schema or "\\" in schema or ".." in schema or Path(schema).is_absolute():
+        raise ValueError(f"unsafe corpus schema directory name: {schema!r}")
     schema_dir = Path(root) / schema
     written: list[Path] = []
 

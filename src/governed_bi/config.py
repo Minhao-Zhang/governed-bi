@@ -66,6 +66,10 @@ class ModelConfig:
     llm_model: str = "gpt-5.6-sol"  # project default; swap in governed_bi.toml
     llm_reasoning_effort: str = "low"  # none | low | medium | high | xhigh | max (provider-specific)
     llm_max_output_tokens: int | None = None  # None = provider default
+    # A stalled model connection must not hang a curator step or serve turn
+    # forever: recursion_limit bounds steps, not wall-clock. None = provider default.
+    request_timeout_s: float | None = 60.0
+    max_retries: int = 2
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int | None = None  # None = model default (1536 for -3-small)
     api_key_env: str = "OPENAI_API_KEY"

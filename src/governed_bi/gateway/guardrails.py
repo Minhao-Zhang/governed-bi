@@ -3,7 +3,8 @@
 Ordered, fail-closed on any layer:
 
 1. **syntax** parses as valid SQL (sqlglot).
-2. **policy blacklist** no DDL/DML/PRAGMA/etc.; read-only single statement only.
+2. **policy blacklist** no DDL/DML/PRAGMA/etc.; read-only single statement only;
+   no file/network/system function calls (``pg_read_file``/``dblink``/``lo_*`` …).
 3. **AST column allowlist** every referenced column is a known, non-excluded,
    non-``suspect`` column (dev/BIRD hard-blocks suspect; prod soft-warns).
 4. **term-semantics** referenced assets match the bound terms.
@@ -126,6 +127,59 @@ _FORBIDDEN_TYPES = tuple(
 # A read-only statement roots at a query: a SELECT or a set operation over selects.
 _QUERY_ROOTS = (exp.Select, exp.SetOperation)
 
+# Dangerous SQL functions that read files, reach the network, run programs, or
+# expose the server. None legitimately appears in a governed analytics query, and
+# a read-only connection does NOT stop them — they are *reads*, not writes. Blocked
+# hard at L2 so a rogue/injected generator cannot exfiltrate through a column-less
+# ``SELECT fn(...)`` (no FROM, no columns), which otherwise references nothing L3/L4/L5
+# inspect and slips past every other layer. Matched by exact name or system prefix.
+_FORBIDDEN_FUNCTION_PREFIXES = ("pg_", "lo_", "dblink")
+_FORBIDDEN_FUNCTION_NAMES = frozenset(
+    {
+        # Server / session info disclosure. sqlglot maps some of these to typed
+        # nodes, so match their canonical ``sql_name()`` too (e.g. version() ->
+        # CurrentVersion -> "current_version"). Date/time ``current_*`` functions
+        # are deliberately NOT listed — they are legitimate analytics.
+        "version",
+        "current_version",
+        "current_setting",
+        "current_user",
+        "current_database",
+        "current_schema",
+        "session_user",
+        "set_config",
+        "query_to_xml",
+        "load_extension",
+        "readfile",
+        "writefile",
+        "system",
+    }
+)
+
+
+def _function_name(node: exp.Expression) -> str:
+    """The SQL function name of a call node, lowercased (``""`` when not resolvable).
+
+    ``exp.Anonymous`` carries the raw (non-standard) name — where every dangerous
+    built-in lands; known functions expose ``sql_name()`` (e.g. ``SUM``)."""
+    if isinstance(node, exp.Anonymous):
+        return str(node.name or "").lower()
+    try:
+        return str(node.sql_name()).lower()
+    except Exception:
+        return ""
+
+
+def _forbidden_function(root: exp.Expression) -> str | None:
+    """The first dangerous function referenced anywhere in the tree, or ``None``."""
+    for node in root.find_all(exp.Func):
+        name = _function_name(node)
+        if name and (
+            name in _FORBIDDEN_FUNCTION_NAMES or name.startswith(_FORBIDDEN_FUNCTION_PREFIXES)
+        ):
+            return name
+    return None
+
 
 def _pass() -> GuardrailVerdict:
     return GuardrailVerdict(passed=True)
@@ -173,6 +227,15 @@ def _layer_policy(statements: list[exp.Expression]) -> GuardrailVerdict:
                 GuardrailLayer.policy_blacklist,
                 f"forbidden statement type: {type(node).__name__}",
             )
+    # A read-only SELECT can still exfiltrate via a file/network/system function
+    # (``pg_read_file``, ``dblink``, ``lo_import`` …) that references no table or
+    # column, so nothing else inspects it. Fail closed here (hard L2).
+    bad_fn = _forbidden_function(root)
+    if bad_fn is not None:
+        return _fail(
+            GuardrailLayer.policy_blacklist,
+            f"forbidden function call: {bad_fn}()",
+        )
     return _pass()
 
 

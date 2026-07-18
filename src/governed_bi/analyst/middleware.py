@@ -22,6 +22,7 @@ from langgraph.types import Command
 
 from ..corpus.schemas import TableAsset
 from ..gateway import GuardrailLayer, QueryResult, check, column_allowlist
+from ..graph import build_graph, detect_missing_join_path
 from .tools import render_result
 
 if TYPE_CHECKING:
@@ -141,6 +142,19 @@ class GovernanceMiddleware(AgentMiddleware):
         self._dialect = dialect
         self._default = default_schema
         self._settings = settings
+        # D15 cross-schema enforcement (a no-op for a single-schema corpus, i.e. the
+        # BIRD/demo path): the join graph + a physical→id map let run_query re-check
+        # that any cross-schema join it reaches is backed by a CURATED JoinAsset, not
+        # merely a structural equality (L5). Retrieval's missing-edge refusal does
+        # not cover a table the agent self-licensed via inspect_schema, so re-check
+        # here at execution time.
+        self._graph = build_graph(corpus)
+        self._phys_to_id = {
+            f"{a.schema}.{a.physical_name}": a.id
+            for a in corpus.assets
+            if isinstance(a, TableAsset)
+            and not getattr(getattr(a, "governance", None), "excluded", False)
+        }
 
     def wrap_model_call(self, request, handler):
         # Gotcha G1: force sequential tool calls on every model turn. Prefer
@@ -286,6 +300,29 @@ class GovernanceMiddleware(AgentMiddleware):
                 }
             )
 
+        # D15: a passing query that reaches ACROSS schemas must be connected by a
+        # curated JoinAsset, never a self-authorized structural join. No-op unless the
+        # SQL spans >=2 schemas with no curated path (single-schema always None).
+        if action == "run_query":
+            missing = self._cross_schema_missing_join(sql)
+            if missing is not None:
+                entry = {
+                    "action": "run_query",
+                    "verdict": "block",
+                    "layer": GuardrailLayer.term_semantics.value,
+                    "reason": (
+                        "cross-schema join is not backed by a curated JoinAsset "
+                        f"(D15 missing edge): schemas {sorted(missing.schemas)}"
+                    ),
+                    "sql": sql,
+                    "allowed": sorted(allowed_tables),
+                    "licensed_ids": sorted(licensed_ids),
+                }
+                # Hard stop, mirroring the retrieval-time missing-edge refusal: an
+                # undeclared cross-schema join is never executed nor graded-delivered
+                # (D15 refuses + escalates), so it cannot be self-authorized.
+                raise GovernanceHardStop(entry, ledger=prior_ledger)
+
         # PASS — middleware executes (single audit entry; finalize reuses result).
         try:
             result = self._gateway.execute(sql, self._identity)
@@ -359,3 +396,22 @@ class GovernanceMiddleware(AgentMiddleware):
         except Exception:
             pass
         return sql, None
+
+    def _cross_schema_missing_join(self, sql: str):
+        """A ``MissingJoinPath`` when ``sql`` joins across schemas with no curated
+        join path, else ``None``. Best-effort parse; a single-schema query (the BIRD
+        path) is always ``None`` — ``detect_missing_join_path`` gates on >=2 schemas.
+        """
+        from .sqlgen import _tables_used  # lazy: keep the import graph acyclic
+
+        # Best-effort and correctness-neutral: a parse/plan hiccup must never turn a
+        # governed answer into an error, so any failure here yields "no missing edge"
+        # (the query has already passed check()). Fail-open is safe because a genuine
+        # cross-schema-without-curated-join case is what this catches, not a leak.
+        try:
+            tables_used = _tables_used(
+                sql, self._phys_to_id, self._dialect, default_schema=self._default
+            )
+            return detect_missing_join_path(self._corpus, self._graph, set(tables_used))
+        except Exception:
+            return None

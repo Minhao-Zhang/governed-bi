@@ -177,6 +177,20 @@ def build_stack(settings: Settings | None = None) -> ServeStack:
         clarify_checkpointer = InMemorySaver()
         can_clarify = bool(settings.can_stream)
 
+    # Identity is a DEMO seam (D1: showcase, not a product). This repo serves a
+    # single all-access identity; per-user identity + gateway RLS live in the private
+    # enterprise fork (D7), not here. Make the ``single_all_access_identity`` toggle
+    # honest instead of dead: if a deployment turns it off (the documented
+    # "prod = real user + RLS" mode), FAIL LOUD rather than silently keep serving
+    # all-access — that path is deliberately unimplemented in this demo.
+    if not settings.single_all_access_identity:
+        raise NotImplementedError(
+            "per-user identity + gateway RLS is not implemented in this demo repo; it "
+            "is deferred to the private enterprise fork (D1/D7). Set "
+            "[runtime].single_all_access_identity = true for the showcase, or run the "
+            "enterprise fork for real per-user identity scoping."
+        )
+
     # Resolve sqlite_path against the repo root when relative, matching
     # build_connector, so the stack's path and the probe agree.
     sqlite_path = Path(datasource.sqlite_path)
@@ -191,7 +205,7 @@ def build_stack(settings: Settings | None = None) -> ServeStack:
         settings=settings,
         dialect=datasource.kind,  # sqlite | postgres | redshift (matches the Dialect enum)
         sqlite_path=sqlite_path,
-        identity=Identity(user="demo", all_access=True),
+        identity=Identity(user="demo", all_access=True),  # demo seam (see the guard above)
         embedder=embedder,
         narrator=narrator,
         model_name=model_name,

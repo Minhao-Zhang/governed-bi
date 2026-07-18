@@ -21,11 +21,31 @@ and human-appended provenance entries vary.
 
 from __future__ import annotations
 
+import re
 import warnings
 from enum import Enum
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter
+
+# A ``schema`` value names an on-disk ``corpus/<schema>/`` directory (D13) AND a
+# live SQL namespace, so it must be a bare identifier. Rejecting separators / ``..``
+# here (at parse) closes the ``/corpus/edit`` path-traversal: the write directory is
+# derived from ``asset.schema`` and ``is_valid_id`` only guards the asset *id*.
+_SCHEMA_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def _validate_schema_name(value: str) -> str:
+    if not isinstance(value, str) or not _SCHEMA_NAME_RE.match(value):
+        raise ValueError(
+            "schema must be a bare identifier matching [A-Za-z0-9_]+ (it names a "
+            "corpus directory and a SQL namespace); path separators and '..' are rejected"
+        )
+    return value
+
+
+# A schema field validated as a safe directory/namespace identifier.
+SchemaName = Annotated[str, AfterValidator(_validate_schema_name)]
 
 # `schema` is our canonical, domain-accurate field name (D15) on several assets. It
 # harmlessly shadows the deprecated ``BaseModel.schema()`` method — nothing calls
@@ -238,7 +258,7 @@ class TableAsset(_Strict):
     id: str
 
     # ── Facts ──
-    schema: str  # scoping namespace = Postgres/Redshift schema / corpus subtree
+    schema: SchemaName  # scoping namespace = Postgres/Redshift schema / corpus subtree
     physical_name: str
     row_count: int | None = None
 
@@ -278,7 +298,7 @@ class FewShotAsset(_Strict):
     id: str
 
     # ── Facts ──
-    schema: str
+    schema: SchemaName
 
     # ── Inference (curator selects/distills a prompt exemplar) ──
     question: str
@@ -371,7 +391,7 @@ class SkillFrontmatter(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     skill_id: str
-    schema: str
+    schema: SchemaName
     kind: SkillKind
     provenance: Provenance
 

@@ -91,6 +91,10 @@ class LangChainChatClient:
             kwargs["reasoning"] = {"effort": models.llm_reasoning_effort}
         if models.llm_max_output_tokens:
             kwargs["max_tokens"] = models.llm_max_output_tokens
+        # Bound wall-clock per call so a stalled connection can't hang a turn.
+        if models.request_timeout_s is not None:
+            kwargs["timeout"] = models.request_timeout_s
+        kwargs["max_retries"] = models.max_retries
         key = os.environ.get(models.api_key_env)
         if key:
             kwargs["api_key"] = key
@@ -175,6 +179,11 @@ def _build_bedrock_chat(models: "ModelConfig") -> Any:
         kwargs["region_name"] = models.region
     if models.llm_max_output_tokens:
         kwargs["max_tokens"] = models.llm_max_output_tokens
+    # Timeout/retries on Bedrock are botocore-client settings
+    # (``config=Config(read_timeout=..., retries=...)``), not top-level kwargs, and
+    # are model/region specific — set them per deployment via a local overlay rather
+    # than forwarding ``request_timeout_s``/``max_retries`` to args
+    # ChatBedrockConverse may reject. (The OpenAI path wires both directly.)
     # Reasoning ("thinking") config on Bedrock is model-family specific — the
     # Converse request field differs between Anthropic and Nova — so it is not
     # auto-translated from ``llm_reasoning_effort`` here. Set it per deployment
