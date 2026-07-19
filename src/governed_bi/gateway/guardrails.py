@@ -148,7 +148,26 @@ _FORBIDDEN_FUNCTION_NAMES = frozenset(
         "current_schema",
         "session_user",
         "set_config",
+        # Postgres XML-export family. Each takes its target table/schema/database
+        # as a STRING-LITERAL argument, so sqlglot parses the call as exp.Anonymous
+        # with no exp.Table/exp.Column nodes — L3/L4/L5 are structurally blind and
+        # would pass. The whole family is the same exfiltration primitive, so the
+        # denylist must list all of it, not just query_to_xml. (A positive allowlist
+        # of permitted functions would be more robust; deferred as a follow-up.)
+        "table_to_xml",
+        "table_to_xmlschema",
+        "table_to_xml_and_xmlschema",
         "query_to_xml",
+        "query_to_xmlschema",
+        "query_to_xml_and_xmlschema",
+        "cursor_to_xml",
+        "cursor_to_xmlschema",
+        "schema_to_xml",
+        "schema_to_xmlschema",
+        "schema_to_xml_and_xmlschema",
+        "database_to_xml",
+        "database_to_xmlschema",
+        "database_to_xml_and_xmlschema",
         "load_extension",
         "readfile",
         "writefile",

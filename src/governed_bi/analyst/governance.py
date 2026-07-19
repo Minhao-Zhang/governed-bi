@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
     from ..config import Settings
     from ..corpus import Corpus
-    from ..gateway import Gateway, Identity, QueryResult
+    from ..gateway import ColumnAllowlist, Gateway, Identity, QueryResult
     from ..graph import MissingJoinPath
     from .narrate import AnswerNarrator
 
@@ -69,19 +69,28 @@ _STOPWORDS = frozenset(
     "the their there to what when where which who why with work works".split()
 )
 
-# Layers whose failure is NEVER graded-and-delivered (re-executed as "unverified"),
-# regardless of settings.grade_semantic_failures — the safety/confidentiality set:
-#   - L2 policy_blacklist: DDL/DML/dangerous-function blocks (hard by design).
-#   - L3 ast_column_allowlist: also gates governance.excluded + suspect columns, a
-#     CONFIDENTIALITY control; graded-delivering an L3 failure would re-execute SQL
-#     that touches a hidden column and return its rows (audit finding S2). L3 stays
-#     *repairable mid-loop* (the agent retries on a BLOCKED ToolMessage, D5/D11) —
-#     only the FINAL disposition is hard, so an exhausted L3 refuses, never leaks.
-# L4/L5 (retrieval scope / cartesian) remain graded-and-delivered (pipeline-design §6).
-_HARD_REFUSE_LAYERS = frozenset(
+# Graded delivery is an ALLOWLIST, never a denylist: the ONLY failures re-executed
+# and delivered as "unverified" (when settings.grade_semantic_failures is on) are
+# the curated SEMANTIC layers below. A query reaches one of these ONLY after
+# clearing every safety/confidentiality layer before it — check() runs the layers
+# in order and returns on the FIRST failure — so a semantic ``failed_layer`` is a
+# proof, minted by check() itself, that L1/L2/L3 passed:
+#   - L4 term_semantics: retrieval/licensing scope (touched an unlicensed table).
+#   - L5 cost_estimate: accidental cartesian / cost guard.
+# Everything else HARD-refuses, never graded-delivers:
+#   - L2 policy_blacklist (DDL/DML/dangerous funcs) and L3 ast_column_allowlist
+#     (governance.excluded + suspect columns, a CONFIDENTIALITY control — audit S2);
+#   - the refuse-gate;
+#   - and — critically — any entry that NEVER reached a check() verdict at all
+#     (verdict "cap"/"error", exhausted/no_coverage, missing pass result — all carry
+#     ``failed_layer=None``). A capped attempt cleared NO layer, so its SQL is never
+#     executed on the graded-delivery path (audit Vuln 2 / broken access control).
+# L3/L4/L5 stay *repairable mid-loop* (the agent retries on a BLOCKED ToolMessage,
+# D5/D11); only the FINAL disposition is fixed here (pipeline-design §6).
+_GRADED_DELIVERY_LAYERS = frozenset(
     {
-        GuardrailLayer.policy_blacklist.value,
-        GuardrailLayer.ast_column_allowlist.value,
+        GuardrailLayer.term_semantics.value,
+        GuardrailLayer.cost_estimate.value,
     }
 )
 
@@ -459,8 +468,17 @@ def _finish_unsuccessful(
     question: str,
     narrator: "AnswerNarrator | None" = None,
     on_event: "Callable[[dict], None] | None" = None,
+    allowlist: "ColumnAllowlist | None" = None,
+    dialect: str | None = None,
+    default_schema: str | None = None,
 ) -> "Answer":
-    """Hard-refuse safety failures; §6 deliver-and-grade semantic ones when enabled."""
+    """Hard-refuse safety failures; §6 deliver-and-grade semantic ones when enabled.
+
+    ``allowlist``/``dialect``/``default_schema`` (threaded from ``analyst.agent``)
+    let this re-run :func:`check` on the SQL right before executing it, mirroring
+    :func:`_try_cache_hit`. Absent (a direct unit call), the semantic-layer
+    allowlist gate below already fails closed.
+    """
     record = dict(last_refusal)
     escalation = record.pop("escalation", _ESCALATION_NO_COVERAGE)
     refused_by = record.get("refused_by", "no_coverage")
@@ -468,11 +486,39 @@ def _finish_unsuccessful(
     sql = record.get("sql")
     provenance = {**base_provenance, **record, "attempts": attempts}
 
-    # Safety stays binary hard-reject (pipeline-design §5.2).
-    hard = refused_by == "refuse_gate" or failed_layer in _HARD_REFUSE_LAYERS
-    if hard or not sql or not settings.grade_semantic_failures:
+    # Graded delivery is an ALLOWLIST: only a SQL that FAILED a curated semantic
+    # layer (L4/L5) — which proves it cleared L1/L2/L3 first — is ever re-executed.
+    # A refuse-gate hit, an L2/L3 safety/confidentiality block, or anything that
+    # never earned a check() verdict (a capped/errored attempt carries
+    # ``failed_layer=None``) is a hard refuse and NEVER executed (audit Vuln 2).
+    deliverable = failed_layer in _GRADED_DELIVERY_LAYERS
+    if not deliverable or not sql or not settings.grade_semantic_failures:
         _emit(on_event, "refuse", refused_by=refused_by, failed_layer=failed_layer)
         return refusal(escalation=escalation, provenance=provenance)
+
+    # Defense-in-depth: re-run the guardrail right before executing, so nothing but
+    # check() itself ever authorizes an execution (mirrors _try_cache_hit; never
+    # trust the ledger's ``failed_layer`` label). ``allowed_tables=None`` skips L4
+    # (the term-scope layer graded delivery exists to forgive), so a genuine L4/L5
+    # failure still delivers — but if the SQL now trips a safety/confidentiality
+    # layer (L2/L3), or any non-semantic layer, refuse and never execute.
+    if allowlist is not None:
+        verdict = check(
+            sql,
+            allowed_columns=set(allowlist.allowed),
+            suspect_columns=allowlist.suspect,
+            allowed_tables=None,
+            hard_block_suspect=settings.hard_block_suspect_columns,
+            dialect=dialect,
+            default_schema=default_schema,
+        )
+        recheck_layer = verdict.failed_layer.value if verdict.failed_layer else None
+        if not verdict.passed and recheck_layer not in _GRADED_DELIVERY_LAYERS:
+            _emit(on_event, "refuse", refused_by=refused_by, failed_layer=recheck_layer)
+            return refusal(
+                escalation=escalation,
+                provenance={**provenance, "graded_delivery_recheck_failed": recheck_layer},
+            )
 
     # §6: deliver the last generated SQL with unverified assurance. Try to
     # execute for a complete answer; if execute fails, still return the SQL so
@@ -487,9 +533,10 @@ def _finish_unsuccessful(
         result = gateway.execute(sql, identity)
         table = _result_table(result)
         # Deliver the REAL answer (narrated from the executed result), clearly
-        # marked unverified. Governance (a semantic layer) failed, but the query
-        # ran read-only and already cleared L1/L2 safety (safety hard-refuses
-        # earlier at the `hard` gate), so it's safe to show.
+        # marked unverified. A curated SEMANTIC layer (L4/L5) failed, but reaching
+        # one proves the SQL cleared L1/L2/L3 (check() returns on first failure),
+        # and the re-check above just re-confirmed it clears safety/confidentiality,
+        # so this read-only query is safe to show.
         answer_text = _answer_text(question, sql, result, table, narrator)
         text = _unverified_prefix(provenance) + answer_text
         return graded_delivery(

@@ -691,6 +691,9 @@ def build_serve_rails(
                 question=question,
                 narrator=None,  # narration deferred to narrate_node
                 on_event=None,
+                allowlist=allowlist,
+                dialect=dialect,
+                default_schema=default_schema,
             )
             events.final(ans)
             return {"answer": ans, "outcome": "refuse"}
@@ -744,6 +747,9 @@ def build_serve_rails(
                 question=question,
                 narrator=None,  # narration deferred to narrate_node
                 on_event=None,
+                allowlist=allowlist,
+                dialect=dialect,
+                default_schema=default_schema,
             )
             if ans.provenance.get("governance_ledger") is None:
                 ans = replace(
@@ -772,6 +778,9 @@ def build_serve_rails(
                 question=question,
                 narrator=None,  # narration deferred to narrate_node
                 on_event=None,
+                allowlist=allowlist,
+                dialect=dialect,
+                default_schema=default_schema,
             )
             events.final(ans)
             return {"answer": ans, "outcome": "refuse"}
