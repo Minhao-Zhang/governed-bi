@@ -42,6 +42,7 @@ from .rvgd import (
     tokenize,
 )
 from .schema_router import (
+    embed_schema_documents,
     expand_schemas_via_curated_joins,
     filter_corpus_for_retrieval,
     route_schemas,
@@ -56,6 +57,7 @@ __all__ = [
     "asset_document",
     "build_embedding_index",
     "build_index",
+    "embed_schema_documents",
     "expand_schemas_via_curated_joins",
     "filter_corpus_for_retrieval",
     "fuse_rankings",

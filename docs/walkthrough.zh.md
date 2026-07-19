@@ -170,7 +170,7 @@ conn.close()
 里**只放密钥**；策略（模型、数据源、corpus 路径）都放在
 [`governed_bi.toml`](../governed_bi.toml) / `governed_bi.local.toml` 里。
 
-模型是 `gpt-5.6-sol`、低推理强度（在 [`governed_bi.toml`](../governed_bi.toml)
+模型是 `gpt-5.6-luna`、低推理强度（在 [`governed_bi.toml`](../governed_bi.toml)
 里配置；如果你的账号只有 GA 权限，就回退到 `gpt-5.5`），通过 LangChain 的
 `ChatOpenAI` 调用，它会把推理模型路由到 OpenAI 的 **Responses API**。通过
 `/chat`，追问会针对对话进行消解（先前的轮次通过引擎的工作记忆回灌），答案会以

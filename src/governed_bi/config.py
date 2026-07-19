@@ -63,7 +63,7 @@ class ModelConfig:
     """
 
     provider: str = "openai"  # openai | bedrock
-    llm_model: str = "gpt-5.6-sol"  # project default; swap in governed_bi.toml
+    llm_model: str = "gpt-5.6-luna"  # project default; swap in governed_bi.toml
     llm_reasoning_effort: str = "low"  # none | low | medium | high | xhigh | max (provider-specific)
     llm_max_output_tokens: int | None = None  # None = provider default
     # A stalled model connection must not hang a curator step or serve turn
@@ -161,6 +161,18 @@ class Settings:
     few_shot_recall_cosine_gate: float = 0.95
     few_shot_recall_confidence_gate: float = 0.90
     few_shot_recall_max_fail_count: int = 3
+
+    # ── Schema routing (D15; multi-schema / data-lake serve) ──
+    # Candidate shortlist size for the router (embedding similarity, BM25 fallback).
+    # Wider raises schema recall at the cost of more per-question context. Only used
+    # when the corpus spans >1 schema.
+    schema_route_top_k: int = 3
+    # When True, an LLM picks exactly ONE schema from the shortlist
+    # (pipeline-design §5.1) and cross-schema join-expansion is skipped — the
+    # single-schema-answer regime (e.g. the BIRD data-lake, where every question
+    # targets one db_id). When False (default), keep the shortlist and expand along
+    # curated cross-schema joins (cross-schema answering).
+    schema_route_llm_pick: bool = False
 
     route_memory_budgets: dict[str, MemoryBudget] = field(
         default_factory=lambda: dict(ROUTE_MEMORY_BUDGETS)

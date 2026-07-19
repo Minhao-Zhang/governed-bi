@@ -186,6 +186,13 @@ def agent_solver(
                 "safety_clearance": answer.safety_clearance,
                 "attempts": prov.get("attempts"),
                 "ledger_len": len(prov.get("governance_ledger") or []),
+                # Schema-routing provenance (D15 data-lake): which schemas the router
+                # shortlisted/kept and, under llm-pick, the single chosen schema —
+                # so a pooled run can score routing recall separately from EX.
+                "routed_schemas": prov.get("routed_schemas"),
+                "shortlisted_schemas": prov.get("shortlisted_schemas"),
+                "schema_pick": prov.get("schema_pick"),
+                "total_schemas": prov.get("total_schemas"),
             }
             return answer.sql
 

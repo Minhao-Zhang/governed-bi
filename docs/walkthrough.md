@@ -179,7 +179,7 @@ variable already set in your shell. `.env` holds **secrets only**; policy
 (models, datasource, corpus path) lives in
 [`governed_bi.toml`](../governed_bi.toml) / `governed_bi.local.toml`.
 
-The model is `gpt-5.6-sol` at low reasoning effort (configured in
+The model is `gpt-5.6-luna` at low reasoning effort (configured in
 [`governed_bi.toml`](../governed_bi.toml); fall back to `gpt-5.5` if your
 account is GA-only), called through LangChain's `ChatOpenAI`, which routes
 reasoning models to the OpenAI **Responses API**. Over `/chat`, follow-ups

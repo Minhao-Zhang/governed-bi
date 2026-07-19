@@ -25,9 +25,11 @@ from ..gateway import column_allowlist
 from ..graph import build_graph, detect_missing_join_path, plan_joins
 from ..obs import tracing_callbacks
 from ..retrieval import (
+    embed_schema_documents,
     expand_schemas_via_curated_joins,
     filter_corpus_for_retrieval,
     retrieve,
+    select_schema,
     shortlist_schemas,
 )
 from .answer import refusal
@@ -281,6 +283,26 @@ def build_serve_rails(
             "`schema`/`corpus_pin` with the loaded corpus, or leave `schema` unset "
             "to span all schemas."
         )
+    # Schema-routing knobs (D15). ``schema_route_top_k`` widens the BM25/embedder
+    # shortlist; ``schema_route_llm_pick`` collapses it to a single LLM-chosen schema
+    # (pipeline-design §5.1 — the single-schema-answer regime, e.g. the BIRD data
+    # lake). Both only bite when the corpus spans schemas. The router chat wraps the
+    # raw model in a ChatClient (``select_schema`` needs ``.complete``); built once.
+    route_top_k = settings.schema_route_top_k
+    route_llm_pick = settings.schema_route_llm_pick
+    router_chat = None
+    if spans_schemas and route_llm_pick and model is not None:
+        from ..llm import LangChainChatClient  # noqa: PLC0415 (lazy: agents extra)
+
+        router_chat = LangChainChatClient(model)
+    # Schema-document vectors are constant per corpus: embed them once here rather
+    # than re-embedding every schema doc on each question (O(schemas) embed calls
+    # per turn at data-lake scale). Only the question is embedded per turn.
+    router_schema_vectors = (
+        embed_schema_documents(corpus, embedder)
+        if spans_schemas and embedder is not None
+        else None
+    )
     # One rich-event emitter for the whole turn (reset in `ingest`); the agent path
     # emits the {seq,kind,step,status,detail} contract, never the legacy {stage}
     # shape governance.py's on_event helpers still accept but which agent.py never
@@ -353,18 +375,37 @@ def build_serve_rails(
         base_provenance = state["base_provenance"]
         retrieval_corpus = corpus
         if spans_schemas:
-            # Shortlist, then expand along curated cross-schema joins. Record both
-            # counts so a scale run can see how aggressively the shortlist prunes
-            # and how far join-expansion widens it back (silent over/under-routing
-            # would otherwise be invisible in the EX number).
-            shortlisted = shortlist_schemas(corpus, question, embedder=embedder)
-            routed = expand_schemas_via_curated_joins(corpus, set(shortlisted))
+            # Shortlist by embedding similarity (BM25 fallback). Then either (a)
+            # collapse to a single LLM-chosen schema (``schema_route_llm_pick`` — the
+            # single-schema-answer regime, no cross-schema joins), or (b) expand the
+            # shortlist along curated cross-schema joins (the default cross-schema
+            # regime). Record both counts + the pick so a scale run can see how the
+            # shortlist prunes and where it routed (silent mis-routing would
+            # otherwise be invisible in the EX number).
+            shortlisted = shortlist_schemas(
+                corpus,
+                question,
+                top_k=route_top_k,
+                embedder=embedder,
+                schema_vectors=router_schema_vectors,
+            )
+            picked: str | None = None
+            if router_chat is not None and shortlisted:
+                picked = select_schema(corpus, question, shortlisted, chat=router_chat)
+                routed = (
+                    frozenset([picked])
+                    if picked
+                    else expand_schemas_via_curated_joins(corpus, set(shortlisted))
+                )
+            else:
+                routed = expand_schemas_via_curated_joins(corpus, set(shortlisted))
             retrieval_corpus = filter_corpus_for_retrieval(corpus, routed)
             base_provenance = {
                 **base_provenance,
                 "routed_schemas": sorted(routed),
                 "shortlisted_schemas": sorted(shortlisted),
                 "total_schemas": len(_corpus_schemas),
+                "schema_pick": picked,
             }
         retrieval = retrieve(retrieval_corpus, question, embedder=embedder)
         missing = detect_missing_join_path(
