@@ -563,7 +563,8 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
 - **Governance upgrade.** As an `Asset`-union member, `NoteAsset` inherits the
   three field tiers, the `for_analyst` audit-strip, `Provenance`, `validate_corpus`,
   and a `Governance` block, which `RuleAsset`/`NegativeExampleAsset` lack today
-  (so D6 `excluded=true` is a silent no-op for rules; this fixes that). Uncertified
+  (a `governance:` key is *rejected at parse* under `extra="forbid"`, so D6
+  exclusion cannot be authored for a rule at all; this fixes that). Uncertified
   notes get **zero** routing-order authority, since a wrong note could evict the
   correct schema from `top_k`; hard-PIN is certified-gated with dev-graduation.
 - **Relation to D9 / D15 / D16.** Refines the **D9** corpus contract
@@ -572,8 +573,10 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
   into the **D16** read-only tool set.
 - **Status: Proposed (design only).** ADR 0003 records 5 open decisions (rename
   churn, scope sentinels vs. a structured `ScopeTarget`, defer regex-over-question,
-  a global always-note budget, the PIN authority gate) and a 7-phase migration;
-  Phases 1-3 deliver the headline feature. No code yet.
+  a global always-note budget, the PIN authority gate) and a 7-phase migration.
+  Phases 1-3 deliver notes as a governed, creatable asset plus the semantic and
+  agent-fetch modes; the trigger-PIN mode and Gap-A routing-reachability arrive
+  in Phase 4 (and deferred Phase 6). No code yet.
 
 ## D18: Local-first Conversation + Run Logging
 
@@ -585,8 +588,9 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
 > owned in the DeepAgents/LangGraph backend so every client (UI, CLI, eval)
 > inherits it. LangGraph's native persistence is the store: a durable
 > checkpointer (`SqliteSaver` local / `PostgresSaver` prod) holds conversation
-> state on every serve path (today `graph_app.py` compiles without one, and the
-> REST `/chat` path has no persistence). This is the concrete build of audit
+> state on the LangGraph-Server / `useStream` path; the plain REST `/chat` route
+> is stateless by design and is a separate follow-on step (today `graph_app.py`
+> compiles without a checkpointer). This is the concrete build of audit
 > findings **R3** (a vendor-independent interaction log keyed by turn +
 > `corpus_release_hash`) and **R5** (persist the ledger; add
 > token/cost/duration/ts), and it fixes **D8**'s ephemerality.

@@ -140,12 +140,30 @@ class NoteAsset(_Strict):
     enforcement: Literal["always", "on_match"]  # kind sets the default; a validator hard-enforces it
     confidence: Confidence | None = None
     related_notes: list[str] = Field(default_factory=list)
+    publication_status: Literal["proposed", "draft", "certified"] = "proposed"
+    # serve-visible; Audit.Provenance.status is stripped by for_analyst
 
     # ── Governance: NEW vs. RuleAsset, closes a latent D6 gap ──
     governance: Governance | None = None
 
     audit: Audit | None = None
 ```
+
+### Certification must survive `for_analyst`
+
+`ProvenanceStatus` (`proposed`/`draft`/`certified`) lives in `Provenance`
+nested inside `Audit` (`schemas.py:72,152-162,188`). `Corpus.for_analyst()`
+nulls `audit` on every asset (`corpus/loader.py:105-107`), and that stripped
+view is what retrieval and prompt assembly read (`agent.py:410` for
+`retrieve()`, `agent.py:426` for `assemble_context`; the caller passes
+`corpus_full.for_analyst()` in, see `api/stack.py:204`). A certification
+status kept only in `Audit` is therefore invisible at serve time, and this
+ADR's "certified > draft" PIN tiebreak and "uncertified notes get zero
+routing-order authority" rule would otherwise have nothing to read.
+`NoteAsset.publication_status` above is a separate, serve-visible field in
+the Inference tier, so it survives `for_analyst` untouched. The PIN tiebreak
+and the zero-authority rule (Honest limit #2) both read `publication_status`,
+never `Audit`.
 
 ### Scope model: the namespace-vs-asset wrinkle
 
@@ -166,12 +184,25 @@ union of `asset` / `schema` / `db` / `global`) later with no data migration:
 the string encoding is a strict subset of what the structured form would
 express.
 
+**This sentinel convention is not free as written.** `validate_corpus`
+requires every `scope[]` entry to resolve against a real asset id
+(`corpus/validate.py:151-153`: `require(scoped, all_ids, a.id,
+"rule.scope[]")`, where `all_ids` holds only asset and derived-column ids,
+none of them containing `:`). A `schema:beer_factory` or `db:main` scope
+entry fires a dangling-ref finding and reddens corpus CI today. `db:main`
+also has no backing identity to resolve against: `DataSourceConfig`
+(`config.py`) has no `db` field, and its `corpus_pin` defaults to
+`beer_factory`, never `main`. Shipping this table requires either teaching
+`validate.py`'s `require()` the `schema:`/`db:` prefixes and giving `db:` a
+real backing identity in `DataSourceConfig`, or adopting the structured
+`ScopeTarget` now instead of sentinel strings (Open Q2).
+
 ### Tri-modal retrieval and the pin-vs-blend contract
 
 | Mode | Purpose | Wiring point (file:function) | Fusion rule |
 |---|---|---|---|
 | **Semantic (own vector)** | recall driver at *retrieval* (post-routing) | `asset_document(NoteAsset)` returns `title + statement`, embedded per-asset in the RVGD retrieval index (`embedding.py:45-50`), kept under a note budget after RRF | **BLEND** into RRF normally. This is the `retrieve()` index built *after* schema routing (`agent.py:410`), so it improves within-scope recall, not schema selection. Each note is its own vector so it does not dilute a table's vector; note bodies stay out of the routing `schema_documents` signal entirely (see Gap-A note below). |
-| **Regex/keyword trigger** | deterministic patch for NAMED misses | new `retrieval/triggers.py::fire_triggers(corpus, q)`, unioned into `selected` (`rvgd.py:354-372`) and into `shortlist_schemas` (`schema_router.py:130-180`) | **PIN, never blend.** No lexical trigger score ever enters RRF, respecting the RRF-hurts finding above. Capped (≤3) with certified > draft > confidence as the tiebreak. |
+| **Regex/keyword trigger** | deterministic patch for NAMED misses | new `retrieval/triggers.py::fire_triggers(corpus, q)`, unioned into `selected` (`rvgd.py:354-372`) and into `shortlist_schemas` (`schema_router.py:130-180`) | **PIN, never blend.** No lexical trigger score ever enters RRF, respecting the RRF-hurts finding above. Capped (≤3); the tiebreak reads `publication_status` first (certified > draft), then `confidence` (Inference-tier, so it survives `for_analyst` too). |
 | **Agent-fetch** | "agent reads a short piece of text" | new read-only, non-licensing tools `read_notes(target)` / `grep_notes(pattern)` added to the list `make_tools` returns (`tools.py:289`) | **Neither.** Not added to `_GOVERNED_TOOLS` (`middleware.py:40`), so `wrap_tool_call`'s dispatch (`middleware.py:219-222`, `if name not in _GOVERNED_TOOLS: return handler(request)`) passes them straight through untouched. Both honor `governance.excluded` via `_is_excluded` (`tools.py:33-35`); reading a note that names table X still requires `inspect_schema(X)` to license X for `run_query`. Safety by topology, not by the tool's own discretion. |
 
 ### What this fixes
@@ -209,8 +240,9 @@ content-scanning validator would be needed for a structural guarantee.
    not over the incoming question. Default to keyword-only triggers; defer
    regex-over-question (it needs a `regex`/RE2 dependency plus a per-match
    timeout, because Python's stdlib `re` has no ReDoS timeout).
-2. **Uncertified notes must get zero routing-order authority.** A single
-   wrong note bumping a schema's score can evict the correct schema from
+2. **Uncertified notes (`publication_status` not `certified`) must get zero
+   routing-order authority.** A single wrong note bumping a schema's score
+   can evict the correct schema from
    `top_k=3` (`DEFAULT_SCHEMA_TOP_K`, `schema_router.py:33`). This must be
    proven, not assumed: run an adversarial-wrong-note test and show recall@3
    does not regress before trusting the PIN in production.
@@ -230,6 +262,14 @@ content-scanning validator would be needed for a structural guarantee.
    `adversary.py:52-93`) until the LLM refutation seam actually lands. "A
    human signed off" (D6) is the only real gate for now, not "an adversary
    tried and failed to break it."
+6. **`grep_notes` needs the same ReDoS bound as limit #1.** An agent-supplied
+   pattern reaches `re` the same way a question-side trigger would, so
+   `grep_notes` must bound its regex (RE2, or a per-match timeout) and cap
+   its output size before it ships in Phase 3; this is the same mitigation
+   limit #1 already requires on the question side, not a separate one. The
+   structural fix for the PII-prose leak above is a content-scanning
+   validator over `NoteAsset.statement` for excluded identifiers, not just
+   deleting the one known offending line during migration.
 
 ## Consequences
 
@@ -304,7 +344,14 @@ content-scanning validator would be needed for a structural guarantee.
    dedups into
    `rule_boolean_flags`, a `Column.reliability.note`, and
    `governance.excluded` (the `CreditCardNumber` line disappears entirely,
-   since exclusion already covers it).
+   since exclusion already covers it). Also teach `validate_corpus`'s
+   `require()` (`corpus/validate.py:151-153`) the `schema:`/`db:` scope
+   sentinels so a schema- or db-scoped note does not redden CI as a
+   dangling reference, and give `db:` a real backing identity in
+   `DataSourceConfig` (`config.py`, which has no `db` field today;
+   `corpus_pin` defaults to `beer_factory`, never `main`); absent that,
+   adopt the structured `ScopeTarget` (Open Q2) instead of sentinel strings
+   before this phase ships.
 2. **Wire injection for real.** Extend the scope-injection resolver
    (`context.py:290-297`) to `schema:` / `metric_` / `join_` / `col_`; render
    triggered/`on_match` notes into the prompt. Add a no-EX-regression eval arm
@@ -315,9 +362,13 @@ content-scanning validator would be needed for a structural guarantee.
    original ask without touching the scoring path at all.
 4. **Trigger PIN.** Add `Trigger` + `retrieval/triggers.py` + shortlist-level
    trigger PIN (keyword-only, capped, outside RRF); measure trigger coverage
-   on a held-out split before trusting it on the full 69 schemas.
+   on a held-out split before trusting it on the full 69 schemas. This
+   phase must not ship live PIN authority (the certified/draft tiebreak
+   actually deciding a schema pick) before Phase 5's `publication_status`
+   gate lands; until then, treat every PIN as dev-only and unranked.
 5. **Certified-gates-PIN.** Wire dev-graduation (draft usable in dev,
-   certified required in prod) as separate, comparable eval arms.
+   certified required in prod) as separate, comparable eval arms. This is
+   the gate Phase 4's tiebreak depends on (see above).
 6. **Second per-schema vector, only if still needed.** If schema-routing
    recall still caps EX after Phases 1-4, add a max-pooled second per-schema
    note vector, with count-bias mitigation; notes stay excluded from
@@ -326,8 +377,10 @@ content-scanning validator would be needed for a structural guarantee.
    first client for the still-unbuilt refutation seam (`adversary.py:96-104`),
    before "certified" PIN authority is trusted in production.
 
-Phases 1-3 deliver the headline feature (governed, creatable, tri-modally
-retrievable notes on any asset or namespace); Phases 4-7 are hardening and
+Phases 1-3 deliver notes as a governed, creatable asset, the semantic and
+agent-fetch retrieval modes, and the prompt-bloat fix; the trigger-PIN mode
+and, with it, Gap-A routing-reachability come in Phase 4 (plus the deferred
+Phase 6 max-pool vector); Phases 5-7 are further hardening and
 scale-proving.
 
 ## Open questions (for the maintainer)
@@ -347,3 +400,14 @@ scale-proving.
    just relabeled as rules instead of skills.
 5. **PIN authority gate.** Confirm draft-in-dev / certified-in-prod as the
    default before Phase 5 ships.
+6. **[C2] Three fields instead of one derived one?** Should `kind`,
+   activation (`always`/`on_match`), and normative force
+   (`must_honour`/`advisory`) be three separate fields, rather than
+   `enforcement` being derived from `kind` by a validator? As written,
+   `enforcement` is effectively `kind` relabeled, and it blocks combinations
+   the model should be able to express, for example a keyword-triggered
+   `business_rule` (`on_match` plus `must_honour`).
+7. **[H1] Conflict/precedence rule for competing `always` notes.** No rule
+   exists today for two `always` notes (or an `always` and an `on_match`)
+   on the same scope that disagree. Needs a precedence rule before Phase 2
+   renders more than one into the same prompt.

@@ -590,15 +590,17 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   新增只读、无需授权的 `read_notes` / `grep_notes` 工具，靠拓扑保证安全。
 - **治理升级。** 作为 `Asset` 联合类型成员，`NoteAsset` 继承三段字段分层、
   `for_analyst` 审计剥离、`Provenance`、`validate_corpus`，以及一个 `Governance`
-  区块（`RuleAsset`/`NegativeExampleAsset` 今天都没有该区块，故 D6 的 `excluded=true`
-  对规则是静默空操作，此举一并修好）。未经认证的笔记对路由排序拿到**零**话事权，因为
+  区块（`RuleAsset`/`NegativeExampleAsset` 今天都没有该区块，且带 `governance:` 键会在
+  `extra="forbid"` 下于解析时被直接拒绝，所以 D6 排除对规则根本无法书写，此举一并修好）。未经认证的笔记对路由排序拿到**零**话事权，因为
   一条错误笔记可能把正确 schema 挤出 `top_k`；硬 PIN 由 certified 门控，并按环境放行。
 - **与 D9 / D15 / D16 的关系。** 细化 **D9** 语料库契约（`rules/` → `notes/`、
   新增 `note` asset_type）与 **D15** schema 路由（schema 限定的笔记终于可被触达）；
   agent 直读工具接入 **D16** 的只读工具集。
 - **状态：Proposed（仅设计）。** ADR 0003 记录了 5 个待定决策（重命名改动量、scope
   前缀 vs 结构化 `ScopeTarget`、推迟对问题做正则、全局常驻笔记预算、PIN 权限门控）
-  与 7 阶段迁移；Phase 1-3 交付核心功能。尚无代码。
+  与 7 阶段迁移。Phase 1-3 交付的是受治理、可创建的笔记资产，以及语义与 agent 直读
+  两种模式；trigger-PIN 模式与 Gap A 的路由可达性要到 Phase 4（及推迟的 Phase 6）。
+  尚无代码。
 
 ## D18：本地优先的对话与运行日志
 
@@ -607,9 +609,9 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 >
 > 持久、**前端无关**的对话历史外加每一轮的元数据，归属在 DeepAgents/LangGraph
 > 后端，因此每个客户端（UI、CLI、eval）都自动继承。以 LangGraph 原生持久化为存储：
-> 一个持久化 checkpointer（本地 `SqliteSaver` / 生产 `PostgresSaver`）在每条 serve
-> 路径上保存对话状态（今天 `graph_app.py` 编译时不带 checkpointer，REST `/chat`
-> 路径没有任何持久化）。这是审计结论 **R3**（以轮次 + `corpus_release_hash` 为键的
+> 一个持久化 checkpointer（本地 `SqliteSaver` / 生产 `PostgresSaver`）在
+> LangGraph-Server / `useStream` 路径上保存对话状态；纯 REST 的 `/chat` 路由按设计
+> 是无状态的，是一个独立的后续步骤（今天 `graph_app.py` 编译时不带 checkpointer）。这是审计结论 **R3**（以轮次 + `corpus_release_hash` 为键的
 > 厂商无关交互日志）与 **R5**（持久化台账；补上 token/成本/耗时/时间戳）的具体落地，
 > 并修好 **D8** 的易失性。
 

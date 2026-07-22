@@ -76,65 +76,129 @@ portable append** for longevity and eval reuse.
 Swap the ephemeral setup (no checkpointer at all on `build_chat_graph`,
 `graph_app.py:181`, and an in-memory saver scoped only to inner-agent HITL,
 `stack.py:172-178`) for a durable checkpointer: `SqliteSaver` (a local
-file) in dev, `PostgresSaver` in prod. This is a config flip, mirroring the
-dev→prod pattern `memory/store.py:3-4` already states for durable memory
-("Dev backing = in-memory / SQLite / files; prod = Postgres + pgvector").
-Attach a durable saver where the chat graph is compiled standalone; on
-LangGraph Server the runtime injects the durable backend, so `build_chat_graph`
-stays checkpointer-less for the server entry (`graph_app.py:103-104`).
-Conversation history is then the persisted `messages` on `ChatState`
-(`graph_app.py:38-46`), referenceable later through the standard LangGraph
-thread API (`get_state` / `get_state_history` / list threads) that every client
-on the streaming / `useStream` path shares. This is the ADR 0001 thread model,
-made durable and frontend-agnostic for that path. **It covers the
-LangGraph-Server / `useStream` path only, not the plain REST `/chat` route**,
-which calls `answer_question_agent` directly and is stateless by design
+file) in dev, `PostgresSaver` in prod. This is NOT a pure config flip.
+`SqliteSaver` / `PostgresSaver` ship in the separate `langgraph-checkpoint-sqlite`
+/ `langgraph-checkpoint-postgres` packages, neither of which is a current
+dependency (`pyproject.toml` lists only the base `langgraph` package), and
+there is no checkpointer path or DSN config field on `Settings` or
+`DataSourceConfig` today (`config.py`). Phase 1 has to add the dependency and
+a checkpointer/DSN config field as explicit work. The dev to prod pattern
+`memory/store.py:3-4` states for durable memory ("Dev backing = in-memory /
+SQLite / files; prod = Postgres + pgvector (a config flip)") describes an
+unimplemented aspiration for those durable memory stores, not a precedent
+already wired up in this codebase. Once added, attach a durable saver where
+the chat graph is compiled standalone; on LangGraph Server the runtime injects
+the durable backend, so `build_chat_graph` stays checkpointer-less for the
+server entry (`graph_app.py:103-104`). Conversation history is then the
+persisted `messages` on `ChatState` (`graph_app.py:38-46`), referenceable
+later through the standard LangGraph thread API (`get_state` /
+`get_state_history` / list threads) that every client on the streaming /
+`useStream` path shares. This is the ADR 0001 thread model, made durable and
+frontend-agnostic for that path. **It covers the LangGraph-Server /
+`useStream` path only, not the plain REST `/chat` route**, which calls
+`answer_question_agent` directly and is stateless by design
 (`api/app.py:414-459`, "the caller persists the transcript," with a fresh
 `InMemoryWorkingMemory` per request). Making REST `/chat` durable is a separate
 migration step: route it through the checkpointed graph, or add persistence
 inside `answer_question_agent`.
 
+**Naming the roles.** The checkpointer is the thread resume / UX store: it is
+not a cache, it is not the audit record, and it carries no retention guarantee
+across LangGraph upgrades. Once the write-consistency contract and the
+full terminal-outcome coverage in Decision §3 hold, the portable append is the
+authoritative historical / audit record, the artifact to query for "history
+to reference later."
+
 ### 2. Metadata captured at the existing seams, persisted alongside the turn
 
 - **Tokens.** Read `usage_metadata` (input/output/total tokens; Anthropic and
   OpenAI populate it natively via LangChain) off the model response and roll it
-  up in `_finalize_success` (below). The capture seam is
-  `GovernanceMiddleware.wrap_model_call` (`middleware.py:159`, already present to
-  force sequential tool calls), which receives the model response. Confirm the
-  exact state-write path against the installed middleware API (an `after_model`
-  hook, or reading usage off the returned AIMessages) rather than assuming it can
-  mirror the `ledger`'s `wrap_tool_call` `Command(update=...)` write
-  (`middleware.py:43-47`): `wrap_model_call` returns a `ModelResponse`, so its
-  channel-write mechanism differs. This is the one genuinely new capture; today
-  tokens are dropped (`run_experiment.py:213`).
+  up in the shared finalize-and-log helper (below, Decision §3). The capture
+  seam is `GovernanceMiddleware.wrap_model_call` (`middleware.py:159`, already
+  present to force sequential tool calls), which receives the model response.
+  Capture `usage_metadata` from the PRE-coercion response, before it reaches
+  `_coerce_single_tool_call` (`middleware.py:175`, rebuild logic at
+  `middleware.py:189-216`): that helper rebuilds the `AIMessage` from only
+  `content`, `tool_calls[:1]`, `id`, and `additional_kwargs`, so it drops
+  `usage_metadata` on any turn where the model emitted parallel tool calls.
+  Confirm the exact state-write path against the installed middleware API (an
+  `after_model` hook, or reading usage off the returned AIMessages) rather than
+  assuming it can mirror the `ledger`'s `wrap_tool_call` `Command(update=...)`
+  write (`middleware.py:43-47`): `wrap_model_call` returns a `ModelResponse`, so
+  its channel-write mechanism differs. This is the one genuinely new capture;
+  today tokens are dropped (`run_experiment.py:213`). `wrap_model_call` only
+  wraps the inner serve agent, so it does not see every model call in the
+  system: the schema router's `select_schema` / `router_chat` (`agent.py:394`),
+  the narrator (`narrate_node`, `agent.py:855`), and the curator/SME graphs
+  (`curator/deep_agent.py:285`, `curator/sme.py:164`) each make model calls
+  outside this seam and need their own capture points. Add a fallback that
+  records a failed-call outcome when a model call raises before returning a
+  response, so an error mid-call does not silently vanish from the
+  token/cost record.
 - **Ledger + duration + ts.** `wrap_tool_call` (`middleware.py:219`) already
   writes a ledger entry per governed action (`middleware.py:234-361`, e.g. the
   `pass` entry at `middleware.py:347-354`); add `duration_ms` and a timestamp
   to each entry (R5 item 1, `design-decisions.md:509-510`).
 - **Roll-up.** `_finalize_success` (`analyst/governance.py:561`, invoked from
-  `agent_core_node` in `analyst/agent.py:837`) already merges `base_provenance`
-  with `governance_ledger` and turn facts into `Answer.provenance`
-  (`governance.py:587-599`); extend that merge to also write model + tier,
-  token sums plus a per-call breakdown, an estimated cost (from a price
-  table), latency, outcome, the two-axis stamp (`safety_clearance` /
-  `semantic_assurance`), `tables_used`, routed schema(s), the ledger,
-  `corpus_release_hash` / `corpus_pin`, session/identity, and `serve_path`.
-  `base_provenance` is threaded from `ServeRailsState` (`agent.py:141`;
-  populated at `agent.py:445`, consumed at `agent.py:746`), so this is additive
-  to an existing seam, not a new one.
+  `agent_core_node` in `analyst/agent.py:837`) is the SUCCESS path's merge of
+  `base_provenance` with `governance_ledger` and turn facts into
+  `Answer.provenance` (`governance.py:587-599`); extend that merge to also
+  write model + tier, token sums plus a per-call breakdown, an estimated cost
+  (from a price table), latency, outcome, the two-axis stamp
+  (`safety_clearance` / `semantic_assurance`), `tables_used`, routed
+  schema(s), the ledger, `corpus_release_hash` / `corpus_pin`,
+  `serve_config_hash` (a hash of the governance/routing config: thresholds,
+  `top_k`, RRF weights, flags, so an identical corpus with a different config
+  is distinguishable), `producer` / `data_split` / `export_allow`, stable
+  immutable `turn` / `run` / `thread` ids, session/identity, and `serve_path`.
+  Recommended future work, not built now: note-lifecycle events, content and
+  context digests, and curator/SME to note lineage; the real corpus-release
+  identity stays deferred to D11. `base_provenance` is threaded from
+  `ServeRailsState` (`agent.py:141`; populated at `agent.py:445`, consumed at
+  `agent.py:746`), so this is additive to an existing seam, not a new one.
+  `_finalize_success` is the ONLY success finalizer, called from this one
+  site; every other terminal outcome returns through a different function: a
+  cache hit through `_try_cache_hit`'s `assemble(...)` (`governance.py:401`,
+  `governance.py:457`); a refusal, a safety block, or a graded/unverified
+  delivery through `_finish_unsuccessful`'s `refusal(...)` /
+  `graded_delivery(...)` (`governance.py:460`, `governance.py:497,518,542,550`);
+  a `GovernanceHardStop` caught directly in `agent.py`, e.g. `agent.py:691`;
+  and the `ask_user` clarify / declined paths (`agent.py:671,675`). The
+  roll-up above cannot live inside `_finalize_success` alone: it has to move
+  into a shared finalize-and-log helper that every one of those
+  terminal-outcome functions calls, so a refusal or a safety block carries the
+  same metadata as a success (see Decision §3).
 
 ### 3. One thin decoupled portable append (the only addition beyond pure-native)
 
-`_finalize_success` also appends **one portable record per turn** (a SQLite
-row or JSONL line) OUTSIDE LangGraph's internal checkpoint schema. Rationale:
-the checkpoint tables are LangGraph-version-coupled and shaped for resume, not
-for reading back a year later or reusing in eval. This decoupled record is the
-durable, portable, human-readable "reference-it-in-the-future" log, keyed by
-turn + `corpus_release_hash`, exactly R3's key
-(`design-decisions.md:450-451`, "a dedicated, queryable, vendor-independent
-interaction log ... keyed by turn + `corpus_release_hash`"). It also closes
-the `run_experiment.py:213` `"usage": None` gap, because eval reads
-tokens/cost from the same append instead of hard-coding `None`.
+The roll-up in §2 and this portable append must both run from a single shared
+finalize-and-log helper, invoked by EVERY terminal-outcome function, not from
+`_finalize_success` alone: success (`_finalize_success`, `governance.py:561`),
+a cache hit (`_try_cache_hit`, `governance.py:401`, which returns via
+`assemble(...)` at `governance.py:457`), a refusal, a safety block, or a
+graded/unverified delivery (`_finish_unsuccessful`, `governance.py:460`, via
+`refusal(...)` / `graded_delivery(...)` at `governance.py:497,518,542,550`), a
+`GovernanceHardStop` (caught directly in `agent.py`, e.g. `agent.py:691`), and
+the `ask_user` clarify / declined paths (`agent.py:671,675`). Routing the
+roll-up and the append solely through `_finalize_success` would silently
+exclude refusals and blocks, the turns an auditor most wants, from the log;
+the shared helper is what closes that gap.
+
+That shared helper appends **one portable record per turn** (a SQLite row or
+JSONL line) OUTSIDE LangGraph's internal checkpoint schema, one record for
+every terminal outcome above, not only on success. Rationale: the checkpoint
+tables are LangGraph-version-coupled and shaped for resume, not for reading
+back a year later or reusing in eval. This decoupled record is the durable,
+portable, human-readable "reference-it-in-the-future" log, keyed by turn +
+`corpus_release_hash`, exactly R3's key (`design-decisions.md:450-451`, "a
+dedicated, queryable, vendor-independent interaction log ... keyed by turn +
+`corpus_release_hash`"). `corpus_release_hash` itself is not implemented
+today (zero occurrences of the term in `src/`) and depends on the
+`CorpusRelease` decision (D11, `design-decisions.md:453`), which is still
+pending; until D11 lands, a git-SHA-per-checkpoint stand-in is the interim
+key, per R3's own caveat. It also closes the `run_experiment.py:213`
+`"usage": None` gap, because eval reads tokens/cost from the same append
+instead of hard-coding `None`.
 
 ### 4. Scope: serve conversations AND DeepAgents runs
 
@@ -161,12 +225,18 @@ per-run record. One mechanism, three producers (serve, curator, SME).
   input by design: `_try_cache_hit` (`governance.py:401,417`) is called from the
   `cache_lookup` node (`agent.py:451-454`) and can short-circuit the current turn
   on a hit. The metadata log deliberately has no equivalent read path.
-- **Full content now; masking later.** The log stores questions, SQL, and row
-  previews verbatim, because it is a historical record and is not consumed
-  during a run. `obs.py`'s `GOVERNED_BI_TRACE_MAX_CHARS` masking
+- **Metadata-only first; full content gated on a privacy decision.** A
+  metadata-only append (turn id, tokens, cost, duration, outcome, no verbatim
+  content) carries none of the exposure risk that verbatim logging does, and
+  ships first. Full content, questions, SQL, and row previews verbatim, is a
+  historical record and is not consumed during a run, but it must not be on
+  by default in any shared or deployed environment until a retention
+  default, an access-control posture, and local-file-permissions are at
+  least explicitly decided. `obs.py`'s `GOVERNED_BI_TRACE_MAX_CHARS` masking
   (`obs.py:61-91`, applied via `_trace_mask` in `_langfuse_handler` at
-  `obs.py:115`) applies to the cloud tracer path only. Masking and retention
-  are a deferred future toggle, explicitly not built now.
+  `obs.py:115`) applies to the cloud tracer path only. Masking, retention,
+  and the default-on decision for full content are deferred, explicitly not
+  built now.
 - **Local-first, on by default.** Unlike the cloud tracers, which are "both
   no-ops when unset" (`obs.py:1-4`), the local log is on by default and needs no keys.
 
@@ -190,11 +260,19 @@ per-run record. One mechanism, three producers (serve, curator, SME).
 - The durable checkpointer needs a real database in prod (Postgres), the
   same deployment note ADR 0001 already carries.
 - A full-content local log is a sensitive artifact: verbatim questions, SQL,
-  and row previews. Masking + retention are deferred, accepted for now because
-  it is an operator-side historical log, not something consumed at runtime.
+  and row previews. It ships gated: off by default outside a single-operator
+  local dev setup, until a retention default, an access-control posture, and
+  local-file-permissions are decided. The metadata-only append ships first and
+  carries none of that risk. Masking and the default-on decision for full
+  content are deferred.
 - The portable append is a second write per turn, on top of the checkpointer
   write. Cheap, but not free, and it is a second place that can drift from the
-  checkpoint state if the two writes are not kept in lockstep.
+  checkpoint state if the two writes are not kept in lockstep. The two writes
+  need one concrete write-consistency contract: at-least-once delivery with an
+  idempotent upsert keyed by a stable turn/run id, or a single-writer outbox
+  with reconciliation, and the append must be replay-idempotent on a
+  LangGraph resume. Writing both from one shared helper is a starting point,
+  not itself a durability guarantee.
 
 ## Alternatives considered
 
@@ -219,7 +297,11 @@ per-run record. One mechanism, three producers (serve, curator, SME).
 
 ## Migration (phased; each phase independently shippable)
 
-1. Attach a durable saver on standalone/local compilation of the chat graph so
+1. Add the `langgraph-checkpoint-sqlite` / `langgraph-checkpoint-postgres`
+   dependency (neither ships with the base `langgraph` dependency in
+   `pyproject.toml` today) and a checkpointer/DSN config field on `Settings` /
+   `DataSourceConfig` (`config.py`, which has no such field today). Then
+   attach a durable saver on standalone/local compilation of the chat graph so
    the LangGraph-Server / `useStream` path persists conversation history (native,
    no new schema; `build_chat_graph` stays checkpointer-less for the server
    entry, `graph_app.py:103-104`, to avoid colliding with the platform's injected
@@ -227,17 +309,33 @@ per-run record. One mechanism, three producers (serve, curator, SME).
    checkpointed graph, or persist inside `answer_question_agent`,
    `api/app.py:414-459`) is a distinct follow-on step.
 2. Capture tokens in `wrap_model_call` (`middleware.py:159`) into a new
-   `token_usage` channel; stamp each ledger entry with `duration_ms` + ts
-   (`middleware.py:219`); extend `_finalize_success`
-   (`governance.py:561`) to roll up the per-turn metadata onto
-   `Answer.provenance`.
-3. Add the thin portable per-turn append, written from `_finalize_success`,
-   keyed by turn + `corpus_release_hash`; wire `run_experiment.py` to read
-   tokens/cost from it instead of hard-coding `"usage": None`
-   (`run_experiment.py:213`).
-4. Extend to DeepAgents: checkpointer + run id + portable record for the
+   `token_usage` channel, reading `usage_metadata` off the PRE-coercion
+   response before `_coerce_single_tool_call` (`middleware.py:175`, rebuild
+   logic at `middleware.py:189-216`) can drop it; add separate capture points
+   for the schema router (`select_schema` / `router_chat`, `agent.py:394`),
+   the narrator (`narrate_node`, `agent.py:855`), and the curator/SME graphs
+   (`curator/deep_agent.py:285`, `curator/sme.py:164`), all of which call
+   models outside the `wrap_model_call` seam; stamp each ledger entry with
+   `duration_ms` + ts (`middleware.py:219`); and add a fallback that records a
+   failed-call outcome when a model call raises before returning a response.
+3. Enumerate every terminal-outcome function (success, cache hit, refusal,
+   safety block, graded/unverified delivery, hard stop, and clarify/declined;
+   see Decision §3) and route each one through a single shared
+   finalize-and-log helper, so the roll-up onto `Answer.provenance` and the
+   portable append below cover every outcome, not only success.
+4. Add the thin portable per-turn append as METADATA-ONLY first (turn id,
+   tokens, cost, duration, outcome; no verbatim content), written from the
+   shared helper, keyed by turn + `corpus_release_hash` (interim: a
+   git-SHA-per-checkpoint stand-in until the `CorpusRelease` decision, D11,
+   lands); wire `run_experiment.py` to read tokens/cost from it instead of
+   hard-coding `"usage": None` (`run_experiment.py:213`).
+5. Add FULL-CONTENT logging (verbatim questions, SQL, row previews) to the
+   append as a follow-on step, gated on deciding a retention default, an
+   access-control posture, and local-file-permissions; not on by default in
+   any shared or deployed environment until then.
+6. Extend to DeepAgents: checkpointer + run id + portable record for the
    curator (`pipeline.py:263-268`) and SME (`sme.py:219-221`) invokes.
-5. (Deferred) masking toggle + retention/rotation; optional relational upgrade
+7. (Deferred) masking toggle + retention/rotation; optional relational upgrade
    of the portable store for dashboards/metrics, per R5 items 4-5
    (`design-decisions.md:513-514`: OpenTelemetry/Prometheus surface,
    fail-loud tracing).
@@ -250,3 +348,8 @@ per-run record. One mechanism, three producers (serve, curator, SME).
   `_finalize_success`).
 - Prod checkpointer: reuse the serving Postgres or a separate logging
   database.
+- Durability for the inner HITL `clarify_checkpointer` (`stack.py:172-178`,
+  today a per-process `InMemorySaver` scoped only to `ask_user` interrupt /
+  resume): whether to give it its own durable backend now, alongside the
+  conversation checkpointer in §1, or accept the current resume-window risk
+  and track it as later work.
