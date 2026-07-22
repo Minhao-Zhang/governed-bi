@@ -61,7 +61,7 @@ uv run python -m governed_bi.corpus.cli --help
 成功时的输出：
 
 ```
-CI green: 16 assets, 1 skills, 0 findings.
+CI green: 17 assets, 0 findings.
 ```
 
 验证失败时，会列出每一条问题项（例如 `dangling-ref [metric_revenue]:
@@ -81,9 +81,9 @@ Pydantic 模型，因此格式有误的资产会立刻失败并报错。
 from pathlib import Path
 from governed_bi.corpus import load_corpus, validate_corpus, is_green, parse_asset
 
-# Load a DB's corpus (YAML assets + Markdown skills) into typed models.
+# Load a schema's corpus (YAML typed assets) into models.
 corpus = load_corpus(Path("corpus"), schema="beer_factory")
-print(len(corpus.assets), "assets;", len(corpus.skills), "skills")
+print(len(corpus.assets), "assets")
 
 # Run the same checks the CLI runs.
 findings = validate_corpus(corpus.assets)
@@ -173,10 +173,10 @@ deepagents 的 curator 也需要同一个 key。
 
 本仓库**不附带任何 UI**。只读的审计/审查界面由两个与 UI 无关的部分组成：
 `governed_bi.viz.presenter` 视图模型（corpus 健康度、表/档位视图、关系/知识图谱、
-资产列表、技能，以及某个答案的双轴可靠性标记——不依赖任何 UI），以及
+资产列表，以及某个答案的双轴可靠性标记，不依赖任何 UI），以及
 `governed_bi.api` 这个 FastAPI HTTP/JSON API，它在 `POST /chat` 处提供这些视图模型
 以及受治理的智能体核心。视图模型相关的端点（`/health`、`/schema`、`/graph`、
-`/corpus/assets`、`/skills` 等）不需要模型；`/chat` 需要，没有模型会返回 `503`。
+`/corpus/assets` 等）不需要模型；`/chat` 需要，没有模型会返回 `503`。
 运行该 API：
 
 ```bash

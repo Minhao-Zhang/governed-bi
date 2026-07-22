@@ -114,8 +114,7 @@ stream.submit(
 | `GET /schema/{table_id}` | 单张表的**完整** `TableResponse`（含 `schema`），在打开详情时惰性拉取；未知 id 返回 `404` |
 | `GET /graph` | **ER 图** `{ nodes, edges, boundary?, meta? }`（节点带 `schema`/`row_count`/`n_columns`/`has_suspect`；边带 `on`/`cardinality`/`confidence`/`low_confidence`）。可选 D15 划范围：`?schema=&focus=&radius=&node_budget=`——划范围响应含 `boundary` + `meta`（回显 `scope` 供 `engineScopeMatches`）。无参 = 全图 |
 | `GET /knowledge-graph` | **完整知识图谱** `{ nodes, edges, boundary?, meta? }`；表节点带 `schema`。与 `/graph` 相同的划范围参数，外加 `?kinds=`（逗号分隔） |
-| `GET /corpus/assets?type=` | 非 table 资产（metric/term/join/rule/few_shot/negative） |
-| `GET /skills` | skills（markdown）；每条带 **`schema`**。部分 corpus 可能为空——形状仍以 OpenAPI / zod 为准 |
+| `GET /corpus/assets?type=` | 非 table 资产（`note` 取代了原来的 `rule`；`skill` 已移除，`?type=rule` 会返回 422） |
 | `POST /corpus/edit` *（仅 dev；以 `can_edit` 为门槛）* | 校验提交的资产 → 写入 YAML（dev）/ 提交 PR（prod）；返回校验结果 + diff |
 
 ---
@@ -416,7 +415,7 @@ stream.submit(
 - `column_id` 是**派生出来**的列 id:`col_<不带 'tbl_' 前缀的表 id>_<物理列名>`
   ——例如 `col_beer_factory_customers_CustomerID`(见
   `corpus.ids.derive_column_id`)。这与 `Column.references`、
-  `TermBinding.asset_id`、`RuleAsset.scope` 条目所用的是**同一套 id**。
+  `TermBinding.asset_id`、`NoteAsset.scope` 条目所用的是**同一套 id**。
 - 当该 id 无法解析到一个已知列时返回 `404`。
 
 ### 14.2 响应(`ColumnRelatedResponse`)
@@ -434,8 +433,8 @@ stream.submit(
     { "id": "term_customer_id", "name": "customer id", "synonyms": ["cust id"],
       "confidence": 0.9, "provenance_status": "draft" }
   ],
-  "rules": [                            // RuleAsset 的 `scope` 里含这一列的 id(KG 关系:"scopes")
-    { "id": "rule_active_customer", "kind": "business_rule",
+  "rules": [                            // NoteAsset 的 `scope` 里含这一列的 id(KG:"scopes";wire key 仍是 `rules`)
+    { "id": "note_active_customer", "kind": "business_rule",
       "statement": "…", "confidence": 0.8, "provenance_status": "draft" }
   ],
   "fk_out": {                           // 这一列自身的 Column.references,已解析;不是 FK 则为 null
@@ -468,7 +467,7 @@ stream.submit(
 两套不同的列标识方案同时存在——这里搞错的话 join 就对不上号:
 
 - **资产 id 方案** —— `col_<table>_<physical_name>`(来自 `derive_column_id`)。
-  被 `TermBinding.asset_id`、`RuleAsset.scope`、`Column.references` 使用。
+  被 `TermBinding.asset_id`、`NoteAsset.scope`、`Column.references` 使用。
   `terms`、`rules`、`fk_out`、`fk_in` 都直接用它做键。
 - **物理谓词方案** —— `JoinAsset.on` 是一个基于**物理**列名(而**不是**列 id)的
   原始 SQL 相等字符串(`"customers.CustomerID = orders.CustomerID"`)。所以

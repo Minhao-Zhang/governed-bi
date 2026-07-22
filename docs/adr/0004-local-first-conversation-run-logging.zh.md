@@ -2,8 +2,8 @@
 
 _[English](0004-local-first-conversation-run-logging.md) · [简体中文](0004-local-first-conversation-run-logging.zh.md)_
 
-- **状态：** Proposed（提议中） (2026-07-21)。设计已与项目负责人达成一致；尚无
-  代码。
+- **状态：** Accepted（已接受）(2026-07-22)。M2 元数据轨道 + 持久对话
+  checkpointer 已落地；M5 门控全量内容 + deep-agent 日志进行中。
 - **决策者：** 项目负责人 + 设计会议
 - **相关文档：** [0001](0001-langgraph-server-chat-runtime.zh.md)（LangGraph
   Server 线程 = 持久化）；[0002](0002-governed-agentic-serve-runtime.md)（治理
@@ -196,17 +196,18 @@ serve agent（`create_agent` + `GovernanceMiddleware`，在 `build_agent_core`
   活路径输入：`_try_cache_hit`（`governance.py:401,417`）由 `cache_lookup` 节点
   （`agent.py:451-454`）调用，命中时可以让当前这一轮短路返回。元数据日志刻意
   没有对应的读取路径。
-- **先只存元数据；存全部内容要等一个隐私决定。** 一条只含元数据的追加记录
-  （turn id、token、成本、耗时、outcome，不含原样内容）不带来原样日志那种
-  暴露风险，所以先上线。原样存下问题、SQL 与行预览这份全部内容，虽然是一份
-  历史记录、不会在运行过程中被消费，但在任何共享或已部署的环境里，都不能
-  默认开启，除非留存默认值、访问控制姿态与本地文件权限至少都已被明确决定。
-  `obs.py` 的 `GOVERNED_BI_TRACE_MAX_CHARS` 打码机制（`obs.py:61-91`，通过
-  `_langfuse_handler` 里的 `_trace_mask` 应用，`obs.py:115`）只作用于云端
-  追踪器这条路径。打码、留存，以及"全部内容默认开启"这个决定都被推迟，
-  明确不在现在构建。
-- **本地优先，默认开启。** 与"未设置密钥时都是空操作（no-op）"的云端追踪器
-  （`obs.py:1-4`）不同，本地日志默认开启，不需要任何密钥。
+- **默认只存元数据；全量内容需显式开启（H11，已决议）。** 三档：
+  **Tier A** 元数据始终写入（turn id、token、成本、耗时、outcome、台账 verdict，
+  不含原样问题/SQL/答案/行）；**Tier B** 原样问题/SQL/答案文本，需
+  `log_full_content`；**Tier C** 行预览，需同时开启 `log_row_previews` 与
+  `log_full_content`。B/C 默认关闭。留存：`log_full_content_ttl_days`（默认 30，
+  由 `prune_full_content` 清空 B/C，保留 Tier A）。存储姿态：POSIX 文件 `0600`、
+  父目录 `0700`；win32 上 `os.chmod` 无法同等限制 group/other，写明单人操作
+  caveat，不要假装。Prod 门控：`environment=prod` 且 `log_full_content` 但未设
+  `log_full_content_ack` 时在 `build_stack` 失败即报。云端追踪器打码
+  （`GOVERNED_BI_TRACE_MAX_CHARS`）与本策略独立。
+- **本地优先，默认开启。** 与"未设置密钥时都是空操作"的云端追踪器不同，本地
+  **元数据**日志默认开启，不需要密钥。全量内容分档保持可选。
 
 ## 影响
 
@@ -216,8 +217,8 @@ serve agent（`create_agent` + `GovernanceMiddleware`，在 `build_agent_core`
 - R3 / R5 以及 ADR 0002 Inv #10 那个持久审计存储，终于有了具体的落地，而
   不是又一个被推迟的接口。
 - 在该路径上修复了 D8 短暂性（ephemerality）对对话历史与治理 ledger 的影响。
-  （HITL 恢复用的是另一个内层 `clarify_checkpointer`，`stack.py:172-178`，需要
-  它自己的持久化步骤，不在 §1 覆盖范围内。）
+  （HITL 恢复用内层 `clarify_checkpointer`；H10 / M5-F7 经同一工厂、独立路径
+  做持久化，`kind=memory` 时仍用 `InMemorySaver`。）
 - 补上了 eval 里 `usage: None` 的缺口（`run_experiment.py:213`）；
   token/成本/延迟终于可以在本地测量，不需要厂商仪表盘。
 - deep agent（curator/SME）的运行拿到和 serve 轮次一样的持久记录：一套
@@ -226,10 +227,8 @@ serve agent（`create_agent` + `GovernanceMiddleware`，在 `build_agent_core`
 **负面 / 成本**
 - 持久化 checkpointer 在 prod 里需要一个真正的数据库（Postgres），这与
   ADR 0001 已经写明的部署提示是同一条。
-- 一份存全部内容的本地日志是一个敏感产物：原样保留的问题、SQL 与行预览。
-  它会被门控上线：除了单人操作的本地开发环境之外默认关闭，直到留存默认值、
-  访问控制姿态与本地文件权限都被决定为止。只含元数据的追加记录先上线，
-  不带那种风险。打码，以及"全部内容默认开启"这个决定都被推迟。
+- 一份存全部内容的本地日志是敏感产物。按 H11：B/C 为可选、TTL 裁剪、POSIX
+  权限并写明 win32 caveat，且 prod-ack 门控，默认不开。
 - 这条可移植追加记录是在 checkpointer 写入之上，每一轮多一次写入。代价
   不高，但也不是零成本，而且如果两次写入没有严格同步，它就是一个可能与
   checkpoint 状态出现偏差的第二存储点。这两次写入需要一份具体的写一致性
@@ -287,25 +286,28 @@ serve agent（`create_agent` + `GovernanceMiddleware`，在 `build_agent_core`
    D11 落地之前，用一个 git-SHA-per-checkpoint 的临时值）；让
    `run_experiment.py` 从这里读取 token/成本，而不再硬编码
    `"usage": None`（`run_experiment.py:213`）。
-5. 作为后续步骤，给追加记录加上**全部内容**日志（原样保留的问题、SQL、行
-   预览），门控在留存默认值、访问控制姿态与本地文件权限都被决定之后；在此
-   之前，在任何共享或已部署的环境里都不默认开启。
-6. 扩展到 DeepAgents：给 curator（`pipeline.py:263-268`）与 SME
-   （`sme.py:219-221`）的 invoke 也接上 checkpointer + run id + 可移植
-   记录。
-7. （推迟）打码开关 + 留存/轮转；把可移植存储可选地升级为关系型表，以支撑
-   仪表盘/指标，对应 R5 第 4-5 项（`design-decisions.md:513-514`：
-   OpenTelemetry/Prometheus 接口、失败即报警的追踪）。
+5. 在 H11 分档 + TTL + POSIX 权限 + prod-ack 下加入**全部内容**日志（M5）。
+   默认仍只含元数据。
+6. 扩展到 DeepAgents：`make_durable_checkpointer` + `emit_run_record`（一套机制、
+   三个 producer）；经 `UsageMetadataCallbackHandler` 捕获 usage；失败 invoke
+   仍写后备记录。
+7. （推迟）可移植存储可选升级为关系型表以支撑仪表盘/指标。B/C 的留存/轮转
+   **不**推迟，见 H11 / `prune_full_content`。
+
+## 已决议事项（2026-07-22）
+
+权威记录见 [D18](../design-decisions.zh.md#d18本地优先的对话与运行日志)。
+
+1. **[H11] 日志隐私 / 留存。** 默认只含元数据（Tier A）；Tier B 需
+   `log_full_content`；Tier C 需同时 `log_row_previews`；B/C 经
+   `prune_full_content` 做 30 天 TTL；POSIX `0600`/`0700` 并写明 win32 caveat；
+   prod 下缺 `log_full_content_ack` 时在 `build_stack` 失败即报。
+2. **[H10] 持久 `clarify_checkpointer`。** 与对话 saver 同一工厂
+   （`make_durable_checkpointer`），独立路径/命名空间；`kind=memory` 时用
+   `InMemorySaver`。
 
 ## 待定问题
 
-- 可移植记录的格式：SQLite 一行记录（可查询，依然能轻松导出，推荐）还是
-  JSONL（追加/grep 都极其简单）。
-- 价目表放在哪里，以及什么时候计算成本（config 里，还是在
-  `_finalize_success` 处）。
-- prod 的 checkpointer：复用 serving 用的 Postgres，还是用一个独立的日志
-  数据库。
-- 内层 HITL 用的 `clarify_checkpointer`（`stack.py:172-178`，今天是一个按
-  进程存在、只服务于 `ask_user` 中断/恢复的 `InMemorySaver`）的持久性：是
-  现在就给它一个自己的持久化后端，与 §1 里的对话 checkpointer 并列，还是
-  接受现在这个 resume 窗口期的风险，把它记作以后的工作。
+- 可移植记录格式：SQLite（默认）与 JSONL 均已实现。
+- 价目表放在哪里，以及什么时候计算成本。
+- prod 的 checkpointer：复用 serving Postgres，还是独立日志库。

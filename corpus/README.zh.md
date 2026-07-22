@@ -19,16 +19,15 @@ corpus/
     few-shots/   fs_<schema>_<n>.yaml
     terms/       term_<name>.yaml
     metrics/     metric_<name>.yaml
-    rules/       rule_<name>.yaml
+    notes/       note_<name>.yaml            # governed annotations (D17)
     negatives/   neg_<schema>_<n>.yaml
-    skills/      *.md                        # prose gotchas / query-patterns
   _generated/    # search index, embeddings, compiled graph (gitignored)
 ```
 
-> **D15**：`<schema>` 层级是 **schema** 命名空间，而非数据库——一次运行的数据库
-> （属于 connection-config 常量，并非语料建模的层级）可容纳多个 schema。磁盘
-> YAML 与 load/write API 使用字段/参数名 `schema`（相对 `db` 的硬切断）。资产
-> ID 不变。
+> **D15：**`<schema>` 层级是**schema**命名空间，而非数据库（一次运行所连接的
+> 数据库是 connection-config 里的常量，不是语料建模的一个层级，可以容纳多个
+> schema）。磁盘 YAML 与 load/write API 使用字段/参数名 `schema`（相对 `db`
+> 的硬切断）。资产 ID 不变。
 
 `beer_factory/` 是**完整参考示例**，基于真实的 BIRD `beer_factory` 数据库
 （`data/bird/beer_factory.sqlite`）编写而成。它覆盖了每一种资产类型，并针对该
@@ -46,5 +45,5 @@ corpus/
 uv run python -m governed_bi.corpus.cli corpus/beer_factory
 ```
 
-校验全部通过（即 ID 命名规范与引用完整性均满足）是 curator 用来判断“完成得
-足够好”的、可由机器检查的信号。
+校验全部通过（即 ID 命名规范与引用完整性均满足）是 curator 用来判断"完成得
+足够好"的、可由机器检查的信号。

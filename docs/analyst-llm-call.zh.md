@@ -113,19 +113,15 @@ Write SQL using only identifiers shown in the context, then call `run_query`. If
   [TABLE].[COLUMN]: [CAVEAT]
 
 ## Governance rules (must honour)
-  ([KIND]) [STATEMENT]
+  ([KIND]) [SUMMARY]
 
 ## Example questions with gold SQL
   Q: [QUESTION]
   A: [SQL]
-
-## Skills (routing / gotchas / patterns)
-### [SKILL_ID] ([KIND])
-[SKILL_BODY]
 ```
 
 下面是一个具体实例：某个问题的检索范围被限定到 `beer_factory` 的 `transaction`
-与 `customers` 两张表（few-shots / terms / metrics / rules 都已按这个范围做了
+与 `customers` 两张表（few-shots / terms / metrics / notes 都已按这个范围做了
 裁剪，保留符合实际的部分）：
 
 ```text
@@ -155,6 +151,7 @@ Write SQL using only identifiers shown in the context, then call `run_query`. If
 
 ## Governance rules (must honour)
   (business_rule) The ingredient and availability flags on rootbeerbrand (CaneSugar, CornSyrup, Honey, ArtificialSweetener, Caffeinated, Alcoholic, AvailableInCans, AvailableInBottles, AvailableInKegs) are stored as the TEXT strings 'TRUE' and 'FALSE', not as integers or booleans. Filter with = 'TRUE', never = 1.
+  (routing) Use metric_revenue over transaction for revenue or sales and join through rootbeer to rootbeerbrand for brand breakdowns; use metric_avg_rating over rootbeerreview for rating or review-quality questions and join directly to rootbeerbrand; ingredient and availability flags are 'TRUE'/'FALSE' strings, and customers.ZipCode is an INTEGER that loses leading zeros and must not be used as a postal key.
 
 ## Example questions with gold SQL
   Q: Which root beer brand has the highest average review rating?
@@ -164,31 +161,14 @@ JOIN rootbeerbrand AS b ON r.BrandID = b.BrandID
 WHERE r.StarRating IS NOT NULL
 GROUP BY b.BrandName
 ORDER BY avg_rating DESC
-
-## Skills (routing / gotchas / patterns)
-### skill_beer_factory_routing (routing)
-# Beer factory: routing & gotchas
-
-## Scope
-Sales, customers, root beer brands, and reviews for a root beer factory.
-`transaction` is the sales fact table; `rootbeer` is the unit dimension, which
-rolls up to `rootbeerbrand`.
-
-## Routing triggers
-- Revenue / sales questions use `metric_revenue` [...]
-- Rating / review-quality questions use `metric_avg_rating` [...]
-
-## Gotchas
-- Ingredient and availability flags on `rootbeerbrand` are the strings
-  `'TRUE'`/`'FALSE'`, not integers [...]
-- `customers.ZipCode` is an INTEGER, so leading zeros are lost [...]
-- `transaction.CreditCardNumber` is PII and is excluded; never select it.
 ```
 
 请注意其中缺失的部分：`transaction.CreditCardNumber` 从未出现过。它属于
 `governance.excluded`，因此早在语料被检索或渲染之前就已被移除，而不仅仅是被打上
 标记。只有 `suspect` 列（curator 推断得出，软性）才会带着 `DO NOT USE` 标签出现；
-`excluded` 列（人工设定，硬性）则对模型完全不可见。
+`excluded` 列（人工设定，硬性）则对模型完全不可见。Phase 1 只会注入
+`activation=always` 的笔记**摘要**，不含 Markdown 的 `skills/` 正文，也不含
+`body` 字段。
 
 ### 首条 human 消息
 
