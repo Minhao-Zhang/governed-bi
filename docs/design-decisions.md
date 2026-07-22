@@ -2,7 +2,7 @@
 
 _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 
-Settled decisions D1-D16 for the [Agentic BI System](system-overview.md), with
+Settled decisions D1-D18 (D17-D18 are Proposed) for the [Agentic BI System](system-overview.md), with
 the alternatives considered and the trade-offs. The **ADR-grade** ones are hard
 to reverse. Treat them as ADRs.
 
@@ -537,3 +537,73 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
   `.pyc`) is a maintainability signal to clean up opportunistically, not a decision.
   R9 (egress/privacy — "send everything," ADR 0002 Q5) remains deferred to the
   enterprise-fork scope. *Status: unchanged (deferred / cleanup).*
+
+## D17: Governed Notes + Tri-modal Retrieval
+
+> **Decided (design-grade, 2026-07-21; Proposed, no code yet).** Full rationale,
+> data model, and phased migration in
+> [ADR 0003](adr/0003-governed-notes-tri-modal-retrieval.md).
+>
+> The `skill` asset is **deleted** and `RuleAsset` is **generalized into
+> `NoteAsset`**: one governed annotation attachable to any asset **or** namespace
+> (schema/db via `schema:` / `db:` scope sentinels; table/column/metric/join via
+> asset id). A "rule" becomes a note with `enforcement=always`. This closes the
+> two data-lake gaps diagnosed 2026-07-21: routing never consulted skills (they
+> were excluded from `schema_documents` and injected only post-route), and nothing
+> created them (skill sat outside the `Asset` union, so it was never
+> indexed/validated/adversaried).
+
+- **Retrieval becomes tri-modal, with an explicit pin-vs-blend contract.**
+  (1) *Semantic*: each note carries its own vector and blends into RRF normally,
+  so it never dilutes a table/schema vector. (2) *Regex/keyword triggers*: PIN,
+  never blend. A trigger hard-includes its target and no lexical score enters RRF,
+  respecting the measured "RRF-of-weak-lexical hurts" finding (recall@3 0.535 <
+  embedding 0.70). (3) *Agent-fetch*: new read-only, non-licensing `read_notes` /
+  `grep_notes` tools, safe by topology.
+- **Governance upgrade.** As an `Asset`-union member, `NoteAsset` inherits the
+  three field tiers, the `for_analyst` audit-strip, `Provenance`, `validate_corpus`,
+  and a `Governance` block, which `RuleAsset`/`NegativeExampleAsset` lack today
+  (so D6 `excluded=true` is a silent no-op for rules; this fixes that). Uncertified
+  notes get **zero** routing-order authority, since a wrong note could evict the
+  correct schema from `top_k`; hard-PIN is certified-gated with dev-graduation.
+- **Relation to D9 / D15 / D16.** Refines the **D9** corpus contract
+  (`rules/` → `notes/`, a new `note` asset_type) and the **D15** schema router
+  (schema-scoped notes finally reachable by routing); the agent-fetch tools slot
+  into the **D16** read-only tool set.
+- **Status: Proposed (design only).** ADR 0003 records 5 open decisions (rename
+  churn, scope sentinels vs. a structured `ScopeTarget`, defer regex-over-question,
+  a global always-note budget, the PIN authority gate) and a 7-phase migration;
+  Phases 1-3 deliver the headline feature. No code yet.
+
+## D18: Local-first Conversation + Run Logging
+
+> **Decided (design-grade, 2026-07-21; Proposed, no code yet).** Full rationale
+> and phased migration in
+> [ADR 0004](adr/0004-local-first-conversation-run-logging.md).
+>
+> Durable, **frontend-agnostic** conversation history plus per-turn metadata,
+> owned in the DeepAgents/LangGraph backend so every client (UI, CLI, eval)
+> inherits it. LangGraph's native persistence is the store: a durable
+> checkpointer (`SqliteSaver` local / `PostgresSaver` prod) holds conversation
+> state on every serve path (today `graph_app.py` compiles without one, and the
+> REST `/chat` path has no persistence). This is the concrete build of audit
+> findings **R3** (a vendor-independent interaction log keyed by turn +
+> `corpus_release_hash`) and **R5** (persist the ledger; add
+> token/cost/duration/ts), and it fixes **D8**'s ephemerality.
+
+- **Metadata at ADR 0002's existing seams.** Tokens via `wrap_model_call`
+  reading `usage_metadata` into a new `token_usage` channel (captured nowhere
+  today, `run_experiment.py:213` `usage: None`); `duration_ms` + ts on each
+  `wrap_tool_call` ledger entry; a per-turn roll-up (model, token sums, est.
+  cost, latency, outcome, two-axis stamp, tables, routed schema, ledger,
+  `corpus_release_hash`) written by `_finalize_success`. Plus one thin, decoupled
+  portable append (SQLite row / JSONL) outside the version-coupled checkpoint
+  schema, for long-term reference and eval reuse.
+- **Two owner invariants.** The log is **write-only during a run**: a historical
+  sink, never a live-path input (preserving R3's capture-first / "never a direct
+  edit"; contrast the live `SqlCache`). It stores **full content now**; masking
+  and retention are a deferred future toggle.
+- **Scope: serve conversations AND DeepAgents runs** (curator/SME), on one
+  mechanism: one thread plus one portable record per run.
+- **Status: Proposed (design only).** No code yet; ADR 0004 gives a 5-phase
+  migration (Phase 1 = attach the durable checkpointer).

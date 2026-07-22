@@ -2,7 +2,7 @@
 
 _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 
-面向[Agentic BI 系统](system-overview.zh.md)的已决策事项 D1-D16，并附上已考虑过的
+面向[Agentic BI 系统](system-overview.zh.md)的已决策事项 D1-D18（D17-D18 为 Proposed），并附上已考虑过的
 备选方案与权衡。标记为**ADR 级**的决策难以逆转，请将其视为 ADR。
 
 ## D1：目标
@@ -570,3 +570,60 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   R8（两套澄清表示、两条策展器编排路径、孤儿 `.pyc`）是一个可顺手清理的可维护性信号，
   不是决策。R9（出站/隐私——"全部发送"，ADR 0002 Q5）仍推迟至企业分支范围。
   *状态：不变（暂缓 / 清理）。*
+
+## D17：受治理的笔记 + 三模态检索
+
+> **已决策（设计层，2026-07-21；Proposed，尚无代码）。** 完整理由、数据模型与
+> 分阶段迁移见 [ADR 0003](adr/0003-governed-notes-tri-modal-retrieval.md)。
+>
+> **删除** `skill` 资产，把 `RuleAsset` **泛化为 `NoteAsset`**：一种可挂载到任意
+> 资产**或**命名空间的受治理标注（schema/db 用 `schema:` / `db:` scope 前缀；
+> table/column/metric/join 用资产 id）。"规则"就是一条 `enforcement=always` 的
+> 笔记。这关掉了 2026-07-21 诊断出的两个数据湖缺口：路由从不参考 skill（它被排除在
+> `schema_documents` 之外，只在路由之后才注入），以及没有任何东西会创建它（skill 不在
+> `Asset` 联合类型里，故从不被索引/校验/对抗审查）。
+
+- **检索变为三模态，并有明确的"PIN vs blend"契约。**（1）*语义*：每条笔记带自己的
+  向量，正常混入 RRF，因此永不稀释某个 table/schema 的向量。（2）*正则/关键词触发器*：
+  只 PIN，绝不 blend：触发即硬性纳入目标，任何词法分数都不进 RRF，这是在尊重实测结论
+  （弱词法混入强 embedding 会拉低召回，recall@3 0.535 < embedding 0.70）。（3）*Agent 直读*：
+  新增只读、无需授权的 `read_notes` / `grep_notes` 工具，靠拓扑保证安全。
+- **治理升级。** 作为 `Asset` 联合类型成员，`NoteAsset` 继承三段字段分层、
+  `for_analyst` 审计剥离、`Provenance`、`validate_corpus`，以及一个 `Governance`
+  区块（`RuleAsset`/`NegativeExampleAsset` 今天都没有该区块，故 D6 的 `excluded=true`
+  对规则是静默空操作，此举一并修好）。未经认证的笔记对路由排序拿到**零**话事权，因为
+  一条错误笔记可能把正确 schema 挤出 `top_k`；硬 PIN 由 certified 门控，并按环境放行。
+- **与 D9 / D15 / D16 的关系。** 细化 **D9** 语料库契约（`rules/` → `notes/`、
+  新增 `note` asset_type）与 **D15** schema 路由（schema 限定的笔记终于可被触达）；
+  agent 直读工具接入 **D16** 的只读工具集。
+- **状态：Proposed（仅设计）。** ADR 0003 记录了 5 个待定决策（重命名改动量、scope
+  前缀 vs 结构化 `ScopeTarget`、推迟对问题做正则、全局常驻笔记预算、PIN 权限门控）
+  与 7 阶段迁移；Phase 1-3 交付核心功能。尚无代码。
+
+## D18：本地优先的对话与运行日志
+
+> **已决策（设计层，2026-07-21；Proposed，尚无代码）。** 完整理由与分阶段迁移见
+> [ADR 0004](adr/0004-local-first-conversation-run-logging.md)。
+>
+> 持久、**前端无关**的对话历史外加每一轮的元数据，归属在 DeepAgents/LangGraph
+> 后端，因此每个客户端（UI、CLI、eval）都自动继承。以 LangGraph 原生持久化为存储：
+> 一个持久化 checkpointer（本地 `SqliteSaver` / 生产 `PostgresSaver`）在每条 serve
+> 路径上保存对话状态（今天 `graph_app.py` 编译时不带 checkpointer，REST `/chat`
+> 路径没有任何持久化）。这是审计结论 **R3**（以轮次 + `corpus_release_hash` 为键的
+> 厂商无关交互日志）与 **R5**（持久化台账；补上 token/成本/耗时/时间戳）的具体落地，
+> 并修好 **D8** 的易失性。
+
+- **元数据在 ADR 0002 已有的接口点上捕获。** token 由 `wrap_model_call` 读取
+  `usage_metadata` 写入新的 `token_usage` 通道（今天完全没捕获，`run_experiment.py:213`
+  为 `usage: None`）；每条 `wrap_tool_call` 台账记录补上 `duration_ms` 与时间戳；
+  每一轮的汇总（模型、token 合计、估算成本、耗时、结果、两轴印章、涉及的表、路由到的
+  schema、台账、`corpus_release_hash`）由 `_finalize_success` 写入。另加一条单薄、
+  解耦的可移植追加记录（SQLite 行 / JSONL），落在版本耦合的 checkpoint schema 之外，
+  用于长期查阅与 eval 复用。
+- **两条负责人不变式。** 该日志在一次运行期间**只写不读**：它是历史记录的汇入端，
+  绝不作为实时路径的输入（守住 R3 的"先捕获、后解读"与"绝不直接改写"；与实时的
+  `SqlCache` 相对）。它现在**存全量内容**；脱敏与保留策略是暂缓的未来开关。
+- **覆盖范围：serve 对话与 DeepAgents 运行**（curator/SME），共用一套机制：每次运行
+  一个 thread 加一条可移植记录。
+- **状态：Proposed（仅设计）。** 尚无代码；ADR 0004 给出 5 阶段迁移（Phase 1 = 接上
+  持久化 checkpointer）。
