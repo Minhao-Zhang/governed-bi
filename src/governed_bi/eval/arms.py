@@ -137,6 +137,7 @@ def agent_solver(
     model,
     embedder=None,
     session_id: str = "eval",
+    enable_run_log: bool = False,
 ) -> Solver:
     """A :class:`Solver` that drives the ADR-0002 agentic serve core.
 
@@ -147,13 +148,31 @@ def agent_solver(
     independent (no working memory / cache), matching the single-round eval
     contract. ``last_solve_meta`` carries audit fields plus the
     governance-ledger length.
+
+    Each question increments ``n_human`` and mints a fresh ``run_id`` (see
+    ``ingest``) so portable run-log UPSERTs do not collapse an N-question run
+    into one ``{session_id}:1`` row. Pass a distinct ``session_id`` per arm so
+    arms do not collide either.
+
+    Portable run logging is forced off here: eval metrics live in
+    ``last_solve_meta`` / experiment rows. Opt in by passing settings with
+    ``run_log_kind`` already set to a non-default destination via
+    ``enable_run_log=True``.
     """
+    from dataclasses import replace as dc_replace
+
     from ..analyst.agent import build_serve_rails
+
+    log_settings = (
+        settings
+        if enable_run_log
+        else dc_replace(settings, run_log_kind="off")
+    )
 
     graph = build_serve_rails(
         corpus=corpus,
         gateway=gateway,
-        settings=settings,
+        settings=log_settings,
         identity=identity,
         model=model,
         embedder=embedder,
@@ -193,6 +212,12 @@ def agent_solver(
                 "shortlisted_schemas": prov.get("shortlisted_schemas"),
                 "schema_pick": prov.get("schema_pick"),
                 "total_schemas": prov.get("total_schemas"),
+                # ADR 0004 L7: token / cost from finalize_and_log provenance.
+                "token_sum": prov.get("token_sum"),
+                "cost_est_usd": prov.get("cost_est_usd"),
+                "usage": prov.get("token_sum") or prov.get("usage"),
+                "turn_id": prov.get("turn_id"),
+                "run_id": prov.get("run_id"),
             }
             return answer.sql
 

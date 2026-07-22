@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import sqlglot
 from sqlglot import exp
@@ -323,18 +323,35 @@ class GovEventStream:
 
     Best-effort like :func:`_emit`: a callback that raises must never turn a
     governed answer into an error, so failures are swallowed.
+
+    When ``finalize_ctx`` is set, :meth:`final` stamps metadata + appends the
+    portable run log (ADR 0004 L5/L6) and returns the stamped ``Answer``.
     """
 
-    def __init__(self, on_event: "Callable[[dict], None] | None", *, serve_path: str = "agent"):
+    def __init__(
+        self,
+        on_event: "Callable[[dict], None] | None",
+        *,
+        serve_path: str = "agent",
+        finalize_ctx: Any = None,
+    ):
         self._on_event = on_event
         self._serve_path = serve_path
         self._seq = 0
         self._started = False
+        self._finalize_ctx = finalize_ctx
+        self._token_usage_extra: list = []
 
     def reset(self) -> None:
         """Start a fresh turn: reset the sequence and the serve_path tag."""
         self._seq = 0
         self._started = False
+        self._token_usage_extra = []
+
+    def add_token_usage(self, entries: list | None) -> None:
+        """Accumulate usage snapshots (agent_core / router) before :meth:`final`."""
+        if entries:
+            self._token_usage_extra.extend(entries)
 
     def _emit_event(
         self,
@@ -379,8 +396,20 @@ class GovEventStream:
         """A governed-tool action inside the agent loop (start or resolve)."""
         self._emit_event("tool", step, status, step_id=step_id, label=label, detail=detail)
 
-    def final(self, answer: "Answer", *, step: str = "finalize") -> None:
-        """The terminal answer's stamp — the two axes + provenance the UI renders."""
+    def final(self, answer: "Answer", *, step: str = "finalize") -> "Answer":
+        """Stamp metadata + emit the terminal answer event; return the stamped Answer."""
+        if self._finalize_ctx is not None:
+            from .run_log import finalize_and_log
+
+            usage = list(self._finalize_ctx.token_usage or []) + list(
+                self._token_usage_extra
+            )
+            ctx = replace(
+                self._finalize_ctx,
+                token_usage=usage,
+                serve_path=self._serve_path or self._finalize_ctx.serve_path,
+            )
+            answer = finalize_and_log(answer, ctx=ctx)
         prov = answer.provenance or {}
         status = "refused" if answer.tier is ReliabilityTier.refused else "ok"
         self._emit_event(
@@ -396,6 +425,8 @@ class GovEventStream:
                 "coverage_best_effort": prov.get("coverage_best_effort"),
             },
         )
+        return answer
+
 
 
 def _try_cache_hit(

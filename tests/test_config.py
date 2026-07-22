@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from governed_bi.config import (
+    DataSourceConfig,
     Environment,
     ModelConfig,
     Settings,
@@ -206,6 +207,57 @@ def test_paths_and_serve_tables(tmp_path):
     assert settings.can_stream is True
     assert settings.allow_edit is False
     assert settings.cors_origins == ("https://app.example.com", "http://localhost:3000")
+
+
+def test_datasource_db_default_and_toml_override(tmp_path):
+    assert DataSourceConfig().db == "main"
+    cfg = tmp_path / "governed_bi.toml"
+    cfg.write_text(
+        "\n".join(
+            [
+                "[datasource]",
+                'kind = "sqlite"',
+                'db = "lake_a"',
+                'corpus_pin = "beer_factory"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    settings = load_settings(cfg)
+    assert settings.datasource.db == "lake_a"
+    assert settings.datasource.corpus_pin == "beer_factory"
+
+
+def test_logging_table_checkpointer_knobs(tmp_path):
+    cfg = tmp_path / "governed_bi.toml"
+    cfg.write_text(
+        "\n".join(
+            [
+                "[logging]",
+                'conversation_checkpointer_kind = "postgres"',
+                'conversation_checkpointer_path = "unused.sqlite"',
+                'conversation_checkpointer_dsn_env = "CHECKPOINT_DSN"',
+                'run_log_kind = "jsonl"',
+                'run_log_path = "data/logs/runs.jsonl"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    settings = load_settings(cfg)
+    assert settings.conversation_checkpointer_kind == "postgres"
+    assert settings.conversation_checkpointer_path == "unused.sqlite"
+    assert settings.conversation_checkpointer_dsn_env == "CHECKPOINT_DSN"
+    assert settings.run_log_kind == "jsonl"
+    assert settings.run_log_path == "data/logs/runs.jsonl"
+
+
+def test_settings_checkpointer_defaults():
+    settings = Settings.for_env(Environment.dev)
+    assert settings.conversation_checkpointer_kind == "sqlite"
+    assert settings.conversation_checkpointer_path == (
+        "data/checkpoints/conversations.sqlite"
+    )
+    assert settings.conversation_checkpointer_dsn_env is None
 
 
 # --------------------------------------------------------------------------- #

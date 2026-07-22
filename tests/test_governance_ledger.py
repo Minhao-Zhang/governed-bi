@@ -72,6 +72,12 @@ def test_ledger_records_pass_and_block(corpus, bird_gateway, settings, identity)
     assert len([e for e in ledger if e.get("action") == "run_query"]) == 2
     assert ledger[0]["verdict"] == "block"
     assert ledger[1]["verdict"] == "pass"
+    for entry in ledger:
+        if entry.get("action") == "run_query":
+            assert "duration_ms" in entry
+            assert isinstance(entry["duration_ms"], int)
+            assert "ts" in entry
+            assert entry["ts"]  # non-empty ISO timestamp
 
 
 def test_schema_qualified_sql_passes_and_executes_on_sqlite(

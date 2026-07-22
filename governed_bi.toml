@@ -61,6 +61,8 @@ api_key_env = "OPENAI_API_KEY"
 # curator facts builder (python -m governed_bi.curator.build) reads this too.
 kind = "sqlite"                               # sqlite | postgres | redshift
 corpus_pin = "beer_factory"                   # default corpus schema subtree / BIRD db_id
+# db = "main"                                 # lake identity for db: note scopes (ADR 0003);
+#                                             # distinct from corpus_pin / schema
 sqlite_path = "data/bird/beer_factory.sqlite" # repo-root-relative
 
 # To profile a BIRD-Obfuscation Postgres instance instead (e.g. the renamed+decoy
@@ -84,3 +86,13 @@ cors_origins = ["http://localhost:3000"]
 
 # Memory / cache / few-shot numeric gates (Architecture §7) are still code
 # defaults on Settings today — not yet loaded from this file.
+
+# Conversation checkpointer + portable run-log knobs (ADR 0004). Defaults match
+# Settings; uncomment to override. DSN passwords never live here — only the env
+# var name.
+# [logging]
+# conversation_checkpointer_kind = "sqlite"   # sqlite | postgres | memory
+# conversation_checkpointer_path = "data/checkpoints/conversations.sqlite"
+# conversation_checkpointer_dsn_env = "CHECKPOINT_DSN"  # postgres only; never inline DSN
+# run_log_kind = "sqlite"                     # sqlite | jsonl | off
+# run_log_path = "data/logs/runs.sqlite"

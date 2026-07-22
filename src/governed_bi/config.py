@@ -88,10 +88,14 @@ class DataSourceConfig:
     here. Set ``dsn_env`` to the name of an environment variable holding the full
     libpq DSN (read at call time), exactly as the API key is handled. ``dsn`` is an
     inline fallback for local, secret-free DSNs only.
+
+    ``db`` is the lake identity for future ``db:`` note-scope sentinels (ADR 0003),
+    not the SQL schema pin — that is ``corpus_pin`` / ``schema``.
     """
 
     kind: str = "sqlite"  # sqlite | postgres | redshift
     corpus_pin: str = "beer_factory"  # default corpus schema subtree / BIRD db_id
+    db: str = "main"  # lake identity for db: scope sentinels (≠ corpus_pin)
     sqlite_path: str = "data/bird/beer_factory.sqlite"  # kind=sqlite; repo-root-relative
     dsn: str | None = None  # kind=postgres/redshift: inline DSN (local, secret-free only)
     dsn_env: str | None = None  # ...or the env var holding the DSN (preferred)
@@ -192,6 +196,13 @@ class Settings:
     allow_edit: bool = True  # corpus file-write; for_env sets False in prod
     cors_origins: tuple[str, ...] = ("http://localhost:3000",)
 
+    # ── Conversation checkpointer + portable run log (ADR 0004; see [logging]) ──
+    conversation_checkpointer_kind: str = "sqlite"  # sqlite | postgres | memory
+    conversation_checkpointer_path: str = "data/checkpoints/conversations.sqlite"
+    conversation_checkpointer_dsn_env: str | None = None  # env var name; never inline DSN
+    run_log_kind: str = "sqlite"  # sqlite | jsonl | off
+    run_log_path: str = "data/logs/runs.sqlite"
+
     @classmethod
     def for_env(
         cls,
@@ -203,6 +214,11 @@ class Settings:
         can_stream: bool | None = None,
         allow_edit: bool | None = None,
         cors_origins: tuple[str, ...] | None = None,
+        conversation_checkpointer_kind: str | None = None,
+        conversation_checkpointer_path: str | None = None,
+        conversation_checkpointer_dsn_env: str | None = None,
+        run_log_kind: str | None = None,
+        run_log_path: str | None = None,
     ) -> "Settings":
         env = Environment(environment)
         base: dict[str, Any] = {}
@@ -218,6 +234,16 @@ class Settings:
             base["allow_edit"] = allow_edit
         if cors_origins is not None:
             base["cors_origins"] = cors_origins
+        if conversation_checkpointer_kind is not None:
+            base["conversation_checkpointer_kind"] = conversation_checkpointer_kind
+        if conversation_checkpointer_path is not None:
+            base["conversation_checkpointer_path"] = conversation_checkpointer_path
+        if conversation_checkpointer_dsn_env is not None:
+            base["conversation_checkpointer_dsn_env"] = conversation_checkpointer_dsn_env
+        if run_log_kind is not None:
+            base["run_log_kind"] = run_log_kind
+        if run_log_path is not None:
+            base["run_log_path"] = run_log_path
         if env is Environment.dev:
             return cls(
                 environment=env,
@@ -400,6 +426,14 @@ def load_settings(
         _cors_origins_from(serve["cors_origins"]) if "cors_origins" in serve else None
     )
 
+    # Optional [logging] table (ADR 0004 checkpointer + portable run log).
+    logging_tbl = data.get("logging", {})
+    ckpt_kind = logging_tbl.get("conversation_checkpointer_kind")
+    ckpt_path = logging_tbl.get("conversation_checkpointer_path")
+    ckpt_dsn_env = logging_tbl.get("conversation_checkpointer_dsn_env")
+    run_log_kind = logging_tbl.get("run_log_kind")
+    run_log_path = logging_tbl.get("run_log_path")
+
     settings = Settings.for_env(
         env,
         models=models,
@@ -408,6 +442,13 @@ def load_settings(
         can_stream=can_stream,
         allow_edit=allow_edit,
         cors_origins=cors_origins,
+        conversation_checkpointer_kind=str(ckpt_kind) if ckpt_kind is not None else None,
+        conversation_checkpointer_path=str(ckpt_path) if ckpt_path is not None else None,
+        conversation_checkpointer_dsn_env=(
+            str(ckpt_dsn_env) if ckpt_dsn_env is not None else None
+        ),
+        run_log_kind=str(run_log_kind) if run_log_kind is not None else None,
+        run_log_path=str(run_log_path) if run_log_path is not None else None,
     )
 
     # Optional [runtime] overrides for the environment toggles, so a deployment

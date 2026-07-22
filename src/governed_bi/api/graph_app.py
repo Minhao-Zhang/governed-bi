@@ -156,6 +156,7 @@ def build_chat_graph(stack: "ServeStack", *, checkpointer: Any = None):
                     clarify_checkpointer=stack.clarify_checkpointer,
                     clarify_thread=clarify_thread,
                     clarify_resume=resume,
+                    n_human=n_human,
                 )
             finally:
                 connector.close()
@@ -179,6 +180,24 @@ def build_chat_graph(stack: "ServeStack", *, checkpointer: Any = None):
     builder.add_edge(START, "answer")
     builder.add_edge("answer", END)
     return builder.compile(checkpointer=checkpointer) if checkpointer else builder.compile()
+
+
+def build_standalone_chat_graph(stack: "ServeStack"):
+    """Compile the chat graph with a durable conversation checkpointer (ADR 0004 L3).
+
+    Use this for local/standalone runs where LangGraph Server will not inject
+    persistence. ``make_graph`` stays checkpointer-less so it does not collide
+    with platform injection.
+    """
+    from dataclasses import replace as dc_replace
+
+    from governed_bi.analyst.run_log import make_conversation_checkpointer
+
+    cp = stack.conversation_checkpointer
+    if cp is None:
+        cp = make_conversation_checkpointer(stack.settings)
+        stack = dc_replace(stack, conversation_checkpointer=cp)
+    return build_chat_graph(stack, checkpointer=cp)
 
 
 def _build_graph():

@@ -222,7 +222,9 @@ __marimo__/
 # Claude Code agent worktrees (transient, per-agent git worktrees)
 .claude/worktrees/
 
-# LangGraph dev server local state (in-memory checkpointer/ops snapshot)
+# LangGraph / local run-log artifacts (ADR 0004)
+data/checkpoints/
+data/logs/
 .langgraph_api/
 
 # Experiment run artifacts (generations, corpora, summaries)

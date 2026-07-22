@@ -334,6 +334,8 @@ def _run_pool_arm(
                 "arm": arm,
                 "generated_sql": sql,
                 "latency_sec": round(latency, 4),
+                "usage": meta.get("usage"),
+                "cost_est_usd": meta.get("cost_est_usd"),
                 "correct": grade["correct"],
                 "correct_strict": grade["correct_strict"],
                 "error": grade.get("error"),
@@ -506,7 +508,13 @@ def run_datalake(
         for arm in arms:
             if lc_model is not None:
                 solver = agent_solver(
-                    corpora[arm], gateway, settings, identity, model=lc_model, embedder=embedder
+                    corpora[arm],
+                    gateway,
+                    settings,
+                    identity,
+                    model=lc_model,
+                    embedder=embedder,
+                    session_id=f"eval-{arm}",
                 )
             else:
                 solver = _RefuseAllSolver()

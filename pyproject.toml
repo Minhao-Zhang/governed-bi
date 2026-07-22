@@ -31,6 +31,8 @@ dependencies = [
     # --- Agent harnesses: LangGraph server DAG + deepagents curator + LangChain clients ---
     "langgraph>=1.0",
     "langgraph-cli[inmem]>=0.2",
+    "langgraph-checkpoint-sqlite>=2.0",
+    "langgraph-checkpoint-postgres>=2.0",
     "langchain>=1.0",
     "langchain-openai>=1.0",
     "deepagents>=0.6",

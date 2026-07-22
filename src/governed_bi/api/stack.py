@@ -52,6 +52,7 @@ class ServeStack:
     chat_model: Any | None = None  # raw LangChain BaseChatModel driving the agent core
     can_clarify: bool = False  # serve-time HITL (ask_user) is available (streaming + live model)
     clarify_checkpointer: Any | None = None  # inner-agent saver for interrupt/resume (in-mem, per process)
+    conversation_checkpointer: Any | None = None  # durable outer-chat saver (ADR 0004 L3)
 
     def open_connector(self, *, connect_timeout: float | None = None) -> "Connector":
         """Open a fresh read-only connector for one request (caller closes it).
@@ -168,7 +169,7 @@ def build_stack(settings: Settings | None = None) -> ServeStack:
     # Serve-time HITL (ask_user -> interrupt) needs a checkpointer for the inner
     # agent to pause/resume; it is only reachable via the streaming chat graph
     # (graph_app), never the REST /chat path (no outer checkpointer there). The
-    # saver is in-memory / per-process for v1 (durable Postgres is deferred).
+    # saver is in-memory / per-process for v1 (durable Postgres is deferred to F7).
     clarify_checkpointer = None
     can_clarify = False
     if has_live:
@@ -176,6 +177,10 @@ def build_stack(settings: Settings | None = None) -> ServeStack:
 
         clarify_checkpointer = InMemorySaver()
         can_clarify = bool(settings.can_stream)
+
+    # conversation_checkpointer is lazy — built only by build_standalone_chat_graph
+    # (L3). Eager construction here opened a sqlite file on every build_stack /
+    # test import while make_graph never used it.
 
     # Identity is a DEMO seam (D1: showcase, not a product). This repo serves a
     # single all-access identity; per-user identity + gateway RLS live in the private
@@ -220,6 +225,7 @@ def build_stack(settings: Settings | None = None) -> ServeStack:
         chat_model=chat_model,
         can_clarify=can_clarify,
         clarify_checkpointer=clarify_checkpointer,
+        conversation_checkpointer=None,
     )
     # Fail fast when TOML points at Postgres/Redshift that isn't up (or a missing
     # SQLite file). Without this, the first chat turn hangs on TCP connect.

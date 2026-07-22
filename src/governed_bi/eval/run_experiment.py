@@ -210,7 +210,8 @@ def _run_arm_generations(
                 "arm": arm,
                 "generated_sql": sql,
                 "latency_sec": round(latency, 4),
-                "usage": None,
+                "usage": meta.get("usage"),
+                "cost_est_usd": meta.get("cost_est_usd"),
                 "correct": grade["correct"],
                 "correct_strict": grade["correct_strict"],
                 "error": grade.get("error"),
@@ -485,10 +486,29 @@ def run_experiment(
     _warn_if_curator_errors(curator_errors)
 
     if lc_model is not None:
-        baseline = agent_solver(baseline_corpus_loaded, gateway, settings, identity, model=lc_model)
-        curated = agent_solver(curated_corpus_loaded, gateway, settings, identity, model=lc_model)
+        baseline = agent_solver(
+            baseline_corpus_loaded,
+            gateway,
+            settings,
+            identity,
+            model=lc_model,
+            session_id="eval-baseline",
+        )
+        curated = agent_solver(
+            curated_corpus_loaded,
+            gateway,
+            settings,
+            identity,
+            model=lc_model,
+            session_id="eval-curated",
+        )
         curated_sme = agent_solver(
-            curated_sme_corpus_loaded, gateway, settings, identity, model=lc_model
+            curated_sme_corpus_loaded,
+            gateway,
+            settings,
+            identity,
+            model=lc_model,
+            session_id="eval-curated_sme",
         )
     else:
         baseline = curated = curated_sme = _RefuseAllSolver()
