@@ -122,15 +122,28 @@ def _langfuse_handler() -> Any | None:
         return None
 
 
-def tracing_callbacks() -> list:
-    """LangChain callbacks for external tracing (Langfuse).
+def tracing_callbacks(*, with_usage: bool = False) -> list:
+    """LangChain callbacks for external tracing (Langfuse) + optional usage.
 
     Empty when the ``tracing`` extra is not installed or the keys are unset, so it
     is safe to splice into any ``config={"callbacks": ...}`` unconditionally.
     LangSmith is not included here; it instruments itself from the environment.
+
+    When ``with_usage`` is True, append a ``UsageMetadataCallbackHandler`` so
+    deep-agent (curator/SME) token totals can be read after ``invoke`` (F6).
     """
+    cbs: list = []
     handler = _langfuse_handler()
-    return [handler] if handler is not None else []
+    if handler is not None:
+        cbs.append(handler)
+    if with_usage:
+        try:
+            from langchain_core.callbacks import UsageMetadataCallbackHandler
+
+            cbs.append(UsageMetadataCallbackHandler())
+        except Exception:
+            pass
+    return cbs
 
 
 def flush_tracing() -> None:

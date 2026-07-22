@@ -27,6 +27,7 @@ from ..corpus.schemas import (
 from .rvgd import BM25Index, asset_document
 
 if TYPE_CHECKING:
+    from ..config import Settings
     from ..corpus import Corpus
     from ..llm import Embedder
 
@@ -134,6 +135,7 @@ def shortlist_schemas(
     top_k: int = DEFAULT_SCHEMA_TOP_K,
     embedder: "Embedder | None" = None,
     schema_vectors: "dict[str, list[float]] | None" = None,
+    settings: "Settings | None" = None,
 ) -> list[str]:
     """Rank schemas against ``question`` and return up to ``top_k`` names.
 
@@ -148,6 +150,9 @@ def shortlist_schemas(
     ``schema_vectors`` (precomputed via :func:`embed_schema_documents`) skips
     re-embedding the schema docs on the hot path; only the question is embedded
     per call. Pass it on the serve path where the corpus is fixed.
+
+    When ``settings.pin_triggers_enabled``, keyword-triggered notes whose scope
+    includes ``schema:`` PINs are hard-prepended (cap ``pin_max``), never RRF-blended.
     """
     schemas = list_schemas(corpus)
     if not schemas:
@@ -177,7 +182,31 @@ def shortlist_schemas(
         ranked = BM25Index.from_documents(schema_documents(corpus)).rank(question)
     if not ranked:
         return schemas  # fail-open: no signal → keep all
-    return [s for s, _ in ranked[:top_k]]
+    out = [s for s, _ in ranked[:top_k]]
+
+    if settings is not None and settings.pin_triggers_enabled:
+        from .triggers import fire_triggers
+
+        pinned_schemas: list[str] = []
+        for nid in fire_triggers(corpus, question, settings=settings):
+            note = corpus.by_id(nid)
+            if note is None:
+                continue
+            for sid in getattr(note, "scope", ()) or ():
+                if isinstance(sid, str) and sid.startswith("schema:"):
+                    name = sid.removeprefix("schema:")
+                    if name in schemas and name not in pinned_schemas:
+                        pinned_schemas.append(name)
+        if pinned_schemas:
+            # PINs are ADDITIVE: prepend pins but keep every top_k-ranked schema,
+            # so a wrong/uncertified pin can never evict the correct schema from
+            # the shortlist (GATE-ADV-WRONG-NOTE). Cap = top_k + pins (<= top_k+pin_max).
+            merged = list(pinned_schemas)
+            for s in out:
+                if s not in merged:
+                    merged.append(s)
+            out = merged[: top_k + len(pinned_schemas)]
+    return out
 
 
 def expand_schemas_via_curated_joins(

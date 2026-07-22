@@ -130,23 +130,69 @@ def render_terms(corpus: "Corpus", term_ids: list) -> list[str]:
     return lines
 
 
-def render_notes(corpus: "Corpus", note_ids: list) -> list[str]:
+def render_notes(corpus: "Corpus", note_ids: list, *, include_body: bool = False) -> list[str]:
     """Governed notes that bear on the query.
 
-    A note's ``scope`` names the asset ids it applies to (empty = global); its
-    summary is the bounded retrieval surface. The body is progressive-disclosure
-    content and is intentionally not returned by this Phase 1 tool path.
+    Summary is the default surface; ``include_body`` is for ``read_notes``.
+    Excluded notes are omitted.
     """
     from ..corpus.schemas import NoteAsset
+    from ..corpus.validate import _excluded_identifier_tokens
 
+    excluded = _excluded_identifier_tokens(list(corpus.assets))
     lines: list[str] = []
     for note_id in note_ids:
         note = corpus.by_id(note_id)
-        if isinstance(note, NoteAsset):
-            kind = getattr(note.kind, "value", note.kind)
-            scope = f" (applies to: {', '.join(note.scope)})" if note.scope else ""
-            lines.append(f"  [{kind}] {note.summary}{scope}")
+        if not isinstance(note, NoteAsset) or _is_excluded(note):
+            continue
+        # C5: never surface prose that still names a governance-excluded identifier.
+        if _text_names_excluded(f"{note.summary}\n{note.body or ''}", excluded):
+            continue
+        kind = getattr(note.kind, "value", note.kind)
+        scope = f" (applies to: {', '.join(note.scope)})" if note.scope else ""
+        lines.append(f"  [{kind}] {note.summary}{scope}")
+        if include_body and note.body:
+            lines.append(note.body)
     return lines
+
+
+_GREP_NOTES_MAX_HITS = 20
+_GREP_NOTES_MAX_CHARS = 4000
+_GREP_PATTERN_MAX_LEN = 128
+_GREP_TEXT_SCAN_MAX = 20000  # cap text length fed to a compiled regex (ReDoS input bound)
+
+
+def _safe_grep_pattern(pattern: str):
+    """Compile a ReDoS-bounded pattern, or fall back to literal substring.
+
+    A quantifier applied to a group (``)`` followed by ``* + ? {``) is the
+    necessary ingredient for catastrophic backtracking, so ANY quantified group
+    (``(a+)+``, ``(a*)*``, ``([a-z]+)*``, ``(a|a)+`` …) and the ``.*.*`` form fall
+    back to a linear literal-substring match. Conservative but safe; legitimate
+    note-grep patterns rarely need a quantified group. Callers additionally cap
+    the searched text length.
+    """
+    import re as _re
+
+    pat = (pattern or "").strip()
+    if not pat or len(pat) > _GREP_PATTERN_MAX_LEN:
+        raise ValueError(f"pattern must be 1..{_GREP_PATTERN_MAX_LEN} chars")
+    if _re.search(r"\)[*+?{]|(\.\*){2,}", pat):
+        return pat.casefold()
+    try:
+        return _re.compile(pat, _re.IGNORECASE)
+    except _re.error:
+        return pat.casefold()
+
+
+def _text_names_excluded(text: str, excluded_tokens) -> bool:
+    """Case-insensitive C5 check: does ``text`` name any excluded identifier?
+
+    Postgres folds unquoted identifiers to lowercase, so a case-sensitive match
+    would leak a differently-cased name; both sides are casefolded.
+    """
+    blob = text.casefold()
+    return any(tok.casefold() in blob for tok in excluded_tokens)
 
 
 def render_result(result) -> str:
@@ -285,7 +331,73 @@ def make_tools(
             return CLARIFY_DECLINED
         return parsed["answer"]
 
-    tools = [search_corpus, inspect_schema, sample_rows, run_query]
+    @tool
+    def read_notes(note_id: str) -> str:
+        """Read one governed note by id (summary + body). Does NOT license tables.
+
+        Naming a table inside a note does not authorize ``run_query`` against it —
+        call ``inspect_schema`` first. Excluded notes are hidden.
+        """
+        from ..corpus.schemas import NoteAsset
+        from ..corpus.validate import _excluded_identifier_tokens
+
+        note = corpus.by_id(note_id)
+        if not isinstance(note, NoteAsset) or _is_excluded(note):
+            return f"{note_id}: not available"
+        # Refuse to return prose that still names excluded identifiers (C5,
+        # case-insensitive so a differently-cased name cannot slip through).
+        excluded = _excluded_identifier_tokens(list(corpus.assets))
+        if _text_names_excluded(f"{note.summary}\n{note.body or ''}", excluded):
+            return f"{note_id}: withheld (names excluded identifiers)"
+        kind = getattr(note.kind, "value", note.kind)
+        lines = [f"id: {note.id}", f"kind: {kind}", f"summary: {note.summary}"]
+        if note.body:
+            lines.append("body:")
+            lines.append(note.body)
+        return "\n".join(lines)
+
+    @tool
+    def grep_notes(pattern: str) -> str:
+        """Search note summaries and bodies for a pattern (read-only, capped).
+
+        Does NOT license tables. ReDoS-bounded; output capped. Excluded notes skip.
+        """
+        from ..corpus.schemas import NoteAsset
+        from ..corpus.validate import _excluded_identifier_tokens
+
+        try:
+            compiled = _safe_grep_pattern(pattern)
+        except ValueError as exc:
+            return f"error: {exc}"
+        excluded = _excluded_identifier_tokens(list(corpus.assets))
+        hits: list[str] = []
+        total_chars = 0
+        for asset in corpus.assets:
+            if not isinstance(asset, NoteAsset) or _is_excluded(asset):
+                continue
+            text = f"{asset.summary}\n{asset.body or ''}"
+            if _text_names_excluded(text, excluded):
+                continue
+            matched = False
+            if hasattr(compiled, "search"):
+                # Cap regex input length as a second ReDoS bound (bodies uncapped).
+                matched = compiled.search(text[:_GREP_TEXT_SCAN_MAX]) is not None
+            else:
+                matched = compiled in text.casefold()
+            if not matched:
+                continue
+            line = f"{asset.id}: {asset.summary}"
+            if total_chars + len(line) > _GREP_NOTES_MAX_CHARS:
+                hits.append("…(output capped)")
+                break
+            hits.append(line)
+            total_chars += len(line)
+            if len(hits) >= _GREP_NOTES_MAX_HITS:
+                hits.append("…(hit cap)")
+                break
+        return "\n".join(hits) if hits else "(no matching notes)"
+
+    tools = [search_corpus, inspect_schema, sample_rows, run_query, read_notes, grep_notes]
     if enable_clarify:
         tools.append(ask_user)
     return tools

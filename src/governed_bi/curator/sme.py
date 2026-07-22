@@ -140,7 +140,7 @@ def _sanitize_sme_answer(text: str) -> str:
     )
 
 
-def build_sme_agent(model, *, gateway, brief: str):
+def build_sme_agent(model, *, gateway, brief: str, checkpointer=None):
     """A read-only deep-agent SME.
 
     The SME answers from the brief (domain descriptions + all evidence) and may
@@ -161,7 +161,14 @@ def build_sme_agent(model, *, gateway, brief: str):
             return f"error: {err}"
         return _render_rows(result)
 
-    return create_deep_agent(model=model, tools=[run_probe_query], system_prompt=brief)
+    kwargs = {
+        "model": model,
+        "tools": [run_probe_query],
+        "system_prompt": brief,
+    }
+    if checkpointer is not None:
+        kwargs["checkpointer"] = checkpointer
+    return create_deep_agent(**kwargs)
 
 
 def _last_message_text(result) -> str:
@@ -202,25 +209,80 @@ class SimulatedSme:
         model = getattr(chat, "model", None)  # LangChainChatClient exposes .model
         if gateway is not None and model is not None:
             try:
-                self._agent = build_sme_agent(model, gateway=gateway, brief=brief)
+                from ..analyst.run_log import make_durable_checkpointer
+                from ..config import load_settings
+
+                settings = load_settings(apply_local=False)
+                # Deep agents get no server injection — hand an explicit saver.
+                # SME runs single-shot per answer() with a fresh thread_id (never
+                # resumes across answers), so an in-process memory saver satisfies
+                # the within-answer interrupt support without an unbounded on-disk
+                # sme_checkpoints.sqlite that would only ever grow.
+                cp = make_durable_checkpointer(settings, kind="memory")
+                self._agent = build_sme_agent(
+                    model, gateway=gateway, brief=brief, checkpointer=cp
+                )
             except Exception:  # noqa: BLE001 — degrade to single-shot, never crash curation
                 self._agent = None
 
     def answer(self, question: str) -> str:
+        import time
+
+        from ..analyst.run_log import emit_run_record, new_run_id
+        from ..config import load_settings
+        from ..obs import tracing_callbacks
+        from ..provenance import Producer
+
         user = (
             "Answer the following curator clarification in plain prose only "
             "(no SQL). You may run read-only probe queries to check the data "
             "first if it helps.\n\n"
             f"Clarification: {question}"
         )
-        if self._agent is not None:
-            from ..obs import tracing_callbacks
+        t0 = time.perf_counter()
+        rid = new_run_id()
+        error = None
+        raw = ""
+        usage_list: list = []
+        try:
+            if self._agent is not None:
+                cbs = tracing_callbacks(with_usage=True)
+                usage_cb = next(
+                    (c for c in cbs if type(c).__name__ == "UsageMetadataCallbackHandler"),
+                    None,
+                )
+                result = self._agent.invoke(
+                    {"messages": [{"role": "user", "content": user}]},
+                    config={
+                        "recursion_limit": 40,
+                        "callbacks": cbs,
+                        "configurable": {"thread_id": rid},
+                    },
+                )
+                raw = _last_message_text(result)
+                if usage_cb is not None:
+                    from ..analyst.run_log import usage_callback_entries
 
-            result = self._agent.invoke(
-                {"messages": [{"role": "user", "content": user}]},
-                config={"recursion_limit": 40, "callbacks": tracing_callbacks()},
+                    usage_list = usage_callback_entries(usage_cb, source="sme")
+            else:
+                raw = self.chat.complete(self.brief, user)
+        except Exception as err:  # noqa: BLE001 — always emit a record
+            error = f"{type(err).__name__}: {err}"
+            raw = ""
+        answer = _sanitize_sme_answer(raw)
+        try:
+            settings = load_settings(apply_local=False)
+            emit_run_record(
+                settings=settings,
+                producer=Producer.sme,
+                run_id=rid,
+                thread_id=rid,
+                outcome="error" if error else "ok",
+                error=error,
+                answer_text=answer if settings.log_full_content else None,
+                token_usage=usage_list,
+                t0=t0,
             )
-            raw = _last_message_text(result)
-        else:
-            raw = self.chat.complete(self.brief, user)
-        return _sanitize_sme_answer(raw)
+        except Exception:
+            pass
+        return answer

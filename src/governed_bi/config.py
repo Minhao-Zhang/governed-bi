@@ -203,6 +203,23 @@ class Settings:
     run_log_kind: str = "sqlite"  # sqlite | jsonl | off
     run_log_path: str = "data/logs/runs.sqlite"
 
+    # ── Always-note prompt budget (ADR 0003 H1; see [notes] in TOML) ──
+    always_note_global_max: int = 8
+    always_note_char_max: int = 2000
+
+    # ── PIN trigger authority (ADR 0003 H2; R7/R8) ──
+    # When True, keyword PINs can affect schema shortlist / selected (prod needs
+    # certified-only graduation — see pin_require_certified).
+    pin_triggers_enabled: bool = False
+    pin_require_certified: bool = True  # prod default; dev may set False
+    pin_max: int = 3
+
+    # ── Full-content run log (ADR 0004 H11; M5) ──
+    log_full_content: bool = False
+    log_full_content_ack: bool = False  # required True in prod when log_full_content
+    log_row_previews: bool = False  # Tier C; needs log_full_content too
+    log_full_content_ttl_days: int = 30
+
     @classmethod
     def for_env(
         cls,
@@ -434,6 +451,8 @@ def load_settings(
     run_log_kind = logging_tbl.get("run_log_kind")
     run_log_path = logging_tbl.get("run_log_path")
 
+    notes_tbl = data.get("notes", {})
+
     settings = Settings.for_env(
         env,
         models=models,
@@ -450,6 +469,34 @@ def load_settings(
         run_log_kind=str(run_log_kind) if run_log_kind is not None else None,
         run_log_path=str(run_log_path) if run_log_path is not None else None,
     )
+
+    knob_overrides: dict[str, Any] = {}
+    for src, keys in (
+        (
+            notes_tbl,
+            (
+                "always_note_global_max",
+                "always_note_char_max",
+                "pin_triggers_enabled",
+                "pin_require_certified",
+                "pin_max",
+            ),
+        ),
+        (
+            logging_tbl,
+            (
+                "log_full_content",
+                "log_full_content_ack",
+                "log_row_previews",
+                "log_full_content_ttl_days",
+            ),
+        ),
+    ):
+        for k in keys:
+            if k in src:
+                knob_overrides[k] = src[k]
+    if knob_overrides:
+        settings = replace(settings, **knob_overrides)
 
     # Optional [runtime] overrides for the environment toggles, so a deployment
     # can soft-warn on suspect columns without switching the whole env.

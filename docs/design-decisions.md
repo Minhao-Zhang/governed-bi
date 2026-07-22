@@ -2,7 +2,7 @@
 
 _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 
-Settled decisions D1-D18 (D18 is Proposed) for the [Agentic BI System](system-overview.md), with
+Settled decisions D1-D18 for the [Agentic BI System](system-overview.md), with
 the alternatives considered and the trade-offs. The **ADR-grade** ones are hard
 to reverse. Treat them as ADRs.
 
@@ -593,45 +593,38 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
   - **H1 (budget + precedence):** at most 8 global `always` notes AND at most
     2000 chars of total injected notes text, plus a 5-tuple precedence rule
     for overflow/conflict.
-- **Status: Phase 1 implemented (M3).** `NoteAsset` shipped (`summary`/`body`,
-  `activation`/`normative_force`, `publication_status`, `governance`);
-  `rules/` → `notes/`; skills deleted; always-injection of note summaries;
-  CI covers scope sentinels, publication-status drift, and the always-note
-  budget. Phase 2 (trigger PIN, `on_match` body load, `read_notes` /
-  `grep_notes`, C5 excluded-id scan) remains pending per ADR 0003 and the
+- **Status: Phase 1–5 largely implemented (M3+M4).** `NoteAsset` shipped;
+  always + on_match injection (5 scopes), H1 budget/precedence, `read_notes` /
+  `grep_notes`, C5 excluded-id scan, keyword PIN with certified gate + offline
+  GATE-RECALL / GATE-ADV-WRONG-NOTE. Phase 6 max-pool vector deferred (only if
+  recall still caps EX). LLM `refute()` for non-notes remains model-gated;
+  notes have an offline structural `refute()`. See ADR 0003 and the
   [implementation plan](plans/implementation-plan-notes-and-run-logging.md).
   ADR 0003's design questions are resolved (see locked decisions above).
 
 ## D18: Local-first Conversation + Run Logging
 
-> **Decided (design-grade, 2026-07-21; Proposed, no code yet).** Full rationale
-> and phased migration in
-> [ADR 0004](adr/0004-local-first-conversation-run-logging.md).
+> **Decided (2026-07-21); M2 implemented, M5 gated full-content in progress.**
+> Full rationale in [ADR 0004](adr/0004-local-first-conversation-run-logging.md).
 >
 > Durable, **frontend-agnostic** conversation history plus per-turn metadata,
 > owned in the DeepAgents/LangGraph backend so every client (UI, CLI, eval)
 > inherits it. LangGraph's native persistence is the store: a durable
 > checkpointer (`SqliteSaver` local / `PostgresSaver` prod) holds conversation
 > state on the LangGraph-Server / `useStream` path; the plain REST `/chat` route
-> is stateless by design and is a separate follow-on step (today `graph_app.py`
-> compiles without a checkpointer). This is the concrete build of audit
-> findings **R3** (a vendor-independent interaction log keyed by turn +
-> `corpus_release_hash`) and **R5** (persist the ledger; add
-> token/cost/duration/ts), and it fixes **D8**'s ephemerality.
+> is stateless by design and is a separate follow-on step.
 
 - **Metadata at ADR 0002's existing seams.** Tokens via `wrap_model_call`
-  reading `usage_metadata` into a new `token_usage` channel (captured nowhere
-  today, `run_experiment.py:213` `usage: None`); `duration_ms` + ts on each
-  `wrap_tool_call` ledger entry; a per-turn roll-up (model, token sums, est.
-  cost, latency, outcome, two-axis stamp, tables, routed schema, ledger,
-  `corpus_release_hash`) written by `_finalize_success`. Plus one thin, decoupled
-  portable append (SQLite row / JSONL) outside the version-coupled checkpoint
-  schema, for long-term reference and eval reuse.
-- **Two owner invariants.** The log is **write-only during a run**: a historical
-  sink, never a live-path input (preserving R3's capture-first / "never a direct
-  edit"; contrast the live `SqlCache`). It stores **full content now**; masking
-  and retention are a deferred future toggle.
+  reading `usage_metadata` into a `token_usage` channel; `duration_ms` + ts on
+  each ledger entry; per-turn roll-up written by `finalize_and_log`, plus a
+  portable append (SQLite / JSONL) outside the version-coupled checkpoint schema.
+- **Two owner invariants.** The log is **write-only during a run**. Default is
+  **metadata-only** (H11): no verbatim question/SQL/answer; ledger strips
+  `sql`/`result`. Full content is opt-in (`log_full_content`) with tiers, TTL
+  prune, POSIX file perms, and a prod ack (`log_full_content_ack`) that fails
+  loud at `build_stack` when missing.
 - **Scope: serve conversations AND DeepAgents runs** (curator/SME), on one
   mechanism: one thread plus one portable record per run.
-- **Status: Proposed (design only).** No code yet; ADR 0004 gives a 5-phase
-  migration (Phase 1 = attach the durable checkpointer).
+- **Status: M2 metadata logging shipped; M5 adds gated full-content + deep-agent
+  run records + durable `clarify_checkpointer`.** REST `/chat` durability remains
+  a follow-on.

@@ -257,13 +257,15 @@ def build_curator_agent(
     system_prompt: str | None = None,
     run_dir: Path | str | None = None,
     certified_writes: bool = False,
+    checkpointer: Any | None = None,
 ):
     """Build the curator deep agent for one corpus schema namespace.
 
     ``model`` is a LangChain chat model instance or a ``"provider:model"`` spec.
     ``run_dir`` wires ``FilesystemBackend`` so built-in file tools persist
     ``clarifications.jsonl`` on disk. ``certified_writes`` enables Phase B
-    human/certified stamping defaults.
+    human/certified stamping defaults. ``checkpointer`` is required for durable
+    resume on deep agents invoked via ``.invoke()`` (no server injection).
     """
     backend = None
     if run_dir is not None:
@@ -282,4 +284,6 @@ def build_curator_agent(
     }
     if backend is not None:
         kwargs["backend"] = backend
+    if checkpointer is not None:
+        kwargs["checkpointer"] = checkpointer
     return create_deep_agent(**kwargs)

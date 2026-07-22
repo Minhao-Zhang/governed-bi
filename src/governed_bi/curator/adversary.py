@@ -8,9 +8,8 @@ asset before it commits. Two layers:
   reference integrity, optional physical existence) and adds cheap heuristic
   self-consistency checks. Green (no findings) is the machine-checkable pass
   the loop needs; it runs with no LLM and no network.
-- :func:`refute` -- the per-asset LLM seam. A model re-derives or attacks one
-  claim, runs falsifying probe queries, and returns accept / revise / reject.
-  Pending; this is where the ``deepagents`` adversary plugs in.
+- :func:`refute` -- per-asset seam. Notes get an offline structural check;
+  other assets still require the LLM adversary (model-gated).
 
 Why an independent adversary, not self-review: a model rarely refutes its own
 plausible inference, and that is exactly where owner-less layers silently rot.
@@ -28,7 +27,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from ..corpus.schemas import ColumnRole, TableAsset
+from ..corpus.schemas import ColumnRole, NoteAsset, TableAsset
 from ..corpus.validate import Finding, validate_corpus
 
 if TYPE_CHECKING:
@@ -56,21 +55,23 @@ def review(
 ) -> list[Finding]:
     """Refute a proposed corpus structurally. Returns findings; empty == pass.
 
-    Runs the corpus CI validator (reference integrity, id conventions, and, when
-    a ``connector`` is given, physical existence) then layers cheap heuristic
-    self-consistency checks on the proposer's Inference tier:
-
-    - ``fk-missing-ref`` -- a column claiming ``role=foreign_key`` must name the
-      column it references.
-    - ``missing-provenance`` -- a curated table must carry an ``audit``
-      provenance stamp; an asset asserted without provenance is unauditable.
-
-    These are the deterministic floor. The richer, per-claim refutation (probe
-    queries, evidence checks) is :func:`refute`, the LLM seam.
+    Runs the corpus CI validator then layers cheap heuristic self-consistency
+    checks (FK refs, provenance stamps for tables and notes). Note C5 /
+    publication-drift findings come from ``validate_corpus``.
     """
     findings: list[Finding] = list(validate_corpus(assets, connector=connector))
 
     for asset in assets:
+        if isinstance(asset, NoteAsset):
+            if asset.audit is None:
+                findings.append(
+                    Finding(
+                        "missing-provenance",
+                        asset.id,
+                        "note asserted without an audit provenance stamp",
+                    )
+                )
+            continue
         if not isinstance(asset, TableAsset):
             continue
         if asset.audit is None:
@@ -94,11 +95,20 @@ def review(
 
 
 def refute(asset: "Asset") -> AdversaryResult:
-    """Attempt to refute one proposed Inference asset (LLM seam).
+    """Attempt to refute one proposed Inference asset.
 
-    The independent adversary re-derives or attacks the claim, runs falsifying
-    probe queries, and checks consistency + evidence, returning a verdict. This
-    is where the ``deepagents`` refute-first agent plugs in; the deterministic
-    scaffold relies on :func:`review` instead.
+    Offline path for notes: structural validate + empty-summary reject.
+    Non-note assets still raise (LLM adversary is model-gated).
     """
-    raise NotImplementedError("per-asset refutation pending; independent LLM adversary")
+    if isinstance(asset, NoteAsset):
+        if not (asset.summary or "").strip():
+            return AdversaryResult(Verdict.reject, "note.summary is empty")
+        findings = validate_corpus([asset])
+        if findings:
+            return AdversaryResult(
+                Verdict.revise, "; ".join(str(f) for f in findings)
+            )
+        return AdversaryResult(Verdict.accept, "structural note checks passed")
+    raise NotImplementedError(
+        "per-asset LLM refutation pending for non-note assets; use review() offline"
+    )

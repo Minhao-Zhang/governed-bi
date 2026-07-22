@@ -87,13 +87,122 @@ def test_always_notes_reach_context_by_licensed_scope():
     retrieval = RetrievalResult(question="q", table_ids=["tbl_s_orders"])
     ctx = assemble_context(corpus, retrieval, licensed_table_ids=frozenset({"tbl_s_orders"}))
 
-    assert any("always exclude test rows" in r for r in ctx.rules)  # global
-    assert any("amount is in cents" in r for r in ctx.rules)  # scoped to a licensed table
-    assert not any("should not appear" in r for r in ctx.rules)  # scoped elsewhere
+    assert any("always exclude test rows" in r for r in ctx.rules)  # global must_honour
+    assert any("amount is in cents" in r for r in ctx.advisory_notes)  # context → advisory
+    assert not any("should not appear" in r for r in ctx.rules + ctx.advisory_notes)
     block = ctx.render()
-    assert "## Governance notes" in block
+    assert "## Governance notes (must honour)" in block
+    assert "## Governance notes (advisory)" in block
     assert "amount is in cents" in block
     assert "on-match should not appear" not in block
+
+
+def test_five_scope_kinds_and_on_match_injection():
+    from governed_bi.corpus import Corpus
+    from governed_bi.corpus.ids import derive_column_id
+    from governed_bi.corpus.schemas import (
+        Column,
+        JoinAsset,
+        LogicalType,
+        MetricAsset,
+        NoteAsset,
+        Reliability,
+        TableAsset,
+    )
+    from governed_bi.retrieval import RetrievalResult
+
+    def _tbl(tid: str, schema: str = "s") -> TableAsset:
+        return TableAsset(
+            id=tid,
+            schema=schema,
+            physical_name=tid.split("_")[-1],
+            columns=[
+                Column(
+                    physical_name="x",
+                    physical_type="INTEGER",
+                    logical_type=LogicalType.integer,
+                    nullable=True,
+                    is_unique=False,
+                    reliability=Reliability(),
+                )
+            ],
+        )
+
+    orders = _tbl("tbl_s_orders")
+    col_id = derive_column_id(orders.id, "x")
+    metric = MetricAsset(
+        id="metric_s_total", name="total", base_table=orders.id, expression="SUM(x)"
+    )
+    join = JoinAsset(
+        id="join_orders_other",
+        left_table="tbl_s_orders",
+        right_table="tbl_s_other",
+        on="orders.x = other.x",
+    )
+    other = _tbl("tbl_s_other")
+    corpus = Corpus(
+        assets=[
+            orders,
+            other,
+            metric,
+            join,
+            NoteAsset(
+                id="note_col",
+                kind="context",
+                scope=[col_id],
+                summary="column-scoped note",
+            ),
+            NoteAsset(
+                id="note_metric",
+                kind="context",
+                scope=["metric_s_total"],
+                summary="metric-scoped note",
+            ),
+            NoteAsset(
+                id="note_schema",
+                kind="context",
+                scope=["schema:s"],
+                summary="schema-scoped note",
+            ),
+            NoteAsset(
+                id="note_db",
+                kind="context",
+                scope=["db:main"],
+                summary="db-scoped note",
+            ),
+            NoteAsset(
+                id="note_match",
+                kind="routing",
+                scope=["tbl_s_orders"],
+                summary="on-match routed",
+                body="long body detail",
+                activation="on_match",
+            ),
+            NoteAsset(
+                id="note_unmatched",
+                kind="routing",
+                scope=["tbl_s_orders"],
+                summary="should stay out",
+                activation="on_match",
+            ),
+        ]
+    )
+    retrieval = RetrievalResult(
+        question="q",
+        table_ids=["tbl_s_orders"],
+        note_ids=["note_match"],
+    )
+    ctx = assemble_context(
+        corpus, retrieval, licensed_table_ids=frozenset({"tbl_s_orders"}), db_name="main"
+    )
+    blob = "\n".join(ctx.rules + ctx.advisory_notes)
+    assert "column-scoped note" in blob
+    assert "metric-scoped note" in blob
+    assert "schema-scoped note" in blob
+    assert "db-scoped note" in blob
+    assert "on-match routed" in blob
+    assert "long body detail" in blob
+    assert "should stay out" not in blob
 
 
 def test_allowed_table_names_match_licensed_physical_names(corpus):

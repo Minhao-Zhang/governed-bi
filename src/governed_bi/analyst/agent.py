@@ -348,6 +348,7 @@ def build_serve_rails(
     def ingest(state: ServeRailsState) -> dict:
         events.reset()  # new turn: fresh seq + serve_path tag
         _turn_n[0] += 1
+        question = state["question"]
         if events._finalize_ctx is not None:
             events._finalize_ctx = replace(
                 events._finalize_ctx,
@@ -355,8 +356,8 @@ def build_serve_rails(
                 n_human=_turn_n[0],
                 t0=time.perf_counter(),
                 token_usage=[],
+                question=question,
             )
-        question = state["question"]
         route = route_intent(question)
         bound_terms = bind_terms(corpus, question)
         base = {
@@ -418,6 +419,7 @@ def build_serve_rails(
                 top_k=route_top_k,
                 embedder=embedder,
                 schema_vectors=router_schema_vectors,
+                settings=settings,
             )
             picked: str | None = None
             if router_chat is not None and shortlisted:
@@ -442,7 +444,7 @@ def build_serve_rails(
                 "total_schemas": len(_corpus_schemas),
                 "schema_pick": picked,
             }
-        retrieval = retrieve(retrieval_corpus, question, embedder=embedder)
+        retrieval = retrieve(retrieval_corpus, question, embedder=embedder, settings=settings)
         missing = detect_missing_join_path(
             corpus, graph_obj, set(retrieval.table_ids)
         )
@@ -463,6 +465,9 @@ def build_serve_rails(
             retrieval,
             licensed_table_ids=licensed_ids,
             history=history,
+            db_name=settings.datasource.db,
+            always_note_global_max=settings.always_note_global_max,
+            always_note_char_max=settings.always_note_char_max,
         )
         events.rail(
             "assemble",
@@ -1029,6 +1034,7 @@ def answer_question_agent(
                 n_human=n_human,
                 model=getattr(settings.models, "llm_model", None),
                 outcome="refuse",
+                question=question,
             ),
         )
     return answer

@@ -126,7 +126,7 @@ def test_agent_refuses_missing_edge(monkeypatch):
     # must refuse before the model runs.
     assert len({x.schema for x in corpus.assets if isinstance(x, TableAsset)}) == 2
 
-    def _fake_retrieve(corpus_arg, question, *, embedder=None):
+    def _fake_retrieve(corpus_arg, question, *, embedder=None, **_kwargs):
         return RetrievalResult(
             question=question,
             table_ids=[SCHEMA_A_ORDERS, SCHEMA_B_ORDERS],

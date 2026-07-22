@@ -72,7 +72,7 @@ def test_llm_pick_calls_select_schema_and_collapses_retrieval(monkeypatch):
         seen["candidates"] = sorted(candidates)
         return "schema_a"
 
-    def _fake_retrieve(corpus_arg, question, *, embedder=None):
+    def _fake_retrieve(corpus_arg, question, *, embedder=None, **_kwargs):
         seen["retrieval_schemas"] = sorted(
             {t.schema for t in corpus_arg.assets if isinstance(t, TableAsset)}
         )
@@ -126,7 +126,7 @@ def test_default_path_does_not_pick_and_refuses_missing_edge(monkeypatch):
         called["select"] = True
         return "schema_a"
 
-    def _fake_retrieve(corpus_arg, question, *, embedder=None):
+    def _fake_retrieve(corpus_arg, question, *, embedder=None, **_kwargs):
         return RetrievalResult(
             question=question,
             table_ids=[SCHEMA_A_ORDERS, SCHEMA_B_ORDERS],

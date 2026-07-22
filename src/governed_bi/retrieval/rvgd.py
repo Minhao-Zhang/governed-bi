@@ -41,6 +41,7 @@ from ..corpus.schemas import (
 )
 
 if TYPE_CHECKING:
+    from ..config import Settings
     from ..corpus import Asset, Corpus
     from ..llm import Embedder
 
@@ -191,6 +192,8 @@ class RetrievalResult:
     metric_ids: list[str] = field(default_factory=list)
     few_shot_ids: list[str] = field(default_factory=list)
     note_ids: list[str] = field(default_factory=list)
+    # Keyword/PIN trigger hits (R7); never blended into RRF — unioned for on_match inject.
+    triggered_note_ids: list[str] = field(default_factory=list)
     scores: dict[str, float] = field(default_factory=dict)
 
 
@@ -270,6 +273,8 @@ def retrieve(
     metric_k: int = 5,
     note_k: int = 5,
     vector_weight: float = 1.0,
+    settings: "Settings | None" = None,
+    triggered_note_ids: list[str] | None = None,
 ) -> RetrievalResult:
     """Rank corpus assets against ``question``, then ground/expand.
 
@@ -352,7 +357,15 @@ def retrieve(
     # Ground/expand to a fixpoint so term -> metric -> base_table and
     # few-shot -> referenced-table chains close.
     selected: set[str] = set(top_ids)
-    frontier: list[str] = list(top_ids)
+    # Keyword PIN (never RRF): hard-include triggered notes into selected.
+    pinned: list[str] = list(triggered_note_ids or [])
+    if not pinned and settings is not None:
+        from .triggers import fire_triggers
+
+        pinned = fire_triggers(corpus, question, settings=settings)
+    for nid in pinned:
+        selected.add(nid)
+    frontier: list[str] = list(selected)
     while frontier:
         asset = by_id.get(frontier.pop())
         expansions: list[str] = []
@@ -418,5 +431,6 @@ def retrieve(
         metric_ids=_ordered(metric_ids),
         few_shot_ids=_ordered(few_shot_ids),
         note_ids=_ordered(note_ids),
+        triggered_note_ids=list(pinned),
         scores=scores,
     )

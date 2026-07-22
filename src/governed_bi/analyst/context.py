@@ -31,7 +31,6 @@ from typing import TYPE_CHECKING
 from ..corpus.schemas import (
     JoinAsset,
     MetricAsset,
-    NoteAsset,
     ReliabilityStatus,
     TableAsset,
     TermAsset,
@@ -115,9 +114,10 @@ class PromptContext:
     metrics: list[MetricView] = field(default_factory=list)
     few_shots: list[FewShotView] = field(default_factory=list)
     caveats: list[str] = field(default_factory=list)
-    # Governance rules (Phase B SME caveats) in scope for the licensed tables:
-    # global rules always, table-scoped rules when their table is licensed.
+    # Injected note lines (must_honour); kept as ``rules`` for PromptContext compat.
     rules: list[str] = field(default_factory=list)
+    # Advisory note lines (normative_force=advisory).
+    advisory_notes: list[str] = field(default_factory=list)
     # Prior (role, content) turns from working memory (D8), oldest first. Empty
     # only for a single-round eval call; every conversational caller passes the
     # session history so a follow-up ("what about last year?") resolves against it.
@@ -189,6 +189,9 @@ def assemble_context(
     licensed_table_ids: frozenset[str] | set[str],
     low_confidence_join: float = LOW_CONFIDENCE_JOIN,
     history: Sequence[tuple[str, str]] = (),
+    db_name: str = "main",
+    always_note_global_max: int = 8,
+    always_note_char_max: int = 2000,
 ) -> PromptContext:
     """Resolve retrieval ids + the licensed table scope into a :class:`PromptContext`.
 
@@ -270,19 +273,23 @@ def assemble_context(
                 note = col.caveat or "flagged unreliable"
                 caveats.append(f"{tv.physical_name}.{col.physical_name}: {note}")
 
-    # Phase 1 note injection: only always-active notes are injected. Global notes
-    # apply everywhere; scoped notes apply when a licensed table id intersects.
-    # Use the bounded summary, never the progressive-disclosure body.
-    rules: list[str] = []
-    for asset in corpus.assets:
-        if not isinstance(asset, NoteAsset):
-            continue
-        if getattr(asset.activation, "value", asset.activation) != "always":
-            continue
-        if asset.scope and not any(sid in licensed_table_ids for sid in asset.scope):
-            continue
-        kind = asset.kind.value if hasattr(asset.kind, "value") else asset.kind
-        rules.append(f"({kind}) {asset.summary}")
+    from .note_inject import (
+        format_note_lines,
+        licensed_scope_from_tables,
+        select_notes_for_injection,
+    )
+
+    licensed = licensed_scope_from_tables(
+        corpus, licensed_table_ids, db_name=db_name
+    )
+    injected = select_notes_for_injection(
+        corpus,
+        retrieval,
+        licensed,
+        global_max=always_note_global_max,
+        char_max=always_note_char_max,
+    )
+    rules, advisory_notes = format_note_lines(injected)
 
     return PromptContext(
         question=retrieval.question,
@@ -293,6 +300,7 @@ def assemble_context(
         few_shots=few_shots,
         caveats=caveats,
         rules=rules,
+        advisory_notes=advisory_notes,
         conversation=list(history),
     )
 
@@ -376,9 +384,17 @@ def _render(ctx: PromptContext) -> str:
 
     if ctx.rules:
         lines.append("")
-        lines.append("## Governance notes")
+        lines.append("## Governance notes (must honour)")
         for r in ctx.rules:
-            lines.append(f"  {r}")
+            for part in r.splitlines() or [r]:
+                lines.append(f"  {part}")
+
+    if ctx.advisory_notes:
+        lines.append("")
+        lines.append("## Governance notes (advisory)")
+        for r in ctx.advisory_notes:
+            for part in r.splitlines() or [r]:
+                lines.append(f"  {part}")
 
     if ctx.few_shots:
         lines.append("")

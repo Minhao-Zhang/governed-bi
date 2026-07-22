@@ -2,8 +2,8 @@
 
 _[English](0004-local-first-conversation-run-logging.md) · [简体中文](0004-local-first-conversation-run-logging.zh.md)_
 
-- **Status:** Proposed (2026-07-21). Design agreed with the project owner; no
-  code yet.
+- **Status:** Accepted (2026-07-22). M2 metadata track + durable conversation
+  checkpointer shipped; M5 gated full-content + deep-agent logging in progress.
 - **Deciders:** project owner + design session
 - **Related:** [0001](0001-langgraph-server-chat-runtime.md) (LangGraph
   Server threads = persistence); [0002](0002-governed-agentic-serve-runtime.md)
@@ -225,20 +225,20 @@ per-run record. One mechanism, three producers (serve, curator, SME).
   input by design: `_try_cache_hit` (`governance.py:401,417`) is called from the
   `cache_lookup` node (`agent.py:451-454`) and can short-circuit the current turn
   on a hit. The metadata log deliberately has no equivalent read path.
-- **Metadata-only first; full content gated on a privacy decision.** A
-  metadata-only append (turn id, tokens, cost, duration, outcome, no verbatim
-  content) carries none of the exposure risk that verbatim logging does, and
-  ships first. Full content, questions, SQL, and row previews verbatim, is a
-  historical record and is not consumed during a run, but it must not be on
-  by default in any shared or deployed environment until a retention
-  default, an access-control posture, and local-file-permissions are at
-  least explicitly decided. `obs.py`'s `GOVERNED_BI_TRACE_MAX_CHARS` masking
-  (`obs.py:61-91`, applied via `_trace_mask` in `_langfuse_handler` at
-  `obs.py:115`) applies to the cloud tracer path only. Masking, retention,
-  and the default-on decision for full content are deferred, explicitly not
-  built now.
+- **Metadata-only default; full content opt-in (H11 — resolved).** Three tiers:
+  **Tier A** metadata always (turn id, tokens, cost, duration, outcome, ledger
+  verdicts — no verbatim question / SQL / answer / rows); **Tier B** verbatim
+  question / SQL / answer text under `log_full_content`; **Tier C** row previews
+  under `log_row_previews` AND `log_full_content`. Default is B/C off. Retention:
+  `log_full_content_ttl_days` (default 30) — `prune_full_content` nulls Tier B/C
+  while keeping Tier A. Store posture: POSIX file `0600` in parent dir `0700`;
+  on win32, `os.chmod` cannot restrict group/other — document the single-operator
+  caveat, do not pretend. Prod gate: `environment=prod` + `log_full_content`
+  without `log_full_content_ack` fails loud at `build_stack`. Cloud-tracer
+  masking (`GOVERNED_BI_TRACE_MAX_CHARS` in `obs.py`) is independent.
 - **Local-first, on by default.** Unlike the cloud tracers, which are "both
-  no-ops when unset" (`obs.py:1-4`), the local log is on by default and needs no keys.
+  no-ops when unset" (`obs.py:1-4`), the local **metadata** log is on by default
+  and needs no keys. Full-content tiers stay opt-in.
 
 ## Consequences
 
@@ -249,8 +249,9 @@ per-run record. One mechanism, three producers (serve, curator, SME).
 - A concrete build of R3 / R5 and the ADR 0002 Inv #10 durable audit sink,
   rather than another deferred seam.
 - Fixes D8 ephemerality for chat history and the governance ledger on that path.
-  (HITL resume uses a separate inner `clarify_checkpointer`, `stack.py:172-178`,
-  and needs its own durability step, not covered by §1.)
+  (HITL resume uses a separate inner `clarify_checkpointer`; H10 / M5-F7 makes
+  it durable via the same factory with a distinct path, or `InMemorySaver`
+  when kind is `memory`.)
 - Closes the eval `usage: None` gap (`run_experiment.py:213`); token/cost/
   latency finally measurable locally, without a vendor dashboard.
 - Deep-agent (curator/SME) runs get the same durable record as serve turns: one
@@ -260,11 +261,8 @@ per-run record. One mechanism, three producers (serve, curator, SME).
 - The durable checkpointer needs a real database in prod (Postgres), the
   same deployment note ADR 0001 already carries.
 - A full-content local log is a sensitive artifact: verbatim questions, SQL,
-  and row previews. It ships gated: off by default outside a single-operator
-  local dev setup, until a retention default, an access-control posture, and
-  local-file-permissions are decided. The metadata-only append ships first and
-  carries none of that risk. Masking and the default-on decision for full
-  content are deferred.
+  and row previews. Per H11 it is opt-in (Tier B/C), TTL-pruned, POSIX-permissioned
+  with an explicit win32 caveat, and prod-ack gated — not on by default.
 - The portable append is a second write per turn, on top of the checkpointer
   write. Cheap, but not free, and it is a second place that can drift from the
   checkpoint state if the two writes are not kept in lockstep. The two writes
@@ -329,27 +327,34 @@ per-run record. One mechanism, three producers (serve, curator, SME).
    git-SHA-per-checkpoint stand-in until the `CorpusRelease` decision, D11,
    lands); wire `run_experiment.py` to read tokens/cost from it instead of
    hard-coding `"usage": None` (`run_experiment.py:213`).
-5. Add FULL-CONTENT logging (verbatim questions, SQL, row previews) to the
-   append as a follow-on step, gated on deciding a retention default, an
-   access-control posture, and local-file-permissions; not on by default in
-   any shared or deployed environment until then.
-6. Extend to DeepAgents: checkpointer + run id + portable record for the
-   curator (`pipeline.py:263-268`) and SME (`sme.py:219-221`) invokes.
-7. (Deferred) masking toggle + retention/rotation; optional relational upgrade
-   of the portable store for dashboards/metrics, per R5 items 4-5
-   (`design-decisions.md:513-514`: OpenTelemetry/Prometheus surface,
-   fail-loud tracing).
+5. Add FULL-CONTENT logging (verbatim questions, SQL, row previews) under H11
+   tiers + TTL + POSIX perms + prod-ack (M5). Metadata-only remains the default.
+6. Extend to DeepAgents: `make_durable_checkpointer` + `emit_run_record` for the
+   curator and SME invokes (one mechanism, three producers); usage via
+   `UsageMetadataCallbackHandler`; failed-invoke fallback record.
+7. (Deferred) optional relational upgrade of the portable store for
+   dashboards/metrics, per R5 items 4-5 (`design-decisions.md:513-514`:
+   OpenTelemetry/Prometheus surface, fail-loud tracing). Retention/rotation for
+   Tier B/C is **not** deferred — see H11 / `prune_full_content`.
+
+## Resolved decisions (2026-07-22)
+
+Canonical record: [D18](../design-decisions.md#d18-local-first-conversation--run-logging).
+
+1. **[H11] Log privacy / retention.** Metadata-only (Tier A) default-on;
+   Tier B under `log_full_content`; Tier C row previews under `log_row_previews`
+   AND `log_full_content`; 30-day TTL on B/C via `prune_full_content`; POSIX
+   `0600`/`0700` with documented win32 single-operator caveat; prod refuses
+   `log_full_content` without `log_full_content_ack` (fail loud at `build_stack`).
+2. **[H10] Durable `clarify_checkpointer`.** Same factory as the conversation
+   saver (`make_durable_checkpointer`) with a distinct path/namespace; 
+   `InMemorySaver` when kind is `memory` (offline tests / ephemeral).
 
 ## Open questions
 
 - Portable record format: SQLite row (queryable, still trivially exportable,
-  recommended) vs. JSONL (dead-simple append/grep).
-- Cost price-table location and when to compute it (config, at
-  `_finalize_success`).
+  recommended) vs. JSONL (dead-simple append/grep) — both implemented; default
+  SQLite.
+- Cost price-table location and when to compute it (config, at finalize).
 - Prod checkpointer: reuse the serving Postgres or a separate logging
   database.
-- Durability for the inner HITL `clarify_checkpointer` (`stack.py:172-178`,
-  today a per-process `InMemorySaver` scoped only to `ask_user` interrupt /
-  resume): whether to give it its own durable backend now, alongside the
-  conversation checkpointer in §1, or accept the current resume-window risk
-  and track it as later work.

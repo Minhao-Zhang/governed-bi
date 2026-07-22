@@ -51,7 +51,7 @@ class ServeStack:
     datasource: DataSourceConfig | None = None  # which DB the serve path executes against
     chat_model: Any | None = None  # raw LangChain BaseChatModel driving the agent core
     can_clarify: bool = False  # serve-time HITL (ask_user) is available (streaming + live model)
-    clarify_checkpointer: Any | None = None  # inner-agent saver for interrupt/resume (in-mem, per process)
+    clarify_checkpointer: Any | None = None  # inner-agent saver for interrupt/resume (H10 durable)
     conversation_checkpointer: Any | None = None  # durable outer-chat saver (ADR 0004 L3)
 
     def open_connector(self, *, connect_timeout: float | None = None) -> "Connector":
@@ -157,6 +157,12 @@ def build_stack(settings: Settings | None = None) -> ServeStack:
     Secrets (API key, DSN) remain in the environment / ``.env``.
     """
     settings = settings if settings is not None else load_settings()
+
+    # H11: prod + full-content without explicit ack fails loud.
+    from ..analyst.run_log import assert_full_content_policy
+
+    assert_full_content_policy(settings)
+
     datasource = settings.datasource
     root = resolve_corpus_root(settings.corpus_root)
 
@@ -167,15 +173,21 @@ def build_stack(settings: Settings | None = None) -> ServeStack:
     can_edit = settings.allow_edit
 
     # Serve-time HITL (ask_user -> interrupt) needs a checkpointer for the inner
-    # agent to pause/resume; it is only reachable via the streaming chat graph
-    # (graph_app), never the REST /chat path (no outer checkpointer there). The
-    # saver is in-memory / per-process for v1 (durable Postgres is deferred to F7).
+    # agent to pause/resume. H10/F7: durable via make_clarify_checkpointer
+    # (distinct path); InMemorySaver when kind=memory.
     clarify_checkpointer = None
     can_clarify = False
     if has_live:
-        from langgraph.checkpoint.memory import InMemorySaver
+        from ..analyst.run_log import make_clarify_checkpointer
 
-        clarify_checkpointer = InMemorySaver()
+        try:
+            clarify_checkpointer = make_clarify_checkpointer(settings)
+        except Exception:
+            clarify_checkpointer = None
+        if clarify_checkpointer is None:
+            from langgraph.checkpoint.memory import InMemorySaver
+
+            clarify_checkpointer = InMemorySaver()
         can_clarify = bool(settings.can_stream)
 
     # conversation_checkpointer is lazy — built only by build_standalone_chat_graph

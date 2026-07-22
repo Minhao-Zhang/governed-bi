@@ -293,6 +293,28 @@ def test_note_indexes_summary_only_and_has_own_budget():
     assert retrieve(corpus, "governed revenue", note_k=0).note_ids == []
 
 
+def test_schema_documents_exclude_note_text():
+    """R1 guard: notes must never dilute the schema-routing document."""
+    from governed_bi.retrieval.schema_router import schema_documents
+
+    table = TableAsset(
+        id="tbl_s_orders",
+        schema="s",
+        physical_name="orders",
+        description="order facts",
+    )
+    note = NoteAsset(
+        id="note_secret",
+        kind="routing",
+        summary="UNIQUE_NOTE_ROUTING_TOKEN_xyz",
+        scope=["schema:s"],
+    )
+    docs = schema_documents(Corpus(assets=[table, note]))
+    assert "s" in docs
+    assert "UNIQUE_NOTE_ROUTING_TOKEN_xyz" not in docs["s"]
+    assert "order facts" in docs["s"]
+
+
 def test_vector_weight_scales_semantic_channel():
     from governed_bi.retrieval.embedding import fuse_rankings
 

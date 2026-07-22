@@ -49,6 +49,7 @@ from .schema_router import (
     select_schema,
     shortlist_schemas,
 )
+from .triggers import fire_triggers
 
 __all__ = [
     "BM25Index",
@@ -60,6 +61,7 @@ __all__ = [
     "embed_schema_documents",
     "expand_schemas_via_curated_joins",
     "filter_corpus_for_retrieval",
+    "fire_triggers",
     "fuse_rankings",
     "retrieve",
     "route_schemas",

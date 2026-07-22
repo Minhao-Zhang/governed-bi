@@ -219,6 +219,26 @@ def validate_corpus(
             )
         )
 
+    # -- C5: notes must not name governance-excluded identifiers (summary first) -- #
+    excluded_tokens = _excluded_identifier_tokens(assets)
+    if excluded_tokens:
+        for a in assets:
+            if not isinstance(a, NoteAsset):
+                continue
+            for field_name, text in (("summary", a.summary), ("body", a.body or "")):
+                if not text:
+                    continue
+                hits = sorted(tok for tok in excluded_tokens if tok in text)
+                if hits:
+                    findings.append(
+                        Finding(
+                            "note-excluded-identifier",
+                            a.id,
+                            f"note.{field_name} names excluded identifier(s): {hits}",
+                        )
+                    )
+                    break  # summary first; one finding per note is enough
+
     # -- Join on-clause columns resolve to the joined tables (corpus-only) --- #
     # Endpoint ids are checked above; the ``on`` SQL is not. A typo'd or
     # hallucinated column in ``on`` otherwise passes CI green and only surfaces
@@ -232,6 +252,19 @@ def validate_corpus(
         _check_physical_existence(assets, connector, findings)
 
     return findings
+
+
+def _excluded_identifier_tokens(assets: list[Asset]) -> set[str]:
+    """Physical names of excluded tables/columns (C5 content-scan fodder)."""
+    tokens: set[str] = set()
+    for a in assets:
+        if isinstance(a, TableAsset):
+            if a.governance.excluded and a.physical_name:
+                tokens.add(a.physical_name)
+            for col in a.columns:
+                if col.governance.excluded and col.physical_name:
+                    tokens.add(col.physical_name)
+    return {t for t in tokens if len(t) >= 3}  # skip tiny tokens that false-positive
 
 
 def _check_join_on_columns(assets: list[Asset], findings: list[Finding]) -> None:

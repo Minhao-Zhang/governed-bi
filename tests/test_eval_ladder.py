@@ -355,7 +355,9 @@ def test_deep_agent_invoke_receives_tracing_callbacks(bird_connector, tmp_path: 
 
     rec = _RecordingAgent()
     monkeypatch.setattr(da_mod, "build_curator_agent", lambda *a, **k: rec)
-    monkeypatch.setattr(pipe_mod, "tracing_callbacks", lambda: ["LF_SENTINEL"])
+    monkeypatch.setattr(
+        pipe_mod, "tracing_callbacks", lambda **_kwargs: ["LF_SENTINEL"]
+    )
 
     gateway = Gateway(bird_connector)
     train = [

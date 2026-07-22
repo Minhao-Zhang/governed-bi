@@ -255,16 +255,34 @@ def _invoke_agent(
     *,
     user: str,
     max_agent_steps: int,
+    settings: "Settings | None" = None,
+    run_id: str | None = None,
+    thread_id: str | None = None,
 ) -> tuple[Any | None, dict[str, Any], str | None]:
     """Invoke agent; return (result, tool_counts, error_string)."""
+    import time
+
+    from ..analyst.run_log import emit_run_record, new_run_id
+    from ..provenance import Producer
+
     result = None
     error = None
+    t0 = time.perf_counter()
+    rid = run_id or new_run_id()
+    tid = thread_id or rid
+    usage_cb = None
+    cbs = tracing_callbacks(with_usage=True)
+    for cb in cbs:
+        if type(cb).__name__ == "UsageMetadataCallbackHandler":
+            usage_cb = cb
+            break
     try:
         result = agent.invoke(
             {"messages": [{"role": "user", "content": user}]},
             config={
                 "recursion_limit": max(max_agent_steps * 4, 100),
-                "callbacks": tracing_callbacks(),
+                "callbacks": cbs,
+                "configurable": {"thread_id": tid},
             },
         )
     except Exception as err:
@@ -277,6 +295,29 @@ def _invoke_agent(
         short = f"{type(err).__name__}: {err}"
         error = f"{short}\n{traceback.format_exc()}"
         print(f"deep-agent stopped early ({short})")
+    if settings is None:
+        try:
+            from ..config import load_settings
+
+            settings = load_settings(apply_local=False)
+        except Exception:
+            settings = None
+    if settings is not None:
+        usage_list: list = []
+        if usage_cb is not None:
+            from ..analyst.run_log import usage_callback_entries
+
+            usage_list = usage_callback_entries(usage_cb, source="curator")
+        emit_run_record(
+            settings=settings,
+            producer=Producer.curator,
+            run_id=rid,
+            thread_id=tid,
+            outcome="error" if error else "ok",
+            error=error,
+            token_usage=usage_list,
+            t0=t0,
+        )
     return result, _count_tool_calls(result), error
 
 
@@ -526,7 +567,25 @@ def build_curated_corpus(
     agent_ran = False
 
     if run_agent and model is not None:
+        from ..analyst.run_log import make_durable_checkpointer, new_run_id
+        from ..config import load_settings
         from .deep_agent import build_curator_agent
+
+        try:
+            _settings = load_settings(apply_local=False)
+        except Exception:
+            _settings = None
+        _run_id = new_run_id()
+        _thread_id = f"curator:{schema}:{out_root.name}"
+        _ckpt = None
+        if _settings is not None:
+            try:
+                _ckpt = make_durable_checkpointer(
+                    _settings,
+                    path=str(Path(out_root) / "agent_checkpoints.sqlite"),
+                )
+            except Exception:  # degrade; a checkpointer fault must not crash curation
+                _ckpt = None
 
         def make_agent() -> Any:  # fresh agent per invoke — no shared fs/state
             return build_curator_agent(
@@ -537,6 +596,7 @@ def build_curated_corpus(
                 bag=bag,
                 run_dir=out_root,
                 system_prompt=_PHASE_A_PROMPT,
+                checkpointer=_ckpt,
             )
 
         agent_ran = True
@@ -552,7 +612,12 @@ def build_curated_corpus(
             ]
         )
         _result, tool_counts, agent_error = _invoke_agent(
-            make_agent(), user=user, max_agent_steps=max_agent_steps
+            make_agent(),
+            user=user,
+            max_agent_steps=max_agent_steps,
+            settings=_settings,
+            run_id=_run_id,
+            thread_id=_thread_id,
         )
 
     findings, fix_counts, fix_error = _validate_fix_pass(
@@ -692,7 +757,25 @@ def build_curated_corpus_with_sme(
     if not open_records:
         fold_mode = "none"  # no clarifications → nothing to fold; curated_sme == curated
     elif run_agent_repass and model is not None:
+        from ..analyst.run_log import make_durable_checkpointer, new_run_id
+        from ..config import load_settings
         from .deep_agent import build_curator_agent
+
+        try:
+            _settings = load_settings(apply_local=False)
+        except Exception:
+            _settings = None
+        _run_id = new_run_id()
+        _thread_id = f"curator-sme:{schema}:{out_root.name}"
+        _ckpt = None
+        if _settings is not None:
+            try:
+                _ckpt = make_durable_checkpointer(
+                    _settings,
+                    path=str(Path(out_root) / "agent_checkpoints.sqlite"),
+                )
+            except Exception:  # degrade; a checkpointer fault must not crash curation
+                _ckpt = None
 
         def make_agent() -> Any:  # fresh agent per invoke — no shared fs/state
             return build_curator_agent(
@@ -704,6 +787,7 @@ def build_curated_corpus_with_sme(
                 run_dir=out_root,
                 system_prompt=_PHASE_B_PROMPT,
                 certified_writes=True,
+                checkpointer=_ckpt,
             )
 
         agent_ran = True
@@ -714,7 +798,12 @@ def build_curated_corpus_with_sme(
             "corpus via annotate/upsert tools with certified=true."
         )
         _result, tool_counts, agent_error = _invoke_agent(
-            make_agent(), user=user, max_agent_steps=max_agent_steps
+            make_agent(),
+            user=user,
+            max_agent_steps=max_agent_steps,
+            settings=_settings,
+            run_id=_run_id,
+            thread_id=_thread_id,
         )
         # Count successful certified writes via tool totals; also apply any
         # unanswered leftovers is NOT done — agent owns the fold.

@@ -178,7 +178,7 @@ def test_route_schemas_recorded_in_provenance(monkeypatch):
         datasource=DataSourceConfig(kind="postgres", dsn="host=x"),
     )
 
-    def _fake_retrieve(corpus_arg, question, *, embedder=None):
+    def _fake_retrieve(corpus_arg, question, *, embedder=None, **_kwargs):
         return RetrievalResult(
             question=question,
             table_ids=["tbl_finance_invoices"],
