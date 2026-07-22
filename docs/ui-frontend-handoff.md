@@ -126,10 +126,9 @@ the rework.
 | `GET /schema/summary?schema=&limit=&offset=` | **lean catalog** `{ total, items }` for the virtualized list + client search index; each item `{ id, physical_name, schema, row_count, n_columns, excluded, has_suspect, provenance_status, columns:[{physical_name, physical_type, role, reliability, excluded}] }` (heavy fields dropped; `total` is pre-pagination) |
 | `GET /schema/{table_id}` | one table's **full** `TableResponse` (includes `schema`), fetched lazily on detail-open; `404` on unknown id |
 | `GET /graph` | **ER graph** `{ nodes, edges, boundary?, meta? }` of tables + join edges (nodes carry `schema` / `row_count` / `n_columns` / `has_suspect`; edges carry `on`/`cardinality`/`confidence`/`low_confidence`). Optional D15 scope: `?schema=&focus=&radius=&node_budget=` — scoped responses include `boundary` + `meta` (echoed `scope` for `engineScopeMatches`). Param-less = full graph |
-| `GET /knowledge-graph` | **full knowledge graph** `{ nodes, edges, boundary?, meta? }` over every asset kind (table/join/metric/term/rule/few_shot/negative_example); table nodes carry `schema`; edges typed `join`/`measures`/`grounds`/`related:*`/`scopes`/`exemplifies`. Same scope params as `/graph`, plus `?kinds=` (comma-separated) |
-| `GET /columns/{column_id}/related` | every semantic-layer item that touches one physical column: `terms`, `rules`, `fk_out`, `fk_in`, `joins` (resolved server-side), `metrics` (table-grain). `column_id` = `col_<table>_<physical_name>`. Full contract in **§14** |
-| `GET /corpus/assets?type=` | non-table assets (metric/term/join/rule/few_shot/negative) |
-| `GET /skills` | skills (markdown); each skill carries **`schema`** (wire). Empty on some corpora — shape is in OpenAPI / zod regardless |
+| `GET /knowledge-graph` | **full knowledge graph** `{ nodes, edges, boundary?, meta? }` over every asset kind (table/join/metric/term/note/few_shot/negative_example); table nodes carry `schema`; edges typed `join`/`measures`/`grounds`/`related:*`/`scopes`/`exemplifies`. Same scope params as `/graph`, plus `?kinds=` (comma-separated) |
+| `GET /columns/{column_id}/related` | every semantic-layer item that touches one physical column: `terms`, `rules` (notes scoped to the column; wire key kept for now), `fk_out`, `fk_in`, `joins` (resolved server-side), `metrics` (table-grain). `column_id` = `col_<table>_<physical_name>`. Full contract in **§14** |
+| `GET /corpus/assets?type=` | non-table assets (`note` replaces former `rule`; `skill` removed — `?type=rule` is 422) |
 | `POST /corpus/edit` *(dev only; gated on `can_edit`)* | validate the submitted asset → write YAML (dev) / PR (prod); returns validation + diff |
 
 ---
@@ -452,7 +451,7 @@ This endpoint surfaces the column grain **without** disturbing that graph.
 - `column_id` is the **derived** column id: `col_<table_id without the 'tbl_' prefix>_<physical_name>`
   — e.g. `col_beer_factory_customers_CustomerID` (see `corpus.ids.derive_column_id`).
   This is the **same id** used by `Column.references`, `TermBinding.asset_id`, and
-  `RuleAsset.scope` entries.
+  `NoteAsset.scope` entries.
 - `404` when the id does not resolve to a known column.
 
 ### 14.2 Response (`ColumnRelatedResponse`)
@@ -470,8 +469,8 @@ This endpoint surfaces the column grain **without** disturbing that graph.
     { "id": "term_customer_id", "name": "customer id", "synonyms": ["cust id"],
       "confidence": 0.9, "provenance_status": "draft" }
   ],
-  "rules": [                            // RuleAsset with this column id in `scope` (KG relation: "scopes")
-    { "id": "rule_active_customer", "kind": "business_rule",
+  "rules": [                            // NoteAsset with this column id in `scope` (KG: "scopes"; wire key still `rules`)
+    { "id": "note_active_customer", "kind": "business_rule",
       "statement": "…", "confidence": 0.8, "provenance_status": "draft" }
   ],
   "fk_out": {                           // this column's own Column.references, resolved; null if not an FK
@@ -504,7 +503,7 @@ field. Each item carries its `provenance_status` / `confidence` so the UI can fl
 Two different column identifier schemes coexist — get this right or joins won't line up:
 
 - **Asset-id scheme** — `col_<table>_<physical_name>` (from `derive_column_id`). Used
-  by `TermBinding.asset_id`, `RuleAsset.scope`, and `Column.references`. `terms`,
+  by `TermBinding.asset_id`, `NoteAsset.scope`, and `Column.references`. `terms`,
   `rules`, `fk_out`, and `fk_in` key on this directly.
 - **Physical-predicate scheme** — `JoinAsset.on` is a raw SQL equality string over
   **physical** names (`"customers.CustomerID = orders.CustomerID"`), **not** col ids.

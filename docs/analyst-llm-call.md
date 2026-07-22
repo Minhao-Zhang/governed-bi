@@ -116,19 +116,15 @@ always present):
   [TABLE].[COLUMN]: [CAVEAT]
 
 ## Governance rules (must honour)
-  ([KIND]) [STATEMENT]
+  ([KIND]) [SUMMARY]
 
 ## Example questions with gold SQL
   Q: [QUESTION]
   A: [SQL]
-
-## Skills (routing / gotchas / patterns)
-### [SKILL_ID] ([KIND])
-[SKILL_BODY]
 ```
 
 A concrete instance for a question retrieval scoped to `beer_factory`'s `transaction`
-and `customers` tables (few-shots/terms/metrics/rules trimmed to what's realistic for
+and `customers` tables (few-shots/terms/metrics/notes trimmed to what's realistic for
 this scope):
 
 ```text
@@ -158,6 +154,7 @@ this scope):
 
 ## Governance rules (must honour)
   (business_rule) The ingredient and availability flags on rootbeerbrand (CaneSugar, CornSyrup, Honey, ArtificialSweetener, Caffeinated, Alcoholic, AvailableInCans, AvailableInBottles, AvailableInKegs) are stored as the TEXT strings 'TRUE' and 'FALSE', not as integers or booleans. Filter with = 'TRUE', never = 1.
+  (routing) Use metric_revenue over transaction for revenue or sales and join through rootbeer to rootbeerbrand for brand breakdowns; use metric_avg_rating over rootbeerreview for rating or review-quality questions and join directly to rootbeerbrand; ingredient and availability flags are 'TRUE'/'FALSE' strings, and customers.ZipCode is an INTEGER that loses leading zeros and must not be used as a postal key.
 
 ## Example questions with gold SQL
   Q: Which root beer brand has the highest average review rating?
@@ -167,32 +164,14 @@ JOIN rootbeerbrand AS b ON r.BrandID = b.BrandID
 WHERE r.StarRating IS NOT NULL
 GROUP BY b.BrandName
 ORDER BY avg_rating DESC
-
-## Skills (routing / gotchas / patterns)
-### skill_beer_factory_routing (routing)
-# Beer factory: routing & gotchas
-
-## Scope
-Sales, customers, root beer brands, and reviews for a root beer factory.
-`transaction` is the sales fact table; `rootbeer` is the unit dimension, which
-rolls up to `rootbeerbrand`.
-
-## Routing triggers
-- Revenue / sales questions use `metric_revenue` [...]
-- Rating / review-quality questions use `metric_avg_rating` [...]
-
-## Gotchas
-- Ingredient and availability flags on `rootbeerbrand` are the strings
-  `'TRUE'`/`'FALSE'`, not integers [...]
-- `customers.ZipCode` is an INTEGER, so leading zeros are lost [...]
-- `transaction.CreditCardNumber` is PII and is excluded; never select it.
 ```
 
 Note what is absent: `transaction.CreditCardNumber` never appears. It is
 `governance.excluded`, so it is removed before the corpus is ever retrieved or
 rendered, not merely flagged. Only `suspect` columns (curator-inferred, soft) show up
 tagged `DO NOT USE`; `excluded` columns (human-set, hard) are invisible to the model
-entirely.
+entirely. Phase 1 injects only `activation=always` note **summaries** (no Markdown
+`skills/` body and no `body` field).
 
 ### First human message
 

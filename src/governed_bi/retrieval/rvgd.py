@@ -35,7 +35,7 @@ from ..corpus.schemas import (
     FewShotAsset,
     MetricAsset,
     NegativeExampleAsset,
-    RuleAsset,
+    NoteAsset,
     TableAsset,
     TermAsset,
 )
@@ -99,8 +99,8 @@ def asset_document(asset: "Asset") -> str:
         return " ".join([asset.name, asset.expression, *asset.dimensions])
     if isinstance(asset, FewShotAsset):
         return asset.question
-    if isinstance(asset, RuleAsset):
-        return asset.statement
+    if isinstance(asset, NoteAsset):
+        return asset.summary
     if isinstance(asset, NegativeExampleAsset):
         return " ".join([asset.pattern, *asset.example_questions])
     return ""
@@ -190,7 +190,7 @@ class RetrievalResult:
     term_ids: list[str] = field(default_factory=list)
     metric_ids: list[str] = field(default_factory=list)
     few_shot_ids: list[str] = field(default_factory=list)
-    rule_ids: list[str] = field(default_factory=list)
+    note_ids: list[str] = field(default_factory=list)
     scores: dict[str, float] = field(default_factory=dict)
 
 
@@ -268,7 +268,7 @@ def retrieve(
     few_shot_k: int = 3,
     term_k: int = 5,
     metric_k: int = 5,
-    rule_k: int = 5,
+    note_k: int = 5,
     vector_weight: float = 1.0,
 ) -> RetrievalResult:
     """Rank corpus assets against ``question``, then ground/expand.
@@ -277,7 +277,7 @@ def retrieve(
        by embedding cosine (the V channel) and fuse the two with Reciprocal Rank
        Fusion.
     2. Keep the top matches **per asset type** — up to ``top_k`` tables plus
-       separate budgets for few-shots / terms / metrics / rules. A single pooled
+       separate budgets for few-shots / terms / metrics / notes. A single pooled
        cut let a flood of matching few-shots crowd every table out of the result
        (and grounding cannot recover a table nothing points to); per-type budgets
        guarantee tables their slots.
@@ -326,7 +326,7 @@ def retrieve(
         FewShotAsset: few_shot_k,
         TermAsset: term_k,
         MetricAsset: metric_k,
-        RuleAsset: rule_k,
+        NoteAsset: note_k,
     }
     kept: dict[type, int] = {}
     top_ids: list[str] = []
@@ -378,7 +378,7 @@ def retrieve(
     term_ids: list[str] = []
     metric_ids: list[str] = []
     few_shot_ids: list[str] = []
-    rule_ids: list[str] = []
+    note_ids: list[str] = []
     for asset_id in selected:
         asset = by_id.get(asset_id)
         if isinstance(asset, TableAsset):
@@ -389,8 +389,8 @@ def retrieve(
             metric_ids.append(asset_id)
         elif isinstance(asset, FewShotAsset):
             few_shot_ids.append(asset_id)
-        elif isinstance(asset, RuleAsset):
-            rule_ids.append(asset_id)
+        elif isinstance(asset, NoteAsset):
+            note_ids.append(asset_id)
 
     table_ids = _ordered(table_ids)
 
@@ -417,6 +417,6 @@ def retrieve(
         term_ids=_ordered(term_ids),
         metric_ids=_ordered(metric_ids),
         few_shot_ids=_ordered(few_shot_ids),
-        rule_ids=_ordered(rule_ids),
+        note_ids=_ordered(note_ids),
         scores=scores,
     )

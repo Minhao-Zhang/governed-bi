@@ -25,9 +25,8 @@ ID_PATTERNS: dict[str, re.Pattern[str]] = {
     "few_shot": re.compile(rf"^fs_{_NAME}_{_NUM}$"),
     "term": re.compile(rf"^term_{_NAME}$"),
     "metric": re.compile(rf"^metric_{_NAME}$"),
-    "rule": re.compile(rf"^rule_{_NAME}$"),
+    "note": re.compile(rf"^note_{_NAME}$"),
     "negative_example": re.compile(rf"^neg_{_NAME}_{_NUM}$"),
-    "skill": re.compile(rf"^skill_{_NAME}$"),
 }
 
 # asset_type -> literal ID prefix, for constructing/eyeballing ids.
@@ -38,9 +37,8 @@ ID_PREFIX: dict[str, str] = {
     "few_shot": "fs_",
     "term": "term_",
     "metric": "metric_",
-    "rule": "rule_",
+    "note": "note_",
     "negative_example": "neg_",
-    "skill": "skill_",
 }
 
 

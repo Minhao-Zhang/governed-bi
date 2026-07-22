@@ -25,7 +25,7 @@ from ..corpus.schemas import (
     JoinAsset,
     MetricAsset,
     NegativeExampleAsset,
-    RuleAsset,
+    NoteAsset,
     TableAsset,
     TermAsset,
 )
@@ -118,17 +118,8 @@ class AssetRow:
 
 
 @dataclass(frozen=True)
-class SkillView:
-    skill_id: str
-    kind: str
-    schema: str  # D15 namespace (skill ``SkillFrontmatter.schema``)
-    body: str
-
-
-@dataclass(frozen=True)
 class CorpusHealth:
     counts: dict[str, int]  # asset_type -> count
-    n_skills: int
     n_suspect_columns: int
     n_excluded: int  # excluded tables + columns
     n_low_confidence_joins: int
@@ -187,7 +178,7 @@ class KnowledgeGraphNode:
     """A corpus asset as a node in the full knowledge graph."""
 
     id: str
-    kind: str  # asset_type: table | join | metric | term | rule | few_shot | negative_example
+    kind: str  # asset_type: table | join | metric | term | note | few_shot | negative_example
     label: str
     excluded: bool
     provenance_status: str | None
@@ -375,7 +366,6 @@ def corpus_health(corpus: "Corpus") -> CorpusHealth:
     findings = [str(f) for f in validate_corpus(corpus.assets)]
     return CorpusHealth(
         counts=counts,
-        n_skills=len(corpus.skills),
         n_suspect_columns=n_suspect,
         n_excluded=n_excluded,
         n_low_confidence_joins=n_low_conf_joins,
@@ -486,8 +476,8 @@ def _summary(asset) -> str:
         return f"{asset.name}: {asset.expression}"
     if isinstance(asset, TermAsset):
         return f"{asset.name} = {', '.join(asset.synonyms) or '(no synonyms)'}"
-    if isinstance(asset, RuleAsset):
-        return f"[{asset.kind.value}] {asset.statement}"
+    if isinstance(asset, NoteAsset):
+        return f"[{asset.kind.value}] {asset.summary}"
     if isinstance(asset, FewShotAsset):
         return asset.question
     if isinstance(asset, NegativeExampleAsset):
@@ -496,7 +486,7 @@ def _summary(asset) -> str:
 
 
 def asset_rows(corpus: "Corpus", *, asset_types: set[str] | None = None) -> list[AssetRow]:
-    """One-line rows for non-table assets (joins, metrics, terms, rules,
+    """One-line rows for non-table assets (joins, metrics, terms, notes,
     few-shots, negatives), optionally filtered to ``asset_types``."""
     rows: list[AssetRow] = []
     for asset in corpus.assets:
@@ -514,18 +504,6 @@ def asset_rows(corpus: "Corpus", *, asset_types: set[str] | None = None) -> list
             )
         )
     return rows
-
-
-def skill_views(corpus: "Corpus") -> list[SkillView]:
-    return [
-        SkillView(
-            skill_id=skill.frontmatter.skill_id,
-            kind=skill.frontmatter.kind.value,
-            schema=skill.frontmatter.schema,
-            body=skill.body,
-        )
-        for skill in corpus.skills
-    ]
 
 
 def schema_graph(corpus: "Corpus") -> SchemaGraphView:
@@ -574,8 +552,8 @@ def _kg_label(asset) -> str:
         return asset.name
     if isinstance(asset, JoinAsset):
         return asset.on
-    if isinstance(asset, RuleAsset):
-        return asset.statement
+    if isinstance(asset, NoteAsset):
+        return asset.summary
     if isinstance(asset, FewShotAsset):
         return asset.question
     if isinstance(asset, NegativeExampleAsset):
@@ -664,7 +642,7 @@ def knowledge_graph(corpus: "Corpus") -> KnowledgeGraphView:
                 add_edge(asset.id, asset.binding.asset_id, "grounds", confidence=asset.confidence)
             for related in asset.related_terms:
                 add_edge(asset.id, related.id, f"related:{related.relation.value}")
-        elif isinstance(asset, RuleAsset):
+        elif isinstance(asset, NoteAsset):
             for scope_id in asset.scope:
                 add_edge(asset.id, scope_id, "scopes")
         elif isinstance(asset, FewShotAsset):
@@ -703,7 +681,7 @@ def related_to_column(corpus: "Corpus", column_id: str) -> ColumnRelatedView | N
     Returns ``None`` when ``column_id`` does not resolve to a known column (the API
     turns that into a 404). ``column_id`` is the derived id
     ``col_<table>_<physical_name>`` (:func:`corpus.ids.derive_column_id`), the same
-    id used by ``Column.references``, ``TermBinding.asset_id``, and ``RuleAsset.scope``.
+    id used by ``Column.references``, ``TermBinding.asset_id``, and ``NoteAsset.scope``.
 
     Reads the full corpus (like the other audit-surface views), so items on excluded
     assets still show. Joins are resolved server-side from the physical ON predicate
@@ -770,13 +748,13 @@ def related_to_column(corpus: "Corpus", column_id: str) -> ColumnRelatedView | N
                         provenance_status=_provenance_status(asset),
                     )
                 )
-        elif isinstance(asset, RuleAsset):
+        elif isinstance(asset, NoteAsset):
             if column_id in asset.scope:
                 rules.append(
                     RelatedRuleView(
                         id=asset.id,
                         kind=asset.kind.value,
-                        statement=asset.statement,
+                        statement=asset.summary,
                         confidence=asset.confidence,
                         provenance_status=_provenance_status(asset),
                     )

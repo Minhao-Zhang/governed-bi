@@ -1,0 +1,46 @@
+asset_type: note
+id: note_beer_factory_routing
+kind: routing
+scope:
+  - tbl_beer_factory_transaction
+  - tbl_beer_factory_rootbeer
+  - tbl_beer_factory_rootbeerbrand
+  - tbl_beer_factory_rootbeerreview
+  - tbl_beer_factory_customers
+  - metric_revenue
+  - metric_avg_rating
+summary: >
+  Use metric_revenue over transaction for revenue or sales and join through
+  rootbeer to rootbeerbrand for brand breakdowns; use metric_avg_rating over
+  rootbeerreview for rating or review-quality questions and join directly to
+  rootbeerbrand; ingredient and availability flags are 'TRUE'/'FALSE' strings,
+  and customers.ZipCode is an INTEGER that loses leading zeros and must not be
+  used as a postal key.
+body: |
+  # Beer factory: routing & gotchas
+
+  ## Scope
+  Sales, customers, root beer brands, and reviews for a root beer factory.
+  `transaction` is the sales fact table; `rootbeer` is the unit dimension, which
+  rolls up to `rootbeerbrand`.
+
+  ## Routing triggers
+  - Revenue / sales questions use `metric_revenue` (`SUM(PurchasePrice)` on
+    `tbl_beer_factory_transaction`). To break revenue down by brand, join
+    transaction to rootbeer (`join_transaction_rootbeer`) then rootbeer to
+    rootbeerbrand (`join_rootbeer_rootbeerbrand`).
+  - Rating / review-quality questions use `metric_avg_rating`
+    (`AVG(StarRating)` on `tbl_beer_factory_rootbeerreview`); join to
+    `tbl_beer_factory_rootbeerbrand` via `join_review_rootbeerbrand`.
+
+  ## Gotchas
+  - Ingredient and availability flags on `rootbeerbrand` are the strings
+    `'TRUE'`/`'FALSE'`, not integers (see `note_boolean_flags`). Filter with
+    `= 'TRUE'`.
+  - `customers.ZipCode` is an INTEGER, so leading zeros are lost; do not use it as
+    a postal key (see its reliability caveat).
+activation: always
+confidence: 0.85
+publication_status: draft
+audit:
+  provenance: { source: curator, status: draft }

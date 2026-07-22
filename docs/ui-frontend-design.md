@@ -137,11 +137,11 @@ above:
    contract. Repair loop = `generate`/`guardrail` re-firing. (Richer per-guardrail
    detail later via LangGraph `stream_mode="custom"`.)
 4. **Custom routes** (mounted on the server): `GET /capabilities`, `/health`,
-   `/schema`, `/graph` (full knowledge graph), `/corpus/assets`, `/skills`;
+   `/schema`, `/graph` (full knowledge graph), `/corpus/assets`;
    `POST /corpus/edit`. These serialize `presenter` view models (mostly built).
 5. **`presenter.corpus_graph()`**: extend beyond tables+joins to a filterable
    knowledge graph over all asset types and their references (tables, columns,
-   metrics, terms, joins, rules, few-shots, negatives).
+   metrics, terms, joins, notes, few-shots, negatives).
 6. **`POST /corpus/edit`**: parse → `validate_corpus` (reject on findings) → in
    `dev`, write YAML via `corpus.serialize.dump_asset`/`write_corpus`, return
    validation and diff; `can_edit` is true only in dev (or an explicit flag). Prod PR

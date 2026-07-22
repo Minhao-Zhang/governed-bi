@@ -20,7 +20,7 @@ from ..corpus.schemas import (
     JoinAsset,
     MetricAsset,
     NegativeExampleAsset,
-    RuleAsset,
+    NoteAsset,
     TableAsset,
     TermAsset,
 )
@@ -308,7 +308,7 @@ def filter_corpus_for_retrieval(corpus: "Corpus", schemas: frozenset[str]) -> "C
     - Metrics: ``base_table`` in kept tables
     - Few-shots: ``few_shot.schema in schemas``
     - Terms: unbound, or binding resolves to a kept table
-    - Rules / negatives: always kept (global governance / refuse-gate)
+    - Notes / negatives: always kept (governance / refuse-gate)
     """
     from ..corpus.loader import Corpus
 
@@ -349,12 +349,7 @@ def filter_corpus_for_retrieval(corpus: "Corpus", schemas: frozenset[str]) -> "C
             owner = _term_binding_table(corpus, a)
             if owner is None or owner in kept_tables:
                 kept.append(a)
-        elif isinstance(a, (RuleAsset, NegativeExampleAsset)):
+        elif isinstance(a, (NoteAsset, NegativeExampleAsset)):
             kept.append(a)
 
-    skills = [
-        s
-        for s in corpus.skills
-        if getattr(s.frontmatter, "schema", None) in schemas
-    ]
-    return Corpus(assets=kept, skills=skills)
+    return Corpus(assets=kept)

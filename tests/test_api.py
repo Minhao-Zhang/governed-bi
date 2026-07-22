@@ -281,15 +281,18 @@ def test_knowledge_graph_nodes_and_edges(client):
 
 def test_corpus_assets_and_type_filter(client):
     everything = client.get("/corpus/assets").json()
-    assert {r["asset_type"] for r in everything} >= {"join", "metric", "term", "negative_example"}
+    assert {r["asset_type"] for r in everything} >= {
+        "join", "metric", "term", "note", "negative_example"
+    }
     metrics = client.get("/corpus/assets", params={"type": "metric"}).json()
     assert metrics and all(r["asset_type"] == "metric" for r in metrics)
+    notes = client.get("/corpus/assets", params={"type": "note"}).json()
+    assert notes and all(r["asset_type"] == "note" for r in notes)
+    assert client.get("/corpus/assets", params={"type": "rule"}).status_code == 422
 
 
-def test_skills(client):
-    skills = client.get("/skills").json()
-    assert len(skills) == 1
-    assert skills[0]["body"].strip()
+def test_skills_route_is_removed(client):
+    assert client.get("/skills").status_code == 404
 
 
 # --------------------------------------------------------------------------- #

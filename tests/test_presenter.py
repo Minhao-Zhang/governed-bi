@@ -32,7 +32,6 @@ def test_corpus_health(corpus):
     assert health.n_suspect_columns == 1  # customers.ZipCode
     assert health.n_excluded == 1  # transaction.CreditCardNumber
     assert health.n_low_confidence_joins == 0  # beer_factory joins are 0.95
-    assert health.n_skills == 1
 
 
 def test_table_views_expose_tiers_and_governance(corpus):
@@ -58,12 +57,6 @@ def test_asset_rows_filterable(corpus):
     assert {"join", "metric", "term"} <= types
     metrics = presenter.asset_rows(corpus, asset_types={"metric"})
     assert metrics and all(r.asset_type == "metric" for r in metrics)
-
-
-def test_skill_views(corpus):
-    skills = presenter.skill_views(corpus)
-    assert len(skills) == 1
-    assert skills[0].body.strip()
 
 
 def test_schema_graph_nodes_and_edges(corpus):
@@ -98,7 +91,7 @@ def test_knowledge_graph_nodes_edges_and_relations(corpus):
 
 def test_knowledge_graph_dedups_self_join_and_redirects_column_targets():
     # A synthetic corpus exercising two edge-cases the beer_factory corpus lacks:
-    # a self-join (both endpoints the same table) and a term/rule that targets a
+    # a self-join (both endpoints the same table) and a term/note that targets a
     # column (not a node). Edges must be deduped, and column targets redirected to
     # the owning table rather than silently dropped.
     from governed_bi.corpus.loader import Corpus
@@ -106,8 +99,7 @@ def test_knowledge_graph_dedups_self_join_and_redirects_column_targets():
         Column,
         JoinAsset,
         LogicalType,
-        RuleAsset,
-        RuleKind,
+        NoteAsset,
         TableAsset,
         TermAsset,
         TermBinding,
@@ -134,11 +126,11 @@ def test_knowledge_graph_dedups_self_join_and_redirects_column_targets():
         id="term_manager", name="manager",
         binding=TermBinding(asset_type="column", asset_id="col_x_employees_ManagerID"),
     )
-    rule = RuleAsset(
-        id="rule_mgr", kind=RuleKind.business_rule, statement="managers matter",
+    note = NoteAsset(
+        id="note_mgr", kind="business_rule", summary="managers matter",
         scope=["col_x_employees_ManagerID", "col_x_employees_ManagerID"],  # repeated on purpose
     )
-    kg = presenter.knowledge_graph(Corpus(assets=[table, self_join, term, rule], skills=[]))
+    kg = presenter.knowledge_graph(Corpus(assets=[table, self_join, term, note]))
 
     edge_ids = [e.id for e in kg.edges]
     assert len(edge_ids) == len(set(edge_ids))  # no colliding edge ids
@@ -229,11 +221,11 @@ def test_related_to_column_unknown_returns_none(corpus):
     assert presenter.related_to_column(corpus, "col_nope_missing") is None
 
 
-def test_related_to_column_terms_and_rules():
-    # No column-level term binding / rule scope in the beer_factory corpus, so
+def test_related_to_column_terms_and_notes():
+    # No column-level term binding / note scope in the beer_factory corpus, so
     # build a tiny synthetic corpus to exercise those two branches directly.
-    from governed_bi.corpus import Corpus, RuleAsset, TableAsset, TermAsset
-    from governed_bi.corpus.schemas import Column, RuleKind, TermBinding
+    from governed_bi.corpus import Corpus, NoteAsset, TableAsset, TermAsset
+    from governed_bi.corpus.schemas import Column, TermBinding
 
     col_id = "col_shop_orders_status"
     table = TableAsset(
@@ -256,17 +248,17 @@ def test_related_to_column_terms_and_rules():
         synonyms=["state"],
         binding=TermBinding(asset_type="column", asset_id=col_id),
     )
-    rule = RuleAsset(
-        id="rule_status_values",
-        kind=RuleKind.constraint,
+    note = NoteAsset(
+        id="note_status_values",
+        kind="constraint",
         scope=[col_id],
-        statement="status is one of 'open' | 'shipped' | 'cancelled'.",
+        summary="status is one of 'open' | 'shipped' | 'cancelled'.",
     )
-    corpus = Corpus(assets=[table, term, rule])
+    corpus = Corpus(assets=[table, term, note])
 
     view = presenter.related_to_column(corpus, col_id)
     assert view is not None
     assert [t.id for t in view.terms] == ["term_status"]
     assert view.terms[0].synonyms == ["state"]
-    assert [r.id for r in view.rules] == ["rule_status_values"]
+    assert [r.id for r in view.rules] == ["note_status_values"]
     assert view.rules[0].kind == "constraint"

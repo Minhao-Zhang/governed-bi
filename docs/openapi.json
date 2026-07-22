@@ -564,7 +564,7 @@
           "corpus"
         ],
         "summary": "Corpus Assets",
-        "description": "Non-table assets (metrics/terms/joins/rules/few-shots/negatives).",
+        "description": "Non-table assets (metrics/terms/joins/notes/few-shots/negatives).",
         "operationId": "corpus_assets_corpus_assets_get",
         "parameters": [
           {
@@ -578,7 +578,7 @@
                     "join",
                     "metric",
                     "term",
-                    "rule",
+                    "note",
                     "few_shot",
                     "negative_example"
                   ],
@@ -613,32 +613,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/skills": {
-      "get": {
-        "tags": [
-          "corpus"
-        ],
-        "summary": "Skills",
-        "description": "Curated skills (rendered markdown bodies).",
-        "operationId": "skills_skills_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/SkillResponse"
-                  },
-                  "type": "array",
-                  "title": "Response Skills Skills Get"
                 }
               }
             }
@@ -1521,10 +1495,6 @@
             "type": "object",
             "title": "Counts"
           },
-          "n_skills": {
-            "type": "integer",
-            "title": "N Skills"
-          },
           "n_suspect_columns": {
             "type": "integer",
             "title": "N Suspect Columns"
@@ -1552,7 +1522,6 @@
         "type": "object",
         "required": [
           "counts",
-          "n_skills",
           "n_suspect_columns",
           "n_excluded",
           "n_low_confidence_joins",
@@ -2104,34 +2073,6 @@
           "items"
         ],
         "title": "SchemaSummaryResponse"
-      },
-      "SkillResponse": {
-        "properties": {
-          "skill_id": {
-            "type": "string",
-            "title": "Skill Id"
-          },
-          "kind": {
-            "type": "string",
-            "title": "Kind"
-          },
-          "schema": {
-            "type": "string",
-            "title": "Schema"
-          },
-          "body": {
-            "type": "string",
-            "title": "Body"
-          }
-        },
-        "type": "object",
-        "required": [
-          "skill_id",
-          "kind",
-          "schema",
-          "body"
-        ],
-        "title": "SkillResponse"
       },
       "TableResponse": {
         "properties": {

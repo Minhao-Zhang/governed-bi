@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from governed_bi.corpus import (
+    NoteAsset,
     TableAsset,
     is_green,
     load_corpus,
@@ -31,6 +32,8 @@ def test_id_conventions():
     assert is_valid_id("join", "join_transaction_customers")
     assert is_valid_id("few_shot", "fs_beer_factory_001")
     assert is_valid_id("negative_example", "neg_beer_factory_001")
+    assert is_valid_id("note", "note_boolean_flags")
+    assert not is_valid_id("rule", "rule_boolean_flags")
     # wrong prefix / shape
     assert not is_valid_id("table", "customers")
     assert not is_valid_id("few_shot", "fs_beer_factory")  # missing numeric suffix
@@ -78,10 +81,10 @@ def test_parse_asset_rejects_bad_enum():
     with pytest.raises(ValidationError):
         parse_asset(
             {
-                "asset_type": "rule",
-                "id": "rule_x",
-                "kind": "not_a_rule_kind",  # invalid enum
-                "statement": "x",
+                "asset_type": "note",
+                "id": "note_x",
+                "kind": "not_a_note_kind",  # invalid enum
+                "summary": "x",
             }
         )
 
@@ -96,7 +99,7 @@ def test_example_corpus_is_ci_green():
     findings = validate_corpus(corpus.assets)
     assert is_green(findings), "\n".join(str(f) for f in findings)
     assert len(corpus.tables()) == 5
-    assert len(corpus.skills) == 1
+    assert sum(isinstance(a, NoteAsset) for a in corpus.assets) == 2
 
 
 def test_validator_catches_dangling_reference():
@@ -143,13 +146,11 @@ def test_for_server_drops_excluded_columns():
 def test_write_corpus_round_trip(tmp_path):
     """Load the example, write it out, load it back: same assets, still green."""
     src = load_corpus(EXAMPLE_DB.parent, schema="beer_factory")
-    write_corpus(tmp_path, "beer_factory", src.assets, src.skills)
+    write_corpus(tmp_path, "beer_factory", src.assets)
     back = load_corpus(tmp_path, schema="beer_factory")
 
     assert is_green(validate_corpus(back.assets))
     assert {a.id for a in back.assets} == {a.id for a in src.assets}
-    assert len(back.skills) == len(src.skills)
-
     # Inference details survive the round trip.
     metric = next(a for a in back.assets if a.id == "metric_revenue")
     assert metric.base_table == "tbl_beer_factory_transaction"
@@ -158,6 +159,53 @@ def test_write_corpus_round_trip(tmp_path):
     customers = next(a for a in back.assets if a.id == "tbl_beer_factory_customers")
     suspect = next(c for c in customers.columns if c.physical_name == "ZipCode")
     assert suspect.reliability.status.value == "suspect"
+    note = next(a for a in back.assets if a.id == "note_beer_factory_routing")
+    assert note.activation == "always"
+    assert note.normative_force == "advisory"
+    assert note.body and "Routing triggers" in note.body
+
+
+def test_note_scope_sentinels_and_dangling_refs():
+    table = parse_asset(
+        {
+            "asset_type": "table",
+            "id": "tbl_demo_orders",
+            "schema": "demo",
+            "physical_name": "orders",
+        }
+    )
+    valid = NoteAsset(
+        id="note_sentinels",
+        kind="context",
+        scope=["schema:demo", "db:main", "tbl_demo_orders"],
+        summary="Scoped context.",
+    )
+    assert validate_corpus([table, valid]) == []
+
+    invalid = valid.model_copy(update={"id": "note_bad_scope", "scope": ["schema:nope"]})
+    assert any(f.code == "dangling-ref" for f in validate_corpus([table, invalid]))
+
+
+def test_note_publication_status_drift_is_reported():
+    note = NoteAsset.model_validate(
+        {
+            "id": "note_drift",
+            "kind": "context",
+            "summary": "Context.",
+            "publication_status": "draft",
+            "audit": {"provenance": {"source": "curator", "status": "certified"}},
+        }
+    )
+    assert [f.code for f in validate_corpus([note])] == ["publication-status-drift"]
+
+
+def test_always_note_budget_is_reported():
+    notes = [
+        NoteAsset(id=f"note_global_{i}", kind="context", summary="x" * 250)
+        for i in range(9)
+    ]
+    findings = validate_corpus(notes)
+    assert sum(f.code == "always-note-budget" for f in findings) == 2
 
 
 # --------------------------------------------------------------------------- #

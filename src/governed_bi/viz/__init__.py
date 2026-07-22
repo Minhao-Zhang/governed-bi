@@ -1,7 +1,7 @@
 """Viz: UI-agnostic view models for the read-only audit surface (review side, D6).
 
 ``presenter`` turns the corpus and Analyst answers into plain, frozen view models
-(corpus health, the table/tier view, the asset listing, skills, the relationship
+(corpus health, the table/tier view, the asset listing, the relationship
 graph, and an answer's two-axis reliability stamp) with **no UI dependency**. It
 reads the full corpus (Facts + Inference + Audit + ``governance.excluded``
 assets), unlike the Analyst's ``for_analyst`` view.
@@ -33,14 +33,12 @@ from .presenter import (
     SchemaGraphEdge,
     SchemaGraphNode,
     SchemaGraphView,
-    SkillView,
     TableView,
     answer_view,
     asset_rows,
     corpus_health,
     knowledge_graph,
     schema_graph,
-    skill_views,
     table_views,
 )
 from .scope import ScopeRequest, apply_er_scope, apply_kg_scope
@@ -61,7 +59,6 @@ __all__ = [
     "SchemaGraphNode",
     "SchemaGraphView",
     "ScopeRequest",
-    "SkillView",
     "TableView",
     "answer_view",
     "apply_er_scope",
@@ -70,6 +67,5 @@ __all__ = [
     "corpus_health",
     "knowledge_graph",
     "schema_graph",
-    "skill_views",
     "table_views",
 ]

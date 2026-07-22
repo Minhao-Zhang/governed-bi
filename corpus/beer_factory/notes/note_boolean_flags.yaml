@@ -1,17 +1,15 @@
-asset_type: rule
-id: rule_boolean_flags
-
-# ── Inference ──
+asset_type: note
+id: note_boolean_flags
 kind: business_rule
 scope: [tbl_beer_factory_rootbeerbrand]
-statement: >
+summary: >
   The ingredient and availability flags on rootbeerbrand (CaneSugar, CornSyrup,
   Honey, ArtificialSweetener, Caffeinated, Alcoholic, AvailableInCans,
   AvailableInBottles, AvailableInKegs) are stored as the TEXT strings 'TRUE' and
-  'FALSE', not as integers or booleans. Filter with = 'TRUE', never = 1.
+  'FALSE', not as integers or booleans; filter with = 'TRUE', never = 1.
+activation: always
 confidence: 0.85
-
-# ── Audit ──
+publication_status: draft
 audit:
   evidence: "sampled values are the literal strings 'TRUE'/'FALSE' in TEXT columns"
   provenance: { source: curator, status: draft }

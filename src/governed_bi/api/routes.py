@@ -1,7 +1,7 @@
 """Mountable ASGI app for the LangGraph Server custom routes (``langgraph.json``).
 
 The read + edit routes (capabilities, health, schema, ER graph, knowledge graph,
-corpus assets, skills, ``/corpus/edit``, and the non-streaming ``/chat``
+corpus assets, ``/corpus/edit``, and the non-streaming ``/chat``
 fallback) as one FastAPI app, so the LangGraph server serves them next to its own
 ``/threads`` and ``/runs`` and the frontend has a single base URL.
 

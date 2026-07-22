@@ -130,23 +130,22 @@ def render_terms(corpus: "Corpus", term_ids: list) -> list[str]:
     return lines
 
 
-def render_rules(corpus: "Corpus", rule_ids: list) -> list[str]:
-    """Governance rules / caveats (Phase B SME output) that bear on the query.
+def render_notes(corpus: "Corpus", note_ids: list) -> list[str]:
+    """Governed notes that bear on the query.
 
-    A rule's ``scope`` names the asset ids it applies to (empty = global); its
-    ``statement`` is the human caveat the model must honour (e.g. a trap column
-    or an annotation correction). Surfacing these is what carries the curator's
-    Phase B governance decisions into the agent's context.
+    A note's ``scope`` names the asset ids it applies to (empty = global); its
+    summary is the bounded retrieval surface. The body is progressive-disclosure
+    content and is intentionally not returned by this Phase 1 tool path.
     """
-    from ..corpus.schemas import RuleAsset
+    from ..corpus.schemas import NoteAsset
 
     lines: list[str] = []
-    for rid in rule_ids:
-        r = corpus.by_id(rid)
-        if isinstance(r, RuleAsset):
-            kind = getattr(r.kind, "value", r.kind)
-            scope = f" (applies to: {', '.join(r.scope)})" if r.scope else ""
-            lines.append(f"  [{kind}] {r.statement}{scope}")
+    for note_id in note_ids:
+        note = corpus.by_id(note_id)
+        if isinstance(note, NoteAsset):
+            kind = getattr(note.kind, "value", note.kind)
+            scope = f" (applies to: {', '.join(note.scope)})" if note.scope else ""
+            lines.append(f"  [{kind}] {note.summary}{scope}")
     return lines
 
 
@@ -212,9 +211,9 @@ def make_tools(
         tm = render_terms(corpus, r.term_ids)
         if tm:
             out += ["", "terms:", *tm]
-        rl = render_rules(corpus, r.rule_ids)
-        if rl:
-            out += ["", "governance rules (must honour):", *rl]
+        notes = render_notes(corpus, r.note_ids)
+        if notes:
+            out += ["", "governed notes:", *notes]
         return "\n".join(out)
 
     @tool

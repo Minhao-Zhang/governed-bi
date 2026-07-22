@@ -19,22 +19,20 @@ Adapted from *《从数据到智能》* Ch.3, with the authoring model inverted.
 - **P1: Three field tiers.** Every asset's fields split into **Facts** (read from the catalog/data, never inferred), **Inference** (curator writes; this is the semantic layer), and **Audit** (why the inference was made, for reference only). Different tiers follow different rules (below).
 - **P2: Universal fields, project-specific values only.** No field name is ever BIRD-specific. BIRD, enterprise deployments, and any future project share the *exact same schema*; only the values (which DB, which SQL dialect, which `source_refs`) differ. BIRD-eval-specific rules (e.g. leakage guards) live in the eval harness, never in the schema.
 
-## Two representations: YAML for structure, Markdown for procedure
+## One representation: everything is a typed YAML asset
 
-The corpus is **not YAML-only.** Two representations, split by access pattern:
+Earlier revisions of this spec split the corpus in two: YAML typed assets for structured, per-entity content, and Markdown "skills" for prose, cross-entity, procedural content (routing triggers, gotchas, query patterns, domain overview) — on the theory that you can't CI-check or graph-project a prose blob, and can't cleanly express *"IF the question is about revenue, start from the transaction fact table, DO NOT use the brand list price"* in a per-column field.
 
-- **YAML typed assets** carry *structured, atomic, per-entity* content: Facts + definitions (`table`/`column`/`join`/`metric`/`term`/`rule`/`few_shot`/`negative_example`). Machine-parsed, CI-checked, graph-projected, retrieved as discrete units.
-- **Markdown skills / reference docs** carry *prose, cross-entity, procedural* content: routing triggers, gotchas, query patterns, domain overview. Retrieved (vector + BM25) and injected as narrative. They **reference YAML assets by ID and never duplicate their data.**
+**D17 folds that split away.** The `skill` asset type is deleted. `RuleAsset` generalizes into `NoteAsset`: one governed, typed asset that carries exactly that cross-entity procedural content — but as a CI-checked, indexed, governance-eligible corpus asset instead of an ungoverned Markdown side-channel that nothing validated or created programmatically. A note stays cross-entity (its `scope` can span several tables, an entire schema, or the whole DB) and still references other assets by id rather than duplicating their data; progressive disclosure survives too, just as one field split (`summary` always-visible, `body` on demand) instead of two file formats. See **Asset: `note`** below and **D17**.
 
-Why both: you can't CI-check or graph-project a prose blob, and you can't cleanly express *"IF the question is about revenue, start from the transaction fact table, DO NOT use the brand list price"* in a per-column field, since that's cross-entity procedure. Anthropic and the book draw the same split.
-
-> **Skills are the highest-value output, and curator-only**
+> **Notes are the highest-value output, and curator-only**
 >
-> Anthropic's result: same model, **<21% without skills, 95%+ with them**.
-> That's the single biggest lever. Skills have **no oracle counterpart** (nothing
-> built derives them for any rung of the eval ladder), so even the `ceiling`
-> rung has no skills. That is exactly why the `curated` arm can *beat* the
-> recoverable ceiling on skill-sensitive questions (D4).
+> Anthropic's result on this class of procedural knowledge: same model,
+> **<21% without it, 95%+ with it**. That's the single biggest lever. Notes
+> have **no oracle counterpart** (nothing built derives them for any rung of
+> the eval ladder), so even the `ceiling` rung has no notes. That is exactly
+> why the `curated` arm can *beat* the recoverable ceiling on note-sensitive
+> questions (D4).
 
 ## The consumption contract (who reads which tier)
 
@@ -98,9 +96,8 @@ corpus/
     few-shots/   fs_<schema>_<n>.yaml
     terms/       term_<name>.yaml
     metrics/     metric_<name>.yaml
-    rules/       rule_<name>.yaml
+    notes/       note_<name>.yaml
     negatives/   neg_<schema>_<n>.yaml
-    skills/      *.md                        # prose gotchas / query-patterns (not typed assets)
   _generated/    # search index, embeddings, compiled graph (derived, gitignored, rebuildable)
 ```
 
@@ -116,7 +113,7 @@ corpus/
 | few_shot | `fs_<schema>_<n>` | `fs_beer_factory_001` |
 | term | `term_<name>` | `term_revenue` |
 | metric | `metric_<name>` | `metric_revenue` |
-| rule | `rule_<name>` | `rule_boolean_flags` |
+| note | `note_<name>` | `note_boolean_flags` |
 | negative_example | `neg_<schema>_<n>` | `neg_beer_factory_001` |
 
 The **physical ↔ meaning bridge** runs through every table/column: `physical_name` is the identifier as it exists in the live DB (obfuscated for BIRD, cryptic in enterprise data). SQL emits this; the Inference tier carries the *meaning*. The curator's whole job is filling meaning for cryptic physical names, and this is identical in BIRD and enterprise deployments.
@@ -278,22 +275,56 @@ audit:
   provenance: { source: curator, status: draft, version: "0.1.0" }
 ```
 
-## Asset: `rule` / `context` (standalone)
+## Asset: `note` (governed annotation; D17)
+
+Replaces the old standalone `rule` asset and the untyped `skills/*.md` surface.
+A "rule" is a note with `activation=always` and `normative_force=must_honour`.
+Routing / gotchas / patterns are notes too (formerly Markdown skills).
+
+| `kind` | default `activation` | default `normative_force` |
+|---|---|---|
+| `business_rule`, `constraint` | `always` | `must_honour` |
+| `context`, `domain_overview` | `always` | `advisory` |
+| `routing`, `gotchas`, `pattern` | `on_match` | `advisory` |
+
+Both defaults are overridable (e.g. a keyword-triggered `business_rule` can be
+`activation=on_match` + `normative_force=must_honour`). Phase 1 injects only
+`activation=always` notes, and only their `summary` (never `body`). `on_match`
+PIN, body fetch, and `read_notes` / `grep_notes` are Phase 2.
+
+A `Trigger` is `{ kind: keyword | regex, value: <string> }`. A firing trigger
+**pins** its note into the shortlist outright rather than contributing a
+lexical score to RRF (fusing weak lexical signal into RRF measurably hurt
+recall — see ADR 0003). `regex` is modeled now but only `keyword` fires today;
+regex-over-the-question is deliberately deferred (`grep_notes`, Phase 2,
+covers regex-over-*text* without that dependency).
+
+`scope` entries are asset ids, or namespace sentinels `schema:<name>` /
+`db:<name>`; `[]` means global. Asset ids never contain `:`.
+`publication_status` is serve-visible (survives `for_analyst`); CI flags drift
+against `audit.provenance.status` when Audit is present.
 
 ```yaml
-# rules/rule_boolean_flags.yaml
-asset_type: rule
-id: rule_boolean_flags
+# notes/note_boolean_flags.yaml
+asset_type: note
+id: note_boolean_flags
 
 # ── Inference ──
-kind: business_rule                    # business_rule | context | constraint
-scope: [tbl_beer_factory_rootbeerbrand]   # assets it constrains; empty = global
-statement: >
+kind: business_rule
+scope: [tbl_beer_factory_rootbeerbrand]   # [] = global; also schema:… / db:…
+summary: >
   The ingredient and availability flags on rootbeerbrand (CaneSugar, CornSyrup,
   Honey, ArtificialSweetener, Caffeinated, Alcoholic, AvailableInCans,
   AvailableInBottles, AvailableInKegs) are stored as the TEXT strings 'TRUE' and
-  'FALSE', not as integers or booleans. Filter with = 'TRUE', never = 1.
+  'FALSE', not as integers or booleans; filter with = 'TRUE', never = 1.
+# body: |                                 # optional long form; on-demand only (Phase 2)
+# triggers: [{ kind: keyword, value: "TRUE" }]   # authored now; PIN wired in Phase 2
+activation: always                        # default from kind; overridable
+# normative_force defaults to must_honour for business_rule
 confidence: 0.85
+publication_status: draft                 # proposed | draft | certified
+# related_notes: [note_other]
+# governance: { excluded: false }
 
 # ── Audit ──
 audit:
@@ -325,46 +356,6 @@ audit:
   provenance: { source: curator, status: draft }
 ```
 
-## Asset: `skill` (Markdown, not YAML)
-
-Prose procedural knowledge per domain. Frontmatter carries the same provenance as YAML assets (auditable, but no gold). The body is retrieved and injected into the Analyst's prompt.
-
-```markdown
----
-# skills/routing.md
-skill_id: skill_beer_factory_routing
-schema: beer_factory
-kind: routing              # routing | gotchas | pattern | domain_overview
-provenance: { source: curator, status: draft }
----
-
-# Beer factory: routing & gotchas
-
-## Scope
-Sales, customers, root beer brands, and reviews for a root beer factory.
-`transaction` is the sales fact table; `rootbeer` is the unit dimension, which
-rolls up to `rootbeerbrand`.
-
-## Routing triggers
-- Revenue / sales questions use `metric_revenue` (`SUM(PurchasePrice)` on
-  `tbl_beer_factory_transaction`). To break revenue down by brand, join
-  transaction to rootbeer (`join_transaction_rootbeer`) then rootbeer to
-  rootbeerbrand (`join_rootbeer_rootbeerbrand`).
-- Rating / review-quality questions use `metric_avg_rating`
-  (`AVG(StarRating)` on `tbl_beer_factory_rootbeerreview`); join to
-  `tbl_beer_factory_rootbeerbrand` via `join_review_rootbeerbrand`.
-
-## Gotchas
-- Ingredient and availability flags on `rootbeerbrand` are the strings
-  `'TRUE'`/`'FALSE'`, not integers (see `rule_boolean_flags`). Filter with
-  `= 'TRUE'`.
-- `customers.ZipCode` is an INTEGER, so leading zeros are lost; do not use it as
-  a postal key (see its reliability caveat).
-- `transaction.CreditCardNumber` is PII and is excluded; never select it.
-```
-
-Skills reference typed assets by ID; they do **not** restate the assets' data. A skill is pure curator value-add: there is no oracle-derived skill to diff against.
-
 ---
 
 ## CI reference-integrity (the "done-enough" signal)
@@ -373,7 +364,9 @@ CI validates the corpus and its pass doubles as the curator's machine-checkable 
 
 - **ID regex**: every `id` matches its convention.
 - **Physical existence**: every `physical_name` / `on` column exists in the live catalog.
-- **Reference resolution**: `references`, `binding.asset_id`, `related_terms[].id`, `metric.base_table`, `rule.scope[]` all resolve to existing assets.
+- **Reference resolution**: `references`, `binding.asset_id`, `related_terms[].id`, `metric.base_table`, `note.scope[]` all resolve to existing assets (including `schema:` / `db:` sentinels).
+- **Note publication drift**: when a note has Audit, `publication_status` must match `audit.provenance.status`.
+- **Always-note budget**: at most 8 global `activation=always` notes and at most 2000 chars of always-note `summary` text.
 - **Enum validity**: `role`, `reliability.status`, `logical_type`, `complexity`, `cardinality`, `relation`, `kind` ∈ their allowed sets.
 - *(Eval-harness layer, not schema)*: few-shot `source_refs ⊆ train split` (leakage guard).
 
@@ -387,12 +380,13 @@ CI validates the corpus and its pass doubles as the curator's machine-checkable 
 | `BINDS_TO` | Term → Metric/Table/Column | `term.binding` |
 | `SYNONYM_OF` / `BROADER_THAN` / `USES` | Term → Term | `term.related_terms[]` |
 | `DERIVED_FROM` | Metric → Table/Column | `metric.base_table` / expression |
+| `SCOPES` | Note → scoped asset id | `note.scope[]` |
 
 BIRD uses an in-memory graph (networkx) for Steiner planning; Neo4j is the optional enterprise-scale projection.
 
 ## Curator vs the retired gold filler
 
 - **Curator (the `curated` arm)** fills the Inference tier by *inference*: descriptions, roles, `references`, `reliability`, `confidence`, with `audit.*_evidence` recording why.
-- There is no manifest-based oracle filler for the Inference tier anymore. A retired de-obfuscation "gold" arm once filled the *same* Inference fields deterministically from the manifests (real names via the rename map, the original-schema FK graph, and any `reliability.status=suspect` flags the manifest recorded), with `provenance.source: gold`, `confidence: 1.0` — it is **removed**: it was never a true ceiling, since curator skills could exceed it on skill-sensitive questions. (`ProvenanceSource.gold` survives in the schema only as a legacy enum value.)
-- Facts are identical across every rung of the eval ladder (read from the catalog); only Inference and Skills vary.
-- **Skills (Markdown) are curator-only**: nothing else in the ladder derives them, including the designed-but-not-built `ceiling` rung's test-aware Simulated SME. This is the mechanism by which the `curated` arm can *exceed* even the recoverable ceiling on skill-sensitive questions.
+- There is no manifest-based oracle filler for the Inference tier anymore. A retired de-obfuscation "gold" arm once filled the *same* Inference fields deterministically from the manifests (real names via the rename map, the original-schema FK graph, and any `reliability.status=suspect` flags the manifest recorded), with `provenance.source: gold`, `confidence: 1.0` — it is **removed**: it was never a true ceiling, since curator notes could exceed it on note-sensitive questions. (`ProvenanceSource.gold` survives in the schema only as a legacy enum value.)
+- Facts are identical across every rung of the eval ladder (read from the catalog); only Inference (including notes) varies.
+- **Notes are curator-authored**: nothing else in the ladder derives them, including the designed-but-not-built `ceiling` rung's test-aware Simulated SME. This is the mechanism by which the `curated` arm can *exceed* even the recoverable ceiling on note-sensitive questions.

@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from .clarify import accept_answer
 from .ids import is_valid_id
-from .loader import Corpus, Skill, load_corpus
-from .serialize import dump_asset, dump_skill, subdir_for_type, write_corpus
+from .loader import Corpus, load_corpus
+from .serialize import dump_asset, subdir_for_type, write_corpus
 from .schemas import (
     Asset,
     Clarification,
@@ -24,12 +24,10 @@ from .schemas import (
     JoinAsset,
     MetricAsset,
     NegativeExampleAsset,
-    RuleAsset,
-    SkillFrontmatter,
+    NoteAsset,
     TableAsset,
     TermAsset,
     parse_asset,
-    parse_skill_frontmatter,
 )
 from .validate import Finding, is_green, validate_corpus
 
@@ -43,20 +41,16 @@ __all__ = [
     "Finding",
     "accept_answer",
     "dump_asset",
-    "dump_skill",
     "JoinAsset",
     "MetricAsset",
     "NegativeExampleAsset",
-    "RuleAsset",
-    "Skill",
-    "SkillFrontmatter",
+    "NoteAsset",
     "TableAsset",
     "TermAsset",
     "is_green",
     "is_valid_id",
     "load_corpus",
     "parse_asset",
-    "parse_skill_frontmatter",
     "subdir_for_type",
     "validate_corpus",
     "write_corpus",

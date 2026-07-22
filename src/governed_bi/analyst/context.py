@@ -2,7 +2,7 @@
 
 Retrieval returns asset *ids*; a SQL generator needs the resolved *meaning* -
 the schema text, join paths, business terms, metrics, reliability caveats, gold
-exemplars, and skills - laid out as one context bundle. This module builds that
+exemplars, and governed notes - laid out as one context bundle. This module builds that
 bundle deterministically from the ``for_analyst()`` corpus and a
 :class:`~governed_bi.retrieval.RetrievalResult`, so it is unit-testable with no
 model and no network. It is the contract every :class:`SqlGenerator` reads from,
@@ -18,8 +18,8 @@ suspect column.
 
 The three points where curator inference drives serve behavior all land here
 (``docs/analyst.md``): reliability caveats become explicit "DO NOT USE" lines,
-join ``confidence`` is annotated (and low-confidence joins flagged), and skills
-are included verbatim.
+join ``confidence`` is annotated (and low-confidence joins flagged), and
+always-active notes are included by summary.
 """
 
 from __future__ import annotations
@@ -31,8 +31,8 @@ from typing import TYPE_CHECKING
 from ..corpus.schemas import (
     JoinAsset,
     MetricAsset,
+    NoteAsset,
     ReliabilityStatus,
-    RuleAsset,
     TableAsset,
     TermAsset,
 )
@@ -100,13 +100,6 @@ class FewShotView:
 
 
 @dataclass(frozen=True)
-class SkillView:
-    skill_id: str
-    kind: str
-    body: str
-
-
-@dataclass(frozen=True)
 class PromptContext:
     """The resolved context a generator turns into SQL.
 
@@ -121,7 +114,6 @@ class PromptContext:
     terms: list[TermView] = field(default_factory=list)
     metrics: list[MetricView] = field(default_factory=list)
     few_shots: list[FewShotView] = field(default_factory=list)
-    skills: list[SkillView] = field(default_factory=list)
     caveats: list[str] = field(default_factory=list)
     # Governance rules (Phase B SME caveats) in scope for the licensed tables:
     # global rules always, table-scoped rules when their table is licensed.
@@ -270,11 +262,6 @@ def assemble_context(
         if isinstance(fs, FewShotAsset):
             few_shots.append(FewShotView(question=fs.question, sql=fs.sql))
 
-    skills = [
-        SkillView(skill_id=s.frontmatter.skill_id, kind=s.frontmatter.kind.value, body=s.body.strip())
-        for s in corpus.skills
-    ]
-
     # Aggregate suspect-column caveats across the licensed tables (decoy avoidance).
     caveats: list[str] = []
     for tv in tables:
@@ -283,18 +270,19 @@ def assemble_context(
                 note = col.caveat or "flagged unreliable"
                 caveats.append(f"{tv.physical_name}.{col.physical_name}: {note}")
 
-    # Governance rules (Phase B SME caveats): a global rule (empty scope) always
-    # applies; a scoped rule applies when any of its scope asset ids is in the
-    # licensed set. Rules are "always honour", so this is independent of lexical
-    # retrieval — the licensed scope is what gates them into the prompt.
+    # Phase 1 note injection: only always-active notes are injected. Global notes
+    # apply everywhere; scoped notes apply when a licensed table id intersects.
+    # Use the bounded summary, never the progressive-disclosure body.
     rules: list[str] = []
     for asset in corpus.assets:
-        if not isinstance(asset, RuleAsset):
+        if not isinstance(asset, NoteAsset):
+            continue
+        if getattr(asset.activation, "value", asset.activation) != "always":
             continue
         if asset.scope and not any(sid in licensed_table_ids for sid in asset.scope):
             continue
         kind = asset.kind.value if hasattr(asset.kind, "value") else asset.kind
-        rules.append(f"({kind}) {asset.statement}")
+        rules.append(f"({kind}) {asset.summary}")
 
     return PromptContext(
         question=retrieval.question,
@@ -303,7 +291,6 @@ def assemble_context(
         terms=terms,
         metrics=metrics,
         few_shots=few_shots,
-        skills=skills,
         caveats=caveats,
         rules=rules,
         conversation=list(history),
@@ -389,7 +376,7 @@ def _render(ctx: PromptContext) -> str:
 
     if ctx.rules:
         lines.append("")
-        lines.append("## Governance rules (must honour)")
+        lines.append("## Governance notes")
         for r in ctx.rules:
             lines.append(f"  {r}")
 
@@ -399,12 +386,5 @@ def _render(ctx: PromptContext) -> str:
         for fs in ctx.few_shots:
             lines.append(f"  Q: {fs.question}")
             lines.append(f"  A: {fs.sql}")
-
-    if ctx.skills:
-        lines.append("")
-        lines.append("## Skills (routing / gotchas / patterns)")
-        for s in ctx.skills:
-            lines.append(f"### {s.skill_id} ({s.kind})")
-            lines.append(s.body)
 
     return "\n".join(lines)

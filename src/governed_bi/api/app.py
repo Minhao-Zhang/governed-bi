@@ -1,7 +1,7 @@
 """FastAPI HTTP interface over the governed serve agent + corpus/audit views.
 
 A thin, **stateless** JSON API: read endpoints serialize the ``viz.presenter``
-view models (schema, relationship graph, corpus assets, skills, health); ``/chat``
+view models (schema, relationship graph, corpus assets, health); ``/chat``
 runs one turn through ``answer_question_agent`` with working memory rebuilt from the
 turns the caller sends. It is the interface a separate frontend (Next.js) consumes
 — see ``docs/ui-frontend-design.md``.
@@ -42,7 +42,6 @@ from .schemas import (
     RelatedTermResponse,
     SchemaGraphResponse,
     SchemaSummaryResponse,
-    SkillResponse,
     TableResponse,
     TableSummaryResponse,
 )
@@ -288,15 +287,10 @@ def create_app(stack: ServeStack | None = None):
     def corpus_assets(
         asset_type: AssetTypeFilter | None = Query(None, alias="type"),
     ) -> list[AssetRowResponse]:
-        """Non-table assets (metrics/terms/joins/rules/few-shots/negatives)."""
+        """Non-table assets (metrics/terms/joins/notes/few-shots/negatives)."""
         types = {asset_type} if asset_type else None
         rows = presenter.asset_rows(stack.corpus_full, asset_types=types)
         return [AssetRowResponse.model_validate(r) for r in rows]
-
-    @app.get("/skills", response_model=list[SkillResponse], tags=["corpus"])
-    def skills() -> list[SkillResponse]:
-        """Curated skills (rendered markdown bodies)."""
-        return [SkillResponse.model_validate(s) for s in presenter.skill_views(stack.corpus_full)]
 
     @app.post("/corpus/edit", response_model=EditResponse, tags=["corpus"])
     def corpus_edit(req: EditRequest) -> EditResponse:

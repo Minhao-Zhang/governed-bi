@@ -249,13 +249,12 @@ def test_upsert_term_coerces_and_rejects_column_binding():
 
 def test_repair_references_resolves_malformed_across_asset_types():
     """Deterministic reference repair: legacy malformed refs across every
-    coercible type (term binding, metric.base_table, rule.scope) are rewritten to
+    coercible type (term binding, metric.base_table, note.scope) are rewritten to
     canonical ids in place, so the fix-pass never hands a machine-fixable dangling
     ref to a stochastic agent."""
     from governed_bi.corpus.schemas import (
         MetricAsset,
-        RuleAsset,
-        RuleKind,
+        NoteAsset,
         TermAsset,
         TermBinding,
     )
@@ -273,11 +272,11 @@ def test_repair_references_resolves_malformed_across_asset_types():
     bag.metrics["metric_demo_n"] = MetricAsset(
         id="metric_demo_n", name="n", base_table="orders", expression="count(*)"
     )
-    # rule.scope entry written as a physical column spelling
-    bag.rules["rule_demo_1"] = RuleAsset(
-        id="rule_demo_1",
-        kind=RuleKind.context,
-        statement="amount is net",
+    # note.scope entry written as a physical column spelling
+    bag.notes["note_demo_1"] = NoteAsset(
+        id="note_demo_1",
+        kind="context",
+        summary="amount is net",
         scope=["orders.amount"],
     )
     assert len(validate_corpus(bag.all_assets())) == 3  # all three dangle
@@ -285,7 +284,7 @@ def test_repair_references_resolves_malformed_across_asset_types():
     assert bag.repair_references() == 3
     assert bag.terms["term_demo_total"].binding.asset_id == "col_demo_orders_amount"
     assert bag.metrics["metric_demo_n"].base_table == "tbl_demo_orders"
-    assert bag.rules["rule_demo_1"].scope == ["col_demo_orders_amount"]
+    assert bag.notes["note_demo_1"].scope == ["col_demo_orders_amount"]
     assert validate_corpus(bag.all_assets()) == []
 
     # Back-compat alias still works.

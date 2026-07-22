@@ -1,7 +1,7 @@
 """Load a ``corpus/<schema>/`` tree and enforce the consumption contract.
 
-Git is the single source of truth (D9); this loader reads the YAML typed assets
-and Markdown skills into memory. The **consumption contract** (docs/asset-schemas
+Git is the single source of truth (D9); this loader reads YAML typed assets
+into memory. The **consumption contract** (docs/asset-schemas
 "who reads which tier") is enforced here:
 
 - ``Corpus.for_analyst()`` strips the Audit tier and drops ``governance.excluded``
@@ -21,13 +21,7 @@ from typing import Any
 
 import yaml
 
-from .schemas import (
-    Asset,
-    SkillFrontmatter,
-    TableAsset,
-    parse_asset,
-    parse_skill_frontmatter,
-)
+from .schemas import Asset, TableAsset, parse_asset
 
 
 class _CorpusYamlLoader(yaml.SafeLoader):
@@ -65,18 +59,9 @@ _DIR_ASSET_TYPE = {
     "few-shots": "few_shot",
     "terms": "term",
     "metrics": "metric",
-    "rules": "rule",
+    "notes": "note",
     "negatives": "negative_example",
 }
-
-
-@dataclass
-class Skill:
-    """A Markdown skill: parsed frontmatter + raw body."""
-
-    frontmatter: SkillFrontmatter
-    body: str
-    path: Path | None = None
 
 
 @dataclass
@@ -84,7 +69,6 @@ class Corpus:
     """An in-memory corpus for one schema (or several, if loaded together)."""
 
     assets: list[Asset] = field(default_factory=list)
-    skills: list[Skill] = field(default_factory=list)
 
     def by_id(self, asset_id: str) -> Asset | None:
         return next((a for a in self.assets if a.id == asset_id), None)
@@ -112,19 +96,7 @@ class Corpus:
                     if not c.governance.excluded
                 ]
             visible.append(copy)
-        return Corpus(assets=visible, skills=self.skills)
-
-
-def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
-    """Split a ``---`` YAML frontmatter block from a Markdown body."""
-    if not text.startswith("---"):
-        raise ValueError("skill file has no YAML frontmatter")
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        raise ValueError("skill frontmatter is not terminated by a second '---'")
-    front = _load_yaml(parts[1]) or {}
-    body = parts[2].lstrip("\n")
-    return front, body
+        return Corpus(assets=visible)
 
 
 def load_corpus(root: Path, schema: str | None = None) -> Corpus:
@@ -143,9 +115,4 @@ def load_corpus(root: Path, schema: str | None = None) -> Corpus:
             for yaml_path in sorted((schema_dir / sub).glob("*.yaml")):
                 data = _load_yaml(yaml_path.read_text(encoding="utf-8"))
                 corpus.assets.append(parse_asset(data))
-        for md_path in sorted((schema_dir / "skills").glob("*.md")):
-            front, body = _split_frontmatter(md_path.read_text(encoding="utf-8"))
-            corpus.skills.append(
-                Skill(frontmatter=parse_skill_frontmatter(front), body=body, path=md_path)
-            )
     return corpus

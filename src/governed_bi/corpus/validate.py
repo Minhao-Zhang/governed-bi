@@ -6,7 +6,7 @@ module checks everything verifiable *from the corpus alone*:
 - ID regex per asset type (``ids.py``).
 - No duplicate ids.
 - Reference resolution: ``column.references``, ``term.binding.asset_id``,
-  ``term.related_terms[].id``, ``metric.base_table``, ``rule.scope[]``,
+  ``term.related_terms[].id``, ``metric.base_table``, ``note.scope[]``,
   ``join.left_table`` / ``right_table`` all resolve to existing assets.
 - Join ``on``-clause columns: parsed with ``sqlglot`` and confirmed to belong to
   one of the join's two tables (corpus-only; catches typo'd/hallucinated columns
@@ -33,13 +33,14 @@ from typing import TYPE_CHECKING
 from . import ids
 
 if TYPE_CHECKING:
+    from ..config import Settings
     from ..gateway.connectors.base import Connector
 from .schemas import (
     Asset,
     FewShotAsset,
     JoinAsset,
     MetricAsset,
-    RuleAsset,
+    NoteAsset,
     TableAsset,
     TermAsset,
 )
@@ -72,6 +73,7 @@ def validate_corpus(
     *,
     connector: "Connector | None" = None,
     train_refs: set[str] | None = None,
+    settings: "Settings | None" = None,
 ) -> list[Finding]:
     """Validate a parsed corpus. Returns findings; empty list == CI green.
 
@@ -121,9 +123,23 @@ def validate_corpus(
     term_ids = {a.id for a in assets if isinstance(a, TermAsset)}
     col_ids = _column_ids(assets)
     all_ids = {a.id for a in assets} | col_ids
+    schemas = {a.schema for a in assets if isinstance(a, TableAsset)}
+    db_name = settings.datasource.db if settings is not None else "main"
 
     def require(ref: str | None, pool: set[str], owner: str, what: str) -> None:
         if ref is None:
+            return
+        if ref.startswith("schema:"):
+            if ref.removeprefix("schema:") not in schemas:
+                findings.append(
+                    Finding("dangling-ref", owner, f"{what} -> '{ref}' does not resolve")
+                )
+            return
+        if ref.startswith("db:"):
+            if ref.removeprefix("db:") != db_name:
+                findings.append(
+                    Finding("dangling-ref", owner, f"{what} -> '{ref}' does not resolve")
+                )
             return
         if ref not in pool:
             findings.append(
@@ -148,9 +164,21 @@ def validate_corpus(
                 require(rel.id, term_ids, a.id, "term.related_terms[].id")
         elif isinstance(a, MetricAsset):
             require(a.base_table, table_ids, a.id, "metric.base_table")
-        elif isinstance(a, RuleAsset):
+        elif isinstance(a, NoteAsset):
             for scoped in a.scope:
-                require(scoped, all_ids, a.id, "rule.scope[]")
+                require(scoped, all_ids, a.id, "note.scope[]")
+            if a.audit is not None:
+                published = getattr(a.publication_status, "value", a.publication_status)
+                audited = getattr(a.audit.provenance.status, "value", a.audit.provenance.status)
+                if published != audited:
+                    findings.append(
+                        Finding(
+                            "publication-status-drift",
+                            a.id,
+                            f"publication_status={published!r} differs from "
+                            f"audit.provenance.status={audited!r}",
+                        )
+                    )
         elif isinstance(a, FewShotAsset):
             if train_refs is not None:
                 prov = a.audit.provenance if a.audit else None
@@ -164,6 +192,32 @@ def validate_corpus(
                             f"few_shot source_refs not in train split: {sorted(leaked)}",
                         )
                     )
+
+    # -- Always-injected note budget ---------------------------------------- #
+    always_notes = [
+        a
+        for a in assets
+        if isinstance(a, NoteAsset)
+        and getattr(a.activation, "value", a.activation) == "always"
+    ]
+    global_always = [a for a in always_notes if not a.scope]
+    if len(global_always) > 8:
+        findings.append(
+            Finding(
+                "always-note-budget",
+                "",
+                f"{len(global_always)} global always notes exceed the maximum of 8",
+            )
+        )
+    total_summary_chars = sum(len(a.summary) for a in always_notes)
+    if total_summary_chars > 2000:
+        findings.append(
+            Finding(
+                "always-note-budget",
+                "",
+                f"always-note summaries total {total_summary_chars} characters; maximum is 2000",
+            )
+        )
 
     # -- Join on-clause columns resolve to the joined tables (corpus-only) --- #
     # Endpoint ids are checked above; the ``on`` SQL is not. A typo'd or

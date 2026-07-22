@@ -16,20 +16,20 @@ from ..corpus.schemas import (
     FewShotAsset,
     JoinAsset,
     MetricAsset,
+    NoteAsset,
+    NoteKind,
     Provenance,
     ProvenanceSource,
     ProvenanceStatus,
     Reliability,
     ReliabilityStatus,
-    RuleAsset,
-    RuleKind,
     TableAsset,
     TermAsset,
 )
 from ..corpus.serialize import write_corpus
 from .clarifications import ClarificationRecord, ClarificationRecordStatus, parse_scope
 
-_Asset = TableAsset | JoinAsset | MetricAsset | TermAsset | FewShotAsset | RuleAsset
+_Asset = TableAsset | JoinAsset | MetricAsset | TermAsset | FewShotAsset | NoteAsset
 
 
 def _slug(name: str) -> str:
@@ -61,7 +61,7 @@ class AssetBag:
     metrics: dict[str, MetricAsset] = field(default_factory=dict)
     terms: dict[str, TermAsset] = field(default_factory=dict)
     few_shots: dict[str, FewShotAsset] = field(default_factory=dict)
-    rules: dict[str, RuleAsset] = field(default_factory=dict)
+    notes: dict[str, NoteAsset] = field(default_factory=dict)
     model_name: str | None = None
 
     @classmethod
@@ -80,7 +80,7 @@ class AssetBag:
             *self.metrics.values(),
             *self.terms.values(),
             *self.few_shots.values(),
-            *self.rules.values(),
+            *self.notes.values(),
         ]
 
     def table_id(self, physical_name: str) -> str | None:
@@ -583,43 +583,46 @@ class AssetBag:
                 applied += 1
         return applied
 
-    def propose_rule(
+    def propose_note(
         self,
-        statement: str,
+        summary: str,
         *,
-        kind: RuleKind = RuleKind.context,
+        kind: NoteKind = NoteKind.context,
         scope: Iterable[str] = (),
         confidence: float = 0.7,
         certified: bool = False,
         answered_by: str | None = None,
     ) -> str:
-        """Record a governance rule/caveat (a gotcha serve should heed)."""
-        statement = (statement or "").strip()
-        if not statement:
-            return "error: empty rule statement"
-        rid = f"rule_{_slug(self.schema)}_{len(self.rules) + 1}"
+        """Record a governed note/caveat that serve should heed."""
+        summary = (summary or "").strip()
+        if not summary:
+            return "error: empty note summary"
+        note_id = f"note_{_slug(self.schema)}_{len(self.notes) + 1}"
         try:
-            asset = RuleAsset.model_validate(
+            asset = NoteAsset.model_validate(
                 {
-                    "id": rid,
+                    "id": note_id,
                     "kind": kind,
                     "scope": list(scope),
-                    "statement": statement,
+                    "summary": summary,
                     "confidence": confidence,
+                    "publication_status": (
+                        ProvenanceStatus.certified if certified else ProvenanceStatus.proposed
+                    ),
                     "audit": self._audit(certified=certified, answered_by=answered_by),
                 }
             )
         except ValidationError as err:
-            return f"error: invalid RuleAsset: {err}"
-        self.rules[rid] = asset
-        return f"ok: wrote {rid}"
+            return f"error: invalid NoteAsset: {err}"
+        self.notes[note_id] = asset
+        return f"ok: wrote {note_id}"
 
     def record_caveats(self, records: Iterable[ClarificationRecord]) -> int:
         """Fold answered clarifications that don't map to an asset (``pair:`` /
         ``query:`` scopes — trap/annotation-error findings) into governance
-        ``RuleAsset``s, so the caveat reaches the served corpus instead of dying
+        ``NoteAsset``s, so the caveat reaches the served corpus instead of dying
         in the ledger. Runs after both fold modes (deterministic + agent).
-        Returns the number of rules recorded.
+        Returns the number of notes recorded.
         """
         n = 0
         for rec in records:
@@ -630,9 +633,9 @@ class AssetBag:
                 continue
             except ValueError:
                 pass  # non-asset scope (pair:/query:/…) → record as a caveat
-            msg = self.propose_rule(
+            msg = self.propose_note(
                 rec.answer,
-                kind=RuleKind.context,
+                kind=NoteKind.context,
                 certified=True,
                 answered_by=rec.answered_by or "sme",
             )
@@ -665,7 +668,7 @@ class AssetBag:
         be resolved at all, is left untouched (a genuine gap for the agent /
         human, not a formatting slip). Covers ``column.references``,
         ``metric.base_table``, ``join.left/right_table``, ``term.binding`` and
-        ``rule.scope``. Returns the number of fields rewritten. Runs before the
+        ``note.scope``. Returns the number of fields rewritten. Runs before the
         agent fix-pass so a stochastic LLM is never handed a deterministic
         reference problem.
         """
@@ -720,12 +723,12 @@ class AssetBag:
             )
             n += 1
 
-        # rule.scope[] -> any canonical asset id
+        # note.scope[] -> any canonical asset id
         valid_any = self._all_asset_ids()
-        for rid, r in list(self.rules.items()):
+        for note_id, note in list(self.notes.items()):
             new_scope = []
             changed = False
-            for s in r.scope:
+            for s in note.scope:
                 if s in valid_any:
                     new_scope.append(s)
                     continue
@@ -737,7 +740,7 @@ class AssetBag:
                 else:
                     new_scope.append(s)  # unresolvable -> leave for agent / human
             if changed:
-                self.rules[rid] = r.model_copy(update={"scope": new_scope})
+                self.notes[note_id] = note.model_copy(update={"scope": new_scope})
 
         return n
 

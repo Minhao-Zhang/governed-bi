@@ -2,10 +2,13 @@
 
 _[English](0003-governed-notes-tri-modal-retrieval.md) · [简体中文](0003-governed-notes-tri-modal-retrieval.zh.md)_
 
-- **Status:** Proposed (2026-07-21). Design agreed in a multi-agent design
-  review (4 independent proposals, 3 diverse judges, and an adversarial
-  red-team; all three judges independently ranked "generalize `RuleAsset`"
-  first). No code yet; awaiting the 5 open decisions below and Phase 1.
+- **Status:** Accepted (design; 2026-07-22). Design agreed in a multi-agent
+  design review (4 independent proposals, 3 diverse judges, and an
+  adversarial red-team; all three judges independently ranked "generalize
+  `RuleAsset`" first). The open questions below are now resolved (see
+  "Resolved decisions (2026-07-22)"). No code yet; implementation is gated as
+  M3+ in
+  [the implementation plan](../plans/implementation-plan-notes-and-run-logging.md).
 - **Deciders:** project owner + design session
 - **Related:** [0002](0002-governed-agentic-serve-runtime.md);
   [pipeline-design.md](../pipeline-design.md);
@@ -103,22 +106,24 @@ reading a short piece of text.
 ## Decision
 
 **Delete `skill`. Generalize `RuleAsset` into `NoteAsset`**, one governed
-annotation attachable to any asset **or** namespace. A "rule" becomes simply a
-note with `enforcement=always`. A parallel, brand-new `NoteAsset` primitive
-that leaves `RuleAsset` untouched was considered and rejected: it re-derives
-everything `RuleAsset` already is (typed, unioned, indexed, scoped) for no
-benefit over generalizing in place.
+annotation attachable to any asset **or** namespace. A "rule" becomes a note
+with `activation=always` and `normative_force=must_honour` (a
+`business_rule`). A parallel, brand-new `NoteAsset` primitive that leaves
+`RuleAsset` untouched was considered and rejected: it re-derives everything
+`RuleAsset` already is (typed, unioned, indexed, scoped) for no benefit over
+generalizing in place.
 
 ```python
 class NoteKind(str, Enum):
-    # from RuleKind: default enforcement = always
+    # default (activation=always, normative_force=must_honour)
     business_rule = "business_rule"
     constraint = "constraint"
+    # default (activation=always, normative_force=advisory)
     context = "context"
-    # from SkillKind: default enforcement = on_match
+    domain_overview = "domain_overview"
+    # default (activation=on_match, normative_force=advisory)
     routing = "routing"
     gotchas = "gotchas"
-    domain_overview = "domain_overview"
     pattern = "pattern"
 
 
@@ -134,10 +139,11 @@ class NoteAsset(_Strict):
     # ── Inference (curator writes / gold fills) ──
     kind: NoteKind
     scope: list[str] = Field(default_factory=list)  # asset/namespace ids; empty = global
-    title: str | None = None
-    statement: str
+    summary: str  # one sentence, author-written; the embedding target AND the always-injection payload
+    body: str | None = None  # long form; loaded on demand (read_notes / on_match), never embedded, never injected by activation=always
     triggers: list[Trigger] = Field(default_factory=list)
-    enforcement: Literal["always", "on_match"]  # kind sets the default; a validator hard-enforces it
+    activation: Literal["always", "on_match"]  # kind sets the default (see NoteKind above), overridable
+    normative_force: Literal["must_honour", "advisory"]  # kind sets the default (see NoteKind above), overridable
     confidence: Confidence | None = None
     related_notes: list[str] = Field(default_factory=list)
     publication_status: Literal["proposed", "draft", "certified"] = "proposed"
@@ -147,6 +153,10 @@ class NoteAsset(_Strict):
     governance: Governance | None = None
 
     audit: Audit | None = None
+
+    # A model_validator(mode="after") defaults `activation` and
+    # `normative_force` from `kind`, both overridable, so a keyword-triggered
+    # business_rule can express (activation=on_match, normative_force=must_honour).
 ```
 
 ### Certification must survive `for_analyst`
@@ -192,16 +202,31 @@ none of them containing `:`). A `schema:beer_factory` or `db:main` scope
 entry fires a dangling-ref finding and reddens corpus CI today. `db:main`
 also has no backing identity to resolve against: `DataSourceConfig`
 (`config.py`) has no `db` field, and its `corpus_pin` defaults to
-`beer_factory`, never `main`. Shipping this table requires either teaching
+`beer_factory`, never `main`. Shipping this table requires teaching
 `validate.py`'s `require()` the `schema:`/`db:` prefixes and giving `db:` a
-real backing identity in `DataSourceConfig`, or adopting the structured
-`ScopeTarget` now instead of sentinel strings (Open Q2).
+real backing identity in `DataSourceConfig` (Q2 resolved 2026-07-22 in favor
+of sentinel strings over a structured `ScopeTarget`; see "Resolved decisions"
+below).
+
+### Always-note budget and precedence (H1)
+
+Global (`scope=[]`), `activation=always` notes are the ones that land in
+every prompt, so they need a hard cap, not just a convention. **Cap:** at
+most 8 global always notes AND at most 2000 chars of total injected notes
+text (config-driven, start conservative). **Precedence for overflow or
+conflict**, applied in order: (1) `publication_status` certified before
+draft before proposed, (2) `normative_force` must_honour before advisory,
+(3) `confidence` descending, (4) scope specificity, asset before schema
+before db before global, (5) `id` ascending. Genuinely contradictory
+`must_honour` notes on the same scope are **both** rendered rather than one
+being silently dropped; picking a winner there is the first real client of
+`adversary.refute()`.
 
 ### Tri-modal retrieval and the pin-vs-blend contract
 
 | Mode | Purpose | Wiring point (file:function) | Fusion rule |
 |---|---|---|---|
-| **Semantic (own vector)** | recall driver at *retrieval* (post-routing) | `asset_document(NoteAsset)` returns `title + statement`, embedded per-asset in the RVGD retrieval index (`embedding.py:45-50`), kept under a note budget after RRF | **BLEND** into RRF normally. This is the `retrieve()` index built *after* schema routing (`agent.py:410`), so it improves within-scope recall, not schema selection. Each note is its own vector so it does not dilute a table's vector; note bodies stay out of the routing `schema_documents` signal entirely (see Gap-A note below). |
+| **Semantic (own vector)** | recall driver at *retrieval* (post-routing) | `asset_document(NoteAsset)` returns `summary` only, embedded per-asset in the RVGD retrieval index (`embedding.py:45-50`), kept under a note budget after RRF (a match living only in `body` surfaces via `grep_notes`/triggers, not semantic recall) | **BLEND** into RRF normally. This is the `retrieve()` index built *after* schema routing (`agent.py:410`), so it improves within-scope recall, not schema selection. Each note is its own vector so it does not dilute a table's vector; note bodies stay out of the routing `schema_documents` signal entirely (see Gap-A note below). |
 | **Regex/keyword trigger** | deterministic patch for NAMED misses | new `retrieval/triggers.py::fire_triggers(corpus, q)`, unioned into `selected` (`rvgd.py:354-372`) and into `shortlist_schemas` (`schema_router.py:130-180`) | **PIN, never blend.** No lexical trigger score ever enters RRF, respecting the RRF-hurts finding above. Capped (≤3); the tiebreak reads `publication_status` first (certified > draft), then `confidence` (Inference-tier, so it survives `for_analyst` too). |
 | **Agent-fetch** | "agent reads a short piece of text" | new read-only, non-licensing tools `read_notes(target)` / `grep_notes(pattern)` added to the list `make_tools` returns (`tools.py:289`) | **Neither.** Not added to `_GOVERNED_TOOLS` (`middleware.py:40`), so `wrap_tool_call`'s dispatch (`middleware.py:219-222`, `if name not in _GOVERNED_TOOLS: return handler(request)`) passes them straight through untouched. Both honor `governance.excluded` via `_is_excluded` (`tools.py:33-35`); reading a note that names table X still requires `inspect_schema(X)` to license X for `run_query`. Safety by topology, not by the tool's own discretion. |
 
@@ -222,10 +247,11 @@ authored for a rule at all; adding `governance` to `NoteAsset` makes it work.
 
 **Limit on the PII-leak fix.** A `Governance` block only excludes a note
 *wholesale*. `governance.excluded` is asset-level (`_is_excluded`,
-`tools.py:33-35`) and nothing scans a note's `statement` text, so a note that
-*names* an excluded column in prose (as `routing.md:30` does with
+`tools.py:33-35`) and nothing scans a note's `summary`/`body` text, so a note
+that *names* an excluded column in prose (as `routing.md:30` does with
 `CreditCardNumber`) is not structurally prevented, and the Mode-C `read_notes` /
-`grep_notes` tools add a new surface that returns statement text directly. The
+`grep_notes` tools add a new surface that returns `summary`/`body` text
+directly. The
 `CreditCardNumber` case is closed only by deleting that line during migration; a
 content-scanning validator would be needed for a structural guarantee.
 
@@ -250,7 +276,7 @@ content-scanning validator would be needed for a structural guarantee.
    `assemble_context` never reads a `retrieval.rule_ids`-equivalent list of
    *triggered* (as opposed to *scoped-and-licensed*) notes into the rendered
    prompt (`context.py:290-297` only injects by licensed-scope match). If the
-   always-on skill prose is migrated straight to `enforcement=on_match` before
+   always-on skill prose is migrated straight to `activation=on_match` before
    that path is wired, its content silently stops reaching the model, a
    regression rather than a neutral no-op.
 4. **The scope-injection resolver matches `licensed_table_ids` only**
@@ -268,7 +294,8 @@ content-scanning validator would be needed for a structural guarantee.
    its output size before it ships in Phase 3; this is the same mitigation
    limit #1 already requires on the question side, not a separate one. The
    structural fix for the PII-prose leak above is a content-scanning
-   validator over `NoteAsset.statement` for excluded identifiers, not just
+   validator over `NoteAsset.summary` and `body` for excluded identifiers
+   (C5; `summary` scanned first, since it is the most exposed), not just
    deleting the one known offending line during migration.
 
 ## Consequences
@@ -305,8 +332,8 @@ content-scanning validator would be needed for a structural guarantee.
 - **New first-class `NoteAsset` alongside untouched `RuleAsset`.** Rejected;
   it re-derives everything `RuleAsset` already is. The one argument for keeping
   them separate, that "one type can't hold both always-on and triggered
-  injection semantics," dissolves once `enforcement` is a field rather than a
-  type distinction.
+  injection semantics," dissolves once `activation` (and `normative_force`) are
+  fields rather than a type distinction.
 - **Retrieval-index-centric design (a dedicated annotation index, separate
   from asset retrieval).** Not adopted wholesale, but its pin-vs-blend rigor
   (never let a lexical trigger score enter RRF) was grafted into the Decision
@@ -327,8 +354,10 @@ content-scanning validator would be needed for a structural guarantee.
 1. **Rename, no new retrieval behavior.** `RuleAsset` → `NoteAsset`
    (`asset_type: rule → note`, id prefix `rule_` → `note_`, directory
    `rules/` → `notes/`); add the `Governance` block (closes D6 for rules
-   standalone) and `enforcement`, with a validator that hard-enforces
-   `kind → enforcement`. Delete the whole skill path: `SkillFrontmatter`,
+   standalone) and the three behavior fields `kind` + `activation` +
+   `normative_force` (replacing `title`/`statement` with `summary`/`body`),
+   with a validator that defaults `activation`/`normative_force` from `kind`,
+   both overridable. Delete the whole skill path: `SkillFrontmatter`,
    `SkillKind`, the frontmatter parser, the loader's skills glob and
    `Corpus.skills` (`loader.py:87`), `SkillView` + its render block
    (`context.py:273-276,403-408`), `dump_skill`, the `schema_router` skills
@@ -349,9 +378,10 @@ content-scanning validator would be needed for a structural guarantee.
    sentinels so a schema- or db-scoped note does not redden CI as a
    dangling reference, and give `db:` a real backing identity in
    `DataSourceConfig` (`config.py`, which has no `db` field today;
-   `corpus_pin` defaults to `beer_factory`, never `main`); absent that,
-   adopt the structured `ScopeTarget` (Open Q2) instead of sentinel strings
-   before this phase ships.
+   `corpus_pin` defaults to `beer_factory`, never `main`); this is the concrete
+   `require()`/`db:`-identity work that Q2's sentinel-strings resolution
+   (2026-07-22, see "Resolved decisions" below) still needs before this phase
+   ships.
 2. **Wire injection for real.** Extend the scope-injection resolver
    (`context.py:290-297`) to `schema:` / `metric_` / `join_` / `col_`; render
    triggered/`on_match` notes into the prompt. Add a no-EX-regression eval arm
@@ -383,31 +413,50 @@ and, with it, Gap-A routing-reachability come in Phase 4 (plus the deferred
 Phase 6 max-pool vector); Phases 5-7 are further hardening and
 scale-proving.
 
-## Open questions (for the maintainer)
+## Resolved decisions (2026-07-22)
 
-1. **Rename churn vs. low-churn.** Full `rule` → `note` rename (breaks the
-   UI's `/skills` surface, forces lockstep migration) vs. keeping
-   `asset_type`/dir as `rule` and renaming only in vocabulary/docs.
-   *Recommendation: bold rename, since this is a greenfield project with no
-   users (AGENTS.md).*
-2. **Prefix sentinels vs. a structured `ScopeTarget` now.** *Recommendation:
-   sentinels now; upgrade later with no migration required.*
-3. **Build or defer regex-over-question.** *Recommendation: defer. Keyword
-   triggers only; `grep_notes` already covers regex-over-text without taking
-   on the ReDoS-dependency question.*
-4. **Global always-note budget.** Needs a CI cap (max count + max chars) on
-   `scope=[]` notes so the every-prompt bloat this ADR fixes does not return,
-   just relabeled as rules instead of skills.
-5. **PIN authority gate.** Confirm draft-in-dev / certified-in-prod as the
-   default before Phase 5 ships.
-6. **[C2] Three fields instead of one derived one?** Should `kind`,
-   activation (`always`/`on_match`), and normative force
-   (`must_honour`/`advisory`) be three separate fields, rather than
-   `enforcement` being derived from `kind` by a validator? As written,
-   `enforcement` is effectively `kind` relabeled, and it blocks combinations
-   the model should be able to express, for example a keyword-triggered
-   `business_rule` (`on_match` plus `must_honour`).
-7. **[H1] Conflict/precedence rule for competing `always` notes.** No rule
-   exists today for two `always` notes (or an `always` and an `on_match`)
-   on the same scope that disagree. Needs a precedence rule before Phase 2
-   renders more than one into the same prompt.
+All open questions below are resolved; the canonical record is
+[D17](../design-decisions.md#d17-governed-notes--tri-modal-retrieval).
+
+1. **Rename churn vs. low-churn: bold rename adopted.** Full `rule` → `note`
+   rename ships, including the UI's `/skills` surface migrating lockstep,
+   since this is a greenfield project with no users (AGENTS.md).
+2. **Prefix sentinels vs. a structured `ScopeTarget`: sentinels adopted
+   (Q2).** `schema:<name>` / `db:<name>` prefixes, bare id is an asset
+   reference, `[]` is global; asset ids never contain `:`. Upgradeable to a
+   structured `ScopeTarget` later with zero data migration.
+3. **Regex-over-question: deferred.** Keyword triggers only for now;
+   `grep_notes` already covers regex-over-text without taking on the
+   ReDoS-dependency question, so building a separate regex-over-question mode
+   is not worth it yet.
+4. **Global always-note budget: adopted (H1).** At most 8 global (`scope=[]`)
+   `always` notes AND at most 2000 chars of total injected notes text; see
+   "Always-note budget and precedence (H1)" above for the full cap and
+   precedence rule.
+5. **PIN authority gate: draft-in-dev / certified-in-prod.** Confirmed as the
+   default, backed by the serve-visible `publication_status` field (C1) that
+   survives `for_analyst` and is cross-checked against `audit.provenance.status`
+   when `Audit` is present.
+6. **[C2] Three fields adopted, not one derived one.** `kind`, `activation`
+   (`always`/`on_match`), and `normative_force` (`must_honour`/`advisory`) are
+   three separate fields on `NoteAsset`, with a `model_validator(mode="after")`
+   defaulting `activation`/`normative_force` from `kind` (both overridable).
+   A single derived `enforcement` field would have been `kind` relabeled and
+   could not express a keyword-triggered `business_rule` (`on_match` plus
+   `must_honour`).
+7. **[H1] Conflict/precedence rule: adopted.** The 5-tuple precedence
+   (`publication_status`, then `normative_force`, then `confidence`, then
+   scope specificity, then `id`) resolves overflow and ordering; genuinely
+   contradictory `must_honour` notes on the same scope are both rendered
+   rather than one being silently dropped. See "Always-note budget and
+   precedence (H1)" above.
+8. **[C3] Progressive disclosure adopted: `summary` + `body` replace
+   `title`/`statement`.** `summary` (required, one sentence) is the embedding
+   target and the `activation=always` injection payload; `body` (optional,
+   long form) loads on demand via `read_notes`/`on_match` and is never
+   embedded or always-injected. `summary` is author-written (curator
+   proposes, adversary/human certifies), and the C5 content-scan validator
+   scans both `summary` and `body` for excluded identifiers, `summary` first.
+   This preserves the progressive-disclosure virtue of the deleted `skill`
+   design (frontmatter description plus an on-demand Markdown body) instead
+   of flattening it into one field.

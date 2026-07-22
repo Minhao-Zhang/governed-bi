@@ -61,10 +61,12 @@ M5  full-content + deep-agent logging (ADR 0004 gated)
 
 Record all resolutions in `docs/design-decisions.md` (D17 for 0003, D18 for 0004) + mark the ADR Open Questions resolved.
 
+> **Resolved 2026-07-22 (see [D17](../design-decisions.md#d17-governed-notes--tri-modal-retrieval)):** C2 three fields (`kind` + `activation` + `normative_force`), Q2 scope sentinels, C1 serve-visible `publication_status`, H1 budget + precedence, plus a new **C3 progressive disclosure** decision: `summary` (embed + always-inject) and `body` (on-demand) replace `title`/`statement`. So **N1 builds `summary`/`body` + `activation`/`normative_force`**, not `title`/`statement` + a single `enforcement`.
+
 ### Gating decisions
 
 **C2 (kind vs enforcement): adopt THREE fields.** `kind` (descriptive taxonomy) + `activation` (`always`|`on_match`) + `normative_force` (`must_honour`|`advisory`), with a `model_validator(mode="after")` that defaults `activation`/`normative_force` from `kind` but leaves both overridable.
-*Rationale:* the ADR's own Open Q C2 (lines 403-409) states a single derived `enforcement` is "`kind` relabeled" and blocks a keyword-triggered `business_rule` (`on_match`+`must_honour`); M4's render step (R2) needs `normative_force` to pick the "must honour" vs "advisory" section header. Writing the schema once in Phase 1 avoids a second `NoteAsset` migration at Phase 2.
+*Rationale:* the ADR's Resolved decision C2 (item 6 under "Resolved decisions") records that a single derived `enforcement` is "`kind` relabeled" and blocks a keyword-triggered `business_rule` (`on_match`+`must_honour`); M4's render step (R2) needs `normative_force` to pick the "must honour" vs "advisory" section header. Writing the schema once in Phase 1 avoids a second `NoteAsset` migration at Phase 2.
 *Note the dissent:* the `notes-datamodel-phase1` track argued two fields (`kind`+`enforcement`) with the third deferred as YAGNI. Overruled because Phase 2 needs `normative_force` immediately and greenfield schema-churn is cheapest done once. **N1 builds the three-field shape.**
 
 **Q2 (scope encoding): sentinel strings now.** `scope: list[str]`; asset ids never contain `:`; `schema:<name>` resolves against `list_schemas` (`schema_router.py:36-38`), `db:<name>` against the new `DataSourceConfig.db` identity, `[]` = global.
@@ -133,7 +135,7 @@ Entry gate: C2, Q2, C1, H1 resolved (M0). CI gate throughout: `python -m governe
 | N4 | `validate.py:151-153` NoteAsset branch + `schema:`/`db:` sentinel resolution + publication_status drift check + always-budget finding | M |
 | N5 | `serialize.py` drop `dump_skill`+skills branch; round-trip preserves `activation`/`normative_force` (exclude_none must not drop kind-default) | S |
 | N7 | `context.py` delete `SkillView`+`## Skills` render (`273-276,403-408`); repoint injection (`290-297`) at `NoteAsset` gated on `activation=='always'` | M |
-| N8 | `rvgd.py:102-103` index NoteAsset = title+statement | S |
+| N8 | `rvgd.py:102-103` index NoteAsset = summary (embed target; body stays out of the vector) | S |
 | N9 | `schema_router.py:355-360` drop skills filter | S |
 | N10 | `presenter.py` drop `SkillView`/`skill_views`/`n_skills` | S |
 | N11 | `api`: delete `GET /skills` (`app.py:296-299`), `SkillResponse`, `HealthResponse.n_skills`; `AssetTypeFilter` rule→note (`schemas.py:270`) | M |
@@ -153,7 +155,7 @@ Entry gate: **P1 = M3 complete.** First step is a guard, not a feature.
 | R3 | always-budget + precedence tuple + prompt-size CI cap (config knobs) | S |
 | R4 | no-EX-regression eval arm (offline recall@k proxy in CI; live EX ON-vs-OFF documented manual gate) | M |
 | R5 | `read_notes`/`grep_notes` on own audited-read path, NOT in `_GOVERNED_TOOLS` (`middleware.py:40`); honor `_is_excluded`; ReDoS-bound + output cap; reading note naming X does NOT license X | M |
-| R6 | C5 content-scan validator over `NoteAsset.statement` for excluded identifiers (structural PII-prose fix); wire into R5 tools | M |
+| R6 | C5 content-scan validator over `NoteAsset.summary` and `body` (summary first) for excluded identifiers (structural PII-prose fix); wire into R5 tools | M |
 | R7 | `retrieval/triggers.py::fire_triggers` (keyword-only); PIN into shortlist (`schema_router.py:130-180`, cap ≤3, never into RRF) + `selected` (`rvgd.py:354-372`); dev-only/unranked | M |
 | R8 | certified-gates-PIN: `publication_status` tiebreak + dev/prod graduation config. **Ships together with R7 authority (H2).** | M |
 | R10 | held-out routing gates: GATE-RECALL (recall@3 ≥ pre-PIN baseline) + GATE-ADV-WRONG-NOTE (certified wrong-schema PIN leaves recall@3 unchanged); offline HashingEmbedder | M |

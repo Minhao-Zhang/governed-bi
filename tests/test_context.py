@@ -37,8 +37,8 @@ def _context(corpus, question):
     return assemble_context(corpus, retrieval, licensed_table_ids=licensed_ids), retrieval
 
 
-def test_governance_rules_reach_context_by_licensed_scope():
-    # A global rule always applies; a table-scoped rule applies only when its
+def test_always_notes_reach_context_by_licensed_scope():
+    # A global note always applies; a table-scoped note applies only when its
     # table is licensed. This is the wiring that carries Phase B SME caveats into
     # the agent's seeded context (they were previously dropped by retrieval).
     from governed_bi.corpus import Corpus
@@ -46,8 +46,7 @@ def test_governance_rules_reach_context_by_licensed_scope():
         Column,
         LogicalType,
         Reliability,
-        RuleAsset,
-        RuleKind,
+        NoteAsset,
         TableAsset,
     )
     from governed_bi.retrieval import RetrievalResult
@@ -74,9 +73,15 @@ def test_governance_rules_reach_context_by_licensed_scope():
         assets=[
             licensed_tbl,
             other_tbl,
-            RuleAsset(id="rule_global", kind=RuleKind.business_rule, scope=[], statement="always exclude test rows"),
-            RuleAsset(id="rule_scoped", kind=RuleKind.context, scope=["tbl_s_orders"], statement="amount is in cents"),
-            RuleAsset(id="rule_offscope", kind=RuleKind.context, scope=["tbl_s_other"], statement="should not appear"),
+            NoteAsset(id="note_global", kind="business_rule", scope=[], summary="always exclude test rows"),
+            NoteAsset(id="note_scoped", kind="context", scope=["tbl_s_orders"], summary="amount is in cents"),
+            NoteAsset(id="note_offscope", kind="context", scope=["tbl_s_other"], summary="should not appear"),
+            NoteAsset(
+                id="note_on_match",
+                kind="routing",
+                scope=["tbl_s_orders"],
+                summary="on-match should not appear",
+            ),
         ]
     )
     retrieval = RetrievalResult(question="q", table_ids=["tbl_s_orders"])
@@ -86,8 +91,9 @@ def test_governance_rules_reach_context_by_licensed_scope():
     assert any("amount is in cents" in r for r in ctx.rules)  # scoped to a licensed table
     assert not any("should not appear" in r for r in ctx.rules)  # scoped elsewhere
     block = ctx.render()
-    assert "## Governance rules (must honour)" in block
+    assert "## Governance notes" in block
     assert "amount is in cents" in block
+    assert "on-match should not appear" not in block
 
 
 def test_allowed_table_names_match_licensed_physical_names(corpus):
@@ -144,8 +150,8 @@ def test_render_lists_only_licensed_tables_and_is_a_string(corpus):
     assert "## Tables (use ONLY these physical identifiers)" in text
     assert "transaction" in text
     # rootbeerreview is 3 hops out -> not licensed -> must not be presented AS A
-    # TABLE. (Skill prose may still mention it by name, which is fine; the guardrail
-    # scope is allowed_table_names, not the free text.)
+    # TABLE. Note prose may still mention it by name; guardrail scope comes from
+    # allowed_table_names, not free text.
     assert "rootbeerreview" not in ctx.allowed_table_names()
     assert "### rootbeerreview" not in text
 
@@ -190,5 +196,4 @@ def test_empty_retrieval_yields_empty_but_valid_context(corpus):
     assert isinstance(ctx, PromptContext)
     assert ctx.tables == []
     assert ctx.allowed_table_names() == frozenset()
-    # Skills are corpus-global, so they still render; the table section is empty.
     assert "## Tables" in ctx.render()

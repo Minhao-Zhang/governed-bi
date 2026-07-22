@@ -1,6 +1,6 @@
 """Curator loop step 3 - Adversary pass (D10).
 
-An *independent* reviewer that tries to **refute** each proposed Inference/skill
+An *independent* reviewer that tries to **refute** each proposed Inference
 asset before it commits. Two layers:
 
 - :func:`review` -- the deterministic structural gate. It wraps the corpus CI
@@ -94,7 +94,7 @@ def review(
 
 
 def refute(asset: "Asset") -> AdversaryResult:
-    """Attempt to refute one proposed Inference/skill asset (LLM seam).
+    """Attempt to refute one proposed Inference asset (LLM seam).
 
     The independent adversary re-derives or attacks the claim, runs falsifying
     probe queries, and checks consistency + evidence, returning a verdict. This

@@ -85,9 +85,8 @@ served over HTTP/JSON by `governed_bi.api` for a separate UI to render:
   triages first: # suspect columns, # excluded assets, # low-confidence joins.
 - **Table view**. Facts + Inference side by side; `suspect` and `excluded`
   columns flagged with their reason; per-column provenance status.
-- **Assets**. The non-table assets (joins, metrics, terms, rules, few-shots,
+- **Assets**. The non-table assets (joins, metrics, terms, notes, few-shots,
   negatives), filterable by type, with provenance status.
-- **Skills**. Rendered markdown.
 
 Design vision, not built here (a fuller audit surface, or the downstream product):
 

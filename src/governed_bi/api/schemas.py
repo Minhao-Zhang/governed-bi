@@ -42,7 +42,6 @@ class CapabilitiesResponse(_View):
 # ── health ────────────────────────────────────────────────────────────────── #
 class HealthResponse(_View):
     counts: dict[str, int]
-    n_skills: int
     n_suspect_columns: int
     n_excluded: int
     n_low_confidence_joins: int
@@ -173,7 +172,7 @@ class SchemaGraphResponse(_View):
 # ── knowledge graph (full corpus) ─────────────────────────────────────────── #
 class KnowledgeGraphNodeResponse(_View):
     id: str
-    kind: str  # table | join | metric | term | rule | few_shot | negative_example
+    kind: str  # table | join | metric | term | note | few_shot | negative_example
     label: str
     excluded: bool
     provenance_status: str | None
@@ -263,11 +262,11 @@ class ColumnRelatedResponse(_View):
     meta: ColumnRelatedMetaResponse
 
 
-# ── corpus assets + skills ────────────────────────────────────────────────── #
+# ── corpus assets ─────────────────────────────────────────────────────────── #
 # The selectable non-table asset types (tables have their own /schema view). Used
 # to constrain the /corpus/assets ?type= filter so unknown values 422 and the
 # valid set is published in the OpenAPI schema.
-AssetTypeFilter = Literal["join", "metric", "term", "rule", "few_shot", "negative_example"]
+AssetTypeFilter = Literal["join", "metric", "term", "note", "few_shot", "negative_example"]
 
 
 class AssetRowResponse(_View):
@@ -276,13 +275,6 @@ class AssetRowResponse(_View):
     summary: str
     provenance_status: str | None
     excluded: bool
-
-
-class SkillResponse(_View):
-    skill_id: str
-    kind: str
-    namespace: str = _NAMESPACE
-    body: str
 
 
 # ── chat ──────────────────────────────────────────────────────────────────── #

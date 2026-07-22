@@ -63,7 +63,7 @@ uv run python -m governed_bi.corpus.cli --help
 Output on success:
 
 ```
-CI green: 16 assets, 1 skills, 0 findings.
+CI green: 17 assets, 0 findings.
 ```
 
 On failure it lists each finding (for example `dangling-ref [metric_revenue]:
@@ -83,9 +83,9 @@ parsed into typed Pydantic models, so a malformed asset fails loudly.
 from pathlib import Path
 from governed_bi.corpus import load_corpus, validate_corpus, is_green, parse_asset
 
-# Load a DB's corpus (YAML assets + Markdown skills) into typed models.
+# Load a schema's corpus (YAML typed assets) into models.
 corpus = load_corpus(Path("corpus"), schema="beer_factory")
-print(len(corpus.assets), "assets;", len(corpus.skills), "skills")
+print(len(corpus.assets), "assets")
 
 # Run the same checks the CLI runs.
 findings = validate_corpus(corpus.assets)
@@ -180,10 +180,10 @@ The deepagents curator needs the same key.
 This repo ships **no bundled UI**. The read-only audit/review surface is two
 UI-agnostic pieces: the `governed_bi.viz.presenter` view models (corpus health,
 the table/tier view, the relationship/knowledge graph, the asset listing,
-skills, and an answer's two-axis reliability stamp — no UI dependency), and the
+and an answer's two-axis reliability stamp — no UI dependency), and the
 `governed_bi.api` FastAPI HTTP/JSON API that serves those view models plus the
 governed agent core at `POST /chat`. The view-model endpoints (`/health`,
-`/schema`, `/graph`, `/corpus/assets`, `/skills`, …) need no model; `/chat`
+`/schema`, `/graph`, `/corpus/assets`, …) need no model; `/chat`
 does, and returns `503` without one. To run the API:
 
 ```bash

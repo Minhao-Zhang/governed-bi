@@ -393,9 +393,9 @@ def test_last_message_text_strips_reasoning_parts():
     assert "gAAAAAB" not in out
 
 
-def test_pair_scoped_clarification_becomes_rule(bird_connector, tmp_path: Path):
+def test_pair_scoped_clarification_becomes_note(bird_connector, tmp_path: Path):
     """A pair:/query:-scoped answered clarification (trap/annotation-error finding)
-    must land as a governance RuleAsset in the served corpus, not die in the ledger."""
+    must land as a governed NoteAsset in the served corpus, not die in the ledger."""
     from governed_bi.corpus import load_corpus
     from governed_bi.curator.clarifications import clarifications_path
 
@@ -427,6 +427,6 @@ def test_pair_scoped_clarification_becomes_rule(bird_connector, tmp_path: Path):
         curated_root=curated, model=None,
     )
     corpus = load_corpus(curated_sme, schema="beer_factory")
-    rules = [a for a in corpus.assets if a.asset_type == "rule"]
-    assert rules, "pair-scoped clarification should have become a RuleAsset"
-    assert "mislabeled" in rules[0].statement.lower() or "annotation" in rules[0].statement.lower()
+    notes = [a for a in corpus.assets if a.asset_type == "note"]
+    assert notes, "pair-scoped clarification should have become a NoteAsset"
+    assert "mislabeled" in notes[0].summary.lower() or "annotation" in notes[0].summary.lower()

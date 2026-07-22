@@ -9,7 +9,7 @@ adversary later tries to refute (``adversary.review``). The adversary boundary
 
 A full LLM proposer (running on the ``deepagents`` harness, seeded with the DB's
 train queries + BIRD ``evidence``) would additionally write column/table prose
-descriptions, joins, reliability caveats, terms, and metrics/rules. This module
+descriptions, joins, reliability caveats, terms, metrics, and notes. This module
 ships a deterministic :class:`HeuristicProposer` so the whole
 proposer -> adversary -> promote loop runs with no network and no LLM. The
 :class:`Proposer` protocol is the seam an LLM proposer plugs into.

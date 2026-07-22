@@ -19,7 +19,7 @@ from typing import Any
 
 import yaml
 
-from .loader import _DIR_ASSET_TYPE, Skill
+from .loader import _DIR_ASSET_TYPE
 from .schemas import Asset
 
 # asset_type -> subdirectory (inverse of the loader's dir -> type map, kept in sync).
@@ -55,23 +55,14 @@ def dump_asset(asset: Asset) -> str:
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
 
 
-def dump_skill(skill: Skill) -> str:
-    """Serialize a skill to Markdown-with-frontmatter (round-trips through the loader)."""
-    front = _yamlify(skill.frontmatter.model_dump(mode="json", exclude_none=True))
-    frontmatter = yaml.safe_dump(front, sort_keys=False, allow_unicode=True)
-    body = skill.body if skill.body.endswith("\n") else skill.body + "\n"
-    return f"---\n{frontmatter}---\n\n{body}"
-
-
 def write_corpus(
     root: Path | str,
     schema: str,
     assets: Iterable[Asset],
-    skills: Iterable[Skill] = (),
 ) -> list[Path]:
-    """Write ``assets`` and ``skills`` into ``root/<schema>/`` and return the paths.
+    """Write ``assets`` into ``root/<schema>/`` and return the paths.
 
-    ``schema`` selects the subtree, since join / term / metric / rule / negative
+    ``schema`` selects the subtree, since join / term / metric / note / negative
     assets carry no ``schema`` field (it is implied by their location). Creates the
     per-type subdirectories as needed.
     """
@@ -90,13 +81,6 @@ def write_corpus(
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / f"{asset.id}.yaml"
         path.write_text(dump_asset(asset), encoding="utf-8")
-        written.append(path)
-
-    for skill in skills:
-        out_dir = schema_dir / "skills"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / f"{skill.frontmatter.skill_id}.md"
-        path.write_text(dump_skill(skill), encoding="utf-8")
         written.append(path)
 
     return written

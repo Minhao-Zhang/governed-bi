@@ -28,12 +28,11 @@ corpus/
   <schema>/
     tables/      tbl_<schema>_<name>.yaml      # columns are inline
     joins/       join_<left>_<right>.yaml
-    metrics/     metric_<name>.yaml
     terms/       term_<name>.yaml
-    rules/       rule_<name>.yaml
+    metrics/     metric_<name>.yaml
+    notes/       note_<name>.yaml
     few-shots/   fs_<schema>_<n>.yaml
     negatives/   neg_<schema>_<n>.yaml
-    skills/      *.md
 ```
 
 One YAML file per asset (columns are the exception: they live inline in their
@@ -196,23 +195,26 @@ everything the Analyst sees, permanently, in all environments.
 `Corpus.for_analyst()` drops these, so an excluded column never reaches
 retrieval, the presented schema, or SQL generation.
 
-## 8. Skills (Markdown, not YAML)
+## 8. Notes (YAML)
 
-Prose routing and gotchas. The frontmatter carries provenance; the body
-references assets by ID and never restates their data.
+Governed annotations that replace the old standalone `rule` asset and the
+deleted Markdown `skills/` surface. See [Asset schemas](asset-schemas.md)
+**Asset: `note`** and D17. Phase 1 injects only `activation=always` notes
+(their `summary`, never `body`).
 
-```markdown
----
-skill_id: skill_demo_routing
-schema: demo
-kind: routing              # routing | gotchas | pattern | domain_overview
-provenance: { source: curator, status: draft, source_refs: [q1] }
----
-
-# Demo: routing & gotchas
-
-- For order value, use `metric_demo_order_total`; join
-  `tbl_demo_orders` to `tbl_demo_customers` via `join_orders_customers`.
+```yaml
+# notes/note_demo_routing.yaml
+asset_type: note
+id: note_demo_routing
+kind: routing
+scope: [tbl_demo_orders, metric_demo_order_total]
+summary: >
+  For order value, use metric_demo_order_total; join tbl_demo_orders to
+  tbl_demo_customers via join_orders_customers.
+activation: always
+publication_status: draft
+audit:
+  provenance: { source: curator, status: draft }
 ```
 
 ## 9. Validate
@@ -222,10 +224,10 @@ uv run python -m governed_bi.corpus.cli corpus/demo
 ```
 
 Green means the IDs are well-formed and every reference resolves. It prints a
-summary line with your asset and skill counts, for example:
+summary line with your asset counts, for example:
 
 ```
-CI green: 6 assets, 1 skills, 0 findings.
+CI green: 6 assets, 0 findings.
 ```
 
 If something is off, each finding names the asset and the problem. The common ones:

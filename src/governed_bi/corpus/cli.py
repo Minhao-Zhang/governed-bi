@@ -63,13 +63,12 @@ def main(argv: list[str] | None = None) -> int:
 
     findings = validate_corpus(corpus.assets)
     n_assets = len(corpus.assets)
-    n_skills = len(corpus.skills)
 
     if is_green(findings):
-        print(f"CI green: {n_assets} assets, {n_skills} skills, 0 findings.")
+        print(f"CI green: {n_assets} assets, 0 findings.")
         return EXIT_GREEN
 
-    print(f"CI failed: {n_assets} assets, {n_skills} skills, {len(findings)} findings:")
+    print(f"CI failed: {n_assets} assets, {len(findings)} findings:")
     for f in findings:
         print(f"  - {f}")
     return EXIT_FINDINGS

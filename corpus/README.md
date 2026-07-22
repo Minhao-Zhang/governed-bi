@@ -19,9 +19,8 @@ corpus/
     few-shots/   fs_<schema>_<n>.yaml
     terms/       term_<name>.yaml
     metrics/     metric_<name>.yaml
-    rules/       rule_<name>.yaml
+    notes/       note_<name>.yaml            # governed annotations (D17)
     negatives/   neg_<schema>_<n>.yaml
-    skills/      *.md                        # prose gotchas / query-patterns
   _generated/    # search index, embeddings, compiled graph (gitignored)
 ```
 

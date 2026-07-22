@@ -91,7 +91,7 @@ def _two_schema_corpus(*, with_cross_join: bool = True) -> Corpus:
                 confidence=0.99,
             )
         )
-    return Corpus(assets=assets, skills=[])
+    return Corpus(assets=assets)
 
 
 # --------------------------------------------------------------------------- #

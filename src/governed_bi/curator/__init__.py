@@ -5,14 +5,14 @@ one-shot bootstrapper but a **permanent maintainer** (cold-start + drift-repair;
 untended corpora rot ~95%→65%/month).
 
 Proposer + adversary (D10): the proposer hypothesizes Inference-tier assets +
-skills; an independent adversary tries to **refute** each before it commits
+notes; an independent adversary tries to **refute** each before it commits
 (``proposed -> draft``). **Facts** are generated programmatically and never
 checked; the adversary boundary *is* the Facts/Inference boundary.
 
 Modules map to the per-DB loop (``docs/curator.md``):
 
 - ``profile``   - step 1: Facts tier, programmatic, no LLM.
-- ``proposer``  - step 2: hypothesize Inference assets + skills.
+- ``proposer``  - step 2: hypothesize Inference assets.
 - ``adversary`` - step 3: refute each proposed asset.
 - ``loop``      - steps 4-5: self-eval & repair, then propose corpus.
 """
