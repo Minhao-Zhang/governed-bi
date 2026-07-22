@@ -35,7 +35,7 @@ review actually lives).
 | Asset schema (for schema-driven forms) | this repo (`corpus/schemas`) |
 | Serialize edits back to YAML | this repo (`corpus/serialize.write_corpus`) |
 | Validate on the PR (the CI gate) | this repo (`corpus/validate` + CLI) |
-| Read-only audit surface (health / tables / assets / skills / ask) | this repo (`viz/presenter` + `governed_bi.api`) |
+| Read-only audit surface (health / tables / assets / notes / ask) | this repo (`viz/presenter` + `governed_bi.api`) |
 | Interactive edit form + git/PR orchestration | downstream tooling / enterprise app |
 
 ## The write path (downstream)

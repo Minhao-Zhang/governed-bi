@@ -113,7 +113,7 @@ confidence: 0.8
 | `metric.base_table` | 某个表的 id | `tbl_demo_orders` |
 | `term.binding.asset_id` | 某个指标、表或列的 id | `metric_demo_order_total` |
 | `term.related_terms[].id` | 某个术语的 id | `term_customer` |
-| `rule.scope[]` | 任意资产的 id | `tbl_demo_orders` |
+| `note.scope[]` | 任意资产的 id | `tbl_demo_orders` |
 
 列本身没有自己的 `id` 字段；loader（加载器）会按照 `col_<schema>_<table>_<physical>` 的格式自动派生一个。因此，`tbl_demo_customers` 中物理名为 `c_0` 的主键，其 id 就是 `col_demo_customers_c_0`，也就是上面 `references` 所指向的目标。
 

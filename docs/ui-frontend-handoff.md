@@ -205,9 +205,8 @@ rename**, and **server-side graph scoping** are shipped; [openapi.json](openapi.
 matches.
 
 > **Shipped (wire + serve + graph scope):**
-> - Namespace field is **`schema`** on `TableResponse`, `TableSummary`,
->   `SkillResponse`, and graph nodes. Filters use **`?schema=` only** — no `?db=`
->   alias (hard cut).
+> - Namespace field is **`schema`** on `TableResponse`, `TableSummary`, and
+>   graph nodes. Filters use **`?schema=` only**, no `?db=` alias (hard cut).
 > - `GET /schema/summary`, `GET /schema/{table_id}`, `can_scope` / `can_search`.
 > - Postgres/Redshift default to multi-schema; SQLite stays single-schema (BIRD).
 > - Cross-schema missing curated join → refuse (`refused_by: "missing_edge"`) with

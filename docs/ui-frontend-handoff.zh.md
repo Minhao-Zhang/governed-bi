@@ -186,7 +186,7 @@ stream.submit(
 
 > **已发布（线上契约 + serve + 图划范围）：**
 > - 命名空间字段为 **`schema`**（`TableResponse` / `TableSummary` /
->   `SkillResponse` / 图节点）。过滤只用 **`?schema=`**——硬切断，无 `?db=` 别名。
+>   图节点）。过滤只用 **`?schema=`**，硬切断，无 `?db=` 别名。
 > - `GET /schema/summary`、`GET /schema/{table_id}`、`can_scope` / `can_search`。
 > - Postgres/Redshift 默认多 schema；SQLite 保持单 schema（BIRD）。
 > - 跨 schema 且无策展 join → 拒答（`refused_by: "missing_edge"`）并带 D12

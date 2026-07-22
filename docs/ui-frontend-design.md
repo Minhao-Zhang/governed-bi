@@ -163,7 +163,7 @@ above:
   `assistantId` = graph name). The hook gives reactive messages, **node/stage
   events** (live progress), thread state (history), and reconnection for free.
 - **Route map:** `/` Chat · `/schema` Schema & knowledge graph · `/corpus` Assets
-  + skills (+ inline editing when `can_edit`) · `/health` Audit/health.
+  + notes (+ inline editing when `can_edit`) · `/health` Audit/health.
 - Config: `NEXT_PUBLIC_LANGGRAPH_URL` (server), `NEXT_PUBLIC_ASSISTANT_ID`. Non-chat
   reads/edit hit the same origin's custom routes. No secrets in the client.
 

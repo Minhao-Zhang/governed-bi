@@ -162,7 +162,7 @@ _[English](ui-frontend-design.md) · [简体中文](ui-frontend-design.zh.md)_
   Server，`assistantId` = graph 名称）。该 hook 免费提供了响应式消息、
   **节点/阶段事件**（实时进度）、线程状态（历史记录），以及重连能力。
 - **路由表：** `/` Chat · `/schema` Schema 与知识图谱 · `/corpus` 资产
-  （Assets）+ skills（当 `can_edit` 为真时支持行内编辑）· `/health` 审计/health。
+  （Assets）+ notes（当 `can_edit` 为真时支持行内编辑）· `/health` 审计/health。
 - 配置项：`NEXT_PUBLIC_LANGGRAPH_URL`（server 地址）、
   `NEXT_PUBLIC_ASSISTANT_ID`。非 chat 的读取/编辑请求会打到同源的自定义
   路由。客户端中不含任何密钥。

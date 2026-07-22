@@ -540,13 +540,13 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
 
 ## D17: Governed Notes + Tri-modal Retrieval
 
-> **Decided (2026-07-22); Phase 1 (M3) landed 2026-07-22.** Full rationale,
+> **Decided (2026-07-22); M3 + M4 landed 2026-07-22.** Full rationale,
 > data model, and phased migration in
 > [ADR 0003](adr/0003-governed-notes-tri-modal-retrieval.md); build order in
 > [the implementation plan](plans/implementation-plan-notes-and-run-logging.md).
-> Phase 1 ships the schema, storage, and CI; Phases 2-7 (trigger PIN,
-> injection wiring, agent-fetch tools, adversary review) are still pending —
-> see "Status" below.
+> M3 shipped the schema, storage, and CI; M4 added trigger PIN (default-off),
+> injection wiring, the agent-fetch tools, and offline gates. Phase 6 (max-pool
+> vector) stays deferred; see "Status" below.
 >
 > The `skill` asset is **deleted** and `RuleAsset` is **generalized into
 > `NoteAsset`**: one governed annotation attachable to any asset **or** namespace

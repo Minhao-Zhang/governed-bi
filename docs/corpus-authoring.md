@@ -133,7 +133,7 @@ References must resolve to an existing asset. The IDs follow fixed conventions
 | `metric.base_table` | a table id | `tbl_demo_orders` |
 | `term.binding.asset_id` | a metric / table / column id | `metric_demo_order_total` |
 | `term.related_terms[].id` | a term id | `term_customer` |
-| `rule.scope[]` | any asset id | `tbl_demo_orders` |
+| `note.scope[]` | any asset id | `tbl_demo_orders` |
 
 Columns have no `id` field of their own; the loader derives one as
 `col_<schema>_<table>_<physical>`. So the primary key of `tbl_demo_customers` with

@@ -573,12 +573,12 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 
 ## D17：受治理的笔记 + 三模态检索
 
-> **已决策（2026-07-22）；Phase 1（M3）已于 2026-07-22 落地。** 完整理由、
+> **已决策（2026-07-22）；M3 与 M4 已于 2026-07-22 落地。** 完整理由、
 > 数据模型与分阶段迁移见
 > [ADR 0003](adr/0003-governed-notes-tri-modal-retrieval.zh.md)；构建顺序见
-> [实施计划](plans/implementation-plan-notes-and-run-logging.md)。Phase 1
-> 交付了 schema、存储与 CI；Phase 2-7（trigger PIN、注入接线、agent 直读工具、
-> 对抗审查）仍待完成，见下文"状态"。
+> [实施计划](plans/implementation-plan-notes-and-run-logging.md)。M3 交付了
+> schema、存储与 CI；M4 又补上了 trigger PIN（默认关闭）、注入接线、agent 直读
+> 工具与离线 gate；Phase 6（max-pool 向量）仍推迟，见下文"状态"。
 >
 > **删除** `skill` 资产，把 `RuleAsset` **泛化为 `NoteAsset`**：一种可挂载到任意
 > 资产**或**命名空间的受治理标注（schema/db 用 `schema:` / `db:` scope 哨兵前缀；
