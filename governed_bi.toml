@@ -96,3 +96,15 @@ cors_origins = ["http://localhost:3000"]
 # conversation_checkpointer_dsn_env = "CHECKPOINT_DSN"  # postgres only; never inline DSN
 # run_log_kind = "sqlite"                     # sqlite | jsonl | off
 # run_log_path = "data/logs/runs.sqlite"
+
+[eval]
+# BIRD eval-harness concurrency (docs/plans/eval-concurrency-design.md).
+# workers = serve-loop worker threads for run_experiment / run_datalake. 1 is the
+# non-negotiable default: fully serial, byte-identical to the pre-concurrency run.
+# Raise it on a dedicated box with no rate limits; size to your Postgres
+# max_connections (each worker holds its own connection). --workers on either CLI
+# overrides this. serve_workers/build_workers are optional splits; build stays
+# serial for now, so build_workers is reserved.
+workers = 1
+# serve_workers = 1
+# build_workers = 1   # reserved; per-DB build loop is still serial

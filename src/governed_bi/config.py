@@ -220,6 +220,25 @@ class Settings:
     log_row_previews: bool = False  # Tier C; needs log_full_content too
     log_full_content_ttl_days: int = 30
 
+    # ── Eval harness concurrency (see [eval]; docs/plans/eval-concurrency-design.md) ──
+    # Serve-loop worker threads for the BIRD eval drivers. 1 = fully serial and
+    # byte-identical to the pre-concurrency behaviour (the non-negotiable default).
+    # ``eval_serve_workers``, when set, overrides ``eval_workers`` for the
+    # per-question serve loop; ``eval_build_workers`` is reserved — the per-DB
+    # build loop stays serial for now (design doc §Ranked plan step 2).
+    eval_workers: int = 1
+    eval_serve_workers: int | None = None
+    eval_build_workers: int | None = None
+
+    def serve_worker_count(self) -> int:
+        """Effective serve-loop worker count: the ``[eval] serve_workers`` split
+        override when set, else the single ``workers`` knob."""
+        return (
+            self.eval_serve_workers
+            if self.eval_serve_workers is not None
+            else self.eval_workers
+        )
+
     @classmethod
     def for_env(
         cls,
@@ -495,6 +514,19 @@ def load_settings(
         for k in keys:
             if k in src:
                 knob_overrides[k] = src[k]
+
+    # Optional [eval] table (docs/plans/eval-concurrency-design.md). TOML keys are
+    # short (``workers`` / ``serve_workers`` / ``build_workers``); they map onto the
+    # ``eval_*`` fields on Settings.
+    eval_tbl = data.get("eval", {})
+    for toml_key, field_name in (
+        ("workers", "eval_workers"),
+        ("serve_workers", "eval_serve_workers"),
+        ("build_workers", "eval_build_workers"),
+    ):
+        if toml_key in eval_tbl:
+            knob_overrides[field_name] = int(eval_tbl[toml_key])
+
     if knob_overrides:
         settings = replace(settings, **knob_overrides)
 

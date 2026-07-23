@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,7 @@ from ..corpus.schemas import ReliabilityStatus, TableAsset
 from ..gateway import Gateway, Identity
 from ..gateway.connectors.postgres import PostgresConnector
 from .arms import _touches_suspect, agent_solver
+from .parallel import ServeWorker, resolve_workers, run_ordered_pool
 from .bird_loader import load_bird_items
 from .hash_grade import (
     crosscheck_execution_match,
@@ -153,7 +155,86 @@ def _run_arm_generations(
     bird_dir: Path,
     suspect_columns: frozenset[str],
     dialect: str,
+    serve_workers: int = 1,
+    worker_factory: "Callable[[int], ServeWorker] | None" = None,
 ) -> tuple[list[dict[str, Any]], ArmSummary, dict[str, Any]]:
+    """Serve + grade one arm over ``items``.
+
+    ``serve_workers == 1`` (default) runs the fully serial loop against the
+    passed ``solver`` / ``gateway`` — byte-identical to the pre-concurrency path.
+    ``serve_workers > 1`` fans the per-question ``solve+grade`` unit out across a
+    thread pool where each worker owns its own connector/gateway/solver (built by
+    ``worker_factory``); results are reassembled in the original item order so the
+    generations rows and every aggregate are identical to the serial run.
+    """
+    items = list(items)
+
+    def _grade_one(item, *, solver, gateway) -> dict[str, Any]:
+        """Solve + grade ONE question against the given (solver, gateway) — the
+        atomic unit shared by the serial and pooled paths. Returns the row plus
+        the booleans the summary needs, so no counter is touched off-thread."""
+        qid = item.question_id or item.question
+        t0 = time.perf_counter()
+        try:
+            sql, meta_raw = solver.solve_with_meta(item.question)
+            err_msg = None
+        except Exception as err:
+            sql, meta_raw, err_msg = None, {}, str(err)
+        latency = time.perf_counter() - t0
+
+        gold = gold_hashes.get(str(qid))
+        grade = score_sql_hashes(sql, gold, gateway, identity, bird_dir)
+        if err_msg and grade.get("error") in (None, "refusal"):
+            grade["error"] = err_msg
+
+        xcheck = crosscheck_execution_match(sql, item.sql, gateway)
+        diff = item.difficulty or "unknown"
+        meta = dict(meta_raw or {})
+        row = {
+            "request_id": str(qid),
+            "question_id": str(qid),
+            "arm": arm,
+            "generated_sql": sql,
+            "latency_sec": round(latency, 4),
+            "usage": meta.get("usage"),
+            "cost_est_usd": meta.get("cost_est_usd"),
+            "correct": grade["correct"],
+            "correct_strict": grade["correct_strict"],
+            "error": grade.get("error"),
+            "ex_crosscheck": xcheck,
+            "difficulty": diff,
+            "refused_by": meta.get("refused_by"),
+            "failed_layer": meta.get("failed_layer"),
+            "graded_delivery": meta.get("graded_delivery"),
+            "coverage_best_effort": meta.get("coverage_best_effort"),
+            "tier": meta.get("tier"),
+            "semantic_assurance": meta.get("semantic_assurance"),
+            "safety_clearance": meta.get("safety_clearance"),
+            "attempts": meta.get("attempts"),
+        }
+        return {
+            "row": row,
+            "correct": bool(grade["correct"]),
+            "correct_strict": bool(grade["correct_strict"]),
+            "refused": sql is None,
+            "decoy": sql is not None and _touches_suspect(sql, suspect_columns, dialect),
+            "xcheck": xcheck,
+            "diff": diff,
+        }
+
+    if serve_workers > 1:
+        if worker_factory is None:
+            raise ValueError("serve_workers > 1 requires a worker_factory")
+        bundles = run_ordered_pool(
+            items,
+            workers=serve_workers,
+            make_worker=worker_factory,
+            run_task=lambda w, item: _grade_one(item, solver=w.solver, gateway=w.gateway),
+        )
+    else:
+        bundles = [_grade_one(item, solver=solver, gateway=gateway) for item in items]
+
+    # --- aggregation on the calling thread, in original item order ---
     rows: list[dict[str, Any]] = []
     n_correct = 0
     n_strict = 0
@@ -164,69 +245,23 @@ def _run_arm_generations(
     n_xcheck_agree = 0
     by_diff_correct: dict[str, list[bool]] = {}
 
-    for item in items:
-        qid = item.question_id or item.question
-        t0 = time.perf_counter()
-        try:
-            sql = solver.solve(item.question)
-        except Exception as err:
-            sql = None
-            err_msg = str(err)
-        else:
-            err_msg = None
-        latency = time.perf_counter() - t0
-
-        gold = gold_hashes.get(str(qid))
-        grade = score_sql_hashes(sql, gold, gateway, identity, bird_dir)
-        if err_msg and grade.get("error") in (None, "refusal"):
-            grade["error"] = err_msg
-
-        xcheck = crosscheck_execution_match(sql, item.sql, gateway)
-        if xcheck is not None:
+    for b in bundles:
+        rows.append(b["row"])
+        if b["xcheck"] is not None:
             n_xcheck += 1
-            if xcheck == bool(grade["correct"]):
+            if b["xcheck"] == b["correct"]:
                 n_xcheck_agree += 1
-
-        refused = sql is None
-        if refused:
+        if b["refused"]:
             n_refused += 1
         else:
             n_produced += 1
-            if _touches_suspect(sql, suspect_columns, dialect):
+            if b["decoy"]:
                 n_decoy += 1
-        if grade["correct"]:
+        if b["correct"]:
             n_correct += 1
-        if grade["correct_strict"]:
+        if b["correct_strict"]:
             n_strict += 1
-
-        diff = item.difficulty or "unknown"
-        by_diff_correct.setdefault(diff, []).append(bool(grade["correct"]))
-
-        meta = dict(getattr(solver, "last_solve_meta", None) or {})
-        rows.append(
-            {
-                "request_id": str(qid),
-                "question_id": str(qid),
-                "arm": arm,
-                "generated_sql": sql,
-                "latency_sec": round(latency, 4),
-                "usage": meta.get("usage"),
-                "cost_est_usd": meta.get("cost_est_usd"),
-                "correct": grade["correct"],
-                "correct_strict": grade["correct_strict"],
-                "error": grade.get("error"),
-                "ex_crosscheck": xcheck,
-                "difficulty": diff,
-                "refused_by": meta.get("refused_by"),
-                "failed_layer": meta.get("failed_layer"),
-                "graded_delivery": meta.get("graded_delivery"),
-                "coverage_best_effort": meta.get("coverage_best_effort"),
-                "tier": meta.get("tier"),
-                "semantic_assurance": meta.get("semantic_assurance"),
-                "safety_clearance": meta.get("safety_clearance"),
-                "attempts": meta.get("attempts"),
-            }
-        )
+        by_diff_correct.setdefault(b["diff"], []).append(b["correct"])
 
     n = len(items)
     summary = ArmSummary(
@@ -253,14 +288,17 @@ def _run_arm_generations(
 
 class _RefuseAllSolver:
     """Trivial solver for ``--skip-agent`` offline smoke runs (no live model):
-    refuses every question so the layered arms still produce a well-formed run."""
+    refuses every question so the layered arms still produce a well-formed run.
 
-    def __init__(self) -> None:
-        self.last_solve_meta: dict = {"refused_by": "no_model"}
+    Implements ``solve_with_meta`` so both drivers use one uniform call path
+    (the return-meta contract, not a stashed attribute)."""
+
+    def solve_with_meta(self, question: str) -> tuple[str | None, dict]:
+        del question
+        return None, {"refused_by": "no_model"}
 
     def solve(self, question: str) -> str | None:
-        del question
-        return None
+        return self.solve_with_meta(question)[0]
 
 
 def run_experiment(
@@ -273,9 +311,15 @@ def run_experiment(
     skip_agent: bool = False,
     limit: int | None = None,
     resume_curated: Path | None = None,
+    serve_workers: int = 1,
 ) -> dict[str, Any]:
     """Run baseline/curated/curated_sme for one DB; write generations + summary
-    under ``out_dir``."""
+    under ``out_dir``.
+
+    ``serve_workers`` fans the per-question serve loop across that many threads
+    (each with its own connector + gateway + graph, all pinned to ``schema=db_id``
+    like the shared connector). 1 = serial (the default). Ignored when there is no
+    live model — the offline refuse-all path stays serial."""
     load_dotenv()
     dataset_dir = bird_dir / "eval_dataset"
     train = load_bird_items(
@@ -517,13 +561,57 @@ def run_experiment(
     suspect_curated = _suspect_from_corpus(corpus_curated, db_id) | trap_cols
     suspect_curated_sme = _suspect_from_corpus(corpus_curated_sme, db_id) | trap_cols
 
+    # Serve concurrency (docs/plans/eval-concurrency-design.md): only fan out when
+    # there is a live model — the offline refuse-all path has nothing to overlap.
+    effective_workers = serve_workers if lc_model is not None else 1
+    if effective_workers > 1:
+        print(
+            f"  serve concurrency: {effective_workers} worker(s)/arm — each owns "
+            f"its own connector+gateway+graph (schema={db_id!r})"
+        )
+
+    def _make_arm_factory(
+        arm_corpus: Any, session_base: str
+    ) -> "Callable[[int], ServeWorker]":
+        """Build a per-worker (connector, gateway, solver) factory for one arm.
+
+        Mirrors the shared connector: ``schema=db_id`` (pinned driver), and one
+        ``agent_solver`` — hence one graph — per worker, with a distinct
+        ``session_id`` so worker graphs never collide."""
+
+        def factory(idx: int) -> ServeWorker:
+            conn = PostgresConnector(pg_dsn, schema=db_id)
+            gw = Gateway(conn, max_rows=200_000, timeout_s=60.0)
+            slv = agent_solver(
+                arm_corpus,
+                gw,
+                settings,
+                identity,
+                model=lc_model,
+                session_id=f"{session_base}-w{idx}",
+            )
+            return ServeWorker(connector=conn, gateway=gw, solver=slv)
+
+        return factory
+
     summaries: dict[str, ArmSummary] = {}
     crosschecks: dict[str, dict] = {}
-    for arm_name, solver, suspects in (
-        ("baseline", baseline, suspect_baseline),
-        ("curated", curated, suspect_curated),
-        ("curated_sme", curated_sme, suspect_curated_sme),
+    for arm_name, solver, suspects, arm_corpus, session_base in (
+        ("baseline", baseline, suspect_baseline, baseline_corpus_loaded, "eval-baseline"),
+        ("curated", curated, suspect_curated, curated_corpus_loaded, "eval-curated"),
+        (
+            "curated_sme",
+            curated_sme,
+            suspect_curated_sme,
+            curated_sme_corpus_loaded,
+            "eval-curated_sme",
+        ),
     ):
+        worker_factory = (
+            _make_arm_factory(arm_corpus, session_base)
+            if effective_workers > 1
+            else None
+        )
         gens, summary, xtra = _run_arm_generations(
             arm=arm_name,
             solver=solver,
@@ -534,6 +622,8 @@ def run_experiment(
             bird_dir=bird_dir,
             suspect_columns=suspects,
             dialect="postgres",
+            serve_workers=effective_workers,
+            worker_factory=worker_factory,
         )
         _write_jsonl(run_root / f"generations.{arm_name}.jsonl", gens)
         summaries[arm_name] = summary
@@ -654,7 +744,21 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="Reuse an existing corpus_curated directory",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help=(
+            "Serve-loop worker threads (overrides [eval] workers in "
+            "governed_bi.toml; default 1 = serial). Size to your Postgres "
+            "max_connections; each worker holds its own connection + graph."
+        ),
+    )
     args = parser.parse_args(argv)
+
+    # CLI overrides config; config overrides the code default of 1.
+    workers = args.workers if args.workers is not None else load_settings().serve_worker_count()
+    workers = resolve_workers(workers)
 
     bird_dir = args.bird_dir.resolve()
     run_dir = args.out / f"{_utc_ts()}_{args.db}"
@@ -669,6 +773,7 @@ def main(argv: list[str] | None = None) -> None:
             skip_agent=args.skip_agent,
             limit=args.limit,
             resume_curated=args.resume_curated,
+            serve_workers=workers,
         )
         print(json.dumps(result["arms"], indent=2))
         print("deltas:", json.dumps(result["deltas"], indent=2))

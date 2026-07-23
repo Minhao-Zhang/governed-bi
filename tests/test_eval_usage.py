@@ -37,7 +37,7 @@ def test_finalize_provenance_feeds_eval_usage_shape(tmp_path):
     usage = ans.provenance.get("token_sum")
     assert usage is not None
     assert usage["total_tokens"] == 10
-    # Mimic arms.py last_solve_meta → run_experiment row
+    # Mimic arms.py solve_with_meta → run_experiment row
     meta = {
         "usage": ans.provenance.get("token_sum"),
         "cost_est_usd": ans.provenance.get("cost_est_usd"),

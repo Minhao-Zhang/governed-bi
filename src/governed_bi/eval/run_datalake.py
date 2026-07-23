@@ -40,6 +40,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,7 @@ from ..corpus import load_corpus
 from ..gateway import Gateway, Identity
 from ..gateway.connectors.postgres import PostgresConnector
 from .arms import _touches_suspect, agent_solver
+from .parallel import ServeWorker, resolve_workers, run_ordered_pool
 from .bird_loader import available_dbs, load_bird_items
 from .hash_grade import (
     load_gold_hashes,
@@ -272,25 +274,34 @@ def _run_pool_arm(
     bird_dir: Path,
     suspect_by_db: dict[str, frozenset[str]],
     dialect: str,
+    serve_workers: int = 1,
+    worker_factory: "Callable[[int], ServeWorker] | None" = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Serve + grade one arm over the pooled (item, db_id) stream. Decoy touches
     use the item's OWN db suspect set; routing recall is scored from the router
-    provenance carried in ``solver.last_solve_meta``."""
-    rows: list[dict[str, Any]] = []
-    n = len(pairs)
-    n_correct = n_strict = n_refused = n_produced = n_decoy = 0
-    n_routed_hit = n_pick_hit = n_pick = 0
-    by_diff: dict[str, list[bool]] = {}
-    by_db: dict[str, list[bool]] = {}
+    provenance returned in the per-question ``meta``.
 
-    for item, db in pairs:
+    ``serve_workers == 1`` (default) runs the serial loop against the passed
+    ``solver`` / ``gateway`` — byte-identical to the pre-concurrency path.
+    ``serve_workers > 1`` fans the per-question ``solve+grade`` unit across a
+    thread pool of ``worker_factory``-built workers (each its own unpinned
+    connector + gateway + graph); results reassemble in the original pair order,
+    so rows and every aggregate match the serial run."""
+    pairs = list(pairs)
+    n = len(pairs)
+
+    def _grade_one(pair: tuple[Any, str], *, solver, gateway) -> dict[str, Any]:
+        """Solve + grade ONE pooled (item, db) pair against the given
+        (solver, gateway). Returns the row plus the booleans the summary needs, so
+        the caller aggregates on one thread in submission order."""
+        item, db = pair
         qid = item.question_id or item.question
         t0 = time.perf_counter()
         try:
-            sql = solver.solve(item.question)
+            sql, meta_raw = solver.solve_with_meta(item.question)
             err_msg = None
         except Exception as err:  # a solver crash is a refusal, not a lost run
-            sql, err_msg = None, str(err)
+            sql, meta_raw, err_msg = None, {}, str(err)
         latency = time.perf_counter() - t0
 
         gold = gold_hashes.get(str(qid))
@@ -298,60 +309,91 @@ def _run_pool_arm(
         if err_msg and grade.get("error") in (None, "refusal"):
             grade["error"] = err_msg
 
-        meta = dict(getattr(solver, "last_solve_meta", None) or {})
+        meta = dict(meta_raw or {})
         routed = meta.get("routed_schemas") or []
         routed_hit = db in routed
         pick = meta.get("schema_pick")
         pick_hit = (pick == db) if pick is not None else None
+        diff = item.difficulty or "unknown"
+        row = {
+            "request_id": str(qid),
+            "question_id": str(qid),
+            "db_id": db,
+            "arm": arm,
+            "generated_sql": sql,
+            "latency_sec": round(latency, 4),
+            "usage": meta.get("usage"),
+            "cost_est_usd": meta.get("cost_est_usd"),
+            "correct": grade["correct"],
+            "correct_strict": grade["correct_strict"],
+            "error": grade.get("error"),
+            "difficulty": diff,
+            "routed_schemas": routed,
+            "routed_hit": routed_hit,
+            "schema_pick": pick,
+            "pick_hit": pick_hit,
+            "total_schemas": meta.get("total_schemas"),
+            "refused_by": meta.get("refused_by"),
+            "failed_layer": meta.get("failed_layer"),
+            "graded_delivery": meta.get("graded_delivery"),
+            "tier": meta.get("tier"),
+            "semantic_assurance": meta.get("semantic_assurance"),
+        }
+        return {
+            "row": row,
+            "db": db,
+            "correct": bool(grade["correct"]),
+            "correct_strict": bool(grade["correct_strict"]),
+            "refused": sql is None,
+            "decoy": (
+                sql is not None
+                and _touches_suspect(sql, suspect_by_db.get(db, frozenset()), dialect)
+            ),
+            "routed_hit": routed_hit,
+            "pick": pick,
+            "pick_hit": pick_hit,
+            "diff": diff,
+        }
 
-        refused = sql is None
-        if refused:
+    if serve_workers > 1:
+        if worker_factory is None:
+            raise ValueError("serve_workers > 1 requires a worker_factory")
+        bundles = run_ordered_pool(
+            pairs,
+            workers=serve_workers,
+            make_worker=worker_factory,
+            run_task=lambda w, pair: _grade_one(pair, solver=w.solver, gateway=w.gateway),
+        )
+    else:
+        bundles = [_grade_one(pair, solver=solver, gateway=gateway) for pair in pairs]
+
+    # --- aggregation on the calling thread, in original pair order ---
+    rows: list[dict[str, Any]] = []
+    n_correct = n_strict = n_refused = n_produced = n_decoy = 0
+    n_routed_hit = n_pick_hit = n_pick = 0
+    by_diff: dict[str, list[bool]] = {}
+    by_db: dict[str, list[bool]] = {}
+
+    for b in bundles:
+        rows.append(b["row"])
+        if b["refused"]:
             n_refused += 1
         else:
             n_produced += 1
-            if _touches_suspect(sql, suspect_by_db.get(db, frozenset()), dialect):
+            if b["decoy"]:
                 n_decoy += 1
-        if grade["correct"]:
+        if b["correct"]:
             n_correct += 1
-        if grade["correct_strict"]:
+        if b["correct_strict"]:
             n_strict += 1
-        if routed_hit:
+        if b["routed_hit"]:
             n_routed_hit += 1
-        if pick is not None:
+        if b["pick"] is not None:
             n_pick += 1
-            if pick_hit:
+            if b["pick_hit"]:
                 n_pick_hit += 1
-
-        diff = item.difficulty or "unknown"
-        by_diff.setdefault(diff, []).append(bool(grade["correct"]))
-        by_db.setdefault(db, []).append(bool(grade["correct"]))
-
-        rows.append(
-            {
-                "request_id": str(qid),
-                "question_id": str(qid),
-                "db_id": db,
-                "arm": arm,
-                "generated_sql": sql,
-                "latency_sec": round(latency, 4),
-                "usage": meta.get("usage"),
-                "cost_est_usd": meta.get("cost_est_usd"),
-                "correct": grade["correct"],
-                "correct_strict": grade["correct_strict"],
-                "error": grade.get("error"),
-                "difficulty": diff,
-                "routed_schemas": routed,
-                "routed_hit": routed_hit,
-                "schema_pick": pick,
-                "pick_hit": pick_hit,
-                "total_schemas": meta.get("total_schemas"),
-                "refused_by": meta.get("refused_by"),
-                "failed_layer": meta.get("failed_layer"),
-                "graded_delivery": meta.get("graded_delivery"),
-                "tier": meta.get("tier"),
-                "semantic_assurance": meta.get("semantic_assurance"),
-            }
-        )
+        by_diff.setdefault(b["diff"], []).append(b["correct"])
+        by_db.setdefault(b["db"], []).append(b["correct"])
 
     summary = {
         "arm": arm,
@@ -393,6 +435,7 @@ def run_datalake(
     route_top_k: int = 8,
     route_llm_pick: bool = True,
     use_embedder: bool = True,
+    serve_workers: int = 1,
 ) -> dict[str, Any]:
     """Build all arms for the requested dbs into shared corpora, then serve the
     pooled test set through the unpinned (data-lake) agentic core. Writes
@@ -503,6 +546,36 @@ def run_datalake(
     corpus_validation = _validate_corpora(corpora)  # no connector: public-default
     _warn_if_not_green(corpus_validation)
 
+    # Serve concurrency (docs/plans/eval-concurrency-design.md): only fan out when
+    # there is a live model — the offline refuse-all path has nothing to overlap.
+    effective_workers = serve_workers if lc_model is not None else 1
+    if effective_workers > 1:
+        print(
+            f"  serve concurrency: {effective_workers} worker(s)/arm — each owns "
+            f"its own unpinned connector+gateway+graph (schema=None)"
+        )
+
+    def _make_arm_factory(arm: str) -> "Callable[[int], ServeWorker]":
+        """Per-worker (connector, gateway, solver) factory for one arm. Mirrors
+        the shared connector: ``schema=None`` (the pooled data-lake driver spans
+        every schema), one graph per worker, distinct ``session_id`` per worker."""
+
+        def factory(idx: int) -> ServeWorker:
+            conn = PostgresConnector(pg_dsn, schema=None)
+            gw = Gateway(conn, max_rows=200_000, timeout_s=60.0)
+            slv = agent_solver(
+                corpora[arm],
+                gw,
+                settings,
+                identity,
+                model=lc_model,
+                embedder=embedder,
+                session_id=f"eval-{arm}-w{idx}",
+            )
+            return ServeWorker(connector=conn, gateway=gw, solver=slv)
+
+        return factory
+
     summaries: dict[str, Any] = {}
     try:
         for arm in arms:
@@ -518,6 +591,9 @@ def run_datalake(
                 )
             else:
                 solver = _RefuseAllSolver()
+            worker_factory = (
+                _make_arm_factory(arm) if effective_workers > 1 else None
+            )
             rows, summary = _run_pool_arm(
                 arm=arm,
                 solver=solver,
@@ -528,6 +604,8 @@ def run_datalake(
                 bird_dir=bird_dir,
                 suspect_by_db=suspect_by_db,
                 dialect="postgres",
+                serve_workers=effective_workers,
+                worker_factory=worker_factory,
             )
             _write_jsonl(out_dir / f"generations.{arm}.jsonl", rows)
             summaries[arm] = summary
@@ -622,12 +700,26 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--route-top-k", type=int, default=8, help="Schema shortlist size")
     p.add_argument("--no-llm-pick", action="store_true", help="Keep shortlist (no single-schema LLM pick)")
     p.add_argument("--no-embedder", action="store_true", help="BM25-only routing (no embeddings)")
+    p.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help=(
+            "Serve-loop worker threads (overrides [eval] workers in "
+            "governed_bi.toml; default 1 = serial). Size to your Postgres "
+            "max_connections; each worker holds its own connection + graph."
+        ),
+    )
     args = p.parse_args(argv)
 
     arms = tuple(a.strip() for a in args.arms.split(",")) if args.arms else _ARMS
     bad = [a for a in arms if a not in _ARMS]
     if bad:
         p.error(f"--arms must be a subset of {_ARMS}; unknown: {bad}")
+
+    # CLI overrides config; config overrides the code default of 1.
+    workers = args.workers if args.workers is not None else load_settings().serve_worker_count()
+    workers = resolve_workers(workers)
 
     bird_dir = args.bird_dir.resolve()
     out_dir = args.out / _utc_ts()
@@ -647,6 +739,7 @@ def main(argv: list[str] | None = None) -> None:
             route_top_k=args.route_top_k,
             route_llm_pick=not args.no_llm_pick,
             use_embedder=not args.no_embedder,
+            serve_workers=workers,
         )
         print(json.dumps(result["arms"], indent=2, ensure_ascii=False))
         print("deltas:", json.dumps(result["deltas"], indent=2))
