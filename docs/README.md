@@ -15,7 +15,7 @@ self-built [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) 
 
 1. [System overview](system-overview.md): what this is, the two harnesses, status.
 2. [Architecture](architecture.md): the full design (spine, kernel, services, storage, flow, eval, environments).
-3. [Design decisions](design-decisions.md): D1-D16 (+ 2026-07-15 audit dispositions) as ADRs, with alternatives and trade-offs.
+3. [Design decisions](design-decisions.md): D1-D18 (+ 2026-07-15 audit dispositions) as ADRs, with alternatives and trade-offs.
 4. [Asset schemas](asset-schemas.md): the per-asset YAML field spec (Facts / Inference / Audit tiers).
 5. [Curator](curator.md): the build-side proposer + adversary loop. For the exact prompts, see [Curator LLM-call walkthrough](curator-llm-call.md).
 6. [Analyst](analyst.md): the serve-side governed agentic core + guardrails. For the exact prompts, see [Analyst LLM-call walkthrough](analyst-llm-call.md).

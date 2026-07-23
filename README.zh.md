@@ -9,7 +9,7 @@ _[English](README.md) · [简体中文](README.zh.md)_
 ## 工作原理
 
 - **两套 harness，一个基座（substrate）。** `curator`（构建）从一批已知良好的 `(question, SQL)` 种子对中*生成*语义层（corpus）；`analyst`（服务）*使用*它来回答问题。二者风险特征相反，却共享同一个 corpus。
-- **corpus 就是护城河。** Git 跟踪的类型化 YAML 资产，加上 Markdown 技能（skill）文档，由 curator 撰写、经人工审核。Git 是唯一真实来源（source of truth）；graph / vector / BM25 存储都是可重建的投影（projection）。
+- **corpus 就是护城河。** Git 跟踪的类型化 YAML 资产，加上 Markdown 笔记（note）文档，由 curator 撰写、经人工审核。Git 是唯一真实来源（source of truth）；graph / vector / BM25 存储都是可重建的投影（projection）。
 - **失败即拒（fail-closed）。** 超出范围、覆盖缺失，或触发了护栏，都只会返回拒答或澄清性问题，绝不会给出一个自信却错误的数字。答案携带两个相互独立的标记：`safety_clearance`（是否通过护栏）与 `semantic_assurance`（接地程度如何），二者绝不会合并成单一的信任分数。
 
 ## 快速开始

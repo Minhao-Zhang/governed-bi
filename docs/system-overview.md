@@ -19,7 +19,7 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
 - Two harnesses over one shared substrate: **curator** (builds the corpus) and **analyst** (answers). The semantic layer is the moat. Fail-closed.
 - Design notes:
     - [Architecture](architecture.md): full design
-    - [Design decisions](design-decisions.md): D1-D16 (+ 2026-07-15 audit dispositions) with alternatives and trade-offs
+    - [Design decisions](design-decisions.md): D1-D18 (+ 2026-07-15 audit dispositions) with alternatives and trade-offs
     - [Asset schemas](asset-schemas.md): the per-asset YAML field spec (Facts / Inference / Audit tiers)
     - [Curator](curator.md): the build-side proposer + adversary loop
     - [Analyst](analyst.md): the serve-side agent + guardrails (the [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) governed agentic core is now the sole serve path; the earlier deterministic flow is retired)
@@ -29,7 +29,7 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
 
 ## Status
 
-> **Decided (D1-D16 + 2026-07-15 audit dispositions)**
+> **Decided (D1-D18 + 2026-07-15 audit dispositions)**
 >
 > target · governed unit · eval · grading · refusal · ownership · identity ·
 > memory · corpus contract · curator gate · external review · clarification
@@ -60,14 +60,16 @@ _[English](system-overview.md) · [简体中文](system-overview.zh.md)_
 > **Pending (code)**
 >
 > LLM authoring of the remaining Inference assets (joins / terms / metrics / rules
-> / skills) and the live per-asset adversary `refute` · the curator self-eval
+> / notes) and the live per-asset adversary `refute` · the curator self-eval
 > train-EX loop · the **full** obfuscated BIRD eval jsonl at scale (a small
 > vendored beer_factory set stands in until it lands; the live eval-ladder harness
 > already runs against a local Postgres with a live model) · the **D15** multi-schema build
 > continues: wire rename + multi-schema serve + missing-edge refusal + server-side
 > graph scoping + on-disk YAML `schema` field + join-aware schema router are
-> **shipped**. Still deferred: server `/search` (client Fuse). `DataSourceConfig.db`
-> has since collapsed into `corpus_pin`.
+> **shipped**. Still deferred: server `/search` (client Fuse). The old
+> `DataSourceConfig.db` (a schema pin) collapsed into `corpus_pin`; a new `db`
+> field was since reintroduced (`config.py`) as the lake identity for `db:`
+> note-scope sentinels (ADR 0003), distinct from `corpus_pin`.
 > Without the eval data the arms cannot yet show the moat.
 
 > **Open (design-level)**

@@ -10,7 +10,7 @@ _[English](README.md) · [简体中文](README.zh.md)_
 
 1. [系统总览](system-overview.zh.md)：这是什么、两个 harness、当前状态。
 2. [架构](architecture.zh.md)：完整设计（主干(spine)、内核(kernel)、服务、存储、流程、评测、环境）。
-3. [设计决策](design-decisions.zh.md)：以 ADR 形式呈现的 D1-D16（+ 2026-07-15 审计处置），包含备选方案与权衡。
+3. [设计决策](design-decisions.zh.md)：以 ADR 形式呈现的 D1-D18（+ 2026-07-15 审计处置），包含备选方案与权衡。
 4. [资产模式](asset-schemas.zh.md)：每个资产的 YAML 字段规范（Facts 层 / Inference 层 / Audit 层）。
 5. [Curator](curator.zh.md)：构建侧的 proposer + adversary 循环。如需查看逐字提示词，见 [Curator LLM 调用全流程](curator-llm-call.zh.md)。
 6. [Analyst](analyst.zh.md)：服务侧的 LangGraph 流程 + 护栏(guardrails)。如需查看逐字提示词，见 [Analyst LLM 调用全流程](analyst-llm-call.zh.md)。

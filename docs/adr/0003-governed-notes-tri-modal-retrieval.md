@@ -6,8 +6,10 @@ _[English](0003-governed-notes-tri-modal-retrieval.md) · [简体中文](0003-go
   design review (4 independent proposals, 3 diverse judges, and an
   adversarial red-team; all three judges independently ranked "generalize
   `RuleAsset`" first). The open questions below are now resolved (see
-  "Resolved decisions (2026-07-22)"). No code yet; implementation is gated as
-  M3+ in
+  "Resolved decisions (2026-07-22)"). **M3 + M4 landed 2026-07-22** — M3
+  shipped the schema, storage, and CI; M4 added trigger PIN (default-off),
+  injection wiring, the agent-fetch tools, and the offline gates. Phase 6
+  (max-pool vector) stays deferred. Build order in
   [the implementation plan](../plans/implementation-plan-notes-and-run-logging.md).
 - **Deciders:** project owner + design session
 - **Related:** [0002](0002-governed-agentic-serve-runtime.md);

@@ -42,7 +42,7 @@ uv run python -c "import governed_bi; print(governed_bi.__version__)"
 
 ## 2. 校验 corpus
 
-corpus 就是那个受治理的语义层：Git 跟踪的 YAML 资产 + Markdown 技能。校验器检查
+corpus 就是那个受治理的语义层：Git 跟踪的 YAML 类型化资产。校验器检查
 ID 约定与引用完整性——一次绿灯运行就是 corpus 的"足够完成"信号（D9）。
 
 ```bash
@@ -52,7 +52,7 @@ uv run python -m governed_bi.corpus.cli
 预期输出：
 
 ```
-CI green: 16 assets, 1 skills, 0 findings.
+CI green: 17 assets, 0 findings.
 ```
 
 （每次 push 时 CI 都会运行同一条命令。）

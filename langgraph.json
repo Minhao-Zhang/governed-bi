@@ -1,5 +1,5 @@
 {
-  "python_version": "3.11",
+  "python_version": "3.13",
   "dependencies": ["."],
   "graphs": {
     "serve": "./src/governed_bi/api/graph_app.py:make_graph"

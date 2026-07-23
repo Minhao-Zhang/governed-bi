@@ -31,9 +31,11 @@ _[English](0004-local-first-conversation-run-logging.md) · [简体中文](0004-
   `verdict`……但不含耗时、不含 token/成本、也不含时间戳，且未做持久化"，而在
   追踪关闭的情况下，延迟或成本"没有厂商无关的记录"。
 - **当前的缺口，附引用：**
-  - **Token 在任何地方都未被捕获。** `eval/run_experiment.py:213` 在每一行
-    eval 结果里硬编码 `"usage": None`；仓库里没有任何地方读取模型响应上的
-    `usage_metadata`（对该字符串的全仓库搜索返回零命中）。
+  - **Token 一度完全没有被捕获（这是本 ADR 修复的 M2 之前状态）。**
+    `eval/run_experiment.py:213` 曾在每一行 eval 结果里硬编码 `"usage": None`，
+    当时仓库里也没有任何地方读取模型响应上的 `usage_metadata`（对该字符串
+    的全仓库搜索当时返回零命中）。下文的 M2 工作（§2、§3）填补了这两处
+    缺口。
   - **可观测性只存在于云端，且在没有密钥时会静默变成空操作。** `obs.py:1-4`
     写明"两个追踪器，都靠环境变量选择性开启，未设置时都是空操作
     （no-op）"；LangSmith 靠环境变量把关（`obs.py:45-52`、

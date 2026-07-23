@@ -50,12 +50,12 @@ Curator and Analyst have opposite risk profiles. They use different harnesses bu
 
 Fork only the harness, but share the substrate. Sharing has three directions, and they tell you where the contracts live:
 
-- **Curator writes → Analyst reads:** semantic layer, skills, metadata/indexes. Contract: publish/certify (versioned).
+- **Curator writes → Analyst reads:** semantic layer, notes, metadata/indexes. Contract: publish/certify (versioned).
 - **Analyst writes → curator reads:** audit log, corrections, episodic signals. Contract: harvest (closes the loop).
 - **Both read one definition:** gateway policy, eval set and ground truth, identity/access model, tool registry, provenance format.
 
 1. **Gateway service**: access, policy enforcement, and audit (one boundary, two permission profiles).
-2. **Corpus service**: semantic layer, skills, metadata, and indexes (publish/read API, versioned).
+2. **Corpus service**: semantic layer, notes, metadata, and indexes (publish/read API, versioned).
 3. **Memory service**: working, profile, episodic, and correction memory. Correction is the cross-agent channel.
 4. **Eval / telemetry service**: ground truth and run history, the shared scoreboard.
 
@@ -63,7 +63,7 @@ Fork only the harness, but share the substrate. Sharing has three directions, an
 
 | Part of the corpus | Representation |
 |---|---|
-| Skills, reference docs, gotchas, procedural knowledge | Markdown (git, colocated with transforms) |
+| Notes: routing rules, gotchas, procedural knowledge | YAML typed asset (`NoteAsset`, git); `body` is an optional on-demand long-form field (D17) |
 | Metric / dimension / rule definitions | Compiled config (MetricFlow / MDL / OSI-style) |
 | Schema, joins, FK connectivity, lineage | Graph (FK graph → Neo4j at scale) |
 | "Which doc / table / example is relevant?" | Vector index + BM25 |
@@ -71,7 +71,7 @@ Fork only the harness, but share the substrate. Sharing has three directions, an
 
 Markdown-first. The graph earns its place only for joins and lineage. A heavy LLM knowledge graph is deferred. Rationale: curation and structure beat representation sophistication. Anthropic's null result showed raw-corpus grep moved accuracy <1pt. See the *Data Agent Memory Design Overview*.
 
-*Built today:* retrieval runs the pure-Python **BM25** lexical channel plus deterministic grounding over the corpus relationships, and a **vector / semantic channel** (embeddings, fused with BM25 via Reciprocal Rank Fusion) behind an injected `Embedder` seam, off unless an embedder is passed. The FK graph is the in-memory `networkx` projection that drives Steiner join planning; Neo4j stays the enterprise-scale projection. Model choices (the OpenAI `gpt-5.5` LLM and `text-embedding-3-small` embedder, both swappable) live in a project config file (`governed_bi.toml`, parsed by `config.load_settings`); the API key is read from the environment, never stored. The clients live in `governed_bi.llm` behind `ChatClient` / `Embedder` protocols, each with a deterministic offline default so the pipeline runs with no model or network. (The no-model *serve* mode is gone: per [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) P2, the agentic core requires a real key (serve fails closed at startup without one), and CI determinism comes from a `FakeListChatModel` agent harness rather than an offline serve default.)
+*Built today:* retrieval runs the pure-Python **BM25** lexical channel plus deterministic grounding over the corpus relationships, and a **vector / semantic channel** (embeddings, fused with BM25 via Reciprocal Rank Fusion) behind an injected `Embedder` seam, off unless an embedder is passed. The FK graph is the in-memory `networkx` projection that drives Steiner join planning; Neo4j stays the enterprise-scale projection. Model choices (the OpenAI `gpt-5.6-luna` LLM and `text-embedding-3-small` embedder, both swappable) live in a project config file (`governed_bi.toml`, parsed by `config.load_settings`); the API key is read from the environment, never stored. The clients live in `governed_bi.llm` behind `ChatClient` / `Embedder` protocols, each with a deterministic offline default so the pipeline runs with no model or network. (The no-model *serve* mode is gone: per [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) P2, the agentic core requires a real key (serve fails closed at startup without one), and CI determinism comes from a `FakeListChatModel` agent harness rather than an offline serve default.)
 
 > **Corpus contract = Git+YAML typed assets, curator-authored / human-audited (D9)**
 >
@@ -199,7 +199,7 @@ Guardrails, in order (fail-closed on any, all five enforced): syntax → policy 
 - Headline metric: execution accuracy vs gold. No hand-grading of semantic layers.
 - **Split (adopt BIRD-Obfuscation's):** per-DB **80/20 seeded holdout**: 8,134 train / 2,030 test, all 69 DBs in both. The **curator reads `train_final.jsonl` only** (distilled, not dumped) → grade on held-out `test_final.jsonl`. Leakage is structurally prevented by the disjoint seeded split.
 - **Variant:** the semantic eval runs on the **`rename_decoy`** instance (cryptic names and live decoys, where the layer's value is maximal), with `base` as a sanity reference. The Analyst always executes against the one physical DB. Only the corpus differs across arms.
-- Arms scored on EX, an eval ladder (per [terminology-refactor.md](plans/terminology-refactor.md), refining the [D14 amendment](design-decisions.md#d14-sme-growth-benchmark-on-bird-obfuscation), 2026-07-15): `baseline` (deterministic, DB-derivable corpus only — names, types, sample values, FK candidates — no curator LLM), `curated` (curator LLM Inference tier + train-SQL-derived seed joins/few-shots), `curated_sme` (`curated` + Simulated-SME clarification rounds) — with a **test-aware SME oracle** as the dashed *`ceiling`*, designed but not yet built. The de-obfuscation "gold" oracle is **retired** (it was never a true ceiling — curator skills can exceed it). **Moat = the share of the obfuscation-induced accuracy drop the curator recovers.** Current run numbers (recorded under the old `A1/A2/A3` labels) are in [experiment results](plans/eval-ladder-results.md).
+- Arms scored on EX, an eval ladder (per [terminology-refactor.md](plans/terminology-refactor.md), refining the [D14 amendment](design-decisions.md#d14-sme-growth-benchmark-on-bird-obfuscation), 2026-07-15): `baseline` (deterministic, DB-derivable corpus only — names, types, sample values, FK candidates — no curator LLM), `curated` (curator LLM Inference tier + train-SQL-derived seed joins/few-shots), `curated_sme` (`curated` + Simulated-SME clarification rounds) — with a **test-aware SME oracle** as the dashed *`ceiling`*, designed but not yet built. The de-obfuscation "gold" oracle is **retired** (it was never a true ceiling — curator notes can exceed it). **Moat = the share of the obfuscation-induced accuracy drop the curator recovers.** Current run numbers (recorded under the old `A1/A2/A3` labels) are in [experiment results](plans/eval-ladder-results.md).
 - Free behavioral signals from the manifest and logs: decoy-touch rate, governed-path adherence. Cost and efficiency (wall-clock, tokens, rows; BIRD's VES is reusable) are logged, not headline.
 - **Refuse-gate eval:** a held-out **unanswerable** set, built from cross-DB and removed-coverage cases (auto-generated) plus a small hand-built out-of-scope set. The cross-DB cases are unanswerable here only because BIRD supplies no curated cross-schema joins; per D15 cross-schema *is* answerable with a curated join, though cross-schema serving is un-graded by BIRD. Scored on **refusal accuracy** (refuses the unanswerable) *and* **false-refusal rate** (on the answerable test set). This is the precision and recall of refusal.
 - **Repo boundary:** BIRD-Obfuscation produces validated data and manifests, and explicitly scopes out "the downstream agent that exercises the traps". That downstream agent is *this* system.

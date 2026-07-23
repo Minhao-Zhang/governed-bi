@@ -44,8 +44,8 @@ The committed `data/bird/beer_factory.sqlite` (a real BIRD database, CC BY-SA
 
 ## 2. Validate the corpus
 
-The corpus is the governed semantic layer: Git-tracked YAML assets + Markdown
-skills. The validator checks ID conventions and reference integrity — a green run
+The corpus is the governed semantic layer: Git-tracked YAML typed assets. The
+validator checks ID conventions and reference integrity — a green run
 is the "done-enough" signal for a corpus (D9).
 
 ```bash
@@ -55,7 +55,7 @@ uv run python -m governed_bi.corpus.cli
 Expected output:
 
 ```
-CI green: 16 assets, 1 skills, 0 findings.
+CI green: 17 assets, 0 findings.
 ```
 
 (This same command runs in CI on every push.)

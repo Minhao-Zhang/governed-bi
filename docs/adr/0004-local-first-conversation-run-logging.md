@@ -35,10 +35,11 @@ _[English](0004-local-first-conversation-run-logging.md) · [简体中文](0004-
   token/cost, and no timestamp, and it is not durably persisted," and with
   tracing off there is "no vendor-independent record" of latency or cost.
 - **Current gaps, cited:**
-  - **Tokens are captured nowhere.** `eval/run_experiment.py:213` hard-codes
-    `"usage": None` in every eval row; nothing in the repo reads
-    `usage_metadata` off a model response (a repo-wide search for the string
-    returns zero hits).
+  - **Tokens were captured nowhere (the pre-M2 state this ADR fixes).**
+    `eval/run_experiment.py:213` used to hard-code `"usage": None` in every
+    eval row, and nothing in the repo read `usage_metadata` off a model
+    response (a repo-wide search for the string returned zero hits at the
+    time). The M2 work below (§2, §3) closes both gaps.
   - **Observability is cloud-only and a silent no-op without keys.**
     `obs.py:1-4` documents "two tracers, both opt-in by environment and both
     no-ops when unset"; LangSmith gates on env vars

@@ -20,6 +20,14 @@ _[English](glossary.md) · [简体中文](glossary.zh.md)_
 > 投影保留）；作为服务代理的 `Server`（→ **Analyst**；"server" /
 > "LangGraph Server" 仍只指基础设施）；`flow` / `flow_solver`；
 > `DataSourceConfig.db`（→ `corpus_pin`）。
+>
+> [ADR 0003](adr/0003-governed-notes-tri-modal-retrieval.md) / **D17**
+> （2026-07-22）还弃用了：`skill`（→ **Note**；`SkillFrontmatter` /
+> `SkillKind` 已删除，`RuleAsset` 泛化为 `NoteAsset`）。
+>
+> 2026-07-17（[D15](design-decisions.md#d15-multi-schema-serving-one-database-many-schemas)）
+> 还弃用了：把 `multi_schema` 模式 / 单 schema 模式当成一个开关的说法——引擎
+> 现在统一采用限定标识符，区别只在于当前有多少个 schema。
 
 | 术语 | 定义 |
 |---|---|
@@ -27,8 +35,8 @@ _[English](glossary.md) · [简体中文](glossary.zh.md)_
 | **治理数据集**（Governed dataset） | 针对某个领域相关问题的标准、单一权威来源的*逻辑*模型。粒度、实体、列、连接和数据清洗过滤条件只需一次性定义。物化视图只是一种可选的物理优化，并非定义本身。 |
 | **指标**（Metric） | 基于治理数据集编译得到的度量/维度，在任何地方计算都得到同一个数字。是通过认证的单元（遵循 SemVer 版本号，从 draft 到 certified）。 |
 | **语义层**（Semantic layer） | 编译产出的各类定义：治理数据集 + 指标 + 术语/业务规则解析。归人类所有，是权威来源。 |
-| **技能 / 参考文档**（Skill / reference doc） | 按领域组织的 Markdown 程序性与描述性知识（路由规则、易错点、查询模式）。 |
-| **Corpus**（语料层） | 共享的、人工所有基底的统称：语义层 + 技能 + 元数据/血缘 + 持久化记忆内容。 |
+| **Note**（笔记，`NoteAsset`） | 受治理的批注——路由规则、易错点、查询模式、业务规则、上下文——可挂载到任意资产或命名空间上（`schema:` / `db:` 范围哨兵，或某个资产 id）。带有完整的三层结构 + `Governance`，检索采用具备来源意识的三模态方式（语义 / 触发词 PIN / agent 主动取用）。前身是未受治理的 Markdown **技能 / 参考文档**（ADR 0003，D17）。 |
+| **Corpus**（语料层） | 共享的、人工所有基底的统称：语义层 + 笔记 + 元数据/血缘 + 持久化记忆内容。 |
 | **Gateway**（网关） | 只读、强制执行策略的数据访问边界：凭证隔离、RLS-as-user（以用户身份执行的行级安全）、强制的 LIMIT/超时、审计/重放。是访问数据的唯一路径。 |
 | **Curator**（构建代理） | 离线探索型代理，*生成*corpus（自举 + 漂移修复）。生产环境下的写入需经人工把关。 |
 | **Analyst**（服务代理） | 在线的治理型代理，*使用*corpus 来回答问题。失败即拒（fail-closed）、可审计。原名"Server"；如今"server"/"LangGraph Server" 仅指基础设施。 |
@@ -61,5 +69,4 @@ _[English](glossary.md) · [简体中文](glossary.zh.md)_
 | **Schema**（命名空间） | 一次运行所连接的那个数据库内部的单级命名空间（D15）：一个 YAML 子树（`corpus/<schema>/`）加上逐资产的 `schema` 字段。一次运行的数据库本身是连接配置（`corpus_pin`），不是 corpus 的一个层级。 |
 | **跨 schema 关系**（Cross-schema relationship） | 两个端点位于*不同* schema 的 `join` 资产。**只靠策展得到**——由 **SME** 声明、从示例 SQL 蒸馏、或从使用中挖掘；绝不从数据库外键探测、也不从名称猜测。若没有这样的资产，引擎会**拒答**该跨 schema 问题，而不是硬造一个连接（D15）。 |
 | **Schema 路由器**（Schema router） | 检索的前置阶段（D15），在表检索之前先筛选出与问题相关的 schema，使跨越众多 schema 的成千上万张表仍可处理。它**连接感知**：沿着已策展的跨 schema 连接扩展，使位于某个未被提及 schema 的桥接表不被丢弃。 |
-| **限定标识符**（Qualified identifier） | 一个完全限定的 `schema.table`（或 `schema.table.column`）引用。在**多 schema 模式**中贯穿始终——检索、护栏许可集、生成的 SQL 与执行。单 schema 路径保持**裸的/未限定**（D15 按模式区分的限定规则，用以保护 SQLite/BIRD 被评分的那条路径）。 |
-| **多 schema 模式**（Multi-schema mode） | 连接器覆盖该单个数据库内每一个 schema、且跨 schema 连接可执行的运行模式（v0 仅限 Postgres/Redshift）。与*单 schema* 模式（SQLite，或一个固定的单 Postgres schema）不同，后者保持不变并输出裸 SQL。由一个显式信号选择，绝不以 `schema` 未设置为判据。 |
+| **限定标识符**（Qualified identifier） | 一个完全限定的 `schema.table`（或 `schema.table.column`）引用。**始终**端到端沿用——检索、护栏许可集、生成的 SQL 与执行（D15，已于 2026-07-17 被取代：统一采用限定标识符）。*裸*引用会解析到服务 schema（`DataSourceConfig.serving_schema()`），若数据源覆盖所有 schema 且没有默认值，则失败即拒。 |

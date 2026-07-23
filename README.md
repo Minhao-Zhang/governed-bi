@@ -19,7 +19,7 @@ not a runtime we ask anyone to deploy.
   layer (the corpus) from a seed of known-good `(question, SQL)` pairs; an
   `analyst` (serve) *consumes* it to answer. Opposite risk profiles, one shared
   corpus.
-- **The corpus is the moat.** Git-tracked typed YAML assets + Markdown skills,
+- **The corpus is the moat.** Git-tracked typed YAML assets + Markdown notes,
   curator-authored and human-audited. Git is the single source of truth; the
   graph / vector / BM25 stores are rebuildable projections.
 - **Fail-closed.** Out-of-scope, missing coverage, or a tripped guardrail returns

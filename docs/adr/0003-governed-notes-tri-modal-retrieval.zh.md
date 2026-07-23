@@ -2,7 +2,7 @@
 
 _[English](0003-governed-notes-tri-modal-retrieval.md) · [简体中文](0003-governed-notes-tri-modal-retrieval.zh.md)_
 
-- **状态：** Accepted（已接受，设计阶段；2026-07-22）。设计已在一次多 agent 设计评审中达成一致（4 份独立提案、3 位不同的评审，以及一次对抗性红队评审；三位评审都各自将「泛化 `RuleAsset`」排在第一）。下文的待定问题现已全部解决（见「已解决的决策（2026-07-22）」）。尚无代码，实现被安排在[实施计划](../plans/implementation-plan-notes-and-run-logging.md)的 M3 及之后阶段。
+- **状态：** Accepted（已接受，设计阶段；2026-07-22）。设计已在一次多 agent 设计评审中达成一致（4 份独立提案、3 位不同的评审，以及一次对抗性红队评审；三位评审都各自将「泛化 `RuleAsset`」排在第一）。下文的待定问题现已全部解决（见「已解决的决策（2026-07-22）」）。**M3 + M4 已于 2026-07-22 落地**——M3 交付了 schema、存储与 CI；M4 新增了触发词 PIN（默认关闭）、注入接线、agent-fetch 工具与离线门禁。Phase 6（max-pool 向量）仍推迟。构建顺序见[实施计划](../plans/implementation-plan-notes-and-run-logging.md)。
 - **决策者：** 项目负责人 + 设计会议
 - **相关文档：** [0002](0002-governed-agentic-serve-runtime.md)；[pipeline-design.md](../pipeline-design.md)；[design-decisions.zh.md](../design-decisions.zh.md)（D6 人工关口、D9 语料库文件结构、D10 提议者+对抗者、D15 多 schema、D16 agentic 核心）；[asset-schemas.zh.md](../asset-schemas.zh.md)；[plans/datalake-run.md](../plans/datalake-run.md)（路由相关数字）
 - **取代：** 整个 `skill` 资产概念：`SkillFrontmatter` / `SkillKind`（`schemas.py:388-396,130-134`）、`corpus/<schema>/skills/*.md` 这个 markdown 表面，以及（从未成立的）「`kind=routing` 的 skill 会影响 schema 路由」这一说法。

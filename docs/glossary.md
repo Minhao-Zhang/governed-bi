@@ -21,6 +21,14 @@ below conflicts with how something is being described, the term below wins.
 > all, only as a display-only projection of the two-axis stamp); `Server` *as
 > the serve agent* (→ **Analyst**; "server" / "LangGraph Server" still mean
 > infra only); `flow` / `flow_solver`; `DataSourceConfig.db` (→ `corpus_pin`).
+>
+> Also retired by [ADR 0003](adr/0003-governed-notes-tri-modal-retrieval.md) /
+> **D17** (2026-07-22): `skill` (→ **Note**; `SkillFrontmatter` / `SkillKind`
+> deleted, `RuleAsset` generalized into `NoteAsset`).
+>
+> Also retired 2026-07-17 ([D15](design-decisions.md#d15-multi-schema-serving-one-database-many-schemas)):
+> `multi_schema` mode / single-schema mode as a toggle — the engine is now
+> uniformly schema-qualified; only the number of schemas present differs.
 
 | Term | Definition |
 |---|---|
@@ -28,8 +36,8 @@ below conflicts with how something is being described, the term below wins.
 | **Governed dataset** | The canonical, single-source-of-truth *logical* model for a domain's questions. Grain, entities, columns, joins, and hygiene filters are defined once. A materialized view is an optional physical optimization, not the definition. |
 | **Metric** | A compiled measure/dimension over a governed dataset that yields the same number everywhere. The unit that is certified (SemVer, draft→certified). |
 | **Semantic layer** | The compiled definitions: governed datasets + metrics + term/business-rule resolution. Human-owned; the source of truth. |
-| **Skill / reference doc** | Markdown procedural + descriptive knowledge per domain (routing rules, gotchas, query patterns). |
-| **Corpus** | Umbrella for the shared human-owned substrate: semantic layer + skills + metadata/lineage + durable memory content. |
+| **Note** (`NoteAsset`) | Governed annotation — routing rules, gotchas, query patterns, business rules, context — attachable to any asset or namespace (`schema:` / `db:` scope sentinels, or an asset id). Carries the full three-tier + `Governance` structure and provenance-aware, tri-modal retrieval (semantic / trigger-PIN / agent-fetch). Formerly the ungoverned Markdown **Skill / reference doc** (ADR 0003, D17). |
+| **Corpus** | Umbrella for the shared human-owned substrate: semantic layer + notes + metadata/lineage + durable memory content. |
 | **Gateway** | The read-only, policy-enforcing data-access boundary: credential isolation, RLS-as-user, forced LIMIT/timeout, audit/replay. The only path to data. |
 | **Curator** (build agent) | Offline exploratory agent that *produces* the corpus (bootstrap + drift-repair). Writes are human-gated in prod. |
 | **Analyst** (serve agent) | Online governed agent that *consumes* the corpus to answer. Fail-closed, auditable. Formerly "Server"; "server" / "LangGraph Server" now mean infra only. |
@@ -62,5 +70,4 @@ below conflicts with how something is being described, the term below wins.
 | **Schema** (namespace) | The single-level namespace inside the one database a run connects to (D15): one YAML subtree (`corpus/<schema>/`) + the per-asset `schema` field. The run's database is connection config (`corpus_pin`), not a corpus level. |
 | **Cross-schema relationship** | A `join` asset whose two endpoints live in *different* schemas. **Curated only** — declared by an **SME**, distilled from example SQL, or mined from usage; never probed from database foreign keys or guessed from names. With no such asset the engine **refuses** the cross-schema question rather than inventing a join (D15). |
 | **Schema router** | The retrieval pre-stage (D15) that shortlists the schemas relevant to a question before table retrieval, so thousands of tables across many schemas stay tractable. **Join-aware**: it expands along curated cross-schema joins so a bridge table in an un-mentioned schema is not dropped. |
-| **Qualified identifier** | A fully-qualified `schema.table` (or `schema.table.column`) reference. Used end-to-end in **multi-schema mode** — retrieval, the guardrail allow-set, generated SQL, and execution. The single-schema path stays **bare/unqualified** (D15's mode-conditional rule protects the SQLite/BIRD graded path). |
-| **Multi-schema mode** | The run mode where the connector spans every schema in the one database and cross-schema joins are executable (Postgres/Redshift only, v0). Distinct from *single-schema* mode (SQLite, or a pinned single Postgres schema), which is unchanged and emits bare SQL. Selected by an explicit signal, never by `schema` being unset. |
+| **Qualified identifier** | A fully-qualified `schema.table` (or `schema.table.column`) reference. Used end-to-end, **always** — retrieval, the guardrail allow-set, generated SQL, and execution (D15, superseded 2026-07-17: uniformly schema-qualified). A *bare* reference resolves to the serving schema (`DataSourceConfig.serving_schema()`), or fails closed when the source spans all schemas with no default. |
