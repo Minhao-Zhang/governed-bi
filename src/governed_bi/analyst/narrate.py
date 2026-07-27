@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from .. import prompts
+
 if TYPE_CHECKING:
     from ..llm import ChatClient
     from .answer import ResultTable
@@ -29,20 +31,9 @@ if TYPE_CHECKING:
 # (gateway + ResultTable preview); this bounds prompt size for a wide result.
 _MAX_PROMPT_ROWS = 30
 
-_NARRATOR_SYSTEM = """\
-You turn the result of a database query into a short, plain-English answer for a \
-business user.
-
-Rules:
-- Answer the user's question directly, using ONLY the values in the result rows. \
-Never invent, estimate, or round beyond what is shown.
-- Be concise: one or two sentences. Do not restate the SQL or mention tables, \
-columns, or "the query".
-- If the result is a single value, state it plainly.
-- If it is a list/ranking, summarise the top rows and note how many there are in \
-total; do not read out every row (the full table is shown alongside your answer).
-- If the result has no rows, say that nothing matched.
-"""
+#: Default narrator system prompt, derived from the registry so ``narrator@v1``
+#: and this constant cannot drift (see ``governed_bi.prompts``).
+_NARRATOR_SYSTEM = prompts.get("narrator").text
 
 
 @runtime_checkable
@@ -82,10 +73,14 @@ class LlmAnswerNarrator:
     ``StaticChatClient`` in tests, a ``LangChainChatClient`` in production). Falls
     back to a deterministic shape summary if the model returns an empty response,
     so the answer text is never blank. Implements :class:`AnswerNarrator`.
+
+    ``system_prompt`` injects a registered ``narrator`` variant, resolved once
+    where the stack is built; ``None`` keeps ``v1``.
     """
 
-    def __init__(self, chat: "ChatClient") -> None:
+    def __init__(self, chat: "ChatClient", *, system_prompt: str | None = None) -> None:
         self.chat = chat
+        self.system_prompt = system_prompt or _NARRATOR_SYSTEM
 
     def narrate(self, question: str, sql: str, result: "ResultTable") -> str:
         user = (
@@ -93,5 +88,5 @@ class LlmAnswerNarrator:
             f"SQL that ran:\n{sql}\n\n"
             f"Result:\n{_render_result_for_prompt(result)}"
         )
-        text = self.chat.complete(_NARRATOR_SYSTEM, user).strip()
+        text = self.chat.complete(self.system_prompt, user).strip()
         return text or _fallback_text(result)

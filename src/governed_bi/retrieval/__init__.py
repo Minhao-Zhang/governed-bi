@@ -37,7 +37,9 @@ from .rvgd import (
     BM25Index,
     RetrievalResult,
     asset_document,
+    RetrievalIndexCache,
     build_index,
+    corpus_index_key,
     retrieve,
     tokenize,
 )
@@ -46,7 +48,8 @@ from .schema_router import (
     expand_schemas_via_curated_joins,
     filter_corpus_for_retrieval,
     route_schemas,
-    select_schema,
+    SchemaPick,
+    pick_schema,
     shortlist_schemas,
 )
 from .triggers import fire_triggers
@@ -63,9 +66,12 @@ __all__ = [
     "filter_corpus_for_retrieval",
     "fire_triggers",
     "fuse_rankings",
+    "RetrievalIndexCache",
+    "corpus_index_key",
     "retrieve",
     "route_schemas",
-    "select_schema",
+    "SchemaPick",
+    "pick_schema",
     "shortlist_schemas",
     "tokenize",
 ]

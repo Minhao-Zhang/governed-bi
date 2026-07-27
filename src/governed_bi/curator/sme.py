@@ -8,26 +8,28 @@ Never receives gold SQL or held-out test questions.
 from __future__ import annotations
 
 import csv
+import io
+import logging
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
+from .. import prompts
+
 if TYPE_CHECKING:
+    from ..config import Settings
     from ..eval.dataset import EvalItem
     from ..llm import ChatClient
+
+logger = logging.getLogger("governed_bi.curator")
 
 _SELECT_RE = re.compile(r"\bSELECT\b", re.IGNORECASE)
 _SQL_FENCE_RE = re.compile(r"```(?:sql)?\s*.*?```", re.IGNORECASE | re.DOTALL)
 
-_SME_SYSTEM_RULES = """\
-Rules you MUST follow:
-- Answer only from the brief below and ordinary domain sense. Do NOT invent \
-columns, tables, or labels that are not in the brief.
-- Never write database queries. Describe meaning in prose only.
-- If a column looks unreliable or misleading for analysis, say so explicitly and \
-recommend not using it (name a more reliable column if one exists).
-- If you are unsure, say you are unsure rather than fabricating a definition.
-"""
+#: The fixed rules block inside the otherwise data-assembled SME brief. Only this
+#: block is a prompt variant; the rest of the brief is BIRD column descriptions
+#: and train evidence, which the registry has no business versioning.
+_SME_SYSTEM_RULES = prompts.get("sme_rules").text
 
 
 def build_sme_brief(
@@ -35,12 +37,17 @@ def build_sme_brief(
     train_items: Sequence["EvalItem"],
     *,
     max_train_questions: int = 40,
+    system_rules: str | None = None,
 ) -> str:
     """Build the Simulated SME system brief (no gold SQL, no test items).
 
     Reads every ``*.csv`` under ``db_description_dir`` (BIRD layout:
     ``original_column_name,column_name,column_description,data_format,value_description``)
     and appends a sample of train questions + evidence for domain flavour.
+
+    ``system_rules`` injects a registered ``sme_rules`` variant; ``None`` keeps
+    ``v1``. Callers that stamp a prompt set must pass the resolved text, or the
+    stamp names a variant the brief did not contain.
     """
     desc_dir = Path(db_description_dir)
     sections: list[str] = [
@@ -48,18 +55,49 @@ def build_sme_brief(
         "clarification questions with concise, practical descriptions of what "
         "tables and columns mean and whether they are reliable for analysis.",
         "",
-        _SME_SYSTEM_RULES,
+        system_rules or _SME_SYSTEM_RULES,
         "",
         "## Database column descriptions",
     ]
 
     csv_paths = sorted(desc_dir.glob("*.csv")) if desc_dir.is_dir() else []
     if not csv_paths:
+        logger.warning(
+            "SME brief has no column descriptions: no *.csv under %s. The SME will "
+            "answer clarifications without its primary domain knowledge, which "
+            "confounds the curated_sme lift being measured.",
+            desc_dir,
+        )
         sections.append("(no description CSVs found)")
     for path in csv_paths:
         sections.append(f"### {path.stem}")
+        # BIRD ships some description CSVs that are not UTF-8 — 11 files across 5 of the
+        # 69 schemas (donor, hockey, public_review_platform, software_company,
+        # works_cycles). ``UnicodeDecodeError`` is a ``ValueError``, so the ``except
+        # OSError`` below never caught it and this function raised. The raise lands in
+        # the SME build, which runs *after* baseline, seeded and curated are already
+        # built and paid for, so the schema was dropped from the scored pool having cost
+        # a full curator pass — and at ``--build-workers 1`` its YAML stayed in the
+        # shared arm roots, competing as a router candidate for every other schema's
+        # questions.
+        #
+        # Decoded with replacement instead of refused: a description with a few mangled
+        # characters is worth far more than losing the schema, and the fallback is
+        # recorded in the brief so a reader can see the text was degraded rather than
+        # wondering why a column reads oddly.
         try:
-            with path.open(encoding="utf-8", newline="") as fh:
+            text = path.read_text(encoding="utf-8", newline="")
+        except UnicodeDecodeError:
+            text = path.read_text(encoding="utf-8", errors="replace", newline="")
+            sections.append(
+                f"(note: {path.name} is not valid UTF-8; decoded with replacement "
+                "characters)"
+            )
+        except OSError as err:
+            sections.append(f"(failed to read {path.name}: {err})")
+            continue
+        try:
+            with io.StringIO(text, newline="") as fh:
                 reader = csv.DictReader(fh)
                 for row in reader:
                     col = (
@@ -202,17 +240,29 @@ class SimulatedSme:
     it falls back to a single-shot completion. Never receives write tools.
     """
 
-    def __init__(self, chat: "ChatClient", brief: str, *, gateway=None) -> None:
+    def __init__(
+        self,
+        chat: "ChatClient",
+        brief: str,
+        *,
+        gateway=None,
+        settings: "Settings | None" = None,
+    ) -> None:
         self.chat = chat
         self.brief = brief
+        # The caller's Settings, when it has them. Re-deriving config here instead
+        # would stamp this producer's records with whatever the TOML says while the
+        # brief it was handed came from the caller's resolved prompt set — a corpus
+        # recorded under a prompt it was not built with, which is the attribution
+        # failure the stamp exists to prevent.
+        self._settings = settings
         self._agent = None
         model = getattr(chat, "model", None)  # LangChainChatClient exposes .model
         if gateway is not None and model is not None:
             try:
                 from ..analyst.run_log import make_durable_checkpointer
-                from ..config import load_settings
 
-                settings = load_settings(apply_local=False)
+                settings = self._resolved_settings()
                 # Deep agents get no server injection — hand an explicit saver.
                 # SME runs single-shot per answer() with a fresh thread_id (never
                 # resumes across answers), so an in-process memory saver satisfies
@@ -225,11 +275,21 @@ class SimulatedSme:
             except Exception:  # noqa: BLE001 — degrade to single-shot, never crash curation
                 self._agent = None
 
+    def _resolved_settings(self) -> "Settings | None":
+        """The caller's Settings, or a freshly loaded one as a last resort."""
+        if self._settings is not None:
+            return self._settings
+        try:
+            from ..config import load_settings
+
+            return load_settings(apply_local=False)
+        except Exception:
+            return None
+
     def answer(self, question: str) -> str:
         import time
 
         from ..analyst.run_log import emit_run_record, new_run_id
-        from ..config import load_settings
         from ..obs import tracing_callbacks
         from ..provenance import Producer
 
@@ -271,7 +331,9 @@ class SimulatedSme:
             raw = ""
         answer = _sanitize_sme_answer(raw)
         try:
-            settings = load_settings(apply_local=False)
+            settings = self._resolved_settings()
+            if settings is None:
+                return answer
             emit_run_record(
                 settings=settings,
                 producer=Producer.sme,

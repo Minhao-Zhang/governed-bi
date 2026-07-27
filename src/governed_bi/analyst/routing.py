@@ -42,6 +42,18 @@ def _tokens(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", text.lower())
 
 
+def _has_cue(q: str, cues: tuple[str, ...]) -> bool:
+    """Cue match anchored at a word start, so a cue is not found mid-word
+    ("count" in "account", "total" in "subtotal"). Anchored only at the start, so
+    intentional stem cues ("correlat", "analyz") still match their inflections.
+
+    A hyphen is a word boundary to ``\\b``, so hyphenated forms ("dis-count",
+    "sub-total") DO match. That is the intended reading here — a hyphenated
+    compound genuinely contains the cue as a word — but it means the anchor bounds
+    mid-word matches only, not compounds."""
+    return any(re.search(rf"\b{re.escape(cue)}", q) for cue in cues)
+
+
 def route_intent(question: str) -> Route:
     """Hard-wired intent classification into one of the four routes.
 
@@ -49,11 +61,11 @@ def route_intent(question: str) -> Route:
     KPI cues, else the general ``nl2sql`` route.
     """
     q = question.lower()
-    if any(cue in q for cue in _KNOWLEDGE_CUES):
+    if _has_cue(q, _KNOWLEDGE_CUES):
         return Route.knowledge_qa
-    if any(cue in q for cue in _DEEP_CUES):
+    if _has_cue(q, _DEEP_CUES):
         return Route.deep_analysis
-    if any(cue in q for cue in _KPI_CUES):
+    if _has_cue(q, _KPI_CUES):
         return Route.kpi_lookup
     return Route.nl2sql
 

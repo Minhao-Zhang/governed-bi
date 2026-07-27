@@ -318,3 +318,62 @@ def test_dotenv_parses_comments_quotes_and_export(tmp_path, monkeypatch):
         "PG_RENAME_DECOY_DSN": "host=127.0.0.1",
         "SINGLE": "value",
     }
+
+
+# --------------------------------------------------------------------------- #
+# [routing]: the knobs the pooled benchmark varies.
+#
+# These three were reachable only through the eval CLI, so the benchmark ran
+# shortlist@10 WITH the LLM pick while every deployment ran the dataclass defaults
+# — shortlist@3, no pick — with no way to configure otherwise. A benchmark result
+# then described a configuration no deployment could run, which makes "this improves
+# the end result" unfalsifiable in the direction that matters.
+# --------------------------------------------------------------------------- #
+
+
+def test_routing_table_reaches_settings(tmp_path):
+    cfg = tmp_path / "governed_bi.toml"
+    cfg.write_text(
+        "[routing]\ntop_k = 10\nllm_pick = true\npick_max_columns = 20\n",
+        encoding="utf-8",
+    )
+    settings = load_settings(cfg)
+    assert settings.schema_route_top_k == 10
+    assert settings.schema_route_llm_pick is True
+    assert settings.schema_pick_max_columns == 20
+
+
+def test_routing_defaults_stand_when_the_table_is_absent(tmp_path):
+    """The deployment defaults are a deliberate choice, not an accident of the
+    loader, so an absent table must not change them."""
+    cfg = tmp_path / "governed_bi.toml"
+    cfg.write_text('[models]\nllm_model = "gpt-6"\n', encoding="utf-8")
+    settings = load_settings(cfg)
+    assert settings.schema_route_top_k == 3
+    assert settings.schema_route_llm_pick is False
+    assert settings.schema_pick_max_columns == 12
+
+
+def test_a_partial_routing_table_leaves_the_rest_alone(tmp_path):
+    """Setting one knob must not silently reset the others to their defaults — that
+    would make a config file's meaning depend on which keys it happens to omit."""
+    cfg = tmp_path / "governed_bi.toml"
+    cfg.write_text("[routing]\nllm_pick = true\n", encoding="utf-8")
+    settings = load_settings(cfg)
+    assert settings.schema_route_llm_pick is True
+    assert settings.schema_route_top_k == 3
+    assert settings.schema_pick_max_columns == 12
+
+
+def test_routing_llm_pick_is_read_as_a_bool_not_a_truthy_int(tmp_path):
+    """`top_k` and `pick_max_columns` are ints and `llm_pick` is a bool. Coercing
+    them all the same way would put `1` in a bool field, which then serialises into
+    the run manifest as `1` and compares unequal to the `True` another run recorded
+    — two identical configurations reading as incomparable."""
+    cfg = tmp_path / "governed_bi.toml"
+    cfg.write_text("[routing]\nllm_pick = true\ntop_k = 7\n", encoding="utf-8")
+    settings = load_settings(cfg)
+    assert settings.schema_route_llm_pick is True
+    assert isinstance(settings.schema_route_llm_pick, bool)
+    assert isinstance(settings.schema_route_top_k, int)
+    assert settings.schema_route_top_k == 7

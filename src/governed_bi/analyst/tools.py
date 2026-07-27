@@ -188,11 +188,16 @@ def _safe_grep_pattern(pattern: str):
 def _text_names_excluded(text: str, excluded_tokens) -> bool:
     """Case-insensitive C5 check: does ``text`` name any excluded identifier?
 
-    Postgres folds unquoted identifiers to lowercase, so a case-sensitive match
-    would leak a differently-cased name; both sides are casefolded.
+    Delegates to the corpus-CI predicate instead of repeating its boundary regex:
+    curator time (a C5 *finding*) and serve time (silently *withholding* the note)
+    must agree on what "names an identifier" means, and a second copy is what let
+    this check ship calling an ``re`` that was never imported here — a ``NameError``
+    out of every notes tool on any corpus holding an excluded column, which the
+    rails then report as an unremarkable ``model_error`` refusal.
     """
-    blob = text.casefold()
-    return any(tok.casefold() in blob for tok in excluded_tokens)
+    from ..corpus.validate import _names_identifier
+
+    return any(_names_identifier(text, tok) for tok in excluded_tokens)
 
 
 def render_result(result) -> str:
@@ -214,6 +219,12 @@ def make_tools(
     *,
     embedder: "Embedder | None" = None,
     enable_clarify: bool = False,
+    # Shared retrieval index, owned by the graph. ``search_corpus`` rebuilt its index on
+    # every call — BM25 and, with an embedder, a re-embed of every asset in the pooled
+    # corpus. The rails already build this cache for ``assemble``; the agent's tools
+    # simply never received it. Purely a speed change: the cache is keyed on corpus
+    # content, so the same corpus yields the same index and the same results.
+    index_cache: Any = None,
 ):
     """Factory: the governed read-only tools closed over deployment deps.
 
@@ -236,7 +247,7 @@ def make_tools(
         context is missing a table/example you need; then ``inspect_schema`` any
         new table before querying it.
         """
-        r = retrieve(corpus, query, embedder=embedder)
+        r = retrieve(corpus, query, embedder=embedder, index_cache=index_cache)
         kept = [
             tid
             for tid in r.table_ids

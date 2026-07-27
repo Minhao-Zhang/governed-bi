@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime
+import hashlib
 import time
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
@@ -21,18 +22,21 @@ from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
+from .. import prompts
 from ..corpus.schemas import TableAsset
 from ..gateway import column_allowlist
 from ..graph import build_graph, detect_missing_join_path, plan_joins
 from ..obs import tracing_callbacks
 from ..retrieval import (
+    RetrievalIndexCache,
     embed_schema_documents,
     expand_schemas_via_curated_joins,
     filter_corpus_for_retrieval,
+    pick_schema,
     retrieve,
-    select_schema,
     shortlist_schemas,
 )
+from ..stages import Stage
 from .answer import refusal
 from .context import assemble_context
 from .governance import (
@@ -40,6 +44,7 @@ from .governance import (
     _ESCALATION_NO_COVERAGE,
     _LEDGER_STATUS,
     GovEventStream,
+    StageRecorder,
     _finalize_success,
     _finish_unsuccessful,
     _licensed_table_ids,
@@ -73,22 +78,10 @@ if TYPE_CHECKING:
     from .cache import SqlCache
     from .narrate import AnswerNarrator
 
-SYSTEM_PROMPT = """You answer questions over a governed data warehouse by writing \
-**one read-only SELECT**.
-
-The `## Governed context` below has been assembled for this question — its tables \
-are already licensed and its joins, metrics, few-shot examples, and reliability \
-caveats are curated, authoritative guidance. **Prefer it over guessing.** Follow \
-the few-shot examples' style, use the listed joins, and never use a column marked \
-DO NOT USE.
-
-Write SQL using only identifiers shown in the context, then call `run_query`. If \
-the context is missing a table or example you need, call `search_corpus` for more, \
-and `inspect_schema` any table **not** already listed before querying it (that \
-licenses it). Use `sample_rows` if you need to see real values. If `run_query` \
-returns BLOCKED or an error, read it, fix the SQL, and retry (max 3). Never guess \
-an identifier. Call tools **one at a time**.
-"""
+#: The default agent-core system prompt. Derived from the registry rather than
+#: held here, so ``agent_core@v1`` and this constant cannot drift apart — a run
+#: stamping ``agent_core=v1`` must have sent the text the registry hashed.
+SYSTEM_PROMPT = prompts.get("agent_core").text
 
 _ESCALATION_CLARIFY_DECLINED = (
     "I needed one clarification to answer this safely, but didn't receive an "
@@ -162,6 +155,47 @@ def _physical_to_id_map(corpus: "Corpus") -> dict[str, str]:
     return out
 
 
+def _tables_used_in(
+    sql: str | None,
+    corpus: "Corpus",
+    dialect: str,
+    default_schema: str | None,
+) -> list[str] | None:
+    """Asset ids for the tables ``sql`` references, or ``None`` when there is no SQL.
+
+    Used on the refusal paths so a turn that generated a query and had it *rejected* still
+    records which tables it touched. Offline analysis reads ``tables_used`` to ask whether
+    an answer reached past the schema router; without this, every blocked turn dropped out
+    of that measurement — and the drop correlates with the event, because the escape most
+    likely to be blocked is one that reached an out-of-routed table without licensing it.
+
+    Resolved against the full serve corpus, the same map the success path uses, so an
+    out-of-routed table resolves rather than being silently dropped.
+
+    ``None`` rather than ``[]`` when there was no SQL: a turn that generated nothing used no
+    tables, which is a different fact from a turn whose tables could not be resolved.
+    """
+    if not sql:
+        return None
+    found = sorted(
+        _tables_used(sql, _physical_to_id_map(corpus), dialect, default_schema=default_schema)
+    )
+    return found or None
+
+
+def _table_provenance_names(corpus: "Corpus", table_ids) -> list[str]:
+    """Schema-qualified physical names for table provenance, sorted.
+
+    Reuses :func:`licensed_physical_names` so there is one projection of asset ids
+    to physical names in the tree. Qualified (``schema.table``) rather than bare:
+    a pooled corpus repeats table names across schemas, and a bare list would let
+    offline analysis credit a table from the wrong schema. Ids that resolve to no
+    table are dropped, not passed through — a raw ``tbl_x_y`` id leaking into a
+    list of physical names would read as an offered table that does not exist.
+    """
+    return sorted(licensed_physical_names(corpus, list(table_ids)))
+
+
 def build_agent_core(
     corpus: "Corpus",
     gateway: "Gateway",
@@ -175,12 +209,18 @@ def build_agent_core(
     system_prompt: str = SYSTEM_PROMPT,
     enable_clarify: bool = False,
     checkpointer: Any = None,
+    stages: "StageRecorder | None" = None,
+    # The graph's shared retrieval index, so the agent's ``search_corpus`` does not rebuild
+    # one per call. See :func:`make_tools`.
+    index_cache: Any = None,
 ):
     """Assemble ``create_agent`` with governed tools + middleware.
 
     ``enable_clarify`` adds the ``ask_user`` HITL tool and requires ``checkpointer``
     (``interrupt`` needs one to pause/resume). Both default off, so the
-    eval/offline path builds the identical agent it always has.
+    eval/offline path builds the identical agent it always has. ``stages`` is the
+    turn's :class:`StageRecorder`, so the middleware's tool counts / guardrail /
+    execute records land on the same turn as the rails' own.
     """
     tools = make_tools(
         corpus,
@@ -188,6 +228,7 @@ def build_agent_core(
         identity,
         embedder=embedder,
         enable_clarify=enable_clarify,
+        index_cache=index_cache,
     )
     mw = GovernanceMiddleware(
         corpus,
@@ -196,6 +237,7 @@ def build_agent_core(
         dialect=dialect,
         default_schema=default_schema,
         settings=settings,
+        stages=stages,
     )
     # Sequential tools: also bind at construction; middleware re-asserts per call (G1).
     bound_model = model
@@ -270,6 +312,12 @@ def build_serve_rails(
     # reference fails closed.
     default_schema = settings.datasource.serving_schema()
     dialect = gateway.catalog().dialect.value
+    # Prompt variants resolved ONCE per stack, not per turn: the map is what
+    # ``serve_config_hash`` / the stamped record claim this graph sent, so
+    # re-reading settings inside a node would let the claim and the bytes diverge.
+    prompt_variants = prompts.resolve(settings.prompt_variants)
+    agent_core_prompt = prompts.text("agent_core", prompt_variants)
+    schema_pick_prompt = prompts.text("schema_pick", prompt_variants)
     # Closures — not state channels (ADR 0001 / finding #7).
     graph_obj = build_graph(corpus)
     allowlist = column_allowlist(corpus)
@@ -294,7 +342,7 @@ def build_serve_rails(
     # shortlist; ``schema_route_llm_pick`` collapses it to a single LLM-chosen schema
     # (pipeline-design §5.1 — the single-schema-answer regime, e.g. the BIRD data
     # lake). Both only bite when the corpus spans schemas. The router chat wraps the
-    # raw model in a ChatClient (``select_schema`` needs ``.complete``); built once.
+    # raw model in a ChatClient (``pick_schema`` needs ``.complete``); built once.
     route_top_k = settings.schema_route_top_k
     route_llm_pick = settings.schema_route_llm_pick
     router_chat = None
@@ -310,6 +358,14 @@ def build_serve_rails(
         if spans_schemas and embedder is not None
         else None
     )
+    # Retrieval indexes are constant per routed corpus, exactly like the schema
+    # vectors above — but ``retrieve`` used to rebuild both on every question, which
+    # meant re-embedding every asset in the routed corpus per turn. Only the question
+    # embedding is genuinely per-turn. Both caches are graph-scoped closures, so each
+    # eval worker's graph owns its own and they need no lock (see ``eval/parallel.py``
+    # on per-worker isolation); they die with the graph, so nothing crosses runs.
+    _index_cache = RetrievalIndexCache()
+    _routed_corpora: dict[frozenset, "Corpus"] = {}
     # One rich-event emitter for the whole turn (reset in `ingest`); the agent path
     # emits the {seq,kind,step,status,detail} contract, never the legacy {stage}
     # shape governance.py's on_event helpers still accept but which agent.py never
@@ -325,7 +381,10 @@ def build_serve_rails(
         serve_path="agent",
         t0=_t0,
     )
-    events = GovEventStream(on_event, finalize_ctx=_finalize_ctx)
+    # The durable counterpart of the live stream: one recorder per turn, owned by
+    # the emitter so both reset on the same boundary (see StageRecorder).
+    stages = StageRecorder()
+    events = GovEventStream(on_event, finalize_ctx=_finalize_ctx, stages=stages)
     # Per-invoke turn counter so a reused rails graph (eval agent_solver) mints a
     # fresh turn_id / run_id each question instead of UPSERT-colliding on eval:1.
     _turn_n = [n_human - 1]
@@ -345,8 +404,41 @@ def build_serve_rails(
             if not getattr(getattr(c, "governance", None), "excluded", False)
         )
 
+    def _timed(stage: Stage, node):
+        """Register a rails node with its own stage record.
+
+        Wrapping at registration rather than inside each body keeps the nodes
+        un-indented; a node that handles its own exception (``agent_core``) times
+        the inner call instead, so a caught crash is not recorded as a stage that
+        ran fine.
+        """
+
+        def run(state: ServeRailsState) -> dict:
+            with stages.stage(stage):
+                update = node(state)
+            # A node can end the turn from inside the block (a missing-edge refusal,
+            # a cache hit), and its own record did not exist yet when `final()`
+            # stamped the answer. Re-stamp so the enclosing stage is not missing from
+            # exactly the turns that stopped in it — that absence would bias any
+            # average over the records towards the turns that got further.
+            answer = update.get("answer") if isinstance(update, dict) else None
+            if answer is not None:
+                update = {
+                    **update,
+                    "answer": replace(
+                        answer,
+                        provenance={
+                            **(answer.provenance or {}),
+                            **stages.provenance(),
+                        },
+                    ),
+                }
+            return update
+
+        return run
+
     def ingest(state: ServeRailsState) -> dict:
-        events.reset()  # new turn: fresh seq + serve_path tag
+        events.reset()  # new turn: fresh seq + serve_path tag + stage records
         _turn_n[0] += 1
         question = state["question"]
         if events._finalize_ctx is not None:
@@ -358,8 +450,11 @@ def build_serve_rails(
                 token_usage=[],
                 question=question,
             )
-        route = route_intent(question)
-        bound_terms = bind_terms(corpus, question)
+        with stages.stage(Stage.route) as detail:
+            route = route_intent(question)
+            bound_terms = bind_terms(corpus, question)
+            detail["intent"] = route.value
+            detail["n_bound_terms"] = len(bound_terms)
         base = {
             "route": route.value,
             "bound_terms": bound_terms,
@@ -420,10 +515,24 @@ def build_serve_rails(
                 embedder=embedder,
                 schema_vectors=router_schema_vectors,
                 settings=settings,
+                index_cache=_index_cache,
             )
             picked: str | None = None
+            pick_fallback: str | None = None
             if router_chat is not None and shortlisted:
-                picked = select_schema(corpus, question, shortlisted, chat=router_chat)
+                # Its own sub-stage: a routing regression has to be separable from
+                # the rest of assemble, and this is the only LLM call in the node.
+                with stages.stage(Stage.schema_pick, n_candidates=len(shortlisted)) as detail:
+                    decision = pick_schema(
+                        corpus,
+                        question,
+                        shortlisted,
+                        chat=router_chat,
+                        max_columns=settings.schema_pick_max_columns,
+                        system_prompt=schema_pick_prompt,
+                    )
+                    detail["fallback"] = decision.fallback is not None
+                picked, pick_fallback = decision.schema, decision.fallback
                 usage = getattr(router_chat, "last_usage_metadata", None)
                 if usage:
                     events.add_token_usage(
@@ -435,16 +544,79 @@ def build_serve_rails(
                     else expand_schemas_via_curated_joins(corpus, set(shortlisted))
                 )
             else:
+                stages.skipped(Stage.schema_pick, llm_pick=router_chat is not None)
                 routed = expand_schemas_via_curated_joins(corpus, set(shortlisted))
-            retrieval_corpus = filter_corpus_for_retrieval(corpus, routed)
+            # Memoised by routed schema set. The filter is deterministic in
+            # ``routed``, so rebuilding it per question minted a fresh ``Corpus``
+            # object with identical contents every time — which then defeated the
+            # retrieval index cache below, because there was nothing stable to key on.
+            # Bounded by the number of distinct neighbourhoods a run visits.
+            routed_key = frozenset(routed)
+            retrieval_corpus = _routed_corpora.get(routed_key)
+            if retrieval_corpus is None:
+                retrieval_corpus = _routed_corpora[routed_key] = (
+                    filter_corpus_for_retrieval(corpus, routed)
+                )
             base_provenance = {
                 **base_provenance,
                 "routed_schemas": sorted(routed),
-                "shortlisted_schemas": sorted(shortlisted),
+                # Kept in RELEVANCE order, not sorted: the position of the true
+                # schema in this list is the signal that separates "retrieval never
+                # surfaced it" from "the picker overrode a correct rank-1", and
+                # alphabetising would throw it away. (``routed`` is a frozenset, so
+                # it has no meaningful order and stays sorted for stable diffs.)
+                "shortlisted_schemas": list(shortlisted),
                 "total_schemas": len(_corpus_schemas),
                 "schema_pick": picked,
+                # Set when ``picked`` is really the rank-1 fallback after a failed
+                # or unparseable pick, so a degraded row is not scored as a
+                # decision the model made.
+                "schema_pick_fallback": pick_fallback,
             }
-        retrieval = retrieve(retrieval_corpus, question, embedder=embedder, settings=settings)
+        else:
+            # A single-schema corpus never routes. Recorded, not omitted: an absent
+            # schema_pick record would read as a build that cannot measure the pick.
+            stages.skipped(Stage.schema_pick, spans_schemas=False)
+            # ...and the same is true of the *row*. Leaving `base_provenance`
+            # untouched here made a bypassed turn indistinguishable from a routed one
+            # that lost its provenance: the row recorded `routed_schemas=[]`, so
+            # `routed_hit` was False on every question and `routing_recall` read 0.0
+            # for a pool that has nothing to route. Worse, the eval's own
+            # "was routing bypassed?" guard tests `isinstance(total_schemas, int)`,
+            # which no single-schema turn could ever satisfy — so every wrong answer
+            # in a one-schema pool was charged to `schema_pick`, a stage that did not
+            # run. The bypass is now asserted by the code that knows it, not inferred
+            # downstream from a field's absence.
+            #
+            # `routed_schemas` is the schema the turn is pinned to, so `routed_hit`
+            # is true for the right reason. `schema_pick` and `shortlisted_schemas`
+            # stay ABSENT on purpose: stamping them would enrol these rows in
+            # `schema_pick_accuracy` and `gold_schema_rank` as unanimous successes of
+            # a picker and a shortlist that never ran, which is how a metric starts
+            # measuring its own denominator.
+            base_provenance = {
+                **base_provenance,
+                "routed_schemas": sorted(_corpus_schemas),
+                "total_schemas": len(_corpus_schemas),
+                "routing_bypassed": True,
+            }
+        with stages.stage(Stage.retrieve) as detail:
+            retrieval = retrieve(
+                retrieval_corpus,
+                question,
+                embedder=embedder,
+                settings=settings,
+                index_cache=_index_cache,
+            )
+            detail["n_tables"] = len(retrieval.table_ids)
+        # Table-level provenance. Without it a wrong-table answer is indistinguishable
+        # from a wrong-*retrieval* one in the scored rows, and those need opposite
+        # fixes (retrieval tuning vs. generation prompting). Recorded before the
+        # missing-edge check so a refusal carries what retrieval offered.
+        base_provenance = {
+            **base_provenance,
+            "retrieved_tables": _table_provenance_names(corpus, retrieval.table_ids),
+        }
         missing = detect_missing_join_path(
             corpus, graph_obj, set(retrieval.table_ids)
         )
@@ -460,6 +632,10 @@ def build_serve_rails(
         except ValueError:
             licensing_join_ids = []
         licensed_ids = _licensed_table_ids(corpus, graph_obj, retrieval, licensing_join_ids)
+        base_provenance = {
+            **base_provenance,
+            "licensed_tables": _table_provenance_names(corpus, licensed_ids),
+        }
         context = assemble_context(
             corpus,
             retrieval,
@@ -469,27 +645,51 @@ def build_serve_rails(
             always_note_global_max=settings.always_note_global_max,
             always_note_char_max=settings.always_note_char_max,
         )
+        # What the model was actually handed. Outcome metrics alone cannot separate
+        # "the curated corpus did not help" from "the curated corpus never reached
+        # the prompt"; these do.
+        rendered = context.render()
+        base_provenance = {
+            **base_provenance,
+            "injected_note_ids": list(context.injected_note_ids),
+            "n_notes_injected": len(context.injected_note_ids),
+            "n_few_shots_injected": len(context.few_shots),
+            "n_joins_injected": len(context.joins),
+            "n_metrics_injected": len(context.metrics),
+            "n_terms_injected": len(context.terms),
+            "n_caveats_injected": len(context.caveats),
+            "context_chars": len(rendered),
+            # The identity of what was handed over, not just its size. Two arms
+            # differing only in corpus content can render byte-identical context —
+            # that is what a treatment failing to reach the model looks like, and a
+            # character count is too coarse to catch it. `eval.treatment` compares
+            # these across arms and voids the comparison when they agree too often.
+            "context_hash": hashlib.sha256(rendered.encode("utf-8")).hexdigest()[:16],
+        }
         events.rail(
             "assemble",
             "ok",
             schema=default_schema,
             tables=len(context.tables),
             few_shots=len(context.few_shots),
+            notes=len(context.injected_note_ids),
         )
-        out: dict = {
-            "context_block": context.render(),
+        # ``base_provenance`` is always a new dict by this point (table provenance
+        # is recorded unconditionally above), so it always propagates.
+        return {
+            "context_block": rendered,
             "seed_licensed": sorted(licensed_ids),
+            "base_provenance": base_provenance,
             "outcome": "continue",
         }
-        if base_provenance is not state["base_provenance"]:
-            out["base_provenance"] = base_provenance
-        return out
 
     def after_assemble(state: ServeRailsState) -> Literal["agent_core", "__end__"]:
         return END if state.get("outcome") == "refuse" else "agent_core"
 
     def cache_lookup(state: ServeRailsState) -> dict:
         if cache is None:
+            # No cache configured: ``cache_hit`` stays unset. A False here would
+            # report a miss on a lookup the turn never made.
             return {"outcome": "miss"}
         hit = _try_cache_hit(
             cache,
@@ -503,13 +703,16 @@ def build_serve_rails(
             state["base_provenance"],
             default_schema=default_schema,
             narrator=None,  # narration is a dedicated graph node (see narrate_node)
-            on_event=None,  # agent path emits the rich contract below, not {stage}
+            stages=stages,
         )
         if hit is not None:
             events.rail("cache", "hit", metric_id=hit.provenance.get("metric_id"))
             hit = events.final(hit)
             return {"answer": hit, "outcome": "finalize"}
-        return {"outcome": "miss"}
+        return {
+            "outcome": "miss",
+            "base_provenance": {**state["base_provenance"], "cache_hit": False},
+        }
 
     def after_cache(state: ServeRailsState) -> Literal["assemble", "narrate"]:
         # A cache hit is a delivered answer → phrase it in the narrate node too, so
@@ -659,9 +862,9 @@ def build_serve_rails(
         question = state["question"]
         context_block = state.get("context_block") or ""
         seed_licensed = list(state.get("seed_licensed") or [])
-        system_prompt = SYSTEM_PROMPT
+        system_prompt = agent_core_prompt
         if context_block:
-            system_prompt = f"{SYSTEM_PROMPT}\n\n## Governed context\n{context_block}"
+            system_prompt = f"{agent_core_prompt}\n\n## Governed context\n{context_block}"
         # Ground relative-date reasoning ("today", "this month", "last quarter") in
         # the machine's LOCAL wall-clock time, stamped per turn (never import-time).
         now_local = datetime.now().astimezone()
@@ -684,6 +887,8 @@ def build_serve_rails(
             system_prompt=system_prompt,
             enable_clarify=clarify_on,
             checkpointer=clarify_checkpointer,
+            stages=stages,
+            index_cache=_index_cache,
         )
 
         # One tracing handler per turn: it is attached at the outer graph.invoke
@@ -727,7 +932,13 @@ def build_serve_rails(
                 agent_input = Command(resume=clarify_resume)
 
         try:
-            final = _stream_agent(agent, agent_input, inner_cfg)
+            # Timed inside the try, not around the node: every ``except`` below
+            # converts a crash into a fail-closed refusal, so a node-level record
+            # would stamp ``ok`` on the exact failures this measurement exists to
+            # find. The recorder marks the stage ``error`` and re-raises into them.
+            with stages.stage(Stage.agent_core) as detail:
+                final = _stream_agent(agent, agent_input, inner_cfg)
+                detail["n_messages"] = len(final.get("messages") or [])
             events.add_token_usage(final.get("token_usage"))
             mw = getattr(agent, "_gov_middleware", None)
             if mw is not None and mw.failed_model_calls:
@@ -740,6 +951,9 @@ def build_serve_rails(
                 mw.failed_model_calls.clear()
             ledger = list(e.ledger)
             entry = e.entry
+            hard_stop_tables = _tables_used_in(
+                entry.get("sql"), corpus, dialect, default_schema
+            )
             ans = refusal(
                 escalation=_ESCALATION_GUARDRAIL,
                 provenance={
@@ -749,6 +963,9 @@ def build_serve_rails(
                     "reason": entry.get("reason"),
                     "sql": entry.get("sql"),
                     "governance_ledger": ledger,
+                    # A hard stop is a refusal *with* SQL in hand. See
+                    # :func:`_tables_used_in`.
+                    **({"tables_used": hard_stop_tables} if hard_stop_tables else {}),
                 },
             )
             ans = events.final(ans)
@@ -780,7 +997,7 @@ def build_serve_rails(
                 },
                 question=question,
                 narrator=None,  # narration deferred to narrate_node
-                on_event=None,
+                stages=stages,
                 allowlist=allowlist,
                 dialect=dialect,
                 default_schema=default_schema,
@@ -844,16 +1061,39 @@ def build_serve_rails(
                 "governance_ledger": ledger,
             }
             attempts = sum(1 for e in ledger if e.get("action") == "run_query")
+            # The tables the blocked SQL referenced. Without this, a turn that generated a
+            # query and had it *rejected* carries no ``tables_used`` at all — and offline
+            # analysis that reads that field to ask "did this answer reach past the router"
+            # gets ``None`` and drops the row.
+            #
+            # That exclusion is not random, which is what makes it worth stamping: the
+            # escape most likely to trip L4 term-semantics is precisely one that reached an
+            # out-of-routed table *without* ``inspect_schema`` licensing it first. So the
+            # rows silently dropped correlate with the event being measured, and the
+            # escape rate is biased low by an unknown amount.
+            #
+            # Resolved against the full serve ``corpus``, the same map the success path
+            # uses, so an out-of-routed table resolves rather than being dropped.
+            blocked_tables = _tables_used_in(
+                (last or {}).get("sql"), corpus, dialect, default_schema
+            )
             ans = _finish_unsuccessful(
                 settings=settings,
                 gateway=gateway,
                 identity=identity,
                 last_refusal=last_refusal,
                 attempts=attempts or 0,
-                base_provenance={**base_provenance, "governance_ledger": ledger},
+                base_provenance={
+                    **base_provenance,
+                    "governance_ledger": ledger,
+                    # Absent, not empty, when there was no SQL to parse: a turn that never
+                    # generated one used no tables, which is a different fact from a turn
+                    # whose tables could not be resolved.
+                    **({"tables_used": blocked_tables} if blocked_tables else {}),
+                },
                 question=question,
                 narrator=None,  # narration deferred to narrate_node
-                on_event=None,
+                stages=stages,
                 allowlist=allowlist,
                 dialect=dialect,
                 default_schema=default_schema,
@@ -884,7 +1124,7 @@ def build_serve_rails(
                 base_provenance=base_provenance,
                 question=question,
                 narrator=None,  # narration deferred to narrate_node
-                on_event=None,
+                stages=stages,
                 allowlist=allowlist,
                 dialect=dialect,
                 default_schema=default_schema,
@@ -912,7 +1152,6 @@ def build_serve_rails(
             licensed=licensed_phys,
             cache=cache,
             narrator=None,  # narration deferred to narrate_node
-            on_event=None,
             ledger=ledger,
         )
         ans = events.final(ans)
@@ -928,12 +1167,23 @@ def build_serve_rails(
         answer = state.get("answer")
         if answer is None:
             return {}
-        narrated = narrate_answer(answer, state["question"], narrator)
+        with stages.stage(Stage.narrate) as detail:
+            narrated = narrate_answer(answer, state["question"], narrator)
+            narrated_ran = narrated is not answer
+            detail["narrated"] = narrated_ran
+        # ``narrate`` is the turn's last stage but runs AFTER events.final() stamped
+        # provenance, so re-stamp the records here — and before the re-append below,
+        # so the durable row gets them too. Without this, the one stage that runs
+        # after finalization is the one stage no record ever mentions.
+        narrated = replace(
+            narrated,
+            provenance={**(narrated.provenance or {}), **stages.provenance()},
+        )
         # Only fold narrator tokens when the narrator actually ran. On refusals
         # narrate_answer returns the same object without calling the model — do
         # not read a stale last_usage_metadata from a prior success turn.
-        if narrated is answer:
-            return {}
+        if not narrated_ran:
+            return {"answer": narrated}
         chat = getattr(narrator, "_chat", None) or getattr(narrator, "chat", None)
         usage = getattr(chat, "last_usage_metadata", None) if chat is not None else None
         if usage:
@@ -950,8 +1200,8 @@ def build_serve_rails(
     builder = StateGraph(ServeRailsState)
     builder.add_node("ingest", ingest)
     builder.add_node("refuse_gate", refuse_gate)
-    builder.add_node("cache", cache_lookup)
-    builder.add_node("assemble", assemble)
+    builder.add_node("cache", _timed(Stage.cache, cache_lookup))
+    builder.add_node("assemble", _timed(Stage.assemble, assemble))
     builder.add_node("agent_core", agent_core_node)
     builder.add_node("narrate", narrate_node)
     builder.add_edge(START, "ingest")

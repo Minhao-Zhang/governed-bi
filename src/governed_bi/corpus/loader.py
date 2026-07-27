@@ -24,7 +24,18 @@ import yaml
 from .schemas import Asset, TableAsset, parse_asset
 
 
-class _CorpusYamlLoader(yaml.SafeLoader):
+# libyaml-backed when the wheel provides it (it does on every platform we run on),
+# which parses ~7x faster than the pure-Python scanner. Corpus loading is a real
+# cost on a scale run: a 69-schema build re-reads these trees per arm, and YAML
+# parsing measured ~23% of an offline run's wall clock. The C loader shares
+# PyYAML's *Python-side* resolver machinery, so the boolean fix below applies
+# identically to both — but the fallback is kept because a source build of PyYAML
+# without libyaml is a legitimate environment, and silently losing `on:` there
+# would corrupt every join asset.
+_BaseYamlLoader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
+class _CorpusYamlLoader(_BaseYamlLoader):  # type: ignore[misc,valid-type]
     """SafeLoader with YAML-1.2 boolean semantics.
 
     PyYAML follows YAML 1.1, which parses ``on``/``off``/``yes``/``no`` as
@@ -35,11 +46,11 @@ class _CorpusYamlLoader(yaml.SafeLoader):
     """
 
 
-# Rebuild the resolver table on the subclass (leaving the global SafeLoader
+# Rebuild the resolver table on the subclass (leaving the global loaders
 # untouched): drop every bool resolver, then re-add one for true/false only.
 _CorpusYamlLoader.yaml_implicit_resolvers = {
     ch: [(tag, rx) for (tag, rx) in resolvers if tag != "tag:yaml.org,2002:bool"]
-    for ch, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+    for ch, resolvers in _BaseYamlLoader.yaml_implicit_resolvers.items()
 }
 _CorpusYamlLoader.add_implicit_resolver(
     "tag:yaml.org,2002:bool",
@@ -113,6 +124,16 @@ def load_corpus(root: Path, schema: str | None = None) -> Corpus:
     for schema_dir in schema_dirs:
         for sub, _asset_type in _DIR_ASSET_TYPE.items():
             for yaml_path in sorted((schema_dir / sub).glob("*.yaml")):
-                data = _load_yaml(yaml_path.read_text(encoding="utf-8"))
+                try:
+                    text = yaml_path.read_text(encoding="utf-8")
+                except UnicodeDecodeError as err:
+                    # Fail loud with the offending path rather than letting an
+                    # opaque UnicodeDecodeError surface from deep in the read —
+                    # in the pooled runner this fires after the whole build phase
+                    # and would otherwise discard every db's work with no clue why.
+                    raise ValueError(
+                        f"corpus file is not valid UTF-8: {yaml_path} ({err})"
+                    ) from err
+                data = _load_yaml(text)
                 corpus.assets.append(parse_asset(data))
     return corpus

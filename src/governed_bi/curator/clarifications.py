@@ -60,6 +60,28 @@ def clarifications_path(run_dir: Path | str) -> Path:
     return Path(run_dir) / CLARIFICATIONS_FILENAME
 
 
+def relocated_clarifications_path(run_dir: Path | str, schema: str) -> Path:
+    """Canonical post-relocate ledger: ``<run_dir>/<schema>/_build/clarifications.jsonl``."""
+    return Path(run_dir) / schema / "_build" / CLARIFICATIONS_FILENAME
+
+
+def resolve_clarifications_path(run_dir: Path | str, schema: str) -> Path | None:
+    """Live arm-root ledger first, then the relocated ``<schema>/_build`` path.
+
+    Within one db build, sidecars still sit at the arm root until relocate runs.
+    Across a resume, curated's ledger has already moved under ``<db>/_build/``; a
+    reader that only checks the live root sees an empty ledger and folds nothing
+    (or, under skip-agent scaffolding, synthesises a misleading seed fold).
+    """
+    live = clarifications_path(run_dir)
+    if live.exists():
+        return live
+    relocated = relocated_clarifications_path(run_dir, schema)
+    if relocated.exists():
+        return relocated
+    return None
+
+
 def parse_line(line: str) -> ClarificationRecord:
     """Parse and validate one JSONL line."""
     return ClarificationRecord.model_validate_json(line)

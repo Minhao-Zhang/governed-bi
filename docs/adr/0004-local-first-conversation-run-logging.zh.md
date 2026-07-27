@@ -111,7 +111,7 @@ threads）在之后被引用。这就是 ADR 0001 的 thread 模型，只是变�
   的 `Command(update=...)` 写法（`middleware.py:43-47`）：`wrap_model_call` 返回
   的是 `ModelResponse`，channel 写入机制不同。这是唯一真正新增的捕获动作；今天
   token 是被丢弃的（`run_experiment.py:213`）。`wrap_model_call` 只包裹了内层
-  serve agent，看不到系统里每一次模型调用：schema 路由的 `select_schema` /
+  serve agent，看不到系统里每一次模型调用：schema 路由的 `pick_schema` /
   `router_chat`（`agent.py:394`）、narrator（`narrate_node`，`agent.py:855`），
   以及 curator/SME 两个图（`curator/deep_agent.py:285`、`curator/sme.py:164`）
   各自在这个接口点之外发起模型调用，需要各自的捕获点。再加一个后备逻辑：当
@@ -272,7 +272,7 @@ serve agent（`create_agent` + `GovernanceMiddleware`，在 `build_agent_core`
    `token_usage` channel，要从**未经改写（PRE-coercion）**的响应上读取
    `usage_metadata`，赶在 `_coerce_single_tool_call`（`middleware.py:175`，
    重建逻辑在 `middleware.py:189-216`）把它丢掉之前；给 schema 路由
-   （`select_schema` / `router_chat`，`agent.py:394`）、narrator
+   （`pick_schema` / `router_chat`，`agent.py:394`）、narrator
    （`narrate_node`，`agent.py:855`），以及 curator/SME 两个图
    （`curator/deep_agent.py:285`、`curator/sme.py:164`）各加一个独立的
    捕获点，因为它们都在 `wrap_model_call` 接口点之外调用模型；给每条

@@ -31,6 +31,7 @@ from .clarifications import (
     clarifications_path,
     fill_clarifications_with_responder,
     load_clarifications,
+    resolve_clarifications_path,
     seed_gap_clarifications,
     write_clarifications,
 )
@@ -39,6 +40,7 @@ from .prompts import _PHASE_A_PROMPT, _PHASE_B_PROMPT
 from .seed import SeedBundle, seed_from_train_sql
 
 if TYPE_CHECKING:
+    from ..config import Settings
     from ..corpus.schemas import TableAsset
     from ..eval.dataset import EvalItem
     from ..gateway import Gateway
@@ -237,6 +239,28 @@ def _write_run_manifest(out_root: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def _phase_a_run_manifest(curated_root: Path, schema: str) -> dict[str, Any] | None:
+    """Phase-A ``run_manifest.json`` from the live root or relocated ``<schema>/_build``.
+
+    After sidecar relocation the manifest sits under ``_build/``; before relocate
+    (and during the same-process SME build) it is still at the arm root.
+    """
+    candidates = (
+        curated_root / "run_manifest.json",
+        curated_root / schema / "_build" / "run_manifest.json",
+    )
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            return data
+    return None
+
+
 def _write_validate_findings(out_root: Path, findings) -> None:
     path = out_root / "validate_findings.jsonl"
     with path.open("w", encoding="utf-8") as fh:
@@ -248,6 +272,25 @@ def _write_validate_findings(out_root: Path, findings) -> None:
                 )
                 + "\n"
             )
+
+
+def _settings_or_load(settings: "Settings | None") -> "Settings | None":
+    """The caller's Settings, or a freshly loaded one as a last resort.
+
+    Every producer in this module stamps its run record from whatever this
+    returns, so a caller that resolved a prompt set (or any other knob) must hand
+    it in. Loading here is the fallback for standalone CLI use, not the norm: a
+    record stamped from a re-read TOML describes a configuration the agent may
+    never have run under.
+    """
+    if settings is not None:
+        return settings
+    try:
+        from ..config import load_settings
+
+        return load_settings(apply_local=False)
+    except Exception:
+        return None
 
 
 def _invoke_agent(
@@ -295,13 +338,7 @@ def _invoke_agent(
         short = f"{type(err).__name__}: {err}"
         error = f"{short}\n{traceback.format_exc()}"
         print(f"deep-agent stopped early ({short})")
-    if settings is None:
-        try:
-            from ..config import load_settings
-
-            settings = load_settings(apply_local=False)
-        except Exception:
-            settings = None
+    settings = _settings_or_load(settings)
     if settings is not None:
         usage_list: list = []
         if usage_cb is not None:
@@ -449,24 +486,89 @@ def _corpora_differ(curated_root: Path, curated_sme_root: Path, schema: str) -> 
 
 def _mark_columns_absent_from_gold(
     bag: AssetBag, sqls: Sequence[str], *, dialect: str = "postgres"
-) -> int:
+) -> dict[str, int]:
     """Heuristic decoy defense: columns never referenced by train gold SQL."""
     import sqlglot
     from sqlglot import exp
+    from sqlglot.optimizer.scope import traverse_scope
 
-    referenced: set[str] = set()
+    # Track qualified (table.column) references separately from unqualified ones so
+    # a decoy column sharing a bare name with a *different* table's used column is
+    # not spuriously spared. Aliases in the gold SQL are resolved to physical table
+    # names; an unqualified reference still spares any same-named column (the query
+    # itself is ambiguous, so we cannot attribute it — the adversary + review pass
+    # backstop this heuristic).
+    referenced_unqualified: set[str] = set()
+    referenced_qualified: set[str] = set()  # "physical_table.col", lowercased
+    unscoped_sql = 0
+    unresolved_columns = 0
+
+    def _binding(scope: Any, qualifier: str) -> Any | None:
+        """Innermost lexical binding for a column qualifier, or None if undeclared.
+
+        Walks up the enclosing scopes because a correlated subquery may legitimately
+        qualify a column with an alias declared by the outer query.
+        """
+        want = qualifier.lower()
+        current = scope
+        while current is not None:
+            for name, source in current.sources.items():
+                if name.lower() == want:
+                    return source
+            current = current.parent
+        return None
+
     for sql in sqls:
         try:
             tree = sqlglot.parse_one(sql, read=dialect)
         except sqlglot.errors.SqlglotError:
             continue  # unparseable gold SQL is tolerated; a non-parse bug is not
-        for col in tree.find_all(exp.Column):
-            referenced.add(col.name.lower())
+        try:
+            scopes = traverse_scope(tree)
+        except Exception:
+            scopes = []
+        if not scopes:
+            # No lexical scopes means no trustworthy alias map, so spare every bare
+            # name the statement mentions rather than attribute any of them.
+            unscoped_sql += 1
+            for col in tree.find_all(exp.Column):
+                referenced_unqualified.add(col.name.lower())
+            continue
+        # Resolve each qualifier inside the scope it was written in. A single flat
+        # alias map per statement lets a reused alias (``t`` naming a different table
+        # in an outer and an inner query) attribute an outer column to the inner
+        # table, so a column the gold SQL really does use reads as never-referenced
+        # and gets stamped DO NOT USE. ``Scope.find_all`` stops at nested-scope
+        # boundaries, so every column node is claimed by exactly one scope.
+        for scope in scopes:
+            for col in scope.find_all(exp.Column):
+                if isinstance(col.this, exp.Star):
+                    continue  # ``t.*`` names no column to attribute
+                cname = col.name.lower()
+                if not col.table:
+                    referenced_unqualified.add(cname)
+                    continue
+                source = _binding(scope, col.table)
+                if isinstance(source, exp.Table):
+                    referenced_qualified.add(f"{source.name.lower()}.{cname}")
+                elif source is None:
+                    # Qualifier declared nowhere up the chain: spare the bare name
+                    # everywhere instead of guessing a table. Sparing a decoy costs a
+                    # line of prompt; banning a used column misdirects generation.
+                    unresolved_columns += 1
+                    referenced_unqualified.add(cname)
+                # else: a CTE or derived table — its base columns are attributed
+                # inside its own scope, so the projection reference adds nothing.
 
     marked = 0
     for table in list(bag.tables.values()):
+        tname = table.physical_name.lower()
         for col in table.columns:
-            if col.physical_name.lower() in referenced:
+            cname = col.physical_name.lower()
+            if (
+                cname in referenced_unqualified
+                or f"{tname}.{cname}" in referenced_qualified
+            ):
                 continue
             if col.is_unique:
                 continue
@@ -478,7 +580,16 @@ def _mark_columns_absent_from_gold(
             )
             if bag.suspect_count() > before:
                 marked += 1
-    return marked
+    if unscoped_sql or unresolved_columns:
+        print(
+            f"decoy defense: {unscoped_sql} train SQL without lexical scopes, "
+            f"{unresolved_columns} unresolved qualified column(s) spared, not marked"
+        )
+    return {
+        "marked": marked,
+        "unscoped_sql": unscoped_sql,
+        "unresolved_columns": unresolved_columns,
+    }
 
 
 def _write_sme_clarifications_log(
@@ -537,6 +648,8 @@ def build_curated_corpus(
     dialect: str = "postgres",
     max_agent_steps: int = 25,
     run_agent: bool = True,
+    system_prompt: str | None = None,
+    settings: "Settings | None" = None,
 ) -> Path:
     """Phase A: profile → seed → explore agent → validate → write curated corpus.
 
@@ -544,6 +657,16 @@ def build_curated_corpus(
     ``write_file`` it (FilesystemBackend rejects write-to-existing). An empty
     missing ledger after Phase A is visible in the manifest
     (``clarification_count: 0``, ``ledger_source: missing``).
+
+    ``system_prompt`` injects a registered ``curator_phase_a`` variant; ``None``
+    keeps ``v1``. A caller that stamps a prompt set on the run **must** pass the
+    resolved text — a corpus built under one prompt and recorded under another is
+    the attribution failure this whole mechanism exists to prevent.
+
+    Pass ``settings`` alongside it. The run record this build emits is stamped from
+    ``settings``, so re-deriving config here would record the corpus under the
+    TOML's prompt set while the agent ran on the caller's — the same mismatch, one
+    layer down, and invisible because both halves look internally consistent.
     """
     out_root = Path(out_root)
     out_root.mkdir(parents=True, exist_ok=True)
@@ -557,7 +680,9 @@ def build_curated_corpus(
             f"seed: {seed_stats['joins_ok']} joins applied, "
             f"{seed_stats['joins_fail']} failed lookup (check alias resolution)"
         )
-    _mark_columns_absent_from_gold(bag, [it.sql for it in train_items], dialect=dialect)
+    decoy_stats = _mark_columns_absent_from_gold(
+        bag, [it.sql for it in train_items], dialect=dialect
+    )
 
     tool_counts = _empty_tool_counts()
     fix_counts = _empty_tool_counts()
@@ -567,25 +692,23 @@ def build_curated_corpus(
     agent_ran = False
 
     if run_agent and model is not None:
-        from ..analyst.run_log import make_durable_checkpointer, new_run_id
-        from ..config import load_settings
+        from ..analyst.run_log import new_run_id
         from .deep_agent import build_curator_agent
 
-        try:
-            _settings = load_settings(apply_local=False)
-        except Exception:
-            _settings = None
+        _settings = _settings_or_load(settings)
         _run_id = new_run_id()
         _thread_id = f"curator:{schema}:{out_root.name}"
-        _ckpt = None
-        if _settings is not None:
-            try:
-                _ckpt = make_durable_checkpointer(
-                    _settings,
-                    path=str(Path(out_root) / "agent_checkpoints.sqlite"),
-                )
-            except Exception:  # degrade; a checkpointer fault must not crash curation
-                _ckpt = None
+        # No checkpointer. deepagents requires one only for `interrupt_on`, and the
+        # curator sets none — it invokes once and never resumes. The sqlite saver it
+        # used to create was written, closed, relocated and never read back by
+        # anything: the harness's own `--resume` decides from existing YAML, and the
+        # fix pass mints a fresh thread rather than continuing this one.
+        #
+        # It was not free. An open sqlite handle is unmovable on Windows, which
+        # aborted every curated build and would have ended a paid run with
+        # "every db failed to build"; the fixes for that (release-in-finally,
+        # copy fallback, promotion exemption) all exist to serve a file nothing reads.
+        # Removing it deletes that whole class of failure rather than guarding it.
 
         def make_agent() -> Any:  # fresh agent per invoke — no shared fs/state
             return build_curator_agent(
@@ -595,8 +718,7 @@ def build_curated_corpus(
                 gateway=gateway,
                 bag=bag,
                 run_dir=out_root,
-                system_prompt=_PHASE_A_PROMPT,
-                checkpointer=_ckpt,
+                system_prompt=system_prompt or _PHASE_A_PROMPT,
             )
 
         agent_ran = True
@@ -645,12 +767,18 @@ def build_curated_corpus(
             "ledger_source": ledger_source,
             "clarification_count": len(ledger),
             "seed": seed_stats,
+            "decoy_defense": decoy_stats,
             "tool_calls": tool_counts,
             "fix_pass_tool_calls": fix_counts,
             "error": agent_error,
             "fix_pass_error": fix_error,
             "validate_finding_count": len(findings),
-            "clarifications_path": str(clarifications_path(out_root)),
+            # Relative to the corpus root, not absolute. An absolute path embeds the
+            # run's own output directory, so it was the one field that differed
+            # between two otherwise byte-identical builds — enough to make
+            # "did these two runs produce the same corpus?" un-answerable with a
+            # plain diff, and it leaks a machine-local path into a durable artifact.
+            "clarifications_path": clarifications_path(out_root).name,
         },
     )
     return out_root
@@ -670,6 +798,9 @@ def build_curated_corpus_with_sme(
     max_agent_steps: int = 15,
     run_agent_repass: bool | None = None,
     seed_ledger_if_empty: bool = False,
+    system_prompt: str | None = None,
+    phase_a_system_prompt: str | None = None,
+    settings: "Settings | None" = None,
 ) -> Path:
     """Phase B: answered clarifications ledger → ingest → write curated_sme corpus.
 
@@ -680,6 +811,13 @@ def build_curated_corpus_with_sme(
     When ``model`` is set, ``run_agent_repass`` defaults to True and the ingest
     agent folds answers (no silent deterministic fold). When ``model`` is None,
     a deterministic scope-based fold is used for offline tests.
+
+    ``system_prompt`` injects a registered ``curator_phase_b`` variant;
+    ``phase_a_system_prompt`` is forwarded to the Phase-A build this function may
+    run for itself when no ``curated_root`` is supplied. Both ``None`` keep ``v1``.
+    ``settings`` is what this build's run records are stamped from, and is
+    forwarded to that Phase-A build for the same reason (see
+    :func:`build_curated_corpus`).
     """
     from ..corpus.loader import load_corpus
     from ..corpus.schemas import TableAsset
@@ -702,6 +840,8 @@ def build_curated_corpus_with_sme(
             dialect=dialect,
             max_agent_steps=max_agent_steps,
             run_agent=model is not None,
+            system_prompt=phase_a_system_prompt,
+            settings=settings,
         )
     curated_root = Path(curated_root)
 
@@ -709,16 +849,51 @@ def build_curated_corpus_with_sme(
     tables = [a for a in corpus.assets if isinstance(a, TableAsset)]
     other = [a for a in corpus.assets if not isinstance(a, TableAsset)]
 
-    ledger_path = clarifications_path(curated_root)
-    records = load_clarifications(ledger_path)
+    ledger_path = resolve_clarifications_path(curated_root, schema)
+    phase_a = _phase_a_run_manifest(curated_root, schema)
+    ledger_was_written = (
+        phase_a is not None
+        and phase_a.get("ledger_source") not in (None, "missing")
+    )
+    if ledger_was_written and ledger_path is None:
+        raise RuntimeError(
+            f"curated clarifications ledger for {schema!r} was recorded "
+            f"(ledger_source={phase_a.get('ledger_source')!r}, "
+            f"clarification_count={phase_a.get('clarification_count')!r}) but is "
+            f"absent from both {clarifications_path(curated_root)} and "
+            f"{curated_root / schema / '_build' / 'clarifications.jsonl'}; "
+            "refusing to continue with a missing relocated ledger"
+        )
+
+    records = load_clarifications(ledger_path) if ledger_path is not None else []
     open_records = [r for r in records if r.status is ClarificationRecordStatus.open]
     ledger_source = "agent" if open_records else "missing"
 
-    if not open_records and seed_ledger_if_empty:
+    if not open_records and seed_ledger_if_empty and ledger_path is None:
         # Offline/--skip-agent scaffolding only: synthesize gap questions so the
         # deterministic fold has something to do.
+        #
+        # Never invent a ledger when a real one was resolved from the live root or
+        # relocated ``<schema>/_build/`` — including an all-answered file. That is
+        # the cross-resume failure: looking only at the live root made the relocated
+        # ledger look absent and this scaffolding synthesised a misleading fold.
+        #
+        # Written to THIS arm's root, not to ``curated_root``. Seeding the shared input
+        # made the *next* SME arm read those synthetic records as if the curator agent
+        # had raised them: with the answer write-back removed they stay open, so
+        # ``curated_sme`` found open records and stamped ``ledger_source="agent"`` — the
+        # one field whose job is telling agent-authored clarifications from mechanically
+        # seeded ones, lying on exactly the rung the write-back fix was repairing. Both
+        # arms now report ``seed_gap`` and both still fold.
         records = seed_gap_clarifications(tables)
-        write_clarifications(ledger_path, records)
+        # Written now, before the responder runs, and truncated by the answered write
+        # further down — so in a successful build this line leaves no trace. It exists for
+        # the failing build: if the responder raises (a rate limit, a dead gateway), the
+        # arm root is left holding the questions that were pending, which is the only
+        # record of what this build was trying to do. Without it a crashed SME build
+        # leaves an arm root with no ledger at all, indistinguishable from one that never
+        # got that far.
+        write_clarifications(clarifications_path(out_root), records)
         open_records = [
             r for r in records if r.status is ClarificationRecordStatus.open
         ]
@@ -728,9 +903,25 @@ def build_curated_corpus_with_sme(
     # An empty ledger from a real agent run is NOT a failure: the agent resolved
     # everything itself, so the SME round-trip has nothing to fold and curated_sme == curated.
     # A true agent no-op is distinguishable via the Phase-A manifest's write_total.
+    # Paid path with a *required* (recorded) ledger absent already raised above.
 
     answered = fill_clarifications_with_responder(records, responder)
-    write_clarifications(ledger_path, answered)
+    # Written to THIS arm's root only. It used to also write back into
+    # ``curated_root``'s ledger, which is this build's *input* — and that voided the
+    # whole ``curated_sme`` arm whenever the blind rung ran first.
+    #
+    # The sequence: ``curated_sme_blind`` reads ``curated``'s ledger, finds its open
+    # records, answers them, and marks them answered *in curated's ledger*. Then
+    # ``curated_sme`` reads the same ledger, finds nothing open, records
+    # ``ledger_source="missing"``, folds nothing, and produces a corpus identical to
+    # ``curated``. So opting into the rung the docs recommend for splitting the
+    # docs-vs-protocol confound destroyed the arm the confound is about. It is caught
+    # downstream — ``_sme_fold_signal`` -> ``sme_noop_dbs`` -> unquotable — but only
+    # after paying for the whole build.
+    #
+    # Harmless to what either arm *serves*: the corpus loader never reads
+    # ``clarifications.jsonl`` and ``_corpora_differ`` fingerprints ``*.yaml`` only. The
+    # damage was confined to the ledger, which is precisely where the next arm looks.
     write_clarifications(clarifications_path(out_root), answered)
     _write_sme_clarifications_log(answered, out_root, schema=schema, tables=tables)
 
@@ -757,25 +948,12 @@ def build_curated_corpus_with_sme(
     if not open_records:
         fold_mode = "none"  # no clarifications → nothing to fold; curated_sme == curated
     elif run_agent_repass and model is not None:
-        from ..analyst.run_log import make_durable_checkpointer, new_run_id
-        from ..config import load_settings
+        from ..analyst.run_log import new_run_id
         from .deep_agent import build_curator_agent
 
-        try:
-            _settings = load_settings(apply_local=False)
-        except Exception:
-            _settings = None
+        _settings = _settings_or_load(settings)
         _run_id = new_run_id()
         _thread_id = f"curator-sme:{schema}:{out_root.name}"
-        _ckpt = None
-        if _settings is not None:
-            try:
-                _ckpt = make_durable_checkpointer(
-                    _settings,
-                    path=str(Path(out_root) / "agent_checkpoints.sqlite"),
-                )
-            except Exception:  # degrade; a checkpointer fault must not crash curation
-                _ckpt = None
 
         def make_agent() -> Any:  # fresh agent per invoke — no shared fs/state
             return build_curator_agent(
@@ -785,9 +963,8 @@ def build_curated_corpus_with_sme(
                 gateway=gateway,
                 bag=bag,
                 run_dir=out_root,
-                system_prompt=_PHASE_B_PROMPT,
+                system_prompt=system_prompt or _PHASE_B_PROMPT,
                 certified_writes=True,
-                checkpointer=_ckpt,
             )
 
         agent_ran = True

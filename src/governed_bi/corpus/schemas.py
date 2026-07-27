@@ -32,7 +32,9 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, 
 # live SQL namespace, so it must be a bare identifier. Rejecting separators / ``..``
 # here (at parse) closes the ``/corpus/edit`` path-traversal: the write directory is
 # derived from ``asset.schema`` and ``is_valid_id`` only guards the asset *id*.
-_SCHEMA_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
+# \A...\Z, not ^...$: Python's $ also matches just before a trailing newline, so
+# "beer_factory\n" would pass a security-labeled validator that names a directory.
+_SCHEMA_NAME_RE = re.compile(r"\A[A-Za-z0-9_]+\Z")
 
 
 def _validate_schema_name(value: str) -> str:

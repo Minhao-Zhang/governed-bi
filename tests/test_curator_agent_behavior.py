@@ -430,3 +430,296 @@ def test_pair_scoped_clarification_becomes_note(bird_connector, tmp_path: Path):
     notes = [a for a in corpus.assets if a.asset_type == "note"]
     assert notes, "pair-scoped clarification should have become a NoteAsset"
     assert "mislabeled" in notes[0].summary.lower() or "annotation" in notes[0].summary.lower()
+
+
+# --------------------------------------------------------------------------- #
+# The SME round-trip must refuse to hand back a corpus it did not change.
+#
+# This is the build-side half of the incident that ran for weeks: `curated_sme`
+# produced a corpus byte-identical to `curated`, so its EX equalled `curated` by
+# construction and the "SME adds nothing" reading was an artifact of the build, not
+# a measurement. The ledger has a serve-side detector for it (`sme_noop_dbs`), but
+# that only fires after a full paid run. This guard fails the build instead, and it
+# had never been exercised — every existing test either has an empty ledger (the
+# complementary branch, where a no-op is legitimate) or a fold that genuinely
+# differs.
+# --------------------------------------------------------------------------- #
+
+
+def test_an_sme_round_that_changes_nothing_fails_the_build(bird_connector, tmp_path: Path):
+    """Open clarifications plus a model that writes nothing must raise, not return.
+
+    Returning here is the dangerous outcome: the corpus is a valid, loadable copy of
+    `curated`, so nothing downstream can tell it apart from a real SME corpus except
+    by comparing bytes — which is exactly what this check does at the one moment the
+    two roots are both to hand.
+    """
+    gateway = Gateway(bird_connector)
+    train = [
+        EvalItem(
+            question="How many customers?",
+            sql="SELECT COUNT(*) FROM customers",
+            question_id="t1",
+        )
+    ]
+    curated = build_curated_corpus(
+        bird_connector, gateway, "beer_factory", train,
+        tmp_path / "corpus_curated", run_agent=False, dialect="sqlite",
+    )
+    write_clarifications(
+        curated / "clarifications.jsonl",
+        [
+            ClarificationRecord(
+                id="q001", scope="table:customers",
+                question="Who are the customers?", raised_by=["t1"],
+            )
+        ],
+    )
+
+    # A model that calls no tools at all: the ReAct loop terminates immediately, so
+    # the fold applies nothing and the output is a byte-for-byte copy of curated.
+    silent = ScriptedToolModel(responses=[AIMessage(content="I have nothing to add.")])
+
+    with pytest.raises(RuntimeError, match="identical to curated"):
+        build_curated_corpus_with_sme(
+            bird_connector, gateway, "beer_factory", train,
+            tmp_path / "corpus_curated_sme",
+            responder=StaticResponder(default="Customers who bought root beer."),
+            curated_root=curated,
+            model=silent,
+            run_agent_repass=True,
+            seed_ledger_if_empty=False,
+        )
+
+
+def test_corpora_differ_compares_bytes_not_just_presence(tmp_path: Path):
+    """The detector under the guard. A same-shaped tree with one edited value must
+    read as different, or the guard passes on any corpus that merely has the right
+    files — which a plain copy always does."""
+    from governed_bi.curator.pipeline import _corpora_differ
+
+    def _tree(root: Path, description: str) -> Path:
+        d = root / "beer_factory" / "tables"
+        d.mkdir(parents=True)
+        (d / "customers.yaml").write_text(
+            f"physical_name: customers\ndescription: {description}\n", encoding="utf-8"
+        )
+        return root
+
+    a = _tree(tmp_path / "a", "Customers.")
+    same = _tree(tmp_path / "same", "Customers.")
+    edited = _tree(tmp_path / "edited", "Customers who bought root beer.")
+
+    assert not _corpora_differ(a, same, "beer_factory"), "identical bytes must not differ"
+    assert _corpora_differ(a, edited, "beer_factory"), "an edited value must differ"
+
+    # A missing schema subtree fingerprints as "" — and two absent trees must not
+    # read as "identical, therefore fine", because nothing was built at all.
+    empty_a, empty_b = tmp_path / "e1", tmp_path / "e2"
+    empty_a.mkdir(), empty_b.mkdir()
+    assert not _corpora_differ(empty_a, empty_b, "beer_factory")
+    assert _corpora_differ(empty_a, a, "beer_factory")
+
+
+# --------------------------------------------------------------------------- #
+# Two bugs that cost paid builds, both found by reading the real run artifacts.
+# --------------------------------------------------------------------------- #
+
+
+def test_a_non_utf8_description_csv_does_not_lose_the_schema(tmp_path: Path):
+    """BIRD ships 11 description CSVs across 5 of the 69 schemas that are not UTF-8.
+    `UnicodeDecodeError` is a `ValueError`, so the `except OSError` in `build_sme_brief`
+    never caught it and the function raised — inside the SME build, which runs *after*
+    baseline, seeded and curated are already paid for. The schema was then dropped from
+    the scored pool having cost a full curator pass, and at `--build-workers 1` its YAML
+    stayed in the shared arm roots competing as a router candidate for every other
+    schema's questions.
+    """
+    from governed_bi.curator.sme import build_sme_brief
+
+    d = tmp_path / "database_description"
+    d.mkdir()
+    # cp1252 bytes that are invalid UTF-8 (0x92 = curly apostrophe).
+    (d / "t.csv").write_bytes(
+        b"column_name,column_description\ncustomer,the customer\x92s name\n"
+    )
+
+    brief = build_sme_brief(d, [])
+    assert "customer" in brief
+    assert "not valid UTF-8" in brief, (
+        "the degraded decode must be recorded, or a reader cannot tell why a "
+        "description reads oddly"
+    )
+
+
+def test_a_readable_csv_carries_no_degradation_note(tmp_path: Path):
+    """The complementary case, so the note above cannot be always-on."""
+    from governed_bi.curator.sme import build_sme_brief
+
+    d = tmp_path / "database_description"
+    d.mkdir()
+    (d / "t.csv").write_text(
+        "column_name,column_description\ncustomer,the customer name\n", encoding="utf-8"
+    )
+    brief = build_sme_brief(d, [])
+    assert "the customer name" in brief
+    assert "not valid UTF-8" not in brief
+
+
+def test_an_sme_build_does_not_consume_the_ledger_the_next_arm_needs(
+    bird_connector, tmp_path: Path
+):
+    """`curated_sme_blind` used to answer `curated`'s open clarifications *in curated's
+    own ledger*. `curated_sme` then read the same ledger, found nothing open, folded
+    nothing, and produced a corpus identical to `curated` — so opting into the rung the
+    docs recommend for splitting the docs-vs-protocol confound destroyed the arm the
+    confound is about.
+    """
+    from governed_bi.curator.clarifications import clarifications_path
+
+    gateway = Gateway(bird_connector)
+    train = [
+        EvalItem(question="How many customers?", sql="SELECT COUNT(*) FROM customers",
+                 question_id="t1")
+    ]
+    curated = build_curated_corpus(
+        bird_connector, gateway, "beer_factory", train,
+        tmp_path / "corpus_curated", run_agent=False, dialect="sqlite",
+    )
+    write_clarifications(
+        clarifications_path(curated),
+        [ClarificationRecord(id="q001", scope="table:customers",
+                             question="Who are the customers?", raised_by=["t1"])],
+    )
+
+    # Stand in for the blind arm: one SME build off the curated ledger.
+    build_curated_corpus_with_sme(
+        bird_connector, gateway, "beer_factory", train,
+        tmp_path / "corpus_blind",
+        responder=StaticResponder(default="Customers who bought root beer."),
+        curated_root=curated, model=None, run_agent_repass=False,
+        seed_ledger_if_empty=False,
+    )
+
+    still_open = [
+        r for r in load_clarifications(clarifications_path(curated))
+        if r.status is ClarificationRecordStatus.open
+    ]
+    assert still_open, (
+        "the first SME arm consumed curated's open clarifications, so the second SME "
+        "arm has nothing to fold and collapses onto curated"
+    )
+    # And the arm that ran did record its own answers.
+    answered = load_clarifications(clarifications_path(tmp_path / "corpus_blind"))
+    assert any(r.status is not ClarificationRecordStatus.open for r in answered)
+
+
+def test_seeded_clarifications_do_not_pose_as_agent_authored_for_the_next_arm(
+    bird_connector, tmp_path: Path
+):
+    """`seed_ledger_if_empty` synthesises gap questions for offline scaffolding. Written
+    into `curated_root`'s ledger they became the *next* SME arm's input, and since the
+    write-back of answers was removed they stay open — so `curated_sme` found open
+    records and stamped `ledger_source="agent"`, the one field whose job is telling
+    agent-authored clarifications from mechanically seeded ones.
+
+    This is the path `--skip-agent` takes, which is how the offline smoke runs.
+    """
+    import json
+
+    from governed_bi.curator.clarifications import clarifications_path
+
+    gateway = Gateway(bird_connector)
+    train = [
+        EvalItem(question="How many customers?", sql="SELECT COUNT(*) FROM customers",
+                 question_id="t1")
+    ]
+    curated = build_curated_corpus(
+        bird_connector, gateway, "beer_factory", train,
+        tmp_path / "corpus_curated", run_agent=False, dialect="sqlite",
+    )
+    assert not clarifications_path(curated).exists(), "curated starts with no ledger"
+
+    sources = []
+    for arm in ("blind", "sme"):
+        out = build_curated_corpus_with_sme(
+            bird_connector, gateway, "beer_factory", train,
+            tmp_path / f"corpus_{arm}",
+            responder=StaticResponder(default="Customers who bought root beer."),
+            curated_root=curated, model=None, run_agent_repass=False,
+            seed_ledger_if_empty=True,
+        )
+        manifest = json.loads(
+            (out / "run_manifest.json").read_text(encoding="utf-8")
+        )
+        sources.append((arm, manifest["ledger_source"], manifest["clarifications_applied"]))
+
+    for arm, source, applied in sources:
+        assert source == "seed_gap", (
+            f"{arm} reported ledger_source={source!r}; a mechanically seeded ledger must "
+            "never be labelled agent-authored"
+        )
+        assert applied > 0, f"{arm} folded nothing"
+
+    # And the shared input is left exactly as the curator left it.
+    assert not clarifications_path(curated).exists(), (
+        "an SME build seeded its scaffolding into the arm it derives from"
+    )
+
+
+def test_a_crashed_sme_build_leaves_the_pending_questions_behind(
+    bird_connector, tmp_path: Path
+):
+    """The seed write is truncated by the answered write in a successful build, so it
+    leaves no trace there. Its purpose is the failing build: when the responder raises,
+    the arm root should still hold the questions that were pending, because that is the
+    only record of what the build was attempting. A test pinning the write's *argument*
+    rather than its effect left deleting the line entirely undetected.
+    """
+    from governed_bi.curator.clarifications import (
+        clarifications_path,
+        load_clarifications,
+    )
+
+    class _DeadResponder:
+        """Stands in for a rate-limited or unreachable SME.
+
+        ``fill_clarifications_with_responder`` passes the record's *question text*, not
+        the record, so the parameter is named for what actually arrives.
+        """
+
+        def answer(self, question: str) -> str:  # noqa: ARG002
+            raise RuntimeError("429 rate limit")
+
+    gateway = Gateway(bird_connector)
+    train = [
+        EvalItem(question="How many customers?", sql="SELECT COUNT(*) FROM customers",
+                 question_id="t1")
+    ]
+    curated = build_curated_corpus(
+        bird_connector, gateway, "beer_factory", train,
+        tmp_path / "corpus_curated", run_agent=False, dialect="sqlite",
+    )
+    out = tmp_path / "corpus_sme"
+
+    # Pinned to the responder's own failure: a bare `Exception` would let an unrelated
+    # raise stand in for the crash this test is about.
+    with pytest.raises(RuntimeError, match="429"):
+        build_curated_corpus_with_sme(
+            bird_connector, gateway, "beer_factory", train, out,
+            responder=_DeadResponder(),
+            curated_root=curated, model=None, run_agent_repass=False,
+            seed_ledger_if_empty=True,
+        )
+
+    ledger = clarifications_path(out)
+    assert ledger.exists(), (
+        "a crashed SME build left no ledger, so nothing records what it was trying to ask"
+    )
+    pending = load_clarifications(ledger)
+    assert pending, "the ledger exists but holds no questions"
+    assert all(r.status is ClarificationRecordStatus.open for r in pending), (
+        "the pending questions should still read as open — none of them were answered"
+    )
+    # And the shared input is still untouched, even on the failure path.
+    assert not clarifications_path(curated).exists()

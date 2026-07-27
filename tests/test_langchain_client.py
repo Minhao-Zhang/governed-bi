@@ -111,3 +111,33 @@ def test_embedder_from_config_builds_openai_embeddings(monkeypatch):
     emb = LangChainEmbedder.from_config(ModelConfig(embedding_dimensions=256))
     assert emb.model.model == "text-embedding-3-small"
     assert emb.model.dimensions == 256
+
+
+def test_the_embedder_gets_the_same_retry_and_timeout_policy_as_the_chat_model(
+    monkeypatch,
+):
+    """`max_retries` is documented as a stack-wide knob and reached only the chat
+    client, so an embedding call had no retry budget and no wall-clock bound. Both
+    matter under the eval's concurrency knobs: every serve worker embeds its
+    question, and a 429 or a stalled connection there fails the turn as a crash.
+    """
+    pytest.importorskip("langchain_openai")
+
+    from dataclasses import replace
+
+    from governed_bi.config import load_settings
+    from governed_bi.llm import LangChainChatClient, LangChainEmbedder
+
+    models = replace(load_settings().models, max_retries=5, request_timeout_s=42.0)
+    # Hermetic: constructing the client needs *a* key, never a valid one — no
+    # request is made here.
+    monkeypatch.setenv(models.api_key_env, "sk-test-not-a-real-key")
+
+    embedder = LangChainEmbedder.from_config(models)
+    inner = getattr(embedder, "_model", None) or getattr(embedder, "model", None)
+    assert inner.max_retries == 5
+    assert getattr(inner, "request_timeout", None) == 42.0
+
+    chat = LangChainChatClient.from_config(models)
+    chat_inner = getattr(chat, "model", None)
+    assert chat_inner.max_retries == 5

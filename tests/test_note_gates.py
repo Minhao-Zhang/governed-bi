@@ -7,7 +7,11 @@ from pathlib import Path
 from governed_bi.config import Settings, load_settings
 from governed_bi.corpus import Corpus, load_corpus
 from governed_bi.corpus.schemas import NoteAsset, ProvenanceStatus, TableAsset
-from governed_bi.eval.note_gates import run_offline_note_gates
+from governed_bi.eval.note_gates import (
+    GateResult,
+    run_offline_note_gates,
+    summarise_gates,
+)
 from governed_bi.retrieval.triggers import fire_triggers
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
@@ -18,7 +22,50 @@ def test_offline_note_gates_green_on_beer_factory():
     settings = load_settings(apply_local=False)
     results = run_offline_note_gates(corpus, settings=settings)
     assert results
-    assert all(r.passed for r in results), [r for r in results if not r.passed]
+    # Asserting `all(r.passed)` was the wrong expectation: a skipped gate carries
+    # passed=True on purpose, so that assertion is also satisfied by a run in which
+    # every gate bailed out on a setup gap. clean_pass demands that each gate
+    # actually ran.
+    summary = summarise_gates(results)
+    assert summary.clean_pass, summary.detail
+    assert summary.n_passed == len(results)
+
+
+def test_all_skipped_gate_run_does_not_read_as_a_pass():
+    """An empty corpus skips every gate; that must not report as green.
+
+    This is the failure mode `GateResult.skipped` was introduced for: with nothing
+    to compare, each gate returns passed=True, so the old `all(r.passed)` check
+    below still holds while nothing whatsoever was measured.
+    """
+    results = run_offline_note_gates(Corpus(assets=[]), settings=Settings.for_env("dev"))
+    assert all(r.passed for r in results)  # the trap the summary has to catch
+
+    summary = summarise_gates(results)
+    assert summary.n_skipped == len(results)
+    assert summary.n_passed == 0
+    assert summary.verdict == "inconclusive"
+    assert not summary.clean_pass
+    assert "skipped" in summary.detail
+
+
+def test_summarise_gates_counts_skips_apart_from_passes():
+    mixed = [
+        GateResult("ran", True, "measured"),
+        GateResult("bailed", True, "no questions", skipped=True),
+    ]
+    summary = summarise_gates(mixed)
+    assert (summary.n_passed, summary.n_skipped, summary.n_failed) == (1, 1, 0)
+    # A real pass alongside a skip is a pass on what ran, but not a clean one: the
+    # skipped gate's invariant is still unverified.
+    assert summary.verdict == "pass"
+    assert not summary.clean_pass
+    assert "1 passed, 0 failed, 1 skipped" in summary.detail
+
+    failing = summarise_gates([*mixed, GateResult("broke", False, "regressed")])
+    assert failing.verdict == "fail"
+    assert failing.n_failed == 1
+    assert not failing.clean_pass
 
 
 def test_adv_wrong_note_pin_does_not_evict_true_schema():

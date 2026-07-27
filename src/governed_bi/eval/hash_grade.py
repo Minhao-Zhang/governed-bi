@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import numbers
 from dataclasses import dataclass
@@ -18,6 +19,8 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..gateway import Gateway, Identity
+
+logger = logging.getLogger("governed_bi.eval")
 
 
 @dataclass(frozen=True)
@@ -149,43 +152,109 @@ def load_gold_hashes(
     return out
 
 
-def load_trap_columns(bird_dir: Path | str, db_id: str) -> frozenset[str]:
-    """Physical ``table.column`` refs for decoy/trap columns (decoy-touch metric)."""
-    bird_dir = Path(bird_dir)
-    path = bird_dir / "artifacts" / "trap_manifest.json"
-    if not path.exists():
-        path = bird_dir / "eval_dataset" / "trap_manifest.json"
-    if not path.exists():
-        return frozenset()
+class TrapColumns(frozenset):
+    """Decoy ``table.column`` refs for one db, plus whether a manifest existed.
+
+    ``manifest_present is False`` is the fact a plain ``frozenset`` could not carry:
+    a missing ``trap_manifest.json`` and a genuinely trap-free db both produced an
+    empty set, so ``decoy_touch_rate`` printed a confident ``0.0`` either way.
+    Subclassing keeps every existing set operation working — a union with the
+    corpus-derived suspects still yields a plain ``frozenset`` — while a caller that
+    wants to report "not measured" instead of "measured as zero" reads the attribute.
+    """
+
+    manifest_present: bool
+
+    def __new__(cls, refs=(), *, manifest_present: bool) -> "TrapColumns":
+        self = super().__new__(cls, refs)
+        self.manifest_present = manifest_present
+        return self
+
+
+def _manifest_path(bird_dir: Path, filename: str) -> Path | None:
+    """``filename`` under ``artifacts/`` or ``eval_dataset/``, or ``None`` if neither."""
+    for parent in ("artifacts", "eval_dataset"):
+        candidate = bird_dir / parent / filename
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _table_rename_map(bird_dir: Path, db_id: str) -> dict[str, str]:
+    """BIRD identifier -> ``rename_decoy`` identifier, for one db.
+
+    ``schema_rename_map.json`` is one flat identifier map per db (tables and columns
+    share it); only the table half is ever looked up here. An absent file yields an
+    empty map rather than an error, because the identity-rename dbs need no
+    translation at all.
+    """
+    path = _manifest_path(bird_dir, "schema_rename_map.json")
+    if path is None:
+        return {}
     data = json.loads(path.read_text(encoding="utf-8"))
+    mapping = data.get(db_id) or {}
+    return {str(k): str(v) for k, v in mapping.items() if isinstance(v, str)}
+
+
+def load_trap_columns(bird_dir: Path | str, db_id: str) -> TrapColumns:
+    """Physical ``table.column`` refs for decoy/trap columns (decoy-touch metric).
+
+    Refs are schema-qualified only: a bare column name over-counts, because a
+    legitimate column sharing a decoy's name in another table then reads as a decoy
+    touch (C6). Each ref is emitted under **both** table spellings, because the
+    manifest keys tables by their pre-rename BIRD name while the graded
+    ``rename_decoy`` database serves the renamed one — matching the manifest's
+    spelling alone would read decoy-touch as zero on every renamed db, which is the
+    same silent-zero failure qualified matching is meant to remove.
+    """
+    bird_dir = Path(bird_dir)
+    path = _manifest_path(bird_dir, "trap_manifest.json")
+    if path is None:
+        logger.warning(
+            "trap_manifest.json not found under %s (checked artifacts/ and "
+            "eval_dataset/); decoy-touch is NOT MEASURED for db %r — read "
+            "manifest_present, not the rate, before calling this db trap-free",
+            bird_dir,
+            db_id,
+        )
+        return TrapColumns(manifest_present=False)
+    rename = _table_rename_map(bird_dir, db_id)
     refs: set[str] = set()
-    for row in data:
+
+    def _add(table: Any, col: Any, *, translate: bool) -> None:
+        if not table or not col:
+            return
+        refs.add(f"{table}.{col}")
+        if translate and rename.get(str(table)):
+            refs.add(f"{rename[str(table)]}.{col}")
+
+    for row in json.loads(path.read_text(encoding="utf-8")):
         if row.get("db") != db_id:
             continue
-        table = row.get("table")
         names = row.get("names") or {}
-        col = names.get("rename") or names.get("base") or row.get("source_column")
-        if table and col:
-            refs.add(f"{table}.{col}")
-            refs.add(col)
-    tpath = bird_dir / "artifacts" / "trap_table_manifest.json"
-    if not tpath.exists():
-        tpath = bird_dir / "eval_dataset" / "trap_table_manifest.json"
-    if tpath.exists():
+        _add(
+            row.get("table"),
+            names.get("rename") or names.get("base") or row.get("source_column"),
+            translate=True,
+        )
+
+    tpath = _manifest_path(bird_dir, "trap_table_manifest.json")
+    if tpath is not None:
         for row in json.loads(tpath.read_text(encoding="utf-8")):
             if row.get("db") != db_id:
                 continue
             names = row.get("names") or {}
-            table = names.get("rename") or names.get("base") or row.get("source_table")
-            for col in row.get("columns") or []:
-                if isinstance(col, dict):
-                    cname = (col.get("names") or {}).get("rename") or col.get("name")
-                else:
-                    cname = col
-                if table and cname:
-                    refs.add(f"{table}.{cname}")
-                    refs.add(str(cname))
-    return frozenset(refs)
+            # A decoy *table* names itself and its columns per variant, under
+            # ``names.<variant>.{table,columns}``. The sibling ``columns`` list holds
+            # the pre-decoy source columns and carries no physical name at all, so
+            # reading it yields nothing — the whole decoy-table manifest used to
+            # contribute zero refs. The variant's table name is already physical, so
+            # it is not run through the rename map.
+            variant = names.get("rename") or names.get("base") or {}
+            table = variant.get("table") or row.get("source_table")
+            for col in variant.get("columns") or []:
+                _add(table, col, translate=False)
+    return TrapColumns(refs, manifest_present=True)
 
 
 def score_sql_hashes(
@@ -228,18 +297,36 @@ def score_sql_hashes(
         return {
             "correct": False,
             "correct_strict": False,
-            "error": str(err),
+            # Prefixed so it is distinguishable downstream. The model produced a
+            # statement that parses and then raises — a type error, an unknown
+            # column. That is a wrong answer, not a harness crash, so the driver is
+            # right to keep the row gradeable; but without a marker the offline
+            # taxonomy could not tell it from a statement that ran fine and returned
+            # the wrong rows, and charged it to "structurally identical, bad value".
+            # A statement that returned nothing has no structure to compare.
+            "error": f"exec_error:{type(err).__name__}: {err}",
             "hash_lenient": None,
             "hash_strict": None,
         }
     h_lenient = hash_normalised_result(rows)
     h_strict = hash_normalised_result_strict(rows)
+    # Result *shape* alongside the verdict. A prediction with the gold row count
+    # but a different hash failed on projection / ordering / formatting; a
+    # different row count means a genuinely different result set. Those two need
+    # opposite responses (change the grading contract vs. fix the SQL), and the
+    # scored booleans alone cannot tell them apart. Free here — the rows are
+    # already in hand — whereas a true value-multiset tier would need the gold SQL
+    # re-executed per question, and the gold artifact ships no such hash.
     return {
         "correct": h_lenient == gold.hash_lenient,
         "correct_strict": bool(gold.hash_strict) and h_strict == gold.hash_strict,
         "error": None,
         "hash_lenient": h_lenient,
         "hash_strict": h_strict,
+        "pred_nrows": len(rows),
+        "pred_ncols": len(result.columns) if result.columns is not None else None,
+        "gold_nrows": gold.nrows,
+        "nrows_match": (gold.nrows is not None and len(rows) == gold.nrows),
     }
 
 
@@ -276,18 +363,31 @@ def validate_gold_hashes_live(
     """
     checked = 0
     matched = 0
+    n_exec_errors = 0
+    n_no_gold = 0
+    n_unusable = 0
     errors: list[str] = []
     for item in items:
         qid = getattr(item, "question_id", None)
         if not qid or str(qid) not in gold_hashes:
+            n_no_gold += 1
             continue
         gold = gold_hashes[str(qid)]
         if not gold.usable or not item.sql:
+            n_unusable += 1
             continue
         try:
             result = gateway.execute(item.sql, identity)
             rows = list(result.rows)
         except Exception as err:
+            # Counted, not merely appended to a truncated string list. An execution
+            # error here reduced ``n_checked`` and never touched ``agree_rate``, so a
+            # caller gating on ``agree_rate < 1.0`` passed on one agreeing row no
+            # matter how many failed to run at all — and gold that cannot execute is
+            # the single most likely thing to be wrong in this pre-flight, because it
+            # is what a wrong DSN, an unloaded schema, a bad ``search_path`` or the
+            # wrong ``gold_sql_field`` all look like.
+            n_exec_errors += 1
             errors.append(f"{qid}: exec {err}")
             continue
         h = hash_normalised_result(rows)
@@ -302,5 +402,11 @@ def validate_gold_hashes_live(
         "n_checked": checked,
         "n_matched": matched,
         "agree_rate": (matched / checked) if checked else None,
+        # Why the un-checked items were un-checked, kept apart because they mean
+        # different things: an exec error is our configuration being wrong, whereas
+        # missing or unusable gold is a property of the dataset that no run can fix.
+        "n_exec_errors": n_exec_errors,
+        "n_no_gold": n_no_gold,
+        "n_unusable_gold": n_unusable,
         "errors": errors[:5],
     }

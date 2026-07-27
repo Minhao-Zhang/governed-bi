@@ -362,7 +362,18 @@ def create_app(stack: ServeStack | None = None):
                 / subdir_for_type(asset.asset_type)
                 / f"{asset.id}.yaml"
             )
-            old_text = target.read_text(encoding="utf-8") if target.exists() else ""
+            if target.exists():
+                try:
+                    old_text = target.read_text(encoding="utf-8")
+                except UnicodeDecodeError as err:
+                    # A non-UTF-8 existing asset file would otherwise surface as an
+                    # opaque 500 with a traceback; return a clean, actionable error.
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"existing asset file is not valid UTF-8: {err}",
+                    ) from err
+            else:
+                old_text = ""
         else:
             old_text = ""
         new_text = dump_asset(asset)

@@ -1,18 +1,26 @@
 """Pooled **data-lake** eval driver (D15 scale run).
 
 Where :mod:`governed_bi.eval.run_experiment` pins ONE ``db_id`` to one Postgres
-schema, this driver serves the whole BIRD test set with **every** schema living
-in one database at once, so the schema router (``analyst.agent`` +
+schema, this driver serves a whole BIRD split with **every** schema living in one
+database at once, so the schema router (``analyst.agent`` +
 ``retrieval.schema_router``) must pick the right schema per question. It is the
 "one database, many schemas" experiment (docs/design-decisions.md D15).
+
+``--split test`` (default) is the held-out score. ``--split train`` is larger but
+is what the curator was built from, so it is a diagnostic only. Rows stream to
+disk as they are scored, so ``--resume-from <run dir>`` continues an interrupted
+run; ``governed_bi.eval.analysis`` reports table-selection attribution, paired
+McNemar and gradeable EX over the result with no further model calls.
 
 Shape (mirrors the eval ladder — three fair rungs, same serve path):
 
 1. **Build** ``baseline`` / ``curated`` / ``curated_sme`` for N ``db_id``s into
    three *shared* corpus roots (each db writes its own ``<root>/<db_id>/``
    subtree). Per-db curator sidecars are relocated so a shared root does not
-   clobber them. Resumable: a db whose subtree already has YAML is skipped.
-2. **Pool** the test questions (tagged with their ``db_id``), the gold hashes
+   clobber them. Resumable: a db whose subtree has the durable
+   ``BUILD_COMPLETE.json`` marker is skipped; partial YAML without that marker
+   is discarded and rebuilt.
+2. **Pool** the split's questions (tagged with their ``db_id``), the gold hashes
    (keyed by globally-unique ``question_id``), and a **per-db** suspect-column
    set (the decoy metric is bare-column-name, so pooling suspect sets would
    cross-contaminate — each db's questions are scored against that db's set).
@@ -39,17 +47,57 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import shutil
+import threading
 import time
-from collections.abc import Callable
+from datetime import datetime, timezone
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from ..config import DataSourceConfig, Environment, Settings, load_dotenv, load_settings
-from ..corpus import load_corpus
+from ..corpus import Corpus, load_corpus
+from ..corpus.schemas import NoteAsset
 from ..gateway import Gateway, Identity
 from ..gateway.connectors.postgres import PostgresConnector
-from .arms import _touches_suspect, agent_solver
+from ..prompts import (
+    parse_cli_overrides,
+    prompt_set_hash,
+    resolve as resolve_prompts,
+    text as prompt_text,
+)
+from ..provenance import corpus_release_hash
+from ..stages import REFUSED_BY_TO_STAGE, Outcome, classify_outcome, classify_row
+from .analysis import census_delta, corpus_census, rank_report
+from .arms import (
+    ARM_ORDER,
+    Arm,
+    _touches_suspect,
+    agent_solver,
+    ladder_steps,
+    skipped_rungs,
+)
+from .error_taxonomy import attribute_rows, summarise_attributions
+from .oracle import GoldIndex, OracleRung, oracle_solver
+from .power import (
+    cluster_sign_test,
+    comparison_report,
+    correct_by_question,
+    holm_adjust,
+    mcnemar,
+    measure_floor,
+    minimum_detectable_effect,
+)
+from .treatment import (
+    DEFAULT_MIN_DIVERGENCE,
+    compare_arms,
+    divergence_table,
+    fingerprint_arm,
+)
 from .parallel import ServeWorker, resolve_workers, run_ordered_pool
 from .bird_loader import available_dbs, load_bird_items
 from .hash_grade import (
@@ -58,18 +106,70 @@ from .hash_grade import (
     score_sql_hashes,
     validate_gold_hashes_live,
 )
+from .index import RESUME_DRIFT_KEYS, index_run, manifest_model
+from .leakage import is_gradeable_eval_row, twin_report, ungradeable_question_ids
 from .run_experiment import (
     _RefuseAllSolver,
+    _write_jsonl,
+    _collect_curator_errors,
+    _cost_block,
+    _sme_fold_signal,
     _suspect_from_corpus,
     _utc_ts,
     _validate_corpora,
     _warn_if_not_green,
-    _write_jsonl,
+    _warn_if_sme_noop,
 )
 
-_ARMS = ("baseline", "curated", "curated_sme")
+# Derived from the enum, not spelled again: two independent spellings of the same
+# three-value taxonomy drift, and this driver's CLI validates ``--arms`` against it.
+_ARMS = ARM_ORDER
+
+
+#: Arms a run scores when ``--arms`` is not given. ``curated_sme_blind`` is opt-in:
+#: it costs a full SME round per database, and whether to spend that to split the
+#: docs-vs-protocol confound is a budget decision the operator should make
+#: deliberately rather than inherit from a default.
+_DEFAULT_ARMS: tuple[str, ...] = (
+    "baseline",
+    "seeded",
+    "curated",
+    "curated_sme",
+)
+_SPLITS = ("test", "train")
+#: Share of schemas whose gold must fail to execute before the run aborts rather than
+#: warns. Set where it is, not tuned: misconfiguration (wrong DSN, unloaded schemas,
+#: gold read from the un-obfuscated ``sql_sqlite``) takes out essentially every schema,
+#: while a query crossing the gateway timeout or a gold row BIRD never flagged as broken
+#: takes out one. A quarter of the split is far above the latter and far below the
+#: former. Below it the failures are reported and recorded, never swallowed.
+#: Share of requested schemas that must build before the run is allowed to serve.
+#: Half is deliberately lenient — a handful of awkward schemas should not throw away a
+#: scale run — but a pool that has lost most of its members is a different experiment
+#: from the one requested, and it is unquotable regardless, so serving it only spends
+#: money. See the check after the build phase.
+_BUILD_COVERAGE_ABORT_FRACTION = 0.5
+_GOLD_EXEC_FAILURE_ABORT_FRACTION = 0.25
+#: ...and at least this many schemas, so the share cannot fire on a single failure in a
+#: small pool. Without it, one slow gold row aborted every ``--limit-dbs 3`` run.
+_GOLD_EXEC_FAILURE_ABORT_MIN_DBS = 2
+# A gold answer that is a literal ``VALUES (...)`` constant hands back a precomputed
+# row instead of querying anything, so no generated SQL can match it. These are
+# counted out of ``ex_gradeable`` and reported, rather than silently deflating EX
+# and diluting every arm-to-arm delta measured against it.
+_FROZEN_GOLD_RE = re.compile(r"\bVALUES\s*\(", re.IGNORECASE)
 # Curator sidecar files written to the corpus *root* (not the per-schema subtree):
 # on a shared root each db would overwrite the last. Relocated per-db after build.
+#: Written into ``<db>/_build/`` when a curator diagnostic could not be promoted.
+#: Its presence means this db's curator verdict is unknown, which the run ledger
+#: must treat as a reason not to quote the run.
+_UNPROMOTED_MARKER = "UNPROMOTED_SIDECARS.json"
+#: Written into ``<db>/_build/`` only after a successful per-(arm, db) build.
+#: Resume, staging seed, skip, and promote treat this — not "any ``*.yaml``" — as
+#: the durable completeness contract. A kill mid-build leaves YAML without this
+#: marker; that tree is debris, not a finished corpus.
+_BUILD_COMPLETE_MARKER = "BUILD_COMPLETE.json"
+
 _SIDECARS = (
     "run_manifest.json",
     "validate_findings.jsonl",
@@ -84,32 +184,2423 @@ def _has_yaml(root: Path, db_id: str) -> bool:
     return d.is_dir() and any(d.rglob("*.yaml"))
 
 
-def _relocate_sidecars(root: Path, db_id: str) -> None:
-    """Move any root-level curator sidecars into ``<root>/<db_id>/_build/`` so the
-    next db's build cannot clobber them (the scored YAML lives per-schema and is
-    already safe)."""
+def _build_complete_path(root: Path, db_id: str) -> Path:
+    return root / db_id / "_build" / _BUILD_COMPLETE_MARKER
+
+
+def _corpus_complete(root: Path, db_id: str) -> bool:
+    """True only when a successful build left the durable completeness marker.
+
+    ``*.yaml`` alone is not enough: a kill mid-build leaves partial YAML that used
+    to be adopted as finished on ``--resume``.
+    """
+    return _build_complete_path(root, db_id).is_file() and _has_yaml(root, db_id)
+
+
+def _mark_build_complete(root: Path, db_id: str) -> None:
+    """Record that ``root/db_id`` finished successfully. Call only after a full build."""
     dest = root / db_id / "_build"
-    for name in _SIDECARS:
-        src = root / name
-        if src.exists():
-            dest.mkdir(parents=True, exist_ok=True)
-            src.replace(dest / name)
+    dest.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "db_id": db_id,
+        "complete": True,
+        "marked_at_utc": _utc_ts(),
+    }
+    _build_complete_path(root, db_id).write_text(
+        json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+    )
 
 
-def _pooled_test(
-    dataset_dir: Path, db_ids: list[str], *, limit: int | None
+def _discard_incomplete_corpus(root: Path, db_id: str) -> bool:
+    """Remove a shared-root ``(arm, db)`` tree that has YAML but no completeness marker.
+
+    Returns whether anything was discarded. Resume must not seed, skip, or promote
+    such debris; rebuilding over it would also leave orphan YAML from the killed
+    attempt mixed into the new tree.
+    """
+    d = root / db_id
+    if not d.is_dir():
+        return False
+    if _corpus_complete(root, db_id):
+        return False
+    if not _has_yaml(root, db_id) and not _build_complete_path(root, db_id).exists():
+        # Empty or sidecar-only debris without YAML — still unsafe to keep if the
+        # directory exists from a killed attempt; clear when anything is present.
+        try:
+            next(d.iterdir())
+        except StopIteration:
+            return False
+    shutil.rmtree(d)
+    return True
+
+
+def _relocate_sidecars(
+    root: Path, db_id: str, *, dest_root: Path | None = None
+) -> list[Path]:
+    """Move root-level curator sidecars into ``<dest_root>/<db_id>/_build/``.
+
+    Returns the sources it could NOT place, so a caller that is about to delete
+    ``root`` can tell the difference between "everything is promoted" and "a
+    diagnostic is still sitting in a directory I am about to remove".
+
+    ``dest_root`` defaults to ``root`` (the in-place serial case). When a build runs
+    in a private staging root, the sidecars are lifted straight into the shared arm
+    root's per-db folder instead, so the staging directory can be discarded whole.
+    """
+    dest = (dest_root or root) / db_id / "_build"
+    # The named sidecars. The curator used to also drop an
+    # ``agent_checkpoints_<schema>.sqlite`` here, which needed its own exemption
+    # because losing it was harmless; the curator no longer creates one (deepagents
+    # wants a checkpointer only for ``interrupt_on``, which the curator does not use),
+    # so every file handled here is now a diagnostic whose loss matters.
+    movable = [root / name for name in _SIDECARS]
+    stuck: list[Path] = []
+    for src in movable:
+        if not src.exists():
+            continue
+        dest.mkdir(parents=True, exist_ok=True)
+        try:
+            src.replace(dest / src.name)
+            continue
+        except OSError:
+            pass
+        # A move can fail where a copy succeeds: on Windows an open handle blocks
+        # renaming the file but not reading it. Copying keeps the diagnostic even
+        # when the original cannot be released.
+        try:
+            shutil.copy2(src, dest / src.name)
+        except OSError as err:
+            stuck.append(src)
+            print(
+                f"*** WARNING: could not place {src.name} for {db_id!r}: {err} ***"
+            )
+            continue
+        # The copy landed, so the original is now redundant AND dangerous: left at
+        # the arm root it is the next db's build that overwrites it, and in serial
+        # mode nobody deletes the arm root. Best effort — the copy is what matters.
+        try:
+            src.unlink()
+        except OSError:
+            pass
+    lost = sorted(p.name for p in stuck)
+    if lost:
+        # A diagnostic that could not be placed means this db's curator verdict is
+        # UNKNOWN, and that has to survive as a fact about the run rather than as a
+        # file somewhere. Two earlier attempts tried to preserve the file itself and
+        # both failed: the staging root that was "kept for inspection" is cleared at
+        # the start of the next build (so a `--resume` erased it and then re-promoted
+        # cleanly, scoring the db as healthy), and in serial mode there is no staging
+        # root at all — the file simply sits at the arm root until the next db
+        # overwrites it.
+        #
+        # So the marker goes where the *promoted* artifacts go, in both modes. It is
+        # read by `_collect_curator_errors`, lands in `summary.json`'s
+        # `curator_errors`, and makes the run un-quotable through the gate that
+        # already exists — because a missing `run_manifest.json` otherwise reads
+        # downstream as "no curator error", which is the swallowed-crash failure this
+        # whole harness is built to stop.
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / _UNPROMOTED_MARKER).write_text(
+            json.dumps(
+                {
+                    "db_id": db_id,
+                    "unpromoted": lost,
+                    "why": (
+                        "these curator diagnostics could not be moved or copied out of "
+                        "the build root, so this db's curator verdict is unknown and "
+                        "the run must not be quoted on it"
+                    ),
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        print(
+            f"*** WARNING: could not promote {', '.join(lost)} for {db_id!r} — "
+            f"recorded in {dest / _UNPROMOTED_MARKER}; this db's curator verdict is "
+            "unknown and the run will not be quotable ***"
+        )
+    return stuck
+
+
+def _stage_roots(
+    staging_root: Path,
+    roots: dict[str, Path],
+    db_id: str,
+    *,
+    resume: bool,
+) -> dict[str, Path]:
+    """Private per-``(arm, db)`` staging roots for a concurrent build.
+
+    Extracted from ``run_datalake``'s build worker so the two things that decide
+    whether a parallel build means the same as a serial one can be tested without
+    driving the whole harness: what a staging root starts out holding, and whether a
+    resume can still see what is already on disk.
+
+    Roots are **cleared**, not just created. A build killed by the process dying
+    (OOM, Ctrl-C) leaves partial YAML behind; staging is never trustworthy, so it
+    is wiped at the start of every attempt.
+
+    Under ``resume`` each staging root is then seeded only with a *complete*
+    shared-root corpus for this db (``BUILD_COMPLETE.json`` present). Partial
+    shared trees are discarded rather than copied: seeding them would let the
+    build's skip check (and a later promote) adopt kill debris as finished.
+    """
+    staged = {arm: staging_root / f"{arm}__{db_id}" for arm in roots}
+    for path in staged.values():
+        shutil.rmtree(path, ignore_errors=True)
+        path.mkdir(parents=True, exist_ok=True)
+    if resume:
+        for arm, path in staged.items():
+            if _corpus_complete(roots[arm], db_id):
+                shutil.copytree(roots[arm] / db_id, path / db_id, dirs_exist_ok=True)
+            elif _discard_incomplete_corpus(roots[arm], db_id):
+                print(
+                    f"  [{arm}] discarded incomplete {db_id!r} corpus under "
+                    f"{roots[arm].name} (YAML without {_BUILD_COMPLETE_MARKER}); "
+                    "will rebuild"
+                )
+    return staged
+
+
+def run_build_phase(
+    wanted: "Sequence[str]",
+    *,
+    roots: dict[str, Path],
+    staging_root: Path,
+    build_workers: int,
+    resume: bool,
+    build_errors: dict[str, str],
+    build_lock: "threading.Lock",
+    build_one_db: "Callable[[str, dict[str, Path]], Any]",
+) -> list[str]:
+    """Build every db in ``wanted``, serially or across workers, into ``roots``.
+
+    Returns the db_ids that succeeded, in the order of ``wanted`` — not completion
+    order: ``Executor.map`` yields in *submission* order, so a slow first schema holds
+    back results already finished behind it. Failures land in ``build_errors`` and are
+    dropped rather than aborting the run, because one bad schema must not cost a scale
+    run its other 68.
+
+    Module-level, and taking the actual build as ``build_one_db``, for one reason:
+    this dispatch decides whether ``--build-workers N`` produces the same corpora as
+    ``--build-workers 1``, and while it was a closure inside :func:`run_datalake` that
+    could only be tested by driving the whole harness — Postgres, gold, serve loop and
+    all. So it never was. The isolation, promotion and staging mechanics underneath it
+    each had tests; the composition of them did not, and the composition is where a
+    parallel build would silently diverge from a serial one.
+
+    The width is deliberately invisible to the result. At ``build_workers == 1`` the
+    builds write straight into the shared roots; above 1 each gets a private staging
+    root (:func:`_stage_roots`) and is promoted under a lock (:func:`_promote_build`).
+    Promotion is the only step touching shared state, and it is a directory move per
+    arm — serialised so two dbs cannot race on creating the same parent, and cheap
+    enough not to meaningfully reduce the parallel fraction.
+    """
+    built: list[str] = []
+
+    def _build_one(db: str) -> str | None:
+        # Pre-assigned so the ``except`` branch can always read it. ``_stage_roots``
+        # can itself raise (a full disk, a permission error), and this used to be
+        # assigned only inside the ``try`` — so that failure raised
+        # ``UnboundLocalError`` *from the exception handler*, which is not caught and
+        # took down the whole build phase rather than one schema.
+        build_roots = roots
+        # ...but "did staging happen" is then a separate question from "is
+        # ``build_workers > 1``", and conflating them made the failure message name the
+        # shared arm roots — which by then hold other schemas' promoted corpora — as
+        # this build's disposable debris.
+        staged = False
+        try:
+            if build_workers > 1:
+                build_roots = _stage_roots(staging_root, roots, db, resume=resume)
+                staged = True
+            build_one_db(db, build_roots)
+            # Completeness markers: a successful return from the build means each
+            # arm that holds YAML for this db is finished. Fake/test builds and
+            # paths that write YAML without calling ``_mark_build_complete`` still
+            # get the durable contract before promote/skip can see them.
+            for _arm, path in build_roots.items():
+                if _has_yaml(path, db) and not _corpus_complete(path, db):
+                    _mark_build_complete(path, db)
+            if staged:
+                with build_lock:
+                    for arm, path in build_roots.items():
+                        _promote_build(path, roots[arm], db)
+            return db
+        except Exception as err:  # one bad db must not lose the whole run
+            detail = f"{type(err).__name__}: {err}"
+            with build_lock:
+                build_errors[db] = detail
+            print(f"*** build FAILED for {db!r} — dropped from pool: {detail}")
+            if staged:
+                # The staging roots are KEPT, not deleted. They hold whatever the
+                # failed build managed to write — findings, a run manifest, a partial
+                # corpus — and that is the only evidence of why it failed. Deleting
+                # them here also undid ``_promote_build``'s refusal to discard a
+                # diagnostic it could not place, which was the entire point of that
+                # refusal.
+                #
+                # Safe to leave: staging is cleared at the START of every build, so a
+                # later ``--resume`` cannot mistake this debris for a finished corpus,
+                # and it all lives under the run directory rather than somewhere the
+                # operator has to be told about.
+                kept = [str(p) for p in build_roots.values() if p.exists()]
+                if kept:
+                    print(f"    staging kept for inspection: {', '.join(sorted(kept))}")
+            return None
+
+    def _consume(results: "Iterable[str | None]") -> None:
+        for done in results:
+            if done is not None:
+                built.append(done)
+                print(f"  built corpora: {done} ({len(built)}/{len(wanted)})")
+
+    # Consumed INSIDE the ``with``, not after it. ``Executor.map`` submits eagerly but
+    # yields lazily, and ``pool.__exit__`` calls ``shutdown(wait=True)`` — so draining
+    # the iterator after the block means nothing prints until every schema has
+    # finished, then all of it at once. On the 69-schema run this exists for that is
+    # hours of silence, and if the process dies partway there is no log of what
+    # completed. Verified: at 2 workers over 6 half-second builds, consuming inside
+    # streams at 0.5/0.5/1.0/1.0/1.5/1.5s; consuming after prints all six at 1.5s.
+    if build_workers > 1 and len(wanted) > 1:
+        print(
+            f"  building {len(wanted)} db(s) across {build_workers} worker(s) "
+            f"(each in a private staging root)"
+        )
+        with ThreadPoolExecutor(max_workers=build_workers) as pool:
+            _consume(pool.map(_build_one, wanted))
+    else:
+        _consume(_build_one(db) for db in wanted)
+    return built
+
+
+def _promote_build(staged: Path, shared: Path, db_id: str) -> None:
+    """Move one finished db's build out of its private staging root into the shared
+    arm root, then discard the staging root.
+
+    This is what makes the build loop parallelisable without touching the curator.
+    Everything a curator build writes — the agent's ``FilesystemBackend`` root and all
+    five sidecars — is rooted at the arm root it is handed, and the sidecars are
+    *root-level* filenames. Two concurrent builds sharing that
+    root would interleave writes to the same ``clarifications.jsonl`` /
+    ``validate_findings.jsonl`` / ``adversary_findings.jsonl``, which for the SME arm
+    means one schema's clarification text leaking into another's corpus. Giving each
+    build a private root keeps every path relationship *inside* a build byte-identical
+    to the serial case — deliberately, because the one time those paths were re-pointed
+    the SME arm silently read its ledger from a directory a build step had moved, and
+    every SME number for weeks was a no-op.
+
+    The schema tree is installed by a same-filesystem swap: stage → ``.incoming``,
+    then rename live → ``.previous`` and ``.incoming`` → live, then delete
+    ``.previous``. A failure between installing the new tree and cleanup leaves
+    either the old or the new valid destination, never an empty hole. Delete-then-
+    move used to destroy the last good corpus when the process died between the
+    two steps.
+
+    Leftovers from a prior crashed promote are healed before anything is deleted:
+    if the live dest is missing, ``.previous`` (preferred) or ``.incoming`` is
+    restored first. Only then are unused leftover names cleared. Clearing first
+    was how a second attempt could erase the last recoverable corpus.
+    """
+    src_schema = staged / db_id
+    if src_schema.is_dir():
+        if not _corpus_complete(staged, db_id):
+            raise RuntimeError(
+                f"refusing to promote incomplete build for {db_id!r} from {staged}: "
+                f"missing {_BUILD_COMPLETE_MARKER} (partial YAML is not a corpus)"
+            )
+        dest_schema = shared / db_id
+        dest_schema.parent.mkdir(parents=True, exist_ok=True)
+        incoming = shared / f".{db_id}.incoming"
+        previous = shared / f".{db_id}.previous"
+        _heal_promote_leftovers(dest_schema, previous=previous, incoming=incoming)
+        # Move staged tree onto the shared filesystem under a temp name first.
+        # Heal may have left nothing named ``incoming``; if a fresh leftover name
+        # somehow still exists it is empty debris and safe to replace.
+        if incoming.exists():
+            shutil.rmtree(incoming)
+        shutil.move(str(src_schema), str(incoming))
+        moved_aside = False
+        try:
+            if dest_schema.exists():
+                # ``previous`` must be free: heal already restored or cleared it.
+                if previous.exists():
+                    shutil.rmtree(previous)
+                dest_schema.rename(previous)
+                moved_aside = True
+            incoming.rename(dest_schema)
+        except BaseException:
+            # Restore the prior corpus if we had moved it aside and the new tree
+            # did not land. Prefer leaving *some* valid destination over none.
+            if moved_aside and previous.exists() and not dest_schema.exists():
+                previous.rename(dest_schema)
+            elif incoming.exists() and not dest_schema.exists():
+                incoming.rename(dest_schema)
+            raise
+        if previous.exists():
+            shutil.rmtree(previous, ignore_errors=True)
+    # Sidecars sit at the staging root; lift them into the promoted per-db folder
+    # before the staging root is discarded.
+    # Anything that could not be placed is already recorded, durably, in the shared
+    # root by ``_relocate_sidecars`` — see the marker it writes there. Raising here
+    # instead was the previous attempt and it did not hold: the staging root it
+    # preserved is cleared at the start of the next build, so a ``--resume`` erased
+    # the evidence and then promoted cleanly, scoring the db as healthy.
+    _relocate_sidecars(staged, db_id, dest_root=shared)
+    shutil.rmtree(staged, ignore_errors=True)
+
+
+def _heal_promote_leftovers(
+    dest_schema: Path, *, previous: Path, incoming: Path
+) -> None:
+    """Restore a missing live dest from prior-promote leftovers before deleting any.
+
+    Order matters. A process death after ``dest → .previous`` (and possibly after
+    ``.incoming → dest`` failed) leaves the recoverable corpus under ``.previous``
+    and/or ``.incoming`` with no live dest. Deleting those names first destroys the
+    only recoverable tree. Prefer ``.previous`` (the last known-good live corpus)
+    over ``.incoming`` (the candidate that may never have been fully installed).
+    """
+    if dest_schema.exists():
+        # Live dest is valid; leftover temp names from an older crash are debris.
+        if incoming.exists():
+            shutil.rmtree(incoming)
+        if previous.exists():
+            shutil.rmtree(previous)
+        return
+    if previous.exists():
+        previous.rename(dest_schema)
+        if incoming.exists():
+            shutil.rmtree(incoming)
+        return
+    if incoming.exists():
+        incoming.rename(dest_schema)
+
+
+def _assert_build_coverage(
+    built: "Sequence[str]",
+    wanted: "Sequence[str]",
+    build_errors: dict[str, str],
+) -> None:
+    """Refuse to serve a pool far from the one requested.
+
+    Build attrition is its own failure mode and needs its own gate. A run missing much
+    of its requested pool is not the experiment anyone asked for: the pooled router
+    ranks against corpora that were never built, the census disagrees with the arm
+    summaries, and :func:`governed_bi.eval.index.quotable` already refuses the run on
+    ``build_errors`` alone. Serving it anyway spends the serve budget on a number nobody
+    could quote.
+
+    It also takes a load off the gold denominator. The gold-failure share is measured
+    against every requested schema, which is right for its own question — is this a
+    systematic misconfiguration across what we asked for — but it means a gold problem
+    confined to a small surviving pool reads as a small fraction. Catching the attrition
+    here stops that pool from being served at all, rather than teaching the gold check
+    to detect build failures.
+
+    Module-level so it can be exercised. As an inline block its only test asserted
+    arithmetic about the threshold constant and never called it, which would have passed
+    with the gate deleted.
+    """
+    if not built:
+        raise RuntimeError(f"every db failed to build: {build_errors}")
+    coverage = len(built) / len(wanted)
+    if coverage < _BUILD_COVERAGE_ABORT_FRACTION:
+        # Named, and the count first: an operator reading this needs to know how much of
+        # the pool went missing before they need to know which schemas.
+        detail = "; ".join(f"{db}: {err}" for db, err in sorted(build_errors.items())[:3])
+        more = "" if len(build_errors) <= 3 else f" (+{len(build_errors) - 3} more)"
+        raise RuntimeError(
+            f"only {len(built)} of {len(wanted)} schema(s) built "
+            f"({coverage:.0%}, below the {_BUILD_COVERAGE_ABORT_FRACTION:.0%} floor) — "
+            f"refusing to serve a pool this far from the one it set out to build, "
+            f"because its numbers could not be quoted anyway. Note this counts only "
+            f"schemas that were present on Postgres and failed to build; schemas absent "
+            f"from Postgres never reach this check and are reported separately as "
+            f"`dbs_absent_from_postgres`. Fix the builds, or narrow the request with "
+            f"--limit-dbs so the pool you score is the pool you asked for. "
+            f"Failures: {detail}{more}"
+        )
+
+
+def _pooled_items(
+    dataset_dir: Path, db_ids: list[str], *, limit: int | None, split: str = "test"
 ) -> list[tuple[Any, str]]:
-    """Load the test items for each db, tagged with their ``db_id`` (``EvalItem``
-    carries no db_id). ``limit`` caps *per db* to keep a subset run balanced."""
+    """Load one split's items for each db, tagged with their ``db_id`` (``EvalItem``
+    carries no db_id). ``limit`` caps *per db* to keep a subset run balanced.
+
+    ``split="train"`` scores the questions the curator itself was built from, so it
+    is a **diagnostic**, not a held-out measurement — see :func:`run_datalake`.
+    """
     pairs: list[tuple[Any, str]] = []
     for db in db_ids:
         items = load_bird_items(
-            dataset_dir, db, split="test", gold_sql_field="sql_rename"
+            dataset_dir, db, split=split, gold_sql_field="sql_rename"
         )
         if limit is not None:
             items = items[:limit]
         pairs.extend((it, db) for it in items)
     return pairs
+
+
+def _assert_train_test_disjoint(dataset_dir: Path, db_ids: list[str]) -> dict[str, Any]:
+    """Fail before serving if any db's train and test question ids overlap (C4).
+
+    The curator reads train; the score is test. An overlap means a scored question
+    was in the curator's own input, and no downstream metric can see that — the run
+    just looks good. ``run_experiment`` asserts this for its one db; the pooled
+    driver serves dozens at once, which is exactly where a bad split regeneration
+    would hide.
+    """
+    overlaps: dict[str, list[str]] = {}
+    n_train = 0
+    n_test = 0
+    for db in db_ids:
+        train_ids = {
+            it.question_id
+            for it in load_bird_items(
+                dataset_dir, db, split="train", gold_sql_field="sql_rename"
+            )
+            if it.question_id
+        }
+        test_ids = {
+            it.question_id
+            for it in load_bird_items(
+                dataset_dir, db, split="test", gold_sql_field="sql_rename"
+            )
+            if it.question_id
+        }
+        n_train += len(train_ids)
+        n_test += len(test_ids)
+        both = train_ids & test_ids
+        if both:
+            overlaps[db] = sorted(both)[:5]
+    if overlaps:
+        raise AssertionError(f"train/test question_id overlap: {overlaps}")
+    return {
+        "train_test_disjoint": True,
+        "n_train_ids": n_train,
+        "n_test_ids": n_test,
+    }
+
+
+def _load_built_corpus(root: Path, built: list[str]) -> Corpus:
+    """Load exactly the schemas in ``built`` from a shared arm root.
+
+    Scoping by the list rather than by the directory is the fix: the root is shared
+    and cumulative, so a ``schema=None`` load serves whatever *any* attempt ever
+    wrote there. A db dropped from ``built`` (a transient Postgres blip on an
+    already-built db was enough) leaves its YAML behind, and that YAML then competes
+    as a router candidate for every other db's questions — silently changing the
+    routing problem's difficulty between two runs of the same db set, and
+    desynchronising ``corpus_census`` / ``corpus_validation`` from ``built_dbs``.
+    The set being scored is knowable; the directory's contents are not.
+    """
+    corpus = Corpus()
+    for db in built:
+        corpus.assets.extend(load_corpus(root, schema=db).assets)
+    return corpus
+
+
+def _stage_event_rows(
+    meta: dict[str, Any], *, question_id: str, arm: str, db_id: str
+) -> list[dict[str, Any]]:
+    """Flatten one question's serve-side ``stage_events`` into per-stage records.
+
+    Tolerant of the key being absent — the serve-path producer can be older than
+    this reader, and a turn with no timings has none to report — but loud about a
+    malformed payload: dropping a misshapen one silently is how an instrumentation
+    regression becomes an empty file nobody questions.
+    """
+    events = meta.get("stage_events")
+    if events is None:
+        return []
+    if not isinstance(events, list):
+        print(
+            f"*** WARNING: stage_events for {question_id} is a "
+            f"{type(events).__name__}, not a list — dropped"
+        )
+        return []
+    out: list[dict[str, Any]] = []
+    n_malformed = 0
+    for event in events:
+        if not isinstance(event, dict):
+            n_malformed += 1
+            continue
+        out.append(
+            {
+                "question_id": question_id,
+                "arm": arm,
+                "db_id": db_id,
+                "stage": event.get("stage"),
+                "status": event.get("status"),
+                "ms": event.get("ms"),
+                "detail": event.get("detail"),
+            }
+        )
+    if n_malformed:
+        print(
+            f"*** WARNING: dropped {n_malformed} malformed stage event(s) for "
+            f"{question_id}"
+        )
+    return out
+
+
+class _RowSink:
+    """Append-only JSONL writer that flushes every row.
+
+    A pooled run is hours long. Buffering rows in memory means a crash loses all of
+    them and leaves ``--resume`` nothing to resume from, so each row leaves this
+    process before the next question starts. ``flush()`` without ``fsync()`` is
+    deliberate: it survives the threat this defends against (the Python process
+    being killed — the bytes are already in the OS page cache) but **not** an OS
+    crash or power loss, and an fsync per row would cost throughput for a threat
+    an eval harness does not face. Rows arrive in submission order (the serial
+    loop, or :func:`run_ordered_pool`'s ordered ``on_result``), so no lock is needed.
+    """
+
+    def __init__(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # A run killed mid-write leaves a partial final line with no newline.
+        # Appending straight onto it would splice the next row into the wreckage
+        # and lose BOTH, so terminate the truncated line first — ``_read_rows``
+        # then drops the fragment alone.
+        if path.exists() and path.stat().st_size:
+            with path.open("rb") as probe:
+                probe.seek(-1, 2)
+                needs_newline = probe.read(1) != b"\n"
+            if needs_newline:
+                with path.open("a", encoding="utf-8") as fh:
+                    fh.write("\n")
+        self._fh = path.open("a", encoding="utf-8")
+
+    def write(self, row: dict[str, Any]) -> None:
+        self._fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        self._fh.flush()
+
+    def close(self) -> None:
+        self._fh.close()
+
+
+def _read_rows(path: Path) -> list[dict[str, Any]]:
+    """Rows scored by a previous (possibly interrupted) run of this arm."""
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    with path.open(encoding="utf-8") as fh:
+        for lineno, line in enumerate(fh, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                # A truncated line is the normal signature of a killed run. Drop it
+                # and re-score that question rather than abort the resume. Named,
+                # because a malformed line anywhere but the end is a real defect.
+                print(
+                    f"*** WARNING: dropping malformed row {path.name}:{lineno} "
+                    "(will be re-scored)"
+                )
+    return rows
+
+
+# Manifest keys that change what a scored row MEANS; anything outside this set
+# (timestamps, paths) may differ freely between a run and its resume.
+# Derived from the ledger's own list rather than spelled again. These two were
+# separate hand-maintained tuples that a comment claimed were in sync, and they had
+# drifted: this one named ``skip_agent`` and ``git_sha`` while the ledger's
+# ``_resume_drift`` iterated the *comparability* keys and saw neither, so a resume
+# after a code edit warned once on the console and then recorded no drift at all.
+#
+# Notable members, whose reasons live at the definition site:
+# ``prompt_set_hash`` is the hash and not the variant map, so editing a variant's
+# text cannot blend two prompts into one arm under an unchanged-looking id;
+# ``git_sha`` and ``skip_agent`` are fatal within a directory and unremarkable
+# between directories, which is exactly why ``RESUME_DRIFT_KEYS`` is a superset of
+# ``COMPARABILITY_KEYS`` instead of the same tuple.
+_RESUME_KNOBS = tuple(key for key, _label in RESUME_DRIFT_KEYS)
+
+
+def _question_scope_hash(pairs: "Sequence[tuple[Any, str]]") -> str:
+    """Stable hash of the effective ``(question_id, db_id)`` pool after caps.
+
+    Caps (``limit``, ``limit_dbs``, ``--dbs``) change which questions are scored;
+    recording only the knobs is not enough when the underlying split files move.
+    """
+    import hashlib
+
+    lines = sorted(
+        f"{db}\t{item.question_id or item.question}" for item, db in pairs
+    )
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()[:16]
+
+
+def _build_manifest(
+    *,
+    bird_dir: Path,
+    split: str,
+    # The CONFIGURED name, not a resolved value. ``manifest_model`` is applied inside,
+    # so a caller cannot write a model name for a run that never called one. Taking
+    # the resolved value here was the drift: both drivers had to remember to apply the
+    # rule, and ``run_experiment`` forgot, which is what let a smoke run be reported
+    # COMPARABLE to a real one. A test can pin a helper; only the signature can stop
+    # the call site from bypassing it.
+    model_name: str | None,
+    prompt_variants: dict[str, str],
+    route_top_k: int,
+    route_llm_pick: bool,
+    schema_pick_max_columns: int,
+    use_embedder: bool,
+    skip_agent: bool,
+    serve_workers: int,
+    build_workers: int = 1,
+    # The run's SCOPE. Not knobs — they decide which arms exist and which questions
+    # are in the pool, so a resume that disagrees is not the same experiment at all.
+    arms: tuple[str, ...] = (),
+    oracles: tuple[str, ...] = (),
+    replicate_of: str | None = None,
+    db_ids: list[str] | None = None,
+    limit: int | None = None,
+    limit_dbs: int | None = None,
+    question_scope_hash: str | None = None,
+    allow_git_sha_drift: bool = False,
+) -> dict[str, Any]:
+    """Every knob that changes what a scored row MEANS, as one dict.
+
+    Its own function so the invariant "a resume knob absent from the manifest can
+    never fire" is testable without a Postgres instance — that guard is the only
+    thing standing between a re-invocation and one arm's rows silently spanning two
+    configurations, and it reads this dict by key name.
+    """
+    return {
+        "mode": "datalake",
+        "bird_dir": str(bird_dir),
+        "created_at_utc": _utc_ts(),
+        # The run ledger's comparability rule reads this: two runs of different code
+        # are not the same experiment, and "which commit produced this?" is not
+        # recoverable from anything else in the directory.
+        "git_sha": corpus_release_hash(),
+        "model": manifest_model(model_name, skip_agent=skip_agent),
+        # Both, by the same argument as the stamped record: the map so a reader
+        # knows what ran, the hash so the ledger's comparability rule and the
+        # resume guard have one key that also moves when a prompt is EDITED.
+        "prompt_variants": dict(prompt_variants),
+        "prompt_set_hash": prompt_set_hash(prompt_variants),
+        "split": split,
+        "route_top_k": route_top_k,
+        "route_llm_pick": route_llm_pick,
+        "schema_pick_max_columns": schema_pick_max_columns,
+        "use_embedder": use_embedder,
+        "skip_agent": skip_agent,
+        # Concurrency knobs are recorded but deliberately NOT in ``_RESUME_KNOBS``:
+        # they change how long a run takes, never what a scored row means, and
+        # per-build isolation makes a resume at a different width safe.
+        "serve_workers": serve_workers,
+        "build_workers": build_workers,
+        # Scope, recorded so ``--resume-from`` can refuse to change it. None of these
+        # were in the manifest, and none are derived from the directory's contents, so
+        # they were silently re-read from argv on every invocation: the runbook's own
+        # resume line omits ``--arms``/``--dbs``/``--oracle``/``--replicate``, so
+        # resuming a Step 3 rung directory dropped ``--oracle`` and picked up the four
+        # default arms — two LLM curator passes over the pool plus three extra serve
+        # passes, i.e. most of a Step 2 budget, from an operator who typed a resume.
+        # A *narrower* resume was worse: ``summary.json`` is written once at the end,
+        # so it came back holding only the arms served in that attempt.
+        "arms": list(arms),
+        "oracles": list(oracles),
+        "replicate_of": replicate_of,
+        # ``None`` means "the whole split", which is different from an empty list.
+        "db_ids": None if db_ids is None else sorted(db_ids),
+        # Per-db and db-count caps. Absent from the earlier scope set, so a capped
+        # smoke directory resumed without the same flags widened to the full split
+        # (or the reverse) before any spend gate fired.
+        "limit": limit,
+        "limit_dbs": limit_dbs,
+        "question_scope_hash": question_scope_hash,
+        # Explicit override for paid resume after a code edit. Smoke (``skip_agent``)
+        # still warns-and-continues without it; paid fails closed unless this is set.
+        "allow_git_sha_drift": allow_git_sha_drift,
+    }
+
+
+def _read_manifest(out_dir: Path) -> dict[str, Any]:
+    """The run directory's manifest, or ``{}`` when absent.
+
+    Raises when the file is there but unreadable. An *absent* manifest legitimately
+    means "this directory predates the check"; an *unparseable* one means the resume
+    guard has nothing to compare and cannot know it. Returning ``{}`` for both is
+    how a manifest torn by a kill mid-``write_text`` silently disables the fatal
+    split check and the knob-drift warning on the very next resume.
+    """
+    path = out_dir / "manifest.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as err:
+        raise RuntimeError(
+            f"{path} exists but is unreadable ({type(err).__name__}: {err}); a run "
+            "killed mid-write leaves this. Resuming would skip the split / knob-drift "
+            "guard with no signal. Inspect it, then delete it to resume without that "
+            "guard, accepting that this arm's rows may mix two configurations."
+        ) from err
+    if not isinstance(data, dict):
+        raise RuntimeError(
+            f"{path} is valid JSON but not an object ({type(data).__name__}); the "
+            "resume guard cannot read the prior run's knobs from it."
+        )
+    return data
+
+
+def _merge_resume_manifest(
+    prior: dict[str, Any], current: dict[str, Any]
+) -> dict[str, Any]:
+    """Keep the ORIGINAL run's knobs and append this attempt under ``resumes``.
+
+    Overwriting would make drift detection one-shot: across a chain of resumes
+    that each change a knob, only the last hop stays visible and nothing records
+    the configuration the earliest rows were scored under. It would also silently
+    redefine ``created_at_utc`` as "start of the most recent resume".
+    """
+    if not prior:
+        return current
+    return {**prior, "resumes": [*prior.get("resumes", []), current]}
+
+
+def _check_resume_manifest(
+    out_dir: Path,
+    expected: dict[str, Any],
+    *,
+    allow_git_sha_drift: bool = False,
+) -> None:
+    """Refuse to resume a run whose recorded knobs differ from this one's.
+
+    Appending rows scored under a different split, model, shortlist width, picker
+    vocabulary or retrieval backend into one ``generations.<arm>.jsonl`` yields a
+    single score silently averaged over two configurations. ``split`` is fatal
+    because the two question pools are disjoint; the rest warn loudly, since an
+    operator may be knowingly restarting a stalled run with a different knob.
+
+    A missing manifest means the directory predates this check (runs now write one
+    before serving anything), so there is nothing to compare — the per-row split
+    guard in :func:`_run_pool_arm` is the remaining backstop. An *unreadable* one
+    raises from :func:`_read_manifest` instead.
+    """
+    prior = _read_manifest(out_dir)
+    if not prior:
+        return
+    # A manifest with no recorded split is NOT a wildcard. A pre-``split``-field run
+    # directory is test-only by construction, so treating its silence as "compatible
+    # with whatever you asked for" is exactly how a `--split train` resume of an old
+    # test run mixes two disjoint question pools into one file with no error.
+    prior_split = prior.get("split")
+    if prior_split != expected.get("split"):
+        raise RuntimeError(
+            f"{out_dir} holds a --split {prior_split} run; refusing to resume it as "
+            f"--split {expected.get('split')} (disjoint question pools would be "
+            "scored as one). Use a fresh --out directory."
+        )
+    # SCOPE is fatal, for the same reason ``split`` is: it decides which arms exist
+    # and which questions are in the pool, so a resume that disagrees is a different
+    # experiment sharing one directory. Fatal in BOTH directions — widening spends a
+    # budget nobody asked for, narrowing overwrites ``summary.json`` with a subset and
+    # blanks the arms it did not serve.
+    #
+    # Compared only when the prior manifest recorded the field: a directory written
+    # before this existed cannot be checked, and refusing every such resume would
+    # strand work that is otherwise fine.
+    for key, flag in (
+        ("arms", "--arms"),
+        ("oracles", "--oracle"),
+        ("replicate_of", "--replicate"),
+        ("db_ids", "--dbs"),
+        ("limit", "--limit"),
+        ("limit_dbs", "--limit-dbs"),
+        ("question_scope_hash", "question pool"),
+    ):
+        if key not in prior:
+            continue
+        was, now = prior.get(key), expected.get(key)
+        if was != now:
+            raise RuntimeError(
+                f"{out_dir} was run with {flag} {was!r} and this resume asks for "
+                f"{now!r}. Scope is not a resume knob: widening it serves arms and "
+                f"schemas nobody asked for (on a paid run, a full curator pass and "
+                f"extra serve passes), and narrowing it rewrites summary.json with a "
+                f"subset. Repeat the original {flag} on the resume, or use a fresh "
+                "--out directory."
+            )
+    drift = {
+        k: (prior.get(k), expected.get(k))
+        for k in _RESUME_KNOBS
+        if k != "split" and prior.get(k) is not None and prior.get(k) != expected.get(k)
+    }
+    # A changed prompt set is fatal, like a changed split. The other knobs warn
+    # because a reader can at least see them in the manifest and judge; a prompt
+    # set cannot be judged after the fact, because ``_merge_resume_manifest`` keeps
+    # the ORIGINAL manifest's top-level values and the ledger's ``comparable()``
+    # reads only those. A half-v1/half-v2 directory would therefore present itself
+    # as a clean v1 run and get quoted beside one.
+    if "prompt_set_hash" in drift:
+        was, now = drift["prompt_set_hash"]
+        raise RuntimeError(
+            f"{out_dir} was scored under prompt set {was} and this run resolves to "
+            f"{now}. Rows already on disk keep the old prompts, and nothing "
+            "downstream can separate them. Use a fresh --out directory."
+        )
+    # Fatal for the same reason, and it is the drift the runbook makes easiest to
+    # hit: step 1 is a ``--skip-agent`` smoke run, step 2 resumes with workers and no
+    # flag. Every row already on disk is a construction-refusal scoring 0, they are
+    # *replayed* rather than re-served, and the resumed arm spends hours of live model
+    # calls onto a permanently poisoned denominator. Note that the generic ``drift``
+    # line under-reports it: ``prior.get(k) is not None`` exempts ``model: None ->
+    # "gpt-..."``, which is precisely the transition ``--skip-agent`` creates.
+    if "skip_agent" in drift:
+        was, now = drift["skip_agent"]
+        raise RuntimeError(
+            f"{out_dir} was scored with --skip-agent={was} and this run has "
+            f"--skip-agent={now}. The rows on disk were produced without a model and "
+            "are replayed, not re-served, so the resumed arm would mix real answers "
+            "with construction-refusals and score them as one. Use a fresh --out "
+            "directory."
+        )
+    # Code/git SHA drift: fatal on paid resume by default. Smoke (``skip_agent``)
+    # keeps warn-and-continue so local iteration stays usable. ``--allow-git-sha-drift``
+    # opts a paid resume in; the merge still records the drift and the ledger marks
+    # the run unquotable.
+    if "git_sha" in drift:
+        was, now = drift.pop("git_sha")
+        smoke = bool(expected.get("skip_agent"))
+        if smoke or allow_git_sha_drift or prior.get("allow_git_sha_drift"):
+            print(
+                f"\n*** WARNING: resuming {out_dir.name} after a code change "
+                f"(git_sha: {was!r} -> {now!r}). Rows already scored keep the OLD "
+                "harness; the ledger will mark this run unquotable"
+                + (
+                    " (--allow-git-sha-drift)."
+                    if allow_git_sha_drift or prior.get("allow_git_sha_drift")
+                    else " (smoke / --skip-agent)."
+                )
+                + " ***\n"
+            )
+        else:
+            raise RuntimeError(
+                f"{out_dir} was scored under git_sha {was!r} and this run is "
+                f"{now!r}. Resuming would mix two harness versions into one arm's "
+                "rows. Use a fresh --out directory, or pass --allow-git-sha-drift "
+                "to continue anyway (the run will be recorded as unquotable)."
+            )
+    if drift:
+        detail = ", ".join(f"{k}: {was!r} -> {now!r}" for k, (was, now) in drift.items())
+        print(
+            f"\n*** WARNING: resuming {out_dir.name} with changed knobs ({detail}). "
+            "Rows already scored keep the OLD configuration, so this arm's score "
+            "will mix both. ***\n"
+        )
+
+
+def _fmt_rate(value: float | None, places: int = 3) -> str:
+    """Render a rate for the console, tolerating "not measured".
+
+    Every rate in the summary is ``None`` when its denominator is empty, so a
+    format spec applied straight to one raises ``TypeError``. Doing that here
+    would abort the run *after* the whole serve loop and *before* ``summary.json``
+    is written — hours of live model calls discarded to print a progress line.
+    """
+    return "n/a" if value is None else f"{value:.{places}f}"
+
+
+def _mean(rows: list[dict[str, Any]], key: str) -> float | None:
+    """Mean of a numeric row field over the rows that recorded it, else ``None``.
+
+    ``None`` rather than ``0.0``: a field absent from an older run means "not
+    measured", and reporting that as zero would read as a real observation.
+    """
+    vals = [float(r[key]) for r in rows if isinstance(r.get(key), (int, float))]
+    return sum(vals) / len(vals) if vals else None
+
+
+def _sum_counters(rows: list[dict[str, Any]], key: str) -> dict[str, int] | None:
+    """Sum per-row ``{name: count}`` dicts across rows, or ``None`` when no row has one.
+
+    ``None`` rather than ``{}`` for the same reason as :func:`_mean`: an empty dict
+    asserts the arm made zero calls, which is a different claim from "nothing
+    reported any" — and these counters come from a producer that may be older than
+    this reader.
+    """
+    total: dict[str, int] = {}
+    seen = False
+    for r in rows:
+        counts = r.get(key)
+        if not isinstance(counts, dict):
+            continue
+        seen = True
+        for name, value in counts.items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                total[str(name)] = total.get(str(name), 0) + int(value)
+    return dict(sorted(total.items())) if seen else None
+
+
+#: Every outcome :func:`price_verdict` can reach. Named so a test can assert the
+#: enumeration walked all of them, instead of asserting something about the shape of its
+#: own fixtures — a guard written that way was tautological and could not detect an
+#: enumeration that missed two branches, which is the defect it existed to prevent.
+PRICE_VERDICT_TAGS: tuple[str | None, ...] = (
+    None,  # priceable: dollars per additional correct answer
+    "gain_negative",  # priceable, but the step lost answers — priced under its own key
+    "unpaired_n",
+    "mismatched_ids",  # equal N, different question-id sets — not a paired gain
+    "ids_unrecorded",  # equal N but neither arm recorded its question-id set
+    "no_cost",
+    "one_sided_cost",
+    "gain_unmeasured",
+    "gain_zero",
+    "coverage_partial",
+    "coverage_unrecorded_one_side",
+    "coverage_unrecorded_both",
+)
+
+
+def price_verdict(
+    *,
+    lo: str,
+    hi: str,
+    n_lo: int | None,
+    n_hi: int | None,
+    lo_cost: float | None,
+    hi_cost: float | None,
+    lo_priced: int | None,
+    hi_priced: int | None,
+    added: int | None,
+    ids_lo: "set[str] | frozenset[str] | None" = None,
+    ids_hi: "set[str] | frozenset[str] | None" = None,
+) -> tuple[str | None, str | None]:
+    """Can this step be priced per additional correct answer, and if not, why not?
+
+    Returns ``(tag, why)``. ``tag is None`` means priceable under
+    ``_usd_per_added_correct``; ``"gain_negative"`` means priceable under
+    ``_usd_per_lost_correct``; any other tag is a refusal, with ``why`` explaining it in
+    words. Every reachable tag is listed in :data:`PRICE_VERDICT_TAGS`.
+
+    Pricing is **paired**: equal row counts alone are not enough. The two arms must
+    share an identical question-id set (or supply rows so a paired net gain can be
+    computed). Equal-N different ID pools used to emit a dollar-per-added-correct
+    figure that priced two different question sets against each other.
+
+    A pure function over scalars, because this chain was wrong in a different cell in four
+    consecutive commits and every one of them was a branch nobody had constructed a case
+    for. Inline, the only way to check coverage was to assert something about a test's own
+    fixtures — which is how a guard against "the enumeration misses branches" ended up
+    unable to detect exactly that.
+
+    **Order is by cause, most fundamental first:** whether the two arms are comparable at
+    all, then whether the numerator exists, then whether the divisor exists, then whether
+    the numerator can be trusted, and last the sign of the divisor. Coverage sits after
+    the divisor checks because it is a caveat on a number that exists, while an absent or
+    zero gain leaves the ratio undefined whatever the coverage — but it sits *before* the
+    negative-gain case, because that case publishes a figure and so needs a numerator it
+    can trust.
+    """
+    if n_lo != n_hi:
+        return "unpaired_n", (
+            f"{lo} scored {n_lo} questions and {hi} scored {n_hi}; an unpaired count "
+            "difference is not a number of answers gained"
+        )
+    if ids_lo is None or ids_hi is None:
+        return "ids_unrecorded", (
+            "question-id sets were not recorded on one or both arms, so equal-N "
+            "cannot be shown to be the same pool — refuse rather than price unpaired "
+            "counts"
+        )
+    if set(ids_lo) != set(ids_hi):
+        return "mismatched_ids", (
+            f"{lo} and {hi} scored {n_lo} questions each but on different question "
+            "ids; an equal-N unpaired delta is not a paired net gain"
+        )
+    if lo_cost is None and hi_cost is None:
+        return "no_cost", (
+            "no row on either side recorded a cost — a --skip-agent run bills nothing, "
+            "and a model absent from the price table cannot be priced"
+        )
+    if lo_cost is None or hi_cost is None:
+        # One side billed and the other not, which an "either side" wording used to
+        # describe as neither. Reachable live: per-arm cost blocks are computed
+        # independently, so a resume replaying an arm scored before cost instrumentation
+        # gives exactly one-sided cost.
+        unbilled, billed = (lo, hi) if lo_cost is None else (hi, lo)
+        return "one_sided_cost", (
+            f"{billed} recorded a cost and {unbilled} recorded none, so the difference "
+            "between them is not a price this step paid"
+        )
+
+    fully_priced = (
+        lo_priced is not None
+        and hi_priced is not None
+        and lo_priced == n_lo
+        and hi_priced == n_hi
+    )
+    # Appended to the divisor refusals below. Without it, reordering coverage after those
+    # checks silently dropped the caveat: a step with equal n_correct and partial coverage
+    # was told only "bought no additional answers" while the _usd total it was pointed at
+    # covered half the rows.
+    coverage_note = (
+        ""
+        if fully_priced
+        else (
+            " (and the cost totals do not cover every row, so the total itself is "
+            "understated)"
+        )
+    )
+
+    if added is None:
+        # Unmeasured, not zero. ``not added`` treated the two the same and reported
+        # "bought no additional correct answers" for a side that never recorded
+        # ``n_correct`` — the absent-versus-zero conflation this module exists to prevent.
+        return "gain_unmeasured", (
+            "n_correct was not recorded on one side, so the gain is unmeasured rather "
+            "than zero" + coverage_note
+        )
+    if added == 0:
+        return "gain_zero", (
+            "the step bought no additional correct answers, so there is no price per "
+            "answer to report — read the total in the _usd key instead" + coverage_note
+        )
+
+    if not fully_priced:
+        if lo_priced is None and hi_priced is None:
+            # Both absent. Naming one arm and quoting the other's number printed
+            # "covers None/100", which is the shape the one-sided message was written to
+            # avoid, reintroduced by writing that message without this case.
+            return "coverage_unrecorded_both", (
+                "priced-row coverage was not recorded on either arm, so whether the cost "
+                "totals are complete cannot be established"
+            )
+        if lo_priced is None or hi_priced is None:
+            absent, known = (lo, hi) if lo_priced is None else (hi, lo)
+            known_priced = hi_priced if lo_priced is None else lo_priced
+            known_n = n_hi if lo_priced is None else n_lo
+            return "coverage_unrecorded_one_side", (
+                f"priced-row coverage was not recorded on {absent}; {known} covers "
+                f"{known_priced}/{known_n} rows, so the cost totals cannot be shown "
+                "complete"
+            )
+        return "coverage_partial", (
+            f"cost covers {lo_priced}/{n_lo} and {hi_priced}/{n_hi} rows; a partial "
+            "total understates the price by the unpriced share"
+        )
+
+    if added < 0:
+        # A regression is still priced — that decision is deliberate and tested — but not
+        # under the gained-answer key. "Dollars per additional correct answer" with a
+        # negative denominator is a different quantity wearing the same name, and its sign
+        # is uninterpretable: a rung that lost 10 answers *and* got cheaper gave ``+0.05``,
+        # reading as "5 cents per additional correct answer" for a regression.
+        return "gain_negative", (
+            f"the step lost {-added} correct answer(s), so there is no price per answer "
+            "gained — the cost per answer lost is in the _usd_per_lost_correct key, and "
+            "its sign says nothing about whether the step was good"
+        )
+    return None, None
+
+
+def _question_ids_of(summary: dict[str, Any]) -> set[str] | None:
+    """Question-id set recorded on an arm summary, or ``None`` if absent."""
+    raw = summary.get("question_ids")
+    if raw is None:
+        return None
+    return {str(q) for q in raw}
+
+
+def _paired_net_gain(
+    lo_correct: dict[str, bool] | None,
+    hi_correct: dict[str, bool] | None,
+) -> int | None:
+    """Paired net gain on the shared question ids: hi-only correct minus lo-only.
+
+    ``None`` when either map is missing. On identical ID sets this equals
+    ``n_correct_hi - n_correct_lo``.
+    """
+    if lo_correct is None or hi_correct is None:
+        return None
+    shared = set(lo_correct) & set(hi_correct)
+    hi_only = sum(1 for q in shared if hi_correct[q] and not lo_correct[q])
+    lo_only = sum(1 for q in shared if lo_correct[q] and not hi_correct[q])
+    return hi_only - lo_only
+
+
+def ladder_deltas(
+    summaries: dict[str, Any],
+    *,
+    rows_by_arm: dict[str, list[dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
+    """Adjacent-rung deltas: what each step moved, what it cost, and what each extra
+    correct answer cost.
+
+    Module-level so it can be exercised. As an inline block inside
+    :func:`run_datalake` the only way to test it was to re-implement it in the test,
+    which tests the copy — the exact failure this module has already had to fix twice.
+
+    Every contrast is reported on EX, on the gradeable denominator, and split into its
+    routing and generation halves, because ``EX = routing_recall x
+    cond_ex_given_routing`` and a delta that moves only one term says *where* the rung
+    helped.
+
+    Cost-per-added-correct and ``*_correct_answers`` use **paired** question-id sets
+    (from ``question_ids`` on each summary, or derived from ``rows_by_arm`` when
+    supplied). Equal-N different pools refuse both the price and the canonical gain
+    field; a descriptive ``*_unpaired_n_correct_delta`` may still appear under that
+    unmistakable name and never feeds pricing.
+    """
+    correct_maps: dict[str, dict[str, bool]] = {}
+    if rows_by_arm:
+        from .power import correct_by_question
+
+        correct_maps = {
+            arm: correct_by_question(rows) for arm, rows in rows_by_arm.items()
+        }
+
+    deltas: dict[str, float | None] = {}
+    for lo, hi in ladder_steps(summaries):
+        for metric, label in (
+            ("ex_lenient", "ex"),
+            ("ex_gradeable", "ex_gradeable"),
+            ("routing_recall", "routing_recall"),
+            ("cond_ex_given_routing", "cond_ex_given_routing"),
+            # Governance, as a step rather than only per arm. A rung that raises EX while
+            # delivering more answers below the assurance bar, or shedding safety
+            # clearance, has traded governance for score — and the ladder exists to
+            # support a claim about *governed* answers, so that trade has to be as visible
+            # as the EX it bought.
+            ("graded_delivery_rate", "graded_delivery_rate"),
+            ("safety_clearance_rate", "safety_clearance_rate"),
+            ("coverage_best_effort_rate", "coverage_best_effort_rate"),
+        ):
+            # ``None`` when either side is unmeasured, never a subtraction. Every
+            # rate here is legitimately ``None`` at an empty denominator — and
+            # ``routing_recall`` is ``None`` for a whole class of runs now that a
+            # bypassed pool reports "not measured" rather than 0.0 — so the direct
+            # subtraction would raise TypeError after the entire serve loop and
+            # before ``summary.json`` is written, discarding hours of model calls to
+            # compute a delta nobody could have read anyway.
+            # ``.get``, not ``[]``: a summary that predates a metric legitimately lacks
+            # the key, and this function is also read over archived ``summary.json`` files.
+            # Indexing turned a missing metric into a KeyError that killed every delta,
+            # including the ones the summary did have.
+            lo_v, hi_v = summaries[lo].get(metric), summaries[hi].get(metric)
+            deltas[f"{hi}_minus_{lo}_{label}"] = (
+                None if lo_v is None or hi_v is None else hi_v - lo_v
+            )
+        # What the step cost, and what each extra right answer cost. The ladder's whole
+        # mechanism is that later rungs inject more context, and context is billed — so
+        # a rung that buys accuracy always buys it with tokens. Per-arm totals were
+        # already recorded, but the question a reader actually has to answer is whether
+        # to ship the layer, and that is a ratio: dollars per additional correct answer.
+        # Leaving them to divide two numbers out of two different blocks is how "the
+        # curator is worth N points" gets decided without anyone pricing N.
+        #
+        # ``None`` rather than a number wherever it would be meaningless. The branch chain
+        # below is the enumeration — deliberately not restated as a count here, because a
+        # count in a comment goes stale the moment a branch is added, and this one already
+        # did. ``_not_priced_because`` names the reason on the pair itself, and
+        # ``tests/test_ladder_design.py`` enumerates the whole state space rather than
+        # sampling it, because this chain has been wrong in a different cell three times.
+        #
+        # Pricing requires identical question-id sets. Equal-N different pools used to
+        # emit a plausible dollar figure that was not a paired gain.
+        lo_cost = (summaries[lo].get("cost") or {}).get("total_cost_est_usd")
+        hi_cost = (summaries[hi].get("cost") or {}).get("total_cost_est_usd")
+        # Priced-row coverage. ``total_cost_est_usd`` sums only the rows that carried a
+        # cost, so a crashed turn — which burned model calls and recorded no meta —
+        # contributes nothing and silently deflates the numerator.
+        lo_priced = (summaries[lo].get("cost") or {}).get("n_rows_priced")
+        hi_priced = (summaries[hi].get("cost") or {}).get("n_rows_priced")
+        # ``None`` when coverage is unknown, not ``False``. Guarding only on
+        # ``n_rows_priced is None`` made that branch unreachable: ``_cost_block`` builds
+        # the field with ``sum(...)``, so it is always an int and ``0`` when nothing was
+        # priced. Every real "we did not measure" case therefore came out as ``False``,
+        # which is the reading this field exists to distinguish from "we measured and
+        # it was incomplete" — an arm that priced 0 of 12 rows because nothing bills
+        # (a ``--skip-agent`` run) is not the same as one that priced 9 of 12 because
+        # three turns crashed.
+        #
+        # Unknown is: no cost recorded at all on a side. Incomplete is: some rows
+        # priced, not all.
+        def _coverage(arm: str) -> bool | None:
+            block = summaries[arm].get("cost") or {}
+            priced = block.get("n_rows_priced")
+            if priced is None or (not priced and block.get("total_cost_est_usd") is None):
+                return None
+            return priced == summaries[arm].get("n")
+
+        lo_cov, hi_cov = _coverage(lo), _coverage(hi)
+        fully_priced = (
+            None if lo_cov is None or hi_cov is None else (lo_cov and hi_cov)
+        )
+        deltas[f"{hi}_minus_{lo}_usd"] = (
+            None if lo_cost is None or hi_cost is None else round(hi_cost - lo_cost, 6)
+        )
+        # ...and whether that dollar delta is over the whole arm or only the rows that
+        # happened to record a cost. It was computed and then dropped, so a cost delta
+        # deflated by unpriced crashes read exactly like a real saving.
+        deltas[f"{hi}_minus_{lo}_usd_fully_priced"] = fully_priced
+        ids_lo = (
+            set(correct_maps[lo])
+            if lo in correct_maps
+            else _question_ids_of(summaries[lo])
+        )
+        ids_hi = (
+            set(correct_maps[hi])
+            if hi in correct_maps
+            else _question_ids_of(summaries[hi])
+        )
+        lo_n, hi_n = summaries[lo].get("n_correct"), summaries[hi].get("n_correct")
+        # Canonical ``*_correct_answers`` is paired-only: identical question-id sets,
+        # then the paired net gain (from rows when present, else ``n_correct`` delta —
+        # which equals the paired gain when the pools are the same). Equal-N different
+        # pools used to write ``hi_n - lo_n`` here while pricing refused — a statistically
+        # misleading unpaired field wearing the paired name.
+        ids_identical = (
+            ids_lo is not None and ids_hi is not None and ids_lo == ids_hi
+        )
+        paired_added = (
+            _paired_net_gain(correct_maps.get(lo), correct_maps.get(hi))
+            if ids_identical and lo in correct_maps and hi in correct_maps
+            else None
+        )
+        correct_unmeasured_because: str | None = None
+        if ids_identical:
+            if paired_added is not None:
+                added = paired_added
+            elif lo_n is not None and hi_n is not None:
+                added = hi_n - lo_n
+            else:
+                added = None
+                correct_unmeasured_because = (
+                    "n_correct was not recorded on one side, so the paired gain is "
+                    "unmeasured rather than zero"
+                )
+        else:
+            added = None
+            if ids_lo is None or ids_hi is None:
+                correct_unmeasured_because = (
+                    "question-id sets were not recorded on one or both arms, so "
+                    "equal-N cannot be shown to be the same pool — "
+                    f"{hi}_minus_{lo}_correct_answers is paired-only"
+                )
+            elif summaries[lo].get("n") != summaries[hi].get("n"):
+                correct_unmeasured_because = (
+                    f"{lo} scored {summaries[lo].get('n')} questions and {hi} scored "
+                    f"{summaries[hi].get('n')}; an unpaired count difference is not a "
+                    "paired net gain"
+                )
+            else:
+                correct_unmeasured_because = (
+                    f"{lo} and {hi} scored the same number of questions but on "
+                    "different question ids; an equal-N unpaired delta is not a "
+                    "paired net gain"
+                )
+            # Descriptive only — unmistakably not the paired claim, never feeds pricing.
+            if lo_n is not None and hi_n is not None:
+                deltas[f"{hi}_minus_{lo}_unpaired_n_correct_delta"] = hi_n - lo_n
+
+        deltas[f"{hi}_minus_{lo}_correct_answers"] = added
+        if correct_unmeasured_because is not None:
+            deltas[f"{hi}_minus_{lo}_correct_answers_unmeasured_because"] = (
+                correct_unmeasured_because
+            )
+        tag, why = price_verdict(
+            lo=lo,
+            hi=hi,
+            n_lo=summaries[lo].get("n"),
+            n_hi=summaries[hi].get("n"),
+            lo_cost=lo_cost,
+            hi_cost=hi_cost,
+            lo_priced=lo_priced,
+            hi_priced=hi_priced,
+            added=added,
+            ids_lo=ids_lo,
+            ids_hi=ids_hi,
+        )
+        if why is not None:
+            deltas[f"{hi}_minus_{lo}_not_priced_because"] = why
+        deltas[f"{hi}_minus_{lo}_usd_per_added_correct"] = (
+            round((hi_cost - lo_cost) / added, 6) if tag is None else None
+        )
+        if tag == "gain_negative":
+            # Priced, under a name that is true. See :func:`price_verdict`.
+            deltas[f"{hi}_minus_{lo}_usd_per_lost_correct"] = round(
+                (hi_cost - lo_cost) / -added, 6
+            )
+        skipped = skipped_rungs(lo, hi)
+        if skipped:
+            # A compound step. Named in the artifact so the delta is not read as a
+            # single-variable result.
+            deltas[f"{hi}_minus_{lo}_bundles"] = skipped
+            print(
+                f"\n*** NOTE: the {lo} -> {hi} delta bundles more than one change — "
+                f"the ladder rung(s) {', '.join(skipped)} were not scored, so this "
+                "difference cannot be attributed to either intervention alone ***\n"
+            )
+    return deltas
+
+
+def _compare_arms(
+    rows_by_arm: dict[str, list[dict[str, Any]]],
+    *,
+    replicate_of: str | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Paired comparisons and treatment-divergence checks for every arm pair.
+
+    The noise floor comes from ``replicate_of``: the arm that was deliberately
+    served twice. Temperature cannot be pinned through the proxy, so the floor is a
+    measured property of this run rather than a constant, and without it no
+    comparison can say whether its delta is resolvable. When no replicate was run,
+    comparisons still carry their exact p-value but say plainly that the run's
+    resolution is unknown.
+    """
+    names = sorted(rows_by_arm)
+    correct = {arm: correct_by_question(rows) for arm, rows in rows_by_arm.items()}
+    # The twin-free stratum, keyed the same way, so the headline delta can be tested
+    # on the questions the curator could not have recalled. A rate alone is not enough
+    # here: dropping 12% of the split widens the interval, and a delta that survives
+    # on the full split can stop being resolvable on the subset — which is exactly the
+    # thing a reader needs told, not left to infer from two numbers.
+    # ``is False``, not falsy: an unstamped row (a resume predating the flag) is not
+    # known to be twin-free, and treating it as such turned this into the pooled
+    # comparison wearing the stratum's name.
+    twin_free = {
+        arm: correct_by_question(
+            [r for r in rows if r.get("gold_twin_in_train") is False]
+        )
+        for arm, rows in rows_by_arm.items()
+    }
+    # A pair is only comparable on the stratum when EVERY scored row on BOTH arms
+    # carries an explicit stamp. ``any(...)`` let a partially stamped file emit
+    # ``comparisons[].no_twin`` from the stamped subset while pooled metrics still
+    # included unstamped rows. Same population as :func:`_twin_stamps_complete`.
+    twin_stamped = {
+        arm: _twin_stamps_complete(rows) for arm, rows in rows_by_arm.items()
+    }
+
+    floor = None
+    mde = None
+    replicate_arm = f"{replicate_of}__replicate" if replicate_of else None
+    replicate_drifted = False
+    if replicate_arm and replicate_arm in correct and replicate_of in correct:
+        # Whether the replicate replicated has to be settled BEFORE its numbers are
+        # used. A pair that served different context was not the same configuration,
+        # so what it measures is that difference, not the pipeline's noise — and a
+        # floor that is not a floor produces a minimum detectable effect that is not
+        # one either. Publishing them anyway would hand a reader a resolution figure
+        # derived from a broken control.
+        replicate_drift_check = compare_arms(
+            replicate_of,
+            rows_by_arm[replicate_of],
+            replicate_arm,
+            rows_by_arm[replicate_arm],
+        )
+        divergence = replicate_drift_check.divergence
+        replicate_drifted = divergence is not None and divergence >= DEFAULT_MIN_DIVERGENCE
+        # ``divergence is None`` means the check could not run — no shared question
+        # carried a context hash on both sides — which is NOT the same as "checked and
+        # identical", and it took the same branch. That published
+        # ``detectable.measured: true`` off a control whose sameness was never
+        # established, which is the one claim the replicate exists to earn.
+        replicate_unverified = divergence is None
+        if replicate_unverified:
+            print(
+                f"\n*** WARNING: the {replicate_arm} control served no question with a "
+                "context hash on both sides, so it could not be shown to have "
+                "replicated. No noise floor is published from it. ***\n"
+            )
+        if not replicate_drifted and not replicate_unverified:
+            floor = measure_floor(correct[replicate_of], correct[replicate_arm])
+            if floor.discordance_rate is not None:
+                mde = minimum_detectable_effect(floor.n_pairs, floor.discordance_rate)
+
+    # ``{question_id: db_id}`` for the cluster test below. Built from the rows the
+    # run already wrote, so it costs nothing and cannot disagree with them.
+    db_by_question: dict[str, str] = {}
+    for arm_rows in rows_by_arm.values():
+        for row in arm_rows:
+            qid, db = row.get("question_id"), row.get("db_id")
+            if qid is not None and db:
+                db_by_question.setdefault(str(qid), str(db))
+
+    comparisons: list[dict[str, Any]] = []
+    divergences: list[dict[str, Any]] = []
+    for i, a in enumerate(names):
+        for b in names[i + 1 :]:
+            report = comparison_report(
+                mcnemar(a, correct[a], b, correct[b]), mde, floor
+            )
+            # A second, weaker test that does not assume questions are independent.
+            # Questions are nested in databases, so the question-level p-value is
+            # anticonservative by an unknown factor; this one treats a database as
+            # the unit and cannot be inflated by one easy schema contributing a
+            # hundred correlated rows.
+            report["cluster"] = cluster_sign_test(
+                correct[a], correct[b], db_by_question
+            )
+            # Same paired test, restricted to questions with no train twin. Reported
+            # even when it agrees, because "the effect survives the stratum" is a
+            # claim someone has to be able to check without re-running anything.
+            # ``None`` when the flag was never stamped (a run predating it), which is
+            # not the same as a stratum that came out empty.
+            tf_a, tf_b = twin_free.get(a) or {}, twin_free.get(b) or {}
+            report["no_twin"] = (
+                comparison_report(mcnemar(a, tf_a, b, tf_b), mde, floor)
+                if (tf_a and tf_b and twin_stamped.get(a) and twin_stamped.get(b))
+                else None
+            )
+            if report["no_twin"] is not None:
+                # The floor and MDE come from the FULL-split replicate, so they
+                # describe a population that still contains the twins. Conservative
+                # (the full-split threshold is the larger one) but mislabelled if left
+                # unsaid. And Holm runs over the top-level family only, so this p is
+                # raw — comparing it against the pooled ``p_value_holm``, which the
+                # runbook used to tell readers to do, is biased toward "the effect
+                # survives".
+                report["no_twin"]["p_value_is_raw"] = True
+                report["no_twin"]["floor_from_full_split"] = True
+            # An oracle rung is a diagnostic, and its p-value should not be read as a
+            # result — the same marker the divergence list carries, so a reader of
+            # ``comparisons`` alone is not misled either.
+            # ``replicate_arm in (a, b)``, not ``{a, b} == {replicate_of,
+            # replicate_arm}``. The replicate exists to measure the noise floor; it is
+            # not a rung, and every pair it appears in duplicates the pair its source
+            # arm already forms. Excluding only the replicate-vs-source pair left the
+            # other three in the family, so a run with four arms plus one replicate
+            # corrected across nine tests where six distinct hypotheses were being
+            # asked — Holm's multiplier 1.5x too large on every real comparison, and
+            # in exactly the runs that followed the runbook, since ``--replicate`` is
+            # required there to quote a delta at all. The comment below already said
+            # this was the intent.
+            #
+            # This field is read by the Holm family and the stdout tag only. The
+            # divergence list keeps its own flag, deliberately untouched: over-
+            # reporting a treatment problem is safe and under-reporting is not.
+            # Off-ladder membership is the primary test, not the reconstructed
+            # ``{arm}__replicate`` string. Matching on that string alone meant the
+            # exclusion depended on ``replicate_of`` being passed consistently with
+            # the rows: called with ``replicate_of=None`` while a ``curated__replicate``
+            # arm is present, the replicate pairs re-entered the family and the count
+            # went straight back to ten — the bug the previous commit fixed, reachable
+            # again through an argument mismatch. ``_compare_arms`` is a plain
+            # importable function the tests call directly, and nothing enforced that
+            # the two arguments agreed.
+            #
+            # Anything not on the fair ladder is a diagnostic by construction: the
+            # oracle rungs, the replicate arm, and any future arm nobody has added to
+            # ``ARM_ORDER`` yet. ``_is_oracle`` and the replicate-string check are kept
+            # alongside it because they say *which* kind, and because a fair-named arm
+            # could in principle be the replicate source.
+            off_ladder = a not in ARM_ORDER or b not in ARM_ORDER
+            # ONE definition, stamped on both blocks below. It used to be computed
+            # here for ``comparisons[]`` and separately — and more narrowly, oracle
+            # pairs only — for ``treatment_divergence[]``, so a pair like
+            # ``baseline vs seeded__replicate`` read ``diagnostic_pair: true`` in one
+            # block and ``null`` in the other. ``index._undelivered`` skips on the
+            # divergence one, so such a pair could block quotability while its own
+            # comparison entry declared it a diagnostic.
+            is_diagnostic = (
+                off_ladder
+                or bool(_is_oracle(a) or _is_oracle(b))
+                or bool(replicate_arm and replicate_arm in (a, b))
+            )
+            report["diagnostic_pair"] = is_diagnostic
+            # What this pair bundles, on the pair itself. The information existed
+            # only in ``deltas.*_bundles``, which is keyed by a different naming
+            # convention (``curated_sme_minus_curated_bundles``) and covers only the
+            # adjacent steps — so the pre-quote checklist's "check the step you are
+            # quoting is adjacent" meant cross-referencing two blocks, and for a pair
+            # like ``curated vs seeded`` there is no delta entry to cross-reference
+            # at all. ``comparisons[]`` is the block the checklist sends people to;
+            # the label belongs where the p-value is.
+            #
+            # Computed by the same ``skipped_rungs`` as the deltas block and as
+            # ``analysis.json``, so the three cannot disagree about what is a
+            # single-variable step. Oracle and replicate pairs are off the ladder
+            # entirely: ``skipped_rungs`` returns ``[]`` for an arm it cannot place,
+            # which would read as "single-variable" — the opposite of what a
+            # diagnostic pair is — so they are labelled ``None``.
+            if report["diagnostic_pair"]:
+                report["single_variable"] = None
+            else:
+                lo, hi = sorted((a, b), key=ARM_ORDER.index)
+                bundles = skipped_rungs(lo, hi)
+                report["single_variable"] = not bundles
+                if bundles:
+                    report["bundles"] = bundles
+                # ``arm_a``/``arm_b`` come from ``sorted(rows_by_arm)``, which is
+                # alphabetical, so a pair can run *down* the ladder (``curated`` vs
+                # ``seeded``). ``net_questions`` is then signed against ladder
+                # direction, and a reader scanning the block for "did this rung help"
+                # would read the sign backwards.
+                report["ladder_descending"] = (a, b) != (lo, hi)
+            comparisons.append(report)
+            pair = compare_arms(a, rows_by_arm[a], b, rows_by_arm[b]).to_dict()
+            if replicate_arm and {a, b} == {replicate_of, replicate_arm}:
+                # The one exception to ``is_diagnostic``, and it goes the other way:
+                # the control-vs-source pair is the only pair whose *sameness* is the
+                # measurement, so it must stay in the gate. ``_exempt_replicate_pair``
+                # inverts the expectation rather than excusing the pair.
+                _exempt_replicate_pair(pair)
+            elif is_diagnostic:
+                # A pair involving a counterfactual rung, the replicate against some
+                # other arm, or an arm nobody put on the ladder. Non-divergence there
+                # means that pair's own number is meaningless, which is worth
+                # reporting — but it must not void the fair ladder's comparisons,
+                # which are what the run is for. The verdict is kept in the artifact
+                # and excluded from the gate.
+                pair["diagnostic_pair"] = True
+            divergences.append(pair)
+
+    # Family-wise error control across the fair ladder's comparisons. Four arms is
+    # six pairwise tests; at a nominal 0.05 each, the chance of at least one false
+    # positive across the family is ~26%, and every one of them used to be reported
+    # as though it stood alone.
+    #
+    # The family is the pairs that actually tested a hypothesis this run is asking,
+    # which is narrower than "every pair" in two ways. Diagnostic pairs are out — the
+    # oracle rungs and the replicate arm, handled by ``diagnostic_pair`` above. And a
+    # pair sharing NO questions is out: its ``p_value`` is 1.0 computed from an empty
+    # discordance count, which is the arithmetic of having nothing to compare rather
+    # than a measurement, and counting it tightens every other pair on behalf of a
+    # test that never ran. Reachable whenever one arm's rows cover different question
+    # ids than another's — a truncated arm, a resume across a row-shape change — and
+    # the sibling report in ``eval.analysis`` already excluded it, so leaving it here
+    # meant the two artifacts corrected the same run across different family sizes.
+    family = [
+        c
+        for c in comparisons
+        if not c.get("diagnostic_pair") and (c.get("n_shared") or 0) > 0
+    ]
+    adjusted = holm_adjust([float(c["p_value"]) for c in family])
+    for comparison, p_adj in zip(family, adjusted):
+        comparison["p_value_holm"] = p_adj
+        comparison["family_size"] = len(family)
+        comparison["significant_holm"] = p_adj < 0.05
+    in_family = {id(c) for c in family}
+    for comparison in comparisons:
+        if id(comparison) not in in_family:
+            # Explicitly ``None`` rather than silently missing: a reader scanning for
+            # the adjusted column should see why this row has none. ``family_size`` is
+            # still stamped so the row says how large the family it was left out of
+            # was.
+            comparison["p_value_holm"] = None
+            comparison["family_size"] = len(family)
+            comparison["significant_holm"] = None
+    return comparisons, divergences
+
+
+def _is_oracle(arm: str) -> bool:
+    return arm in {r.value for r in OracleRung}
+
+
+def _exempt_replicate_pair(pair: dict[str, Any]) -> None:
+    """Turn the divergence verdict inside out for a replicate pair.
+
+    A replicate is the same corpus served twice, so identical context is the whole
+    design. Left alone, the divergence gate reads that as "these two arms are the
+    same experiment run twice" — which is exactly right and exactly the wrong
+    conclusion to draw from it — marks the pair undelivered, and
+    :func:`governed_bi.eval.index.quotable` refuses the run. Measuring the noise
+    floor would disqualify every run that measured it, and worse, a run would
+    become quotable again only once the replicate drifted enough to stop being a
+    replicate.
+
+    ``treatment_delivered=None`` rather than ``True``: the ledger tests ``is False``,
+    so ``None`` clears the gate without asserting a treatment that was never
+    supposed to exist. The measured divergence is kept — it is the context-level
+    noise floor, which nothing else records — and the assertion a replicate
+    actually needs is applied instead: *high* divergence means the two serves were
+    not the same configuration, so the floor derived from them is not a floor.
+    """
+    pair["expected_identical"] = True
+    divergence = pair.get("divergence")
+    if divergence is not None and divergence >= DEFAULT_MIN_DIVERGENCE:
+        # A replicate that did not replicate. This DOES disqualify the run, and via
+        # the ordinary gate: ``treatment_delivered=False`` is what ``_undelivered``
+        # reads, so setting reasons without it would file a complaint nothing ever
+        # opens. The run also publishes no floor and no MDE (see ``_compare_arms``),
+        # because both would be derived from a control that did not hold.
+        pair["treatment_delivered"] = False
+        pair["replicate_drifted"] = True
+        pair["reasons"] = [
+            f"{pair.get('arm_a')} and {pair.get('arm_b')} are the same corpus served "
+            f"twice, but their delivered context differs on {divergence:.1%} of "
+            "comparable questions — they were not the same configuration, so the "
+            "noise floor derived from them is not a floor, and this run reports no "
+            "resolution at all rather than a wrong one"
+        ]
+    else:
+        # Identical context is the design. ``None`` rather than ``True``: the ledger
+        # tests ``is False``, so this clears the gate without asserting a treatment
+        # that was never meant to exist.
+        pair["treatment_delivered"] = None
+        pair["replicate_drifted"] = False
+        pair["reasons"] = []
+        # ...but "checked and identical" and "could not be checked" are different
+        # facts, and both arrive here as ``divergence is None``. Recorded so a reader
+        # of the pair can tell, and so ``_compare_arms``'s decision not to publish a
+        # floor has a visible cause. Not a gate: an unverifiable control costs the run
+        # its resolution figure, it does not invalidate the arms' own scores.
+        pair["replicate_verified"] = divergence is not None
+
+
+def _shortlists_from_rows(
+    rows: list[dict[str, Any]],
+) -> dict[str, list[str]]:
+    """``{question_id: shortlisted_schemas}`` for the rows that recorded one.
+
+    Lets the taxonomy separate the two routing failures: a picker that chose wrongly
+    from a shortlist containing the right schema is a different problem from a
+    shortlist that never contained it. Rows without the field are simply absent, so
+    they attribute to the picker — the conservative reading, blaming the component
+    we can actually see.
+    """
+    out: dict[str, list[str]] = {}
+    for row in rows:
+        qid = row.get("question_id") or row.get("request_id")
+        shortlisted = row.get("shortlisted_schemas")
+        if qid is not None and isinstance(shortlisted, list) and shortlisted:
+            out[str(qid)] = [str(s) for s in shortlisted]
+    return out
+
+
+def _group_by(rows: list[dict[str, Any]], key: str) -> dict[str, list[dict[str, Any]]]:
+    """``{value: rows}`` for one row field, skipping rows that do not carry it.
+
+    Rows without the key are dropped rather than pooled under ``"None"``: a phantom
+    bucket named after a missing field reads as a real database.
+    """
+    out: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        value = row.get(key)
+        if value is None:
+            continue
+        out.setdefault(str(value), []).append(row)
+    return out
+
+
+def _drop_keys(block: dict[str, Any], keys: "tuple[str, ...]") -> dict[str, Any]:
+    """``block`` without ``keys``. Absence beats a value that means the wrong thing."""
+    return {k: v for k, v in block.items() if k not in keys} if keys else block
+
+
+def _ungrouped(rows: list[dict[str, Any]], key: str) -> int:
+    """How many rows :func:`_group_by` dropped for lacking ``key``.
+
+    Dropping them is right — a bucket named after a missing field reads as a real
+    database — but dropping them *unaccounted for* is the failure this harness exists
+    to stop: ``sum(by_db[*].n)`` would quietly stop equalling the arm's ``n`` and no
+    field would say why. ``_grade_one`` always stamps ``db_id``, including on a crashed
+    turn, so a non-zero count here means rows arrived from somewhere else — a
+    ``--resume-from`` across a row-shape change, or a hand-edited file.
+    """
+    return sum(1 for row in rows if row.get(key) is None)
+
+
+def _routing_escaped(
+    used_schemas: "set[str] | None",
+    routed: "list[str]",
+    *,
+    bypassed: bool,
+    unresolved_ids: "list[str] | tuple[str, ...] | None" = None,
+) -> bool | None:
+    """Did the ANSWER use a table outside the schemas the router selected?
+
+    ``used_schemas`` is resolved from the turn's ``tables_used`` — the tables parsed out of
+    the SQL that was actually delivered. Not from ``licensed_tables``: that is the
+    assemble-time seed license, computed from the *routed* corpus and never amended, so it
+    cannot contain an out-of-routed schema no matter what the agent went on to do. Scored
+    that way, a turn that reached past the router via ``search_corpus`` and
+    ``inspect_schema`` — with the guardrail passing the out-of-routed table — was reported
+    as compliant, and the metric could only ever return ``False`` or ``None``.
+
+    ``None`` when there is nothing to judge **or** when judgment is unknown:
+
+    * the router was bypassed (single-schema corpus, or an oracle rung handed its schema);
+    * the turn produced no SQL / empty ``tables_used`` (genuinely unobserved);
+    * ``tables_used`` was non-empty but some asset ids did not resolve — we cannot claim
+      compliance, so escape is unknown rather than silently ``None``-as-unobserved.
+
+    A non-empty unresolved set that still has a resolved schema outside the routed set
+    is a definitive escape (``True``). Unresolved-only or unresolved-with-all-resolved-
+    inside yields ``None`` (unknown); stamp ``routing_escape_unknown`` on the row.
+    """
+    unresolved = [str(x) for x in (unresolved_ids or ()) if x]
+    if bypassed:
+        return None
+    if not used_schemas and not unresolved:
+        return None
+    routed_set = set(routed or ())
+    if not routed_set:
+        return None
+    if used_schemas and (used_schemas - routed_set):
+        return True
+    if unresolved:
+        return None
+    return False
+
+
+def _schema_of_assets(
+    corpus: Any, asset_ids: "list[str] | None"
+) -> tuple[set[str], list[str]]:
+    """Schemas of the given table-asset ids, plus ids that did not resolve.
+
+    Ids look like ``tbl_<schema>_<name>`` but schema names contain underscores
+    (``beer_factory``), so splitting the string guesses wrong. Unresolved ids are
+    returned explicitly rather than dropped: a non-empty ``tables_used`` that resolves
+    to nothing must not look like "no tables observed" for routing escape.
+    """
+    out: set[str] = set()
+    unresolved: list[str] = []
+    for aid in asset_ids or ():
+        key = str(aid)
+        asset = corpus.by_id(key) if corpus is not None else None
+        schema = getattr(asset, "schema", None)
+        if asset is not None and getattr(asset, "asset_type", None) == "table" and schema:
+            out.add(str(schema))
+        else:
+            unresolved.append(key)
+    return out, unresolved
+
+
+def _bool_rate(rows: list[dict[str, Any]], key: str) -> float | None:
+    """Share of rows where ``key`` is ``True``, over the rows that recorded it at all.
+
+    ``None`` at an empty denominator, and the denominator is rows where the field is not
+    ``None`` — not every row. A boolean that was never stamped is not a boolean that was
+    stamped ``False``, and averaging over all rows would report a governance failure
+    wherever the instrumentation simply did not run.
+    """
+    observed = [r for r in rows if r.get(key) is not None]
+    if not observed:
+        return None
+    return sum(1 for r in observed if r.get(key)) / len(observed)
+
+
+def _rate_over(rows: list[dict[str, Any]]) -> float | None:
+    """EX over a subset, ``None`` on an empty one. Absent is not zero."""
+    return (sum(1 for r in rows if r.get("correct")) / len(rows)) if rows else None
+
+
+def _twin_stamps_complete(rows: "Sequence[dict[str, Any]]") -> bool:
+    """True when every scored row carries an explicit ``gold_twin_in_train`` stamp.
+
+    Summary twin EX strata and ``comparisons[].no_twin`` share this gate. The
+    population is **all scored rows**, not the gradeable subset: an unstamped
+    frozen or order-sensitive row is still an incomplete stamp, and letting the
+    summary emit strata while comparisons refused (or the reverse) was the
+    residual after the unstamped-as-false fix. Empty arms are incomplete.
+    """
+    return bool(rows) and all(r.get("gold_twin_in_train") is not None for r in rows)
+
+
+def _summarise_rows(
+    arm: str,
+    rows: list[dict[str, Any]],
+    *,
+    gold: dict[str, str] | None = None,
+    corpus_note_assets: int | None = None,
+    nested: bool = False,
+) -> dict[str, Any]:
+    """Aggregate scored rows into one arm summary.
+
+    Aggregating from **rows** (not from in-flight task results) is what lets a
+    resumed run summarise identically to an uninterrupted one: replayed rows and
+    freshly scored rows go through exactly this function.
+
+    ``gold`` maps question_id to gold SQL. When supplied, wrong answers are also
+    attributed to a stage and an error class
+    (:mod:`governed_bi.eval.error_taxonomy`); without it the summary still reports
+    outcomes, it just cannot say what kind of wrong a wrong answer was.
+
+    ``corpus_note_assets`` is how many notes the served corpus held. It is what
+    lets :func:`governed_bi.eval.treatment.treatment_reasons` say "this arm held
+    notes and injected none" — the signature of both interventions that were
+    reported as measured nulls. Without it that check is unreachable, since its
+    guard is ``if count and not injected``.
+    """
+    n = len(rows)
+    n_correct = sum(1 for r in rows if r.get("correct"))
+    n_strict = sum(1 for r in rows if r.get("correct_strict"))
+    produced = [r for r in rows if r.get("generated_sql")]
+    n_produced = len(produced)
+    n_decoy = sum(1 for r in produced if r.get("decoy_touch"))
+    # One vocabulary for how each turn ended (``governed_bi.stages``). A crash and a
+    # refusal used to be the same row shape, so ``refusal_rate`` absorbed the crash
+    # count and EX absorbed the loss — by a different amount per arm, since the arms
+    # do not crash equally. Counting them apart is the whole point.
+    by_outcome: dict[str, int] = {}
+    by_failed_stage: dict[str, int] = {}
+    for row in rows:
+        outcome, stage, _recognised = classify_row(row)
+        by_outcome[outcome.value] = by_outcome.get(outcome.value, 0) + 1
+        if stage is not None:
+            by_failed_stage[stage.value] = by_failed_stage.get(stage.value, 0) + 1
+    n_answered = by_outcome.get(Outcome.answered.value, 0)
+    n_refused = by_outcome.get(Outcome.refused.value, 0)
+    n_crashed = by_outcome.get(Outcome.crashed.value, 0)
+    # A crashed turn returns no meta at all, so its row records ``routed_schemas=[]``
+    # and ``routed_hit=False`` whether or not the router ever ran. Leaving those in
+    # the routing denominator charges every crash to the router — the same "one
+    # metric silently absorbs another's failures" defect this module was rewritten
+    # to remove, just relocated from ``refusal_rate`` to ``routing_recall``.
+    #
+    # A *bypassed* turn is the second shape of the same problem, and it needs the
+    # opposite treatment from either a hit or a miss. When the corpus holds one schema
+    # there is nothing to route: the serve path pins it and says so
+    # (``routing_bypassed``). Counting those rows as misses reported 0.0 recall for a
+    # pool with no routing decision in it; counting them as hits reports 1.0, which
+    # claims a router succeeded where none ran — and on an oracle rung, where the
+    # schema was *handed over*, that would be the rung grading its own gift. They are
+    # excluded from the denominator, so the metric is ``None`` (not measured) rather
+    # than either lie. ``n_routing_bypassed`` is reported so the exclusion is visible.
+    #
+    # The third shape is a turn that recorded no routing decision at all — it ended
+    # before ``assemble`` ran. ``routed_hit`` is ``None`` there, and the denominator
+    # is defined on POSITIVE evidence (a recorded decision) rather than on the
+    # absence of a bypass flag, so an unrecorded turn cannot be read as a miss.
+    # ``n_routing_unrecorded`` makes the exclusion visible, exactly as
+    # ``n_routing_bypassed`` does for the pinned case.
+    #
+    # All three exclusions are applied to ONE population, and every routing metric is
+    # computed over it. They used to be applied in two places — the numerator over
+    # ``routing_rows``, the denominator over a separately-filtered count — and the
+    # populations disagreed about crashes. A turn that crashes *after* ``assemble``
+    # carries real ``routed_schemas``, so it contributed a genuine hit to the
+    # numerator while being struck from the denominator, and ``routing_recall``
+    # exceeded 1.0. Measured at 3 such crashes plus one clean miss: ``crash_rate
+    # 0.75, n_routing_observed 1, routing_recall 3.0``. That is the failure shape a
+    # rate-limit storm at ``--workers 8`` produces, which is the condition the
+    # runbook warns about.
+    unbypassed = [r for r in rows if not r.get("routing_bypassed")]
+    n_routing_bypassed = n - len(unbypassed)
+    uncrashed = [r for r in unbypassed if classify_row(r)[0] is not Outcome.crashed]
+    n_routing_crashed = len(unbypassed) - len(uncrashed)
+    routing_rows = [r for r in uncrashed if r.get("routed_hit") is not None]
+    n_routing_unrecorded = len(uncrashed) - len(routing_rows)
+    n_routed_hit = sum(1 for r in routing_rows if r.get("routed_hit"))
+    # How often an answer reached past the router. Drawn from ``routing_rows``, so it
+    # inherits all three carve-outs above (bypassed, crashed, unrecorded) and then adds
+    # its own: rows where ``routing_escaped`` is ``None``, because a refusal licensed
+    # nothing and so neither obeyed nor escaped.
+    escape_rows = [r for r in routing_rows if r.get("routing_escaped") is not None]
+    n_routing_escaped = sum(1 for r in escape_rows if r.get("routing_escaped"))
+    n_correct_escaped = sum(
+        1 for r in escape_rows if r.get("routing_escaped") and r.get("correct")
+    )
+    # Rows with non-empty ``tables_used`` that could not be fully resolved — escape is
+    # unknown, not unobserved. Excluded from the escape-rate denominator (which is
+    # definitive True/False only) and counted here so undercount is visible.
+    n_routing_escape_unknown = sum(
+        1 for r in routing_rows if r.get("routing_escape_unknown")
+    )
+    n_tables_used_unresolved = sum(
+        int(r.get("n_tables_used_unresolved") or 0) for r in rows
+    )
+    # Literally the population above. Recomputing it with its own filter is what let
+    # the two drift apart in the first place.
+    n_routing_observed = len(routing_rows)
+    # EX *given* the router got the schema right needs a numerator drawn from the
+    # same rows as its denominator. Dividing every correct row by only the routed
+    # ones is EX/routing_recall wearing a conditional's name, and it exceeds 1.0 the
+    # moment a question is answered correctly off a schema the router missed.
+    n_correct_routed = sum(
+        1 for r in routing_rows if r.get("routed_hit") and r.get("correct")
+    )
+    # Correct answers on questions whose schema the router missed — drawn from the
+    # routed population only, so a bypassed row (which had no routing decision) is not
+    # booked as a correct answer the router failed to enable.
+    n_correct_routing_rows = sum(1 for r in routing_rows if r.get("correct"))
+    n_correct_unrouted = n_correct_routing_rows - n_correct_routed
+    # ...which leaves the rows excluded above, and they must be reported separately
+    # rather than swept into one residual. ``EX`` is computed over EVERY row, so once
+    # excluded rows exist the decomposition ``EX == routing_recall *
+    # cond_ex_given_routing`` silently stops holding while ``n_correct_unrouted`` —
+    # the field documented as the escape hatch — still reads 0.
+    #
+    # Each is counted DIRECTLY, not by subtraction. ``n_correct_bypassed`` used to be
+    # ``n_correct - n_correct_routing_rows``, which was correct only while "bypassed"
+    # was the sole exclusion; once unrecorded turns were also excluded, a correct
+    # answer on a turn that recorded no routing decision was booked into a field named
+    # "bypassed" — producing ``n_correct_bypassed > n_routing_bypassed``, an
+    # impossible pair for anyone cross-checking the identity.
+    n_correct_bypassed = sum(
+        1 for r in rows if r.get("routing_bypassed") and r.get("correct")
+    )
+    n_correct_routing_unrecorded = sum(
+        1 for r in uncrashed if r.get("routed_hit") is None and r.get("correct")
+    )
+    # Counted directly, like the other four. Deriving it by subtraction made
+    # ``n_correct_unaccounted`` below identically zero — the residual absorbed
+    # whatever the four named buckets missed and then the check subtracted the same
+    # five terms, so it could never fire. That is the defect this block was rewritten
+    # to remove (``n_correct_bypassed`` as a residual), relocated one bucket over: a
+    # sixth exclusion produced ``n_correct_routing_crashed = 2`` beside
+    # ``n_routing_crashed = 0`` with the check still reading 0.
+    n_correct_routing_crashed = sum(
+        1
+        for r in unbypassed
+        if classify_row(r)[0] is Outcome.crashed and r.get("correct")
+    )
+    # Over the SAME uncrashed population as every other routing metric. Left over
+    # ``rows``, a crash that happened to record a pick counted in
+    # ``schema_pick_accuracy`` while the same crash recording a route was struck from
+    # ``routing_recall`` — two members of one family, named together in the runbook,
+    # disagreeing about whether a crashed turn is an observation. Under the rate-limit
+    # storm this block was rewritten for, that is a systematic split.
+    picks = [r for r in uncrashed if r.get("schema_pick") is not None]
+    n_pick_hit = sum(1 for r in picks if r.get("pick_hit"))
+    genuine_picks = [r for r in picks if not r.get("schema_pick_fallback")]
+    n_missing_gold = sum(1 for r in rows if r.get("error") == "missing_gold_hash")
+    # The other ungradeable shape: a gold hash exists but the artifact recorded it as
+    # unusable. Those rows score correct=False and sit in every EX denominator, so
+    # without a count the understatement they cause is nameless.
+    n_gold_unusable = sum(
+        1 for r in rows if str(r.get("error") or "").startswith("gold_unusable:")
+    )
+
+    gradeable = [r for r in rows if is_gradeable_eval_row(r)]
+    n_gradeable = len(gradeable)
+    _measured_notes = [
+        r for r in rows if isinstance(r.get("n_notes_injected"), (int, float))
+    ]
+
+    def _bucket(key: str) -> dict[str, dict[str, Any]]:
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for r in rows:
+            groups.setdefault(str(r.get(key)), []).append(r)
+        return {
+            k: {
+                "ex_lenient": sum(1 for r in v if r.get("correct")) / len(v),
+                "n": len(v),
+            }
+            for k, v in sorted(groups.items())
+        }
+
+    # Every rate below is ``None`` when its denominator is empty. An arm that scored
+    # zero rows measured nothing, and rendering that as 0.0 makes a run that never
+    # ran look like a run that failed everything — which the ledger's quotability
+    # check then reads as "crash_rate recorded, and it was fine".
+    return {
+        "arm": arm,
+        "n": n,
+        # The count, not only the rate. A marginal cost per additional correct answer
+        # needs a numerator in answers, and reconstructing it from ``ex_lenient * n``
+        # re-introduces rounding into a figure that is exactly an integer.
+        "n_correct": n_correct,
+        # Sorted question ids for paired pricing. Equal-N different pools must not
+        # price; :func:`ladder_deltas` / :func:`price_verdict` require identical sets.
+        "question_ids": sorted(
+            {
+                str(qid)
+                for r in rows
+                if (qid := r.get("question_id") or r.get("request_id")) is not None
+            }
+        ),
+        "ex_lenient": (n_correct / n) if n else None,
+        "ex_strict": (n_strict / n) if n else None,
+        # EX over questions a generator can actually win (frozen-VALUES golds
+        # removed from the denominator). Every arm-to-arm delta is proportionally
+        # larger here, which is what makes small real effects visible.
+        "n_gradeable": n_gradeable,
+        "n_frozen_gold": sum(1 for r in rows if r.get("gold_frozen")),
+        "n_order_sensitive_gold": sum(
+            1 for r in rows if r.get("gold_order_sensitive")
+        ),
+        "ex_gradeable": (
+            sum(1 for r in gradeable if r.get("correct")) / n_gradeable
+            if n_gradeable
+            else None
+        ),
+        # EX split by whether the gold statement already existed in train (see
+        # ``eval.leakage``). ``ex_no_twin`` is the defensible headline: on those
+        # questions the curator had nothing to recall, so a lift is generalisation.
+        # ``ex_twin`` is worth reporting beside it rather than hidden — a pipeline
+        # that recalls well is not useless, it is just not the claim being made.
+        #
+        # ``None`` when a stratum is empty OR when stamp coverage is incomplete.
+        # Both strata exist on the real split, so a ``None`` here means the flag was
+        # never stamped — a run that predates it, a driver that forgot to pass
+        # ``twin_ids``, or a partial resume across the boundary. ``is not None``,
+        # not truthiness. A row from before the flag existed has the key ABSENT, and
+        # ``not r.get(...)`` put it in the twin-FREE stratum — so on a resumed run
+        # ``ex_no_twin`` silently became the pooled EX. Partial coverage is worse:
+        # emitting a rate over only the stamped subset while ``n`` still counts
+        # unstamped rows. Refuse both rates unless every scored row is stamped —
+        # the same :func:`_twin_stamps_complete` gate ``comparisons[].no_twin`` uses,
+        # including frozen / order-sensitive rows that leave the gradeable pool.
+        "n_gold_twin_in_train": sum(
+            1 for r in rows if r.get("gold_twin_in_train") is True
+        ),
+        "n_twin_unstamped": sum(
+            1 for r in rows if r.get("gold_twin_in_train") is None
+        ),
+        "ex_no_twin": (
+            _rate_over(
+                [r for r in gradeable if r.get("gold_twin_in_train") is False]
+            )
+            if _twin_stamps_complete(rows)
+            else None
+        ),
+        "n_no_twin_gradeable": sum(
+            1 for r in gradeable if r.get("gold_twin_in_train") is False
+        ),
+        "ex_twin": (
+            _rate_over(
+                [r for r in gradeable if r.get("gold_twin_in_train") is True]
+            )
+            if _twin_stamps_complete(rows)
+            else None
+        ),
+        "n_twin_gradeable": sum(
+            1 for r in gradeable if r.get("gold_twin_in_train") is True
+        ),
+        # GENUINE refusals only — the product declining. A crash is our bug and gets
+        # its own rate; mixing them measured two things and reported one.
+        "refusal_rate": (n_refused / n) if n else None,
+        "n_answered": n_answered,
+        "n_refused": n_refused,
+        "n_crashed": n_crashed,
+        "crash_rate": (n_crashed / n) if n else None,
+        # The complete partition, so the three headline counts above can be checked
+        # against ``n`` — `capped` and `clarification` turns exist and would
+        # otherwise be an invisible remainder.
+        "by_outcome": by_outcome,
+        # Where the failures were decided. A bucket only appears when something
+        # actually observed it: an unattributable failure leaves no stage weight
+        # rather than a guess.
+        "by_failed_stage": by_failed_stage,
+        # ``refused_by`` is free text with no central declaration, so a typo would
+        # otherwise mint a failure category no report ever mentions.
+        "n_unmapped_refused_by": sum(
+            1
+            for r in rows
+            if r.get("refused_by") is not None
+            and str(r.get("refused_by")) not in REFUSED_BY_TO_STAGE
+        ),
+        # ``None``, not 0.0, when no row produced SQL: an arm that refused or crashed
+        # on everything touched no decoys because it wrote no SQL, and reporting that
+        # as a perfect governance score rewards the worst possible run.
+        "decoy_touch_rate": (n_decoy / n_produced) if n_produced else None,
+        "n_decoy_touch": n_decoy,
+        "conditional_ex_lenient": (n_correct / n_produced) if n_produced else None,
+        # Routing recall: share of questions whose TRUE schema survived routing,
+        # over the turns that actually reached the router (crashes excluded — see
+        # ``n_routing_observed``). This is the ceiling on EX in the data lake.
+        "routing_recall": (n_routed_hit / n_routing_observed) if n_routing_observed else None,
+        "n_routing_observed": n_routing_observed,
+        # Turns with no routing decision to score (a one-schema corpus, or an oracle
+        # rung that was handed its schema). Excluded from every routing metric above;
+        # reported here so a ``routing_recall: null`` is legible as "nothing to route"
+        # rather than "the field went missing".
+        "n_routing_bypassed": n_routing_bypassed,
+        # Turns that recorded no routing decision at all — they ended before
+        # ``assemble`` ran. Also excluded from the denominator, and also counted, for
+        # the same reason: the alternative is charging the router for turns it never
+        # saw. Non-zero on a live arm means the serve path is losing provenance.
+        "n_routing_unrecorded": n_routing_unrecorded,
+        # Rows the per-db grouping could not place. Non-zero means
+        # ``sum(by_db[*].n)`` does not add up to ``n``, and says so instead of
+        # leaving the reader to notice.
+        "n_rows_no_db_id": _ungrouped(rows, "db_id"),
+        # Exception classes behind the crashes, counted. A crash rate already blocks
+        # quotability; this says whether to re-run at lower concurrency (a wall of
+        # ``RateLimitError``) or to go and fix something (anything else). Empty when
+        # nothing crashed, absent-as-empty being unambiguous here because
+        # ``crash_rate`` sits beside it.
+        "by_error_type": dict(
+            Counter(
+                str(r.get("error_type"))
+                for r in rows
+                if r.get("error_type")
+            ).most_common()
+        ),
+        # --- The governance stamp, aggregated -----------------------------------
+        # Every row carries these and nothing reported them, so a run could say EX moved
+        # and not whether the answers were *governed* — which is half of what the corpus
+        # is claimed to buy. Reliability is graded on ``semantic_assurance`` (safety stays
+        # hard), so an arm that raises EX while shifting mass from ``verified`` toward
+        # ``unverified`` has not made the product better in the way the claim means.
+        #
+        # Counted over the rows that RECORDED each field, with the denominator reported
+        # beside it. A row that never recorded one is not a row that recorded a bad value,
+        # and lumping them together is how an instrumentation gap reads as a governance
+        # failure — or the reverse.
+        "by_tier": dict(
+            Counter(
+                # ``getattr(..., "value", ...)`` rather than ``str``: every producer
+                # stamps ``.value`` today, but ``str(ReliabilityTier.governed)`` is
+                # ``'ReliabilityTier.governed'`` while the same value round-trips
+                # through JSON as ``'governed'`` — so a future enum-stamping producer
+                # would split one tier across two keys on a resume, silently.
+                str(getattr(r.get("tier"), "value", r.get("tier")))
+                for r in rows
+                if r.get("tier")
+            ).most_common()
+        ),
+        "by_semantic_assurance": dict(
+            Counter(
+                str(
+                    getattr(
+                        r.get("semantic_assurance"),
+                        "value",
+                        r.get("semantic_assurance"),
+                    )
+                )
+                for r in rows
+                if r.get("semantic_assurance")
+            ).most_common()
+        ),
+        "n_with_governance_stamp": sum(1 for r in rows if r.get("tier")),
+        # All three are conditioned on DELIVERY — ``produced``, the rows that handed back
+        # SQL — not on every row. A refusal stamps ``safety_clearance=False`` outright,
+        # and ``arms.py`` coerces the other two through ``bool(...)``, so absent becomes
+        # ``False`` and an ``is not None`` guard excludes only crashes. Over all rows the
+        # readings came out backwards: an arm that refused 8 of 10 reported the *best*
+        # graded-delivery rate and the *worst* safety-clearance rate, because refusing is
+        # neither delivering nor clearing. A rung that refuses more would have looked like
+        # a rung that governs better.
+        #
+        # Refusal behaviour is ``refusal_rate``'s job; these describe the answers handed
+        # back.
+        #
+        # **On the current serve path the first two are complements.** Only two ``Answer``
+        # constructors carry SQL: ``assemble`` (``safety_clearance=True``, no
+        # ``graded_delivery`` key, so ``False``) and ``graded_delivery``
+        # (``safety_clearance=False``, ``graded_delivery=True``). So
+        # ``safety_clearance_rate == 1 - graded_delivery_rate`` over delivered rows, and
+        # the two ladder deltas are exact negatives of each other. Both are kept because a
+        # future path could deliver an answer that clears safety *and* is graded, at which
+        # point they separate — ``test_the_two_delivery_rates_are_currently_complements``
+        # fails when that happens, which is the signal to update the runbook rather than a
+        # regression.
+        #
+        # The ``n_*_observed`` counts are therefore ``len(produced)`` in a live run, not a
+        # partial-instrumentation detector: absent legitimately means ``False`` for these
+        # flags ("this was not a graded delivery"), so relaying them unmodified would make
+        # the denominator only the *positive* rows and the rate a constant 1.0. What the
+        # counts do tell you is whether anything was delivered at all.
+        "safety_clearance_rate": _bool_rate(produced, "safety_clearance"),
+        "n_safety_clearance_observed": sum(
+            1 for r in produced if r.get("safety_clearance") is not None
+        ),
+        # Delivered under grading semantics (pipeline-design §6): the turn handed back SQL
+        # whose semantic assurance was below the bar rather than refusing. A rung that
+        # raises EX mostly by delivering more of these is trading governance for score,
+        # and that is invisible without the rate.
+        "graded_delivery_rate": _bool_rate(produced, "graded_delivery"),
+        "n_graded_delivery_observed": sum(
+            1 for r in produced if r.get("graded_delivery") is not None
+        ),
+        "coverage_best_effort_rate": _bool_rate(produced, "coverage_best_effort"),
+        # Its denominator was simply missing, so ``0.0`` could not be told from 0-of-1 —
+        # in a block whose whole point is that a rate without its denominator is not a
+        # measurement.
+        "n_coverage_best_effort_observed": sum(
+            1 for r in produced if r.get("coverage_best_effort") is not None
+        ),
+        # EX *given* the router got the schema right, both terms over routed rows.
+        # Separates generation quality from routing quality.
+        "cond_ex_given_routing": (n_correct_routed / n_routed_hit) if n_routed_hit else None,
+        # The router is not a gate: the agent's ``search_corpus`` sees the pooled corpus,
+        # so a turn can license a table from a schema the router excluded. These make that
+        # visible, and they are the reason ``routing_recall`` and ``cond_ex_given_routing``
+        # do not multiply out to EX.
+        #
+        # ``None`` at an empty denominator, as everywhere else here: no row was in a
+        # position to escape.
+        "n_routing_escape_observed": len(escape_rows),
+        "n_routing_escaped": n_routing_escaped,
+        "routing_escape_rate": (
+            (n_routing_escaped / len(escape_rows)) if escape_rows else None
+        ),
+        # Non-empty ``tables_used`` that failed to fully resolve. Not in the escape-rate
+        # denominator (unknown ≠ observed escape); counted so unresolved ids cannot
+        # silently look like "nothing to judge".
+        "n_routing_escape_unknown": n_routing_escape_unknown,
+        "n_tables_used_unresolved": n_tables_used_unresolved,
+        # Correct answers that used a schema the router had excluded — the population that
+        # breaks the decomposition, since they are wins the router did not enable.
+        "n_correct_via_routing_escape": n_correct_escaped,
+        # Correct answers on questions the router missed. Normally 0; when it is not,
+        # EX != routing_recall x cond_ex_given_routing, and this is the discrepancy.
+        "n_correct_unrouted": n_correct_unrouted,
+        # Correct answers on turns that had no routing decision at all. Non-zero here
+        # is why EX can exceed ``routing_recall * cond_ex_given_routing`` without
+        # ``n_correct_unrouted`` firing: those two terms are computed over routed rows
+        # only, and EX is computed over all of them.
+        "n_correct_bypassed": n_correct_bypassed,
+        # The remaining two terms of the identity. ``n_correct_routed`` was the one
+        # the decomposition is built on and it was never written to the artifact, so
+        # `docs/measurement.md` told the reader to check a sum they could not compute.
+        # All five are counted over disjoint populations and must total ``n_correct``;
+        # ``n_correct_unaccounted`` is that check, published rather than asserted so a
+        # future exclusion shows up as a non-zero number instead of a crash at the end
+        # of a paid run.
+        "n_correct_routed": n_correct_routed,
+        "n_correct_routing_unrecorded": n_correct_routing_unrecorded,
+        "n_correct_routing_crashed": n_correct_routing_crashed,
+        "n_correct_unaccounted": n_correct
+        - (
+            n_correct_routed
+            + n_correct_unrouted
+            + n_correct_bypassed
+            + n_correct_routing_unrecorded
+            + n_correct_routing_crashed
+        ),
+        # Turns excluded from every routing metric because they crashed. Distinct from
+        # ``n_crashed``: a crash on a bypassed turn is not in this count.
+        "n_routing_crashed": n_routing_crashed,
+        # Single-schema pick accuracy (only when schema_route_llm_pick is on).
+        "schema_pick_accuracy": (n_pick_hit / len(picks)) if picks else None,
+        # Rows with SQL but no gold hash to compare it to. They score ``correct=False``
+        # and stay in every denominator on purpose: the gap is identical across arms
+        # (``gold_hashes`` and ``pairs`` are shared), so deltas are unaffected, and
+        # excluding them here alone would make this ``ex_gradeable`` disagree with
+        # ``analysis.py``'s. Read it as the size of the understatement in absolute EX.
+        "n_missing_gold": n_missing_gold,
+        "n_gold_unusable": n_gold_unusable,
+        # Wrong answer, right row count: the projection / ordering / formatting
+        # class. Sizes how much of the remaining gap is a grading-contract artifact
+        # rather than a semantic error, which is the difference between fixing the
+        # generator and changing the grader.
+        "n_wrong_but_nrows_match": sum(
+            1 for r in rows if not r.get("correct") and r.get("nrows_match")
+        ),
+        # Delivery: did the curated corpus actually reach the prompt? A curation arm
+        # whose notes never arrive is indistinguishable from one whose notes are
+        # useless unless this is recorded.
+        "mean_notes_injected": _mean(rows, "n_notes_injected"),
+        # Over the rows that actually recorded note injection, not over every row: a
+        # row that never measured it is not a row that measured zero, and treating
+        # it as one reports "the notes never reached the prompt" next to a
+        # ``mean_notes_injected`` of null.
+        "share_with_a_note": (
+            (
+                sum(1 for r in _measured_notes if (r.get("n_notes_injected") or 0) > 0)
+                / len(_measured_notes)
+            )
+            if _measured_notes
+            else None
+        ),
+        "mean_few_shots_injected": _mean(rows, "n_few_shots_injected"),
+        "mean_context_chars": _mean(rows, "context_chars"),
+        # What this arm actually handed the model, as an identity rather than a
+        # size. Compared across arms by ``eval.treatment``: two arms whose corpora
+        # differ but whose prompts do not are one experiment run twice, and their
+        # difference is nondeterminism. Two separate interventions on this project
+        # were reported as measured nulls before anyone checked this.
+        # ``corpus_note_assets`` is a whole-corpus count with no per-db decomposition,
+        # so the nested block drops the key rather than reporting it as ``None``.
+        # ``None`` in this module means "not verified", and a field that reads
+        # unverified when it is simply not applicable is the ambiguity
+        # ``eval/treatment.py`` exists to remove.
+        "treatment": _drop_keys(
+            fingerprint_arm(arm, rows, corpus_note_assets=corpus_note_assets).to_dict(),
+            ("corpus_note_assets", "note_injection_rate") if nested else (),
+        ),
+        # Where the WRONG answers went wrong. Outcome buckets above cover turns
+        # that refused, capped or crashed; this covers the much larger population
+        # that answered and answered incorrectly, which otherwise carries no stage
+        # at all. ``None`` when no gold was supplied — not an empty dict, which
+        # would assert that nothing was miscategorised.
+        "errors": (
+            summarise_attributions(
+                attribute_rows(rows, gold, shortlists=_shortlists_from_rows(rows))
+            )
+            if gold
+            else None
+        ),
+        "mean_attempts": _mean(rows, "attempts"),
+        "mean_ledger_len": _mean(rows, "ledger_len"),
+        # Tool calls by name and guardrail decisions by layer. ``search_corpus`` /
+        # ``inspect_schema`` dominate a turn and had no durable count anywhere, so
+        # "which layer blocks most" and "how much exploring did this arm do" were
+        # unanswerable from the artifacts.
+        "tool_calls": _sum_counters(rows, "n_tool_calls"),
+        "by_guardrail_layer": _sum_counters(rows, "by_guardrail_layer"),
+        # Cost and wall-clock, deliberately nested and kept OUT of the scored
+        # fields above. Widening the picker context raises input tokens on every
+        # question, so a total is needed — but latency is scheduler-dependent by
+        # design, and a serial run and a pooled run must still agree on every
+        # number that is a *result* (docs/plans/eval-concurrency-design.md).
+        # Shared with ``run_experiment`` so the two drivers cannot disagree about
+        # what a cost block is, and so a measured 0.0 stays 0.0 rather than
+        # collapsing into "not measured".
+        "cost": _cost_block(rows),
+        # Picks that are really the logged rank-1 fallback after an LLM failure or
+        # an unparseable reply. They are indistinguishable from genuine picks in
+        # `schema_pick_accuracy`, so the count is reported alongside it.
+        "n_pick_fallback": sum(1 for r in rows if r.get("schema_pick_fallback")),
+        # ...and the same accuracy with those rows removed from BOTH numerator and
+        # denominator, so the model's real pick rate needs no hand subtraction.
+        "schema_pick_accuracy_excl_fallback": (
+            sum(1 for r in genuine_picks if r.get("pick_hit")) / len(genuine_picks)
+            if genuine_picks
+            else None
+        ),
+        "by_difficulty": (
+            {}
+            if nested
+            else {k: v["ex_lenient"] for k, v in _bucket("difficulty").items()}
+        ),
+        # ~85% of this dataset's rows carry no difficulty, so ``by_difficulty``
+        # collapses into one "unknown" bucket. Without this count that reads as a
+        # uniform distribution across difficulties instead of an empty measurement.
+        "n_with_difficulty": sum(
+            1 for r in rows if r.get("difficulty") not in (None, "", "unknown")
+        ),
+        # Per-database diagnosis, not just per-database EX.
+        #
+        # This used to be two numbers per db (`ex_lenient`, `n`), which says WHICH
+        # schemas are dragging a pooled run down and nothing about WHY — and "why" is
+        # the first question a 69-schema run raises. Worse, the cluster sign test in
+        # `comparisons[].cluster` reports which databases improved or regressed, so the
+        # artifact was raising a question it could not answer.
+        #
+        # It is the same function applied to a subset of the same rows, so a per-db
+        # figure cannot disagree with the run-wide one by construction — the
+        # alternative (a parallel set of per-db counters) is how two numbers that
+        # should be equal drift apart. Costs nothing: pure aggregation over rows
+        # already on disk, no query and no model call.
+        #
+        # Reading these as a rollup needs one caution: a *conditional* rate weights by
+        # its own denominator, not by ``n``. ``cond_ex_given_routing`` weights by
+        # routed rows, ``schema_pick_accuracy`` by rows that recorded a pick,
+        # ``errors.multi_class_share`` by diffed rows — so the pooled figure is not the
+        # ``n``-weighted mean of the per-db ones and should not be reconstructed that
+        # way. What IS guaranteed is that each per-db figure equals the same formula
+        # over that db's rows, because it is the same call.
+        #
+        # ``nested`` stops the recursion and drops the bucket blocks, which are noise
+        # at this level (a single db's `by_db` is itself).
+        "by_db": (
+            {}
+            if nested
+            else {
+                db: _summarise_rows(arm, db_rows, gold=gold, nested=True)
+                for db, db_rows in sorted(
+                    _group_by(rows, "db_id").items()
+                )
+            }
+        ),
+        # EX by the true schema's rank in the embedding shortlist: separates "the
+        # picker overrode a correct rank-1" from "retrieval never surfaced it".
+        # Delegated so summary.json and the offline report cannot diverge (the
+        # local bucket helper sorts keys as strings: 1, 10, 2, ...).
+        # Uncrashed rows, for the same reason as ``picks`` above: a crashed turn's
+        # shortlist says nothing about retrieval, and the bucket it lands in is read
+        # as a spending decision (``docs/prompt-experiments.md``).
+        "by_gold_rank": {} if nested else rank_report(uncrashed),
+    }
 
 
 def _build_db_corpora(
@@ -124,22 +2615,78 @@ def _build_db_corpora(
     skip_agent: bool,
     max_agent_steps: int,
     resume: bool,
+    # ``None`` = every stage at v1. Defaulted only so an offline caller that builds
+    # no agent need not know about prompts; the driver always passes the run's map.
+    prompt_variants: dict[str, str] | None = None,
+    # The run's Settings, carrying that same resolved map. The curator stamps its
+    # own run records from this; without it the curator re-reads the TOML and
+    # records the corpus under a prompt set the agent never ran on.
+    settings: Any | None = None,
 ) -> None:
     """Build the requested arms for one ``db_id`` into the shared roots. Baseline is
     always built (it's deterministic and anchors the per-db suspect set); curated is
     built when curated or curated_sme is requested; the SME arm only when requested.
-    Raises on any build failure (the caller records it and drops the db)."""
-    need_curated = "curated" in arms or "curated_sme" in arms
+    Raises on any build failure (the caller records it and drops the db).
+
+    ``prompt_variants`` is the run's resolved map. The curator and SME prompts are
+    threaded from it rather than re-read inside the curator, because the manifest
+    stamps this map for the *whole* run: a corpus built under a prompt the manifest
+    does not name would make the curated arms' numbers unattributable."""
+    need_seeded = "seeded" in arms
+    need_sme_blind = "curated_sme_blind" in arms
+    need_curated = (
+        "curated" in arms or "curated_sme" in arms or "curated_sme_blind" in arms
+    )
     need_sme = "curated_sme" in arms
-    from ..curator.clarifications import StaticResponder
+
+    # Every requested arm is already on disk: return before opening Postgres or
+    # re-reading the BIRD split. Those steps can fail transiently, and a failure on
+    # a db that is already fully built drops it from ``built`` (so it is not scored)
+    # while its YAML stays in the shared corpus root — which used to leave it
+    # competing as a router candidate for every OTHER db's questions and
+    # desynchronised the census from ``built_dbs``. The SME brief's leakage assertion
+    # is not re-run here because it necessarily passed in the attempt that wrote that
+    # corpus: it is asserted before the SME build, never after.
+    already = ["baseline"]
+    if need_seeded:
+        already.append("seeded")
+    if need_curated:
+        already.append("curated")
+    if need_sme_blind:
+        already.append("curated_sme_blind")
+    if need_sme:
+        already.append("curated_sme")
+    if resume and all(_corpus_complete(roots[a], db_id) for a in already):
+        return
+
     from ..curator.pipeline import (
         build_baseline_corpus,
         build_curated_corpus,
-        build_curated_corpus_with_sme,
     )
-    from ..curator.sme import SimulatedSme, assert_brief_no_leakage, build_sme_brief
+    from ..curator.sme import assert_brief_no_leakage, build_sme_brief
 
     connector = PostgresConnector(pg_dsn, schema=db_id)  # build profiles ONE schema
+    # Sidecar relocation is DEFERRED to the end of the whole db build, not done after
+    # each arm. `build_curated_corpus_with_sme` resolves its clarification ledger from
+    # the curated arm root *or* the relocated `<db>/_build/` path (cross-resume), and
+    # relocating before the SME arm runs within one process still left the live-root
+    # read empty until that resolution existed. Deferring costs nothing: every arm's
+    # sidecars are per-db within one build, and nothing outside SME reads them until
+    # the run aggregates.
+    pending_relocations: list[Path] = []
+
+    def _arm_done(arm: str) -> bool:
+        """Skip only a *complete* prior build; discard partial YAML before rebuild."""
+        root = roots[arm]
+        if resume and _corpus_complete(root, db_id):
+            return True
+        if _discard_incomplete_corpus(root, db_id):
+            print(
+                f"  [{arm}] discarded incomplete {db_id!r} corpus "
+                f"(YAML without {_BUILD_COMPLETE_MARKER}); rebuilding"
+            )
+        return False
+
     try:
         if db_id not in connector.list_schemas():
             raise RuntimeError(f"schema {db_id!r} not present on the Postgres instance")
@@ -152,12 +2699,35 @@ def _build_db_corpora(
         )
 
         # --- baseline (deterministic, no LLM) ---
-        if not (resume and _has_yaml(roots["baseline"], db_id)):
+        if not _arm_done("baseline"):
             build_baseline_corpus(connector, db_id, roots["baseline"])
-            _relocate_sidecars(roots["baseline"], db_id)
+            _mark_build_complete(roots["baseline"], db_id)
+            pending_relocations.append(roots["baseline"])
+
+        # --- seeded (deterministic: the mechanical half of `curated`, no LLM) ---
+        # Same code path as `curated` with the agent switched off, which is exactly
+        # what makes the pair a single-variable comparison: `seeded -> curated` adds
+        # the LLM agent and nothing else, and `baseline -> seeded` adds the
+        # train-SQL seed and nothing else.
+        if need_seeded and not _arm_done("seeded"):
+            build_curated_corpus(
+                connector,
+                gateway,
+                db_id,
+                train,
+                roots["seeded"],
+                model=None,
+                dialect="postgres",
+                max_agent_steps=max_agent_steps,
+                run_agent=False,
+                system_prompt=prompt_text("curator_phase_a", prompt_variants),
+                settings=settings,
+            )
+            _mark_build_complete(roots["seeded"], db_id)
+            pending_relocations.append(roots["seeded"])
 
         # --- curated ---
-        if need_curated and not (resume and _has_yaml(roots["curated"], db_id)):
+        if need_curated and not _arm_done("curated"):
             build_curated_corpus(
                 connector,
                 gateway,
@@ -168,58 +2738,237 @@ def _build_db_corpora(
                 dialect="postgres",
                 max_agent_steps=max_agent_steps,
                 run_agent=not skip_agent,
+                system_prompt=prompt_text("curator_phase_a", prompt_variants),
+                settings=settings,
             )
-            _relocate_sidecars(roots["curated"], db_id)
+            _mark_build_complete(roots["curated"], db_id)
+            pending_relocations.append(roots["curated"])
 
-        if not need_sme:
+        if not (need_sme or need_sme_blind):
             return
 
-        # --- SME brief + leakage invariant (asserted whenever the SME arm builds) ---
+        # --- SME brief + leakage invariant (asserted whenever an SME arm builds) ---
         desc_dir = (
             bird_dir / "data" / "train" / "train_databases" / db_id / "database_description"
         )
-        brief = build_sme_brief(desc_dir, train)
-        assert_brief_no_leakage(
-            brief,
-            gold_sqls=[it.sql for it in train],
-            test_questions=[it.question for it in test],
-        )
+
+        def _brief(*, with_docs: bool) -> str:
+            # ``build_sme_brief`` already degrades to "(no description CSVs found)"
+            # for a directory that does not exist, so blind mode is the same call
+            # with the directory withheld — no second code path to keep in sync.
+            built = build_sme_brief(
+                desc_dir if with_docs else Path("/nonexistent-sme-docs"),
+                train,
+                system_rules=prompt_text("sme_rules", prompt_variants),
+            )
+            assert_brief_no_leakage(
+                built,
+                gold_sqls=[it.sql for it in train],
+                test_questions=[it.question for it in test],
+            )
+            return built
+
+        # --- curated_sme_blind: the protocol WITHOUT the human column docs ---
+        # Isolates the clarification round from the information it smuggles in.
+        # Built before `curated_sme` so a run that dies partway still has the rung
+        # that answers the harder question.
+        if need_sme_blind and not _arm_done("curated_sme_blind"):
+            _build_sme_arm(
+                connector=connector,
+                gateway=gateway,
+                db_id=db_id,
+                train=train,
+                out_root=roots["curated_sme_blind"],
+                curated_root=roots["curated"],
+                brief=_brief(with_docs=False),
+                chat_client=chat_client,
+                lc_model=lc_model,
+                skip_agent=skip_agent,
+                prompt_variants=prompt_variants,
+                settings=settings,
+            )
+            _mark_build_complete(roots["curated_sme_blind"], db_id)
+            pending_relocations.append(roots["curated_sme_blind"])
+
+        if not need_sme:
+            return
+        brief = _brief(with_docs=True)
 
         # --- curated_sme ---
-        if not (resume and _has_yaml(roots["curated_sme"], db_id)):
-            if skip_agent:
-                responder = StaticResponder(
-                    default="Domain column used in analytics; treat as reliable unless samples conflict."
-                )
-                build_curated_corpus_with_sme(
-                    connector,
-                    gateway,
-                    db_id,
-                    train,
-                    roots["curated_sme"],
-                    responder=responder,
-                    curated_root=roots["curated"],
-                    model=None,
-                    run_agent_repass=False,
-                    seed_ledger_if_empty=True,
-                )
-            else:
-                responder = SimulatedSme(chat_client, brief, gateway=gateway)
-                build_curated_corpus_with_sme(
-                    connector,
-                    gateway,
-                    db_id,
-                    train,
-                    roots["curated_sme"],
-                    responder=responder,
-                    curated_root=roots["curated"],
-                    model=lc_model,
-                    run_agent_repass=True,
-                    seed_ledger_if_empty=False,
-                )
-            _relocate_sidecars(roots["curated_sme"], db_id)
+        if not _arm_done("curated_sme"):
+            _build_sme_arm(
+                connector=connector,
+                gateway=gateway,
+                db_id=db_id,
+                train=train,
+                out_root=roots["curated_sme"],
+                curated_root=roots["curated"],
+                brief=brief,
+                chat_client=chat_client,
+                lc_model=lc_model,
+                skip_agent=skip_agent,
+                prompt_variants=prompt_variants,
+                settings=settings,
+            )
+            _mark_build_complete(roots["curated_sme"], db_id)
+            pending_relocations.append(roots["curated_sme"])
     finally:
+        # Flush after every arm of this db is built, so no arm's relocation can hide
+        # an input another arm still needs.
+        for arm_root in pending_relocations:
+            _relocate_sidecars(arm_root, db_id)
         connector.close()
+
+
+def _build_sme_arm(
+    *,
+    connector: Any,
+    gateway: Any,
+    db_id: str,
+    train: list,
+    out_root: Path,
+    curated_root: Path,
+    brief: str,
+    chat_client: Any,
+    lc_model: Any,
+    skip_agent: bool,
+    prompt_variants: dict[str, str],
+    settings: Any,
+) -> None:
+    """One SME arm's build. Shared so ``curated_sme`` and ``curated_sme_blind``
+    cannot drift apart in anything except the brief they are handed — which is the
+    single variable the pair exists to isolate.
+    """
+    from ..curator.clarifications import StaticResponder
+    from ..curator.pipeline import build_curated_corpus_with_sme
+    from ..curator.sme import SimulatedSme
+
+    if skip_agent:
+        build_curated_corpus_with_sme(
+            connector,
+            gateway,
+            db_id,
+            train,
+            out_root,
+            responder=StaticResponder(
+                default="Domain column used in analytics; treat as reliable unless samples conflict."
+            ),
+            curated_root=curated_root,
+            model=None,
+            run_agent_repass=False,
+            seed_ledger_if_empty=True,
+            system_prompt=prompt_text("curator_phase_b", prompt_variants),
+            settings=settings,
+        )
+        return
+    build_curated_corpus_with_sme(
+        connector,
+        gateway,
+        db_id,
+        train,
+        out_root,
+        responder=SimulatedSme(chat_client, brief, gateway=gateway, settings=settings),
+        curated_root=curated_root,
+        model=lc_model,
+        run_agent_repass=True,
+        seed_ledger_if_empty=False,
+        system_prompt=prompt_text("curator_phase_b", prompt_variants),
+        settings=settings,
+    )
+
+
+def _assert_gold_is_trustworthy(
+    gold_check: dict[str, Any],
+    *,
+    n_schemas: int | None = None,
+    on_abort=None,
+) -> None:
+    """Raise unless the sampled gold executed and agreed with its recorded hashes.
+
+    ``on_abort`` runs before raising, for a caller holding a Postgres connection.
+
+    Order matters. Gold that will not *execute* is judged before ``agree_rate``,
+    because an exec error lowers ``n_checked`` without touching the rate: one agreeing
+    row across sixty-nine schemas reported 1.0, so the run proceeded to grade against
+    gold it had never confirmed. A wrong DSN, an unloaded schema, a bad ``search_path``
+    and the wrong ``gold_sql_field`` all present exactly that way — the last easy to
+    hit, because the un-obfuscated ``sql_sqlite`` parses fine and simply names tables
+    this Postgres does not have.
+
+    The exec-failure test is **proportional**, not absolute.
+    :func:`validate_gold_hashes_live` catches ``Exception`` broadly and cannot tell a
+    misconfiguration from a query that crossed the 60 s gateway timeout, or a gold row
+    BIRD never flagged as broken. Misconfiguration takes out essentially every schema;
+    an unlucky query takes out one. Aborting on one would let a single slow query make
+    the whole split unrunnable, deterministically, with no way past it — worse than the
+    fail-open this replaced. Below the threshold the schemas are named on stdout and
+    recorded in the summary, where ``eval.index`` turns them into a quotability
+    blocker: the run may proceed, but a score for a schema whose gold nothing confirmed
+    is not a number to quote.
+    """
+
+    def _abort(message: str) -> None:
+        if on_abort is not None:
+            on_abort()
+        raise RuntimeError(message)
+
+    if not gold_check["n_checked"]:
+        _abort(f"gold self-check verified 0 rows: {gold_check}")
+
+    failed = gold_check.get("exec_error_dbs") or {}
+    # The denominator is the schemas the RUN asked for, passed in by the caller — not
+    # ``gold_check["n_dbs"]``, which is however many happened to be sampled that time.
+    # The two call sites sample different sets: the pre-flight covers every requested
+    # schema, the post-build one only those that built. Deriving the fraction from each
+    # meant the same fixed set of gold failures became a larger share after the build,
+    # so a configuration the pre-flight had correctly called "a few awkward queries"
+    # could cross the threshold and abort — purely because *unrelated* schemas failed to
+    # build — which is precisely the abort-after-paying this pre-flight exists to avoid.
+    n_dbs = n_schemas if n_schemas is not None else (gold_check.get("n_dbs") or 0)
+    # Both a share AND a count. The share alone made a single awkward gold row abort
+    # any run of three or fewer schemas — including the runbook's own
+    # ``--limit-dbs 3`` smoke — and abort it while claiming "this is a configuration
+    # fault", which one failure out of three is no evidence of. One schema failing is
+    # never systematic; the total-failure case is already caught above by
+    # ``n_checked == 0``.
+    systematic = (
+        len(failed) >= _GOLD_EXEC_FAILURE_ABORT_MIN_DBS
+        and n_dbs
+        and (len(failed) / n_dbs) > _GOLD_EXEC_FAILURE_ABORT_FRACTION
+    )
+    if systematic:
+        detail = "; ".join(f"{db}: {err}" for db, err in list(failed.items())[:3])
+        _abort(
+            f"gold SQL failed to execute on {len(failed)} of {n_dbs} schema(s) — more "
+            f"than {_GOLD_EXEC_FAILURE_ABORT_FRACTION:.0%}, so this is a configuration "
+            f"fault rather than a few awkward queries, and the grader cannot be trusted "
+            f"against gold it cannot run. Check the DSN, that every schema is loaded, "
+            f"and that gold is read from `sql_rename` rather than the un-obfuscated "
+            f"`sql_sqlite`. First failures: {detail}"
+        )
+    if gold_check["agree_rate"] < 1.0:
+        _abort(f"gold self-check disagreed with live gold: {gold_check}")
+
+    if failed:
+        print(
+            f"*** WARNING: gold would not execute on {len(failed)} of {n_dbs} "
+            f"schema(s), so the grader is unverified there: {sorted(failed)[:10]} — "
+            "raise --gold-per-db to sample more rows per schema, or accept that those "
+            "schemas' scores rest on gold nothing confirmed (this blocks quotability) "
+            "***"
+        )
+    if gold_check.get("partial_exec_error_dbs"):
+        print(
+            f"    ({len(gold_check['partial_exec_error_dbs'])} further schema(s) had a "
+            "sampled gold query fail but verified on another — not counted against "
+            "them)"
+        )
+    if gold_check.get("dbs_without_usable_gold"):
+        print(
+            f"*** WARNING: {len(gold_check['dbs_without_usable_gold'])} schema(s) had "
+            "no usable gold in the sampled rows, so their grader agreement is "
+            f"unverified: {gold_check['dbs_without_usable_gold'][:10]} ***"
+        )
 
 
 def _datalake_gold_selfcheck(
@@ -241,7 +2990,11 @@ def _datalake_gold_selfcheck(
 
     n_checked = 0
     n_agree = 0
+    n_exec_errors = 0
     per_db_fail: list[str] = []
+    exec_error_dbs: dict[str, str] = {}
+    partial_exec_error_dbs: dict[str, str] = {}
+    unverified_dbs: list[str] = []
     for db, items in sorted(by_db.items()):
         conn = PostgresConnector(pg_dsn, schema=db)
         try:
@@ -255,12 +3008,214 @@ def _datalake_gold_selfcheck(
         n_agree += round(res["agree_rate"] * res["n_checked"]) if res["n_checked"] else 0
         if res["n_checked"] and res["agree_rate"] < 1.0:
             per_db_fail.append(db)
+        # A db whose gold could not be executed at all is the case this pre-flight
+        # exists for, and it used to be invisible: an exec error lowered ``n_checked``
+        # and never touched ``agree_rate``, so the caller's ``agree_rate < 1.0`` gate
+        # passed on a single agreeing row while every other schema failed to run. That
+        # is what a wrong DSN, an unloaded schema, a bad ``search_path`` or the wrong
+        # ``gold_sql_field`` all look like — the last of which is easy to get wrong,
+        # because the un-obfuscated ``sql_sqlite`` field parses fine and simply names
+        # tables this Postgres does not have.
+        if res.get("n_exec_errors") and not res["n_checked"]:
+            # Only when the schema was left with *nothing* verified. A schema where one
+            # sampled query timed out and another executed and agreed is verified: the
+            # grader demonstrably works there, and raising ``--gold-per-db`` has to buy
+            # redundancy rather than more ways to abort.
+            n_exec_errors += res["n_exec_errors"]
+            exec_error_dbs[db] = (res.get("errors") or ["?"])[0]
+        elif res.get("n_exec_errors"):
+            partial_exec_error_dbs[db] = (res.get("errors") or ["?"])[0]
+        elif not res["n_checked"]:
+            # Nothing to execute rather than a failure to execute: every sampled item
+            # had missing or unusable gold. Reported, not fatal — it is a property of
+            # the dataset, and those questions are ungradeable for every arm equally.
+            unverified_dbs.append(db)
     return {
         "n_checked": n_checked,
         "agree_rate": (n_agree / n_checked) if n_checked else 0.0,
         "n_dbs": len(by_db),
         "failed_dbs": per_db_fail,
+        # Schemas left with nothing verified because gold would not run. Fatal in
+        # aggregate — see :func:`_assert_gold_is_trustworthy`.
+        "n_exec_errors": n_exec_errors,
+        "exec_error_dbs": exec_error_dbs,
+        # Schemas where *some* sampled gold failed but at least one query executed and
+        # agreed. Reported, never fatal: the grader is demonstrably working there, and
+        # one slow or genuinely-broken gold row out of the dataset is not a reason to
+        # discard a run.
+        "partial_exec_error_dbs": partial_exec_error_dbs,
+        "dbs_without_usable_gold": unverified_dbs,
+        # Excludes hash mismatches too. A schema whose gold executed and disagreed is
+        # not verified, and it sits in ``failed_dbs`` rather than either bucket above.
+        # Unreachable through :func:`_assert_gold_is_trustworthy` — any mismatch drags
+        # the aggregate ``agree_rate`` below 1.0 and aborts — but this function is
+        # importable, and a field that only tells the truth when a caller happens to
+        # gate correctly is the shape of defect this module keeps finding.
+        "n_dbs_verified": (
+            len(by_db) - len(exec_error_dbs) - len(unverified_dbs) - len(per_db_fail)
+        ),
     }
+
+
+class ArmServingPlan(NamedTuple):
+    """How one arm gets served: which corpus, how wide, and under which rung."""
+
+    corpus_arm: str
+    rung: "OracleRung | None"
+    n_workers: int
+    needs_factory: bool
+
+
+def plan_arm_serving(
+    *,
+    rung: "OracleRung | None",
+    source_arm: str,
+    oracle_base: str | None,
+    effective_workers: int,
+    has_model: bool,
+) -> ArmServingPlan:
+    """Decide the serving shape for one arm. Pure, so it can be tested.
+
+    Extracted because the decision it encodes is unreachable before the paid run:
+    ``--skip-agent`` rejects every rung but ``oracle_sql``, and ``effective_workers``
+    is forced to 1 without a model, so no offline command exercises "oracle rung at
+    width > 1". A mutation that dropped ``rung`` on the way to the worker factory left
+    the whole suite green while making every rung serve as an ordinary arm under a
+    rung's name — silently replacing the headroom bounds that every other number in
+    the runbook is read against.
+
+    ``corpus_arm`` is the BASE arm for a rung, never the rung's own name: a rung is a
+    narrowing of some arm's corpus and its name is not a corpus key, so keying on
+    ``source_arm`` raises ``KeyError`` at serve time.
+    """
+    if rung is not None and oracle_base is None:
+        raise ValueError(f"oracle rung {rung.value} has no base arm to narrow")
+    corpus_arm = oracle_base if rung is not None else source_arm
+    assert corpus_arm is not None  # narrowed by the guard above
+    # ``oracle_sql`` submits gold SQL and never calls a model; every other rung serves
+    # through the real graph and cannot run without one.
+    servable = has_model or rung is None or rung is OracleRung.sql
+    needs_factory = effective_workers > 1 and servable
+    return ArmServingPlan(
+        corpus_arm=corpus_arm,
+        rung=rung,
+        n_workers=effective_workers if needs_factory else 1,
+        needs_factory=needs_factory,
+    )
+
+
+class ServeBindings(NamedTuple):
+    """The run-wide objects a worker factory needs. Built once per run."""
+
+    corpora_serve: dict
+    pg_dsn: str
+    settings: Any
+    identity: Any
+    model: Any
+    embedder: Any
+    gold: Any
+
+
+def arm_worker_factory(
+    plan: ArmServingPlan, bindings: "ServeBindings"
+) -> "Callable[[int], ServeWorker]":
+    """Curry :func:`make_serve_worker_factory` onto one arm's plan.
+
+    Module-level, and takes the plan WHOLE, because this is the last place the rung
+    can be lost. As a closure over ``run_datalake``'s locals it was unreachable from
+    any test, and dropping ``rung=`` here left the entire suite green while making
+    every oracle rung serve as an ordinary arm under a rung's name — replacing the
+    headroom bounds the runbook reads every other number against. No offline command
+    reaches this path either: ``--skip-agent`` rejects all rungs but ``oracle_sql``,
+    and the worker count is forced to 1 without a model.
+    """
+    return make_serve_worker_factory(
+        corpus=bindings.corpora_serve[plan.corpus_arm],
+        pg_dsn=bindings.pg_dsn,
+        settings=bindings.settings,
+        identity=bindings.identity,
+        model=bindings.model,
+        embedder=bindings.embedder,
+        arm=plan.corpus_arm,
+        rung=plan.rung,
+        gold=bindings.gold if plan.rung is not None else None,
+        n_workers=plan.n_workers,
+    )
+
+
+def make_serve_worker_factory(
+    *,
+    corpus: Any,
+    pg_dsn: str,
+    settings: Any,
+    identity: Any,
+    model: Any,
+    embedder: Any = None,
+    arm: str,
+    rung: "OracleRung | None" = None,
+    gold: "GoldIndex | None" = None,
+    n_workers: int = 1,
+) -> "Callable[[int], ServeWorker]":
+    """Build the per-worker ``(connector, gateway, solver)`` factory for one arm.
+
+    Each worker owns an unpinned connector (``schema=None`` — the pooled driver spans
+    every schema), its own gateway, its own solver and therefore its own graph, and a
+    distinct ``session_id``. That is the whole isolation argument for serving an arm
+    concurrently.
+
+    **Oracle rungs go through here too.** They were pinned to one worker on the
+    grounds that they "rebuild a graph per narrowed corpus, so they cannot share the
+    per-arm worker factory" — but that cache is closure-local to a single
+    ``oracle_solver`` call, which is exactly why a *per-worker* solver is safe rather
+    than why it is impossible. It is the same isolation every fair arm already had.
+    Serialising them cost step 3 of the runbook three rungs x the whole split in
+    strictly sequential agent loops, on the diagnostics that bound every other number.
+
+    The per-solver graph cap is *divided* by the worker count rather than multiplied,
+    so each worker keeps a shorter reuse tail instead of a full one. That holds the
+    total flat **up to 8 workers**; past that the floor of 4 dominates and the total
+    does grow (16 workers -> 64 graphs, 32 -> 128). The floor is deliberate: a cap of 1
+    or 2 defeats the reuse that matters, which is consecutive questions over one
+    schema. The runbook's ``--workers 8`` sits exactly on the flat part.
+
+    ``oracle_sql`` compiles nothing at all — it hands gold SQL straight to the grader —
+    so it fans out for free.
+
+    Module-level and fully parameterised rather than a closure over ``run_datalake``'s
+    locals, so the wiring above can be asserted on behaviour instead of on source text.
+    """
+    if rung is not None and gold is None:
+        raise ValueError(f"oracle rung {rung.value} needs a gold index")
+
+    def factory(idx: int) -> ServeWorker:
+        conn = PostgresConnector(pg_dsn, schema=None)
+        gw = Gateway(conn, max_rows=200_000, timeout_s=60.0)
+        if rung is not None:
+            slv = oracle_solver(
+                rung,
+                corpus,
+                gw,
+                settings,
+                identity,
+                model=model,
+                embedder=embedder,
+                gold=gold,
+                session_id=f"eval-{rung.value}-w{idx}",
+                graph_cache_max=max(4, 32 // max(1, n_workers)),
+            )
+        else:
+            slv = agent_solver(
+                corpus,
+                gw,
+                settings,
+                identity,
+                model=model,
+                embedder=embedder,
+                session_id=f"eval-{arm}-w{idx}",
+            )
+        return ServeWorker(connector=conn, gateway=gw, solver=slv)
+
+    return factory
 
 
 def _run_pool_arm(
@@ -273,9 +3228,42 @@ def _run_pool_arm(
     identity: Identity,
     bird_dir: Path,
     suspect_by_db: dict[str, frozenset[str]],
+    # The corpus this arm served, for resolving ``tables_used`` asset ids to schemas —
+    # ids cannot be split on ``_`` because schema names contain underscores.
+    #
+    # Required, not defaulted to ``None``. With a default, forgetting it at the driver
+    # call site silently disabled the routing-escape metric for the whole run and left
+    # the suite green: every row reported ``routing_escaped: None`` and the summary a
+    # null rate, which reads as "nothing escaped" rather than "nothing was measured".
+    # A missing argument is now a TypeError at the call, which is the loudest cheap
+    # failure available.
+    arm_corpus: Any,
+    # Question ids whose gold SQL has a structural twin in train (``eval.leakage``).
+    # Passed in rather than recomputed per arm: it is a property of the split, not of
+    # the arm, and recomputing it would put a few thousand regex substitutions on the
+    # critical path of every serve pass.
+    # REQUIRED, both of them, deliberately without defaults. Each decides what is in
+    # the EX denominator or which stratum a row lands in, so a silently-empty default
+    # reads as "no twins, nothing excluded" — the absent-vs-zero failure this module
+    # keeps finding, and one a forgetful call site would never be told about. Removing
+    # ``ungradeable_ids=`` from the driver used to leave the whole suite green.
+    # Callers that genuinely do not care pass ``frozenset()`` and say so.
+    twin_ids: frozenset[str] | set[str],
+    ungradeable_ids: frozenset[str] | set[str],
     dialect: str,
+    out_path: Path,
+    split: str = "test",
+    resume: bool = False,
+    # Keep crashed rows on resume instead of re-serving them. Off by default: a
+    # crash is a bug rather than a measurement, and replaying one costs the run.
+    replay_crashed: bool = False,
     serve_workers: int = 1,
     worker_factory: "Callable[[int], ServeWorker] | None" = None,
+    stage_sink: "_RowSink | None" = None,
+    # How many notes the corpus this arm served actually held. Passed through to
+    # the treatment fingerprint so "held notes, injected none" is checkable; that
+    # check is unreachable without it.
+    corpus_note_assets: int | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Serve + grade one arm over the pooled (item, db_id) stream. Decoy touches
     use the item's OWN db suspect set; routing recall is scored from the router
@@ -285,23 +3273,118 @@ def _run_pool_arm(
     ``solver`` / ``gateway`` — byte-identical to the pre-concurrency path.
     ``serve_workers > 1`` fans the per-question ``solve+grade`` unit across a
     thread pool of ``worker_factory``-built workers (each its own unpinned
-    connector + gateway + graph); results reassemble in the original pair order,
-    so rows and every aggregate match the serial run."""
-    pairs = list(pairs)
-    n = len(pairs)
+    connector + gateway + graph); freshly served rows reassemble in the original
+    pair order, so rows and every aggregate match the serial run. (On resume the
+    returned list is replayed rows first, then fresh ones — aggregation is
+    order-independent, and the summary is what callers use.)
 
-    def _grade_one(pair: tuple[Any, str], *, solver, gateway) -> dict[str, Any]:
+    Rows stream to ``out_path`` as they are scored. With ``resume=True`` the rows
+    already there are replayed instead of re-served, so an interrupted multi-hour
+    run continues where it stopped; the summary is computed over replayed and fresh
+    rows alike, so it matches an uninterrupted run.
+
+    ``stage_sink`` (when given) receives the per-stage timing records of every
+    question served *in this attempt*. A replayed row is deliberately absent from it:
+    it has no fresh timings, and synthesising one — or copying the row's total
+    latency onto a stage — would put a fabricated number in the one file whose
+    purpose is attributing time. So the stage file is a subset of the row file on a
+    resumed run, joinable by ``(question_id, arm)``; a question re-served after a
+    torn row write can appear there twice, which is why the row file stays the
+    authority on what was scored.
+    """
+    pairs = list(pairs)
+    wanted_ids = {str(item.question_id or item.question) for item, _ in pairs}
+
+    done_rows: list[dict[str, Any]] = []
+    if resume:
+        on_disk = _read_rows(out_path)
+        # Check the split across EVERY row on disk, before narrowing to this pool.
+        # train and test question ids are disjoint, so filtering first would drop
+        # the foreign-split rows and leave the guard permanently unreachable —
+        # while the file itself silently accumulated two splits. A row that records
+        # NO split counts as foreign too: rows written before the field existed are
+        # of unknown split, and treating unknown as "matches whatever you asked for"
+        # is what let a `--split train` resume append onto an old test file.
+        stale = {r.get("split") for r in on_disk} - {split}
+        if stale:
+            raise RuntimeError(
+                f"{out_path.name} holds rows from split(s) {sorted(map(str, stale))} "
+                f"but this run is --split {split}. Resuming would mix splits into one "
+                "file; use a different --out directory or drop --resume."
+            )
+        # Only replay rows belonging to THIS pool: a narrower --limit / --dbs must
+        # not smuggle stale questions into the denominator. They stay in the file,
+        # so the summary and the artifact can disagree — reported below.
+        done_rows = [r for r in on_disk if str(r.get("question_id")) in wanted_ids]
+        if len(on_disk) != len(done_rows):
+            print(
+                f"  [{arm}] {len(on_disk) - len(done_rows)} row(s) on disk fall "
+                "outside this question pool; scored summary excludes them but the "
+                "JSONL still contains them"
+            )
+    else:
+        out_path.unlink(missing_ok=True)  # fresh run: never append to a stale file
+
+    # A crashed row is not a measurement, so replaying it preserves nothing and costs
+    # the whole run: ``quotable()`` refuses any arm with a non-zero crash rate, so one
+    # bad turn in 10,150 disqualifies the result — and a resume used to hand that same
+    # row straight back, leaving hand-editing the JSONL as the only recovery from a
+    # transient provider failure a re-serve would very likely clear.
+    #
+    # Re-served rather than dropped, and the stale row is removed from the file first:
+    # leaving it would put two rows under one ``question_id``, which double-counts in
+    # every denominator and which ``eval.analysis`` rejects outright as a corrupt file.
+    #
+    # ``--replay-crashed`` restores the old behaviour for anyone who wants a
+    # byte-identical replay. Off by default because the default should be the one that
+    # rescues a run rather than the one that preserves a non-result.
+    if resume and not replay_crashed:
+        crashed = [r for r in done_rows if classify_row(r)[0] is Outcome.crashed]
+        if crashed:
+            crashed_ids = {str(r.get("question_id")) for r in crashed}
+            done_rows = [
+                r for r in done_rows if str(r.get("question_id")) not in crashed_ids
+            ]
+            _write_jsonl(
+                out_path,
+                [
+                    r
+                    for r in _read_rows(out_path)
+                    if str(r.get("question_id")) not in crashed_ids
+                ],
+            )
+            print(
+                f"  [{arm}] resume: re-serving {len(crashed)} crashed turn(s) "
+                "(a crash is a bug, not a measurement — pass --replay-crashed to keep "
+                "them instead)"
+            )
+
+    done_ids = {str(r.get("question_id")) for r in done_rows}
+    todo = [p for p in pairs if str(p[0].question_id or p[0].question) not in done_ids]
+    if done_rows:
+        print(
+            f"  [{arm}] resume: {len(done_rows)} scored, {len(todo)} to go "
+            f"({len(pairs)} total)"
+        )
+
+    def _grade_one(
+        pair: tuple[Any, str], *, solver, gateway
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """Solve + grade ONE pooled (item, db) pair against the given
-        (solver, gateway). Returns the row plus the booleans the summary needs, so
-        the caller aggregates on one thread in submission order."""
+        (solver, gateway), returning the row that is both persisted and aggregated,
+        plus that question's per-stage timing records."""
         item, db = pair
         qid = item.question_id or item.question
         t0 = time.perf_counter()
         try:
             sql, meta_raw = solver.solve_with_meta(item.question)
             err_msg = None
-        except Exception as err:  # a solver crash is a refusal, not a lost run
-            sql, meta_raw, err_msg = None, {}, str(err)
+        except Exception as err:  # one crashed question must not lose the run
+            # Class name AND message. ``str(KeyError("schema"))`` is just "'schema'",
+            # which names neither the failure kind nor the frame — and this string is
+            # the only record of the crash that reaches the row.
+            sql, meta_raw = None, {}
+            err_msg = f"{type(err).__name__}: {err}"
         latency = time.perf_counter() - t0
 
         gold = gold_hashes.get(str(qid))
@@ -310,114 +3393,272 @@ def _run_pool_arm(
             grade["error"] = err_msg
 
         meta = dict(meta_raw or {})
-        routed = meta.get("routed_schemas") or []
-        routed_hit = db in routed
+        # Classified HERE, where a solver exception is still distinguishable from
+        # everything else. ``grade["error"]`` holds a grader verdict, a solver crash
+        # message OR a gateway execution failure by then, and the last of those is a
+        # wrong answer, not a crash — so ``err_msg`` is what gets passed, and the
+        # stamp is what every later reader uses instead of re-deriving it.
+        outcome, failed_stage, refused_by_known = classify_outcome(
+            generated_sql=sql,
+            exception=err_msg,
+            refused_by=meta.get("refused_by"),
+            recursion_exhausted=meta.get("recursion_exhausted"),
+        )
+        if not refused_by_known:
+            print(
+                f"*** WARNING: unrecognised refused_by={meta.get('refused_by')!r} on "
+                f"{qid} — counted in n_unmapped_refused_by, not attributed to a stage"
+            )
+        # ``.get(...)`` without an ``or []`` tail: absent and empty are different
+        # facts here and the tail erased the difference. A turn that never reached
+        # ``assemble`` records no ``routed_schemas`` at all, and coercing that to
+        # ``[]`` made ``routed_hit=False`` — a routing MISS, indistinguishable from a
+        # router that ran and picked wrong. The whole-split ``--skip-agent`` ceiling
+        # published ``routing_recall: 0.0`` over 2030 rows on that path, for a router
+        # that was never invoked. Same for the shortlist: coerced to ``[]`` it gave
+        # every oracle row ``gold_schema_rank=None``, filing all 2030 under the
+        # ``by_gold_rank["miss"]`` bucket whose documented meaning is "retrieval never
+        # surfaced the schema" — a 100%-retrieval-failure reading at EX 1.0.
+        routed = meta.get("routed_schemas")
+        shortlisted = meta.get("shortlisted_schemas")
         pick = meta.get("schema_pick")
-        pick_hit = (pick == db) if pick is not None else None
-        diff = item.difficulty or "unknown"
+        # One definition, read by both the row's own ``routing_bypassed`` field and the
+        # routing-escape verdict. They were spelled separately and the escape used the
+        # narrow form, so a row could carry ``routing_bypassed=True`` beside a non-null
+        # escape verdict — two fields disagreeing about whether the router ran.
+        bypassed = bool(meta.get("routing_bypassed")) or (
+            isinstance(meta.get("total_schemas"), int) and meta["total_schemas"] <= 1
+        )
+        used_schemas, unresolved_tables = _schema_of_assets(
+            arm_corpus, meta.get("tables_used")
+        )
+        routing_escaped = _routing_escaped(
+            used_schemas,
+            routed,
+            bypassed=bypassed,
+            unresolved_ids=unresolved_tables,
+        )
+        # Unknown escape: non-empty tables_used could not be fully resolved, and we
+        # did not already prove an escape from the resolved subset. Distinct from
+        # genuinely unobserved (empty/missing tables_used → routing_escaped None
+        # without this flag).
+        routing_escape_unknown = bool(
+            unresolved_tables
+            and not bypassed
+            and meta.get("tables_used")
+            and routing_escaped is None
+        )
         row = {
             "request_id": str(qid),
             "question_id": str(qid),
             "db_id": db,
             "arm": arm,
+            "split": split,
             "generated_sql": sql,
             "latency_sec": round(latency, 4),
             "usage": meta.get("usage"),
+            # Per-source token spend (router / agent_core / narrator / repair), so a
+            # cost delta between arms is attributable to a stage rather than only
+            # visible as a bigger total.
+            "token_usage": meta.get("token_usage"),
             "cost_est_usd": meta.get("cost_est_usd"),
             "correct": grade["correct"],
             "correct_strict": grade["correct_strict"],
             "error": grade.get("error"),
-            "difficulty": diff,
+            # Result shape: same row count + wrong hash is a projection /
+            # ordering failure, a different count is a different answer.
+            "pred_nrows": grade.get("pred_nrows"),
+            "pred_ncols": grade.get("pred_ncols"),
+            "gold_nrows": grade.get("gold_nrows"),
+            "nrows_match": grade.get("nrows_match"),
+            "difficulty": item.difficulty or "unknown",
+            # Gold that is a literal VALUES(...) constant can never be matched;
+            # flagged per row so ``ex_gradeable`` can exclude it by denominator.
+            "gold_frozen": bool(_FROZEN_GOLD_RE.search(item.sql or "")),
+            # Could the curator have answered this from train rather than generalised
+            # to it? ``seeded`` derives its seed from train gold SQL and ``curated``
+            # runs an agent over train, so on a question whose statement already exists
+            # there — verbatim modulo literals — an EX gain is consistent with recall.
+            # 246 of 2030 test questions (12.1%) qualify, up to 46% in one schema.
+            "gold_twin_in_train": str(qid) in twin_ids,
+            # The obfuscation repo ships these and its own note says to exclude them:
+            # gold with LIMIT-without-total-order or a float aggregate returns a
+            # different-but-VALID result, which hashes differently, so each was scored
+            # wrong for every arm. Uniform across arms, so deltas were fine — but every
+            # absolute EX was depressed, including the one read against the oracle_sql
+            # ceiling. Excluded from ``ex_gradeable`` the same way frozen gold is.
+            "gold_order_sensitive": str(qid) in ungradeable_ids,
             "routed_schemas": routed,
-            "routed_hit": routed_hit,
+            # ``None`` when the turn recorded no routing decision at all — see the
+            # ``routed``/``shortlisted`` note above. ``_summarise_rows`` drops those
+            # rows from the recall denominator and counts them in
+            # ``n_routing_unrecorded``.
+            "routed_hit": (db in routed) if routed is not None else None,
+            # Did the answer actually use a schema the router excluded? The agent core is
+            # built with the POOLED corpus (``agent.py``'s ``agent_core_node`` passes
+            # ``corpus``, not the routed ``retrieval_corpus``), so ``search_corpus``
+            # retrieves across every schema whatever the router decided. That is arguably
+            # good for EX — the agent can recover from a routing miss — but it means the
+            # router is not a gate, and therefore
+            # ``EX = routing_recall x cond_ex_given_routing`` is not an identity.
+            #
+            # Resolved from ``tables_used`` — the tables in the SQL that was delivered —
+            # via the arm's own corpus. NOT from ``licensed_tables``: that is the
+            # assemble-time seed license computed from the *routed* corpus and never
+            # amended, so it cannot contain an out-of-routed schema however far the agent
+            # went, and a metric built on it scored a demonstrated escape as compliant.
+            "tables_used": meta.get("tables_used"),
+            "tables_used_unresolved": unresolved_tables or None,
+            "n_tables_used_unresolved": len(unresolved_tables),
+            "routing_escaped": routing_escaped,
+            "routing_escape_unknown": routing_escape_unknown,
+            "shortlisted_schemas": shortlisted,
+            # 1-based position of the TRUE schema in the relevance-ordered
+            # shortlist, or None when retrieval never surfaced it at all.
+            #
+            # ``None`` is overloaded — it is also what an absent shortlist gives —
+            # so ``rank_report`` reads ``shortlisted_schemas`` to tell the two
+            # apart rather than bucketing both as a retrieval miss.
+            "gold_schema_rank": (
+                shortlisted.index(db) + 1
+                if shortlisted is not None and db in shortlisted
+                else None
+            ),
             "schema_pick": pick,
-            "pick_hit": pick_hit,
+            "schema_pick_fallback": meta.get("schema_pick_fallback"),
+            "pick_hit": (pick == db) if pick is not None else None,
             "total_schemas": meta.get("total_schemas"),
+            "retrieved_tables": meta.get("retrieved_tables"),
+            "licensed_tables": meta.get("licensed_tables"),
+            "injected_note_ids": meta.get("injected_note_ids"),
+            "n_notes_injected": meta.get("n_notes_injected"),
+            "n_few_shots_injected": meta.get("n_few_shots_injected"),
+            "n_joins_injected": meta.get("n_joins_injected"),
+            "n_metrics_injected": meta.get("n_metrics_injected"),
+            "n_terms_injected": meta.get("n_terms_injected"),
+            "n_caveats_injected": meta.get("n_caveats_injected"),
+            "context_chars": meta.get("context_chars"),
+            # Identity of the delivered context. ``eval.treatment`` compares these
+            # across arms; without it, two arms that never actually differed still
+            # produce different scores and read as a measured null result.
+            "context_hash": meta.get("context_hash"),
+            # Which counterfactual rung produced this row, if any. ``None`` on every
+            # fair arm. This is the stamp that keeps an oracle number from being
+            # read later as system performance: the rung reads the answer key, so a
+            # row from one is a headroom bound and nothing else.
+            "oracle_rung": meta.get("oracle_rung"),
+            "oracle_applied": meta.get("oracle_applied"),
+            # What the rung handed over, so the delta is inspectable. Compare
+            # against a fair arm's `licensed_tables` for the same question: if
+            # licensing already held every gold table, the rung removed no
+            # selection error and its lift is something else.
+            "oracle_gold_tables": meta.get("oracle_gold_tables"),
+            "oracle_offered_tables": meta.get("oracle_offered_tables"),
+            "oracle_corpus_tables": meta.get("oracle_corpus_tables"),
+            "oracle_padding_degenerate": meta.get("oracle_padding_degenerate"),
+            # True when the router never engaged, so its absence of provenance is
+            # not a miss. Two ways that happens: an oracle rung pinned the corpus to
+            # one schema, or the pool itself only holds one (``--limit-dbs 1``, or a
+            # build that dropped everything else). Both leave `routed_hit=False` on
+            # a row where routing was never asked a question, and the taxonomy would
+            # otherwise charge every wrong answer in the run to the picker.
+            # Set only on positive evidence that the router never engaged. The
+            # earlier form, ``(total_schemas or 0) <= 1``, failed OPEN: a row that
+            # never recorded ``total_schemas`` folded to 0, read as bypassed, and had
+            # its genuine routing miss suppressed. Suppressing an error because a
+            # field is missing is the same shape of defect as counting a crash as a
+            # refusal, so an unrecorded count now means "not known to be bypassed"
+            # and the miss is attributed.
+            "routing_bypassed": bypassed,
+            # Computed in the solver meta but previously dropped before the row.
+            "attempts": meta.get("attempts"),
+            # Prompt identity per row, from the serve path's own stamp. ``None``
+            # when nothing served this row (the offline refuse-all path), which is
+            # the honest value: no prompt was sent.
+            "prompt_variants": meta.get("prompt_variants"),
+            "prompt_set_hash": meta.get("prompt_set_hash"),
+            "token_sum": meta.get("token_sum"),
+            "run_id": meta.get("run_id"),
+            "turn_id": meta.get("turn_id"),
+            "decoy_touch": (
+                sql is not None
+                and _touches_suspect(sql, suspect_by_db.get(db, frozenset()), dialect)
+            ),
             "refused_by": meta.get("refused_by"),
+            # Which exception class produced a crash, so a rate-limit storm is
+            # distinguishable from a defect at a glance rather than by re-reading logs.
+            "error_type": meta.get("error_type"),
             "failed_layer": meta.get("failed_layer"),
             "graded_delivery": meta.get("graded_delivery"),
             "tier": meta.get("tier"),
             "semantic_assurance": meta.get("semantic_assurance"),
+            # The safety axis of the two-axis stamp. ``run_experiment`` recorded it
+            # and this driver did not, so the pooled run — the one that produces the
+            # scale numbers — could not report whether guardrails cleared.
+            "safety_clearance": meta.get("safety_clearance"),
+            "coverage_best_effort": meta.get("coverage_best_effort"),
+            # How the turn ended and where, in the one vocabulary the summary, the
+            # offline analysis and the run ledger all read (``governed_bi.stages``).
+            "outcome": outcome.value,
+            "failed_stage": failed_stage.value if failed_stage is not None else None,
+            # Also computed in the solver meta and previously dropped: the ledger
+            # length, and the per-tool call counts that are the only record of
+            # search_corpus / inspect_schema activity.
+            "ledger_len": meta.get("ledger_len"),
+            "n_tool_calls": meta.get("n_tool_calls"),
+            "by_guardrail_layer": meta.get("by_guardrail_layer"),
         }
-        return {
-            "row": row,
-            "db": db,
-            "correct": bool(grade["correct"]),
-            "correct_strict": bool(grade["correct_strict"]),
-            "refused": sql is None,
-            "decoy": (
-                sql is not None
-                and _touches_suspect(sql, suspect_by_db.get(db, frozenset()), dialect)
-            ),
-            "routed_hit": routed_hit,
-            "pick": pick,
-            "pick_hit": pick_hit,
-            "diff": diff,
-        }
+        return row, _stage_event_rows(meta, question_id=str(qid), arm=arm, db_id=db)
 
-    if serve_workers > 1:
-        if worker_factory is None:
-            raise ValueError("serve_workers > 1 requires a worker_factory")
-        bundles = run_ordered_pool(
-            pairs,
-            workers=serve_workers,
-            make_worker=worker_factory,
-            run_task=lambda w, pair: _grade_one(pair, solver=w.solver, gateway=w.gateway),
-        )
-    else:
-        bundles = [_grade_one(pair, solver=solver, gateway=gateway) for pair in pairs]
+    # Only touch the file when there is something to write: a fully-resumed arm
+    # (or an arm with no questions) should not leave an empty generations file
+    # that later reads back as an arm scored over zero rows.
+    fresh: list[dict[str, Any]] = []
+    if todo:
+        sink = _RowSink(out_path)
 
-    # --- aggregation on the calling thread, in original pair order ---
-    rows: list[dict[str, Any]] = []
-    n_correct = n_strict = n_refused = n_produced = n_decoy = 0
-    n_routed_hit = n_pick_hit = n_pick = 0
-    by_diff: dict[str, list[bool]] = {}
-    by_db: dict[str, list[bool]] = {}
+        def _persist(scored: tuple[dict[str, Any], list[dict[str, Any]]]) -> None:
+            """Flush one question's row and its stage records before the next starts."""
+            row, stage_rows = scored
+            sink.write(row)
+            if stage_sink is not None:
+                for stage_row in stage_rows:
+                    stage_sink.write(stage_row)
 
-    for b in bundles:
-        rows.append(b["row"])
-        if b["refused"]:
-            n_refused += 1
-        else:
-            n_produced += 1
-            if b["decoy"]:
-                n_decoy += 1
-        if b["correct"]:
-            n_correct += 1
-        if b["correct_strict"]:
-            n_strict += 1
-        if b["routed_hit"]:
-            n_routed_hit += 1
-        if b["pick"] is not None:
-            n_pick += 1
-            if b["pick_hit"]:
-                n_pick_hit += 1
-        by_diff.setdefault(b["diff"], []).append(b["correct"])
-        by_db.setdefault(b["db"], []).append(b["correct"])
+        try:
+            if serve_workers > 1:
+                if worker_factory is None:
+                    raise ValueError("serve_workers > 1 requires a worker_factory")
+                scored = run_ordered_pool(
+                    todo,
+                    workers=serve_workers,
+                    make_worker=worker_factory,
+                    run_task=lambda w, pair: _grade_one(
+                        pair, solver=w.solver, gateway=w.gateway
+                    ),
+                    on_result=_persist,
+                )
+                fresh = [row for row, _stage_rows in scored]
+            else:
+                for pair in todo:
+                    row, stage_rows = _grade_one(pair, solver=solver, gateway=gateway)
+                    _persist((row, stage_rows))
+                    fresh.append(row)
+        finally:
+            sink.close()
 
-    summary = {
-        "arm": arm,
-        "n": n,
-        "ex_lenient": n_correct / n if n else 0.0,
-        "ex_strict": n_strict / n if n else 0.0,
-        "refusal_rate": n_refused / n if n else 0.0,
-        "decoy_touch_rate": n_decoy / n_produced if n_produced else 0.0,
-        "conditional_ex_lenient": (n_correct / n_produced) if n_produced else 0.0,
-        # Routing recall: share of questions whose TRUE schema survived routing.
-        # This is the ceiling on EX in the data lake — a mis-routed question is 0.
-        "routing_recall": n_routed_hit / n if n else 0.0,
-        # Single-schema pick accuracy (only when schema_route_llm_pick is on).
-        "schema_pick_accuracy": (n_pick_hit / n_pick) if n_pick else None,
-        "by_difficulty": {
-            d: (sum(1 for x in xs if x) / len(xs) if xs else 0.0)
-            for d, xs in sorted(by_diff.items())
-        },
-        "by_db": {
-            d: {"ex_lenient": sum(1 for x in xs if x) / len(xs), "n": len(xs)}
-            for d, xs in sorted(by_db.items())
-        },
+    rows = [*done_rows, *fresh]
+    # Gold SQL keyed by question id, so wrong answers can be attributed to a stage
+    # and an error class. Built from the same ``pairs`` the arm was served with, so
+    # a resumed run attributes exactly as an uninterrupted one does.
+    gold_sql = {
+        str(item.question_id or item.question): item.sql
+        for item, _db in pairs
+        if item.sql
     }
-    return rows, summary
+    return rows, _summarise_rows(
+        arm, rows, gold=gold_sql, corpus_note_assets=corpus_note_assets
+    )
 
 
 def run_datalake(
@@ -432,32 +3673,106 @@ def run_datalake(
     max_agent_steps: int = 25,
     skip_agent: bool = False,
     resume: bool = True,
-    route_top_k: int = 8,
+    split: str = "test",
+    # Shortlist width. Widening recovers schemas the picker would otherwise never
+    # see, at the cost of two more candidate summaries; measure recall@k with
+    # ``eval.analysis`` (``by_gold_rank``) before changing it.
+    route_top_k: int = 10,
     route_llm_pick: bool = True,
     use_embedder: bool = True,
     serve_workers: int = 1,
+    # Per-db corpus builds to run concurrently. The dbs are independent (each
+    # profiles its own Postgres schema through its own connector), so this is the
+    # single biggest wall-clock lever on a scale run: 69 sequential deep-agent
+    # curator passes become 69/N. Each build gets a private staging root because the
+    # curator writes its sidecars at the arm root (see ``_promote_build``).
+    build_workers: int = 1,
+    # Gold rows sampled per schema by the pre-flight. More than one buys redundancy
+    # against a single slow or genuinely-broken gold row: a schema counts as verified
+    # when ANY sampled row executes and agrees, so raising this can only help.
+    gold_per_db: int = 1,
+    # Keep crashed rows on resume rather than re-serving them (see _run_pool_arm).
+    replay_crashed: bool = False,
+    prompt_variants: dict[str, str] | None = None,
+    # ``None`` keeps whatever Settings says, so a caller that does not care about
+    # the picker's column budget need not know the default.
+    schema_pick_max_columns: int | None = None,
+    # Serve this arm a second time as ``<arm>__replicate`` to measure the run's own
+    # noise floor. Costs one extra serve pass and is the only way to know what the
+    # run could resolve, because the proxy drops temperature and the sampling cannot
+    # be pinned. Without it, comparisons report significance but not resolution.
+    replicate_of: str | None = None,
+    # Counterfactual rungs to serve alongside the fair arms (``oracle_sql``,
+    # ``oracle_schema``, ``oracle_tables``). Each hands one stage the gold answer and
+    # re-measures, so its lift IS that stage's headroom rather than an estimate
+    # summed from per-class counts. Test-aware: diagnostics, never performance.
+    oracles: tuple[str, ...] = (),
+    # Paid resume after a code edit: refuse by default; this opts in and is recorded
+    # so the ledger still marks the run unquotable via resume drift.
+    allow_git_sha_drift: bool = False,
 ) -> dict[str, Any]:
     """Build all arms for the requested dbs into shared corpora, then serve the
-    pooled test set through the unpinned (data-lake) agentic core. Writes
-    ``generations.<arm>.jsonl`` + ``summary.json`` + ``manifest.json`` under
-    ``out_dir`` and returns the summary dict."""
+    pooled split through the unpinned (data-lake) agentic core. Writes
+    ``generations.<arm>.jsonl`` + ``stage_events.jsonl`` + ``summary.json`` +
+    ``manifest.json`` under ``out_dir``, appends one record to the run ledger
+    (``runs/index.jsonl``) on completion, and returns the summary dict.
+
+    ``split="train"`` scores the very questions the curator read to build the
+    ``curated`` / ``curated_sme`` corpora (few-shots, table descriptions and the
+    SME brief all derive from them). That makes it a **diagnostic** — useful for
+    measuring a routing or prompt change at higher sample size — and *not* a
+    held-out result. The manifest records the split so a train number can never be
+    mistaken for a test number later.
+
+    ``prompt_variants`` (``stage -> variant``, empty = all ``v1``) selects
+    registered prompt text per stage. It reaches the serve path through
+    ``Settings``, so ``serve_config_hash`` and every stamped row move with it; the
+    resolved map and its text hash go in the manifest, and the hash is a resume
+    knob so a resume cannot mix two prompt sets into one arm's rows.
+    """
+    if split not in _SPLITS:
+        raise ValueError(f"split must be one of {_SPLITS}, got {split!r}")
+    # Resolve (and validate) before touching Postgres or a corpus: a bad stage or
+    # variant must cost nothing, and the resolved map is what gets recorded.
+    resolved_prompts = resolve_prompts(prompt_variants)
     load_dotenv()
     dataset_dir = bird_dir / "eval_dataset"
     out_dir.mkdir(parents=True, exist_ok=True)
     roots = {arm: out_dir / f"corpus_{arm}" for arm in _ARMS}
+    if split == "train":
+        print(
+            "\n*** NOTE: --split train scores the questions the curator was BUILT "
+            "from (few-shots, descriptions, SME brief all derive from them). Treat "
+            "these numbers as a diagnostic, never as a held-out result. ***\n"
+        )
 
-    # --- resolve the db set: requested (or every test db), present on Postgres ---
+    # --- resolve the db set: requested (or every db in the split), on Postgres ---
     probe = PostgresConnector(pg_dsn, schema=None)
     try:
         present = set(probe.list_schemas())
     finally:
         probe.close()
-    wanted = db_ids if db_ids is not None else sorted(available_dbs(dataset_dir, "test"))
+    wanted = db_ids if db_ids is not None else sorted(available_dbs(dataset_dir, split))
     if limit_dbs is not None:
         wanted = wanted[:limit_dbs]
+    # Requested but not loaded. This is a *third* kind of attrition, distinct from the
+    # two that already have gates: a schema absent from Postgres never enters ``wanted``,
+    # so neither the build-coverage check nor the gold share can see it — both measure
+    # against ``wanted``, which is already filtered here. Until now it produced one
+    # truncated print and nothing durable, so a default run against a partially-loaded
+    # Postgres scored 40 of 69 schemas and reported full coverage of what it attempted.
+    # Recorded and carried into the ledger, where it blocks quoting: a 40-schema result
+    # is not the 69-schema benchmark, whatever its internal consistency.
+    n_requested = len(wanted)
     missing = [d for d in wanted if d not in present]
     if missing:
-        print(f"*** WARNING: {len(missing)} requested db(s) not on Postgres, skipped: {missing[:10]}")
+        print(
+            f"*** WARNING: {len(missing)} of {n_requested} requested db(s) are not on "
+            f"Postgres and will be skipped: {sorted(missing)[:10]}"
+            + (f" (+{len(missing) - 10} more)" if len(missing) > 10 else "")
+            + " — the pool scored is smaller than the pool requested, and this blocks "
+            "quotability ***"
+        )
     wanted = [d for d in wanted if d in present]
     if not wanted:
         raise RuntimeError("no requested db_ids are loaded on the Postgres instance")
@@ -480,6 +3795,18 @@ def run_datalake(
         grade_semantic_failures=True,
         schema_route_top_k=route_top_k,
         schema_route_llm_pick=route_llm_pick,
+        # ``None`` keeps the Settings default. Without this the knob was recorded in
+        # the manifest, guarded on resume, and used as a comparability key while
+        # being permanently 12 — three guards on a value nothing could change.
+        schema_pick_max_columns=(
+            settings.schema_pick_max_columns
+            if schema_pick_max_columns is None
+            else schema_pick_max_columns
+        ),
+        # The full resolved map, not just the overrides: every consumer downstream
+        # (graph build, config hash, per-row stamp) then reads one description of
+        # what this run sends instead of re-deriving the defaults itself.
+        prompt_variants=resolved_prompts,
     )
 
     chat_client = None
@@ -493,61 +3820,284 @@ def run_datalake(
         if use_embedder:
             embedder = LangChainEmbedder.from_config(settings.models)
 
-    # --- BUILD phase (per-db, into shared roots) ---
+    # Every knob that changes what a scored row MEANS. Written before any work so
+    # a crashed run still leaves one to validate a later --resume against; the same
+    # dict is re-written at the end. (A manifest that only appeared on success
+    # would be missing in exactly the case resume exists for.)
+    # Scope hash over the effective pool AFTER ``limit_dbs`` and Postgres filtering,
+    # so a resume that changes caps fails before build/serve spend.
+    scope_pairs = _pooled_items(dataset_dir, wanted, limit=limit, split=split)
+    manifest = _build_manifest(
+        bird_dir=bird_dir,
+        split=split,
+        model_name=settings.models.llm_model,
+        prompt_variants=resolved_prompts,
+        route_top_k=route_top_k,
+        route_llm_pick=route_llm_pick,
+        schema_pick_max_columns=settings.schema_pick_max_columns,
+        use_embedder=bool(embedder),
+        skip_agent=skip_agent,
+        serve_workers=serve_workers,
+        build_workers=build_workers,
+        arms=arms,
+        oracles=oracles,
+        replicate_of=replicate_of,
+        db_ids=db_ids,
+        limit=limit,
+        limit_dbs=limit_dbs,
+        question_scope_hash=_question_scope_hash(scope_pairs),
+        allow_git_sha_drift=allow_git_sha_drift,
+    )
+    if resume:
+        _check_resume_manifest(
+            out_dir, manifest, allow_git_sha_drift=allow_git_sha_drift
+        )
+        manifest = _merge_resume_manifest(_read_manifest(out_dir), manifest)
+    (out_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
+
+    # --- GOLD PRE-FLIGHT, before the build phase spends anything on a model ---
+    # Needs only Postgres and the split files, never a corpus — and it used to run
+    # *after* the builds, so a wrong DSN or the wrong gold field aborted a run that had
+    # already paid for a curator pass and an SME round on every schema. About 40 ms per
+    # row per schema, so a few seconds over the full split: the cheapest possible place
+    # to find out the grader cannot be trusted.
+    #
+    # Sampled over ``wanted`` because nothing is built yet. ``built`` is a subset, so
+    # clearing this clears the scored pool too; the post-build check re-runs over the
+    # exact scored rows anyway.
+    # Before any build work. This used to sit inside the serve block, downstream of
+    # the curator loop, so ``--replicate curated --arms baseline`` spent two LLM
+    # curator passes over every schema and then aborted on an argument that was
+    # already wrong when the process started. Verified live: the run printed
+    # ``built corpora: address (1/1)`` before raising.
+    if replicate_of and replicate_of not in arms:
+        raise ValueError(
+            f"--replicate {replicate_of!r} is not one of the arms being run "
+            f"({', '.join(arms)}); there is nothing to replicate"
+        )
+
+    preflight_identity = Identity(user="eval", all_access=True)
+    preflight_gold: dict[str, Any] = {}
+    for db in wanted:
+        preflight_gold.update(load_gold_hashes(bird_dir, db_id=db, split=split))
+    print(f"  gold pre-flight over {len(wanted)} schema(s)...")
+    _assert_gold_is_trustworthy(
+        _datalake_gold_selfcheck(
+            _pooled_items(dataset_dir, wanted, limit=limit, split=split),
+            preflight_gold,
+            pg_dsn,
+            preflight_identity,
+            per_db=gold_per_db,
+        ),
+        n_schemas=len(wanted),
+    )
+
+    # --- BUILD phase (per-db) ---
+    # The dominant wall-clock cost of a scale run, and until now fully serial: one
+    # deep-agent curator pass per db per arm, 69 dbs deep. The dbs are independent —
+    # each profiles its own Postgres schema through its own connector — so the only
+    # thing that made this serial was the shared arm root (see ``_promote_build``).
     built: list[str] = []
     build_errors: dict[str, str] = {}
-    for db in wanted:
-        try:
-            _build_db_corpora(
-                db_id=db,
-                pg_dsn=pg_dsn,
-                bird_dir=bird_dir,
-                roots=roots,
-                arms=arms,
-                chat_client=chat_client,
-                lc_model=lc_model,
-                skip_agent=skip_agent,
-                max_agent_steps=max_agent_steps,
-                resume=resume,
-            )
-            built.append(db)
-            print(f"  built corpora: {db} ({len(built)}/{len(wanted)})")
-        except Exception as err:  # one bad db must not lose the whole run
-            build_errors[db] = f"{type(err).__name__}: {err}"
-            print(f"*** build FAILED for {db!r} — dropped from pool: {build_errors[db]}")
-    if not built:
-        raise RuntimeError(f"every db failed to build: {build_errors}")
+    build_lock = threading.Lock()
+    # Inside the run directory, not a system temp dir: a build that dies partway
+    # leaves its staging root next to the run it belongs to, where it can be
+    # inspected, rather than somewhere the operator has to be told about.
+    staging_root = out_dir / "_staging"
+    build_workers = resolve_workers(build_workers)
+
+    built = run_build_phase(
+        wanted,
+        roots=roots,
+        staging_root=staging_root,
+        build_workers=build_workers,
+        resume=resume,
+        build_errors=build_errors,
+        build_lock=build_lock,
+        build_one_db=lambda db, build_roots: _build_db_corpora(
+            db_id=db,
+            pg_dsn=pg_dsn,
+            bird_dir=bird_dir,
+            roots=build_roots,
+            arms=arms,
+            chat_client=chat_client,
+            lc_model=lc_model,
+            skip_agent=skip_agent,
+            max_agent_steps=max_agent_steps,
+            resume=resume,
+            prompt_variants=resolved_prompts,
+            settings=settings,
+        ),
+    )
+    _assert_build_coverage(built, wanted, build_errors)
 
     # --- POOL gold + test + per-db suspects (only successfully-built dbs) ---
-    pairs = _pooled_test(dataset_dir, built, limit=limit)
+    leakage = _assert_train_test_disjoint(dataset_dir, built)
+    # The FINE form of leakage the id check cannot see: a scored question whose gold
+    # statement already exists in train, modulo literals. Not a gate — twins are a
+    # property of the benchmark, and refusing to score them would discard an eighth of
+    # the split and change the denominator every published BIRD number uses. Reported,
+    # stamped per row, and given its own EX stratum so the defensible headline (the
+    # twin-free stratum) can be stated separately from the recall-flavoured one.
+    pairs = _pooled_items(dataset_dir, built, limit=limit, split=split)
+    # The dataset's OWN exclusion list, which nothing here read. Its note says to
+    # exclude these from cross-variant EX; 25 of the 2030 test questions qualify and
+    # each was scored wrong for every arm, depressing every absolute EX including the
+    # one read against the oracle_sql ceiling.
+    _excl = ungradeable_question_ids(dataset_dir)
+    ungradeable_ids = frozenset().union(*_excl.values()) if _excl else frozenset()
+    leakage["dataset_ungradeable"] = {
+        "source": "order_sensitive_qids.json",
+        "by_reason": {k: len(v) for k, v in sorted(_excl.items())},
+        "n_in_pool": sum(
+            1 for _item, _db in pairs if str(_item.question_id) in ungradeable_ids
+        ),
+        "file_present": bool(_excl),
+    }
+    if not _excl:
+        print(
+            "  *** WARNING: order_sensitive_qids.json not found — the dataset's own EX "
+            "exclusions are not being applied ***"
+        )
+    # Restricted to the questions this run actually SCORED. Computed over every test
+    # row of the built schemas, ``twin_rate`` described the dataset while sitting in the
+    # artifact beside numbers that describe the run — on the smoke command
+    # (``--limit-dbs 3 --limit 5``) that is 15 scored questions and a rate over several
+    # hundred.
+    # Minus the dataset's own exclusions too, so the twin rate and the strata it
+    # labels share ONE denominator. Filtering only frozen gold left the quoted rate
+    # over 1652 rows while ``ex_no_twin``/``ex_twin`` used 1627 — the same
+    # different-populations mismatch this filter was added to remove, 25 rows smaller.
+    _scored_ids = {
+        str(item.question_id)
+        for item, _db in pairs
+        if str(item.question_id) not in ungradeable_ids
+    }
+    twins = twin_report(dataset_dir, built, split=split, only_ids=_scored_ids)
+    twin_ids = twins.pop("twin_ids")
+    leakage["structural_gold_twins"] = twins
+    print(
+        f"  structural gold twins: {twins['n_twin']}/{twins['n_scored']} gradeable "
+        f"question(s) have a same-schema train twin"
+        + (f" — worst: {', '.join(twins['worst_dbs'][:3])}" if twins["worst_dbs"] else "")
+    )
+
+    # ``question_id`` is the key gold hashes are pooled under AND the resume dedup
+    # key, so a collision across dbs would score one db's question against another
+    # db's gold and silently dedup two questions into one. Globally unique in today's
+    # dataset; a regeneration that broke that would otherwise be invisible.
+    counts: dict[str, int] = {}
+    for item, _db in pairs:
+        key = str(item.question_id or item.question)
+        counts[key] = counts.get(key, 0) + 1
+    collisions = sorted(k for k, c in counts.items() if c > 1)
+    if collisions:
+        raise RuntimeError(
+            f"{len(collisions)} question_id(s) appear in more than one pooled db "
+            f"(e.g. {collisions[:5]}): gold association and resume dedup key on it."
+        )
     gold_hashes: dict[str, Any] = {}
     suspect_by_db: dict[str, frozenset[str]] = {}
+    # Which dbs actually had a trap manifest to load. ``load_trap_columns`` reports
+    # this precisely so a missing manifest cannot read as a trap-free db, but the
+    # flag is only worth carrying if something records it: without this, a
+    # ``decoy_touch_rate`` of 0.0 across an arm is indistinguishable from having
+    # measured no traps at all.
+    trap_manifest_missing: list[str] = []
     for db in built:
-        gold_hashes.update(load_gold_hashes(bird_dir, db_id=db))
+        gold_hashes.update(load_gold_hashes(bird_dir, db_id=db, split=split))
         trap = load_trap_columns(bird_dir, db)
+        if not getattr(trap, "manifest_present", True):
+            trap_manifest_missing.append(db)
         suspect_by_db[db] = _suspect_from_corpus(roots["baseline"], db) | trap
+    if trap_manifest_missing:
+        print(
+            f"*** WARNING: no trap manifest for {', '.join(trap_manifest_missing)} — "
+            "decoy_touch_rate for their questions counts only corpus-flagged suspects"
+        )
 
     # --- SERVE phase: ONE unpinned connector spans every schema ---
     connector = PostgresConnector(pg_dsn, schema=None)
     gateway = Gateway(connector, max_rows=200_000, timeout_s=60.0)
     identity = Identity(user="eval", all_access=True)
 
-    # Gold self-check on schema-pinned gateways (search_path per db).
-    gold_check = _datalake_gold_selfcheck(pairs, gold_hashes, pg_dsn, identity)
-    if not gold_check["n_checked"]:
-        connector.close()
-        raise RuntimeError(f"gold self-check verified 0 rows: {gold_check}")
-    if gold_check["agree_rate"] < 1.0:
-        connector.close()
-        raise RuntimeError(f"gold self-check disagreed with live gold: {gold_check}")
+    # Re-run over the *scored* pool, which is a subset of what the pre-flight above
+    # already cleared. Cheap (~40 ms per row per schema) and it keeps the assertion
+    # attached to the exact rows about to be graded.
+    gold_check = _datalake_gold_selfcheck(
+        pairs, gold_hashes, pg_dsn, identity, per_db=gold_per_db
+    )
+    _assert_gold_is_trustworthy(
+        gold_check, n_schemas=len(wanted), on_abort=connector.close
+    )
 
-    # Load each requested arm's MERGED corpus (schema=None → every built subtree).
-    corpora = {arm: load_corpus(roots[arm], schema=None) for arm in arms}
+    # Load each requested arm's corpus for exactly the dbs being scored — NOT
+    # whatever the shared root happens to hold (see :func:`_load_built_corpus`).
+    corpora = {arm: _load_built_corpus(roots[arm], built) for arm in arms}
     corpus_validation = _validate_corpora(corpora)  # no connector: public-default
     _warn_if_not_green(corpus_validation)
+    # Serve gets the Analyst view (D6): a governance.excluded asset must reach
+    # neither SQL-gen nor the schema-routing index. Validation above and the census
+    # below deliberately keep the full corpus — the C5 note scan needs the excluded
+    # identifiers to check prose against, and the census counts what was excluded.
+    corpora_serve = {arm: corpora[arm].for_analyst() for arm in arms}
+
+    # Census the independent variable. An arm-to-arm EX delta is uninterpretable
+    # without knowing what the higher arm actually added, and a rung that added
+    # nothing is not evidence that its layer does not work.
+    corpus_census_by_arm = {arm: corpus_census(corpora[arm]) for arm in arms}
+    census_deltas: dict[str, dict[str, Any]] = {}
+    for lo, hi in ladder_steps(corpus_census_by_arm):
+        delta = census_delta(corpus_census_by_arm[lo], corpus_census_by_arm[hi])
+        census_deltas[f"{hi}_minus_{lo}"] = delta
+        if not delta:
+            print(
+                f"\n*** WARNING: {hi} corpus is numerically identical to {lo} — "
+                "it added no assets, so any EX difference between them is noise, "
+                "not a measurement of that layer ***\n"
+            )
+
+    # Lift swallowed curator build errors + SME no-op signals per db. The pooled
+    # driver relocates each db's run_manifest.json into <root>/<db>/_build/, so the
+    # single-schema root reader never sees them — read the relocated location, and
+    # flag any db whose curated_sme ended byte-identical to curated (no real fold).
+    curator_errors: dict[str, dict] = {}
+    sme_fold: dict[str, dict] = {}
+    for db in built:
+        # EVERY arm that ran, not a hardcoded pair. This listed only
+        # ``curated``/``curated_sme``, which was complete when those were the only
+        # arms that invoked the curator — and silently stopped being complete the
+        # moment ``seeded`` and ``curated_sme_blind`` were added. A swallowed curator
+        # error, or an unpromoted-diagnostic marker, on either of those arms was
+        # invisible to ``summary.json`` and therefore to ``quotable()``.
+        #
+        # ``baseline`` writes a manifest too and never runs an agent, so it simply has
+        # nothing to report; including it costs one missing-file check and removes the
+        # need to keep this list in step with the ladder.
+        errs = _collect_curator_errors(
+            {arm: roots[arm] / db / "_build" for arm in arms}
+        )
+        if errs:
+            curator_errors[db] = errs
+            for arm, block in errs.items():
+                print(
+                    f"\n*** WARNING: curator error on {db!r}/{arm} was swallowed "
+                    f"during build (corpus still scored): error={block['error']!r} "
+                    f"fix_pass_error={block['fix_pass_error']!r} ***"
+                )
+        if "curated" in arms and "curated_sme" in arms:
+            fold = _sme_fold_signal(roots["curated"], roots["curated_sme"], db)
+            sme_fold[db] = fold
+            _warn_if_sme_noop(fold, db_id=db)
 
     # Serve concurrency (docs/plans/eval-concurrency-design.md): only fan out when
-    # there is a live model — the offline refuse-all path has nothing to overlap.
+    # there is a live model. The refuse-all path returns without work, so there is
+    # nothing to overlap. The one exception is ``oracle_sql``, which executes real
+    # gold SQL under ``--skip-agent`` and so *would* overlap — left serial on purpose:
+    # the whole 2030-question split grades in well under ten minutes, once, and it is
+    # the run every other number is read against. Not worth a concurrency bug.
     effective_workers = serve_workers if lc_model is not None else 1
     if effective_workers > 1:
         print(
@@ -555,46 +4105,146 @@ def run_datalake(
             f"its own unpinned connector+gateway+graph (schema=None)"
         )
 
-    def _make_arm_factory(arm: str) -> "Callable[[int], ServeWorker]":
-        """Per-worker (connector, gateway, solver) factory for one arm. Mirrors
-        the shared connector: ``schema=None`` (the pooled data-lake driver spans
-        every schema), one graph per worker, distinct ``session_id`` per worker."""
 
-        def factory(idx: int) -> ServeWorker:
-            conn = PostgresConnector(pg_dsn, schema=None)
-            gw = Gateway(conn, max_rows=200_000, timeout_s=60.0)
-            slv = agent_solver(
-                corpora[arm],
-                gw,
-                settings,
-                identity,
-                model=lc_model,
-                embedder=embedder,
-                session_id=f"eval-{arm}-w{idx}",
-            )
-            return ServeWorker(connector=conn, gateway=gw, solver=slv)
 
-        return factory
+    # One stage-event file spans every arm (each record carries its own ``arm``), so
+    # it is cleared once here rather than per arm — clearing it inside the arm loop
+    # would delete the first arm's records while writing the second's.
+    stage_events_path = out_dir / "stage_events.jsonl"
+    if not resume:
+        stage_events_path.unlink(missing_ok=True)
+    stage_sink = _RowSink(stage_events_path)
 
     summaries: dict[str, Any] = {}
+    rows_by_arm: dict[str, list[dict[str, Any]]] = {}
     try:
-        for arm in arms:
-            if lc_model is not None:
-                solver = agent_solver(
-                    corpora[arm],
-                    gateway,
-                    settings,
-                    identity,
-                    model=lc_model,
-                    embedder=embedder,
-                    session_id=f"eval-{arm}",
-                )
-            else:
-                solver = _RefuseAllSolver()
-            worker_factory = (
-                _make_arm_factory(arm) if effective_workers > 1 else None
+        # The replicate is the same corpus served a second time under a distinct
+        # arm name. It is the only way to measure this pipeline's noise, because the
+        # proxy drops the temperature parameter and the sampling cannot be pinned.
+        # Appended last so a run that dies partway still has its real arms scored.
+        serve_order = list(arms)
+        # Oracle rungs append after the fair arms: they are diagnostics, and a run
+        # that dies partway should still have scored the arms that are results.
+        oracle_rungs = {r.value: r for r in OracleRung if r.value in (oracles or ())}
+        # A rung measures headroom *relative to* one arm's corpus. The last arm is
+        # the most curated one under the default ordering, which is the arm whose
+        # remaining headroom anyone is actually asking about.
+        oracle_base = arms[-1] if arms else None
+        if oracle_rungs and oracle_base is None:
+            raise ValueError("--oracle needs at least one arm to measure against")
+        # Built before any serving so an ambiguous gold aborts the run up front,
+        # rather than after a rung has already spent its model budget. Only five
+        # BIRD questions collide by text and all of them share gold SQL, so this is
+        # a guard against a future dataset change, not a live hazard.
+        oracle_gold = (
+            GoldIndex.build(
+                [
+                    {
+                        "question": item.question,
+                        "sql_rename": item.sql,
+                        "question_id": item.question_id,
+                        "db_id": db,
+                    }
+                    for item, db in pairs
+                ]
             )
-            rows, summary = _run_pool_arm(
+            if oracle_rungs
+            else None
+        )
+        serve_order.extend(oracle_rungs)
+        if replicate_of:
+            # Validated before the build phase, above.
+            serve_order.append(f"{replicate_of}__replicate")
+
+        for arm in serve_order:
+            # A replicate serves its source arm's corpus; only the name differs, and
+            # that is the point — any disagreement between them is pure noise.
+            source_arm = arm[: -len("__replicate")] if arm.endswith("__replicate") else arm
+            rung = oracle_rungs.get(arm)
+            # Which corpus this arm actually serves. A replicate serves its source
+            # arm's; an oracle rung serves the base arm's, narrowed per question.
+            # The rung's own name is never a corpus key, so anything looking one up
+            # has to go through this rather than through ``source_arm``.
+            plan = plan_arm_serving(
+                rung=rung,
+                source_arm=source_arm,
+                oracle_base=oracle_base,
+                effective_workers=effective_workers,
+                has_model=lc_model is not None,
+            )
+            served_corpus_arm = plan.corpus_arm
+
+            # ONE construction, read by both the serial solver and the per-worker
+            # factory. They used to decide independently — the serial branch keyed on
+            # ``oracle_base`` and the parallel one on the plan — so a change to either
+            # could silently serve the two paths different corpora under one arm name.
+            # ``plan`` is the single answer to "what is this arm", and both paths take
+            # it whole rather than picking pieces out of it.
+            #
+            # ``oracle_sql`` is the exception to the model requirement: it submits
+            # gold SQL straight to the grader and never calls a model, so gating it
+            # behind ``lc_model`` made the one rung that costs nothing silently
+            # degrade to refuse-all under ``--skip-agent`` — reporting EX 0.000 for
+            # the grader ceiling, which is the number every other number is supposed
+            # to be read against. The other rungs do serve through the real graph and
+            # genuinely need a model.
+            def _solver_for(plan: ArmServingPlan):
+                """The serial solver. The pool builds its own, per worker, via
+                ``make_serve_worker_factory`` — same branch, same plan."""
+                if plan.rung is not None and (
+                    lc_model is not None or plan.rung is OracleRung.sql
+                ):
+                    # A counterfactual rung: same serve path, corpus narrowed toward
+                    # the gold answer. Diagnostic only — it reads the answer key, so
+                    # its number is a headroom bound and never system performance.
+                    return oracle_solver(
+                        plan.rung,
+                        corpora_serve[plan.corpus_arm],
+                        gateway,
+                        settings,
+                        identity,
+                        model=lc_model,
+                        embedder=embedder,
+                        gold=oracle_gold,
+                        session_id=f"eval-{arm}",
+                    )
+                if lc_model is not None:
+                    return agent_solver(
+                        corpora_serve[plan.corpus_arm],
+                        gateway,
+                        settings,
+                        identity,
+                        model=lc_model,
+                        embedder=embedder,
+                        session_id=f"eval-{arm}",
+                    )
+                return _RefuseAllSolver()
+
+            solver = _solver_for(plan)
+            # Oracle rungs parallelise too — each worker gets its own solver, and the
+            # graph cache that was cited as the blocker is closure-local to one. The
+            # rung serves the BASE arm's corpus (``served_corpus_arm``), narrowed per
+            # question inside the solver, so the factory is keyed on that and not on
+            # ``source_arm``: the rung's own name is never a corpus key.
+            worker_factory = (
+                arm_worker_factory(
+                    plan,
+                    ServeBindings(
+                        corpora_serve=corpora_serve,
+                        pg_dsn=pg_dsn,
+                        settings=settings,
+                        identity=identity,
+                        model=lc_model,
+                        embedder=embedder,
+                        gold=oracle_gold,
+                    ),
+                )
+                if plan.needs_factory
+                else None
+            )
+            arm_workers = plan.n_workers
+            arm_started = time.time()
+            _rows, summary = _run_pool_arm(
                 arm=arm,
                 solver=solver,
                 pairs=pairs,
@@ -603,39 +4253,115 @@ def run_datalake(
                 identity=identity,
                 bird_dir=bird_dir,
                 suspect_by_db=suspect_by_db,
+                # The corpus this arm served, for resolving ``tables_used`` ids to schemas.
+                # The base corpus rather than ``corpora_serve``: ``for_analyst()`` is a
+                # projection for the prompt, and the id->schema mapping must come from the
+                # same object the ids were minted against.
+                arm_corpus=corpora[served_corpus_arm],
+                twin_ids=twin_ids,
+                ungradeable_ids=ungradeable_ids,
                 dialect="postgres",
-                serve_workers=effective_workers,
+                out_path=out_dir / f"generations.{arm}.jsonl",
+                split=split,
+                resume=resume,
+                replay_crashed=replay_crashed,
+                serve_workers=arm_workers,
                 worker_factory=worker_factory,
+                stage_sink=stage_sink,
+                # Counted off the corpus actually served (post-`for_analyst`, so
+                # excluded assets are already gone), which is the honest
+                # denominator for "held notes and injected none".
+                corpus_note_assets=sum(
+                    1
+                    for a in corpora_serve[served_corpus_arm].assets
+                    if isinstance(a, NoteAsset)
+                ),
             )
-            _write_jsonl(out_dir / f"generations.{arm}.jsonl", rows)
+            # Where this arm sat in wall-clock time. Arms serve sequentially, hours
+            # apart on a scale run, against a hosted provider — so any drift in provider
+            # behaviour maps monotonically onto the ladder and is indistinguishable from a
+            # rung's effect. Interleaving arms per question would remove the confound, but
+            # it would restructure the serve loop, the per-arm generations files and the
+            # resume contract; recording the position makes the confound *detectable*
+            # instead, which is the cheap half.
+            #
+            # Read it by checking whether EX tracks ``serve_index`` rather than the
+            # ladder. The replicate helps here too: it is appended last, so it is
+            # maximally distant in time from the arm it replicates, and the noise floor
+            # measured from that pair already absorbs drift across at least one arm's
+            # serve rather than being a within-moment figure.
+            summary["serve_index"] = serve_order.index(arm)
+            summary["serve_started_utc"] = datetime.fromtimestamp(
+                arm_started, tz=timezone.utc
+            ).isoformat(timespec="seconds")
+            summary["serve_seconds"] = round(time.time() - arm_started, 1)
             summaries[arm] = summary
+            # Kept for the cross-arm checks below: whether two arms actually
+            # delivered different context, and how much of their score difference
+            # this run could resolve. Both are pairwise and cannot be computed from
+            # per-arm summaries alone.
+            rows_by_arm[arm] = _rows
             print(
-                f"  [{arm}] EX={summary['ex_lenient']:.3f} "
-                f"routing_recall={summary['routing_recall']:.3f} "
-                f"refuse={summary['refusal_rate']:.3f}"
+                f"  [{arm}] EX={_fmt_rate(summary['ex_lenient'])} "
+                f"EX_gradeable={_fmt_rate(summary['ex_gradeable'])} "
+                f"routing_recall={_fmt_rate(summary['routing_recall'])} "
+                f"cond_EX|routed={_fmt_rate(summary['cond_ex_given_routing'])} "
+                f"decoy={_fmt_rate(summary['decoy_touch_rate'], 4)} "
+                f"refuse={_fmt_rate(summary['refusal_rate'])} "
+                f"crash={_fmt_rate(summary['crash_rate'])}"
             )
     finally:
+        stage_sink.close()
         connector.close()
 
-    deltas: dict[str, float] = {}
-    if "baseline" in summaries and "curated" in summaries:
-        deltas["curated_minus_baseline_ex"] = (
-            summaries["curated"]["ex_lenient"] - summaries["baseline"]["ex_lenient"]
-        )
-    if "curated" in summaries and "curated_sme" in summaries:
-        deltas["curated_sme_minus_curated_ex"] = (
-            summaries["curated_sme"]["ex_lenient"] - summaries["curated"]["ex_lenient"]
-        )
+    deltas = ladder_deltas(summaries, rows_by_arm=rows_by_arm)
+
+    # Pairwise arm comparisons, each carrying what the run could resolve alongside
+    # what it measured. A delta reported without its resolution is how "+5 questions,
+    # not significant" got published as evidence that an intervention does nothing,
+    # when the run could not have detected a real effect six times that size.
+    comparisons, divergences = _compare_arms(rows_by_arm, replicate_of=replicate_of)
+
     result = {
         "mode": "datalake",
-        "arms_run": list(arms),
-        "n_dbs_requested": len(wanted),
+        "split": split,
+        "split_note": (
+            "train scores the questions the curator was built from — diagnostic, "
+            "not held out"
+            if split == "train"
+            else "held-out evaluation split"
+        ),
+        # Every arm actually served, replicate and oracle rungs included. Listing
+        # only the fair arms made a summary carrying four arms' scores announce one,
+        # so a reader could not tell from the manifest what the run had done.
+        "arms_run": list(summaries),
+        "fair_arms": list(arms),
+        # Requested AND present on Postgres — the denominator the build coverage gate
+        # actually measures against. Distinct from ``n_dbs_requested`` below, which
+        # counts before the presence filter. Both were spelled ``n_dbs_requested`` in
+        # this one dict literal: the later key won, which happened to be the right
+        # one, and a reorder would have silently changed the number.
+        "n_dbs_attempted": len(wanted),
         "n_dbs_built": len(built),
         "built_dbs": built,
         "build_errors": build_errors,
-        "n_test": len(pairs),
+        # Requested but not loaded on Postgres. Distinct from ``build_errors`` (loaded
+        # but the build failed): neither the coverage gate nor the gold share can see
+        # these, because both measure against the already-filtered ``wanted``.
+        "dbs_absent_from_postgres": sorted(missing),
+        "n_dbs_requested": n_requested,
+        "n_questions": len(pairs),
         "arms": summaries,
         "deltas": deltas,
+        # Paired (McNemar) comparisons with the run's own noise floor and minimum
+        # detectable effect. Prefer these over ``deltas``: a difference of marginal
+        # rates ignores that both arms answered the same questions, which is the
+        # single largest source of variance on a benchmark this uneven.
+        "comparisons": comparisons,
+        # Did the arms actually differ in what they sent the model? An arm pair that
+        # delivered identical context is one experiment run twice, whatever their
+        # corpora contain on disk.
+        "treatment_divergence": divergences,
         "routing": {
             "top_k": route_top_k,
             "llm_pick": route_llm_pick,
@@ -646,33 +4372,61 @@ def run_datalake(
             ),
         },
         "corpus_validation": corpus_validation,
+        "corpus_census": corpus_census_by_arm,
+        "corpus_census_deltas": census_deltas,
+        "curator_errors": curator_errors,
+        "sme_fold": sme_fold,
         "gold_hash_self_check": gold_check,
+        # Decoy-touch is only meaningful where traps were actually loaded. Naming the
+        # dbs that had no manifest keeps a 0.0 rate from reading as "clean".
+        "decoy_manifest_missing_dbs": trap_manifest_missing,
         "serve_policy": {
             "hard_block_suspect_columns": settings.hard_block_suspect_columns,
             "grade_semantic_failures": settings.grade_semantic_failures,
         },
+        "leakage": leakage,
     }
     (out_dir / "summary.json").write_text(
         json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
     (out_dir / "manifest.json").write_text(
-        json.dumps(
-            {
-                "mode": "datalake",
-                "bird_dir": str(bird_dir),
-                "pg_dsn_host": "127.0.0.1:5435",
-                "created_at_utc": _utc_ts(),
-                "model": settings.models.llm_model,
-                "route_top_k": route_top_k,
-                "route_llm_pick": route_llm_pick,
-                "use_embedder": bool(embedder),
-                "skip_agent": skip_agent,
-            },
-            indent=2,
-        )
-        + "\n",
+        json.dumps({**manifest, "completed_at_utc": _utc_ts()}, indent=2) + "\n",
         encoding="utf-8",
     )
+
+    # A crashy arm is not a result: the crashes it absorbed are OUR failures, and
+    # they are not distributed equally across arms, so the deltas move with them.
+    crashy = {
+        arm: s["crash_rate"] for arm, s in summaries.items() if s.get("n_crashed")
+    }
+    if crashy:
+        detail = ", ".join(f"{a}={r:.3f}" for a, r in sorted(crashy.items()))
+        # Accumulate, don't comprehend. A dict comprehension over every arm is
+        # last-writer-wins per stage, so a stage that several arms hit would print
+        # only the last arm's count and read as *smaller* than a stage one arm hit —
+        # in the one line whose job is telling an operator where to look first.
+        stages_hit: Counter[str] = Counter()
+        for s in summaries.values():
+            stages_hit.update(s.get("by_failed_stage") or {})
+        print(
+            f"\n*** WARNING: solver CRASHES during serve ({detail}). These are bugs in "
+            "this system, not model refusals: they depress EX and inflate nothing "
+            "you can subtract, and the arms do not crash equally — so no arm-to-arm "
+            "delta from this run is quotable until they are fixed. Failing stages "
+            f"(all outcomes, not only crashes): {dict(stages_hit) or 'unattributed'}. "
+            "See stage_events.jsonl. ***\n"
+        )
+
+    # Self-register in the run ledger so "which runs exist, and which two may be
+    # compared" is computed from artifacts instead of remembered. Deliberately not
+    # wrapped: summary.json is already on disk, so a raise here costs visibility
+    # only, and a ledger that silently fails to record a run is the failure mode the
+    # ledger exists to prevent.
+    record = index_run(out_dir)
+    if not record["quotable"]:
+        print(f"*** run indexed as NOT quotable: {out_dir}")
+        for reason in record["not_quotable_because"]:
+            print(f"  - {reason}")
     return result
 
 
@@ -686,18 +4440,70 @@ def main(argv: list[str] | None = None) -> None:
         "--pg-dsn", default="host=127.0.0.1 port=5435 dbname=bird user=bird password=bird"
     )
     p.add_argument("--out", type=Path, default=Path("runs/datalake"))
-    p.add_argument("--dbs", default=None, help="Comma-separated db_ids (default: all test dbs)")
+    p.add_argument(
+        "--split",
+        choices=_SPLITS,
+        default="test",
+        help=(
+            "Question split to score. 'train' is larger but is what the curator "
+            "was built from — a diagnostic, not a held-out result."
+        ),
+    )
+    p.add_argument(
+        "--resume-from",
+        type=Path,
+        default=None,
+        help=(
+            "Continue an existing run directory instead of creating a new "
+            "timestamped one: questions already in generations.<arm>.jsonl are "
+            "replayed, the rest are served."
+        ),
+    )
+    p.add_argument("--dbs", default=None, help="Comma-separated db_ids (default: all dbs in the split)")
     p.add_argument(
         "--arms",
         default=None,
-        help="Comma-separated arms (subset of baseline,curated,curated_sme; default all)",
+        help=(
+            "Comma-separated arms (subset of baseline,seeded,curated,curated_sme_blind,curated_sme; "
+            "default all). The ladder is designed so each adjacent step changes one "
+            "thing: seeded adds the deterministic train-SQL seed (no model calls to "
+            "build), curated adds the LLM curator agent on top of it, curated_sme "
+            "adds the clarification round. Dropping a middle rung leaves the "
+            "surrounding delta bundling two interventions."
+        ),
     )
     p.add_argument("--limit-dbs", type=int, default=None, help="Cap the number of dbs")
-    p.add_argument("--limit", type=int, default=None, help="Cap test questions PER db")
+    p.add_argument("--limit", type=int, default=None, help="Cap questions PER db")
     p.add_argument("--max-agent-steps", type=int, default=25)
     p.add_argument("--skip-agent", action="store_true", help="Offline smoke (no model)")
-    p.add_argument("--no-resume", action="store_true", help="Rebuild corpora even if present")
-    p.add_argument("--route-top-k", type=int, default=8, help="Schema shortlist size")
+    p.add_argument(
+        "--allow-git-sha-drift",
+        action="store_true",
+        help=(
+            "Paid resume after a code edit: continue despite git_sha drift. "
+            "Smoke (--skip-agent) already warns and continues; without this flag a "
+            "paid resume refuses before spend. The ledger still records the drift "
+            "and marks the run unquotable."
+        ),
+    )
+    p.add_argument(
+        "--no-resume",
+        action="store_true",
+        help=(
+            "Start clean: rebuild corpora even if present, and re-serve every "
+            "question even if already scored in the run directory."
+        ),
+    )
+    p.add_argument("--route-top-k", type=int, default=10, help="Schema shortlist size")
+    p.add_argument(
+        "--schema-pick-max-columns",
+        type=int,
+        default=None,
+        help=(
+            "Column names per table shown to the LLM schema picker (0 = names only). "
+            "Column vocabulary is what separates same-topic sibling schemas."
+        ),
+    )
     p.add_argument("--no-llm-pick", action="store_true", help="Keep shortlist (no single-schema LLM pick)")
     p.add_argument("--no-embedder", action="store_true", help="BM25-only routing (no embeddings)")
     p.add_argument(
@@ -710,20 +4516,142 @@ def main(argv: list[str] | None = None) -> None:
             "max_connections; each worker holds its own connection + graph."
         ),
     )
+    p.add_argument(
+        "--build-workers",
+        type=int,
+        default=None,
+        help=(
+            "Concurrent per-db corpus builds (overrides [eval] build_workers, then "
+            "[eval] workers; default 1 = serial). The dbs are independent, so this "
+            "is the biggest wall-clock lever on a scale run: each build is a "
+            "deep-agent curator pass and there are as many as there are schemas. "
+            "Each build runs in a private staging root and is promoted into the "
+            "shared arm root on success. Size to your Postgres max_connections AND "
+            "your model provider's rate limit."
+        ),
+    )
+    p.add_argument(
+        "--replay-crashed",
+        action="store_true",
+        help=(
+            "On --resume-from, keep crashed turns instead of re-serving them. Off by "
+            "default: a crash is a bug rather than a measurement, and any crash makes "
+            "the run unquotable — so replaying one preserves nothing and costs the run."
+        ),
+    )
+    p.add_argument(
+        "--gold-per-db",
+        type=int,
+        default=1,
+        help=(
+            "Gold rows the pre-flight verifies per schema (default 1). A schema counts "
+            "as verified when ANY sampled row executes and agrees, so raising this buys "
+            "redundancy against one slow or genuinely-broken gold row rather than more "
+            "ways to fail. Costs about 40 ms per row per schema."
+        ),
+    )
+    p.add_argument(
+        "--prompt",
+        action="append",
+        metavar="STAGE=VARIANT",
+        default=None,
+        help=(
+            "Select a registered prompt variant for one stage, e.g. "
+            "--prompt schema_pick=v2 (repeatable). Default: every stage on v1. "
+            "An unknown stage or variant is an error, never a fallback to v1."
+        ),
+    )
+    p.add_argument(
+        "--replicate",
+        metavar="ARM",
+        default=None,
+        help=(
+            "Serve ARM twice (as ARM__replicate) to measure this run's noise floor "
+            "and minimum detectable effect. Costs one extra serve pass. Without it "
+            "the run reports p-values but cannot say what size of effect it was "
+            "able to resolve — the gap that let a null result inside the noise be "
+            "published as a finding."
+        ),
+    )
+    p.add_argument(
+        "--oracle",
+        default=None,
+        metavar="RUNG[,RUNG...]",
+        help=(
+            "ALSO serve counterfactual rungs, in addition to --arms: oracle_sql "
+            "(the grader's own ceiling, free), oracle_schema (routing cannot miss), "
+            "oracle_tables (table selection cannot miss), oracle_tables_padded (the "
+            "control for oracle_tables — same gold tables, padded back to a "
+            "comparable count). Each rung's EX lift is that stage's headroom, "
+            "measured rather than estimated. These read the answer key: diagnostics, "
+            "never system performance. Note ALSO: --arms baseline --oracle X,Y,Z is "
+            "FOUR serve passes, not three."
+        ),
+    )
     args = p.parse_args(argv)
 
-    arms = tuple(a.strip() for a in args.arms.split(",")) if args.arms else _ARMS
+    arms = (
+        tuple(a.strip() for a in args.arms.split(","))
+        if args.arms
+        else _DEFAULT_ARMS
+    )
+    oracles: tuple[str, ...] = ()
+    if args.oracle:
+        oracles = tuple(o.strip() for o in args.oracle.split(",") if o.strip())
+        known = {r.value for r in OracleRung}
+        unknown = sorted(set(oracles) - known)
+        if unknown:
+            p.error(
+                f"unknown oracle rung(s): {', '.join(unknown)}. "
+                f"Choose from: {', '.join(sorted(known))}"
+            )
+        # ``oracle_sql`` submits gold SQL and needs no model. Every other rung serves
+        # through the real graph, so without one it would silently fall through to the
+        # refuse-all solver and produce an arm that is shape-identical to a genuinely
+        # refused one — an unmeasured rung indistinguishable from a measurement. Refuse
+        # the combination instead of scoring it.
+        if args.skip_agent:
+            needs_model = sorted(set(oracles) - {OracleRung.sql.value})
+            if needs_model:
+                p.error(
+                    f"--skip-agent cannot serve {', '.join(needs_model)}: these rungs "
+                    "serve through the real graph and need a model, so they would "
+                    "score as refusals rather than as counterfactuals. Only "
+                    f"{OracleRung.sql.value} runs without a model — it submits gold "
+                    "SQL straight to the grader, which is why it is step 0 of the "
+                    "runbook."
+                )
     bad = [a for a in arms if a not in _ARMS]
     if bad:
         p.error(f"--arms must be a subset of {_ARMS}; unknown: {bad}")
+    if args.resume_from is not None and args.no_resume:
+        p.error("--resume-from and --no-resume are contradictory")
+    try:
+        prompt_overrides = parse_cli_overrides(args.prompt)
+    except (KeyError, ValueError) as err:
+        # argparse's own error path, so a typo reads as a usage error rather than a
+        # traceback — and exits before the run opens a database.
+        p.error(str(err.args[0] if err.args else err))
 
     # CLI overrides config; config overrides the code default of 1.
-    workers = args.workers if args.workers is not None else load_settings().serve_worker_count()
+    _cfg = load_settings()
+    workers = args.workers if args.workers is not None else _cfg.serve_worker_count()
     workers = resolve_workers(workers)
+    build_workers = (
+        args.build_workers
+        if args.build_workers is not None
+        else _cfg.build_worker_count()
+    )
 
     bird_dir = args.bird_dir.resolve()
-    out_dir = args.out / _utc_ts()
-    print(f"run dir: {out_dir}")
+    if args.resume_from is not None:
+        out_dir = args.resume_from
+        if not out_dir.is_dir():
+            p.error(f"--resume-from {out_dir} is not a directory")
+        print(f"run dir: {out_dir} (resuming)")
+    else:
+        out_dir = args.out / _utc_ts()
+        print(f"run dir: {out_dir}")
     try:
         result = run_datalake(
             bird_dir=bird_dir,
@@ -736,13 +4664,51 @@ def main(argv: list[str] | None = None) -> None:
             max_agent_steps=args.max_agent_steps,
             skip_agent=args.skip_agent,
             resume=not args.no_resume,
+            split=args.split,
             route_top_k=args.route_top_k,
+            schema_pick_max_columns=args.schema_pick_max_columns,
             route_llm_pick=not args.no_llm_pick,
             use_embedder=not args.no_embedder,
             serve_workers=workers,
+            build_workers=build_workers,
+            gold_per_db=args.gold_per_db,
+            replay_crashed=args.replay_crashed,
+            prompt_variants=prompt_overrides,
+            replicate_of=args.replicate,
+            oracles=oracles,
+            allow_git_sha_drift=args.allow_git_sha_drift,
         )
         print(json.dumps(result["arms"], indent=2, ensure_ascii=False))
-        print("deltas:", json.dumps(result["deltas"], indent=2))
+        # Printed BEFORE any delta, because these are the two questions that decide
+        # whether a delta means anything: did the arms differ, and could this run have
+        # seen it if they did. They used to come after, which is the reading order
+        # that let a null inside the noise get published as a finding.
+        print("\ntreatment delivery:")
+        print(divergence_table(result["treatment_divergence"]))
+        print("\npaired comparisons (Holm-adjusted across the fair family):")
+        for comparison in result["comparisons"]:
+            tag = " [diagnostic rung]" if comparison.get("diagnostic_pair") else ""
+            # A compound step and a backwards one are the two ways to misread this
+            # line, so both are said here rather than left in the JSON. An operator
+            # watching a long run reads stdout; the artifact is for afterwards.
+            if comparison.get("bundles"):
+                tag += " [bundles " + ", ".join(comparison["bundles"]) + "]"
+            if comparison.get("ladder_descending"):
+                tag += " [reads DOWN the ladder — sign is reversed]"
+            p_adj = comparison.get("p_value_holm")
+            adj = f", holm={p_adj:.4g}" if isinstance(p_adj, float) else ""
+            print(
+                f"  {comparison['arm_a']} -> {comparison['arm_b']}: "
+                f"{comparison['net_questions']:+d} questions "
+                f"(p={comparison['p_value']:.4g}{adj}){tag} — {comparison['reading']}"
+            )
+            cluster = comparison.get("cluster") or {}
+            if cluster.get("reading"):
+                print(f"      by database: {cluster['reading']}")
+        # Raw marginal-rate differences last, and labelled: they ignore that both arms
+        # answered the same questions, so the paired comparisons above supersede them.
+        print("\nunpaired marginal deltas (prefer the paired comparisons above):")
+        print(json.dumps(result["deltas"], indent=2))
     finally:
         from ..obs import flush_tracing
 

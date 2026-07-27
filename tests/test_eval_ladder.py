@@ -174,6 +174,98 @@ def test_seed_bundle_dedupes():
     assert bundle.metrics  # SUM(x)
 
 
+def _two_table_bag() -> AssetBag:
+    """Two tables sharing every column name, so a misattributed qualifier shows up."""
+    from governed_bi.corpus.schemas import Column, LogicalType, TableAsset
+
+    def _col(name: str) -> Column:
+        return Column(
+            physical_name=name,
+            physical_type="INTEGER",
+            logical_type=LogicalType.integer,
+            nullable=True,
+            is_unique=False,
+        )
+
+    return AssetBag.from_tables(
+        "demo",
+        [
+            TableAsset(
+                id=f"tbl_demo_{name}",
+                schema="demo",
+                physical_name=name,
+                columns=[_col("a"), _col("b"), _col("decoy")],
+            )
+            for name in ("tbl_x", "tbl_y")
+        ],
+    )
+
+
+def _mark_absent_from_gold(sql: str) -> tuple[set[str], dict[str, int]]:
+    from governed_bi.corpus.schemas import ReliabilityStatus
+    from governed_bi.curator.pipeline import _mark_columns_absent_from_gold
+
+    bag = _two_table_bag()
+    stats = _mark_columns_absent_from_gold(bag, [sql], dialect="postgres")
+    suspect = {
+        f"{t.physical_name}.{c.physical_name}"
+        for t in bag.tables.values()
+        for c in t.columns
+        if c.reliability.status is ReliabilityStatus.suspect
+    }
+    return suspect, stats
+
+
+def test_absent_from_gold_resolves_reused_alias_per_scope():
+    """A subquery may reuse an alias letter for a different table. One flat alias map
+    per statement resolves the outer ``t.a`` to the inner table, so a column the gold
+    SQL genuinely uses reads as never-referenced and gets stamped DO NOT USE — the
+    heuristic then argues against the column the generator needs."""
+    suspect, stats = _mark_absent_from_gold(
+        "SELECT t.a FROM tbl_x t WHERE t.a IN (SELECT t.b FROM tbl_y t)"
+    )
+    assert "tbl_x.a" not in suspect  # outer scope: t = tbl_x
+    assert "tbl_y.b" not in suspect  # inner scope: t = tbl_y
+    # Qualified attribution must still bite, or this degrades to the old lenient set.
+    assert {"tbl_x.b", "tbl_y.a", "tbl_x.decoy", "tbl_y.decoy"} == suspect
+    assert stats["unresolved_columns"] == 0
+
+
+def test_absent_from_gold_self_join_spares_both_aliases():
+    """Two aliases for one physical table must both resolve to it."""
+    suspect, _ = _mark_absent_from_gold(
+        "SELECT p.a, c.b FROM tbl_x p JOIN tbl_x c ON p.a = c.b"
+    )
+    assert {"tbl_x.a", "tbl_x.b"}.isdisjoint(suspect)
+    assert {"tbl_y.a", "tbl_y.b"} <= suspect  # gold never touches the other table
+
+
+def test_absent_from_gold_single_scope_query_unchanged():
+    """No-regression guard for the ordinary shape: one scope, qualified references."""
+    suspect, stats = _mark_absent_from_gold("SELECT tbl_x.a FROM tbl_x WHERE tbl_x.b > 1")
+    assert {"tbl_x.decoy", "tbl_y.a", "tbl_y.b", "tbl_y.decoy"} == suspect
+    assert stats == {"marked": 4, "unscoped_sql": 0, "unresolved_columns": 0}
+
+
+def test_absent_from_gold_undeclared_qualifier_spares_instead_of_marking():
+    """Fail safe: an alias declared in no scope leaves the column unattributable, so
+    spare the bare name everywhere and count it. A wrongly kept column costs a line of
+    prompt; a wrongly banned one misdirects generation."""
+    suspect, stats = _mark_absent_from_gold("SELECT z.a FROM tbl_x")
+    assert {"tbl_x.a", "tbl_y.a"}.isdisjoint(suspect)
+    assert stats["unresolved_columns"] == 1
+
+
+def test_absent_from_gold_credits_cte_columns_to_the_base_table():
+    """A CTE alias is not a physical table: its base columns are attributed inside the
+    CTE's own scope, and the projection reference must not spare that name elsewhere."""
+    suspect, _ = _mark_absent_from_gold(
+        "WITH q AS (SELECT tbl_y.b FROM tbl_y) SELECT q.b FROM q"
+    )
+    assert "tbl_y.b" not in suspect
+    assert "tbl_x.b" in suspect
+
+
 def test_asset_bag_propose_join_and_suspect(bird_connector, tmp_path: Path):
     tables = profile_database(bird_connector, schema="beer_factory")
     bag = AssetBag.from_tables("beer_factory", tables)

@@ -25,6 +25,8 @@ from langgraph.types import Command
 from ..corpus.schemas import TableAsset
 from ..gateway import GuardrailLayer, QueryResult, check, column_allowlist
 from ..graph import build_graph, detect_missing_join_path
+from ..stages import Stage
+from .governance import StageRecorder
 from .tools import render_result
 
 if TYPE_CHECKING:
@@ -144,8 +146,13 @@ class GovernanceMiddleware(AgentMiddleware):
         dialect: str,
         default_schema: str | None,
         settings: "Settings",
+        stages: "StageRecorder | None" = None,
     ):
         super().__init__()
+        # The turn's recorder when the serve rails threaded one in; a private one
+        # otherwise, so a directly-constructed middleware needs no wiring and still
+        # cannot write into another turn's records.
+        self._stages = stages if stages is not None else StageRecorder()
         self._corpus = corpus
         self._gateway = gateway
         self._identity = identity
@@ -269,6 +276,12 @@ class GovernanceMiddleware(AgentMiddleware):
 
     def wrap_tool_call(self, request, handler):
         name = request.tool_call["name"]
+        # Counted for EVERY tool, before the governed-tool gate below: this is the
+        # one choke point every tool call passes through, and ``_GOVERNED_TOOLS``
+        # deliberately keeps search_corpus/inspect_schema out of the *ledger*
+        # (widening the audit record would widen what claims to be governed). A
+        # plain call counter is the other need, so it gets its own record.
+        self._stages.count_tool_call(name)
         if name not in _GOVERNED_TOOLS:
             return handler(request)
 
@@ -325,15 +338,21 @@ class GovernanceMiddleware(AgentMiddleware):
                 )
 
         allowed_tables = licensed_physical_names(self._corpus, licensed_ids)
-        verdict = check(
-            sql,
-            allowed_columns=set(self._allowlist.allowed),
-            suspect_columns=self._allowlist.suspect,
-            allowed_tables=frozenset(allowed_tables),
-            hard_block_suspect=self._settings.hard_block_suspect_columns,
-            dialect=self._dialect,
-            default_schema=self._default,
-        )
+        with self._stages.stage(Stage.guardrail, action=action) as detail:
+            verdict = check(
+                sql,
+                allowed_columns=set(self._allowlist.allowed),
+                suspect_columns=self._allowlist.suspect,
+                allowed_tables=frozenset(allowed_tables),
+                hard_block_suspect=self._settings.hard_block_suspect_columns,
+                dialect=self._dialect,
+                default_schema=self._default,
+                on_layer=self._stages.guardrail_layer,
+            )
+            detail["passed"] = verdict.passed
+            detail["failed_layer"] = (
+                verdict.failed_layer.value if verdict.failed_layer else None
+            )
         if not verdict.passed:
             entry = {
                 "action": action,
@@ -385,7 +404,9 @@ class GovernanceMiddleware(AgentMiddleware):
 
         # PASS — middleware executes (single audit entry; finalize reuses result).
         try:
-            result = self._gateway.execute(sql, self._identity)
+            with self._stages.stage(Stage.execute, action=action) as detail:
+                result = self._gateway.execute(sql, self._identity)
+                detail["rows"] = result.row_count
         except Exception as err:
             entry = {
                 "action": action,

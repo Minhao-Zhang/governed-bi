@@ -11,13 +11,18 @@ helpers remain and are consumed by ``analyst.agent`` / ``analyst.governance``:
 - :func:`_tables_used` — map the physical table names in a SQL string back to
   their asset ids (for the reliability stamp's join plan; never a safety input,
   since the guardrails re-parse the SQL independently).
-- :func:`_extract_sql` — pull SQL out of a raw model response (fences/prose
-  tolerant), used by the no-layer eval baseline solver.
+
+``_extract_sql`` (markdown-fence/prose-tolerant SQL extraction) also lived here,
+for the retired raw-dump ``no_layer`` solver. That solver is gone
+(``eval/baseline_solver.py``, deleted in the terminology refactor) and every eval
+rung — including the designed-not-built ``ceiling`` — now runs the same agentic
+serve path, where SQL arrives as a governed ``run_query`` tool argument, never as
+free text to be scraped out of a model reply. So it is deleted rather than kept
+warm for a caller that is not coming.
 """
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 
 import sqlglot
@@ -61,23 +66,3 @@ def _tables_used(
         if asset_id is not None:
             ids.add(asset_id)
     return frozenset(ids)
-
-
-def _extract_sql(response: str) -> str:
-    """Pull the SQL out of a model response, tolerating markdown fences/prose.
-
-    If the response has fenced code blocks, take the **last** one (the model's
-    final answer usually follows any echoed example) and drop its info-string
-    (```sql / ```python / bare ```), so a language tag is never captured into the
-    SQL. Otherwise strip stray backticks. Trims a trailing semicolon; returns the
-    empty string for an empty response.
-    """
-    text = response.strip()
-    if not text:
-        return ""
-    blocks = re.findall(r"```[ \t]*[A-Za-z0-9_+-]*[ \t]*\r?\n(.*?)```", text, re.DOTALL)
-    if blocks:
-        text = blocks[-1].strip()
-    else:
-        text = text.strip("`").strip()
-    return text.rstrip(";").strip()

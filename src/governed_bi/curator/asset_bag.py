@@ -636,6 +636,12 @@ class AssetBag:
             msg = self.propose_note(
                 rec.answer,
                 kind=NoteKind.context,
+                # Scope to the owning schema. A caveat written for one schema is
+                # not a statement about the other 68 in a pooled data lake, but an
+                # empty scope is *global* — ``scope_matches`` then returns True for
+                # every question, so these notes crowd the always-note character
+                # budget on turns they have nothing to say about.
+                scope=[f"schema:{self.schema}"],
                 certified=True,
                 answered_by=rec.answered_by or "sme",
             )

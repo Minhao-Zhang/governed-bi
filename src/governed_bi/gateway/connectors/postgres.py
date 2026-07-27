@@ -74,12 +74,32 @@ class PostgresConnector(Connector):
             # a read-only DB role is still required in production as the real
             # belt-and-suspenders, this is not a substitute for one.
             self._conn.read_only = True
-        # Pin unqualified names to the target schema (single-schema / BIRD eval).
-        # Skipped when ``schema`` is the default ``public`` or the caller spans
-        # all schemas (factory passes ``schema=None`` in multi-schema mode).
-        if schema and schema != "public" and connection is None:
+        if connection is None:
             with self._conn.cursor() as cur:
-                cur.execute(f"SET search_path TO {_ident(schema)}, public")
+                # Deterministic scan start. Postgres defaults ``synchronize_seqscans``
+                # to ON: a sequential scan may begin wherever another concurrent scan
+                # on the same table has reached, so an unordered ``LIMIT n`` returns a
+                # DIFFERENT n rows depending on what else is touching the table.
+                #
+                # ``profile_database`` samples column values with exactly that shape
+                # (``SELECT col FROM t LIMIT 5``, no ORDER BY — deliberately, because
+                # ordering would force a full scan on tables this size). Those samples
+                # go into the corpus, into the prompt, and therefore into the answer.
+                # Left on, two builds of the SAME arm can produce different corpora,
+                # and — worse — the arms of one run can differ from each other for a
+                # reason that has nothing to do with the intervention being measured.
+                # Observed live: the same schema profiled in two runs gave
+                # `2018/8/5` and `2018/8/1` for the same column.
+                #
+                # Turning it off costs nothing here (every scan starts at block 0) and
+                # buys reproducibility, which matters more the more builds run
+                # concurrently.
+                cur.execute("SET synchronize_seqscans = off")
+                # Pin unqualified names to the target schema (single-schema / BIRD
+                # eval). Skipped when ``schema`` is the default ``public`` or the
+                # caller spans all schemas (``schema=None`` in multi-schema mode).
+                if schema and schema != "public":
+                    cur.execute(f"SET search_path TO {_ident(schema)}, public")
 
     def _qualified(self, table: str, schema: str | None = None) -> str:
         return f"{_ident(schema or self.schema)}.{_ident(table)}"

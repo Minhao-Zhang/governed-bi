@@ -649,3 +649,63 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   每次运行一个 thread 加一条可移植记录。
 - **状态：M2 元数据日志已上线；M5 补门控全量内容 + deep-agent 运行记录 + 持久
   `clarify_checkpointer`。** REST `/chat` 持久化仍是后续步骤。
+
+## D19：提示词变体注册表 + 归因
+
+> **已决策（2026-07-25）**
+>
+> 每一条系统提示词都是 `governed_bi.prompts`（`src/governed_bi/prompts/registry.py`）
+> 里一条具名、带版本号的条目：`stage -> variant -> PromptVariant(text,
+> rationale)`。一次运行按 stage 解析出一个变体（默认是 `v1`，和这个模块出现之前
+> 每个调用点发送的文本逐字节相同），并对解析出来的这份映射**按文本本身**、而不
+> 仅仅按变体 id 求哈希，这样一个被改过的 `v1` 就不能冒充成它取代的那份提示词。
+> 这个哈希会并入 `serve_config_hash`，映射本身和哈希会被打到每一个
+> `Answer.provenance`、可移植运行记录、每一行打过分的 eval 记录，以及
+> `manifest.json`（`run_experiment.py` 和 `run_datalake.py` 都是）上。
+
+- **为什么是现在。** `baseline`/`curated`/`curated_sme` 这条阶梯（**D14**）是
+  一条 corpus 内容轴，每个臂发送的提示词文本都逐字节相同，所以"我们改了一处
+  提示词，EX 就变了"以前根本无法证伪：两次跑在不同提示词上的运行，在记录里
+  完全看不出区别，一份被改过的提示词也和它取代的那份提示词分辨不出来。
+- **结构上就是失败即拒。** 一个未知的 stage 或 variant 会直接报错，而不是
+  回退到 `v1`，在每一个入口都是如此：`Settings.prompt_variants`（在
+  `load_settings()` 内部校验）、两个 eval CLI 上的 `--prompt STAGE=VARIANT`
+  （在任何 Postgres/模型相关工作开始之前校验）、以及一次直接的
+  `prompts.get`/`resolve` 调用。一次悄悄的回退，会报出一个这次运行从未真正
+  发送过的变体。
+- **在提示词集合已经变化的情况下恢复运行是致命错误，而不是一条警告**——这一点
+  在评审发现"只警告"不够之后被升级了。`_merge_resume_manifest` 会保留*原始*
+  manifest 顶层的那些旋钮，运行台账（`eval/index.py`）也只读这些旋钮，所以一个
+  一半在 `v1` 下打分、一半在 `v2` 下打分的目录，否则就会把自己伪装成一次干净的
+  `v1` 运行，并被拿去和别的 `v1` 运行比较。其他每一个恢复用的旋钮（模型、
+  路由宽度、embedder）仍然只会警告，因为读者能在 manifest 里直接看到它们、自己
+  判断；而一个混杂了多种提示词的集合，事后根本没法判断。
+- **生产者必须从调用方的 `Settings` 打戳，而不是重新加载一份。**
+  `build_curated_corpus`、`build_curated_corpus_with_sme` 和 `SimulatedSme` 都
+  接收一个 `settings` 参数，并用它来给自己的运行记录打戳。如果改用
+  `load_settings()` 重新推导配置，会把一份在 `--prompt` 下构建出来的 corpus
+  错记成属于 TOML 里那份提示词集合——这样一来，构建出这份 corpus 的
+  curator/SME 那几轮，就再也无法通过"查一查这份 corpus 的 serve 轮次实际用的
+  是哪套提示词集合"反查到日志里去。
+- **后果：** `eval.index` 的 `comparable()` 新增了 `prompt_set_hash` 作为一个
+  可比性判定键，一旦确认两次运行可比，配对 McNemar 检验就是显著性检验的
+  标准做法——在未配对的运行之间比较一个点估计的 EX 差值，不能替代它，因为
+  serve 端的解码本来就没有被钉死。这里有两套实现：引用差值时用
+  `eval.power`（导出为 `paired_mcnemar`）里的结果，这是两个驱动器实际写进
+  `summary.json` 的那一套，也是唯一一套会在 p 值旁边同时报出这次运行的噪声
+  下限和最小可探测效应的实现。`eval.analysis.mcnemar` 是 `analysis.json`
+  背后那个离线的兄弟版本；它的 p 值和前者精确一致（两者是同一个精确的
+  双侧二项分布检验，已经在 `tests/test_eval_statistics.py` 里用手算的
+  有理数验证过），但不给出分辨率，而一个看起来显著、实际上比这次运行能
+  分辨的最小效应还要小的差值，正是这项决策要防止的失败模式。由于
+  `analysis.json` 枚举的是*每一对*臂，而不只是阶梯上相邻的那几步，它也就
+  带着和驱动器报告同样的多重比较问题：四个臂就是六个检验，所以它会对
+  产出了 p 值的那些配对应用 Holm 校正（出错的配对会被排除在这个家族
+  之外——它什么都没测到），并给每一对打上 `single_variable`，复合情形下
+  再加上由驱动器同一个 `arms.skipped_rungs` 计算出的 `bundles` 列表。
+  这样一来，两份产物在同一套校正策略下回答的都是“这是否显著”；只有
+  `summary.json` 回答“这次运行本来能不能分辨出它”。相邻关系本身只在
+  `eval.arms`（`ARM_ORDER`、`ladder_steps`、`skipped_rungs`）里定义一次，
+  因为阶梯的两种拼法会渐渐走样。完整的运行手册，包括“一个已测出的具体
+  失败到底该换哪个变体”的判断表，见
+  [提示词变体实验](prompt-experiments.zh.md)。

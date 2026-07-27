@@ -23,6 +23,7 @@ grounding change with zero model cost. Gold items come from BIRD via
 from __future__ import annotations
 
 import argparse
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -34,6 +35,8 @@ from ..corpus.schemas import TableAsset
 from ..graph import build_graph, plan_joins
 from ..analyst.governance import _licensed_table_ids
 from ..retrieval import retrieve
+
+logger = logging.getLogger("governed_bi.eval")
 
 __all__ = [
     "QuestionRecall",
@@ -62,7 +65,11 @@ def gold_table_ids(corpus, sql: str, *, dialect: str = "sqlite") -> frozenset[st
     """
     try:
         tree = sqlglot.parse_one(sql, read=dialect)
-    except Exception:
+    except sqlglot.errors.SqlglotError:
+        # An unparseable gold SQL yields an empty gold-table set, understating
+        # recall for this item; surface it rather than silently distorting the
+        # aggregate. A non-parse bug (not a SqlglotError) now propagates.
+        logger.warning("gold SQL did not parse; recall understated for: %.200s", sql)
         return frozenset()
     if tree is None:
         return frozenset()

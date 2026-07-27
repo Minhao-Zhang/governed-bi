@@ -9,6 +9,8 @@ so governance decisions live in exactly one place and cannot drift.
 from __future__ import annotations
 
 import re
+import time
+from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
@@ -17,6 +19,7 @@ from sqlglot import exp
 
 from ..gateway import GuardrailLayer, check
 from ..graph import join_neighborhood, plan_joins
+from ..stages import Stage
 from .answer import (
     LOW_CONFIDENCE_JOIN,
     RESULT_PREVIEW_ROWS,
@@ -69,6 +72,21 @@ _STOPWORDS = frozenset(
     "the their there to what when where which who why with work works".split()
 )
 
+# Analytics filler: words nearly every BI question AND nearly every curated pattern
+# contains ("list all", "total", "average"), so a match on one of these alone
+# carries no topical signal and must not refuse a legitimate question. Kept small,
+# explicit and singular (tokens are singular-folded before the lookup) so the gate's
+# behavior is reviewable, unlike an overlap ratio: a ratio over the combined keyword
+# sets punishes the RICHER pattern (every extra word a curator writes shrinks it),
+# which is backwards for the D5 gate that is deliberately the high-recall curated
+# net rather than a coverage heuristic.
+_GENERIC_KEYWORDS = frozenset(
+    "all amount any average avg bottom breakdown column count data each find get "
+    "give highest largest least list lowest max maximum mean median min minimum most "
+    "number overall per percent percentage queries query question rate ratio record "
+    "report row share show smallest sum table tell top total value".split()
+)
+
 # Graded delivery is an ALLOWLIST, never a denylist: the ONLY failures re-executed
 # and delivered as "unverified" (when settings.grade_semantic_failures is on) are
 # the curated SEMANTIC layers below. A query reaches one of these ONLY after
@@ -99,21 +117,47 @@ def _tokens(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", text.lower())
 
 
+def _fold(token: str) -> str:
+    """Fold a trailing plural ``s`` so "employees" and "employee" key alike.
+
+    Curators write patterns in the plural ("questions about employees") while the
+    paraphrase that must be refused is often singular ("which employee ..."); without
+    this the gate misses the closest paraphrases there are.
+    """
+    if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
+        return token[:-1]
+    return token
+
+
+def _keywords(text: str) -> set[str]:
+    """The distinctive keywords a text contributes to the refuse-gate topic match.
+
+    Stop words go first (on the raw token, so "does" cannot fold into a non-stop
+    "doe"), then the singular fold, then the analytics filler.
+    """
+    folded = {_fold(t) for t in _tokens(text) if t not in _STOPWORDS}
+    return folded - _GENERIC_KEYWORDS
+
+
 def _match_negative_example(corpus: "Corpus", question: str) -> "NegativeExampleAsset | None":
     """Return the first curated negative example the question matches, else None.
 
-    Matches on either a distinctive keyword from the pattern (content words, stop
-    words removed) or a high token-overlap with one of the example questions.
-    Deterministic and conservative to avoid refusing a legitimate question.
+    Matches on either one shared *distinctive* keyword with the topic pattern
+    (:func:`_keywords` — stop words and analytics filler removed) or a high
+    token-overlap with one of the example questions. Deterministic. A single
+    incidental filler word ("list", "all", "average") must not refuse a legitimate
+    question, but one on-topic word must: ``pattern`` names a question CLASS, so
+    "what is the total headcount?" has to hit "questions about employees, staffing,
+    or headcount" while sharing only one of its words.
     """
     q_tokens = set(_tokens(question))
     if not q_tokens:
         return None
+    q_keywords = _keywords(question)
     for asset in corpus.assets:
         if not isinstance(asset, NegativeExampleAsset):
             continue
-        keywords = {t for t in _tokens(asset.pattern) if t not in _STOPWORDS}
-        if q_tokens & keywords:
+        if q_keywords & _keywords(asset.pattern):
             return asset
         for example in asset.example_questions:
             ex_tokens = set(_tokens(example))
@@ -193,7 +237,11 @@ def _suspect_in_scope(sql: str, suspect: frozenset[str], dialect: str | None) ->
     """
     if not suspect:
         return False
-    suspect_bare = {ref.split(".", 1)[1] for ref in suspect}
+    # ``suspect`` refs from column_allowlist are 3-part ``schema.table.column``;
+    # take the last segment for the bare column name (split(".",1)[1] would leave
+    # ``table.column`` and never match a bare col.name — the stamp would silently
+    # never flag a suspect column on the serve path).
+    suspect_bare = {ref.rsplit(".", 1)[-1] for ref in suspect}
     try:
         tree = sqlglot.parse_one(sql, read=dialect)
     except Exception:
@@ -279,22 +327,126 @@ def narrate_answer(
     return replace(answer, text=body)
 
 
-def _emit(on_event: "Callable[[dict], None] | None", stage: str, **detail) -> None:
-    """Fire a best-effort stage-progress event (no-op without a callback).
+class StageRecorder:
+    """Per-turn accumulator of stage timings and per-turn counters.
 
-    The serve flow stays authoritative: a callback that raises must never turn a
-    governed answer into an error, so failures here are swallowed. The payload is
-    a small stable dict ``{"stage": ..., **detail}`` that the LangGraph server
-    maps to a labeled UI stage (see docs/plans/agent-step-visualization.md). Stages, in
-    pipeline order: ``route``, ``refuse_gate``, ``cache_hit``, ``retrieve``,
-    ``generate``, ``guardrail``, ``execute``, ``compose``.
+    One instance per turn, owned by the turn's :class:`GovEventStream` so the two
+    reset at the same boundary — a recorder still holding the previous turn's
+    records reports a latency this turn never spent. Per-turn ownership rather
+    than a module global is load-bearing, not style: the eval harness serves
+    several graphs at once (``serve_workers > 1``), and one shared accumulator
+    would interleave two turns into a single unreadable record.
+
+    Records are appended in *completion* order and nested stages overlap their
+    parent by construction (``retrieve`` runs inside ``assemble``), so read a
+    stage's ``ms`` on its own — summing the list double-counts.
     """
-    if on_event is None:
-        return
-    try:
-        on_event({"stage": stage, **detail})
-    except Exception:
-        pass
+
+    __slots__ = ("_events", "_tool_calls", "_guardrail_layers")
+
+    def __init__(self) -> None:
+        self._events: list[dict] = []
+        self._tool_calls: dict[str, int] = {}
+        self._guardrail_layers: dict[str, int] = {}
+
+    def reset(self) -> None:
+        """Start a fresh turn (drop the previous turn's records and counters)."""
+        self._events = []
+        self._tool_calls = {}
+        self._guardrail_layers = {}
+
+    @contextmanager
+    def stage(self, stage: "Stage | str", **detail):
+        """Time one stage, yielding its mutable ``detail`` dict for the caller to fill.
+
+        On an exception the record is stamped ``status="error"`` and the exception
+        is RE-RAISED. Swallowing it would leave a stage that died looking like one
+        that never ran, which is the exact confusion this record exists to remove.
+
+        ``status`` describes the stage's own execution, not the turn's verdict: a
+        stage that deliberately refuses still ran fine and reads ``ok``.
+        """
+        payload: dict[str, Any] = dict(detail)
+        status = "ok"
+        t0 = time.perf_counter()
+        try:
+            yield payload
+        except BaseException as err:
+            status = "error"
+            payload["error_type"] = type(err).__name__
+            raise
+        finally:
+            self._events.append(
+                {
+                    "stage": getattr(stage, "value", stage),
+                    "status": status,
+                    "ms": round((time.perf_counter() - t0) * 1000.0, 3),
+                    "detail": payload,
+                }
+            )
+
+    def skipped(self, stage: "Stage | str", **detail) -> None:
+        """Record a stage that deliberately did not run (no LLM schema pick on a
+        single-schema corpus, no narrator configured).
+
+        ``ms`` is ``None``: a stage that never ran did not take zero milliseconds,
+        and an absent record would read as a stage this build cannot measure.
+        """
+        self._events.append(
+            {
+                "stage": getattr(stage, "value", stage),
+                "status": "skipped",
+                "ms": None,
+                "detail": dict(detail),
+            }
+        )
+
+    def count_tool_call(self, name: str) -> None:
+        """Count one tool invocation by name.
+
+        Deliberately separate from the governance ledger. The ledger is the audit
+        record of data-touching actions and only ``run_query``/``sample_rows``
+        belong in it — widening it would widen what claims to be governed. This is
+        a plain call counter, and without it ``search_corpus``/``inspect_schema``,
+        most of a turn's tool calls, leave no durable trace at all.
+        """
+        key = str(name or "unknown")
+        self._tool_calls[key] = self._tool_calls.get(key, 0) + 1
+
+    def guardrail_layer(self, layer: Any, passed: bool) -> None:
+        """Note that one guardrail layer ran, and whether it blocked.
+
+        A layer that ran is keyed even when it passed, so ``0`` means "ran, blocked
+        nothing" while an ABSENT key means "never ran this turn" — L4 is skipped
+        outright when the caller passes no retrieval scope. Collapsing those two
+        would report a confident zero for a layer nobody executed.
+        """
+        key = str(getattr(layer, "value", layer))
+        self._guardrail_layers[key] = self._guardrail_layers.get(key, 0) + (
+            0 if passed else 1
+        )
+
+    def provenance(self) -> dict:
+        """The instrumentation fields the serve path stamps onto a turn's answer."""
+        return {
+            "stage_events": list(self._events),
+            "n_tool_calls": dict(self._tool_calls),
+            "by_guardrail_layer": dict(self._guardrail_layers),
+        }
+
+
+def _stage(stages: "StageRecorder | None", stage: "Stage | str", **detail):
+    """:meth:`StageRecorder.stage` when a recorder is threaded through, else a
+    no-op that still yields a detail dict — so a direct unit call into these
+    helpers needs no recorder and gets no records."""
+    if stages is not None:
+        return stages.stage(stage, **detail)
+    return nullcontext(dict(detail))
+
+
+def _layer_observer(stages: "StageRecorder | None"):
+    """The ``check(on_layer=...)`` observer for a recorder, or None."""
+    return None if stages is None else stages.guardrail_layer
 
 
 # Ledger ``verdict`` → the step-event ``status`` the UI renders. Keeps the live
@@ -314,15 +466,15 @@ class GovEventStream:
     One instance per turn (call :meth:`reset` at the turn boundary). Stamps a
     monotonic ``seq`` so the frontend can order events, and tags the first event
     of the turn with ``serve_path`` so the UI picks the agent renderer (see
-    docs/plans/agent-step-visualization.md). This is the *agent* path's emitter;
-    the shared helpers below (:func:`_try_cache_hit`, :func:`_finalize_success`,
-    :func:`_finish_unsuccessful`) still accept an ``on_event`` callback and fall
-    back to the bare :func:`_emit` legacy ``{stage}`` shape when one is passed,
-    but ``analyst.agent`` always passes ``on_event=None`` there and drives this
-    emitter instead, so extending one never disturbs the other.
+    docs/plans/agent-step-visualization.md).
 
-    Best-effort like :func:`_emit`: a callback that raises must never turn a
-    governed answer into an error, so failures are swallowed.
+    Best-effort: a callback that raises must never turn a governed answer into an
+    error, so failures are swallowed.
+
+    ``stages`` (a :class:`StageRecorder`) is the *durable* counterpart of this
+    ephemeral stream — the emitter owns it so both reset on the same turn boundary,
+    and :meth:`final` stamps its records onto the answer just before the portable
+    append, which is why every terminal path funnels through here.
 
     When ``finalize_ctx`` is set, :meth:`final` stamps metadata + appends the
     portable run log (ADR 0004 L5/L6) and returns the stamped ``Answer``.
@@ -334,6 +486,7 @@ class GovEventStream:
         *,
         serve_path: str = "agent",
         finalize_ctx: Any = None,
+        stages: "StageRecorder | None" = None,
     ):
         self._on_event = on_event
         self._serve_path = serve_path
@@ -341,12 +494,17 @@ class GovEventStream:
         self._started = False
         self._finalize_ctx = finalize_ctx
         self._token_usage_extra: list = []
+        self._stages = stages
 
     def reset(self) -> None:
-        """Start a fresh turn: reset the sequence and the serve_path tag."""
+        """Start a fresh turn: reset the sequence, the serve_path tag and the
+        stage records (a recorder carried over would bill this turn for the last
+        one's latency)."""
         self._seq = 0
         self._started = False
         self._token_usage_extra = []
+        if self._stages is not None:
+            self._stages.reset()
 
     def add_token_usage(self, entries: list | None) -> None:
         """Accumulate usage snapshots (agent_core / router) before :meth:`final`."""
@@ -398,6 +556,14 @@ class GovEventStream:
 
     def final(self, answer: "Answer", *, step: str = "finalize") -> "Answer":
         """Stamp metadata + emit the terminal answer event; return the stamped Answer."""
+        if self._stages is not None and answer is not None:
+            # Before the portable append, so the durable record carries the turn's
+            # own timings/counters too — an eval run should not be the only place
+            # they exist.
+            answer = replace(
+                answer,
+                provenance={**(answer.provenance or {}), **self._stages.provenance()},
+            )
         if self._finalize_ctx is not None:
             from .run_log import finalize_and_log
 
@@ -434,7 +600,7 @@ def _try_cache_hit(
     *,
     default_schema: str | None = None,
     narrator: "AnswerNarrator | None" = None,
-    on_event: "Callable[[dict], None] | None" = None,
+    stages: "StageRecorder | None" = None,
 ) -> "Answer | None":
     """Serve a semantic-cache hit, or return None to fall through to the pipeline.
 
@@ -448,19 +614,24 @@ def _try_cache_hit(
     entry = cache.lookup(question)
     if entry is None:
         return None
-    verdict = check(
-        entry.sql,
-        allowed_columns=set(allowlist.allowed),
-        suspect_columns=allowlist.suspect,
-        allowed_tables=entry.licensed_tables,
-        hard_block_suspect=settings.hard_block_suspect_columns,
-        dialect=dialect,
-        default_schema=default_schema,
-    )
+    with _stage(stages, Stage.guardrail, path="cache") as detail:
+        verdict = check(
+            entry.sql,
+            allowed_columns=set(allowlist.allowed),
+            suspect_columns=allowlist.suspect,
+            allowed_tables=entry.licensed_tables,
+            hard_block_suspect=settings.hard_block_suspect_columns,
+            dialect=dialect,
+            default_schema=default_schema,
+            on_layer=_layer_observer(stages),
+        )
+        detail["passed"] = verdict.passed
     if not verdict.passed:
         return None
     try:
-        result = gateway.execute(entry.sql, identity)
+        with _stage(stages, Stage.execute, path="cache") as detail:
+            result = gateway.execute(entry.sql, identity)
+            detail["rows"] = result.row_count
     except Exception:
         return None
     try:
@@ -482,7 +653,6 @@ def _try_cache_hit(
         "truncated": result.truncated,
         "cache_hit": True,
     }
-    _emit(on_event, "cache_hit", metric_id=entry.metric_id)
     table = _result_table(result)
     text = _answer_text(question, entry.sql, result, table, narrator)
     return assemble(text=text, sql=entry.sql, signals=signals, provenance=provenance, result=table)
@@ -498,7 +668,7 @@ def _finish_unsuccessful(
     base_provenance: dict,
     question: str,
     narrator: "AnswerNarrator | None" = None,
-    on_event: "Callable[[dict], None] | None" = None,
+    stages: "StageRecorder | None" = None,
     allowlist: "ColumnAllowlist | None" = None,
     dialect: str | None = None,
     default_schema: str | None = None,
@@ -524,7 +694,6 @@ def _finish_unsuccessful(
     # ``failed_layer=None``) is a hard refuse and NEVER executed (audit Vuln 2).
     deliverable = failed_layer in _GRADED_DELIVERY_LAYERS
     if not deliverable or not sql or not settings.grade_semantic_failures:
-        _emit(on_event, "refuse", refused_by=refused_by, failed_layer=failed_layer)
         return refusal(escalation=escalation, provenance=provenance)
 
     # Defense-in-depth: re-run the guardrail right before executing, so nothing but
@@ -534,18 +703,20 @@ def _finish_unsuccessful(
     # failure still delivers — but if the SQL now trips a safety/confidentiality
     # layer (L2/L3), or any non-semantic layer, refuse and never execute.
     if allowlist is not None:
-        verdict = check(
-            sql,
-            allowed_columns=set(allowlist.allowed),
-            suspect_columns=allowlist.suspect,
-            allowed_tables=None,
-            hard_block_suspect=settings.hard_block_suspect_columns,
-            dialect=dialect,
-            default_schema=default_schema,
-        )
+        with _stage(stages, Stage.guardrail, path="graded_delivery_recheck") as detail:
+            verdict = check(
+                sql,
+                allowed_columns=set(allowlist.allowed),
+                suspect_columns=allowlist.suspect,
+                allowed_tables=None,
+                hard_block_suspect=settings.hard_block_suspect_columns,
+                dialect=dialect,
+                default_schema=default_schema,
+                on_layer=_layer_observer(stages),
+            )
+            detail["passed"] = verdict.passed
         recheck_layer = verdict.failed_layer.value if verdict.failed_layer else None
         if not verdict.passed and recheck_layer not in _GRADED_DELIVERY_LAYERS:
-            _emit(on_event, "refuse", refused_by=refused_by, failed_layer=recheck_layer)
             return refusal(
                 escalation=escalation,
                 provenance={**provenance, "graded_delivery_recheck_failed": recheck_layer},
@@ -554,14 +725,10 @@ def _finish_unsuccessful(
     # §6: deliver the last generated SQL with unverified assurance. Try to
     # execute for a complete answer; if execute fails, still return the SQL so
     # eval can grade it (and the UI can show an unverified payload).
-    _emit(
-        on_event,
-        "graded_delivery",
-        refused_by=refused_by,
-        failed_layer=failed_layer,
-    )
     try:
-        result = gateway.execute(sql, identity)
+        with _stage(stages, Stage.execute, path="graded_delivery") as detail:
+            result = gateway.execute(sql, identity)
+            detail["rows"] = result.row_count
         table = _result_table(result)
         # Deliver the REAL answer (narrated from the executed result), clearly
         # marked unverified. A curated SEMANTIC layer (L4/L5) failed, but reaching
@@ -591,7 +758,7 @@ def _finish_unsuccessful(
 
 def _finalize_success(
     *, question, graph, generated, result, attempts, base_provenance, dialect, allowlist, licensed,
-    cache, narrator: "AnswerNarrator | None" = None, on_event: "Callable[[dict], None] | None" = None,
+    cache, narrator: "AnswerNarrator | None" = None,
     coverage_best_effort: bool = False,
     ledger: list | None = None,
 ) -> "Answer":
@@ -629,7 +796,6 @@ def _finalize_success(
     if ledger is not None:
         provenance["governance_ledger"] = list(ledger)
     table = _result_table(result)
-    _emit(on_event, "compose")
     text = _answer_text(question, generated.sql, result, table, narrator)
     answer = assemble(
         text=text, sql=generated.sql, signals=signals, provenance=provenance, result=table

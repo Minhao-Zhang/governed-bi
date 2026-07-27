@@ -32,6 +32,7 @@ scope it is skipped, so a corpus-only unit check still exercises L1 to L3 and L5
 
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
@@ -45,6 +46,8 @@ from sqlglot.optimizer.scope import traverse_scope
 from ..corpus.schemas import ReliabilityStatus, TableAsset
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from ..corpus import Corpus
 
 
@@ -198,6 +201,47 @@ def _forbidden_function(root: exp.Expression) -> str | None:
         ):
             return name
     return None
+
+
+_observer_failed = False
+
+
+def _observe(
+    on_layer: "Callable[[GuardrailLayer, bool], None] | None",
+    layer: GuardrailLayer,
+    passed: bool,
+) -> None:
+    """Report that one layer ran, and whether it passed, to an optional observer.
+
+    Observation only: nothing here may reach a verdict. This is also the one place
+    in the metrics work that swallows an exception, deliberately — re-raising would
+    hand an observer a veto over the safety path, so a broken counter could turn a
+    governed answer into an error. A missing number costs less than that.
+
+    Swallowed, but not silently. A counter that raises on every query would
+    otherwise leave the layer histogram permanently empty while every run looked
+    healthy — the same shape of failure this instrumentation was added to end. It
+    warns once per process rather than per layer per query, because the failure is
+    a property of the observer, not of the SQL, and one traceback is enough to act
+    on where thousands would bury the run's real output.
+
+    Which layers report at all is itself the signal: ``check`` returns on the first
+    failure and skips L4 when the caller passes no scope, so a layer with no report
+    never ran, which is a different fact from a layer that blocked nothing.
+    """
+    if on_layer is None:
+        return
+    try:
+        on_layer(layer, passed)
+    except Exception:
+        global _observer_failed
+        if not _observer_failed:
+            _observer_failed = True
+            logging.getLogger("governed_bi.gateway").warning(
+                "guardrail layer observer raised; layer counts will be incomplete "
+                "for the rest of this process (verdicts are unaffected)",
+                exc_info=True,
+            )
 
 
 def _pass() -> GuardrailVerdict:
@@ -666,6 +710,7 @@ def check(
     allowed_tables: frozenset[str] | None = None,
     dialect: str | None = None,
     default_schema: str | None = None,
+    on_layer: "Callable[[GuardrailLayer, bool], None] | None" = None,
 ) -> GuardrailVerdict:
     """Run the layers in order; return on the first failure (fail-closed).
 
@@ -680,12 +725,18 @@ def check(
     and layer bookkeeping are all ``schema.``-prefixed (see :func:`column_allowlist`,
     :func:`_layer_terms`, :func:`_layer_columns`, :func:`_layer_cartesian`), and
     ``default_schema`` is the schema a bare (unqualified) reference resolves to.
+
+    ``on_layer`` is an optional observer called once per layer that actually runs
+    (see :func:`_observe`); it is what makes "which layer blocks most often"
+    answerable, and it cannot influence the verdict.
     """
     verdict, statements = _layer_syntax(sql, dialect)
+    _observe(on_layer, GuardrailLayer.syntax, verdict.passed)
     if not verdict.passed:
         return verdict
 
     verdict = _layer_policy(statements)
+    _observe(on_layer, GuardrailLayer.policy_blacklist, verdict.passed)
     if not verdict.passed:
         return verdict
 
@@ -696,6 +747,7 @@ def check(
         hard_block_suspect,
         default_schema=default_schema,
     )
+    _observe(on_layer, GuardrailLayer.ast_column_allowlist, verdict.passed)
     if not verdict.passed:
         return verdict
 
@@ -705,7 +757,10 @@ def check(
             set(allowed_tables),
             default_schema=default_schema,
         )
+        _observe(on_layer, GuardrailLayer.term_semantics, verdict.passed)
         if not verdict.passed:
             return verdict
 
-    return _layer_cartesian(statements[0], default_schema=default_schema)
+    verdict = _layer_cartesian(statements[0], default_schema=default_schema)
+    _observe(on_layer, GuardrailLayer.cost_estimate, verdict.passed)
+    return verdict

@@ -147,6 +147,15 @@ class LangChainEmbedder:
         kwargs: dict[str, Any] = {"model": models.embedding_model}
         if models.embedding_dimensions:
             kwargs["dimensions"] = models.embedding_dimensions
+        # The same timeout and retry policy the chat client gets. These were omitted
+        # here, so ``max_retries`` — the one knob meant to govern retry behaviour
+        # stack-wide — reached only half the stack, and an embedding call had no
+        # wall-clock bound at all. Both matter more under the eval's concurrency
+        # knobs: every serve worker embeds its question, and a 429 or a stalled
+        # connection on that call fails the turn as a crash.
+        if models.request_timeout_s is not None:
+            kwargs["timeout"] = models.request_timeout_s
+        kwargs["max_retries"] = models.max_retries
         key = os.environ.get(models.api_key_env)
         if key:
             kwargs["api_key"] = key

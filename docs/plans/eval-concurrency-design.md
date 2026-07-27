@@ -1,9 +1,12 @@
 # Eval concurrency: a configurable `workers` knob (design)
 
-_Status: **Proposed** (design only, no code). From the 2026-07-22 experiment audit
-(companion to [`eval-audit-backlog-2026-07-22.md`](eval-audit-backlog-2026-07-22.md),
-its Q2 item). Implementation is deferred until the in-flight ~2,000-question
-`run_datalake` run lands; this doc is the spec the implementer follows after._
+_Status: **Shipped** (2026-07-23, commit `99f517d`). From the 2026-07-22 experiment
+audit (companion to [`eval-audit-backlog-2026-07-22.md`](eval-audit-backlog-2026-07-22.md),
+its Q2 item). This doc is now a closed design record: the `workers` knob, the
+per-worker connector/graph isolation (Fixes 1-2), the `solve_with_meta` return-meta
+refactor (Fix 3), and the byte-for-byte serial-vs-pooled invariance tests in
+[`tests/test_eval_concurrency.py`](../../tests/test_eval_concurrency.py) all exist as
+specified below._
 
 Goal: make eval throughput configurable (high on a dedicated box with no
 rate limits, low against a rate-limited provider) without changing any

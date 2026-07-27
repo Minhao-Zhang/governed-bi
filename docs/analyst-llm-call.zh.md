@@ -1,51 +1,67 @@
 # Agentic BI Analyst：LLM 调用全流程
 
-本文逐次调用地追踪一个问题如何流经服务路径（`analyst.agent`），展示模型在每一步
-实际收到的*逐字*文本。它是 [Analyst](analyst.zh.md) 的补充。那份文档描述的是周围
-的轨道（rails）；这里的目标更窄：把每一条系统提示逐字重现，把每一条 user/human
-消息连同动态内容注入处的占位符一起展示，并把工具循环呈现为一份示意性的对话记录。
+本文逐次调用地追踪一个问题如何流经服务路径（`analyst.agent`）：哪个阶段发出
+哪条提示词、user/human 消息在动态内容注入处长什么样、每次调用外围又有哪些
+确定性的守卫。它是 [Analyst](analyst.zh.md) 的补充——那份文档描述的是周围
+的轨道（rails）。
+
+**提示词文本本身不在这里重现。** 这条路径发出的每一条系统提示，都是
+`governed_bi.prompts` 里一条具名、带版本号的记录——`src/governed_bi/prompts/registry.py`
+是唯一真相源，在这里逐字引用，只要一次编辑或一个新变体出现就会立刻和源头
+脱节（这份文档的上一版就正是这样脱节的）。要看某个阶段的确切文本，请直接去
+查 registry；要看 `v1` 与更新的变体之间到底差在哪、一次运行怎么选定一个
+变体、这个选择又是怎么打戳到它产出的每一行上的，见
+[提示词变体实验](prompt-experiments.zh.md)。
 
 > 实现：[`src/governed_bi/analyst/agent.py`](../src/governed_bi/analyst/agent.py)、
 > [`context.py`](../src/governed_bi/analyst/context.py)、
+> [`note_inject.py`](../src/governed_bi/analyst/note_inject.py)、
 > [`tools.py`](../src/governed_bi/analyst/tools.py)、
 > [`narrate.py`](../src/governed_bi/analyst/narrate.py)、
-> [`retrieval/schema_router.py`](../src/governed_bi/retrieval/schema_router.py)。
+> [`retrieval/schema_router.py`](../src/governed_bi/retrieval/schema_router.py)、
+> [`prompts/registry.py`](../src/governed_bi/prompts/registry.py)。
 
 ## 概览：最多三次模型调用
 
 一个问题最多会触发**三次**模型调用，顺序如下：
 
-- **(A) Schema 路由**：仅在多 schema 路径上发生，且仅当检索初筛出**2 个或以上**
-  候选 schema 时才会调用。零个候选会路由到 `""`；恰好一个候选则**无需 LLM 调用**
-  即可直接选定。单 schema 部署完全跳过这一步。
-- **(B) Agent 内核**：一个 LangChain `create_agent` 工具循环。这是主戏所在：它
-  会在逐个调用工具的过程中多次调用模型。
-- **(C) 叙述器（narrator）**：一次调用，把已执行的结果表格措辞成通顺的英文。遇到
-  拒答，或未配置 narrator 时会被跳过。
+- **(A) Schema 路由**——registry 阶段 `schema_pick`。仅在多 schema 路径上
+  发生，且仅当检索初筛出**2 个或以上**候选 schema 时才会调用。零个候选会
+  路由到 `""`；恰好一个候选则**无需 LLM 调用**即可直接选定。单 schema 部署
+  完全跳过这一步。
+- **(B) Agent 内核**——registry 阶段 `agent_core`。一个 LangChain
+  `create_agent` 工具循环。这是主戏所在：它会在逐个调用工具的过程中多次
+  调用模型。
+- **(C) 叙述器（narrator）**——registry 阶段 `narrator`。一次调用，把已
+  执行的结果表格措辞成通顺的英文。遇到拒答，或未配置 narrator 时会被跳过。
 
 (A) 与 (C) 都是单次调用，走的是同一个 seam：`chat.complete(system, user)`。
 `LangChainChatClient.complete`（`llm/langchain_client.py`）会构建消息列表
-`[("system", system), ("human", user)]` 并调用模型一次。(B) 的形态则不同：它是一个
-以 `system_prompt=` 加一条 `HumanMessage` 构建出的 `create_agent`，模型会在该 agent
-自身的循环内部被反复调用。
+`[("system", system), ("human", user)]` 并调用模型一次。(B) 的形态则不同：
+它是一个以 `system_prompt=` 加一条 `HumanMessage` 构建出的 `create_agent`，
+模型会在该 agent 自身的循环内部被反复调用。
 
 ## (A) Schema 路由
 
-`retrieval/schema_router.py` 中的 `select_schema` 会从 BM25 检索初筛出的候选中
-选定一个 schema。
+`retrieval/schema_router.py` 中的 `pick_schema` 会从 `shortlist_schemas`
+排出的候选里选定一个 schema（按向量相似度排序，没有 embedder 时才退回
+BM25——见 [Data-lake run](plans/datalake-run.md)）。
 
-**系统提示（逐字）：**
+**系统提示：** `prompts.text("schema_pick", prompt_variants)`，在 serve
+技术栈构建时（`build_serve_rails`）解析一次，而不是每轮都解析。目前存在
+两个变体（`v1`、`v2`——两者的差别见
+[提示词变体实验](prompt-experiments.zh.md#三个真正存在的变体)）；两者都
+要求模型把问题拆解成它需要的具体部分（实体、过滤条件、连接、要返回的值
+或度量），再拿每个候选去逐一核对，因为近乎重复的同胞 schema（两个同主题
+的 schema，或一个 schema 和它的 `_2` 孪生体）在主题与表描述文本上读起来
+很像，真正的差别只在列的用词上。
 
-```text
-You route a natural-language question to exactly ONE database schema. You are given candidate schemas and their tables. Reply with ONLY the single schema name (verbatim, no punctuation) that can answer the question. It must be exactly one of the candidate names.
-```
-
-**用户消息（拼装而成）：**
+**用户消息（由 `pick_schema` 拼装而成）：**
 
 ```text
 Question: [USER_QUESTION]
 
-Candidate schemas:
+Candidate schemas (most relevant first):
 [SCHEMA_SUMMARIES]
 
 Answer with exactly one of: [CANDIDATE_1, CANDIDATE_2, ...]
@@ -55,40 +71,60 @@ Answer with exactly one of: [CANDIDATE_1, CANDIDATE_2, ...]
 
 ```text
 schema: [SCHEMA_NAME]
-  - [PHYSICAL_TABLE]: [SHORT_DESCRIPTION]
-  - [PHYSICAL_TABLE]: [SHORT_DESCRIPTION]
+  - [PHYSICAL_TABLE]: [SHORT_DESCRIPTION][  [cols: C1, C2, ...]]
   ... (up to 15 tables, then "… (N more tables)")
 ```
 
-这次调用外围包着确定性的守卫：无法解析或超出候选集合的回复，会回退到
-`candidates[0]`（BM25 排名最高者），而不会抛出异常。
+`[cols: ...]` 这个后缀只有在 `schema_pick_max_columns > 0` 时才会按表出现
+（数据湖驱动器默认把它设成 12；`0` 会退回只有名称的摘要）——真正能把两个
+表描述读起来一样的同胞 schema 区分开的，正是这份列的用词。
+
+**这次调用外围的确定性守卫，精确说来**（`pick_schema` / `_parse_schema_reply`）：
+
+- 0 个候选 → `SchemaPick("")`，不调用 LLM。
+- 1 个候选 → `SchemaPick(candidates[0])`，不调用 LLM。
+- 2 个及以上候选 → 发起上面那次调用，然后回复会对着固定的候选列表来
+  解析，绝不当作自由文本直接信任，判定顺序如下：(1) 回复最后一行独自
+  出现一个裸的候选名（两个提示词变体都是这么要求的），视为干净的选定；
+  (2) 否则，找一个*带标签*的答案（“Final answer: x” / “chosen: x”），
+  从后往前扫描；(3) 在非最后一行找到一个精确的裸名称，或 (4) 某一行按
+  词边界匹配到恰好一个候选名的子串——(3) 与 (4) 都会返回一个选定结果，
+  但会标上 `fallback="parsed_nonfinal_line"`，因为模型没有把答案放在它
+  被要求的位置；(5) 一个解析不了的回复，或调用本身抛出异常，都会降级为
+  `SchemaPick(candidates[0], "unparseable_reply"/"call_failed")`——取
+  检索排名最高的那个，绝不会凭空造一个不在候选列表里的名字。
+- 上面每一种 `fallback` 原因都会被带在返回的 `SchemaPick` 上，并体现在
+  provenance 里（`schema_pick_fallback`），这样一行降级过的记录就绝不会
+  被当成一次真正的模型决策来计分。
 
 ## (B) Agent 内核
 
-### 系统提示
-
-`agent_core_node` 把模块级的 `SYSTEM_PROMPT` 交给 `create_agent`，并在末尾附上
-已组装好的 `## Governed context` 区块：
+Registry 阶段 `agent_core`。`build_serve_rails` 每次构建技术栈只解析一次
+提示词文本（`agent_core_prompt = prompts.text("agent_core", prompt_variants)`），
+而 `agent_core_node` 会在每一轮都往后面追加已组装好的上下文与当前时间：
 
 ```python
-system_prompt = f"{SYSTEM_PROMPT}\n\n## Governed context\n{context_block}"
+system_prompt = agent_core_prompt
+if context_block:
+    system_prompt = f"{agent_core_prompt}\n\n## Governed context\n{context_block}"
+system_prompt = f"{system_prompt}\n\n## Current time\n{now_local:%Y-%m-%d %H:%M:%S %Z (UTC%z)} ..."
 ```
 
-`SYSTEM_PROMPT`（逐字，`analyst/agent.py`）：
-
-```text
-You answer questions over a governed data warehouse by writing **one read-only SELECT**.
-
-The `## Governed context` below has been assembled for this question — its tables are already licensed and its joins, metrics, few-shot examples, and reliability caveats are curated, authoritative guidance. **Prefer it over guessing.** Follow the few-shot examples' style, use the listed joins, and never use a column marked DO NOT USE.
-
-Write SQL using only identifiers shown in the context, then call `run_query`. If the context is missing a table or example you need, call `search_corpus` for more, and `inspect_schema` any table **not** already listed before querying it (that licenses it). Use `sample_rows` if you need to see real values. If `run_query` returns BLOCKED or an error, read it, fix the SQL, and retry (max 3). Never guess an identifier. Call tools **one at a time**.
-```
+目前存在三个变体（`v1`/`v2`/`v3`；见
+[提示词变体实验](prompt-experiments.zh.md#三个真正存在的变体)）。三者形状
+相同——优先采信已授权的治理上下文而不是凭空猜测，谨慎选表（哪怕列名对得
+上，也要拒绝一份可疑/重复/备选的拷贝），只用已展示的标识符写 SQL，返回
+的正是问题所问的东西，然后再执行——但 `v2` 把“拒绝错误的那份拷贝”变成了
+独立的一步、带可见输出（说明问题的每个部分用了哪张表，点名拒绝了什么、
+为什么拒绝），`v3` 则在写 SQL *之前*加了一步：先写清楚确切的输出列与
+粒度，再拿最终的 `SELECT` 列表对照这句话检查，删掉不在这句话里的一切。
 
 ### `## Governed context` 区块
 
-`context.py` 中的 `_render` 会依据确定性的 `assemble` 节点的输出来组装这个区块。
-在模型看到任何东西之前，检索、连接规划与授权（licensing）都已经跑完。各个小节
-按以下顺序出现，为空时会被省略（`## Tables` 除外，它总是存在）：
+`context.py` 中的 `_render` 会依据确定性的 `assemble` 节点的输出来组装
+这个区块。在模型看到任何东西之前，检索、连接规划与授权（licensing）都
+已经跑完。各个小节按以下顺序出现，为空时会被省略（`## Tables` 除外，它
+总是存在）：
 
 ```text
 ## Conversation so far (oldest first; use ONLY to resolve references in the latest question, e.g. 'that', 'last year')
@@ -96,7 +132,7 @@ Write SQL using only identifiers shown in the context, then call `run_query`. If
   ...
 
 ## Tables (use ONLY these physical identifiers)
-### [PHYSICAL_NAME][  [reachable only via a join]]  (grain: [GRAIN])
+### [SCHEMA].[PHYSICAL_NAME][  [reachable only via a join]]  (grain: [GRAIN])
   [TABLE_DESCRIPTION]
     - [COLUMN] ([LOGICAL_TYPE], [ROLE]): [DESCRIPTION][  [SUSPECT - DO NOT USE: CAVEAT]]
 
@@ -112,46 +148,55 @@ Write SQL using only identifiers shown in the context, then call `run_query`. If
 ## Reliability caveats (DO NOT USE these columns)
   [TABLE].[COLUMN]: [CAVEAT]
 
-## Governance rules (must honour)
-  ([KIND]) [SUMMARY]
+## Governance notes (must honour)
+  ([KIND]) [SUMMARY][ (body, on_match notes only)]
+
+## Governance notes (advisory)
+  ([KIND]) [SUMMARY][ (body, on_match notes only)]
 
 ## Example questions with gold SQL
   Q: [QUESTION]
   A: [SQL]
 ```
 
-下面是一个具体实例：某个问题的检索范围被限定到 `beer_factory` 的 `transaction`
-与 `customers` 两张表（few-shots / terms / metrics / notes 都已按这个范围做了
-裁剪，保留符合实际的部分）：
+表头始终是 schema 限定的（`schema.physical_name`）——自 D15 于
+2026-07-17 的取代之后，引擎已统一采用限定标识符，所以哪怕是单 schema 的
+BIRD/SQLite 路径（把文件 `ATTACH` 到一个 `corpus_pin` 别名下）也是这样
+渲染，不只是多 schema 的 Postgres 路径。
+
+下面是一个具体实例：某个问题的检索范围被限定到 `beer_factory` 的
+`transaction` 与 `customers` 两张表（few-shots / terms / metrics 都已
+按这个范围做了裁剪，保留符合实际的部分）：
 
 ```text
 ## Tables (use ONLY these physical identifiers)
-### transaction  (grain: one row = one sale)
+### beer_factory.transaction  (grain: one row = one sale)
   One row per sale of a root beer unit to a customer.
     - TransactionID (integer, primary_key): unique sale identifier
     - RootBeerID (integer, foreign_key): root beer unit that was sold
     - PurchasePrice (decimal, measure): sale price, USD
-### customers  [reachable only via a join]  (grain: one row = one customer)
+### beer_factory.customers  [reachable only via a join]  (grain: one row = one customer)
   One row per customer of the root beer factory.
     - CustomerID (integer, primary_key): unique customer identifier
     - ZipCode (integer, dimension): postal code, stored as an integer  [SUSPECT - DO NOT USE: Stored as INTEGER, so leading zeros are lost. Unreliable as a postal key or for display; cast/pad before use.]
 
 ## Joins (physical equality; prefer high-confidence)
-  transaction.CustomerID = customers.CustomerID  (many_to_one, confidence 0.90)
+  beer_factory.transaction.CustomerID = beer_factory.customers.CustomerID  (many_to_one, confidence 0.90)
 
 ## Business terms
   brand (synonyms: root beer brand, label, make) -> table 'rootbeerbrand'
 
 ## Metrics (meaning; map to physical columns)
   total revenue = SUM(PurchasePrice)  over transaction  (dimensions: customer, brand, transaction_date)
-  average star rating = AVG(StarRating)  over rootbeerreview  (dimensions: brand)
 
 ## Reliability caveats (DO NOT USE these columns)
   customers.ZipCode: Stored as INTEGER, so leading zeros are lost. Unreliable as a postal key or for display; cast/pad before use.
 
-## Governance rules (must honour)
+## Governance notes (must honour)
   (business_rule) The ingredient and availability flags on rootbeerbrand (CaneSugar, CornSyrup, Honey, ArtificialSweetener, Caffeinated, Alcoholic, AvailableInCans, AvailableInBottles, AvailableInKegs) are stored as the TEXT strings 'TRUE' and 'FALSE', not as integers or booleans. Filter with = 'TRUE', never = 1.
-  (routing) Use metric_revenue over transaction for revenue or sales and join through rootbeer to rootbeerbrand for brand breakdowns; use metric_avg_rating over rootbeerreview for rating or review-quality questions and join directly to rootbeerbrand; ingredient and availability flags are 'TRUE'/'FALSE' strings, and customers.ZipCode is an INTEGER that loses leading zeros and must not be used as a postal key.
+
+## Governance notes (advisory)
+  (routing) Use metric_revenue over transaction for revenue or sales and join through rootbeer to rootbeerbrand for brand breakdowns.
 
 ## Example questions with gold SQL
   Q: Which root beer brand has the highest average review rating?
@@ -164,11 +209,21 @@ ORDER BY avg_rating DESC
 ```
 
 请注意其中缺失的部分：`transaction.CreditCardNumber` 从未出现过。它属于
-`governance.excluded`，因此早在语料被检索或渲染之前就已被移除，而不仅仅是被打上
-标记。只有 `suspect` 列（curator 推断得出，软性）才会带着 `DO NOT USE` 标签出现；
-`excluded` 列（人工设定，硬性）则对模型完全不可见。Phase 1 只会注入
-`activation=always` 的笔记**摘要**，不含 Markdown 的 `skills/` 正文，也不含
-`body` 字段。
+`governance.excluded`，因此早在语料被检索或渲染之前就已被移除，而不仅仅
+是被打上标记。只有 `suspect` 列（curator 推断得出，软性）才会带着
+`DO NOT USE` 标签出现；`excluded` 列（人工设定，硬性）则对模型完全不
+可见。
+
+笔记的 `kind` 决定了它会落进这两个治理小节中的哪一个，以及它会不会在
+agent 开口之前就被注入：`business_rule`/`constraint` 默认是
+`activation=always` + `normative_force=must_honour`；`context`/
+`domain_overview` 默认是 `always` + `advisory`；`routing`/`gotchas`/
+`pattern` 默认是 `on_match` + `advisory`（由检索命中或一个关键词正则
+触发，前提是 `pin_triggers_enabled`）。一条 `always` 笔记只注入它的
+`summary`；一条被触发的 `on_match` 笔记则会同时注入 `summary` **与**
+`body`（渐进式展开——见[设计决策](design-decisions.zh.md#d17受治理的笔记-三模态检索)
+里的 D17）。一条 agent 需要、但始终没被触发的笔记，仍然可以在轮次进行中
+经由下文的 `read_notes` / `grep_notes` 工具取到。
 
 ### 首条 human 消息
 
@@ -190,10 +245,10 @@ agent_input = {
 
 ### 工具循环
 
-模型始终会被提供四个工具，第五个（`ask_user`）只在启用澄清（clarification）功能
-时才会出现。工具调用被强制串行执行（`model.bind(parallel_tool_calls=False)`），
-系统提示本身也反复申明“Call tools one at a time”，因此下面的每一步都是一次
-独立的模型轮次。
+模型始终会被提供**六个**工具，第七个（`ask_user`）只在启用澄清
+（clarification）功能时才会出现。工具调用被强制串行执行
+（`model.bind(parallel_tool_calls=False)`），系统提示本身也反复申明
+“Call tools one at a time”，因此下面的每一步都是一次独立的模型轮次。
 
 **可用工具（先给出名称，再给出模型所看到的、作为该工具描述的文档字符串
 （docstring））：**
@@ -211,6 +266,12 @@ agent_input = {
 - **`run_query(sql)`**：“Execute a read-only SELECT. Guardrailed + audited by
   middleware. Only use identifiers from tables you have inspected. If BLOCKED, fix and
   retry.”
+- **`read_notes(note_id)`**：“Read one governed note by id (summary + body). Does NOT
+  license tables. Naming a table inside a note does not authorize `run_query` against
+  it — call `inspect_schema` first. Excluded notes are hidden.”
+- **`grep_notes(pattern)`**：“Search note summaries and bodies for a pattern
+  (read-only, capped). Does NOT license tables. ReDoS-bounded; output capped. Excluded
+  notes skip.”
 - **`ask_user(question, why)`**（仅 HITL，启用澄清功能时才存在）：“Ask the
   user ONE short clarifying question and wait for their answer. Use ONLY when the
   question is genuinely ambiguous and the governed context cannot resolve it (e.g. two
@@ -218,15 +279,20 @@ agent_input = {
   schema or corpus. State plainly in `why` what is ambiguous. Returns the user's
   answer; continue with it.”
 
+`read_notes` / `grep_notes` 在结构上就是只读、不做授权（non-licensing）
+的（D17）：它们让 agent 能取到一条 scope 匹配上了、却没挤进注入预算的
+笔记，或者直接对笔记文本做检索，而这条笔记自始至终都不会被算作一张已
+授权的表。
+
 **示意性对话记录**（动态内容以占位符表示）：
 
 ```text
 assistant → tool_call: search_corpus(query="[REFINED_QUERY]")
-tool     → [SEARCH RESULT: matching tables + few-shots + metrics + terms + rules]
+tool     → [SEARCH RESULT: matching tables + few-shots + metrics + terms + notes]
 
 assistant → tool_call: inspect_schema(table_id="[TABLE_ID]")
 tool     → table_id: [TABLE_ID]
-           physical: [PHYSICAL_NAME]
+           physical: [SCHEMA].[PHYSICAL_NAME]
            description: [TABLE_DESCRIPTION]
            columns:
              - [COL]: [PHYSICAL_TYPE] ([LOGICAL_TYPE])[ [SUSPECT — do not use]]
@@ -270,21 +336,15 @@ not guess."`，外层轨道（rails）会直接短路到拒答，而不会重新
 
 ## (C) 叙述器（narrator）
 
-当一次 `run_query` 通过护栏并执行之后，`narrate.py` 中的 `LlmAnswerNarrator`
-（如果已配置）会把结果措辞成通顺的英文。
+Registry 阶段 `narrator`。当一次 `run_query` 通过护栏并执行之后，
+`narrate.py` 中的 `LlmAnswerNarrator`（如果已配置）会把结果措辞成通顺
+的英文。目前只存在 `v1`——narrator 跑在打分之后，一个 narrator 变体不
+可能撼动 EX，也就没有指标能拿来衡量它。
 
-**系统提示（逐字，`_NARRATOR_SYSTEM`）：**
-
-```text
-You turn the result of a database query into a short, plain-English answer for a business user.
-
-Rules:
-- Answer the user's question directly, using ONLY the values in the result rows. Never invent, estimate, or round beyond what is shown.
-- Be concise: one or two sentences. Do not restate the SQL or mention tables, columns, or "the query".
-- If the result is a single value, state it plainly.
-- If it is a list/ranking, summarise the top rows and note how many there are in total; do not read out every row (the full table is shown alongside your answer).
-- If the result has no rows, say that nothing matched.
-```
+**系统提示：** `prompts.text("narrator", prompt_variants)`，或者在传入
+时使用 `LlmAnswerNarrator.__init__` 上注入的 `system_prompt`。它要求
+模型只使用结果行里的值来作答，控制在一两句话以内，绝不复述 SQL，且在
+没有匹配结果时要直说。
 
 **用户消息（拼装而成）：**
 
@@ -326,21 +386,22 @@ sequenceDiagram
 
     U->>R: 问题
     opt 多 schema 且候选 schema ≥2 个
-        R->>SR: system + user（候选 schema 摘要）
+        R->>SR: schema_pick system + user（候选 schema 摘要）
         SR-->>R: 一个 schema 名称
     end
-    R->>A: SYSTEM_PROMPT + "## Governed context", HumanMessage(question)
+    R->>A: agent_core 系统提示 + "## Governed context", HumanMessage(question)
     loop 工具循环（每次一个调用，run_query 最多尝试 3 次）
-        A->>T: search_corpus / inspect_schema / sample_rows / run_query / ask_user
+        A->>T: search_corpus / inspect_schema / sample_rows / run_query / read_notes / grep_notes / ask_user
         T-->>A: 工具结果（或 BLOCKED，或 ask_user 触发的 interrupt）
     end
     A-->>R: 通过护栏的 SQL + 已执行的结果表格
-    R->>N: 问题 + SQL + 结果表格
+    R->>N: narrator 系统提示 + 问题 + SQL + 结果表格
     N-->>R: 英文答案文本
     R-->>U: 答案 + 结果表格 + 治理账本
 ```
 
 **另见：** [Analyst](analyst.zh.md) 了解完整的轨道/护栏设计；
 [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) 了解 agentic 内核为何存在；
-[Asset schemas](asset-schemas.zh.md) 了解 `TableAsset`/`JoinAsset` 等资产在被渲染
-进这个上下文区块之前是什么样子。
+[提示词变体实验](prompt-experiments.zh.md) 了解 registry、一次运行如何选定一个
+变体，以及这个选择如何被端到端归因；[Asset schemas](asset-schemas.zh.md) 了解
+`TableAsset`/`JoinAsset`/`NoteAsset` 在被渲染进这个上下文区块之前是什么样子。

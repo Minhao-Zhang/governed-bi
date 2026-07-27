@@ -25,6 +25,34 @@ class GateResult:
     name: str
     passed: bool
     detail: str
+    # A gate that could not actually run (missing inputs, cue didn't fire, empty
+    # corpus) reports skipped=True. It stays passed=True so CI does not fail on a
+    # setup gap, but callers/summaries must not count it as a real green pass.
+    skipped: bool = False
+
+
+@dataclass(frozen=True)
+class GateSummary:
+    """Fold of a gate run, with skips counted apart from real passes.
+
+    ``all(r.passed)`` cannot see a skip — a skipped gate carries ``passed=True``
+    deliberately — so a corpus/settings combination that skips every gate reads as
+    fully green. That is the distinction this type exists to keep: ``verdict`` is
+    ``"inconclusive"`` whenever no gate produced an actual verdict, which is the
+    difference between "the gates held" and "the gates never ran".
+    """
+
+    n_gates: int
+    n_passed: int  # ran AND passed; a skip is not counted here
+    n_failed: int
+    n_skipped: int
+    verdict: str  # "pass" | "fail" | "inconclusive"
+    detail: str
+
+    @property
+    def clean_pass(self) -> bool:
+        """Every gate ran and passed — the only state that should read as green."""
+        return self.verdict == "pass" and self.n_skipped == 0
 
 
 def note_injection_recall_proxy(
@@ -51,6 +79,9 @@ def note_injection_recall_proxy(
         "no-EX-regression-proxy",
         True,
         f"checked {len(questions)} questions; notes ON did not drop gold tables",
+        # Zero questions compared nothing: the loop above never ran, so this is a
+        # setup gap, not evidence that notes ON is safe.
+        skipped=not questions,
     )
 
 
@@ -65,7 +96,7 @@ def gate_recall(
 ) -> GateResult:
     """GATE-RECALL: fraction of questions whose true schema is in shortlist@top_k."""
     if not questions:
-        return GateResult("GATE-RECALL", True, "no questions")
+        return GateResult("GATE-RECALL", True, "no questions", skipped=True)
     hits = 0
     for q, true_schema in questions:
         short = shortlist_schemas(
@@ -80,7 +111,15 @@ def gate_recall(
             False,
             f"recall@3={recall:.3f} < baseline {baseline_recall:.3f}",
         )
-    return GateResult("GATE-RECALL", True, f"recall@3={recall:.3f} n={len(questions)}")
+    return GateResult(
+        "GATE-RECALL",
+        True,
+        f"recall@3={recall:.3f} n={len(questions)}",
+        # Without a baseline there is nothing to regress against, so this branch is
+        # tautological: recall was measured but no verdict was reached. Reporting it
+        # as a pass is how a caller ends up believing a regression was ruled out.
+        skipped=baseline_recall is None,
+    )
 
 
 def gate_adv_wrong_note(
@@ -105,6 +144,7 @@ def gate_adv_wrong_note(
             "GATE-ADV-WRONG-NOTE",
             True,
             "skipped: need both schemas in corpus",
+            skipped=True,
         )
 
     # Baseline without the adversarial note.
@@ -116,6 +156,7 @@ def gate_adv_wrong_note(
             "GATE-ADV-WRONG-NOTE",
             True,
             "skipped: true schema not in baseline shortlist",
+            skipped=True,
         )
 
     from dataclasses import replace
@@ -143,6 +184,7 @@ def gate_adv_wrong_note(
             "GATE-ADV-WRONG-NOTE",
             True,
             "skipped: adversarial keyword did not fire",
+            skipped=True,
         )
     after = shortlist_schemas(
         poisoned, question, top_k=top_k, embedder=embedder, settings=pin_settings
@@ -215,3 +257,41 @@ def run_offline_note_gates(
             )
         )
     return results
+
+
+def summarise_gates(results: list[GateResult]) -> GateSummary:
+    """Fold gate results into one verdict that a skip cannot pass off as green.
+
+    Every caller of :func:`run_offline_note_gates` should assert on this rather
+    than on ``all(r.passed)``: the latter is satisfied by a run in which nothing
+    ran at all.
+    """
+    failed = [r for r in results if not r.passed]
+    skipped = [r for r in results if r.passed and r.skipped]
+    passed = [r for r in results if r.passed and not r.skipped]
+    if failed:
+        verdict = "fail"
+    elif passed:
+        verdict = "pass"
+    else:
+        # No failures and no real passes: nothing was measured (an empty corpus, a
+        # cue that never fired). "pass" here would be a fabricated green.
+        verdict = "inconclusive"
+    parts = [
+        f"{len(results)} gate(s): {len(passed)} passed, "
+        f"{len(failed)} failed, {len(skipped)} skipped"
+    ]
+    if failed:
+        parts.append("failed: " + ", ".join(r.name for r in failed))
+    if skipped:
+        parts.append(
+            "skipped: " + ", ".join(f"{r.name} ({r.detail})" for r in skipped)
+        )
+    return GateSummary(
+        n_gates=len(results),
+        n_passed=len(passed),
+        n_failed=len(failed),
+        n_skipped=len(skipped),
+        verdict=verdict,
+        detail="; ".join(parts),
+    )

@@ -28,7 +28,7 @@ import math
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..corpus.ids import derive_column_id
 from ..corpus.schemas import (
@@ -238,6 +238,100 @@ def build_index(corpus: "Corpus") -> BM25Index:
     return BM25Index({a.id: bm25_tokens(a) for a in corpus.assets})
 
 
+def corpus_index_key(corpus: "Corpus") -> tuple[str, ...]:
+    """A cache key for the *content* of a retrieval corpus.
+
+    Asset ids, sorted. Object identity is useless here because the caller rebuilds
+    the retrieval corpus per question (``filter_corpus_for_retrieval`` returns a fresh
+    ``Corpus`` every time), and a content hash over every asset's full text would cost
+    what it saves. Within one run a corpus is immutable and an id set determines its
+    assets, so the id tuple is exactly as discriminating as the alternatives and
+    O(assets) to compute — against an O(assets) *network* call, which is the point.
+    """
+    return tuple(sorted(a.id for a in corpus.assets))
+
+
+class RetrievalIndexCache:
+    """Per-graph memo for the two indexes ``retrieve`` would otherwise rebuild.
+
+    ``retrieve`` used to call :func:`build_index` and ``build_embedding_index`` on
+    every question. The BM25 rebuild is merely wasteful; the embedding rebuild is a
+    live network round-trip that re-embeds every asset in the routed corpus — text
+    that is identical for every question landing on that schema. On a pooled
+    69-schema run that is thousands of redundant embedding calls where tens suffice.
+
+    Deliberately an explicit object owned by the caller rather than a module-level
+    dict: each eval worker thread owns its own serve graph, so a graph-scoped cache
+    needs no lock and cannot leak across runs or bleed one arm's corpus into another's
+    measurements. Unbounded on purpose — it is keyed by routed-corpus content, so its
+    size is bounded by the number of distinct schema neighbourhoods a run actually
+    visits, and every entry is live for the whole run.
+    """
+
+    __slots__ = ("_bm25", "_embed", "_schema_docs", "_schema_bm25", "hits", "misses")
+
+    def __init__(self) -> None:
+        self._bm25: dict[tuple[str, ...], BM25Index] = {}
+        self._embed: dict[tuple[str, ...], Any] = {}
+        self._schema_docs: dict[tuple[str, ...], dict[str, str]] = {}
+        self._schema_bm25: dict[tuple[str, ...], BM25Index] = {}
+        self.hits = 0
+        self.misses = 0
+
+    def schema_docs(self, corpus: "Corpus") -> dict[str, str]:
+        """Per-schema documents for the router, computed once per corpus.
+
+        ``schema_documents`` runs ``Corpus.for_analyst()`` internally, and that
+        deep-copies every asset via pydantic ``model_copy(deep=True)``. Called per
+        question — which the router's BM25 path did — it measured **55% of the serve
+        path's entire non-model CPU cost**: 24,768 asset deep-copies across 94
+        questions, for a value that is identical every time because the corpus is
+        fixed for the life of the graph.
+
+        It matters beyond wall-clock. ``deepcopy`` is pure Python and holds the GIL, so
+        this was the largest GIL-bound block on the hot path — it caps what raising
+        ``--workers`` can actually buy, which is the opposite of what a concurrency
+        knob is for.
+        """
+        key = corpus_index_key(corpus)
+        got = self._schema_docs.get(key)
+        if got is None:
+            from .schema_router import schema_documents
+
+            got = self._schema_docs[key] = schema_documents(corpus)
+        return got
+
+    def schema_bm25(self, corpus: "Corpus") -> BM25Index:
+        """BM25 over the schema documents. Same argument as :meth:`schema_docs`, plus
+        the index build itself, which was also per question."""
+        key = corpus_index_key(corpus)
+        got = self._schema_bm25.get(key)
+        if got is None:
+            got = self._schema_bm25[key] = BM25Index.from_documents(
+                self.schema_docs(corpus)
+            )
+        return got
+
+    def bm25(self, corpus: "Corpus") -> BM25Index:
+        key = corpus_index_key(corpus)
+        got = self._bm25.get(key)
+        if got is None:
+            self.misses += 1
+            got = self._bm25[key] = build_index(corpus)
+        else:
+            self.hits += 1
+        return got
+
+    def embedding(self, corpus: "Corpus", embedder: "Embedder"):
+        from .embedding import build_embedding_index
+
+        key = corpus_index_key(corpus)
+        got = self._embed.get(key)
+        if got is None:
+            got = self._embed[key] = build_embedding_index(corpus, embedder)
+        return got
+
+
 def _sql_table_ids(sql: str, phys_to_table: dict[str, str]) -> list[str]:
     """Table asset ids referenced by ``sql`` (best-effort, for few-shot grounding).
 
@@ -275,6 +369,7 @@ def retrieve(
     vector_weight: float = 1.0,
     settings: "Settings | None" = None,
     triggered_note_ids: list[str] | None = None,
+    index_cache: "RetrievalIndexCache | None" = None,
 ) -> RetrievalResult:
     """Rank corpus assets against ``question``, then ground/expand.
 
@@ -292,13 +387,22 @@ def retrieve(
     4. Partition the selected ids into the typed id lists (score desc, id asc).
 
     ``corpus`` is expected to be a ``Corpus.for_analyst()`` view.
+
+    ``index_cache`` (a :class:`RetrievalIndexCache`) memoises the BM25 and embedding
+    indexes across questions that retrieve over the same corpus content. Without it
+    every call re-embeds every asset — a network round-trip per question over text
+    that never changes. Only the *question* embedding is genuinely per-call.
     """
-    index = build_index(corpus)
+    index = index_cache.bm25(corpus) if index_cache is not None else build_index(corpus)
     ranked = index.rank(question)
     if embedder is not None:
         from .embedding import build_embedding_index, fuse_rankings
 
-        emb_index = build_embedding_index(corpus, embedder)
+        emb_index = (
+            index_cache.embedding(corpus, embedder)
+            if index_cache is not None
+            else build_embedding_index(corpus, embedder)
+        )
         emb_ranked = emb_index.rank(embedder.embed_one(question))
         # ``vector_weight`` tunes the semantic channel's pull relative to lexical
         # (1.0 = equal). For governed BI an exact lexical name-match is usually the

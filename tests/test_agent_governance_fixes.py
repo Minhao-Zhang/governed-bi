@@ -336,3 +336,145 @@ def test_serve_rails_state_is_thin():
         "outcome",
         "clarification",
     }
+
+
+# --------------------------------------------------------------------------- #
+# A blocked turn carries the tables its SQL referenced.
+#
+# Offline analysis reads `tables_used` to ask "did this answer reach past the router".
+# A turn that generated a query and had it *rejected* used to carry no `tables_used` at
+# all, so those rows were dropped from the routing-escape denominator — and the drop is
+# correlated with the event being measured: the escape most likely to trip L4
+# term-semantics is precisely one that reached an out-of-routed table without
+# `inspect_schema` licensing it first. So the escape rate was biased low by an unknown
+# amount, which is the same failure class as the two earlier versions of that metric,
+# narrowed rather than removed.
+# --------------------------------------------------------------------------- #
+
+
+def test_a_blocked_query_still_reports_the_tables_it_referenced(
+    corpus, bird_gateway, settings, identity
+):
+    from governed_bi.analyst.agent import answer_question_agent
+
+    # A write statement: L2 policy refuses it outright, so the turn generates SQL over a
+    # real table and still fails. Using an unlicensed table instead is fragile — the
+    # beer_factory corpus licenses most of them.
+    blocked_sql = 'DELETE FROM "beer_factory"."customers"'
+    model = FakeToolModel(
+        responses=[
+            ai_tool_turn("run_query", {"sql": blocked_sql}, "c1"),
+            AIMessage(content="I cannot answer that."),
+        ]
+    )
+    answer = answer_question_agent(
+        "how many customers are there",
+        identity,
+        corpus=corpus,
+        gateway=bird_gateway,
+        settings=settings,
+        session_id="blocked",
+        model=model,
+    )
+    prov = answer.provenance or {}
+    # The turn did not succeed...
+    assert prov.get("refused_by") or answer.sql is None or prov.get("failed_layer")
+    # ...but it referenced a table, and that fact is recorded rather than lost.
+    used = prov.get("tables_used")
+    assert used, (
+        "a blocked query left no tables_used, so offline analysis cannot tell which "
+        "schemas the attempt touched and silently drops the row"
+    )
+    assert any("customer" in str(t).lower() for t in used), used
+
+
+def test_a_turn_that_generated_no_sql_reports_no_tables(
+    corpus, bird_gateway, settings, identity
+):
+    """The complementary case, so the stamp above cannot be always-on. A turn that never
+    produced a query used no tables — which is a different fact from a turn whose tables
+    could not be resolved, and must stay absent rather than becoming an empty list."""
+    from governed_bi.analyst.agent import answer_question_agent
+
+    model = FakeToolModel(responses=[AIMessage(content="I have no idea.")])
+    answer = answer_question_agent(
+        "unanswerable question",
+        identity,
+        corpus=corpus,
+        gateway=bird_gateway,
+        settings=settings,
+        session_id="nosql",
+        model=model,
+    )
+    assert not (answer.provenance or {}).get("tables_used")
+
+
+def test_a_column_blocked_refusal_reports_the_table_it_referenced(
+    corpus, bird_gateway, settings, identity
+):
+    """The *other* refusal path. A guardrail hard stop is caught in one place; a query
+    rejected and then abandoned falls through `extract_final_sql` finding no passing entry,
+    which is a different branch. Patching them one at a time is how the hard stop got
+    missed, so both are pinned.
+
+    The table must be one the corpus knows, because `tables_used` records asset **ids** —
+    a query over a table absent from the corpus resolves to nothing and correctly records
+    nothing. So this blocks on a column instead: `customers` is licensed, the column is not.
+    """
+    from governed_bi.analyst.agent import answer_question_agent
+
+    model = FakeToolModel(
+        responses=[
+            ai_tool_turn(
+                "run_query",
+                {"sql": 'SELECT "definitely_not_a_column" FROM "customers"'},
+                "c1",
+            ),
+            AIMessage(content="I cannot answer that."),
+        ]
+    )
+    answer = answer_question_agent(
+        "unanswerable via a blocked column",
+        identity,
+        corpus=corpus,
+        gateway=bird_gateway,
+        settings=settings,
+        session_id="colblock",
+        model=model,
+    )
+    prov = answer.provenance or {}
+    assert prov.get("refused_by"), "the blocked column should not have produced an answer"
+    used = prov.get("tables_used")
+    assert used, (
+        "a rejected-then-abandoned query left no tables_used, so the routing-escape "
+        "measurement silently drops the row"
+    )
+    assert any("customer" in str(t).lower() for t in used), used
+
+
+def test_a_query_over_a_table_the_corpus_does_not_know_records_nothing(
+    corpus, bird_gateway, settings, identity
+):
+    """`tables_used` holds asset ids, so a table absent from the corpus has none to record.
+    That is correct rather than a gap: for the routing-escape measurement the table is
+    always *in* the pooled corpus, just in a schema the router excluded."""
+    from governed_bi.analyst.agent import answer_question_agent
+
+    model = FakeToolModel(
+        responses=[
+            ai_tool_turn("run_query", {"sql": 'SELECT COUNT(*) FROM "geolocation"'}, "c1"),
+            AIMessage(content="I cannot answer that."),
+        ]
+    )
+    answer = answer_question_agent(
+        "how many geolocations",
+        identity,
+        corpus=corpus,
+        gateway=bird_gateway,
+        settings=settings,
+        session_id="unknown-table",
+        model=model,
+    )
+    prov = answer.provenance or {}
+    assert prov.get("refused_by")
+    assert not prov.get("tables_used")

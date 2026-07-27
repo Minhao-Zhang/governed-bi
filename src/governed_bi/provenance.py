@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
 
 from .config import _repo_root
+from .prompts import prompt_set_hash
 
 if TYPE_CHECKING:
     from .config import Settings
@@ -73,17 +74,23 @@ def serve_config_hash(
     Two runs that differ only on those fields get different digests; fields not
     in this set (e.g. model names, paths, CORS) are intentionally out of scope.
 
+    ``prompt_set_hash`` folds in the prompt *text* every stage will send, not the
+    variant ids alone, so editing a prompt in place changes this digest. A fixed
+    field list is exactly how prompt identity went unhashed in the first place.
+
     ``routing_knobs`` values must be JSON-native (str/int/float/bool/None/list/dict).
     Non-JSON types raise ``TypeError`` so the digest never depends on ``repr``.
     """
     payload: dict[str, Any] = {
         "environment": settings.environment.value,
+        "prompt_set_hash": prompt_set_hash(settings.prompt_variants),
         "auto_accept_corpus": settings.auto_accept_corpus,
         "working_memory": settings.working_memory,
         "episodic_memory": settings.episodic_memory,
         "correction_memory": settings.correction_memory,
         "schema_route_top_k": settings.schema_route_top_k,
         "schema_route_llm_pick": settings.schema_route_llm_pick,
+        "schema_pick_max_columns": settings.schema_pick_max_columns,
         "hard_block_suspect_columns": settings.hard_block_suspect_columns,
         "grade_semantic_failures": settings.grade_semantic_failures,
         "cache_hit_cosine_gate": settings.cache_hit_cosine_gate,

@@ -129,7 +129,7 @@ to reference later."
   its channel-write mechanism differs. This is the one genuinely new capture;
   today tokens are dropped (`run_experiment.py:213`). `wrap_model_call` only
   wraps the inner serve agent, so it does not see every model call in the
-  system: the schema router's `select_schema` / `router_chat` (`agent.py:394`),
+  system: the schema router's `pick_schema` / `router_chat` (`agent.py:394`),
   the narrator (`narrate_node`, `agent.py:855`), and the curator/SME graphs
   (`curator/deep_agent.py:285`, `curator/sme.py:164`) each make model calls
   outside this seam and need their own capture points. Add a fallback that
@@ -311,7 +311,7 @@ per-run record. One mechanism, three producers (serve, curator, SME).
    `token_usage` channel, reading `usage_metadata` off the PRE-coercion
    response before `_coerce_single_tool_call` (`middleware.py:175`, rebuild
    logic at `middleware.py:189-216`) can drop it; add separate capture points
-   for the schema router (`select_schema` / `router_chat`, `agent.py:394`),
+   for the schema router (`pick_schema` / `router_chat`, `agent.py:394`),
    the narrator (`narrate_node`, `agent.py:855`), and the curator/SME graphs
    (`curator/deep_agent.py:285`, `curator/sme.py:164`), all of which call
    models outside the `wrap_model_call` seam; stamp each ledger entry with

@@ -1,5 +1,15 @@
 # Plan: terminology refactor
 
+> **Superseded for ladder / arm claims (do not use as source of truth).**
+> This file is a dated 2026-07-16 execution record. The eval ladder later gained
+> `seeded` and optional `curated_sme_blind`, and mechanical train-SQL seeding is
+> joins + metrics only (no few-shots). For current definitions and causal
+> reading, use [glossary.md](../glossary.md) (+ `.zh`) and
+> [experiment-runbook.md](experiment-runbook.md) (+ `.zh`). Sections below that
+> teach the pre-`seeded` ladder or "seed joins & few-shots" as one mechanical
+> bundle are historical target text from this refactor; they are marked in place
+> and must not be quoted as today's contract.
+
 > **Status: EXECUTED (2026-07-16).** All phases applied via fanned-out agents +
 > an independent checker pass. Offline suite green (466 passed / 11 skipped).
 > `db → corpus_pin` was the final field name (not `default_schema`; it would have
@@ -12,8 +22,9 @@
 > 3-arm run) with a superseded-terminology note.
 
 Working doc (English only). Consolidates the messy, drifted vocabulary into one
-set of names. This doc was the agreed target; the canonical
-[glossary.md](../glossary.md) (+ `.zh`) now matches it.
+set of names. This doc was the agreed target for the 2026-07-16 rename; live
+vocabulary for arms and the ladder has moved on (see the supersession banner
+above). Canonical live text: [glossary.md](../glossary.md) (+ `.zh`).
 
 Companion to [design-decisions.md](../design-decisions.md) (D4 / D14 / D16 +
 Audit dispositions R2/R-gold), which this reconciles.
@@ -50,8 +61,15 @@ thing, and two are outright stale:
    `(question, SQL)` pairs — seed joins, few-shots — belongs to `curated`, not
    `baseline`. This collapses the old thin raw-dump `no_layer` and the
    `facts_only` row into one `baseline`.
+   *(Historical as written: after 2026-07-26, mechanical train-SQL joins/metrics
+   and decoy marking live on the separate `seeded` rung; few-shots arrive only
+   on the curated agent path. Live reading: glossary + experiment runbook.)*
 
 ## The eval ladder (target)
+
+> **Historical target (2026-07-16).** Live ladder inserts `seeded` between
+> `baseline` and `curated`, and optional `curated_sme_blind` before
+> `curated_sme`. Do not treat the table or reading below as current.
 
 Four fair rungs plus a walled-off ceiling. Each differs from the one above it by
 **exactly one** input, and — critically — all run through the **same serve path**
@@ -61,15 +79,16 @@ this fixes that).
 | Rung | = old label | What it adds | Built by | Status |
 |---|---|---|---|---|
 | `baseline` | A1 + facts_only (merged) | names, types, sample values, FK candidates | deterministic script, **no LLM** | corpus buildable today; **not yet scored as this arm** |
-| `curated` | A2 / autonomous curator | Inference tier (descriptions, reliability caveats, terms, metrics) **+ train-SQL-derived** seed joins & few-shots | LLM curator agent | ✅ built & run |
+| `curated` | A2 / autonomous curator | Inference tier (descriptions, reliability caveats, terms, metrics) **+ train-SQL-derived** seed joins & few-shots *(stale: few-shots are agent-authored; mechanical seed is joins/metrics on `seeded`)* | LLM curator agent | ✅ built & run |
 | `curated_sme` | A3 / +SME | Simulated-SME clarification round(s) | curator + Simulated SME | ✅ built & run (one round, stuffed brief today; retrieval-based multi-round is designed, not built) |
 | `ceiling` | replaces retired `gold` | test-aware oracle (sees test questions+evidence, never test gold SQL); dashed upper-bound line | Simulated SME, split-scoped index | ❌ designed, **not built** |
 
-The reading: `baseline → curated` isolates **what the AI-authored semantic layer
-adds over raw structured metadata**; `curated → curated_sme` isolates **the lift
-from SME answers**; `ceiling` bounds **recoverable knowledge** (`1.0 − ceiling` =
-irreducible SQL-gen error; `ceiling − curated_sme` = test-relevant knowledge a
-train-bounded SME cannot reach).
+The reading *(historical)*: `baseline → curated` isolates **what the AI-authored
+semantic layer adds over raw structured metadata**; `curated → curated_sme`
+isolates **the lift from SME answers**; `ceiling` bounds **recoverable knowledge**
+(`1.0 − ceiling` = irreducible SQL-gen error; `ceiling − curated_sme` =
+test-relevant knowledge a train-bounded SME cannot reach). Live reading splits
+those compound steps; see the experiment runbook.
 
 ## Rename map
 
@@ -165,9 +184,9 @@ unchanged from today's [glossary.md](../glossary.md). Review this before we begi
 | **Execution accuracy (EX)** | The agent's result matches gold, verified by re-executing gold SQL. | — |
 | **Governed-path adherence** | Share of questions resolved via the semantic layer rather than raw tables. | — |
 | **Decoy-touch rate** | Share of questions where the agent used a manifest-flagged fake column/table. | — |
-| **Baseline** (eval floor) | The deterministic, script-built corpus — table/column names, types, **sample values**, FK candidates — with **no curator LLM** and **no train-SQL-derived** assets. Served through the same **Analyst** path as every arm. Isolates "what a script knows about the database." Replaces the old raw-dump no-layer arm **and** the facts-only row. | **NEW** (replaces "No-layer arm" + "Facts-only corpus") |
-| **Curated arm** | `baseline` + the curator's LLM-authored **Inference tier** (descriptions, reliability caveats, terms, metrics) **and** train-SQL-derived assets (seed joins, few-shots). `baseline → curated` isolates what the semantic layer adds. | **NEW** |
-| **Curated+SME arm** (`curated_sme`) | `curated` + one or more Simulated-SME clarification rounds. The growth axis. | **NEW** |
+| **Baseline** (eval floor) | The deterministic, script-built corpus — table/column names, types, **sample values**, FK candidates — with **no curator LLM** and **no train-SQL-derived** assets. Served through the same **Analyst** path as every arm. Isolates "what a script knows about the database." Replaces the old raw-dump no-layer arm **and** the facts-only row. | **NEW** (replaces "No-layer arm" + "Facts-only corpus") — still current for baseline itself |
+| **Curated arm** | `baseline` + the curator's LLM-authored **Inference tier** (descriptions, reliability caveats, terms, metrics) **and** train-SQL-derived assets (seed joins, few-shots). `baseline → curated` isolates what the semantic layer adds. | **NEW** at the time; **superseded reading** — live ladder has `seeded` (mechanical joins/metrics, no few-shots) then `curated` (agent + few-shots). See glossary. |
+| **Curated+SME arm** (`curated_sme`) | `curated` + one or more Simulated-SME clarification rounds. The growth axis. | **NEW** — still current as the SME rung; optional `curated_sme_blind` now sits before it when scored |
 | **Recoverable ceiling** (`ceiling`) | The dashed upper-bound line: a test-aware Simulated SME holding the held-out test questions + evidence (never test gold SQL) in its retrieval index. Deliberately-leaky oracle, walled off from the fair arms. Replaces the retired de-obfuscation "gold" arm. Designed, not yet built. | **REVISED**: names the `ceiling` arm; "A3" refs dropped |
 | **Schema** (namespace) | The single-level namespace inside the one database a run connects to (D15): one YAML subtree (`corpus/<schema>/`) + the per-asset `schema` field. The run's database is connection config (`default_schema`), not a corpus level. | **REVISED**: notes `db → default_schema` |
 | **Cross-schema relationship** | A `join` asset whose endpoints live in different schemas. **Curated only**; else the engine refuses (D15). | — |

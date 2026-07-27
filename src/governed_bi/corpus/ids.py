@@ -18,15 +18,17 @@ _NAME = r"[a-z0-9]+(?:_[a-z0-9]+)*"
 _NUM = r"\d+"
 
 # asset_type -> compiled ID pattern.
+# \A...\Z, not ^...$: Python's $ also matches just before a trailing newline, so
+# "tbl_foo\n" would otherwise validate as a well-formed id.
 ID_PATTERNS: dict[str, re.Pattern[str]] = {
-    "table": re.compile(rf"^tbl_{_NAME}$"),
-    "column": re.compile(rf"^col_{_NAME}$"),
-    "join": re.compile(rf"^join_{_NAME}$"),
-    "few_shot": re.compile(rf"^fs_{_NAME}_{_NUM}$"),
-    "term": re.compile(rf"^term_{_NAME}$"),
-    "metric": re.compile(rf"^metric_{_NAME}$"),
-    "note": re.compile(rf"^note_{_NAME}$"),
-    "negative_example": re.compile(rf"^neg_{_NAME}_{_NUM}$"),
+    "table": re.compile(rf"\Atbl_{_NAME}\Z"),
+    "column": re.compile(rf"\Acol_{_NAME}\Z"),
+    "join": re.compile(rf"\Ajoin_{_NAME}\Z"),
+    "few_shot": re.compile(rf"\Afs_{_NAME}_{_NUM}\Z"),
+    "term": re.compile(rf"\Aterm_{_NAME}\Z"),
+    "metric": re.compile(rf"\Ametric_{_NAME}\Z"),
+    "note": re.compile(rf"\Anote_{_NAME}\Z"),
+    "negative_example": re.compile(rf"\Aneg_{_NAME}_{_NUM}\Z"),
 }
 
 # asset_type -> literal ID prefix, for constructing/eyeballing ids.

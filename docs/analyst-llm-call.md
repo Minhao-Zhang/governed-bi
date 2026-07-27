@@ -1,29 +1,42 @@
 # Agentic BI Analyst: LLM Call Walkthrough
 
-This traces one question through the serve path (`analyst.agent`) call by call, showing
-the *exact* text the model receives at each step. It complements [Analyst](analyst.md),
-which describes the surrounding rails; here the goal is narrower: every system
-prompt reproduced verbatim, every user/human message shown with the placeholders where
-dynamic content is injected, and the tool loop shown as an illustrative transcript.
+This traces one question through the serve path (`analyst.agent`) call by call: which
+stage sends which prompt, what the user/human message looks like with the
+placeholders where dynamic content is injected, and the deterministic guards around
+each call. It complements [Analyst](analyst.md), which describes the surrounding
+rails.
+
+**Prompt text itself is not reproduced here.** Every system prompt this path sends is
+a named, versioned entry in `governed_bi.prompts` — `src/governed_bi/prompts/registry.py`
+is the single source, and quoting it here would drift out of sync with an edit or a
+new variant the moment either happens (which is exactly what happened to the previous
+version of this doc). Read the registry directly for the exact text of a stage, and
+[Prompt-variant experiments](prompt-experiments.md) for what varies between `v1` and
+the newer variants, how a run selects one, and how that selection gets stamped onto
+every row it produces.
 
 > Implementation: [`src/governed_bi/analyst/agent.py`](../src/governed_bi/analyst/agent.py),
 > [`context.py`](../src/governed_bi/analyst/context.py),
+> [`note_inject.py`](../src/governed_bi/analyst/note_inject.py),
 > [`tools.py`](../src/governed_bi/analyst/tools.py),
 > [`narrate.py`](../src/governed_bi/analyst/narrate.py),
-> [`retrieval/schema_router.py`](../src/governed_bi/retrieval/schema_router.py).
+> [`retrieval/schema_router.py`](../src/governed_bi/retrieval/schema_router.py),
+> [`prompts/registry.py`](../src/governed_bi/prompts/registry.py).
 
 ## Overview: up to three model calls
 
 One question makes **up to three** model calls, in this order:
 
-- **(A) Schema routing**: only on the multi-schema path, and only when retrieval
-  shortlisted **2 or more** candidate schemas. Zero candidates route to `""`; exactly
-  one candidate is picked with **no LLM call**. Single-schema deployments skip this
-  entirely.
-- **(B) The agent core**: a LangChain `create_agent` tool loop. This is the main
-  event: it may invoke the model many times as it calls tools, one at a time.
-- **(C) The narrator**: one call that phrases the executed result grid into plain
-  English. Skipped for refusals and when no narrator is configured.
+- **(A) Schema routing** — registry stage `schema_pick`. Only on the multi-schema
+  path, and only when retrieval shortlisted **2 or more** candidate schemas. Zero
+  candidates route to `""`; exactly one candidate is picked with **no LLM call**.
+  Single-schema deployments skip this entirely.
+- **(B) The agent core** — registry stage `agent_core`. A LangChain `create_agent`
+  tool loop. This is the main event: it may invoke the model many times as it calls
+  tools, one at a time.
+- **(C) The narrator** — registry stage `narrator`. One call that phrases the
+  executed result grid into plain English. Skipped for refusals and when no narrator
+  is configured.
 
 (A) and (C) are single-shot calls that flow through the same seam:
 `chat.complete(system, user)`. `LangChainChatClient.complete` (`llm/langchain_client.py`)
@@ -33,21 +46,25 @@ plus a `HumanMessage`, and the model is called repeatedly inside that agent's ow
 
 ## (A) Schema routing
 
-`retrieval/schema_router.py`'s `select_schema` picks one schema from the candidates
-BM25 retrieval shortlisted.
+`retrieval/schema_router.py`'s `pick_schema` picks one schema from the candidates
+`shortlist_schemas` ranked (embedding similarity, BM25 fallback — see
+[Data-lake run](plans/datalake-run.md)).
 
-**System prompt (verbatim):**
+**System prompt:** `prompts.text("schema_pick", prompt_variants)`, resolved once when
+the serve stack is built (`build_serve_rails`), not per turn. Two variants exist
+today (`v1`, `v2` — see [Prompt-variant experiments](prompt-experiments.md#the-three-real-variants)
+for what changes between them); both ask the model to decompose the question into
+the concrete parts it needs (entities, filters, joins, the returned value or measure)
+and check every candidate against them, because near-duplicate sibling schemas (two
+schemas on the same topic, or a schema and its `_2` twin) read alike on topic and
+table-description text and only really differ in column vocabulary.
 
-```text
-You route a natural-language question to exactly ONE database schema. You are given candidate schemas and their tables. Reply with ONLY the single schema name (verbatim, no punctuation) that can answer the question. It must be exactly one of the candidate names.
-```
-
-**User message (assembled):**
+**User message (assembled by `pick_schema`):**
 
 ```text
 Question: [USER_QUESTION]
 
-Candidate schemas:
+Candidate schemas (most relevant first):
 [SCHEMA_SUMMARIES]
 
 Answer with exactly one of: [CANDIDATE_1, CANDIDATE_2, ...]
@@ -57,34 +74,56 @@ Answer with exactly one of: [CANDIDATE_1, CANDIDATE_2, ...]
 
 ```text
 schema: [SCHEMA_NAME]
-  - [PHYSICAL_TABLE]: [SHORT_DESCRIPTION]
-  - [PHYSICAL_TABLE]: [SHORT_DESCRIPTION]
+  - [PHYSICAL_TABLE]: [SHORT_DESCRIPTION][  [cols: C1, C2, ...]]
   ... (up to 15 tables, then "… (N more tables)")
 ```
 
-Deterministic guards around the call: an unparseable or out-of-set reply falls back to
-`candidates[0]` (the top BM25 rank) rather than raising.
+The `[cols: ...]` suffix appears per table only when `schema_pick_max_columns > 0`
+(the data-lake driver defaults it to 12; `0` restores the names-only summary) — that
+column vocabulary is what actually separates two sibling schemas whose table
+descriptions read the same.
+
+**Deterministic guards around the call, precisely** (`pick_schema` / `_parse_schema_reply`):
+
+- 0 candidates → `SchemaPick("")`, no LLM call.
+- 1 candidate → `SchemaPick(candidates[0])`, no LLM call.
+- 2+ candidates → the call above, then the reply is resolved against the fixed
+  candidate list, never trusted as free text, in this order: (1) a bare candidate
+  name alone on the reply's final line (what both prompt variants ask for) is a
+  clean pick; (2) failing that, a *labelled* answer ("Final answer: x" / "chosen: x"),
+  scanned bottom-up; (3) an exact bare name found on a non-final line, or (4) a line
+  naming exactly one candidate by word-boundary-matched substring — both (3) and (4)
+  return a pick but flag it `fallback="parsed_nonfinal_line"`, since the model did not
+  put its answer where it was told to; (5) an unparseable reply or a raised exception
+  degrades to `SchemaPick(candidates[0], "unparseable_reply"/"call_failed")` — the top
+  retrieval rank, never an invented out-of-list name.
+- Every one of those `fallback` reasons is carried on the returned `SchemaPick` and
+  surfaced in provenance (`schema_pick_fallback`), so a degraded row is never scored
+  as a genuine model decision.
 
 ## (B) The agent core
 
-### System prompt
-
-`agent_core_node` hands `create_agent` the module-level `SYSTEM_PROMPT` with the
-assembled `## Governed context` block appended:
+Registry stage `agent_core`. `build_serve_rails` resolves the prompt text once per
+stack build (`agent_core_prompt = prompts.text("agent_core", prompt_variants)`), and
+`agent_core_node` appends the assembled context and the current time to it every turn:
 
 ```python
-system_prompt = f"{SYSTEM_PROMPT}\n\n## Governed context\n{context_block}"
+system_prompt = agent_core_prompt
+if context_block:
+    system_prompt = f"{agent_core_prompt}\n\n## Governed context\n{context_block}"
+system_prompt = f"{system_prompt}\n\n## Current time\n{now_local:%Y-%m-%d %H:%M:%S %Z (UTC%z)} ..."
 ```
 
-`SYSTEM_PROMPT` (verbatim, `analyst/agent.py`):
-
-```text
-You answer questions over a governed data warehouse by writing **one read-only SELECT**.
-
-The `## Governed context` below has been assembled for this question — its tables are already licensed and its joins, metrics, few-shot examples, and reliability caveats are curated, authoritative guidance. **Prefer it over guessing.** Follow the few-shot examples' style, use the listed joins, and never use a column marked DO NOT USE.
-
-Write SQL using only identifiers shown in the context, then call `run_query`. If the context is missing a table or example you need, call `search_corpus` for more, and `inspect_schema` any table **not** already listed before querying it (that licenses it). Use `sample_rows` if you need to see real values. If `run_query` returns BLOCKED or an error, read it, fix the SQL, and retry (max 3). Never guess an identifier. Call tools **one at a time**.
-```
+Three variants exist today (`v1`/`v2`/`v3`; see
+[Prompt-variant experiments](prompt-experiments.md#the-three-real-variants)). All
+three share the same shape — license the governed context over guessing, choose
+tables deliberately (reject a suspect/duplicate/alternate copy even when its column
+names fit), write SQL using only the shown identifiers, return exactly what was asked
+for, then run it — but `v2` turns "reject the wrong copy" into its own step with
+visible output (state which table was used for each part of the question and name
+what was rejected and why), and `v3` adds a step *before* writing SQL: state the exact
+output columns and grain, then check the final `SELECT` list against that statement
+and delete anything not on it.
 
 ### The `## Governed context` block
 
@@ -99,7 +138,7 @@ always present):
   ...
 
 ## Tables (use ONLY these physical identifiers)
-### [PHYSICAL_NAME][  [reachable only via a join]]  (grain: [GRAIN])
+### [SCHEMA].[PHYSICAL_NAME][  [reachable only via a join]]  (grain: [GRAIN])
   [TABLE_DESCRIPTION]
     - [COLUMN] ([LOGICAL_TYPE], [ROLE]): [DESCRIPTION][  [SUSPECT - DO NOT USE: CAVEAT]]
 
@@ -115,46 +154,55 @@ always present):
 ## Reliability caveats (DO NOT USE these columns)
   [TABLE].[COLUMN]: [CAVEAT]
 
-## Governance rules (must honour)
-  ([KIND]) [SUMMARY]
+## Governance notes (must honour)
+  ([KIND]) [SUMMARY][ (body, on_match notes only)]
+
+## Governance notes (advisory)
+  ([KIND]) [SUMMARY][ (body, on_match notes only)]
 
 ## Example questions with gold SQL
   Q: [QUESTION]
   A: [SQL]
 ```
 
+Table headers are always schema-qualified (`schema.physical_name`) — the engine has
+been uniformly schema-qualified since D15's 2026-07-17 supersession, so even the
+single-schema BIRD/SQLite path (which `ATTACH`es the file under a `corpus_pin` alias)
+renders this way, not just the multi-schema Postgres path.
+
 A concrete instance for a question retrieval scoped to `beer_factory`'s `transaction`
-and `customers` tables (few-shots/terms/metrics/notes trimmed to what's realistic for
-this scope):
+and `customers` tables (few-shots/terms/metrics trimmed to what's realistic for this
+scope):
 
 ```text
 ## Tables (use ONLY these physical identifiers)
-### transaction  (grain: one row = one sale)
+### beer_factory.transaction  (grain: one row = one sale)
   One row per sale of a root beer unit to a customer.
     - TransactionID (integer, primary_key): unique sale identifier
     - RootBeerID (integer, foreign_key): root beer unit that was sold
     - PurchasePrice (decimal, measure): sale price, USD
-### customers  [reachable only via a join]  (grain: one row = one customer)
+### beer_factory.customers  [reachable only via a join]  (grain: one row = one customer)
   One row per customer of the root beer factory.
     - CustomerID (integer, primary_key): unique customer identifier
     - ZipCode (integer, dimension): postal code, stored as an integer  [SUSPECT - DO NOT USE: Stored as INTEGER, so leading zeros are lost. Unreliable as a postal key or for display; cast/pad before use.]
 
 ## Joins (physical equality; prefer high-confidence)
-  transaction.CustomerID = customers.CustomerID  (many_to_one, confidence 0.90)
+  beer_factory.transaction.CustomerID = beer_factory.customers.CustomerID  (many_to_one, confidence 0.90)
 
 ## Business terms
   brand (synonyms: root beer brand, label, make) -> table 'rootbeerbrand'
 
 ## Metrics (meaning; map to physical columns)
   total revenue = SUM(PurchasePrice)  over transaction  (dimensions: customer, brand, transaction_date)
-  average star rating = AVG(StarRating)  over rootbeerreview  (dimensions: brand)
 
 ## Reliability caveats (DO NOT USE these columns)
   customers.ZipCode: Stored as INTEGER, so leading zeros are lost. Unreliable as a postal key or for display; cast/pad before use.
 
-## Governance rules (must honour)
+## Governance notes (must honour)
   (business_rule) The ingredient and availability flags on rootbeerbrand (CaneSugar, CornSyrup, Honey, ArtificialSweetener, Caffeinated, Alcoholic, AvailableInCans, AvailableInBottles, AvailableInKegs) are stored as the TEXT strings 'TRUE' and 'FALSE', not as integers or booleans. Filter with = 'TRUE', never = 1.
-  (routing) Use metric_revenue over transaction for revenue or sales and join through rootbeer to rootbeerbrand for brand breakdowns; use metric_avg_rating over rootbeerreview for rating or review-quality questions and join directly to rootbeerbrand; ingredient and availability flags are 'TRUE'/'FALSE' strings, and customers.ZipCode is an INTEGER that loses leading zeros and must not be used as a postal key.
+
+## Governance notes (advisory)
+  (routing) Use metric_revenue over transaction for revenue or sales and join through rootbeer to rootbeerbrand for brand breakdowns.
 
 ## Example questions with gold SQL
   Q: Which root beer brand has the highest average review rating?
@@ -170,8 +218,17 @@ Note what is absent: `transaction.CreditCardNumber` never appears. It is
 `governance.excluded`, so it is removed before the corpus is ever retrieved or
 rendered, not merely flagged. Only `suspect` columns (curator-inferred, soft) show up
 tagged `DO NOT USE`; `excluded` columns (human-set, hard) are invisible to the model
-entirely. Phase 1 injects only `activation=always` note **summaries** (no Markdown
-`skills/` body and no `body` field).
+entirely.
+
+Note kind decides which of the two governance sections a note lands in and whether
+it injects at all before the agent asks: `business_rule`/`constraint` default to
+`activation=always` + `normative_force=must_honour`; `context`/`domain_overview`
+default to `always` + `advisory`; `routing`/`gotchas`/`pattern` default to
+`on_match` + `advisory` (triggered by retrieval match or a keyword regex, when
+`pin_triggers_enabled`). An `always` note injects only its `summary`; an `on_match`
+note that fires injects `summary` **and** `body` (progressive disclosure — see D17 in
+[Design decisions](design-decisions.md)). A note the agent needs but that never fired
+can still be reached mid-turn via the `read_notes` / `grep_notes` tools below.
 
 ### First human message
 
@@ -193,7 +250,7 @@ So the first human turn the model sees is literally:
 
 ### The tool loop
 
-The model is offered four tools always, and a fifth (`ask_user`) only when
+The model is offered **six** tools always, and a seventh (`ask_user`) only when
 clarification is enabled. Tool calls are forced sequential
 (`model.bind(parallel_tool_calls=False)`), and the system prompt itself repeats "Call
 tools one at a time", so each step below is a separate model turn.
@@ -213,6 +270,12 @@ tools one at a time", so each step below is a separate model turn.
 - **`run_query(sql)`**: "Execute a read-only SELECT. Guardrailed + audited by
   middleware. Only use identifiers from tables you have inspected. If BLOCKED, fix and
   retry."
+- **`read_notes(note_id)`**: "Read one governed note by id (summary + body). Does NOT
+  license tables. Naming a table inside a note does not authorize `run_query` against
+  it — call `inspect_schema` first. Excluded notes are hidden."
+- **`grep_notes(pattern)`**: "Search note summaries and bodies for a pattern
+  (read-only, capped). Does NOT license tables. ReDoS-bounded; output capped. Excluded
+  notes skip."
 - **`ask_user(question, why)`** (HITL only, when clarification is enabled): "Ask the
   user ONE short clarifying question and wait for their answer. Use ONLY when the
   question is genuinely ambiguous and the governed context cannot resolve it (e.g. two
@@ -220,15 +283,19 @@ tools one at a time", so each step below is a separate model turn.
   schema or corpus. State plainly in `why` what is ambiguous. Returns the user's
   answer; continue with it."
 
+`read_notes` / `grep_notes` are read-only and non-licensing by construction (D17): they
+let the agent pull a note that scope-matched but never made the injection budget, or
+search note text directly, without that note ever counting as a licensed table.
+
 **Illustrative transcript** (placeholders for anything dynamic):
 
 ```text
 assistant → tool_call: search_corpus(query="[REFINED_QUERY]")
-tool     → [SEARCH RESULT: matching tables + few-shots + metrics + terms + rules]
+tool     → [SEARCH RESULT: matching tables + few-shots + metrics + terms + notes]
 
 assistant → tool_call: inspect_schema(table_id="[TABLE_ID]")
 tool     → table_id: [TABLE_ID]
-           physical: [PHYSICAL_NAME]
+           physical: [SCHEMA].[PHYSICAL_NAME]
            description: [TABLE_DESCRIPTION]
            columns:
              - [COL]: [PHYSICAL_TYPE] ([LOGICAL_TYPE])[ [SUSPECT — do not use]]
@@ -273,21 +340,15 @@ agent.
 
 ## (C) The narrator
 
-After a `run_query` passes and the SQL executes, `narrate.py`'s `LlmAnswerNarrator`
-(when configured) phrases the result into plain English.
+Registry stage `narrator`. After a `run_query` passes and the SQL executes,
+`narrate.py`'s `LlmAnswerNarrator` (when configured) phrases the result into plain
+English. Only `v1` exists — the narrator runs after grading, so a narrator variant
+could never move EX and there is no metric it would be measured against.
 
-**System prompt (verbatim, `_NARRATOR_SYSTEM`):**
-
-```text
-You turn the result of a database query into a short, plain-English answer for a business user.
-
-Rules:
-- Answer the user's question directly, using ONLY the values in the result rows. Never invent, estimate, or round beyond what is shown.
-- Be concise: one or two sentences. Do not restate the SQL or mention tables, columns, or "the query".
-- If the result is a single value, state it plainly.
-- If it is a list/ranking, summarise the top rows and note how many there are in total; do not read out every row (the full table is shown alongside your answer).
-- If the result has no rows, say that nothing matched.
-```
+**System prompt:** `prompts.text("narrator", prompt_variants)`, or the injected
+`system_prompt` on `LlmAnswerNarrator.__init__` when one is passed. It instructs the
+model to answer using ONLY the values in the result rows, stay to one or two
+sentences, never restate the SQL, and say plainly when nothing matched.
 
 **User message (assembled):**
 
@@ -329,21 +390,23 @@ sequenceDiagram
 
     U->>R: question
     opt multi-schema AND 2+ candidate schemas
-        R->>SR: system + user (candidate schema summaries)
+        R->>SR: schema_pick system + user (candidate schema summaries)
         SR-->>R: one schema name
     end
-    R->>A: SYSTEM_PROMPT + "## Governed context", HumanMessage(question)
+    R->>A: agent_core system prompt + "## Governed context", HumanMessage(question)
     loop tool loop (one call at a time, max 3 run_query attempts)
-        A->>T: search_corpus / inspect_schema / sample_rows / run_query / ask_user
+        A->>T: search_corpus / inspect_schema / sample_rows / run_query / read_notes / grep_notes / ask_user
         T-->>A: tool result (or BLOCKED, or interrupt for ask_user)
     end
     A-->>R: passing SQL + executed result grid
-    R->>N: question + SQL + result grid
+    R->>N: narrator system prompt + question + SQL + result grid
     N-->>R: plain-English answer
     R-->>U: answer + result grid + governance ledger
 ```
 
 **See also:** [Analyst](analyst.md) for the full rails/guardrail design;
 [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) for why the agentic core exists;
-[Asset schemas](asset-schemas.md) for what a `TableAsset`/`JoinAsset`/etc. looks like
-before it is rendered into this context block.
+[Prompt-variant experiments](prompt-experiments.md) for the registry, how a run selects
+a variant, and how that selection is attributed end to end;
+[Asset schemas](asset-schemas.md) for what a `TableAsset`/`JoinAsset`/`NoteAsset` looks
+like before it is rendered into this context block.

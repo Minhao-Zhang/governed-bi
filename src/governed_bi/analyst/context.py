@@ -122,6 +122,13 @@ class PromptContext:
     # only for a single-round eval call; every conversational caller passes the
     # session history so a follow-up ("what about last year?") resolves against it.
     conversation: list[tuple[str, str]] = field(default_factory=list)
+    # Ids of the notes that survived scope matching AND the injection budget, i.e.
+    # the ones the model actually saw. ``rules`` / ``advisory_notes`` hold rendered
+    # text, which cannot be traced back to an asset — so without this an arm that
+    # authored notes and an arm whose notes were all budgeted out look identical
+    # downstream, which is exactly how a delivery failure gets read as "curation
+    # does not help".
+    injected_note_ids: list[str] = field(default_factory=list)
 
     def allowed_table_names(self) -> frozenset[str]:
         """The licensed tables — the L4 ``allowed_tables`` set: schema-qualified
@@ -302,6 +309,7 @@ def assemble_context(
         rules=rules,
         advisory_notes=advisory_notes,
         conversation=list(history),
+        injected_note_ids=[n.id for n in injected],
     )
 
 

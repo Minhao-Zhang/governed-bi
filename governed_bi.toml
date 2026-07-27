@@ -97,14 +97,36 @@ cors_origins = ["http://localhost:3000"]
 # run_log_kind = "sqlite"                     # sqlite | jsonl | off
 # run_log_path = "data/logs/runs.sqlite"
 
+# Which registered prompt variant each stage sends (the governed_bi.prompts
+# registry). Omitted = every stage on v1, byte-identical to the text this system
+# has always sent. A stage or variant this build does not know fails at startup
+# rather than falling back to v1: a run must never report a prompt it did not
+# send. Read src/governed_bi/prompts/registry.py for the stage list and each
+# variant's rationale. The eval CLIs take --prompt stage=variant for one-offs.
+# [prompts]
+# schema_pick = "v2"
+# agent_core = "v3"
+
 [eval]
 # BIRD eval-harness concurrency (docs/plans/eval-concurrency-design.md).
 # workers = serve-loop worker threads for run_experiment / run_datalake. 1 is the
 # non-negotiable default: fully serial, byte-identical to the pre-concurrency run.
 # Raise it on a dedicated box with no rate limits; size to your Postgres
 # max_connections (each worker holds its own connection). --workers on either CLI
-# overrides this. serve_workers/build_workers are optional splits; build stays
-# serial for now, so build_workers is reserved.
+# overrides this. serve_workers/build_workers are optional splits: serve_workers
+# sizes the per-question serve loop, build_workers the per-schema corpus build loop.
+# Both are live — the build loop runs a thread pool with a staging root per schema,
+# and the runbook's own Step 2 command passes --build-workers 6.
 workers = 1
 # serve_workers = 1
-# build_workers = 1   # reserved; per-DB build loop is still serial
+# build_workers = 1   # per-schema corpus builds; each gets its own staging root
+
+# Optional eval routing profile (D15 schema router). Distinct from product
+# dataclass defaults (shortlist@3, no LLM pick). Uncomment to pin a deployment
+# to the same knobs the pooled data-lake driver uses by default. Omit this
+# table (or leave it commented) for product defaults. CLI flags still override
+# for a one-off run.
+# [routing]
+# top_k = 10
+# llm_pick = true
+# pick_max_columns = 12

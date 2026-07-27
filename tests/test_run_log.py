@@ -248,3 +248,59 @@ def test_build_metadata_record_has_no_verbatim(settings):
     assert "March 3rd" not in blob
     assert "reason" not in blob
     assert "question" not in rec
+
+
+# --------------------------------------------------------------------------- #
+# A cost of zero and a cost that was never measured are different facts.
+#
+# `estimate_cost_usd`'s guard is `if not model or not token_sum` — and a usage payload
+# of all zeros is a dict, which is truthy. So a provider that reported no usage got a
+# *measured* `0.0`, which then passed every `is None` check downstream and dragged the
+# arm's cost total down as an observation rather than an absence. Live turns making two
+# real model calls recorded `cost_est_usd: 0.0` this way.
+#
+# This became load-bearing when `ladder_deltas` started dividing by that total and
+# `_cost_block` started counting priced rows: a zero-cost row counts as priced, so it
+# also made a partially-instrumented arm look fully priced.
+# --------------------------------------------------------------------------- #
+
+
+def test_an_all_zero_usage_payload_is_not_a_measured_zero_cost():
+    from governed_bi.analyst.run_log import estimate_cost_usd
+
+    assert estimate_cost_usd("gpt-4o", {"input_tokens": 0, "output_tokens": 0}) is None
+    assert (
+        estimate_cost_usd(
+            "gpt-4o", {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        )
+        is None
+    )
+    # The alternate key spelling some providers use must behave the same way.
+    assert estimate_cost_usd("gpt-4o", {"prompt_tokens": 0, "completion_tokens": 0}) is None
+
+
+def test_a_summed_empty_usage_list_is_not_a_measured_zero_cost():
+    """`sum_token_usage([])` returns a dict of zeros, which is the exact shape that
+    slipped past the `not token_sum` guard."""
+    from governed_bi.analyst.run_log import estimate_cost_usd, sum_token_usage
+
+    assert estimate_cost_usd("gpt-4o", sum_token_usage([])) is None
+    assert estimate_cost_usd("gpt-4o", sum_token_usage(None)) is None
+
+
+def test_real_token_counts_still_price():
+    """The complementary case, so the guard above cannot be always-on."""
+    from governed_bi.analyst.run_log import estimate_cost_usd
+
+    priced = estimate_cost_usd("gpt-4o", {"input_tokens": 1000, "output_tokens": 500})
+    assert priced is not None and priced > 0
+    # Output-only and input-only turns are both real.
+    assert (estimate_cost_usd("gpt-4o", {"input_tokens": 0, "output_tokens": 10}) or 0) > 0
+    assert (estimate_cost_usd("gpt-4o", {"input_tokens": 10, "output_tokens": 0}) or 0) > 0
+
+
+def test_an_unknown_model_is_unpriced_not_free():
+    from governed_bi.analyst.run_log import estimate_cost_usd
+
+    assert estimate_cost_usd("no-such-model-xyz", {"input_tokens": 100}) is None
+    assert estimate_cost_usd(None, {"input_tokens": 100}) is None

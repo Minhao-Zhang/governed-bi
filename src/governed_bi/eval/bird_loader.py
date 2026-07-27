@@ -31,16 +31,69 @@ def _rows_path(dataset_dir: Path | str, split: str) -> Path:
     return Path(dataset_dir) / f"{split}_final.jsonl"
 
 
-def _iter_rows(dataset_dir: Path | str, split: str):
-    """Yield parsed JSON objects from the split file, skipping blank lines."""
+def _parse_rows(path: Path) -> list[dict]:
+    """Parse every JSON object in a split file, skipping blank lines."""
+    out: list[dict] = []
+    try:
+        with path.open(encoding="utf-8") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                out.append(json.loads(line))
+    except UnicodeDecodeError as err:
+        # Fail loud with the path rather than an opaque decode error mid-iteration.
+        raise ValueError(
+            f"BIRD split file is not valid UTF-8: {path} ({err})"
+        ) from err
+    return out
+
+
+#: ``(resolved path, mtime_ns, size) -> {db_id: [row, ...]}``, in file order.
+#:
+#: Every public function here needs the same parse, and a pooled run calls them
+#: dozens of times: once per db per split for the gold items, again for the
+#: train/test disjointness assertion, again for ``available_dbs``. The obfuscated
+#: BIRD splits are ~9 MB (test) and ~34 MB (train), so that was tens of seconds of
+#: pure JSON parsing per run — and it was paid again on every ``--resume-from`` even
+#: when nothing needed rebuilding.
+#:
+#: Keyed on identity AND (mtime, size) so regenerating a split invalidates the entry
+#: instead of silently serving the previous dataset — which on this project would be
+#: a *scoring* bug, not a caching one. Grouped by ``db_id`` because that is the access
+#: pattern; rows with no ``db_id`` are dropped, which every caller already did.
+_ROWS_CACHE: dict[tuple[str, int, int], dict[str, list[dict]]] = {}
+
+
+def clear_split_cache() -> None:
+    """Drop the parsed-split cache. For tests that rewrite a fixture in place within
+    the same mtime granularity; production invalidates on (mtime, size)."""
+    _ROWS_CACHE.clear()
+
+
+def _rows_by_db(dataset_dir: Path | str, split: str) -> dict[str, list[dict]]:
+    """``{db_id: rows}`` for one split, parsed at most once per file version."""
     path = _rows_path(dataset_dir, split)
     if not path.exists():
         raise FileNotFoundError(f"BIRD split file not found: {path}")
-    with path.open(encoding="utf-8") as fh:
-        for line in fh:
-            if not line.strip():
+    stat = path.stat()
+    key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+    grouped = _ROWS_CACHE.get(key)
+    if grouped is None:
+        grouped = {}
+        for row in _parse_rows(path):
+            db_id = row.get("db_id")
+            if db_id is None:
                 continue
-            yield json.loads(line)
+            grouped.setdefault(str(db_id), []).append(row)
+        _ROWS_CACHE[key] = grouped
+    return grouped
+
+
+def _iter_rows(dataset_dir: Path | str, split: str):
+    """Yield every row of a split, in file order. Kept for callers that want the
+    whole split rather than one db's slice."""
+    for rows in _rows_by_db(dataset_dir, split).values():
+        yield from rows
 
 
 def load_bird_items(
@@ -62,9 +115,7 @@ def load_bird_items(
     matching row lacks ``question`` or the chosen gold SQL field.
     """
     items: list[EvalItem] = []
-    for row in _iter_rows(dataset_dir, split):
-        if row.get("db_id") != db_id:
-            continue
+    for row in _rows_by_db(dataset_dir, split).get(str(db_id), ()):
         qid = row.get("question_id", "<unknown>")
         try:
             question = row["question"]
@@ -87,11 +138,7 @@ def load_bird_items(
 
 def available_dbs(dataset_dir: Path | str, split: str = "test") -> set[str]:
     """Return the distinct ``db_id``s in a split (a harness convenience)."""
-    return {
-        db_id
-        for row in _iter_rows(dataset_dir, split)
-        if (db_id := row.get("db_id")) is not None
-    }
+    return set(_rows_by_db(dataset_dir, split))
 
 
 def load_cross_db_unanswerable(
@@ -106,13 +153,12 @@ def load_cross_db_unanswerable(
     span domains rather than all coming from whichever DB is first in the file.
     """
     by_db: dict[str, list[str]] = {}
-    for row in _iter_rows(dataset_dir, split):
-        other = row.get("db_id")
-        if other is None or other == db_id:
+    for other, rows in _rows_by_db(dataset_dir, split).items():
+        if other == db_id:
             continue
-        q = row.get("question")
-        if q:
-            by_db.setdefault(other, []).append(q)
+        questions = [q for row in rows if (q := row.get("question"))]
+        if questions:
+            by_db[other] = questions
     out: list[str] = []
     cursors = {d: 0 for d in by_db}
     while len(out) < k and any(cursors[d] < len(by_db[d]) for d in by_db):

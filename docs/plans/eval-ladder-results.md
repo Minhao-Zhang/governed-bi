@@ -210,7 +210,7 @@ trustworthy. **However**, A3's post-fold **validation fix-pass** crashed with
    agent path, or was 0.522 a lucky draw?).
 3. **Per-question win/loss inspection** — which test questions do the 11 SME rules
    fix that A2 misses? Turns Finding 2 from an aggregate delta into a mechanism.
-4. **Data-lake run** — 2 schemas live, blind routing via the LLM `select_schema`
+4. **Data-lake run** — 2 schemas live, blind routing via the LLM `pick_schema`
    node (§5.1).
 
 ## Known limitations (of this benchmark)

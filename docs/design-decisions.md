@@ -628,3 +628,67 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
 - **Status: M2 metadata logging shipped; M5 adds gated full-content + deep-agent
   run records + durable `clarify_checkpointer`.** REST `/chat` durability remains
   a follow-on.
+
+## D19: Prompt-Variant Registry + Attribution
+
+> **Decided (2026-07-25)**
+>
+> Every system prompt is a named, versioned entry in `governed_bi.prompts`
+> (`src/governed_bi/prompts/registry.py`): `stage -> variant -> PromptVariant(text,
+> rationale)`. A run resolves one variant per stage (default `v1`, byte-identical to
+> the text every call site sent before this module existed) and hashes the resolved
+> map **over the text**, not just the variant id, so an edited `v1` cannot masquerade
+> as the prompt it replaced. The hash folds into `serve_config_hash`, and the map
+> plus the hash are stamped on every `Answer.provenance`, the portable run record,
+> every scored eval row, and `manifest.json` (both `run_experiment.py` and
+> `run_datalake.py`).
+
+- **Why now.** The `baseline`/`curated`/`curated_sme` ladder (**D14**) is a
+  corpus-content axis that sends byte-identical prompt text across every arm, so
+  "we changed a prompt and EX moved" was previously unfalsifiable: two runs on
+  different prompts were indistinguishable in the record, and an edited prompt was
+  indistinguishable from the prompt it replaced.
+- **Fail-closed by construction.** An unknown stage or variant raises rather than
+  falling back to `v1`, at every entry point: `Settings.prompt_variants` (validated
+  inside `load_settings()`), `--prompt STAGE=VARIANT` on both eval CLIs (validated
+  before any Postgres/model work), and a direct `prompts.get`/`resolve` call. A
+  silent fallback would report a variant a run never sent.
+- **A resume under a changed prompt set is fatal, not a warning** — escalated after
+  review found the warning insufficient. `_merge_resume_manifest` keeps the
+  *original* manifest's top-level knobs, and the run ledger (`eval/index.py`) reads
+  only those, so a directory scored half under `v1` and half under `v2` would
+  otherwise present itself as a clean `v1` run and get compared against one. Every
+  other resume knob (model, routing width, embedder) still only warns, because a
+  reader can see those in the manifest and judge; a mixed prompt set cannot be
+  judged after the fact at all.
+- **Producers must stamp from the caller's `Settings`, not a fresh load.**
+  `build_curated_corpus`, `build_curated_corpus_with_sme`, and `SimulatedSme` take a
+  `settings` parameter and stamp their run records from it. Re-deriving config with
+  `load_settings()` would record a corpus built under `--prompt` as belonging to the
+  TOML's prompt set instead — the curator/SME turns that built a corpus would then
+  be unreachable by querying the log for what ran under the prompt set that
+  corpus's serve turns actually used.
+- **Consequence:** `eval.index`'s `comparable()` gained `prompt_set_hash` as a
+  comparability key, and a paired McNemar test is the significance check once two
+  runs are confirmed comparable — a point-estimate EX delta across unpaired runs is
+  not a substitute, because serve decoding is not pinned. Two implementations
+  exist: quote deltas from `eval.power` (exported as `paired_mcnemar`), which is
+  what the drivers write into `summary.json` and the only one that reports the
+  run's noise floor and minimum detectable effect alongside the p-value.
+  `eval.analysis.mcnemar` is the offline sibling behind `analysis.json`; its
+  p-value agrees exactly (both are the same exact two-sided binomial, verified
+  against hand-computed rationals in `tests/test_eval_statistics.py`), but it states
+  no resolution, and a significant-looking delta smaller than the run could resolve
+  is the failure mode this decision exists to prevent. Because `analysis.json`
+  enumerates *every* pair rather than the ladder's adjacent steps, it also carries
+  the multiplicity the driver's report does: four arms is six tests, so it applies
+  Holm across the pairs that produced a p-value (an errored pair is excluded from
+  the family — it tested nothing) and stamps each pair with `single_variable` plus,
+  when compound, the `bundles` list computed by the same `arms.skipped_rungs` the
+  driver uses. Both artifacts therefore answer "is this significant" under one
+  correction policy; only `summary.json` answers "could this run have resolved it".
+  Adjacency itself is defined once, in `eval.arms` (`ARM_ORDER`, `ladder_steps`,
+  `skipped_rungs`), because two spellings of the ladder drift. See
+  [Prompt-variant experiments](prompt-experiments.md) for the full runbook,
+  including the decision table for which variant a specific measured failure calls
+  for.

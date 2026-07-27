@@ -52,6 +52,11 @@ def test_serve_config_hash_stable_and_sensitive():
     changed_accept = replace(a, auto_accept_corpus=False)
     assert serve_config_hash(changed_accept) != serve_config_hash(a)
 
+    # Prompt text is part of the configuration: two runs that sent different
+    # prompts are not the same setup, however identical every other knob is.
+    changed_prompt = replace(a, prompt_variants={"agent_core": "v2"})
+    assert serve_config_hash(changed_prompt) != serve_config_hash(a)
+
     with_knobs = serve_config_hash(a, routing_knobs={"rrf_weights": [1.0, 0.5]})
     assert with_knobs != serve_config_hash(a)
     assert with_knobs != serve_config_hash(a, routing_knobs={"rrf_weights": [1.0, 1.0]})

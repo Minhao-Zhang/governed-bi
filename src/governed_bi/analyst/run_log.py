@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ..config import Environment, Settings, _repo_root
+from ..prompts import prompt_set_hash, resolve as resolve_prompt_variants
 from ..provenance import (
     DataSplit,
     Producer,
@@ -39,6 +40,18 @@ logger = logging.getLogger("governed_bi.run_log")
 # Serialize JSONL read-modify-rewrite so concurrent finalizes cannot drop rows.
 _JSONL_LOCK = threading.Lock()
 
+# Per-turn instrumentation: counts and timings, no content (Tier A). Kept as its
+# own tuple because :func:`finalize_and_log` has to default these to None — a
+# producer that measured nothing must say so, and an absent key is indistinguishable
+# from a metric this build cannot record at all.
+_INSTRUMENTATION_KEYS: tuple[str, ...] = (
+    "stage_events",
+    "n_tool_calls",
+    "by_guardrail_layer",
+    "cache_hit",
+    "attempts",
+)
+
 # Provenance keys every terminal Answer must carry after finalize_and_log (L5).
 METADATA_PROVENANCE_KEYS: tuple[str, ...] = (
     "turn_id",
@@ -50,6 +63,11 @@ METADATA_PROVENANCE_KEYS: tuple[str, ...] = (
     "corpus_release_hash",
     "corpus_pin",
     "serve_config_hash",
+    # The prompt identity, twice over: the hash (folded into serve_config_hash too,
+    # so a comparison cannot miss it) AND the map itself, so one row read on its own
+    # says which prompts ran without a lookup table.
+    "prompt_set_hash",
+    "prompt_variants",
     "token_usage",
     "token_sum",
     "cost_est_usd",
@@ -57,6 +75,7 @@ METADATA_PROVENANCE_KEYS: tuple[str, ...] = (
     "outcome",
     "model",
     "serve_path",
+    *_INSTRUMENTATION_KEYS,
 )
 
 # USD per 1M tokens (input, output). Unknown models → cost_est_usd=None.
@@ -169,6 +188,9 @@ def make_durable_checkpointer(
         saver.setup()
         _secure_store_perms(ckpt_path)
         return saver
+    # NOTE for callers: the sqlite saver owns an OPEN FILE HANDLE. Close it with
+    # :func:`close_checkpointer` when you are done, or the file cannot be moved or
+    # deleted on Windows — see that function.
     if resolved_kind == "postgres":
         env_name = dsn_env if dsn_env is not None else settings.conversation_checkpointer_dsn_env
         if not env_name:
@@ -189,6 +211,52 @@ def make_durable_checkpointer(
         saver.setup()
         return saver
     return None
+
+
+def close_checkpointer(saver: Any | None) -> None:
+    """Release a checkpointer's underlying connection. Never raises.
+
+    The sqlite saver holds an open file handle for as long as it lives, and a compiled
+    agent keeps a reference to it well past the scope that built it. On POSIX a leaked
+    handle is merely untidy; on Windows it makes the file **unmovable and
+    undeletable**. That is not hypothetical: the eval harness's curator used to create
+    one per schema, and moving it afterwards raised
+    ``PermissionError: [WinError 32]``, which propagated out of the build, dropped the
+    database, and would have ended a paid run with "every db failed to build" and no
+    ``summary.json``. The curator no longer creates a checkpointer at all — deepagents
+    needs one only for ``interrupt_on`` — so this exists for the callers that do own a
+    long-lived saver and need to hand its file back.
+
+    Does not raise: a caller closing a saver on the way out of work that already
+    succeeded must not have that work discarded by the teardown. It does say so on
+    stdout, because a failed close leaves the handle open, which is the precondition
+    for the failure above.
+    """
+    if saver is None:
+        return
+    # The whole body is guarded, including the attribute reads: ``conn`` may be a
+    # property, and a property that raises would otherwise turn teardown into the
+    # thing that discards the corpus — precisely the failure mode this function
+    # exists to prevent, one level down.
+    try:
+        for attr in ("conn", "_conn"):
+            conn = getattr(saver, attr, None)
+            if conn is not None and hasattr(conn, "close"):
+                conn.close()
+                return
+        closer = getattr(saver, "close", None)
+        if callable(closer):
+            closer()
+    except Exception as err:  # noqa: BLE001 — teardown must not raise
+        # Not raising, but not silent either. A failed close leaves the handle open,
+        # which is the exact precondition for the file-lock failure this function
+        # exists to prevent — so a bare ``pass`` would hide the cause of the next
+        # symptom. Printed rather than logged because the eval drivers surface their
+        # diagnostics on stdout and nothing configures logging for them.
+        print(
+            f"*** WARNING: could not close the checkpointer ({type(err).__name__}: "
+            f"{err}) — its file handle may still be open ***"
+        )
 
 
 def make_conversation_checkpointer(settings: Settings) -> Any | None:
@@ -247,6 +315,14 @@ def estimate_cost_usd(model: str | None, token_sum: Mapping[str, int] | None) ->
     pin, pout = prices
     inp = int(token_sum.get("input_tokens") or token_sum.get("prompt_tokens") or 0)
     out = int(token_sum.get("output_tokens") or token_sum.get("completion_tokens") or 0)
+    if not inp and not out:
+        # A usage payload of all zeros is a provider that reported nothing, not a turn
+        # that cost nothing. ``if not token_sum`` above does not catch it — a dict of
+        # zeros is truthy — so this returned a *measured* ``0.0``, which then passed
+        # every ``is None`` guard downstream and dragged the arm's cost total down as an
+        # observation rather than an absence. Live turns making two real model calls
+        # recorded ``cost_est_usd: 0.0`` this way.
+        return None
     return round((inp * pin + out * pout) / 1_000_000.0, 8)
 
 
@@ -306,6 +382,42 @@ def strip_ledger_for_log(
     return out
 
 
+def strip_stage_events_for_log(events: Any) -> list[dict] | None:
+    """Tier A projection of a turn's stage records: stage, status, timing, numbers.
+
+    ``None`` in, ``None`` out — an empty list would claim a turn measured no stages
+    when in fact nothing measured.
+
+    ``detail`` is free-form at the source (one record carries a table count, the
+    next a guardrail layer), and a per-key whitelist cannot tell a closed vocabulary
+    from a question echo, so a later ``detail["query"]`` would put the user's words
+    into a metadata-only log. Every non-numeric detail value is therefore dropped
+    here rather than trusted. The live view and the eval harness read the unstripped
+    list straight off ``Answer.provenance``, so nothing diagnostic is lost where
+    content is already permitted.
+    """
+    if events is None:
+        return None
+    out: list[dict] = []
+    for event in events if isinstance(events, list) else []:
+        if not isinstance(event, dict):
+            continue
+        detail = event.get("detail") or {}
+        out.append(
+            {
+                "stage": event.get("stage"),
+                "status": event.get("status"),
+                "ms": event.get("ms"),
+                "detail": {
+                    k: v
+                    for k, v in detail.items()
+                    if isinstance(v, (bool, int, float))
+                },
+            }
+        )
+    return out
+
+
 def build_metadata_record(answer: Any, *, ctx: FinalizeCtx, provenance: dict) -> dict:
     """Build the portable record; Tier B/C only when Settings gates allow."""
     settings = ctx.settings
@@ -321,6 +433,8 @@ def build_metadata_record(answer: Any, *, ctx: FinalizeCtx, provenance: dict) ->
         "corpus_release_hash": provenance.get("corpus_release_hash"),
         "corpus_pin": provenance.get("corpus_pin"),
         "serve_config_hash": provenance.get("serve_config_hash"),
+        "prompt_set_hash": provenance.get("prompt_set_hash"),
+        "prompt_variants": provenance.get("prompt_variants"),
         "token_usage": provenance.get("token_usage") or [],
         "token_sum": provenance.get("token_sum"),
         "cost_est_usd": provenance.get("cost_est_usd"),
@@ -335,6 +449,15 @@ def build_metadata_record(answer: Any, *, ctx: FinalizeCtx, provenance: dict) ->
         "safety_clearance": getattr(answer, "safety_clearance", None),
         "tables_used": provenance.get("tables_used"),
         "routed_schemas": provenance.get("routed_schemas"),
+        # Per-turn instrumentation. Without it a real deployment keeps no durable
+        # record of its own routing / retrieval / cache / tool-call behaviour —
+        # only an eval run captured any of it, and only by reading a different
+        # object.
+        "stage_events": strip_stage_events_for_log(provenance.get("stage_events")),
+        "n_tool_calls": provenance.get("n_tool_calls"),
+        "by_guardrail_layer": provenance.get("by_guardrail_layer"),
+        "cache_hit": provenance.get("cache_hit"),
+        "attempts": provenance.get("attempts"),
         "governance_ledger": strip_ledger_for_log(
             provenance.get("governance_ledger"),
             full_content=full,
@@ -731,6 +854,8 @@ def _emit_run_record_inner(
         "corpus_release_hash": corpus_release_hash(),
         "corpus_pin": settings.datasource.corpus_pin,
         "serve_config_hash": serve_config_hash(settings),
+        "prompt_set_hash": prompt_set_hash(settings.prompt_variants),
+        "prompt_variants": resolve_prompt_variants(settings.prompt_variants),
         "token_usage": usage,
         "token_sum": token_sum,
         "cost_est_usd": estimate_cost_usd(model_name, token_sum),
@@ -794,6 +919,11 @@ def finalize_and_log(answer: Any, *, ctx: FinalizeCtx) -> Any:
         outcome = "finalize"
 
     base = dict(getattr(answer, "provenance", None) or {})
+    # A producer that recorded no instrumentation still carries the keys, holding
+    # None: "not measured" must be expressible, or a curator/eval record and a serve
+    # turn with a genuinely empty tool-call count read the same.
+    for key in _INSTRUMENTATION_KEYS:
+        base.setdefault(key, None)
     meta = {
         "turn_id": tid,
         "run_id": ctx.run_id or base.get("run_id") or new_run_id(),
@@ -804,6 +934,10 @@ def finalize_and_log(answer: Any, *, ctx: FinalizeCtx) -> Any:
         "corpus_release_hash": corpus_release_hash(),
         "corpus_pin": settings.datasource.corpus_pin,
         "serve_config_hash": serve_config_hash(settings),
+        # Read off the same Settings the graph resolved its prompts from, so the
+        # stamp on a scored row names the text that produced it.
+        "prompt_set_hash": prompt_set_hash(settings.prompt_variants),
+        "prompt_variants": resolve_prompt_variants(settings.prompt_variants),
         "token_usage": usage,
         "token_sum": token_sum,
         "cost_est_usd": cost,
@@ -884,6 +1018,7 @@ __all__ = [
     "new_run_id",
     "prune_full_content",
     "strip_ledger_for_log",
+    "strip_stage_events_for_log",
     "sum_token_usage",
     "turn_id",
     "usage_callback_entries",

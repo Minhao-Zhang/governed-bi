@@ -87,8 +87,29 @@ def _resolve(name: str | None, aliases: dict[str, str]) -> str | None:
     return aliases.get(name, name)
 
 
+_SIMPLE_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _qualified(table: str, column: str, *, dialect: str) -> str:
+    """``table.column``, quoted where the identifier needs it.
+
+    Interpolating raw names produced unparseable SQL for every table whose physical
+    name contains a space — BIRD has several (``Air Carriers``), and the resulting
+    join asset failed ``validate_corpus``'s ``join-on-unparseable`` check on every
+    build. A join the validator rejects is a join edge the planner never gets, so
+    this quietly cost the seeded/curated/SME arms real join coverage.
+    """
+    parts = []
+    for name in (table, column):
+        if _SIMPLE_IDENT.match(name):
+            parts.append(name)
+        else:
+            parts.append(exp.to_identifier(name, quoted=True).sql(dialect=dialect))
+    return ".".join(parts)
+
+
 def _eq_on_clause(
-    predicate: exp.Expression, aliases: dict[str, str]
+    predicate: exp.Expression, aliases: dict[str, str], *, dialect: str = "postgres"
 ) -> tuple[str, str, str] | None:
     """Return ``(left_physical, right_physical, on_sql)`` for an equality ON."""
     if not isinstance(predicate, exp.EQ):
@@ -102,14 +123,26 @@ def _eq_on_clause(
     right_phys = _resolve(right.table, aliases)
     if not left_phys or not right_phys:
         return None
-    on_sql = f"{left_phys}.{left.name} = {right_phys}.{right.name}"
+    on_sql = (
+        f"{_qualified(left_phys, left.name, dialect=dialect)} = "
+        f"{_qualified(right_phys, right.name, dialect=dialect)}"
+    )
     return left_phys, right_phys, on_sql
 
 
-def extract_joins_from_sql(sql: str, *, dialect: str = "postgres") -> list[JoinCandidate]:
-    """Pull ``JOIN … ON`` edges from one gold SQL string (physical names only)."""
+def extract_joins_from_sql(
+    sql: str, *, dialect: str = "postgres", tree: "exp.Expression | None" = None
+) -> list[JoinCandidate]:
+    """Pull ``JOIN … ON`` edges from one gold SQL string (physical names only).
+
+    ``tree`` lets a caller that has already parsed ``sql`` hand the AST over
+    instead of paying for a second parse. This function only reads the tree, so
+    sharing one is safe. Parsing measured ~30% of an offline build's wall clock,
+    and every train statement was being parsed once here and again in
+    :func:`extract_metrics_from_sql`.
+    """
     try:
-        tree = sqlglot.parse_one(sql, read=dialect)
+        tree = tree if tree is not None else sqlglot.parse_one(sql, read=dialect)
     except sqlglot.errors.SqlglotError:
         return []  # unparseable gold SQL is tolerated; a non-parse bug is not
     aliases = _alias_map(tree)
@@ -119,14 +152,26 @@ def extract_joins_from_sql(sql: str, *, dialect: str = "postgres") -> list[JoinC
         on = join.args.get("on")
         if on is None:
             continue
-        resolved = _eq_on_clause(on, aliases)
+        resolved = _eq_on_clause(on, aliases, dialect=dialect)
         if resolved is None:
             continue
         left_name, right_name, on_sql = resolved
-        # Prefer the JOIN's right table physical name when available.
+        # The ON clause names both endpoints, and after alias resolution those names
+        # are authoritative. This used to OVERWRITE ``right_name`` with the joined
+        # table — which is only the same table when the ON happens to be written in
+        # the same order as the JOIN. Written the other way round
+        # (``... JOIN congress ON congress.x = zip_congress.district``) the overwrite
+        # produced ``left=congress, right=congress`` with an ON referencing a third
+        # table, and ``validate_corpus`` rejected it as ``join-on-unresolved``: an
+        # edge the planner never receives.
+        #
+        # The joined table is still used, but only to ORDER the pair — so the edge
+        # reads in the direction the query wrote it — never to replace an endpoint.
         right_node = join.this
         if isinstance(right_node, exp.Table):
-            right_name = _physical_name(right_node) or right_name
+            joined = _physical_name(right_node)
+            if joined and joined == left_name and joined != right_name:
+                left_name, right_name = right_name, left_name
         key = (left_name, right_name, on_sql)
         if key in seen:
             continue
@@ -142,10 +187,17 @@ def extract_joins_from_sql(sql: str, *, dialect: str = "postgres") -> list[JoinC
     return out
 
 
-def extract_metrics_from_sql(sql: str, *, dialect: str = "postgres") -> list[MetricCandidate]:
-    """Pull simple aggregate expressions (SUM/AVG/COUNT/MIN/MAX) as metric seeds."""
+def extract_metrics_from_sql(
+    sql: str, *, dialect: str = "postgres", tree: "exp.Expression | None" = None
+) -> list[MetricCandidate]:
+    """Pull simple aggregate expressions (SUM/AVG/COUNT/MIN/MAX) as metric seeds.
+
+    ``tree`` is an optional pre-parsed AST — see :func:`extract_joins_from_sql`.
+    The aggregate is ``copy()``d before its columns are rewritten, so a shared tree
+    is never mutated.
+    """
     try:
-        tree = sqlglot.parse_one(sql, read=dialect)
+        tree = tree if tree is not None else sqlglot.parse_one(sql, read=dialect)
     except sqlglot.errors.SqlglotError:
         return []  # unparseable gold SQL is tolerated; a non-parse bug is not
     aliases = _alias_map(tree)
@@ -189,13 +241,18 @@ def seed_from_train_sql(
     join_seen: set[tuple[str, str, str]] = set()
     metric_seen: set[str] = set()
     for sql in sqls:
-        for j in extract_joins_from_sql(sql, dialect=dialect):
+        # Parse once, hand the AST to both extractors. Both only read it.
+        try:
+            tree = sqlglot.parse_one(sql, read=dialect)
+        except sqlglot.errors.SqlglotError:
+            continue  # unparseable gold SQL is tolerated, exactly as before
+        for j in extract_joins_from_sql(sql, dialect=dialect, tree=tree):
             key = (j.left_table, j.right_table, j.on)
             if key in join_seen:
                 continue
             join_seen.add(key)
             bundle.joins.append(j)
-        for m in extract_metrics_from_sql(sql, dialect=dialect):
+        for m in extract_metrics_from_sql(sql, dialect=dialect, tree=tree):
             if m.expression in metric_seen:
                 continue
             metric_seen.add(m.expression)

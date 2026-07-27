@@ -15,7 +15,9 @@ _[English](README.md) · [简体中文](README.zh.md)_
 5. [Curator](curator.zh.md)：构建侧的 proposer + adversary 循环。如需查看逐字提示词，见 [Curator LLM 调用全流程](curator-llm-call.zh.md)。
 6. [Analyst](analyst.zh.md)：服务侧的 LangGraph 流程 + 护栏(guardrails)。如需查看逐字提示词，见 [Analyst LLM 调用全流程](analyst-llm-call.zh.md)。
 7. [Viz](viz.zh.md)：只读审计面(surface)——presenter 视图模型加上 `governed_bi.api` HTTP API，用于浏览语义层并与受治理 Analyst 对话（交互式 UI 是一个独立项目）。
-8. [术语表](glossary.zh.md)：规范术语。
+8. [度量](measurement.zh.md)：eval harness 记录了什么、失败会定位到哪里——数字看着不对时先读这篇。
+9. [提示词变体实验](prompt-experiments.zh.md)：提示词注册表、一次运行怎么选变体、什么被盖章记到哪里，以及怎么判断一个测出来的失败到底该换哪个变体。
+10. [术语表](glossary.zh.md)：规范术语。
 
 支撑本设计的[外部设计资料来源](references.zh.md)。
 
@@ -40,6 +42,7 @@ _[English](README.md) · [简体中文](README.zh.md)_
 | [资产模式](asset-schemas.zh.md)、[设计决策](design-decisions.zh.md) D9 | `src/governed_bi/corpus/` |
 | [Curator](curator.zh.md) | `src/governed_bi/curator/` |
 | [Analyst](analyst.zh.md)、[架构](architecture.zh.md) §6 | `src/governed_bi/analyst/`、`gateway/`、`graph/`、`retrieval/`、`memory/` |
-| [架构](architecture.zh.md) §8 | `src/governed_bi/eval/` |
+| [架构](architecture.zh.md) §8、[度量](measurement.zh.md) | `src/governed_bi/eval/`、`src/governed_bi/stages.py` |
+| [提示词变体实验](prompt-experiments.zh.md) | `src/governed_bi/prompts/` |
 | [Viz](viz.zh.md) | `src/governed_bi/viz/` |
 | [架构](architecture.zh.md) §9（环境开关(environment toggles)） | `src/governed_bi/config.py` |

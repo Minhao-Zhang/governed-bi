@@ -21,6 +21,10 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+# Text-and-pure-functions only, no settings import of its own, so this cannot
+# cycle back — the property the registry is written to preserve.
+from .prompts import resolve as resolve_prompt_variants
+
 
 class Environment(str, Enum):
     """Dev/test runs on BIRD; prod runs at enterprise scale. See Architecture §9."""
@@ -177,6 +181,11 @@ class Settings:
     # targets one db_id). When False (default), keep the shortlist and expand along
     # curated cross-schema joins (cross-schema answering).
     schema_route_llm_pick: bool = False
+    # Column names per table shown to the LLM picker. Column vocabulary is what
+    # separates same-topic sibling schemas whose table descriptions read alike;
+    # 0 restores the names-only summary. Capped per table so one wide table cannot
+    # dominate the picker context across every candidate.
+    schema_pick_max_columns: int = 12
 
     route_memory_budgets: dict[str, MemoryBudget] = field(
         default_factory=lambda: dict(ROUTE_MEMORY_BUDGETS)
@@ -184,6 +193,15 @@ class Settings:
 
     # ── Model seam (see [models] in governed_bi.toml) ──
     models: ModelConfig = field(default_factory=ModelConfig)
+
+    # ── Prompt variants (see [prompts]; governed_bi.prompts is the registry) ──
+    # ``stage -> variant id``, e.g. ``{"schema_pick": "v2"}``. Empty (the default)
+    # means every stage sends ``v1``, byte-identical to the pre-registry text.
+    # Unlike the eval-only routing knobs above this is TOML-visible: a deployment
+    # that wants a non-default prompt has no other way to say so, since
+    # ``api.stack.build_stack`` reads ``load_settings()`` and nothing else. The
+    # eval CLIs layer ``--prompt stage=variant`` on top for one-off experiments.
+    prompt_variants: dict[str, str] = field(default_factory=dict)
 
     # ── Data source (see [datasource]) ──
     datasource: DataSourceConfig = field(default_factory=DataSourceConfig)
@@ -223,9 +241,10 @@ class Settings:
     # ── Eval harness concurrency (see [eval]; docs/plans/eval-concurrency-design.md) ──
     # Serve-loop worker threads for the BIRD eval drivers. 1 = fully serial and
     # byte-identical to the pre-concurrency behaviour (the non-negotiable default).
-    # ``eval_serve_workers``, when set, overrides ``eval_workers`` for the
-    # per-question serve loop; ``eval_build_workers`` is reserved — the per-DB
-    # build loop stays serial for now (design doc §Ranked plan step 2).
+    # ``eval_serve_workers`` overrides ``eval_workers`` for the per-question serve
+    # loop; ``eval_build_workers`` does the same for the per-DB corpus build loop.
+    # They are separate because they exhaust different resources — a build worker
+    # holds a Postgres connection AND a deep-agent conversation.
     eval_workers: int = 1
     eval_serve_workers: int | None = None
     eval_build_workers: int | None = None
@@ -236,6 +255,20 @@ class Settings:
         return (
             self.eval_serve_workers
             if self.eval_serve_workers is not None
+            else self.eval_workers
+        )
+
+    def build_worker_count(self) -> int:
+        """Effective corpus-build worker count.
+
+        Same split-override shape as :meth:`serve_worker_count`. The two are separate
+        knobs because they exhaust different resources: the serve loop is bounded by
+        Postgres ``max_connections``, while a build worker holds a connection *and* a
+        deep-agent conversation, so the sensible ceilings differ.
+        """
+        return (
+            self.eval_build_workers
+            if self.eval_build_workers is not None
             else self.eval_workers
         )
 
@@ -515,6 +548,25 @@ def load_settings(
             if k in src:
                 knob_overrides[k] = src[k]
 
+    # Optional [routing] table (D15 data-lake schema routing). These three were
+    # reachable only through the eval CLI, so the pooled benchmark ran shortlist@10
+    # WITH the LLM pick while every deployment ran the dataclass defaults —
+    # shortlist@3, no pick — with no way to configure otherwise. A benchmark result
+    # then described a configuration no deployment could run, which makes "this
+    # improves the end result" unfalsifiable in the direction that matters: the
+    # improvement was measured under routing the product does not have.
+    routing_tbl = data.get("routing", {})
+    for toml_key, field_name in (
+        ("top_k", "schema_route_top_k"),
+        ("llm_pick", "schema_route_llm_pick"),
+        ("pick_max_columns", "schema_pick_max_columns"),
+    ):
+        if toml_key in routing_tbl:
+            value = routing_tbl[toml_key]
+            knob_overrides[field_name] = (
+                bool(value) if field_name == "schema_route_llm_pick" else int(value)
+            )
+
     # Optional [eval] table (docs/plans/eval-concurrency-design.md). TOML keys are
     # short (``workers`` / ``serve_workers`` / ``build_workers``); they map onto the
     # ``eval_*`` fields on Settings.
@@ -526,6 +578,20 @@ def load_settings(
     ):
         if toml_key in eval_tbl:
             knob_overrides[field_name] = int(eval_tbl[toml_key])
+
+    # Optional [prompts] table: stage = "variant" per registered stage. Validated
+    # HERE, through the registry, so a typo fails at startup instead of silently
+    # serving v1 while every artifact claims the variant that was asked for.
+    prompts_tbl = data.get("prompts", {})
+    if prompts_tbl:
+        prompt_overrides = {str(k): str(v) for k, v in prompts_tbl.items()}
+        try:
+            resolve_prompt_variants(prompt_overrides)
+        except KeyError as err:
+            raise ValueError(
+                f"[prompts] in {resolved}: {err.args[0] if err.args else err}"
+            ) from err
+        knob_overrides["prompt_variants"] = prompt_overrides
 
     if knob_overrides:
         settings = replace(settings, **knob_overrides)
@@ -614,7 +680,10 @@ def load_dotenv(path: str | Path | None = None, *, override: bool = False) -> di
         return {}
     try:
         parsed = _parse_dotenv(resolved.read_text(encoding="utf-8"))
-    except OSError:
+    except (OSError, ValueError):
+        # UnicodeDecodeError is a ValueError subclass, not an OSError: a .env
+        # saved as cp1252/latin-1 (or with one non-ASCII byte) must stay a no-op
+        # per the docstring, not crash `import governed_bi` at import time.
         return {}
     applied: dict[str, str] = {}
     for key, value in parsed.items():

@@ -137,3 +137,97 @@ def test_row_missing_sql_sqlite_raises_value_error_naming_question_id(tmp_path: 
     _write_jsonl(tmp_path / "test_final.jsonl", [bad])
     with pytest.raises(ValueError, match="question_id=0.*sql_sqlite"):
         load_bird_items(tmp_path, "beer_factory")
+
+
+# --------------------------------------------------------------------------- #
+# Parse-once caching. The splits are ~9 MB / ~34 MB and a pooled run asks for them
+# dozens of times (per db per split, plus the disjointness assertion, plus
+# available_dbs), so this was tens of seconds of pure JSON parsing per run — paid
+# again on every --resume-from.
+# --------------------------------------------------------------------------- #
+
+
+def test_a_split_is_parsed_once_across_many_calls(dataset_dir: Path, monkeypatch):
+    from governed_bi.eval import bird_loader
+
+    bird_loader.clear_split_cache()
+    n_parses = {"n": 0}
+    real = bird_loader._parse_rows
+
+    def _counting(path):
+        n_parses["n"] += 1
+        return real(path)
+
+    monkeypatch.setattr(bird_loader, "_parse_rows", _counting)
+
+    load_bird_items(dataset_dir, "beer_factory")
+    load_bird_items(dataset_dir, "movie_platform")
+    available_dbs(dataset_dir)
+    load_cross_db_unanswerable(dataset_dir, "beer_factory", k=1)
+
+    assert n_parses["n"] == 1, "the test split should be parsed once, not per call"
+
+
+def test_each_split_is_cached_separately(dataset_dir: Path, monkeypatch):
+    from governed_bi.eval import bird_loader
+
+    bird_loader.clear_split_cache()
+    n_parses = {"n": 0}
+    real = bird_loader._parse_rows
+    monkeypatch.setattr(
+        bird_loader,
+        "_parse_rows",
+        lambda p: (n_parses.__setitem__("n", n_parses["n"] + 1), real(p))[1],
+    )
+
+    load_bird_items(dataset_dir, "beer_factory", split="test")
+    load_bird_items(dataset_dir, "beer_factory", split="train")
+    load_bird_items(dataset_dir, "beer_factory", split="test")
+
+    assert n_parses["n"] == 2, "one parse per split, not one per split per call"
+
+
+def test_a_regenerated_split_is_not_served_from_cache(tmp_path: Path):
+    """Serving a stale dataset would be a SCORING bug, not a caching one.
+
+    Regenerating a split must invalidate. Keyed on (path, mtime_ns, size), so a file
+    whose contents changed at all is a different entry.
+    """
+    from governed_bi.eval import bird_loader
+
+    bird_loader.clear_split_cache()
+    path = tmp_path / "test_final.jsonl"
+    _write_jsonl(path, [_ROWS[0]])
+    assert [it.question for it in load_bird_items(tmp_path, "beer_factory")] == [
+        "What is the total revenue?"
+    ]
+
+    # Rewrite with different content (and a different size, so mtime granularity
+    # cannot mask it).
+    _write_jsonl(path, [_ROWS[0], _ROWS[1]])
+    assert [it.question for it in load_bird_items(tmp_path, "beer_factory")] == [
+        "What is the total revenue?",
+        "How many customers are there?",
+    ]
+
+
+def test_cross_db_selection_is_unchanged_by_the_cache(dataset_dir: Path):
+    """The round-robin is deterministic and draws only from OTHER dbs."""
+    from governed_bi.eval import bird_loader
+
+    bird_loader.clear_split_cache()
+    first = load_cross_db_unanswerable(dataset_dir, "beer_factory", k=5)
+    again = load_cross_db_unanswerable(dataset_dir, "beer_factory", k=5)
+    assert first == again
+    beer = {it.question for it in load_bird_items(dataset_dir, "beer_factory")}
+    assert beer.isdisjoint(first)
+
+
+def test_rows_without_a_db_id_are_ignored_everywhere(tmp_path: Path):
+    from governed_bi.eval import bird_loader
+
+    bird_loader.clear_split_cache()
+    orphan = {k: v for k, v in _ROWS[0].items() if k != "db_id"}
+    _write_jsonl(tmp_path / "test_final.jsonl", [_ROWS[0], orphan])
+    assert available_dbs(tmp_path) == {"beer_factory"}
+    assert len(load_bird_items(tmp_path, "beer_factory")) == 1

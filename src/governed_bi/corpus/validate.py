@@ -22,10 +22,28 @@ Two checks require inputs beyond the corpus and are therefore *optional* hooks
   live catalog. Needs a DB connection (pass ``connector``).
 - **Leakage guard** — few-shot ``source_refs`` ⊆ train split. Needs the split
   (pass ``train_refs``). BIRD-eval-specific.
+
+  **This one currently protects nothing, and should not be cited as though it
+  does.** Two independent reasons: no call site anywhere passes ``train_refs``, and
+  nothing populates ``FewShotAsset.audit.provenance.source_refs`` in the first place
+  — ``seed_from_train_sql`` receives a list of SQL strings, not the items they came
+  from, so it has no question id to stamp. The check would therefore find an empty
+  ref set and pass, on every asset, even if it were wired up.
+
+  What actually keeps few-shots out of the test split today is structural, not this:
+  ``build_curated_corpus`` is only ever called with ``train_items`` loaded at
+  ``split="train"``, and the pooled driver asserts train/test id disjointness before
+  serving (``run_datalake._assert_train_test_disjoint``). That is sound but it is
+  enforcement by call site, so an edit that widened the seeder's input would sail
+  through. Making this guard real means threading question ids into
+  ``seed_from_train_sql`` so it can stamp ``source_refs``, then passing
+  ``train_refs`` from the one call site that has the split in scope
+  (``_validate_fix_pass``).
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -228,7 +246,9 @@ def validate_corpus(
             for field_name, text in (("summary", a.summary), ("body", a.body or "")):
                 if not text:
                     continue
-                hits = sorted(tok for tok in excluded_tokens if tok in text)
+                hits = sorted(
+                    tok for tok in excluded_tokens if _names_identifier(text, tok)
+                )
                 if hits:
                     findings.append(
                         Finding(
@@ -265,6 +285,14 @@ def _excluded_identifier_tokens(assets: list[Asset]) -> set[str]:
                 if col.governance.excluded and col.physical_name:
                     tokens.add(col.physical_name)
     return {t for t in tokens if len(t) >= 3}  # skip tiny tokens that false-positive
+
+
+def _names_identifier(text: str, tok: str) -> bool:
+    """Whole-identifier match, not raw substring: excluded `age` must not flag the
+    word "average". ``\\b`` treats ``_`` as a word char, so snake_case physical
+    names still match as whole tokens. Case-insensitive (Postgres folds unquoted
+    identifiers to lowercase)."""
+    return re.search(rf"\b{re.escape(tok)}\b", text, re.IGNORECASE) is not None
 
 
 def _check_join_on_columns(assets: list[Asset], findings: list[Finding]) -> None:

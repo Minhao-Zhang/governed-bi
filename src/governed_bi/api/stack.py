@@ -127,12 +127,18 @@ def _build_model_stack(settings: Settings) -> tuple[Any, Any, str | None, bool, 
         try:
             from ..llm import LangChainChatClient, LangChainEmbedder
             from ..analyst import LlmAnswerNarrator
+            from .. import prompts
 
             models = settings.models
             chat = LangChainChatClient.from_config(models)
             return (
                 LangChainEmbedder.from_config(models),
-                LlmAnswerNarrator(chat),
+                # Resolved once here, where the stack is built — the narrator
+                # outlives the turn, so a per-turn lookup would be the same text
+                # re-derived and one more place for it to disagree.
+                LlmAnswerNarrator(
+                    chat, system_prompt=prompts.text("narrator", settings.prompt_variants)
+                ),
                 models.llm_model,
                 True,
                 chat.model,

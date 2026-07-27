@@ -191,8 +191,16 @@ execute (as-user) → narrate → answer + provenance
 - 核心指标：执行准确率（execution accuracy）相对 gold 的比较。不对语义层做人工评分。
 - **数据切分（沿用 BIRD-Obfuscation 的方案）：** 按数据库进行**80/20 带随机种子的留出划分（seeded holdout）**：8,134 条训练 / 2,030 条测试，69 个数据库两边都有。**curator 只读取 `train_final.jsonl`**（经过蒸馏，而非整体倾倒）→ 在留出的 `test_final.jsonl` 上打分。由于划分不相交且带随机种子，数据泄漏（leakage）在结构上被杜绝。
 - **变体：** 语义评测运行在 **`rename_decoy`** 实例上（晦涩的命名与真实生效的诱饵，此时语义层的价值最大），并以 `base` 作为合理性检查的参照基准。Analyst 始终针对同一个物理数据库执行。各臂之间只有 corpus 不同。
-- 按 EX 打分的评测阶梯（见 [术语重构](plans/terminology-refactor.md)，是对 [D14 修订](design-decisions.md#d14-sme-growth-benchmark-on-bird-obfuscation)（2026-07-15）的精化）：`baseline`（确定性、仅数据库可推导的 corpus——名称、类型、样本值、外键候选——无 curator LLM）；`curated`（curator 的 LLM Inference 层 + 由训练集 SQL 派生的种子连接/少样本示例）；`curated_sme`（`curated` + Simulated-SME 澄清轮次）——外加一个作为虚线*`ceiling`*的**测试感知 SME 预言机**，已设计但尚未构建。去混淆"gold"预言机已**退役**（它从来不是真正的上限——curator 的笔记（notes）就能超过它）。**护城河（moat）= curator 挽回的那部分因混淆导致的准确率下降。**当前的运行数字（记录时仍沿用旧的 `A1/A2/A3` 标签）见[实验结果](plans/eval-ladder-results.md)。
+- 按 EX 打分的一条评测阶梯，各档的排列顺序保证**每相邻一步只改变一件事**——非相邻两档之间的差值捆绑了不止一个变量，说不清是哪个变量在起作用：
+  - `baseline`——确定性、仅数据库可推导的 corpus（名称、类型、样本值、外键候选）。没有训练集 SQL，也没有 curator LLM。
+  - `seeded`——在此基础上加上机械的训练集 SQL 连接与指标，以及诱饵 / 负空间标记。依然**没有 LLM，也没有 few-shot**（few-shot 只经 curated agent 路径写入）。构建成本为零。它的存在是因为 `baseline → curated` 以前把免费的确定性种子和 LLM 那一趟捆在了一起，从没有哪个臂把两者分开过——而这恰恰决定了这个产品到底需不需要一个 curator LLM。`baseline → seeded` 仍一次改动多个机制（连接、指标、去掉 FK 猜测、训练集条件列掩码），不是“单靠解析”的因果估计。
+  - `curated`——在同一份种子之上，加上 curator LLM agent 的一趟处理（含 few-shot）。
+  - `curated_sme_blind`*（可选）*——加上 Simulated-SME 澄清轮次，SME **看不到 BIRD 人工撰写的 `database_description` CSV**。
+  - `curated_sme`——同一轮澄清，但 SME 的任务简报里带上了这些 CSV。
+
+  最后这一对之所以存在，是因为 SME 会读到 curator 从未见过的人工撰写列文档，所以 `curated → curated_sme` 这一步的差值，既可以解释成"来了一个新的知识来源"，也可以解释成"澄清协议本身生效了"，两种说法一样自洽。把它拆开需要每个数据库多花一整轮 SME 的成本，所以是可选项——被省略时，产生的那个复合步骤会在产物里如实标注自己是复合的，而不是冒充成单变量的一步。一个**测试感知 SME 预言机**仍然是虚线*`ceiling`*，已设计但尚未构建；去混淆"gold"预言机已**退役**（它从来不是真正的上限——curator 的笔记（notes）就能超过它）。**护城河（moat）= curator 挽回的那部分因混淆导致的准确率下降。**如何运行：[实验运行手册](plans/experiment-runbook.md)。
 - 来自 manifest 与日志的免费行为信号：诱饵触碰率、治理路径遵循率。成本与效率（耗时、token 数、行数；BIRD 的 VES 可复用）会被记录，但不作为核心指标。
+- **结果/阶段分类体系。** `governed_bi.stages` 给 serve 路径和 eval harness 提供了同一套词汇表，用来描述一轮是怎么结束的（`Outcome`：answered / refused / clarification / capped / crashed）以及在哪里结束的（`Stage`），这样一次 serve 路径崩溃后降级成的失败即拒式拒答，就永远不会被算成模型主动拒绝。逐轮的阶段耗时、工具调用计数、护栏层裁决只被记录一次（`analyst.governance.StageRecorder`），同时进入按问题的 eval 产物（`generations.<arm>.jsonl`、`stage_events.jsonl`）和可移植的持久运行日志（ADR 0004），所以一个没有跑 eval harness 的部署环境，依然留有这份记录。一份运行台账（`runs/index.jsonl`、`governed_bi.eval.index`）随后会为每次运行计算：它自己的数字能不能引用，以及它可以和哪些其他运行放在一起比较。逐字段的细节，以及一张"症状对应文件"的速查表，见[测量](measurement.md)。
 - **拒答关（Refuse-gate）评测：** 一个留出的**不可回答**集合，由跨数据库（cross-DB）与覆盖被移除（removed-coverage）的情形构成（自动生成），外加一个小规模、人工构建的超出范围（out-of-scope）集合。这里的 cross-DB 情形之所以不可回答，只是因为 BIRD 未提供经策展的跨 schema 连接；按 D15，跨 schema 借助一个经策展的连接是*可以*回答的，只是跨 schema 服务未被 BIRD 评分。评分维度为**拒答准确率**（能否拒答不可回答的问题）*以及* **误拒率**（false-refusal rate）（在可回答的测试集上）。这正是拒答的精确率与召回率。
 - **仓库边界：** BIRD-Obfuscation 产出经过验证的数据与 manifest，并明确将“利用这些陷阱（trap）的下游 agent”排除在自身范围之外。而这个下游 agent 正是*本*系统。
 - 之后：在企业级部署上开展规模化检索（retrieval-at-scale）评测（Recall@K / MRR / nDCG，经语义层回答的问题占比）。

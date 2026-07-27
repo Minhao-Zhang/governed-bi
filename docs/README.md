@@ -20,7 +20,9 @@ self-built [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) 
 5. [Curator](curator.md): the build-side proposer + adversary loop. For the exact prompts, see [Curator LLM-call walkthrough](curator-llm-call.md).
 6. [Analyst](analyst.md): the serve-side governed agentic core + guardrails. For the exact prompts, see [Analyst LLM-call walkthrough](analyst-llm-call.md).
 7. [Viz](viz.md): the read-only audit surface — the presenter view models plus the `governed_bi.api` HTTP API to browse the layer and chat with the governed Analyst (the interactive UI is a separate project).
-8. [Glossary](glossary.md): canonical terms.
+8. [Measurement](measurement.md): what the eval harness records and where a failure localises — read this when a number looks wrong.
+9. [Prompt-variant experiments](prompt-experiments.md): the prompt registry, how a run selects a variant, what gets stamped where, and how to decide which variant a measured failure actually calls for.
+10. [Glossary](glossary.md): canonical terms.
 
 [External design sources](references.md) that ground the design.
 
@@ -46,6 +48,7 @@ today (the corpus layer and the dev workflow):
 | [Asset schemas](asset-schemas.md), [Design decisions](design-decisions.md) D9 | `src/governed_bi/corpus/` |
 | [Curator](curator.md) | `src/governed_bi/curator/` |
 | [Analyst](analyst.md), [Architecture](architecture.md) §6 | `src/governed_bi/analyst/`, `gateway/`, `graph/`, `retrieval/`, `memory/` |
-| [Architecture](architecture.md) §8 | `src/governed_bi/eval/` |
+| [Architecture](architecture.md) §8, [Measurement](measurement.md) | `src/governed_bi/eval/`, `src/governed_bi/stages.py` |
+| [Prompt-variant experiments](prompt-experiments.md) | `src/governed_bi/prompts/` |
 | [Viz](viz.md) | `src/governed_bi/viz/` |
 | [Architecture](architecture.md) §9 (environment toggles) | `src/governed_bi/config.py` |
