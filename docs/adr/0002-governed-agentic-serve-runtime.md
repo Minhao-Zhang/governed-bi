@@ -1,6 +1,6 @@
 # 0002: Serve runtime as a governed agentic core
 
-_[English](0002-governed-agentic-serve-runtime.md) · 简体中文 (pending)_
+_[English](0002-governed-agentic-serve-runtime.md) · [简体中文](0002-governed-agentic-serve-runtime.zh.md)_
 
 - **Status:** Accepted / Implemented. Grilled & refined in design review
   2026-07-13; cutover landed on `main` 2026-07-14 (commit `d2fdd6a`).

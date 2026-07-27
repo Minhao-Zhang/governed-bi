@@ -1,9 +1,12 @@
 # Engineering gaps — 2026-07-16
 
-Durable companion to the visual audit
-[`docs/engineering-gaps-2026-07-16.html`](../engineering-gaps-2026-07-16.html)
-(Chinese). That file is the full write-up with evidence per gap; this doc is the
-tracker: what was fixed, and what is **deferred for discussion**.
+Durable tracker for the 2026-07-16 visual audit: what was fixed, and what is
+**deferred for discussion**.
+
+> The audit's own write-up (`engineering-gaps-2026-07-16.html`, Chinese, with the
+> per-gap evidence) was a generated artifact and was never committed to this repo,
+> so this tracker is the only record here. Treat the gap list below as
+> self-contained; do not send a reader looking for the HTML.
 
 Snapshot: `main` after commit `5228f87`. Scope: curator / analyst / eval pipeline.
 

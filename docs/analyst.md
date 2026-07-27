@@ -21,7 +21,7 @@ The outer rails and the agent's `GovernanceMiddleware` **share one governance co
 
 > *Built (today's reality):* the agentic core is the **only** serve path: the P2 cutover has landed, and the deterministic flow node plus the `agent_serve` flag are both gone. `analyst.agent` compiles an outer deterministic `StateGraph` (`ingest → refuse_gate → prepare → cache → assemble → agent_core → narrate`) that wraps an inner LangChain `create_agent` reasoning loop; the public entry point is `answer_question_agent`. Governance rides on `GovernanceMiddleware` (`analyst.middleware`); the four governed tools live in `analyst.tools`; `llm.fake` supplies a `FakeListChatModel` harness for CI determinism.
 >
-> Answering a question now requires a live model: `build_stack()` still builds without one (the read-only audit API keeps running), but the LangGraph serve process (`make_graph`) fails closed at startup, and REST `/chat` returns 503, until a model is configured. See ADR 0002; current eval numbers in [`eval-ladder-results.md`](plans/eval-ladder-results.md).
+> Answering a question now requires a live model: `build_stack()` still builds without one (the read-only audit API keeps running), but the LangGraph serve process (`make_graph`) fails closed at startup, and REST `/chat` returns 503, until a model is configured. See ADR 0002. **There are no current eval numbers:** every number produced before 2026-07-26 is discarded, so [`eval-ladder-results.md`](plans/eval-ladder-results.md) is a historical record only — to produce a quotable one, follow the [experiment runbook](plans/experiment-runbook.md).
 
 ## The flow
 

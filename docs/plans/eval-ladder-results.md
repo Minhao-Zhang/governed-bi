@@ -3,18 +3,36 @@
 _Recorded 2026-07-14 (run `20260715T010412Z_restaurant`, executed 2026-07-14
 evening local). Method and decisions: [design-decisions.md](../design-decisions.md)
 (D4 grading · D14 SME-growth benchmark + 2026-07-15 amendment · Audit dispositions).
-Raw `runs/` artifacts are git-ignored/ephemeral — this doc is the durable record._
+Raw `runs/` artifacts are git-ignored/ephemeral — this doc is the durable record of
+**what the run was**, not of a quotable number._
 
-> **v5 is the first full end-to-end run on the _agent_ serve path — now the only
+> **DISCARDED — do not quote any number in this document.** Every number produced
+> before 2026-07-26 is discarded ([experiment-runbook.md](experiment-runbook.md),
+> "What you need"), and everything below was recorded 2026-07-14. The reason is not
+> single-seed noise: these arms were scored under metric definitions since found
+> wrong. Most importantly **a solver crash and a deliberate refusal were the same
+> row shape**, so `refusal_rate` absorbed crashes and EX absorbed the loss — by a
+> different amount per arm, because the arms do not crash equally. This run
+> contains at least one such crash (the A3 fix-pass `KeyError`, "Next steps" #1
+> below), so its A2→A3 delta is exactly the shape the defect corrupts. Fixed in
+> `3d1973b` with the `governed_bi.stages` outcome taxonomy; the same defect
+> retired the data-lake numbers ([datalake-run.md](datalake-run.md)).
+>
+> The document stays as the record of what the run was looking for, the arm
+> definitions, and the terminology of that period. For numbers, the first quotable
+> run is the one taken under the corrected definitions per the
+> [experiment runbook](experiment-runbook.md).
+
+> **v5 was the first full end-to-end run on the _agent_ serve path — now the only
 > serve path** (the [ADR 0002](../adr/0002-governed-agentic-serve-runtime.md) P2
 > cutover deleted `flow.py` on 2026-07-14, commit `d2fdd6a`). Every prior
 > number (v1–v4) was scored on the retired deterministic **flow** path.
-> v5 is therefore the canonical record of the *shipped* system; **v4's flow
+> v5 is therefore the canonical record of *which system was measured*; **v4's flow
 > figures are kept below only as the flow-path baseline** for the agent-vs-flow
 > comparison, because that comparison can no longer be re-run (flow is gone).
-> **Still a single seed** — the ≥3-seed blocker from v4 is unchanged; v5's
-> headline finding (SME finally moved EX) is a signal to replicate, not a result
-> to quote.
+> **Also a single seed** — the ≥3-seed blocker from v4 is unchanged; v5's
+> headline finding (SME finally moved EX) was a signal to replicate, not a result
+> to quote, and it has not been replicated under the corrected definitions.
 
 > **Terminology since superseded — read this before the numbers below.** This
 > doc predates the [terminology refactor](terminology-refactor.md) and uses the

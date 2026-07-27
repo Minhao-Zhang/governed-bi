@@ -1,5 +1,7 @@
 # 实验运行手册
 
+_[English](experiment-runbook.md) · [简体中文](experiment-runbook.zh.md)_
+
 该跑什么、按什么顺序跑、以及在一个数字值得被引用之前必须先满足哪些条件。写给
 一个手上有机器和数据、但没有参与构建这套 harness 的人看。
 

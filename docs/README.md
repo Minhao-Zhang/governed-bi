@@ -35,6 +35,48 @@ today (the corpus layer and the dev workflow):
 - [Usage](usage.md): install, the validate CLI, and the programmatic corpus API.
 - [Corpus authoring](corpus-authoring.md): write and validate corpus assets step by step.
 
+Two step-by-step call traces sit alongside the design docs, useful when reading
+the code: [analyst sequence](analyst-sequence.md) and
+[curator sequence](curator-sequence.md).
+
+## Decision records (ADRs)
+
+Point-in-time decisions. An ADR is never edited to match later reality — a
+superseding ADR is added instead, so a stale-looking statement inside one is
+intentional history.
+
+| ADR | Status |
+|---|---|
+| [0001 LangGraph Server chat runtime](adr/0001-langgraph-server-chat-runtime.md) | Accepted 2026-07-10; partly superseded by 0002 |
+| [0002 Governed agentic serve runtime](adr/0002-governed-agentic-serve-runtime.md) | Accepted / implemented (`d2fdd6a`) — the sole serve path |
+| [0003 Governed notes, tri-modal retrieval](adr/0003-governed-notes-tri-modal-retrieval.md) | Accepted as design 2026-07-22 (D17); not built |
+| [0004 Local-first conversation + run logging](adr/0004-local-first-conversation-run-logging.md) | Accepted 2026-07-22 (D18); build not started |
+
+## Working docs (`plans/`) and reviews
+
+Dated working docs, not canonical design. Where one disagrees with the docs
+above, the docs above win. **No eval number anywhere in this repo is currently
+quotable — every number produced before 2026-07-26 is discarded.**
+
+*Live:*
+
+- [Experiment runbook](plans/experiment-runbook.md): what to run, in what order, and what must be true before a number is worth quoting. **The entry point for any eval work.**
+- [Data-lake run](plans/datalake-run.md): the pooled multi-schema run (D15) — runbook and status.
+- [Eval audit backlog](plans/eval-audit-backlog-2026-07-22.md): open correctness / efficiency items on the eval harness.
+- [Notes + run-logging build plan](plans/implementation-plan-notes-and-run-logging.md): the proposed build order for ADR 0003 + 0004.
+- [Clarification + SME benchmark build plan](plans/clarification-sme-benchmark-build-plan.md): D12–D14; increments 1–2 shipped, the scale run still open.
+- [HITL clarification contract](plans/hitl-clarification-contract.md): serve-time clarification, server ↔ frontend. Server side implemented.
+- [Agent-step visualization](plans/agent-step-visualization.md): frontend spec for the governed serve stream.
+
+*Closed records — kept for history, not for guidance:*
+
+- [Eval ladder results](plans/eval-ladder-results.md): the v5 run. **Numbers discarded**; the arm definitions and terminology of the period survive.
+- [Eval concurrency design](plans/eval-concurrency-design.md): the `workers` knob, shipped 2026-07-23.
+- [Engineering gaps 2026-07-16](plans/engineering-gaps-2026-07-16.md): audit tracker; a few items still deferred.
+- [Schema-qualification scale risk](plans/schema-qualification-scale-risk.md): resolved 2026-07-17 by removing the `multi_schema` mode.
+- [Terminology refactor](plans/terminology-refactor.md): 2026-07-16 execution record, **superseded for ladder / arm claims** — use [glossary](glossary.md) and the runbook instead.
+- [Pipeline design](pipeline-design.md): curator/build-side pipeline; its serve half shipped differently and was removed.
+
 ## The spine (non-negotiables)
 
 - **Two planes.** A semantic/control plane (versioned config + markdown, published via PR/CI) stays separate from a data plane that executes only guardrail-passed SQL. Meaning is defined once and owned by humans.

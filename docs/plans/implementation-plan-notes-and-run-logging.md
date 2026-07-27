@@ -111,7 +111,24 @@ The whole **M2 metadata track** (L1→L7) is decision-independent and runs the n
 - **X1** (M) provenance.py + config `db`/checkpointer fields. Entry: none. Exit: `tests/test_provenance_ids.py` (ids deterministic+unique, turn_id matches `graph_app.py:131`, `serve_config_hash` stable/changes on top_k/RRF/threshold change, imports from analyst+corpus+curator with no cycle).
 
 ### M2: logging metadata track (ADR 0004), parallel with M3
-Entry gate: SPIKE-1 + SPIKE-2 verdicts (L2/L3/L4 gated), X1.
+Entry gate: SPIKE-1 + SPIKE-2 verdicts (L2/L3/L4 gated), X1. **Both ran 2026-07-22 and
+both PASS** — the verdicts, and the mechanism each one settled:
+
+- **SPIKE-1 (token state-write) — PASS.** The pre-fix coercion rebuilds `AIMessage` from
+  only `content` / `tool_calls[:1]` / `id` / `additional_kwargs`, so it drops
+  `usage_metadata` *and* `response_metadata` on any 2+ tool-call turn. The installed
+  LangChain does expose `AgentMiddleware.after_model(self, state, runtime) -> dict | None`.
+  **Mechanism adopted:** preserve both fields through coercion, and have `after_model`
+  return `{"token_usage": [...]}` onto `GovState.token_usage: Annotated[list, operator.add]`.
+  Regression lock: `tests/test_token_capture.py` (L4).
+- **SPIKE-2 (durable vs ephemeral persistence) — PASS, attach on standalone.**
+  `langgraph.json` + `langgraph-cli[inmem]` means `langgraph dev` injects an *ephemeral*
+  in-memory saver, so there is **no** cross-restart persistence in the local CLI; LangGraph
+  Server / deploy targets inject durable Postgres at runtime instead. **Decision:** L3
+  attaches the durable `conversation_checkpointer` on the **standalone** path
+  (`build_chat_graph(stack, checkpointer=...)`, tests, local callers), and `make_graph`
+  stays bare so it cannot collide with server injection. `clarify_checkpointer` remains
+  `InMemorySaver` until F7.
 | id | title | eff |
 |---|---|---|
 | L1 | ledger duration_ms+ts (started in §3) | S |
@@ -216,7 +233,7 @@ Exit gate: with `log_full_content=False` a governed turn's record has NO questio
 6. **Durable persistence not injected on server (SPIKE-2).** `build_chat_graph` compiles checkpointer-less trusting runtime; `langgraph dev` is likely ephemeral. **Mitigation:** SPIKE-2 verdict; L3 attaches saver on standalone path; `clarify_checkpointer` stays non-durable until F7.
 7. **`create_deep_agent` may not forward a checkpointer.** F3/F4/F5 assume it does. **Mitigation:** verify early (deep-agent analogue of SPIKE-2); if not, reach into the compiled graph or wrap the invoke. Also: durable checkpointing over 69-schema curator batches is non-trivial I/O: keep curator checkpointing opt-in, always-on only for the portable record.
 
-Cross-cutting caveat: all EX/recall/adversarial numbers are single-seed (per MEMORY, SME +0.174 broke the pattern on one seed). Treat every eval gate as provisional until replicated; document seed in gate output; do not gate prod on one run.
+Cross-cutting caveat: there is **no measured baseline to gate against yet** — every number produced before 2026-07-26 is discarded (see [experiment-runbook.md](experiment-runbook.md); the prior single-seed SME result is recorded, and voided, in [eval-ladder-results.md](eval-ladder-results.md)). So each eval gate below is provisional until it has been run under the corrected metric definitions: document the seed in the gate output, replicate before believing a delta, and do not gate prod on one run.
 
 ---
 

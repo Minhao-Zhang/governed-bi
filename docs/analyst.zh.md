@@ -14,7 +14,7 @@ _[English](analyst.md) · [简体中文](analyst.zh.md)_
 
 > *已实现（当前现状）：* agentic 内核是**唯一**的服务路径：P2 切换已经落地，确定性流程节点与 `agent_serve` 开关都已被移除。`analyst.agent` 会编译一个外层的确定性 `StateGraph`（`ingest → refuse_gate → prepare → cache → assemble → agent_core → narrate`），它包裹起一个内层的 LangChain `create_agent` 推理循环；公开的入口函数是 `answer_question_agent`。治理由 `GovernanceMiddleware`（`analyst.middleware`）承载；四个受治理工具位于 `analyst.tools`；`llm.fake` 提供一个 `FakeListChatModel` harness 用于 CI 的确定性。
 >
-> 回答问题现在必须有真实（live）模型：`build_stack()` 在没有模型时仍可构建（只读的审计 API 仍可运行），但 LangGraph 服务进程（`make_graph`）会在启动时失败即拒（fail closed），`/chat` 在模型配置完成之前始终返回 503。参见 ADR 0002；当前评测数字见 [`eval-ladder-results.md`](plans/eval-ladder-results.md)。
+> 回答问题现在必须有真实（live）模型：`build_stack()` 在没有模型时仍可构建（只读的审计 API 仍可运行），但 LangGraph 服务进程（`make_graph`）会在启动时失败即拒（fail closed），`/chat` 在模型配置完成之前始终返回 503。参见 ADR 0002。**目前没有可引用的评测数字**：2026-07-26 之前产出的数字全部作废，所以 [`eval-ladder-results.md`](plans/eval-ladder-results.md) 只是历史记录。要拿到一个能引用的数字，按[实验操作手册](plans/experiment-runbook.md)重跑。
 
 ## 流程
 
