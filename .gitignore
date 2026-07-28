@@ -227,3 +227,9 @@ data/logs/
 # Experiment run artifacts (generations, corpora, summaries)
 runs/
 tmp_agent_run/
+
+# Large curated corpora dropped in for local serving (the vendored demo corpus in
+# corpus/ stays tracked). These are build outputs of a curator run, reproducible
+# from BIRD-Data-Obfuscation, and run to thousands of files — git is the source of
+# truth for the authored demo corpus, not for these.
+corpora/
