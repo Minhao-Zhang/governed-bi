@@ -9,7 +9,7 @@ _[English](architecture.md) · [简体中文](architecture.zh.md)_
 
 1. **两个平面。** 语义/控制平面以版本化的配置与 Markdown 承载业务含义，通过 PR/CI 离线发布；它与只执行通过护栏（guardrail）的 SQL 的数据平面保持分离。含义只定义一次，由人类拥有。
 2. **服务（serve）的*权限（authority）*是确定性的；其*推理（reasoning）*则可以是 agentic 的。** 问题可以很宽泛，但 SQL 必须收窄。权限（什么可以执行、什么被信任、什么会被记录）是硬编码且可审计的；而寻找答案的推理，则可以作为一个有界的 agentic 循环运行，并被限定在受治理的只读工具之内。[ADR 0002](adr/0002-governed-agentic-serve-runtime.md) 推翻了本脊柱早先「绝不是自主式 ReAct 循环」的表述——如今已落地为唯一的服务路径——把推理层面的自主性与权限层面的自主性区分开来；只有后者仍被禁止。
-3. **失败即拒（fail-closed）。** 超出范围、覆盖缺失，或护栏被触发时，返回拒答或澄清问题，绝不给出一个自信却错误的数字。
+3. **在 serve 默认配置下失败即拒。** 在 `grade_semantic_failures=False`（serve 的默认值）下，超出范围、覆盖缺失，或护栏被触发时，返回拒答或澄清问题——而不是一个自信却错误的数字。分级交付（graded delivery，目前在 eval driver 里是开着的）可以把部分 L4/L5 失败重新以 `unverified` 行的形式送出；这不是 serve 的默认行为。
 
 ## 2. 同一共享基座上的两套 harness
 
@@ -23,7 +23,7 @@ Curator 与 Analyst 的风险特征相反。二者使用不同的 harness，但�
 | 自主度 | 最大（探索） | 最小（失败即拒） |
 | Harness | `deepagents` | `LangGraph` + 中间件 |
 
-*已实现：* 两套 harness 都由一次普通的 `uv sync` 安装（不需要任何 extra），构建在基于 LangChain 的模型客户端之上。Analyst 就是 [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) 所定义的受治理 agentic 内核 `analyst.agent`（薄薄的外层确定性轨道，包裹起一个由中间件治理的 `create_agent` 推理循环；该模块原为 `server/`，在 P2 切换之后改名为 `analyst/`——如今"server"只用来指代基础设施：`LangGraph Server`、HTTP/ASGI 进程）——自 P2 切换以来它是唯一的服务路径；早先的确定性流程（`server.flow::answer_question`）与那个陈旧、未被使用的 `server.graph` DAG，在改名之前、以旧模块名均已删除。没有实时模型时会失败即拒：`build_stack()` 仍可离线构建以支撑只读审计 API，但服务进程会在启动时报错，`/chat` 返回 503，直到配置好模型为止。相对于（现已移除的）确定性流程的首次线上 A/B 促成了 [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) 的 Amendment 1；当前评测数字见 [实验结果](plans/eval-ladder-results.md)。curator = `curator.deep_agent`（一个运行在 Facts 画像（profiling）与只读探测（probe）工具之上的 deepagents agent，其构造已离线验证，实际运行则受模型门控）。
+*已实现：* 两套 harness 都由一次普通的 `uv sync` 安装（不需要任何 extra），构建在基于 LangChain 的模型客户端之上。Analyst 就是 [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) 所定义的受治理 agentic 内核 `analyst.agent`（薄薄的外层确定性轨道，包裹起一个由中间件治理的 `create_agent` 推理循环；该模块原为 `server/`，在 P2 切换之后改名为 `analyst/`——如今"server"只用来指代基础设施：`LangGraph Server`、HTTP/ASGI 进程）——自 P2 切换以来它是唯一的服务路径；早先的确定性流程（`server.flow::answer_question`）与那个陈旧、未被使用的 `server.graph` DAG，在改名之前、以旧模块名均已删除。没有实时模型时会失败即拒：`build_stack()` 仍可离线构建以支撑审计 API（浏览/对话；corpus 写操作由 `allow_edit` 门控），但服务进程会在启动时报错，`/chat` 返回 503，直到配置好模型为止。相对于（现已移除的）确定性流程的首次线上 A/B 促成了 [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) 的 Amendment 1。**2026-07-26 之前的任何评测数字都不可引用**；[评测阶梯结果](plans/eval-ladder-results.md)只保留 arm 定义与方法（数字已作废）。要拿到可引用的运行结果，请按[实验操作手册](plans/experiment-runbook.md)执行。curator = `curator.deep_agent`（一个运行在 Facts 画像（profiling）与只读探测（probe）工具之上的 deepagents agent，其构造已离线验证，实际运行则受模型门控）。
 
 > **Curator = 永久维护者**
 >
@@ -34,10 +34,10 @@ Curator 与 Analyst 的风险特征相反。二者使用不同的 harness，但�
 
 ## 3. 内核原语（经受模型升级而存续）
 
-- **受治理的 gateway**：只读、RLS-as-user（以用户身份执行的行级安全）、凭证隔离、强制 LIMIT/超时、可审计/可重放。它可以访问一切，但一个上下文层会优先路由到受治理数据集（governed dataset）。理想情况下，原始表永远不会被触及。
+- **受治理的 gateway**：只读 SQL 执行、凭证隔离、行数上限 + 语句超时、可审计/可重放。行数上限在每种方言上都靠 `fetchmany(max_rows + 1)` 实现，且每种方言也都会对缺少 LIMIT 的简单 `SELECT`/`UNION` SQL 尽力注入一个根级 `LIMIT`（不做会破坏 CTE 的子查询包裹）。RLS-as-user（以用户身份执行的行级安全）是一个默认关闭的预留接口（D7），在本仓库中没有落地。它可以访问一切，但一个上下文层会优先路由到受治理数据集（governed dataset）。理想情况下，原始表永远不会被触及。
 - **Agentic 循环**：永久的控制循环。
 - **工具（Tools）**：模型可能调用的编码函数。数量要精简、要精准。
-- **Hooks（中间件）**：在循环事件上运行的确定性代码。`before_model` 注入上下文（工作记忆、RLS 范围、语义层路由器）；`wrap_tool_call` 对动作进行门控或否决（AST 许可清单、cost/EXPLAIN、PII、RLS）。失败即拒正是在这里落地。
+- **Hooks（中间件）**：在循环事件上运行的确定性代码。`before_model` 注入上下文（工作记忆、身份/会话范围、语义层路由器）；`wrap_tool_call` 对动作进行门控或否决（AST 许可清单、结构性成本/交叉连接；PII 与 RLS 是尚未在此实现的预留接口）。失败即拒正是在这里落地。
 
 > **引擎与燃料**
 >
@@ -103,7 +103,7 @@ execute (as-user) → narrate → answer + provenance
 
 护栏按顺序排列（任一触发即失败即拒，五层全部强制执行）：语法 → 策略黑名单 → AST 列许可清单 → term 语义 → 成本。AST 许可清单具备 scope 感知能力（针对每一列自身所在的查询 scope 进行解析，并拦截星号投影）；term 语义会为检索到的表，以及它们的 FK 连接邻域、连接规划所桥接经过的 Steiner 点（而不是精确的检索命中集合，因此它与检索召回率相解耦），以及任何经策展的跨 schema 连接目标授权，并拦截该授权范围之外的任何表名。成本层目前是一道结构性的交叉连接防护；基于数值化 EXPLAIN 的成本（Postgres / Redshift）是未来按方言展开的工作。逐阶段细节见[Analyst](analyst.zh.md)第 8 步。
 
-> **D15：L4 授权范围按 schema 限定，并跨越多个 schema。** 跨 schema 的表名只有经过策展的连接（curated join）才被授权——若不存在这样的连接，引擎宁可拒答也不猜测。单 schema / SQLite / BIRD 路径保持裸写（不加限定）。护栏 + serve 接入 + 缺失边拒答 + 连接感知 schema 路由器均已落地。
+> **D15：L4 授权范围按 schema 限定，并跨越多个 schema。** 跨 schema 的表名只有经过策展的连接（curated join）才被授权——若不存在这样的连接，引擎宁可拒答也不猜测。单 schema / SQLite / BIRD 路径**同样**加了 schema 限定：SQLite 连接器会把它的文件 `ATTACH` 到 `corpus_pin` 别名下，因此 `beer_factory.customers` 能原生执行（本行原先写的是"保持裸写（不加限定）"，2026-07-17 那次取代之后这句话已经不成立）。护栏 + serve 接入 + 缺失边拒答 + 连接感知 schema 路由器均已落地。
 
 > **有界自修复（agent 的工具反思循环）**
 >
@@ -113,7 +113,7 @@ execute (as-user) → narrate → answer + provenance
 > 拒答；每一次尝试都会重新经过护栏，因此未经审查的 SQL 永远不会被执行。每轮的
 > 尝试次数上限（3 次）在 `wrap_tool_call` 中强制执行，外层图则受 `recursion_limit`
 > 约束；预算耗尽即失败即拒。经过修复后的答案，其 `semantic_assurance` 会降为
-> `heuristic`，而不是 `grounded`（在已退役、仅作展示用的单轴档位中，即 `lineage`，
+> `heuristic`，而不是 `unflagged`（在已退役、仅作展示用的单轴档位中，即 `lineage`，
 > 而不是 `governed`）。
 >
 > 这正是 [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) 的机制。它所取代
@@ -149,10 +149,10 @@ execute (as-user) → narrate → answer + provenance
 >   escalation）（含负责人联系方式）。这是失败即拒路径。
 > - **硬护栏（Hard guardrails）**（`wrap_tool_call`）：无论如何都可以否决任何查询。
 > - **否则尽力而为：** 附带一个**可靠性标记**交付——`semantic_assurance`
->   （`grounded` / `heuristic` / `unverified`）加上触发的不确定性标志。旧有的
+>   （`unflagged` / `heuristic` / `unverified`）加上触发的不确定性标志。旧有的
 >   单轴档位（`governed` / `lineage` / `fenced_raw` / `refused`）只作为这一轴的
 >   展示用 1:1 投影而保留，绝非第二套词汇。这些边界是未经校准的治理/不确定性
->   启发式规则，基于评测调优而成：`grounded` 只意味着安全、在范围内、且未触发任何
+>   启发式规则，基于评测调优而成：`unflagged` 只意味着未触发任何
 >   不确定性标志，**并不**意味着已验证正确。护栏是安全/治理层面的关卡，不是正确性
 >   的判定者（oracle），因此一个看似合理却错误的查询（合法、在许可清单内、但计算
 >   有误）会在这里以及失败即拒路径中被捕捉，而不是在某一层护栏处。让标记真正具有
@@ -220,4 +220,4 @@ execute (as-user) → narrate → answer + provenance
 | 身份 / RLS | 单一的全权限身份 | 真实用户，在 gateway 处执行 RLS |
 | 服务方式 | 单进程 + 文件 + SQLite | 无状态的 server 集群（fleet）；curator 作为异步任务；gateway/corpus/memory/eval 作为独立服务；图数据库；缓存 |
 
-现在就把这些抽象打底（identity 对象、关口、按范围划定的 memory/cache），这样上线到 prod 只是一次配置切换，而不是重写。
+现在就把这些抽象打底（identity 对象、关口、按范围划定的 memory/cache），把它们做成企业分支可以直接接入的预留接口——而不是"上线到 prod 只是一次配置切换"（见 [D1](design-decisions.zh.md#d1目标)）。

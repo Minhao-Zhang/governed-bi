@@ -70,6 +70,12 @@ class ModelConfig:
     llm_model: str = "gpt-5.6-luna"  # project default; swap in governed_bi.toml
     llm_reasoning_effort: str = "low"  # none | low | medium | high | xhigh | max (provider-specific)
     llm_max_output_tokens: int | None = None  # None = provider default
+    # Recorded on every run even when None. Decoding temperature is the largest
+    # single source of run-to-run variance in a text-to-SQL score, and it was neither
+    # pinned nor recorded anywhere (AUDIT E5): two runs of "the same" configuration
+    # could differ because a provider changed its default. None = provider default,
+    # which is now at least a stated, comparable fact rather than an unknown.
+    llm_temperature: float | None = None
     # A stalled model connection must not hang a curator step or serve turn
     # forever: recursion_limit bounds steps, not wall-clock. None = provider default.
     request_timeout_s: float | None = 60.0
@@ -211,7 +217,15 @@ class Settings:
 
     # ── Serve / API (see [serve]) ──
     can_stream: bool = False  # True when a streaming chat graph is fronted
-    allow_edit: bool = True  # corpus file-write; for_env sets False in prod
+    # Corpus file-write via POST /corpus/edit. Safe default is False; for_env(dev)
+    # opts in to True for local demo when the TOML does not override. Committed
+    # governed_bi.toml sets false — enable in governed_bi.local.toml for edits.
+    allow_edit: bool = False
+    # Env-var *name* holding the shared secret for mutating HTTP routes
+    # (X-API-Key or Authorization: Bearer). None / unset = demo mode: reads stay
+    # open, writes still require allow_edit. Same secret-name-only pattern as
+    # models.api_key_env / datasource.dsn_env.
+    serve_api_key_env: str | None = None
     cors_origins: tuple[str, ...] = ("http://localhost:3000",)
 
     # ── Conversation checkpointer + portable run log (ADR 0004; see [logging]) ──
@@ -282,6 +296,7 @@ class Settings:
         corpus_root: str | None = None,
         can_stream: bool | None = None,
         allow_edit: bool | None = None,
+        serve_api_key_env: str | None = None,
         cors_origins: tuple[str, ...] | None = None,
         conversation_checkpointer_kind: str | None = None,
         conversation_checkpointer_path: str | None = None,
@@ -301,6 +316,8 @@ class Settings:
             base["can_stream"] = can_stream
         if allow_edit is not None:
             base["allow_edit"] = allow_edit
+        if serve_api_key_env is not None:
+            base["serve_api_key_env"] = serve_api_key_env
         if cors_origins is not None:
             base["cors_origins"] = cors_origins
         if conversation_checkpointer_kind is not None:
@@ -314,6 +331,7 @@ class Settings:
         if run_log_path is not None:
             base["run_log_path"] = run_log_path
         if env is Environment.dev:
+            # Local demo: file-write edits on unless TOML / caller opts out.
             return cls(
                 environment=env,
                 auto_accept_corpus=True,
@@ -330,6 +348,17 @@ class Settings:
             allow_edit=base.pop("allow_edit", False),
             **base,
         )
+
+    def serve_api_key(self) -> str | None:
+        """Shared secret for mutating HTTP routes, or None when auth is off.
+
+        Reads ``os.environ[serve_api_key_env]`` when the env-var name is set.
+        Empty / missing values are treated as unset (auth not enforced).
+        """
+        if not self.serve_api_key_env:
+            return None
+        value = os.environ.get(self.serve_api_key_env)
+        return value if value else None
 
 
 # --------------------------------------------------------------------------- #
@@ -491,6 +520,12 @@ def load_settings(
     serve = data.get("serve", {})
     can_stream = bool(serve["can_stream"]) if "can_stream" in serve else None
     allow_edit = bool(serve["allow_edit"]) if "allow_edit" in serve else None
+    # [serve].api_key_env names the env var; never the secret itself.
+    raw_serve_key_env = serve.get("api_key_env")
+    if raw_serve_key_env is None:
+        serve_api_key_env = None
+    else:
+        serve_api_key_env = str(raw_serve_key_env).strip() or None
     cors_origins = (
         _cors_origins_from(serve["cors_origins"]) if "cors_origins" in serve else None
     )
@@ -512,6 +547,7 @@ def load_settings(
         corpus_root=str(corpus_root),
         can_stream=can_stream,
         allow_edit=allow_edit,
+        serve_api_key_env=serve_api_key_env,
         cors_origins=cors_origins,
         conversation_checkpointer_kind=str(ckpt_kind) if ckpt_kind is not None else None,
         conversation_checkpointer_path=str(ckpt_path) if ckpt_path is not None else None,

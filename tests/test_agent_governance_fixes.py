@@ -7,11 +7,6 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from governed_bi.config import Environment, Settings
-from governed_bi.corpus import load_corpus
-from governed_bi.gateway import Gateway, Identity, SqliteConnector
-from governed_bi.llm.fake import FakeToolModel, ai_tool_turn, tool_call
-from governed_bi.memory import InMemoryWorkingMemory
 from governed_bi.analyst.agent import (
     ServeRailsState,
     answer_question_agent,
@@ -22,6 +17,11 @@ from governed_bi.analyst.middleware import (
     AGENT_RECURSION_LIMIT,
     GovernanceMiddleware,
 )
+from governed_bi.config import Environment, Settings
+from governed_bi.corpus import load_corpus
+from governed_bi.gateway import Gateway, Identity, SqliteConnector
+from governed_bi.llm.fake import FakeToolModel, ai_tool_turn, tool_call
+from governed_bi.memory import InMemoryWorkingMemory
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 BIRD_DB = Path(__file__).resolve().parents[1] / "data" / "bird" / "beer_factory.sqlite"
@@ -82,8 +82,7 @@ def test_sample_rows_selects_only_allowlisted_columns(
     sample = next(e for e in final["ledger"] if e.get("action") == "sample_rows")
     assert sample["verdict"] == "pass"
     sql = sample["sql"]
-    assert "SELECT *" not in sql.upper().replace(" ", " ")
-    assert "SELECT *" not in sql
+    assert "SELECT *" not in sql.upper()
     # Explicit columns only
     assert "FROM" in sql.upper()
     cols = sample["result"]["columns"]
@@ -102,7 +101,10 @@ def test_sample_rows_blocked_without_license(corpus, bird_gateway, settings, ide
     sample = next(e for e in final["ledger"] if e.get("action") == "sample_rows")
     assert sample["verdict"] == "deny"
     assert "not licensed" in sample["reason"]
-    assert not any("sample" in (a.sql or "").lower() for a in bird_gateway.audit_log)
+    # The point is that NOTHING executed. Asserting on the substring "sample" was
+    # vacuous (it never appears in generated SQL), so deleting the license gate at
+    # middleware.py left this test green — assert on the audit log itself instead.
+    assert bird_gateway.audit_log == []
 
 
 # --------------------------------------------------------------------------- #
@@ -295,10 +297,17 @@ def test_working_memory_reaches_agent_prompt(corpus, bird_gateway, settings, ide
 # --------------------------------------------------------------------------- #
 
 
-def test_recursion_limit_constant():
-    # Raised from the ADR Q6 first guess (15) after live cs_semester runs hit the
-    # limit on ordinary questions — sequential tool calls (G1) inflate step count.
-    assert AGENT_RECURSION_LIMIT == 40
+def test_recursion_limit_leaves_room_for_a_realistic_tool_chain():
+    """Not a pin on the number — a check on the property the number exists for.
+
+    Sequential tool calls (G1) mean a normal search -> inspect x N -> query ->
+    repair chain costs ~2 steps per tool call. The ADR Q6 first guess of 15 was hit
+    by ordinary live questions. Asserting `== 40` only detected someone editing the
+    line; this fails if the budget stops covering the chain it is sized for.
+    """
+    search, inspects, query, repair = 1, 4, 1, 2
+    steps_per_tool_call = 2
+    assert AGENT_RECURSION_LIMIT >= (search + inspects + query + repair) * steps_per_tool_call
 
 
 def test_coerce_single_tool_call_keeps_first_only():
@@ -478,3 +487,119 @@ def test_a_query_over_a_table_the_corpus_does_not_know_records_nothing(
     prov = answer.provenance or {}
     assert prov.get("refused_by")
     assert not prov.get("tables_used")
+
+
+# --------------------------------------------------------------------------- #
+# AUDIT R1: the delivered answer was always the LAST passing run_query, so a
+# post-answer sanity check got reported as the answer.
+# --------------------------------------------------------------------------- #
+
+
+def _ledger_with(*sqls):
+    return [{"action": "run_query", "verdict": "pass", "sql": s} for s in sqls]
+
+
+def test_final_sql_prefers_the_query_the_agent_quoted(corpus):
+    from langchain_core.messages import AIMessage
+
+    from governed_bi.analyst.agent import extract_final_sql
+
+    real = 'SELECT "CustomerID" FROM "beer_factory"."customers"'
+    sanity = 'SELECT COUNT(*) FROM "beer_factory"."customers"'
+    final = {
+        # The sanity check ran last...
+        "ledger": _ledger_with(real, sanity),
+        # ...but the agent presented the first query as its answer.
+        "messages": [AIMessage(content=f"Here is the answer:\n```sql\n{real}\n```")],
+    }
+
+    sql, _tables, entry = extract_final_sql(final, corpus=corpus, dialect="sqlite")
+    assert sql == real
+    assert entry["final_sql_source"] == "agent_final_message"
+
+
+def test_final_sql_falls_back_to_last_passing_when_the_message_says_nothing(corpus):
+    from langchain_core.messages import AIMessage
+
+    from governed_bi.analyst.agent import extract_final_sql
+
+    first = 'SELECT "CustomerID" FROM "beer_factory"."customers"'
+    last = 'SELECT COUNT(*) FROM "beer_factory"."customers"'
+    final = {
+        "ledger": _ledger_with(first, last),
+        "messages": [AIMessage(content="Done — see the table above.")],
+    }
+
+    sql, _tables, entry = extract_final_sql(final, corpus=corpus, dialect="sqlite")
+    assert sql == last
+    assert entry["final_sql_source"] == "last_passing"
+
+
+def test_final_sql_ignores_blocked_entries(corpus):
+    from governed_bi.analyst.agent import extract_final_sql
+
+    ok = 'SELECT "CustomerID" FROM "beer_factory"."customers"'
+    final = {
+        "ledger": [
+            *_ledger_with(ok),
+            {"action": "run_query", "verdict": "block", "sql": "SELECT * FROM secrets"},
+        ],
+        "messages": [],
+    }
+    sql, _tables, _entry = extract_final_sql(final, corpus=corpus, dialect="sqlite")
+    assert sql == ok
+
+
+# --------------------------------------------------------------------------- #
+# AUDIT T3: the fake model discarded `messages`, so the system prompt and the
+# tool set were untested — both could be emptied with a green suite.
+# --------------------------------------------------------------------------- #
+
+
+def test_the_agent_actually_sends_the_governance_system_prompt(
+    corpus, bird_gateway, settings, identity
+):
+    from governed_bi.llm.fake import FakeToolModel
+
+    model = FakeToolModel(responses=[AIMessage(content="done")])
+    agent = build_agent_core(
+        corpus,
+        bird_gateway,
+        identity,
+        model,
+        settings=settings,
+        dialect="sqlite",
+        default_schema="beer_factory",
+    )
+    agent.invoke({"messages": [HumanMessage("x")], "licensed": [], "ledger": []})
+
+    system = model.system_text()
+    assert system, "no system message reached the model at all"
+    # Load-bearing instructions, not incidental wording: without these the loop is
+    # an ungoverned text-to-SQL agent that happens to be wrapped in middleware.
+    assert "inspect_schema" in system
+    assert "run_query" in system
+
+
+def test_the_agent_offers_exactly_the_governed_tool_set(
+    corpus, bird_gateway, settings, identity
+):
+    from governed_bi.llm.fake import FakeToolModel
+
+    model = FakeToolModel(responses=[AIMessage(content="done")])
+    agent = build_agent_core(
+        corpus,
+        bird_gateway,
+        identity,
+        model,
+        settings=settings,
+        dialect="sqlite",
+        default_schema="beer_factory",
+    )
+    agent.invoke({"messages": [HumanMessage("x")], "licensed": [], "ledger": []})
+
+    assert model.tools_seen, "create_agent never bound tools"
+    offered = {getattr(t, "name", None) for t in model.tools_seen[-1]}
+    assert {"search_corpus", "inspect_schema", "sample_rows", "run_query"} <= offered
+    # ask_user is serve-only (needs a checkpointer); the eval path must not see it.
+    assert "ask_user" not in offered

@@ -23,6 +23,14 @@ class FakeToolModel(BaseChatModel):
 
     responses: list[BaseMessage]
     i: int = 0
+    #: Every prompt this model was sent, in order. The trajectory is scripted, so a
+    #: fake that discards ``messages`` makes the whole system prompt untested — the
+    #: governance instructions could be deleted and every agent test would still pass
+    #: (AUDIT T3). Recording them costs nothing and lets a test assert on what the
+    #: model was actually handed.
+    prompts_seen: list[list[BaseMessage]] = []
+    #: Tool sets passed to :meth:`bind_tools`, for the same reason.
+    tools_seen: list[list[Any]] = []
 
     def _generate(
         self,
@@ -31,6 +39,7 @@ class FakeToolModel(BaseChatModel):
         run_manager: Any = None,
         **kwargs: Any,
     ) -> ChatResult:
+        self.prompts_seen.append(list(messages))
         msg = self.responses[min(self.i, len(self.responses) - 1)]
         object.__setattr__(self, "i", self.i + 1)
         return ChatResult(generations=[ChatGeneration(message=msg)])
@@ -40,7 +49,18 @@ class FakeToolModel(BaseChatModel):
         return "fake-tool-model"
 
     def bind_tools(self, tools, **kwargs):  # noqa: ANN001
+        self.tools_seen.append(list(tools))
         return self
+
+    def system_text(self) -> str:
+        """Concatenated system-message text across every call, for assertions."""
+        out: list[str] = []
+        for call in self.prompts_seen:
+            for msg in call:
+                if getattr(msg, "type", None) == "system":
+                    content = msg.content
+                    out.append(content if isinstance(content, str) else str(content))
+        return "\n".join(out)
 
 
 def tool_call(name: str, args: dict, id_: str) -> dict:

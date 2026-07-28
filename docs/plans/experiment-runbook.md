@@ -411,7 +411,7 @@ your model provider, not this code.
    `graded_delivery_rate`, `safety_clearance_rate`. **EX alone cannot support the claim.**
    The benchmark exists to show that governed metadata improves answers, and reliability
    is graded on `semantic_assurance` — so an arm that raises EX while shifting mass from
-   `grounded` toward `unverified` or `none`, or by delivering more answers below the assurance bar
+   `unflagged` toward `unverified` or `none`, or by delivering more answers below the assurance bar
    (`graded_delivery_rate` up), has traded governance for score rather than improving the
    product. Each is also reported as a ladder delta, so the trade is visible per step
    rather than only per arm.
@@ -444,9 +444,47 @@ your model provider, not this code.
    figure; and the cluster test treats each database as one observation, which a
    run-wide drift affects uniformly.
 
+## The result that would make us abandon the corpus thesis
+
+Stated before the run, because a harness that can only return one answer is not an
+experiment (AUDIT C8). **One sentence:**
+
+> If `seeded → curated` on the **test** split, over the twin-free stratum, at
+> 69 schemas, yields a paired McNemar point estimate below **+2.0 EX points** with a
+> Holm-adjusted *p* > 0.05, across **three independent curator draws** (three builds
+> from the same inputs, different agent seeds), then the LLM curator does not earn
+> its cost and the corpus-as-moat claim fails at this scale.
+
+Every term is mechanical and already computed:
+
+| Term | Where it comes from |
+|---|---|
+| arm pair | `seeded → curated` — the rung that isolates the LLM curator from the free deterministic pass. Not `baseline → curated`, which bundles two mechanisms. |
+| metric | `comparisons[].net_questions` / `ex_lenient` delta, paired (`eval.analysis`), never a point-estimate difference across runs |
+| stratum | the twin-free stratum (§Quote the twin-free stratum) — gold-SQL twins in train make recall and generalisation indistinguishable |
+| effect size | +2.0 EX points. Below the ~+1.6-point band the MDE machinery treats as resolvable, a "win" is not separable from decoding noise. |
+| curator draws | three. `n=1` on a stochastic agent is a sample of one from the treatment distribution, which `power.py` says in its own docstring. |
+
+Two honest caveats on this criterion:
+
+- It is a statement about **this benchmark at this scale with this model**, not about
+  semantic layers in general. A null result here would not show that curation cannot
+  help; it would show that *this* curator, on obfuscated BIRD, does not pay for
+  itself — which is the decision the project actually faces.
+- The MDE it leans on is derived from **serve** noise (re-serving one corpus) while
+  the treatment is **corpus-level**. That bound is therefore optimistic: it measures
+  decoding variance, not curator variance. The three-draw requirement exists to cover
+  the gap, and until a three-draw run exists the criterion cannot be evaluated.
+
+The quotability gates enforce the symmetric half of this: a run whose correct rows are
+mostly free passes (empty gold, no `FROM`, zero table overlap) is now non-quotable, so
+a flattering result can be disqualified the same way a crashed one can.
+
 ## What the ladder does and does not tell you
 
-Each adjacent step changes one thing:
+Each step is **adjacent**, which is not the same as changing one thing — see
+`mechanisms_changed` on every comparison, and `single_variable`, which now means
+exactly one mechanism rather than merely one rung:
 
 | Step | What it adds | What its delta means |
 |---|---|---|

@@ -12,7 +12,7 @@ import json
 import uuid
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 from .config import _repo_root
 from .prompts import prompt_set_hash
@@ -104,6 +104,40 @@ def serve_config_hash(
     # No default=str: non-JSON-native knobs must fail loudly, not hash via repr.
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+_SEP = bytes([0])  # path/payload separator so two files cannot concatenate ambiguously
+
+
+def corpus_content_hash(roots: "Sequence[Path | str]") -> str:
+    """Content digest of one or more corpus trees — the treatment's actual identity.
+
+    ``corpus_release_hash`` reads ``.git/HEAD`` of the **code** repo, so it moves when
+    the engine changes and stays put when the corpus does. The corpus is the
+    independent variable of every experiment in this repo, and nothing hashed it
+    (AUDIT E5): two runs over different curator draws compared as if comparable.
+
+    Path-relative and sorted, so an absolute staging path cannot leak into the digest
+    and two byte-identical trees in different directories hash the same. Returns
+    ``"unknown"`` for an absent or unreadable tree rather than raising — a missing
+    corpus is a fact for the ledger to record, not an exception at manifest time.
+    """
+    h = hashlib.sha256()
+    seen_any = False
+    for root in roots:
+        base = Path(root)
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*.yaml")) + sorted(base.rglob("*.md")):
+            try:
+                payload = path.read_bytes()
+            except OSError:
+                continue
+            seen_any = True
+            h.update(str(path.relative_to(base)).replace("\\", "/").encode())
+            h.update(_SEP)
+            h.update(payload)
+    return h.hexdigest()[:16] if seen_any else "unknown"
 
 
 def corpus_release_hash(*, repo_root: Path | None = None) -> str:

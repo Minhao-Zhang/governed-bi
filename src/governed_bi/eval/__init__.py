@@ -34,16 +34,20 @@ from __future__ import annotations
 
 from .analysis import (
     McNemarResult,
-    census_delta,
-    corpus_census,
     TableSelectionReport,
     analyse_run,
+    census_delta,
+    corpus_census,
     gradeable_report,
     mcnemar,
     rank_report,
     sql_tables,
     table_selection_report,
 )
+from .arms import Arm, ArmResult, Solver, agent_solver, run_arm, run_arms
+from .bird_loader import available_dbs, load_bird_items
+from .dataset import BEER_FACTORY_EVAL, BEER_FACTORY_UNANSWERABLE, EvalItem
+from .ex import execution_match
 
 # Two exact-binomial McNemar implementations exist and both are live. The bare
 # name ``mcnemar`` above is ``analysis``'s, which takes row iterables and writes
@@ -55,18 +59,14 @@ from .analysis import (
 from .power import (  # noqa: E402
     DetectableEffect,
     NoiseFloor,
+    cluster_sign_test,
     comparison_report,
     correct_by_question,
-    cluster_sign_test,
     holm_adjust,
     measure_floor,
     minimum_detectable_effect,
 )
 from .power import mcnemar as paired_mcnemar  # noqa: E402
-from .arms import Arm, ArmResult, Solver, agent_solver, run_arm, run_arms
-from .bird_loader import available_dbs, load_bird_items
-from .dataset import BEER_FACTORY_EVAL, BEER_FACTORY_UNANSWERABLE, EvalItem
-from .ex import execution_match
 from .refuse_gate import RefuseGateResult, agent_refuser, eval_refuse_gate
 
 __all__ = [

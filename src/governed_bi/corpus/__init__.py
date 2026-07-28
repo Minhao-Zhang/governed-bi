@@ -14,7 +14,6 @@ from __future__ import annotations
 from .clarify import accept_answer
 from .ids import is_valid_id
 from .loader import Corpus, load_corpus
-from .serialize import dump_asset, subdir_for_type, write_corpus
 from .schemas import (
     Asset,
     Clarification,
@@ -29,6 +28,7 @@ from .schemas import (
     TermAsset,
     parse_asset,
 )
+from .serialize import dump_asset, subdir_for_type, write_corpus
 from .validate import Finding, is_green, validate_corpus
 
 __all__ = [

@@ -150,7 +150,7 @@ def test_success_and_refusal_share_metadata_keys(settings):
             sql=None,
             provenance={"tables_used": []},
             safety_clearance=True,
-            semantic_assurance=SemanticAssurance.grounded,
+            semantic_assurance=SemanticAssurance.unflagged,
         ),
         ctx=replace(ctx, n_human=3, outcome="finalize"),
     )
@@ -171,7 +171,7 @@ def test_standalone_chat_graph_wires_checkpointer(tmp_path):
 
     from governed_bi.api.graph_app import build_standalone_chat_graph
     from governed_bi.api.stack import ServeStack
-    from governed_bi.config import DataSourceConfig, Environment, Settings
+    from governed_bi.config import Environment, Settings
     from governed_bi.corpus import load_corpus
     from governed_bi.gateway import Identity
 
@@ -304,3 +304,100 @@ def test_an_unknown_model_is_unpriced_not_free():
 
     assert estimate_cost_usd("no-such-model-xyz", {"input_tokens": 100}) is None
     assert estimate_cost_usd(None, {"input_tokens": 100}) is None
+
+
+def test_prune_full_content_nulls_expired_tier_bc(tmp_path):
+    """ADR 0004 H11: prune keeps Tier A, drops Tier B/C past TTL (AUDIT T4)."""
+    from datetime import datetime, timedelta, timezone
+
+    from governed_bi.analyst.run_log import (
+        _resolve_path,
+        _upsert_sqlite,
+        prune_full_content,
+    )
+
+    settings = replace(
+        Settings.for_env(Environment.dev),
+        run_log_kind="sqlite",
+        run_log_path=str(tmp_path / "runs.sqlite"),
+        log_full_content_ttl_days=30,
+    )
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    fresh_ts = datetime.now(timezone.utc).isoformat()
+    path = _resolve_path(settings.run_log_path)
+    _upsert_sqlite(
+        path,
+        "old:1",
+        {
+            "turn_id": "old:1",
+            "logged_at": old_ts,
+            "outcome": "ok",
+            "question": "secret question",
+            "sql": "SELECT secret FROM t",
+            "answer": "secret answer",
+        },
+    )
+    _upsert_sqlite(
+        path,
+        "fresh:1",
+        {
+            "turn_id": "fresh:1",
+            "logged_at": fresh_ts,
+            "outcome": "ok",
+            "question": "still secret",
+            "sql": "SELECT 1",
+            "answer": "keep me",
+        },
+    )
+    assert prune_full_content(settings, ttl_days=30) == 1
+    old = load_run_record("old:1", settings)
+    fresh = load_run_record("fresh:1", settings)
+    assert old is not None and fresh is not None
+    assert "question" not in old and "sql" not in old and "answer" not in old
+    assert old["turn_id"] == "old:1"
+    assert old["outcome"] == "ok"
+    assert fresh["question"] == "still secret"
+    assert fresh["sql"] == "SELECT 1"
+
+
+def test_append_triggers_prune_of_expired_full_content(tmp_path):
+    """First append to a path runs prune_full_content (write-path retention)."""
+    from datetime import datetime, timedelta, timezone
+
+    from governed_bi.analyst import run_log as run_log_mod
+
+    run_log_mod._APPENDS_SINCE_PRUNE.clear()
+    settings = replace(
+        Settings.for_env(Environment.dev),
+        run_log_kind="sqlite",
+        run_log_path=str(tmp_path / "runs.sqlite"),
+        log_full_content_ttl_days=7,
+    )
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+    append_run_record(
+        {
+            "turn_id": "aged:1",
+            "logged_at": old_ts,
+            "outcome": "ok",
+            "question": "PII name",
+            "sql": "SELECT ssn FROM people",
+            "answer": "leaked",
+            "governance_ledger": [
+                {
+                    "action": "run_query",
+                    "verdict": "pass",
+                    "sql": "SELECT ssn FROM people",
+                    "result": {"rows": [["123"]]},
+                }
+            ],
+        },
+        settings,
+    )
+    rec = load_run_record("aged:1", settings)
+    assert rec is not None
+    assert "question" not in rec
+    assert "sql" not in rec
+    assert "answer" not in rec
+    assert rec["outcome"] == "ok"
+    ledger = rec.get("governance_ledger") or []
+    assert ledger and "sql" not in ledger[0] and "result" not in ledger[0]

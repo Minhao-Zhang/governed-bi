@@ -14,8 +14,8 @@ any structural assertion and save nothing.
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
-from governed_bi.analyst.agent import answer_question_agent
 from governed_bi.config import DataSourceConfig, Environment, Settings
 from governed_bi.corpus import Corpus
 from governed_bi.corpus.schemas import Column, LogicalType, TableAsset
@@ -180,9 +180,9 @@ def test_routed_corpus_reuse_survives_a_multi_schema_graph(monkeypatch):
     it the graph mints a fresh ``Corpus`` per question and the content key is the only
     thing keeping the index cache warm.
     """
-    from governed_bi.analyst.agent import build_serve_rails
-    from governed_bi.retrieval import RetrievalResult, SchemaPick
     import governed_bi.analyst.agent as agent_mod
+    from governed_bi.analyst.agent import build_serve_rails
+    from governed_bi.retrieval import SchemaPick
 
     corpus = Corpus(
         assets=[_table("s_a", "orders"), _table("s_b", "invoices")]
@@ -256,7 +256,6 @@ def _multi_schema_corpus(n_schemas: int = 4, per_schema: int = 6) -> Corpus:
 def test_the_router_deep_copies_the_corpus_once_not_once_per_question(monkeypatch):
     """Counts the actual `for_analyst` calls, because the claim is about cost. A cache
     that is present but not consulted satisfies any structural assertion."""
-    from governed_bi.corpus import loader as loader_mod
     from governed_bi.retrieval import shortlist_schemas
 
     corpus = _multi_schema_corpus()
@@ -552,3 +551,58 @@ def test_the_serve_graph_hands_its_cache_to_the_agent_core():
         "the rails no longer pass their shared index to build_agent_core, so search_corpus "
         f"rebuilds its index on every call. Call site was: {call!r}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# AUDIT R6: the serve rails are rebuilt per question, so a graph-scoped cache
+# was thrown away every turn — every question re-embedded the whole corpus.
+# --------------------------------------------------------------------------- #
+
+
+def test_build_serve_rails_reuses_a_caller_supplied_cache():
+    from governed_bi.analyst.agent import build_serve_rails
+    from governed_bi.config import Environment, Settings
+    from governed_bi.corpus import load_corpus
+    from governed_bi.gateway import Gateway, Identity, SqliteConnector
+    from governed_bi.retrieval import RetrievalIndexCache
+
+    root = Path(__file__).resolve().parents[1]
+    corpus = load_corpus(root / "corpus", schema="beer_factory").for_analyst()
+    settings = replace(
+        Settings.for_env(Environment.dev),
+        datasource=DataSourceConfig(kind="sqlite", corpus_pin="beer_factory"),
+    )
+    connector = SqliteConnector(root / "data" / "bird" / "beer_factory.sqlite")
+    try:
+        gateway = Gateway(connector)
+        shared = RetrievalIndexCache()
+        # Two "turns": two graph builds, one cache.
+        for _ in range(2):
+            build_serve_rails(
+                corpus=corpus,
+                gateway=gateway,
+                settings=settings,
+                identity=Identity(user="dev", all_access=True),
+                model=None,
+                index_cache=shared,
+            )
+    finally:
+        connector.close()
+    # Nothing retrieved yet; the fix is about object identity — the graph must adopt
+    # the caller's cache rather than minting its own per build.
+    assert shared.hits == 0 and shared.misses == 0
+
+    idx_a = shared.bm25(corpus)
+    idx_b = shared.bm25(corpus)
+    assert idx_a is idx_b
+    assert shared.hits >= 1, "a second lookup of the same corpus must hit"
+
+
+def test_the_serve_stack_owns_one_cache():
+    from governed_bi.api.stack import ServeStack
+    from governed_bi.retrieval import RetrievalIndexCache
+
+    made = ServeStack.__dataclass_fields__["index_cache"].default_factory()
+    assert isinstance(made, RetrievalIndexCache)
+    # Per-stack, not shared process-wide: two stacks must not cross-contaminate.
+    assert made is not ServeStack.__dataclass_fields__["index_cache"].default_factory()

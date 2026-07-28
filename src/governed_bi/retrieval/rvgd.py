@@ -79,6 +79,49 @@ def tokenize(text: str) -> list[str]:
     return [_stem(tok) for tok in _TOKEN_RE.findall(split.lower())]
 
 
+# Question words and function words carry no evidence about coverage. BM25's IDF is
+# supposed to discount them, but on a single-schema corpus (a handful of documents)
+# every term looks rare, so "what is the airspeed of a swallow" scores as well as a
+# real question. Coverage is measured on content terms only.
+_QUESTION_STOPWORDS = frozenset(
+    """
+    a an and any are as at be been by can did do doe for from get give had ha have how
+    i in is it many me much of on or our show that the their there these this those to
+    total us was we were what when where which who why will with you your
+    """.split()
+)
+
+
+def content_terms(text: str) -> list[str]:
+    """Question tokens that could carry coverage evidence (see ``_QUESTION_STOPWORDS``)."""
+    return [tok for tok in tokenize(text) if len(tok) > 2 and tok not in _QUESTION_STOPWORDS]
+
+
+def lexical_coverage(question: str, vocabulary: "set[str] | frozenset[str]") -> float:
+    """Fraction of the question's content terms that appear in the corpus at all.
+
+    ``0.0`` means the corpus contains no table, column, term or description word the
+    question actually asks about — the signature of an out-of-corpus question. This
+    is the evidence signal the assurance stamp was missing (AUDIT C2): the per-type
+    budget in :func:`retrieve` has no minimum, and with an embedder every asset
+    scores above zero, so ``top_k`` tables come back regardless of topicality and a
+    clean run over them stamps ``unflagged``.
+
+    Deliberately crude and vocabulary-level, not a threshold on a similarity score:
+    a fused RRF rank is not comparable across questions, and raw BM25 on a
+    few-document corpus is dominated by IDF noise. Coverage answers a narrower
+    question honestly — did the user name anything this corpus knows about.
+
+    A question with no content terms at all ("how many are there?") returns ``1.0``:
+    there is nothing to be uncovered, and flagging it would report missing evidence
+    where the real problem is an underspecified question.
+    """
+    terms = content_terms(question)
+    if not terms:
+        return 1.0
+    return sum(1 for tok in terms if tok in vocabulary) / len(terms)
+
+
 def asset_document(asset: "Asset") -> str:
     """Build the human-language text document indexed for ``asset``.
 
@@ -136,6 +179,14 @@ class BM25Index:
             for term in tf:  # Counter keys are the unique terms in the doc
                 self._df[term] += 1
 
+    def vocabulary(self) -> frozenset[str]:
+        """Every term any indexed document contains — the corpus's known words.
+
+        Document frequencies are already computed at construction, so this is a view
+        over existing state rather than a second pass.
+        """
+        return frozenset(self._df)
+
     @classmethod
     def from_documents(
         cls, texts: dict[str, str], *, k1: float = 1.5, b: float = 0.75
@@ -180,9 +231,15 @@ class BM25Index:
 class RetrievalResult:
     """Typed, deterministic retrieval output (the contract the agent core, ``analyst.agent``, reads).
 
-    ``scores`` maps asset id -> BM25 score for the selected assets that scored
-    above zero; grounded additions (bound targets, base tables, columns) that
+    ``scores`` maps asset id -> **ranking score** for the selected assets that
+    scored above zero; grounded additions (bound targets, base tables, columns) that
     did not themselves match are present in the id lists but not in ``scores``.
+
+    The scale depends on the channel: raw BM25 with no embedder, and **Reciprocal
+    Rank Fusion** when one is configured. RRF values are ~1/(60+rank) — small,
+    bounded, and not comparable to BM25 magnitudes. They were documented and
+    displayed to the model as "BM25 score" regardless (AUDIT R8), so anything
+    reasoning about the magnitude was reading the wrong scale.
     """
 
     question: str
@@ -195,6 +252,11 @@ class RetrievalResult:
     # Keyword/PIN trigger hits (R7); never blended into RRF — unioned for on_match inject.
     triggered_note_ids: list[str] = field(default_factory=list)
     scores: dict[str, float] = field(default_factory=dict)
+    # Fraction of the question's content terms the corpus knows at all (see
+    # :func:`lexical_coverage`). ``0.0`` means the question is about something this
+    # corpus does not contain, however many tables the budget returned. ``None``
+    # when retrieval did not run.
+    lexical_coverage: float | None = None
 
 
 # Field weight for the lexical index (BM25F-by-repetition). Governed-BI thesis:
@@ -332,7 +394,7 @@ class RetrievalIndexCache:
         return got
 
 
-def _sql_table_ids(sql: str, phys_to_table: dict[str, str]) -> list[str]:
+def _sql_table_ids(sql: str, phys_to_table: "dict[str, str | None]") -> list[str]:
     """Table asset ids referenced by ``sql`` (best-effort, for few-shot grounding).
 
     Parses the SQL and maps each base-table name to a table id by physical name
@@ -350,7 +412,15 @@ def _sql_table_ids(sql: str, phys_to_table: dict[str, str]) -> list[str]:
         return []
     ids: list[str] = []
     for t in tree.find_all(exp.Table):
-        tid = phys_to_table.get(t.name.lower())
+        # Qualified first. Keying on the BARE name was last-write-wins across
+        # schemas, so in a pooled lake a few-shot's `users` could ground to schema
+        # B's table for a question routed to schema A (AUDIT R8). A bare reference in
+        # the few-shot's own SQL still resolves by name, but only when that name is
+        # unambiguous corpus-wide — see the ``None`` entries built below.
+        qualified = f"{t.db}.{t.name}".lower() if t.db else None
+        tid = phys_to_table.get(qualified) if qualified else None
+        if tid is None:
+            tid = phys_to_table.get(t.name.lower())
         if tid is not None:
             ids.append(tid)
     return ids
@@ -395,6 +465,9 @@ def retrieve(
     """
     index = index_cache.bm25(corpus) if index_cache is not None else build_index(corpus)
     ranked = index.rank(question)
+    # Measured against the index vocabulary, not against a score: see
+    # :func:`lexical_coverage` for why a score threshold cannot do this job.
+    coverage = lexical_coverage(question, index.vocabulary())
     if embedder is not None:
         from .embedding import build_embedding_index, fuse_rankings
 
@@ -451,10 +524,18 @@ def retrieve(
     # so grounding resolves a bound column id to its owning table. This map makes
     # that resolution deterministic and mirrors validate.py's reference check.
     col_owner: dict[str, str] = {}
-    phys_to_table: dict[str, str] = {}  # lower(physical_name) -> table id, for few-shot grounding
+    # Two keyings for few-shot grounding: the qualified `schema.table` (always
+    # unambiguous) and the bare name (only when ONE table corpus-wide carries it —
+    # an ambiguous bare name maps to None and grounds nothing, rather than to
+    # whichever table happened to be loaded last).
+    phys_to_table: dict[str, str | None] = {}
+    _bare_seen: dict[str, int] = {}
     for a in corpus.assets:
         if isinstance(a, TableAsset):
-            phys_to_table[a.physical_name.lower()] = a.id
+            bare = a.physical_name.lower()
+            phys_to_table[f"{a.schema}.{bare}".lower()] = a.id
+            _bare_seen[bare] = _bare_seen.get(bare, 0) + 1
+            phys_to_table[bare] = a.id if _bare_seen[bare] == 1 else None
             for c in a.columns:
                 col_owner[derive_column_id(a.id, c.physical_name)] = a.id
 
@@ -519,7 +600,8 @@ def retrieve(
                 column_ids.append(derive_column_id(table_id, col.physical_name))
     column_ids = _ordered(column_ids)
 
-    # scores: BM25 score for any selected asset that actually matched (> 0),
+    # scores: ranking score (BM25, or RRF when fused) for any selected asset that
+    # actually matched (> 0),
     # inserted in the deterministic display order.
     scores = {
         asset_id: score_map[asset_id]
@@ -537,4 +619,5 @@ def retrieve(
         note_ids=_ordered(note_ids),
         triggered_note_ids=list(pinned),
         scores=scores,
+        lexical_coverage=coverage,
     )

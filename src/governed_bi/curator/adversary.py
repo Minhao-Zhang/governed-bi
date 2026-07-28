@@ -11,10 +11,15 @@ asset before it commits. Two layers:
 - :func:`refute` -- per-asset seam. Notes get an offline structural check;
   other assets still require the LLM adversary (model-gated).
 
+Hard vs soft findings: ``validate_corpus`` codes (dangling refs, bad ids,
+missing physical tables, …) are **gating** — the pipeline must not write.
+Heuristic codes in :data:`SOFT_ADVERSARY_CODES` are confidence penalties only.
+
 Why an independent adversary, not self-review: a model rarely refutes its own
 plausible inference, and that is exactly where owner-less layers silently rot.
 
-- **Dev (BIRD):** the adversary is the *only* reviewer (auto-accept on pass).
+- **Dev (BIRD):** the structural gate is the *only* automated reviewer today;
+  LLM per-claim ``refute`` is still a seam.
 - **Prod (enterprise):** automated first-line reviewer before human certification (D6).
 
 Both the proposer's claim/evidence and the adversary's verdict/reasons are
@@ -33,6 +38,33 @@ from ..corpus.validate import Finding, validate_corpus
 if TYPE_CHECKING:
     from ..corpus.schemas import Asset
     from ..gateway.connectors.base import Connector
+
+# Heuristic self-consistency notes from :func:`review` — confidence penalties
+# only. Everything else (including every ``validate_corpus`` code) is hard and
+# blocks corpus write.
+SOFT_ADVERSARY_CODES = frozenset({"missing-provenance", "fk-missing-ref"})
+
+
+class StructuralGateError(RuntimeError):
+    """Raised when hard structural findings must block corpus write (fail closed)."""
+
+    def __init__(self, findings: list[Finding]):
+        self.findings = list(findings)
+        summary = "; ".join(str(f) for f in self.findings[:10])
+        extra = "" if len(self.findings) <= 10 else f" (+{len(self.findings) - 10} more)"
+        super().__init__(f"structural adversary blocked corpus write: {summary}{extra}")
+
+
+def hard_findings(findings: list[Finding]) -> list[Finding]:
+    """Return findings that must block write (everything except soft heuristics)."""
+    return [f for f in findings if f.code not in SOFT_ADVERSARY_CODES]
+
+
+def gate_hard_findings(findings: list[Finding]) -> None:
+    """Raise :class:`StructuralGateError` when any hard finding remains."""
+    hard = hard_findings(findings)
+    if hard:
+        raise StructuralGateError(hard)
 
 
 class Verdict(str, Enum):

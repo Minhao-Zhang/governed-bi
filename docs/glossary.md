@@ -24,7 +24,7 @@ below conflicts with how something is being described, the term below wins.
 > tier `governed` / `lineage` / `fenced_raw` / `refused` (kept, if surfaced at
 > all, only as a display-only projection of the two-axis stamp); `Server` *as
 > the serve agent* (→ **Analyst**; "server" / "LangGraph Server" still mean
-> infra only); `flow` / `flow_solver`; `DataSourceConfig.db` (→ `corpus_pin`).
+> infra only); `flow` / `flow_solver`. **`DataSourceConfig.db` is not retired** — it was, and it is live again with a different meaning (`config.py`: the lake identity behind `db:` note-scope sentinels, ADR 0003). The SQL schema pin is `corpus_pin` / `schema`.
 >
 > Also retired by [ADR 0003](adr/0003-governed-notes-tri-modal-retrieval.md) /
 > **D17** (2026-07-22): `skill` (→ **Note**; `SkillFrontmatter` / `SkillKind`
@@ -42,7 +42,7 @@ below conflicts with how something is being described, the term below wins.
 | **Semantic layer** | The compiled definitions: governed datasets + metrics + term/business-rule resolution. Human-owned; the source of truth. |
 | **Note** (`NoteAsset`) | Governed annotation — routing rules, gotchas, query patterns, business rules, context — attachable to any asset or namespace (`schema:` / `db:` scope sentinels, or an asset id). Carries the full three-tier + `Governance` structure and provenance-aware, tri-modal retrieval (semantic / trigger-PIN / agent-fetch). Formerly the ungoverned Markdown **Skill / reference doc** (ADR 0003, D17). |
 | **Corpus** | Umbrella for the shared human-owned substrate: semantic layer + notes + metadata/lineage + durable memory content. |
-| **Gateway** | The read-only, policy-enforcing data-access boundary: credential isolation, RLS-as-user, forced LIMIT/timeout, audit/replay. The only path to data. |
+| **Gateway** | The read-only, policy-enforcing data-access boundary: credential isolation, row-cap + statement timeout, forced-LIMIT injection on unbounded SELECT/UNION (all dialects), audit/replay. The only path to data. **RLS-as-user is a deferred seam, not built:** `identity` reaches `Gateway.execute` and is used only for the audit row. |
 | **Curator** (build agent) | Offline exploratory agent that *produces* the corpus (bootstrap + drift-repair). Writes are human-gated in prod. |
 | **Analyst** (serve agent) | Online governed agent that *consumes* the corpus to answer. Fail-closed, auditable. Formerly "Server"; "server" / "LangGraph Server" now mean infra only. |
 | **Tool** | A coded function the model may decide to call. |
@@ -54,7 +54,7 @@ below conflicts with how something is being described, the term below wins.
 | **Promotion loop** | Distilling a discovered pattern into a certified governed dataset/metric after human review. |
 | **Semantic plane / data plane** | Offline meaning (published via PR/CI) vs online execution (guardrail-gated). |
 | **Negative example** | A curated pattern marking a question class as unanswerable-from-this-data; fires the canned escalation. |
-| **Reliability stamp** | The two-axis marking on a delivered answer (D5): `safety_clearance` (bool hard gate) and `semantic_assurance` (`grounded` / `heuristic` / `unverified` — how well-grounded). `grounded` means safe + in-scope, **not** verified-correct; thresholds uncalibrated (Audit R2). |
+| **Reliability stamp** | The two-axis marking on a delivered answer (D5): `safety_clearance` (bool hard gate) and `semantic_assurance` (`unflagged` / `heuristic` / `unverified` — whether uncertainty flags fired). `unflagged` means no flag fired, **not** verified-correct and **not** "well grounded in retrieval"; thresholds uncalibrated (Audit R2 / C2). |
 | **Reliability caveat** | An AI-inferred free-text warning on a *column* that it may be unreliable (`UNRELIABLE. DO NOT USE` plus a reason). Corpus-side and curator-authored, distinct from the answer-side **Reliability stamp**. It replaces a typed decoy flag so the mechanism transfers to an enterprise deployment. |
 | **Governance exclusion** | A human-set `governance.excluded` boolean on a column/table meaning "never surface": the asset is removed from everything the **Analyst** sees, all environments, permanently. Human-authored (D6); distinct from the curator's AI-inferred **Reliability caveat**. |
 | **Interaction signal** | A recorded observation of a user action on a served answer — a **Correction signal**, a rephrased re-ask, a regenerate, an abandonment, or an explicit rating — captured for *evaluation* (production quality, run against metrics) and *development* (passive semantic-layer improvement). Captured **raw** (capture-first); trust-tiering/interpretation is deferred until real usage shows what correlates with a wrong answer. v0 rides Langfuse/LangSmith trace feedback; a dedicated, queryable interaction log (keyed by turn + corpus-release hash) is future work. |

@@ -12,6 +12,16 @@ what to read when a number looks wrong: where the measurement lives, and which
 file localises which kind of failure. The retirement itself is recorded in
 [`plans/datalake-run.md`](plans/datalake-run.md).
 
+> **Provenance of the numbers on this page.** Every "last full benchmark" figure
+> (45.8%, 135 of 2030, 61%, 73.7%, …) comes from the pre-2026-07-25 analysis runs
+> and is **retired** along with the rest of that instrument's output — see
+> [`plans/datalake-run.md`](plans/datalake-run.md#status). They are kept because the
+> *arithmetic* they illustrate (multi-class errors do not sum; question-level churn
+> swamps small deltas) is the point, and a worked example with real magnitudes
+> teaches it better than one with invented ones. They are **not current results**,
+> and `plans/experiment-runbook.md` is right that this repo has never run the full
+> split with a model. Re-derive before quoting any of them.
+
 ## Two axes, kept apart on purpose
 
 `src/governed_bi/stages.py` is the shared vocabulary both the serve path and

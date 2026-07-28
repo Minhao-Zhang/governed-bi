@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from governed_bi.analyst.run_log import FinalizeCtx, finalize_and_log
+from dataclasses import replace
+
 from governed_bi.analyst.answer import refusal
+from governed_bi.analyst.run_log import FinalizeCtx, finalize_and_log
 from governed_bi.config import Environment, Settings
 from governed_bi.provenance import new_run_id
-from dataclasses import replace
 
 
 def test_finalize_provenance_feeds_eval_usage_shape(tmp_path):

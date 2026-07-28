@@ -91,3 +91,22 @@ def test_normal_aggregate_still_passes():
         default_schema="beer_factory",
     )
     assert verdict.passed, verdict.reason
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # SELECT-shaped write primitives (audit S2). nextval advances a sequence;
+        # setval assigns it. Both mutate under a SELECT cloak.
+        "SELECT setval('ds.myseq', 999) AS z",
+        "SELECT nextval('ds.myseq') AS z",
+        "SELECT pg_catalog.setval('ds.myseq', 999) AS z",
+        "SELECT pg_catalog.nextval('ds.myseq') AS z",
+    ],
+)
+def test_sequence_mutators_are_hard_blocked(sql: str):
+    verdict = _check(sql)
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.policy_blacklist
+    assert verdict.reason is not None
+    assert "setval" in verdict.reason or "nextval" in verdict.reason

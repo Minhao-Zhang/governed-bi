@@ -166,11 +166,11 @@ def test_route_schemas_recorded_in_provenance(monkeypatch):
 
     from langchain_core.messages import AIMessage
 
+    from governed_bi.analyst.agent import answer_question_agent
     from governed_bi.config import DataSourceConfig, Environment, Settings
     from governed_bi.gateway import Gateway, Identity, SqliteConnector
     from governed_bi.llm.fake import FakeToolModel
     from governed_bi.retrieval import RetrievalResult
-    from governed_bi.analyst.agent import answer_question_agent
 
     corpus = _three_schema_bridge().for_analyst()
     settings = replace(

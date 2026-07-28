@@ -103,8 +103,9 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 > **已决定（ADR 级）**
 >
 > 两道并行的关卡：经过整理的**反例** → 预设的升级提示内容（附负责人联系
-> 方式）；始终生效的硬性护栏（AST/成本/PII/RLS），通过 `wrap_tool_call`
-> 实现；否则走**尽力而为**路径，即推荐路径 + **可靠性标记**。高风险
+> 方式）；今天已存在的始终生效的硬性护栏（AST 白名单/结构化成本控制），通过
+> `wrap_tool_call` 实现，外加 PII 与 RLS 的**推迟接缝**（本仓库未实现——属企业
+> 分支范围，D7）；否则走**尽力而为**路径，即推荐路径 + **可靠性标记**。高风险
 > （high-stakes）场景 → 人工签核。
 
 - **备选方案：** 一旦覆盖范围耗尽就立即失败即拒（fail-closed）（安全，但
@@ -116,20 +117,21 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 - **已构建：** 失败即拒的拒答关卡与一个**双轴可靠性标记**均已实现。该标记
   报告两个相互独立的轴，以免二者被混淆：`safety_clearance`（护栏 + 授权已
   通过——这是一个*闸门*，对每个交付的答案都为真、对每个拒答都为假）与
-  `semantic_assurance`（`grounded` / `heuristic` / `unverified`——答案接地
-  程度如何，即应当驱动是否自动交付的那个轴）。旧的单轴档位（`governed` /
-  `lineage` / `fenced_raw` / `refused`）已作为规范词汇退役；如今它若还出现，
-  也只是双轴标记的**纯展示层投影**，绝非并行的另一个概念。一个**有界的
-  自修复循环**会把*可修复的*护栏拒绝（语法 + 列/表范围——
+  `semantic_assurance`（`unflagged` / `heuristic` / `unverified`——是否有
+  不确定性标志被触发，即应当驱动是否自动交付的那个轴）。旧的单轴档位
+  （`governed` / `lineage` / `fenced_raw` / `refused`）已作为规范词汇退役；如今
+  它若还出现，也只是双轴标记的**纯展示层投影**，绝非并行的另一个概念。一个
+  **有界的自修复循环**会把*可修复的*护栏拒绝（语法 + 列/表范围——
   L3/L4 按决定保持可修复，[D11](#d11开放决策外部评审2026-07-09)）或执行错误
-  回传给生成器，然后才拒答；修复后的答案是 `heuristic`，绝不会是 `grounded`。
+  回传给生成器，然后才拒答；修复后的答案是 `heuristic`，绝不会是 `unflagged`。
   **一个硬性策略/DDL 阻断（L2 `policy_blacklist`）现在会立即失败即拒**——把它
-  回传只会诱导生成器去规避策略。缓存准入以 `semantic_assurance == grounded`
+  回传只会诱导生成器去规避策略。缓存准入以 `semantic_assurance == unflagged`
   为门槛，绝不只凭安全。各档位阈值和不确定性信号集合都是**未经校准的启发式
-  规则**，需要在评估中调优。`grounded` 表示安全 + 在范围内 +
-  未触发任何不确定性标志，**并不**表示“已验证正确”：护栏是安全/治理关卡，
+  规则**，需要在评估中调优。`unflagged` 表示未触发任何不确定性标志，**并不**
+  表示“已验证正确”，**也不**表示“检索中已良好接地”：护栏是安全/治理关卡，
   不是正确性判定者（oracle），所以看似合理但实际错误的 SQL 是靠标记机制 +
-  失败即拒来拦截的，而不是靠对正确性的证明。**对 BI 受众而言该标签夸大其词：已将 `certified` 改名为 `grounded`**——见[审计处置（2026-07-15）](#审计处置2026-07-15)，R2。
+  失败即拒来拦截的，而不是靠对正确性的证明。**标签沿革：** `certified` →
+  `grounded`（审计 R2，2026-07-15）→ `unflagged`（审计 C2，2026-07-27）。
 
 ## D6：所有权与人工关卡
 
@@ -140,8 +142,9 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 > PR + 负责人 + CI。认证（为一份*定义*背书）与高风险答案签核（为一个
 > *答案*背书）二者保持区分。
 
-- **已构建（范围）：** 本仓库提供一个**只读**的审计面（audit surface）——即
-  `viz.presenter` 视图模型加上可选的 `governed_bi.api` HTTP API——交互式 UI
+- **已构建（范围）：** 本仓库提供一个**审计面**（audit surface）——即
+  `viz.presenter` 视图模型加上可选的 `governed_bi.api` HTTP API（浏览/对话；
+  corpus 写入受 `allow_edit` 门控，而非一个未加限定的只读 API）——交互式 UI
   则是一个独立项目；交互式的 corpus 编辑与保存为 PR **不在本仓库范围内**
   （开发环境下用通用的 git/PR + CI，生产环境下由企业应用承担）。本仓库拥有
   下游编辑器会复用的写入*原语*：资产 schema、`corpus.serialize.write_corpus`，
@@ -242,7 +245,8 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   可迁移性正是做出这个决定的关键理由。
 - **BIRD 的范围不只是结构。** BIRD 提供了一个 `evidence` 字段（外部知识
   提示，大致相当于轻量规则/派生指标），因此 curator 也会为 BIRD 生成由
-  evidence 播种而来的 `metric`/`rule`/`term`/`context`。这些资产按 EX
+  evidence 播种而来的 `metric`/`note`/`term`。（`rule` 与 `context` 已被 D17
+  并入 `note`；此处出现它们只是为了保留历史记录。）这些资产按 EX
   做端到端评分（`baseline` 对比 `curated`），且**没有逐资产的 gold**（按 D4，
   gold 仍只限于名称、FK 以及诱饵排除）。**同义词（`term`/
   `term_relationship`）同样在 BIRD 的范围之内**：混淆的*改写*维度意味着
@@ -289,14 +293,15 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   harness**（`curator/deep_agent.py`：一个
   运行在 Facts 画像分析 + 只读探测工具之上的 deep agent；其构建过程已
   离线验证，自主运行则受模型门控）。仍是接缝的有：join/term/metric/
-  rule/skill 的 LLM 撰写、逐资产实时的 adversary `refute`，以及自评估的
-  train-EX 循环；正是这些让 `curated` 能够胜过 `baseline`。参见[Curator](curator.zh.md)。
+  note 的 LLM 撰写、逐资产实时的 adversary `refute`，以及自评估的
+  train-EX 循环（`rule`/`skill` 是已退役的旧名——D17）；正是这些让 `curated`
+  能够胜过 `baseline`。参见[Curator](curator.zh.md)。
 
 ## D11：开放决策（外部评审，2026-07-09）
 
 由一次独立的项目评审（2026-07-09）提出。记录于此，以便每一项都被审慎地拍板、而非默认略过。（评审中的部分条目——D1 的冷启动措辞、D5 的双轴标记与 L2 立即拒答——已在上文调和。）
 
-- **按失败类别修复（L3/L4 边界）——已决定（2026-07-09）：保持可修复。** `policy_blacklist`（L2）不经重试直接失败即拒（把 DDL/策略阻断回传只会诱导规避）。曾经的问题是：**列白名单（L3）与 term-semantics（L4）范围失败是否也应立即拒答**（评审立场：诱导模型绕过范围阻断，等于施压让它去找一个能过关却在分析上仍然错误的查询）。**决定：L3/L4 保持可修复。** FK 邻域扩展 + 修复循环是针对检索欠召回的一种刻意的*降低误拒*机制，修复后的答案已是 `heuristic`（绝不会是 `grounded`），且尝试上限 + 无进展保护为循环设界。若真实评测显示修复诱导抬高了"看似合理却错误"的答案，再重新考虑。
+- **按失败类别修复（L3/L4 边界）——已决定（2026-07-09）：保持可修复。** `policy_blacklist`（L2）不经重试直接失败即拒（把 DDL/策略阻断回传只会诱导规避）。曾经的问题是：**列白名单（L3）与 term-semantics（L4）范围失败是否也应立即拒答**（评审立场：诱导模型绕过范围阻断，等于施压让它去找一个能过关却在分析上仍然错误的查询）。**决定：L3/L4 保持可修复。** FK 邻域扩展 + 修复循环是针对检索欠召回的一种刻意的*降低误拒*机制，修复后的答案已是 `heuristic`（绝不会是 `unflagged`），且尝试上限 + 无进展保护为循环设界。若真实评测显示修复诱导抬高了"看似合理却错误"的答案，再重新考虑。
 - **`CorpusRelease`——一份不可变、经认证的服务契约。** Git 是真实来源，但仅靠版本控制并不构成*发布*契约：Analyst 目前在服务时并不区分草稿与已认证资产、不锁定 corpus 内容哈希、也不在每个答案中记录发布版本。提议：一个 `CorpusRelease` 工件（版本 + 内容哈希 + 已认证资产 ID + 构建/adversary 证据 + 时间戳）；curator 只写暂存区，CI 构建发布，Analyst 只读取锁定的发布，每个答案/审计事件都记录发布哈希。**范围问题：** 轻量的发布哈希 + 服务时锁定，可以说是引擎级的服务正确性原语（属本仓库范围）；而完整的"CI 构建发布、owner 审批"工作流则是产品（企业分支范围）。**决策待定**，但**已被 D13 部分解决**：就基准测试而言，一个独立的 corpus 仓库加上每个检查点一个 git SHA，锁定了 corpus 状态，并推迟了完整的发布工件。
 - **结构化意图的 SQL 缓存。** 语义缓存目前以嵌入相似度阈值为键。评审指出全局余弦阈值是一个很弱的等价性判据（两个问题可能在时间段、分母、实体或指标上不同）。提议：以结构化意图为键（`corpus_release_hash + 身份范围 + 指标 ID + 归一化维度/过滤 + join 计划指纹 + 策略版本`），或在此之前只做精确归一化查询缓存。该缓存默认关闭，故不紧急。**决策待定。**
 
@@ -435,7 +440,8 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 > **已决定（ADR 级，2026-07-13；切换已于 2026-07-14 落地）。** 完整的理据、
 > 不变式与分阶段迁移见 [ADR 0002](adr/0002-governed-agentic-serve-runtime.md)；
 > 历史性的 agent-vs-flow A/B（flow 现已删除）总结见
-> [实验结果](plans/eval-ladder-results.md)。
+> [eval-ladder-results](plans/eval-ladder-results.md)（数字已作废；仅保留方法
+> 与臂定义）。
 >
 > serve 从一张确定性的单次 DAG 重做为一个**受治理的 agentic 核心**：外层是一张
 > 确定性的 `StateGraph`（很薄的治理护栏），包裹着内层一个有界的 `create_agent`
@@ -486,12 +492,12 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   变得统计稳定，一个 23 题的单库差值不再是证据单位。*状态：已计划，取决于多 schema
   实验（D15）。*
 
-- **R2 —— `certified` 标签夸大其词，已改名为 `grounded`；校准仍暂缓（细化 D5）。**
-  `semantic_assurance = certified` 在 BI 用户看来意为"已验证正确"，但它其实仅表示"安全 +
-  在范围内 + 未触发不确定性标记"。**已改名**：`semantic_assurance` 现在报告
-  `grounded`（原 `certified`） / `heuristic` / `unverified`。仍暂缓的是：在规模运行
-  就绪后**对阈值与不确定性信号集按真实 EX 校准**——即测量被打标的答案实际正确的
-  比例。*状态：已改名；校准已排期（需先有规模运行）。*
+- **R2 / C2 —— 会夸大其词的标记标签。** `certified` 曾被读作“已验证正确”，
+  于是改名为 `grounded`（2026-07-15）。但 `grounded` 仍会被读成检索质量/
+  已验证接地，于是再次改名为 `unflagged`（2026-07-27）：只表示未触发任何
+  不确定性标志——**不**表示已验证正确。仍暂缓的是：在规模运行就绪后**对
+  阈值与不确定性信号集按真实 EX 校准**。*状态：已改名为 `unflagged`；校准已
+  排期（需先有规模运行）。*
 
 - **R3 —— 用户反馈闭环：已于 2026-07-15 讨论；方向已定，构建暂缓（细化 D8）。**
   设计讨论的结论：
@@ -590,8 +596,10 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 
 - **检索变为三模态，并有明确的"PIN vs blend"契约。**（1）*语义*：每条笔记带自己的
   向量，正常混入 RRF，因此永不稀释某个 table/schema 的向量。（2）*正则/关键词触发器*：
-  只 PIN，绝不 blend：触发即硬性纳入目标，任何词法分数都不进 RRF，这是在尊重实测结论
-  （弱词法混入强 embedding 会拉低召回，recall@3 0.535 低于 embedding 的 0.70）。
+  只 PIN，绝不 blend：触发即硬性纳入目标，任何词法分数都不进 RRF，这是在尊重
+  “弱词法混入强 embedding 会拉低召回”这一发现（recall@3 0.535 低于 embedding
+  的 0.70——这是一个**已退役**的测量，此处只作为它当初得出的设计理由被引用，
+  而非当前数字；退役说明见 [datalake-run.md](plans/datalake-run.md#status)）。
   （3）*Agent 直读*：新增只读、无需授权的 `read_notes` / `grep_notes` 工具，靠拓扑
   保证安全。
 - **治理升级。** 作为 `Asset` 联合类型成员，`NoteAsset` 继承三段字段分层、

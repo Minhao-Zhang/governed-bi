@@ -52,9 +52,11 @@ class Gateway:
         """Run already-guardrail-passed SQL as ``identity``, read-only with the
         forced row cap and timeout, and record it in the audit log.
 
-        RLS-as-user is an environment toggle (D7): in dev the single all-access
-        identity is a pass-through; an enterprise deployment scopes the session
-        to the real user at this point.
+        ``identity`` is recorded on the audit row and **nothing else**: no session
+        role is set, no rows are scoped. RLS-as-user is the seam an enterprise
+        deployment wires here (D7); in this repo it is unimplemented, and four
+        surfaces used to describe it as live (AUDIT S6). Read the parameter as
+        provenance, not enforcement.
         """
         result = self._connector.execute(
             sql, max_rows=self._max_rows, timeout_s=self._timeout_s

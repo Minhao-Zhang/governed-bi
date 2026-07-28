@@ -2,18 +2,22 @@
 
 _[English](viz.md) · [简体中文](viz.zh.md)_
 
-The **read-only audit surface** for the [Agentic BI System](system-overview.md)
-corpus. This repo ships **no bundled UI**; instead it ships the pieces a UI reads
-from — the `presenter` view models (UI-agnostic) and the `governed_bi.api`
-HTTP/JSON API — so you can browse and audit the AI-built layer, and ask a question
-to see the governed answer plus its reliability stamp. The interactive UI is a
-separate project (see [ui-frontend-design.md](ui-frontend-design.md)).
+The **audit surface** for the [Agentic BI System](system-overview.md) corpus —
+**read-only by default**. This repo ships **no bundled UI**; instead it ships the
+pieces a UI reads from — the `presenter` view models (UI-agnostic) and the
+`governed_bi.api` HTTP/JSON API — so you can browse and audit the AI-built layer,
+and ask a question to see the governed answer plus its reliability stamp. The
+interactive UI is a separate project (see [ui-frontend-design.md](ui-frontend-design.md)).
 
-**Editing the corpus and opening PRs is intentionally not built here.** Because
-git is the source of truth (D9), a correction is "edit a file + PR", which is
-served by generic git/PR tooling plus CI (dev), or by the enterprise application
-(prod). This repo owns the write *primitives* such an editor reuses; it does not
-own the interactive editor or the PR orchestration.
+**Interactive corpus editing and opening PRs are intentionally not built here**
+as a product surface. `POST /corpus/edit` can write YAML when `[serve].allow_edit`
+is true (committed default is false; `Settings.for_env(dev)` opts in only when
+TOML omits the key) and, when `[serve].api_key_env` names a secret, a matching
+`X-API-Key` or `Authorization: Bearer` value. Because git is the source of truth
+(D9), a durable correction is still "edit a file + PR", served by generic git/PR
+tooling plus CI (dev), or by the enterprise application (prod). This repo owns
+the write *primitives* such an editor reuses; it does not own the interactive
+editor or the PR orchestration.
 
 > Implementation: [`src/governed_bi/viz/`](../src/governed_bi/viz/) (read-only).
 > `presenter.py` holds UI-agnostic view models; [`governed_bi.api`](../src/governed_bi/api/)
@@ -49,7 +53,7 @@ mechanism rather than a bespoke store:
    - **Dev/BIRD:** the developer is the reviewer, so this can commit directly.
    - **Prod/enterprise:** real owner + PR + CI (D6). The adversary has already
      pre-filtered, so the human only certifies draft-quality assets.
-3. CI runs reference-integrity (`governed-bi validate ...`).
+3. CI runs reference-integrity (`uv run python -m governed_bi.corpus.cli`). There is no `governed-bi` console script — `pyproject.toml` defines no `[project.scripts]`.
 
 This is the same mechanism as the correction loop (D8; the memory/corpus
 distinction collapses). A serve-side correction can pre-populate a draft edit for

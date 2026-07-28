@@ -2,15 +2,19 @@
 
 _[English](viz.md) · [简体中文](viz.zh.md)_
 
-面向 [Agentic BI System](system-overview.zh.md) corpus 的**只读审计面（audit surface）**。
-本仓库**不提供任何内置 UI**；它提供的是 UI 所读取的部件——与 UI 无关的 `presenter`
-视图模型，以及 `governed_bi.api` HTTP/JSON API——因此你可以浏览并审计 AI 构建的层，并
-提出问题以查看治理后的答案及其可靠性标记。交互式 UI 是一个独立项目（见
+面向 [Agentic BI System](system-overview.zh.md) corpus 的**审计面（audit surface）
+——默认只读**。本仓库**不提供任何内置 UI**；它提供的是 UI 所读取的部件——与 UI 无关的
+`presenter` 视图模型，以及 `governed_bi.api` HTTP/JSON API——因此你可以浏览并审计 AI
+构建的层，并提出问题以查看治理后的答案及其可靠性标记。交互式 UI 是一个独立项目（见
 [ui-frontend-design.md](ui-frontend-design.zh.md)）。
 
-**本仓库有意不在这里实现 corpus 编辑与发起 PR 的功能。** 由于 git 是唯一的事实来源
-（D9），一次修正就是「编辑一个文件 + 发起 PR」，这件事可以由通用的 git/PR 工具配合
-CI 来完成（开发环境），也可以由企业应用来完成（生产环境）。本仓库拥有编辑器会复用的
+**交互式 corpus 编辑与发起 PR 有意不作为产品能力在这里实现。** 当
+`[serve].allow_edit` 为 true 时（提交进仓库的默认值是 false；只有当 TOML 里省略
+这个键时，`Settings.for_env(dev)` 才会自动开启），`POST /corpus/edit` 可以写入
+YAML；如果 `[serve].api_key_env` 指定了一个密钥名，还需要匹配的 `X-API-Key` 或
+`Authorization: Bearer` 值。由于 git 是唯一的事实来源（D9），一次持久化的修正
+依然是「编辑一个文件 + 发起 PR」，这件事可以由通用的 git/PR 工具配合 CI 来完成
+（开发环境），也可以由企业应用来完成（生产环境）。本仓库拥有编辑器会复用的
 写入*原语*，但不拥有交互式编辑器本身，也不拥有 PR 编排。
 
 > 实现位置：[`src/governed_bi/viz/`](../src/governed_bi/viz/)（只读）。
@@ -45,7 +49,8 @@ CI 来完成（开发环境），也可以由企业应用来完成（生产环�
    - **Dev/BIRD：** 开发者本人就是评审者，因此可以直接提交（commit）。
    - **Prod/企业：** 真正的 owner + PR + CI（D6）。adversary 已经预先做过筛选，人工
      只需要认证 draft 质量的资产。
-3. CI 运行引用完整性检查（`governed-bi validate ...`）。
+3. CI 运行引用完整性检查（`uv run python -m governed_bi.corpus.cli`）。不存在
+   `governed-bi` 这个控制台脚本——`pyproject.toml` 没有定义任何 `[project.scripts]`。
 
 这与修正循环（correction loop，D8；此时 memory 与 corpus 的界限归于统一）属于同一套
 机制。一次 serve 端的修正可以预先填充一份草稿编辑，供人工确认，同样由拥有编辑功能的

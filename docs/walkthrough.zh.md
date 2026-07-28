@@ -63,9 +63,15 @@ CI green: 17 assets, 0 findings.
 uv run pytest -q
 ```
 
-离线即为绿灯。全部 **470** 个测试默认就会运行（`uv run pytest`）：
-**462 个通过**、**8 个跳过**：跳过的都是只能靠实时模型才能验证的检查
-（智能体生成质量），改由 `scripts/live_smoke.py` 来覆盖。
+离线即为绿灯：**收集到 1489 个测试，1477 个通过，11 个跳过，1 个预期失败（xfail）**
+（`uv run pytest`）。跳过的都是只能靠实时模型才能验证的检查（智能体生成质量）；
+它们是 `skipif` 而不是无条件 `skip`，所以设置 `GOVERNED_BI_LIVE_TESTS=1` 并配上
+`OPENAI_API_KEY` 就能跑起来，`scripts/live_smoke.py` 覆盖的是同一块内容。那个
+xfail 是检索命题（curated description 必须排在诱饵原始名之前），严格标注——一旦
+`_SEMANTIC_BOOST` 哪天真的生效了，它会立刻报错提醒你。
+
+> 数字会漂移。请用 `uv run pytest --collect-only -q | tail -1` 重新核实，而不要
+> 直接相信这段话——它曾经偏差了 3 倍，是一次审计才发现的。
 
 ## 4. 提出你的第一个问题
 
@@ -93,7 +99,7 @@ curl -s localhost:8000/chat -H 'content-type: application/json' \
 可能不同，下面是一个具有代表性的示例），其 JSON 里带有：
 
 - **tier: governed**
-- **safety_clearance: true** · **semantic_assurance: grounded**
+- **safety_clearance: true** · **semantic_assurance: unflagged**
 - 答案，例如：`total_revenue = 18496.0`
 - 它运行的 SQL，例如：`SELECT SUM(PurchasePrice) AS total_revenue FROM "transaction"`
 - 一个 **provenance** 轨迹（路由、指标、涉及的表、连接置信度）
@@ -146,7 +152,7 @@ ans = answer_question_agent(
 )
 print(ans.tier.value)            # governed（通常如此，实时模型的输出会有波动）
 print(ans.safety_clearance)      # True
-print(ans.semantic_assurance.value)  # grounded / heuristic
+print(ans.semantic_assurance.value)  # unflagged / heuristic
 print(ans.sql)                   # 例如：SELECT SUM(PurchasePrice) AS total_revenue FROM "transaction"
 print(ans.text)                  # 例如：total_revenue = 18496.0
 conn.close()
@@ -155,8 +161,9 @@ conn.close()
 ## 5. 你正在看的是什么
 
 - **双轴标记是最诚实的部分。** `safety_clearance` 是一道闸门——这条 SQL 是否通过了
-  全部五层护栏、并以请求者身份执行？`semantic_assurance`（`grounded` /
-  `heuristic` / `unverified`）则是答案的*接地程度*。二者刻意分开：一条查询可以
+  全部五层护栏、并以请求者身份执行？`semantic_assurance`（`unflagged` /
+  `heuristic` / `unverified`）表示是否触发了任何不确定性标记——而不是验证为正确。
+  二者刻意分开：一条查询可以
   完全安全，却仍是错误的计算，所以"安全"绝不能被读成"正确"。（见 [Analyst](analyst.zh.md)。）
 - **你可以审计这条 SQL。** 模型的输出被当作不可信；实际运行的 SQL 会被展示，而且它
   只会触及 corpus 授权的列/表。

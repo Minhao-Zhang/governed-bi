@@ -17,6 +17,7 @@ mechanical ledger seeding requires explicit opt-in.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import traceback
 from pathlib import Path
@@ -31,6 +32,7 @@ from .clarifications import (
     clarifications_path,
     fill_clarifications_with_responder,
     load_clarifications,
+    quarantine_agent_answers,
     resolve_clarifications_path,
     seed_gap_clarifications,
     write_clarifications,
@@ -38,6 +40,8 @@ from .clarifications import (
 from .profile import profile_database
 from .prompts import _PHASE_A_PROMPT, _PHASE_B_PROMPT
 from .seed import SeedBundle, seed_from_train_sql
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..config import Settings
@@ -402,8 +406,15 @@ def _validate_fix_pass(
 def _run_adversary_signal(
     bag: AssetBag, *, connector: "Connector", out_root: Path
 ) -> list[dict]:
-    """Structural adversary as a *signal* (design §1): record findings, never gate."""
-    from .adversary import review
+    """Structural adversary: record findings, soft confidence penalties, then gate.
+
+    Soft heuristic codes (missing provenance, FK-without-ref) only discount
+    confidence. Hard findings (dangling refs, bad ids, missing physical tables,
+    and every other ``validate_corpus`` code) raise
+    :class:`~governed_bi.curator.adversary.StructuralGateError` so the caller
+    must not ``bag.write`` — fail closed.
+    """
+    from .adversary import SOFT_ADVERSARY_CODES, gate_hard_findings, review
 
     findings = review(bag.all_assets(), connector=connector)
     records = [
@@ -437,8 +448,11 @@ def _run_adversary_signal(
             data["adversary_findings"] = notes
             new_audit = Audit.model_validate(data)
             conf = table.confidence
-            if conf is not None:
-                conf = max(0.0, float(conf) - 0.1 * len(notes))
+            # Soft notes only: hard findings block write, so a penalty is moot,
+            # but we still record them on the audit trail above.
+            soft_n = sum(1 for n in notes if n.split(":", 1)[0] in SOFT_ADVERSARY_CODES)
+            if conf is not None and soft_n:
+                conf = max(0.0, float(conf) - 0.1 * soft_n)
             bag.tables[name] = table.model_copy(
                 update={"audit": new_audit, "confidence": conf}
             )
@@ -461,9 +475,12 @@ def _run_adversary_signal(
             new_audit = Audit.model_validate(data)
             conf = getattr(asset, "confidence", None)
             updates: dict = {"audit": new_audit}
-            if conf is not None:
-                updates["confidence"] = max(0.0, float(conf) - 0.1 * len(notes))
+            soft_n = sum(1 for n in notes if n.split(":", 1)[0] in SOFT_ADVERSARY_CODES)
+            if conf is not None and soft_n:
+                updates["confidence"] = max(0.0, float(conf) - 0.1 * soft_n)
             store[asset_id] = asset.model_copy(update=updates)
+
+    gate_hard_findings(findings)
     return records
 
 
@@ -680,9 +697,22 @@ def build_curated_corpus(
             f"seed: {seed_stats['joins_ok']} joins applied, "
             f"{seed_stats['joins_fail']} failed lookup (check alias resolution)"
         )
-    decoy_stats = _mark_columns_absent_from_gold(
-        bag, [it.sql for it in train_items], dialect=dialect
-    )
+    # Only with train SQL to reason from. The rule is "columns never referenced by
+    # working train SQL are suspect"; with NO train SQL every non-unique column is
+    # unreferenced, so the heuristic marks essentially the whole schema DO NOT USE —
+    # 53 of 61 columns on the shipped fixture — and under the dev profile's
+    # `hard_block_suspect_columns=True` that hard-blocks 87% of the corpus. Anyone
+    # following the README curates without train SQL, so the unguarded version was
+    # broken for exactly the path the docs describe (AUDIT E3).
+    train_sqls = [it.sql for it in train_items if getattr(it, "sql", None)]
+    if train_sqls:
+        decoy_stats = _mark_columns_absent_from_gold(bag, train_sqls, dialect=dialect)
+    else:
+        decoy_stats = {"skipped_no_train_sql": 1}
+        print(
+            "decoy defense: skipped — no train SQL to derive 'never referenced' from "
+            "(marking every unreferenced column would suspect the whole schema)"
+        )
 
     tool_counts = _empty_tool_counts()
     fix_counts = _empty_tool_counts()
@@ -758,6 +788,21 @@ def build_curated_corpus(
     else:
         ledger_source = "missing"
 
+    # The agent owns this file, so it can pre-answer its own questions and mint a
+    # certified "human" fact (AUDIT C6). Strip that here, at the Phase A boundary,
+    # and rewrite the artifact so nothing downstream can read the forged form.
+    forged_answers: list[str] = []
+    if ledger and ledger_source == "agent":
+        ledger, forged_answers = quarantine_agent_answers(ledger)
+        if forged_answers:
+            write_clarifications(clarifications_path(out_root), ledger)
+            logger.warning(
+                "curator agent pre-answered %d clarification(s) in %s; reset to open: %s",
+                len(forged_answers),
+                schema,
+                ", ".join(forged_answers),
+            )
+
     _write_run_manifest(
         out_root,
         {
@@ -766,6 +811,8 @@ def build_curated_corpus(
             "agent_ran": agent_ran,
             "ledger_source": ledger_source,
             "clarification_count": len(ledger),
+            # Non-empty means the agent tried to answer its own questions (AUDIT C6).
+            "agent_forged_answers": forged_answers,
             "seed": seed_stats,
             "decoy_defense": decoy_stats,
             "tool_calls": tool_counts,
@@ -964,7 +1011,6 @@ def build_curated_corpus_with_sme(
                 bag=bag,
                 run_dir=out_root,
                 system_prompt=system_prompt or _PHASE_B_PROMPT,
-                certified_writes=True,
             )
 
         agent_ran = True
@@ -972,7 +1018,7 @@ def build_curated_corpus_with_sme(
         user = (
             f"Ingest answered clarifications for schema `{schema}`. "
             "Read /clarifications.jsonl and fold each answered record into the "
-            "corpus via annotate/upsert tools with certified=true."
+            "corpus via annotate/upsert tools (curator/proposed provenance only)."
         )
         _result, tool_counts, agent_error = _invoke_agent(
             make_agent(),
@@ -982,8 +1028,8 @@ def build_curated_corpus_with_sme(
             run_id=_run_id,
             thread_id=_thread_id,
         )
-        # Count successful certified writes via tool totals; also apply any
-        # unanswered leftovers is NOT done — agent owns the fold.
+        # Count successful writes via tool totals; unanswered leftovers are NOT
+        # folded — agent owns the fold.
         applied = tool_counts["write_total"]
     else:
         fold_mode = "deterministic"
@@ -1001,6 +1047,10 @@ def build_curated_corpus_with_sme(
         out_root=out_root,
         max_agent_steps=max_agent_steps,
     )
+    # Phase B has no separate soft-adversary pass; validate findings are all hard.
+    from .adversary import gate_hard_findings
+
+    gate_hard_findings(findings)
     bag.write(out_root)
 
     _write_run_manifest(

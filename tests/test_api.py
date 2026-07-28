@@ -8,6 +8,7 @@ SQL generator, no narrator), and no test ever reaches a live model.
 
 from __future__ import annotations
 
+import os
 import shutil
 from dataclasses import replace
 from pathlib import Path
@@ -28,8 +29,16 @@ CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 # Agent-only serve (ADR 0002): answering a /chat turn needs a live model, which
 # the hermetic suite forbids. These end-to-end answer cases are live-only; the
 # read-only API surface (schema/graph/corpus/capabilities) stays fully offline.
-requires_live_serve = pytest.mark.skip(
-    reason="agent-only serve needs a live model; covered by scripts/live_smoke.py"
+# `skipif`, not `skip`: an unconditional skip can never run in ANY environment
+# without editing this file, and these cover the primary user journey — answering a
+# question end to end (AUDIT T3). Set GOVERNED_BI_LIVE_TESTS=1 with OPENAI_API_KEY to
+# execute them against a live model.
+requires_live_serve = pytest.mark.skipif(
+    not (os.getenv("GOVERNED_BI_LIVE_TESTS") and os.getenv("OPENAI_API_KEY")),
+    reason=(
+        "agent-only serve needs a live model; set GOVERNED_BI_LIVE_TESTS=1 with "
+        "OPENAI_API_KEY to run (also covered by scripts/live_smoke.py)"
+    ),
 )
 
 
@@ -79,6 +88,17 @@ def test_build_stack_defaults_can_stream_false():
     # endpoint, so the committed [serve].can_stream default must be False.
     # Streaming is opted in by the LangGraph-server routes app.
     assert build_stack().can_stream is False
+
+
+def test_build_stack_prod_raises_without_all_access_identity():
+    # S8 / T1: Environment.prod defaults single_all_access_identity=False, and
+    # that path is deliberately unimplemented — build_stack must fail loud.
+    from governed_bi.config import Environment, Settings
+
+    settings = Settings.for_env(Environment.prod)
+    assert settings.single_all_access_identity is False
+    with pytest.raises(NotImplementedError, match="per-user identity"):
+        build_stack(settings)
 
 
 def test_build_stack_fails_fast_when_sqlite_missing(tmp_path):
@@ -308,7 +328,7 @@ def test_chat_governed_answer_carries_result(client):
     body = r.json()
     assert body["tier"] == "governed"
     assert body["safety_clearance"] is True
-    assert body["semantic_assurance"] == "grounded"
+    assert body["semantic_assurance"] == "unflagged"
     assert "SUM(PurchasePrice)" in body["sql"]
     # Offline profile: no narrator -> compact render; rows are still carried.
     assert "total_revenue" in body["text"]
@@ -392,6 +412,52 @@ def test_chat_returns_503_when_db_missing():
     assert r.json()["detail"] == "database unavailable"  # generic; no path leaked
 
 
+@pytest.mark.skipif(not BIRD_DB.exists(), reason="vendored beer_factory.sqlite not present")
+def test_chat_two_turns_produce_distinct_audit_rows(tmp_path):
+    """REST /chat must pass n_human from history so turn_ids do not collide (AUDIT R3)."""
+    from langchain_core.messages import AIMessage
+
+    from governed_bi.analyst.run_log import count_run_records, load_run_record
+    from governed_bi.llm.fake import FakeToolModel
+
+    settings = replace(
+        load_settings(apply_local=False),
+        run_log_kind="sqlite",
+        run_log_path=str(tmp_path / "runs.sqlite"),
+    )
+    # Refuse-gate path: model is never invoked; any FakeToolModel clears the
+    # live-model gate and still finalizes an audit row with the passed n_human.
+    stack = replace(
+        build_stack(settings),
+        chat_model=FakeToolModel(responses=[AIMessage(content="should not run")]),
+    )
+    client = TestClient(create_app(stack))
+    session = "sess-r3"
+    q = "How many employees work at the factory?"
+
+    r1 = client.post("/chat", json={"question": q, "session_id": session})
+    assert r1.status_code == 200
+    assert r1.json()["tier"] == "refused"
+
+    r2 = client.post(
+        "/chat",
+        json={
+            "question": q,
+            "session_id": session,
+            "history": [
+                {"role": "user", "text": q},
+                {"role": "assistant", "text": "I can't answer that."},
+            ],
+        },
+    )
+    assert r2.status_code == 200
+    assert r2.json()["tier"] == "refused"
+
+    assert load_run_record(f"{session}:1", settings) is not None
+    assert load_run_record(f"{session}:2", settings) is not None
+    assert count_run_records(settings) == 2
+
+
 # --------------------------------------------------------------------------- #
 # corpus edit (dev file-write; gated on can_edit) — writes to a temp corpus root
 # --------------------------------------------------------------------------- #
@@ -402,7 +468,8 @@ _VALID_METRIC = {
     "id": "metric_test_kpi",
     "name": "Test KPI",
     "base_table": "tbl_beer_factory_transaction",
-    "expression": "count of transactions",
+    # Must be sqlglot-parseable (corpus validate rejects natural-language expressions).
+    "expression": "COUNT(*)",
 }
 
 
@@ -419,6 +486,90 @@ def _edit_client(tmp_path, **flags):
 def test_corpus_edit_disabled_returns_403(tmp_path):
     client = _edit_client(tmp_path, can_edit=False, edit_mode=None)
     r = client.post("/corpus/edit", json={"asset": _VALID_METRIC})
+    assert r.status_code == 403
+
+
+def test_build_stack_allow_edit_follows_settings():
+    # Committed TOML defaults allow_edit false; capabilities must match.
+    stack = build_stack(replace(load_settings(apply_local=False), allow_edit=False))
+    assert stack.can_edit is False
+    body = TestClient(create_app(stack)).get("/capabilities").json()
+    assert body["can_edit"] is False
+
+
+def test_corpus_edit_auth_rejects_bad_or_missing_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("GOVERNED_BI_API_KEY", "correct-secret")
+    settings = replace(
+        load_settings(apply_local=False),
+        allow_edit=True,
+        serve_api_key_env="GOVERNED_BI_API_KEY",
+    )
+    shutil.copytree(CORPUS_ROOT / "beer_factory", tmp_path / "beer_factory")
+    stack = replace(build_stack(settings), corpus_root=tmp_path, can_edit=True, edit_mode="file")
+    client = TestClient(create_app(stack))
+
+    assert client.post("/corpus/edit", json={"asset": _VALID_METRIC}).status_code == 401
+    assert (
+        client.post(
+            "/corpus/edit",
+            json={"asset": _VALID_METRIC},
+            headers={"X-API-Key": "wrong"},
+        ).status_code
+        == 401
+    )
+    # Reads stay open even when a serve API key is configured.
+    assert client.get("/capabilities").status_code == 200
+
+
+def test_corpus_edit_auth_accepts_x_api_key_and_bearer(tmp_path, monkeypatch):
+    monkeypatch.setenv("GOVERNED_BI_API_KEY", "correct-secret")
+    settings = replace(
+        load_settings(apply_local=False),
+        allow_edit=True,
+        serve_api_key_env="GOVERNED_BI_API_KEY",
+    )
+    shutil.copytree(CORPUS_ROOT / "beer_factory", tmp_path / "beer_factory")
+    stack = replace(build_stack(settings), corpus_root=tmp_path, can_edit=True, edit_mode="file")
+    client = TestClient(create_app(stack))
+
+    via_header = client.post(
+        "/corpus/edit",
+        json={"asset": _VALID_METRIC},
+        headers={"X-API-Key": "correct-secret"},
+    )
+    assert via_header.status_code == 200
+    assert via_header.json()["written"] is True
+
+    other = {
+        **_VALID_METRIC,
+        "id": "metric_test_kpi_bearer",
+        "name": "Test KPI Bearer",
+    }
+    via_bearer = client.post(
+        "/corpus/edit",
+        json={"asset": other},
+        headers={"Authorization": "Bearer correct-secret"},
+    )
+    assert via_bearer.status_code == 200
+    assert via_bearer.json()["written"] is True
+
+
+def test_corpus_edit_auth_configured_but_edit_disabled_returns_403(tmp_path, monkeypatch):
+    # Auth passes first; allow_edit still gates the write (403, not a silent skip).
+    monkeypatch.setenv("GOVERNED_BI_API_KEY", "correct-secret")
+    settings = replace(
+        load_settings(apply_local=False),
+        allow_edit=False,
+        serve_api_key_env="GOVERNED_BI_API_KEY",
+    )
+    shutil.copytree(CORPUS_ROOT / "beer_factory", tmp_path / "beer_factory")
+    stack = replace(build_stack(settings), corpus_root=tmp_path, can_edit=False, edit_mode=None)
+    client = TestClient(create_app(stack))
+    r = client.post(
+        "/corpus/edit",
+        json={"asset": _VALID_METRIC},
+        headers={"X-API-Key": "correct-secret"},
+    )
     assert r.status_code == 403
 
 

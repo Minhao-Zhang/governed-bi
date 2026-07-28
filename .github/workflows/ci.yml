@@ -39,7 +39,26 @@ jobs:
       - name: Validate corpus
         run: uv run python -m governed_bi.corpus.cli
 
-      # -rs surfaces the reason for any skip in the log, so a newly-skipped
-      # integration path is visible in review even when the suite is green.
+      # Lint gates the whole tree (AUDIT T5). Config in [tool.ruff]; keep it green
+      # rather than widening `select` ahead of a cleanup pass.
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      # Type-checking gates the governance spine only — the modules that decide
+      # whether a query executes. A whole-tree gate would need ~90 fixes first, and
+      # an unenforceable gate is what AUDIT T5 was about. Widen this list as files
+      # are typed; never widen it past what stays green.
+      - name: Type-check (mypy, governance spine)
+        run: >-
+          uv run mypy
+          src/governed_bi/gateway/guardrails.py
+          src/governed_bi/gateway/gateway.py
+          src/governed_bi/gateway/connectors/postgres.py
+          src/governed_bi/analyst/governance.py
+          src/governed_bi/analyst/answer.py
+          src/governed_bi/analyst/middleware.py
+
+      # -rs surfaces skip reasons. --strict-markers + ResourceWarning visibility
+      # come from [tool.pytest.ini_options] in pyproject.toml (AUDIT T5).
       - name: Run tests
         run: uv run pytest -q -rs

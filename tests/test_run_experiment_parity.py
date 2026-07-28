@@ -121,7 +121,14 @@ def test_cost_block_matches_the_pooled_driver_shape():
 
     pooled = _summarise_rows("curated", rows)
     ours = asdict(_arm(*_fixture())[1])
-    for key in ("mean_attempts", "n_wrong_but_nrows_match", "n_missing_gold"):
+    for key in (
+        "mean_attempts",
+        "n_wrong_but_nrows_match",
+        "n_missing_gold",
+        "n_correct_with_empty_gold",
+        "n_correct_and_pred_has_no_from",
+        "n_correct_and_zero_table_overlap",
+    ):
         assert key in pooled and key in ours, key
 
 
@@ -337,7 +344,8 @@ def test_treatment_and_errors_land_where_the_ledger_looks():
     to be written only under `ex_crosscheck`, so the gate could never see them."""
     import inspect
 
-    from governed_bi.eval import index, run_experiment as mod
+    from governed_bi.eval import index
+    from governed_bi.eval import run_experiment as mod
 
     assert 'summary.get("arms")' in inspect.getsource(index._undelivered)
     src = inspect.getsource(mod)

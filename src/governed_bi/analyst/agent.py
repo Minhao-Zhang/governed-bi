@@ -10,10 +10,11 @@ channels — so a future checkpointer stays thin.
 
 from __future__ import annotations
 
+import hashlib
+import re
+import time
 from dataclasses import replace
 from datetime import datetime
-import hashlib
-import time
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from langchain.agents import create_agent
@@ -38,9 +39,11 @@ from ..retrieval import (
 )
 from ..stages import Stage
 from .answer import refusal
+from .clarify import new_clarification_id, parse_response
 from .context import assemble_context
 from .governance import (
     _ESCALATION_GUARDRAIL,
+    _ESCALATION_MODEL_ERROR,
     _ESCALATION_NO_COVERAGE,
     _LEDGER_STATUS,
     GovEventStream,
@@ -53,7 +56,6 @@ from .governance import (
     missing_edge_refusal,
     narrate_answer,
 )
-from .run_log import FinalizeCtx, amend_run_tokens, finalize_and_log, new_run_id
 from .middleware import (
     AGENT_RECURSION_LIMIT,
     GovernanceHardStop,
@@ -61,8 +63,8 @@ from .middleware import (
     licensed_physical_names,
     result_from_ledger,
 )
-from .clarify import new_clarification_id, parse_response
 from .routing import bind_terms, route_intent
+from .run_log import FinalizeCtx, amend_run_tokens, finalize_and_log, new_run_id
 from .sqlgen import GeneratedSql, _tables_used
 from .tools import make_tools
 
@@ -213,6 +215,9 @@ def build_agent_core(
     # The graph's shared retrieval index, so the agent's ``search_corpus`` does not rebuild
     # one per call. See :func:`make_tools`.
     index_cache: Any = None,
+    # The routed schema set for this turn; bounds what ``inspect_schema`` may license
+    # (AUDIT S4). None = unbounded, correct for a single-schema corpus.
+    licensable_schemas: "frozenset[str] | set[str] | None" = None,
 ):
     """Assemble ``create_agent`` with governed tools + middleware.
 
@@ -229,6 +234,7 @@ def build_agent_core(
         embedder=embedder,
         enable_clarify=enable_clarify,
         index_cache=index_cache,
+        licensable_schemas=licensable_schemas,
     )
     mw = GovernanceMiddleware(
         corpus,
@@ -258,6 +264,45 @@ def build_agent_core(
     return return_agent
 
 
+def _final_text(final: dict) -> str:
+    """Text of the agent's last AI message (its closing statement), or ``""``."""
+    for msg in reversed(list(final.get("messages") or [])):
+        if isinstance(msg, AIMessage):
+            content = msg.content
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                return " ".join(
+                    part.get("text", "") if isinstance(part, dict) else str(part)
+                    for part in content
+                )
+            return str(content or "")
+    return ""
+
+
+def _sql_fingerprint(sql: str) -> str:
+    """Whitespace/case/quote-insensitive key for comparing two SQL strings."""
+    return re.sub(r'[\s"`\[\]]+', "", str(sql or "")).lower().rstrip(";")
+
+
+def _sql_blocks_in_text(text: str) -> list[str]:
+    """SQL the agent quoted in its closing message, best-effort.
+
+    Fenced blocks first (``` or ```sql), then a bare trailing SELECT. Only used to
+    *choose among* queries that already executed and passed — never as SQL to run,
+    so a sloppy extraction can pick the wrong recorded query but can never introduce
+    an unguardrailed one.
+    """
+    if not text:
+        return []
+    fence = chr(96) * 3
+    blocks = re.findall(rf"{fence}(?:sql)?\s*(.+?){fence}", text, re.S | re.I)
+    if blocks:
+        return [b.strip() for b in blocks]
+    bare = re.findall(r"(?is)\b(select\b.+?)(?:;|\Z)", text)
+    return [b.strip() for b in bare]
+
+
 def extract_final_sql(
     final: dict,
     *,
@@ -265,19 +310,48 @@ def extract_final_sql(
     dialect: str,
     default_schema: str | None = None,
 ) -> tuple[str | None, frozenset[str], dict | None]:
-    """Last passing ``run_query``: sql, tables_used from SQL parse (G3), ledger entry."""
+    """The query the agent presented as its answer: sql, tables_used (G3), ledger entry.
+
+    Preference order:
+
+    1. A passing ``run_query`` whose SQL the agent quoted in its final message.
+    2. Otherwise the **last** passing ``run_query``.
+
+    (2) alone was the whole rule, and it silently mis-reports any turn that runs a
+    sanity check after its real answer — "revenue by region" followed by a
+    ``SELECT COUNT(*)`` to confirm the row count delivers the count as the answer,
+    with the correct query sitting earlier in the same ledger (AUDIT R1). The agent's
+    own closing message is the only place its intent is stated, so consult it first
+    and fall back to positional order when it says nothing usable.
+
+    The chosen entry carries ``final_sql_source`` (``"agent_final_message"`` or
+    ``"last_passing"``) so a scored row records which rule applied.
+    """
     ledger = list(final.get("ledger") or [])
     phys_to_id = _physical_to_id_map(corpus)
-    for entry in reversed(ledger):
-        if entry.get("action") == "run_query" and entry.get("verdict") == "pass":
-            sql = entry.get("sql")
-            if not sql:
-                continue
-            tables_used = _tables_used(
-                sql, phys_to_id, dialect, default_schema=default_schema
-            )
-            return sql, tables_used, entry
-    return None, frozenset(), None
+    passing = [
+        e
+        for e in ledger
+        if e.get("action") == "run_query" and e.get("verdict") == "pass" and e.get("sql")
+    ]
+    if not passing:
+        return None, frozenset(), None
+
+    chosen: dict | None = None
+    source = "last_passing"
+    if len(passing) > 1:
+        quoted = {_sql_fingerprint(b) for b in _sql_blocks_in_text(_final_text(final))}
+        if quoted:
+            for entry in reversed(passing):
+                if _sql_fingerprint(entry["sql"]) in quoted:
+                    chosen, source = entry, "agent_final_message"
+                    break
+    if chosen is None:
+        chosen = passing[-1]
+
+    sql = chosen["sql"]
+    tables_used = _tables_used(sql, phys_to_id, dialect, default_schema=default_schema)
+    return sql, tables_used, {**chosen, "final_sql_source": source}
 
 
 def build_serve_rails(
@@ -298,6 +372,13 @@ def build_serve_rails(
     clarify_resume: Any = None,
     run_id: str | None = None,
     n_human: int = 1,
+    # Caller-owned, reusable across turns. The rails are rebuilt per question (the
+    # per-turn closures make that the simple thing), which meant re-embedding every
+    # schema document and every routed asset on every question (AUDIT R6). Passing a
+    # cache in decouples the expensive, corpus-constant work from graph construction.
+    # ``None`` keeps the old behaviour: a fresh, graph-scoped cache.
+    index_cache: "RetrievalIndexCache | None" = None,
+    schema_vectors: Any = None,
 ):
     """Compile the outer deterministic StateGraph wrapping the agent core.
 
@@ -353,18 +434,16 @@ def build_serve_rails(
     # Schema-document vectors are constant per corpus: embed them once here rather
     # than re-embedding every schema doc on each question (O(schemas) embed calls
     # per turn at data-lake scale). Only the question is embedded per turn.
-    router_schema_vectors = (
-        embed_schema_documents(corpus, embedder)
-        if spans_schemas and embedder is not None
-        else None
-    )
+    router_schema_vectors = schema_vectors
+    if router_schema_vectors is None and spans_schemas and embedder is not None:
+        router_schema_vectors = embed_schema_documents(corpus, embedder)
     # Retrieval indexes are constant per routed corpus, exactly like the schema
     # vectors above — but ``retrieve`` used to rebuild both on every question, which
     # meant re-embedding every asset in the routed corpus per turn. Only the question
     # embedding is genuinely per-turn. Both caches are graph-scoped closures, so each
     # eval worker's graph owns its own and they need no lock (see ``eval/parallel.py``
     # on per-worker isolation); they die with the graph, so nothing crosses runs.
-    _index_cache = RetrievalIndexCache()
+    _index_cache = index_cache if index_cache is not None else RetrievalIndexCache()
     _routed_corpora: dict[frozenset, "Corpus"] = {}
     # One rich-event emitter for the whole turn (reset in `ingest`); the agent path
     # emits the {seq,kind,step,status,detail} contract, never the legacy {stage}
@@ -508,6 +587,7 @@ def build_serve_rails(
             # regime). Record both counts + the pick so a scale run can see how the
             # shortlist prunes and where it routed (silent mis-routing would
             # otherwise be invisible in the EX number).
+            route_channel: dict = {}
             shortlisted = shortlist_schemas(
                 corpus,
                 question,
@@ -516,7 +596,11 @@ def build_serve_rails(
                 schema_vectors=router_schema_vectors,
                 settings=settings,
                 index_cache=_index_cache,
+                channel_out=route_channel,
             )
+            # A silent embedding->BM25 degradation halves routing recall
+            # (0.70 -> 0.35); recorded so the drop is attributable (AUDIT R8).
+            base_provenance = {**base_provenance, **route_channel}
             picked: str | None = None
             pick_fallback: str | None = None
             if router_chat is not None and shortlisted:
@@ -616,6 +700,10 @@ def build_serve_rails(
         base_provenance = {
             **base_provenance,
             "retrieved_tables": _table_provenance_names(corpus, retrieval.table_ids),
+            # Carried so the stamp can say something about the *evidence*, not only
+            # about what went wrong downstream (AUDIT C2). 0.0 = the question names
+            # nothing this corpus contains.
+            "retrieval_lexical_coverage": retrieval.lexical_coverage,
         }
         missing = detect_missing_join_path(
             corpus, graph_obj, set(retrieval.table_ids)
@@ -889,6 +977,12 @@ def build_serve_rails(
             checkpointer=clarify_checkpointer,
             stages=stages,
             index_cache=_index_cache,
+            # Recorded by assemble_node; absent (or empty) on a single-schema corpus
+            # where routing never runs, which leaves the scope unbounded as before.
+            licensable_schemas=frozenset(
+                state.get("base_provenance", {}).get("routed_schemas") or ()
+            )
+            or None,
         )
 
         # One tracing handler per turn: it is attached at the outer graph.invoke
@@ -1007,12 +1101,14 @@ def build_serve_rails(
         except Exception as e:
             # L4: model/call failure — drain failed-call stubs and still emit one
             # portable record (metadata-only; no exception message text).
+            # Distinct from coverage refusals: do not tell the user to add coverage
+            # when the failure was infrastructure (AUDIT R2).
             mw = getattr(agent, "_gov_middleware", None)
             if mw is not None and mw.failed_model_calls:
                 events.add_token_usage(mw.failed_model_calls)
                 mw.failed_model_calls.clear()
             ans = refusal(
-                escalation=_ESCALATION_NO_COVERAGE,
+                escalation=_ESCALATION_MODEL_ERROR,
                 provenance={
                     **state["base_provenance"],
                     "refused_by": "model_error",
@@ -1233,6 +1329,8 @@ def answer_question_agent(
     clarify_resume: Any = None,
     run_id: str | None = None,
     n_human: int = 1,
+    index_cache: "RetrievalIndexCache | None" = None,
+    schema_vectors: Any = None,
 ) -> "Answer | ClarificationPending":
     """Run one question through the agentic serve rails.
 
@@ -1259,6 +1357,8 @@ def answer_question_agent(
         clarify_resume=clarify_resume,
         run_id=_run_id,
         n_human=n_human,
+        index_cache=index_cache,
+        schema_vectors=schema_vectors,
     )
     final = graph.invoke(
         {

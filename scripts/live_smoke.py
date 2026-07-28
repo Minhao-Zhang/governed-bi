@@ -63,6 +63,7 @@ def main() -> None:
     except ImportError as err:
         _fail(f"LangChain/deepagents deps failed to import ({err}). Run: uv sync")
 
+    from governed_bi.analyst.agent import answer_question_agent
     from governed_bi.config import Environment, Settings, load_settings
     from governed_bi.corpus import load_corpus
     from governed_bi.eval import (
@@ -75,7 +76,6 @@ def main() -> None:
         run_arm,
     )
     from governed_bi.gateway import Gateway, Identity, SqliteConnector, column_allowlist
-    from governed_bi.analyst.agent import answer_question_agent
 
     models = load_settings(REPO_ROOT / "governed_bi.toml").models
     print(f"models: llm={models.llm_model} (effort={models.llm_reasoning_effort}) "

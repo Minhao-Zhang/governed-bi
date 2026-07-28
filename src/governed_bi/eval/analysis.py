@@ -43,7 +43,7 @@ from typing import Any, Iterable
 import sqlglot
 from sqlglot import exp
 
-from .arms import ARM_ORDER, skipped_rungs
+from .arms import ARM_ORDER, skipped_rungs, step_mechanisms
 from .leakage import is_gradeable_eval_row
 from .power import holm_adjust
 
@@ -745,9 +745,15 @@ def analyse_run(
         placed = on_ladder.get(key)
         if placed is None:
             entry["single_variable"] = None
+            entry["mechanisms_changed"] = []
             continue
         bundles = skipped_rungs(*placed)
-        entry["single_variable"] = not bundles
+        # Adjacency and "one mechanism" are different claims — see
+        # ``arms.step_mechanisms`` and AUDIT E5.
+        mechanisms = step_mechanisms(*placed)
+        entry["adjacent_rung"] = not bundles
+        entry["mechanisms_changed"] = list(mechanisms)
+        entry["single_variable"] = not bundles and len(mechanisms) == 1
         if bundles:
             entry["bundles"] = bundles
 

@@ -21,8 +21,8 @@ from governed_bi.analyst.agent import answer_question_agent
 from governed_bi.analyst.answer import refusal
 from governed_bi.analyst.governance import GovEventStream, StageRecorder
 from governed_bi.analyst.run_log import (
-    FinalizeCtx,
     _INSTRUMENTATION_KEYS,
+    FinalizeCtx,
     build_metadata_record,
     finalize_and_log,
     load_run_record,
@@ -511,3 +511,25 @@ def test_a_crash_inside_agent_core_is_attributed_to_agent_core(
     assert {e["status"] for e in ans.provenance["stage_events"] if e["stage"] == "retrieve"} == {
         "ok"
     }
+
+
+def test_model_error_refusal_does_not_ask_for_coverage(
+    corpus, bird_gateway, settings, identity
+):
+    """Regression for AUDIT R2: a raised non-governance exception must surface as
+    a system-error message, not the coverage-escalation canned blob."""
+    ans = answer_question_agent(
+        "total revenue",
+        identity,
+        corpus=corpus,
+        gateway=bird_gateway,
+        settings=settings,
+        session_id="r2-model-error-wording",
+        model=_ExplodingModel(responses=[AIMessage(content="unused")]),
+    )
+    assert ans.provenance["refused_by"] == "model_error"
+    assert ans.escalation is not None
+    assert "contact the data owner to add coverage" not in ans.escalation.lower()
+    assert "outside the governed semantic layer" not in ans.escalation.lower()
+    assert "temporary system error" in ans.escalation.lower()
+    assert "try again" in ans.escalation.lower()

@@ -24,6 +24,7 @@ from langgraph.types import Command
 
 from ..corpus.schemas import TableAsset
 from ..gateway import GuardrailLayer, QueryResult, check, column_allowlist
+from ..gateway.guardrails import canonical_identifier_map, canonicalize_identifiers
 from ..graph import build_graph, detect_missing_join_path
 from ..stages import Stage
 from .governance import StageRecorder
@@ -157,6 +158,17 @@ class GovernanceMiddleware(AgentMiddleware):
         self._gateway = gateway
         self._identity = identity
         self._allowlist = column_allowlist(corpus)
+        # Folded identifier -> the spelling the corpus declares, so generated SQL
+        # reaches the engine in the physical case even when the model guessed (S1).
+        self._canonical_idents = canonical_identifier_map(
+            set(self._allowlist.allowed)
+            | set(self._allowlist.suspect)
+            | {
+                f"{a.schema}.{a.physical_name}"
+                for a in corpus.assets
+                if isinstance(a, TableAsset)
+            }
+        )
         self._dialect = dialect
         self._default = default_schema
         self._settings = settings
@@ -312,19 +324,41 @@ class GovernanceMiddleware(AgentMiddleware):
         else:
             raw = args.get("sql") or ""
             try:
-                sql = sqlglot.transpile(
-                    raw, read=self._dialect, write=self._dialect, identify=True
-                )[0]
+                # Rewrite identifiers to the corpus's own spelling before quoting.
+                # L3 folds case on Postgres/Redshift, so `customerid` clears a
+                # `CustomerID` allowlist key; quoting the model's spelling would
+                # then hand the engine an identifier that does not exist (AUDIT S1).
+                sql = canonicalize_identifiers(
+                    raw, dialect=self._dialect, names=self._canonical_idents
+                )
             except Exception:
+                # Normalisation is cosmetic, not a control: the guardrails run on
+                # whatever string we pass on, so falling back to the model's raw SQL
+                # is safe — it is checked either way. Recorded so a systematic
+                # normalisation failure is visible instead of silent.
                 sql = raw
+                self._stages.skipped("sql_normalisation", reason="canonicalisation failed")
             action = "run_query"
             # Attempt cap only for run_query (ADR Q6)
             prior = sum(1 for e in prior_ledger if e.get("action") == "run_query")
             if prior >= RUN_QUERY_CAP:
+                # `goto="__end__"`: stop the loop, do not merely refuse the call.
+                # Returning a ToolMessage let the agent keep going — burning model
+                # round-trips against a cap it can never clear until the 40-step
+                # recursion limit finally stopped it (AUDIT R8). There is no wall-clock
+                # or token bound on a turn, so those round-trips were unbounded cost
+                # for a turn whose outcome was already decided.
                 return Command(
+                    goto="__end__",
                     update={
                         "messages": [
-                            ToolMessage(content="attempt cap reached", tool_call_id=tcid)
+                            ToolMessage(
+                                content=(
+                                    "attempt cap reached: no further queries will run "
+                                    "this turn"
+                                ),
+                                tool_call_id=tcid,
+                            )
                         ],
                         "ledger": [
                             {
@@ -381,8 +415,26 @@ class GovernanceMiddleware(AgentMiddleware):
         # D15: a passing query that reaches ACROSS schemas must be connected by a
         # curated JoinAsset, never a self-authorized structural join. No-op unless the
         # SQL spans >=2 schemas with no curated path (single-schema always None).
+        # Fail-closed on detector exception: check() does not enforce D15, so a
+        # parse/plan crash must not let an undeclared cross-schema join execute.
         if action == "run_query":
-            missing = self._cross_schema_missing_join(sql)
+            try:
+                missing = self._cross_schema_missing_join(sql)
+            except Exception as err:
+                entry = {
+                    "action": "run_query",
+                    "verdict": "block",
+                    "layer": GuardrailLayer.term_semantics.value,
+                    "reason": (
+                        "cross-schema join detector failed (D15 fail-closed): "
+                        f"{type(err).__name__}"
+                    ),
+                    "sql": sql,
+                    "allowed": sorted(allowed_tables),
+                    "licensed_ids": sorted(licensed_ids),
+                    **_ledger_stamp(t0),
+                }
+                raise GovernanceHardStop(entry, ledger=prior_ledger)
             if missing is not None:
                 entry = {
                     "action": "run_query",
@@ -482,19 +534,16 @@ class GovernanceMiddleware(AgentMiddleware):
 
     def _cross_schema_missing_join(self, sql: str):
         """A ``MissingJoinPath`` when ``sql`` joins across schemas with no curated
-        join path, else ``None``. Best-effort parse; a single-schema query (the BIRD
-        path) is always ``None`` — ``detect_missing_join_path`` gates on >=2 schemas.
+        join path, else ``None``. A single-schema query (the BIRD path) is always
+        ``None`` — ``detect_missing_join_path`` gates on >=2 schemas.
+
+        Exceptions propagate to the ``run_query`` choke point, which fail-closes
+        (D15): ``check()`` does not enforce cross-schema curated joins, so a
+        detector crash must not execute the query.
         """
         from .sqlgen import _tables_used  # lazy: keep the import graph acyclic
 
-        # Best-effort and correctness-neutral: a parse/plan hiccup must never turn a
-        # governed answer into an error, so any failure here yields "no missing edge"
-        # (the query has already passed check()). Fail-open is safe because a genuine
-        # cross-schema-without-curated-join case is what this catches, not a leak.
-        try:
-            tables_used = _tables_used(
-                sql, self._phys_to_id, self._dialect, default_schema=self._default
-            )
-            return detect_missing_join_path(self._corpus, self._graph, set(tables_used))
-        except Exception:
-            return None
+        tables_used = _tables_used(
+            sql, self._phys_to_id, self._dialect, default_schema=self._default
+        )
+        return detect_missing_join_path(self._corpus, self._graph, set(tables_used))

@@ -182,6 +182,12 @@ def shortlist_schemas(
     schema_vectors: "dict[str, list[float]] | None" = None,
     settings: "Settings | None" = None,
     index_cache: "RetrievalIndexCache | None" = None,
+    # Out-param: the caller records WHICH channel produced the ranking. Embedding
+    # recall@3 is 0.70 and the BM25 fallback's is 0.35, so a silent degradation
+    # roughly halves routing recall with nothing in the record to explain the drop
+    # (AUDIT R8) — a run could look like a curation failure when it was a dead
+    # embedding endpoint. Values: "embedding" | "bm25_fallback" | "none".
+    channel_out: dict | None = None,
 ) -> list[str]:
     """Rank schemas against ``question`` and return up to ``top_k`` names.
 
@@ -233,13 +239,20 @@ def shortlist_schemas(
                 (s, sc) for s, vec in vec_items if (sc := cosine(q_vec, vec)) > 0.0
             ]
             ranked.sort(key=lambda p: (-p[1], p[0]))
+    if ranked and channel_out is not None:
+        channel_out["schema_route_channel"] = "embedding"
     if not ranked:  # no embedder, or it scored nothing → BM25 fallback
+        if channel_out is not None:
+            channel_out["schema_route_channel"] = "bm25_fallback"
+            channel_out["schema_route_degraded"] = embedder is not None
         ranked = (
             index_cache.schema_bm25(corpus)
             if index_cache is not None
             else BM25Index.from_documents(schema_documents(corpus))
         ).rank(question)
     if not ranked:
+        if channel_out is not None:
+            channel_out["schema_route_channel"] = "none"
         return schemas  # fail-open: no signal → keep all
     out = [s for s, _ in ranked[:top_k]]
 

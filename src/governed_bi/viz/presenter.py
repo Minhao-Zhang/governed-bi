@@ -31,8 +31,8 @@ from ..corpus.schemas import (
 )
 
 if TYPE_CHECKING:
-    from ..corpus import Corpus
     from ..analyst.answer import Answer
+    from ..corpus import Corpus
 
 # A join at or below this confidence is flagged in the health view (tunable).
 LOW_CONFIDENCE_JOIN = 0.7
@@ -320,7 +320,7 @@ class ColumnRelatedView:
 class AnswerView:
     tier: str  # display-only projection (ReliabilityTier) for a compact badge; NOT canonical
     safety_clearance: bool  # axis 1 (canonical): guardrails + authorization passed
-    semantic_assurance: str  # axis 2 (canonical): how well-grounded (drives delivery), not "is it right"
+    semantic_assurance: str  # axis 2 (canonical): uncertainty-flag level (drives delivery), not "is it right"
     text: str | None
     sql: str | None
     escalation: str | None
@@ -829,6 +829,14 @@ def _redact_provenance_for_client(provenance: dict) -> dict:
                     res["rows"] = []
                     res["rows_redacted"] = True
                 entry = {**entry, "result": res}
+            # `reason` too, not just rows. For verdict="error" it is raw str(err),
+            # and libpq embeds the offending statement ("LINE 1: SELECT ..."), so a
+            # guardrail message can echo question literals and PII. run_log.py drops
+            # it for exactly this reason; this surface is reachable ANONYMOUSLY and
+            # was using the weaker policy (AUDIT S7). The layer/verdict stay, so the
+            # audit view still shows what blocked and where.
+            if isinstance(entry, dict) and entry.get("reason") is not None:
+                entry = {**entry, "reason": None, "reason_redacted": True}
             redacted.append(entry)
         out["governance_ledger"] = redacted
     return out

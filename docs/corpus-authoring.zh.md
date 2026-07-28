@@ -197,8 +197,11 @@ uv run python -m governed_bi.corpus.cli corpus/demo
 校验通过（green），意味着所有 id 格式都正确，且每一个引用都能成功解析。命令会打印一行摘要，列出你的资产数量，例如：
 
 ```
-CI green: 6 assets, 0 findings.
+CI green: 5 assets, 0 findings.
 ```
+
+（这个数字取决于 §1-§8 最终给你留下了多少个 YAML 文件——如果严格照做，应该是五个。
+上面原来写的是六个，任何按教程操作的读者都得不出这个数。）
 
 如果哪里有问题，每条 finding 都会指出具体的资产和存在的问题。常见的几种如下：
 

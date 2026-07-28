@@ -35,21 +35,21 @@ from __future__ import annotations
 from .embedding import EmbeddingIndex, build_embedding_index, fuse_rankings
 from .rvgd import (
     BM25Index,
+    RetrievalIndexCache,
     RetrievalResult,
     asset_document,
-    RetrievalIndexCache,
     build_index,
     corpus_index_key,
     retrieve,
     tokenize,
 )
 from .schema_router import (
+    SchemaPick,
     embed_schema_documents,
     expand_schemas_via_curated_joins,
     filter_corpus_for_retrieval,
-    route_schemas,
-    SchemaPick,
     pick_schema,
+    route_schemas,
     shortlist_schemas,
 )
 from .triggers import fire_triggers

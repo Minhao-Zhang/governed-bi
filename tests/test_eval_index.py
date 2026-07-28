@@ -9,6 +9,8 @@ import json
 import pytest
 
 from governed_bi.eval.index import (
+    COMPARABILITY_KEYS,
+    RESUME_DRIFT_KEYS,
     append_run,
     comparable,
     index_run,
@@ -17,7 +19,6 @@ from governed_bi.eval.index import (
     record_for_run,
     render_index,
 )
-from governed_bi.eval.index import COMPARABILITY_KEYS, RESUME_DRIFT_KEYS
 
 
 def _write_run(
@@ -87,6 +88,29 @@ def test_a_crashed_arm_makes_a_run_unquotable(tmp_path):
     assert not ok
     assert any("crashed" in r for r in reasons)
     # The arm that crashed must be named — "some arm crashed" is not actionable.
+    assert any("curated" in r for r in reasons)
+
+
+def test_re_served_crashed_turns_make_a_run_unquotable(tmp_path):
+    """Resume that deletes crashed rows and re-serves them launders crash_rate to 0
+    (audit E1). ``n_re_served`` in the arm summary must block quotability."""
+    run = _write_run(
+        tmp_path,
+        arms={
+            "baseline": {"n": 72, "ex_lenient": 0.2, "crash_rate": 0.0, "n_re_served": 0},
+            "curated": {
+                "n": 72,
+                "ex_lenient": 0.33,
+                "crash_rate": 0.0,
+                "n_re_served": 12,
+            },
+        },
+    )
+    record = record_for_run(run)
+    assert record["n_re_served_by_arm"] == {"curated": 12}
+    ok, reasons = quotable(record)
+    assert not ok
+    assert any("re-served" in r for r in reasons)
     assert any("curated" in r for r in reasons)
 
 
@@ -393,7 +417,7 @@ def test_every_resume_drift_key_is_actually_checked(tmp_path, key, label):
     original = {"split": "test", "model": "gpt-5.6-luna", "git_sha": "abc123",
                 "skip_agent": False, "prompt_set_hash": "h0", "route_top_k": 10,
                 "route_llm_pick": True, "schema_pick_max_columns": 12,
-                "use_embedder": True}
+                "use_embedder": True, "corpus_content_hash": "c0"}
     changed = dict(original)
     was = original[key]
     changed[key] = (not was) if isinstance(was, bool) else f"{was}-changed"

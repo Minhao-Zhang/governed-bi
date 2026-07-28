@@ -13,12 +13,12 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import AIMessage
 
+from governed_bi.analyst.agent import answer_question_agent
+from governed_bi.analyst.answer import ReliabilityTier, SemanticAssurance
 from governed_bi.config import Environment, Settings
 from governed_bi.corpus import load_corpus
 from governed_bi.gateway import Gateway, Identity, SqliteConnector
 from governed_bi.llm.fake import FakeToolModel, ai_tool_turn
-from governed_bi.analyst.agent import answer_question_agent
-from governed_bi.analyst.answer import ReliabilityTier, SemanticAssurance
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 BIRD_DB = Path(__file__).resolve().parents[1] / "data" / "bird" / "beer_factory.sqlite"
@@ -135,5 +135,55 @@ def test_invariant_safety_clearance_on_agent_path(
     )
     assert ans.tier is ReliabilityTier.governed
     assert ans.safety_clearance is True
-    assert ans.semantic_assurance is SemanticAssurance.grounded
+    assert ans.semantic_assurance is SemanticAssurance.unflagged
     assert ans.sql is not None
+
+
+# --------------------------------------------------------------------------- #
+# AUDIT R4: executions outside wrap_tool_call must still leave a ledger entry
+# --------------------------------------------------------------------------- #
+
+
+def test_out_of_band_entry_names_its_path_and_carries_the_result():
+    from governed_bi.analyst.governance import _out_of_band_ledger_entry
+    from governed_bi.gateway import QueryResult
+
+    result = QueryResult(columns=["n"], rows=[(3,)], row_count=1, truncated=False)
+    entry = _out_of_band_ledger_entry("SELECT 1", result, path="cache", t0=0.0)
+
+    assert entry["action"] == "run_query"
+    assert entry["verdict"] == "pass"
+    # Which bypass produced it — otherwise it is indistinguishable from a tool call.
+    assert entry["path"] == "cache"
+    assert entry["result"]["row_count"] == 1
+    assert "ts" in entry and "duration_ms" in entry
+
+
+def test_out_of_band_entry_records_a_failed_execution():
+    from governed_bi.analyst.governance import _out_of_band_ledger_entry
+
+    entry = _out_of_band_ledger_entry(
+        "SELECT 1", None, path="graded_delivery", t0=0.0, error="OperationalError: gone"
+    )
+    assert entry["verdict"] == "error"
+    assert entry["reason"] == "OperationalError: gone"
+    assert "result" not in entry
+
+
+def test_run_log_write_failure_is_stated_on_the_answer(tmp_path, monkeypatch):
+    """A turn whose audit row did not land must not look fully audited."""
+    from governed_bi.analyst import run_log as run_log_mod
+
+    monkeypatch.setattr(
+        run_log_mod, "_upsert_sqlite", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full"))
+    )
+    from dataclasses import replace as _replace
+
+    settings = _replace(
+        Settings.for_env(Environment.dev),
+        run_log_kind="sqlite",
+        run_log_path=str(tmp_path / "runs.sqlite"),
+    )
+
+    err = run_log_mod.append_run_record({"turn_id": "t:1"}, settings)
+    assert err is not None and "disk full" in err

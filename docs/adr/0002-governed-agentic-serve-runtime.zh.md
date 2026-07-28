@@ -18,7 +18,7 @@ _[English](0002-governed-agentic-serve-runtime.md) · [简体中文](0002-govern
 - **推理是确定性的，但是笨的。** 意图路由靠关键词匹配；schema 选择只看检索分数；**SQL 生成是盲的单次生成**——模型从不查看真实的表结构，这正是 `RA` 未加引号那次执行失败的直接原因（「它根本看不到表结构」）；修复则是手写的 `while attempts < 3` 循环。
 - **既有的不变量恰好禁止了这个修法。** pipeline-design §8 宣布服务侧绝不能跑自主循环——而这恰恰就是让生成器*先看再跳*所需要的东西。
 
-本次会议作出的决定：把运行时做成真正有智能的（一个**完整的 agentic 内核**），并推翻「绝不自主循环」这条不变量——**但前提是治理由构造保证**，而不是靠约定俗成。
+本次会议作出的决定：把运行时做成真正有智能的（一个**完整的 agentic 内核**），并推翻「绝不自主循环」这条不变量——**但前提是治理由构造保证**，而不是靠约定俗成。这是设计意图，拓扑结构落实了它的大部分——但不是全部：语义缓存命中与分级交付都在 `wrap_tool_call` 之外执行（各自写自己的 ledger 记录），分级交付用 `allowed_tables=None` 重新检查、因此跳过了 L4，持久运行日志的写入也是尽力而为的。这些是约定，本文如实记录，而不是把它们说没了。
 
 ## 决策
 
@@ -43,7 +43,7 @@ _[English](0002-governed-agentic-serve-runtime.md) · [简体中文](0002-govern
 
 | # | 问题 | 决策 |
 |---|---|---|
-| Q1 | 这个内核在 LangGraph 里怎么搭？ | **`create_agent` + `AgentMiddleware`**，外面套一层很薄的 `StateGraph`。治理 = `wrap_tool_call`（护栏 + 审计）与 `wrap_model_call`（按身份限定工具范围）——*不是*手工接线的节点，*也不是*一个不透明的 `create_react_agent`。 |
+| Q1 | 这个内核在 LangGraph 里怎么搭？ | **`create_agent` + `AgentMiddleware`**，外面套一层很薄的 `StateGraph`。治理 = `wrap_tool_call`（护栏 + 审计）与 `wrap_model_call`（串行化工具调用 + token 采集）——*不是*手工接线的节点，*也不是*一个不透明的 `create_react_agent`。此处曾把「按身份限定工具范围」写成已构建，但其实并没有——`wrap_model_call` 从未引用过 `identity`。 |
 | Q2 | 探索会扩大执行权限吗？ | **受治理边界内的动态授权。** 探索类工具尊重 `governance.excluded`（被排除的资产永远不会浮现）；经由受治理工具浮现出来的表会被加进按轮计的 `licensed` 集合，`run_query` 的护栏把它当作 L4 的 `allowed_tables` 来读；L3 仍然逐列把关。这里接受了一次策略转移：L4 的底线从*「检索召回 + FK 拓扑」*挪到了*「curator 的 `excluded` 标记 + L3 逐列」*。 |
 | Q3 | 审计要多持久？ | **（a）先落在 `Answer` 的 provenance 上**；同时把一个持久化 sink **（c）** 设计成接口，由同一个咽喉点供给；以后再迁移到持久的 **（b）/（c）**。 |
 | Q4 | 保留两条生成路径吗？ | **不——一套 agentic 架构，并且必须有 key。** `TemplateSqlGenerator` 作为服务路径被移除；CI / 离线的确定性改由一个 `FakeListChatModel` 的 agent harness 承担。 |
@@ -65,7 +65,7 @@ START → ingest → refuse_gate ──（命中负例）───────�
                │      agent_core = create_agent(...)     │  ← 智能所在
                │  由 AgentMiddleware 治理：                │
                │   • wrap_tool_call  → 每次调用先规范化 + 护栏 + 审计
-               │   • wrap_model_call → 按身份限定工具范围
+               │   • wrap_model_call → 串行化工具调用 + token 采集
                └───────────────────────────────────────┘
                      │ （sql, rows）        │ 预算耗尽 / 主动放弃
                      ▼                       ▼
@@ -97,7 +97,7 @@ agent 从不直接调用 `gateway.execute`，也从不自己设置可靠性印�
 2. **每个数据工具都是只读且限定范围的**——L3 列白名单 / L4 授权在 `wrap_tool_call` 里强制；被 `excluded` 的资产永不浮现。
 3. **`run_query` 在中间件里被规范化、过护栏、设上限**——agent 无法执行未受治理的 SQL；L2 策略拦截是硬停，绝不喂回去教它绕（对齐 `_NON_REPAIRABLE_LAYERS`）。
 4. **授权来自受治理的探索，而不是 agent 的自我声明**——`allowed_tables` = 本轮*经由受治理工具*浮现出来的表，再做 FK 扩展。召回变成 agentic 的（修掉 RA 的召回不足），同时不给一个失控 agent 自我授权 `excluded` 表的机会。*一旦越出确定性的「检索 + FK」基线，`semantic_assurance` 就降级*（推荐的默认行为），这样「agent 跑偏了」在印章上是看得见的。
-5. **可靠性印章是确定性的**——`safety_clearance` / `semantic_assurance` 由 `finalize` 根据实际发生的事情算出来，**绝不是自报的**。agent 无法宣称自己 `grounded`。
+5. **可靠性印章是确定性的**——`safety_clearance` / `semantic_assurance` 由 `finalize` 根据实际发生的事情算出来，**绝不是自报的**。agent 无法宣称自己 `unflagged`。
 6. **`safety_clearance` 保持二元的硬判定**——只有 `semantic_assurance` 是分级的（§6 的「先交付再分级」不变）。
 7. **有界**——`recursion_limit ≈ 15` 加 `run_query` 尝试上限 3；耗尽 → 分级交付或拒答。
 8. **泄漏边界不变**——gold SQL / 答案永远不进入服务侧。

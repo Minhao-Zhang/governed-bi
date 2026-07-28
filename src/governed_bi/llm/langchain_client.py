@@ -92,6 +92,11 @@ class LangChainChatClient:
             kwargs["reasoning"] = {"effort": models.llm_reasoning_effort}
         if models.llm_max_output_tokens:
             kwargs["max_tokens"] = models.llm_max_output_tokens
+        # Only when set. Sending an explicit temperature to a reasoning model is an
+        # API error on some providers, so `None` still means "provider default" — the
+        # difference is that the default is now recorded rather than unknown (E5).
+        if models.llm_temperature is not None:
+            kwargs["temperature"] = models.llm_temperature
         # Bound wall-clock per call so a stalled connection can't hang a turn.
         if models.request_timeout_s is not None:
             kwargs["timeout"] = models.request_timeout_s
@@ -117,7 +122,9 @@ class LangChainChatClient:
             # Inside a run: let LangChain propagate the parent trace via contextvar.
             message = self.model.invoke(messages)
         else:
-            from ..obs import tracing_callbacks  # noqa: PLC0415 (lazy: avoid import cost when unused)
+            from ..obs import (
+                tracing_callbacks,  # noqa: PLC0415 (lazy: avoid import cost when unused)
+            )
 
             callbacks = tracing_callbacks()
             config = {"callbacks": callbacks} if callbacks else None

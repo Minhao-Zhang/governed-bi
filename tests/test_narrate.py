@@ -8,9 +8,9 @@ conformance, and the deterministic fallbacks.
 
 from __future__ import annotations
 
-from governed_bi.llm import StaticChatClient
 from governed_bi.analyst.answer import ResultTable
 from governed_bi.analyst.narrate import AnswerNarrator, LlmAnswerNarrator
+from governed_bi.llm import StaticChatClient
 
 
 def test_narrator_returns_model_phrasing():

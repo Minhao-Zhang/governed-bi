@@ -40,6 +40,11 @@ from typing import Any, Iterable
 
 DEFAULT_INDEX = Path("runs/index.jsonl")
 
+#: Share of an arm's questions that may score correct for a non-SQL reason before the
+#: run stops being quotable. Not tuned against anything — a deliberate, visible line
+#: rather than the previous absence of one (AUDIT E2).
+FREE_PASS_QUOTABLE_FRACTION = 0.10
+
 #: Knobs that must match before two runs may be compared. Each is (record key,
 #: human label). Keep this list in sync with ``run_datalake``'s resume-drift
 #: guard: both answer the same question — "would mixing these two mislead?" —
@@ -52,6 +57,10 @@ COMPARABILITY_KEYS: tuple[tuple[str, str], ...] = (
     ("route_llm_pick", "llm_pick"),
     ("schema_pick_max_columns", "schema_pick_max_columns"),
     ("use_embedder", "embedder"),
+    # The corpus IS the treatment, and it was the one thing the comparability check
+    # did not cover (AUDIT E5): two runs over different corpora compared cleanly.
+    # `corpus_content_hash` is the per-arm corpus digest; `git_sha` covers the code.
+    ("corpus_content_hash", "corpus content"),
 )
 
 #: Knobs whose change *within a single run directory* corrupts that run, checked by
@@ -234,6 +243,13 @@ def record_for_run(run_dir: Path | str) -> dict[str, Any]:
             "crash_rate": s.get("crash_rate"),
             "routing_recall": s.get("routing_recall"),
             "schema_pick_accuracy": s.get("schema_pick_accuracy"),
+            # Resume that deleted crashed rows and re-served them (audit E1).
+            "n_re_served": s.get("n_re_served"),
+            # Rows scored correct for a reason other than good SQL (audit E2): an
+            # empty gold result, a prediction with no FROM, zero table overlap.
+            "n_correct_with_empty_gold": s.get("n_correct_with_empty_gold"),
+            "n_correct_and_pred_has_no_from": s.get("n_correct_and_pred_has_no_from"),
+            "n_correct_and_zero_table_overlap": s.get("n_correct_and_zero_table_overlap"),
         }
 
     record = {
@@ -316,6 +332,13 @@ def record_for_run(run_dir: Path | str) -> dict[str, Any]:
         "gold_unverified_dbs": sorted(
             (summary.get("gold_hash_self_check") or {}).get("exec_error_dbs") or {}
         ),
+        # Per-arm counts of crashed turns deleted and re-served on resume. A non-zero
+        # total launders ``crash_rate`` back to zero (audit E1); ``quotable`` refuses it.
+        "n_re_served_by_arm": {
+            arm: s.get("n_re_served")
+            for arm, s in arms.items()
+            if isinstance(s, dict) and s.get("n_re_served")
+        },
     }
     ok, reasons = quotable(record)
     _attach_hygiene_and_claim_fields(record, ok=ok, reasons=reasons)
@@ -514,6 +537,43 @@ def quotable(record: dict[str, Any]) -> tuple[bool, list[str]]:
         if crashed:
             detail = ", ".join(f"{a}={v}" for a, v in sorted(crashed.items()))
             reasons.append(f"arms crashed during serve ({detail})")
+        re_served = {
+            arm: s.get("n_re_served")
+            for arm, s in headline.items()
+            if isinstance(s, dict) and s.get("n_re_served")
+        }
+        if re_served:
+            detail = ", ".join(f"{a}={v}" for a, v in sorted(re_served.items()))
+            reasons.append(
+                f"resume re-served crashed turns ({detail}) — those draws were "
+                "resampled after failure, so crash_rate no longer describes the "
+                "original sample; use --replay-crashed to keep crashes visible, or "
+                "start a fresh run"
+            )
+        # Free passes cut the OTHER way from crashes: they inflate a positive result.
+        # The counters existed and fed no gate, so the harness could block a negative
+        # result and never a flattering one (AUDIT E2 / C8). A free pass on more than
+        # a tenth of the scored questions means EX is not measuring better SQL.
+        _FREE_PASS_KEYS = (
+            "n_correct_with_empty_gold",
+            "n_correct_and_pred_has_no_from",
+            "n_correct_and_zero_table_overlap",
+        )
+        inflated: list[str] = []
+        for arm, s in sorted(headline.items()):
+            if not isinstance(s, dict):
+                continue
+            n = s.get("n") or 0
+            worst = max((s.get(k) or 0) for k in _FREE_PASS_KEYS)
+            if n and worst / n > FREE_PASS_QUOTABLE_FRACTION:
+                inflated.append(f"{arm}={worst}/{n}")
+        if inflated:
+            reasons.append(
+                f"free passes dominate the correct rows ({', '.join(inflated)}) — more "
+                f"than {FREE_PASS_QUOTABLE_FRACTION:.0%} of an arm's questions scored "
+                "correct with empty gold, no FROM clause, or zero table overlap, so EX "
+                "does not distinguish better SQL from more over-filtering"
+            )
         unmeasured = sorted(
             arm
             for arm, s in headline.items()

@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .base import ColumnInfo, Connector, Dialect, QueryResult, TableInfo
+from .base import ColumnInfo, Connector, Dialect, QueryResult, TableInfo, _force_row_limit
 
 
 def _ident(name: str) -> str:
@@ -149,9 +149,15 @@ class SqliteConnector(Connector):
             # Return non-zero to abort the running statement once past the deadline.
             return 1 if (time.monotonic() - start) > timeout_s else 0
 
+        # Same forced LIMIT as the Postgres connector. sqlite3 cursors stream, so
+        # this is less urgent here than on psycopg (whose default cursor buffers the
+        # whole result client-side), but `gateway/__init__.py` documents a forced row
+        # cap for the gateway as a whole and SQLite was the one path without it
+        # (AUDIT S7). +1 so `truncated` detection below still works.
+        limited_sql = _force_row_limit(sql, max_rows + 1, dialect="sqlite")
         self._conn.set_progress_handler(_deadline, 1000)
         try:
-            cur = self._conn.execute(sql)  # read-only connection -> writes raise
+            cur = self._conn.execute(limited_sql)  # read-only connection -> writes raise
             columns = [d[0] for d in cur.description] if cur.description else []
             fetched = cur.fetchmany(max_rows + 1)
             truncated = len(fetched) > max_rows
@@ -166,3 +172,22 @@ class SqliteConnector(Connector):
 
     def close(self) -> None:
         self._conn.close()
+
+    # Callers that build a connector for one probe and drop it are the common case
+    # (retrieval index builds, schema routing, every eval row). Without this, the
+    # handle survives until sqlite3.Connection.__del__ reclaims it and emits
+    # `ResourceWarning: unclosed database` — 131 of them across the suite (AUDIT T5),
+    # which is real FD pressure on a 69-schema pooled run, not just noise. Closing
+    # here is idempotent and safe: sqlite3.close() on an already-closed connection
+    # is a no-op, and a half-built connector may not have `_conn` at all.
+    def __del__(self) -> None:
+        try:
+            self._conn.close()
+        except Exception:
+            pass
+
+    def __enter__(self) -> "SqliteConnector":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()

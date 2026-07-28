@@ -66,9 +66,15 @@ CI green: 17 assets, 0 findings.
 uv run pytest -q
 ```
 
-The suite is green offline. All **470** tests run by default (`uv run pytest`):
-**462 pass** and **8 skip** — the skips are live-model-only checks (agent
-generation quality), covered instead by `scripts/live_smoke.py`.
+The suite is green offline: **1489 tests collected, 1477 pass, 11 skip, 1 xfail**
+(`uv run pytest`). The skips are live-model-only checks (agent generation quality);
+they are `skipif`, not `skip`, so setting `GOVERNED_BI_LIVE_TESTS=1` with
+`OPENAI_API_KEY` runs them, and `scripts/live_smoke.py` covers the same ground. The
+single xfail is the retrieval thesis (curated description must outrank a decoy raw
+name), strict — it will fail loudly if `_SEMANTIC_BOOST` ever starts working.
+
+> Counts drift. Re-read them with `uv run pytest --collect-only -q | tail -1` rather
+> than trusting this paragraph; it was off by 3x before an audit caught it.
 
 ## 4. Ask your first question
 
@@ -98,7 +104,7 @@ model to generate the SQL, so exact phrasing can vary run to run — this is a
 representative example):
 
 - **tier: governed**
-- **safety_clearance: true**  ·  **semantic_assurance: grounded**
+- **safety_clearance: true**  ·  **semantic_assurance: unflagged**
 - the answer, e.g. `total_revenue = 18496.0`
 - the SQL it ran, e.g. `SELECT SUM(PurchasePrice) AS total_revenue FROM "transaction"`
 - a **provenance** trace (route, metric, tables, join confidence)
@@ -151,7 +157,7 @@ ans = answer_question_agent(
 )
 print(ans.tier.value)            # governed (usually — live-model output can vary)
 print(ans.safety_clearance)      # True
-print(ans.semantic_assurance.value)  # grounded / heuristic
+print(ans.semantic_assurance.value)  # unflagged / heuristic
 print(ans.sql)                   # e.g. SELECT SUM(PurchasePrice) AS total_revenue FROM "transaction"
 print(ans.text)                  # e.g. total_revenue = 18496.0
 conn.close()
@@ -161,8 +167,8 @@ conn.close()
 
 - **The two-axis stamp is the honest part.** `safety_clearance` is a gate — did
   the SQL pass all five guardrail layers and execute as the requesting principal?
-  `semantic_assurance` (`grounded` / `heuristic` / `unverified`) is *how
-  well-grounded* the answer is. They are kept separate on purpose: a query can be
+  `semantic_assurance` (`unflagged` / `heuristic` / `unverified`) is whether any
+  uncertainty flag fired — not verified-correct. They are kept separate on purpose: a query can be
   perfectly safe and still be the wrong computation, so "safe" is never read as
   "correct". (See [Analyst](analyst.md).)
 - **You can audit the SQL.** The model's output is treated as untrusted; what

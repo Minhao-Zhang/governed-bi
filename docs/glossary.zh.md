@@ -18,8 +18,10 @@ _[English](glossary.md) · [简体中文](glossary.zh.md)_
 > `draft→certified` 生命周期不受影响）；旧的单轴档位 `governed` /
 > `lineage` / `fenced_raw` / `refused`（如仍出现，也只作为双轴标记的展示层
 > 投影保留）；作为服务代理的 `Server`（→ **Analyst**；"server" /
-> "LangGraph Server" 仍只指基础设施）；`flow` / `flow_solver`；
-> `DataSourceConfig.db`（→ `corpus_pin`）。
+> "LangGraph Server" 仍只指基础设施）；`flow` / `flow_solver`。
+> **`DataSourceConfig.db` 并未退役**——它曾经退役过，现又以另一层含义复活
+> （`config.py`：`db:` 笔记范围哨兵背后的数据湖标识，ADR 0003）。SQL schema
+> 的锁定字段是 `corpus_pin` / `schema`。
 >
 > [ADR 0003](adr/0003-governed-notes-tri-modal-retrieval.md) / **D17**
 > （2026-07-22）还弃用了：`skill`（→ **Note**；`SkillFrontmatter` /
@@ -37,7 +39,7 @@ _[English](glossary.md) · [简体中文](glossary.zh.md)_
 | **语义层**（Semantic layer） | 编译产出的各类定义：治理数据集 + 指标 + 术语/业务规则解析。归人类所有，是权威来源。 |
 | **Note**（笔记，`NoteAsset`） | 受治理的批注——路由规则、易错点、查询模式、业务规则、上下文——可挂载到任意资产或命名空间上（`schema:` / `db:` 范围哨兵，或某个资产 id）。带有完整的三层结构 + `Governance`，检索采用具备来源意识的三模态方式（语义 / 触发词 PIN / agent 主动取用）。前身是未受治理的 Markdown **技能 / 参考文档**（ADR 0003，D17）。 |
 | **Corpus**（语料层） | 共享的、人工所有基底的统称：语义层 + 笔记 + 元数据/血缘 + 持久化记忆内容。 |
-| **Gateway**（网关） | 只读、强制执行策略的数据访问边界：凭证隔离、RLS-as-user（以用户身份执行的行级安全）、强制的 LIMIT/超时、审计/重放。是访问数据的唯一路径。 |
+| **Gateway**（网关） | 只读、强制执行策略的数据访问边界：凭证隔离、行数上限 + 语句超时、对无边界 SELECT/UNION 强制注入 LIMIT（覆盖所有方言）、审计/重放。是访问数据的唯一路径。**RLS-as-user 是一个尚未构建的推迟接缝：**`identity` 会传到 `Gateway.execute`，但目前仅用于审计行。 |
 | **Curator**（构建代理） | 离线探索型代理，*生成*corpus（自举 + 漂移修复）。生产环境下的写入需经人工把关。 |
 | **Analyst**（服务代理） | 在线的治理型代理，*使用*corpus 来回答问题。失败即拒（fail-closed）、可审计。原名"Server"；如今"server"/"LangGraph Server" 仅指基础设施。 |
 | **工具**（Tool） | 模型可自行决定调用的编码函数。 |
@@ -49,7 +51,7 @@ _[English](glossary.md) · [简体中文](glossary.zh.md)_
 | **晋升循环**（Promotion loop） | 经人工评审后，将发现的模式提炼为已认证的治理数据集/指标。 |
 | **语义平面 / 数据平面**（Semantic plane / data plane） | 离线含义（通过 PR/CI 发布）与在线执行（受护栏把关）的对照。 |
 | **反例**（Negative example） | 一种经人工整理的模式，用于标记某类问题在当前数据下无法回答，并触发预先设定的升级处理流程。 |
-| **可靠性标记**（Reliability stamp） | 对已交付答案的双轴标记（D5）：`safety_clearance`（布尔硬关卡）与 `semantic_assurance`（`grounded` / `heuristic` / `unverified`——有据程度）。`grounded` 意为安全 + 在范围内，**而非**已验证正确；阈值尚未校准（审计处置 R2）。 |
+| **可靠性标记**（Reliability stamp） | 对已交付答案的双轴标记（D5）：`safety_clearance`（布尔硬关卡）与 `semantic_assurance`（`unflagged` / `heuristic` / `unverified`——是否触发了不确定性标志）。`unflagged` 意为未触发标志，**而非**已验证正确，**也不**表示“检索中已良好接地”；阈值尚未校准（审计处置 R2 / C2）。 |
 | **可靠性警示**（Reliability caveat） | 由 AI 推断、写在*列*上的自由文本警示，说明该列可能不可靠（`UNRELIABLE. DO NOT USE` 加上原因说明）。属于 corpus 一侧、由 curator 撰写的内容，与答案一侧的**可靠性标记**不同。它取代了带类型的诱饵标志，从而使该机制可以迁移到企业级部署中。 |
 | **治理排除**（Governance exclusion） | 人工在列/表上设置的 `governance.excluded` 布尔字段，含义是“永不呈现”：该资产会从 **Analyst** 能看到的一切内容中移除，覆盖所有环境，且是永久性的。由人工撰写（D6），与 curator 通过 AI 推断得到的**可靠性警示**不同。 |
 | **交互信号**（Interaction signal） | 对某次已服务答案上用户动作的一条记录——一个**纠正信号**、一次重新表述的追问、一次重新生成、一次放弃，或一个显式评分——用于*评估*（生产质量，对一系列指标运行）与*开发*（被动改进语义层）。**原始**记录（先记录），置信度分级/解释推迟到真实使用显示出哪些信号与错误答案相关之后。v0 依托 Langfuse/LangSmith 的轨迹反馈；一个专用、可查询、以 turn + corpus-release 哈希为键的交互日志是未来工作。 |

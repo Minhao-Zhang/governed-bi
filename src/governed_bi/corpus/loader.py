@@ -23,7 +23,6 @@ import yaml
 
 from .schemas import Asset, TableAsset, parse_asset
 
-
 # libyaml-backed when the wheel provides it (it does on every platform we run on),
 # which parses ~7x faster than the pure-Python scanner. Corpus loading is a real
 # cost on a scale run: a 69-schema build re-reads these trees per arm, and YAML

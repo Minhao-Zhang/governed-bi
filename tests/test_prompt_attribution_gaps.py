@@ -22,7 +22,6 @@ from governed_bi.config import Environment, Settings
 from governed_bi.eval.run_datalake import _check_resume_manifest
 from governed_bi.prompts import prompt_set_hash, resolve
 
-
 # --------------------------------------------------------------------------- #
 # 1. The producer stamps the Settings it was given
 # --------------------------------------------------------------------------- #
@@ -79,15 +78,50 @@ def test_sme_uses_the_callers_settings_not_a_fresh_load(monkeypatch):
 
 
 def test_the_stamp_and_the_text_come_from_one_map():
-    # The regression in one line: if a producer stamps from a different Settings
-    # than the one that supplied its prompt text, these two digests diverge.
+    """The record stamps the prompt set the caller actually ran on.
+
+    Previously this asserted only its own PRECONDITION — that two Settings hash
+    differently — and stopped there; the test it was a precondition for was never
+    written (AUDIT T2). The regression it should catch: a producer that stamps from
+    a re-loaded Settings records the TOML's prompt set instead of the one in force.
+    """
+    from governed_bi.analyst.run_log import FinalizeCtx, build_metadata_record
+
     caller = replace(
         Settings.for_env(Environment.dev), prompt_variants={"agent_core": "v2"}
     )
     toml_default = Settings.for_env(Environment.dev)
-    assert prompt_set_hash(resolve(caller.prompt_variants)) != prompt_set_hash(
-        resolve(toml_default.prompt_variants)
-    ), "the two configurations must be distinguishable, or this test proves nothing"
+    caller_hash = prompt_set_hash(resolve(caller.prompt_variants))
+    default_hash = prompt_set_hash(resolve(toml_default.prompt_variants))
+    assert caller_hash != default_hash, "the two configurations must be distinguishable"
+
+    class _Answer:
+        provenance: dict = {}
+        sql = None
+        text = None
+        tier = None
+        safety_clearance = False
+        semantic_assurance = None
+        escalation = None
+        result = None
+
+    ctx = FinalizeCtx(
+        settings=caller,
+        run_id="r1",
+        thread_id="t1",
+        n_human=1,
+        model="m",
+        serve_path="agent",
+        token_usage=[],
+        outcome="finalize",
+        append=False,
+        question="q",
+    )
+    record = build_metadata_record(
+        _Answer(), ctx=ctx, provenance={"prompt_set_hash": caller_hash, "turn_id": "t1:1"}
+    )
+    assert record["prompt_set_hash"] == caller_hash
+    assert record["prompt_set_hash"] != default_hash
 
 
 # --------------------------------------------------------------------------- #

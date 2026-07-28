@@ -14,7 +14,6 @@ import logging
 
 import pytest
 
-from governed_bi import gateway as gateway_pkg
 from governed_bi.gateway import GuardrailLayer, check
 from governed_bi.gateway import guardrails as gr
 

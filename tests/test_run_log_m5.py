@@ -68,7 +68,7 @@ def test_finalize_metadata_only_has_no_verbatim(tmp_path: Path):
             ]
         },
         safety_clearance=True,
-        semantic_assurance=SemanticAssurance.grounded,
+        semantic_assurance=SemanticAssurance.unflagged,
     )
     stamped = finalize_and_log(
         ans,

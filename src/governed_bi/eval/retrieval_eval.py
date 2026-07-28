@@ -30,10 +30,10 @@ from pathlib import Path
 import sqlglot
 from sqlglot import exp
 
+from ..analyst.governance import _licensed_table_ids
 from ..corpus import load_corpus
 from ..corpus.schemas import TableAsset
 from ..graph import build_graph, plan_joins
-from ..analyst.governance import _licensed_table_ids
 from ..retrieval import retrieve
 
 logger = logging.getLogger("governed_bi.eval")

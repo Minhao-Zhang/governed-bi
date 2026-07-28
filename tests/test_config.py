@@ -63,8 +63,19 @@ def test_settings_carries_a_default_model_config():
     settings = Settings.for_env(Environment.dev)
     assert settings.models == ModelConfig()
     assert settings.corpus_root == "corpus"
+    # for_env(dev) opts in to file-write for local demo; the dataclass / TOML
+    # safe default is False (see test_allow_edit_defaults).
     assert settings.allow_edit is True
+    assert settings.serve_api_key_env is None
     assert settings.cors_origins == ("http://localhost:3000",)
+
+
+def test_allow_edit_defaults():
+    # Safe field / prod default is False; only for_env(dev) without an override
+    # opts in so a forgotten TOML key cannot silently enable writes in prod.
+    assert Settings.for_env(Environment.prod).allow_edit is False
+    assert Settings.for_env(Environment.dev).allow_edit is True
+    assert Settings.for_env(Environment.dev, allow_edit=False).allow_edit is False
 
 
 # --------------------------------------------------------------------------- #
@@ -82,7 +93,8 @@ def test_load_project_config_file():
     assert settings.corpus_root == "corpus"
     assert settings.datasource.kind == "sqlite"
     assert settings.can_stream is False
-    assert settings.allow_edit is True
+    assert settings.allow_edit is False  # committed [serve].allow_edit = false
+    assert settings.serve_api_key_env is None
     assert settings.cors_origins == ("http://localhost:3000",)
     # dev toggles come from for_env, not the file.
     assert settings.hard_block_suspect_columns is True
@@ -197,6 +209,7 @@ def test_paths_and_serve_tables(tmp_path):
                 "[serve]",
                 "can_stream = true",
                 "allow_edit = false",
+                'api_key_env = "GOVERNED_BI_API_KEY"',
                 'cors_origins = ["https://app.example.com", "http://localhost:3000"]',
             ]
         ),
@@ -206,8 +219,16 @@ def test_paths_and_serve_tables(tmp_path):
     assert settings.corpus_root == "../BIRD-corpus"
     assert settings.can_stream is True
     assert settings.allow_edit is False
+    assert settings.serve_api_key_env == "GOVERNED_BI_API_KEY"
     assert settings.cors_origins == ("https://app.example.com", "http://localhost:3000")
 
+
+def test_serve_api_key_reads_named_env(monkeypatch):
+    settings = Settings.for_env(Environment.dev, serve_api_key_env="GOVERNED_BI_API_KEY")
+    monkeypatch.delenv("GOVERNED_BI_API_KEY", raising=False)
+    assert settings.serve_api_key() is None
+    monkeypatch.setenv("GOVERNED_BI_API_KEY", "shared-secret")
+    assert settings.serve_api_key() == "shared-secret"
 
 def test_datasource_db_default_and_toml_override(tmp_path):
     assert DataSourceConfig().db == "main"

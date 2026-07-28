@@ -183,8 +183,8 @@ def test_an_unknown_variant_in_settings_fails_the_graph_build():
 
 
 def test_the_narrator_takes_a_variant_and_defaults_to_v1():
-    from governed_bi.analyst.narrate import LlmAnswerNarrator
     from governed_bi.analyst.answer import ResultTable
+    from governed_bi.analyst.narrate import LlmAnswerNarrator
 
     class _Chat:
         def __init__(self):
@@ -350,8 +350,6 @@ def test_the_phase_b_prompt_is_injectable(tmp_path, monkeypatch):
                                 {
                                     "table": "customers",
                                     "description": "Customers who bought root beer.",
-                                    "certified": True,
-                                    "answered_by": "sme",
                                     "confidence": 0.9,
                                 },
                                 "b1",
@@ -474,7 +472,7 @@ def _solver_over(provenance: dict, monkeypatch):
         sql="SELECT 1",
         provenance=provenance,
         tier=SimpleNamespace(value="governed"),
-        semantic_assurance=SimpleNamespace(value="grounded"),
+        semantic_assurance=SimpleNamespace(value="unflagged"),
         safety_clearance=True,
     )
     graph = SimpleNamespace(invoke=lambda state, config=None: {"answer": answer})
@@ -699,9 +697,9 @@ def test_a_resume_after_a_prompt_change_is_fatal(tmp_path):
 
 
 def test_a_resume_on_the_same_prompt_set_is_silent(tmp_path, capsys):
-    from governed_bi.eval.run_datalake import _check_resume_manifest
-
     import json
+
+    from governed_bi.eval.run_datalake import _check_resume_manifest
 
     out = tmp_path / "run"
     out.mkdir()

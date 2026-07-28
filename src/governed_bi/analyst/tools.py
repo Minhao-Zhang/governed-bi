@@ -47,13 +47,19 @@ def _table_by_id(corpus: "Corpus", table_id: str) -> TableAsset | None:
 
 
 def render_retrieval(result) -> str:
-    """Compact retrieval summary for the model (ids + scores, no excluded assets)."""
+    """Compact retrieval summary for the model (ids + scores, no excluded assets).
+
+    Scores are labelled ``rank_score`` rather than a channel name: they are BM25
+    magnitudes without an embedder and Reciprocal Rank Fusion values with one, and
+    the two scales are not comparable (AUDIT R8). Rank order is the meaning; the
+    number is only a tie-break hint.
+    """
     lines: list[str] = [f"question: {result.question}"]
     if result.table_ids:
-        lines.append("tables:")
+        lines.append("tables (ordered by relevance; rank_score is relative, not absolute):")
         for tid in result.table_ids:
             score = result.scores.get(tid)
-            suffix = f" (score={score:.3f})" if score is not None else ""
+            suffix = f" (rank_score={score:.3f})" if score is not None else ""
             lines.append(f"  - {tid}{suffix}")
     if result.term_ids:
         lines.append("terms: " + ", ".join(result.term_ids))
@@ -225,6 +231,10 @@ def make_tools(
     # simply never received it. Purely a speed change: the cache is keyed on corpus
     # content, so the same corpus yields the same index and the same results.
     index_cache: Any = None,
+    # Schemas this turn is allowed to license from — the routed set. ``None`` means
+    # unbounded, which is correct for a single-schema corpus (BIRD / demo / eval) and
+    # wrong for a pooled lake: see :func:`_in_licensable_scope`.
+    licensable_schemas: "frozenset[str] | set[str] | None" = None,
 ):
     """Factory: the governed read-only tools closed over deployment deps.
 
@@ -237,6 +247,25 @@ def make_tools(
     set and behaviour are unchanged there.
     """
     _ = gateway, identity  # owned by GovernanceMiddleware for data-touching tools
+
+    scope = frozenset(licensable_schemas) if licensable_schemas is not None else None
+
+    def _in_licensable_scope(asset: "TableAsset") -> bool:
+        """Whether the agent may license this table on this turn.
+
+        ``inspect_schema`` writes straight into ``GovState.licensed``, which the
+        middleware feeds to L4 as ``allowed_tables`` — so without a scope check the
+        agent grows its own authorisation set at will. The guardrail docstring calls
+        ``allowed_tables`` "the tables surfaced by retrieval and their join-plan
+        Steiner points"; that is only the seed (AUDIT S4). Bounding to the ROUTED
+        schemas keeps the useful case (a table retrieval ranked just out of the
+        budget, in a schema this question was routed to) and removes the one that
+        matters: reaching into an unrelated schema in a pooled corpus.
+
+        Cross-schema *joins* are governed separately and more strictly — the D15
+        check in the middleware still requires a curated join asset.
+        """
+        return scope is None or asset.schema in scope
 
     @tool
     def search_corpus(query: str) -> str:
@@ -251,7 +280,12 @@ def make_tools(
         kept = [
             tid
             for tid in r.table_ids
-            if (asset := corpus.by_id(tid)) is not None and not _is_excluded(asset)
+            if (asset := corpus.by_id(tid)) is not None
+            and not _is_excluded(asset)
+            # Do not advertise what the agent cannot license: an out-of-scope hit
+            # here becomes an inspect_schema call that has to be refused, which
+            # reads to the model as a broken tool rather than a bounded one.
+            and (not isinstance(asset, TableAsset) or _in_licensable_scope(asset))
         ]
         filtered = replace(
             r,
@@ -283,7 +317,10 @@ def make_tools(
         You cannot query a table until you have inspected it. Call tools one at a time.
         """
         asset = _table_by_id(corpus, table_id)
-        if asset is None:
+        if asset is None or not _in_licensable_scope(asset):
+            # One message for both cases on purpose: whether a table is absent or
+            # merely out of route is not something an unauthorised caller should be
+            # able to probe for.
             return Command(
                 update={
                     "messages": [
@@ -308,7 +345,7 @@ def make_tools(
 
     @tool
     def sample_rows(table_id: str, n: int = 5) -> str:
-        """Preview up to n rows of an already-licensed table (read-only, RLS via identity).
+        """Preview up to n rows of an already-licensed table (read-only).
 
         Only allowlisted columns are returned — never excluded or suspect columns.
         Guardrailed and executed by governance middleware.

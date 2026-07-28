@@ -227,8 +227,11 @@ Green means the IDs are well-formed and every reference resolves. It prints a
 summary line with your asset counts, for example:
 
 ```
-CI green: 6 assets, 0 findings.
+CI green: 5 assets, 0 findings.
 ```
+
+(The count is however many YAML files §1-§8 left you with — five if you followed
+them exactly. The number above said six, which no reader could reach.)
 
 If something is off, each finding names the asset and the problem. The common ones:
 

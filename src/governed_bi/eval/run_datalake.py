@@ -34,7 +34,7 @@ Run (subset first — this is the heaviest run in the project)::
 
     uv run python -m governed_bi.eval.run_datalake \\
       --bird-dir ../BIRD-Data-Obfuscation \\
-      --pg-dsn "host=127.0.0.1 port=5435 dbname=bird user=bird password=bird" \\
+      --pg-dsn "$GOVERNED_BI_PG_DSN" \\
       --limit-dbs 5 --out runs/datalake/
 
 The gold self-check runs against a schema-*pinned* gateway per sampled db (gold
@@ -47,15 +47,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import threading
 import time
-from datetime import datetime, timezone
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Iterable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -67,22 +68,44 @@ from ..gateway.connectors.postgres import PostgresConnector
 from ..prompts import (
     parse_cli_overrides,
     prompt_set_hash,
+)
+from ..prompts import (
     resolve as resolve_prompts,
+)
+from ..prompts import (
     text as prompt_text,
 )
-from ..provenance import corpus_release_hash
-from ..stages import REFUSED_BY_TO_STAGE, Outcome, classify_outcome, classify_row
+from ..provenance import corpus_content_hash, corpus_release_hash
+from ..stages import (
+    INFRA_ERROR_PREFIX,
+    REFUSED_BY_TO_STAGE,
+    Outcome,
+    Stage,
+    classify_outcome,
+    classify_row,
+)
 from .analysis import census_delta, corpus_census, rank_report
 from .arms import (
     ARM_ORDER,
-    Arm,
     _touches_suspect,
     agent_solver,
     ladder_steps,
     skipped_rungs,
+    step_mechanisms,
 )
+from .bird_loader import available_dbs, load_bird_items
 from .error_taxonomy import attribute_rows, summarise_attributions
+from .hash_grade import (
+    free_pass_counts,
+    load_gold_hashes,
+    load_trap_columns,
+    score_sql_hashes,
+    validate_gold_hashes_live,
+)
+from .index import RESUME_DRIFT_KEYS, index_run, manifest_model
+from .leakage import is_gradeable_eval_row, twin_report, ungradeable_question_ids
 from .oracle import GoldIndex, OracleRung, oracle_solver
+from .parallel import ServeWorker, resolve_workers, run_ordered_pool
 from .power import (
     cluster_sign_test,
     comparison_report,
@@ -92,33 +115,23 @@ from .power import (
     measure_floor,
     minimum_detectable_effect,
 )
-from .treatment import (
-    DEFAULT_MIN_DIVERGENCE,
-    compare_arms,
-    divergence_table,
-    fingerprint_arm,
-)
-from .parallel import ServeWorker, resolve_workers, run_ordered_pool
-from .bird_loader import available_dbs, load_bird_items
-from .hash_grade import (
-    load_gold_hashes,
-    load_trap_columns,
-    score_sql_hashes,
-    validate_gold_hashes_live,
-)
-from .index import RESUME_DRIFT_KEYS, index_run, manifest_model
-from .leakage import is_gradeable_eval_row, twin_report, ungradeable_question_ids
 from .run_experiment import (
-    _RefuseAllSolver,
-    _write_jsonl,
     _collect_curator_errors,
     _cost_block,
+    _RefuseAllSolver,
     _sme_fold_signal,
     _suspect_from_corpus,
     _utc_ts,
     _validate_corpora,
     _warn_if_not_green,
     _warn_if_sme_noop,
+    _write_jsonl,
+)
+from .treatment import (
+    DEFAULT_MIN_DIVERGENCE,
+    compare_arms,
+    divergence_table,
+    fingerprint_arm,
 )
 
 # Derived from the enum, not spelled again: two independent spellings of the same
@@ -655,34 +668,50 @@ def _assert_train_test_disjoint(dataset_dir: Path, db_ids: list[str]) -> dict[st
     would hide.
     """
     overlaps: dict[str, list[str]] = {}
+    text_overlaps: dict[str, list[str]] = {}
     n_train = 0
     n_test = 0
+    n_text_overlap = 0
     for db in db_ids:
-        train_ids = {
-            it.question_id
-            for it in load_bird_items(
-                dataset_dir, db, split="train", gold_sql_field="sql_rename"
-            )
-            if it.question_id
-        }
-        test_ids = {
-            it.question_id
-            for it in load_bird_items(
-                dataset_dir, db, split="test", gold_sql_field="sql_rename"
-            )
-            if it.question_id
-        }
+        train_items = load_bird_items(
+            dataset_dir, db, split="train", gold_sql_field="sql_rename"
+        )
+        test_items = load_bird_items(
+            dataset_dir, db, split="test", gold_sql_field="sql_rename"
+        )
+        train_ids = {it.question_id for it in train_items if it.question_id}
+        test_ids = {it.question_id for it in test_items if it.question_id}
         n_train += len(train_ids)
         n_test += len(test_ids)
         both = train_ids & test_ids
         if both:
             overlaps[db] = sorted(both)[:5]
+        # Byte-identical question TEXT across splits. Id-disjointness is the coarse
+        # form and it passes here; the text form is documented in `oracle.py` ("five
+        # questions appear in both splits with byte-identical text") and was checked
+        # by nothing (AUDIT E5). Recorded, not fatal: on this dataset the known cases
+        # share gold SQL, so they are harmless — but a scored question whose exact
+        # words the curator read is not something a run should be able to hide.
+        train_text = {(it.question or "").strip() for it in train_items}
+        shared_text = sorted(
+            {(it.question or "").strip() for it in test_items} & train_text - {""}
+        )
+        if shared_text:
+            n_text_overlap += len(shared_text)
+            text_overlaps[db] = shared_text[:5]
     if overlaps:
         raise AssertionError(f"train/test question_id overlap: {overlaps}")
+    if text_overlaps:
+        print(
+            f"train/test question TEXT overlap: {n_text_overlap} question(s) across "
+            f"{len(text_overlaps)} schema(s) — recorded in the manifest, not fatal"
+        )
     return {
         "train_test_disjoint": True,
         "n_train_ids": n_train,
         "n_test_ids": n_test,
+        "n_train_test_text_overlap": n_text_overlap,
+        "train_test_text_overlap_examples": text_overlaps,
     }
 
 
@@ -867,6 +896,7 @@ def _build_manifest(
     limit_dbs: int | None = None,
     question_scope_hash: str | None = None,
     allow_git_sha_drift: bool = False,
+    llm_temperature: float | None = None,
 ) -> dict[str, Any]:
     """Every knob that changes what a scored row MEANS, as one dict.
 
@@ -884,6 +914,13 @@ def _build_manifest(
         # recoverable from anything else in the directory.
         "git_sha": corpus_release_hash(),
         "model": manifest_model(model_name, skip_agent=skip_agent),
+        # Recorded even when None (= provider default): an unrecorded decoding
+        # temperature makes two "identical" runs incomparable (AUDIT E5).
+        "llm_temperature": llm_temperature,
+        # Declared here, filled after the build: this manifest is written before any
+        # corpus exists (the gold pre-flight must run before a model is paid for), and
+        # a comparability key absent from the manifest can never fire.
+        "corpus_content_hash": None,
         # Both, by the same argument as the stamped record: the map so a reader
         # knows what ran, the hash so the ledger's comparability rule and the
         # resume guard have one key that also moves when a prompt is EDITED.
@@ -1732,7 +1769,15 @@ def _compare_arms(
             else:
                 lo, hi = sorted((a, b), key=ARM_ORDER.index)
                 bundles = skipped_rungs(lo, hi)
-                report["single_variable"] = not bundles
+                report["adjacent_rung"] = not bundles
+                # `single_variable` used to mean exactly `adjacent_rung`, so
+                # `baseline -> seeded` claimed one variable while changing three
+                # (AUDIT E5). It now means what it says, and the mechanisms are
+                # listed either way so a bundled step is quotable-with-disclosure
+                # rather than silently mislabelled.
+                mechanisms = step_mechanisms(lo, hi)
+                report["mechanisms_changed"] = list(mechanisms)
+                report["single_variable"] = not bundles and len(mechanisms) == 1
                 if bundles:
                     report["bundles"] = bundles
                 # ``arm_a``/``arm_b`` come from ``sorted(rows_by_arm)``, which is
@@ -2475,6 +2520,11 @@ def _summarise_rows(
         "n_wrong_but_nrows_match": sum(
             1 for r in rows if not r.get("correct") and r.get("nrows_match")
         ),
+        # Correct answers that are grading free passes (Audit E2). Empty-gold
+        # matches, no-FROM predictions, and (when table sets are available)
+        # zero table overlap — visible so an arm that over-filters into free
+        # passes cannot look identical to one that actually got the SQL right.
+        **free_pass_counts(rows, gold=gold),
         # Delivery: did the curated corpus actually reach the prompt? A curation arm
         # whose notes never arrive is indistinguishable from one whose notes are
         # useless unless this is recorded.
@@ -3335,12 +3385,19 @@ def _run_pool_arm(
     # leaving it would put two rows under one ``question_id``, which double-counts in
     # every denominator and which ``eval.analysis`` rejects outright as a corrupt file.
     #
-    # ``--replay-crashed`` restores the old behaviour for anyone who wants a
-    # byte-identical replay. Off by default because the default should be the one that
-    # rescues a run rather than the one that preserves a non-result.
+    # Re-serving clears ``crash_rate`` on the new rows, which would otherwise launder
+    # the run back to quotable (audit E1). ``n_re_served`` is therefore written into
+    # the arm summary and ``quotable()`` refuses any non-zero count. Completing the
+    # generations file is still useful operationally; quoting it is not.
+    #
+    # ``--replay-crashed`` is the honest opt-in: keep the crashed rows, leave
+    # ``crash_rate > 0``, and never claim the re-draws did not happen. Off by default
+    # so a resume can finish the artifact; on when you want a byte-identical replay.
+    n_re_served = 0
     if resume and not replay_crashed:
         crashed = [r for r in done_rows if classify_row(r)[0] is Outcome.crashed]
         if crashed:
+            n_re_served = len(crashed)
             crashed_ids = {str(r.get("question_id")) for r in crashed}
             done_rows = [
                 r for r in done_rows if str(r.get("question_id")) not in crashed_ids
@@ -3354,9 +3411,9 @@ def _run_pool_arm(
                 ],
             )
             print(
-                f"  [{arm}] resume: re-serving {len(crashed)} crashed turn(s) "
-                "(a crash is a bug, not a measurement — pass --replay-crashed to keep "
-                "them instead)"
+                f"  [{arm}] resume: re-serving {n_re_served} crashed turn(s) "
+                "(recorded as n_re_served — run will not be quotable; pass "
+                "--replay-crashed to keep the crashed rows instead)"
             )
 
     done_ids = {str(r.get("question_id")) for r in done_rows}
@@ -3395,15 +3452,25 @@ def _run_pool_arm(
         meta = dict(meta_raw or {})
         # Classified HERE, where a solver exception is still distinguishable from
         # everything else. ``grade["error"]`` holds a grader verdict, a solver crash
-        # message OR a gateway execution failure by then, and the last of those is a
-        # wrong answer, not a crash — so ``err_msg`` is what gets passed, and the
-        # stamp is what every later reader uses instead of re-deriving it.
+        # message, a model SQL fault (``exec_error:``), or an infrastructure failure
+        # (``infra_error:``). Only the first of the gateway cases is a wrong answer;
+        # infra failures must crash the turn so they cannot silently move accuracy
+        # (audit E4). ``err_msg`` (solver) or the infra prefix (grader) is what gets
+        # passed; the stamp is what every later reader uses instead of re-deriving.
+        grade_err = grade.get("error")
+        infra_msg = (
+            grade_err
+            if isinstance(grade_err, str) and grade_err.startswith(INFRA_ERROR_PREFIX)
+            else None
+        )
         outcome, failed_stage, refused_by_known = classify_outcome(
             generated_sql=sql,
-            exception=err_msg,
+            exception=err_msg or infra_msg,
             refused_by=meta.get("refused_by"),
             recursion_exhausted=meta.get("recursion_exhausted"),
         )
+        if infra_msg and outcome is Outcome.crashed and failed_stage is None:
+            failed_stage = Stage.execute
         if not refused_by_known:
             print(
                 f"*** WARNING: unrecognised refused_by={meta.get('refused_by')!r} on "
@@ -3656,9 +3723,13 @@ def _run_pool_arm(
         for item, _db in pairs
         if item.sql
     }
-    return rows, _summarise_rows(
+    summary = _summarise_rows(
         arm, rows, gold=gold_sql, corpus_note_assets=corpus_note_assets
     )
+    # Durable, not stdout-only: ``quotable()`` reads this from the arm summary in
+    # ``summary.json``. Always present so absence cannot be confused with zero.
+    summary["n_re_served"] = n_re_served
+    return rows, summary
 
 
 def run_datalake(
@@ -3847,6 +3918,7 @@ def run_datalake(
         limit_dbs=limit_dbs,
         question_scope_hash=_question_scope_hash(scope_pairs),
         allow_git_sha_drift=allow_git_sha_drift,
+        llm_temperature=settings.models.llm_temperature,
     )
     if resume:
         _check_resume_manifest(
@@ -4036,6 +4108,31 @@ def run_datalake(
     # Load each requested arm's corpus for exactly the dbs being scored — NOT
     # whatever the shared root happens to hold (see :func:`_load_built_corpus`).
     corpora = {arm: _load_built_corpus(roots[arm], built) for arm in arms}
+    # Amend the manifest with the digest of what was actually built. The manifest is
+    # written before the build (the gold pre-flight has to run before anything is
+    # spent on a model), so the corpus hash — the identity of the *treatment* — can
+    # only be recorded here. Without it two runs over different curator draws
+    # compared as if comparable (AUDIT E5).
+    observed_corpus_hash = corpus_content_hash([roots[arm] for arm in sorted(arms)])
+    manifest["corpus_content_hash_observed"] = observed_corpus_hash
+    manifest["corpus_content_hash_by_arm"] = {
+        arm: corpus_content_hash([roots[arm]]) for arm in sorted(arms)
+    }
+    prior_hash = manifest.get("corpus_content_hash")
+    if prior_hash is None:
+        manifest["corpus_content_hash"] = observed_corpus_hash
+    elif prior_hash != observed_corpus_hash:
+        # A resume whose corpus is not the corpus the run started on. Leave the
+        # original in place so the ledger's comparability/drift check sees the
+        # mismatch instead of having it overwritten out of existence.
+        print(
+            f"*** corpus content changed since this run started "
+            f"({prior_hash} -> {observed_corpus_hash}); rows from the two builds are "
+            "not the same experiment"
+        )
+    (out_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
     corpus_validation = _validate_corpora(corpora)  # no connector: public-default
     _warn_if_not_green(corpus_validation)
     # Serve gets the Analyst view (D6): a governance.excluded asset must reach
@@ -4427,17 +4524,35 @@ def run_datalake(
         print(f"*** run indexed as NOT quotable: {out_dir}")
         for reason in record["not_quotable_because"]:
             print(f"  - {reason}")
+    # Carried so `main` can exit non-zero on it: a scripted run had no way to tell a
+    # clean result from a disqualified one (AUDIT E5).
+    result["quotable"] = record["quotable"]
+    result["not_quotable_because"] = list(record["not_quotable_because"])
     return result
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> int:
+    """Run the pooled data-lake eval. Returns a process exit code.
+
+    Non-zero when the run indexed as NOT quotable. The only ``SystemExit`` in
+    ``eval/`` returned a hardcoded 0, so a scripted or CI-driven run could not tell a
+    clean result from one the ledger had already disqualified (AUDIT E5) — the
+    operator had to read stdout.
+    """
     p = argparse.ArgumentParser(description="Pooled data-lake BIRD eval (D15 scale run)")
     p.add_argument(
         "--bird-dir", type=Path, default=Path("../BIRD-Data-Obfuscation"),
         help="Path to BIRD-Data-Obfuscation checkout",
     )
     p.add_argument(
-        "--pg-dsn", default="host=127.0.0.1 port=5435 dbname=bird user=bird password=bird"
+        # No credential in the source. The obfuscated-BIRD Postgres is a local
+        # throwaway, but a password committed to git is a password committed to git,
+        # and this default is the one every runbook copies (AUDIT S7). Set
+        # GOVERNED_BI_PG_DSN (or pass --pg-dsn) instead.
+        "--pg-dsn",
+        default=os.environ.get(
+            "GOVERNED_BI_PG_DSN", "host=127.0.0.1 port=5435 dbname=bird user=bird"
+        ),
     )
     p.add_argument("--out", type=Path, default=Path("runs/datalake"))
     p.add_argument(
@@ -4714,6 +4829,9 @@ def main(argv: list[str] | None = None) -> None:
 
         flush_tracing()
 
+    # 2, not 1: distinguishes "ran to completion but is not quotable" from a crash.
+    return 0 if result.get("quotable", True) else 2
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

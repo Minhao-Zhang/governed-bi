@@ -11,7 +11,6 @@ import json
 
 import pytest
 
-from governed_bi.eval.arms import ARM_ORDER
 from governed_bi.eval.analysis import (
     analyse_run,
     census_delta,
@@ -22,6 +21,7 @@ from governed_bi.eval.analysis import (
     sql_tables,
     table_selection_report,
 )
+from governed_bi.eval.arms import ARM_ORDER
 from governed_bi.eval.run_datalake import (
     _check_resume_manifest,
     _merge_resume_manifest,
@@ -931,8 +931,14 @@ def test_analyse_run_names_what_a_non_adjacent_pair_bundles(tmp_path):
     _write_four_arm_run(tmp_path, bird)
     pairs = analyse_run(tmp_path, bird_dir=bird)["mcnemar"]
 
-    assert pairs["baseline_vs_seeded"]["single_variable"] is True
-    assert "bundles" not in pairs["baseline_vs_seeded"], (
+    # Adjacent, but NOT one variable: the rung adds train-SQL joins, train-SQL
+    # metrics and decoy marking together (AUDIT E5). Both facts are now reported,
+    # and `single_variable` means what it says.
+    step = pairs["baseline_vs_seeded"]
+    assert step["adjacent_rung"] is True
+    assert step["single_variable"] is False
+    assert len(step["mechanisms_changed"]) == 3
+    assert "bundles" not in step, (
         "spelled absent rather than empty, matching summary.json's deltas.*_bundles"
     )
 
@@ -1023,7 +1029,7 @@ def test_analyse_run_survives_arms_that_are_not_on_the_ladder(tmp_path):
             assert entry["single_variable"] in (True, False), name
 
     # The fair pairs keep their labels, so the off-ladder arms cost nothing.
-    assert pairs["baseline_vs_seeded"]["single_variable"] is True
+    assert pairs["baseline_vs_seeded"]["adjacent_rung"] is True
     assert pairs["baseline_vs_curated"]["bundles"] == ["seeded"]
 
 
@@ -1036,7 +1042,7 @@ def test_analyse_run_excludes_off_ladder_arms_from_the_correction_family(tmp_pat
     _write_four_arm_run(tmp_path, bird, n=20)
     fair = (tmp_path / "generations.curated.jsonl").read_text(encoding="utf-8")
     for off in ("curated__replicate", "oracle_sql"):
-        rows = [{**json.loads(l), "arm": off} for l in fair.splitlines() if l.strip()]
+        rows = [{**json.loads(line), "arm": off} for line in fair.splitlines() if line.strip()]
         (tmp_path / f"generations.{off}.jsonl").write_text(
             "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8"
         )
@@ -1068,7 +1074,7 @@ def test_analyse_run_excludes_a_pair_that_shared_no_questions(tmp_path):
     _write_four_arm_run(tmp_path, bird, n=20)
     # Rewrite one arm onto question ids no other arm scored.
     path = tmp_path / "generations.curated_sme.jsonl"
-    rows = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     for r in rows:
         r["question_id"] = "z" + str(r["question_id"])
     path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")

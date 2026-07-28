@@ -10,7 +10,7 @@ configured API key is set, else the deterministic offline default.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -19,12 +19,19 @@ from ..corpus import load_corpus
 from ..gateway import Identity
 
 if TYPE_CHECKING:
+    from ..analyst import AnswerNarrator
     from ..corpus import Corpus
     from ..gateway.connectors.base import Connector
     from ..llm import Embedder
-    from ..analyst import AnswerNarrator
 
 logger = logging.getLogger("governed_bi.api")
+
+
+def _new_index_cache() -> Any:
+    """A fresh :class:`RetrievalIndexCache` (imported lazily: agents extra)."""
+    from ..retrieval import RetrievalIndexCache
+
+    return RetrievalIndexCache()
 
 
 @dataclass(frozen=True)
@@ -53,6 +60,11 @@ class ServeStack:
     can_clarify: bool = False  # serve-time HITL (ask_user) is available (streaming + live model)
     clarify_checkpointer: Any | None = None  # inner-agent saver for interrupt/resume (H10 durable)
     conversation_checkpointer: Any | None = None  # durable outer-chat saver (ADR 0004 L3)
+    # Stack-scoped retrieval memo. The serve rails are rebuilt per question, so
+    # without this every turn re-embedded every schema document and every routed
+    # asset — text that is identical for the life of the stack (AUDIT R6). Content
+    # keyed, so a corpus edit produces different entries rather than stale ones.
+    index_cache: Any = field(default_factory=lambda: _new_index_cache())
 
     def open_connector(self, *, connect_timeout: float | None = None) -> "Connector":
         """Open a fresh read-only connector for one request (caller closes it).
@@ -125,9 +137,9 @@ def _build_model_stack(settings: Settings) -> tuple[Any, Any, str | None, bool, 
     """
     if settings.models.api_key():
         try:
-            from ..llm import LangChainChatClient, LangChainEmbedder
-            from ..analyst import LlmAnswerNarrator
             from .. import prompts
+            from ..analyst import LlmAnswerNarrator
+            from ..llm import LangChainChatClient, LangChainEmbedder
 
             models = settings.models
             chat = LangChainChatClient.from_config(models)

@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from governed_bi.corpus.schemas import TableAsset
 from governed_bi.curator.clarifications import (
     ClarificationRecord,
     ClarificationRecordStatus,
@@ -20,7 +21,6 @@ from governed_bi.curator.clarifications import (
     resolve_clarifications_path,
     write_clarifications,
 )
-from governed_bi.corpus.schemas import TableAsset
 from governed_bi.eval.run_datalake import (
     _BUILD_COMPLETE_MARKER,
     _check_resume_manifest,
@@ -157,9 +157,9 @@ def test_sme_reads_relocated_ledger_on_cross_resume(tmp_path: Path, monkeypatch)
     sme_ledger = out / "clarifications.jsonl"
     assert sme_ledger.exists()
     lines = [
-        json.loads(l)
-        for l in sme_ledger.read_text(encoding="utf-8").splitlines()
-        if l.strip()
+        json.loads(line)
+        for line in sme_ledger.read_text(encoding="utf-8").splitlines()
+        if line.strip()
     ]
     assert lines[0]["status"] == "answered"
     assert lines[0]["answer"] == "answered"

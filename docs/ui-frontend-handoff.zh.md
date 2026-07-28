@@ -39,14 +39,14 @@ NEXT_PUBLIC_ASSISTANT_ID=serve                    # graph name in langgraph.json
 
 在 engine 仓库中：
 ```bash
-uv sync --extra agents --extra api                # agents = LangGraph/LangChain; api = custom routes
-uv run --extra agents --extra api langgraph dev   # LangGraph Server at :2024 (chat + custom routes)
+uv sync                                           # everything: LangGraph/LangChain + FastAPI routes
+uv run langgraph dev                              # LangGraph Server at :2024 (chat + custom routes)
 ```
 - 真实模型（自然语言应答 + 自由格式 SQL）：设置 `OPENAI_API_KEY`（环境变量或仓库
   根目录下的 `.env`）。
 - 追踪（可选；见 `.env.example`）：
   - LangSmith：`LANGSMITH_API_KEY` + `LANGSMITH_TRACING=true`（或旧名 `LANGCHAIN_TRACING_V2=true`）
-  - Langfuse：`uv sync --extra tracing`，再设 `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`
+  - Langfuse：不需要额外 extra（`langfuse` 已是核心依赖）；设 `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`
 - CORS：在 `governed_bi.toml` 的 `[serve].cors_origins` 中配置（默认含 `http://localhost:3000`）。
 - 在 `langgraph dev` 下，**本地线程是临时性的**（持久化落在已部署的 Postgres 上）。
   `/capabilities` 会报告 `has_live_model`、`can_stream`、`can_edit`、
@@ -76,15 +76,17 @@ stream.submit(
 - **实时步骤:** 该图会发出带类型的治理事件,通过 `onCustomEvent(data, { mutate })`
   这个选项送达(该次 run 的 `streamMode` 必须含 `custom`)。当前的事件形状是来自
   `GovEventStream` 的 `{seq, kind: "rail"|"tool"|"final", step, status, id?, detail,
-  serve_path?}`——这是一条**动态的进度轨(rail)+ agent 工具循环**(`search_corpus` /
-  `inspect_schema` / `sample_rows` / `run_query`),**不是**固定的 6 阶段列表。权威的
+  serve_path?}`——这是一条**动态的进度轨(rail)+ agent 工具循环**——全部七个受
+  治理工具:`search_corpus`、`inspect_schema`、`sample_rows`、`run_query`、
+  `read_notes`、`grep_notes`,以及 `ask_user`(仅 serve;需要 checkpointer)——
+  **不是**固定的 6 阶段列表。权威的
   事件契约与 `buildStepsFromLedger` 映射见
   **[agent-step-visualization.md](plans/agent-step-visualization.md)**。这反映的是
   *真实的*后端进度,不是计时器。
 - **最终答案**是一个自定义的 **`answer` state 通道**:读 `stream.values.answer`
   (即 `AnswerResponse` 的形状)。渲染出**答案卡片**:
   - 两个徽章，而不是一个分数：`safety_clearance`（布尔值）+ `semantic_assurance`
-    （`grounded|heuristic|unverified|none`）；档位标签为绿色/黄色/红色。
+    （`unflagged|heuristic|unverified|none`）；档位标签为绿色/黄色/红色。
   - 英文答案文本；可折叠的**结果表格**（`columns`/`rows`，含截断提示）；只读的
     **SQL**；**溯源/审计抽屉**（route、tables_used、join_ids、min_join_confidence、
     attempts、uncertainty_flags 等）。
@@ -268,12 +270,13 @@ stream.submit(
   查询没有通过某道安全关卡(**L2 策略**:DDL/DML/注入,或经过策展的**反例**拒答
   关卡)。安全失败在**任何**可靠性分数下都**绝不会被交付**。不存在"把分数调低然后
   照样跑"这种事。
-- **`semantic_assurance: grounded | heuristic | unverified | none` —— 分级的。**
+- **`semantic_assurance: unflagged | heuristic | unverified | none` —— 分级的。**
   这才是应当据以着色的可靠性指标。由 `provenance.uncertainty_flags`(触发的信号)
   驱动:`low_confidence_join`(join 计划置信度 < 0.7)、`suspect_in_scope`(用到了
   curator 标记过的诱饵/可疑列)、`repaired`(超过 1 次生成尝试)、
-  `fenced_raw_fallback`。没有任何标志 → `grounded`;`fenced_raw_fallback` →
-  `unverified`;其他任意标志 → `heuristic`。
+  `fenced_raw_fallback`。(`corrective_rag` 在协议里预留了字段但未启用。)没有任何
+  标志 → `unflagged`;`fenced_raw_fallback` → `unverified`;其他任意标志 →
+  `heuristic`。`unflagged` 的意思是没有标志触发——**不是**验证为正确。
 
 `tier`(`governed | lineage | fenced_raw | refused`)是 `semantic_assurance` 的
 一个遗留的、**只用于展示的一一映射**——继续把它渲染成一个档位标签(chip),但
@@ -283,7 +286,7 @@ stream.submit(
 
 | 状态 | 如何判定 | 渲染方式 |
 |---|---|---|
-| **正常答案** | `sql != null` 且 `semantic_assurance ∈ {grounded, heuristic}` | 正常的答案卡片;绿色/中性档位标签。`heuristic` = 一条轻量的提醒。 |
+| **正常答案** | `sql != null` 且 `semantic_assurance ∈ {unflagged, heuristic}` | 正常的答案卡片;绿色/中性档位标签。`heuristic` = 一条轻量的提醒。 |
 | **分级交付** | `sql != null` 且(`semantic_assurance ∈ {unverified, none}` **或** `provenance.graded_delivery === true`) | **照常展示 SQL + 结果表格**,但包裹在一个明显不同的**警示处理**里(琥珀色/红色边框 + 横幅):*"We produced this answer but could not fully verify it."* 外加**"为什么"这一行**(§13.4)。这是大多数 UI 会做错——直接把它隐藏掉——的新状态。 |
 | **硬性拒答** | `sql == null`(始终 `tier=refused`、`safety_clearance=false`、`result=null`) | 现有的拒答框:升级提示文字,没有 SQL/数字。 |
 
@@ -295,17 +298,25 @@ stream.submit(
 ### 13.3 契约里今天已经上线的 vs. 后端仍欠你的
 
 - **契约里今天已经上线的:** 两个轴;`provenance.graded_delivery` 标记;
-  `provenance.uncertainty_flags`;`graded_delivery` **流事件**;以及整条交付并
-  分级的代码路径(`analyst/answer.py::graded_delivery`、`_finish_unsuccessful`)。
-  §13.1–13.4 可以直接对着现有的这些形状去构建。
+  `provenance.uncertainty_flags`;以及整条交付并分级的代码路径
+  (`analyst/answer.py::graded_delivery`、`_finish_unsuccessful`)。§13.1–13.4
+  可以直接对着现有的这些形状去构建。
+- **没有上线,尽管本节以前把它列在里面:** 并**不存在 `graded_delivery` 流事件**。
+  `Stage.execute` 会在其 stage detail 里带上 `path="graded_delivery"`,而
+  `final` 事件带着 stamp 和 provenance——这就是全部信号。请以
+  `provenance.graded_delivery` 为判断依据,而不是去等一个事件。
 - **闲置,等一个开关翻转:** 交付并分级功能藏在引擎设置
   **`grade_semantic_failures`** 后面,该设置**在服务时默认 `false`**(目前只在
   评测 harness 里开着)。在后端为 serve 打开它之前,每一次语义失败仍会以**硬性
   拒答**(`sql=null`)的形式到达——所以分级交付这条分支逻辑是对的,只是暂时不会
   触发。**上线耦合关系:§13.2 的 UI 必须先于或随该开关一起上线**,否则用户会突然
   收到只带一个不起眼徽章提醒的 `fenced_raw` 答案。
-- **拒答理由**(在 `provenance.refused_by` 里):`refuse_gate`、`no_coverage`、
-  `guardrail`、`execution`、`missing_edge`。当 `grade_semantic_failures` 打开后,
+- **拒答理由**(在 `provenance.refused_by` 里),全部九个已上线的取值:
+  `refuse_gate`、`no_coverage`、`guardrail`、`execution`、`missing_edge`、
+  `clarification_declined`(用户拒绝回答一个 `ask_user` 问题)、`exhausted`
+  (步骤预算耗尽)、`model_error`(一个被捕获的异常——是系统故障,不是治理决策)、
+  `no_model`(没有配置实时模型)。此前文档只列出前五个,但九个其实全都能触发。
+  当 `grade_semantic_failures` 打开后,
   只有 `refuse_gate` 和 **policy_blacklist** 护栏会继续保持硬性拒答;其余的
   (`no_coverage`、可修复的 `guardrail`、`execution`、`missing_edge`)都会变成
   分级交付。**`missing_edge` 被重新分类:** 它不再是硬性拒答(取代 §10/§12 的说法)
@@ -320,6 +331,8 @@ stream.submit(
 - `suspect_in_scope` → "Used a column that may be unreliable (flagged during curation)."
 - `repaired` → "Needed multiple attempts to produce valid SQL."
 - `fenced_raw_fallback` → "Fell back to a raw query without the governed layer."
+- `weak_retrieval` → "The corpus may not cover what you asked about."
+- `corrective_rag` → 预留;目前没有任何 serve 路径会设置它,所以它现在永远不会出现。
 
 `min_join_confidence` 和 `attempts` 已经在 `provenance` 里(并且已经渲染在抽屉
 里)。如果 `suspect_columns` 被加进 `provenance`(见 13.6),就在这句话里指名具体
@@ -346,10 +359,16 @@ stream.submit(
 设计目标(§5.1):检索先短名单出约 3 个 schema → 由一个**LLM 节点挑选其中一个**
 → 下游只使用那一个 schema;UI 展示是哪个 schema 给出了这次应答。
 
-- **尚未构建。** 引擎今天做的是确定性的**BM25 短名单 + 策展 join 扩展成一个集合**
-  (`schema_router.route_schemas`),对外表现为 `provenance.routed_schemas`(一个
-  无序集合)和一个 `schema_route` 流事件。目前**没有单一的"已选定"schema,没有
-  候选打分/排名,也没有 LLM 挑选**这一步。
+- **已构建。** 本节此前说这三样东西"尚未构建";现在三样都已上线。
+  `shortlist_schemas` 对候选做排序(优先语义嵌入,BM25 兜底),`pick_schema` 是
+  由 `schema_route_llm_pick` 开关的 LLM 挑选步骤,选中的 schema 与
+  `routed_schemas` 一起进入 `provenance`。`provenance.schema_route_channel`
+  标出实际跑的是哪条排序通道(`embedding` / `bm25_fallback` / `none`)——值得在
+  抽屉里展示出来,因为一次悄无声息的兜底大约会让路由召回率减半。
+- **不存在 `schema_route` 流事件。** 进度轨发出的是 `route` / `refuse_gate` /
+  `cache` / `assemble`;路由细节挂在 `assemble` 这一步的 `detail` 里。
+  `graded_delivery` 流事件同样不存在——分级交付要看 `final` 事件的标记与
+  provenance。这两个事件此前在这里都被当作已上线的实时事件来承诺,实际都没有。
 - **UI 现在(过渡方案):** 可以把 `provenance.routed_schemas` 展示为"已考虑的
   schema",并在阶段步进器里加一个**"正在选择 schema"**步骤(只是给现有的
   `schema_route` 事件加一条 `STAGE_ALIASES` 映射——不需要改组件)。

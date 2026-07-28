@@ -10,11 +10,11 @@ _[English](README.md) · [简体中文](README.zh.md)_
 
 1. [系统总览](system-overview.zh.md)：这是什么、两个 harness、当前状态。
 2. [架构](architecture.zh.md)：完整设计（主干(spine)、内核(kernel)、服务、存储、流程、评测、环境）。
-3. [设计决策](design-decisions.zh.md)：以 ADR 形式呈现的 D1-D18（+ 2026-07-15 审计处置），包含备选方案与权衡。
+3. [设计决策](design-decisions.zh.md)：以 ADR 形式呈现的 D1-D19（+ 2026-07-15 审计处置），包含备选方案与权衡。
 4. [资产模式](asset-schemas.zh.md)：每个资产的 YAML 字段规范（Facts 层 / Inference 层 / Audit 层）。
 5. [Curator](curator.zh.md)：构建侧的 proposer + adversary 循环。如需查看逐字提示词，见 [Curator LLM 调用全流程](curator-llm-call.zh.md)。
 6. [Analyst](analyst.zh.md)：服务侧受治理的 agentic 内核 + 护栏(guardrails)。如需查看逐字提示词，见 [Analyst LLM 调用全流程](analyst-llm-call.zh.md)。
-7. [Viz](viz.zh.md)：只读审计面(surface)——presenter 视图模型加上 `governed_bi.api` HTTP API，用于浏览语义层并与受治理 Analyst 对话（交互式 UI 是一个独立项目）。
+7. [Viz](viz.zh.md)：审计面(surface)——presenter 视图模型加上 `governed_bi.api` HTTP API，用于浏览语义层并与受治理 Analyst 对话（corpus 写操作由 `allow_edit` 门控；交互式 UI 是一个独立项目）。
 8. [度量](measurement.zh.md)：eval harness 记录了什么、失败会定位到哪里——数字看着不对时先读这篇。
 9. [提示词变体实验](prompt-experiments.zh.md)：提示词注册表、一次运行怎么选变体、什么被盖章记到哪里，以及怎么判断一个测出来的失败到底该换哪个变体。
 10. [术语表](glossary.zh.md)：规范术语。
@@ -41,8 +41,14 @@ ADR 记录的是某个时点的决策。它不会为了跟上后来的现实而�
 |---|---|
 | [0001 LangGraph Server 聊天运行时](adr/0001-langgraph-server-chat-runtime.zh.md) | 2026-07-10 接受；部分被 0002 取代 |
 | [0002 受治理的 agentic 服务运行时](adr/0002-governed-agentic-serve-runtime.zh.md) | 已接受并实现（`d2fdd6a`），是唯一的服务路径 |
-| [0003 受治理的 note 与三模态检索](adr/0003-governed-notes-tri-modal-retrieval.zh.md) | 2026-07-22 接受（只到设计，D17）；尚未实现 |
-| [0004 本地优先的会话与运行日志](adr/0004-local-first-conversation-run-logging.zh.md) | 2026-07-22 接受（D18）；尚未开工 |
+| [0003 受治理的 note 与三模态检索](adr/0003-governed-notes-tri-modal-retrieval.zh.md) | 2026-07-22 接受（D17）；已构建——`NoteAsset`、`note_inject.py`、`retrieval/triggers.py`、`read_notes` / `grep_notes`、`[notes]` 配置 |
+| [0004 本地优先的会话与运行日志](adr/0004-local-first-conversation-run-logging.zh.md) | 2026-07-22 接受（D18）；已构建——`run_log.py`、`[logging]` 配置、`prune_full_content` 保留策略 |
+
+> **证伪条件（falsifier）。** 能让我们判定"corpus 没有用"的那一个结果——arm 配对、指标、
+> 分层、效应量、curator 抽样次数——写在
+> [`plans/experiment-runbook.md`](plans/experiment-runbook.md#the-result-that-would-make-us-abandon-the-corpus-thesis)里。
+> 它是在跑之前就定好的，至今还没被评估过：需要在 69 个 schema 上独立跑三次 curator，而目前
+> 还没有这样的运行。
 
 ## 工作文档（`plans/`）与评审
 
@@ -72,7 +78,7 @@ ADR 记录的是某个时点的决策。它不会为了跟上后来的现实而�
 
 - **两个平面(planes)。** 语义/控制平面（版本化配置 + markdown，通过 PR/CI 发布）与数据平面相互分离，后者只执行通过护栏检查的 SQL。语义只定义一次，由人类掌控。
 - **权限是确定性的；推理可以是 agentic 的。** 问题可以很宽泛、模型在一个有界的 agentic 循环里推理，但*什么能执行、什么被信任、什么被记录*由中间件固定，而非模型自行裁量（ADR 0002 反转了此前"绝不自主循环"的规则）。但 SQL 必须收窄。
-- **失败即拒（fail-closed）。** 超出范围(out-of-scope)/覆盖缺失(missing-coverage)/触发护栏(tripped-guardrail)，任何一种情况都只会返回拒答或澄清性问题，绝不会给出一个自信却错误的数字。
+- **在 serve 默认配置下失败即拒。** 在 `grade_semantic_failures=False`（serve 的默认值）下，超出范围(out-of-scope)/覆盖缺失(missing-coverage)/触发护栏(tripped-guardrail)会返回拒答或澄清性问题——而不是一个自信却错误的数字。分级投递（graded delivery，目前在 eval driver 里是开着的）可以把部分 L4/L5 失败重新以 `unverified` 行的形式送出；这不是 serve 的默认行为。
 
 ## 文档与代码的对应关系
 

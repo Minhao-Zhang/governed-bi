@@ -14,11 +14,30 @@ from typing import Any
 
 import pytest
 
-from governed_bi.gateway.connectors.postgres import PostgresConnector
+from governed_bi.gateway.connectors.postgres import PostgresConnector, _force_row_limit
 
 
 class FakeCursor:
     """Records executed SQL and hands back canned rows keyed by query shape."""
+
+    # Statements that must fail when default_transaction_read_only is on.
+    _WRITE_STARTERS = frozenset(
+        {
+            "INSERT",
+            "UPDATE",
+            "DELETE",
+            "MERGE",
+            "CREATE",
+            "DROP",
+            "ALTER",
+            "TRUNCATE",
+            "GRANT",
+            "REVOKE",
+            "COPY",
+            "CALL",
+            "DO",
+        }
+    )
 
     def __init__(self, conn: "FakeConnection") -> None:
         self._conn = conn
@@ -36,6 +55,20 @@ class FakeCursor:
         self._conn.log.append((sql, params))
         self._pos = 0
         norm = " ".join(sql.split())
+        upper = norm.upper()
+
+        if upper.startswith("SET DEFAULT_TRANSACTION_READ_ONLY"):
+            # Mirror Postgres session GUC so write rejection can be tested offline.
+            value = upper.rsplit("=", 1)[-1].strip()
+            self._conn.default_transaction_read_only = value in ("ON", "TRUE", "1")
+            self.description = None
+            self._rows = []
+            return
+
+        if self._conn.default_transaction_read_only:
+            first = upper.split(None, 1)[0] if upper else ""
+            if first in self._WRITE_STARTERS:
+                raise RuntimeError(f"cannot execute {first} in a read-only transaction")
 
         def col(name: str) -> tuple:
             # DBAPI description entries are 7-tuples; only [0] (name) matters here.
@@ -103,6 +136,7 @@ class FakeConnection:
 
     def __init__(self) -> None:
         self.read_only: Any = False
+        self.default_transaction_read_only = False
         self.log: list[tuple[str, tuple | None]] = []
         self.closed = False
 
@@ -130,10 +164,13 @@ class FakeConnection:
 # --------------------------------------------------------------------------- #
 
 
-def test_read_only_true_sets_connection_flag() -> None:
+def test_read_only_true_sets_flag_and_issues_session_set() -> None:
     conn = FakeConnection()
     PostgresConnector("postgresql://x", connection=conn, read_only=True)
     assert conn.read_only is True
+    assert conn.default_transaction_read_only is True
+    set_sqls = [sql for sql, _ in conn.log if "default_transaction_read_only" in sql]
+    assert set_sqls == ["SET default_transaction_read_only = on"]
 
 
 def test_read_only_false_does_not_force_flag() -> None:
@@ -141,6 +178,16 @@ def test_read_only_false_does_not_force_flag() -> None:
     conn.read_only = "untouched"  # sentinel: connector must not overwrite it
     PostgresConnector("postgresql://x", connection=conn, read_only=False)
     assert conn.read_only == "untouched"
+    assert conn.default_transaction_read_only is False
+    assert not any("default_transaction_read_only" in sql for sql, _ in conn.log)
+
+
+def test_execute_rejects_writes_when_read_only() -> None:
+    """Mirror SQLite's test_execute_is_read_only: INSERT must fail under read-only."""
+    conn = FakeConnection()
+    pg = PostgresConnector("postgresql://x", connection=conn, read_only=True)
+    with pytest.raises(RuntimeError, match="read-only transaction"):
+        pg.execute("INSERT INTO customers VALUES ('09999', 'Nope')")
 
 
 # --------------------------------------------------------------------------- #
@@ -334,6 +381,54 @@ def test_execute_sets_statement_timeout_in_milliseconds() -> None:
     assert timeout_sqls == ["SET statement_timeout = 2500"]
 
 
+def test_force_row_limit_appends_on_simple_select() -> None:
+    assert _force_row_limit("SELECT id FROM users", 1000) == "SELECT id FROM users LIMIT 1000"
+
+
+def test_force_row_limit_skips_when_limit_present() -> None:
+    sql = "SELECT id FROM users LIMIT 5"
+    assert _force_row_limit(sql, 1000) == sql
+
+
+def test_force_row_limit_appends_on_cte_without_wrapping() -> None:
+    out = _force_row_limit("WITH c AS (SELECT 1 AS x) SELECT * FROM c", 10)
+    assert out == "WITH c AS (SELECT 1 AS x) SELECT * FROM c LIMIT 10"
+    assert "_gov_limited" not in out
+
+
+def test_execute_injects_limit_on_select_without_limit() -> None:
+    """Unbounded SELECT must reach the server with LIMIT max_rows+1 (S7)."""
+    conn = FakeConnection()
+    conn.generic_description = [("id", None, None, None, None, None, None)]
+    conn.generic_rows = [(i,) for i in range(5)]
+    pg = PostgresConnector("postgresql://x", connection=conn)
+
+    pg.execute("SELECT id FROM users", max_rows=3)
+
+    exec_sqls = [
+        sql
+        for sql, _ in conn.log
+        if not sql.upper().startswith("SET ") and "information_schema" not in sql
+    ]
+    assert exec_sqls == ["SELECT id FROM users LIMIT 4"]
+
+
+def test_execute_preserves_existing_limit() -> None:
+    conn = FakeConnection()
+    conn.generic_description = [("id", None, None, None, None, None, None)]
+    conn.generic_rows = [(1,)]
+    pg = PostgresConnector("postgresql://x", connection=conn)
+
+    pg.execute("SELECT id FROM users LIMIT 5", max_rows=3)
+
+    exec_sqls = [
+        sql
+        for sql, _ in conn.log
+        if not sql.upper().startswith("SET ") and "information_schema" not in sql
+    ]
+    assert exec_sqls == ["SELECT id FROM users LIMIT 5"]
+
+
 def test_execute_applies_row_cap_and_marks_truncated() -> None:
     conn = FakeConnection()
     conn.generic_description = [
@@ -481,3 +576,72 @@ def test_live_pg_rename_decoy_spans_schemas_and_introspects_beer_factory() -> No
         assert info.columns, f"expected columns for {tables[0]!r} in beer_factory"
     finally:
         pg.close()
+
+
+# --------------------------------------------------------------------------- #
+# AUDIT T1: the whole real-dial-out branch (`connection is None`) had never run
+# under test — the SETs that make sampling reproducible and pin search_path.
+# --------------------------------------------------------------------------- #
+
+
+def test_real_dial_out_issues_the_session_sets(monkeypatch):
+    """Covers the `connection is None` branch by faking psycopg's connect, not the
+    connection — so the argument passing and every SET are exercised."""
+    import governed_bi.gateway.connectors.postgres as pg
+
+    conn = FakeConnection()
+    seen: dict = {}
+
+    class _Psycopg:
+        @staticmethod
+        def connect(dsn, **kwargs):
+            seen["dsn"] = dsn
+            seen["kwargs"] = kwargs
+            return conn
+
+    monkeypatch.setattr(pg, "_require_psycopg", lambda: _Psycopg)
+
+    pg.PostgresConnector("postgresql://host/db", schema="beer_factory")
+
+    assert seen["dsn"] == "postgresql://host/db"
+    assert seen["kwargs"]["autocommit"] is True
+    issued = [sql for sql, _params in conn.log]
+    assert "SET default_transaction_read_only = on" in issued
+    # Without this, two builds of the same arm can sample different rows.
+    assert "SET synchronize_seqscans = off" in issued
+    assert any("SET search_path TO" in sql and "beer_factory" in sql for sql in issued)
+
+
+def test_real_dial_out_skips_search_path_for_public_and_for_span_all(monkeypatch):
+    import governed_bi.gateway.connectors.postgres as pg
+
+    for schema in ("public", None):
+        conn = FakeConnection()
+
+        class _Psycopg:
+            @staticmethod
+            def connect(dsn, **kwargs):
+                return conn
+
+        monkeypatch.setattr(pg, "_require_psycopg", lambda: _Psycopg)
+        pg.PostgresConnector("postgresql://host/db", schema=schema)
+        issued = [sql for sql, _params in conn.log]
+        assert not any("search_path" in sql for sql in issued), schema
+        # Determinism SET is unconditional on a real dial-out.
+        assert "SET synchronize_seqscans = off" in issued
+
+
+def test_read_write_connector_issues_no_read_only_set(monkeypatch):
+    import governed_bi.gateway.connectors.postgres as pg
+
+    conn = FakeConnection()
+
+    class _Psycopg:
+        @staticmethod
+        def connect(dsn, **kwargs):
+            return conn
+
+    monkeypatch.setattr(pg, "_require_psycopg", lambda: _Psycopg)
+    pg.PostgresConnector("postgresql://host/db", read_only=False)
+    issued = [sql for sql, _params in conn.log]
+    assert "SET default_transaction_read_only = on" not in issued

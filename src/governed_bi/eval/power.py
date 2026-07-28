@@ -3,7 +3,8 @@
 The serve path is not deterministic and cannot be made so: the model sits behind a
 proxy that drops the temperature parameter, so sampling noise is a fixed cost of
 the setup rather than a knob. Re-running one arm against itself on the last full
-benchmark moved 135 of 2030 questions — individual answers flip constantly even
+benchmark moved 135 of 2030 questions (RETIRED figure; see docs/measurement.md) —
+individual answers flip constantly even
 though the headline rate barely moves.
 
 That has a consequence the previous round of reporting missed. An arm comparison

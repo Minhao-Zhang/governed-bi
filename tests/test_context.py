@@ -9,11 +9,11 @@ from pathlib import Path
 
 import pytest
 
+from governed_bi.analyst.context import PromptContext, assemble_context
+from governed_bi.analyst.governance import _licensed_table_ids
 from governed_bi.corpus import load_corpus
 from governed_bi.graph import build_graph, plan_joins
 from governed_bi.retrieval import retrieve
-from governed_bi.analyst.context import PromptContext, assemble_context
-from governed_bi.analyst.governance import _licensed_table_ids
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 
@@ -45,8 +45,8 @@ def test_always_notes_reach_context_by_licensed_scope():
     from governed_bi.corpus.schemas import (
         Column,
         LogicalType,
-        Reliability,
         NoteAsset,
+        Reliability,
         TableAsset,
     )
     from governed_bi.retrieval import RetrievalResult

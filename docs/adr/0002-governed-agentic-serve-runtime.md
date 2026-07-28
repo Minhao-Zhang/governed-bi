@@ -48,7 +48,7 @@ The serve runtime under-uses LangGraph and its reasoning is deterministic-but-bl
 
 Decision taken this session: make the runtime genuinely intelligent (a **full
 agentic core**), and reverse the "never an autonomous loop" invariant — **but
-only if governance is preserved by construction**, not by convention.
+only if governance is preserved by construction**, not by convention. That is the design intent, and the topology delivers most of it — but not all: a semantic-cache hit and graded delivery both execute outside `wrap_tool_call` (each writing its own ledger entry), graded delivery re-checks with `allowed_tables=None` and so skips L4, and the durable run-log write is best-effort. Those are conventions, documented here rather than claimed away.
 
 ## Decision
 
@@ -84,7 +84,7 @@ with
 
 | # | Question | Decision |
 |---|---|---|
-| Q1 | How is the core built in LangGraph? | **`create_agent` + `AgentMiddleware`**, wrapped by a thin outer `StateGraph`. Governance = `wrap_tool_call` (guardrail + audit) and `wrap_model_call` (identity tool-scoping) — *not* hand-wired nodes and *not* an opaque `create_react_agent`. |
+| Q1 | How is the core built in LangGraph? | **`create_agent` + `AgentMiddleware`**, wrapped by a thin outer `StateGraph`. Governance = `wrap_tool_call` (guardrail + audit) and `wrap_model_call` (sequential tool calls + token capture) — *not* hand-wired nodes and *not* an opaque `create_react_agent`. Identity tool-scoping was named here as built; it is not — `wrap_model_call` never references `identity`. |
 | Q2 | Does exploration expand execution authority? | **Governance-bounded dynamic licensing.** Exploration tools honor `governance.excluded` (excluded assets never surface); a table surfaced via a governed tool is added to a per-turn `licensed` set that `run_query`'s guardrail reads as L4 `allowed_tables`; L3 still guards every column. Accepts the policy shift: the L4 floor moves from *"retrieval recall + FK topology"* to *"curator `excluded` flags + L3 per-column."* |
 | Q3 | How durable must the audit be? | **(a) on-`Answer` provenance now**; design a durable-sink **(c)** seam fed from the same choke point; migrate to durable **(b)/(c)** later. |
 | Q4 | Keep two generation paths? | **No — one agentic architecture. A key is required.** `TemplateSqlGenerator` is removed as a serve path; CI/offline determinism moves to a `FakeListChatModel` agent harness. |
@@ -106,7 +106,7 @@ START → ingest → refuse_gate ──(neg match)──────────
                │      agent_core = create_agent(...)     │  ← the intelligence
                │  governed by AgentMiddleware:           │
                │   • wrap_tool_call  → normalize+guardrail+audit each call
-               │   • wrap_model_call → identity tool-scoping
+               │   • wrap_model_call → sequential tool calls + token capture
                └───────────────────────────────────────┘
                      │ (sql, rows)          │ budget exhausted / decline
                      ▼                       ▼
@@ -152,7 +152,7 @@ reliability stamp. It reasons; the middleware and the rails govern.
    default) so "the agent wandered" is visible in the stamp.
 5. **The reliability stamp is deterministic** — `safety_clearance` /
    `semantic_assurance` are computed by `finalize` from what actually happened,
-   **never self-reported**. The agent cannot claim `grounded`.
+   **never self-reported**. The agent cannot claim `unflagged`.
 6. **`safety_clearance` stays binary-hard** — only `semantic_assurance` is graded
    (§6 deliver-and-grade unchanged).
 7. **Bounded** — `recursion_limit ≈ 15` + `run_query` attempt cap = 3; exhaustion

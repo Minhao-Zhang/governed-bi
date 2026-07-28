@@ -5,31 +5,43 @@ reads ``information_schema`` views, which is portable across Postgres-wire-proto
 engines — the ``RedshiftConnector`` subclass reuses this class and overrides only
 the introspection seams (``list_tables``, ``_column_specs``, ``_primary_keys``)
 with Redshift's ``svv_*`` views. Guarded execution (``execute``) sets a
-per-statement ``statement_timeout`` and applies a forced row cap + truncation
-flag, matching the ``sqlite.py`` reference connector's fetch-and-truncate
-pattern.
+per-statement ``statement_timeout``, best-effort injects a root ``LIMIT`` for
+simple ``SELECT`` / ``UNION`` SQL that lacks one (so the server stops early
+instead of buffering a huge result into libpq), then applies a client-side
+``fetchmany`` row cap + truncation flag.
 
 Read-only is security-critical: the gateway trusts this connector to make writes
-fail, not the reverse. ``psycopg`` (v3) makes every subsequent transaction on a
-connection read-only once ``connection.read_only = True`` is set, so INSERT /
-UPDATE / DDL raise at execute time. That in-process guard is belt-and-suspenders
-only — production deployments MUST also connect through a read-only DB role /
-grant, since an application bug or connector misuse should never be the last
-line of defense.
+fail, not the reverse. Connections open with ``autocommit=True`` (so session
+``SET``s apply immediately), and when ``read_only=True`` the connector issues
+``SET default_transaction_read_only = on`` so INSERT / UPDATE / DDL raise at
+execute time even without an explicit transaction. It also sets
+``connection.read_only = True``, which only affects ``BEGIN ... READ ONLY`` when
+autocommit is off — useful for injected / pooled connections, but not the
+enforcement path under autocommit. Both are belt-and-suspenders only —
+production deployments MUST also connect through a read-only DB role / grant,
+since an application bug or connector misuse should never be the last line of
+defense.
 
 ``psycopg`` is imported lazily (see ``_require_psycopg``) so importing this
 module — or constructing a ``PostgresConnector`` against an injected
 ``connection=`` (as the offline unit tests do) — never requires the driver to
 be installed. Install the optional extra to open a real connection:
 
-    uv sync --extra postgres
+    uv sync
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from .base import ColumnInfo, Connector, Dialect, QueryResult, TableInfo
+from .base import (
+    ColumnInfo,
+    Connector,
+    Dialect,
+    QueryResult,
+    TableInfo,
+    _force_row_limit,  # re-exported: shared by every connector
+)
 
 
 def _require_psycopg():
@@ -37,7 +49,8 @@ def _require_psycopg():
         import psycopg
     except ImportError as e:  # pragma: no cover
         raise ImportError(
-            "PostgresConnector needs psycopg; install it: uv sync --extra postgres"
+            "PostgresConnector needs psycopg; it is a core dependency, so `uv sync` "
+            "installs it"
         ) from e
     return psycopg
 
@@ -69,37 +82,43 @@ class PostgresConnector(Connector):
         else:
             self._conn = _require_psycopg().connect(dsn, autocommit=True, **connect_kwargs)
         if read_only:
-            # psycopg3: setting this makes every subsequent transaction on the
-            # connection read-only, so writes raise. See the module docstring —
-            # a read-only DB role is still required in production as the real
-            # belt-and-suspenders, this is not a substitute for one.
+            # Secondary under autocommit: only shapes BEGIN ... READ ONLY when a
+            # transaction actually starts. Real write rejection is the SET below.
             self._conn.read_only = True
-        if connection is None:
+        # Session SETs for read-only (always when requested) and for real dial-outs
+        # (scan determinism / search_path). Injected fakes see the read-only SET so
+        # offline tests can assert it and simulate write rejection.
+        if read_only or connection is None:
             with self._conn.cursor() as cur:
-                # Deterministic scan start. Postgres defaults ``synchronize_seqscans``
-                # to ON: a sequential scan may begin wherever another concurrent scan
-                # on the same table has reached, so an unordered ``LIMIT n`` returns a
-                # DIFFERENT n rows depending on what else is touching the table.
-                #
-                # ``profile_database`` samples column values with exactly that shape
-                # (``SELECT col FROM t LIMIT 5``, no ORDER BY — deliberately, because
-                # ordering would force a full scan on tables this size). Those samples
-                # go into the corpus, into the prompt, and therefore into the answer.
-                # Left on, two builds of the SAME arm can produce different corpora,
-                # and — worse — the arms of one run can differ from each other for a
-                # reason that has nothing to do with the intervention being measured.
-                # Observed live: the same schema profiled in two runs gave
-                # `2018/8/5` and `2018/8/1` for the same column.
-                #
-                # Turning it off costs nothing here (every scan starts at block 0) and
-                # buys reproducibility, which matters more the more builds run
-                # concurrently.
-                cur.execute("SET synchronize_seqscans = off")
-                # Pin unqualified names to the target schema (single-schema / BIRD
-                # eval). Skipped when ``schema`` is the default ``public`` or the
-                # caller spans all schemas (``schema=None`` in multi-schema mode).
-                if schema and schema != "public":
-                    cur.execute(f"SET search_path TO {_ident(schema)}, public")
+                if read_only:
+                    # Under autocommit, psycopg's connection.read_only never reaches
+                    # BEGIN ... READ ONLY. Session default is what makes writes fail.
+                    cur.execute("SET default_transaction_read_only = on")
+                if connection is None:
+                    # Deterministic scan start. Postgres defaults ``synchronize_seqscans``
+                    # to ON: a sequential scan may begin wherever another concurrent scan
+                    # on the same table has reached, so an unordered ``LIMIT n`` returns a
+                    # DIFFERENT n rows depending on what else is touching the table.
+                    #
+                    # ``profile_database`` samples column values with exactly that shape
+                    # (``SELECT col FROM t LIMIT 5``, no ORDER BY — deliberately, because
+                    # ordering would force a full scan on tables this size). Those samples
+                    # go into the corpus, into the prompt, and therefore into the answer.
+                    # Left on, two builds of the SAME arm can produce different corpora,
+                    # and — worse — the arms of one run can differ from each other for a
+                    # reason that has nothing to do with the intervention being measured.
+                    # Observed live: the same schema profiled in two runs gave
+                    # `2018/8/5` and `2018/8/1` for the same column.
+                    #
+                    # Turning it off costs nothing here (every scan starts at block 0) and
+                    # buys reproducibility, which matters more the more builds run
+                    # concurrently.
+                    cur.execute("SET synchronize_seqscans = off")
+                    # Pin unqualified names to the target schema (single-schema / BIRD
+                    # eval). Skipped when ``schema`` is the default ``public`` or the
+                    # caller spans all schemas (``schema=None`` in multi-schema mode).
+                    if schema and schema != "public":
+                        cur.execute(f"SET search_path TO {_ident(schema)}, public")
 
     def _qualified(self, table: str, schema: str | None = None) -> str:
         return f"{_ident(schema or self.schema)}.{_ident(table)}"
@@ -188,6 +207,8 @@ class PostgresConnector(Connector):
 
     def row_count(self, table: str, schema: str | None = None) -> int:
         row = self._fetchone(f"SELECT COUNT(*) FROM {self._qualified(table, schema)}")
+        if row is None:  # an aggregate always returns a row; a None here is a driver fault
+            raise RuntimeError(f"COUNT(*) returned no row for {self._qualified(table, schema)}")
         return int(row[0])
 
     def sample_values(
@@ -205,6 +226,8 @@ class PostgresConnector(Connector):
             f"SELECT COUNT(*), COUNT(DISTINCT {_ident(column)}) "
             f"FROM {self._qualified(table, schema)}"
         )
+        if row is None:  # as above: an aggregate with no row means the driver failed
+            raise RuntimeError(f"uniqueness probe returned no row for {table}.{column}")
         total, distinct = row
         # Non-null values are distinct and cover every row (no nulls). A PK qualifies.
         return total == distinct
@@ -217,9 +240,12 @@ class PostgresConnector(Connector):
         timeout_ms = int(timeout_s * 1000)
         if timeout_ms < 0:
             raise ValueError(f"timeout_s must be non-negative, got {timeout_s!r}")
+        # Server-side stop for unbounded SELECT/UNION: inject LIMIT max_rows+1
+        # so truncation detection still works, then fetchmany caps the client.
+        limited_sql = _force_row_limit(sql, max_rows + 1, dialect="postgres")
         with self._conn.cursor() as cur:
             cur.execute(f"SET statement_timeout = {timeout_ms}")
-            cur.execute(sql)  # read-only connection -> writes raise
+            cur.execute(limited_sql)  # default_transaction_read_only -> writes raise
             columns = [d[0] for d in cur.description] if cur.description else []
             fetched = cur.fetchmany(max_rows + 1)
             truncated = len(fetched) > max_rows

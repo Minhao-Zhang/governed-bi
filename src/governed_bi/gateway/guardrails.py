@@ -36,12 +36,12 @@ import logging
 from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable, Mapping, cast
 
 import sqlglot
 from sqlglot import exp
 from sqlglot.errors import SqlglotError
-from sqlglot.optimizer.scope import traverse_scope
+from sqlglot.optimizer.scope import Scope, traverse_scope
 
 from ..corpus.schemas import ReliabilityStatus, TableAsset
 
@@ -175,6 +175,12 @@ _FORBIDDEN_FUNCTION_NAMES = frozenset(
         "readfile",
         "writefile",
         "system",
+        # SELECT-shaped write primitives (Postgres sequences). ``nextval`` advances
+        # a sequence; ``setval`` assigns it. Both mutate server state under a
+        # SELECT cloak and currently pass every other layer. Not an allowlist —
+        # only the known mutators called out by audit finding S2.
+        "setval",
+        "nextval",
     }
 )
 
@@ -186,8 +192,11 @@ def _function_name(node: exp.Expression) -> str:
     built-in lands; known functions expose ``sql_name()`` (e.g. ``SUM``)."""
     if isinstance(node, exp.Anonymous):
         return str(node.name or "").lower()
+    sql_name = getattr(node, "sql_name", None)
+    if not callable(sql_name):
+        return ""
     try:
-        return str(node.sql_name()).lower()
+        return str(sql_name()).lower()
     except Exception:
         return ""
 
@@ -195,7 +204,8 @@ def _function_name(node: exp.Expression) -> str:
 def _forbidden_function(root: exp.Expression) -> str | None:
     """The first dangerous function referenced anywhere in the tree, or ``None``."""
     for node in root.find_all(exp.Func):
-        name = _function_name(node)
+        # sqlglot's own annotations do not present Func as an Expression subclass.
+        name = _function_name(node)  # type: ignore[arg-type]
         if name and (
             name in _FORBIDDEN_FUNCTION_NAMES or name.startswith(_FORBIDDEN_FUNCTION_PREFIXES)
         ):
@@ -252,17 +262,93 @@ def _fail(layer: GuardrailLayer, reason: str) -> GuardrailVerdict:
     return GuardrailVerdict(passed=False, failed_layer=layer, reason=reason)
 
 
+# Dialects that fold unquoted identifiers to a single case (Postgres / Redshift →
+# lowercase). L3 must compare allowlist keys the same way the engine will, or an
+# LLM-emitted ``customerid`` fails against a corpus key ``CustomerID`` even though
+# both name the same column on the wire.
+_CASE_INSENSITIVE_IDENTS = frozenset({"postgres", "redshift"})
+
+
+def _idents_case_insensitive(dialect: str | None) -> bool:
+    return dialect in _CASE_INSENSITIVE_IDENTS
+
+
+def _fold_ident(s: str, *, fold: bool) -> str:
+    return s.casefold() if fold else s
+
+
+def _fold_ident_set(refs: set[str], *, fold: bool) -> set[str]:
+    return {_fold_ident(r, fold=fold) for r in refs} if fold else refs
+
+
+def canonical_identifier_map(refs: Iterable[str]) -> dict[str, str]:
+    """Folded bare identifier → the corpus's own spelling of it.
+
+    Built from allowlist keys (``schema.table.column``) and physical table names, so
+    every schema, table and column part contributes one entry. Ambiguous folds — two
+    corpus identifiers differing only by case — are dropped: there is no single
+    correct rewrite, and guessing would be worse than leaving the model's spelling
+    alone for the engine to resolve.
+    """
+    seen: dict[str, set[str]] = {}
+    for ref in refs:
+        for part in str(ref).split("."):
+            if part:
+                seen.setdefault(part.casefold(), set()).add(part)
+    return {folded: next(iter(names)) for folded, names in seen.items() if len(names) == 1}
+
+
+def canonicalize_identifiers(sql: str, *, dialect: str | None, names: Mapping[str, str]) -> str:
+    """Rewrite identifiers to their corpus spelling, then quote them.
+
+    L3 compares case-insensitively on folding dialects, so ``SELECT customerid`` now
+    clears the allowlist even when the corpus key is ``CustomerID``. Quoting that SQL
+    as-is (``identify=True``) makes the case load-bearing again at the engine — a
+    query the guardrails passed then dies on a physically mixed-case column (AUDIT
+    S1). Mapping each identifier back to the spelling the corpus declares keeps the
+    gate's leniency and the engine's strictness from contradicting each other.
+
+    Unknown identifiers (aliases the model invented, CTE names, function labels) are
+    left untouched; they are not corpus objects and quoting preserves them verbatim.
+    """
+    if not names:
+        return sql
+    tree = sqlglot.parse_one(sql, read=dialect)
+    for node in tree.find_all(exp.Identifier):
+        raw = node.this
+        if not isinstance(raw, str):
+            continue
+        canonical = names.get(raw.casefold())
+        # A quoted identifier is the model asserting an exact spelling. Honour it —
+        # but only when the corpus agrees such an object exists, which the folded
+        # lookup already established.
+        if canonical is not None and canonical != raw:
+            node.set("this", canonical)
+    return tree.sql(dialect=dialect, identify=True)
+
+
 def _layer_syntax(sql: str, dialect: str | None) -> tuple[GuardrailVerdict, list[exp.Expression]]:
     """L1: parse. Returns the verdict and, on success, the parsed statements.
 
     Catches the whole ``SqlglotError`` family (both ``ParseError`` and the sibling
-    ``TokenError`` raised on unterminated literals / stray delimiters), so malformed
-    SQL always yields a fail-closed verdict instead of an unhandled exception.
+    ``TokenError`` raised on unterminated literals / stray delimiters), plus
+    ``RecursionError`` from pathological nesting and any other unexpected parse
+    failure, so malformed SQL always yields a fail-closed verdict instead of an
+    unhandled exception.
     """
     try:
-        statements = [s for s in sqlglot.parse(sql, read=dialect) if s is not None]
+        # sqlglot.parse is typed list[Expr | None] over its own TypeVar; the None
+        # filter is what makes the result usable, so assert the element type here.
+        statements = cast(
+            list[exp.Expression], [s for s in sqlglot.parse(sql, read=dialect) if s is not None]
+        )
+    except RecursionError:
+        return _fail(GuardrailLayer.syntax, "SQL nesting too deep to parse"), []
     except SqlglotError as err:
         first = str(err).splitlines()[0] if str(err) else "parse error"
+        return _fail(GuardrailLayer.syntax, f"does not parse as SQL: {first}"), []
+    except Exception as err:
+        first = str(err).splitlines()[0] if str(err) else type(err).__name__
         return _fail(GuardrailLayer.syntax, f"does not parse as SQL: {first}"), []
     if not statements:
         return _fail(GuardrailLayer.syntax, "no SQL statement found"), []
@@ -302,7 +388,16 @@ def _layer_policy(statements: list[exp.Expression]) -> GuardrailVerdict:
     return _pass()
 
 
-_MISSING = object()  # sentinel: a source name that is not known anywhere in the query
+class _MissingSource:
+    """Sentinel type: a source name not known anywhere in the query.
+
+    A distinct class rather than ``object()`` so ``resolve`` can be typed
+    ``str | None | _MissingSource`` and the caller narrows to ``str | None``
+    after the miss check — the guardrail's fail-closed branch is then checked
+    by the type system rather than by convention."""
+
+
+_MISSING = _MissingSource()
 
 
 def _is_projection_star(select: exp.Select) -> bool:
@@ -330,7 +425,7 @@ def _physical_of(src: exp.Table, default_schema: str | None) -> str:
 
 
 def _scope_sources(
-    scope: object, *, default_schema: str | None = None
+    scope: Scope, *, default_schema: str | None = None
 ) -> tuple[dict[str, str | None], set[str], set[str]]:
     """Resolve one scope's sources (never flattened across the query).
 
@@ -367,6 +462,7 @@ def _layer_columns(
     hard_block_suspect: bool,
     *,
     default_schema: str | None = None,
+    dialect: str | None = None,
 ) -> GuardrailVerdict:
     """L3: every referenced column resolves to an allowed physical column.
 
@@ -385,8 +481,14 @@ def _layer_columns(
       qualification); in a derived-only scope it must be a projected output of a
       derived source.
     - A ``suspect`` column is hard-blocked when ``hard_block_suspect`` (dev/BIRD).
+    - On Postgres / Redshift, allowlist membership is case-insensitive (both the
+      corpus key and the SQL identifier are casefolded), matching how those
+      engines fold unquoted identifiers. SQLite stays exact-match.
     """
     layer = GuardrailLayer.ast_column_allowlist
+    fold = _idents_case_insensitive(dialect)
+    allowed = _fold_ident_set(allowed, fold=fold)
+    suspect = _fold_ident_set(suspect, fold=fold)
     scopes = list(traverse_scope(root))
 
     for scope in scopes:
@@ -400,25 +502,42 @@ def _layer_columns(
         for scope in scopes
     }
 
-    def resolve(scope: object, qualifier: str) -> object:
+    def resolve(scope: Scope, qualifier: str) -> str | None | _MissingSource:
         # Walk up the scope chain so a correlated reference resolves against the
-        # outer scope that owns it.
-        current = scope
+        # outer scope that owns it. On case-folding dialects, also try the folded
+        # qualifier so ``Customers.col`` resolves to a ``customers`` source.
+        current: Scope | None = scope
         while current is not None:
             resolved = cache[id(current)][0]
             if qualifier in resolved:
                 return resolved[qualifier]
+            if fold:
+                folded = _fold_ident(qualifier, fold=True)
+                for key, physical in resolved.items():
+                    if _fold_ident(key, fold=True) == folded:
+                        return physical
             current = current.parent
         return _MISSING
+
+    def base_has(base: set[str], physical: str) -> bool:
+        if physical in base:
+            return True
+        if not fold:
+            return False
+        target = _fold_ident(physical, fold=True)
+        return any(_fold_ident(p, fold=True) == target for p in base)
+
+    def col_ref(physical: str, name: str) -> str:
+        return _fold_ident(f"{physical}.{name}", fold=fold)
 
     for column in root.find_all(exp.Column):
         name = column.name
         if name == "*":  # a t.* anywhere (bare * is caught by the star check above)
             return _fail(layer, "star projection is not allowed; enumerate columns")
 
-        select = column.find_ancestor(exp.Select)
-        scope = by_select.get(id(select)) if select is not None else None
-        if scope is None:
+        col_select = column.find_ancestor(exp.Select)
+        col_scope = by_select.get(id(col_select)) if col_select is not None else None
+        if col_scope is None:
             return _fail(layer, f"cannot attribute column '{name}' to a query scope")
 
         qualifier = column.table
@@ -429,28 +548,33 @@ def _layer_columns(
                 # otherwise a column of an off-scope table would slip past L3 (its
                 # key is in the corpus-wide allowlist) and L4 (which inspects only
                 # FROM sources), leaving the database engine as the last line.
-                physical: str | None = f"{column.db}.{qualifier}"
-                if physical not in cache[id(scope)][1]:
+                physical: str = f"{column.db}.{qualifier}"
+                if not base_has(cache[id(col_scope)][1], physical):
                     return _fail(layer, f"column references a table not in scope: {physical}.{name}")
             else:
-                physical = resolve(scope, qualifier)
-                if physical is _MISSING:
+                resolved_physical = resolve(col_scope, qualifier)
+                if isinstance(resolved_physical, _MissingSource):
                     return _fail(layer, f"column references unknown source '{qualifier}'")
-                if physical is None:
+                if resolved_physical is None:
                     continue  # derived source; its base columns are validated in its scope
-            ref = f"{physical}.{name}"
+                physical = resolved_physical
+            ref = col_ref(physical, name)
+            # Keep the human-readable (pre-fold) form in block reasons.
+            display = f"{physical}.{name}"
             if ref in suspect:
                 if hard_block_suspect:
-                    return _fail(layer, f"suspect (unreliable) column blocked: {ref}")
+                    return _fail(layer, f"suspect (unreliable) column blocked: {display}")
                 continue
             if ref in allowed:
                 continue
-            return _fail(layer, f"column not in the allowlist: {ref}")
+            return _fail(layer, f"column not in the allowlist: {display}")
 
         # Bare column: only this scope's own sources can own it.
-        _resolved, base, derived_outputs = cache[id(scope)]
-        candidate_allowed = any(f"{p}.{name}" in allowed for p in base)
-        candidate_suspect = any(f"{p}.{name}" in suspect for p in base)
+        _resolved, base, derived_outputs = cache[id(col_scope)]
+        if fold:
+            derived_outputs = _fold_ident_set(set(derived_outputs), fold=True)
+        candidate_allowed = any(col_ref(p, name) in allowed for p in base)
+        candidate_suspect = any(col_ref(p, name) in suspect for p in base)
         # Same-named columns across in-scope schemas are routine, so a bare name
         # matching a suspect column in ANY in-scope base must fail closed: the DB
         # could bind it to the decoy (leftmost-table resolution) and the caller
@@ -462,7 +586,7 @@ def _layer_columns(
             continue
         if base:
             return _fail(layer, f"column not in the allowlist: {name}")
-        if name in derived_outputs:
+        if _fold_ident(name, fold=fold) in derived_outputs:
             continue  # projected by an in-scope derived source (validated there)
         return _fail(layer, f"column not in the allowlist: {name}")
 
@@ -476,15 +600,15 @@ def _layer_columns(
         using = join.args.get("using")
         if not using:
             continue
-        select = join.find_ancestor(exp.Select)
-        scope = by_select.get(id(select)) if select is not None else None
-        if scope is None:
+        join_select = join.find_ancestor(exp.Select)
+        join_scope = by_select.get(id(join_select)) if join_select is not None else None
+        if join_scope is None:
             return _fail(layer, "cannot attribute a USING join to a query scope")
-        _resolved, base, _derived = cache[id(scope)]
+        _resolved, base, _derived = cache[id(join_scope)]
         for identifier in using:
             key = identifier.name
-            candidate_allowed = any(f"{p}.{key}" in allowed for p in base)
-            candidate_suspect = any(f"{p}.{key}" in suspect for p in base)
+            candidate_allowed = any(col_ref(p, key) in allowed for p in base)
+            candidate_suspect = any(col_ref(p, key) in suspect for p in base)
             if hard_block_suspect and candidate_suspect and not candidate_allowed:
                 return _fail(layer, f"suspect (unreliable) column blocked: {key}")
             if candidate_allowed or candidate_suspect:
@@ -720,6 +844,7 @@ def check(
     (qualified ``schema.table`` names) drives L4 (term-semantics); when ``None``,
     L4 is skipped (e.g. a corpus-only unit check with no retrieval scope).
     ``dialect`` is the sqlglot dialect name (e.g. ``"sqlite"``) for parsing.
+    On Postgres / Redshift, L3 allowlist membership is case-insensitive.
 
     The engine is uniformly schema-qualified: allowlist keys, licensed table names,
     and layer bookkeeping are all ``schema.``-prefixed (see :func:`column_allowlist`,
@@ -729,7 +854,45 @@ def check(
     ``on_layer`` is an optional observer called once per layer that actually runs
     (see :func:`_observe`); it is what makes "which layer blocks most often"
     answerable, and it cannot influence the verdict.
+
+    Always returns a :class:`GuardrailVerdict`: parse failures, pathological
+    nesting (``RecursionError``), and unexpected layer errors are converted to
+    ``passed=False`` rather than raised.
     """
+    try:
+        return _check(
+            sql,
+            allowed_columns=allowed_columns,
+            hard_block_suspect=hard_block_suspect,
+            suspect_columns=suspect_columns,
+            allowed_tables=allowed_tables,
+            dialect=dialect,
+            default_schema=default_schema,
+            on_layer=on_layer,
+        )
+    except RecursionError:
+        # Pathological nesting can also escape L1 into traverse_scope / walk.
+        _observe(on_layer, GuardrailLayer.syntax, False)
+        return _fail(GuardrailLayer.syntax, "SQL nesting too deep to parse")
+    except Exception as err:
+        # Layers are fail-closed by design; an unexpected raise must not punch a
+        # hole in the audit trail (middleware builds the ledger after check()).
+        first = str(err).splitlines()[0] if str(err) else type(err).__name__
+        _observe(on_layer, GuardrailLayer.syntax, False)
+        return _fail(GuardrailLayer.syntax, f"guardrail check failed: {first}")
+
+
+def _check(
+    sql: str,
+    *,
+    allowed_columns: set[str],
+    hard_block_suspect: bool,
+    suspect_columns: frozenset[str],
+    allowed_tables: frozenset[str] | None,
+    dialect: str | None,
+    default_schema: str | None,
+    on_layer: "Callable[[GuardrailLayer, bool], None] | None",
+) -> GuardrailVerdict:
     verdict, statements = _layer_syntax(sql, dialect)
     _observe(on_layer, GuardrailLayer.syntax, verdict.passed)
     if not verdict.passed:
@@ -746,6 +909,7 @@ def check(
         set(suspect_columns),
         hard_block_suspect,
         default_schema=default_schema,
+        dialect=dialect,
     )
     _observe(on_layer, GuardrailLayer.ast_column_allowlist, verdict.passed)
     if not verdict.passed:

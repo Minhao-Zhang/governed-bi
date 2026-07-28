@@ -11,6 +11,15 @@ _[English](measurement.md) · [简体中文](measurement.zh.md)_
 查——测量本身落在哪里，哪个文件负责把哪一类失败定位出来。那次作废的记录本身
 见 [`plans/datalake-run.md`](plans/datalake-run.md)。
 
+> **这一页上数字的出处。** 每一个「最近一次完整基准测试」的数字（45.8%、
+> 2030 中的 135、61%、73.7%……）都来自 2026-07-25 之前的分析跑批，和那套
+> 仪器产出的其余东西一样已经**作废**——见
+> [`plans/datalake-run.md`](plans/datalake-run.md#status)。留着它们，是因为
+> 它们所演示的*算术*（多类别错误不能直接相加；问题层面的波动会淹没掉小
+> 差值）才是要点，而一个带着真实量值的示例，比一个凭空编的示例更能说清楚
+> 这一点。它们**不是当前的结果**，`plans/experiment-runbook.md` 说得对：这
+> 个仓库从来没有带模型跑完过完整的切分。引用其中任何一个之前，请重新推算。
+
 ## 两根轴，刻意分开
 
 `src/governed_bi/stages.py` 是 serve 路径与 eval harness 共用的一套词汇表，

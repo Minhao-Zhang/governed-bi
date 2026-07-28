@@ -29,7 +29,7 @@ def solve_with(monkeypatch):
             sql=sql,
             provenance=provenance,
             tier=SimpleNamespace(value="governed"),
-            semantic_assurance=SimpleNamespace(value="grounded"),
+            semantic_assurance=SimpleNamespace(value="unflagged"),
             safety_clearance=True,
         )
         graph = SimpleNamespace(invoke=lambda state, config=None: {"answer": answer})

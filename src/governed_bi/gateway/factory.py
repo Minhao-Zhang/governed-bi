@@ -3,7 +3,7 @@
 The config-driven data-source seam: a ``[datasource]`` table in ``governed_bi.toml``
 (or CLI overrides) selects the engine, and this factory dials it. Drivers are
 imported lazily, so importing this module never requires ``psycopg`` - only
-opening a Postgres/Redshift connection does (install ``uv sync --extra postgres``).
+opening a Postgres/Redshift connection does (``psycopg`` is a core dependency, so ``uv sync`` covers it).
 """
 
 from __future__ import annotations

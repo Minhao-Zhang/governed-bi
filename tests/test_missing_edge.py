@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from governed_bi.analyst.agent import answer_question_agent
+from governed_bi.analyst.answer import ReliabilityTier
 from governed_bi.config import DataSourceConfig, Environment, Settings
 from governed_bi.corpus import Corpus
 from governed_bi.corpus.schemas import (
@@ -22,8 +24,6 @@ from governed_bi.corpus.schemas import (
 from governed_bi.gateway import Gateway, Identity, SqliteConnector
 from governed_bi.graph import build_graph, detect_missing_join_path
 from governed_bi.retrieval import RetrievalResult
-from governed_bi.analyst.agent import answer_question_agent
-from governed_bi.analyst.answer import ReliabilityTier
 
 SCHEMA_A_ORDERS = "tbl_schema_a_orders"
 SCHEMA_B_ORDERS = "tbl_schema_b_orders"

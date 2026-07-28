@@ -254,7 +254,9 @@ def test_few_shot_grounds_its_referenced_tables():
     reason="field weights are flat (_SEMANTIC_BOOST=1) for now; preferring the "
     "curated description over a matching raw/decoy name is a production-tuning "
     "target (raise _SEMANTIC_BOOST). Kept as an executable spec of the goal.",
-    strict=False,
+    # strict: this is the product thesis. Non-strict meant a fix would XPASS in
+    # silence and nobody would learn the boost had started working (AUDIT T3).
+    strict=True,
 )
 def test_curated_semantics_outrank_a_decoy_raw_name():
     # Governed-BI thesis: the curated description is the trusted match surface; a

@@ -6,9 +6,10 @@ Amazon Redshift speaks the Postgres wire protocol (its engine forked Postgres
 real Postgres server. This connector therefore *subclasses*
 :class:`~governed_bi.gateway.connectors.postgres.PostgresConnector` and
 inherits its connection handling, read-only enforcement
-(``self._conn.read_only = True``), ``execute()``, ``row_count()``,
-``sample_values()``, ``is_unique()``, ``explain()``, and ``close()`` unchanged
--- those are standard SQL / standard psycopg usage that Redshift supports.
+(``SET default_transaction_read_only = on`` plus ``connection.read_only``),
+``execute()``, ``row_count()``, ``sample_values()``, ``is_unique()``,
+``explain()``, and ``close()`` unchanged -- those are standard SQL / standard
+psycopg usage that Redshift supports.
 
 It overrides only the two catalog-introspection seams that Redshift resolves
 differently, because Redshift does not populate ``information_schema`` the
@@ -36,11 +37,11 @@ Caveats (read before pointing this at a real cluster):
 * ``SET statement_timeout`` is honored by Redshift, but cluster-side Workload
   Management (WLM) queue configuration also applies and can queue or kill a
   query independently of this timeout.
-* Read-only is enforced the same way as for Postgres: the parent sets
-  ``self._conn.read_only = True`` on the psycopg connection. In production
-  this client-side flag should be paired with a read-only IAM role / DB user
-  grant on the cluster itself -- the flag alone is a courtesy, not a security
-  boundary.
+* Read-only is enforced the same way as for Postgres: the parent issues
+  ``SET default_transaction_read_only = on`` (real write rejection under
+  autocommit) and also sets ``connection.read_only``. In production this
+  should be paired with a read-only IAM role / DB user grant on the cluster
+  itself -- the session SET alone is a courtesy, not a security boundary.
 * **Untested against a live Redshift cluster.** There is no AWS access
   available while writing this connector. The implementation is best-effort
   against the documented ``svv_tables`` / ``svv_columns`` schemas and the

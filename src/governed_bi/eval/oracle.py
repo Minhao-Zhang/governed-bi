@@ -2,7 +2,8 @@
 
 The error taxonomy says *where* wrong answers come from. It cannot say what fixing
 a stage would buy, and the arithmetic that looks like it can is wrong. On the last
-benchmark 61% of wrong answers were wrong along more than one dimension at once, so
+benchmark 61% of wrong answers were wrong along more than one dimension at once
+(RETIRED figure; see docs/measurement.md), so
 "203 questions have the wrong table" is not 203 recoverable questions — fix the
 tables and most of those queries are still wrong about something else. Adding
 per-class counts to get a headroom estimate over-counts every query in more than
@@ -252,7 +253,7 @@ def restrict_corpus(
             # Filtered by table too, not only by schema. An exemplar whose SQL
             # reads a table the narrowed corpus dropped is gold SQL the turn is
             # then blocked from imitating: the prompt says "use ONLY these
-            # identifiers" and the example uses others. Measured at 73.7% of
+            # identifiers" and the example uses others. Measured at 73.7% of  # RETIRED
             # exemplars under ``oracle_tables`` before this filter existed, which
             # depresses the rung for a reason that has nothing to do with the
             # stage it is meant to isolate.
@@ -388,7 +389,7 @@ def oracle_solver(
                     "oracle_rung": rung.value,
                     "oracle_applied": True,
                     "tier": "governed",
-                    "semantic_assurance": "grounded",
+                    "semantic_assurance": "unflagged",
                     "routed_schemas": [schema] if schema else [],
                     "routing_bypassed": True,
                 }

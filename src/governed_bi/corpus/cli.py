@@ -2,8 +2,10 @@
 
 Loads a ``corpus/<schema>/`` tree, runs the CI reference-integrity + ID checks, and
 prints findings. A green run is the curator's machine-checkable "done-enough"
-signal (D9). Physical-existence and few-shot leakage checks are skipped here:
-they need a live catalog / the eval split, so they belong to the eval harness.
+signal (D9). Metric expression parse runs offline (no DB). Physical-existence and
+few-shot leakage checks are skipped here: they need a live catalog / the eval
+split. ``validate_corpus`` already accepts ``connector=`` / ``train_refs=`` —
+plumb a connector through this CLI when a catalog dial is available.
 
 Run it with:
 
@@ -29,13 +31,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m governed_bi.corpus.cli",
         description=(
-            "Validate a corpus tree: ID conventions + reference integrity. "
+            "Validate a corpus tree: ID conventions + reference integrity + "
+            "offline metric-expression parse. "
             "A green run is the curator's 'done-enough' signal (D9)."
         ),
         epilog=(
             "PATH may be a corpus root (validates every <schema> under it) or a single "
             "<schema> directory. Exit codes: 0 = green, 1 = findings, 2 = bad usage / path "
-            "not found. Physical-existence and leakage checks are not run here."
+            "not found. Physical-existence (pass connector= to validate_corpus) and "
+            "leakage checks are not run here."
         ),
     )
     parser.add_argument(
@@ -61,6 +65,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         corpus = load_corpus(root)
 
+    # Offline path: no connector / train_refs. When a catalog dial is wired,
+    # pass connector=... (and optionally settings=...) into validate_corpus here
+    # so physical-existence runs without changing the default CI path.
     findings = validate_corpus(corpus.assets)
     n_assets = len(corpus.assets)
 

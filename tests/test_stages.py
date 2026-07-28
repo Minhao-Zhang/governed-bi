@@ -138,6 +138,29 @@ def test_grader_gradeability_errors_are_not_crashes():
         assert outcome is Outcome.answered, err
 
 
+def test_exec_error_is_answered_not_crashed():
+    # Model SQL that raises at grading time is a wrong answer (audit E4 contrast).
+    outcome, _, _ = classify_row(
+        {
+            "generated_sql": "SELECT missing",
+            "error": "exec_error:UndefinedColumn: no such column",
+        }
+    )
+    assert outcome is Outcome.answered
+
+
+def test_infra_error_is_a_crash_not_a_wrong_answer():
+    # Timeouts / connection deaths / truncation share ``infra_error:`` so they
+    # enter crash_rate and block quotability instead of silently moving EX.
+    for err in (
+        "infra_error:OperationalError: server closed the connection",
+        "infra_error:QueryCanceled: canceling statement due to statement timeout",
+        "infra_error:truncated: result exceeded row cap (200000 rows returned)",
+    ):
+        outcome, _, _ = classify_row({"generated_sql": "SELECT 1", "error": err})
+        assert outcome is Outcome.crashed, err
+
+
 def test_stage_and_outcome_are_plain_strings_for_json():
     # Both land in JSONL rows, so they must serialise without a custom encoder.
     import json

@@ -22,6 +22,8 @@ inject the ``RunnableConfig``, and a stringized annotation defeats that.
 """
 
 import asyncio
+import hashlib
+import secrets
 import threading
 from typing import TYPE_CHECKING, Annotated, Any, TypedDict
 
@@ -61,6 +63,11 @@ def _message_text(message) -> str:
 
 def _is_human(message) -> bool:
     return getattr(message, "type", None) == "human"
+
+
+#: Per-process salt for inner clarify-thread keys. Regenerated on restart, which is
+#: correct: a pause cannot outlive the process that holds it in memory anyway.
+_CLARIFY_THREAD_SALT = secrets.token_hex(16)
 
 
 def _split_question_and_history(messages: list) -> tuple[str, list]:
@@ -107,12 +114,14 @@ def build_chat_graph(stack: "ServeStack", *, checkpointer: Any = None):
     """
     from dataclasses import asdict
 
+    from langgraph.types import interrupt
+
+    from governed_bi.analyst.agent import ClarificationPending, answer_question_agent
+
     # Absolute imports: the LangGraph server loads this module by file path (no
     # parent package), so relative imports would fail at call time.
     from governed_bi.gateway import Gateway
-    from governed_bi.analyst.agent import ClarificationPending, answer_question_agent
     from governed_bi.viz import presenter
-    from langgraph.types import interrupt
 
     def answer(state: ChatState, config: RunnableConfig | None = None) -> dict:
         thread_id = ((config or {}).get("configurable") or {}).get("thread_id") or "default"
@@ -127,8 +136,18 @@ def build_chat_graph(stack: "ServeStack", *, checkpointer: Any = None):
         # Serve-time HITL: a per-turn inner thread, stable across the outer graph's
         # re-execution on resume (contract §2). Keyed by the human-turn count so a
         # new turn gets a fresh inner thread and never resumes a stale pause.
+        #
+        # The inner key is NAMESPACED and hashed rather than the raw client-supplied
+        # thread_id. The clarify checkpointer is process-global, so a caller sending a
+        # colliding thread_id could land on a victim's paused clarification — which
+        # embeds their question — and resume their agent (AUDIT S7). Hashing does not
+        # authenticate the caller (only real per-session auth does), but it stops a
+        # guessable id like "default" from being a usable handle on someone else's
+        # pause, and the namespace keeps inner threads from colliding with outer ones.
         n_human = sum(1 for m in state["messages"] if getattr(m, "type", None) == "human")
-        clarify_thread = f"{thread_id}:{n_human}"
+        clarify_thread = "clarify:" + hashlib.sha256(
+            f"{_CLARIFY_THREAD_SALT}:{thread_id}:{n_human}".encode()
+        ).hexdigest()[:32]
 
         # Run the turn; if the agent pauses on ask_user, surface a client interrupt
         # and loop back with the answer. When clarify is off (no checkpointer),
@@ -157,6 +176,8 @@ def build_chat_graph(stack: "ServeStack", *, checkpointer: Any = None):
                     clarify_thread=clarify_thread,
                     clarify_resume=resume,
                     n_human=n_human,
+                    # Stack-scoped, so schema/asset embeddings survive the turn (R6).
+                    index_cache=stack.index_cache,
                 )
             finally:
                 connector.close()

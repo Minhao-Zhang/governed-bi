@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING
 from ..corpus.schemas import NoteAsset, ProvenanceStatus
 
 if TYPE_CHECKING:
-    from ..corpus import Corpus
     from ..config import Settings
+    from ..corpus import Corpus
 
 
 def fire_triggers(

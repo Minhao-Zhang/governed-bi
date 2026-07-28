@@ -2,7 +2,7 @@
 
 Run::
 
-    uv run --extra agents --extra postgres python -m governed_bi.eval.run_experiment \\
+    uv run python -m governed_bi.eval.run_experiment \\
       --db cs_semester \\
       --bird-dir ../BIRD-Data-Obfuscation \\
       --pg-dsn "host=127.0.0.1 port=5435 dbname=bird user=bird password=bird" \\
@@ -28,24 +28,29 @@ from ..gateway.connectors.postgres import PostgresConnector
 from ..prompts import (
     parse_cli_overrides,
     prompt_set_hash,
+)
+from ..prompts import (
     resolve as resolve_prompts,
+)
+from ..prompts import (
     text as prompt_text,
 )
 from ..provenance import corpus_release_hash
-from ..stages import Outcome, classify_outcome
+from ..stages import INFRA_ERROR_PREFIX, Outcome, Stage, classify_outcome
 from .arms import _touches_suspect, agent_solver
-from .error_taxonomy import attribute_rows, summarise_attributions
-from .index import manifest_model
-from .parallel import ServeWorker, resolve_workers, run_ordered_pool
-from .treatment import fingerprint_arm
 from .bird_loader import load_bird_items
+from .error_taxonomy import attribute_rows, summarise_attributions
 from .hash_grade import (
     crosscheck_execution_match,
+    free_pass_counts,
     load_gold_hashes,
     load_trap_columns,
     score_sql_hashes,
     validate_gold_hashes_live,
 )
+from .index import manifest_model
+from .parallel import ServeWorker, resolve_workers, run_ordered_pool
+from .treatment import fingerprint_arm
 
 
 @dataclass
@@ -82,6 +87,11 @@ class ArmSummary:
     # a semantic error — the difference between fixing the generator and changing
     # the grader. Same field the pooled driver reports, from the same grade dict.
     n_wrong_but_nrows_match: int = 0
+    # Correct answers that are grading free passes (Audit E2). Empty gold, no-FROM
+    # predictions, and (when table sets are available) zero table overlap.
+    n_correct_with_empty_gold: int = 0
+    n_correct_and_pred_has_no_from: int = 0
+    n_correct_and_zero_table_overlap: int = 0
     # ``None`` (not ``0.0``) when no row recorded ``attempts``: an arm whose solver
     # never reported a repair count did not average zero attempts.
     mean_attempts: float | None = None
@@ -485,12 +495,22 @@ def _run_arm_generations(
         # other kind of ``error`` string. Parity with the pooled driver is the point:
         # this driver produces the single-DB ladder numbers, and until now it still
         # scored a crash as a refusal — the defect the shared vocabulary exists to end.
+        # ``infra_error:`` from the grader is a harness failure, not a wrong answer
+        # (audit E4) — same stamp as ``run_datalake``.
+        grade_err = grade.get("error")
+        infra_msg = (
+            grade_err
+            if isinstance(grade_err, str) and grade_err.startswith(INFRA_ERROR_PREFIX)
+            else None
+        )
         outcome, failed_stage, recognised = classify_outcome(
             generated_sql=sql,
-            exception=err_msg,
+            exception=err_msg or infra_msg,
             refused_by=meta.get("refused_by"),
             recursion_exhausted=meta.get("recursion_exhausted"),
         )
+        if infra_msg and outcome is Outcome.crashed and failed_stage is None:
+            failed_stage = Stage.execute
         row["outcome"] = outcome.value
         row["failed_stage"] = failed_stage.value if failed_stage else None
         if not recognised:
@@ -569,6 +589,14 @@ def _run_arm_generations(
             n_strict += 1
         by_diff_correct.setdefault(b["diff"], []).append(b["correct"])
 
+    free_passes = free_pass_counts(
+        rows,
+        gold={
+            str(item.question_id or item.question): item.sql
+            for item in items
+            if getattr(item, "sql", None)
+        },
+    )
     n = len(items)
     summary = ArmSummary(
         arm=arm,
@@ -592,6 +620,11 @@ def _run_arm_generations(
         },
         n_missing_gold=n_missing_gold,
         n_wrong_but_nrows_match=n_wrong_but_nrows_match,
+        n_correct_with_empty_gold=free_passes["n_correct_with_empty_gold"],
+        n_correct_and_pred_has_no_from=free_passes["n_correct_and_pred_has_no_from"],
+        n_correct_and_zero_table_overlap=free_passes[
+            "n_correct_and_zero_table_overlap"
+        ],
         mean_attempts=_mean_or_none(rows, "attempts"),
     )
     # Attach cross-check agreement onto the generations sidecar via a sentinel row

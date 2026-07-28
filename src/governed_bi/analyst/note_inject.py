@@ -14,9 +14,9 @@ from ..corpus.ids import derive_column_id
 from ..corpus.schemas import (
     JoinAsset,
     MetricAsset,
+    NormativeForce,
     NoteActivation,
     NoteAsset,
-    NormativeForce,
     ProvenanceStatus,
     TableAsset,
 )
@@ -156,10 +156,20 @@ def scope_matches(note: NoteAsset, licensed: LicensedScope) -> bool:
 
 
 def _precedence_key(note: NoteAsset) -> tuple:
+    """Order notes for the always-inject budget: normative force first.
+
+    Publication status used to sort first, which meant a ``certified`` + ``advisory``
+    note outranked a ``draft`` + ``must_honour`` one — so under a tight char budget
+    the rules the engine promises to honour were the ones dropped, silently (AUDIT
+    R8). Force leads now: a must-honour note is a constraint on the answer, while a
+    certified advisory one is a suggestion, and dropping a constraint to keep a
+    suggestion is the wrong trade at every budget. Status still breaks ties within a
+    force level, so a certified must-honour note beats a draft must-honour note.
+    """
     conf = note.confidence if isinstance(note.confidence, (int, float)) else 0.0
     return (
-        _PUB_RANK.get(_pub_value(note), 9),
         _FORCE_RANK.get(_force_value(note), 9),
+        _PUB_RANK.get(_pub_value(note), 9),
         -float(conf),
         _scope_specificity(note.scope),
         note.id,
@@ -261,14 +271,82 @@ def select_notes_for_injection(
     return out
 
 
+NOTE_TEXT_MAX_CHARS = 4000
+
+# Line shapes that only make sense as an attempt to address the model rather than to
+# describe the data. Matched at the START of a stripped line, so ordinary prose that
+# happens to contain these words is untouched.
+_INSTRUCTION_PREFIXES = (
+    "ignore previous",
+    "ignore all previous",
+    "ignore the above",
+    "disregard previous",
+    "disregard the above",
+    "system:",
+    "assistant:",
+    "user:",
+    "new instructions",
+    "you are now",
+    "forget everything",
+    "override:",
+)
+
+_REDACTED = "[redacted: instruction-shaped line in corpus content]"
+_FENCE = chr(96) * 3
+
+
+def sanitize_note_text(text: str, *, max_chars: int = NOTE_TEXT_MAX_CHARS) -> str:
+    """Make one note safe to paste into an authoritative prompt section.
+
+    The corpus is curator-authored, but it is also writable (``POST /corpus/edit``)
+    and partly LLM-authored, and the system prompt tells the model this content is
+    authoritative guidance to prefer over its own reasoning. Rendering it verbatim
+    with no bound made it the primary poisoning vector (AUDIT S5).
+
+    Three narrow measures, none of which touch a legitimate note's meaning:
+
+    1. Drop lines that open like an instruction to the model rather than a statement
+       about the data. A governance note describes a rule; nobody needs to begin a
+       line with "ignore previous instructions".
+    2. Neutralise fence and heading markers, so note text cannot close the block it
+       sits in and open a section the renderer never intended.
+    3. Truncate at ``max_chars``, visibly - otherwise one asset can push the
+       question, the schema and the rules out of the context window.
+
+    Defence in depth, not a claim to have solved prompt injection: a well-written
+    note is still text the model reads and believes, which is inherent to
+    corpus-as-context. This removes the cheap mechanical version and the
+    unbounded-length one.
+    """
+    kept: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.lower().startswith(_INSTRUCTION_PREFIXES):
+            kept.append(_REDACTED)
+            continue
+        if line.startswith(_FENCE):
+            line = line.replace(_FENCE, "'''")
+        if line.startswith("#"):
+            line = line.lstrip("#").lstrip()
+        kept.append(line)
+    out = "\n".join(kept)
+    if len(out) > max_chars:
+        out = out[:max_chars] + "\n" + "[truncated at " + str(max_chars) + " chars]"
+    return out
+
+
 def format_note_lines(notes: Iterable[InjectedNote]) -> tuple[list[str], list[str]]:
-    """Split into (must_honour_lines, advisory_lines) for rendering."""
+    """Split into (must_honour_lines, advisory_lines) for rendering.
+
+    Note text is sanitized here - the one place both lists are built - so no
+    renderer can emit raw corpus prose into an authoritative section by accident.
+    """
     must: list[str] = []
     advisory: list[str] = []
     for n in notes:
-        line = f"({n.kind}) {n.summary}"
+        line = "(" + n.kind + ") " + sanitize_note_text(n.summary)
         if n.body:
-            line = f"{line}\n{n.body}"
+            line = line + "\n" + sanitize_note_text(n.body)
         if n.normative_force == NormativeForce.must_honour.value:
             must.append(line)
         else:

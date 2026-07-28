@@ -7,6 +7,13 @@ Two tracers, both opt-in by environment and both no-ops when unset:
   emit traces automatically, so the whole chat run (under ``langgraph dev`` /
   Platform) and every model call are traced with zero wiring. This is the
   LangChain-native path.
+
+  **It ships run inputs/outputs verbatim.** ``_trace_mask`` is a Langfuse client
+  option and has no LangSmith equivalent, so enabling LangSmith sends full tool
+  messages — row previews and governed context included — to LangSmith (AUDIT S7).
+  :func:`langsmith_enabled` therefore logs a warning on first use, and
+  ``GOVERNED_BI_ALLOW_UNMASKED_LANGSMITH`` must be set to silence it: an
+  acknowledgement, not a control. Prefer Langfuse where content masking matters.
 - **Langfuse** is attached as a LangChain callback via :func:`tracing_callbacks`,
   returned only when the ``tracing`` extra is installed *and* the ``LANGFUSE_*``
   keys are set. It is spliced into ``config={"callbacks": ...}`` at each run
@@ -33,6 +40,9 @@ logger = logging.getLogger("governed_bi.obs")
 
 _TRUTHY = {"1", "true", "yes", "on"}
 
+#: One warning per process about LangSmith's absent content mask.
+_WARNED_UNMASKED = False
+
 
 def _env_truthy(*names: str) -> bool:
     """True if any named env var is set to a truthy value."""
@@ -49,7 +59,17 @@ def langsmith_enabled() -> bool:
     ``LANGCHAIN_TRACING_V2``, plus ``LANGSMITH_API_KEY``.
     """
     tracing = _env_truthy("LANGSMITH_TRACING", "LANGCHAIN_TRACING_V2")
-    return tracing and bool(os.environ.get("LANGSMITH_API_KEY"))
+    on = tracing and bool(os.environ.get("LANGSMITH_API_KEY"))
+    if on and not _WARNED_UNMASKED and not _env_truthy("GOVERNED_BI_ALLOW_UNMASKED_LANGSMITH"):
+        # Once per process. LangSmith has no mask hook, so this is the only place the
+        # operator can be told that enabling it exports row previews verbatim.
+        globals()["_WARNED_UNMASKED"] = True
+        logger.warning(
+            "LangSmith tracing is on and has no content mask: full tool inputs/outputs "
+            "(including result-row previews and governed context) are exported. Set "
+            "GOVERNED_BI_ALLOW_UNMASKED_LANGSMITH=1 to acknowledge, or use Langfuse."
+        )
+    return on
 
 
 def _langfuse_configured() -> bool:

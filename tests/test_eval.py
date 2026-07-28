@@ -6,6 +6,7 @@ so the whole module is skipped when it is not present.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -32,8 +33,16 @@ pytestmark = pytest.mark.skipif(not BIRD_DB.exists(), reason="vendored beer_fact
 # The curator/refuse-gate arms now drive the agentic serve core, which needs a
 # live model; the hermetic suite has none, so those two cases are live-only. The
 # EX scorer and the gold self-solver stay fully offline (solver-agnostic).
-requires_live_serve = pytest.mark.skip(
-    reason="agent-only serve needs a live model; covered by scripts/live_smoke.py"
+# `skipif`, not `skip`: an unconditional skip can never run in ANY environment
+# without editing this file, and these cover the primary user journey — answering a
+# question end to end (AUDIT T3). Set GOVERNED_BI_LIVE_TESTS=1 with OPENAI_API_KEY to
+# execute them against a live model.
+requires_live_serve = pytest.mark.skipif(
+    not (os.getenv("GOVERNED_BI_LIVE_TESTS") and os.getenv("OPENAI_API_KEY")),
+    reason=(
+        "agent-only serve needs a live model; set GOVERNED_BI_LIVE_TESTS=1 with "
+        "OPENAI_API_KEY to run (also covered by scripts/live_smoke.py)"
+    ),
 )
 
 

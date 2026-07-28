@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import sqlglot
 
 from governed_bi.corpus import load_corpus
 from governed_bi.gateway import GuardrailLayer, check, column_allowlist
@@ -297,6 +298,53 @@ def test_tokenizer_error_fails_syntax_not_crash():
     assert verdict.failed_layer is GuardrailLayer.syntax
 
 
+def _check_postgres(sql: str, *, hard_block_suspect: bool = True):
+    return check(
+        sql,
+        allowed_columns=set(ALLOWLIST.allowed),
+        suspect_columns=ALLOWLIST.suspect,
+        hard_block_suspect=hard_block_suspect,
+        dialect="postgres",
+        default_schema=SCHEMA,
+    )
+
+
+def test_postgres_lowercase_column_matches_mixed_case_allowlist():
+    # Postgres folds unquoted identifiers; corpus keys stay mixed-case. Both
+    # sides of the L3 comparison must casefold or LLM-emitted lowercase fails.
+    assert _check_postgres("SELECT customerid FROM beer_factory.customers").passed
+    assert _check_postgres("SELECT CUSTOMERID FROM beer_factory.customers").passed
+    # identify=True quoting preserves the model's case; L3 must still pass.
+    quoted = sqlglot.transpile(
+        "SELECT customerid FROM beer_factory.customers",
+        read="postgres",
+        write="postgres",
+        identify=True,
+    )[0]
+    assert _check_postgres(quoted).passed
+
+
+def test_postgres_unknown_column_still_blocked():
+    verdict = _check_postgres("SELECT notacolumn FROM beer_factory.customers")
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.ast_column_allowlist
+
+
+def test_deeply_nested_parens_fail_closed():
+    # Pathological nesting raises RecursionError inside sqlglot; check() must
+    # return a blocked verdict rather than escaping the middleware.
+    nested = "(" * 50 + "1" + ")" * 50
+    verdict = check(
+        f"SELECT {nested} AS z",
+        allowed_columns=set(),
+        hard_block_suspect=True,
+        dialect="postgres",
+    )
+    assert not verdict.passed
+    assert verdict.failed_layer is GuardrailLayer.syntax
+    assert verdict.reason is not None
+
+
 # --------------------------------------------------------------------------- #
 # Regression: second-round review findings (scope-aware resolution)
 # --------------------------------------------------------------------------- #
@@ -396,3 +444,50 @@ def test_natural_join_is_blocked():
 def test_using_join_on_allowed_column_passes():
     sql = 'SELECT COUNT(*) AS n FROM "transaction" t1 JOIN "transaction" t2 USING (CustomerID)'
     assert _check(sql).passed
+
+
+# --------------------------------------------------------------------------- #
+# AUDIT S1: L3 folds case, so the SQL we hand the engine must carry the
+# corpus's physical spelling — not the model's guess, re-quoted.
+# --------------------------------------------------------------------------- #
+
+
+def test_canonicalize_rewrites_model_case_to_the_corpus_spelling():
+    from governed_bi.gateway.guardrails import (
+        canonical_identifier_map,
+        canonicalize_identifiers,
+    )
+
+    names = canonical_identifier_map({"beer_factory.customers.CustomerID"})
+    out = canonicalize_identifiers(
+        "SELECT customerid FROM beer_factory.customers", dialect="postgres", names=names
+    )
+    # Quoted-and-lowercased would not resolve against a physical "CustomerID".
+    assert '"CustomerID"' in out
+    assert '"customerid"' not in out
+
+
+def test_canonicalize_leaves_aliases_and_unknown_names_alone():
+    from governed_bi.gateway.guardrails import (
+        canonical_identifier_map,
+        canonicalize_identifiers,
+    )
+
+    names = canonical_identifier_map({"beer_factory.customers.CustomerID"})
+    out = canonicalize_identifiers(
+        "SELECT c.customerid AS total FROM beer_factory.customers AS c",
+        dialect="postgres",
+        names=names,
+    )
+    assert '"CustomerID"' in out
+    assert '"total"' in out  # an invented alias is not a corpus object
+    assert '"c"' in out
+
+
+def test_canonicalize_skips_case_ambiguous_identifiers():
+    """Two corpus columns differing only by case have no single correct rewrite."""
+    from governed_bi.gateway.guardrails import canonical_identifier_map
+
+    names = canonical_identifier_map({"s.t.Value", "s.t.value"})
+    assert "value" not in names
+    assert names["t"] == "t"

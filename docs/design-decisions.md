@@ -96,13 +96,15 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 > **Decided (ADR-grade)**
 >
 > Two concurrent gates: curated **negative examples** → canned escalation blob
-> (owner contact); always-on hard guardrails (AST / cost / PII / RLS) via
-> `wrap_tool_call`; else **best-effort** via the recommended path + a
-> **reliability stamp**. High-stakes → human sign-off.
+> (owner contact); always-on hard guardrails that exist today (AST allowlist /
+> structural cost) via `wrap_tool_call`, plus **deferred seams** for PII and RLS
+> (not implemented in this repo — enterprise-fork scope, D7); else
+> **best-effort** via the recommended path + a **reliability stamp**. High-stakes
+> → human sign-off.
 
 - **Alternative:** fail-closed the moment coverage runs out (safe but misses the long tail, and makes the agent guess whether it's out of scope).
 - **Consequence:** refusal is driven by a curated signal, not a coverage heuristic. Two caveats: the stamp needs teeth, because a footer alone is weak against silent wrong answers; and BIRD won't test the refuse-gate, which needs a held-out unanswerable set.
-- **Built:** the fail-closed refuse-gate and a **two-axis reliability stamp** are implemented. The stamp reports two independent axes so neither is mistaken for the other: `safety_clearance` (guardrails + authorization passed — a *gate*, true for every delivered answer, false for every refusal) and `semantic_assurance` (`grounded` / `heuristic` / `unverified` — how well-grounded the answer is, the axis that should drive automatic delivery). The legacy single-axis tier (`governed` / `lineage` / `fenced_raw` / `refused`) is retired as a canonical vocabulary; where it is still surfaced at all, it is only a **display-only projection** of the two axes, never a parallel concept. A **bounded self-repair loop** feeds a *repairable* guardrail rejection (syntax + column/table scope — L3/L4 stay repairable [by decision, D11](#d11-external-review-2026-07-09)) or an execution error back to the generator before refusing; a repaired answer is `heuristic`, never `grounded`. A **hard policy/DDL block (L2 `policy_blacklist`) fails closed immediately** — feeding it back would only coach the generator to evade the policy. Cache admission gates on `semantic_assurance == grounded`, never on safety alone. The thresholds and the uncertainty-signal set are **uncalibrated heuristics**, to be tuned on the eval. `grounded` means safe + in-scope + no uncertainty flag fired, **not** "verified correct": the guardrails are a safety/governance gate, not a correctness oracle, so plausible-but-wrong SQL is caught by the stamp + fail-closed, not by a proof of correctness. **The label overclaimed for a BI audience: renamed `certified` → `grounded`** — see [Audit dispositions (2026-07-15)](#audit-dispositions-2026-07-15), R2.
+- **Built:** the fail-closed refuse-gate and a **two-axis reliability stamp** are implemented. The stamp reports two independent axes so neither is mistaken for the other: `safety_clearance` (guardrails + authorization passed — a *gate*, true for every delivered answer, false for every refusal) and `semantic_assurance` (`unflagged` / `heuristic` / `unverified` — whether any uncertainty flag fired, the axis that should drive automatic delivery). The legacy single-axis tier (`governed` / `lineage` / `fenced_raw` / `refused`) is retired as a canonical vocabulary; where it is still surfaced at all, it is only a **display-only projection** of the two axes, never a parallel concept. A **bounded self-repair loop** feeds a *repairable* guardrail rejection (syntax + column/table scope — L3/L4 stay repairable [by decision, D11](#d11-external-review-2026-07-09)) or an execution error back to the generator before refusing; a repaired answer is `heuristic`, never `unflagged`. A **hard policy/DDL block (L2 `policy_blacklist`) fails closed immediately** — feeding it back would only coach the generator to evade the policy. Cache admission gates on `semantic_assurance == unflagged`, never on safety alone. The thresholds and the uncertainty-signal set are **uncalibrated heuristics**, to be tuned on the eval. `unflagged` means no uncertainty flag fired, **not** "verified correct" and **not** "well grounded in retrieval": the guardrails are a safety/governance gate, not a correctness oracle, so plausible-but-wrong SQL is caught by the stamp + fail-closed, not by a proof of correctness. **Label history:** `certified` → `grounded` (Audit R2, 2026-07-15) → `unflagged` (Audit C2, 2026-07-27).
 
 ## D6: Ownership & Human Gate
 
@@ -113,7 +115,7 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 > CI behind every corpus change. Certification (blessing a *definition*) stays
 > distinct from high-stakes answer sign-off (blessing an *answer*).
 
-- **Built (scope):** this repo ships a **read-only** audit surface — the `viz.presenter` view models plus the optional `governed_bi.api` HTTP API — with the interactive UI as a separate project; interactive corpus editing and save-to-PR are **out of scope here** (generic git/PR + CI in dev, the enterprise app in prod). The repo owns the write *primitives* a downstream editor reuses: the asset schema, `corpus.serialize.write_corpus`, and `corpus.validate` + CLI (the CI gate). See [Viz](viz.md).
+- **Built (scope):** this repo ships an **audit surface** — the `viz.presenter` view models plus the optional `governed_bi.api` HTTP API (browse/chat; corpus write gated by `allow_edit`, not an unqualified read-only API) — with the interactive UI as a separate project; interactive corpus editing and save-to-PR are **out of scope here** (generic git/PR + CI in dev, the enterprise app in prod). The repo owns the write *primitives* a downstream editor reuses: the asset schema, `corpus.serialize.write_corpus`, and `corpus.validate` + CLI (the CI gate). See [Viz](viz.md).
 - **Extended by D12:** the **clarification protocol** adds curator-emitted questions and an `accept_answer` primitive on top of this gate, and keeps the interactive round-trip downstream.
 
 ## D7: Identity
@@ -179,7 +181,7 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 
 - **Asset types (YAML):** `table`, `column`, `join`, `few_shot`, `term`, `metric`, `note`, `negative_example`. CI enforces reference integrity (`term→metric→column→table` and `note.scope[]` all resolve, including `schema:` / `db:` sentinels) and regex IDs (`tbl_<schema>_<name>`, `note_<name>`, …). That check doubles as the curator's machine-checkable "done-enough" signal. (D17: `rule`/`skill` → `note`; see [D17](#d17-governed-notes--tri-modal-retrieval).)
 - **Column reliability is prose, not a flag.** No `decoy: true`. The curator writes a free-text **reliability caveat** ("UNRELIABLE: DO NOT USE" plus a reason) inferred from data evidence. *Same mechanism in BIRD and enterprise deployments.* In BIRD the decoy manifest lets us *grade* it (decoy-recall / decoy-touch); in the enterprise setting nobody knows ground truth, but the same inference runs. Transferability is the deciding reason.
-- **BIRD scope is not only structure.** BIRD ships an `evidence` field (external-knowledge hints ≈ lightweight rules / derived metrics), so the curator also generates `metric`/`rule`/`term`/`context` for BIRD, seeded by evidence. These are scored end-to-end by EX (`baseline` vs `curated`), with **no per-asset gold** for those (gold stays limited to names, FK, and decoy-exclusions per D4). **Synonyms (`term`/`term_relationship`) are in-scope for BIRD too**: the obfuscation's *rewrite* dimension means one concept gets asked multiple ways, so synonym mappings aid paraphrase-robust retrieval. They're consumed via the dictionary engine or in-memory, still no Neo4j.
+- **BIRD scope is not only structure.** BIRD ships an `evidence` field (external-knowledge hints ≈ lightweight rules / derived metrics), so the curator also generates `metric`/`note`/`term` for BIRD, seeded by evidence. (`rule` and `context` were retired into `note` by D17; they are named here only in the history.) These are scored end-to-end by EX (`baseline` vs `curated`), with **no per-asset gold** for those (gold stays limited to names, FK, and decoy-exclusions per D4). **Synonyms (`term`/`term_relationship`) are in-scope for BIRD too**: the obfuscation's *rewrite* dimension means one concept gets asked multiple ways, so synonym mappings aid paraphrase-robust retrieval. They're consumed via the dictionary engine or in-memory, still no Neo4j.
 - **Graph is a projection (in-memory built; Neo4j deferred).** `join` (+ `term_relationship`, + metric/column lineage) project into a property graph. BIRD uses an **in-memory graph** (networkx) for Steiner-tree planning; **that projection and the Steiner join planner are built** (the planner cost model is a tunable heuristic). **Neo4j is an optional derived projection** for enterprise scale (and a stated learning goal), rebuilt from YAML by a loader, and stays deferred.
 - **Alternatives:** custom DB-backed schema (loses git diff/PR/audit; authoring-in-DB breaks the source-of-truth invariant); typed decoy flag (not transferable to an enterprise deployment).
 - **Namespace field renamed `db` → `schema` (D15, 2026-07-11).** The per-asset namespace historically named `db` always denoted a *schema* (one YAML subtree per namespace); it is renamed `schema` everywhere. IDs are unchanged — they already embed the namespace (`tbl_<schema>_<name>`) — so the rename is a projection fix, not an identity change. See **D15**.
@@ -198,13 +200,13 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 
 - **Alternative:** a single-agent curator (cheaper, but self-review is weak: a model rarely refutes its own plausible inference, and that's where owner-less layers silently rot).
 - **Consequence:** dev = adversary is the only reviewer (auto-accept on pass); prod = automated first-line reviewer before human certification (D6). Proposer claim + adversary verdict both land in the asset `audit` block → the viz/audit surface.
-- **Built:** the deterministic scaffold (programmatic Facts profiling, a `HeuristicProposer` for roles / confidence / provenance, an adversary `review` wrapping the CI validator, and a `curate` promote loop `proposed -> draft`), plus the **LLM proposer** (`LlmProposer`: authors descriptions + `suspect` reliability caveats over the heuristic, Facts untouched) and the **deepagents build harness** (`curator/deep_agent.py`: a deep agent over Facts-profiling + read-only-probe tools; construction verified offline, the autonomous run model-gated). Still seams: LLM authoring of joins / terms / metrics / rules / skills, the live per-asset adversary `refute`, and the self-eval train-EX loop; those are what make `curated` beat `baseline`. See [Curator](curator.md).
+- **Built:** the deterministic scaffold (programmatic Facts profiling, a `HeuristicProposer` for roles / confidence / provenance, an adversary `review` wrapping the CI validator, and a `curate` promote loop `proposed -> draft`), plus the **LLM proposer** (`LlmProposer`: authors descriptions + `suspect` reliability caveats over the heuristic, Facts untouched) and the **deepagents build harness** (`curator/deep_agent.py`: a deep agent over Facts-profiling + read-only-probe tools; construction verified offline, the autonomous run model-gated). Still seams: LLM authoring of joins / terms / metrics / notes, the live per-asset adversary `refute`, and the self-eval train-EX loop (`rule` / `skill` are retired names — D17); those are what make `curated` beat `baseline`. See [Curator](curator.md).
 
 ## D11: External review (2026-07-09)
 
 Raised by an independent project review (2026-07-09). Recorded here so each item is settled deliberately, not by default. Several items are already reconciled above — the cold-start wording in D1, and the two-axis stamp + L2-immediate-refuse in D5. The remaining items below.
 
-- **Repair by failure class (L3/L4 boundary) — DECIDED (2026-07-09): keep repairable.** `policy_blacklist` (L2) fails closed without a retry (feeding a DDL/policy block back only coaches evasion). The question was whether **column-allowlist (L3) and term-semantics (L4) scope failures should also refuse immediately** (the review's position: coaching a model past a scope block is pressure to find a query that passes while staying analytically wrong). **Decision: L3/L4 stay repairable.** The FK-neighborhood widening + repair loop is a deliberate *false-refusal-reduction* mechanism for retrieval under-recall, a repaired answer is already `heuristic` (never `grounded`), and the attempt cap + no-progress guard bound the loop. Revisit if the live eval shows repair coaching inflating plausible-but-wrong answers.
+- **Repair by failure class (L3/L4 boundary) — DECIDED (2026-07-09): keep repairable.** `policy_blacklist` (L2) fails closed without a retry (feeding a DDL/policy block back only coaches evasion). The question was whether **column-allowlist (L3) and term-semantics (L4) scope failures should also refuse immediately** (the review's position: coaching a model past a scope block is pressure to find a query that passes while staying analytically wrong). **Decision: L3/L4 stay repairable.** The FK-neighborhood widening + repair loop is a deliberate *false-refusal-reduction* mechanism for retrieval under-recall, a repaired answer is already `heuristic` (never `unflagged`), and the attempt cap + no-progress guard bound the loop. Revisit if the live eval shows repair coaching inflating plausible-but-wrong answers.
 - **`CorpusRelease` — an immutable, certified serving contract.** Git is the source of truth, but source control alone is not a *publication* contract: the Analyst does not currently distinguish draft from certified assets at serve time, pin a corpus content hash, or record a release in each answer. Proposed: a `CorpusRelease` artifact (version + content hash + certified asset IDs + build/adversary evidence + timestamp); the curator writes only staging, CI builds a release, the Analyst reads only a pinned release, every answer/audit event records the release hash. **Scope question:** a lightweight release hash + a serve-time pin is arguably an engine-level serving-correctness primitive (in scope here); the full "CI builds release, owners approve" workflow is product (enterprise-fork scope). **Decision pending**, but **partly addressed by D13**: for the benchmark, a separate corpus repo plus a git-SHA-per-checkpoint pins corpus state and defers the full release artifact.
 - **Structured-intent SQL cache.** The semantic cache currently keys on an embedding-similarity gate. The review notes a global cosine threshold is a weak equivalence test (two questions can differ in period, denominator, entity, or metric). Proposed: key on structured intent (`corpus_release_hash + identity scope + metric ID + normalized dims/filters + join-plan fingerprint + policy version`), or restrict to exact normalized-query caching until that exists. The cache is off by default, so this is not urgent. **Decision pending.**
 
@@ -354,7 +356,8 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
 > invariants, and phased migration in
 > [ADR 0002](adr/0002-governed-agentic-serve-runtime.md); the historical
 > agent-vs-flow A/B (flow now deleted) is summarized in
-> [experiment results](plans/eval-ladder-results.md).
+> [eval-ladder-results](plans/eval-ladder-results.md) (numbers discarded; method
+> and arm definitions only).
 >
 > Serve is reworked from a deterministic single-shot DAG into a **governed
 > agentic core**: an outer deterministic `StateGraph` (thin governance rails)
@@ -415,15 +418,13 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
   a 23-question single-DB delta stops being the unit of evidence. *Status: planned,
   gated on the multi-schema experiment ([D15](#d15-multi-schema-serving-one-database-many-schemas)).*
 
-- **R2 — The `certified` label overclaimed and has been renamed to `grounded`;
-  calibration is still pending (refines [D5](#d5-refusal--best-effort)).**
-  `semantic_assurance = certified` read to a BI user as "verified correct," but it
-  meant only "safe + in-scope + no uncertainty flag fired." **Renamed**:
-  `semantic_assurance` now reports `grounded` (formerly `certified`) / `heuristic`
-  / `unverified`. Still pending: **calibrate the thresholds and uncertainty-signal
-  set against actual EX** once the scale run exists — i.e. measure what fraction
-  of stamped answers are in fact correct. *Status: renamed; calibration scheduled
-  (needs the scale run first).*
+- **R2 / C2 — Stamp labels that overclaim.** `certified` read as "verified correct"
+  and was renamed to `grounded` (2026-07-15). `grounded` still read as retrieval
+  quality / verified grounding, so it was renamed again to `unflagged`
+  (2026-07-27): no uncertainty flag fired — **not** verified-correct. Still
+  pending: **calibrate the thresholds and uncertainty-signal set against actual
+  EX** once the scale run exists. *Status: renamed to `unflagged`; calibration
+  scheduled (needs the scale run first).*
 
 - **R3 — User-feedback loop: discussed 2026-07-15; direction set, build deferred
   (refines [D8](#d8-serve-time-memory)).** Outcome of the design session:
@@ -562,8 +563,10 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
   (1) *Semantic*: each note carries its own vector and blends into RRF normally,
   so it never dilutes a table/schema vector. (2) *Regex/keyword triggers*: PIN,
   never blend. A trigger hard-includes its target and no lexical score enters RRF,
-  respecting the measured "RRF-of-weak-lexical hurts" finding (recall@3 0.535 <
-  embedding 0.70). (3) *Agent-fetch*: new read-only, non-licensing `read_notes` /
+  respecting the "RRF-of-weak-lexical hurts" finding (recall@3 0.535 < embedding
+  0.70 — a *retired* measurement, cited here for the design rationale it produced,
+  not as a current number; see the retirement note in
+  [datalake-run.md](plans/datalake-run.md#status)). (3) *Agent-fetch*: new read-only, non-licensing `read_notes` /
   `grep_notes` tools, safe by topology.
 - **Governance upgrade.** As an `Asset`-union member, `NoteAsset` inherits the
   three field tiers, the `for_analyst` audit-strip, `Provenance`, `validate_corpus`,

@@ -6,10 +6,14 @@ runs one turn through ``answer_question_agent`` with working memory rebuilt from
 turns the caller sends. It is the interface a separate frontend (Next.js) consumes
 — see ``docs/ui-frontend-design.md``.
 
+The audit surface is **read-only by default**. ``POST /corpus/edit`` writes only
+when ``[serve].allow_edit`` is true; mutating routes also require a shared secret
+when ``[serve].api_key_env`` names an environment variable that is set.
+
 Run it (needs the ``api`` extra) — the app is built by a factory, so there are no
 import-time side effects (the stack is assembled only when the factory is called):
 
-    uv run --extra api uvicorn --factory governed_bi.api:create_app --reload
+    uv run uvicorn --factory governed_bi.api:create_app --reload
 
 Policy comes from ``governed_bi.toml`` (+ optional ``governed_bi.local.toml``);
 secrets from the environment / ``.env``. Import stays free of FastAPI unless this
@@ -19,6 +23,7 @@ module is used, keeping the core install lean.
 from __future__ import annotations
 
 import logging
+import secrets
 
 from .. import __version__
 from ..viz import presenter
@@ -97,9 +102,22 @@ def _corpus_subtree_for_asset(asset, corpus_root, current) -> str | None:
     return None
 
 
+def _presented_api_key(
+    x_api_key: str | None,
+    authorization: str | None,
+) -> str | None:
+    """Extract a presented shared secret from X-API-Key or Authorization: Bearer."""
+    if x_api_key:
+        return x_api_key
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization[7:].strip()
+        return token or None
+    return None
+
+
 def create_app(stack: ServeStack | None = None):
     """Build the FastAPI app over a serve stack (from ``build_stack`` / TOML if not given)."""
-    from fastapi import FastAPI, HTTPException, Query
+    from fastapi import Depends, FastAPI, Header, HTTPException, Query
     from fastapi.middleware.cors import CORSMiddleware
 
     stack = stack or build_stack()
@@ -119,6 +137,36 @@ def create_app(stack: ServeStack | None = None):
             allow_methods=["GET", "POST", "OPTIONS"],
             allow_headers=["*"],
         )
+
+    def require_mutating_auth(
+        x_api_key: str | None = Header(None, alias="X-API-Key"),
+        authorization: str | None = Header(None),
+    ) -> None:
+        """Shared-secret gate for mutating routes when ``[serve].api_key_env`` is set.
+
+        Demo mode (env-var name unset): no-op — reads stay open; writes still need
+        ``allow_edit``. When the name is set, require a matching ``X-API-Key`` or
+        ``Authorization: Bearer`` (401 if the env var is missing/empty or the
+        presented key does not match).
+        """
+        expected = stack.settings.serve_api_key()
+        if expected is None:
+            # Name configured but secret missing: still enforce when the name is set,
+            # so a forgotten env var cannot silently open writes.
+            if stack.settings.serve_api_key_env:
+                raise HTTPException(
+                    status_code=401,
+                    detail="API key required",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            return
+        presented = _presented_api_key(x_api_key, authorization)
+        if presented is None or not secrets.compare_digest(presented, expected):
+            raise HTTPException(
+                status_code=401,
+                detail="invalid or missing API key",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
     @app.get("/capabilities", response_model=CapabilitiesResponse, tags=["meta"])
     def capabilities() -> CapabilitiesResponse:
@@ -292,14 +340,21 @@ def create_app(stack: ServeStack | None = None):
         rows = presenter.asset_rows(stack.corpus_full, asset_types=types)
         return [AssetRowResponse.model_validate(r) for r in rows]
 
-    @app.post("/corpus/edit", response_model=EditResponse, tags=["corpus"])
+    @app.post(
+        "/corpus/edit",
+        response_model=EditResponse,
+        tags=["corpus"],
+        dependencies=[Depends(require_mutating_auth)],
+    )
     def corpus_edit(req: EditRequest) -> EditResponse:
-        """Validate a corpus asset and, in dev, write it to the YAML tree.
+        """Validate a corpus asset and, when enabled, write it to the YAML tree.
 
-        Gated on ``capabilities.can_edit`` (403 otherwise). The asset is schema-
-        validated (422 on a bad shape) then reference-checked against the rest of
-        the corpus; findings block the write and are returned with the diff so the
-        editor can fix them. Prod PR mode is deferred; the request shape is stable.
+        Gated on auth (401 when ``[serve].api_key_env`` is configured but the key
+        is missing/wrong) then ``capabilities.can_edit`` (403 otherwise). The asset
+        is schema-validated (422 on a bad shape) then reference-checked against the
+        rest of the corpus; findings block the write and are returned with the diff
+        so the editor can fix them. Prod PR mode is deferred; the request shape is
+        stable.
         """
         import difflib
 
@@ -416,13 +471,18 @@ def create_app(stack: ServeStack | None = None):
             diff=diff,
         )
 
-    @app.post("/chat", response_model=AnswerResponse, tags=["chat"])
+    @app.post(
+        "/chat",
+        response_model=AnswerResponse,
+        tags=["chat"],
+        dependencies=[Depends(require_mutating_auth)],
+    )
     def chat(req: ChatRequest) -> AnswerResponse:
         """Answer one turn. Working memory is rebuilt from ``history`` (the API is
         stateless); the caller persists the transcript."""
+        from ..analyst.agent import answer_question_agent
         from ..gateway import Gateway
         from ..memory import InMemoryWorkingMemory
-        from ..analyst.agent import answer_question_agent
 
         if stack.chat_model is None:
             # Agent-only serve (ADR 0002): no deterministic offline fallback. Fail
@@ -432,6 +492,10 @@ def create_app(stack: ServeStack | None = None):
         memory = InMemoryWorkingMemory()
         for turn in req.history:
             memory.append(req.session_id, turn.role, turn.text)
+        # Same turn numbering as graph_app: human-turn count including this question.
+        # history is prior turns only, so +1 for the current question. Without this,
+        # every REST turn defaults to n_human=1 and upserts overwrite prior audit rows.
+        n_human = sum(1 for turn in req.history if turn.role == "user") + 1
 
         try:
             connector = stack.open_connector()  # config-driven: SQLite or Postgres/Redshift
@@ -452,6 +516,9 @@ def create_app(stack: ServeStack | None = None):
                 embedder=stack.embedder,
                 narrator=stack.narrator,
                 working_memory=memory,
+                n_human=n_human,
+                # Stack-scoped, so schema/asset embeddings survive the turn (R6).
+                index_cache=stack.index_cache,
             )
         except Exception:
             # The serve flow is read-only and guardrailed by construction; a raise

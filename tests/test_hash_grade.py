@@ -121,7 +121,77 @@ def test_score_execution_error_is_not_correct():
     gold = GoldHash(question_id="q", hash_lenient=_L_AB, hash_strict=_S_AB)
     grade = score_sql_hashes("SELECT boom", gold, _RaisingGateway(), _IDENTITY)
     assert grade["correct"] is False
+    assert grade["error"].startswith("exec_error:")
     assert "boom" in grade["error"]
+
+
+def test_score_infrastructure_error_uses_infra_prefix():
+    """Timeouts / connection deaths must not share ``exec_error:`` with bad SQL.
+
+    ``exec_error:`` is treated as answered-and-wrong; ``infra_error:`` is a crash
+    that blocks quotability (audit E4).
+    """
+    from governed_bi.eval.hash_grade import is_infrastructure_error
+
+    class _Timeout(Exception):
+        pass
+
+    class _TimeoutGateway:
+        def execute(self, sql, identity):  # noqa: ARG002
+            raise _Timeout("canceling statement due to statement timeout")
+
+    class QueryCanceled(Exception):
+        pass
+
+    class _CanceledGateway:
+        def execute(self, sql, identity):  # noqa: ARG002
+            raise QueryCanceled("canceling statement due to statement timeout")
+
+    class OperationalError(Exception):
+        pass
+
+    class _ConnClosedGateway:
+        def execute(self, sql, identity):  # noqa: ARG002
+            raise OperationalError("server closed the connection unexpectedly")
+
+    gold = GoldHash(question_id="q", hash_lenient=_L_AB, hash_strict=_S_AB)
+    for gw in (_TimeoutGateway(), _CanceledGateway(), _ConnClosedGateway()):
+        grade = score_sql_hashes("SELECT 1", gold, gw, _IDENTITY)
+        assert grade["correct"] is False
+        assert grade["error"].startswith("infra_error:"), grade["error"]
+
+    # sqlite-style SQL fault wrapped as OperationalError stays a model error.
+    class _SqlFaultGateway:
+        def execute(self, sql, identity):  # noqa: ARG002
+            raise OperationalError("no such column: missing")
+
+    grade = score_sql_hashes("SELECT missing", gold, _SqlFaultGateway(), _IDENTITY)
+    assert grade["error"].startswith("exec_error:"), grade["error"]
+    assert not is_infrastructure_error(OperationalError("no such column: missing"))
+    assert is_infrastructure_error(
+        OperationalError("server closed the connection unexpectedly")
+    )
+
+
+def test_score_truncated_result_is_not_hashed_as_complete():
+    """A row-cap clip must not be hashed as if it were the full result (audit E4)."""
+
+    class _TruncGateway:
+        def execute(self, sql, identity):  # noqa: ARG002
+            return QueryResult(
+                columns=["n", "s"],
+                rows=[(1, "A"), (2, "b")],
+                row_count=2,
+                truncated=True,
+            )
+
+    gold = GoldHash(question_id="q", hash_lenient=_L_AB, hash_strict=_S_AB)
+    grade = score_sql_hashes("SELECT ...", gold, _TruncGateway(), _IDENTITY)
+    assert grade["correct"] is False
+    assert grade["correct_strict"] is False
+    assert grade["error"].startswith("infra_error:truncated:")
+    assert grade["hash_lenient"] is None
+    assert grade["hash_strict"] is None
 
 
 # --------------------------------------------------------------------------- #
@@ -439,8 +509,15 @@ def test_a_schema_with_nothing_verified_is_counted_as_failed(monkeypatch):
 
 def test_the_gate_aborts_when_most_schemas_could_not_run_their_gold(monkeypatch):
     """The case that was silent: eleven of twelve schemas failing while the one
-    survivor reported agree_rate 1.0."""
-    from governed_bi.eval.run_datalake import _GOLD_EXEC_FAILURE_ABORT_FRACTION
+    survivor reported agree_rate 1.0.
+
+    Calls the gate. The earlier version recomputed `share > THRESHOLD` itself and
+    never touched `_assert_gold_is_trustworthy`, so deleting the gate outright left
+    this test green (AUDIT T2).
+    """
+    import pytest as _pytest
+
+    from governed_bi.eval.run_datalake import _assert_gold_is_trustworthy
 
     results = {f"db{i}": _all_failed() for i in range(11)}
     results["ok"] = _ok()
@@ -448,34 +525,44 @@ def test_the_gate_aborts_when_most_schemas_could_not_run_their_gold(monkeypatch)
 
     assert res["n_checked"] == 1
     assert res["agree_rate"] == 1.0, "the survivor genuinely agreed"
-    share = len(res["exec_error_dbs"]) / res["n_dbs"]
-    assert share > _GOLD_EXEC_FAILURE_ABORT_FRACTION, (
-        f"{share:.0%} of schemas failed and the gate would not have aborted"
-    )
+    with _pytest.raises(RuntimeError, match="configuration fault"):
+        _assert_gold_is_trustworthy(res, n_schemas=12)
 
 
 def test_the_gate_does_not_abort_for_one_awkward_schema_in_many(monkeypatch):
     """One slow query out of sixty-nine must not make the split unrunnable."""
-    from governed_bi.eval.run_datalake import _GOLD_EXEC_FAILURE_ABORT_FRACTION
+    from governed_bi.eval.run_datalake import _assert_gold_is_trustworthy
 
     results = {f"db{i}": _ok() for i in range(68)}
     results["slow"] = _all_failed()
     res = _selfcheck_with(monkeypatch, results)
 
     assert len(res["exec_error_dbs"]) == 1
-    share = len(res["exec_error_dbs"]) / res["n_dbs"]
-    assert share <= _GOLD_EXEC_FAILURE_ABORT_FRACTION, (
-        "a single awkward schema would abort the run"
-    )
+    # The gate itself must let this through, not merely the arithmetic behind it.
+    _assert_gold_is_trustworthy(res, n_schemas=69)
     assert res["n_dbs_verified"] == 68
 
 
-def test_the_abort_threshold_sits_between_the_two_cases():
-    """Pinned so a later tweak cannot quietly restore either failure mode: too low and
-    one bad query aborts the split, too high and a total misconfiguration passes."""
-    from governed_bi.eval.run_datalake import _GOLD_EXEC_FAILURE_ABORT_FRACTION
+def test_the_abort_threshold_sits_between_the_two_cases(monkeypatch):
+    """Both failure modes, driven through the gate rather than through arithmetic:
+    too low and one bad query aborts the split, too high and a misconfiguration passes."""
+    import pytest as _pytest
+
+    from governed_bi.eval.run_datalake import (
+        _GOLD_EXEC_FAILURE_ABORT_FRACTION,
+        _assert_gold_is_trustworthy,
+    )
 
     assert 1 / 69 < _GOLD_EXEC_FAILURE_ABORT_FRACTION < 11 / 12
+
+    one_bad = {f"db{i}": _ok() for i in range(68)}
+    one_bad["slow"] = _all_failed()
+    _assert_gold_is_trustworthy(_selfcheck_with(monkeypatch, one_bad), n_schemas=69)
+
+    mostly_bad = {f"db{i}": _all_failed() for i in range(11)}
+    mostly_bad["ok"] = _ok()
+    with _pytest.raises(RuntimeError):
+        _assert_gold_is_trustworthy(_selfcheck_with(monkeypatch, mostly_bad), n_schemas=12)
 
 
 def test_the_gold_preflight_runs_before_the_build_phase_spends_on_a_model():
@@ -741,3 +828,135 @@ def test_build_coverage_and_gold_share_are_separate_thresholds():
 
     assert _BUILD_COVERAGE_ABORT_FRACTION != _GOLD_EXEC_FAILURE_ABORT_FRACTION
     assert 0 < _GOLD_EXEC_FAILURE_ABORT_FRACTION < _BUILD_COVERAGE_ABORT_FRACTION < 1
+
+
+# --------------------------------------------------------------------------- #
+# Free-pass counters (Audit E2)
+# --------------------------------------------------------------------------- #
+
+
+def test_free_pass_counts_correct_with_empty_gold():
+    from governed_bi.eval.hash_grade import free_pass_counts
+
+    rows = [
+        {
+            "question_id": "q1",
+            "correct": True,
+            "gold_nrows": 0,
+            "generated_sql": "SELECT 1 WHERE false",
+            "tables_used": [],
+        },
+        {
+            "question_id": "q2",
+            "correct": True,
+            "gold_nrows": 3,
+            "generated_sql": "SELECT a FROM t",
+            "tables_used": ["tbl_t"],
+        },
+        {
+            "question_id": "q3",
+            "correct": False,
+            "gold_nrows": 0,
+            "generated_sql": "SELECT 1 WHERE false",
+            "tables_used": [],
+        },
+    ]
+    counts = free_pass_counts(rows)
+    assert counts["n_correct_with_empty_gold"] == 1
+    assert counts["n_correct_and_pred_has_no_from"] == 1
+
+
+def test_summarise_rows_increments_empty_gold_free_pass():
+    from governed_bi.eval.run_datalake import _summarise_rows
+
+    rows = [
+        {
+            "question_id": "q1",
+            "db_id": "d",
+            "arm": "curated",
+            "split": "test",
+            "correct": True,
+            "gold_nrows": 0,
+            "generated_sql": "SELECT 1 WHERE false",
+            "tables_used": [],
+        },
+        {
+            "question_id": "q2",
+            "db_id": "d",
+            "arm": "curated",
+            "split": "test",
+            "correct": True,
+            "gold_nrows": 2,
+            "generated_sql": "SELECT a FROM t",
+            "tables_used": ["tbl_t"],
+        },
+    ]
+    s = _summarise_rows("curated", rows)
+    assert s["n_correct_with_empty_gold"] == 1
+    assert s["n_correct_and_pred_has_no_from"] == 1
+    assert s["n_correct_and_zero_table_overlap"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# AUDIT T1: `load_gold_hashes` loads the ground truth behind every published
+# number, and every gold test monkeypatched around it.
+# --------------------------------------------------------------------------- #
+
+
+def _write_gold_lines(path, rows):
+    import json as _json
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(_json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+
+
+def test_load_gold_hashes_filters_by_db_split_and_dsn_key(tmp_path):
+    from governed_bi.eval.hash_grade import load_gold_hashes
+
+    rows = [
+        {"question_id": "1", "db_id": "beer", "split": "test", "dsn_key": "rename_decoy",
+         "hash_lenient": "aa", "hash_strict": "bb", "nrows": 2},
+        {"question_id": "2", "db_id": "other", "split": "test", "dsn_key": "rename_decoy",
+         "hash_lenient": "cc", "hash_strict": "dd"},
+        {"question_id": "3", "db_id": "beer", "split": "train", "dsn_key": "rename_decoy",
+         "hash_lenient": "ee", "hash_strict": "ff"},
+        {"question_id": "4", "db_id": "beer", "split": "test", "dsn_key": "other_dsn",
+         "hash_lenient": "gg", "hash_strict": "hh"},
+    ]
+    _write_gold_lines(tmp_path / "eval_dataset" / "gold_result_hashes_rename_decoy.jsonl", rows)
+
+    out = load_gold_hashes(tmp_path, db_id="beer")
+    assert set(out) == {"1"}, "wrong db / split / dsn_key leaked into the gold index"
+    assert out["1"].hash_lenient == "aa"
+    assert out["1"].nrows == 2
+
+
+def test_load_gold_hashes_accepts_the_artifacts_layout(tmp_path):
+    from governed_bi.eval.hash_grade import load_gold_hashes
+
+    _write_gold_lines(
+        tmp_path / "artifacts" / "gold_result_hashes_rename_decoy.jsonl",
+        [{"question_id": "1", "db_id": "beer", "hash_lenient": "aa", "hash_strict": "bb"}],
+    )
+    assert set(load_gold_hashes(tmp_path, db_id="beer")) == {"1"}
+
+
+def test_load_gold_hashes_raises_when_the_file_is_absent(tmp_path):
+    import pytest as _pytest
+
+    from governed_bi.eval.hash_grade import load_gold_hashes
+
+    with _pytest.raises(FileNotFoundError, match="gold hash file not found"):
+        load_gold_hashes(tmp_path, db_id="beer")
+
+
+def test_load_gold_hashes_skips_blank_lines(tmp_path):
+    from governed_bi.eval.hash_grade import load_gold_hashes
+
+    path = tmp_path / "eval_dataset" / "gold_result_hashes_rename_decoy.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        '{"question_id":"1","db_id":"beer","hash_lenient":"aa","hash_strict":"bb"}\n\n\n',
+        encoding="utf-8",
+    )
+    assert set(load_gold_hashes(tmp_path, db_id="beer")) == {"1"}

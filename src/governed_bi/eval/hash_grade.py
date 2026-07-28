@@ -38,6 +38,56 @@ class GoldHash:
         return self.error is None and bool(self.hash_lenient)
 
 
+#: Exception type names that mean the *grader's* connection / timeout failed, not
+#: that the model's SQL was wrong. Walked via ``__mro__`` so psycopg subclasses
+#: (``QueryCanceled``, ``AdminShutdown``, …) match without listing every leaf.
+#:
+#: ``OperationalError`` is deliberately absent: sqlite wraps "no such column" in
+#: it, and treating those as infrastructure would hide wrong answers as crashes.
+_INFRA_EXC_NAMES: frozenset[str] = frozenset(
+    {
+        "QueryCanceled",
+        "QueryCanceledError",
+        "TimeoutError",
+        "CancelledError",
+        "InterfaceError",
+        "ConnectionError",
+        "ConnectionResetError",
+        "ConnectionAbortedError",
+        "BrokenPipeError",
+    }
+)
+
+#: Message fragments that mark infrastructure failure even when the exception type
+#: is the ambiguous ``OperationalError`` / ``DatabaseError``.
+_INFRA_MSG_MARKERS: tuple[str, ...] = (
+    "server closed the connection",
+    "connection not open",
+    "connection already closed",
+    "could not connect",
+    "connection timed out",
+    "canceling statement due to statement timeout",
+    "cancelling statement due to statement timeout",
+    "statement timeout",
+    "lock wait timeout",
+    "ssl connection has been closed",
+    "consuming input failed",
+)
+
+
+def is_infrastructure_error(err: BaseException) -> bool:
+    """True when ``err`` is a harness / DB-infra failure, not a bad model statement.
+
+    Infrastructure failures must not land in the accuracy denominator as ordinary
+    wrong answers (audit E4): they are crashes that block quotability.
+    """
+    for cls in type(err).__mro__:
+        if cls.__name__ in _INFRA_EXC_NAMES:
+            return True
+    msg = str(err).lower()
+    return any(marker in msg for marker in _INFRA_MSG_MARKERS)
+
+
 # --------------------------------------------------------------------------- #
 # Vendored from BIRD-Data-Obfuscation/pipeline/_db.py (keep in sync)
 # --------------------------------------------------------------------------- #
@@ -294,19 +344,41 @@ def score_sql_hashes(
         result = gateway.execute(sql, identity)
         rows = list(result.rows)
     except Exception as err:
+        # Split infrastructure failures (timeout, connection death) from model SQL
+        # faults (undefined column, bad cast). The former used to share the
+        # ``exec_error:`` prefix, so ``classify_row`` treated them as answered-
+        # and-wrong and ``crash_rate`` / ``quotable`` never saw them (audit E4).
+        prefix = "infra_error" if is_infrastructure_error(err) else "exec_error"
         return {
             "correct": False,
             "correct_strict": False,
-            # Prefixed so it is distinguishable downstream. The model produced a
-            # statement that parses and then raises — a type error, an unknown
-            # column. That is a wrong answer, not a harness crash, so the driver is
-            # right to keep the row gradeable; but without a marker the offline
-            # taxonomy could not tell it from a statement that ran fine and returned
-            # the wrong rows, and charged it to "structurally identical, bad value".
-            # A statement that returned nothing has no structure to compare.
-            "error": f"exec_error:{type(err).__name__}: {err}",
+            # Prefixed so it is distinguishable downstream. ``exec_error:`` — the
+            # model produced a statement that parses and then raises (type error,
+            # unknown column): a wrong answer, not a harness crash. ``infra_error:``
+            # — the grader could not finish the execution: a crash that must not
+            # silently move the accuracy number.
+            "error": f"{prefix}:{type(err).__name__}: {err}",
             "hash_lenient": None,
             "hash_strict": None,
+        }
+    # A truncated result is not a complete answer. Hashing the clipped rows as if
+    # they were the full set can falsely match (or falsely miss) gold; either way
+    # the comparison is meaningless. Same infra bucket as a timeout: counted,
+    # blocks quotability, not a silent wrong answer.
+    if getattr(result, "truncated", False):
+        return {
+            "correct": False,
+            "correct_strict": False,
+            "error": (
+                f"infra_error:truncated: result exceeded row cap "
+                f"({getattr(result, 'row_count', len(rows))} rows returned)"
+            ),
+            "hash_lenient": None,
+            "hash_strict": None,
+            "pred_nrows": len(rows),
+            "pred_ncols": len(result.columns) if result.columns is not None else None,
+            "gold_nrows": gold.nrows,
+            "nrows_match": False,
         }
     h_lenient = hash_normalised_result(rows)
     h_strict = hash_normalised_result_strict(rows)
@@ -409,4 +481,72 @@ def validate_gold_hashes_live(
         "n_no_gold": n_no_gold,
         "n_unusable_gold": n_unusable,
         "errors": errors[:5],
+    }
+
+
+def free_pass_counts(
+    rows: list[dict[str, Any]],
+    *,
+    gold: dict[str, str] | None = None,
+    dialect: str = "postgres",
+) -> dict[str, int]:
+    """Count correct answers that are grading free passes (Audit E2).
+
+    Every input is already on the scored row (or optionally ``gold`` SQL keyed by
+    question id). These do not change ``correct`` — they only make free-pass mass
+    visible in the summary so an arm that over-filters into empty-vs-empty matches
+    cannot look identical to one that actually got the answer right.
+
+    - ``n_correct_with_empty_gold``: ``correct`` and ``gold_nrows == 0``.
+    - ``n_correct_and_pred_has_no_from``: ``correct`` and the prediction touches no
+      tables (``SELECT 1``-style). Prefer an empty ``tables_used`` when the row
+      recorded it; otherwise parse ``generated_sql``.
+    - ``n_correct_and_zero_table_overlap``: ``correct``, both sides name at least one
+      table, and the physical-name sets are disjoint. Uses ``oracle_gold_tables``
+      when present, else ``gold`` SQL when supplied; pred tables always come from
+      parsing ``generated_sql`` (``tables_used`` holds asset ids, not physical names).
+      Skipped when neither gold source is available.
+    """
+    from .sql_diff import extract_features
+
+    n_empty_gold = 0
+    n_no_from = 0
+    n_zero_overlap = 0
+
+    for row in rows:
+        if not row.get("correct"):
+            continue
+        if row.get("gold_nrows") == 0:
+            n_empty_gold += 1
+
+        sql = row.get("generated_sql")
+        tables_used = row.get("tables_used")
+        pred_no_from: bool | None = None
+        if isinstance(tables_used, (list, tuple, set, frozenset)):
+            pred_no_from = len(tables_used) == 0
+        elif sql:
+            pred_no_from = not extract_features(sql, dialect=dialect).tables
+        if pred_no_from:
+            n_no_from += 1
+
+        gold_tables: frozenset[str] | None = None
+        oracle_gold = row.get("oracle_gold_tables")
+        if isinstance(oracle_gold, (list, tuple, set, frozenset)):
+            gold_tables = frozenset(str(t).lower() for t in oracle_gold if t)
+        elif gold is not None:
+            qid = row.get("question_id") or row.get("request_id")
+            gold_sql = gold.get(str(qid)) if qid is not None else None
+            if gold_sql:
+                gold_tables = extract_features(gold_sql, dialect=dialect).tables
+
+        if gold_tables is None or not sql:
+            continue
+        pred_tables = extract_features(sql, dialect=dialect).tables
+        if pred_tables and gold_tables and pred_tables.isdisjoint(gold_tables):
+            n_zero_overlap += 1
+
+    return {
+        "n_correct_with_empty_gold": n_empty_gold,
+        "n_correct_and_pred_has_no_from": n_no_from,
+        "n_correct_and_zero_table_overlap": n_zero_overlap,
     }

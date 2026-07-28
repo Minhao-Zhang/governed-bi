@@ -22,10 +22,14 @@ not a runtime we ask anyone to deploy.
 - **The corpus is the moat.** Git-tracked typed YAML assets + Markdown notes,
   curator-authored and human-audited. Git is the single source of truth; the
   graph / vector / BM25 stores are rebuildable projections.
-- **Fail-closed.** Out-of-scope, missing coverage, or a tripped guardrail returns
-  a refusal or a clarifying question, never a confident wrong number. Answers
-  carry two separate stamps: `safety_clearance` (did it pass the guardrails) and
-  `semantic_assurance` (how well-grounded), never collapsed into one trust score.
+- **Fail-closed under serve defaults.** With `grade_semantic_failures=False`
+  (the serve default), out-of-scope, missing coverage, or a tripped guardrail
+  returns a refusal or a clarifying question — not a confident wrong number.
+  Graded delivery (on in the eval drivers today) can re-serve some L4/L5
+  failures as `unverified` rows; that is not the serve default. Answers carry
+  two separate stamps: `safety_clearance` (did it pass the guardrails) and
+  `semantic_assurance` (did any uncertainty flag fire — not "is it correct"),
+  never collapsed into one trust score.
 
 ## Quickstart
 
@@ -104,18 +108,18 @@ Built and tested: the governed agentic serve core ([ADR
 graph wrapping a bounded `create_agent` loop over read-only tools, with guardrail
 + audit middleware), the corpus contract and validator, the five-layer
 guardrails, the curator, retrieval, eval harness, semantic SQL cache, and the
-read-only audit API.
+audit API (read-only by default; corpus writes need `allow_edit` plus optional
+API-key auth when `[serve].api_key_env` is set).
 
-The corpus-as-moat claim has a first live result on an obfuscated Postgres
-database: curator-built assets lift execution accuracy over a no-corpus baseline
-and drive decoy-column touches to zero. But it is single-seed and small-N, so
-the result is directional, not yet conclusive. The current milestone is the
+**No eval number in this repo is currently quotable** — every number produced
+before 2026-07-26 is discarded (see [`docs/README.md`](docs/README.md)). The
+prior single-seed ladder run is a historical record only
+([eval-ladder-results](docs/plans/eval-ladder-results.md): arm definitions and
+method survive; **do not quote its numbers**). The current milestone is the
 **scale run** — all 69 BIRD DBs loaded as Postgres schemas (8,134 train /
-2,030 test), where the large held-out test set replaces single-seed deltas as the
-unit of evidence (see
-[audit dispositions](docs/design-decisions.md#audit-dispositions-2026-07-15)).
-Full numbers and method:
-[experiment results](docs/plans/eval-ladder-results.md).
+2,030 test) — where a large held-out test set is the unit of evidence (see
+[audit dispositions](docs/design-decisions.md#audit-dispositions-2026-07-15) and
+the [experiment runbook](docs/plans/experiment-runbook.md)).
 
 Designed but not yet built: `CorpusRelease` (immutable, hash-pinned serving
 release). Seamed but toggled off (enterprise-fork scope): identity → query scope
@@ -153,7 +157,7 @@ src/governed_bi/
   memory/           working memory; episodic/correction seams
   analyst/          the ADR-0002 governed agentic core (sole serve path): agent, tools, middleware, governance, cache, stamp
   eval/             execution accuracy, arm harness, refuse-gate
-  viz/              read-only audit surface (UI-agnostic presenter view models)
+  viz/              audit surface (UI-agnostic presenter view models; API write gated by allow_edit)
 tests/              unit + end-to-end suites
 ```
 

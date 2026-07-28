@@ -11,7 +11,12 @@
 [runtime]
 # dev  = BIRD scale: auto-accept corpus, single all-access identity, hard-block
 #        suspect columns, files + SQLite.
-# prod = enterprise scale: PR + owner + CI, real user + gateway RLS, soft-warn.
+# prod = enterprise *intent* (PR + owner + CI, real user + gateway RLS, soft-warn).
+# WARNING: environment = "prod" is NOT bootable in this demo repo. Settings.for_env
+# sets single_all_access_identity=False, and build_stack() then raises
+# NotImplementedError (per-user identity + gateway RLS live in the enterprise
+# fork, D1/D7). Keep "dev" here, or override single_all_access_identity = true
+# if you need prod-ish toggles without that identity path.
 environment = "dev"
 # Optional per-toggle overrides (otherwise follow environment defaults above):
 # auto_accept_corpus = true
@@ -81,7 +86,13 @@ sqlite_path = "data/bird/beer_factory.sqlite" # repo-root-relative
 # can_stream: REST factory default. The LangGraph-mounted app (api/routes.py)
 # forces can_stream=True regardless of this value.
 can_stream = false
-allow_edit = true                        # corpus file-write (dev); set false for prod-like
+# Corpus file-write (POST /corpus/edit). Safe default is false. for_env(dev)
+# opts in when this key is omitted; set true in governed_bi.local.toml for
+# local demo edits. Mutating routes also require auth when api_key_env is set.
+allow_edit = false
+# Env-var *name* for the shared HTTP API secret (X-API-Key or Bearer).
+# Unset = single-identity demo: reads stay open; writes still need allow_edit.
+# api_key_env = "GOVERNED_BI_API_KEY"
 cors_origins = ["http://localhost:3000"]
 
 # Memory / cache / few-shot numeric gates (Architecture §7) are still code

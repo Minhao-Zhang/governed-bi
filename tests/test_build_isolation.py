@@ -16,6 +16,7 @@ failure cleans up after itself without taking the run down.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import threading
@@ -484,9 +485,9 @@ def test_an_oracle_rung_is_served_at_full_width_under_its_own_rung(tmp_path: Pat
 def test_run_pool_arm_still_refuses_workers_without_a_factory(tmp_path: Path):
     """The guard the fix above respects must stay — it is what catches the next
     caller that forgets."""
-    from governed_bi.eval.run_datalake import _run_pool_arm
-
     from types import SimpleNamespace
+
+    from governed_bi.eval.run_datalake import _run_pool_arm
 
     item = SimpleNamespace(question_id="q1", question="q?", sql="SELECT 1", difficulty=None)
     with pytest.raises(ValueError, match="worker_factory"):
@@ -810,16 +811,15 @@ def test_a_real_curator_agent_build_creates_no_checkpoint_file(tmp_path: Path):
     every curated build. Removing it deletes the failure class instead of guarding it.
     """
     pytest.importorskip("deepagents")
+    import sqlite3
+
     from langchain_core.messages import AIMessage
 
     from governed_bi.config import load_settings
     from governed_bi.curator.pipeline import build_curated_corpus
     from governed_bi.eval.dataset import EvalItem
     from governed_bi.gateway import Gateway, SqliteConnector
-
     from test_curator_agent_behavior import ScriptedToolModel  # type: ignore
-
-    import sqlite3
 
     db = tmp_path / "t.sqlite"
     con = sqlite3.connect(db)
@@ -988,7 +988,7 @@ def test_resume_seeds_staging_from_what_is_already_built(tmp_path):
 
 def test_resume_staging_discards_shared_root_partial_yaml(tmp_path):
     """Kill debris in the shared arm root must not be seeded into staging on resume."""
-    from governed_bi.eval.run_datalake import _BUILD_COMPLETE_MARKER, _stage_roots
+    from governed_bi.eval.run_datalake import _stage_roots
 
     staging = tmp_path / "_staging"
     roots = {"curated": tmp_path / "corpus_curated"}
@@ -1037,9 +1037,6 @@ def test_without_resume_staging_starts_empty_even_when_the_shared_root_is_full(t
 # module-level function taking the build as an argument.
 # --------------------------------------------------------------------------- #
 
-import hashlib
-import threading as _threading
-
 
 def _fingerprint_tree(root):
     """Content hash of every YAML under `root`, path-relative so absolute staging
@@ -1086,7 +1083,7 @@ def _run_phase(tmp_path, dbs, workers, *, build=_deterministic_build, resume=Fal
         build_workers=workers,
         resume=resume,
         build_errors=errors,
-        build_lock=_threading.Lock(),
+        build_lock=threading.Lock(),
         build_one_db=build,
     )
     return built, errors, roots
@@ -1231,7 +1228,7 @@ def test_progress_is_reported_as_each_build_finishes_not_all_at_the_end(tmp_path
             build_workers=3,
             resume=False,
             build_errors=errors,
-            build_lock=_threading.Lock(),
+            build_lock=threading.Lock(),
             build_one_db=_slow,
         )
     finally:
@@ -1278,7 +1275,7 @@ def test_a_staging_failure_does_not_name_the_shared_roots_as_debris(tmp_path, ca
             build_workers=2,
             resume=False,
             build_errors=errors,
-            build_lock=_threading.Lock(),
+            build_lock=threading.Lock(),
             build_one_db=_deterministic_build,
         )
 

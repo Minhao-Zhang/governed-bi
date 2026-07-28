@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from governed_bi.corpus import (
+    MetricAsset,
     NoteAsset,
     TableAsset,
     is_green,
@@ -206,6 +207,40 @@ def test_always_note_budget_is_reported():
     ]
     findings = validate_corpus(notes)
     assert sum(f.code == "always-note-budget" for f in findings) == 2
+
+
+def test_metric_expression_unparseable_is_reported():
+    table = TableAsset(
+        id="tbl_demo_orders",
+        schema="demo",
+        physical_name="orders",
+    )
+    bad = MetricAsset(
+        id="metric_bad_expr",
+        name="broken",
+        base_table=table.id,
+        expression="NOT VALID (((",
+    )
+    findings = validate_corpus([table, bad])
+    assert any(f.code == "metric-expression-unparseable" for f in findings)
+    assert any(f.asset_id == "metric_bad_expr" for f in findings)
+
+
+def test_metric_expression_sum_style_is_ok():
+    table = TableAsset(
+        id="tbl_demo_orders",
+        schema="demo",
+        physical_name="orders",
+    )
+    good = MetricAsset(
+        id="metric_ok_sum",
+        name="total",
+        base_table=table.id,
+        expression="SUM(x)",
+    )
+    findings = validate_corpus([table, good])
+    assert not any(f.code == "metric-expression-unparseable" for f in findings)
+    assert is_green(findings)
 
 
 # --------------------------------------------------------------------------- #

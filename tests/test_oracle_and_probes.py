@@ -21,7 +21,6 @@ from governed_bi.eval.oracle import (
     restrict_corpus,
 )
 
-
 # --------------------------------------------------------------------------- #
 # The note-scope contract the oracle corpus got wrong
 # --------------------------------------------------------------------------- #
@@ -342,7 +341,7 @@ def _oracle_meta(prov: dict, *, rung=OracleRung.schema):
         sql="SELECT x FROM t",
         provenance=prov,
         tier=SimpleNamespace(value="governed"),
-        semantic_assurance=SimpleNamespace(value="grounded"),
+        semantic_assurance=SimpleNamespace(value="unflagged"),
         safety_clearance=True,
     )
     graph = SimpleNamespace(invoke=lambda state, config=None: {"answer": answer})
@@ -394,9 +393,9 @@ def test_a_rung_does_not_claim_a_schema_pick_it_never_made():
 
 
 def test_oracle_sql_needs_no_serve_path_and_still_reports_its_bypass():
-    from governed_bi.eval.oracle import GoldIndex, OracleRung, oracle_solver
     from governed_bi.config import Environment, Settings
     from governed_bi.corpus import Corpus
+    from governed_bi.eval.oracle import GoldIndex, OracleRung, oracle_solver
 
     gold = GoldIndex.build(
         [{"question": "q?", "question_id": "1", "db_id": "restaurant", "sql": "SELECT 1"}]
@@ -433,9 +432,9 @@ def test_the_oracle_graph_cache_is_bounded():
 def test_an_evicted_graph_is_rebuilt_with_a_fresh_session_id():
     """Session ids used to be keyed off cache SIZE, so an evicted-then-rebuilt graph
     reused an id another graph already held — two graphs' turns colliding on it."""
-    import governed_bi.analyst.agent as agent_mod
     from types import SimpleNamespace
 
+    import governed_bi.analyst.agent as agent_mod
     from governed_bi.config import Environment, Settings
     from governed_bi.corpus import Corpus
     from governed_bi.corpus.schemas import Column, LogicalType, TableAsset

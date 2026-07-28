@@ -71,9 +71,13 @@ def curator_tools(
     Always includes ``read_corpus`` when a bag is supplied (and a stub error
     otherwise). Includes ``run_probe_query`` when a read-only ``gateway`` is
     supplied; includes the six write tools when ``bag`` is supplied.
-    ``certified_writes`` stamps human/certified provenance on Phase B writes.
+
+    ``certified_writes`` is accepted for API compat but never stamps
+    ``human`` / ``certified`` provenance (C6). Agent writes always use the bag
+    default (``curator`` / ``proposed``). Human certification is only via the
+    non-agent fold (``AssetBag.apply_answered_clarifications``).
     """
-    del connector, schema  # bag already holds the profiled Facts
+    del connector, schema, certified_writes  # bag already holds the profiled Facts
 
     tools: list[Callable[..., str]] = []
 
@@ -119,8 +123,6 @@ def curator_tools(
             on: str,
             cardinality: str = "many_to_one",
             confidence: float = 0.7,
-            certified: bool = False,
-            answered_by: str = "",
         ) -> str:
             """Record a validated JoinAsset between two physical tables."""
             return bag.upsert_join(
@@ -129,8 +131,7 @@ def curator_tools(
                 on,
                 cardinality=cardinality,
                 confidence=confidence,
-                certified=certified or certified_writes,
-                answered_by=answered_by or None,
+                certified=False,
             )
 
         def upsert_metric(
@@ -138,8 +139,6 @@ def curator_tools(
             base_table: str,
             expression: str,
             confidence: float = 0.6,
-            certified: bool = False,
-            answered_by: str = "",
         ) -> str:
             """Record a validated MetricAsset (aggregate over a base table)."""
             return bag.upsert_metric(
@@ -147,8 +146,7 @@ def curator_tools(
                 base_table,
                 expression,
                 confidence=confidence,
-                certified=certified or certified_writes,
-                answered_by=answered_by or None,
+                certified=False,
             )
 
         def upsert_term(
@@ -156,8 +154,6 @@ def curator_tools(
             binding_asset_type: str = "table",
             binding_asset_id: str = "",
             confidence: float = 0.6,
-            certified: bool = False,
-            answered_by: str = "",
         ) -> str:
             """Record a validated TermAsset mapping business language to an asset.
             For a column binding, set binding_asset_type='column' and pass
@@ -169,8 +165,7 @@ def curator_tools(
                 binding_asset_type=binding_asset_type,
                 binding_asset_id=binding_asset_id or None,
                 confidence=confidence,
-                certified=certified or certified_writes,
-                answered_by=answered_by or None,
+                certified=False,
             )
 
         def upsert_few_shot(
@@ -178,8 +173,6 @@ def curator_tools(
             sql: str,
             complexity: str = "simple",
             confidence: float = 0.7,
-            certified: bool = False,
-            answered_by: str = "",
         ) -> str:
             """Record a validated FewShotAsset (question + working SQL)."""
             return bag.upsert_few_shot(
@@ -187,24 +180,20 @@ def curator_tools(
                 sql,
                 complexity=complexity,
                 confidence=confidence,
-                certified=certified or certified_writes,
-                answered_by=answered_by or None,
+                certified=False,
             )
 
         def annotate_table(
             table: str,
             description: str = "",
             confidence: float = 0.0,
-            certified: bool = False,
-            answered_by: str = "",
         ) -> str:
             """Set table-level Inference fields (description, confidence)."""
             return bag.annotate_table(
                 table,
                 description=description or None,
                 confidence=confidence if confidence > 0 else None,
-                certified=certified or certified_writes,
-                answered_by=answered_by or None,
+                certified=False,
             )
 
         def annotate_column(
@@ -216,8 +205,6 @@ def curator_tools(
             suspect: bool = False,
             note: str = "",
             confidence: float = 0.0,
-            certified: bool = False,
-            answered_by: str = "",
         ) -> str:
             """Set column Inference: description, role, reliability, and/or suspect."""
             return bag.annotate_column(
@@ -229,8 +216,7 @@ def curator_tools(
                 suspect=True if suspect else None,
                 note=note or None,
                 confidence=confidence if confidence > 0 else None,
-                certified=certified or certified_writes,
-                answered_by=answered_by or None,
+                certified=False,
             )
 
         tools.extend(
@@ -263,9 +249,10 @@ def build_curator_agent(
 
     ``model`` is a LangChain chat model instance or a ``"provider:model"`` spec.
     ``run_dir`` wires ``FilesystemBackend`` so built-in file tools persist
-    ``clarifications.jsonl`` on disk. ``certified_writes`` enables Phase B
-    human/certified stamping defaults. ``checkpointer`` is required for durable
-    resume on deep agents invoked via ``.invoke()`` (no server injection).
+    ``clarifications.jsonl`` on disk. ``certified_writes`` is accepted for API
+    compat but never stamps human/certified (C6). ``checkpointer`` is required
+    for durable resume on deep agents invoked via ``.invoke()`` (no server
+    injection).
     """
     backend = None
     if run_dir is not None:

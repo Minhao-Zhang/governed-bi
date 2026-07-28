@@ -3,7 +3,8 @@
 :mod:`governed_bi.stages` attributes turns that refused, capped, or crashed. That
 leaves the largest population unattributed: turns that ran cleanly, produced SQL,
 executed it, and returned the wrong rows. On the last full benchmark those were
-45.8% of every question and they all landed in one bucket called
+45.8% of every question (a RETIRED pre-2026-07-25 figure — see docs/measurement.md)
+and they all landed in one bucket called
 "right schema, wrong SQL" — a bucket too big to act on, which is why the estimate
 of what fixing it was worth ranged over an order of magnitude.
 

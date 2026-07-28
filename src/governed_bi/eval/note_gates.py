@@ -208,7 +208,21 @@ def run_offline_note_gates(
     settings: "Settings",
     embedder: "Embedder | None" = None,
 ) -> list[GateResult]:
-    """Convenience bundle used by CI tests."""
+    """Convenience bundle used by CI tests. **Not a measurement.**
+
+    Read the limitation before quoting anything from this: the gold pairs are built
+    from the table descriptions the gates then retrieve *against* (see the loop
+    below), so a passing result means the embedder can find a document from its own
+    text. It cannot fail unless retrieval is catastrophically broken, and it says
+    nothing about recall on real questions (AUDIT E5).
+
+    Kept because that smoke-level assurance is genuinely worth having in CI — a dead
+    embedder or a broken PIN path does show up here — and because the PIN-off
+    baseline below makes GATE-RECALL non-tautological in the one dimension that
+    matters (a wrong PIN must not reduce recall). It has no production caller and
+    should not acquire one; real retrieval measurement is ``eval/retrieval_eval.py``
+    against the obfuscated split.
+    """
     # Build cheap gold pairs from tables present in the corpus.
     tables = [a for a in corpus.assets if isinstance(a, TableAsset)]
     questions: list[tuple[str, set[str]]] = []

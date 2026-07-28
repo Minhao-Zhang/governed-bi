@@ -1,6 +1,7 @@
 """HTTP API interface (FastAPI) over the governed serve flow + corpus views.
 
-Optional: requires the ``api`` extra (``uv sync --extra api``). The app is built
+No extra required: FastAPI is a core dependency, so a plain ``uv sync`` is enough
+(there is no ``api`` extra and never was). The app is built
 by :func:`create_app` (a factory), so importing this package has no side effects
 and the stack is assembled only when the factory runs. Serve it with
 ``uvicorn --factory governed_bi.api:create_app``. See ``governed_bi.api.app`` for

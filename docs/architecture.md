@@ -10,7 +10,7 @@ in [Design decisions](design-decisions.md).
 
 1. **Two planes.** A semantic/control plane holds business meaning as versioned config and markdown, published offline via PR/CI. It stays separate from a data plane that executes only guardrail-passed SQL. Meaning is defined once and owned by humans.
 2. **Serve's *authority* is deterministic; its *reasoning* may be agentic.** The question can be wide, but the SQL must be narrow. Authority (what may execute, what is trusted, what goes recorded) is hard-wired and auditable; the reasoning that finds the answer may run as a bounded agentic loop confined to governed, read-only tools. [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) reverses the earlier "never an autonomous ReAct loop" form of this spine, now implemented as the sole serve path, separating autonomy-in-reasoning from autonomy-in-authority; only the latter stays forbidden.
-3. **Fail-closed.** Out-of-scope, missing-coverage, or tripped-guardrail returns a refusal or a clarifying question, never a confident wrong number.
+3. **Fail-closed under serve defaults.** With `grade_semantic_failures=False` (the serve default), out-of-scope, missing-coverage, or tripped-guardrail returns a refusal or a clarifying question — not a confident wrong number. Graded delivery (on in the eval drivers today) can re-serve some L4/L5 failures as `unverified` rows; that is not the serve default.
 
 ## 2. Two Harnesses over One Shared Substrate
 
@@ -24,7 +24,7 @@ Curator and Analyst have opposite risk profiles. They use different harnesses bu
 | Autonomy | maximum (explore) | minimum (fail-closed) |
 | Harness | `deepagents` | `LangGraph` + middleware |
 
-*Built:* both harnesses are installed by a plain `uv sync` (no extra), over LangChain-backed model clients. The Analyst is the [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) governed agentic core, `analyst.agent` (thin outer deterministic rails wrapping a `create_agent` reasoning loop governed by middleware; the module was `server/`, renamed `analyst/` post-cutover — "server" now names infra only: `LangGraph Server`, the HTTP/ASGI process). It has been the sole serve path since the P2 cutover; the earlier deterministic flow (`server.flow::answer_question`) and the stale, unused `server.graph` DAG were deleted under the old module name, before that rename. No live model is fail-closed: `build_stack()` still builds offline for the read-only audit API, but the serve process raises at startup and `/chat` returns 503 until a model is configured. The first live A/B against the (now-removed) deterministic flow motivated [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) Amendment 1; current eval numbers are in [experiment results](plans/eval-ladder-results.md). Curator = `curator.deep_agent` (a deepagents agent over Facts-profiling + read-only-probe tools, construction verified offline, live run model-gated).
+*Built:* both harnesses are installed by a plain `uv sync` (no extra), over LangChain-backed model clients. The Analyst is the [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) governed agentic core, `analyst.agent` (thin outer deterministic rails wrapping a `create_agent` reasoning loop governed by middleware; the module was `server/`, renamed `analyst/` post-cutover — "server" now names infra only: `LangGraph Server`, the HTTP/ASGI process). It has been the sole serve path since the P2 cutover; the earlier deterministic flow (`server.flow::answer_question`) and the stale, unused `server.graph` DAG were deleted under the old module name, before that rename. No live model is fail-closed: `build_stack()` still builds offline for the audit API (browse/chat; corpus write gated by `allow_edit`), but the serve process raises at startup and `/chat` returns 503 until a model is configured. The first live A/B against the (now-removed) deterministic flow motivated [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) Amendment 1. **No eval number before 2026-07-26 is quotable**; [eval-ladder-results](plans/eval-ladder-results.md) keeps arm definitions and method only (numbers discarded). For a quotable run, follow the [experiment runbook](plans/experiment-runbook.md). Curator = `curator.deep_agent` (a deepagents agent over Facts-profiling + read-only-probe tools, construction verified offline, live run model-gated).
 
 > **Curator = permanent maintainer**
 >
@@ -35,10 +35,10 @@ Curator and Analyst have opposite risk profiles. They use different harnesses bu
 
 ## 3. Kernel Primitives (Survive model improvement)
 
-- **Governed gateway**: read-only, RLS-as-user, credential-isolated, forced LIMIT/timeout, audit/replay. It can access everything, but a context layer routes to governed datasets first. Ideally raw tables are never touched.
+- **Governed gateway**: read-only SQL execution, credential-isolated, row-cap + statement timeout, audit/replay. The row cap is `fetchmany(max_rows + 1)` on every dialect, and every dialect also best-effort injects a root `LIMIT` on simple `SELECT`/`UNION` SQL that lacks one (no CTE-breaking subquery wrap). RLS-as-user is a toggled-off seam (D7), not live in this repo. It can access everything, but a context layer routes to governed datasets first. Ideally raw tables are never touched.
 - **Agentic loop**: the permanent control loop.
 - **Tools**: coded functions the model may call. Keep them few and sharp.
-- **Hooks (middleware)**: deterministic code on loop events. `before_model` injects context (working memory, RLS scope, the semantic-layer router). `wrap_tool_call` gates or vetoes actions (AST allowlist, cost/EXPLAIN, PII, RLS). This is where fail-closed lives.
+- **Hooks (middleware)**: deterministic code on loop events. `before_model` injects context (working memory, identity/session scope, the semantic-layer router). `wrap_tool_call` gates or vetoes actions (AST allowlist, structural cost/cross-join; PII and RLS are deferred seams, not implemented here). This is where fail-closed lives.
 
 > **Engine vs fuel**
 >
@@ -107,7 +107,7 @@ Per D15, on the multi-schema Postgres / Redshift path a join-aware schema router
 
 Guardrails, in order (fail-closed on any, all five enforced): syntax → policy blacklist → AST column allowlist → term-semantics → cost. The AST allowlist is scope-aware (resolves each column against its own query scope and blocks star projections); term-semantics licenses the retrieved tables plus their FK join-neighborhood, the join plan's Steiner points (not just the exact retrieved set, so it is decoupled from retrieval recall), and any curated cross-schema join targets, and blocks any table name outside that licensed scope. The cost layer is a structural cross-join guard for now; numeric EXPLAIN-based cost (Postgres / Redshift) is future per-dialect work. Stage-by-stage detail is in [Analyst](analyst.md) step 8.
 
-> **D15: L4 scope is schema-qualified and spans schemas.** Cross-schema names are licensed only via a curated join — with none, the engine refuses rather than guessing. The single-schema / SQLite / BIRD path stays bare/unqualified. Guardrail + serve wiring + missing-edge refusal + join-aware schema router are shipped.
+> **D15: L4 scope is schema-qualified and spans schemas.** Cross-schema names are licensed only via a curated join — with none, the engine refuses rather than guessing. The single-schema / SQLite / BIRD path is **also** schema-qualified: the SQLite connector `ATTACH`es its file under the `corpus_pin` alias, so `beer_factory.customers` executes natively (this line said "stays bare/unqualified", which the 2026-07-17 supersession made false). Guardrail + serve wiring + missing-edge refusal + join-aware schema router are shipped.
 
 > **Bounded self-repair (agent tool-reflection loop)**
 >
@@ -118,7 +118,7 @@ Guardrails, in order (fail-closed on any, all five enforced): syntax → policy 
 > outright; every attempt is re-guardrailed, so un-vetted SQL never runs. The
 > per-turn attempt cap (3) is enforced in `wrap_tool_call`, and the outer graph
 > is bounded by a `recursion_limit`; exhaustion fails closed. A repaired answer's
-> `semantic_assurance` drops to `heuristic`, not `grounded` (in the retired,
+> `semantic_assurance` drops to `heuristic`, not `unflagged` (in the retired,
 > display-only single-axis tier: `lineage`, not `governed`).
 >
 > This is the [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) mechanism.
@@ -159,12 +159,12 @@ Guardrails, in order (fail-closed on any, all five enforced): syntax → policy 
 > - **Refuse-gate** (curated negative examples): match → canned escalation blob (owner contact). This is the fail-closed path.
 > - **Hard guardrails** (`wrap_tool_call`): can veto any query regardless.
 > - **Best-effort otherwise:** delivered with a **reliability stamp** —
->   `semantic_assurance` (`grounded` / `heuristic` / `unverified`) plus the
+>   `semantic_assurance` (`unflagged` / `heuristic` / `unverified`) plus the
 >   uncertainty flags that fired. The legacy single-axis tier (`governed` /
 >   `lineage` / `fenced_raw` / `refused`) survives only as a display-only 1:1
 >   projection of this axis, never a second vocabulary. The boundaries are
->   uncalibrated governance/uncertainty heuristics, tuned on the eval: `grounded`
->   means safe, in-scope, and no uncertainty flag, **not** verified-correct. The
+>   uncalibrated governance/uncertainty heuristics, tuned on the eval: `unflagged`
+>   means no uncertainty flag fired, **not** verified-correct. The
 >   guardrails are a safety/governance gate, not a correctness oracle, so a
 >   plausible-but-wrong query (valid, in-allowlist, wrong computation) is caught
 >   here and by the fail-closed paths, not at a guardrail. Give the stamp teeth:
@@ -229,4 +229,4 @@ Guardrails, in order (fail-closed on any, all five enforced): syntax → policy 
 | Identity / RLS | single all-access identity | real user, RLS at gateway |
 | Serving | one process + files + SQLite | stateless server fleet; curator as async jobs; gateway/corpus/memory/eval as services; graph DB; caches |
 
-Bake in the abstractions now (identity object, gate, scoped memory/cache) so prod is a config flip, not a rewrite.
+Bake in the abstractions now (identity object, gate, scoped memory/cache) as seams an enterprise fork can adapt — not "prod is a config flip" (see [D1](design-decisions.md#d1-target)).

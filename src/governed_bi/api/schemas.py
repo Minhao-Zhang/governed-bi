@@ -305,7 +305,7 @@ class ResultTableResponse(_View):
 class AnswerResponse(_View):
     tier: str  # governed | lineage | fenced_raw | refused
     safety_clearance: bool
-    semantic_assurance: str  # grounded | heuristic | unverified | none
+    semantic_assurance: str  # unflagged | heuristic | unverified | none
     text: str | None
     sql: str | None
     escalation: str | None

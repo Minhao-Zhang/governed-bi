@@ -33,6 +33,7 @@ __all__ = [
     "Outcome",
     "REFUSED_BY_TO_STAGE",
     "CRASH_REFUSED_BY",
+    "INFRA_ERROR_PREFIX",
     "classify_outcome",
     "classify_row",
 ]
@@ -240,7 +241,16 @@ _GRADER_ERRORS: frozenset[str] = frozenset({"refusal", "missing_gold_hash"})
 #: in us. ``gold_unusable:`` — the gold side could not be used. ``exec_error:`` — the
 #: model's own statement raised when the grader ran it, which is a wrong answer, not
 #: our bug, and must not be counted as a crash.
+#:
+#: ``infra_error:`` is deliberately *not* here. Timeouts, connection deaths, and
+#: truncated results are harness failures: ``_exception_from_error`` must surface
+#: them so ``classify_row`` / ``crash_rate`` / ``quotable`` treat them as crashed
+#: rather than answered-and-wrong (audit E4).
 _GRADER_ERROR_PREFIXES: tuple[str, ...] = ("gold_unusable:", "exec_error:")
+
+#: Prefix stamped by ``score_sql_hashes`` for infrastructure failures. Listed so
+#: callers can recognise it without re-deriving the classification.
+INFRA_ERROR_PREFIX: str = "infra_error:"
 
 
 def _exception_from_error(error: Any) -> str | None:

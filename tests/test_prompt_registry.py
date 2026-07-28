@@ -31,7 +31,7 @@ V1_DIGESTS = {
     "schema_pick": "5d7f170fe6d12c96ceec36ef7fd1e69eb2396f52efedeaed691c756a8d8b8253",
     "narrator": "91886100a9010256574f6ca3bc0264726bf27117b0096cdf05934e8458b07824",
     "curator_phase_a": "207a2737d6d58d542f851ce49fba698b1e4dc19e0687bf1f0c0979d26556cba2",
-    "curator_phase_b": "8072254515568afa650bfbc0aec2be2759e785c9490d3c5ac12a21219173fd3b",
+    "curator_phase_b": "473708cc6ec6737defdf6318fbda0fd6653b167e19a060a4c5cbe0fc7ac665c5",
     "sme_rules": "557773916c44247b92fa25fb4b4a4cfe1d73afe274a480e1f40cb5f3bc00581c",
 }
 

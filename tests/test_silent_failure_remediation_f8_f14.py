@@ -5,9 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from governed_bi.eval.analysis import gradeable_report
-from governed_bi.eval.error_taxonomy import ErrorClass, _STAGE_CASCADE, summarise_attributions
+from governed_bi.eval.error_taxonomy import _STAGE_CASCADE, ErrorClass, summarise_attributions
 from governed_bi.eval.index import (
-    CLAIM_READY_REQUIRES,
     MIN_QUOTABLE_QUESTIONS,
     arithmetic_floor_for_arms,
     holm_family_size,
@@ -22,7 +21,6 @@ from governed_bi.eval.run_datalake import (
     ladder_deltas,
     price_verdict,
 )
-
 
 # --------------------------------------------------------------------------- #
 # F8 — ledger hygiene vs claim readiness
@@ -58,7 +56,15 @@ def test_quotable_true_is_ledger_ok_not_claim_ready(tmp_path):
     assert record["ledger_ok"] is True
     assert record["hygiene_ok"] is True
     assert record["claim_ready"] is False
-    assert record["claim_ready_requires"] == list(CLAIM_READY_REQUIRES)
+    # Not `== list(CLAIM_READY_REQUIRES)` — that asserted index.py's own assignment
+    # against itself and would pass for any content, including an empty tuple. Check
+    # what the field is FOR: a reader has to be told the substantive gates, so an
+    # emptied or hygiene-only list must fail here.
+    requires = record["claim_ready_requires"]
+    assert len(requires) >= 5, "a claim-readiness checklist this short explains nothing"
+    joined = " ".join(requires).lower()
+    for gate in ("noise floor", "mde", "holm", "sign-test", "single-variable"):
+        assert gate in joined, f"claim_ready_requires never mentions {gate}"
     assert any("hygiene only" in r for r in record["claim_ready_blocked_because"])
     assert record["arithmetic_floor_questions"] == 8
     assert record["holm_family_size"] == 6

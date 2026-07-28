@@ -132,8 +132,18 @@ def test_every_fair_comparison_says_whether_one_thing_changed():
         "curated_sme": {"q0", "q1", "q2", "q3"},
     })
 
-    assert by_pair[("baseline", "seeded")]["single_variable"] is True
-    assert "bundles" not in by_pair[("baseline", "seeded")]
+    # Adjacent, but not one variable: the rung bundles train-SQL joins, train-SQL
+    # metrics and decoy marking. `single_variable` used to mean only "adjacent"
+    # (AUDIT E5); the two claims are now reported separately.
+    step = by_pair[("baseline", "seeded")]
+    assert step["adjacent_rung"] is True
+    assert step["single_variable"] is False
+    assert step["mechanisms_changed"] == [
+        "train-SQL-derived joins",
+        "train-SQL-derived metrics",
+        "decoy / negative-space column marking",
+    ]
+    assert "bundles" not in step
 
     compound = by_pair[("baseline", "curated")]
     assert compound["single_variable"] is False
@@ -173,8 +183,12 @@ def test_the_label_agrees_with_the_deltas_block_and_with_analysis_json():
 
     for (a, b), entry in by_pair.items():
         lo, hi = sorted((a, b), key=ARM_ORDER.index)
-        assert entry["single_variable"] is (not skipped_rungs(lo, hi))
+        assert entry["adjacent_rung"] is (not skipped_rungs(lo, hi))
         assert entry.get("bundles", []) == skipped_rungs(lo, hi)
+        # `single_variable` is strictly stronger than adjacency now.
+        if entry["single_variable"]:
+            assert entry["adjacent_rung"] is True
+            assert len(entry["mechanisms_changed"]) == 1
 
     # And every adjacent ladder step must appear as a pair, or a step the run
     # measured would have no comparison carrying its p-value.

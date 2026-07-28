@@ -113,6 +113,41 @@ class Arm(str, Enum):
 ARM_ORDER: tuple[str, ...] = tuple(a.value for a in Arm)
 
 
+#: What each ladder step actually changes, one entry per mechanism. Adjacency is not
+#: the same claim as "one mechanism": ``baseline -> seeded`` is a single rung and
+#: changes three things at once, and reporting it as ``single_variable: true`` was the
+#: measurement error AUDIT E5 named. Keyed by the step's UPPER arm.
+STEP_MECHANISMS: dict[str, tuple[str, ...]] = {
+    "seeded": (
+        "train-SQL-derived joins",
+        "train-SQL-derived metrics",
+        "decoy / negative-space column marking",
+    ),
+    "curated": (
+        "LLM curator agent pass",
+        "few-shot exemplars",
+    ),
+    "curated_sme_blind": ("clarification protocol",),
+    "curated_sme": ("BIRD human column documentation (SME brief)",),
+}
+
+
+def step_mechanisms(lo: str, hi: str) -> tuple[str, ...]:
+    """Every mechanism that differs between two ladder arms, in ladder order.
+
+    ``()`` for a pair that is not on the ladder (oracle / replicate diagnostics), for
+    the same reason :func:`skipped_rungs` returns ``[]`` there: there is no span.
+    """
+    order = list(ARM_ORDER)
+    if lo not in order or hi not in order:
+        return ()
+    lo, hi = sorted((lo, hi), key=order.index)
+    out: list[str] = []
+    for arm in order[order.index(lo) + 1 : order.index(hi) + 1]:
+        out.extend(STEP_MECHANISMS.get(arm, ()))
+    return tuple(out)
+
+
 def ladder_steps(present: "Iterable[str]") -> list[tuple[str, str]]:
     """Adjacent rungs to report a delta between, given the arms actually scored.
 

@@ -26,6 +26,7 @@ from .clarifications import (
     Responder,
     StaticResponder,
     load_clarifications,
+    quarantine_agent_answers,
     upsert_clarification_record,
     write_clarifications,
 )
@@ -55,6 +56,7 @@ __all__ = [
     "curate",
     "enrich_table",
     "load_clarifications",
+    "quarantine_agent_answers",
     "profile_database",
     "review",
     "upsert_clarification_record",

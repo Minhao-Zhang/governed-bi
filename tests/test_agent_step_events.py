@@ -11,13 +11,13 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import AIMessage
 
+from governed_bi.analyst.agent import answer_question_agent
+from governed_bi.analyst.answer import UncertaintySignals, assemble, refusal
+from governed_bi.analyst.governance import GovEventStream
 from governed_bi.config import Environment, Settings
 from governed_bi.corpus import load_corpus
 from governed_bi.gateway import Gateway, Identity, SqliteConnector
 from governed_bi.llm.fake import FakeToolModel, ai_tool_turn
-from governed_bi.analyst.agent import answer_question_agent
-from governed_bi.analyst.answer import UncertaintySignals, assemble, refusal
-from governed_bi.analyst.governance import GovEventStream
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 BIRD_DB = Path(__file__).resolve().parents[1] / "data" / "bird" / "beer_factory.sqlite"
@@ -205,7 +205,7 @@ def test_agent_path_streams_rail_tool_and_final_events(
     finals = [e for e in events if e["kind"] == "final"]
     assert len(finals) == 1
     assert finals[-1]["detail"]["safety_clearance"] is True
-    assert finals[-1]["detail"]["semantic_assurance"] in ("heuristic", "grounded")
+    assert finals[-1]["detail"]["semantic_assurance"] in ("heuristic", "unflagged")
 
     # The event trace's run_query entries equal the audit ledger (Inv #10).
     ledger = ans.provenance.get("governance_ledger") or []

@@ -10,7 +10,7 @@ _[English](README.md) · [简体中文](README.zh.md)_
 
 - **两套 harness，一个基座（substrate）。** `curator`（构建）从一批已知良好的 `(question, SQL)` 种子对中*生成*语义层（corpus）；`analyst`（服务）*使用*它来回答问题。二者风险特征相反，却共享同一个 corpus。
 - **corpus 就是护城河。** Git 跟踪的类型化 YAML 资产，加上 Markdown 笔记（note）文档，由 curator 撰写、经人工审核。Git 是唯一真实来源（source of truth）；graph / vector / BM25 存储都是可重建的投影（projection）。
-- **失败即拒（fail-closed）。** 超出范围、覆盖缺失，或触发了护栏，都只会返回拒答或澄清性问题，绝不会给出一个自信却错误的数字。答案携带两个相互独立的标记：`safety_clearance`（是否通过护栏）与 `semantic_assurance`（接地程度如何），二者绝不会合并成单一的信任分数。
+- **在 serve 默认配置下失败即拒。** 在 `grade_semantic_failures=False`（serve 的默认值）下，超出范围、覆盖缺失，或触发了护栏，会返回拒答或澄清性问题——而不是一个自信却错误的数字。分级投递（graded delivery，目前在 eval driver 里是开着的）可以把部分 L4/L5 失败重新以 `unverified` 行的形式送出；这不是 serve 的默认行为。答案携带两个相互独立的标记：`safety_clearance`（是否通过护栏）与 `semantic_assurance`（是否触发了某个不确定性标志——而不是"是否正确"），二者绝不会合并成单一的信任分数。
 
 ## 快速开始
 
@@ -79,13 +79,16 @@ uv run python scripts/live_smoke.py       # end-to-end over a real model (needs 
 已构建并测试：受治理的 agentic serve 核心（[ADR
 0002](docs/adr/0002-governed-agentic-serve-runtime.md)：一个确定性的 rails 图，外层包着一个受限的
 `create_agent` 循环，循环之下是若干只读工具，配合护栏 + 审计中间件）、corpus 契约与校验器、五层
-护栏、curator、检索、eval harness、语义 SQL 缓存，以及只读的审计 API。
+护栏、curator、检索、eval harness、语义 SQL 缓存，以及审计 API（默认只读；corpus 写操作需要
+`allow_edit`，并在设置了 `[serve].api_key_env` 时叠加可选的 API-key 鉴权）。
 
-「corpus 即护城河」这一论断，已经在一个混淆版 Postgres 数据库上跑出了第一个真实结果：curator
-构建的资产相比无 corpus 基线提升了执行准确率，并把 decoy-touch 压到零。但它只用了单一随机种子、
-样本量也小，所以这个结果是方向性的，尚不能下定论。当前的里程碑是**规模化运行**——把全部 69 个
-BIRD 库作为 Postgres schema 加载（8,134 训练 / 2,030 测试），用大规模留出测试集取代单种子差值
-作为证据单位（见[审计处置](docs/design-decisions.md#audit-dispositions-2026-07-15)）。完整数据与方法见：[实验结果](docs/plans/eval-ladder-results.md)。
+**本仓库现在没有任何可引用的评测数字**——2026-07-26 之前产出的数字全部作废（见
+[`docs/README.md`](docs/README.md)）。此前那次单种子阶梯运行只是历史记录
+（[评测阶梯结果](docs/plans/eval-ladder-results.md)：arm 定义与方法仍然有效，**但不要引用其中的数字**）。
+当前的里程碑是**规模化运行**——把全部 69 个 BIRD 库作为 Postgres schema 加载（8,134 训练 /
+2,030 测试）——用大规模留出测试集作为证据单位（见
+[审计处置](docs/design-decisions.md#audit-dispositions-2026-07-15)与
+[实验操作手册](docs/plans/experiment-runbook.md)）。
 
 仅设计、尚未构建：`CorpusRelease`（不可变、按内容哈希锁定的服务发布）。已接入预留接口（seam）但
 默认关闭（属于企业分支范围）：身份 → 查询范围（RLS / 租户隔离）、人工审批闸门、按范围限定的
@@ -121,7 +124,7 @@ src/governed_bi/
   memory/           working memory; episodic/correction seams
   analyst/          the ADR-0002 governed agentic core (sole serve path): agent, tools, middleware, governance, cache, stamp
   eval/             execution accuracy, arm harness, refuse-gate
-  viz/              read-only audit surface (UI-agnostic presenter view models)
+  viz/              audit surface (UI-agnostic presenter view models; API write gated by allow_edit)
 tests/              unit + end-to-end suites
 ```
 

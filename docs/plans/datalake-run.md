@@ -147,7 +147,10 @@ the following. Note the `top_k=8`: this run predates the driver default moving t
 10, so it is not directly comparable to a run made today — the knob table above
 gives the current defaults.
 
-| metric | value |
+**Retired 2026-07-25 — do not quote.** Produced before the measurement fixes; kept
+as the record of what was run.
+
+| metric | value (RETIRED) |
 |---|---|
 | shortlist recall@8 | 0.848 (117/138) |
 | `pick_schema` pick accuracy (end to end) | 0.732 (101/138) |
@@ -276,13 +279,21 @@ to localise a specific kind of failure, is in
 
 ## Status
 
+> **Nothing numeric on this page is quotable.** The 2026-07-25 retirement covered
+> "these EX values"; the routing numbers date to 2026-07-19, inside the same window,
+> and survived it only because the caveat named EX specifically. They were produced
+> by the same instrument, under the same crash-counted-as-refusal definitions, so
+> they are retired too. Treat every figure below as a record of what was attempted.
+
 The driver runs end to end and the eval ladder replicates at multi-db scale.
-Confirmed:
+Mechanically confirmed (shape, not magnitude):
 
 - Offline (`--skip-agent`) build → pool → serve → grade on 1- and 2-db pools.
-- Live schema routing at 69-schema scale: embedder shortlist + `pick_schema`
-  give ~0.73 effective single-schema routing (routing table above), up from the
-  ~0.35 BM25 ceiling.
+- Live schema routing at 69-schema scale runs: embedder shortlist + `pick_schema`
+  measured ~0.73 effective single-schema routing (routing table above) against a
+  ~0.35 BM25 ceiling. **Retired — do not quote.** The direction (embedding beats
+  lexical for schema routing) is the design premise and is independently visible in
+  `schema_router`'s own docstring; the magnitudes need re-measuring.
 - **5-db, 3-arm live dry run** (72 pooled questions, 15/db, `address` `airline`
   `app_store` `authors` `beer_factory`) — **numbers retired 2026-07-25, see the
   caveat below**:
@@ -293,13 +304,19 @@ Confirmed:
   | curated | 0.333 | +0.125 |
   | curated_sme | 0.417 | +0.083 |
 
-  The shape (a curated moat and an SME lift on top of it) is what this run was
-  run to look for, and it appeared. Decoy-touch fell 0.35 → 0.0 → 0.01 (curated
+  The shape this run was looking for (a curated moat, an SME lift on top) is
+  what the table shows. That is not evidence it is there: the same measurement
+  faults that retired the numbers also moved them, and per arm by different amounts,
+  so the *ordering* is no more trustworthy than the values. What this run
+  established is that the harness executes end to end. Decoy-touch fell 0.35 → 0.0 → 0.01 (curated
   reliability annotations working); all arms CI-green; gold self-check 5/5; no
   build failures. Routing recall here reads ~0.97 only because the pool holds 5
   schemas — the real 69-schema routing number is the ~0.73 above, not this.
 
-> **These EX values are retired and must not be quoted as a result.** They were
+> **These EX values are retired and must not be quoted as a result** — nor may the
+> conclusion drawn from them be carried forward while the numbers are dropped, which
+> is what the first version of this caveat allowed.
+> They were
 > produced under metric definitions since found wrong — most importantly a solver
 > crash was counted as a refusal, so `refusal_rate` was inflated and EX depressed
 > by an amount that differs per arm. Their run artifacts were deleted rather than

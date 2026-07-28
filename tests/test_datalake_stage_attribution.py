@@ -497,12 +497,27 @@ def test_disjoint_splits_report_their_sizes(tmp_path):
         "train_test_disjoint": True,
         "n_train_ids": 2,
         "n_test_ids": 1,
+        # Byte-identical question text across splits — id-disjointness does not
+        # cover it, and nothing checked it before (AUDIT E5).
+        "n_train_test_text_overlap": 0,
+        "train_test_text_overlap_examples": {},
     }
 
 
-# --------------------------------------------------------------------------- #
-# Oracle provenance
-# --------------------------------------------------------------------------- #
+def test_byte_identical_question_text_across_splits_is_reported(tmp_path):
+    """Ids differ, words are the same — the form the id check cannot see."""
+    dataset_dir = _dataset(tmp_path, ["a"], ["b"])
+    # Give the test question the train question's exact text (ids stay distinct).
+    path = dataset_dir / "test_final.jsonl"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace('"question": "qb"', '"question": "qa"'),
+        encoding="utf-8",
+    )
+
+    out = rd._assert_train_test_disjoint(dataset_dir, ["db_a"])
+    assert out["train_test_disjoint"] is True  # ids are still disjoint
+    assert out["n_train_test_text_overlap"] == 1
+    assert out["train_test_text_overlap_examples"]["db_a"] == ["qa"]
 
 
 def test_the_oracle_rung_stamp_reaches_the_row(tmp_path):

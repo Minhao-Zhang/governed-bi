@@ -686,12 +686,14 @@ def test_a_resume_re_serves_a_crashed_turn(tmp_path):
     assert len(on_disk) == 6
     ids = [str(r["question_id"]) for r in on_disk]
     assert len(set(ids)) == 6, f"duplicate question_id after re-serve: {ids}"
-    # And the crash is gone from the summary, which is the point.
+    # Crash rate is cleared on the new rows — but the re-serve is durable so it
+    # cannot silently restore quotability (audit E1).
     assert summary["crash_rate"] == 0.0, "the re-served turn is still recorded as a crash"
+    assert summary["n_re_served"] == 1, "re-serve count must land in the arm summary"
 
 
 def test_replay_crashed_keeps_the_old_behaviour(tmp_path):
-    """The opt-out, for anyone who wants a byte-identical replay."""
+    """The honest opt-in: keep crashed rows, leave crash_rate visible, re-serve nothing."""
     items = _build_items(6)
     pairs = [(item, DBS[i % len(DBS)]) for i, item in enumerate(items)]
     gold = _gold_hashes(items)
@@ -709,6 +711,7 @@ def test_replay_crashed_keeps_the_old_behaviour(tmp_path):
     )
     assert second.served == [], "nothing should be re-served under --replay-crashed"
     assert summary["crash_rate"] > 0.0, "the crash must survive the replay"
+    assert summary["n_re_served"] == 0
 
 
 def test_a_resume_with_no_crashes_serves_nothing(tmp_path):
@@ -722,10 +725,13 @@ def test_a_resume_with_no_crashes_serves_nothing(tmp_path):
     _run_pool_arm(solver=_StubSolver(), gateway=_EchoGateway(), out_path=path,
                   **_pool_args(pairs, gold))
     second = _CountingSolver()
-    _run_pool_arm(solver=second, gateway=_EchoGateway(), out_path=path, resume=True,
-                  **_pool_args(pairs, gold))
+    _rows, summary = _run_pool_arm(
+        solver=second, gateway=_EchoGateway(), out_path=path, resume=True,
+        **_pool_args(pairs, gold),
+    )
     assert second.served == []
     assert len(_read_rows(path)) == 6
+    assert summary["n_re_served"] == 0
 
 
 # --------------------------------------------------------------------------- #

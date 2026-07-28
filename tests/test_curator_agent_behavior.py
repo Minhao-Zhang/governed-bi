@@ -195,8 +195,11 @@ def test_phase_a_agent_edit_broadens_same_id(bird_connector, tmp_path: Path):
     assert "grain" in records[0].question
 
 
-def test_phase_b_agent_ingests_with_certified_provenance(bird_connector, tmp_path: Path):
-    """Scripted Phase B: ingest agent annotates with certified=true (not deterministic)."""
+def test_phase_b_agent_ingests_without_forging_human_certification(
+    bird_connector, tmp_path: Path
+):
+    """Scripted Phase B: ingest agent annotates; certified/answered_by in the
+    tool call (if the model tries) must not produce human+certified audit (C6)."""
     gateway = Gateway(bird_connector)
     train = [
         EvalItem(
@@ -236,8 +239,6 @@ def test_phase_b_agent_ingests_with_certified_provenance(bird_connector, tmp_pat
                         {
                             "table": "customers",
                             "description": "Customers who bought root beer.",
-                            "certified": True,
-                            "answered_by": "sme",
                             "confidence": 0.9,
                         },
                         "b1",
@@ -274,8 +275,8 @@ def test_phase_b_agent_ingests_with_certified_provenance(bird_connector, tmp_pat
     customers = next(t for t in corpus.tables() if t.physical_name == "customers")
     assert customers.description == "Customers who bought root beer."
     assert customers.audit is not None
-    assert customers.audit.provenance.source is ProvenanceSource.human
-    assert customers.audit.provenance.status is ProvenanceStatus.certified
+    assert customers.audit.provenance.source is ProvenanceSource.curator
+    assert customers.audit.provenance.status is ProvenanceStatus.proposed
 
 
 def test_phase_b_empty_ledger_is_noop_not_failure(bird_connector, tmp_path: Path):
@@ -345,9 +346,12 @@ def test_phase_a_manifest_marks_missing_ledger(bird_connector, tmp_path: Path):
     assert "read" in manifest["tool_calls"]
 
 
-def test_sme_runs_as_deep_agent_with_probe(bird_connector):
+def test_sme_runs_as_deep_agent_with_probe(bird_connector, tmp_path: Path):
     """SimulatedSme with a live model + gateway is a read-only deep agent that can
     call run_probe_query, then answer — a real multi-turn ReAct loop, not single-shot."""
+    from dataclasses import replace
+
+    from governed_bi.config import Environment, Settings
     from governed_bi.curator.sme import SimulatedSme
 
     gateway = Gateway(bird_connector)
@@ -365,10 +369,28 @@ def test_sme_runs_as_deep_agent_with_probe(bird_connector):
         def __init__(self, model):
             self.model = model
 
-    sme = SimulatedSme(_ModelChat(scripted), "You are an SME for beer_factory.", gateway=gateway)
+    # Isolate audit writes — without settings=, SimulatedSme falls back to the
+    # real run_log_path and pollutes data/logs/runs.sqlite (AUDIT T6).
+    default_log = Path("data/logs/runs.sqlite")
+    before = default_log.stat().st_mtime_ns if default_log.exists() else None
+    settings = replace(
+        Settings.for_env(Environment.dev),
+        run_log_kind="sqlite",
+        run_log_path=str(tmp_path / "runs.sqlite"),
+    )
+    sme = SimulatedSme(
+        _ModelChat(scripted),
+        "You are an SME for beer_factory.",
+        gateway=gateway,
+        settings=settings,
+    )
     ans = sme.answer("What does the customers table represent?")
     assert "customer" in ans.lower()
     assert scripted.i >= 2, "expected a probe turn then an answer turn (real ReAct loop)"
+    if before is None:
+        assert not default_log.exists()
+    else:
+        assert default_log.stat().st_mtime_ns == before
 
 
 def test_last_message_text_strips_reasoning_parts():

@@ -10,6 +10,7 @@ offline.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -35,8 +36,16 @@ REVENUE_Q = "What is the total revenue?"
 # Answering a turn drives the agent core, which needs a live model; the hermetic
 # suite has none, so these are opt-in (set GOVERNED_BI_LIVE_SERVE + a real key and
 # disable the conftest strip to run them).
-requires_live_serve = pytest.mark.skip(
-    reason="agent-only serve needs a live model; covered by scripts/live_smoke.py"
+# `skipif`, not `skip`: an unconditional skip can never run in ANY environment
+# without editing this file, and these cover the primary user journey — answering a
+# question end to end (AUDIT T3). Set GOVERNED_BI_LIVE_TESTS=1 with OPENAI_API_KEY to
+# execute them against a live model.
+requires_live_serve = pytest.mark.skipif(
+    not (os.getenv("GOVERNED_BI_LIVE_TESTS") and os.getenv("OPENAI_API_KEY")),
+    reason=(
+        "agent-only serve needs a live model; set GOVERNED_BI_LIVE_TESTS=1 with "
+        "OPENAI_API_KEY to run (also covered by scripts/live_smoke.py)"
+    ),
 )
 
 
@@ -166,3 +175,50 @@ def test_prior_turns_are_replayed_as_working_memory(stack):
     )
     assert result["answer"]["tier"] == "governed"
     assert "AVG(StarRating)" in result["answer"]["sql"]
+
+
+# --------------------------------------------------------------------------- #
+# AUDIT T3: make_graph is the entry point langgraph.json deploys, and no test
+# referenced it — renaming it left a green suite and a broken deploy.
+# --------------------------------------------------------------------------- #
+
+
+def test_langgraph_json_points_at_a_real_factory():
+    """The deploy contract: the dotted path in langgraph.json must resolve."""
+    import importlib.util
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    cfg = json.loads((root / "langgraph.json").read_text(encoding="utf-8"))
+    target = cfg["graphs"]["serve"]
+    rel, _, attr = target.partition(":")
+
+    module_path = (root / rel).resolve()
+    assert module_path.is_file(), f"langgraph.json names a missing file: {rel}"
+
+    spec = importlib.util.spec_from_file_location("_lg_serve_probe", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    factory = getattr(module, attr, None)
+    assert callable(factory), f"{rel}:{attr} is not callable"
+
+    # An async factory, per the LangGraph runtime contract.
+    import inspect
+
+    assert inspect.iscoroutinefunction(factory)
+
+
+def test_make_graph_returns_the_cached_graph_without_touching_config():
+    """Exercises the cache branch without building a stack (no model, no corpus I/O)."""
+    import asyncio
+
+    from governed_bi.api import graph_app
+
+    sentinel = object()
+    original = graph_app._GRAPH
+    try:
+        graph_app._GRAPH = sentinel
+        assert asyncio.run(graph_app.make_graph()) is sentinel
+    finally:
+        graph_app._GRAPH = original

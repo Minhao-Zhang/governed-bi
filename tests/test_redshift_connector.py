@@ -216,6 +216,10 @@ def test_read_only_is_set_on_connection(fake_conn: FakeConnection) -> None:
         connection=fake_conn,
     )
     assert fake_conn.read_only is True
+    set_sqls = [
+        sql for sql, _ in fake_conn.queries if "default_transaction_read_only" in sql.lower()
+    ]
+    assert set_sqls == ["SET default_transaction_read_only = on"]
 
 
 def test_read_only_false_does_not_set_flag(fake_conn: FakeConnection) -> None:
@@ -226,6 +230,9 @@ def test_read_only_false_does_not_set_flag(fake_conn: FakeConnection) -> None:
         connection=fake_conn,
     )
     assert fake_conn.read_only is not True
+    assert not any(
+        "default_transaction_read_only" in sql.lower() for sql, _ in fake_conn.queries
+    )
 
 
 def test_row_count_smoke_through_subclass(redshift: RedshiftConnector, fake_conn: FakeConnection) -> None:

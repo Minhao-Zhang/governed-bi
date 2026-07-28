@@ -4,7 +4,8 @@ Execution accuracy answers one bit — did the rows match — and that bit is th
 only thing the grader can be trusted on. But a run of 2030 wrong answers with no
 further structure is what produced a report whose per-stage estimates were off by
 an order of magnitude: every failure landed in one undifferentiated
-"right schema, wrong SQL" bucket covering 45.8% of the benchmark.
+"right schema, wrong SQL" bucket covering 45.8% of the benchmark (RETIRED figure;
+see docs/measurement.md).
 
 This module splits that bucket. It parses both statements, resolves every column
 reference through its lexical scope, and reports a verdict *per dimension* —

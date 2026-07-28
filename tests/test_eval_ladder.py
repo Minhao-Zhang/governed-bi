@@ -153,14 +153,56 @@ def test_adversary_signal_writes_findings(bird_connector, tmp_path: Path):
     assert isinstance(findings, list)
 
 
-def test_sme_sanitizes_sql_in_answers():
+def test_adversary_signal_blocks_dangling_ref_before_write(bird_connector, tmp_path: Path):
+    """C5: injecting a dangling metric must raise and leave no corpus YAML."""
+    from governed_bi.corpus.schemas import (
+        Audit,
+        MetricAsset,
+        Provenance,
+        ProvenanceSource,
+        ProvenanceStatus,
+    )
+    from governed_bi.curator.adversary import StructuralGateError
+    from governed_bi.curator.pipeline import _run_adversary_signal
+
+    tables = profile_database(bird_connector, schema="beer_factory")
+    bag = AssetBag.from_tables("beer_factory", tables)
+    bag.metrics["metric_beer_factory_ghost"] = MetricAsset(
+        id="metric_beer_factory_ghost",
+        name="ghost",
+        base_table="tbl_beer_factory_does_not_exist",
+        expression="count(*)",
+        audit=Audit(
+            provenance=Provenance(
+                source=ProvenanceSource.curator, status=ProvenanceStatus.proposed
+            )
+        ),
+    )
+    out = tmp_path / "curated"
+    out.mkdir()
+    with pytest.raises(StructuralGateError):
+        _run_adversary_signal(bag, connector=bird_connector, out_root=out)
+    assert (out / "adversary_findings.jsonl").exists()
+    assert list(out.rglob("*.yaml")) == []
+
+
+def test_sme_sanitizes_sql_in_answers(tmp_path: Path):
+    from dataclasses import replace
+
+    from governed_bi.config import Environment, Settings
     from governed_bi.curator.sme import SimulatedSme, _sanitize_sme_answer
 
     assert "SELECT" not in _sanitize_sme_answer(
         "Looks reliable.\nSELECT * FROM decoy"
     ).upper()
     chat = StaticChatClient(responses="Mean student id.\n```sql\nSELECT 1\n```")
-    sme = SimulatedSme(chat, "brief")
+    # Isolate audit writes (AUDIT T6) — answer() emits a producer:sme run record.
+    settings = replace(
+        Settings.for_env(Environment.dev),
+        run_log_kind="sqlite",
+        run_log_path=str(tmp_path / "runs.sqlite"),
+    )
+    sme = SimulatedSme(chat, "brief", settings=settings)
     ans = sme.answer("What is student_id?")
     assert "SELECT" not in ans.upper()
     assert "student" in ans.lower() or "Unsure" in ans

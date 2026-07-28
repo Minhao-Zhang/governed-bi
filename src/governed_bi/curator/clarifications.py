@@ -115,6 +115,52 @@ def write_clarifications(path: Path | str, records: Sequence[ClarificationRecord
     return p
 
 
+def quarantine_agent_answers(
+    records: Sequence[ClarificationRecord],
+) -> tuple[list[ClarificationRecord], list[str]]:
+    """Reset any answer the *agent* pre-filled, and report which ids were reset.
+
+    The Phase A ledger is written by the deep agent through ordinary ``write_file`` /
+    ``edit_file`` tools, so every field in it — including ``status`` and
+    ``answered_by`` — is model-controlled. ``fill_clarifications_with_responder``
+    only fills records still ``open``, and
+    :meth:`AssetBag.apply_answered_clarifications` maps an answered record to
+    ``source=human, status=certified``. Together those meant an agent could write
+
+        {"id": "q001", ..., "status": "answered", "answered_by": "Jane Chen, Finance"}
+
+    and mint a certified human fact with no human in the loop (AUDIT C6). Removing
+    ``certified`` from the write-tool signatures closed the tool-argument path; this
+    closes the file path, which is the one the agent actually owns.
+
+    The prompt telling the agent to write ``"status": "open"`` is not a control. This
+    is: an answer that did not come from the ``Responder`` seam does not survive the
+    Phase A boundary, whatever the ledger says.
+    """
+    cleaned: list[ClarificationRecord] = []
+    reset: list[str] = []
+    for rec in records:
+        forged = (
+            rec.status is ClarificationRecordStatus.answered
+            or rec.answer is not None
+            or rec.answered_by is not None
+        )
+        if not forged:
+            cleaned.append(rec)
+            continue
+        reset.append(rec.id)
+        cleaned.append(
+            rec.model_copy(
+                update={
+                    "status": ClarificationRecordStatus.open,
+                    "answer": None,
+                    "answered_by": None,
+                }
+            )
+        )
+    return cleaned, reset
+
+
 def next_clarification_id(records: Sequence[ClarificationRecord]) -> str:
     """Allocate the next ``qNNN`` id."""
     max_n = 0

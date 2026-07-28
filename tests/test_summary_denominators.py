@@ -497,14 +497,14 @@ def test_the_summary_counts_tiers_and_assurance_levels():
     from governed_bi.eval.run_datalake import _summarise_rows
 
     rows = [
-        _gov_row("q1", tier="governed", assurance="grounded"),
-        _gov_row("q2", tier="governed", assurance="grounded"),
+        _gov_row("q1", tier="governed", assurance="unflagged"),
+        _gov_row("q2", tier="governed", assurance="unflagged"),
         _gov_row("q3", tier="fenced_raw", assurance="unverified"),
     ]
     s = _summarise_rows("curated", rows)
     assert s["by_tier"] == {"governed": 2, "fenced_raw": 1}
     assert s["by_semantic_assurance"] == {
-        "grounded": 2, "unverified": 1,
+        "unflagged": 2, "unverified": 1,
     }
     assert s["n_with_governance_stamp"] == 3
 
@@ -692,11 +692,11 @@ def test_an_enum_valued_assurance_does_not_split_across_two_keys():
 
     rows = [
         {"question_id": "q1", "db_id": "d", "arm": "x", "split": "test", "correct": True,
-         "generated_sql": "SELECT 1", "semantic_assurance": SemanticAssurance.grounded},
+         "generated_sql": "SELECT 1", "semantic_assurance": SemanticAssurance.unflagged},
         {"question_id": "q2", "db_id": "d", "arm": "x", "split": "test", "correct": True,
-         "generated_sql": "SELECT 1", "semantic_assurance": "grounded"},
+         "generated_sql": "SELECT 1", "semantic_assurance": "unflagged"},
     ]
-    assert _summarise_rows("x", rows)["by_semantic_assurance"] == {"grounded": 2}
+    assert _summarise_rows("x", rows)["by_semantic_assurance"] == {"unflagged": 2}
 
 
 def test_the_two_delivery_rates_are_currently_complements():

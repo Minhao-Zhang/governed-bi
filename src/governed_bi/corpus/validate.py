@@ -11,6 +11,10 @@ module checks everything verifiable *from the corpus alone*:
 - Join ``on``-clause columns: parsed with ``sqlglot`` and confirmed to belong to
   one of the join's two tables (corpus-only; catches typo'd/hallucinated columns
   that would otherwise mis-join at serve time).
+- Metric ``expression`` parseability: ``sqlglot`` parse of the expression fragment
+  (dialect from ``settings.datasource.kind`` when available, else postgres).
+  Offline-safe — no connector. Does **not** execute the metric or type-check
+  columns against a live catalog.
 
 Enum validity is enforced upstream at parse time (``schemas.parse_asset``), so
 by the time assets reach here their enum fields are already valid.
@@ -97,8 +101,11 @@ def validate_corpus(
 
     ``connector`` and ``train_refs`` are optional; when omitted the corresponding
     checks (physical existence, leakage guard) are skipped rather than failing.
+    Metric expression parse always runs (offline; dialect from ``settings`` when
+    given, else postgres).
     """
     findings: list[Finding] = []
+    dialect = _sql_dialect(settings)
 
     # -- ID regex + duplicate detection ------------------------------------- #
     seen: set[str] = set()
@@ -267,11 +274,31 @@ def validate_corpus(
     # joined tables.
     _check_join_on_columns(assets, findings)
 
+    # -- Metric expressions parse as SQL fragments (corpus-only; offline) ---- #
+    # Correctness against live data is out of scope for CI; this only rejects
+    # expressions sqlglot cannot parse under the datasource dialect.
+    _check_metric_expressions(assets, findings, dialect=dialect)
+
     # -- Physical existence (optional; needs a live catalog) ---------------- #
+    # Hook: pass ``connector`` (e.g. from the CLI once a catalog dial is wired)
+    # to verify physical_name / columns against the live catalog. Skipped when
+    # omitted so offline CI stays green without a DB.
     if connector is not None:
         _check_physical_existence(assets, connector, findings)
 
     return findings
+
+
+def _sql_dialect(settings: "Settings | None") -> str:
+    """sqlglot dialect for corpus-only SQL fragment checks.
+
+    Prefer the configured datasource kind (``sqlite`` / ``postgres`` /
+    ``redshift``); default to postgres when settings are absent (offline CLI /
+    unit tests with no config loaded).
+    """
+    if settings is not None and settings.datasource.kind:
+        return settings.datasource.kind.lower()
+    return "postgres"
 
 
 def _excluded_identifier_tokens(assets: list[Asset]) -> set[str]:
@@ -336,6 +363,42 @@ def _check_join_on_columns(assets: list[Asset], findings: list[Finding]) -> None
                         f"{left.physical_name!r} or {right.physical_name!r}",
                     )
                 )
+
+
+def _check_metric_expressions(
+    assets: list[Asset], findings: list[Finding], *, dialect: str
+) -> None:
+    """Reject metric expressions that sqlglot cannot parse (offline, no connector).
+
+    Does not execute against a live DB, resolve columns, or type-check — only
+    catches unparseable fragments before they become authoritative prompt guidance.
+    """
+    import sqlglot
+
+    for a in assets:
+        if not isinstance(a, MetricAsset):
+            continue
+        expr = (a.expression or "").strip()
+        if not expr:
+            findings.append(
+                Finding(
+                    "metric-expression-unparseable",
+                    a.id,
+                    "metric.expression is empty",
+                )
+            )
+            continue
+        try:
+            sqlglot.parse_one(expr, read=dialect)
+        except Exception as err:
+            first = str(err).splitlines()[0] if str(err) else type(err).__name__
+            findings.append(
+                Finding(
+                    "metric-expression-unparseable",
+                    a.id,
+                    f"metric.expression is not parseable SQL ({dialect}): {expr!r} ({first})",
+                )
+            )
 
 
 def _check_physical_existence(

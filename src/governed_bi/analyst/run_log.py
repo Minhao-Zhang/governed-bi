@@ -18,13 +18,15 @@ import os
 import sqlite3
 import threading
 import time
+from contextlib import closing
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
 from ..config import Environment, Settings, _repo_root
-from ..prompts import prompt_set_hash, resolve as resolve_prompt_variants
+from ..prompts import prompt_set_hash
+from ..prompts import resolve as resolve_prompt_variants
 from ..provenance import (
     DataSplit,
     Producer,
@@ -483,15 +485,30 @@ def build_metadata_record(answer: Any, *, ctx: FinalizeCtx, provenance: dict) ->
     return rec
 
 
-def append_run_record(record: Mapping[str, Any], settings: Settings) -> None:
-    """At-least-once idempotent append keyed by ``turn_id``. Never raises."""
+# Append counts per resolved path — first write always prunes; then every N.
+_APPENDS_SINCE_PRUNE: dict[str, int] = {}
+_PRUNE_EVERY_N_APPENDS = 64
+
+
+def append_run_record(record: Mapping[str, Any], settings: Settings) -> str | None:
+    """At-least-once idempotent append keyed by ``turn_id``. Never raises.
+
+    Returns ``None`` on success, or a short description of why the record was not
+    written. Callers thread that into the answer's provenance
+    (``run_log_write_error``) so a missing audit row is stated on the answer itself.
+    The docs claim you cannot execute without a record; before this the failure went
+    to ``logger.exception`` and there is no ``logging.basicConfig`` anywhere in
+    ``src/``, so the default configuration dropped it and the answer shipped looking
+    fully audited (AUDIT R4). Still non-fatal by design — refusing to answer because
+    a log write failed would trade a silent gap for an outage — but no longer silent.
+    """
     kind = (settings.run_log_kind or "sqlite").lower()
     if kind == "off":
-        return
+        return None
     turn = record.get("turn_id")
     if not turn:
         logger.warning("run_log skip: missing turn_id")
-        return
+        return "missing turn_id"
     try:
         path = _resolve_path(settings.run_log_path)
         if kind == "jsonl":
@@ -499,8 +516,25 @@ def append_run_record(record: Mapping[str, Any], settings: Settings) -> None:
         else:
             _upsert_sqlite(path, str(turn), dict(record))
         _secure_store_perms(path)
-    except Exception:
+        # ADR 0004 H11: Tier B/C 30-day TTL — retention on the write path.
+        _maybe_prune_full_content(settings, path)
+    except Exception as err:
         logger.exception("run_log append failed (non-fatal)")
+        return f"{type(err).__name__}: {err}"
+    return None
+
+
+def _maybe_prune_full_content(settings: Settings, path: Path) -> None:
+    """Best-effort prune: first append to a path, then every N appends."""
+    key = str(path)
+    n = _APPENDS_SINCE_PRUNE.get(key, 0) + 1
+    _APPENDS_SINCE_PRUNE[key] = n
+    if n != 1 and n % _PRUNE_EVERY_N_APPENDS != 0:
+        return
+    try:
+        prune_full_content(settings)
+    except Exception:
+        logger.exception("run_log prune_full_content failed (non-fatal)")
 
 
 def _upsert_sqlite(path: Path, turn: str, record: dict) -> None:
@@ -508,7 +542,7 @@ def _upsert_sqlite(path: Path, turn: str, record: dict) -> None:
     _secure_store_perms(path, file_must_exist=False)
     payload = json.dumps(record, sort_keys=True, default=str)
     ts = record.get("logged_at") or datetime.now(timezone.utc).isoformat()
-    with sqlite3.connect(str(path)) as conn:
+    with closing(sqlite3.connect(str(path))) as conn, conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS run_log (
@@ -600,7 +634,7 @@ def _prune_sqlite(path: Path, cutoff: datetime) -> int:
     if not path.is_file():
         return 0
     pruned = 0
-    with sqlite3.connect(str(path)) as conn:
+    with closing(sqlite3.connect(str(path))) as conn, conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS run_log (
@@ -698,7 +732,7 @@ def load_run_record(turn: str, settings: Settings) -> dict | None:
         return None
     if not path.is_file():
         return None
-    with sqlite3.connect(str(path)) as conn:
+    with closing(sqlite3.connect(str(path))) as conn, conn:
         row = conn.execute(
             "SELECT payload FROM run_log WHERE turn_id = ?", (turn,)
         ).fetchone()
@@ -719,7 +753,7 @@ def count_run_records(settings: Settings) -> int:
         return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
     if not path.is_file():
         return 0
-    with sqlite3.connect(str(path)) as conn:
+    with closing(sqlite3.connect(str(path))) as conn, conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS run_log (
@@ -950,7 +984,12 @@ def finalize_and_log(answer: Any, *, ctx: FinalizeCtx) -> Any:
 
     stamped = replace(answer, provenance=base)
     if ctx.append:
-        append_run_record(build_metadata_record(stamped, ctx=ctx, provenance=base), settings)
+        err = append_run_record(build_metadata_record(stamped, ctx=ctx, provenance=base), settings)
+        if err is not None:
+            # The answer says so itself: "audited" is a claim about this turn, and a
+            # turn whose record did not land must not be able to make it (AUDIT R4).
+            base["run_log_write_error"] = err
+            stamped = replace(answer, provenance=base)
     return stamped
 
 
@@ -986,7 +1025,10 @@ def amend_run_tokens(
         question=prov.get("question"),
     )
     # Force the already-known turn_id by keeping provenance keys.
-    append_run_record(build_metadata_record(stamped, ctx=ctx, provenance=prov), settings)
+    err = append_run_record(build_metadata_record(stamped, ctx=ctx, provenance=prov), settings)
+    if err is not None:
+        prov["run_log_write_error"] = err
+        stamped = replace(answer, provenance=prov)
     return stamped
 
 

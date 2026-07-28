@@ -10,7 +10,13 @@ Steiner-tree join planning; Neo4j is the optional enterprise-scale projection.
 
 from __future__ import annotations
 
-from .planner import JoinPlan, MissingJoinPath, detect_missing_join_path, join_neighborhood, plan_joins
+from .planner import (
+    JoinPlan,
+    MissingJoinPath,
+    detect_missing_join_path,
+    join_neighborhood,
+    plan_joins,
+)
 from .projection import (
     EDGE_BINDS_TO,
     EDGE_DERIVED_FROM,

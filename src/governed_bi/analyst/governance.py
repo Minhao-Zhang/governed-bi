@@ -12,7 +12,8 @@ import re
 import time
 from contextlib import contextmanager, nullcontext
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Mapping
 
 import sqlglot
 from sqlglot import exp
@@ -62,6 +63,12 @@ _ESCALATION_GUARDRAIL = (
 _ESCALATION_MISSING_EDGE = (
     "No curated relationship connects the schemas needed for this question. "
     "Contact the data owner to declare a cross-schema join."
+)
+# Infrastructure / model crashes — NOT a coverage gap. Must not tell the user to
+# file a curation ticket (AUDIT R2).
+_ESCALATION_MODEL_ERROR = (
+    "A temporary system error prevented answering this question. "
+    "Please try again."
 )
 
 # Refuse-gate tuning: how much a question must overlap a curated example to count
@@ -595,6 +602,38 @@ class GovEventStream:
 
 
 
+def _out_of_band_ledger_entry(
+    sql: str, result: "QueryResult | None", *, path: str, t0: float, error: str | None = None
+) -> dict:
+    """A ledger entry for an execution that did not go through ``wrap_tool_call``.
+
+    Two paths execute outside the middleware: a semantic-cache hit and graded
+    delivery. Both re-run ``check()`` first, so they are governed — but they built no
+    ledger entry, so their answers carried no ``governance_ledger`` and the audit
+    trail showed a query that never happened (AUDIT R4). ``path`` names which one, so
+    an out-of-band execution is identifiable in the record rather than indistinguishable
+    from a tool call.
+    """
+    entry: dict[str, Any] = {
+        "action": "run_query",
+        "verdict": "error" if error is not None else "pass",
+        "sql": sql,
+        "path": path,
+        "duration_ms": int((time.perf_counter() - t0) * 1000),
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    if error is not None:
+        entry["reason"] = error
+    if result is not None:
+        entry["result"] = {
+            "columns": list(result.columns),
+            "rows": [list(r) for r in result.rows],
+            "row_count": result.row_count,
+            "truncated": result.truncated,
+        }
+    return entry
+
+
 def _try_cache_hit(
     cache, question, gateway, identity, settings, allowlist, dialect, graph, base_provenance,
     *,
@@ -628,12 +667,14 @@ def _try_cache_hit(
         detail["passed"] = verdict.passed
     if not verdict.passed:
         return None
+    t0 = time.perf_counter()
     try:
         with _stage(stages, Stage.execute, path="cache") as detail:
             result = gateway.execute(entry.sql, identity)
             detail["rows"] = result.row_count
     except Exception:
         return None
+    cache_ledger = [_out_of_band_ledger_entry(entry.sql, result, path="cache", t0=t0)]
     try:
         stamp_plan = plan_joins(graph, set(entry.tables_used))
         join_ids, min_confidence = stamp_plan.join_ids, stamp_plan.min_confidence
@@ -642,6 +683,7 @@ def _try_cache_hit(
     signals = UncertaintySignals(
         low_confidence_join=min_confidence < LOW_CONFIDENCE_JOIN,
         suspect_in_scope=_suspect_in_scope(entry.sql, allowlist.suspect, dialect),
+        weak_retrieval=_weak_retrieval(base_provenance),
     )
     provenance = {
         **base_provenance,
@@ -652,6 +694,7 @@ def _try_cache_hit(
         "row_count": result.row_count,
         "truncated": result.truncated,
         "cache_hit": True,
+        "governance_ledger": cache_ledger,
     }
     table = _result_table(result)
     text = _answer_text(question, entry.sql, result, table, narrator)
@@ -725,10 +768,20 @@ def _finish_unsuccessful(
     # §6: deliver the last generated SQL with unverified assurance. Try to
     # execute for a complete answer; if execute fails, still return the SQL so
     # eval can grade it (and the UI can show an unverified payload).
+    t0 = time.perf_counter()
     try:
         with _stage(stages, Stage.execute, path="graded_delivery") as detail:
             result = gateway.execute(sql, identity)
             detail["rows"] = result.row_count
+        # Graded delivery executes outside wrap_tool_call, so it has to record its
+        # own entry or the answer carries no evidence of the query (AUDIT R4).
+        provenance = {
+            **provenance,
+            "governance_ledger": [
+                *(provenance.get("governance_ledger") or []),
+                _out_of_band_ledger_entry(sql, result, path="graded_delivery", t0=t0),
+            ],
+        }
         table = _result_table(result)
         # Deliver the REAL answer (narrated from the executed result), clearly
         # marked unverified. A curated SEMANTIC layer (L4/L5) failed, but reaching
@@ -744,7 +797,16 @@ def _finish_unsuccessful(
             text=text,
         )
     except Exception as err:
-        provenance = {**provenance, "graded_delivery_execute_error": str(err)}
+        provenance = {
+            **provenance,
+            "graded_delivery_execute_error": str(err),
+            "governance_ledger": [
+                *(provenance.get("governance_ledger") or []),
+                _out_of_band_ledger_entry(
+                    sql, None, path="graded_delivery", t0=t0, error=f"{type(err).__name__}: {err}"
+                ),
+            ],
+        }
         return graded_delivery(
             sql=sql,
             provenance=provenance,
@@ -754,6 +816,27 @@ def _finish_unsuccessful(
                 f"({refused_by}/{failed_layer or 'n/a'}); execution failed."
             ),
         )
+
+
+def _weak_retrieval(base_provenance: Mapping[str, Any] | dict) -> bool:
+    """True when no retrieved table matched the question lexically.
+
+    ``retrieval_lexical_coverage`` is the fraction of the question's content terms
+    the corpus knows at all. Zero means the question is about something absent from
+    the corpus — "how many employees do we have?" against a corpus with no employee
+    table still returns ``top_k`` tables, because the budget cut has no minimum and
+    the embedding channel scores everything above zero (AUDIT C2). Absent key ->
+    False: a path that never retrieved (a cache hit on a pre-existing entry) has no
+    evidence either way, and inventing a flag there would make the stamp less
+    honest, not more.
+    """
+    best = base_provenance.get("retrieval_lexical_coverage")
+    if best is None:
+        return False
+    try:
+        return float(best) <= 0.0
+    except (TypeError, ValueError):
+        return False
 
 
 def _finalize_success(
@@ -781,6 +864,7 @@ def _finalize_success(
         suspect_in_scope=_suspect_in_scope(generated.sql, allowlist.suspect, dialect),
         fenced_raw_fallback=coverage_best_effort,
         repaired=attempts > 1 or coverage_best_effort,
+        weak_retrieval=_weak_retrieval(base_provenance),
     )
     provenance = {
         **base_provenance,
@@ -800,10 +884,10 @@ def _finalize_success(
     answer = assemble(
         text=text, sql=generated.sql, signals=signals, provenance=provenance, result=table
     )
-    # Cache admission gates on the *semantic* axis, never on safety alone: only a
-    # ``grounded`` answer (clean run, no uncertainty flag) is written back, so a
+    # Cache admission gates on the *semantic* axis, never on safety alone: only an
+    # ``unflagged`` answer (clean run, no uncertainty flag) is written back, so a
     # later hit is always high-assurance. Cache SQL text only, never results (D7).
-    if cache is not None and answer.semantic_assurance is SemanticAssurance.grounded:
+    if cache is not None and answer.semantic_assurance is SemanticAssurance.unflagged:
         cache.put(
             question,
             generated.sql,

@@ -56,12 +56,16 @@ dev = [
     # scratch dir, several tests monkeypatch module globals) and nothing checked it —
     # it was only ever verified by a reviewer pulling the plugin in ad hoc.
     "pytest-randomly>=3.15",
+    # Optional local/CI coverage runs (`uv run pytest --cov=governed_bi`); not gated.
+    "pytest-cov>=5.0",
     # Starlette's TestClient (used by the API tests) needs httpx.
     "httpx>=0.27",
     # LangChain's DeterministicFakeEmbedding (used by the LangChainEmbedder tests)
     # imports numpy; it is not a hard langchain-core dependency, so pin it here for
     # the test environment (previously satisfied transitively via streamlit).
     "numpy>=1.26",
+    "ruff>=0.16.0",
+    "mypy>=2.3.0",
 ]
 
 [build-system]
@@ -70,3 +74,43 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/governed_bi"]
+
+# --- Tooling (AUDIT T5) -------------------------------------------------------
+# Config lands here so local runs and CI share one source of truth. `ruff check` is
+# green on the whole tree and CI gates it. `mypy` is installed and configured but
+# gated only over the governance-critical modules (see [tool.mypy] below) — a clean
+# pass over all ~32k LOC is a separate effort, and a gate nobody can keep green is
+# worse than an honest narrow one. Coverage is available via pytest-cov, not gated.
+
+[tool.pytest.ini_options]
+# --strict-markers: a typo'd mark (e.g. skipiff) fails loudly instead of no-op.
+# -ra is opt-in on CLI (CI already uses -rs); keep addopts focused on correctness.
+addopts = ["--strict-markers"]
+filterwarnings = [
+    # The suite's 131 `ResourceWarning: unclosed database` (AUDIT T5) were all one
+    # bug: `with sqlite3.connect(...)` commits but does not close. Fixed at the four
+    # run_log.py sites; now an error so the trap cannot come back silently.
+    "error::ResourceWarning",
+]
+
+[tool.ruff]
+target-version = "py313"
+# 120, not 100: the tree was written without a formatter and its longest line is 119.
+# Picking the limit the code already respects makes the gate enforceable today rather
+# than aspirational. Tighten with a formatting pass, not by leaving the gate off.
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# Starter select only — expand alongside the cleanup, never ahead of it.
+select = ["E", "F", "I"]
+
+[tool.mypy]
+python_version = "3.13"
+# `uv run mypy src` checks the whole tree (~89 findings, mostly Optional narrowing) —
+# useful locally. CI gates the governance spine only; the file list lives in
+# .github/workflows/ci.yml so widening it is a visible, reviewable change.
+packages = ["governed_bi"]
+warn_return_any = false
+warn_unused_configs = true
+ignore_missing_imports = true

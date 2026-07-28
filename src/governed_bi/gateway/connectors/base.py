@@ -22,6 +22,38 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+import sqlglot
+from sqlglot import exp
+from sqlglot.errors import SqlglotError
+
+
+def _force_row_limit(sql: str, max_rows: int, *, dialect: str = "postgres") -> str:
+    """Best-effort: append ``LIMIT max_rows`` to a single SELECT/UNION with none.
+
+    Lives here, not in one connector, because ``gateway/__init__.py`` documents a
+    forced row cap for the gateway as a whole — and SQLite was the one path that did
+    not apply it (AUDIT S7).
+
+    Uses sqlglot to attach a root-level LIMIT (works for WITH/CTE and UNION).
+    Leaves SQL unchanged when parsing fails, the statement is not a Select/Union,
+    or a root LIMIT already exists — no subquery wrap, so CTEs stay intact.
+    Callers that need truncation detection should pass ``max_rows + 1``.
+    """
+    if max_rows < 0:
+        raise ValueError(f"max_rows must be non-negative, got {max_rows!r}")
+    try:
+        statements = [s for s in sqlglot.parse(sql, read=dialect) if s is not None]
+    except SqlglotError:
+        return sql
+    if len(statements) != 1:
+        return sql
+    parsed = statements[0]
+    if not isinstance(parsed, (exp.Select, exp.Union)):
+        return sql
+    if parsed.args.get("limit") is not None:
+        return sql
+    return parsed.limit(max_rows).sql(dialect=dialect)
+
 
 class Dialect(str, Enum):
     """Names match sqlglot dialects, so a connector's dialect drives parsing."""

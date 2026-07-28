@@ -47,13 +47,13 @@ NEXT_PUBLIC_ASSISTANT_ID=serve                    # graph name in langgraph.json
 
 From the engine repo:
 ```bash
-uv sync --extra agents --extra api                # agents = LangGraph/LangChain; api = custom routes
-uv run --extra agents --extra api langgraph dev   # LangGraph Server at :2024 (chat + custom routes)
+uv sync                                           # everything: LangGraph/LangChain + FastAPI routes
+uv run langgraph dev                              # LangGraph Server at :2024 (chat + custom routes)
 ```
 - Live model (NL answers + free-form SQL): set `OPENAI_API_KEY` (env or repo `.env`).
 - Tracing (optional; see `.env.example`):
   - LangSmith: `LANGSMITH_API_KEY` + `LANGSMITH_TRACING=true` (or legacy `LANGCHAIN_TRACING_V2=true`)
-  - Langfuse: `uv sync --extra tracing`, then `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`
+  - Langfuse: no extra needed (`langfuse` is a core dependency); set `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`
 - CORS: set `[serve].cors_origins` in `governed_bi.toml` (default includes `http://localhost:3000`).
 - **Local threads are ephemeral** under `langgraph dev` (durable persistence is the
   deployed Postgres). `/capabilities` reports `has_live_model`, `can_stream`,
@@ -84,15 +84,16 @@ stream.submit(
   `onCustomEvent(data, { mutate })` option (the run must include `custom` in
   `streamMode`). The current shape is `{seq, kind: "rail"|"tool"|"final", step,
   status, id?, detail, serve_path?}` from `GovEventStream` — a **dynamic rail +
-  agent tool-loop** (`search_corpus` / `inspect_schema` / `sample_rows` /
-  `run_query`), **not** a fixed 6-stage list. See
+  agent tool-loop** — all seven governed tools: `search_corpus`, `inspect_schema`,
+  `sample_rows`, `run_query`, `read_notes`, `grep_notes`, and `ask_user` (serve-only,
+  needs a checkpointer) — **not** a fixed 6-stage list. See
   **[agent-step-visualization.md](plans/agent-step-visualization.md)** for the
   authoritative event contract and the `buildStepsFromLedger` mapping. This
   reflects real backend progress, not a timer.
 - **Final answer** is a custom **`answer` state channel**: read `stream.values.answer`
   (the `AnswerResponse` shape). Render the **answer card**:
   - Two badges, never one score: `safety_clearance` (bool) + `semantic_assurance`
-    (`grounded|heuristic|unverified|none`); tier chip green/amber/red.
+    (`unflagged|heuristic|unverified|none`); tier chip green/amber/red.
   - English answer text; collapsible **result table** (`columns`/`rows`,
     truncated note); read-only **SQL**; **provenance/audit drawer** (route,
     tables_used, join_ids, min_join_confidence, attempts, uncertainty_flags, …).
@@ -297,13 +298,14 @@ Two independent axes (both already on `AnswerResponse`):
   failed a safety gate (**L2 policy**: DDL/DML/injection, or the curated
   **negative-example** refuse-gate). A safety failure is **never delivered** at any
   reliability score. There is no "lower the number and run it anyway" for safety.
-- **`semantic_assurance: grounded | heuristic | unverified | none` — graded.**
+- **`semantic_assurance: unflagged | heuristic | unverified | none` — graded.**
   This is the reliability indicator to color on. Driven by
   `provenance.uncertainty_flags` (fired signals): `low_confidence_join`
   (join-plan confidence < 0.7), `suspect_in_scope` (a curator-flagged decoy/suspect
   column was used), `repaired` (took >1 generate attempt), `fenced_raw_fallback`.
-  No flags → `grounded`; `fenced_raw_fallback` → `unverified`; any other flag →
-  `heuristic`.
+  (`corrective_rag` is reserved on the wire but unused.) No flags → `unflagged`;
+  `fenced_raw_fallback` → `unverified`; any other flag → `heuristic`. `unflagged`
+  means no flag fired — **not** verified-correct.
 
 `tier` (`governed | lineage | fenced_raw | refused`) is a legacy, **display-only
 1:1 projection** of `semantic_assurance` — keep rendering it as a chip, but branch
@@ -313,7 +315,7 @@ logic on the two axes above, not on `tier`.
 
 | State | How to detect | Render |
 |---|---|---|
-| **Clean answer** | `sql != null` and `semantic_assurance ∈ {grounded, heuristic}` | Normal answer card; green/neutral tier chip. `heuristic` = mild caution note. |
+| **Clean answer** | `sql != null` and `semantic_assurance ∈ {unflagged, heuristic}` | Normal answer card; green/neutral tier chip. `heuristic` = mild caution note. |
 | **Graded delivery** | `sql != null` and (`semantic_assurance ∈ {unverified, none}` **or** `provenance.graded_delivery === true`) | **Show the SQL + result table**, wrapped in a distinct **warning treatment** (amber/red border + banner): *"We produced this answer but could not fully verify it."* Plus the **why line** (§13.4). This is the new state most UIs get wrong by hiding it. |
 | **Hard refusal** | `sql == null` (always `tier=refused`, `safety_clearance=false`, `result=null`) | Current refusal box: escalation text, no SQL/number. |
 
@@ -325,10 +327,14 @@ use `tier === "refused"` as the gate — a graded delivery is `tier = fenced_raw
 
 ### 13.3 What's live vs. what the backend still owes you
 
-- **Live in the contract today:** both axes; `provenance.graded_delivery` marker;
-  `provenance.uncertainty_flags`; the `graded_delivery` **stream event**; and the
-  whole deliver-and-grade code path (`analyst/answer.py::graded_delivery`,
-  `_finish_unsuccessful`). You can build 13.1–13.4 against the current shapes now.
+- **Live in the contract today:** both axes; the `provenance.graded_delivery`
+  marker; `provenance.uncertainty_flags`; and the whole deliver-and-grade code path
+  (`analyst/answer.py::graded_delivery`, `_finish_unsuccessful`). You can build
+  13.1–13.4 against the current shapes now.
+- **Not live, though this section used to list it:** there is **no
+  `graded_delivery` stream event**. `Stage.execute` carries `path="graded_delivery"`
+  in its stage detail, and the `final` event carries the stamp and provenance — that
+  is the whole signal. Branch on `provenance.graded_delivery`, not on an event.
 - **Inert until a flag flips:** deliver-and-grade is behind the engine setting
   **`grade_semantic_failures`**, which **defaults `false` in serving** (it's on only
   in the eval harness). Until the backend turns it on for serve, every semantic
@@ -336,8 +342,13 @@ use `tier === "refused"` as the gate — a graded delivery is `tier = fenced_raw
   branch is correct but simply won't fire yet. **Rollout coupling: the §13.2 UI must
   land before/with that flag flip**, or users will suddenly get `fenced_raw` answers
   with only a faint badge to warn them.
-- **Refused_by reasons** (in `provenance.refused_by`): `refuse_gate`, `no_coverage`,
-  `guardrail`, `execution`, `missing_edge`. When `grade_semantic_failures` is on,
+- **Refused_by reasons** (in `provenance.refused_by`), all nine live values:
+  `refuse_gate`, `no_coverage`, `guardrail`, `execution`, `missing_edge`,
+  `clarification_declined` (the user declined an `ask_user` question), `exhausted`
+  (step budget spent), `model_error` (a caught exception — a system fault, not a
+  governance decision), `no_model` (no live model configured). The first five were
+  the whole documented list while all nine were reachable. When
+  `grade_semantic_failures` is on,
   only `refuse_gate` and the **policy_blacklist** guardrail stay hard refusals; the
   rest (`no_coverage`, repairable `guardrail`, `execution`, `missing_edge`) become
   graded deliveries. **`missing_edge` reclassified:** it is no longer a hard refusal
@@ -352,6 +363,8 @@ drawer). Map `provenance.uncertainty_flags` → text:
 - `suspect_in_scope` → "Used a column that may be unreliable (flagged during curation)."
 - `repaired` → "Needed multiple attempts to produce valid SQL."
 - `fenced_raw_fallback` → "Fell back to a raw query without the governed layer."
+- `weak_retrieval` → "The corpus may not cover what you asked about."
+- `corrective_rag` → reserved; no serve path sets it, so it never appears today.
 
 `min_join_confidence` and `attempts` are already in `provenance` (and already render
 in the drawer). If `suspect_columns` is added to `provenance` (see 13.6) name the
@@ -377,11 +390,16 @@ free once present (provenance is an open `Record`; add to the drawer's
 Design target (§5.1): retrieval shortlists ~3 schemas → an **LLM node picks one** →
 downstream uses only that schema; the UI shows which schema answered.
 
-- **Not built yet.** The engine today does a deterministic **BM25 shortlist +
-  curated-join expansion into a set** (`schema_router.route_schemas`), exposed as
-  `provenance.routed_schemas` (an unordered set) and a `schema_route` stream event.
-  There is **no single "selected" schema, no candidate ranking/scores, and no LLM
-  pick**.
+- **Built.** This section said "not built yet" for all three pieces; all three
+  shipped. `shortlist_schemas` ranks candidates (embedding-first, BM25 fallback),
+  `pick_schema` is the LLM pick behind `schema_route_llm_pick`, and the chosen schema
+  reaches `provenance` alongside `routed_schemas`. `provenance.schema_route_channel`
+  names which ranking channel ran (`embedding` / `bm25_fallback` / `none`) — worth
+  surfacing in the drawer, because a silent fallback roughly halves routing recall.
+- **No `schema_route` stream event exists.** The rail emits `route` / `refuse_gate` /
+  `cache` / `assemble`; routing detail rides on the `assemble` step's `detail`. A
+  `graded_delivery` stream event does not exist either — graded delivery is visible on
+  the `final` event's stamp and provenance. Both were promised here as live events.
 - **UI now (interim):** you may show `provenance.routed_schemas` as "schemas
   considered", and add a **"Selecting schema"** step to the stage stepper (one
   `STAGE_ALIASES` entry mapping the existing `schema_route` event — no component

@@ -7,12 +7,12 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
+from governed_bi.analyst.agent import build_agent_core
+from governed_bi.analyst.middleware import GovernanceHardStop
 from governed_bi.config import Environment, Settings
 from governed_bi.corpus import load_corpus
 from governed_bi.gateway import Gateway, Identity, SqliteConnector
 from governed_bi.llm.fake import FakeToolModel, ai_tool_turn
-from governed_bi.analyst.agent import build_agent_core
-from governed_bi.analyst.middleware import GovernanceHardStop
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 BIRD_DB = Path(__file__).resolve().parents[1] / "data" / "bird" / "beer_factory.sqlite"
@@ -120,3 +120,24 @@ def test_middleware_attempt_cap(corpus, bird_gateway, settings, identity):
     run_entries = [e for e in final["ledger"] if e.get("action") == "run_query"]
     assert any(e.get("verdict") == "cap" for e in run_entries)
     assert sum(1 for e in run_entries if e.get("verdict") == "block") == 3
+
+
+# --------------------------------------------------------------------------- #
+# AUDIT R8: hitting the cap returned a ToolMessage and let the loop continue,
+# so the agent kept burning model round-trips against a cap it could not clear.
+# --------------------------------------------------------------------------- #
+
+
+def test_the_attempt_cap_ends_the_turn_instead_of_looping():
+    """The cap entry must carry `goto="__end__"`, not merely a refusal message."""
+    import inspect
+
+    from governed_bi.analyst import middleware as mw
+
+    src = inspect.getsource(mw.GovernanceMiddleware.wrap_tool_call)
+    cap_branch = src[src.index("if prior >= RUN_QUERY_CAP:") :]
+    cap_branch = cap_branch[: cap_branch.index("action = ")] if "action = " in cap_branch else cap_branch
+    assert 'goto="__end__"' in cap_branch, (
+        "the cap no longer stops the loop; the agent will keep calling the model "
+        "until the recursion limit, with no wall-clock or token bound on the turn"
+    )

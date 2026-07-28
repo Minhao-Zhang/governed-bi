@@ -22,6 +22,7 @@ from governed_bi.corpus.schemas import (
     ProvenanceStatus,
     TableAsset,
 )
+from governed_bi.corpus.validate import Finding
 from governed_bi.curator import (
     CurationResult,
     HeuristicProposer,
@@ -333,6 +334,116 @@ def test_review_flags_missing_provenance():
     assert any(f.code == "missing-provenance" for f in findings)
 
 
+def test_soft_findings_do_not_gate_hard_findings_do():
+    from governed_bi.curator.adversary import (
+        StructuralGateError,
+        gate_hard_findings,
+        hard_findings,
+    )
+
+    soft_only = [
+        Finding("missing-provenance", "tbl_x", "no audit"),
+        Finding("fk-missing-ref", "tbl_x", "fk without ref"),
+    ]
+    assert hard_findings(soft_only) == []
+    gate_hard_findings(soft_only)  # must not raise
+
+    dangling = Finding(
+        "dangling-ref",
+        "metric_demo_ghost",
+        "metric.base_table -> 'tbl_nope' does not resolve",
+    )
+    assert hard_findings([*soft_only, dangling]) == [dangling]
+    with pytest.raises(StructuralGateError) as err:
+        gate_hard_findings([*soft_only, dangling])
+    assert err.value.findings == [dangling]
+
+
+def test_adversary_signal_fails_closed_on_dangling_ref(tmp_path: Path):
+    """C5: a bag with a dangling reference must not be writable — gate raises
+    after recording findings, before any caller can ``bag.write``."""
+    from governed_bi.corpus.schemas import MetricAsset
+    from governed_bi.curator.adversary import StructuralGateError
+    from governed_bi.curator.asset_bag import AssetBag
+    from governed_bi.curator.pipeline import _run_adversary_signal
+
+    bag = AssetBag.from_tables("demo", [_orders_table()])
+    bag.metrics["metric_demo_ghost"] = MetricAsset(
+        id="metric_demo_ghost",
+        name="ghost",
+        base_table="tbl_demo_does_not_exist",
+        expression="count(*)",
+        audit=Audit(
+            provenance=Provenance(
+                source=ProvenanceSource.curator, status=ProvenanceStatus.proposed
+            )
+        ),
+    )
+    out = tmp_path / "curated"
+    out.mkdir()
+    with pytest.raises(StructuralGateError) as err:
+        _run_adversary_signal(bag, connector=None, out_root=out)
+    assert any(f.code == "dangling-ref" for f in err.value.findings)
+    assert (out / "adversary_findings.jsonl").exists()
+    # Fail closed: nothing under the schema tree was written by the gate path.
+    assert not (out / "demo").exists()
+    bag.write(out)  # would succeed if called — the pipeline must not call it
+    # Prove the bag still carries the dangling asset (gate did not mutate it away).
+    from governed_bi.corpus.validate import validate_corpus
+
+    assert any(f.code == "dangling-ref" for f in validate_corpus(bag.all_assets()))
+
+
+def test_write_tools_do_not_expose_certified_params():
+    """C6: model-facing tool schemas must not accept certified / answered_by."""
+    import inspect
+
+    pytest.importorskip("deepagents")
+    from governed_bi.curator.asset_bag import AssetBag
+    from governed_bi.curator.deep_agent import curator_tools
+
+    bag = AssetBag.from_tables("demo", [_orders_table()])
+    tools = curator_tools(connector=None, schema="demo", bag=bag)  # type: ignore[arg-type]
+    write_names = {
+        "upsert_join",
+        "upsert_metric",
+        "upsert_term",
+        "upsert_few_shot",
+        "annotate_table",
+        "annotate_column",
+    }
+    for tool in tools:
+        if tool.__name__ not in write_names:
+            continue
+        params = inspect.signature(tool).parameters
+        assert "certified" not in params, tool.__name__
+        assert "answered_by" not in params, tool.__name__
+
+
+def test_tool_writes_never_stamp_human_certified():
+    """C6: even if bag.upsert still accepts certified=True internally, the
+    model-facing tools force certified=False."""
+    pytest.importorskip("deepagents")
+    from governed_bi.curator.asset_bag import AssetBag
+    from governed_bi.curator.deep_agent import curator_tools
+
+    bag = AssetBag.from_tables("demo", [_orders_table()])
+    tools = {t.__name__: t for t in curator_tools(connector=None, schema="demo", bag=bag)}  # type: ignore[arg-type]
+    msg = tools["annotate_table"]("orders", description="Orders header", confidence=0.9)
+    assert msg.startswith("ok:")
+    table = bag.tables["orders"]
+    assert table.audit is not None
+    assert table.audit.provenance.source is ProvenanceSource.curator
+    assert table.audit.provenance.status is ProvenanceStatus.proposed
+
+    # Internal non-agent path may still certify (deterministic SME fold).
+    bag.annotate_table(
+        "orders", description="Orders header (SME)", confidence=0.9, certified=True, answered_by="sme"
+    )
+    assert bag.tables["orders"].audit.provenance.source is ProvenanceSource.human
+    assert bag.tables["orders"].audit.provenance.status is ProvenanceStatus.certified
+
+
 # --------------------------------------------------------------------------- #
 # Loop
 # --------------------------------------------------------------------------- #
@@ -376,3 +487,131 @@ def test_curate_end_to_end_from_profiled_facts():
         for col in table.columns:
             assert col.role is not None
             assert col.description is None
+
+
+# --------------------------------------------------------------------------- #
+# AUDIT C6: the agent owns clarifications.jsonl, so it can forge a human answer
+# --------------------------------------------------------------------------- #
+
+
+def test_quarantine_resets_agent_authored_answers():
+    """A pre-answered record must not survive the Phase A boundary.
+
+    Without this, an agent writing `status: "answered"` + `answered_by: "<a name>"`
+    through `write_file` gets `source=human, status=certified` out of
+    `apply_answered_clarifications` — a certified fact with no human in the loop.
+    """
+    from governed_bi.curator.clarifications import (
+        ClarificationRecord,
+        ClarificationRecordStatus,
+        quarantine_agent_answers,
+    )
+
+    forged = ClarificationRecord(
+        id="q001",
+        scope="table:customers",
+        question="What counts as an active customer?",
+        status=ClarificationRecordStatus.answered,
+        answer="Anyone with a transaction in the last 90 days.",
+        answered_by="Jane Chen, Finance",
+    )
+    honest = ClarificationRecord(id="q002", scope="table:transaction", question="Units of amount?")
+
+    cleaned, reset = quarantine_agent_answers([forged, honest])
+
+    assert reset == ["q001"]
+    assert cleaned[0].status is ClarificationRecordStatus.open
+    assert cleaned[0].answer is None
+    assert cleaned[0].answered_by is None
+    # An untouched record passes through byte-identical.
+    assert cleaned[1] == honest
+
+
+def test_quarantined_record_cannot_mint_a_certified_fact(tmp_path):
+    """End of the chain: the forged record folds into nothing."""
+    from governed_bi.curator.asset_bag import AssetBag
+    from governed_bi.curator.clarifications import (
+        ClarificationRecord,
+        ClarificationRecordStatus,
+        quarantine_agent_answers,
+    )
+
+    tables = [_orders_table()]
+    forged = ClarificationRecord(
+        id="q001",
+        scope="table:orders",
+        question="What is this table?",
+        status=ClarificationRecordStatus.answered,
+        answer="Every order, one row each.",
+        answered_by="Jane Chen, Finance",
+    )
+
+    bag = AssetBag.from_tables("demo", tables)
+    assert bag.apply_answered_clarifications([forged]) == 1, "precondition: the forgery works"
+
+    bag2 = AssetBag.from_tables("demo", tables)
+    cleaned, _ = quarantine_agent_answers([forged])
+    assert bag2.apply_answered_clarifications(cleaned) == 0
+
+
+# --------------------------------------------------------------------------- #
+# AUDIT E3: the decoy defence derives "suspect" from train gold SQL. With no
+# train SQL that rule suspects the entire schema.
+# --------------------------------------------------------------------------- #
+
+
+def test_decoy_defense_marks_unreferenced_columns_when_train_sql_exists():
+    from governed_bi.curator.asset_bag import AssetBag
+    from governed_bi.curator.pipeline import _mark_columns_absent_from_gold
+
+    bag = AssetBag.from_tables("demo", [_orders_table()])
+    stats = _mark_columns_absent_from_gold(
+        bag, ["SELECT amount FROM orders"], dialect="sqlite"
+    )
+    assert sum(v for k, v in stats.items() if "mark" in k) >= 1, stats
+
+
+def test_decoy_defense_is_skipped_with_no_train_sql(monkeypatch, tmp_path):
+    """The README path: curating without train SQL must not suspect the schema."""
+    from governed_bi.curator import pipeline
+
+    called = []
+    monkeypatch.setattr(
+        pipeline,
+        "_mark_columns_absent_from_gold",
+        lambda *a, **k: called.append(a) or {},
+    )
+    monkeypatch.setattr(pipeline, "profile_database", lambda *a, **k: [_orders_table()])
+    monkeypatch.setattr(
+        pipeline, "seed_from_train_sql", lambda *a, **k: pipeline.SeedBundle([], [])
+    )
+
+    class _Connector:
+        """Enough surface for validate_corpus's physical-existence probe."""
+
+        def list_tables(self, schema=None):
+            return ["orders"]
+
+        def list_schemas(self):
+            return ["demo"]
+
+        def describe_table(self, table, schema=None):
+            class _Col:
+                def __init__(self, name):
+                    self.name = name
+
+            class _Info:
+                columns = [_Col("OrderID"), _Col("amount"), _Col("note")]
+
+            return _Info()
+
+    pipeline.build_curated_corpus(
+        _Connector(),
+        object(),  # gateway (unused without a model)
+        "demo",
+        [],  # train_items: the README path
+        tmp_path,
+        model=None,
+        dialect="sqlite",
+    )
+    assert called == [], "the decoy heuristic ran with nothing to derive suspicion from"

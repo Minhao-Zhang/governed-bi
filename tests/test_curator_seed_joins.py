@@ -19,7 +19,6 @@ from __future__ import annotations
 from governed_bi.corpus.validate import validate_corpus
 from governed_bi.curator.seed import extract_joins_from_sql
 
-
 # --------------------------------------------------------------------------- #
 # join-on-unparseable: physical names containing a space
 # --------------------------------------------------------------------------- #

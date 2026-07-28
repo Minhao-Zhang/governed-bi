@@ -7,12 +7,12 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
+from governed_bi.analyst.agent import answer_question_agent, build_agent_core
+from governed_bi.analyst.answer import ReliabilityTier
 from governed_bi.config import Environment, Settings
 from governed_bi.corpus import load_corpus
 from governed_bi.gateway import Gateway, Identity, SqliteConnector
 from governed_bi.llm.fake import FakeToolModel, ai_tool_turn
-from governed_bi.analyst.agent import answer_question_agent, build_agent_core
-from governed_bi.analyst.answer import ReliabilityTier
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 BIRD_DB = Path(__file__).resolve().parents[1] / "data" / "bird" / "beer_factory.sqlite"

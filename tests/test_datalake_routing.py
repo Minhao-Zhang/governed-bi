@@ -14,6 +14,7 @@ Both run deterministically without a live model — the routing decision happens
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 from governed_bi.analyst.agent import answer_question_agent
 from governed_bi.config import DataSourceConfig, Environment, Settings
@@ -21,6 +22,9 @@ from governed_bi.corpus import Corpus
 from governed_bi.corpus.schemas import Column, LogicalType, TableAsset
 from governed_bi.gateway import Gateway, Identity, SqliteConnector
 from governed_bi.retrieval import RetrievalResult, SchemaPick
+
+#: Repo root, so corpus paths do not depend on pytest's working directory.
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 SCHEMA_A_ORDERS = "tbl_schema_a_orders"
 SCHEMA_B_ORDERS = "tbl_schema_b_orders"
@@ -356,21 +360,19 @@ def test_asset_ids_resolve_to_schemas_through_the_corpus():
     """Ids look like `tbl_<schema>_<name>`, but schema names contain underscores
     (`beer_factory`), so splitting the string guesses wrong. The corpus is the only
     reliable resolver."""
-    from pathlib import Path
-
     from governed_bi.corpus import load_corpus
     from governed_bi.eval.run_datalake import _schema_of_assets
 
-    roots = sorted(
-        Path("runs/datalake").glob("*/corpus_curated"), key=lambda p: p.stat().st_mtime
-    )
-    if not roots:
-        import pytest as _pt
-
-        _pt.skip("no built corpus on disk to resolve against")
-    corpus = load_corpus(roots[-1], schema=None)
+    # The committed corpus, not `runs/datalake/*` build output. Globbing gitignored
+    # artifacts under a RELATIVE path meant this test always skipped in CI and
+    # anywhere it was not run from the repo root (AUDIT T3) — and `beer_factory` is
+    # exactly the underscore-containing schema name the test exists to pin.
+    corpus = load_corpus(REPO_ROOT / "corpus", schema=None)
     tables = [a for a in corpus.assets if a.asset_type == "table"]
     assert tables, "corpus holds no tables"
+    assert any("_" in a.schema for a in tables), (
+        "the point of this test is a schema name containing an underscore"
+    )
 
     sample = tables[:3]
     resolved, unresolved = _schema_of_assets(corpus, [a.id for a in sample])
@@ -587,25 +589,12 @@ def test_a_few_shot_asset_id_does_not_resolve_to_a_schema():
     """`_schema_of_assets` guards on `asset_type == "table"`. `FewShotAsset` also carries a
     `schema`, so without the guard a few-shot id would contribute a schema to the
     used-tables set and could manufacture an escape out of a retrieved example."""
-    from pathlib import Path
-
     from governed_bi.corpus import load_corpus
     from governed_bi.eval.run_datalake import _schema_of_assets
 
-    roots = sorted(
-        Path("runs/datalake").glob("*/corpus_curated"), key=lambda p: p.stat().st_mtime
-    )
-    corpus = None
-    for root in reversed(roots):
-        c = load_corpus(root, schema=None)
-        if any(a.asset_type == "few_shot" for a in c.assets):
-            corpus = c
-            break
-    if corpus is None:
-        import pytest as _pt
-
-        _pt.skip("no built corpus on disk holds a few-shot asset")
-
+    # The committed corpus carries a few-shot asset, so this no longer depends on
+    # gitignored `runs/datalake/*` build output that never exists in CI (AUDIT T3).
+    corpus = load_corpus(REPO_ROOT / "corpus", schema=None)
     few = next(a for a in corpus.assets if a.asset_type == "few_shot")
     assert getattr(few, "schema", None), "fixture assumes few-shots carry a schema"
     assert _schema_of_assets(corpus, [few.id]) == (set(), [few.id]), (

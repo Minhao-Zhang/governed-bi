@@ -182,8 +182,8 @@ Method:
 1. Read /clarifications.jsonl (file tools). For each answered record, use its \
 scope field plus read_corpus to locate the target table/column/asset.
 2. Apply knowledge via annotate_table / annotate_column / upsert_* tools. \
-Stamp human-certified provenance by setting certified=true (and answered_by \
-from the record) on those writes.
+Writes carry curator/proposed provenance automatically — do not claim human \
+certification; that stamp is reserved for the non-agent fold path.
 3. Do not invent new open questions. Prefer editing existing assets over \
 duplicating them. Use run_probe_query only if an answer still needs a data check.
 4. Focus on table:/column:/join:/metric: scoped answers. Answers scoped pair: or \
