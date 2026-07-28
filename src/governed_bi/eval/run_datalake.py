@@ -93,7 +93,12 @@ from .arms import (
     skipped_rungs,
     step_mechanisms,
 )
-from .bird_loader import available_dbs, load_bird_items
+from .bird_loader import (
+    available_dbs,
+    description_dir,
+    load_bird_items,
+    load_rename_map,
+)
 from .error_taxonomy import attribute_rows, summarise_attributions
 from .hash_grade import (
     free_pass_counts,
@@ -2798,18 +2803,29 @@ def _build_db_corpora(
             return
 
         # --- SME brief + leakage invariant (asserted whenever an SME arm builds) ---
-        desc_dir = (
-            bird_dir / "data" / "train" / "train_databases" / db_id / "database_description"
-        )
+        # The description CSVs are keyed to BIRD's original identifiers, so the
+        # rename map is what re-addresses them to the schema the agent actually
+        # queries. Without it the SME is briefed about a schema that is not there.
+        desc_dir = description_dir(bird_dir, db_id)
+        rename_map = load_rename_map(bird_dir, db_id)
+        if desc_dir is None:
+            print(
+                f"\n*** WARNING: no database_description/ for {db_id!r} under either "
+                "BIRD tree — curated_sme is being built BLIND and is not comparable "
+                "to the other SME schemas ***"
+            )
 
         def _brief(*, with_docs: bool) -> str:
             # ``build_sme_brief`` already degrades to "(no description CSVs found)"
             # for a directory that does not exist, so blind mode is the same call
             # with the directory withheld — no second code path to keep in sync.
             built = build_sme_brief(
-                desc_dir if with_docs else Path("/nonexistent-sme-docs"),
+                (desc_dir or Path("/nonexistent-sme-docs"))
+                if with_docs
+                else Path("/nonexistent-sme-docs"),
                 train,
                 system_rules=prompt_text("sme_rules", prompt_variants),
+                rename_map=rename_map,
             )
             assert_brief_no_leakage(
                 built,

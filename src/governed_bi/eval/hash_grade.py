@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .bird_loader import load_rename_map, manifest_path
+
 if TYPE_CHECKING:
     from ..gateway import Gateway, Identity
 
@@ -221,31 +223,6 @@ class TrapColumns(frozenset):
         return self
 
 
-def _manifest_path(bird_dir: Path, filename: str) -> Path | None:
-    """``filename`` under ``artifacts/`` or ``eval_dataset/``, or ``None`` if neither."""
-    for parent in ("artifacts", "eval_dataset"):
-        candidate = bird_dir / parent / filename
-        if candidate.exists():
-            return candidate
-    return None
-
-
-def _table_rename_map(bird_dir: Path, db_id: str) -> dict[str, str]:
-    """BIRD identifier -> ``rename_decoy`` identifier, for one db.
-
-    ``schema_rename_map.json`` is one flat identifier map per db (tables and columns
-    share it); only the table half is ever looked up here. An absent file yields an
-    empty map rather than an error, because the identity-rename dbs need no
-    translation at all.
-    """
-    path = _manifest_path(bird_dir, "schema_rename_map.json")
-    if path is None:
-        return {}
-    data = json.loads(path.read_text(encoding="utf-8"))
-    mapping = data.get(db_id) or {}
-    return {str(k): str(v) for k, v in mapping.items() if isinstance(v, str)}
-
-
 def load_trap_columns(bird_dir: Path | str, db_id: str) -> TrapColumns:
     """Physical ``table.column`` refs for decoy/trap columns (decoy-touch metric).
 
@@ -258,7 +235,7 @@ def load_trap_columns(bird_dir: Path | str, db_id: str) -> TrapColumns:
     same silent-zero failure qualified matching is meant to remove.
     """
     bird_dir = Path(bird_dir)
-    path = _manifest_path(bird_dir, "trap_manifest.json")
+    path = manifest_path(bird_dir, "trap_manifest.json")
     if path is None:
         logger.warning(
             "trap_manifest.json not found under %s (checked artifacts/ and "
@@ -268,7 +245,7 @@ def load_trap_columns(bird_dir: Path | str, db_id: str) -> TrapColumns:
             db_id,
         )
         return TrapColumns(manifest_present=False)
-    rename = _table_rename_map(bird_dir, db_id)
+    rename = load_rename_map(bird_dir, db_id)
     refs: set[str] = set()
 
     def _add(table: Any, col: Any, *, translate: bool) -> None:
@@ -288,7 +265,7 @@ def load_trap_columns(bird_dir: Path | str, db_id: str) -> TrapColumns:
             translate=True,
         )
 
-    tpath = _manifest_path(bird_dir, "trap_table_manifest.json")
+    tpath = manifest_path(bird_dir, "trap_table_manifest.json")
     if tpath is not None:
         for row in json.loads(tpath.read_text(encoding="utf-8")):
             if row.get("db") != db_id:

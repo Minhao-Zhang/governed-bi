@@ -353,6 +353,127 @@ def test_build_baseline_corpus_is_deterministic_db_derivable(bird_connector, tmp
     assert manifest["fk_candidates"]["fk_candidates_ok"] >= 1
 
 
+def test_sme_brief_is_addressed_to_the_physical_schema(tmp_path: Path):
+    """The SME must name the columns the agent can actually select.
+
+    The description CSVs are BIRD's untouched originals, so on the 55 of 69
+    obfuscated schemas that carry a real rename an un-translated brief is
+    semantically true and completely unusable: it says ``PurchaseDate`` while the
+    agent is choosing between ``kaufdatum``, ``bewertungsdatum`` and
+    ``transaktionsdatum``, so nothing the SME knows can land on a column. Three
+    separate defects produced that, and each is asserted here:
+
+    * no ``rename_map`` was ever passed;
+    * the address came from ``column_name`` (a label — "customer id") rather than
+      ``original_column_name`` (the identifier the map is keyed by);
+    * 83 of the 597 CSVs open with a BOM, which corrupts the *first* header name
+      and so blanked ``original_column_name`` for every row of those files.
+    """
+    desc = tmp_path / "database_description"
+    desc.mkdir()
+    (desc / "customers.csv").write_text(
+        "﻿original_column_name,column_name,column_description,data_format,"
+        "value_description\n"
+        "CustomerID,customer id,the unique id for the customer,integer,\n"
+        "PurchaseDate,purchase date,the date of purchase,date,yyyy-mm-dd\n"
+        "Freight,freight,shipping cost on the order,real,\n",
+        encoding="utf-8",
+    )
+    rename_map = {
+        "customers": "kunden",
+        "CustomerID": "kunde_id",
+        "PurchaseDate": "kaufdatum",
+    }
+    brief = build_sme_brief(desc, [], rename_map=rename_map)
+
+    assert "### kunden" in brief
+    assert "- kunde_id: the unique id for the customer" in brief
+    assert "- kaufdatum: the date of purchase" in brief
+    # The BIRD spellings and the friendly labels are both wrong addresses.
+    for absent in ("CustomerID", "PurchaseDate", "customer id", "purchase date"):
+        assert absent not in brief
+    # A described column with no map entry is not in the obfuscated schema (BIRD
+    # ships full-dataset docs for subset databases); describing it would invent a
+    # column the agent cannot select.
+    assert "Freight" not in brief and "shipping cost" not in brief
+
+    # No map means "already physical" — an identity-rename schema must not be
+    # emptied out by the same code path.
+    plain = build_sme_brief(desc, [], rename_map={})
+    assert "- CustomerID: the unique id for the customer" in plain
+    assert "- Freight: shipping cost on the order" in plain
+
+
+def test_sme_brief_resolves_misfiled_description_filenames(tmp_path: Path):
+    """A description CSV filed under a name that is not the table must still be
+    headed with the table.
+
+    Three of the 569 CSVs are misfiled: app_store's ``googleplaystore.csv`` /
+    ``googleplaystore_user_reviews.csv`` are tables ``playstore`` / ``user_reviews``,
+    and student_loan's ``filed_for_bankruptcy.csv`` is the misspelt table
+    ``filed_for_bankrupcy``. Taking the stem at face value headed *both* of
+    app_store's tables with a name that exists nowhere in the schema.
+    """
+    desc = tmp_path / "database_description"
+    desc.mkdir()
+    header = (
+        "original_column_name,column_name,column_description,data_format,"
+        "value_description\n"
+    )
+    (desc / "googleplaystore.csv").write_text(header + "App,,name,text,\n", "utf-8")
+    (desc / "googleplaystore_user_reviews.csv").write_text(
+        header + "Sentiment,,tone,text,\n", encoding="utf-8"
+    )
+    (desc / "filed_for_bankruptcy.csv").write_text(header + "name,,who,text,\n", "utf-8")
+
+    brief = build_sme_brief(
+        desc,
+        [],
+        rename_map={
+            "playstore": "playstore",
+            "user_reviews": "user_reviews",
+            "filed_for_bankrupcy": "shen_qing_po_chan",
+            "App": "App",
+            "Sentiment": "Sentiment",
+            "name": "ming_cheng",
+        },
+    )
+    assert "### playstore" in brief
+    assert "### user_reviews" in brief  # longest suffix wins over a "Reviews" column
+    assert "### shen_qing_po_chan" in brief  # closest key, past the typo
+    assert "googleplaystore" not in brief and "filed_for_bankruptcy" not in brief
+
+
+def test_sme_brief_leakage_guard_ignores_the_english_word_select(tmp_path: Path):
+    """``SELECT`` matched case-insensitively also matched prose.
+
+    european_football_2's ``Player_Attributes.csv`` says "implies that the player
+    will select the attack actions he will join in". Once the dev-tree descriptions
+    became reachable, that schema failed the leakage assert and was dropped from the
+    pool *after* its baseline, seeded and curated corpora had been built and paid
+    for. All 30,492 gold statements spell the keyword ``SELECT``, so the guard is
+    case-sensitive and loses nothing.
+    """
+    desc = tmp_path / "database_description"
+    desc.mkdir()
+    (desc / "player.csv").write_text(
+        "original_column_name,column_name,column_description,data_format,"
+        "value_description\n"
+        "defensive_work_rate,,the rate,text,medium: implies that the player will "
+        "select the defensive actions he will join in\n",
+        encoding="utf-8",
+    )
+    brief = build_sme_brief(
+        desc,
+        [],
+        rename_map={"player": "spieler", "defensive_work_rate": "abwehrarbeitsrate"},
+    )
+    assert "will select the defensive actions" in brief
+    assert_brief_no_leakage(brief, gold_sqls=[], test_questions=[])
+    with pytest.raises(AssertionError, match="SELECT"):
+        assert_brief_no_leakage("bad SELECT 1", gold_sqls=[], test_questions=[])
+
+
 def test_sme_brief_leakage_guard(tmp_path: Path):
     desc = tmp_path / "database_description"
     desc.mkdir()
@@ -576,3 +697,49 @@ def test_sme_clarifications_logged(bird_connector, tmp_path: Path):
     # The verbatim SME answer is captured (this is what makes leakage auditable).
     assert any("root beer" in (r["answer"] or "") for r in answered)
     assert all(r["answered_by"] for r in answered)
+
+
+def test_sme_rules_v2_gives_the_sme_an_answer_for_decoys():
+    """The graded database is `rename_decoy`, and the decoys are undocumented.
+
+    1,486 invented columns and 162 invented tables sit alongside the real ones in
+    `pg_rename_decoy`. None has a BIRD description or a rename-map entry, so none
+    can reach the brief — verified separately against the SQLite schemas: every one
+    of the 2,893 real physical column names is described, and none of the decoys is.
+    That makes "absent from the brief" a sound signal, and v2 is what turns it into
+    an answer instead of silence. v1 left the SME with nothing to say about exactly
+    the columns a trap-avoiding curator most needs help on.
+
+    v1 stays the default: v2 is a falsifiable candidate (see its registry
+    rationale), and folding it into the default would add a third mechanism to a
+    `curated -> curated_sme` step the docs already flag as compound.
+    """
+    from governed_bi import prompts
+
+    assert prompts.variants("sme_rules") == ["v1", "v2"]
+    assert prompts.resolve()["sme_rules"] == "v1"
+
+    v1 = prompts.text("sme_rules", {"sme_rules": "v1"})
+    v2 = prompts.text("sme_rules", {"sme_rules": "v2"})
+    assert "do not recognise it" in v2 and "would not rely on it" in v2
+    assert "do not recognise it" not in v1
+    # Selecting it must move the prompt-set hash, or a run could not prove which
+    # rules block it sent.
+    assert prompts.prompt_set_hash({"sme_rules": "v2"}) != prompts.prompt_set_hash()
+
+
+def test_sme_brief_carries_the_selected_rules_variant(tmp_path: Path):
+    """The brief embeds whichever variant the caller resolved, not always v1."""
+    from governed_bi import prompts
+
+    desc = tmp_path / "database_description"
+    desc.mkdir()
+    (desc / "t.csv").write_text(
+        "original_column_name,column_name,column_description,data_format,"
+        "value_description\nc,,a column,text,\n",
+        encoding="utf-8",
+    )
+    v2 = prompts.text("sme_rules", {"sme_rules": "v2"})
+    brief = build_sme_brief(desc, [], system_rules=v2, rename_map={"t": "t", "c": "c"})
+    assert "do not recognise it" in brief
+    assert_brief_no_leakage(brief, gold_sqls=[], test_questions=[])

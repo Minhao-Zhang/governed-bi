@@ -8,11 +8,12 @@ Never receives gold SQL or held-out test questions.
 from __future__ import annotations
 
 import csv
+import difflib
 import io
 import logging
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Mapping, Sequence
 
 from .. import prompts
 
@@ -23,7 +24,21 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("governed_bi.curator")
 
-_SELECT_RE = re.compile(r"\bSELECT\b", re.IGNORECASE)
+#: Case-**sensitive** on purpose. The guard is looking for gold SQL, and all 30,492
+#: gold statements in the obfuscated BIRD splits spell the keyword ``SELECT``. Matching
+#: case-insensitively also matched English prose: european_football_2's
+#: ``Player_Attributes.csv`` says "implies that the player will select the attack
+#: actions he will join in", so the moment the dev-tree descriptions became reachable
+#: that schema started failing the leakage assert and being dropped from the pool —
+#: after its baseline, seeded and curated corpora had already been built and paid for.
+_SELECT_LEAK_RE = re.compile(r"\bSELECT\b")
+
+#: The sanitiser's copy, deliberately case-**in**sensitive. It runs over *model
+#: output*, where a lowercase ``select * from ...`` is ordinary and must still be
+#: stripped before it can reach provenance. Only the leakage guard above may fold
+#: case away, because only it runs over English prose. One shared pattern served
+#: both and could not be right for both.
+_SELECT_SQL_RE = re.compile(r"\bSELECT\b", re.IGNORECASE)
 _SQL_FENCE_RE = re.compile(r"```(?:sql)?\s*.*?```", re.IGNORECASE | re.DOTALL)
 
 #: The fixed rules block inside the otherwise data-assembled SME brief. Only this
@@ -38,12 +53,28 @@ def build_sme_brief(
     *,
     max_train_questions: int = 40,
     system_rules: str | None = None,
+    rename_map: Mapping[str, str] | None = None,
 ) -> str:
     """Build the Simulated SME system brief (no gold SQL, no test items).
 
     Reads every ``*.csv`` under ``db_description_dir`` (BIRD layout:
     ``original_column_name,column_name,column_description,data_format,value_description``)
     and appends a sample of train questions + evidence for domain flavour.
+
+    ``rename_map`` is the db's ``schema_rename_map.json`` entry (BIRD identifier ->
+    physical identifier). It is what makes the brief *usable* on the obfuscated
+    databases, and omitting it is the bug it exists to fix: the description CSVs
+    are the untouched originals, so on the 55 of 69 schemas that carry a real
+    rename the SME would talk about ``PurchaseDate`` while the agent is choosing
+    between ``kaufdatum``, ``bewertungsdatum`` and ``transaktionsdatum``. Every
+    statement stays semantically true and none of it can land on a column, which
+    is worse than useless — it reads as a working SME arm. Pass the map (empty is
+    fine for identity-rename schemas); ``None`` means "these CSVs are already
+    keyed to the physical schema".
+
+    Note also that the *address* is taken from ``original_column_name``, not
+    ``column_name``: in BIRD the latter is a friendly label ("customer id"), not an
+    identifier, and it is what the rename map is keyed by.
 
     ``system_rules`` injects a registered ``sme_rules`` variant; ``None`` keeps
     ``v1``. Callers that stamp a prompt set must pass the resolved text, or the
@@ -60,6 +91,47 @@ def build_sme_brief(
         "## Database column descriptions",
     ]
 
+    # Exact first, then case-insensitive: BIRD ships a handful of description CSVs
+    # whose stem differs from the schema's table only in case (``FootNotes`` vs
+    # ``footnotes``), and Postgres folds unquoted identifiers to lower anyway.
+    lowered = {k.lower(): v for k, v in (rename_map or {}).items()}
+    # A map is only authoritative if it has entries; an absent manifest loads as {}.
+    translating = bool(rename_map)
+    dropped: list[str] = []
+
+    def _physical(name: str) -> str | None:
+        """``name`` in the physical schema's spelling, or ``None`` if it has none."""
+        if not translating:
+            return name
+        return rename_map.get(name) or lowered.get(name.lower())
+
+    def _physical_table(stem: str) -> str | None:
+        """A CSV filename resolved to its physical table, or ``None``.
+
+        Three of the 569 description CSVs are filed under a name that is not the
+        table: app_store ships ``googleplaystore.csv`` and
+        ``googleplaystore_user_reviews.csv`` for tables ``playstore`` and
+        ``user_reviews``, and student_loan's ``filed_for_bankruptcy.csv`` is the
+        misspelt table ``filed_for_bankrupcy``. Left unresolved, app_store's brief
+        headed *both* of that database's tables with a name that exists nowhere —
+        the same "describes something the agent cannot select" failure the column
+        translation above exists to prevent. Falls back to the longest map key that
+        is a suffix of the filename, then to the closest key by edit distance; both
+        are tight enough that all 566 already-exact stems are untouched.
+        """
+        exact = _physical(stem)
+        if exact is not None:
+            return exact
+        suffixes = sorted(
+            (k for k in rename_map if k and stem.lower().endswith(k.lower())),
+            key=len,
+            reverse=True,
+        )
+        if suffixes:
+            return rename_map[suffixes[0]]
+        close = difflib.get_close_matches(stem, list(rename_map), n=1, cutoff=0.8)
+        return rename_map[close[0]] if close else None
+
     csv_paths = sorted(desc_dir.glob("*.csv")) if desc_dir.is_dir() else []
     if not csv_paths:
         logger.warning(
@@ -70,7 +142,15 @@ def build_sme_brief(
         )
         sections.append("(no description CSVs found)")
     for path in csv_paths:
-        sections.append(f"### {path.stem}")
+        table = _physical_table(path.stem)
+        if table is None and translating:
+            logger.warning(
+                "SME brief: description file %s could not be resolved to a table in "
+                "the physical schema; its heading names something the agent cannot "
+                "query",
+                path.name,
+            )
+        sections.append(f"### {table or path.stem}")
         # BIRD ships some description CSVs that are not UTF-8 — 11 files across 5 of the
         # 69 schemas (donor, hockey, public_review_platform, software_company,
         # works_cycles). ``UnicodeDecodeError`` is a ``ValueError``, so the ``except
@@ -85,10 +165,16 @@ def build_sme_brief(
         # characters is worth far more than losing the schema, and the fallback is
         # recorded in the brief so a reader can see the text was degraded rather than
         # wondering why a column reads oddly.
+        #
+        # ``utf-8-sig``, not ``utf-8``: 83 of the 597 description CSVs start with a
+        # BOM, which lands inside the first header name — ``﻿original_column_name``
+        # — so ``row.get("original_column_name")`` returned ``None`` for every row of
+        # those files. That silently emptied whole tables out of the brief (frpm in
+        # california_schools contributed nothing at all) with no error anywhere.
         try:
-            text = path.read_text(encoding="utf-8", newline="")
+            text = path.read_text(encoding="utf-8-sig", newline="")
         except UnicodeDecodeError:
-            text = path.read_text(encoding="utf-8", errors="replace", newline="")
+            text = path.read_text(encoding="utf-8-sig", errors="replace", newline="")
             sections.append(
                 f"(note: {path.name} is not valid UTF-8; decoded with replacement "
                 "characters)"
@@ -100,11 +186,28 @@ def build_sme_brief(
             with io.StringIO(text, newline="") as fh:
                 reader = csv.DictReader(fh)
                 for row in reader:
-                    col = (
-                        row.get("column_name")
-                        or row.get("original_column_name")
+                    # ``original_column_name`` is the identifier; ``column_name`` is
+                    # a human label ("customer id" for ``CustomerID``) and is empty
+                    # on plenty of rows. Addressing the label meant the SME named
+                    # something that is not a column even on the identity-rename
+                    # schemas, and it is not what ``rename_map`` is keyed by.
+                    raw = (
+                        row.get("original_column_name")
+                        or row.get("column_name")
                         or ""
                     ).strip()
+                    if not raw:
+                        continue
+                    col = _physical(raw)
+                    if col is None:
+                        # No map entry means the column is not in the obfuscated
+                        # schema — BIRD's CSVs describe the full upstream dataset
+                        # while the DB is often a subset (retail_world ships the
+                        # complete Northwind docs for a cut-down W3Schools table
+                        # set). Emitting it would have the SME confidently describe
+                        # a column the agent cannot select.
+                        dropped.append(raw)
+                        continue
                     desc = (row.get("column_description") or "").strip()
                     values = (row.get("value_description") or "").strip()
                     fmt = (row.get("data_format") or "").strip()
@@ -115,6 +218,14 @@ def build_sme_brief(
                         sections.append(f"- {col}")
         except OSError as err:
             sections.append(f"(failed to read {path.name}: {err})")
+
+    if dropped:
+        logger.info(
+            "SME brief: dropped %d described column(s) with no entry in the rename "
+            "map (not present in the obfuscated schema): %s",
+            len(dropped),
+            ", ".join(sorted(set(dropped))[:20]),
+        )
 
     # ALL unique evidence hints — never capped. In BIRD the ``evidence`` field is
     # the key domain hint (e.g. "higher CSS ranking value = higher prospect"), so
@@ -150,7 +261,7 @@ def assert_brief_no_leakage(
 
     Used by unit tests and the experiment runner leakage invariants.
     """
-    if _SELECT_RE.search(brief):
+    if _SELECT_LEAK_RE.search(brief):
         raise AssertionError("SME brief must not contain SELECT (gold SQL leakage)")
     for sql in gold_sqls:
         snippet = sql.strip()
@@ -165,11 +276,11 @@ def assert_brief_no_leakage(
 def _sanitize_sme_answer(text: str) -> str:
     """Strip SQL fences / SELECT statements so invented SQL cannot enter provenance."""
     cleaned = _SQL_FENCE_RE.sub("", text).strip()
-    if _SELECT_RE.search(cleaned):
+    if _SELECT_SQL_RE.search(cleaned):
         # Keep only the prose before the first SELECT-looking line.
         lines = []
         for line in cleaned.splitlines():
-            if _SELECT_RE.search(line):
+            if _SELECT_SQL_RE.search(line):
                 break
             lines.append(line)
         cleaned = "\n".join(lines).strip()

@@ -209,6 +209,24 @@ recommend not using it (name a more reliable column if one exists).
 # ``governed_bi.eval.analysis`` carry the full argument).
 # --------------------------------------------------------------------------- #
 
+_SME_RULES_V2 = """\
+Rules you MUST follow:
+- Answer only from the brief below and ordinary domain sense. Do NOT invent \
+columns, tables, or labels that are not in the brief.
+- The brief lists every table and column you know about. It is not a summary: if \
+an identifier the curator asks about does not appear in it, you have never heard \
+of that identifier. Say so plainly — that you do not recognise it, that it is not \
+part of the documented schema you know, and that you would not rely on it for \
+analysis — and point to the documented column that answers their underlying \
+question if there is one. Do not guess at its meaning from its name, and do not \
+soften this into "it probably holds ...".
+- Never write database queries. Describe meaning in prose only.
+- If a column looks unreliable or misleading for analysis, say so explicitly and \
+recommend not using it (name a more reliable column if one exists).
+- If you are unsure, say you are unsure rather than fabricating a definition.
+"""
+
+
 _SCHEMA_PICK_V2 = """\
 You route a natural-language question to exactly ONE database schema, chosen from a short
 candidate list that often contains near-duplicate siblings (two schemas on the same topic,
@@ -360,6 +378,22 @@ _ALL: tuple[PromptVariant, ...] = (
         rationale=(
             "Shipped text; the rules block inside the code-assembled SME brief (the "
             "rest of that brief is data, not a prompt variant)."
+        ),
+    ),
+    PromptVariant(
+        stage="sme_rules",
+        variant="v2",
+        text=_SME_RULES_V2,
+        rationale=(
+            "Gives the SME an answer for the decoys. The graded database is "
+            "rename_decoy: 1,486 invented columns and 162 invented tables sit "
+            "alongside the real ones, and none of them appears in the brief, so v1's "
+            "'answer only from the brief' left the SME with nothing to say about "
+            "exactly the columns a trap-avoiding curator needs help on. v2 makes the "
+            "absence itself the answer — not recognised, do not rely on it — which "
+            "is derivable from the brief alone and needs no trap manifest. Refuted "
+            "if decoy_touch_rate does not fall on the SME arms; watch refusal_rate "
+            "and clarification volume for the over-refusal it could buy instead."
         ),
     ),
 )

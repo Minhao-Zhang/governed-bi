@@ -539,6 +539,74 @@ on top of it. Both failures were silent because nothing in the pipeline
 asserted that the treatment had been delivered — every check that existed
 passed.
 
+A third incident marks the limit of what divergence can see. The Simulated SME
+was briefed from BIRD's `database_description/*.csv`, which are the *original*
+BIRD descriptions and were never re-keyed to the obfuscated schema. On the 55 of
+69 databases that carry a real rename, the SME therefore talked about
+`PurchaseDate` while the agent was choosing between `kaufdatum`,
+`bewertungsdatum` and `transaktionsdatum`. Every statement it made was true and
+none of it could land on a column — precisely the German date-column
+substitutions seen in beer_factory. Two smaller defects rode along: the address
+was read from `column_name`, a human label ("customer id"), rather than
+`original_column_name`, the identifier; and 83 of the 597 CSVs open with a BOM
+that corrupts the first header name, blanking `original_column_name` for every
+row of those files. `build_sme_brief` now takes the db's `rename_map` and
+translates every identifier it emits, dropping described columns the map does
+not cover — BIRD ships full-dataset docs for subset databases, so those columns
+are not in the schema at all. `bird_loader.description_dir()` also searches both
+BIRD trees; hardcoding `train_databases/` found no CSVs for the 11 dev-tree
+schemas and built their SME arm blind.
+
+Note what this costs the check above: the arm *did* diverge. The brief had
+content, clarifications folded, `context_hash` moved. Divergence proves an
+intervention was delivered, not that it was delivered in a form the model could
+use, and no automated gate in this repo distinguishes those two. Reading an
+actual brief remains the only way to catch a treatment that is well-formed and
+misaddressed. Measured against the BIRD SQLite schemas: 8.6% of emitted
+identifiers named a real physical column before the fix, 99.6% after.
+
+Unblinding the dev tree also broke a second guard, which is worth recording
+because the failure mode is the same shape. `assert_brief_no_leakage` matched
+`\bSELECT\b` case-insensitively, and european_football_2's `Player_Attributes.csv`
+says "implies that the player will select the attack actions he will join in", so
+that schema began failing the leakage assert and dropping out of the pool *after*
+its baseline, seeded and curated corpora had been built and paid for. The guard is
+now case-sensitive; all 30,492 gold statements spell the keyword `SELECT`, so it
+loses nothing.
+
+The graded database is `rename_decoy`, which is two transformations, and the
+above fixes only the first. Alongside the real schema sit 1,486 invented columns
+and 162 invented tables. None has a BIRD description or a rename-map entry, so
+none can reach the brief — and the drop rule now guarantees it. Measured against
+the SQLite schemas: all 2,893 real physical column names are described and zero
+decoy names are, which makes "absent from the brief" a sound signal rather than a
+coverage gap. Under `sme_rules` v1 the SME simply had nothing to say about
+precisely the columns a trap-avoiding curator most needs help on. `sme_rules` v2
+turns the absence into the answer — *I do not recognise that identifier, it is not
+part of the documented schema, I would not rely on it* — which is derivable from
+the brief alone and needs no trap manifest. Feeding it the manifest would be the
+tempting version and the wrong one: it hands the SME arm ground truth no other arm
+has, and the lift would be leakage wearing the costume of expertise.
+
+v2 is **not** the default. It is a falsifiable candidate — refuted if
+`decoy_touch_rate` does not fall on the SME arms, with `refusal_rate` and
+clarification volume watched for the over-refusal it could buy instead — and
+`curated -> curated_sme` is a step this doc already flags as compound. Select it
+with a `[prompts]` entry (`sme_rules = "v2"`); the prompt-set hash moves, so a run
+can prove which rules block it sent.
+
+Two limits survive, both from the rename map being *flat* — one namespace for
+table and column names per db, so it cannot express a per-table column rename.
+Six emitted `(table, column)` pairs are columns that exist in the schema but not
+in the table they are printed under: BIRD's Northwind docs describe
+`retail_world.Customers.Phone`, the physical `kunden` has no phone column, but
+`Phone` maps via `Suppliers.Phone` and so is emitted anyway. And the
+case-insensitive fallback used to match a misfiled CSV name flattens eight dbs'
+case-distinct keys (hockey has both `G` and `g`); only three lookups in the whole
+corpus resolve through that fallback today and none of them is ambiguous, but
+`mondial_geo` is one CSV filename away from it mattering. Closing either needs the
+physical schema, not the map.
+
 Delivery is now measured from the rows a run already produces, at two levels.
 
 **Per arm**, `fingerprint_arm()` builds an `ArmTreatment` from an arm's

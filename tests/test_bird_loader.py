@@ -7,6 +7,7 @@ real ``../BIRD-Data-Obfuscation`` checkout.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -231,3 +232,59 @@ def test_rows_without_a_db_id_are_ignored_everywhere(tmp_path: Path):
     _write_jsonl(tmp_path / "test_final.jsonl", [_ROWS[0], orphan])
     assert available_dbs(tmp_path) == {"beer_factory"}
     assert len(load_bird_items(tmp_path, "beer_factory")) == 1
+
+
+def test_description_dir_finds_both_bird_trees(tmp_path: Path):
+    """BIRD splits its schemas across ``train_databases/`` and ``dev_databases/``.
+
+    Hardcoding the train tree found nothing for the 11 dev-tree schemas
+    (california_schools, financial, formula_1, superhero, ...) and built their SME
+    arm blind without failing — the arm looked measured and was not.
+    """
+    from governed_bi.eval.bird_loader import description_dir
+
+    train = tmp_path / "data/train/train_databases/beer_factory/database_description"
+    dev = tmp_path / "data/dev/dev_databases/california_schools/database_description"
+    train.mkdir(parents=True)
+    dev.mkdir(parents=True)
+
+    assert description_dir(tmp_path, "beer_factory") == train
+    assert description_dir(tmp_path, "california_schools") == dev
+    assert description_dir(tmp_path, "not_a_schema") is None
+
+
+def test_load_rename_map_reads_either_manifest_root(tmp_path: Path):
+    from governed_bi.eval.bird_loader import load_rename_map
+
+    assert load_rename_map(tmp_path, "beer_factory") == {}
+    (tmp_path / "eval_dataset").mkdir()
+    (tmp_path / "eval_dataset" / "schema_rename_map.json").write_text(
+        json.dumps({"beer_factory": {"customers": "kunden"}}), encoding="utf-8"
+    )
+    assert load_rename_map(tmp_path, "beer_factory") == {"customers": "kunden"}
+    assert load_rename_map(tmp_path, "absent_db") == {}
+
+
+def test_load_rename_map_warns_instead_of_silently_not_translating(tmp_path: Path, caplog):
+    """An empty map reverts every caller to un-translated identifiers.
+
+    ``{}`` is returned for both "manifest absent" and "db not in manifest", and
+    both are falsy, so the SME brief silently goes back to addressing BIRD's
+    original names — the exact defect the rename map exists to fix, with the run
+    completing and the numbers looking normal. Identity-rename dbs carry a full
+    name -> same-name map, so an empty result is never "needs no translation".
+    """
+    from governed_bi.eval.bird_loader import load_rename_map
+
+    with caplog.at_level(logging.WARNING, logger="governed_bi.eval"):
+        assert load_rename_map(tmp_path, "beer_factory") == {}
+    assert "schema_rename_map.json not found" in caplog.text
+
+    (tmp_path / "eval_dataset").mkdir()
+    (tmp_path / "eval_dataset" / "schema_rename_map.json").write_text(
+        json.dumps({"beer_factory": {"customers": "kunden"}}), encoding="utf-8"
+    )
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="governed_bi.eval"):
+        assert load_rename_map(tmp_path, "absent_db") == {}
+    assert "no entry in" in caplog.text

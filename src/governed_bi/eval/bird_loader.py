@@ -16,9 +16,12 @@ tests feed a tmp fixture. Nothing is read at import time.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from .dataset import EvalItem
+
+logger = logging.getLogger("governed_bi.eval")
 
 _SPLITS = ("test", "train")
 _DEFAULT_GOLD_SQL_FIELD = "sql_sqlite"
@@ -134,6 +137,72 @@ def load_bird_items(
             )
         )
     return items
+
+
+def manifest_path(bird_dir: Path | str, filename: str) -> Path | None:
+    """``filename`` under ``artifacts/`` or ``eval_dataset/``, or ``None`` if neither."""
+    bird_dir = Path(bird_dir)
+    for parent in ("artifacts", "eval_dataset"):
+        candidate = bird_dir / parent / filename
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def load_rename_map(bird_dir: Path | str, db_id: str) -> dict[str, str]:
+    """BIRD identifier -> ``rename_decoy`` identifier, for one db.
+
+    ``schema_rename_map.json`` is one *flat* identifier map per db: table names and
+    column names share the namespace, so a column name that collides with a table
+    name (or with a same-named column in another table) has exactly one entry. That
+    is fine for both callers — grading translates table names, the SME brief
+    translates whatever identifier it is addressing — but it means the map cannot
+    express a per-table column rename, and never could.
+
+    An absent file yields an empty map rather than an error, because the
+    identity-rename dbs need no translation at all.
+    """
+    path = manifest_path(bird_dir, "schema_rename_map.json")
+    if path is None:
+        logger.warning(
+            "schema_rename_map.json not found under %s (checked artifacts/ and "
+            "eval_dataset/); db %r will NOT be translated to its physical "
+            "identifiers. Callers that address the obfuscated schema — the SME "
+            "brief above all — will name identifiers that do not exist there.",
+            bird_dir,
+            db_id,
+        )
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    mapping = data.get(db_id)
+    if not mapping:
+        # Identity-rename dbs still carry a full map of name -> same name, so an
+        # absent entry is a missing db, never "this db needs no translation".
+        logger.warning(
+            "db %r has no entry in %s; it will NOT be translated to its physical "
+            "identifiers",
+            db_id,
+            path,
+        )
+        return {}
+    return {str(k): str(v) for k, v in mapping.items() if isinstance(v, str)}
+
+
+def description_dir(bird_dir: Path | str, db_id: str) -> Path | None:
+    """The BIRD ``database_description/`` directory for ``db_id``, or ``None``.
+
+    BIRD splits its schemas across two trees — ``data/train/train_databases/`` and
+    ``data/dev/dev_databases/`` — and the 69-schema pool draws from both. Callers
+    that hardcoded the train tree silently found no CSVs for the 11 dev-tree
+    schemas (california_schools, financial, formula_1, superhero, ...), which
+    turned their SME arm into a blind arm without failing.
+    """
+    bird_dir = Path(bird_dir)
+    for split, tree in (("train", "train_databases"), ("dev", "dev_databases")):
+        candidate = bird_dir / "data" / split / tree / db_id / "database_description"
+        if candidate.is_dir():
+            return candidate
+    return None
 
 
 def available_dbs(dataset_dir: Path | str, split: str = "test") -> set[str]:

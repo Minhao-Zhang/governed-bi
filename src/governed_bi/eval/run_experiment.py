@@ -38,7 +38,7 @@ from ..prompts import (
 from ..provenance import corpus_release_hash
 from ..stages import INFRA_ERROR_PREFIX, Outcome, Stage, classify_outcome
 from .arms import _touches_suspect, agent_solver
-from .bird_loader import load_bird_items
+from .bird_loader import description_dir, load_bird_items, load_rename_map
 from .error_taxonomy import attribute_rows, summarise_attributions
 from .hash_grade import (
     crosscheck_execution_match,
@@ -841,16 +841,19 @@ def run_experiment(
     # --- curated_sme corpus ---
     # Always rebuild + assert the SME brief (even on --resume-curated) so leakage
     # invariants execute for every headline number.
-    desc_dir = (
-        bird_dir
-        / "data"
-        / "train"
-        / "train_databases"
-        / db_id
-        / "database_description"
-    )
+    # ``description_dir`` covers both BIRD trees, and ``rename_map`` re-addresses the
+    # original identifiers in those CSVs to the obfuscated schema the agent queries.
+    desc_dir = description_dir(bird_dir, db_id)
+    if desc_dir is None:
+        print(
+            f"\n*** WARNING: no database_description/ for {db_id!r} under either "
+            "BIRD tree — the SME brief carries no column docs ***"
+        )
     brief = build_sme_brief(
-        desc_dir, train, system_rules=prompt_text("sme_rules", resolved_prompts)
+        desc_dir or bird_dir / "_nonexistent-sme-docs",
+        train,
+        system_rules=prompt_text("sme_rules", resolved_prompts),
+        rename_map=load_rename_map(bird_dir, db_id),
     )
     assert_brief_no_leakage(
         brief,
