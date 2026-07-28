@@ -84,10 +84,52 @@ class ModelConfig:
     embedding_dimensions: int | None = None  # None = model default (1536 for -3-small)
     api_key_env: str = "OPENAI_API_KEY"
     region: str | None = None  # Bedrock only: AWS region; None = boto3 default (AWS_REGION)
+    # Bedrock only: extra model-specific fields merged into the Converse request's
+    # ``additionalModelRequestFields``. The escape hatch for anything the engine does
+    # not translate, and the override for what it does: keys set here win over the
+    # ``llm_reasoning_effort`` translation in ``llm.langchain_client``. Left None,
+    # only the translated reasoning field is sent.
+    bedrock_request_fields: dict[str, Any] | None = None
 
     def api_key(self) -> str | None:
         """Read the API key from the configured environment variable, or None."""
         return os.environ.get(self.api_key_env)
+
+    def has_credentials(self) -> bool:
+        """Whether this deployment can actually authenticate to the provider.
+
+        For OpenAI this is exactly "the named env var is set". For Bedrock it is
+        **not**: boto3 resolves credentials from a chain — env vars, a shared
+        ``~/.aws/credentials`` profile, the SSO cache, an instance/task role — so
+        gating on one env var refuses to boot a perfectly authenticated deployment
+        whose keys live in the documented default place. ``api_key_env`` still wins
+        when it is set, so an operator who wants a hard env-var gate keeps one.
+
+        Note for the no-credentials case: botocore's chain ends at EC2 instance
+        metadata, so a machine with no credentials at all pays a short probe timeout
+        here before returning False. That is once per stack build, not per turn.
+        """
+        if self.api_key() is not None:
+            return True
+        if self.provider != "bedrock":
+            return False
+        try:
+            import botocore.session  # noqa: PLC0415 (lazy: bedrock extra only)
+        except ModuleNotFoundError:
+            return False  # provider=bedrock without the extra: nothing can authenticate
+        try:
+            return botocore.session.get_session().get_credentials() is not None
+        except Exception:
+            return False
+
+    def credentials_hint(self) -> str:
+        """Human-facing description of what to set, for fail-closed error messages."""
+        if self.provider == "bedrock":
+            return (
+                f"AWS credentials — env {self.api_key_env}, an ~/.aws/credentials "
+                "profile (optionally AWS_PROFILE), or an instance/task role"
+            )
+        return self.api_key_env
 
 
 @dataclass(frozen=True)

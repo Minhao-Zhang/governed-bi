@@ -232,9 +232,23 @@ def _build_graph():
 
     stack = build_stack()
     if stack.chat_model is None:
+        models = stack.settings.models
+        if models.has_credentials():
+            # Credentials resolved, so the client build itself failed — pointing at
+            # credentials here sends the reader down the wrong path. The stack logged
+            # the real exception; name the usual suspects so it is actionable.
+            raise RuntimeError(
+                "agentic serve requires a live model; credentials for provider "
+                f"'{models.provider}' resolved, but building the model client failed. "
+                "See the preceding 'live model stack failed to build' log entry for the "
+                "underlying error. On Bedrock the common causes are an unresolvable "
+                "region (nothing in [models].region, AWS_REGION, or the active profile), "
+                f"a model id not enabled in that region ({models.llm_model!r}), or a "
+                "missing 'agents' extra."
+            )
         raise RuntimeError(
             "agentic serve requires a live model but none is configured; set "
-            f"{stack.settings.models.api_key_env} (and install the 'agents' extra)"
+            f"{models.credentials_hint()}"
         )
     return build_chat_graph(stack)
 

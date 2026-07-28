@@ -135,7 +135,10 @@ def _build_model_stack(settings: Settings) -> tuple[Any, Any, str | None, bool, 
     at startup, ``/chat`` returns 503). ``chat_model`` is the raw LangChain model
     the agent core drives; the narrator wraps the same client.
     """
-    if settings.models.api_key():
+    # Provider-aware: an env var for OpenAI, boto3's whole credential chain for
+    # Bedrock (see ModelConfig.has_credentials — an env-var-only check refused to
+    # boot with keys in ~/.aws/credentials).
+    if settings.models.has_credentials():
         try:
             from .. import prompts
             from ..analyst import LlmAnswerNarrator
@@ -159,9 +162,9 @@ def _build_model_stack(settings: Settings) -> tuple[Any, Any, str | None, bool, 
             # A key was set (live intended) but the stack failed to build; make the
             # silent downgrade observable rather than a mystery.
             logger.warning(
-                "%s is set but the live model stack failed to build; "
+                "credentials resolved (%s) but the live model stack failed to build; "
                 "serve will fail closed until it is fixed",
-                settings.models.api_key_env,
+                settings.models.credentials_hint(),
                 exc_info=True,
             )
     return (None, None, None, False, None)

@@ -189,6 +189,41 @@ class LangChainEmbedder:
 # ``models.region`` is unset.
 
 
+def _bedrock_reasoning_fields(models: "ModelConfig") -> dict[str, Any]:
+    """Translate ``llm_reasoning_effort`` into the Converse request field the model's
+    family expects, for ``additionalModelRequestFields``.
+
+    Converse has no portable reasoning parameter: the field name and shape differ per
+    family, which is why this used to be left to a hand-written overlay. But an
+    unset knob meant a configured effort was **silently dropped** on Bedrock — the
+    run then reported an effort it never sent, which is exactly the class of drift the
+    run log exists to catch. Translating here keeps the stamp honest.
+
+    - **Anthropic (Claude)** — ``output_config.effort``, the Messages API effort
+      parameter, passed through Converse. Note what is deliberately NOT sent: on
+      Claude Sonnet 5 / Opus 5 the old ``thinking: {type: "enabled", budget_tokens: N}``
+      block is **rejected with a 400**, and adaptive thinking is already on by
+      default — so effort is the whole configuration, and emitting a thinking block
+      here would break every call.
+    - **Amazon Nova** — ``reasoningConfig.maxReasoningEffort`` (``low``/``medium``/``high``
+      only; a higher level configured here will be rejected by the API rather than
+      silently downgraded).
+
+    An unrecognized family returns ``{}`` rather than guessing a shape: sending the
+    wrong field is a hard API error, and silently sending nothing is the bug above.
+    Use ``[models].bedrock_request_fields`` for a family this does not cover.
+    """
+    effort = (models.llm_reasoning_effort or "").strip().lower()
+    if not effort or effort == "none":
+        return {}
+    model = models.llm_model.lower()
+    if "anthropic" in model or "claude" in model:
+        return {"output_config": {"effort": effort}}
+    if "nova" in model:
+        return {"reasoningConfig": {"type": "enabled", "maxReasoningEffort": effort}}
+    return {}
+
+
 def _build_bedrock_chat(models: "ModelConfig") -> Any:
     _require_langchain_aws()
     from langchain_aws import ChatBedrockConverse  # noqa: PLC0415 (lazy: bedrock extra)
@@ -203,10 +238,17 @@ def _build_bedrock_chat(models: "ModelConfig") -> Any:
     # are model/region specific — set them per deployment via a local overlay rather
     # than forwarding ``request_timeout_s``/``max_retries`` to args
     # ChatBedrockConverse may reject. (The OpenAI path wires both directly.)
-    # Reasoning ("thinking") config on Bedrock is model-family specific — the
-    # Converse request field differs between Anthropic and Nova — so it is not
-    # auto-translated from ``llm_reasoning_effort`` here. Set it per deployment
-    # via a local overlay if a specific model needs it.
+    #
+    # Reasoning: the family-specific translation, with an explicit overlay on top so a
+    # deployment can correct or extend it without an engine change.
+    extra: dict[str, Any] = _bedrock_reasoning_fields(models)
+    if models.bedrock_request_fields:
+        extra.update(models.bedrock_request_fields)
+    if extra:
+        kwargs["additional_model_request_fields"] = extra
+    # `llm_temperature` is deliberately NOT forwarded: current Claude models reject a
+    # non-default sampling parameter outright, so honoring it here would turn a
+    # recorded-but-unused default into a 400 on every call.
     return ChatBedrockConverse(**kwargs)
 
 
