@@ -19,6 +19,7 @@ from governed_bi.retrieval import (
     fuse_rankings,
     retrieve,
 )
+from governed_bi.retrieval.rvgd import asset_document
 
 CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 
@@ -33,9 +34,54 @@ def corpus():
 # --------------------------------------------------------------------------- #
 
 
-def test_embedding_index_covers_all_assets(corpus):
+def test_embedding_index_covers_every_asset_with_a_language_surface(corpus):
+    """Every asset that has text gets a vector — and only those.
+
+    ``asset_document`` returns "" by design for types with no language surface
+    (joins), which it documents as "never match". This asserted equality with *all*
+    assets, which quietly required the opposite: a vector for a blank document.
+    """
     index = build_embedding_index(corpus, HashingEmbedder())
-    assert set(index.vectors) == {a.id for a in corpus.assets}
+    expected = {a.id for a in corpus.assets if asset_document(a).strip()}
+    assert set(index.vectors) == expected
+    assert expected, "fixture corpus should have some embeddable assets"
+
+
+def test_embedding_index_never_embeds_a_blank_document(corpus):
+    """Regression: blank documents must not reach the embedder at all.
+
+    Bedrock Titan rejects an empty ``inputText`` with
+    ``ValidationException: expected minLength: 1``, which took down every chat turn
+    on a join-heavy corpus. OpenAI accepts it, so the bug was invisible until the
+    provider changed. Assert on what is *sent*, not just on the resulting index —
+    the crash happened inside the embedder call.
+    """
+    seen: list[str] = []
+
+    class RecordingStrictEmbedder(HashingEmbedder):
+        def embed(self, texts):
+            seen.extend(texts)
+            if any(not t.strip() for t in texts):
+                raise AssertionError("blank document sent to the embedder")
+            return super().embed(texts)
+
+    index = build_embedding_index(corpus, RecordingStrictEmbedder())
+    assert seen, "embedder should have been called"
+    # Joins are the blank-document type in this corpus; none may be indexed.
+    assert not [asset_id for asset_id in index.vectors if asset_id.startswith("join_")]
+
+
+def test_embedding_index_keeps_ids_aligned_with_vectors(corpus):
+    """Skipping blanks must not shift the id->vector zip.
+
+    Each id must map to the vector of *its own* document, so embedding a document
+    directly has to reproduce the indexed vector.
+    """
+    embedder = HashingEmbedder(dimensions=128)
+    index = build_embedding_index(corpus, embedder)
+    by_id = {a.id: a for a in corpus.assets}
+    for asset_id, vector in index.vectors.items():
+        assert vector == embedder.embed_one(asset_document(by_id[asset_id]))
 
 
 def test_embedding_index_rank_is_deterministic_and_sorted(corpus):

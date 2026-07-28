@@ -43,11 +43,28 @@ class EmbeddingIndex:
 
 
 def build_embedding_index(corpus: "Corpus", embedder: "Embedder") -> EmbeddingIndex:
-    """Embed one document per asset (the same text BM25 indexes) into an index."""
-    ids = [a.id for a in corpus.assets]
-    docs = [asset_document(a) for a in corpus.assets]
-    vectors = embedder.embed(docs)
-    return EmbeddingIndex(dict(zip(ids, vectors)))
+    """Embed one document per asset (the same text BM25 indexes) into an index.
+
+    Assets whose document is blank are **skipped, not embedded**. That is not a
+    defensive nicety: ``asset_document`` returns ``""`` by design for types with no
+    language surface (joins, today — see its docstring), and those are supposed to
+    "never match". Sending them anyway meant embedding a blank string, which is
+    both meaningless and provider-dependent — OpenAI accepts it and hands back a
+    vector that can still score above zero and pollute the ranking, while Bedrock
+    Titan rejects it outright (``ValidationException: expected minLength: 1``) and
+    took the whole turn down. An asset with nothing to say gets no vector, so it
+    cannot match on the V channel — which is what the contract already promised.
+
+    This mirrors the guard ``schema_router.embed_schema_documents`` already applies
+    to its own documents; this was the one embed call site missing it. Skipping also
+    drops ~a quarter of the calls on a join-heavy corpus, which matters because
+    Bedrock's embedder issues one HTTP request per document.
+    """
+    pairs = [(a.id, doc) for a in corpus.assets if (doc := asset_document(a)).strip()]
+    if not pairs:
+        return EmbeddingIndex({})
+    vectors = embedder.embed([doc for _id, doc in pairs])
+    return EmbeddingIndex(dict(zip([asset_id for asset_id, _doc in pairs], vectors)))
 
 
 def fuse_rankings(
