@@ -1435,23 +1435,15 @@ def ladder_deltas(
             deltas[f"{hi}_minus_{lo}_{label}"] = (
                 None if lo_v is None or hi_v is None else hi_v - lo_v
             )
-        # What the step cost, and what each extra right answer cost. The ladder's whole
-        # mechanism is that later rungs inject more context, and context is billed — so
-        # a rung that buys accuracy always buys it with tokens. Per-arm totals were
-        # already recorded, but the question a reader actually has to answer is whether
-        # to ship the layer, and that is a ratio: dollars per additional correct answer.
-        # Leaving them to divide two numbers out of two different blocks is how "the
-        # curator is worth N points" gets decided without anyone pricing N.
+        # Dollars per additional correct answer. Later rungs buy accuracy with tokens,
+        # so the ship/don't-ship question is a ratio, not two totals in two blocks.
         #
-        # ``None`` rather than a number wherever it would be meaningless. The branch chain
-        # below is the enumeration — deliberately not restated as a count here, because a
-        # count in a comment goes stale the moment a branch is added, and this one already
-        # did. ``_not_priced_because`` names the reason on the pair itself, and
-        # ``tests/test_ladder_design.py`` enumerates the whole state space rather than
-        # sampling it, because this chain has been wrong in a different cell three times.
-        #
-        # Pricing requires identical question-id sets. Equal-N different pools used to
-        # emit a plausible dollar figure that was not a paired gain.
+        # ``None`` rather than a number wherever it would be meaningless;
+        # ``_not_priced_because`` names the reason on the pair itself. Pricing requires
+        # identical question-id sets — equal-N different pools used to emit a plausible
+        # figure that was not a paired gain. ``tests/test_ladder_design.py`` enumerates
+        # the whole state space rather than sampling it; this chain has been wrong in a
+        # different cell three times.
         lo_cost = (summaries[lo].get("cost") or {}).get("total_cost_est_usd")
         hi_cost = (summaries[hi].get("cost") or {}).get("total_cost_est_usd")
         # Priced-row coverage. ``total_cost_est_usd`` sums only the rows that carried a
@@ -1732,21 +1724,12 @@ def _compare_arms(
                 or bool(replicate_arm and replicate_arm in (a, b))
             )
             report["diagnostic_pair"] = is_diagnostic
-            # What this pair bundles, on the pair itself. The information existed
-            # only in ``deltas.*_bundles``, which is keyed by a different naming
-            # convention (``curated_sme_minus_curated_bundles``) and covers only the
-            # adjacent steps — so the pre-quote checklist's "check the step you are
-            # quoting is adjacent" meant cross-referencing two blocks, and for a pair
-            # like ``curated vs seeded`` there is no delta entry to cross-reference
-            # at all. ``comparisons[]`` is the block the checklist sends people to;
-            # the label belongs where the p-value is.
-            #
-            # Computed by the same ``skipped_rungs`` as the deltas block and as
-            # ``analysis.json``, so the three cannot disagree about what is a
-            # single-variable step. Oracle and replicate pairs are off the ladder
-            # entirely: ``skipped_rungs`` returns ``[]`` for an arm it cannot place,
-            # which would read as "single-variable" — the opposite of what a
-            # diagnostic pair is — so they are labelled ``None``.
+            # What this pair bundles, stamped on the pair itself: the pre-quote
+            # checklist sends readers to ``comparisons[]``, so the adjacency label
+            # belongs where the p-value is. Computed by the same ``skipped_rungs`` as
+            # the deltas block and ``analysis.json``, so the three cannot disagree.
+            # Off-ladder pairs are ``None``, not ``[]`` — ``skipped_rungs`` returns
+            # ``[]`` for an arm it cannot place, which would read as single-variable.
             if report["diagnostic_pair"]:
                 report["single_variable"] = None
             else:
@@ -1787,21 +1770,15 @@ def _compare_arms(
                 pair["diagnostic_pair"] = True
             divergences.append(pair)
 
-    # Family-wise error control across the fair ladder's comparisons. Four arms is
-    # six pairwise tests; at a nominal 0.05 each, the chance of at least one false
-    # positive across the family is ~26%, and every one of them used to be reported
-    # as though it stood alone.
+    # Family-wise error control across the fair ladder. Four arms is six pairwise
+    # tests, so at a nominal 0.05 each the chance of one false positive is ~26%.
     #
-    # The family is the pairs that actually tested a hypothesis this run is asking,
-    # which is narrower than "every pair" in two ways. Diagnostic pairs are out — the
-    # oracle rungs and the replicate arm, handled by ``diagnostic_pair`` above. And a
-    # pair sharing NO questions is out: its ``p_value`` is 1.0 computed from an empty
-    # discordance count, which is the arithmetic of having nothing to compare rather
-    # than a measurement, and counting it tightens every other pair on behalf of a
-    # test that never ran. Reachable whenever one arm's rows cover different question
-    # ids than another's — a truncated arm, a resume across a row-shape change — and
-    # the sibling report in ``eval.analysis`` already excluded it, so leaving it here
-    # meant the two artifacts corrected the same run across different family sizes.
+    # The family is narrower than "every pair" in two ways. Diagnostic pairs are out
+    # (oracle rungs and the replicate, via ``diagnostic_pair`` above). And a pair
+    # sharing NO questions is out: its ``p_value`` of 1.0 comes from an empty
+    # discordance count, so counting it tightens every real pair on behalf of a test
+    # that never ran. ``eval.analysis`` excludes it too, or the two artifacts would
+    # correct the same run across different family sizes.
     family = [
         c
         for c in comparisons
@@ -2226,22 +2203,15 @@ def _summarise_rows(
             else None
         ),
         # EX split by whether the gold statement already existed in train (see
-        # ``eval.leakage``). ``ex_no_twin`` is the defensible headline: on those
-        # questions the curator had nothing to recall, so a lift is generalisation.
-        # ``ex_twin`` is worth reporting beside it rather than hidden — a pipeline
-        # that recalls well is not useless, it is just not the claim being made.
+        # ``eval.leakage``). ``ex_no_twin`` is the defensible headline — the curator had
+        # nothing to recall there, so a lift is generalisation; ``ex_twin`` sits beside
+        # it rather than hidden.
         #
-        # ``None`` when a stratum is empty OR when stamp coverage is incomplete.
-        # Both strata exist on the real split, so a ``None`` here means the flag was
-        # never stamped — a run that predates it, a driver that forgot to pass
-        # ``twin_ids``, or a partial resume across the boundary. ``is not None``,
-        # not truthiness. A row from before the flag existed has the key ABSENT, and
-        # ``not r.get(...)`` put it in the twin-FREE stratum — so on a resumed run
-        # ``ex_no_twin`` silently became the pooled EX. Partial coverage is worse:
-        # emitting a rate over only the stamped subset while ``n`` still counts
-        # unstamped rows. Refuse both rates unless every scored row is stamped —
-        # the same :func:`_twin_stamps_complete` gate ``comparisons[].no_twin`` uses,
-        # including frozen / order-sensitive rows that leave the gradeable pool.
+        # ``None`` when a stratum is empty OR when stamp coverage is incomplete, gated
+        # by :func:`_twin_stamps_complete` (the same gate ``comparisons[].no_twin``
+        # uses). Test on ``is not None``, never truthiness: an unstamped row has the key
+        # ABSENT, and ``not r.get(...)`` would file it as twin-FREE, which silently
+        # turns ``ex_no_twin`` into the pooled EX on a resumed run.
         "n_gold_twin_in_train": sum(
             1 for r in rows if r.get("gold_twin_in_train") is True
         ),
@@ -2554,30 +2524,15 @@ def _summarise_rows(
         "n_with_difficulty": sum(
             1 for r in rows if r.get("difficulty") not in (None, "", "unknown")
         ),
-        # Per-database diagnosis, not just per-database EX.
+        # Per-database diagnosis, not just per-database EX: the cluster sign test
+        # reports which databases moved, so the artifact has to be able to answer why.
+        # It is the same function over a subset of the same rows, so a per-db figure
+        # cannot disagree with the run-wide one by construction.
         #
-        # This used to be two numbers per db (`ex_lenient`, `n`), which says WHICH
-        # schemas are dragging a pooled run down and nothing about WHY — and "why" is
-        # the first question a 69-schema run raises. Worse, the cluster sign test in
-        # `comparisons[].cluster` reports which databases improved or regressed, so the
-        # artifact was raising a question it could not answer.
-        #
-        # It is the same function applied to a subset of the same rows, so a per-db
-        # figure cannot disagree with the run-wide one by construction — the
-        # alternative (a parallel set of per-db counters) is how two numbers that
-        # should be equal drift apart. Costs nothing: pure aggregation over rows
-        # already on disk, no query and no model call.
-        #
-        # Reading these as a rollup needs one caution: a *conditional* rate weights by
-        # its own denominator, not by ``n``. ``cond_ex_given_routing`` weights by
-        # routed rows, ``schema_pick_accuracy`` by rows that recorded a pick,
-        # ``errors.multi_class_share`` by diffed rows — so the pooled figure is not the
-        # ``n``-weighted mean of the per-db ones and should not be reconstructed that
-        # way. What IS guaranteed is that each per-db figure equals the same formula
-        # over that db's rows, because it is the same call.
-        #
-        # ``nested`` stops the recursion and drops the bucket blocks, which are noise
-        # at this level (a single db's `by_db` is itself).
+        # One caution when rolling up: a *conditional* rate weights by its own
+        # denominator, not by ``n`` (``cond_ex_given_routing`` by routed rows,
+        # ``schema_pick_accuracy`` by rows with a pick), so the pooled figure is not
+        # the ``n``-weighted mean of the per-db ones. ``nested`` stops the recursion.
         "by_db": (
             {}
             if nested
@@ -3332,24 +3287,14 @@ def _run_pool_arm(
     else:
         out_path.unlink(missing_ok=True)  # fresh run: never append to a stale file
 
-    # A crashed row is not a measurement, so replaying it preserves nothing and costs
-    # the whole run: ``quotable()`` refuses any arm with a non-zero crash rate, so one
-    # bad turn in 10,150 disqualifies the result — and a resume used to hand that same
-    # row straight back, leaving hand-editing the JSONL as the only recovery from a
-    # transient provider failure a re-serve would very likely clear.
-    #
-    # Re-served rather than dropped, and the stale row is removed from the file first:
-    # leaving it would put two rows under one ``question_id``, which double-counts in
-    # every denominator and which ``eval.analysis`` rejects outright as a corrupt file.
-    #
-    # Re-serving clears ``crash_rate`` on the new rows, which would otherwise launder
-    # the run back to quotable (audit E1). ``n_re_served`` is therefore written into
-    # the arm summary and ``quotable()`` refuses any non-zero count. Completing the
-    # generations file is still useful operationally; quoting it is not.
-    #
-    # ``--replay-crashed`` is the honest opt-in: keep the crashed rows, leave
-    # ``crash_rate > 0``, and never claim the re-draws did not happen. Off by default
-    # so a resume can finish the artifact; on when you want a byte-identical replay.
+    # A crashed row is not a measurement, and ``quotable()`` refuses any arm with a
+    # non-zero crash rate, so a resume re-serves crashed rows rather than handing them
+    # back. The stale row is deleted from the file first: two rows under one
+    # ``question_id`` double-count in every denominator, and ``eval.analysis`` rejects
+    # the file outright. Re-serving would otherwise launder the run back to quotable
+    # (audit E1), so ``n_re_served`` goes into the arm summary and ``quotable()``
+    # refuses any non-zero count — finishing the artifact is useful, quoting it is not.
+    # ``--replay-crashed`` keeps the crashed rows and leaves ``crash_rate > 0``.
     n_re_served = 0
     if resume and not replay_crashed:
         crashed = [r for r in done_rows if classify_row(r)[0] is Outcome.crashed]
@@ -3887,20 +3832,13 @@ def run_datalake(
     )
 
     # --- GOLD PRE-FLIGHT, before the build phase spends anything on a model ---
-    # Needs only Postgres and the split files, never a corpus — and it used to run
-    # *after* the builds, so a wrong DSN or the wrong gold field aborted a run that had
-    # already paid for a curator pass and an SME round on every schema. About 40 ms per
-    # row per schema, so a few seconds over the full split: the cheapest possible place
-    # to find out the grader cannot be trusted.
+    # Needs only Postgres and the split files, never a corpus, and costs seconds over
+    # the full split — the cheapest place to learn the grader cannot be trusted. Runs
+    # here, not after the builds, or a wrong DSN aborts a run that already paid for a
+    # curator pass and an SME round on every schema.
     #
-    # Sampled over ``wanted`` because nothing is built yet. ``built`` is a subset, so
-    # clearing this clears the scored pool too; the post-build check re-runs over the
-    # exact scored rows anyway.
-    # Before any build work. This used to sit inside the serve block, downstream of
-    # the curator loop, so ``--replicate curated --arms baseline`` spent two LLM
-    # curator passes over every schema and then aborted on an argument that was
-    # already wrong when the process started. Verified live: the run printed
-    # ``built corpora: address (1/1)`` before raising.
+    # Sampled over ``wanted`` because nothing is built yet; ``built`` is a subset, and
+    # the post-build check re-runs over the exact scored rows anyway.
     if replicate_of and replicate_of not in arms:
         raise ValueError(
             f"--replicate {replicate_of!r} is not one of the arms being run "
