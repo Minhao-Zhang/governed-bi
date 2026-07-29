@@ -28,7 +28,15 @@ record — decisions belong in [design-decisions.md](design-decisions.md) and
 ## Experiment design
 
 The instrument is sound; the design does not yet isolate the claim. In priority
-order:
+order.
+
+**Before adding arms, read the conditional diagnostics.** X1 and X2 exist to
+isolate *which part of the corpus does the work*, and that needs new arms. But six
+within-arm conditionals now give a partial answer for free, on rows you already
+have — stamp calibration, decoy-touch with vs without a caveat, EX with vs without
+a note, EX after a repair, and a ceiling on guardrail-induced loss. See
+[Eval metrics](eval-metrics.md#conditional-diagnostics--which-part-of-the-governance-is-doing-the-work).
+If the caveat split shows no effect, X2's ablation has its answer before the run.
 
 | # | What | Why it blocks a claim |
 | --- | --- | --- |
