@@ -20,7 +20,7 @@ abstractions are seamed in but toggled off. Evaluated on the self-built
 4. [Curator](curator.md): the build-side proposer + adversary loop. For the exact prompts, see [Curator LLM-call walkthrough](curator-llm-call.md).
 5. [Analyst](analyst.md): the serve-side governed agentic core + guardrails. For the exact prompts, see [Analyst LLM-call walkthrough](analyst-llm-call.md).
 6. [Viz](viz.md): the audit surface — the presenter view models plus the `governed_bi.api` HTTP API to browse the layer and chat with the governed Analyst (corpus write gated by `allow_edit`; the interactive UI is a separate project).
-7. [Measurement](measurement.md): what the eval harness records and where a failure localises — read this when a number looks wrong.
+7. [Measurement](measurement.md): what the eval harness records and where a failure localises — read this when a number looks wrong. The field-by-field register is [Eval metrics](eval-metrics.md).
 8. [Prompt-variant experiments](prompt-experiments.md): the prompt registry, how a run selects a variant, what gets stamped where, and how to decide which variant a measured failure actually calls for.
 9. [Glossary](glossary.md): canonical terms.
 

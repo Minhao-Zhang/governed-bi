@@ -27,7 +27,6 @@ from ..gateway import Gateway, Identity
 from ..gateway.connectors.postgres import PostgresConnector
 from ..prompts import (
     parse_cli_overrides,
-    prompt_set_hash,
 )
 from ..prompts import (
     resolve as resolve_prompts,
@@ -35,8 +34,8 @@ from ..prompts import (
 from ..prompts import (
     text as prompt_text,
 )
-from ..provenance import corpus_release_hash
 from ..stages import INFRA_ERROR_PREFIX, Outcome, Stage, classify_outcome
+from . import metrics
 from .arms import _touches_suspect, agent_solver
 from .bird_loader import description_dir, load_bird_items, load_rename_map
 from .error_taxonomy import attribute_rows, summarise_attributions
@@ -48,7 +47,6 @@ from .hash_grade import (
     score_sql_hashes,
     validate_gold_hashes_live,
 )
-from .index import manifest_model
 from .parallel import ServeWorker, resolve_workers, run_ordered_pool
 from .treatment import fingerprint_arm
 
@@ -126,37 +124,46 @@ def build_manifest(
     skip_agent: bool,
     model_name: str | None,
     resolved_prompts: dict[str, str],
+    split: str = "test",
 ) -> dict[str, Any]:
-    """The single-schema driver's manifest.
+    """The single-schema driver's manifest, built through the shared register.
 
-    Module-level so it can be asserted on directly. Inline in ``run_experiment`` it
-    was only reachable by running the whole driver, so the one property that matters
-    to the shared ledger — ``model`` is ``None`` under ``--skip-agent`` — could only
-    be checked by reading the source. A test that reads source text passes a
-    semantically equivalent rewrite, and that is exactly how this field drifted away
-    from the pooled driver's the first time, letting a smoke run be reported
-    *comparable* to a real one.
+    It used to be an independent dict, and it was missing six of the eight keys
+    ``eval.index.COMPARABILITY_KEYS`` reads. Four of those omissions were harmless
+    — this driver pins one schema, so the router never runs and its knobs have no
+    value to record. Two were not: ``split``, and ``corpus_content_hash``, whose own
+    comment in ``index.py`` names it as the one thing the comparability check did
+    not cover because the corpus *is* the treatment.
+
+    ``comparable()`` skips a knob that is ``None`` on both sides, so those two
+    absences did not read as "unknown, be careful" — they read as "these agree".
+    Two runs of this driver over different corpora, on different splits, compared as
+    the same configuration. And this is the driver whose numbers were quoted.
+
+    Routing knobs are passed as ``None`` deliberately, with ``routing_bypassed``
+    recording *why*, so "not applicable" and "not recorded" stop looking alike.
     """
-    return {
+    return metrics.build_manifest(
+        mode="single",
+        bird_dir=bird_dir,
+        split=split,
+        model_name=model_name,
+        prompt_variants=resolved_prompts,
+        skip_agent=skip_agent,
+        created_at_utc=_utc_ts(),
+        # One pinned schema: the router does not run, so there is no shortlist size
+        # or picker setting to report.
+        route_top_k=None,
+        route_llm_pick=None,
+        schema_pick_max_columns=None,
+        use_embedder=None,
+        db_ids=[db_id],
+        pg_dsn_host=_dsn_host(pg_dsn),
+        max_agent_steps=max_agent_steps,
+    ) | {
+        # Kept alongside ``db_ids`` for readers (and artifacts) that address the
+        # single-schema run by its one schema.
         "db_id": db_id,
-        "bird_dir": str(bird_dir),
-        # The host actually connected to, not a literal: a manifest that always says
-        # 127.0.0.1:5435 cannot tell two runs against different databases apart.
-        "pg_dsn_host": _dsn_host(pg_dsn),
-        "created_at_utc": _utc_ts(),
-        # Which commit produced this. Recoverable from nothing else in the directory,
-        # and ``eval.index`` reads it — the pooled driver already records it.
-        "git_sha": corpus_release_hash(),
-        "max_agent_steps": max_agent_steps,
-        "skip_agent": skip_agent,
-        "serve_path": "agent_core",  # agent-only serve (ADR 0002)
-        # One definition, shared with the pooled driver, because both write this
-        # field into the same ledger and had already drifted apart once.
-        "model": manifest_model(model_name, skip_agent=skip_agent),
-        # Same key names the pooled driver writes and ``eval.index`` reads: the map
-        # for a human, the text hash for the comparability rule.
-        "prompt_variants": resolved_prompts,
-        "prompt_set_hash": prompt_set_hash(resolved_prompts),
     }
 
 
@@ -1151,9 +1158,18 @@ def run_experiment(
         model_name=settings.models.llm_model,
         resolved_prompts=resolved_prompts,
     )
-    (run_root / "manifest.json").write_text(
-        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    # The corpus IS the treatment, so the digest of what was actually served has to
+    # reach the ledger. Stamped here rather than in the builder because the corpora
+    # do not exist when the manifest is first shaped.
+    metrics.stamp_corpus_hashes(
+        manifest,
+        {
+            "baseline": corpus_baseline,
+            "curated": corpus_curated,
+            "curated_sme": corpus_curated_sme,
+        },
     )
+    metrics.write_manifest(run_root, manifest)
 
     connector.close()
     return result

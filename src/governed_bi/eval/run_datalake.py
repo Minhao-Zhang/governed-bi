@@ -67,7 +67,6 @@ from ..gateway import Gateway, Identity
 from ..gateway.connectors.postgres import PostgresConnector
 from ..prompts import (
     parse_cli_overrides,
-    prompt_set_hash,
 )
 from ..prompts import (
     resolve as resolve_prompts,
@@ -75,7 +74,6 @@ from ..prompts import (
 from ..prompts import (
     text as prompt_text,
 )
-from ..provenance import corpus_content_hash, corpus_release_hash
 from ..stages import (
     INFRA_ERROR_PREFIX,
     REFUSED_BY_TO_STAGE,
@@ -84,6 +82,7 @@ from ..stages import (
     classify_outcome,
     classify_row,
 )
+from . import metrics
 from .analysis import census_delta, corpus_census, rank_report
 from .arms import (
     ARM_ORDER,
@@ -107,7 +106,7 @@ from .hash_grade import (
     score_sql_hashes,
     validate_gold_hashes_live,
 )
-from .index import RESUME_DRIFT_KEYS, index_run, manifest_model
+from .index import RESUME_DRIFT_KEYS, index_run
 from .leakage import is_gradeable_eval_row, twin_report, ungradeable_question_ids
 from .oracle import GoldIndex, OracleRung, oracle_solver
 from .parallel import ServeWorker, resolve_workers, run_ordered_pool
@@ -876,12 +875,11 @@ def _build_manifest(
     *,
     bird_dir: Path,
     split: str,
-    # The CONFIGURED name, not a resolved value. ``manifest_model`` is applied inside,
-    # so a caller cannot write a model name for a run that never called one. Taking
-    # the resolved value here was the drift: both drivers had to remember to apply the
-    # rule, and ``run_experiment`` forgot, which is what let a smoke run be reported
-    # COMPARABLE to a real one. A test can pin a helper; only the signature can stop
-    # the call site from bypassing it.
+    # The CONFIGURED name, not a resolved value. ``manifest_model`` is applied inside
+    # the shared builder, so a caller cannot write a model name for a run that never
+    # called one. Taking the resolved value here was the original drift: both drivers
+    # had to remember to apply the rule and one forgot, which let a smoke run be
+    # reported COMPARABLE to a real one.
     model_name: str | None,
     prompt_variants: dict[str, str],
     route_top_k: int,
@@ -893,6 +891,10 @@ def _build_manifest(
     build_workers: int = 1,
     # The run's SCOPE. Not knobs — they decide which arms exist and which questions
     # are in the pool, so a resume that disagrees is not the same experiment at all.
+    # Recorded because none of them is derivable from the directory's contents, so
+    # they were silently re-read from argv on every invocation: the runbook's resume
+    # line omits ``--arms``/``--dbs``/``--oracle``/``--replicate``, so resuming a
+    # Step 3 rung directory dropped ``--oracle`` and picked up the four default arms.
     arms: tuple[str, ...] = (),
     oracles: tuple[str, ...] = (),
     replicate_of: str | None = None,
@@ -903,69 +905,40 @@ def _build_manifest(
     allow_git_sha_drift: bool = False,
     llm_temperature: float | None = None,
 ) -> dict[str, Any]:
-    """Every knob that changes what a scored row MEANS, as one dict.
+    """The pooled driver's manifest, built through the shared register.
 
-    Its own function so the invariant "a resume knob absent from the manifest can
-    never fire" is testable without a Postgres instance — that guard is the only
-    thing standing between a re-invocation and one arm's rows silently spanning two
-    configurations, and it reads this dict by key name.
+    Kept as a named function with this signature because the invariant "a resume
+    knob absent from the manifest can never fire" has to be testable without a
+    Postgres instance — that guard is the only thing standing between a
+    re-invocation and one arm's rows silently spanning two configurations, and it
+    reads this dict by key name. :func:`governed_bi.eval.metrics.validate_manifest`
+    now enforces the same thing from the other side.
     """
-    return {
-        "mode": "datalake",
-        "bird_dir": str(bird_dir),
-        "created_at_utc": _utc_ts(),
-        # The run ledger's comparability rule reads this: two runs of different code
-        # are not the same experiment, and "which commit produced this?" is not
-        # recoverable from anything else in the directory.
-        "git_sha": corpus_release_hash(),
-        "model": manifest_model(model_name, skip_agent=skip_agent),
-        # Recorded even when None (= provider default): an unrecorded decoding
-        # temperature makes two "identical" runs incomparable (AUDIT E5).
-        "llm_temperature": llm_temperature,
-        # Declared here, filled after the build: this manifest is written before any
-        # corpus exists (the gold pre-flight must run before a model is paid for), and
-        # a comparability key absent from the manifest can never fire.
-        "corpus_content_hash": None,
-        # Both, by the same argument as the stamped record: the map so a reader
-        # knows what ran, the hash so the ledger's comparability rule and the
-        # resume guard have one key that also moves when a prompt is EDITED.
-        "prompt_variants": dict(prompt_variants),
-        "prompt_set_hash": prompt_set_hash(prompt_variants),
-        "split": split,
-        "route_top_k": route_top_k,
-        "route_llm_pick": route_llm_pick,
-        "schema_pick_max_columns": schema_pick_max_columns,
-        "use_embedder": use_embedder,
-        "skip_agent": skip_agent,
-        # Concurrency knobs are recorded but deliberately NOT in ``_RESUME_KNOBS``:
-        # they change how long a run takes, never what a scored row means, and
-        # per-build isolation makes a resume at a different width safe.
-        "serve_workers": serve_workers,
-        "build_workers": build_workers,
-        # Scope, recorded so ``--resume-from`` can refuse to change it. None of these
-        # were in the manifest, and none are derived from the directory's contents, so
-        # they were silently re-read from argv on every invocation: the runbook's own
-        # resume line omits ``--arms``/``--dbs``/``--oracle``/``--replicate``, so
-        # resuming a Step 3 rung directory dropped ``--oracle`` and picked up the four
-        # default arms — two LLM curator passes over the pool plus three extra serve
-        # passes, i.e. most of a Step 2 budget, from an operator who typed a resume.
-        # A *narrower* resume was worse: ``summary.json`` is written once at the end,
-        # so it came back holding only the arms served in that attempt.
-        "arms": list(arms),
-        "oracles": list(oracles),
-        "replicate_of": replicate_of,
+    return metrics.build_manifest(
+        mode="datalake",
+        bird_dir=bird_dir,
+        split=split,
+        model_name=model_name,
+        prompt_variants=prompt_variants,
+        skip_agent=skip_agent,
+        created_at_utc=_utc_ts(),
+        route_top_k=route_top_k,
+        route_llm_pick=route_llm_pick,
+        schema_pick_max_columns=schema_pick_max_columns,
+        use_embedder=use_embedder,
+        arms=arms,
+        oracles=oracles,
+        replicate_of=replicate_of,
         # ``None`` means "the whole split", which is different from an empty list.
-        "db_ids": None if db_ids is None else sorted(db_ids),
-        # Per-db and db-count caps. Absent from the earlier scope set, so a capped
-        # smoke directory resumed without the same flags widened to the full split
-        # (or the reverse) before any spend gate fired.
-        "limit": limit,
-        "limit_dbs": limit_dbs,
-        "question_scope_hash": question_scope_hash,
-        # Explicit override for paid resume after a code edit. Smoke (``skip_agent``)
-        # still warns-and-continues without it; paid fails closed unless this is set.
-        "allow_git_sha_drift": allow_git_sha_drift,
-    }
+        db_ids=None if db_ids is None else sorted(db_ids),
+        limit=limit,
+        limit_dbs=limit_dbs,
+        question_scope_hash=question_scope_hash,
+        serve_workers=serve_workers,
+        build_workers=build_workers,
+        allow_git_sha_drift=allow_git_sha_drift,
+        llm_temperature=llm_temperature,
+    )
 
 
 def _read_manifest(out_dir: Path) -> dict[str, Any]:
@@ -3827,9 +3800,7 @@ def run_datalake(
             out_dir, manifest, allow_git_sha_drift=allow_git_sha_drift
         )
         manifest = _merge_resume_manifest(_read_manifest(out_dir), manifest)
-    (out_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
-    )
+    metrics.write_manifest(out_dir, manifest)
 
     # --- GOLD PRE-FLIGHT, before the build phase spends anything on a model ---
     # Needs only Postgres and the split files, never a corpus, and costs seconds over
@@ -4008,11 +3979,9 @@ def run_datalake(
     # spent on a model), so the corpus hash — the identity of the *treatment* — can
     # only be recorded here. Without it two runs over different curator draws
     # compared as if comparable (AUDIT E5).
-    observed_corpus_hash = corpus_content_hash([roots[arm] for arm in sorted(arms)])
-    manifest["corpus_content_hash_observed"] = observed_corpus_hash
-    manifest["corpus_content_hash_by_arm"] = {
-        arm: corpus_content_hash([roots[arm]]) for arm in sorted(arms)
-    }
+    observed_corpus_hash = metrics.stamp_corpus_hashes(
+        manifest, {arm: roots[arm] for arm in sorted(arms)}
+    )
     prior_hash = manifest.get("corpus_content_hash")
     if prior_hash is None:
         manifest["corpus_content_hash"] = observed_corpus_hash
@@ -4025,9 +3994,7 @@ def run_datalake(
             f"({prior_hash} -> {observed_corpus_hash}); rows from the two builds are "
             "not the same experiment"
         )
-    (out_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
-    )
+    metrics.write_manifest(out_dir, manifest)
     corpus_validation = _validate_corpora(corpora)  # no connector: public-default
     _warn_if_not_green(corpus_validation)
     # Serve gets the Analyst view (D6): a governance.excluded asset must reach
@@ -4381,10 +4348,7 @@ def run_datalake(
     (out_dir / "summary.json").write_text(
         json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
-    (out_dir / "manifest.json").write_text(
-        json.dumps({**manifest, "completed_at_utc": _utc_ts()}, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    metrics.write_manifest(out_dir, {**manifest, "completed_at_utc": _utc_ts()})
 
     # A crashy arm is not a result: the crashes it absorbed are OUR failures, and
     # they are not distributed equally across arms, so the deltas move with them.
