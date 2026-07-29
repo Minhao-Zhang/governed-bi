@@ -52,6 +52,7 @@ import re
 import shutil
 import threading
 import time
+import traceback
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -3501,6 +3502,55 @@ def _run_pool_arm(
         )
 
     def _grade_one(
+        pair: tuple[Any, str], *, solver, gateway
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Solve, grade and record ONE pooled ``(item, db)`` pair — crash-contained.
+
+        The scoring body below guards only the solver call, and everything after it
+        — grading, hash comparison, the ~150-field row, and the ``json.dumps`` that
+        persists it — ran unguarded. ``run_ordered_pool`` re-raises task exceptions on
+        purpose (absorbing them would turn a crashing arm into a merely-refusing one),
+        the serve loop's enclosing block is a ``try``/``finally`` with no ``except``,
+        and ``summary.json`` plus ``index_run`` come after it. So a single
+        non-serialisable field, or any bug in one row's bookkeeping, took down a
+        multi-hour run leaving no summary and no ledger entry at all — invisible to
+        the ledger rather than flagged in it, which is worse than every reason
+        ``quotable()`` can state.
+
+        The third option the re-raise comment did not consider is the one the solver
+        call already uses: catch, stamp ``Outcome.crashed``, keep going. A crashed row
+        is still counted as a crash — ``classify_row`` prefers the stamped ``outcome``
+        — so nothing is laundered into a refusal or a wrong answer.
+        """
+        item, db = pair
+        try:
+            return _grade_one_scored(pair, solver=solver, gateway=gateway)
+        except Exception as err:
+            detail = f"{type(err).__name__}: {err}"
+            print(
+                f"*** WARNING: grading {item.question_id or item.question!r} on {db!r} "
+                f"raised after the solver returned ({detail}) — recorded as a crashed "
+                "row so the run survives; the row's other fields are unmeasured ***"
+            )
+            traceback.print_exc()
+            row = {
+                "question_id": str(item.question_id or item.question),
+                "db_id": db,
+                "arm": arm,
+                "split": split,
+                "generated_sql": None,
+                "correct": False,
+                "correct_strict": False,
+                "error": detail,
+                "error_type": type(err).__name__,
+                "difficulty": getattr(item, "difficulty", None) or "unknown",
+                # Stamped, so no downstream reader re-derives this as a refusal.
+                "outcome": Outcome.crashed.value,
+                "failed_stage": None,
+            }
+            return row, []
+
+    def _grade_one_scored(
         pair: tuple[Any, str], *, solver, gateway
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """Solve + grade ONE pooled (item, db) pair against the given

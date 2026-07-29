@@ -109,6 +109,10 @@ def serve_config_hash(
 
 _SEP = bytes([0])  # path/payload separator so two files cannot concatenate ambiguously
 
+#: What :func:`corpus_content_hash` returns when there was no corpus to hash. Named so
+#: the comparability gate can refuse it instead of matching it against itself.
+CORPUS_HASH_UNKNOWN = "unknown"
+
 
 def corpus_content_hash(roots: "Sequence[Path | str]") -> str:
     """Content digest of one or more corpus trees — the treatment's actual identity.
@@ -120,25 +124,47 @@ def corpus_content_hash(roots: "Sequence[Path | str]") -> str:
 
     Path-relative and sorted, so an absolute staging path cannot leak into the digest
     and two byte-identical trees in different directories hash the same. Returns
-    ``"unknown"`` for an absent or unreadable tree rather than raising — a missing
-    corpus is a fact for the ledger to record, not an exception at manifest time.
+    ``"unknown"`` for an absent tree rather than raising — a missing corpus is a fact
+    for the ledger to record, not an exception at manifest time.
+
+    ``"unknown"`` is NOT a hash and must never be compared as one. It equals itself, so
+    two runs over two *different* missing corpora read as identical on the one field
+    whose whole job is being the treatment's identity (AUDIT E5) — ``index.comparable``
+    therefore treats the sentinel as un-comparable rather than as a match.
+
+    A file that exists and cannot be READ is a third case, distinct from both: skipping
+    it silently made a corpus with unreadable content hash identically to one that was
+    never written. Those files are named in the digest without their bytes, so the
+    digest still differs from a clean tree and the caller is told on stderr.
     """
     h = hashlib.sha256()
     seen_any = False
+    unreadable: list[str] = []
     for root in roots:
         base = Path(root)
         if not base.is_dir():
             continue
         for path in sorted(base.rglob("*.yaml")) + sorted(base.rglob("*.md")):
+            rel = str(path.relative_to(base)).replace("\\", "/")
             try:
                 payload = path.read_bytes()
-            except OSError:
+            except OSError as err:
+                unreadable.append(f"{rel}: {err}")
+                seen_any = True
+                h.update(rel.encode())
+                h.update(_SEP)
+                h.update(b"<unreadable>")
                 continue
             seen_any = True
-            h.update(str(path.relative_to(base)).replace("\\", "/").encode())
+            h.update(rel.encode())
             h.update(_SEP)
             h.update(payload)
-    return h.hexdigest()[:16] if seen_any else "unknown"
+    if unreadable:
+        print(
+            f"*** WARNING: corpus_content_hash could not read {len(unreadable)} file(s); "
+            f"they are counted by name only: {', '.join(unreadable[:5])} ***"
+        )
+    return h.hexdigest()[:16] if seen_any else CORPUS_HASH_UNKNOWN
 
 
 def corpus_release_hash(*, repo_root: Path | None = None) -> str:

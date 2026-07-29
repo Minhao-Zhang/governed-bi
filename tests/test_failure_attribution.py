@@ -35,6 +35,16 @@ from governed_bi.eval.treatment import (
 )
 from governed_bi.stages import Stage
 
+#: The three grading free-pass counters, at "measured, and zero". ``quotable()`` fails
+#: closed when an arm omits them — an absent counter cannot be told from a measured
+#: zero, and these guard a FLATTERING result — so a fixture standing in for a real run
+#: spells them, exactly as it already spells ``crash_rate``.
+_MEASURED_FREE_PASSES = {
+    "n_correct_with_empty_gold": 0,
+    "n_correct_and_pred_has_no_from": 0,
+    "n_correct_and_zero_table_overlap": 0,
+}
+
 # --------------------------------------------------------------------------- #
 # sql_diff
 # --------------------------------------------------------------------------- #
@@ -416,7 +426,7 @@ def test_measuring_the_noise_floor_does_not_disqualify_the_run():
         "manifest_readable": True,
         "split": "test",
         "n_questions": 200,
-        "headline": {"curated": {"crash_rate": 0.0}},
+        "headline": {"curated": {"crash_rate": 0.0, **_MEASURED_FREE_PASSES}},
         "treatment_not_delivered": [
             r for d in divergences if d.get("treatment_delivered") is False
             for r in d.get("reasons", [])
@@ -498,7 +508,7 @@ def test_a_degenerate_oracle_pair_does_not_void_the_fair_ladder():
         "manifest_readable": True,
         "split": "test",
         "n_questions": 200,
-        "headline": {"curated": {"crash_rate": 0.0}},
+        "headline": {"curated": {"crash_rate": 0.0, **_MEASURED_FREE_PASSES}},
     }
     from governed_bi.eval.index import _undelivered
 
@@ -762,7 +772,7 @@ def test_a_rung_only_run_is_not_quotable_when_the_rungs_measured_nothing():
         "manifest_readable": True,
         "split": "test",
         "n_questions": 2030,
-        "headline": {"baseline": {"crash_rate": 0.0}},
+        "headline": {"baseline": {"crash_rate": 0.0, **_MEASURED_FREE_PASSES}},
         "treatment_not_delivered": reasons,
     }
     ok, why = quotable(record)

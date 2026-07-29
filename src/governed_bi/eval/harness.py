@@ -224,6 +224,17 @@ def _sme_fold_signal(
         "ledger_source": data.get("ledger_source"),
         "clarification_count": data.get("clarification_count"),
         "clarifications_applied": data.get("clarifications_applied"),
+        # Relayed so this block stands on its own. Without it a reader inspecting
+        # ``sme_fold`` saw ``clarifications_applied: 0`` beside
+        # ``identical_to_curated: false`` — a self-consistent, plausible, and wrong
+        # story, because the deterministic caveat/suspect passes run after the fold
+        # regardless of whether the fold agent crashed, so the corpus differs anyway.
+        # Learning that the fold agent had died required separately cross-referencing
+        # ``curator_errors``. The one diagnostic whose job is measuring SME
+        # effectiveness must not need a second lookup to be read correctly.
+        "error": (data.get("error") or "").splitlines()[0] or None
+        if data.get("error")
+        else None,
         "identical_to_curated": not _corpora_differ(
             curated_root, curated_sme_root, schema
         ),

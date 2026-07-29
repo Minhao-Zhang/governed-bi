@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import re
 import time
+import traceback
 from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
@@ -556,6 +557,49 @@ def build_serve_rails(
         return END if state.get("outcome") == "refuse" else "assemble"
 
     def assemble(state: ServeRailsState) -> dict:
+        """Deterministic front half — fails closed like every other terminal path.
+
+        This was the one node in the outer rails with no exception handling. Its body
+        guards a single ``plan_joins`` ``ValueError``; everything else — schema
+        shortlisting, the LLM pick, retrieval, licensing, ``assemble_context`` — could
+        raise straight out of ``graph.invoke``. An embedder timeout or a retrieval bug
+        therefore produced no ``Answer``, no refusal, and no run-log row at all, which is
+        a worse audit gap than losing the ledger: there is nothing to find afterwards.
+
+        ``agent_core_node`` has had this protection on three separate paths for a while
+        (``GovernanceHardStop`` / ``GraphRecursionError`` / bare ``Exception``); this is
+        the same shape, so a failure here becomes an L4 model-error refusal that still
+        runs through ``events.final`` and therefore still logs.
+
+        In the eval harness the gap was masked one layer up — the driver wraps
+        ``solve_with_meta`` — so this mattered most in live chat, where
+        ``api/graph_app.py`` has only a ``finally``.
+        """
+        try:
+            return _assemble_inner(state)
+        except Exception as err:
+            # Printed, not logged: nothing in ``src/`` calls ``logging.basicConfig``, so a
+            # ``logger.exception`` here would be dropped by the default configuration —
+            # the same way a swallowed run-log write once was (AUDIT R4). The traceback is
+            # the only record of which sub-step died.
+            print(f"*** assemble failed, refusing (model_error): {type(err).__name__}: {err}")
+            traceback.print_exc()
+            ans = refusal(
+                escalation=_ESCALATION_MODEL_ERROR,
+                provenance={
+                    **state["base_provenance"],
+                    "refused_by": "model_error",
+                    "error_type": type(err).__name__,
+                    # Which node died. Without it a `model_error` refusal is
+                    # indistinguishable from one raised inside the agent core, and the
+                    # two call for opposite investigations.
+                    "failed_stage": Stage.assemble.value,
+                },
+            )
+            ans = events.final(ans)
+            return {"answer": ans, "outcome": "refuse"}
+
+    def _assemble_inner(state: ServeRailsState) -> dict:
         """Amendment 1: run the deterministic front half and seed the semantic layer.
 
         Reuses the exact deterministic assembly (retrieval + licensing +

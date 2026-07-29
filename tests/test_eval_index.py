@@ -26,6 +26,16 @@ from governed_bi.eval.index import (
 #: rather than a hunt through every call site — which is the whole argument for the
 #: register in the first place. `build_manifest` nulls `pin_require_certified` and
 #: `pin_max` itself when PIN is off, so callers pass the real values regardless.
+#: The three grading free-pass counters, at "measured, and zero". ``quotable()`` fails
+#: closed when an arm omits them — an absent counter cannot be told from a measured zero,
+#: and these guard a FLATTERING result — so a fixture standing in for a real run has to
+#: spell them, exactly as it already spells ``crash_rate``.
+_MEASURED_FREE_PASSES = {
+    "n_correct_with_empty_gold": 0,
+    "n_correct_and_pred_has_no_from": 0,
+    "n_correct_and_zero_table_overlap": 0,
+}
+
 _NOTES = {
     "always_note_global_max": 8,
     "always_note_char_max": 2000,
@@ -79,6 +89,14 @@ def _write_run(
         "build_errors": build_errors or {},
         "curator_errors": curator_errors or {},
     }
+    # Every arm gets the free-pass counters unless the test spelled its own, so a
+    # fixture standing in for a real run carries what a real run always writes
+    # (``hash_grade.free_passes`` returns all three for every arm). `quotable()` fails
+    # closed on an absent counter, the same way it does for `crash_rate`.
+    for _arm, _s in (summary.get("arms") or {}).items():
+        if isinstance(_s, dict):
+            for _k, _v in _MEASURED_FREE_PASSES.items():
+                _s.setdefault(_k, _v)
     summary.update(summary_extra or {})
     (run_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
     return run_dir
@@ -970,7 +988,7 @@ def test_a_run_too_small_to_ever_reach_significance_is_not_quotable():
     base = {
         "manifest_readable": True,
         "split": "test",
-        "headline": {"curated": {"crash_rate": 0.0}},
+        "headline": {"curated": {"crash_rate": 0.0, **_MEASURED_FREE_PASSES}},
     }
     ok, reasons = quotable({**base, "n_questions": MIN_QUOTABLE_QUESTIONS - 1})
     assert not ok

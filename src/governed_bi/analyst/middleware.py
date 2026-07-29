@@ -501,7 +501,22 @@ class GovernanceMiddleware(AgentMiddleware):
     ) -> tuple[str | None, str | None]:
         """Build a column-allowlisted sample SELECT, or return (None, error)."""
         table_id = args.get("table_id") or ""
-        n = max(1, min(int(args.get("n") or 5), 20))
+        # Guarded because THIS path skips pydantic. The exploration tools go through
+        # ``handler(request)``, so LangGraph validates their args and hands the model a
+        # recoverable "please fix the error" ToolMessage; the two governed tools read
+        # ``request.tool_call["args"]`` raw and never reach that net. ``run_query`` is
+        # accidentally safe (``guardrails.check`` has an outer catch-all that turns any
+        # exception into a syntax refusal); this cast ran before any guardrail. A model
+        # writing ``n="five"`` therefore raised out of the tool, and while
+        # ``agent_core_node`` does convert that to a refusal, its generic handler — unlike
+        # the ``GraphRecursionError`` one beside it — cannot recover ``partial_state``, so
+        # the turn's governance ledger was LOST. A turn that had already run a passing
+        # query was recorded as a ledger-less ``model_error`` refusal, which is the audit
+        # completeness the docs claim holds (R4 / Inv #10).
+        try:
+            n = max(1, min(int(args.get("n") or 5), 20))
+        except (TypeError, ValueError):
+            return None, f"invalid n={args.get('n')!r}: expected an integer 1-20"
         asset = _table_by_id(self._corpus, table_id)
         if asset is None:
             return None, f"{table_id}: not available"

@@ -22,6 +22,16 @@ from governed_bi.eval.run_datalake import (
     price_verdict,
 )
 
+#: The three grading free-pass counters, at "measured, and zero". ``quotable()`` fails
+#: closed when an arm omits them — an absent counter cannot be told from a measured
+#: zero, and these guard a FLATTERING result — so a fixture standing in for a real run
+#: spells them, exactly as it already spells ``crash_rate``.
+_MEASURED_FREE_PASSES = {
+    "n_correct_with_empty_gold": 0,
+    "n_correct_and_pred_has_no_from": 0,
+    "n_correct_and_zero_table_overlap": 0,
+}
+
 # --------------------------------------------------------------------------- #
 # F8 — ledger hygiene vs claim readiness
 # --------------------------------------------------------------------------- #
@@ -41,7 +51,7 @@ def test_quotable_true_is_ledger_ok_not_claim_ready(tmp_path):
         encoding="utf-8",
     )
     arms = {
-        a: {"n": 72, "ex_lenient": 0.2, "ex_gradeable": 0.2, "crash_rate": 0.0}
+        a: {"n": 72, "ex_lenient": 0.2, "ex_gradeable": 0.2, "crash_rate": 0.0, **_MEASURED_FREE_PASSES}
         for a in ("baseline", "seeded", "curated", "curated_sme")
     }
     (run_dir / "summary.json").write_text(
@@ -86,7 +96,7 @@ def test_five_arm_family_rejects_default_eight_question_floor():
         "split": "test",
         "arms": arms,
         "headline": {
-            a: {"n": 8, "ex_lenient": 0.1, "crash_rate": 0.0} for a in arms
+            a: {"n": 8, "ex_lenient": 0.1, "crash_rate": 0.0, **_MEASURED_FREE_PASSES} for a in arms
         },
     }
     ok, reasons = quotable(base)
@@ -94,7 +104,7 @@ def test_five_arm_family_rejects_default_eight_question_floor():
     assert any("5-arm" in r and "floor of 9" in r for r in reasons)
 
     ok8, _ = quotable({**base, "arms": arms[:4], "headline": {
-        a: {"n": 8, "ex_lenient": 0.1, "crash_rate": 0.0} for a in arms[:4]
+        a: {"n": 8, "ex_lenient": 0.1, "crash_rate": 0.0, **_MEASURED_FREE_PASSES} for a in arms[:4]
     }})
     assert ok8
 

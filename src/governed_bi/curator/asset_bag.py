@@ -196,13 +196,25 @@ def answer_disowns_column(answer: str | None) -> bool:
     return bool(answer and _DISOWNS_COLUMN.search(answer))
 
 
+#: Per-caveat cap for :meth:`AssetBag.record_caveats`. Larger than the schema-card
+#: cap because a caveat's summary *is* its whole content, but bounded for the same
+#: reason: an ``always``-activation note is prompt text on every question in the
+#: schema, and the total is a hard budget.
+_CAVEAT_NOTE_MAX_CHARS = 400
+
+
+def _clip_words(text: str, limit: int) -> str:
+    """Collapse whitespace and clip to ``limit`` chars on a word boundary."""
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0]
+    return f"{cut} …"
+
+
 def _suspect_note_from_answer(answer: str) -> str:
     """One line of the SME's own words, short enough to sit on a schema card."""
-    text = " ".join(answer.split())
-    if len(text) <= _SUSPECT_NOTE_MAX_CHARS:
-        return text
-    cut = text[:_SUSPECT_NOTE_MAX_CHARS].rsplit(" ", 1)[0]
-    return f"{cut} …"
+    return _clip_words(answer, _SUSPECT_NOTE_MAX_CHARS)
 
 
 def _inference_audit(
@@ -867,7 +879,28 @@ class AssetBag:
         When it names none — a statement about a table's general reliability — there
         is nothing to match on and ``always`` is the honest activation.
         """
+        from ..corpus.validate import ALWAYS_NOTE_TOTAL_CHARS_MAX
+
+        # The always-note character budget is a HARD ``validate_corpus`` finding, and
+        # Phase B pipes every finding through ``gate_hard_findings`` — which raises and
+        # aborts the whole ``curated_sme`` build for the schema. So writing past the
+        # budget here does not degrade a prompt, it discards a paid arm. Verbose SME
+        # answers alone were enough: a dozen ordinary ~320-char prose answers to
+        # ``pair:``/``query:``-scoped questions summed past 2000 with nothing malformed
+        # anywhere. Note the asymmetry this closes — ``mark_unrecognised_columns`` has
+        # bounded its note since it was written (``_suspect_note_from_answer``); this
+        # producer wrote ``rec.answer`` verbatim.
+        #
+        # Only ``always`` notes count against it, so a triggered (``on_match``) caveat
+        # is unbounded by the budget and merely clipped.
+        budget_used = sum(
+            len(a.summary)
+            for a in self.notes.values()
+            if getattr(a.activation, "value", a.activation) == "always"
+        )
         n = 0
+        clipped = 0
+        over_budget: list[str] = []
         for rec in records:
             if rec.status is not ClarificationRecordStatus.answered or not rec.answer:
                 continue
@@ -877,8 +910,17 @@ class AssetBag:
             except ValueError:
                 pass  # non-asset scope (pair:/query:/…) → record as a caveat
             triggers = derive_keyword_triggers(rec.question, rec.answer)
+            summary = _clip_words(rec.answer, _CAVEAT_NOTE_MAX_CHARS)
+            if summary != " ".join(rec.answer.split()):
+                clipped += 1
+            if not triggers:
+                # No trigger → this note fires on every question in the schema.
+                if budget_used + len(summary) > ALWAYS_NOTE_TOTAL_CHARS_MAX:
+                    over_budget.append(rec.id)
+                    continue
+                budget_used += len(summary)
             msg = self.propose_note(
-                rec.answer,
+                summary,
                 kind=NoteKind.context,
                 triggers=triggers,
                 activation=NoteActivation.on_match if triggers else None,
@@ -893,6 +935,21 @@ class AssetBag:
             )
             if msg.startswith("ok:"):
                 n += 1
+        if clipped or over_budget:
+            # Said out loud rather than silently absorbed: a dropped caveat is an SME
+            # statement that never reaches serve, which is exactly the shape of the
+            # note-injection losses this project has already published a result on top
+            # of. The build survives; the loss is on the record.
+            print(
+                f"record_caveats: {n} recorded, {clipped} clipped to "
+                f"{_CAVEAT_NOTE_MAX_CHARS} chars"
+                + (
+                    f", {len(over_budget)} dropped over the always-note budget "
+                    f"({', '.join(over_budget[:5])})"
+                    if over_budget
+                    else ""
+                )
+            )
         return n
 
     def _table_id_index(self) -> dict[str, str]:

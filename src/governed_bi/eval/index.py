@@ -38,6 +38,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable
 
+from ..provenance import CORPUS_HASH_UNKNOWN
 from .atomic import atomic_write_text
 from .metrics import MANIFEST_KNOBS, MANIFEST_SCHEMA_VERSION
 
@@ -613,13 +614,30 @@ def quotable(record: dict[str, Any]) -> tuple[bool, list[str]]:
             "n_correct_and_zero_table_overlap",
         )
         inflated: list[str] = []
+        unmeasured_free_pass: list[str] = []
         for arm, s in sorted(headline.items()):
             if not isinstance(s, dict):
                 continue
             n = s.get("n") or 0
-            worst = max((s.get(k) or 0) for k in _FREE_PASS_KEYS)
+            # An ABSENT counter is not a measured zero. ``s.get(k) or 0`` read the two
+            # the same way, so a run whose free-pass rate was never computed passed this
+            # gate silently — the exact asymmetry the ``crash_rate is None`` check below
+            # exists to prevent, on the counter that guards a FLATTERING result instead
+            # of a damning one. Fails closed now, like its neighbour.
+            missing = [k for k in _FREE_PASS_KEYS if s.get(k) is None]
+            if missing:
+                unmeasured_free_pass.append(f"{arm} ({', '.join(missing)})")
+                continue
+            worst = max(int(s[k]) for k in _FREE_PASS_KEYS)
             if n and worst / n > FREE_PASS_QUOTABLE_FRACTION:
                 inflated.append(f"{arm}={worst}/{n}")
+        if unmeasured_free_pass:
+            reasons.append(
+                "free-pass counters not recorded for "
+                + "; ".join(unmeasured_free_pass)
+                + " — so it is unknown whether the correct rows are real answers or "
+                "empty gold / no-FROM / zero-table-overlap free passes"
+            )
         if inflated:
             reasons.append(
                 f"free passes dominate the correct rows ({', '.join(inflated)}) — more "
@@ -770,6 +788,18 @@ def comparable(a: dict[str, Any], b: dict[str, Any]) -> tuple[bool, list[str]]:
                 "knob is present — a knob it never recorded would be read below as "
                 "agreement. Re-index it with `--reindex` if its manifest carries the "
                 "field, or treat the pair as incomparable"
+            )
+    # ``"unknown"`` is a sentinel, not a digest — ``corpus_content_hash`` returns it when
+    # there was no corpus tree to read. It compares EQUAL to itself, so two runs over two
+    # different missing corpora agreed on the one field whose job is being the treatment's
+    # identity (AUDIT E5), and the pair passed with zero diffs. Refused here for the same
+    # reason ``manifest_schema_version`` is: an unknown must never read as agreement.
+    for side, rec in (("a", a), ("b", b)):
+        if rec.get("corpus_content_hash") == CORPUS_HASH_UNKNOWN:
+            diffs.append(
+                f"run {side}'s corpus_content_hash is {CORPUS_HASH_UNKNOWN!r} — no corpus "
+                "tree was readable when its manifest was written, so the treatment has no "
+                "recorded identity and cannot be matched against anything"
             )
     for key, label in COMPARABILITY_KEYS:
         av, bv = a.get(key), b.get(key)

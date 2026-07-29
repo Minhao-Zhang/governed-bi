@@ -14,6 +14,7 @@ derived, rebuildable projection and is never read as source.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +23,8 @@ from typing import Any
 import yaml
 
 from .schemas import Asset, TableAsset, parse_asset
+
+logger = logging.getLogger(__name__)
 
 # libyaml-backed when the wheel provides it (it does on every platform we run on),
 # which parses ~7x faster than the pure-Python scanner. Corpus loading is a real
@@ -120,19 +123,40 @@ def load_corpus(root: Path, schema: str | None = None) -> Corpus:
     )
 
     corpus = Corpus()
+    unreadable: list[str] = []
     for schema_dir in schema_dirs:
         for sub, _asset_type in _DIR_ASSET_TYPE.items():
             for yaml_path in sorted((schema_dir / sub).glob("*.yaml")):
                 try:
                     text = yaml_path.read_text(encoding="utf-8")
-                except UnicodeDecodeError as err:
-                    # Fail loud with the offending path rather than letting an
-                    # opaque UnicodeDecodeError surface from deep in the read —
-                    # in the pooled runner this fires after the whole build phase
-                    # and would otherwise discard every db's work with no clue why.
-                    raise ValueError(
-                        f"corpus file is not valid UTF-8: {yaml_path} ({err})"
-                    ) from err
-                data = _load_yaml(text)
-                corpus.assets.append(parse_asset(data))
+                    corpus.assets.append(parse_asset(_load_yaml(text)))
+                except Exception as err:
+                    # Per FILE, not per load. Only ``UnicodeDecodeError`` used to be
+                    # handled here, and even that only to improve the message before
+                    # re-raising — while ``_load_yaml`` (YAMLError) and ``parse_asset``
+                    # (ValidationError) were bare. The comment that guard carried
+                    # already stated the blast radius exactly: in the pooled runner
+                    # this "fires after the whole build phase and would otherwise
+                    # discard every db's work with no clue why". It does: the pooled
+                    # driver loads every schema × every arm through one call, and its
+                    # ``main`` wrapper is ``try``/``finally`` with no ``except``, so one
+                    # truncated YAML anywhere threw away a fully-paid build of 69
+                    # schemas.
+                    #
+                    # One bad file now costs that file. Loud, and named: skipping in
+                    # silence would turn a corpus that lost half its assets into one
+                    # that merely looks small, and "the treatment was thinner than we
+                    # think" is the failure this project has published a result on top
+                    # of before.
+                    unreadable.append(f"{yaml_path}: {type(err).__name__}: {err}")
+                    logger.warning("corpus file skipped — %s", unreadable[-1])
+    if unreadable:
+        print(
+            f"*** WARNING: {len(unreadable)} corpus file(s) could not be loaded and were "
+            f"SKIPPED — the corpus served is missing them ***"
+        )
+        for detail in unreadable[:10]:
+            print(f"  - {detail}")
+        if len(unreadable) > 10:
+            print(f"  ... (+{len(unreadable) - 10} more)")
     return corpus

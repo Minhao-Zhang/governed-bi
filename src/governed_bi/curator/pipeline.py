@@ -40,7 +40,7 @@ from .clarifications import (
 )
 from .profile import profile_database
 from .prompts import _PHASE_A_PROMPT, _PHASE_B_PROMPT
-from .seed import SeedBundle, seed_from_train_sql
+from .seed import SeedBundle, qualified_ref, seed_from_train_sql
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +101,8 @@ def _norm_name(name: str) -> str:
 
 def _fk_candidates_from_names(
     tables: Sequence["TableAsset"],
+    *,
+    dialect: str = "postgres",
 ) -> list[tuple[str, str, str]]:
     """Naming-convention FK guesses over Facts alone: no train SQL, no LLM.
 
@@ -146,7 +148,16 @@ def _fk_candidates_from_names(
             target_pk = pk_by_table.get(target)
             if not target_pk:
                 continue
-            on = f"{t.physical_name}.{c.physical_name} = {target}.{target_pk}"
+            # Through the same helper the train-SQL seeder uses, not an f-string. Raw
+            # interpolation is how `Air Carriers` produced the unparseable
+            # `Air Carriers.carrier_id = Carriers.CarrierID`, and this producer feeds
+            # the BASELINE arm — the one rung `build_baseline_corpus` deliberately
+            # never runs `validate_corpus` over, so nothing downstream would have
+            # reported the malformed edge.
+            on = (
+                f"{qualified_ref(t.physical_name, c.physical_name, dialect=dialect)} = "
+                f"{qualified_ref(target, target_pk, dialect=dialect)}"
+            )
             key = (t.physical_name, target, on)
             if key in seen:
                 continue
@@ -155,11 +166,13 @@ def _fk_candidates_from_names(
     return candidates
 
 
-def _apply_fk_candidates(bag: AssetBag, tables: Sequence["TableAsset"]) -> dict[str, int]:
+def _apply_fk_candidates(
+    bag: AssetBag, tables: Sequence["TableAsset"], *, dialect: str = "postgres"
+) -> dict[str, int]:
     """Materialise naming-convention FK candidates. Low, honest confidence: an
     unverified prior, not a measured or SME-confirmed relationship."""
     ok = fail = 0
-    for left, right, on in _fk_candidates_from_names(tables):
+    for left, right, on in _fk_candidates_from_names(tables, dialect=dialect):
         msg = bag.propose_join(left, right, on, confidence=0.3)
         if msg.startswith("ok:"):
             ok += 1
@@ -213,6 +226,32 @@ def _empty_tool_counts() -> dict[str, Any]:
         "other": 0,
         "read_total": 0,
         "write_total": 0,
+    }
+
+
+def _unmeasured_tool_counts() -> dict[str, Any]:
+    """Counts for an invocation that CRASHED — every total ``None``, not ``0``.
+
+    ``_count_tool_calls`` reconstructs the tally from the returned message list, and
+    :func:`_invoke_agent` nulls that list on any exception, so a crash produced a
+    complete-looking dict of zeros. The agent's writes are unaffected — the write tools
+    mutate the shared :class:`AssetBag` as they are called and ``bag.write`` runs after
+    the ``except`` — so ``write_total: 0`` described a half-authored corpus as an
+    untouched one. On the 2026-07-29 run that read as "the agent wrote nothing" for 13
+    of 55 schemas, and the SME phase republished the same zero as
+    ``clarifications_applied``, a reported metric.
+
+    Zero is a measurement. This is the absence of one.
+    """
+    return {
+        "read": {name: None for name in sorted(_READ_TOOLS)},
+        "write": {name: None for name in sorted(_WRITE_TOOLS)},
+        "other": None,
+        "read_total": None,
+        "write_total": None,
+        # Named in the artifact so a reader does not have to infer why the totals are
+        # null, and so `None` cannot be mistaken for an old manifest that lacked them.
+        "unmeasured_reason": "agent invocation raised; counts cannot be reconstructed",
     }
 
 
@@ -360,7 +399,8 @@ def _invoke_agent(
             token_usage=usage_list,
             t0=t0,
         )
-    return result, _count_tool_calls(result), error
+    counts = _unmeasured_tool_counts() if error is not None else _count_tool_calls(result)
+    return result, counts, error
 
 
 def _validate_fix_pass(

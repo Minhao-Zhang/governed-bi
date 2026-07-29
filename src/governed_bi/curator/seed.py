@@ -90,7 +90,7 @@ def _resolve(name: str | None, aliases: dict[str, str]) -> str | None:
 _SIMPLE_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-def _qualified(table: str, column: str, *, dialect: str) -> str:
+def qualified_ref(table: str, column: str, *, dialect: str) -> str:
     """``table.column``, quoted where the identifier needs it.
 
     Interpolating raw names produced unparseable SQL for every table whose physical
@@ -124,8 +124,8 @@ def _eq_on_clause(
     if not left_phys or not right_phys:
         return None
     on_sql = (
-        f"{_qualified(left_phys, left.name, dialect=dialect)} = "
-        f"{_qualified(right_phys, right.name, dialect=dialect)}"
+        f"{qualified_ref(left_phys, left.name, dialect=dialect)} = "
+        f"{qualified_ref(right_phys, right.name, dialect=dialect)}"
     )
     return left_phys, right_phys, on_sql
 
@@ -220,7 +220,7 @@ def extract_metrics_from_sql(
                     # name verbatim and unquoted, so a physical name with a space —
                     # BIRD ships `Air Carriers` — produced ``COUNT(Air Carriers."Code")``,
                     # which does not parse. The join half of this module already learned
-                    # this (see :func:`_qualified`); the metric half was the site it
+                    # this (see :func:`qualified_ref`); the metric half was the site it
                     # missed, and the seeded/curated/SME arms carried the malformed
                     # expression into every prompt that rendered the metric block.
                     #

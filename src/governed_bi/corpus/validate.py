@@ -57,6 +57,7 @@ from . import ids
 if TYPE_CHECKING:
     from ..config import Settings
     from ..gateway.connectors.base import Connector
+
 from .schemas import (
     Asset,
     FewShotAsset,
@@ -66,6 +67,15 @@ from .schemas import (
     TableAsset,
     TermAsset,
 )
+
+#: The always-injected note budget, named so a producer can respect the same numbers
+#: this checker enforces. They were literals here and nowhere else, so
+#: ``AssetBag.record_caveats`` could write past the budget and only find out when
+#: ``gate_hard_findings`` refused the corpus — which discards the whole build rather
+#: than the note that did not fit. Mirrors ``[notes] always_note_global_max`` /
+#: ``always_note_char_max`` in Settings; keep them in step.
+ALWAYS_NOTE_GLOBAL_MAX = 8
+ALWAYS_NOTE_TOTAL_CHARS_MAX = 2000
 
 
 @dataclass(frozen=True)
@@ -226,21 +236,23 @@ def validate_corpus(
         and getattr(a.activation, "value", a.activation) == "always"
     ]
     global_always = [a for a in always_notes if not a.scope]
-    if len(global_always) > 8:
+    if len(global_always) > ALWAYS_NOTE_GLOBAL_MAX:
         findings.append(
             Finding(
                 "always-note-budget",
                 "",
-                f"{len(global_always)} global always notes exceed the maximum of 8",
+                f"{len(global_always)} global always notes exceed the maximum of "
+                f"{ALWAYS_NOTE_GLOBAL_MAX}",
             )
         )
     total_summary_chars = sum(len(a.summary) for a in always_notes)
-    if total_summary_chars > 2000:
+    if total_summary_chars > ALWAYS_NOTE_TOTAL_CHARS_MAX:
         findings.append(
             Finding(
                 "always-note-budget",
                 "",
-                f"always-note summaries total {total_summary_chars} characters; maximum is 2000",
+                f"always-note summaries total {total_summary_chars} characters; "
+                f"maximum is {ALWAYS_NOTE_TOTAL_CHARS_MAX}",
             )
         )
 
