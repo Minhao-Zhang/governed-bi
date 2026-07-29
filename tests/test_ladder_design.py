@@ -14,48 +14,52 @@ These tests pin the decomposition, not the plumbing.
 
 from __future__ import annotations
 
-from governed_bi.eval.arms import Arm
+from governed_bi.eval.arms import Arm, step_mechanisms
 from governed_bi.eval.run_datalake import (
     _ARMS,
-    _DEFAULT_ARMS,
     ladder_steps,
     skipped_rungs,
 )
 
 
 def test_the_ladder_has_a_rung_between_baseline_and_curated():
-    assert Arm.seeded.value == "seeded"
     assert "seeded" in _ARMS
+    assert skipped_rungs("baseline", "curated") == ["seeded"]
 
 
 def test_every_reported_step_is_adjacent_among_the_arms_that_ran():
     """A non-adjacent delta bundles two interventions and cannot say which paid."""
-    for arms in (_DEFAULT_ARMS, _ARMS, ("baseline", "seeded", "curated")):
+    for arms in (_ARMS, ("baseline", "seeded", "curated")):
         order = [a for a in _ARMS if a in arms]
         for lo, hi in ladder_steps(arms):
             assert order.index(hi) - order.index(lo) == 1
 
 
-def test_the_full_ladder_splits_the_sme_confound():
-    """With the blind rung scored, the protocol and the human docs are separate."""
+def test_the_sme_step_is_adjacent_and_still_not_single_variable():
+    """The regression guarding the 2026-07-28 removal of ``curated_sme_blind``.
+
+    That rung existed to split the SME step into protocol-vs-human-docs, and it was
+    removed as meaningless — it briefed the SME on inputs Phase A already had. The
+    hazard is that removing it makes the confound *invisible*: ``curated ->
+    curated_sme`` is now adjacent, so ``skipped_rungs`` is empty and a reader could
+    take the step for one variable.
+
+    It does not, because ``single_variable`` is ``not bundles and len(mechanisms) ==
+    1`` — the same reason ``baseline -> seeded`` is adjacent and still compound. The
+    confound now travels as a mechanism count instead of a missing rung.
+    """
     steps = ladder_steps(_ARMS)
-    assert ("curated", "curated_sme_blind") in steps
-    assert ("curated_sme_blind", "curated_sme") in steps
-    assert ("curated", "curated_sme") not in steps, "would double-count the interval"
-
-
-def test_the_default_ladder_leaves_the_sme_confound_bundled_and_says_so():
-    """The blind rung costs a full SME round per db, so it is opt-in. The default
-    therefore reports a compound step — which must announce itself."""
-    steps = ladder_steps(_DEFAULT_ARMS)
     assert ("curated", "curated_sme") in steps
-    assert skipped_rungs("curated", "curated_sme") == ["curated_sme_blind"]
+    assert skipped_rungs("curated", "curated_sme") == []
+    assert step_mechanisms("curated", "curated_sme") == (
+        "clarification protocol",
+        "BIRD human column documentation (SME brief)",
+    ), "the SME step must keep declaring both mechanisms, or the confound vanishes"
 
 
 def test_a_single_variable_step_bundles_nothing():
     assert skipped_rungs("baseline", "seeded") == []
     assert skipped_rungs("seeded", "curated") == []
-    assert skipped_rungs("curated", "curated_sme_blind") == []
 
 
 def test_the_old_conflated_comparison_is_flagged_as_compound():
@@ -149,11 +153,12 @@ def test_every_fair_comparison_says_whether_one_thing_changed():
     assert compound["single_variable"] is False
     assert compound["bundles"] == ["seeded"]
 
-    # The default arm set skips the blind rung, so this consecutive-looking pair is
-    # still confounded — the docs-vs-protocol confound the ladder documents.
+    # Adjacent since the blind rung went, so nothing is skipped — but the step still
+    # changes two mechanisms, and that is what keeps it out of single_variable.
     sme = by_pair[("curated", "curated_sme")]
+    assert "bundles" not in sme, "nothing is skipped — the rung is adjacent"
     assert sme["single_variable"] is False
-    assert sme["bundles"] == ["curated_sme_blind"]
+    assert len(sme["mechanisms_changed"]) == 2
 
 
 def test_a_pair_running_down_the_ladder_says_so():

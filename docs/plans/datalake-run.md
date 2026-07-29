@@ -6,7 +6,7 @@ the single-DB arm/method record in git history (
 terminology) and the operator checklist in
 [experiment-runbook.md](experiment-runbook.md). Read the runbook before a paid
 pooled run. Arm names: `baseline` / `seeded` / `curated` / `curated_sme`
-(optional `curated_sme_blind`)._
+._
 
 ## What it is
 
@@ -20,7 +20,7 @@ Driver: `src/governed_bi/eval/run_datalake.py`, invoked as
 `python -m governed_bi.eval.run_datalake`.
 
 Default fair arms are `baseline`, `seeded`, `curated`, `curated_sme` (same
-ladder as the experiment runbook). `curated_sme_blind` is opt-in. The arms
+ladder as the experiment runbook). The arms
 differ only in the corpus fed in; routing, guardrails, and grading are shared.
 
 ## How it works
@@ -210,7 +210,7 @@ uv run python -m governed_bi.eval.run_datalake --build-workers 6 --workers 8 --r
 
 Other flags: `--dbs a,b,c` (explicit db list instead of all test dbs),
 `--arms baseline,seeded,curated,curated_sme` (subset of
-`baseline,seeded,curated,curated_sme_blind,curated_sme`; baseline-only skips
+`baseline,seeded,curated,curated_sme`; baseline-only skips
 expensive curation), `--limit N` (cap test questions per db), `--limit-dbs N`,
 `--pg-dsn`, `--bird-dir`, `--max-agent-steps`, `--allow-git-sha-drift` (paid
 resume after a code edit; ledger still marks the run unquotable).
@@ -248,7 +248,7 @@ to localise a specific kind of failure, is in
   `arms` / `db_ids` / `oracles` / `replicate_of` / `limit` / `limit_dbs`),
   read back by `--resume` and by the run ledger's comparability check.
 - The built corpus roots (`corpus_baseline/`, `corpus_seeded/`,
-  `corpus_curated/`, `corpus_curated_sme/`, and `corpus_curated_sme_blind/`
+  `corpus_curated/`, and `corpus_curated_sme/`
   when that arm is scored).
 - One record appended to `runs/index.jsonl` (the run ledger,
   `governed_bi.eval.index`), computing whether this run's artifact hygiene is

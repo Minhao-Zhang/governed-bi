@@ -84,23 +84,24 @@ class Arm(str, Enum):
     baseline = "baseline"  # deterministic-max, DB-derivable only; no train SQL
     seeded = "seeded"  # + train-SQL-derived joins/metrics/decoys; still no LLM
     curated = "curated"  # + curator LLM agent pass over that seed
-    #: The SME round with the SME **blind to BIRD's human column documentation**.
+    #: The Simulated-SME clarification round.
     #:
-    #: ``curated -> curated_sme`` changes two things at once, and this is the more
-    #: awkward of the two confounds on this ladder. The Simulated SME's brief is built
-    #: from BIRD's ``database_description/*.csv`` — human-authored column and value
-    #: descriptions — and Phase A never sees that directory. So a positive
-    #: ``curated_sme`` delta is exactly as consistent with "we handed the pipeline a
-    #: new, higher-quality knowledge source for the first time" as with "the
-    #: clarification protocol works", and the headline claim is the latter.
+    #: **This rung bundles two mechanisms and cannot be split.** The SME's brief is
+    #: built from BIRD's ``database_description/*.csv`` — human-authored column and
+    #: value descriptions — which Phase A never sees. So a positive delta is exactly
+    #: as consistent with "we handed the pipeline a new, higher-quality knowledge
+    #: source for the first time" as with "the clarification protocol works", and the
+    #: headline claim is the latter.
     #:
-    #: Blind mode builds the brief from train questions and evidence only, which the
-    #: curator already has access to. Then ``curated -> curated_sme_blind`` is the
-    #: protocol alone and ``curated_sme_blind -> curated_sme`` is what the human docs
-    #: are worth. Off by default: it costs a full SME round per database, and whether
-    #: to spend that is a budget call, not a correctness one.
-    curated_sme_blind = "curated_sme_blind"
-    curated_sme = "curated_sme"  # + the same round, with the human column docs
+    #: A ``curated_sme_blind`` rung used to exist to separate them, building the brief
+    #: from train questions and evidence only. It was removed 2026-07-28 as
+    #: meaningless: those are inputs Phase A *already* has, so the rung compared the
+    #: curator against itself re-asked through a Q&A round-trip, and the only thing it
+    #: genuinely added was ``certified`` provenance stamping. Splitting this confound
+    #: needs a knowledge source the curator lacks and a human does not simulate — not
+    #: another arm over the same inputs. Until then, do not read a ``curated_sme``
+    #: delta as evidence for the protocol.
+    curated_sme = "curated_sme"
     # No member for ``ceiling`` (still unbuilt) or for the oracle rungs (built, but
     # they read the answer key). See the module docstring — the two are different
     # constructs and neither belongs on the fair ladder.
@@ -127,8 +128,10 @@ STEP_MECHANISMS: dict[str, tuple[str, ...]] = {
         "LLM curator agent pass",
         "few-shot exemplars",
     ),
-    "curated_sme_blind": ("clarification protocol",),
-    "curated_sme": ("BIRD human column documentation (SME brief)",),
+    "curated_sme": (
+        "clarification protocol",
+        "BIRD human column documentation (SME brief)",
+    ),
 }
 
 
@@ -155,17 +158,14 @@ def ladder_steps(present: "Iterable[str]") -> list[tuple[str, str]]:
     pairing where exactly one thing changed. ``baseline -> seeded`` adds the
     deterministic train-SQL joins/metrics and decoy / negative-space marking (no
     few-shots, no LLM); ``seeded -> curated`` adds the LLM curator agent on top of
-    that seed (including few-shots); ``curated -> curated_sme_blind`` adds the
-    clarification protocol; ``curated_sme_blind -> curated_sme`` adds BIRD's human
-    column documentation, which the SME sees and the curator never has. A
+    that seed (including few-shots); ``curated -> curated_sme`` adds the
+    clarification protocol *and* BIRD's human column documentation together. A
     ``baseline -> curated`` delta bundles the first two and cannot say which paid
-    for it.
+    for it, and the SME step is permanently bundled — see :class:`Arm`.
 
     Derived from what ran rather than fixed, so a partial ``--arms`` selection
     chains the rungs it has instead of either inventing a comparison or reporting
-    none. With the blind rung omitted (the default) that yields
-    ``curated -> curated_sme``, which is honest as long as its docs-vs-protocol
-    confound is stated — see :class:`Arm`.
+    none.
     """
     order = [a for a in ARM_ORDER if a in set(present)]
     return list(zip(order, order[1:]))
@@ -408,9 +408,8 @@ def agent_solver(
 
     Routes through ``answer_question_agent`` (the ``create_agent`` +
     governance-middleware path) — the one serve path shared by every fair rung
-    of the eval ladder (``baseline`` / ``seeded`` / ``curated`` / ``curated_sme``,
-    and optionally ``curated_sme_blind``). The outer
-    rails graph is built once and invoked per question; each call is independent
+    of the eval ladder (``baseline`` / ``seeded`` / ``curated`` / ``curated_sme``).
+    The outer rails graph is built once and invoked per question; each call is independent
     (no working memory / cache), matching the single-round eval contract.
     ``solve_with_meta`` returns ``(sql, meta)`` where ``meta`` carries audit
     fields plus the governance-ledger length; ``solve`` returns just the SQL.

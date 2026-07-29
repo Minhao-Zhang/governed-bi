@@ -195,7 +195,7 @@ def description_dir(bird_dir: Path | str, db_id: str) -> Path | None:
     ``data/dev/dev_databases/`` — and the 69-schema pool draws from both. Callers
     that hardcoded the train tree silently found no CSVs for the 11 dev-tree
     schemas (california_schools, financial, formula_1, superhero, ...), which
-    turned their SME arm into a blind arm without failing.
+    left their SME arm's brief silently empty without failing.
     """
     bird_dir = Path(bird_dir)
     for split, tree in (("train", "train_databases"), ("dev", "dev_databases")):

@@ -955,16 +955,15 @@ def build_curated_corpus_with_sme(
     answered = fill_clarifications_with_responder(records, responder)
     # Written to THIS arm's root only. It used to also write back into
     # ``curated_root``'s ledger, which is this build's *input* — and that voided the
-    # whole ``curated_sme`` arm whenever the blind rung ran first.
+    # arm of any *second* SME build over the same curated root.
     #
-    # The sequence: ``curated_sme_blind`` reads ``curated``'s ledger, finds its open
-    # records, answers them, and marks them answered *in curated's ledger*. Then
-    # ``curated_sme`` reads the same ledger, finds nothing open, records
-    # ``ledger_source="missing"``, folds nothing, and produces a corpus identical to
-    # ``curated``. So opting into the rung the docs recommend for splitting the
-    # docs-vs-protocol confound destroyed the arm the confound is about. It is caught
-    # downstream — ``_sme_fold_signal`` -> ``sme_noop_dbs`` -> unquotable — but only
-    # after paying for the whole build.
+    # The sequence: SME build A reads ``curated``'s ledger, finds its open records,
+    # answers them, and marks them answered *in curated's ledger*. Build B then reads
+    # the same ledger, finds nothing open, records ``ledger_source="missing"``, folds
+    # nothing, and produces a corpus identical to ``curated``. It is caught downstream
+    # — ``_sme_fold_signal`` -> ``sme_noop_dbs`` -> unquotable — but only after paying
+    # for the whole build. Reachable by a resume, a ``--replicate curated_sme``, or a
+    # future second SME arm.
     #
     # Harmless to what either arm *serves*: the corpus loader never reads
     # ``clarifications.jsonl`` and ``_corpora_differ`` fingerprints ``*.yaml`` only. The

@@ -181,7 +181,6 @@ execute (as-user) → narrate → answer + provenance
   - `baseline`——确定性、仅数据库可推导的 corpus（名称、类型、样本值、外键候选）。没有训练集 SQL，也没有 curator LLM。
   - `seeded`——在此基础上加上机械的训练集 SQL 连接与指标，以及诱饵 / 负空间标记。依然**没有 LLM，也没有 few-shot**（few-shot 只经 curated agent 路径写入）。构建成本为零。它的存在是因为 `baseline → curated` 以前把免费的确定性种子和 LLM 那一趟捆在了一起，从没有哪个臂把两者分开过——而这恰恰决定了这个产品到底需不需要一个 curator LLM。`baseline → seeded` 仍一次改动多个机制（连接、指标、去掉 FK 猜测、训练集条件列掩码），不是“单靠解析”的因果估计。
   - `curated`——在同一份种子之上，加上 curator LLM agent 的一趟处理（含 few-shot）。
-  - `curated_sme_blind`*（可选）*——加上 Simulated-SME 澄清轮次，SME **看不到 BIRD 人工撰写的 `database_description` CSV**。
   - `curated_sme`——同一轮澄清，但 SME 的任务简报里带上了这些 CSV。
 
   最后这一对之所以存在，是因为 SME 会读到 curator 从未见过的人工撰写列文档，所以 `curated → curated_sme` 这一步的差值，既可以解释成"来了一个新的知识来源"，也可以解释成"澄清协议本身生效了"，两种说法一样自洽。把它拆开需要每个数据库多花一整轮 SME 的成本，所以是可选项——被省略时，产生的那个复合步骤会在产物里如实标注自己是复合的，而不是冒充成单变量的一步。一个**测试感知 SME 预言机**仍然是虚线*`ceiling`*，已设计但尚未构建；去混淆"gold"预言机已**退役**（它从来不是真正的上限——curator 的笔记（notes）就能超过它）。**护城河（moat）= curator 挽回的那部分因混淆导致的准确率下降。**如何运行：[实验运行手册](plans/experiment-runbook.md)。

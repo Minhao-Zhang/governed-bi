@@ -369,7 +369,7 @@ not. The corrections below landed alongside the taxonomy work:
   nothing. Each pair also carries `single_variable`, and when compound the
   `bundles` list, from the same `arms.skipped_rungs` the driver uses: a pair can be
   consecutive among the arms that ran and *still* bundle, which is exactly the case
-  of the default arm set's `curated → curated_sme` skipping `curated_sme_blind`.
+  of `curated → curated_sme` changing two mechanisms at once.
   What this report cannot do is state resolution — it has no replicate arm — so it
   carries `mcnemar_caveats.no_noise_floor` pointing at `summary.json` rather than
   letting a small p-value imply the run could resolve the delta behind it.
@@ -784,8 +784,7 @@ name is deliberate and must not be quoted as answers gained.
 |---|---|---|
 | `baseline → seeded` | train-SQL joins + metrics, decoy / negative-space marking; drops baseline's FK-name guesses. **No few-shots.** | nothing — no model calls |
 | `seeded → curated` | the curator LLM agent (including few-shots), over that same seed | one curator pass per db |
-| `curated → curated_sme_blind` | the SME clarification protocol | one SME round per db |
-| `curated_sme_blind → curated_sme` | BIRD's human column documentation, in the SME's brief | one SME round per db |
+| `curated → curated_sme` | the SME clarification protocol **and** BIRD's human column documentation, together | one SME round per db |
 
 Two of these exist because the comparison above them was compound.
 
@@ -800,12 +799,23 @@ cost. Do not quote `baseline → seeded` as few-shot lift or as a single-mechani
 parse effect.
 
 `curated → curated_sme` bundles the clarification protocol with a new information
-source. The Simulated SME's brief is built from BIRD's
-`database_description/*.csv` — human-authored column and value descriptions — and
-Phase A never receives that directory. `curated_sme_blind` runs the identical round
-with the brief built from train questions and evidence only, which the curator
-already has. It is opt-in because it costs a full SME round per database; when it is
-omitted, the compound step labels itself rather than passing as single-variable.
+source, and **this one cannot be split.** The Simulated SME's brief is built from
+BIRD's `database_description/*.csv` — human-authored column and value descriptions
+— and Phase A never receives that directory. So the delta is equally consistent
+with "the protocol works" and "we handed the pipeline a better knowledge source for
+the first time", and the headline claim is the former.
+
+A `curated_sme_blind` rung existed for this and was removed 2026-07-28. It ran the
+identical round with the brief built from train questions and evidence only —
+inputs the curator *already has* — so it compared the curator against itself
+re-asked through a Q&A round-trip, and the only thing it genuinely added was
+`certified` provenance stamping. Splitting this confound needs a knowledge source
+the curator lacks and a simulated SME does not supply.
+
+Removing it did not hide the confound: the step is now adjacent, so nothing is
+"skipped", but `single_variable` is `not bundles and len(mechanisms) == 1` and the
+step declares two mechanisms. Same shape as `baseline → seeded`, which is adjacent
+and changes three things.
 
 ## Concurrency, and what it is allowed to change
 

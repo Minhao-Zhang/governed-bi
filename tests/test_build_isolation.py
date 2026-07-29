@@ -736,7 +736,7 @@ def test_the_marker_makes_the_run_unquotable(tmp_path):
     assert any("curator build errors" in r for r in reasons)
 def test_every_arm_that_ran_is_checked_for_curator_errors():
     """The list was hardcoded to `curated`/`curated_sme`, which was complete until
-    `seeded` and `curated_sme_blind` were added — after which a swallowed curator
+    `seeded` was added — after which a swallowed curator
     error on either was invisible to `summary.json` and therefore to `quotable()`."""
     import inspect
 

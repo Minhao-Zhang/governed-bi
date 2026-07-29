@@ -139,20 +139,10 @@ from .treatment import (
 )
 
 # Derived from the enum, not spelled again: two independent spellings of the same
-# three-value taxonomy drift, and this driver's CLI validates ``--arms`` against it.
+# taxonomy drift, and this driver both validates ``--arms`` against it and uses it
+# as the default. Those were two names until 2026-07-28, when removing the opt-in
+# ``curated_sme_blind`` rung made the default equal to the whole ladder.
 _ARMS = ARM_ORDER
-
-
-#: Arms a run scores when ``--arms`` is not given. ``curated_sme_blind`` is opt-in:
-#: it costs a full SME round per database, and whether to spend that to split the
-#: docs-vs-protocol confound is a budget decision the operator should make
-#: deliberately rather than inherit from a default.
-_DEFAULT_ARMS: tuple[str, ...] = (
-    "baseline",
-    "seeded",
-    "curated",
-    "curated_sme",
-)
 _SPLITS = ("test", "train")
 #: Share of schemas whose gold must fail to execute before the run aborts rather than
 #: warns. Set where it is, not tuned: misconfiguration (wrong DSN, unloaded schemas,
@@ -2713,10 +2703,7 @@ def _build_db_corpora(
     stamps this map for the *whole* run: a corpus built under a prompt the manifest
     does not name would make the curated arms' numbers unattributable."""
     need_seeded = "seeded" in arms
-    need_sme_blind = "curated_sme_blind" in arms
-    need_curated = (
-        "curated" in arms or "curated_sme" in arms or "curated_sme_blind" in arms
-    )
+    need_curated = "curated" in arms or "curated_sme" in arms
     need_sme = "curated_sme" in arms
 
     # Every requested arm is already on disk: return before opening Postgres or
@@ -2732,8 +2719,6 @@ def _build_db_corpora(
         already.append("seeded")
     if need_curated:
         already.append("curated")
-    if need_sme_blind:
-        already.append("curated_sme_blind")
     if need_sme:
         already.append("curated_sme")
     if resume and all(_corpus_complete(roots[a], db_id) for a in already):
@@ -2824,7 +2809,7 @@ def _build_db_corpora(
             _mark_build_complete(roots["curated"], db_id)
             pending_relocations.append(roots["curated"])
 
-        if not (need_sme or need_sme_blind):
+        if not need_sme:
             return
 
         # --- SME brief + leakage invariant (asserted whenever an SME arm builds) ---
@@ -2840,14 +2825,12 @@ def _build_db_corpora(
                 "to the other SME schemas ***"
             )
 
-        def _brief(*, with_docs: bool) -> str:
-            # ``build_sme_brief`` already degrades to "(no description CSVs found)"
-            # for a directory that does not exist, so blind mode is the same call
-            # with the directory withheld — no second code path to keep in sync.
+        def _brief() -> str:
+            # ``build_sme_brief`` degrades to "(no description CSVs found)" for a
+            # directory that does not exist, which is what a run without the BIRD
+            # description CSVs gets — the arm still builds, with a thinner brief.
             built = build_sme_brief(
-                (desc_dir or Path("/nonexistent-sme-docs"))
-                if with_docs
-                else Path("/nonexistent-sme-docs"),
+                desc_dir or Path("/nonexistent-sme-docs"),
                 train,
                 system_rules=prompt_text("sme_rules", prompt_variants),
                 rename_map=rename_map,
@@ -2859,31 +2842,7 @@ def _build_db_corpora(
             )
             return built
 
-        # --- curated_sme_blind: the protocol WITHOUT the human column docs ---
-        # Isolates the clarification round from the information it smuggles in.
-        # Built before `curated_sme` so a run that dies partway still has the rung
-        # that answers the harder question.
-        if need_sme_blind and not _arm_done("curated_sme_blind"):
-            _build_sme_arm(
-                connector=connector,
-                gateway=gateway,
-                db_id=db_id,
-                train=train,
-                out_root=roots["curated_sme_blind"],
-                curated_root=roots["curated"],
-                brief=_brief(with_docs=False),
-                chat_client=chat_client,
-                lc_model=lc_model,
-                skip_agent=skip_agent,
-                prompt_variants=prompt_variants,
-                settings=settings,
-            )
-            _mark_build_complete(roots["curated_sme_blind"], db_id)
-            pending_relocations.append(roots["curated_sme_blind"])
-
-        if not need_sme:
-            return
-        brief = _brief(with_docs=True)
+        brief = _brief()
 
         # --- curated_sme ---
         if not _arm_done("curated_sme"):
@@ -2926,9 +2885,11 @@ def _build_sme_arm(
     prompt_variants: dict[str, str],
     settings: Any,
 ) -> None:
-    """One SME arm's build. Shared so ``curated_sme`` and ``curated_sme_blind``
-    cannot drift apart in anything except the brief they are handed — which is the
-    single variable the pair exists to isolate.
+    """One SME arm's build, taking the brief as a parameter.
+
+    Kept as its own function rather than inlined: the brief is the whole treatment,
+    so a caller that wants a different one changes an argument instead of a code
+    path. It carried two callers when a blind rung existed; one now.
     """
     from ..curator.clarifications import StaticResponder
     from ..curator.pipeline import build_curated_corpus_with_sme
@@ -4184,9 +4145,9 @@ def run_datalake(
         # EVERY arm that ran, not a hardcoded pair. This listed only
         # ``curated``/``curated_sme``, which was complete when those were the only
         # arms that invoked the curator — and silently stopped being complete the
-        # moment ``seeded`` and ``curated_sme_blind`` were added. A swallowed curator
-        # error, or an unpromoted-diagnostic marker, on either of those arms was
-        # invisible to ``summary.json`` and therefore to ``quotable()``.
+        # moment ``seeded`` was added. A swallowed curator error, or an
+        # unpromoted-diagnostic marker, on a newly added arm was invisible to
+        # ``summary.json`` and therefore to ``quotable()``.
         #
         # ``baseline`` writes a manifest too and never runs an agent, so it simply has
         # nothing to report; including it costs one missing-file check and removes the
@@ -4624,7 +4585,7 @@ def main(argv: list[str] | None = None) -> int:
         "--arms",
         default=None,
         help=(
-            "Comma-separated arms (subset of baseline,seeded,curated,curated_sme_blind,curated_sme; "
+            "Comma-separated arms (subset of baseline,seeded,curated,curated_sme; "
             "default all). The ladder is designed so each adjacent step changes one "
             "thing: seeded adds the deterministic train-SQL seed (no model calls to "
             "build), curated adds the LLM curator agent on top of it, curated_sme "
@@ -4753,7 +4714,7 @@ def main(argv: list[str] | None = None) -> int:
     arms = (
         tuple(a.strip() for a in args.arms.split(","))
         if args.arms
-        else _DEFAULT_ARMS
+        else _ARMS
     )
     oracles: tuple[str, ...] = ()
     if args.oracle:

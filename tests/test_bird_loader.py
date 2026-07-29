@@ -239,7 +239,8 @@ def test_description_dir_finds_both_bird_trees(tmp_path: Path):
 
     Hardcoding the train tree found nothing for the 11 dev-tree schemas
     (california_schools, financial, formula_1, superhero, ...) and built their SME
-    arm blind without failing — the arm looked measured and was not.
+    arm's brief silently empty without failing — the arm looked measured and was
+    not.
     """
     from governed_bi.eval.bird_loader import description_dir
 

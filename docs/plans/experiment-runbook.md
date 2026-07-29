@@ -163,8 +163,7 @@ questions**. With the four default arms plus `--replicate curated` that is five 
 passes, so **10,150 scored turns** — each one an agent loop, not a single completion.
 On top of that the build phase runs an LLM curator over 69 databases twice: once for
 `curated` and once for the SME round. `baseline` and `seeded` cost no model calls to
-build. Adding `curated_sme_blind` (below) makes it three curator passes and six serve
-passes.
+build.
 
 Cost and latency are already instrumented per turn — `arms.<arm>.cost` in
 `summary.json` (`total_tokens`, `total_cost_est_usd`, `n_rows_priced`), and the same
@@ -503,14 +502,17 @@ a new knowledge source for the first time" as with "the clarification protocol
 works". To split it, add the opt-in rung:
 
 ```bash
-uv run python -m governed_bi.eval.run_datalake --arms baseline,seeded,curated,curated_sme_blind,curated_sme --build-workers 6 --workers 8 --replicate curated
+uv run python -m governed_bi.eval.run_datalake --arms baseline,seeded,curated,curated_sme --build-workers 6 --workers 8 --replicate curated
 ```
 
-`curated_sme_blind` runs the same round with the SME blind to those CSVs, so
-`curated → curated_sme_blind` is the protocol and `curated_sme_blind → curated_sme`
-is what the human docs are worth. It costs a full SME round per database, which is
-why it is not the default — but the unsplit version cannot support the claim the
-benchmark exists to make.
+**`curated → curated_sme` bundles two mechanisms and cannot be split**, so on its
+own it does not support the claim the benchmark exists to make. A
+`curated_sme_blind` rung existed for exactly this and was removed 2026-07-28: it
+briefed the SME on train questions and evidence, which Phase A already has, so it
+compared the curator against itself re-asked through a Q&A round-trip. Splitting the
+confound needs a knowledge source the curator lacks and a simulated SME does not
+supply. Until then, report the SME delta with its two mechanisms named —
+`single_variable` is `false` on that step and `mechanisms_changed` says why.
 
 ## Before quoting anything
 

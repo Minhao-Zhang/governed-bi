@@ -947,11 +947,13 @@ def test_analyse_run_names_what_a_non_adjacent_pair_bundles(tmp_path):
     assert compound["bundles"] == ["seeded"]
 
     # Consecutive among the arms that ran, yet still bundling: the default arm set
-    # skips `curated_sme_blind`, which is exactly the docs-vs-protocol confound.
+    # changes two mechanisms at once, which is the docs-vs-protocol confound.
     # Reporting this pair as single-variable is the failure this flag prevents.
     sme = pairs["curated_vs_curated_sme"]
     assert sme["single_variable"] is False
-    assert sme["bundles"] == ["curated_sme_blind"]
+    assert "bundles" not in sme, "nothing is skipped — the rung is adjacent"
+    assert sme["single_variable"] is False
+    assert len(sme["mechanisms_changed"]) == 2
 
 
 def test_analyse_run_states_it_has_no_noise_floor(tmp_path):
@@ -1121,7 +1123,7 @@ def test_skipped_rungs_does_not_depend_on_argument_order():
     ]:
         assert skipped_rungs(lo, hi) == skipped_rungs(hi, lo), (lo, hi)
     assert skipped_rungs("curated_sme", "baseline") == [
-        "seeded", "curated", "curated_sme_blind",
+        "seeded", "curated",
     ]
 
 

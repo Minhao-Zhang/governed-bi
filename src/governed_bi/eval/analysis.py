@@ -732,7 +732,7 @@ def analyse_run(
     # than empty when there is nothing to report. Note that a pair can be
     # consecutive among the arms this run scored and still bundle: the default arm
     # set makes ``curated -> curated_sme`` consecutive while skipping
-    # ``curated_sme_blind``, which is why the flag is named for the property that
+    # more than one mechanism, which is why the flag is named for the property that
     # matters (one thing changed) and not for position in the run.
     #
     # An arm this module cannot place on the ladder gets ``None``, not ``True``.

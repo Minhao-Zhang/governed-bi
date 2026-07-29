@@ -591,11 +591,15 @@ def test_a_readable_csv_carries_no_degradation_note(tmp_path: Path):
 def test_an_sme_build_does_not_consume_the_ledger_the_next_arm_needs(
     bird_connector, tmp_path: Path
 ):
-    """`curated_sme_blind` used to answer `curated`'s open clarifications *in curated's
-    own ledger*. `curated_sme` then read the same ledger, found nothing open, folded
-    nothing, and produced a corpus identical to `curated` — so opting into the rung the
-    docs recommend for splitting the docs-vs-protocol confound destroyed the arm the
-    confound is about.
+    """An SME build used to answer `curated`'s open clarifications *in curated's own
+    ledger* — its own input. A second SME build off the same curated root then read
+    that ledger, found nothing open, folded nothing, and produced a corpus identical
+    to `curated`.
+
+    Found via the `curated_sme_blind` rung (removed 2026-07-28), which was the first
+    thing to build two SME arms off one curated root. The hazard is not specific to
+    it: a resume, a `--replicate curated_sme`, or any future second SME arm hits the
+    same edge, which is why this test outlived the rung that exposed it.
     """
     from governed_bi.curator.clarifications import clarifications_path
 
@@ -614,10 +618,10 @@ def test_an_sme_build_does_not_consume_the_ledger_the_next_arm_needs(
                              question="Who are the customers?", raised_by=["t1"])],
     )
 
-    # Stand in for the blind arm: one SME build off the curated ledger.
+    # The first SME build off the curated ledger.
     build_curated_corpus_with_sme(
         bird_connector, gateway, "beer_factory", train,
-        tmp_path / "corpus_blind",
+        tmp_path / "corpus_sme_first",
         responder=StaticResponder(default="Customers who bought root beer."),
         curated_root=curated, model=None, run_agent_repass=False,
         seed_ledger_if_empty=False,
@@ -632,7 +636,7 @@ def test_an_sme_build_does_not_consume_the_ledger_the_next_arm_needs(
         "arm has nothing to fold and collapses onto curated"
     )
     # And the arm that ran did record its own answers.
-    answered = load_clarifications(clarifications_path(tmp_path / "corpus_blind"))
+    answered = load_clarifications(clarifications_path(tmp_path / "corpus_sme_first"))
     assert any(r.status is not ClarificationRecordStatus.open for r in answered)
 
 
@@ -663,7 +667,7 @@ def test_seeded_clarifications_do_not_pose_as_agent_authored_for_the_next_arm(
     assert not clarifications_path(curated).exists(), "curated starts with no ledger"
 
     sources = []
-    for arm in ("blind", "sme"):
+    for arm in ("sme_first", "sme_second"):
         out = build_curated_corpus_with_sme(
             bird_connector, gateway, "beer_factory", train,
             tmp_path / f"corpus_{arm}",

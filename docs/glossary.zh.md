@@ -67,8 +67,7 @@ _[English](glossary.md) · [简体中文](glossary.zh.md)_
 | **基线**（Baseline，评测下限） | 确定性的、由脚本构建的 corpus——表/列名称、类型、**样本值**、FK 候选——**没有 curator LLM**、也**没有从训练集 SQL 派生**的资产。通过与其他所有臂相同的 **Analyst** 路径提供服务。隔离出“一个脚本能从数据库了解到什么”。取代了旧的原始转储无语义层臂**以及** facts-only 那一行。 |
 | **种子臂**（Seeded arm，`seeded`） | `baseline` 加上机械的训练集 SQL 连接与指标，以及诱饵 / 负空间标记（训练集 gold 从未碰过的列）。**没有 LLM，也没有 few-shot**——few-shot 只在 curated agent 路径上撰写。构建不花模型调用。`baseline → seeded` **不是**“单靠解析训练集 SQL”的因果估计：它还去掉了 baseline 按命名规范猜的外键，并套上以训练集为条件的列掩码。详见实验运行手册清单。 |
 | **策展臂**（Curated arm） | `seeded` 加上 curator 撰写的 LLM **Inference 层**（描述、可靠性警示、术语、指标、few-shot）。`seeded → curated` 隔离出 curator LLM 在那趟免费的确定性处理之上又多贡献了什么。它是相对 `seeded` 而非 `baseline` 来衡量的：这两项干预以前总是同时出现，所以旧版的 `baseline → curated` 差值说不清到底是哪一项在起作用。 |
-| **盲测 SME 臂**（Blind SME arm，`curated_sme_blind`） | `curated` 加上 Simulated-SME 澄清轮次，SME **看不到 BIRD 人工撰写的 `database_description` CSV**。可选项（每个数据库要多花一整轮 SME）。`curated → curated_sme_blind` 单独隔离出澄清协议本身。 |
-| **策展+SME 臂**（Curated+SME arm，`curated_sme`） | 同一轮澄清，但 SME 的任务简报里带上了人工撰写的列文档。`curated_sme_blind → curated_sme` 就是那份文档值多少。没有盲测这一档时，两者会被捆在一起，复合步骤会如实标注这一点。增长轴。 |
+| **策展+SME 臂**（Curated+SME arm，`curated_sme`） | `curated` 加上 Simulated-SME 澄清轮次，SME 的任务简报里带着 BIRD 人工撰写的 `database_description` CSV。增长轴。**`curated → curated_sme` 这一步同时动了两个机制**——澄清协议，以及那份人工文档——而且拆不开：原来用来拆它的 `curated_sme_blind` 档已于 2026-07-28 删除，因为那一档给 SME 的简报只有训练集问题与 evidence，而这些 Phase A 本来就有。这一步的 `single_variable` 仍然是 `false`，靠的是机制计数，而不是"跳过了某一档"。 |
 | **可恢复上限**（Recoverable ceiling，`ceiling`） | 虚线上界：一个测试感知的 Simulated SME，把留出测试问题 + evidence（绝不含测试 gold SQL）纳入其检索索引。**刻意泄漏的预言机**，与公平臂隔离。取代已退役的去混淆 "gold" 臂。已设计，尚未构建。 |
 | **Schema**（命名空间） | 一次运行所连接的那个数据库内部的单级命名空间（D15）：一个 YAML 子树（`corpus/<schema>/`）加上逐资产的 `schema` 字段。一次运行的数据库本身是连接配置（`corpus_pin`），不是 corpus 的一个层级。 |
 | **跨 schema 关系**（Cross-schema relationship） | 两个端点位于*不同* schema 的 `join` 资产。**只靠策展得到**——由 **SME** 声明、从示例 SQL 蒸馏、或从使用中挖掘；绝不从数据库外键探测、也不从名称猜测。若没有这样的资产，引擎会**拒答**该跨 schema 问题，而不是硬造一个连接（D15）。 |

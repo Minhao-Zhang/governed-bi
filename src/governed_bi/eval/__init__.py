@@ -11,13 +11,14 @@ DB is one). Default adjacent steps:
 - ``seeded``: + train-SQL-derived joins/metrics and decoy / negative-space marking;
   still no LLM and **no few-shots** (``run_agent=False``).
 - ``curated``: + curator LLM agent over that seed (Inference tier, including few-shots).
-- ``curated_sme_blind`` (opt-in): + Simulated-SME clarification protocol, blind to
+- ``curated_sme``: + the Simulated-SME clarification round, whose brief carries
   BIRD's human column docs.
-- ``curated_sme``: + the same SME round with those human docs in the brief.
 
 Moat claims need the adjacent steps above, not a bundled ``baseline -> curated``.
-The default SME lift without the blind rung is ``curated -> curated_sme`` (protocol
-and docs together — disclose that confound). ``ceiling`` remains a test-aware
+``curated -> curated_sme`` bundles the protocol and the human docs permanently —
+the ``curated_sme_blind`` rung that split them was removed 2026-07-28 as
+meaningless (it briefed the SME on inputs Phase A already had). Disclose that
+confound; do not read the delta as evidence for the protocol. ``ceiling`` remains a test-aware
 oracle reference line — designed, not built; counterfactual oracle rungs live in
 :mod:`governed_bi.eval.oracle` and are not fair ``Arm`` members.
 
