@@ -1709,6 +1709,17 @@ def _compare_arms(
                 report["single_variable"] = not bundles and len(mechanisms) == 1
                 if bundles:
                     report["bundles"] = bundles
+                elif len(mechanisms) > 1:
+                    # An adjacent rung that still changes more than one thing —
+                    # ``curated -> curated_sme`` is the live case (the clarification
+                    # protocol AND BIRD's human column docs, see ``arms.Arm``). With
+                    # no rung skipped there is no ``bundles`` key, so a reader keying
+                    # on ``adjacent_rung`` or on ``bundles`` sees a clean
+                    # single-variable step and only ``len(mechanisms_changed)`` says
+                    # otherwise. Named here so the confound is a key rather than an
+                    # inference — and NOT by faking a skipped rung, which would send
+                    # every reader looking for an arm that does not exist.
+                    report["confounded_mechanisms"] = list(mechanisms)
                 # ``arm_a``/``arm_b`` come from ``sorted(rows_by_arm)``, which is
                 # alphabetical, so a pair can run *down* the ladder (``curated`` vs
                 # ``seeded``). ``net_questions`` is then signed against ladder
@@ -1983,17 +1994,106 @@ def _guardrail_ceiling(rows: list[dict[str, Any]]) -> dict[str, Any]:
             return []
         return sorted(k for k, v in raw.items() if isinstance(v, int) and v > 0)
 
+    observed = [r for r in rows if isinstance(r.get("by_guardrail_layer"), dict)]
     blocked = [r for r in rows if blocked_layers(r)]
     wrong = [r for r in blocked if not r.get("correct")]
     by_layer: Counter[str] = Counter()
     for r in wrong:
         by_layer.update(blocked_layers(r))
     return {
+        # Rows that recorded guardrail layers AT ALL. ``n_blocked: 0`` has two
+        # readings — nothing was blocked, or nothing was instrumented — and only the
+        # first is a governance result. A row with no ``by_guardrail_layer`` cannot
+        # be told from a clean one by ``blocked_layers``, which returns ``[]`` for
+        # both, so the denominator has to be counted separately or the ceiling is
+        # quoted over an unknown share of the arm.
+        "n_observed": len(observed),
         "n_blocked": len(blocked),
         "n_blocked_and_wrong": len(wrong),
         "blocked_then_wrong_rate": (len(wrong) / len(blocked)) if blocked else None,
         "by_layer": dict(by_layer.most_common()),
     }
+
+
+def _ex_by_stamp(rows: list[dict[str, Any]], key: str) -> dict[str, Any]:
+    """EX per stamped value of ``key``, plus a count of the rows that lacked it.
+
+    Deliberately not :func:`_bucket`, which groups on ``str(r.get(key))`` and so
+    renders an unstamped row as a ``"None"`` bucket sitting beside the real stamp
+    values. An instrumentation gap must not look like a stamp level.
+
+    But excluding those rows and counting nothing was the other half of the same
+    defect: the calibration line then reads as a confident statement over an unknown
+    fraction of the arm, and on a run where the stamp was mostly missing it looks
+    identical to one where it was mostly present. ``n_unstamped`` sits INSIDE this
+    block rather than beside it so the exclusion travels with the numbers it
+    qualifies — which means every reader of this dict must skip the non-stamp key
+    (see the calibration print in the serve loop).
+
+    Module-level so it can be tested without building a whole summary, like
+    :func:`_guardrail_ceiling`.
+    """
+    groups: dict[str, list[dict[str, Any]]] = {}
+    unstamped = 0
+    for r in rows:
+        raw = r.get(key)
+        if not raw:
+            unstamped += 1
+            continue
+        groups.setdefault(str(getattr(raw, "value", raw)), []).append(r)
+    out: dict[str, Any] = {
+        k: {"n": len(v), "ex_lenient": _rate_over(v)} for k, v in sorted(groups.items())
+    }
+    out["n_unstamped"] = unstamped
+    return out
+
+
+def _split(
+    population: list[dict[str, Any]],
+    flag: "Callable[[dict[str, Any]], bool | None]",
+    outcome: str,
+) -> dict[str, Any]:
+    """Rate of ``outcome`` on both sides of a per-row predicate.
+
+    ``flag`` returns ``None`` for a row that never recorded the input, and those
+    rows are counted out rather than filed on the negative side — the failure mode
+    the twin strata already document: ``not r.get(...)`` puts an ABSENT key in the
+    FALSE stratum, which silently turns one side into the pooled figure.
+
+    Module-level so it can be tested without building a whole summary.
+    """
+    yes: list[dict[str, Any]] = []
+    no: list[dict[str, Any]] = []
+    unstamped = 0
+    for r in population:
+        v = flag(r)
+        if v is None:
+            unstamped += 1
+        elif v:
+            yes.append(r)
+        else:
+            no.append(r)
+
+    def rate(group: list[dict[str, Any]]) -> float | None:
+        return (sum(1 for r in group if r.get(outcome)) / len(group)) if group else None
+
+    return {
+        "with": rate(yes),
+        "without": rate(no),
+        "n_with": len(yes),
+        "n_without": len(no),
+        "n_unstamped": unstamped,
+    }
+
+
+def _positive(key: str) -> "Callable[[dict[str, Any]], bool | None]":
+    """``_split`` predicate: did the row record a positive count for ``key``?"""
+
+    def flag(r: dict[str, Any]) -> bool | None:
+        v = r.get(key)
+        return None if v is None else bool(v) and v > 0
+
+    return flag
 
 
 def _summarise_rows(
@@ -2026,6 +2126,14 @@ def _summarise_rows(
     n_strict = sum(1 for r in rows if r.get("correct_strict"))
     produced = [r for r in rows if r.get("generated_sql")]
     n_produced = len(produced)
+    # Correct answers among the rows that PRODUCED SQL — the numerator
+    # ``conditional_ex_lenient`` needs, drawn from the same rows as its denominator.
+    # It used to divide ``n_correct`` (every row) by ``n_produced``, the identical
+    # population mix ``cond_ex_given_routing`` was rewritten to remove; see the
+    # comment there. It happened to agree only because ``hash_grade`` never marks a
+    # row correct without SQL, an invariant nothing asserts — and the day a grading
+    # free pass (empty gold, no FROM) scores a refusal correct, this exceeds 1.0.
+    n_correct_produced = sum(1 for r in produced if r.get("correct"))
     n_decoy = sum(1 for r in produced if r.get("decoy_touch"))
     # One vocabulary for how each turn ended (``governed_bi.stages``). A crash and a
     # refusal used to be the same row shape, so ``refusal_rate`` absorbed the crash
@@ -2156,70 +2264,6 @@ def _summarise_rows(
             for k, v in sorted(groups.items())
         }
 
-    def _ex_of(group: list[dict[str, Any]]) -> float | None:
-        return (sum(1 for r in group if r.get("correct")) / len(group)) if group else None
-
-    def _ex_by_stamp(key: str) -> dict[str, dict[str, Any]]:
-        """EX per stamped value of ``key``, excluding rows that never recorded it.
-
-        Deliberately not :func:`_bucket`, which groups on ``str(r.get(key))`` and so
-        renders an unstamped row as a ``"None"`` bucket sitting beside the real stamp
-        values. An instrumentation gap must not look like a stamp level.
-        """
-        groups: dict[str, list[dict[str, Any]]] = {}
-        for r in rows:
-            raw = r.get(key)
-            if not raw:
-                continue
-            groups.setdefault(str(getattr(raw, "value", raw)), []).append(r)
-        return {
-            k: {"n": len(v), "ex_lenient": _ex_of(v)} for k, v in sorted(groups.items())
-        }
-
-    def _split(
-        population: list[dict[str, Any]],
-        flag: "Callable[[dict[str, Any]], bool | None]",
-        outcome: str,
-    ) -> dict[str, Any]:
-        """Rate of ``outcome`` on both sides of a per-row predicate.
-
-        ``flag`` returns ``None`` for a row that never recorded the input, and those
-        rows are counted out rather than filed on the negative side — the failure mode
-        the twin strata already document: ``not r.get(...)`` puts an ABSENT key in the
-        FALSE stratum, which silently turns one side into the pooled figure.
-        """
-        yes: list[dict[str, Any]] = []
-        no: list[dict[str, Any]] = []
-        unstamped = 0
-        for r in population:
-            v = flag(r)
-            if v is None:
-                unstamped += 1
-            elif v:
-                yes.append(r)
-            else:
-                no.append(r)
-
-        def rate(group: list[dict[str, Any]]) -> float | None:
-            return (
-                (sum(1 for r in group if r.get(outcome)) / len(group)) if group else None
-            )
-
-        return {
-            "with": rate(yes),
-            "without": rate(no),
-            "n_with": len(yes),
-            "n_without": len(no),
-            "n_unstamped": unstamped,
-        }
-
-    def _positive(key: str) -> "Callable[[dict[str, Any]], bool | None]":
-        def flag(r: dict[str, Any]) -> bool | None:
-            v = r.get(key)
-            return None if v is None else bool(v) and v > 0
-
-        return flag
-
     # Every rate below is ``None`` when its denominator is empty. An arm that scored
     # zero rows measured nothing, and rendering that as 0.0 makes a run that never
     # ran look like a run that failed everything — which the ledger's quotability
@@ -2319,7 +2363,9 @@ def _summarise_rows(
         # as a perfect governance score rewards the worst possible run.
         "decoy_touch_rate": (n_decoy / n_produced) if n_produced else None,
         "n_decoy_touch": n_decoy,
-        "conditional_ex_lenient": (n_correct / n_produced) if n_produced else None,
+        "conditional_ex_lenient": (
+            (n_correct_produced / n_produced) if n_produced else None
+        ),
         # Routing recall: share of questions whose TRUE schema survived routing,
         # over the turns that actually reached the router (crashes excluded — see
         # ``n_routing_observed``). This is the ceiling on EX in the data lake.
@@ -2407,8 +2453,10 @@ def _summarise_rows(
         # tiers uncalibrated heuristics to be tuned in eval — this is the number that
         # tunes them. If ``unflagged`` does not out-score ``heuristic``, the stamp is
         # decoration. Both blocks exclude unstamped rows (see ``_ex_by_stamp``).
-        "ex_by_semantic_assurance": {} if nested else _ex_by_stamp("semantic_assurance"),
-        "ex_by_tier": {} if nested else _ex_by_stamp("tier"),
+        "ex_by_semantic_assurance": (
+            {} if nested else _ex_by_stamp(rows, "semantic_assurance")
+        ),
+        "ex_by_tier": {} if nested else _ex_by_stamp(rows, "tier"),
         # Does the suspect caveat stop the model reaching for the decoy? Conditioned on
         # DELIVERY, matching ``decoy_touch_rate``'s denominator. Unconditioned, the rate
         # cannot separate "the caveat worked" from "the model never wanted that column".
@@ -2576,6 +2624,13 @@ def _summarise_rows(
             if _measured_notes
             else None
         ),
+        # ...and how many rows that actually is. The rate is declared over all scored
+        # rows and computed over the measured ones, so without this the exclusion is
+        # invisible: an arm that recorded injection on three rows out of two thousand
+        # publishes a share indistinguishable from one measured over the whole arm.
+        # The denominator, not a flag — ``n - n_notes_observed`` is the size of the
+        # instrumentation gap, and that is the number worth reading.
+        "n_notes_observed": len(_measured_notes),
         "mean_few_shots_injected": _mean(rows, "n_few_shots_injected"),
         "mean_context_chars": _mean(rows, "context_chars"),
         # What this arm actually handed the model, as an identity rather than a
@@ -3778,6 +3833,18 @@ def run_datalake(
     # Paid resume after a code edit: refuse by default; this opts in and is recorded
     # so the ledger still marks the run unquotable via resume drift.
     allow_git_sha_drift: bool = False,
+    # Adopt whatever is already complete under ``corpus_dir`` even when ``resume`` is
+    # off. Set by ``--split both`` for the second split, and for nothing else.
+    #
+    # ``resume`` used to govern both halves at once, so ``--split both --no-resume``
+    # re-ran the STOCHASTIC deep-agent curator into the shared roots between the two
+    # passes: test scored against corpus v1, train against v2, and the gap that comes
+    # out is a mix of overfitting and curator variance measuring neither (see
+    # ``eval.split_gap``). It also paid for the build twice, which is the run's
+    # dominant cost. The two halves are separable — this one is "is the treatment
+    # already built", ``resume`` is "are these rows already scored" — and the second
+    # must stay honest per split directory when an operator asks for a clean start.
+    reuse_corpus: bool = False,
 ) -> dict[str, Any]:
     """Build all arms for the requested dbs into shared corpora, then serve the
     pooled split through the unpinned (data-lake) agentic core. Writes
@@ -3970,12 +4037,18 @@ def run_datalake(
     staging_root = corpus_dir / "_staging"
     build_workers = resolve_workers(build_workers)
 
+    # "Is the treatment already built" — deliberately NOT ``resume``, which answers
+    # "are these rows already scored". See ``reuse_corpus`` in the signature.
+    build_resume = resume or reuse_corpus
+    if reuse_corpus and not resume:
+        print("  corpus: reusing the build already under corpus_dir (--split both)")
+
     built = run_build_phase(
         wanted,
         roots=roots,
         staging_root=staging_root,
         build_workers=build_workers,
-        resume=resume,
+        resume=build_resume,
         build_errors=build_errors,
         build_lock=build_lock,
         build_one_db=lambda db, build_roots: _build_db_corpora(
@@ -3988,7 +4061,7 @@ def run_datalake(
             lc_model=lc_model,
             skip_agent=skip_agent,
             max_agent_steps=max_agent_steps,
-            resume=resume,
+            resume=build_resume,
             prompt_variants=resolved_prompts,
             settings=settings,
         ),
@@ -4106,10 +4179,11 @@ def run_datalake(
     observed_corpus_hash = metrics.stamp_corpus_hashes(
         manifest, {arm: roots[arm] for arm in sorted(arms)}
     )
+    # Already filled by ``stamp_corpus_hashes`` when this run declared none, so it is
+    # never ``None`` here — re-implementing that fill in the caller only created a
+    # second place for the two to disagree.
     prior_hash = manifest.get("corpus_content_hash")
-    if prior_hash is None:
-        manifest["corpus_content_hash"] = observed_corpus_hash
-    elif prior_hash != observed_corpus_hash:
+    if prior_hash != observed_corpus_hash:
         # A resume whose corpus is not the corpus the run started on. Leave the
         # original in place so the ledger's comparability/drift check sees the
         # mismatch instead of having it overwritten out of existence.
@@ -4398,15 +4472,21 @@ def run_datalake(
             # the assurance ladder rather than alphabetically, because the whole
             # question is whether EX falls as assurance drops.
             _cal = summary.get("ex_by_semantic_assurance") or {}
-            if _cal:
-                ladder = [k for k in ("unflagged", "heuristic", "unverified") if k in _cal]
-                ladder += [k for k in sorted(_cal) if k not in ladder]
+            # ``n_unstamped`` lives inside the block (it qualifies these numbers), so
+            # it is not a stamp level and must not be printed as one.
+            _levels = {k: v for k, v in _cal.items() if isinstance(v, dict)}
+            if _levels:
+                ladder = [
+                    k for k in ("unflagged", "heuristic", "unverified") if k in _levels
+                ]
+                ladder += [k for k in sorted(_levels) if k not in ladder]
                 print(
                     "         calibration  "
                     + "  ".join(
-                        f"{k}={_fmt_rate(_cal[k]['ex_lenient'])}(n={_cal[k]['n']})"
+                        f"{k}={_fmt_rate(_levels[k]['ex_lenient'])}(n={_levels[k]['n']})"
                         for k in ladder
                     )
+                    + f"  unstamped={_cal.get('n_unstamped', 0)}"
                 )
             _rep = summary.get("ex_by_repair") or {}
             _note = summary.get("ex_by_note_injected") or {}
@@ -4422,6 +4502,14 @@ def run_datalake(
                 f"(n={_note.get('n_without', 0)})  "
                 f"blocked_then_wrong={_fmt_rate(_gc.get('blocked_then_wrong_rate'))}"
                 f"(n={_gc.get('n_blocked', 0)}, ceiling)"
+            )
+            # The most quotable numbers on this line are the least causal, and a
+            # terminal copy-paste carries no context. Both strata are selected by an
+            # outcome of the turn: repaired = the questions that already failed once,
+            # note = the questions retrieval had a note for. Not effects.
+            print(
+                "         ^ strata are self-selected (repaired = already failed once; "
+                "note = retrieval matched) — differences are not effects"
             )
     finally:
         stage_sink.close()
@@ -4781,6 +4869,24 @@ def main(argv: list[str] | None = None) -> int:
         out_dir = args.resume_from
         if not out_dir.is_dir():
             p.error(f"--resume-from {out_dir} is not a directory")
+        # A single-split run directory holds its artifacts FLAT (``manifest.json``,
+        # ``summary.json``, ``generations.<arm>.jsonl`` at the top), while ``both``
+        # holds them per split under ``train/`` and ``test/``. Resuming the first as
+        # the second silently strands the flat files beside the new subdirectories:
+        # the resume guard reads ``<split_dir>/manifest.json`` and there is none, so
+        # nothing compares knobs, nothing replays the rows already scored, and the run
+        # directory ends up carrying two runs' artifacts with only the flat ones
+        # visible to ``analyse_run`` / the ledger. Refused rather than handled — the
+        # useful shapes (resume the single split, or start ``both`` fresh) are both
+        # one command away, and neither loses the earlier work.
+        if args.split == "both" and (out_dir / "manifest.json").exists():
+            p.error(
+                f"--resume-from {out_dir} is a single-split run directory (it has a "
+                "flat manifest.json) and --split both writes per-split subdirectories. "
+                "Resume it with the --split it was run under, or start a fresh "
+                "--split both run; mixing the two layouts leaves stale flat artifacts "
+                "that the resume guard cannot see."
+            )
         print(f"run dir: {out_dir} (resuming)")
     else:
         out_dir = args.out / _utc_ts()
@@ -4793,18 +4899,23 @@ def main(argv: list[str] | None = None) -> int:
     # precisely so two splits cannot be mixed in one generations file.
     splits = _SPLITS if args.split == "both" else (args.split,)
     corpus_dir = out_dir if len(splits) == 1 else out_dir / "corpora"
-    results: dict[str, dict] = {}
-    for split in splits:
+    results: dict[str, dict[str, Any]] = {}
+    for index, split in enumerate(splits):
         split_dir = out_dir if len(splits) == 1 else out_dir / split
         if len(splits) > 1:
             print(f"\n=== scoring split {split!r} -> {split_dir} ===")
         result = _score_one_split(
             args,
-            p,
             bird_dir=bird_dir,
             out_dir=split_dir,
             corpus_dir=corpus_dir,
             split=split,
+            # ONE build for the whole run, even under ``--no-resume``. The corpus is
+            # the treatment and the curator is stochastic, so a rebuild between the
+            # splits makes the gap a mix of overfitting and curator variance (and
+            # pays twice for the run's dominant cost). ``resume`` still governs row
+            # replay, which is per-split-directory and stays clean when asked for.
+            reuse_corpus=index > 0,
             arms=arms,
             oracles=oracles,
             prompt_overrides=prompt_overrides,
@@ -4828,24 +4939,33 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _score_one_split(
-    args,
-    p,
+    args: argparse.Namespace,
     *,
-    bird_dir: Path,
+    # Per-split, computed in ``main``: which split, where its artifacts go, which
+    # corpus it serves, and whether it may adopt a build the previous split made.
+    split: str,
     out_dir: Path,
     corpus_dir: Path,
-    split: str,
+    reuse_corpus: bool,
+    # RESOLVED once in ``main`` — parsed, validated and defaulted against config —
+    # rather than re-derived per split from ``args``. Two derivations of one knob is
+    # how the two splits of a single run could disagree about what they measured, and
+    # ``--prompt`` / ``--workers`` in particular go through validation that must not
+    # run twice.
+    bird_dir: Path,
     arms: tuple[str, ...],
     oracles: tuple[str, ...],
     prompt_overrides: dict[str, str],
     workers: int,
     build_workers: int,
-) -> dict:
+) -> dict[str, Any]:
     """One split's build-or-reuse, serve, score and report.
 
     Extracted from ``main`` so ``--split both`` runs it twice without duplicating the
-    twenty-odd argument hand-off. The second call finds every corpus already complete
-    under ``corpus_dir`` and skips the build phase.
+    twenty-odd argument hand-off. The second call passes ``reuse_corpus=True`` and so
+    finds every corpus already complete under ``corpus_dir``, whatever ``--no-resume``
+    says: one build per run is what makes the train-vs-test gap mean overfitting
+    rather than curator variance.
     """
     try:
         result = run_datalake(
@@ -4873,6 +4993,7 @@ def _score_one_split(
             replicate_of=args.replicate,
             oracles=oracles,
             allow_git_sha_drift=args.allow_git_sha_drift,
+            reuse_corpus=reuse_corpus,
         )
         print(json.dumps(result["arms"], indent=2, ensure_ascii=False))
         # Printed BEFORE any delta, because these are the two questions that decide
@@ -4889,6 +5010,15 @@ def _score_one_split(
             # watching a long run reads stdout; the artifact is for afterwards.
             if comparison.get("bundles"):
                 tag += " [bundles " + ", ".join(comparison["bundles"]) + "]"
+            if comparison.get("confounded_mechanisms"):
+                # One rung, more than one mechanism: no rung was skipped, so the
+                # ``bundles`` tag above stays silent and this step would otherwise read
+                # as single-variable on stdout.
+                tag += (
+                    " [one rung, "
+                    + " + ".join(comparison["confounded_mechanisms"])
+                    + " — cannot attribute to either]"
+                )
             if comparison.get("ladder_descending"):
                 tag += " [reads DOWN the ladder — sign is reversed]"
             p_adj = comparison.get("p_value_holm")
