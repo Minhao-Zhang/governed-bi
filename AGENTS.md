@@ -16,33 +16,18 @@
 
 ## Documentation language workflow
 
-English is the source of truth. **Only a small core set has a Chinese twin** — the
-docs a Chinese reader enters through:
+English is the source of truth. Keep a Chinese twin for these docs only:
 
 ```
-README.zh.md                 corpus/README.zh.md
-docs/README.zh.md            data/README.zh.md
-docs/architecture.zh.md      data/generated/README.zh.md
-docs/design-decisions.zh.md
-docs/glossary.zh.md
-docs/usage.zh.md
+README.md                docs/design-decisions.md    corpus/README.md
+docs/README.md           docs/glossary.md            data/README.md
+docs/architecture.md     docs/usage.md               data/generated/README.md
 ```
 
-Everything else — ADRs, the LLM-call traces, `measurement`, `open-work`, the
-runbooks under `plans/`, `viz`, `asset-schemas`, `analyst`, `curator`,
-`prompt-experiments`, `references`, `corpus-authoring` — is **English only**. Do
-not create a `.zh.md` for them; a mirror that has to be re-translated on every
-edit costs more than it returns on docs that are read while working in the code.
-Those files carry no language-switcher line, so its absence is the signal.
+Everything else is **English only** — do not create a `.zh.md` for it.
 
-- **While the work is in progress**: edit the **English docs only**. Let the core
-  Chinese set drift.
-- **When the work is done** (before commit): align the affected docs *in the core
-  set* to the finalized English, then refine each with the `qu-ai-wei` skill.
-  Match the existing zh house style rather than imposing a new one (this repo
-  uses straight quotes next to CJK).
-- A link from a Chinese doc to an English-only doc points at the `.md` — that is
-  correct, not a gap.
+- **While the work is in progress**: edit the **English docs only**. Let the Chinese twins drift.
+- **When the work is done** (before commit): align the affected twins to the finalized English, then refine each with the `qu-ai-wei` skill.
 
 ## External dependencies
 - The UI is a separate project, you can find it in the [governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui) repository and it is available locally at `../governed-bi-ui`.
