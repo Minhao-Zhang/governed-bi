@@ -45,7 +45,7 @@ PG_DSN=host=... port=5432 dbname=... user=... password=...
 uv run langgraph dev          # starts the `serve` graph; POST questions to /chat
 ```
 
-[演练](docs/walkthrough.zh.md)是一份引导式的「第一个问题」教程，[快速上手](docs/usage.zh.md)是完整参考。要直接用 Python 驱动 agent 核心，见 [`docs/analyst.md`](docs/analyst.zh.md)。
+[演练](docs/usage.zh.md)是一份引导式的「第一个问题」教程，[快速上手](docs/usage.zh.md)是完整参考。要直接用 Python 驱动 agent 核心，见 [`docs/analyst.md`](docs/analyst.zh.md)。
 
 ## 配置
 
@@ -84,7 +84,7 @@ uv run python scripts/live_smoke.py       # end-to-end over a real model (needs 
 
 **本仓库现在没有任何可引用的评测数字**——2026-07-26 之前产出的数字全部作废（见
 [`docs/README.md`](docs/README.md)）。此前那次单种子阶梯运行只是历史记录
-（[评测阶梯结果](docs/plans/eval-ladder-results.md)：arm 定义与方法仍然有效，**但不要引用其中的数字**）。
+（git 历史里的 v5 运行记录：arm 定义与方法仍然有效，**但不要引用其中的数字**）。
 当前的里程碑是**规模化运行**——把全部 69 个 BIRD 库作为 Postgres schema 加载（8,134 训练 /
 2,030 测试）——用大规模留出测试集作为证据单位（见
 [审计处置](docs/design-decisions.md#audit-dispositions-2026-07-15)与
@@ -121,7 +121,7 @@ src/governed_bi/
   curator/          Facts profiling, proposers, adversary review, curate loop, deepagents build harness
   graph/            FK graph projection + Steiner-tree join planning
   retrieval/        BM25 + grounding + vector channel (RRF fusion)
-  memory/           working memory; episodic/correction seams
+  memory/           working memory (session-scoped)
   analyst/          the ADR-0002 governed agentic core (sole serve path): agent, tools, middleware, governance, cache, stamp
   eval/             execution accuracy, arm harness, refuse-gate
   viz/              audit surface (UI-agnostic presenter view models; API write gated by allow_edit)

@@ -2,7 +2,7 @@
 
 _[English](analyst.md) · [简体中文](analyst.zh.md)_
 
-[Agentic BI System](system-overview.zh.md) 的服务侧代理（serve-side agent，即 **Analyst**）。它是在线运行的受治理代理，*消费* corpus（语料库）以生成答案，做到**失败即拒（fail-closed）且可审计**（两套 harness 拆分；`LangGraph` + 中间件（middleware））。是 [Curator](curator.zh.md) 的对应方，消费 [Asset schemas](asset-schemas.zh.md) 中定义的资产。
+[Agentic BI System](architecture.zh.md) 的服务侧代理（serve-side agent，即 **Analyst**）。它是在线运行的受治理代理，*消费* corpus（语料库）以生成答案，做到**失败即拒（fail-closed）且可审计**（两套 harness 拆分；`LangGraph` + 中间件（middleware））。是 [Curator](curator.zh.md) 的对应方，消费 [Asset schemas](asset-schemas.zh.md) 中定义的资产。
 
 > 实现：[`src/governed_bi/analyst/`](../src/governed_bi/analyst/)，护栏（guardrail）/gateway 位于 [`gateway/`](../src/governed_bi/gateway/)，连接规划（join planning）位于 [`graph/`](../src/governed_bi/graph/)，RVGD 位于 [`retrieval/`](../src/governed_bi/retrieval/)。
 
@@ -14,14 +14,13 @@ _[English](analyst.md) · [简体中文](analyst.zh.md)_
 
 > *已实现（当前现状）：* agentic 内核是**唯一**的服务路径：P2 切换已经落地，确定性流程节点与 `agent_serve` 开关都已被移除。`analyst.agent` 会编译一个外层的确定性 `StateGraph`（`ingest → refuse_gate → prepare → cache → assemble → agent_core → narrate`），它包裹起一个内层的 LangChain `create_agent` 推理循环；公开的入口函数是 `answer_question_agent`。治理由 `GovernanceMiddleware`（`analyst.middleware`）承载；四个受治理工具位于 `analyst.tools`；`llm.fake` 提供一个 `FakeListChatModel` harness 用于 CI 的确定性。
 >
-> 回答问题现在必须有真实（live）模型：`build_stack()` 在没有模型时仍可构建（审计 API 仍继续提供浏览/对话；corpus 写操作由 `allow_edit` 门控），但 LangGraph 服务进程（`make_graph`）会在启动时失败即拒（fail closed），`/chat` 在模型配置完成之前始终返回 503。参见 ADR 0002。**目前没有可引用的评测数字**：2026-07-26 之前产出的数字全部作废，所以 [`eval-ladder-results.md`](plans/eval-ladder-results.md) 只是历史记录。要拿到一个能引用的数字，按[实验操作手册](plans/experiment-runbook.md)重跑。
+> 回答问题现在必须有真实（live）模型：`build_stack()` 在没有模型时仍可构建（审计 API 仍继续提供浏览/对话；corpus 写操作由 `allow_edit` 门控），但 LangGraph 服务进程（`make_graph`）会在启动时失败即拒（fail closed），`/chat` 在模型配置完成之前始终返回 503。参见 ADR 0002。**目前没有可引用的评测数字**：2026-07-26 之前产出的数字全部作废。要拿到一个能引用的数字，按[实验操作手册](plans/experiment-runbook.md)重跑。
 
 ## 流程
 
 1. **摄入（Ingest）**：问题 + 身份（identity）（D7、以用户身份（as-user）） + 工作记忆（D8、会话级（session-scoped））。
 2. **查询理解与术语绑定（term binding）**：通过 `term` 资产解析业务语言。同义词与 `term_relationship` 把各种措辞映射到规范资产（强路由（strong-routing），而非 LLM 猜测）。
 3. **意图路由（intent routing）**：硬编码路由（`nl2sql | kpi_lookup | knowledge_qa | deep_analysis`），每条路由各自拥有检索与记忆预算。
-4. **SQL 语义缓存快速路径**：问题嵌入 → 与缓存 SQL 的余弦相似度 ≥0.92 → 命中则跳过检索（retrieval）/规划/生成，但**始终重新执行**（仅 SQL 文本、以用户身份、D7）。TTL 15 分钟；成功后写回。*已实现：* `analyst.cache.SqlCache`（默认关闭，以注入方式提供）。命中的缓存条目还会针对其存入时所持有的已授权表**重新过护栏**，然后再执行；已过期或现已被拦截的命中会回落到完整流水线（失败即拒）。缓存准入以**语义**轴为门槛，绝不只凭安全：只有 `unflagged`（干净运行、未触发任何不确定性标志）的答案才会被写回。
 5. **RVGD 检索**：R 精确匹配 / V 语义 / G 图 / D 词典。四阶段重排，受 token 预算约束，并有 Corrective-RAG 回退。**仅限 Facts 层与 Inference 层**（加载器契约（loader contract））；Audit 层与 `excluded` 资产永不被检索。*已实现：* 纯 Python 的 **BM25** 词法通道，加上确定性接地（grounding）（一个已绑定的 term 会带出它的目标对象，一个 metric 会带出它的基表，一张 table 会带出它的列），以及 **V（向量）通道**（`retrieval.embedding`）：注入的 `Embedder`（OpenAI `text-embedding-3-small`，或确定性的离线 `HashingEmbedder`）按余弦相似度排序，并通过 Reciprocal Rank Fusion 与 BM25 融合。除非传入了 embedder，否则该通道关闭，因此默认是纯 BM25。图通道（G）与 Corrective-RAG 重排仍是后续切片。
    - **上下文组装（context assembly）**（`analyst.context.assemble_context`）：检索返回的是 id；该步骤将 L4 授权的表范围解析为一个 `PromptContext`（物理 schema、带置信度的连接路径、terms、metrics、suspect 列告诫、gold 标准样例、笔记（notes））。护栏的 `allowed_tables` 由此派生，因此**生成器能看到的，正是 L4 所允许的**。
 6. **Steiner 树连接规划**：在推断出的 FK 图上进行。
@@ -39,10 +38,7 @@ flowchart TD
     Ask["Question + identity + session_id"] --> Ingest["Ingest<br/>attach working memory + identity (audit scope)"]
     Ingest --> Bind["Query understanding<br/>bind terms to canonical assets"]
     Bind --> Route{"Intent route<br/>nl2sql / kpi_lookup / knowledge_qa / deep_analysis<br/>shared pipeline; per-route retrieval + memory budgets"}
-    Route --> Cache{"SQL semantic cache<br/>cosine gate 0.92?"}
-
-    Cache -->|hit| Reexecute["Re-execute cached SQL<br/>as current identity"]
-    Cache -->|miss| Assemble["Assemble<br/>RVGD retrieval, Steiner-tree join planning,<br/>seed Governed context + licensed table scope"]
+    Route --> Assemble["Assemble<br/>RVGD retrieval, Steiner-tree join planning,<br/>seed Governed context + licensed table scope"]
     Assemble --> AgentCore{"agent_core: create_agent tool loop<br/>GovernanceMiddleware.wrap_tool_call gates every call"}
     Bind --> RefuseGate{"Refuse-gate<br/>negative example match?"}
 
@@ -78,7 +74,7 @@ SQL 生成与执行的中段（上文第 6-9 步）就是一个有界的 `create
 
 **`GovernanceMiddleware`（`analyst.middleware`）。** 治理是强制的拦截层，而非 agent 的自由裁量：
 
-- `wrap_tool_call` 会规范化每一次调用（`sqlglot identify=True`），针对当前的 `licensed` 集合运行 **L1-L5 护栏**，强制执行 `run_query` 的尝试次数上限，并写入一条**治理账本（governance ledger）**记录，这是一份对每一个受治理动作的追加式（append-only）审计记录（refuse-gate 结果、所提供的工具、每次探索所暴露 / 被 `excluded` 过滤的资产及授权增量、每次 `run_query` 的规范化 SQL + 逐层裁决 + `allowed_tables` + 结果元信息）。每一次受治理的执行都会写入一条账本记录，包括在 `wrap_tool_call` 之外运行的那两条路径（语义缓存命中与分级交付，二者都标注了各自的 `path`）。持久化运行日志的写入按设计是尽力而为（best-effort）——因为一次日志写入失败就拒绝作答，只是把一个静默缺口换成一次中断——所以写入失败会作为 `provenance.run_log_write_error` 明确标注在答案上，而不是悄悄略过。
+- `wrap_tool_call` 会规范化每一次调用（`sqlglot identify=True`），针对当前的 `licensed` 集合运行 **L1-L5 护栏**，强制执行 `run_query` 的尝试次数上限，并写入一条**治理账本（governance ledger）**记录，这是一份对每一个受治理动作的追加式（append-only）审计记录（refuse-gate 结果、所提供的工具、每次探索所暴露 / 被 `excluded` 过滤的资产及授权增量、每次 `run_query` 的规范化 SQL + 逐层裁决 + `allowed_tables` + 结果元信息）。每一次受治理的执行都会写入一条账本记录，包括在 `wrap_tool_call` 之外运行的分级交付（它标注了自己的 `path`）。持久化运行日志的写入按设计是尽力而为（best-effort）——因为一次日志写入失败就拒绝作答，只是把一个静默缺口换成一次中断——所以写入失败会作为 `provenance.run_log_write_error` 明确标注在答案上，而不是悄悄略过。
 - `wrap_model_call` 强制工具调用串行执行（`parallel_tool_calls=False`）并记录每次调用的 token 用量。它**不会**按身份划定工具范围——`identity` 根本没有在这个方法里被引用。按身份做工具划范围（identity tool-scoping）是一份已记录在案的预留接口（seam），还没有构建出来。
 
 **存续下来的不变式：** **护栏仍然在任何执行之前于中间件中运行**：同样的五层，失败即拒，只是现在在*工具边界*（`wrap_tool_call`）而不是某个图节点上强制执行。授权来自**受治理的探索，而非 agent 的声称**：`allowed_tables` 是本轮通过受治理工具所暴露的表集合（经 FK 扩展）。agent 可以通过检视另一张表来扩大这个集合——但只能在本轮的**已路由 schema**范围内（`make_tools(..., licensable_schemas=...)`），且绝不能是 `excluded` 表；跨 schema 连接仍然需要一条经策展的连接资产（D15），L3 仍然守卫每一个列。在这个范围限定存在之前，`inspect_schema` 可以在一个池化 corpus 里对任何未排除的表自行授权。

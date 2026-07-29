@@ -2,7 +2,7 @@
 
 _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 
-面向[Agentic BI 系统](system-overview.zh.md)的已决策事项 D1-D18，并附上已考虑过的
+面向[Agentic BI 系统](architecture.zh.md)的已决策事项 D1-D18，并附上已考虑过的
 备选方案与权衡。标记为**ADR 级**的决策难以逆转，请将其视为 ADR。
 
 ## D1：目标
@@ -188,11 +188,11 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   Overview*。
 - **已构建：** 工作记忆的实现方式是一个进程内、按会话划定范围的存储
   （`InMemoryWorkingMemory`），`before_model` 中间件会读取该存储以注入
-  先前的上下文。情景记忆与纠错记忆是**默认关闭的协议接缝**
-  （`EpisodicMemory` / `CorrectionMemory`），尚未实现，这与“仅在某个领域
-  被评估证明确有收益时才启用”的原则一致。**Profile** 记忆——架构 §7 蓝图中的
-  第 4 类存储——仅以配置形式存在（一份路由预算 + `profile_ttl_days`）；它尚无存储
-  协议接缝，是优先级最低的持久存储。
+  先前的上下文。情景记忆、纠错记忆与 Profile 记忆**都没有构建**——而且从
+  2026-07-28 起连桩都不留了：空的 `EpisodicMemory` / `CorrectionMemory`
+  协议，以及 `profile_ttl_days` 与路由预算这些配置，全部删除。没有实现的接口、
+  没人读的阈值，都算不上接缝，只是一句声明。等评测证明它们值得时，再从设计里
+  重新引入。
 
 ## 两套 harness 拆分（ADR 级，横切）
 
@@ -285,12 +285,9 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   环境 = 在人工认证（D6）之前，先经过一道自动化的第一线审查。proposer 的
   论断与 adversary 的裁定都会落入资产的 `audit` 区块 → 呈现在 viz/审计
   界面上。
-- **已构建：** 确定性的脚手架（程序化的 Facts 画像分析、一个负责角色/
-  置信度/溯源的 `HeuristicProposer`、一个包装 CI 校验器的 adversary
-  `review`，以及一个 `proposed -> draft` 的 `curate` 提升循环），再加上
-  **LLM proposer**（`LlmProposer`：在 heuristic 的基础上撰写描述与
-  `suspect` 可靠性警示，Facts 保持不变），以及**deepagents 构建
-  harness**（`curator/deep_agent.py`：一个
+- **已构建：** 确定性的脚手架（程序化的 Facts 画像分析、按命名约定推出的
+  FK 候选，以及一个包装 CI 校验器的 adversary `review`），再加上
+  **deepagents 构建 harness**（`curator/deep_agent.py`：一个
   运行在 Facts 画像分析 + 只读探测工具之上的 deep agent；其构建过程已
   离线验证，自主运行则受模型门控）。仍是接缝的有：join/term/metric/
   note 的 LLM 撰写、逐资产实时的 adversary `refute`，以及自评估的
@@ -303,7 +300,7 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 
 - **按失败类别修复（L3/L4 边界）——已决定（2026-07-09）：保持可修复。** `policy_blacklist`（L2）不经重试直接失败即拒（把 DDL/策略阻断回传只会诱导规避）。曾经的问题是：**列白名单（L3）与 term-semantics（L4）范围失败是否也应立即拒答**（评审立场：诱导模型绕过范围阻断，等于施压让它去找一个能过关却在分析上仍然错误的查询）。**决定：L3/L4 保持可修复。** FK 邻域扩展 + 修复循环是针对检索欠召回的一种刻意的*降低误拒*机制，修复后的答案已是 `heuristic`（绝不会是 `unflagged`），且尝试上限 + 无进展保护为循环设界。若真实评测显示修复诱导抬高了"看似合理却错误"的答案，再重新考虑。
 - **`CorpusRelease`——一份不可变、经认证的服务契约。** Git 是真实来源，但仅靠版本控制并不构成*发布*契约：Analyst 目前在服务时并不区分草稿与已认证资产、不锁定 corpus 内容哈希、也不在每个答案中记录发布版本。提议：一个 `CorpusRelease` 工件（版本 + 内容哈希 + 已认证资产 ID + 构建/adversary 证据 + 时间戳）；curator 只写暂存区，CI 构建发布，Analyst 只读取锁定的发布，每个答案/审计事件都记录发布哈希。**范围问题：** 轻量的发布哈希 + 服务时锁定，可以说是引擎级的服务正确性原语（属本仓库范围）；而完整的"CI 构建发布、owner 审批"工作流则是产品（企业分支范围）。**决策待定**，但**已被 D13 部分解决**：就基准测试而言，一个独立的 corpus 仓库加上每个检查点一个 git SHA，锁定了 corpus 状态，并推迟了完整的发布工件。
-- **结构化意图的 SQL 缓存。** 语义缓存目前以嵌入相似度阈值为键。评审指出全局余弦阈值是一个很弱的等价性判据（两个问题可能在时间段、分母、实体或指标上不同）。提议：以结构化意图为键（`corpus_release_hash + 身份范围 + 指标 ID + 归一化维度/过滤 + join 计划指纹 + 策略版本`），或在此之前只做精确归一化查询缓存。该缓存默认关闭，故不紧急。**决策待定。**
+- **结构化意图的 SQL 缓存。** ~~语义缓存以嵌入相似度阈值为键，而全局余弦阈值是一个很弱的等价性判据（两个问题可能在时间段、分母、实体或指标上不同）。~~ **以删除结案（2026-07-28）。** 这条快速路径从来没有被任何调用方接上：所有入口和所有 eval arm 调用 serve rails 时都没有传 cache，所以 `cache_lookup` 在生产里恒定返回未命中。与其去修一条没人用的路径上的等价性判据，不如把 `analyst/cache.py` 和 `cache` 图节点一起删掉。若将来延迟真的需要缓存，一开始就以结构化意图为键（`corpus_release_hash + 身份范围 + 指标 ID + 归一化维度/过滤 + join 计划指纹 + 策略版本`）。
 
 ## D12：澄清协议
 
@@ -433,14 +430,14 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 - **护栏变为按 schema 限定，并仍是唯一的表范围关卡。** 检索与 L4 授权范围覆盖所有 schema：一个 **schema 路由器**先筛选出相关 schema，再**沿着已策展的连接**扩展，使位于第三个 schema 的桥接表不被丢弃（若只按相似度筛选，会造成*虚假*拒答，与上文那种诚实拒答无法区分）。L4 许可集变为完全限定的 `schema.table` 成员判定；一个裸引用只解析到某个指定的默认 schema，并在许可集中该名称跨多个 schema 出现时**因歧义而被拒**——这正是禁止自我授权到范围外 schema 的机制。L3 键变为三段式 `schema.table.column`；L5 的并查集按 `schema.table` 建键。许可的 *ID* 集本就已按 schema 正确（ID 已嵌入 schema），所以这是一次投影修正。只读、强制行数上限与语句超时保持不变——它们位于连接器而非护栏——且**不**使用 `search_path`（L2 禁止 `Command`）；完全限定才是所用机制。
 - **备选方案：** 一个真正三级的 `连接 → schema → 表` 模型并支持跨连接联邦（否决——单个引擎无法跨物理连接做连接；联邦是数仓的问题）；从外键元数据或名称启发式自动发现跨 schema 连接（否决——跨 schema 外键极少存在，而猜测它们在无外键场景中正是主导错误模式）；无条件限定（否决——它会破坏 SQLite/BIRD 被评分的那条路径）。
 - **结果：** 精化了 **D1** 的目标（在一个数据库内具备多 schema 能力，租户隔离仍在范围外）与 **D9** 的 corpus 契约（`db` → `schema`；`<db>/` 子树变为 `<schema>/`）。**跨 schema 服务不被 BIRD 评分**（**D14**），这是一个被接受、已记录的局限，转而以护栏单元测试、一个双 schema 的 Postgres 集成夹具，以及一项校验 `(schema, physical_name)` 唯一性与许可集键无歧义的 CI 检查来覆盖。**状态：正按已验证的增量推进（自 2026-07-12）。** 已发布：增量 1，网关基础（全 schema 覆盖连接器 + `multi_schema` 配置）；增量 2，按 schema 限定的护栏（L3/L4/L5 以 `schema.table` 建键）；增量 3，Postgres/Redshift **默认多 schema 服务**（限定 SQL + 护栏已接入；SQLite 保持单 schema 以服务 BIRD）；增量 4，**缺失边拒答**（跨 schema 检索无策展 `JoinAsset` 时在 generate 前拒答，并带 D12 `clarification_hint`）；增量 5，**API 线上字段更名**（presenter/OpenAPI 响应与过滤只用 `schema` / `?schema=`——硬切断，无 `?db=` 别名；图**节点**已带 `schema`）；增量 6，**服务端图划范围**（`/graph` 与 `/knowledge-graph` 上的 `?schema=` / `focus` / `radius` / `node_budget`，KG 另有 `kinds=`，以及 `boundary` + `meta.scope` 信封；无参仍为全图）；增量 7，**磁盘 YAML 更名**（`TableAsset` / `FewShotAsset` / skill frontmatter 字段 `db` → `schema`；`load_corpus`/`write_corpus`；serve 始终加载每一个 `corpus/<schema>/` 子树；以及增量 8，**连接感知 schema 路由器**（多 schema 路径上，在 RVGD 之前做 BM25 schema 短名单 + 沿策展跨 schema join 扩展；单 schema/SQLite 不变）。仍推迟：服务端 `/search`（按 Q6，客户端 Fuse 仍为默认）。**`DataSourceConfig.db` 并入单一 pin 字段现已完成**（术语重构）：该字段已更名为 `corpus_pin`（统一了 BIRD db_id 与默认写入子树）。LLM 由粗到细的裁剪 pass 仍推迟在可插拔生成器接缝之后。增量 9（2026-07-17）：`multi_schema` 模式开关被移除——见下方的取代说明。
-- **已取代（2026-07-17）：统一按 schema 限定。** `multi_schema` 开关被移除；SQLite 不再保持裸 SQL。SQLite 连接器现在把数据库文件 `ATTACH` 到一个 schema 别名下（即 `corpus_pin`/BIRD 的 `db_id`），使生成的 `schema.table` 查询能原生地在 SQLite 上执行，只读性质靠 `PRAGMA query_only` 保留。`DataSourceConfig` 去掉了 `is_multi_schema()`，换成 `serving_schema()`（ATTACH 别名、固定的 Postgres schema，或 `None` 表示覆盖所有 schema），把三种模式的区分（SQLite 单 schema / Postgres 固定单 schema / Postgres 全 schema 覆盖）收敛为同一套限定约定——剩下的唯一变量是存在多少个 schema，以及裸引用默认解析到哪个 schema。护栏与 `PromptContext`（已去掉 `multi_schema` 字段）现在无条件按 schema 限定；`default_schema` 始终是当前的服务 schema。无需重新生成 corpus——BIRD 资产本就带有 `schema: <db_id>`。`run_experiment.py` 不再固定 `multi_schema=False`。参见 [schema-qualification-scale-risk.md](plans/schema-qualification-scale-risk.md)（§Resolution）与 [engineering-gaps-2026-07-16.md](plans/engineering-gaps-2026-07-16.md) #9。
+- **已取代（2026-07-17）：统一按 schema 限定。** `multi_schema` 开关被移除；SQLite 不再保持裸 SQL。SQLite 连接器现在把数据库文件 `ATTACH` 到一个 schema 别名下（即 `corpus_pin`/BIRD 的 `db_id`），使生成的 `schema.table` 查询能原生地在 SQLite 上执行，只读性质靠 `PRAGMA query_only` 保留。`DataSourceConfig` 去掉了 `is_multi_schema()`，换成 `serving_schema()`（ATTACH 别名、固定的 Postgres schema，或 `None` 表示覆盖所有 schema），把三种模式的区分（SQLite 单 schema / Postgres 固定单 schema / Postgres 全 schema 覆盖）收敛为同一套限定约定——剩下的唯一变量是存在多少个 schema，以及裸引用默认解析到哪个 schema。护栏与 `PromptContext`（已去掉 `multi_schema` 字段）现在无条件按 schema 限定；`default_schema` 始终是当前的服务 schema。无需重新生成 corpus——BIRD 资产本就带有 `schema: <db_id>`。`run_experiment.py` 不再固定 `multi_schema=False`。
 
 ## D16：受治理的 Agentic 服务核心
 
 > **已决定（ADR 级，2026-07-13；切换已于 2026-07-14 落地）。** 完整的理据、
 > 不变式与分阶段迁移见 [ADR 0002](adr/0002-governed-agentic-serve-runtime.md)；
 > 历史性的 agent-vs-flow A/B（flow 现已删除）总结见
-> [eval-ladder-results](plans/eval-ladder-results.md)（数字已作废；仅保留方法
+> git 历史里 2026-07-14 的 v5 运行记录（数字已作废；仅保留方法
 > 与臂定义）。
 >
 > serve 从一张确定性的单次 DAG 重做为一个**受治理的 agentic 核心**：外层是一张
@@ -582,7 +579,7 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 > **已决策（2026-07-22）；M3 与 M4 已于 2026-07-22 落地。** 完整理由、
 > 数据模型与分阶段迁移见
 > [ADR 0003](adr/0003-governed-notes-tri-modal-retrieval.zh.md)；构建顺序见
-> [实施计划](plans/implementation-plan-notes-and-run-logging.md)。M3 交付了
+> ADR 0003 / ADR 0004（M1–M5 均已落地）。M3 交付了
 > schema、存储与 CI；M4 又补上了 trigger PIN（默认关闭）、注入接线、agent 直读
 > 工具与离线 gate；Phase 6（max-pool 向量）仍推迟，见下文"状态"。
 >
@@ -631,7 +628,7 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   GATE-RECALL / GATE-ADV-WRONG-NOTE。Phase 6 的 max-pool 向量方案已推迟（只有
   在召回仍卡住 EX 时才会启用）。非笔记资产的 LLM `refute()` 仍受模型门控；
   笔记有自己的离线结构化 `refute()`。见 ADR 0003 与
-  [实施计划](plans/implementation-plan-notes-and-run-logging.md)。ADR 0003
+  ADR 0004（M1–M2、M5 已落地）。ADR 0003
   的设计问题均已解决（见上文已锁定的决策）。
 
 ## D18：本地优先的对话与运行日志

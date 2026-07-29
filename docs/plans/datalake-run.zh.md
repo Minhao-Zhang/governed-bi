@@ -2,7 +2,7 @@
 
 _[English](datalake-run.md) · [简体中文](datalake-run.zh.md)_
 
-_实现 [D15](../design-decisions.zh.md#d15多-schema-服务一个数据库多个-schema)（一个数据库，多个 schema）。配套文档：[eval-ladder-results.md](eval-ladder-results.md)（单库的 arm、方法、术语，英文）以及 [experiment-runbook.zh.md](experiment-runbook.zh.md) 里的操作清单。付费的池化运行之前先读操作手册。Arm 名称：`baseline` / `seeded` / `curated` / `curated_sme`（`curated_sme_blind` 可选）。_
+_实现 [D15](../design-decisions.zh.md#d15多-schema-服务一个数据库多个-schema)（一个数据库，多个 schema）。配套文档：git 历史里的单库 arm / 方法记录，以及 [experiment-runbook.zh.md](experiment-runbook.zh.md) 里的操作清单。付费的池化运行之前先读操作手册。Arm 名称：`baseline` / `seeded` / `curated` / `curated_sme`（`curated_sme_blind` 可选）。_
 
 ## 这是什么
 
@@ -51,7 +51,7 @@ _实现 [D15](../design-decisions.zh.md#d15多-schema-服务一个数据库多�
 | `schema_route_llm_pick` | 由 LLM 从短名单里挑出恰好一个 schema | `False` | `True` |
 | `schema_pick_max_columns` | 展示给挑选器的每表列名数量（0 = 只给表名） | 12 | 12 |
 
-当 `schema_route_llm_pick=True` 时，LLM 从短名单里挑出恰好一个 schema（pipeline-design §5.1），并且**跨 schema 的 join 扩展会被跳过**。这是「单 schema 作答」的模式，对 BIRD 是正确的（每个测试问题都只针对一个 `db_id`）。默认值（`False`）是通用的跨 schema 模式，单库 / 产品服务路径保持不变。
+当 `schema_route_llm_pick=True` 时，LLM 从短名单里挑出恰好一个 schema（D15），并且**跨 schema 的 join 扩展会被跳过**。这是「单 schema 作答」的模式，对 BIRD 是正确的（每个测试问题都只针对一个 `db_id`）。默认值（`False`）是通用的跨 schema 模式，单库 / 产品服务路径保持不变。
 
 数据湖驱动还默认打开 embedder，叠在 `top_k=10` 与 `llm_pick=True` 之上。Schema 文档向量在护轨构建期一次性嵌入（`embed_schema_documents`），不会每个问题重新嵌入。
 

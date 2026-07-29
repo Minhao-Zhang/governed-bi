@@ -105,7 +105,7 @@ observer 驱动。它在结构上就是只读观察：`_observe()` 内部的任�
 计数，而不只是 eval harness 才有。哪些 provenance 键必须留存到每一个终态
 `Answer` 上，由 `METADATA_PROVENANCE_KEYS`（`src/governed_bi/analyst/run_log.py`）
 钉死，其中包括 `stage_events`、`n_tool_calls`、`by_guardrail_layer`、
-`cache_hit`、`attempts`（这些属于 `_INSTRUMENTATION_KEYS` 那一块），外加
+`attempts`（这些属于 `_INSTRUMENTATION_KEYS` 那一块），外加
 运行身份字段（`turn_id`、`run_id`、`outcome`、`model`……）。一个没有测到
 值的埋点字段会被写成 `None`，绝不是 `0` 或 `{}`——一个什么都没测到的生产者
 必须说清楚这一点，否则缺失的键就和"这个 build 根本记录不了这个指标"分辨

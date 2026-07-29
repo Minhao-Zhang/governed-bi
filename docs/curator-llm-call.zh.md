@@ -2,9 +2,8 @@
 
 本文逐次调用地追踪离线策展流水线（`curator/`）：哪一步发出哪条提示词、
 用户消息在动态内容注入处长什么样，以及每个 deep agent 的工具循环呈现为
-一份示意性的对话记录。它是 [Curator](curator.zh.md) 与
-[Pipeline design](pipeline-design.md) 的补充——那两份文档描述的是周围的
-设计。
+一份示意性的对话记录。它是 [Curator](curator.zh.md) 的补充——那份文档描述的
+是周围的设计。
 
 **提示词文本本身不在这里重现。** `_PHASE_A_PROMPT` 与 `_PHASE_B_PROMPT`
 （`curator/prompts.py`）是 `governed_bi.prompts` 里 `curator_phase_a` /
@@ -14,7 +13,7 @@
 [提示词变体实验](prompt-experiments.zh.md)了解一次运行怎么选定一个变体、
 这两个阶段今天为什么只有 `v1`。
 
-> 实现：[`src/governed_bi/curator/llm_proposer.py`](../src/governed_bi/curator/llm_proposer.py)、
+> 实现：
 > [`prompts.py`](../src/governed_bi/curator/prompts.py)、
 > [`pipeline.py`](../src/governed_bi/curator/pipeline.py)、
 > [`seed.py`](../src/governed_bi/curator/seed.py)、
@@ -43,17 +42,7 @@ harness：它加装了一个文件系统式的暂存区（scratchpad，`Filesyst
 提示词归因很要紧，见
 [提示词变体实验](prompt-experiments.zh.md#为什么-curator-与-sme-的生产者不能再重新推导-settings)。
 
-**`LlmProposer` 没有被接入这条流水线。** `curator/llm_proposer.py` 里的
-`LlmProposer` 在一个基础的（启发式）proposer 之上做组合，通过每张表一次
-模型调用来补充逐表描述与 `suspect` 可靠性标记，它是一个真实存在、有测试
-覆盖的组件——但去 `curator/pipeline.py` 和 `curator/deep_agent.py` 里
-搜一下，找不到任何实例化它的调用点。它只出现在 `curator/__init__.py`
-的导出列表里，以及它自己的测试（`tests/test_llm_proposer.py`）里。
-`pipeline.build_curated_corpus` 用另一种方式构建表描述：下文的 Phase A
-deep agent 通过 `annotate_table`/`annotate_column` 来写，驱动它的是
-(question, gold SQL) 配对与它自己的探索，而不是一遍逐表的 `LlmProposer`
-扫描。在有什么东西在测试之外真正调用 `LlmProposer(...)` 之前，请把它
-当成一个已实现但没接线的组件，而不是一个生产步骤。
+
 
 **旁白：Simulated SME 不在本文范围内。** 在 Phase A 与 Phase B 之间，
 一个只用于评测的组件（`curator/sme.py`、`build_sme_brief`）扮演回答
@@ -240,8 +229,7 @@ corpus；它们会自动落地为治理规则（`bag.record_caveats`），因此
    ingest 指令；把已回答的记录折叠进 corpus，标记 `certified=true`。
 7. 再次**校验** → 写出 **`curated_sme`** corpus。
 
-**另见：** [Curator](curator.zh.md) 了解 proposer/adversary 设计与溯源
-生命周期；[Pipeline design](pipeline-design.md) 了解 Phase A/B 如何契合
-评测阶梯实验；[提示词变体实验](prompt-experiments.zh.md) 了解 registry、
+**另见：** [Curator](curator.zh.md) 了解 proposer/adversary 设计、溯源
+生命周期，以及 Phase A/B 如何契合评测阶梯实验；[提示词变体实验](prompt-experiments.zh.md) 了解 registry、
 变体选择与端到端归因；[Asset schemas](asset-schemas.zh.md) 了解
 `upsert_*` / `annotate_*` 实际写入的内容。

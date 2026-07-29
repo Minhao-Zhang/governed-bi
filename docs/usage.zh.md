@@ -2,7 +2,7 @@
 
 _[English](usage.md) · [简体中文](usage.zh.md)_
 
-> 新手？[演练](walkthrough.zh.md)是一份引导式的“克隆 → 第一个问题”教程；本页是参考性的快速上手。
+> 新手？[演练](usage.zh.md)是一份引导式的“克隆 → 第一个问题”教程；本页是参考性的快速上手。
 
 从提问到应答的完整流水线，如今已经可以在已提交的 `beer_factory` 数据库上端到端运行。
 corpus 校验、gateway 与检索都不需要模型或网络（embedder 仍会回退到一个基于哈希的
@@ -15,7 +15,7 @@ corpus 校验、gateway 与检索都不需要模型或网络（embedder 仍会�
 | corpus 的模式、ID、验证器、加载器、序列化器、CLI | 可运行 | `src/governed_bi/corpus/` |
 | 示例 corpus（`beer_factory`，真实 BIRD 数据库） | 可运行 | `corpus/beer_factory/` |
 | SQLite 连接器 + gateway（只读、带审计）+ 五层护栏 | 可运行 | `src/governed_bi/gateway/` |
-| Curator：Facts 层画像分析、启发式 proposer 与 LLM proposer、adversary、curate 循环 | 可运行 | `src/governed_bi/curator/` |
+| Curator：Facts 层画像分析、deepagents 的 Phase A/B、adversary 结构闸门 | 可运行 | `src/governed_bi/curator/` |
 | 图投影 + Steiner 连接规划 | 可运行 | `src/governed_bi/graph/` |
 | 检索（BM25 + 接地，外加由 embedder 门控的向量通道） | 可运行 | `src/governed_bi/retrieval/` |
 | serve（智能体核心：路由、上下文、受治理的工具、护栏、自修复、缓存、标记） | 可运行，需要实时模型 | `src/governed_bi/analyst/` |
@@ -135,7 +135,7 @@ connector=conn)` 还会运行物理存在性检查（确保每个 `physical_name
 ## 提问（serve 流水线）
 
 serve 现在是纯智能体路径（ADR 0002）：`create_agent` + `GovernanceMiddleware` +
-受治理的只读工具，外面包了一层 LangGraph rails 图，负责给问题路由、检查语义缓存、
+受治理的只读工具，外面包了一层 LangGraph rails 图，负责给问题路由、
 运行智能体核心，并为答案打上标记。回答问题不再有确定性的兜底实现，它需要实时
 模型，没有模型就会失败即拒（fail closed），而不是去猜：
 
@@ -195,7 +195,7 @@ curl -s localhost:8000/chat -H 'content-type: application/json' \
 标志）。本机覆盖写在 git-ignored 的 `governed_bi.local.toml`。由于展示逻辑位于与
 UI 无关的 `governed_bi.viz.presenter` 中（不依赖任何 UI 框架），一个独立的前端可以
 消费同样的视图模型——交互式 UI 是一个独立项目，参见
-[docs/ui-frontend-design.md](ui-frontend-design.zh.md)。
+[docs/ui-frontend-design.md](ui-frontend-handoff.zh.md)。
 
 ## 运行测试
 

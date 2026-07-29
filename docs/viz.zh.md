@@ -2,11 +2,11 @@
 
 _[English](viz.md) · [简体中文](viz.zh.md)_
 
-面向 [Agentic BI System](system-overview.zh.md) corpus 的**审计面（audit surface）
+面向 [Agentic BI System](architecture.zh.md) corpus 的**审计面（audit surface）
 ——默认只读**。本仓库**不提供任何内置 UI**；它提供的是 UI 所读取的部件——与 UI 无关的
 `presenter` 视图模型，以及 `governed_bi.api` HTTP/JSON API——因此你可以浏览并审计 AI
 构建的层，并提出问题以查看治理后的答案及其可靠性标记。交互式 UI 是一个独立项目（见
-[ui-frontend-design.md](ui-frontend-design.zh.md)）。
+[ui-frontend-design.md](ui-frontend-handoff.zh.md)）。
 
 **交互式 corpus 编辑与发起 PR 有意不作为产品能力在这里实现。** 当
 `[serve].allow_edit` 为 true 时（提交进仓库的默认值是 false；只有当 TOML 里省略

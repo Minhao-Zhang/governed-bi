@@ -4,7 +4,7 @@ _[English](0002-governed-agentic-serve-runtime.md) · [简体中文](0002-govern
 
 - **状态：** Accepted / Implemented（已接受并实现）。2026-07-13 的设计评审上被反复拷问并据此修订；切换于 2026-07-14 落地 `main`（提交 `d2fdd6a`）。
 - **决策者：** 项目负责人 + 设计会议
-- **相关文档：** [0001](0001-langgraph-server-chat-runtime.zh.md)、[pipeline-design.md](../pipeline-design.md)（§8 不变量；它当初写的服务侧 §§5–7 已删除）、[design-decisions.zh.md](../design-decisions.zh.md)（D2、D5、D11、D15）
+- **相关文档：** [0001](0001-langgraph-server-chat-runtime.zh.md)、pipeline-design.md（§8 不变量；该文档已删除，见 git 历史）、[design-decisions.zh.md](../design-decisions.zh.md)（D2、D5、D11、D15）
 - **取代：** pipeline-design §8 的那条不变量——*「服务侧保持确定性 DAG；LLM 只作为有界的节点操作出现，绝不作为自主循环」*——以及 §5 的说法*「LLM = 节点分类器，绝不是 ReAct」*。
 - **已验证的技术栈：** `langchain 1.3.12`、`langgraph 1.2.8`、`deepagents 0.6.12`——`create_agent` + `AgentMiddleware`（`wrap_tool_call` / `wrap_model_call`）与 `FakeListChatModel` 在锁定的环境里都能正常导入。
 - **机制已由一次 spike 验证（2026-07-13）。** 一次端到端 spike 在已安装的技术栈上证明了那个承重机制：`wrap_tool_call` 能读 `request.state`，并通过 `Command(update=...)` 写自定义 state 通道；一个受治理工具可以扩充按轮计的 `licensed` 通道，供之后某次 `run_query` 的护栏读取（不变量 #4）；而每一次 `run_query`——无论放行还是拒绝——都从同一个拦截点写下一条 ledger 记录（不变量 #10）。**同时发现一处约束：** 工具调用必须**串行**（自定义 state 的更新在两次调用之间提交）；同一个模型轮次里的并行工具调用会让 `run_query` 抢在 `inspect_schema` 完成授权之前跑掉。详见构建指南。

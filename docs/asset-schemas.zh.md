@@ -2,7 +2,7 @@
 
 _[English](asset-schemas.md) · [简体中文](asset-schemas.zh.md)_
 
-这是 [Agentic BI 系统](system-overview.zh.md) corpus 的逐资产 YAML 字段规范。具体化了
+这是 [Agentic BI 系统](architecture.zh.md) corpus 的逐资产 YAML 字段规范。具体化了
 [设计决策](design-decisions.zh.md)中的 **D9**（Git+YAML 类型化资产，由 curator 撰写、
 人工审核）；存储方案的理由见[架构](architecture.zh.md)第 5 节；术语定义见
 [术语表](glossary.zh.md)。改编自 *《从数据到智能》* 第 3 章，但撰写模式方向相反。

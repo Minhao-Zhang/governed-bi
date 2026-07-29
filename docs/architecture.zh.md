@@ -2,7 +2,7 @@
 
 _[English](architecture.md) · [简体中文](architecture.zh.md)_
 
-[Agentic BI 系统](system-overview.zh.md)的完整设计。术语见[术语表](glossary.zh.md)。
+[Agentic BI 系统](architecture.zh.md)的完整设计。术语见[术语表](glossary.zh.md)。
 每项选择背后的理由与备选方案见[设计决策](design-decisions.zh.md)。
 
 ## 1. 设计脊柱（不可妥协项）
@@ -23,7 +23,7 @@ Curator 与 Analyst 的风险特征相反。二者使用不同的 harness，但�
 | 自主度 | 最大（探索） | 最小（失败即拒） |
 | Harness | `deepagents` | `LangGraph` + 中间件 |
 
-*已实现：* 两套 harness 都由一次普通的 `uv sync` 安装（不需要任何 extra），构建在基于 LangChain 的模型客户端之上。Analyst 就是 [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) 所定义的受治理 agentic 内核 `analyst.agent`（薄薄的外层确定性轨道，包裹起一个由中间件治理的 `create_agent` 推理循环；该模块原为 `server/`，在 P2 切换之后改名为 `analyst/`——如今"server"只用来指代基础设施：`LangGraph Server`、HTTP/ASGI 进程）——自 P2 切换以来它是唯一的服务路径；早先的确定性流程（`server.flow::answer_question`）与那个陈旧、未被使用的 `server.graph` DAG，在改名之前、以旧模块名均已删除。没有实时模型时会失败即拒：`build_stack()` 仍可离线构建以支撑审计 API（浏览/对话；corpus 写操作由 `allow_edit` 门控），但服务进程会在启动时报错，`/chat` 返回 503，直到配置好模型为止。相对于（现已移除的）确定性流程的首次线上 A/B 促成了 [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) 的 Amendment 1。**2026-07-26 之前的任何评测数字都不可引用**；[评测阶梯结果](plans/eval-ladder-results.md)只保留 arm 定义与方法（数字已作废）。要拿到可引用的运行结果，请按[实验操作手册](plans/experiment-runbook.md)执行。curator = `curator.deep_agent`（一个运行在 Facts 画像（profiling）与只读探测（probe）工具之上的 deepagents agent，其构造已离线验证，实际运行则受模型门控）。
+*已实现：* 两套 harness 都由一次普通的 `uv sync` 安装（不需要任何 extra），构建在基于 LangChain 的模型客户端之上。Analyst 就是 [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) 所定义的受治理 agentic 内核 `analyst.agent`（薄薄的外层确定性轨道，包裹起一个由中间件治理的 `create_agent` 推理循环；该模块原为 `server/`，在 P2 切换之后改名为 `analyst/`——如今"server"只用来指代基础设施：`LangGraph Server`、HTTP/ASGI 进程）——自 P2 切换以来它是唯一的服务路径；早先的确定性流程（`server.flow::answer_question`）与那个陈旧、未被使用的 `server.graph` DAG，在改名之前、以旧模块名均已删除。没有实时模型时会失败即拒：`build_stack()` 仍可离线构建以支撑审计 API（浏览/对话；corpus 写操作由 `allow_edit` 门控），但服务进程会在启动时报错，`/chat` 返回 503，直到配置好模型为止。相对于（现已移除的）确定性流程的首次线上 A/B 促成了 [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) 的 Amendment 1。**2026-07-26 之前的任何评测数字都不可引用。**要拿到可引用的运行结果，请按[实验操作手册](plans/experiment-runbook.md)执行。curator = `curator.deep_agent`（一个运行在 Facts 画像（profiling）与只读探测（probe）工具之上的 deepagents agent，其构造已离线验证，实际运行则受模型门控）。
 
 > **Curator = 永久维护者**
 >
@@ -92,14 +92,6 @@ execute (as-user) → narrate → answer + provenance
 完整的分阶段设计见[Analyst](analyst.zh.md)，以及 curator 推断驱动 Analyst 行为的三个关键点。
 
 按 D15，在多 schema 的 Postgres / Redshift 路径上，一个连接感知（join-aware）的 schema 路由器会先于 RVGD 检索运行，因此检索会跨越多个 schema；单 schema 路径则跳过它。**已落地**（`retrieval.schema_router`；已接入 `analyst.agent`）。
-
-> **SQL 语义缓存快速路径**
->
-> 对问题做 embedding → 与已缓存 SQL 库做余弦相似度比较，阈值 ≥0.92 → 命中则跳过
-> 检索、规划与生成，但**始终重新执行**缓存中的 SQL（新鲜度优先于延迟；只缓存 SQL
-> 文本，从不缓存结果，这与 D7 的身份范围划定一致）。未命中则走完整流水线，成功后再
-> 写回缓存。TTL 为 15 分钟。使用单一的全局阈值，这是一个已知的缺口，尚未按领域分别
-> 调优。参见 *Data Agent Memory Design Overview* §5。
 
 护栏按顺序排列（任一触发即失败即拒，五层全部强制执行）：语法 → 策略黑名单 → AST 列许可清单 → term 语义 → 成本。AST 许可清单具备 scope 感知能力（针对每一列自身所在的查询 scope 进行解析，并拦截星号投影）；term 语义会为检索到的表，以及它们的 FK 连接邻域、连接规划所桥接经过的 Steiner 点（而不是精确的检索命中集合，因此它与检索召回率相解耦），以及任何经策展的跨 schema 连接目标授权，并拦截该授权范围之外的任何表名。成本层目前是一道结构性的交叉连接防护；基于数值化 EXPLAIN 的成本（Postgres / Redshift）是未来按方言展开的工作。逐阶段细节见[Analyst](analyst.zh.md)第 8 步。
 
@@ -174,13 +166,7 @@ execute (as-user) → narrate → answer + provenance
 > | 参数 | 取值 |
 > |---|---|
 > | 工作记忆 | 按会话划定范围，会话结束即清除 |
-> | 用户画像 TTL | 365 天 |
-> | 情景记忆 TTL | 90 天 + 每天衰减 0.02 |
-> | 纠错记忆 TTL | 180 天 |
-> | SQL 缓存 TTL | 15 分钟 |
-> | 缓存命中门限 | 余弦相似度 ≥ 0.92（见 §6） |
-> | 少样本（few-shot）召回门限 | 余弦相似度 ≥ 0.95，置信度 ≥ 0.9，fail_count ≤ 3 |
-> | 路由记忆预算（用户画像/情景/纠错） | nl2sql 5/2/5 · kpi_lookup 2/0/1 · knowledge_qa 3/1/1 · deep_analysis 8/8/4 |
+> | 其余可复用数值 | 均为设计，不是代码。用户画像 / 情景 / 纠错 TTL、SQL 缓存 TTL 与命中门限、少样本召回门限、路由记忆预算，全部在 2026-07-28 从 `Settings` 中删除——没有任何代码读过它们，而 serve 却把它们盖章写进了 provenance，等于报告一个从未生效的阈值。真要建这些存储时，从设计里重新引入。 |
 > | 少样本晋升门限 | `pending_review` → 人工 `approve` → 检索时阈值校验 |
 >
 > 来源：该书中可直接复用的蓝图。参见 *Data Agent Memory Design Overview* §5。

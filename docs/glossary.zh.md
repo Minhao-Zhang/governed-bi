@@ -2,7 +2,7 @@
 
 _[English](glossary.md) · [简体中文](glossary.zh.md)_
 
-[Agentic BI System](system-overview.zh.md)的标准术语。当下文术语与某处的描述方式冲突时，以下文术语为准。
+[Agentic BI System](architecture.zh.md)的标准术语。当下文术语与某处的描述方式冲突时，以下文术语为准。
 
 > **弃用词汇**
 >
@@ -10,7 +10,7 @@ _[English](glossary.md) · [简体中文](glossary.zh.md)_
 > → **治理数据集**（可选择物化）；`app_ci` → gateway 的
 > 执行目标。
 >
-> 本次[术语重构](plans/terminology-refactor.md)还弃用了以下词汇：`A1` /
+> 2026-07-16 的那次术语重构还弃用了以下词汇：`A1` /
 > `A2` / `A3`（→ `baseline` / `curated` / `curated_sme`）；`gold` 臂 /
 > `build_gold_corpus`（→ `ceiling`，已设计尚未构建）；作为独立臂存在的
 > `no_layer` 与 `facts_only`（并入 `baseline`）；作为可靠性标记取值的
@@ -44,7 +44,7 @@ _[English](glossary.md) · [简体中文](glossary.zh.md)_
 | **Analyst**（服务代理） | 在线的治理型代理，*使用*corpus 来回答问题。失败即拒（fail-closed）、可审计。原名"Server"；如今"server"/"LangGraph Server" 仅指基础设施。 |
 | **工具**（Tool） | 模型可自行决定调用的编码函数。 |
 | **钩子**（Hook，中间件） | 在循环事件上触发的确定性代码，用于注入上下文和/或否决动作。 |
-| **记忆**（Memory） | 设计上的四类存储（架构 §7）：**Working**（已实现，会话级）外加三类默认关闭、仅在评估证明其价值后才按域采用的持久存储——**Profile**（用户画像）、**Episodic**（情景）、**Correction**（纠错）。目前仅 Working 已实现；Episodic/Correction 为尚未实现的协议接缝；Profile 仅有配置（路由预算 + `profile_ttl_days`，尚无存储接缝——优先级最低的持久存储）。 |
+| **记忆**（Memory） | 设计上的四类存储（架构 §7）。目前只有 **Working**（已实现，会话级）真正存在。**Profile**（用户画像）、**Episodic**（情景）、**Correction**（纠错）只是设计而非代码——它们的空协议与配置已于 2026-07-28 删除（D8）。 |
 | **Working memory**（工作记忆） | 按会话逐字保留的上下文（checkpointer）。是临时性的，按身份限定作用域。 |
 | **治理路径**（Governed path） | 从语义层出发回答问题（默认方式）。 |
 | **探索路径**（Discovery path） | 针对语义层未覆盖的问题进行受限的原始数据探索。 |

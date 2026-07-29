@@ -2,7 +2,7 @@
 
 _[English](curator.md) · [简体中文](curator.zh.md)_
 
-[Agentic BI 系统](system-overview.zh.md)的构建侧（build-side）智能体。它是*生成*
+[Agentic BI 系统](architecture.zh.md)的构建侧（build-side）智能体。它是*生成*
 corpus 的离线智能体（两套 harness 的分工；`deepagents`）。**逐库（per-DB）独立**
 运行。写入[资产模式（Asset schemas）](asset-schemas.zh.md)中定义的 corpus；服务侧
 （serve-side）对应的部分是[Analyst](analyst.zh.md)。它不是一次性的启动脚本
@@ -14,24 +14,15 @@ corpus 的离线智能体（两套 harness 的分工；`deepagents`）。**逐�
 > 实现代码：[`src/governed_bi/curator/`](../src/governed_bi/curator/)。
 
 > **构建状态（scaffold vs seam）。** 一个确定性的 scaffold 在没有模型、没有网络的
-> 情况下运行：程序化的 Facts 画像分析（`profile`）、一个 `HeuristicProposer`
-> （从 Facts 中填充列角色、置信度、溯源（provenance），并把散文式的 `description`
-> 留给 LLM 撰写）、一个用低成本自一致性检查包装 CI 校验器的 adversary `review`
-> （结构性发现会**在写入前拦截**），以及一个 `curate` 的 propose -> review ->
-> promote 循环（`proposed -> draft`）。
-> **LLM 撰写的 Inference 层**现已以 `LlmProposer`（`curator/llm_proposer.py`）的
-> 形式构建完成：它在启发式方法（heuristic，决定角色/溯源的部分）之上进行组合，并
-> 通过一个注入的 `ChatClient`（OpenAI `gpt-5.6-luna` low）叠加模型撰写的**描述 + 可靠性
-> 警示（reliability caveats）**（`suspect` 加一条“DO NOT USE”提示），从不触及
-> Facts，并在响应格式不合规时退化为基础提案。正是这些警示构成了让 `curated` 分支
-> 胜过 `baseline` 分支的关键杠杆。仍是 seam 的有：**连接（joins）/术语
-> （terms）/指标（metrics）/规则（rules）/笔记（notes）** 的 LLM 撰写、**逐资产（per-asset）
-> 的 adversary `refute`**（探测查询），以及**自评估（self-eval）train-EX 循环**。
-> **deepagents harness** 本身已构建完成（`curator/deep_agent.py`）：
-> `build_curator_agent` 在接地（grounded）工具之上装配了一个 deep agent，这些
-> 工具包括 `profile_facts`（Facts 层）和 `run_probe_query`（一个只读 SQL 探测，
-> 即在线 refute 的基础操作），并搭配一个 LangChain 模型（`agents` extra）。构建
-> 过程已完成离线验证；运行自主循环则需要一个在线模型。以下各节描述完整设计；
+> 情况下运行：程序化的 Facts 画像分析（`profile`）、按命名约定推出的 FK 候选，以及
+> 一个用低成本自一致性检查包装 CI 校验器的 adversary `review`（结构性硬发现会
+> **在写入前拦截**）。**LLM 撰写的 Inference 层**由 deepagents harness 构建
+> （`curator/deep_agent.py`）：`build_curator_agent` 在接地（grounded）工具之上装配
+> 一个 deep agent——`profile_facts`（Facts 层）与 `run_probe_query`（一个只读 SQL
+> 探测）——Phase A 通过 `AssetBag` 撰写描述、连接、术语、指标与笔记，Phase B 把 SME
+> 已回答的澄清折回 corpus。仍是 seam 的有：**逐资产（per-asset）的 adversary
+> `refute`**（探测查询——它目前直接抛 `NotImplementedError`，所以 `curated` 这一级
+> 唯一的审阅者就是结构闸门），以及**自评估（self-eval）train-EX 循环**。以下各节描述完整设计；
 > 标记为 *(seam)* 的步骤由模型支撑，尚未运行。
 
 ## 输入 / 输出
@@ -88,8 +79,8 @@ Proposer 的论断/证据**以及** adversary 的发现，都会落入该资产�
    术语/指标/笔记（notes）仍是 seam)* Proposer 假设描述、连接（值重叠（value-overlap）
    + 种子 SQL 的连接模式——**限于同一 schema 内**；跨 schema 连接从不由 FK/重叠发现，只从 SME / 示例 SQL / 使用情况中策展而来（D15），否则 Analyst 拒绝）、可靠性警示（对照陷阱执行并观察（execute-and-observe））、
    术语/同义词、指标/规则（来自 `evidence` 与反复出现的计算），并撰写**路由/
-   坑点/模式笔记（notes）**。自由探索被限定在这一小块空间内。`HeuristicProposer`
-   从 Facts 中填充角色/置信度/溯源；`LlmProposer` 在其之上叠加模型撰写的描述 +
+   坑点/模式笔记（notes）**。自由探索被限定在这一小块空间内。角色、置信度与溯源
+   来自 Facts；Phase A deep agent 通过 `AssetBag` 撰写描述、`suspect` 警示 +
    `suspect` 警示；撰写衍生资产（连接/术语/指标/规则/笔记（notes））是剩余的 LLM
    proposer 工作。
 3. **Adversary 审核。** *(结构性关卡已构建；逐条 LLM `refute` 是 seam)*
@@ -110,7 +101,7 @@ Proposer 的论断/证据**以及** adversary 的发现，都会落入该资产�
 `curate` 循环还会为 propose/review 轮次设上限。train-EX 的那一半则要靠
 self-eval 这个 seam（第 4 步）才能实现。
 
-构建循环概览:
+构建循环概览：
 
 ```mermaid
 flowchart TD
@@ -133,7 +124,7 @@ flowchart TD
 
 ## 可靠性推断（Phase 2 细节）
 
-*(已构建：`LlmProposer` 从该表的 Facts 出发标记 `suspect` 并附一条“DO NOT
+*(已构建：Phase A 从该表的 Facts 出发标记 `suspect` 并附一条"DO NOT
 USE”警示。下方的结构化信号打分是该提示词（prompt）所近似实现的更完整设计。)*
 curator 通过**通用的数据质量异常，而非针对 BIRD 陷阱专门设计的检测器**来
 标记不可靠的列（P2，因此可迁移到企业级部署场景；BIRD 的陷阱只是用来验证这些

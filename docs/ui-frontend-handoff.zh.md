@@ -2,7 +2,7 @@
 
 _[English](ui-frontend-handoff.md) · [简体中文](ui-frontend-handoff.zh.md)_
 
-**governed-bi** 前端的构建简报 + 契约。请与 [ui-frontend-design.md](ui-frontend-design.zh.md)
+**governed-bi** 前端的构建简报 + 契约。请与 [ui-frontend-design.md](ui-frontend-handoff.zh.md)
 中的架构依据，以及 [ADR 0001](adr/0001-langgraph-server-chat-runtime.zh.md) 中的运行时决策
 配合阅读。
 
@@ -253,7 +253,7 @@ stream.submit(
 ## 13. 可靠性与交付并分级（新设计）
 
 来源：[D5（双轴标记 + 分级交付）](design-decisions.zh.md#d5拒答与尽力而为)；关于
-已钉住 corpus 的语境见 [pipeline-design.md §1](pipeline-design.md)。动机：可靠性
+已钉住 corpus 的语境见 [curator.zh.md](curator.zh.md)。动机：可靠性
 处理方式就是引擎**交付并分级（deliver-and-grade）**这一决策的产品呈现面——一次
 覆盖范围 / L3–L5 / 执行失败会带着 `unverified` 标记交付 SQL,而不是直接拒答,这样
 经过策展的分支就不会因为它只能带着说明作答的、本可回答的问题而被扣分。（缺失的

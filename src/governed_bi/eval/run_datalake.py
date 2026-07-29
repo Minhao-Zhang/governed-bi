@@ -1708,38 +1708,16 @@ def _compare_arms(
                 # survives".
                 report["no_twin"]["p_value_is_raw"] = True
                 report["no_twin"]["floor_from_full_split"] = True
-            # An oracle rung is a diagnostic, and its p-value should not be read as a
-            # result — the same marker the divergence list carries, so a reader of
-            # ``comparisons`` alone is not misled either.
-            # ``replicate_arm in (a, b)``, not ``{a, b} == {replicate_of,
-            # replicate_arm}``. The replicate exists to measure the noise floor; it is
-            # not a rung, and every pair it appears in duplicates the pair its source
-            # arm already forms. Excluding only the replicate-vs-source pair left the
-            # other three in the family, so a run with four arms plus one replicate
-            # corrected across nine tests where six distinct hypotheses were being
-            # asked — Holm's multiplier 1.5x too large on every real comparison, and
-            # in exactly the runs that followed the runbook, since ``--replicate`` is
-            # required there to quote a delta at all. The comment below already said
-            # this was the intent.
-            #
-            # This field is read by the Holm family and the stdout tag only. The
-            # divergence list keeps its own flag, deliberately untouched: over-
-            # reporting a treatment problem is safe and under-reporting is not.
-            # Off-ladder membership is the primary test, not the reconstructed
-            # ``{arm}__replicate`` string. Matching on that string alone meant the
-            # exclusion depended on ``replicate_of`` being passed consistently with
-            # the rows: called with ``replicate_of=None`` while a ``curated__replicate``
-            # arm is present, the replicate pairs re-entered the family and the count
-            # went straight back to ten — the bug the previous commit fixed, reachable
-            # again through an argument mismatch. ``_compare_arms`` is a plain
-            # importable function the tests call directly, and nothing enforced that
-            # the two arguments agreed.
-            #
-            # Anything not on the fair ladder is a diagnostic by construction: the
-            # oracle rungs, the replicate arm, and any future arm nobody has added to
-            # ``ARM_ORDER`` yet. ``_is_oracle`` and the replicate-string check are kept
-            # alongside it because they say *which* kind, and because a fair-named arm
-            # could in principle be the replicate source.
+            # Only fair-ladder pairs enter the Holm family. Anything off the ladder is
+            # a diagnostic by construction — the oracle rungs, the replicate arm, and
+            # any arm not yet in ``ARM_ORDER`` — and its p-value is not a result. The
+            # test is ``ARM_ORDER`` membership, not the reconstructed
+            # ``{arm}__replicate`` string, so the exclusion cannot depend on
+            # ``replicate_of`` being passed consistently with the rows. Every pair the
+            # replicate appears in duplicates the pair its source arm already forms, so
+            # admitting them inflates Holm's multiplier on every real comparison. The
+            # divergence list keeps its own, wider flag: over-reporting a treatment
+            # problem is safe, under-reporting is not.
             off_ladder = a not in ARM_ORDER or b not in ARM_ORDER
             # ONE definition, stamped on both blocks below. It used to be computed
             # here for ``comparisons[]`` and separately — and more narrowly, oracle
@@ -2097,39 +2075,16 @@ def _summarise_rows(
     n_answered = by_outcome.get(Outcome.answered.value, 0)
     n_refused = by_outcome.get(Outcome.refused.value, 0)
     n_crashed = by_outcome.get(Outcome.crashed.value, 0)
-    # A crashed turn returns no meta at all, so its row records ``routed_schemas=[]``
-    # and ``routed_hit=False`` whether or not the router ever ran. Leaving those in
-    # the routing denominator charges every crash to the router — the same "one
-    # metric silently absorbs another's failures" defect this module was rewritten
-    # to remove, just relocated from ``refusal_rate`` to ``routing_recall``.
-    #
-    # A *bypassed* turn is the second shape of the same problem, and it needs the
-    # opposite treatment from either a hit or a miss. When the corpus holds one schema
-    # there is nothing to route: the serve path pins it and says so
-    # (``routing_bypassed``). Counting those rows as misses reported 0.0 recall for a
-    # pool with no routing decision in it; counting them as hits reports 1.0, which
-    # claims a router succeeded where none ran — and on an oracle rung, where the
-    # schema was *handed over*, that would be the rung grading its own gift. They are
-    # excluded from the denominator, so the metric is ``None`` (not measured) rather
-    # than either lie. ``n_routing_bypassed`` is reported so the exclusion is visible.
-    #
-    # The third shape is a turn that recorded no routing decision at all — it ended
-    # before ``assemble`` ran. ``routed_hit`` is ``None`` there, and the denominator
-    # is defined on POSITIVE evidence (a recorded decision) rather than on the
-    # absence of a bypass flag, so an unrecorded turn cannot be read as a miss.
-    # ``n_routing_unrecorded`` makes the exclusion visible, exactly as
-    # ``n_routing_bypassed`` does for the pinned case.
-    #
-    # All three exclusions are applied to ONE population, and every routing metric is
-    # computed over it. They used to be applied in two places — the numerator over
-    # ``routing_rows``, the denominator over a separately-filtered count — and the
-    # populations disagreed about crashes. A turn that crashes *after* ``assemble``
-    # carries real ``routed_schemas``, so it contributed a genuine hit to the
-    # numerator while being struck from the denominator, and ``routing_recall``
-    # exceeded 1.0. Measured at 3 such crashes plus one clean miss: ``crash_rate
-    # 0.75, n_routing_observed 1, routing_recall 3.0``. That is the failure shape a
-    # rate-limit storm at ``--workers 8`` produces, which is the condition the
-    # runbook warns about.
+    # Routing metrics are computed over ONE population, excluding three kinds of row
+    # that carry no routing decision: crashes (no meta at all, so ``routed_hit=False``
+    # would charge the crash to the router), bypassed turns (a single-schema corpus is
+    # pinned, not routed — counting them as misses reports 0.0, as hits reports 1.0,
+    # and on an oracle rung that would be the rung grading its own gift), and turns
+    # that ended before ``assemble`` (``routed_hit is None``). The denominator is
+    # defined on POSITIVE evidence — a recorded decision — so absence cannot read as a
+    # miss, and each exclusion is reported as ``n_routing_*`` so it stays visible.
+    # Applying an exclusion to the numerator but not the denominator lets recall
+    # exceed 1.0; one population is what prevents that.
     unbypassed = [r for r in rows if not r.get("routing_bypassed")]
     n_routing_bypassed = n - len(unbypassed)
     uncrashed = [r for r in unbypassed if classify_row(r)[0] is not Outcome.crashed]
@@ -2410,34 +2365,20 @@ def _summarise_rows(
             ).most_common()
         ),
         "n_with_governance_stamp": sum(1 for r in rows if r.get("tier")),
-        # All three are conditioned on DELIVERY — ``produced``, the rows that handed back
-        # SQL — not on every row. A refusal stamps ``safety_clearance=False`` outright,
-        # and ``arms.py`` coerces the other two through ``bool(...)``, so absent becomes
-        # ``False`` and an ``is not None`` guard excludes only crashes. Over all rows the
-        # readings came out backwards: an arm that refused 8 of 10 reported the *best*
-        # graded-delivery rate and the *worst* safety-clearance rate, because refusing is
-        # neither delivering nor clearing. A rung that refuses more would have looked like
-        # a rung that governs better.
+        # All three are conditioned on DELIVERY (``produced``), not on every row.
+        # Refusing is neither delivering nor clearing, so over all rows an arm that
+        # refuses more looks like an arm that governs better; refusal behaviour is
+        # ``refusal_rate``'s job.
         #
-        # Refusal behaviour is ``refusal_rate``'s job; these describe the answers handed
-        # back.
+        # On the current serve path the first two are complements: only ``assemble``
+        # (clears, not graded) and ``graded_delivery`` (graded, does not clear) carry
+        # SQL, so their rates sum to 1 and their ladder deltas are exact negatives.
+        # Both are kept for the path that delivers an answer which clears safety *and*
+        # is graded; ``test_the_two_delivery_rates_are_currently_complements`` fails
+        # when that arrives, which is the signal to update the runbook.
         #
-        # **On the current serve path the first two are complements.** Only two ``Answer``
-        # constructors carry SQL: ``assemble`` (``safety_clearance=True``, no
-        # ``graded_delivery`` key, so ``False``) and ``graded_delivery``
-        # (``safety_clearance=False``, ``graded_delivery=True``). So
-        # ``safety_clearance_rate == 1 - graded_delivery_rate`` over delivered rows, and
-        # the two ladder deltas are exact negatives of each other. Both are kept because a
-        # future path could deliver an answer that clears safety *and* is graded, at which
-        # point they separate — ``test_the_two_delivery_rates_are_currently_complements``
-        # fails when that happens, which is the signal to update the runbook rather than a
-        # regression.
-        #
-        # The ``n_*_observed`` counts are therefore ``len(produced)`` in a live run, not a
-        # partial-instrumentation detector: absent legitimately means ``False`` for these
-        # flags ("this was not a graded delivery"), so relaying them unmodified would make
-        # the denominator only the *positive* rows and the rate a constant 1.0. What the
-        # counts do tell you is whether anything was delivered at all.
+        # ``n_*_observed`` is therefore ``len(produced)`` in a live run, not a
+        # partial-instrumentation detector — absent legitimately means ``False`` here.
         "safety_clearance_rate": _bool_rate(produced, "safety_clearance"),
         "n_safety_clearance_observed": sum(
             1 for r in produced if r.get("safety_clearance") is not None

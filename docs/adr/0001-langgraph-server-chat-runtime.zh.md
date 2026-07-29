@@ -4,7 +4,7 @@ _[English](0001-langgraph-server-chat-runtime.md) · [简体中文](0001-langgra
 
 - **状态：** Accepted（已接受） (2026-07-10)；部分被 [ADR 0002](0002-governed-agentic-serve-runtime.md)（2026-07-14）取代——运行时选择（LangGraph Server + `useStream`）依然成立，被取代的是单节点 `answer_question` 的框架。
 - **决策者：** 项目负责人 + 设计会议
-- **相关文档：** [ui-frontend-design.zh.md](../ui-frontend-design.zh.md), [ui-frontend-handoff.zh.md](../ui-frontend-handoff.zh.md)
+- **相关文档：** [ui-frontend-handoff.zh.md](../ui-frontend-handoff.zh.md), [ui-frontend-handoff.zh.md](../ui-frontend-handoff.zh.md)
 
 ## 背景
 
