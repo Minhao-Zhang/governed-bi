@@ -262,7 +262,7 @@ def test_an_empty_arm_reports_unmeasured_rather_than_zero():
 def test_manifest_host_comes_from_the_dsn_not_a_literal():
     """The manifest used to hard-code 127.0.0.1:5435 whatever --pg-dsn said, so two
     runs against different databases were indistinguishable in the record."""
-    from governed_bi.eval.run_experiment import _dsn_host
+    from governed_bi.eval.harness import _dsn_host
 
     assert _dsn_host("host=db.internal port=6000 dbname=bird user=u password=p") == (
         "db.internal:6000"
@@ -273,7 +273,7 @@ def test_manifest_host_comes_from_the_dsn_not_a_literal():
 
 
 def test_manifest_host_never_carries_the_password():
-    from governed_bi.eval.run_experiment import _dsn_host
+    from governed_bi.eval.harness import _dsn_host
 
     dsn = "host=h port=1 dbname=d user=u password=hunter2"
     assert "hunter2" not in _dsn_host(dsn)

@@ -560,7 +560,7 @@ def test_close_checkpointer_tolerates_anything(tmp_path: Path):
 def test_a_missing_run_manifest_reads_as_no_curator_error():
     """The downstream behaviour that makes losing the file dangerous, stated as a
     test so the two halves cannot drift apart."""
-    from governed_bi.eval.run_experiment import _collect_curator_errors
+    from governed_bi.eval.harness import _collect_curator_errors
 
     assert _collect_curator_errors({"curated": Path("nonexistent")}) == {}
 
@@ -717,8 +717,8 @@ def test_serial_mode_records_the_same_marker(tmp_path, monkeypatch):
 
 def test_the_marker_makes_the_run_unquotable(tmp_path):
     """It has to reach the gate, or it is just another file nobody reads."""
+    from governed_bi.eval.harness import _collect_curator_errors
     from governed_bi.eval.index import quotable
-    from governed_bi.eval.run_experiment import _collect_curator_errors
 
     build = tmp_path / "curated" / "beer" / "_build"
     build.mkdir(parents=True)
@@ -751,7 +751,7 @@ def test_every_arm_that_ran_is_checked_for_curator_errors():
 def test_a_marker_and_a_real_curator_error_are_both_reported(tmp_path):
     """Returning early on the marker dropped a recorded curator crash in favour of a
     note about a different missing file — losing the more specific finding."""
-    from governed_bi.eval.run_experiment import _collect_curator_errors
+    from governed_bi.eval.harness import _collect_curator_errors
 
     d = tmp_path / "_build"
     d.mkdir()
@@ -769,7 +769,7 @@ def test_a_marker_and_a_real_curator_error_are_both_reported(tmp_path):
 
 
 def test_a_marker_alone_is_still_reported_when_no_manifest_exists(tmp_path):
-    from governed_bi.eval.run_experiment import _collect_curator_errors
+    from governed_bi.eval.harness import _collect_curator_errors
 
     d = tmp_path / "_build"
     d.mkdir()
@@ -782,7 +782,7 @@ def test_a_marker_alone_is_still_reported_when_no_manifest_exists(tmp_path):
 
 
 def test_a_clean_arm_reports_nothing(tmp_path):
-    from governed_bi.eval.run_experiment import _collect_curator_errors
+    from governed_bi.eval.harness import _collect_curator_errors
 
     d = tmp_path / "_build"
     d.mkdir()

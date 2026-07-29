@@ -34,7 +34,7 @@ def test_validate_corpora_gate_counts_findings_per_arm():
     from types import SimpleNamespace
 
     from governed_bi.corpus.schemas import LogicalType, TableAsset, TermAsset, TermBinding
-    from governed_bi.eval.run_experiment import _validate_corpora
+    from governed_bi.eval.harness import _validate_corpora
 
     def _tbl() -> TableAsset:
         from governed_bi.corpus.schemas import Column
@@ -76,7 +76,7 @@ def test_collect_curator_errors_lifts_swallowed_failures(tmp_path):
     lifts its short form into the headline so it is not silently lost."""
     import json
 
-    from governed_bi.eval.run_experiment import _collect_curator_errors
+    from governed_bi.eval.harness import _collect_curator_errors
 
     clean_dir = tmp_path / "corpus_curated"
     crashed_dir = tmp_path / "corpus_curated_sme"

@@ -361,7 +361,7 @@ def test_a_delta_between_unmeasured_rates_is_none_not_a_crash():
     ``None`` — raised ``TypeError`` after the full run and before ``summary.json``
     was written, losing the run's artifacts.
     """
-    from governed_bi.eval.run_experiment import _delta
+    from governed_bi.eval.harness import _delta
 
     assert _delta(None, None) is None
     assert _delta(0.5, None) is None

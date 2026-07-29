@@ -21,6 +21,7 @@ from governed_bi.curator.clarifications import (
     resolve_clarifications_path,
     write_clarifications,
 )
+from governed_bi.eval.harness import _write_jsonl
 from governed_bi.eval.run_datalake import (
     _BUILD_COMPLETE_MARKER,
     _check_resume_manifest,
@@ -30,7 +31,6 @@ from governed_bi.eval.run_datalake import (
     _mark_build_complete,
     _summarise_rows,
 )
-from governed_bi.eval.run_experiment import _write_jsonl
 
 
 def _table(schema: str = "beer") -> TableAsset:

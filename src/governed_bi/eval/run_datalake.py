@@ -99,6 +99,18 @@ from .bird_loader import (
     load_rename_map,
 )
 from .error_taxonomy import attribute_rows, summarise_attributions
+from .harness import (
+    _collect_curator_errors,
+    _cost_block,
+    _RefuseAllSolver,
+    _sme_fold_signal,
+    _suspect_from_corpus,
+    _utc_ts,
+    _validate_corpora,
+    _warn_if_not_green,
+    _warn_if_sme_noop,
+    _write_jsonl,
+)
 from .hash_grade import (
     free_pass_counts,
     load_gold_hashes,
@@ -118,18 +130,6 @@ from .power import (
     mcnemar,
     measure_floor,
     minimum_detectable_effect,
-)
-from .run_experiment import (
-    _collect_curator_errors,
-    _cost_block,
-    _RefuseAllSolver,
-    _sme_fold_signal,
-    _suspect_from_corpus,
-    _utc_ts,
-    _validate_corpora,
-    _warn_if_not_green,
-    _warn_if_sme_noop,
-    _write_jsonl,
 )
 from .treatment import (
     DEFAULT_MIN_DIVERGENCE,
