@@ -27,7 +27,9 @@ The **curator reads ``train_final.jsonl`` only**; grading is on held-out
 - ``ex``: execution-accuracy scoring vs gold SQL.
 - ``arms``: the arm harness (EX + free behavioral signals) and solvers.
 - ``dataset``: a small vendored beer_factory gold set until the BIRD jsonl lands.
-- ``refuse_gate``: refusal recall / false-refusal rate on an unanswerable set.
+- ``refuse_gate``: the refusal scorer. No driver calls it — the cross-DB negative
+  set it was wired to is invalid once schemas are pooled (open-work X6); the
+  scorer waits for a genuinely out-of-scope set.
 """
 
 from __future__ import annotations

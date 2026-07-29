@@ -341,7 +341,7 @@ def test_a_row_without_delivery_fields_reads_as_unverified_not_as_zero():
 
 def test_treatment_and_errors_land_where_the_ledger_looks():
     """`eval.index._undelivered` reads `summary["arms"][arm]["treatment"]`. They used
-    to be written only under `ex_crosscheck`, so the gate could never see them."""
+    to be written only under a per-arm sidecar the gate never looked at."""
     import inspect
 
     from governed_bi.eval import index

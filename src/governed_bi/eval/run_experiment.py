@@ -40,7 +40,6 @@ from .arms import _touches_suspect, agent_solver
 from .bird_loader import description_dir, load_bird_items, load_rename_map
 from .error_taxonomy import attribute_rows, summarise_attributions
 from .hash_grade import (
-    crosscheck_execution_match,
     free_pass_counts,
     load_gold_hashes,
     load_trap_columns,
@@ -450,7 +449,6 @@ def _run_arm_generations(
         if err_msg and grade.get("error") in (None, "refusal"):
             grade["error"] = err_msg
 
-        xcheck = crosscheck_execution_match(sql, item.sql, gateway)
         diff = item.difficulty or "unknown"
         meta = dict(meta_raw or {})
         row = {
@@ -472,7 +470,6 @@ def _run_arm_generations(
             "pred_ncols": grade.get("pred_ncols"),
             "gold_nrows": grade.get("gold_nrows"),
             "nrows_match": grade.get("nrows_match"),
-            "ex_crosscheck": xcheck,
             "difficulty": diff,
             "refused_by": meta.get("refused_by"),
             "failed_layer": meta.get("failed_layer"),
@@ -533,7 +530,6 @@ def _run_arm_generations(
             "recognised_refusal": recognised or meta.get("refused_by") is None,
             "refused": outcome is Outcome.refused,
             "decoy": sql is not None and _touches_suspect(sql, suspect_columns, dialect),
-            "xcheck": xcheck,
             "diff": diff,
         }
 
@@ -556,8 +552,6 @@ def _run_arm_generations(
     n_refused = 0
     n_decoy = 0
     n_produced = 0
-    n_xcheck = 0
-    n_xcheck_agree = 0
     n_missing_gold = 0
     n_wrong_but_nrows_match = 0
     n_crashed = 0
@@ -572,10 +566,6 @@ def _run_arm_generations(
             n_missing_gold += 1
         if not b["correct"] and b["row"].get("nrows_match"):
             n_wrong_but_nrows_match += 1
-        if b["xcheck"] is not None:
-            n_xcheck += 1
-            if b["xcheck"] == b["correct"]:
-                n_xcheck_agree += 1
         if b["refused"]:
             n_refused += 1
         if b["outcome"] is Outcome.crashed:
@@ -637,8 +627,6 @@ def _run_arm_generations(
     # Attach cross-check agreement onto the generations sidecar via a sentinel row
     # isn't ideal; return it through the summary dict in the caller instead.
     summary_extra = {
-        "ex_crosscheck_n": n_xcheck,
-        "ex_crosscheck_agree_rate": (n_xcheck_agree / n_xcheck) if n_xcheck else None,
         # Same two diagnostics the pooled driver records, so a single-schema run and
         # a data-lake run can be read with one vocabulary. ``errors`` attributes the
         # wrong answers to a stage; ``treatment`` records what actually reached the
@@ -1054,44 +1042,22 @@ def run_experiment(
     curated_s = summaries["curated"]
     curated_sme_s = summaries["curated_sme"]
 
-    # Refuse-gate: BIRD test questions are all answerable, so the curated_sme
-    # arm's refusal_rate IS the false-refusal rate. The missing half — refusal
-    # *accuracy* on truly-unanswerable questions — is measured here against a
-    # cross-DB negative set (questions from other db_ids, unanswerable by
-    # construction). Needs the live model; skipped on the offline (no-model) path.
-    refuse_gate: dict[str, Any] | None = None
-    if lc_model is not None:
-        from .bird_loader import load_cross_db_unanswerable
-        from .refuse_gate import agent_refuser, eval_refuse_gate
-
-        try:
-            unanswerable = load_cross_db_unanswerable(dataset_dir, db_id, k=20)
-            if unanswerable:
-                refused = agent_refuser(
-                    curated_sme_corpus_loaded, gateway, settings, identity, model=lc_model
-                )
-                rg = eval_refuse_gate([], unanswerable, refused)  # accuracy on unanswerable
-                refuse_gate = {
-                    "refusal_accuracy": rg.refusal_accuracy,
-                    "false_refusal_rate": curated_sme_s.refusal_rate,  # answerable-set refusals
-                    "n_unanswerable": len(unanswerable),
-                    "n_answerable": curated_sme_s.n,
-                    "note": (
-                        "refusal_accuracy on a cross-DB unanswerable set (curated_sme "
-                        "corpus); false_refusal_rate reuses the curated_sme arm's "
-                        "refusal_rate since every BIRD test question is answerable"
-                    ),
-                }
-            else:
-                refuse_gate = {"skipped": "no cross-DB unanswerable questions available"}
-        except Exception as err:  # noqa: BLE001 — never lose the computed arm summaries
-            # The arm summaries above are already computed; a refuse-gate crash must
-            # not abort before summary.json is written and discard the whole run.
-            refuse_gate = {"error": f"{type(err).__name__}: {err}"}
-            print(
-                f"refuse-gate failed ({type(err).__name__}: {err}); "
-                "arm summaries preserved, writing summary.json anyway"
-            )
+    # Refuse-gate: NOT measured here any more.
+    #
+    # The measurement that used to sit here scored refusal accuracy against a
+    # cross-DB negative set — questions drawn from other ``db_id``s, which
+    # ``load_cross_db_unanswerable`` documents as unanswerable *for this db_id*.
+    # That premise holds only because this driver pins the corpus to one schema. It
+    # does not survive pooling: in a data-lake run every other schema is in the
+    # pool, so those questions are answerable and the metric would score every
+    # correct answer as a refuse-gate failure.
+    #
+    # Rather than carry a metric that inverts the moment the two drivers merge, it
+    # is dropped on the record (docs/open-work.md, X6). The scorer itself is intact
+    # and tested — ``eval.refuse_gate.eval_refuse_gate`` plus ``agent_refuser``,
+    # exercised in ``tests/test_eval.py`` against ``BEER_FACTORY_UNANSWERABLE``,
+    # which is the genuinely out-of-scope negative shape a pooled run would need.
+    # What is missing is that set at scale, not the machinery to score it.
 
     # ``cost`` sits beside the scored fields under the same ``arms.<arm>.cost`` path
     # the pooled driver writes, so one reader works on both drivers' summary.json.
@@ -1131,7 +1097,6 @@ def run_experiment(
         "corpus_validation": corpus_validation,
         "curator_errors": curator_errors,
         "sme_fold": sme_fold,
-        "refuse_gate": refuse_gate,
         "gold_hash_self_check": gold_check,
         "serve_policy": {
             "hard_block_suspect_columns": settings.hard_block_suspect_columns,

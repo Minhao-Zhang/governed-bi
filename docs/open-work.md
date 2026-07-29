@@ -63,24 +63,45 @@ n=1. Collapsing them removes roughly 9,600 lines.
 `metrics.build_manifest`, which closed a real hole — see
 [Eval metrics](eval-metrics.md).
 
-**What still blocks the collapse**, in order:
+### Two metrics dropped on the record (decided 2026-07-28)
 
-1. **The refuse-gate's negative set (X6 above).** It is the single-schema driver's
-   only non-redundant capability, and its validity depends on the corpus being
-   pinned. Either the merged driver keeps a pinned single-schema *mode*, or the
-   measurement is rebuilt on a genuinely out-of-scope negative set. This is a
-   design decision, not a porting task, and guessing it wrong silently inverts the
-   metric.
-2. **Cross-check EX** (`ex_crosscheck_agree_rate`) — a grader-validity diagnostic
-   that only the single-schema driver computes; the pooled driver skips it
-   deliberately. Nothing gates on it, but it is the only check that hash grading
-   agrees with set-equality re-execution. Port it with the E1 memoisation, or drop
-   it on the record.
-3. **`--resume-curated`** is subsumed by the pooled driver's staging/promotion
-   resume, so it needs no port — confirm before deleting.
+Both were single-schema-driver-only, and both blocked the collapse. Dropping them
+is a **loss of measurement**, recorded here so nobody later reads their absence as
+"never existed".
 
-Everything else in `run_experiment.py` is duplicated logic, and the register in
-`metrics.py` is the contract that makes the merge checkable.
+- **`refusal_accuracy`** — scored against a cross-DB negative set, whose validity
+  rests on the corpus being pinned to one schema (see X6). Dropped rather than
+  ported, because ported unchanged it would invert. **The scorer survives**:
+  `eval.refuse_gate.eval_refuse_gate` + `agent_refuser`, exercised in
+  `tests/test_eval.py` against `BEER_FACTORY_UNANSWERABLE` — the genuinely
+  out-of-scope shape. What is missing is that set at scale, not the machinery.
+- **`ex_crosscheck_agree_rate`** — the only check that hash grading agrees with
+  set-equality re-execution of gold. Nothing gated on it. Consequence: **hash
+  grading now has no independent cross-verification at all**, which compounds C3
+  (the strict normaliser is never self-checked). `eval.ex.execution_match` itself
+  is untouched and still tested.
+
+### What is left to reach one file
+
+Mechanical, but wide: `run_experiment.py` is still imported by **11 test files**
+and by `run_datalake.py` (10 private symbols) and `curator/pipeline.py`
+(`_sme_fold_signal`).
+
+1. Move the ~10 shared helpers (`_utc_ts`, `_write_jsonl`, `_cost_block`,
+   `_validate_corpora`, `_collect_curator_errors`, `_sme_fold_signal`,
+   `_warn_if_*`, `_suspect_from_corpus`, `_RefuseAllSolver`, `_dsn_host`) out of the
+   driver into a shared module, so no driver reaches into another's privates.
+2. Rewire the 11 test files. Three need structural rewrites, not import edits:
+   `test_eval_concurrency`, `test_prompt_attribution` and
+   `test_run_experiment_parity` drive `_run_arm_generations` (261 lines), the
+   single-schema arm loop. `test_run_experiment_parity`'s entire purpose — the two
+   drivers agree — dissolves when there is one driver.
+3. Confirm `--resume-curated` is subsumed by the pooled staging/promotion resume,
+   then delete `run_experiment.py`.
+4. Rename the survivor: `run_datalake` is the wrong name for the only driver.
+
+The register in `metrics.py` is the contract that makes step 2 checkable — it is
+why the merge is now a mechanical job rather than a risky one.
 
 ## Test debt blocked on the eval driver
 

@@ -493,8 +493,6 @@ def test_experiment_arm_generations_workers_invariance():
     assert summary_serial.refusal_rate > 0
     assert 0 < summary_serial.ex_lenient < 1
     assert summary_serial.decoy_touch_rate > 0
-    # Cross-check agreement was computed for the produced (non-refused) items.
-    assert extra_serial["ex_crosscheck_n"] > 0
 
 
 def test_missing_factory_when_parallel_raises():

@@ -46,9 +46,9 @@ Each stage below zooms into one of these nodes.
 
 ---
 
-## 1 · Gating — ingest → refuse-gate → cache
+## 1 · Gating — ingest → refuse-gate
 
-Two ways to answer (or refuse) before any retrieval or generation.
+The one way to refuse before any retrieval or generation.
 
 ```mermaid
 sequenceDiagram
@@ -56,8 +56,6 @@ sequenceDiagram
     actor U as User
     participant R as Serve rails
     participant RG as Refuse-gate
-    participant SC as SQL cache
-    participant DB as Read-only gateway
 
     U->>R: ask(question, identity)
     Note over R: ingest — stamp identity + session (no memory read yet)
@@ -66,17 +64,7 @@ sequenceDiagram
         RG-->>R: refuse
         R-->>U: REFUSE — out of scope (0 tokens, + hint)
     else in scope
-        RG-->>R: ok
-        R->>SC: lookup(question)
-        alt cache hit
-            SC-->>R: cached SQL + licensed tables
-            R->>R: re-guardrail via check() L1–L5 (freshness)
-            R->>DB: execute(sql)
-            DB-->>R: rows
-            R-->>U: ANSWER — cached, re-verified
-        else cache miss
-            SC-->>R: miss → go to Assemble
-        end
+        RG-->>R: ok → go to Assemble
     end
 ```
 
@@ -84,8 +72,7 @@ sequenceDiagram
 
 ## 2 · Assemble — retrieve + license
 
-Entered only on a cache miss. Pulls the governed assets and computes the scope
-the query is allowed to touch.
+Pulls the governed assets and computes the scope the query is allowed to touch.
 
 ```mermaid
 sequenceDiagram

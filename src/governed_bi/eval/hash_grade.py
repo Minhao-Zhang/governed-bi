@@ -379,23 +379,6 @@ def score_sql_hashes(
     }
 
 
-def crosscheck_execution_match(
-    pred_sql: str | None,
-    gold_sql: str | None,
-    gateway: "Gateway",
-) -> bool | None:
-    """Secondary EX via in-repo ``execution_match`` (gold SQL re-exec).
-
-    Returns ``None`` when either side is missing (not scorable); otherwise the
-    set-equality result. Used to sanity-check ``hash_grade`` on the same run.
-    """
-    if not pred_sql or not gold_sql:
-        return None
-    from .ex import execution_match
-
-    return execution_match(pred_sql, gold_sql, gateway)
-
-
 def validate_gold_hashes_live(
     items: list,
     gold_hashes: dict[str, GoldHash],
