@@ -1,7 +1,5 @@
 # 0003: Governed notes (`NoteAsset`) and tri-modal retrieval
 
-_[English](0003-governed-notes-tri-modal-retrieval.md) · [简体中文](0003-governed-notes-tri-modal-retrieval.zh.md)_
-
 - **Status:** Accepted (design; 2026-07-22). Design agreed in a multi-agent
   design review (4 independent proposals, 3 diverse judges, and an
   adversarial red-team; all three judges independently ranked "generalize

@@ -1,7 +1,5 @@
 # 0004: Local-first conversation + run logging
 
-_[English](0004-local-first-conversation-run-logging.md) · [简体中文](0004-local-first-conversation-run-logging.zh.md)_
-
 - **Status:** Accepted (2026-07-22). M2 metadata track + durable conversation
   checkpointer shipped; M5 gated full-content + deep-agent logging in progress.
 - **Deciders:** project owner + design session

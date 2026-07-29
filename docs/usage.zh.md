@@ -195,7 +195,7 @@ curl -s localhost:8000/chat -H 'content-type: application/json' \
 标志）。本机覆盖写在 git-ignored 的 `governed_bi.local.toml`。由于展示逻辑位于与
 UI 无关的 `governed_bi.viz.presenter` 中（不依赖任何 UI 框架），一个独立的前端可以
 消费同样的视图模型——交互式 UI 是一个独立项目，参见
-[docs/ui-frontend-design.md](ui-frontend-handoff.zh.md)。
+[docs/ui-frontend-design.md](ui-frontend-handoff.md)。
 
 ## 运行测试
 
@@ -205,6 +205,6 @@ uv run pytest -q
 
 ## 接下来
 
-- 如需编写或编辑 corpus 资产，请参见 [Corpus authoring](corpus-authoring.zh.md)。
-- 如需查看逐字段的资产规格，请参见 [Asset schemas](asset-schemas.zh.md)。
+- 如需编写或编辑 corpus 资产，请参见 [Corpus authoring](corpus-authoring.md)。
+- 如需查看逐字段的资产规格，请参见 [Asset schemas](asset-schemas.md)。
 - 如需了解这一切背后的设计，请从 [docs/README.md](README.zh.md) 开始阅读。

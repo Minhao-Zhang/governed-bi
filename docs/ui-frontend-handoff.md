@@ -1,7 +1,5 @@
 # Frontend handoff: governed-bi UI
 
-_[English](ui-frontend-handoff.md) · [简体中文](ui-frontend-handoff.zh.md)_
-
 The build brief + contract for the **governed-bi** frontend. Pair with the
 architecture rationale in [ADR 0001](adr/0001-langgraph-server-chat-runtime.md) and the
 runtime decision in [ADR 0001](adr/0001-langgraph-server-chat-runtime.md).

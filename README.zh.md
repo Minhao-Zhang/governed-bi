@@ -45,7 +45,7 @@ PG_DSN=host=... port=5432 dbname=... user=... password=...
 uv run langgraph dev          # starts the `serve` graph; POST questions to /chat
 ```
 
-[演练](docs/usage.zh.md)是一份引导式的「第一个问题」教程，[快速上手](docs/usage.zh.md)是完整参考。要直接用 Python 驱动 agent 核心，见 [`docs/analyst.md`](docs/analyst.zh.md)。
+[演练](docs/usage.zh.md)是一份引导式的「第一个问题」教程，[快速上手](docs/usage.zh.md)是完整参考。要直接用 Python 驱动 agent 核心，见 [`docs/analyst.md`](docs/analyst.md)。
 
 ## 配置
 
@@ -104,8 +104,8 @@ uv run python scripts/live_smoke.py       # end-to-end over a real model (needs 
 
 从 [`docs/README.md`](docs/README.zh.md) 开始阅读。核心文档：
 [架构](docs/architecture.zh.md) · [设计决策](docs/design-decisions.zh.md) ·
-[资产模式](docs/asset-schemas.zh.md) · [curator](docs/curator.zh.md) ·
-[analyst](docs/analyst.zh.md) · [viz](docs/viz.zh.md) · [术语表](docs/glossary.zh.md)。
+[资产模式](docs/asset-schemas.md) · [curator](docs/curator.md) ·
+[analyst](docs/analyst.md) · [viz](docs/viz.md) · [术语表](docs/glossary.zh.md)。
 
 ## 仓库结构
 

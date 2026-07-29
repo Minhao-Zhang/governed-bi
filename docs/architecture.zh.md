@@ -30,7 +30,7 @@ Curator 与 Analyst 的风险特征相反。二者使用不同的 harness，但�
 > 它不是一次性的引导程序（bootstrapper）。冷启动（cold-start）是它的第一项工作，但漂移
 > 修复（drift-repair）是持续进行的。疏于维护的 corpus 会腐化（据 *How Anthropic
 > enables self-service data analytics with Claude*，约以 95%→65%/月的速度）。完整
-> 循环（proposer 与 adversary）见[Curator](curator.zh.md)。
+> 循环（proposer 与 adversary）见[Curator](curator.md)。
 
 ## 3. 内核原语（经受模型升级而存续）
 
@@ -89,11 +89,11 @@ RVGD retrieval → Steiner-tree join plan → SQL gen → five-layer guardrails 
 execute (as-user) → narrate → answer + provenance
 ```
 
-完整的分阶段设计见[Analyst](analyst.zh.md)，以及 curator 推断驱动 Analyst 行为的三个关键点。
+完整的分阶段设计见[Analyst](analyst.md)，以及 curator 推断驱动 Analyst 行为的三个关键点。
 
 按 D15，在多 schema 的 Postgres / Redshift 路径上，一个连接感知（join-aware）的 schema 路由器会先于 RVGD 检索运行，因此检索会跨越多个 schema；单 schema 路径则跳过它。**已落地**（`retrieval.schema_router`；已接入 `analyst.agent`）。
 
-护栏按顺序排列（任一触发即失败即拒，五层全部强制执行）：语法 → 策略黑名单 → AST 列许可清单 → term 语义 → 成本。AST 许可清单具备 scope 感知能力（针对每一列自身所在的查询 scope 进行解析，并拦截星号投影）；term 语义会为检索到的表，以及它们的 FK 连接邻域、连接规划所桥接经过的 Steiner 点（而不是精确的检索命中集合，因此它与检索召回率相解耦），以及任何经策展的跨 schema 连接目标授权，并拦截该授权范围之外的任何表名。成本层目前是一道结构性的交叉连接防护；基于数值化 EXPLAIN 的成本（Postgres / Redshift）是未来按方言展开的工作。逐阶段细节见[Analyst](analyst.zh.md)第 8 步。
+护栏按顺序排列（任一触发即失败即拒，五层全部强制执行）：语法 → 策略黑名单 → AST 列许可清单 → term 语义 → 成本。AST 许可清单具备 scope 感知能力（针对每一列自身所在的查询 scope 进行解析，并拦截星号投影）；term 语义会为检索到的表，以及它们的 FK 连接邻域、连接规划所桥接经过的 Steiner 点（而不是精确的检索命中集合，因此它与检索召回率相解耦），以及任何经策展的跨 schema 连接目标授权，并拦截该授权范围之外的任何表名。成本层目前是一道结构性的交叉连接防护；基于数值化 EXPLAIN 的成本（Postgres / Redshift）是未来按方言展开的工作。逐阶段细节见[Analyst](analyst.md)第 8 步。
 
 > **D15：L4 授权范围按 schema 限定，并跨越多个 schema。** 跨 schema 的表名只有经过策展的连接（curated join）才被授权——若不存在这样的连接，引擎宁可拒答也不猜测。单 schema / SQLite / BIRD 路径**同样**加了 schema 限定：SQLite 连接器会把它的文件 `ATTACH` 到 `corpus_pin` 别名下，因此 `beer_factory.customers` 能原生执行（本行原先写的是"保持裸写（不加限定）"，2026-07-17 那次取代之后这句话已经不成立）。护栏 + serve 接入 + 缺失边拒答 + 连接感知 schema 路由器均已落地。
 

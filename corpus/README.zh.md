@@ -7,7 +7,7 @@ _[English](README.md) · [简体中文](README.zh.md)_
 （内存图、向量、BM25、Postgres）都是 `_generated/` 目录下的派生、可重建投影，
 绝不直接编写。
 
-完整规范参见[`docs/asset-schemas.md`](../docs/asset-schemas.zh.md)。
+完整规范参见[`docs/asset-schemas.md`](../docs/asset-schemas.md)。
 
 ## 目录结构
 

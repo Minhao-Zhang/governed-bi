@@ -1,7 +1,5 @@
 # Agentic BI Asset Schemas
 
-_[English](asset-schemas.md) · [简体中文](asset-schemas.zh.md)_
-
 The per-asset YAML field spec for the [Agentic BI System](architecture.md)
 corpus. Concretizes **D9** in [Design decisions](design-decisions.md) (Git+YAML
 typed assets, curator-authored / human-audited); storage rationale in

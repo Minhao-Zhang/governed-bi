@@ -1,7 +1,5 @@
 # Experiment runbook
 
-_[English](experiment-runbook.md) · [简体中文](experiment-runbook.zh.md)_
-
 What to run, in what order, and what has to be true before a number is worth
 quoting. Written for someone with the machine and the data who did not build the
 harness.

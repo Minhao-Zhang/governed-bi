@@ -1,7 +1,5 @@
 # Agentic BI Viz
 
-_[English](viz.md) · [简体中文](viz.zh.md)_
-
 The **audit surface** for the [Agentic BI System](architecture.md) corpus —
 **read-only by default**. This repo ships **no bundled UI**; instead it ships the
 pieces a UI reads from — the `presenter` view models (UI-agnostic) and the

@@ -1,7 +1,5 @@
 # Open work
 
-_[English](open-work.md) · [简体中文](open-work.zh.md)_
-
 The single tracker for work that is **open**. It replaces four dated trackers
 (`engineering-gaps-2026-07-16`, `eval-audit-backlog-2026-07-22`,
 `clarification-sme-benchmark-build-plan`, `implementation-plan-notes-and-run-logging`),

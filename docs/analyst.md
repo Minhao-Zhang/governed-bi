@@ -1,7 +1,5 @@
 # Agentic BI Analyst
 
-_[English](analyst.md) · [简体中文](analyst.zh.md)_
-
 The serve-side agent (the **Analyst**) for the [Agentic BI System](architecture.md).
 It is the online governed agent that *consumes* the corpus to answer,
 **fail-closed and auditable** (two-harness split; `LangGraph` + middleware).

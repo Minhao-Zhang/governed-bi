@@ -1,7 +1,5 @@
 # What we measure, and where a failure shows up
 
-_[English](measurement.md) · [简体中文](measurement.zh.md)_
-
 A three-arm data-lake run once had to be discarded because the harness could
 say a turn failed but not *where*. A solver crash and a deliberate refusal
 both arrived as `error="refusal"`, so `refusal_rate` absorbed the crash count

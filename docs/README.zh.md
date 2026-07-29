@@ -10,24 +10,24 @@ _[English](README.md) · [简体中文](README.zh.md)_
 
 1. [架构](architecture.zh.md)：完整设计（主干(spine)、内核(kernel)、服务、存储、流程、评测、环境）。
 2. [设计决策](design-decisions.zh.md)：以 ADR 形式呈现的 D1–D19（+ 2026-07-15 审计处置），包含备选方案与权衡。
-3. [资产模式](asset-schemas.zh.md)：每个资产的 YAML 字段规范（Facts 层 / Inference 层 / Audit 层）。
-4. [Curator](curator.zh.md)：构建侧的 proposer + adversary 循环。如需查看逐字提示词，见 [Curator LLM 调用全流程](curator-llm-call.zh.md)。
-5. [Analyst](analyst.zh.md)：服务侧受治理的 agentic 内核 + 护栏(guardrails)。如需查看逐字提示词，见 [Analyst LLM 调用全流程](analyst-llm-call.zh.md)。
-6. [Viz](viz.zh.md)：审计面(surface)——presenter 视图模型加上 `governed_bi.api` HTTP API，用于浏览语义层并与受治理 Analyst 对话（corpus 写操作由 `allow_edit` 门控；交互式 UI 是一个独立项目）。
-7. [度量](measurement.zh.md)：eval harness 记录了什么、失败会定位到哪里——数字看着不对时先读这篇。
-8. [提示词变体实验](prompt-experiments.zh.md)：提示词注册表、一次运行怎么选变体、什么被盖章记到哪里，以及怎么判断一个测出来的失败到底该换哪个变体。
+3. [资产模式](asset-schemas.md)：每个资产的 YAML 字段规范（Facts 层 / Inference 层 / Audit 层）。
+4. [Curator](curator.md)：构建侧的 proposer + adversary 循环。如需查看逐字提示词，见 [Curator LLM 调用全流程](curator-llm-call.md)。
+5. [Analyst](analyst.md)：服务侧受治理的 agentic 内核 + 护栏(guardrails)。如需查看逐字提示词，见 [Analyst LLM 调用全流程](analyst-llm-call.md)。
+6. [Viz](viz.md)：审计面(surface)——presenter 视图模型加上 `governed_bi.api` HTTP API，用于浏览语义层并与受治理 Analyst 对话（corpus 写操作由 `allow_edit` 门控；交互式 UI 是一个独立项目）。
+7. [度量](measurement.md)：eval harness 记录了什么、失败会定位到哪里——数字看着不对时先读这篇。
+8. [提示词变体实验](prompt-experiments.md)：提示词注册表、一次运行怎么选变体、什么被盖章记到哪里，以及怎么判断一个测出来的失败到底该换哪个变体。
 9. [术语表](glossary.zh.md)：规范术语。
 
-[待办工作](open-work.zh.md)是唯一一份记录"还没做完"的清单。
+[待办工作](open-work.md)是唯一一份记录"还没做完"的清单。
 
-支撑本设计的[外部设计资料来源](references.zh.md)。
+支撑本设计的[外部设计资料来源](references.md)。
 
 ## 使用本仓库
 
 上述设计文档描述的是预期中的系统。至于当前实际运行的部分（corpus 层与开发工作流）：
 
 - [使用指南](usage.zh.md)：安装、校验示例 corpus、提出第一个问题。**从这里开始。**
-- [Corpus 编写](corpus-authoring.zh.md)：逐步编写并校验 corpus 资产。
+- [Corpus 编写](corpus-authoring.md)：逐步编写并校验 corpus 资产。
 
 读代码时，另有两份逐步调用轨迹可以对照：[Analyst 时序](analyst-sequence.md)与
 [Curator 时序](curator-sequence.md)（英文）。
@@ -39,10 +39,10 @@ ADR 记录的是某个时点的决策。它不会为了跟上后来的现实而�
 
 | ADR | 状态 |
 |---|---|
-| [0001 LangGraph Server 聊天运行时](adr/0001-langgraph-server-chat-runtime.zh.md) | 2026-07-10 接受；部分被 0002 取代 |
-| [0002 受治理的 agentic 服务运行时](adr/0002-governed-agentic-serve-runtime.zh.md) | 已接受并实现（`d2fdd6a`），是唯一的服务路径 |
-| [0003 受治理的 note 与三模态检索](adr/0003-governed-notes-tri-modal-retrieval.zh.md) | 2026-07-22 接受（D17）；已构建——`NoteAsset`、`note_inject.py`、`retrieval/triggers.py`、`read_notes` / `grep_notes`、`[notes]` 配置 |
-| [0004 本地优先的会话与运行日志](adr/0004-local-first-conversation-run-logging.zh.md) | 2026-07-22 接受（D18）；已构建——`run_log.py`、`[logging]` 配置、`prune_full_content` 保留策略 |
+| [0001 LangGraph Server 聊天运行时](adr/0001-langgraph-server-chat-runtime.md) | 2026-07-10 接受；部分被 0002 取代 |
+| [0002 受治理的 agentic 服务运行时](adr/0002-governed-agentic-serve-runtime.md) | 已接受并实现（`d2fdd6a`），是唯一的服务路径 |
+| [0003 受治理的 note 与三模态检索](adr/0003-governed-notes-tri-modal-retrieval.md) | 2026-07-22 接受（D17）；已构建——`NoteAsset`、`note_inject.py`、`retrieval/triggers.py`、`read_notes` / `grep_notes`、`[notes]` 配置 |
+| [0004 本地优先的会话与运行日志](adr/0004-local-first-conversation-run-logging.md) | 2026-07-22 接受（D18）；已构建——`run_log.py`、`[logging]` 配置、`prune_full_content` 保留策略 |
 
 > **证伪条件（falsifier）。** 能让我们判定"corpus 没有用"的那一个结果——arm 配对、指标、
 > 分层、效应量、curator 抽样次数——写在
@@ -57,13 +57,13 @@ ADR 记录的是某个时点的决策。它不会为了跟上后来的现实而�
 
 *仍然有效：*
 
-- [实验操作手册](plans/experiment-runbook.zh.md)：跑什么、按什么顺序跑，以及一个数字要满足哪些条件才值得引用。**做评测就从这里开始。**
-- [Data-lake 运行](plans/datalake-run.zh.md)：多 schema 池化运行（D15）的操作手册与状态。
-- [HITL 澄清契约](plans/hitl-clarification-contract.zh.md)：服务时向人追问的服务端 ↔ 前端契约，服务端已实现。
+- [实验操作手册](plans/experiment-runbook.md)：跑什么、按什么顺序跑，以及一个数字要满足哪些条件才值得引用。**做评测就从这里开始。**
+- [Data-lake 运行](plans/datalake-run.md)：多 schema 池化运行（D15）的操作手册与状态。
+- [HITL 澄清契约](plans/hitl-clarification-contract.md)：服务时向人追问的服务端 ↔ 前端契约，服务端已实现。
 - [Agent 步骤可视化](plans/agent-step-visualization.md)（英文）：前端怎么展示受治理服务流的每一步。
 
 已关闭的跟踪表和被取代的计划不再以文件形式保留——git 历史就是归档。它们里面还没做完的条目
-都收进了[待办工作](open-work.zh.md)。
+都收进了[待办工作](open-work.md)。
 
 ## 主干（不可妥协项）
 
@@ -75,10 +75,10 @@ ADR 记录的是某个时点的决策。它不会为了跟上后来的现实而�
 
 | 文档 | 对应的包区域 |
 |---|---|
-| [资产模式](asset-schemas.zh.md)、[设计决策](design-decisions.zh.md) D9 | `src/governed_bi/corpus/` |
-| [Curator](curator.zh.md) | `src/governed_bi/curator/` |
-| [Analyst](analyst.zh.md)、[架构](architecture.zh.md) §6 | `src/governed_bi/analyst/`、`gateway/`、`graph/`、`retrieval/`、`memory/` |
-| [架构](architecture.zh.md) §8、[度量](measurement.zh.md) | `src/governed_bi/eval/`、`src/governed_bi/stages.py` |
-| [提示词变体实验](prompt-experiments.zh.md) | `src/governed_bi/prompts/` |
-| [Viz](viz.zh.md) | `src/governed_bi/viz/` |
+| [资产模式](asset-schemas.md)、[设计决策](design-decisions.zh.md) D9 | `src/governed_bi/corpus/` |
+| [Curator](curator.md) | `src/governed_bi/curator/` |
+| [Analyst](analyst.md)、[架构](architecture.zh.md) §6 | `src/governed_bi/analyst/`、`gateway/`、`graph/`、`retrieval/`、`memory/` |
+| [架构](architecture.zh.md) §8、[度量](measurement.md) | `src/governed_bi/eval/`、`src/governed_bi/stages.py` |
+| [提示词变体实验](prompt-experiments.md) | `src/governed_bi/prompts/` |
+| [Viz](viz.md) | `src/governed_bi/viz/` |
 | [架构](architecture.zh.md) §9（环境开关(environment toggles)） | `src/governed_bi/config.py` |
