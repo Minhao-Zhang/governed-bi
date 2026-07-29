@@ -910,7 +910,17 @@ def _write_gold_lines(path, rows):
     path.write_text("".join(_json.dumps(r) + "\n" for r in rows), encoding="utf-8")
 
 
-def test_load_gold_hashes_filters_by_db_split_and_dsn_key(tmp_path):
+def test_load_gold_hashes_filters_by_db_and_dsn_key_but_not_split(tmp_path):
+    """`db_id` and `dsn_key` gate; the row's own `split` label does NOT.
+
+    That label is stale in the shipped artifact: the split was re-drawn after the
+    hashes were computed and the label was not regenerated, so 79% of rows marked
+    `split=test` are questions that now live in `train_final.jsonl`. Filtering on it
+    left 286 of 1,389 test questions gradeable while every one of them has a hash, and
+    the failure was a silently smaller n rather than a wrong number. Safe to ignore
+    because the two splits are disjoint on `(db_id, question_id)` and no pair carries
+    two gold rows, both checked against the artifact.
+    """
     from governed_bi.eval.hash_grade import load_gold_hashes
 
     rows = [
@@ -918,6 +928,8 @@ def test_load_gold_hashes_filters_by_db_split_and_dsn_key(tmp_path):
          "hash_lenient": "aa", "hash_strict": "bb", "nrows": 2},
         {"question_id": "2", "db_id": "other", "split": "test", "dsn_key": "rename_decoy",
          "hash_lenient": "cc", "hash_strict": "dd"},
+        # Mislabelled `train` for a question the current split calls test. This is the
+        # 79% case, and it must still be gradeable.
         {"question_id": "3", "db_id": "beer", "split": "train", "dsn_key": "rename_decoy",
          "hash_lenient": "ee", "hash_strict": "ff"},
         {"question_id": "4", "db_id": "beer", "split": "test", "dsn_key": "other_dsn",
@@ -926,9 +938,49 @@ def test_load_gold_hashes_filters_by_db_split_and_dsn_key(tmp_path):
     _write_gold_lines(tmp_path / "eval_dataset" / "gold_result_hashes_rename_decoy.jsonl", rows)
 
     out = load_gold_hashes(tmp_path, db_id="beer")
-    assert set(out) == {"1"}, "wrong db / split / dsn_key leaked into the gold index"
+    assert set(out) == {"1", "3"}, "the stale split label must not gate, but db/dsn must"
     assert out["1"].hash_lenient == "aa"
     assert out["1"].nrows == 2
+    assert out["3"].hash_lenient == "ee"
+
+
+def test_conflicting_gold_for_one_question_raises_rather_than_picking(tmp_path):
+    """The one case where ignoring the split label could mis-grade.
+
+    Two different golds for one `(db_id, question_id)` means the label was the only
+    thing that could tell them apart, and it is not trustworthy here. Silently keeping
+    the last row read would grade against an arbitrary one of the two.
+    """
+    import pytest as _pytest
+
+    from governed_bi.eval.hash_grade import load_gold_hashes
+
+    _write_gold_lines(
+        tmp_path / "eval_dataset" / "gold_result_hashes_rename_decoy.jsonl",
+        [
+            {"question_id": "1", "db_id": "beer", "split": "test", "hash_lenient": "aa"},
+            {"question_id": "1", "db_id": "beer", "split": "train", "hash_lenient": "zz"},
+        ],
+    )
+    with _pytest.raises(ValueError, match="conflicting gold hashes"):
+        load_gold_hashes(tmp_path, db_id="beer")
+
+
+def test_an_identical_gold_row_twice_is_not_a_conflict(tmp_path):
+    """Dedup, not paranoia: the same question hashed twice under both split labels is
+    the shape the stale artifact actually has, and it agrees with itself."""
+    from governed_bi.eval.hash_grade import load_gold_hashes
+
+    _write_gold_lines(
+        tmp_path / "eval_dataset" / "gold_result_hashes_rename_decoy.jsonl",
+        [
+            {"question_id": "1", "db_id": "beer", "split": "test",
+             "hash_lenient": "aa", "sql_sha256": "s1"},
+            {"question_id": "1", "db_id": "beer", "split": "train",
+             "hash_lenient": "aa", "sql_sha256": "s1"},
+        ],
+    )
+    assert set(load_gold_hashes(tmp_path, db_id="beer")) == {"1"}
 
 
 def test_load_gold_hashes_accepts_the_artifacts_layout(tmp_path):

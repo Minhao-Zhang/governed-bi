@@ -172,7 +172,27 @@ def load_gold_hashes(
     dsn_key: str = "rename_decoy",
     split: str = "test",
 ) -> dict[str, GoldHash]:
-    """Load ``gold_result_hashes_rename_decoy.jsonl`` filtered to one db/split."""
+    """Load ``gold_result_hashes_rename_decoy.jsonl`` for one db.
+
+    Keyed on ``question_id`` within ``db_id``, and **the row's own ``split`` label is
+    deliberately ignored.** That label is stale in the shipped artifact: the split was
+    re-drawn after the hashes were computed and the label was not regenerated with it,
+    so 79% of rows marked ``split=test`` are questions that now live in
+    ``train_final.jsonl`` and 20% of rows marked ``split=train`` are now test
+    questions. Filtering on it left 286 of 1,389 test questions gradeable (21%) while
+    every one of them in fact has a hash. The symptom was not a wrong number, it was a
+    silently smaller one, and it surfaced only because a ``--limit 5`` run happened to
+    draw five questions that all fell in the unlabelled 79% and tripped the gold
+    pre-flight.
+
+    Ignoring the label is safe rather than merely convenient, and both halves were
+    checked against the artifact: the two splits are **disjoint** on
+    ``(db_id, question_id)``, and no ``(db_id, question_id)`` carries more than one
+    gold row. So the pair identifies a question on its own and the label adds nothing.
+    ``split`` is kept as a parameter because callers pass it and because a future
+    artifact may key by it; a *conflict* raises rather than letting one row quietly
+    win.
+    """
     bird_dir = Path(bird_dir)
     path = bird_dir / "eval_dataset" / "gold_result_hashes_rename_decoy.jsonl"
     if not path.exists():
@@ -190,9 +210,19 @@ def load_gold_hashes(
                 continue
             if row.get("dsn_key") and row.get("dsn_key") != dsn_key:
                 continue
-            if row.get("split") and row.get("split") != split:
-                continue
             qid = str(row["question_id"])
+            prior = out.get(qid)
+            if prior is not None and (
+                prior.hash_lenient != row.get("hash_lenient")
+                or prior.sql_sha256 != row.get("sql_sha256")
+            ):
+                # Two different golds for one question is the one case where dropping
+                # the split filter could mis-grade. Refuse instead of picking.
+                raise ValueError(
+                    f"conflicting gold hashes for {db_id} question {qid}: the split "
+                    "label is the only thing that could disambiguate them, and it is "
+                    "not trustworthy in this artifact. Regenerate the hash file."
+                )
             out[qid] = GoldHash(
                 question_id=qid,
                 hash_lenient=row.get("hash_lenient"),
