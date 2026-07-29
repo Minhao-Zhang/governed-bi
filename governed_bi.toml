@@ -63,7 +63,6 @@ api_key_env = "OPENAI_API_KEY"
 # and CI need no setup. For real work, do NOT build on beer_factory: override this
 # table in a git-ignored governed_bi.local.toml to point at your own DB, and author
 # a corpus for that schema. Built into a Connector by gateway.build_connector; the
-# curator facts builder (python -m governed_bi.curator.build) reads this too.
 kind = "sqlite"                               # sqlite | postgres | redshift
 corpus_pin = "beer_factory"                   # default corpus schema subtree / BIRD db_id
 # db = "main"                                 # lake identity for db: note scopes (ADR 0003);

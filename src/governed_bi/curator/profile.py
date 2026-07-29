@@ -10,7 +10,7 @@ scale, so profiling never runs a uniqueness ``COUNT(DISTINCT)`` or a ``COUNT(*)`
 row count. ``is_unique`` reflects only the catalog's declared primary key (a free
 metadata read); ``row_count`` is left unset. Sample values come from a bounded
 ``LIMIT`` (cheap). The scanned facts - true (non-PK) uniqueness and row count -
-are opt-in per column via :func:`enrich.enrich_table` (partial indexing), for
+are opt-in per column (partial indexing), for
 when a specific table earns the cost.
 
 These Facts are never proposed and never checked by the adversary (D10). The
@@ -61,7 +61,7 @@ def profile_database(
     uniqueness (the primary-key flag), and up to ``sample_limit`` sample values (a
     bounded ``LIMIT``). Runs no ``COUNT(DISTINCT)`` and no ``COUNT(*)``, so it is
     safe at data-lake scale; ``row_count`` is left unset and non-PK uniqueness is
-    left to :func:`enrich.enrich_table`. The Inference tier (description, role,
+    left to the curator agent. The Inference tier (description, role,
     references, reliability, confidence) is left empty for the proposer. Works
     against any :class:`Connector`. ``schema`` is the corpus namespace written onto
     each :class:`TableAsset` (and used in asset ids).

@@ -14,8 +14,7 @@ edited or a variant is added. Read the registry directly, and
 [Prompt-variant experiments](prompt-experiments.md) for how a run selects a variant
 and why only `v1` exists for these two stages today.
 
-> Implementation: [`src/governed_bi/curator/llm_proposer.py`](../src/governed_bi/curator/llm_proposer.py),
-> [`prompts.py`](../src/governed_bi/curator/prompts.py),
+> Implementation: [`prompts.py`](../src/governed_bi/curator/prompts.py),
 > [`pipeline.py`](../src/governed_bi/curator/pipeline.py),
 > [`seed.py`](../src/governed_bi/curator/seed.py),
 > [`deep_agent.py`](../src/governed_bi/curator/deep_agent.py),
@@ -42,19 +41,6 @@ a `settings` parameter now, and stamp the run record each build emits from it ra
 than re-deriving config with a fresh `load_settings()` call — see
 [Prompt-variant experiments](prompt-experiments.md#why-the-curator-and-sme-producers-had-to-stop-re-deriving-settings)
 for why that matters for prompt attribution.
-
-**`LlmProposer` is not wired into this pipeline.** `curator/llm_proposer.py`'s
-`LlmProposer` composes over a base (heuristic) proposer to add per-table
-descriptions and `suspect` reliability flags via one model call per table, and it
-is a real, tested component — but grep `curator/pipeline.py` and `curator/deep_agent.py`
-and there is no call site that instantiates it. It appears only in
-`curator/__init__.py`'s export list and in its own test
-(`tests/test_llm_proposer.py`). `pipeline.build_curated_corpus` builds table
-descriptions a different way: the Phase A deep agent (below) writes them via
-`annotate_table`/`annotate_column`, driven off the (question, gold SQL) pairs and
-its own exploration, not off a per-table `LlmProposer` pass. Treat `LlmProposer` as
-an implemented-but-unwired component, not a production step, until something calls
-`LlmProposer(...)` outside a test.
 
 **Aside: the Simulated SME is out of scope here.** Between Phase A and Phase B, an
 eval-only component (`curator/sme.py`, `build_sme_brief`) plays the human responder who

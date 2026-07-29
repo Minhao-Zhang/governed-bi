@@ -63,7 +63,7 @@ def build_connector(
         # spans every user schema (the connector enumerates via list_schemas() and
         # introspects any via the explicit ``schema=`` argument, defaulting
         # unqualified introspection to "public", so a span-all caller must pass an
-        # explicit ``schema=`` per call — see build_facts_all_schemas).
+        # explicit ``schema=`` per call).
         schema = datasource.serving_schema()
         connect_kwargs: dict = {}
         if connect_timeout is not None:

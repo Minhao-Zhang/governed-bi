@@ -16,7 +16,7 @@ Two implementations of each:
 - Deterministic (:class:`StaticChatClient`, :class:`HashingEmbedder`): no network,
   no key, no dependency. They are the test doubles *and* the offline default (the
   same "deterministic core + real seam" split as ``TemplateSqlGenerator`` /
-  ``HeuristicProposer``), so the whole pipeline runs end to end without a model.
+  profiling), so the deterministic half runs end to end without a model.
 
 Model choices come from :class:`governed_bi.config.ModelConfig`. The concrete
 provider is swappable: nothing outside this module imports ``openai``.

@@ -15,26 +15,17 @@ maintainer**: cold-start plus ongoing drift-repair. Untended corpora rot
 > Implementation: [`src/governed_bi/curator/`](../src/governed_bi/curator/).
 
 > **Build status (scaffold vs seam).** A deterministic **scaffold** runs with no
-> model and no network: programmatic Facts profiling (`profile`), a
-> `HeuristicProposer` that fills column roles / confidence / provenance from Facts
-> and leaves prose `description`s to the LLM, an adversary `review` that wraps the
-> CI validator with cheap self-consistency checks (hard findings **gate write**),
-> and a `curate` propose -> review -> promote loop (`proposed -> draft`). The
-> **LLM-authored Inference tier** is now built as `LlmProposer`
-> (`curator/llm_proposer.py`): it composes over the heuristic (which decides
-> roles/provenance) and layers model-authored **descriptions + reliability
-> caveats** (`suspect` + a "DO NOT USE" note) via an injected `ChatClient`
-> (OpenAI `gpt-5.6-luna` low), never touching Facts and degrading to the base
-> proposal on a malformed response. Those caveats are the lever that makes the
-> `curated` arm beat the `baseline` arm. Still seams: LLM authoring of **joins /
-> terms / metrics / rules / notes**, the **per-asset adversary `refute`** (probe
-> queries), and the **self-eval train-EX loop**. The **deepagents harness**
-> itself is built (`curator/deep_agent.py`): `build_curator_agent` wires a deep
-> agent over grounded tools - `profile_facts` (the Facts tier) and
-> `run_probe_query` (a read-only SQL probe = the live refute primitive) - with a
-> LangChain model (`agents` extra). Construction is verified offline; running the
-> autonomous loop needs a live model. The sections below describe the full
-> design; a step marked *(seam)* is model-backed and not yet run.
+> model and no network: programmatic Facts profiling (`profile`), naming-convention
+> FK candidates, and an adversary `review` that wraps the CI validator with cheap
+> self-consistency checks (hard findings **gate write**). The **LLM-authored
+> Inference tier** is built by the deepagents harness (`curator/deep_agent.py`):
+> `build_curator_agent` wires a deep agent over grounded tools — `profile_facts`
+> (the Facts tier) and `run_probe_query` (a read-only SQL probe) — and Phase A
+> authors descriptions, joins, terms, metrics and notes through `AssetBag`, while
+> Phase B folds SME-answered clarifications back in. Still seams: the **per-asset
+> adversary `refute`** (probe queries — it currently raises `NotImplementedError`,
+> so the `curated` rung's only reviewer is the structural gate) and the
+> **self-eval train-EX loop**. A step marked *(seam)* is not yet run.
 
 ## Inputs / outputs
 
@@ -54,7 +45,7 @@ Status lifecycle in each asset's `provenance.status`:
 
 `proposed` (proposer) → `draft` (adversary-passed) → `certified` (human sign-off, **prod only**, D6)
 
-- **Dev (BIRD):** the structural gate is the automated reviewer that ships today; a green pass is required before write. The offline `curate` helper can still promote `proposed → draft` when `review` is green; the live Phase A/B pipeline gates write and leaves status as authored unless the deterministic non-agent fold stamps certification.
+- **Dev (BIRD):** the structural gate is the automated reviewer that ships today; a green pass is required before write. The Phase A/B pipeline gates write and leaves status as authored unless the deterministic non-agent fold stamps certification.
 - **Prod (enterprise):** the structural gate is the **automated first-line reviewer**. Human certification (D6) is a separate non-agent path — never a model-callable tool parameter.
 
 Both the proposer's claim/evidence **and** the adversary's findings land in the asset's `audit` block → rendered in the viz/audit surface. This is the auditability payoff of an owner-less, AI-built layer.
@@ -62,12 +53,12 @@ Both the proposer's claim/evidence **and** the adversary's findings land in the 
 ## The loop (per DB)
 
 1. **Profile (Facts, programmatic).** *(built)* Read catalog + sample data → emit the Facts tier for every table/column. Deterministic; no LLM; correct in every arm.
-2. **Propose (Inference + notes).** *(heuristic + description/caveat authoring built; joins/terms/metrics/notes still seam)* Proposer hypothesizes descriptions, joins (value-overlap + seed-SQL join patterns — **within a schema**; cross-schema joins are never FK/overlap-discovered, only curated from SME / example SQL / usage per D15, else the Analyst refuses), reliability caveats (execute-and-observe against the traps), terms/synonyms, metrics/rules (from `evidence` + recurring computations), and authors **routing/gotcha/pattern notes**. Free exploration is confined to this pocket. The `HeuristicProposer` fills roles/confidence/provenance from Facts; `LlmProposer` layers model-authored descriptions + `suspect` caveats over it; authoring the derived assets (joins/terms/metrics/rules/notes) is the remaining LLM proposer work.
-3. **Adversary pass.** *(structural gate built; per-asset LLM `refute` seam)* Hard structural findings refuse the write. Soft heuristic notes discount confidence only. Survivors of a green `review` in the offline `curate` helper → `draft`. The built `review` is the deterministic structural gate (CI validator + self-consistency); the per-claim refutation with probe queries is the LLM seam.
+2. **Propose (Inference + notes).** *(built: the Phase A deep agent)* The proposer hypothesizes descriptions, joins (value-overlap + seed-SQL join patterns — **within a schema**; cross-schema joins are never FK/overlap-discovered, only curated from SME / example SQL / usage per D15, else the Analyst refuses), reliability caveats (execute-and-observe against the traps), terms/synonyms, metrics/rules (from `evidence` + recurring computations), and authors **routing/gotcha/pattern notes**. Free exploration is confined to this pocket. Roles, confidence and provenance come from Facts; the Phase A deep agent authors the descriptions, `suspect` caveats and derived assets (joins/terms/metrics/notes) through `AssetBag`.
+3. **Adversary pass.** *(structural gate built; per-asset LLM `refute` seam)* Hard structural findings refuse the write. Soft heuristic notes discount confidence only. The built `review` is the deterministic structural gate (CI validator + self-consistency); the per-claim refutation with probe queries is the LLM seam.
 4. **Self-eval & repair (inner loop, capped).** *(seam)* Assemble the draft layer → run the Analyst pipeline on the DB's **train** questions → measure EX → diagnose failures → proposer patches (a failed question often *becomes* the gotcha note that fixes it) → adversary re-checks the patch → repeat until train-EX plateaus or the iteration/budget cap hits. **Train-only.**
 5. **Propose corpus.** *(emit downstream)* Structural gate green ∧ train-EX plateaued → emit (dev auto-accepts; prod opens a PR to the owner, D6).
 
-**Done-enough criterion:** `CI green ∧ (train-EX plateaued ∨ cap)`. The built structural gate enforces the machine-checkable half (`CI green`) before write; the offline `curate` loop also caps propose/review rounds. The train-EX half arrives with the self-eval seam (step 4).
+**Done-enough criterion:** `CI green ∧ (train-EX plateaued ∨ cap)`. The built structural gate enforces the machine-checkable half (`CI green`) before write. The train-EX half arrives with the self-eval seam (step 4).
 
 The build loop at a glance:
 
@@ -92,7 +83,7 @@ flowchart TD
 
 ## Reliability inference (Phase 2 detail)
 
-*(Built: `LlmProposer` flags `suspect` + a "DO NOT USE" note from the table's Facts. The structured-signal scoring below is the fuller design the prompt approximates.)* The curator flags an unreliable column via **general data-quality anomalies, not BIRD-trap-specific detectors** (P2, so it transfers to an enterprise deployment; BIRD's traps merely validate that the signals fire). Each signal contributes to a confidence score. A column is marked `suspect` only above a threshold. Per-claim LLM adversary refutation of each caveat is still a seam; today only the structural gate runs before write.
+*(Built: Phase A flags `suspect` columns from the table's Facts. The structured-signal scoring below is the fuller design the prompt approximates.)* The curator flags an unreliable column via **general data-quality anomalies, not BIRD-trap-specific detectors** (P2, so it transfers to an enterprise deployment; BIRD's traps merely validate that the signals fire). Each signal contributes to a confidence score. A column is marked `suspect` only above a threshold. Per-claim LLM adversary refutation of each caveat is still a seam; today only the structural gate runs before write.
 
 | Signal | Generic form | Catches (BIRD trap) |
 |---|---|---|
