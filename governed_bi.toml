@@ -63,6 +63,10 @@ api_key_env = "OPENAI_API_KEY"
 # and CI need no setup. For real work, do NOT build on beer_factory: override this
 # table in a git-ignored governed_bi.local.toml to point at your own DB, and author
 # a corpus for that schema. Built into a Connector by gateway.build_connector; the
+# corpus itself has no build CLI — curator/pipeline.py's build_baseline_corpus /
+# build_curated_corpus are library calls, driven today only by the eval drivers
+# (governed_bi.eval.run_experiment / run_datalake). `python -m governed_bi.corpus.cli`
+# only validates an already-authored corpus, it does not author one.
 kind = "sqlite"                               # sqlite | postgres | redshift
 corpus_pin = "beer_factory"                   # default corpus schema subtree / BIRD db_id
 # db = "main"                                 # lake identity for db: note scopes (ADR 0003);
@@ -94,8 +98,9 @@ allow_edit = false
 # api_key_env = "GOVERNED_BI_API_KEY"
 cors_origins = ["http://localhost:3000"]
 
-# Memory / cache / few-shot numeric gates (Architecture §7) are still code
-# defaults on Settings today — not yet loaded from this file.
+# Memory / cache / few-shot numeric gates (docs/architecture.md §7) are design
+# targets in that doc only — this branch removed them from Settings, so there is
+# no knob here or in code to tune yet.
 
 # Conversation checkpointer + portable run-log knobs (ADR 0004). Defaults match
 # Settings; uncomment to override. DSN passwords never live here — only the env
@@ -118,7 +123,7 @@ cors_origins = ["http://localhost:3000"]
 # agent_core = "v3"
 
 [eval]
-# BIRD eval-harness concurrency (docs/plans/eval-concurrency-design.md).
+# BIRD eval-harness concurrency (docs/measurement.md).
 # workers = serve-loop worker threads for run_experiment / run_datalake. 1 is the
 # non-negotiable default: fully serial, byte-identical to the pre-concurrency run.
 # Raise it on a dedicated box with no rate limits; size to your Postgres

@@ -44,7 +44,12 @@ EDGE_JOINS_TO = "JOINS_TO"
 
 
 def build_graph(corpus: "Corpus") -> nx.MultiDiGraph:
-    """Build the join graph from a parsed corpus. Rebuildable at any time."""
+    """Build the join graph from a parsed corpus. Rebuildable at any time.
+
+    Pass the ``Corpus.for_analyst()`` view: the Analyst-facing graph must not
+    surface ``governance.excluded`` tables (D6), same as retrieval and the
+    presented schema.
+    """
     g = nx.MultiDiGraph()
 
     for a in corpus.assets:

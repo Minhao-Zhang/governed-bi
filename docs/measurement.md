@@ -34,7 +34,7 @@ a refusal is the product working, and a metric that adds them together is
 measuring two things and reporting one.
 
 **`Stage`** — where in the pipeline it happened: the graph's own rails
-(`route`, `refuse_gate`, `cache`, `assemble`, `agent_core`, `narrate`,
+(`route`, `refuse_gate`, `assemble`, `agent_core`, `narrate`,
 `finalize`) plus the sub-stages inside `assemble` (`shortlist`, `schema_pick`,
 `retrieve`, `license`) and `agent_core` (`search_corpus`, `inspect_schema`,
 `sample_rows`, `guardrail`, `execute`, `repair`). A schema-pick miss and a
@@ -323,17 +323,62 @@ record answers two questions that used to live only in someone's memory:
   experiment-runbook checklist; the ledger always sets `claim_ready: false` and
   lists `claim_ready_requires` rather than pretending to evaluate those conditions.
 - **`comparable(a, b)`** — may two runs be put in the same sentence? Only if
-  `split`, `model`, `prompt_set_hash`, `route_top_k`, `route_llm_pick`,
-  `schema_pick_max_columns`, and `use_embedder` all match. A knob absent on
-  both sides counts as matching (two runs that both predate a knob did not
-  differ in it); a knob recorded on only one side is a genuine difference,
-  because one side is unknown. Comparing across a changed knob without
-  noticing is the specific mistake that produced the retired numbers.
+  `split`, `model`, `llm_temperature`, `prompt_set_hash`, `corpus_content_hash`,
+  `route_top_k`, `route_llm_pick`, `schema_pick_max_columns` and `use_embedder`
+  all match. That list is **derived** from `MANIFEST_KNOBS` minus a documented
+  `COMPARABILITY_EXCLUSIONS`, not spelled out a second time, so a knob added to
+  the register joins the gate by default — it was spelled out separately once,
+  and `llm_temperature` was simply missing from it, so two runs decoded at
+  different temperatures compared as the same experiment. `git_sha` and
+  `skip_agent` are excluded here and checked as resume drift instead: two runs
+  at different commits are the normal case, but a commit changing *within* one
+  run directory corrupts that run.
+
+  A knob absent on both sides counts as matching (two runs that both predate a
+  knob did not differ in it) — which is sound only because every knob is now
+  guaranteed present, so `manifest_schema_version` must be on both records or
+  the pair is refused outright rather than silently read as agreement. Comparing
+  across a changed knob without noticing is the specific mistake that produced
+  the retired numbers.
 
 Neither check blocks a run. What they do is put the reasons in the artifact and
 in the rendered table, so quoting a number means reading past them first.
 `tests/test_eval_index.py` pins both rules against the two mistakes that
 already cost a set of results.
+
+## The conditional metrics are observational, not causal
+
+`SUMMARY_CONDITIONALS` (`src/governed_bi/eval/metrics.py`) adds six splits that
+condition an outcome on something the turn itself recorded:
+`ex_by_semantic_assurance`, `ex_by_tier`, `ex_by_note_injected`, `ex_by_repair`,
+`decoy_touch_by_caveat`, and `guardrail_cost_ceiling`. They exist because the
+summary previously reported governance signals and EX side by side without ever
+crossing them, so nothing said whether the signals tracked correctness. Field
+definitions are in [Eval metrics](eval-metrics.md).
+
+**None of them measures an effect.** Every conditioning variable is downstream of
+the treatment, so a difference between strata is post-treatment selection, not a
+causal contrast:
+
+- **`ex_by_semantic_assurance`, `ex_by_tier`** — the split is on an *output of the
+  system*. Read *within* one arm this is calibration and answers a real question
+  (if `unflagged` does not out-score `heuristic`, the stamp is decoration). Read
+  *across* arms it is invalid: the arms do not stamp the same questions, so the
+  strata are not the same population.
+- **`ex_by_note_injected`** — a note injects when retrieval matched, i.e. on the
+  questions the corpus already covers. The split therefore measures **coverage**,
+  not what a note is worth. The counterfactual it looks like it answers — the same
+  question with the note withheld — is only available from a prompt-variant or
+  ablation arm.
+- **`ex_by_repair`** — the "with repair" stratum is, by construction, the questions
+  that already failed once. It compares two different difficulty populations, and
+  the repair stratum scoring lower is the expected result, not evidence that repair
+  hurts.
+- **`decoy_touch_by_caveat`** — same shape: a caveat is injected when a suspect
+  column is in scope, so the two strata are different questions.
+- **`guardrail_cost_ceiling`** — a **bound**, not a cost. Blocked SQL cannot be
+  graded without executing un-guardrailed SQL, so this counts turns where a layer
+  blocked *and* the turn ended wrong. The true cost is at most this and may be zero.
 
 ## `eval/analysis.py`: attribution after the run
 

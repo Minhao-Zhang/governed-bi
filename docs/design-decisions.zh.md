@@ -522,7 +522,7 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   `pg_rename_decoy`，`127.0.0.1:5435`）执行评测阶梯的各臂（`baseline` / `curated` /
   `curated_sme`）——这是每日评测的实际路径，不是离线替身。
   连接器 docstring（`gateway/connectors/{base,__init__}.py`、`gateway/__init__.py`）、
-  `usage.md` 与 `system-overview.md` 已相应更正。**Redshift** 仍未对真实集群验证。
+  `usage.md` 与架构文档已相应更正。**Redshift** 仍未对真实集群验证。
   关于"一次站得住脚的运行"里程碑的两个子点：**(4.1) 实模型运行**——已在进行（见上）；
   **(4.2) gold 参照臂**——见下方 R-gold。
 

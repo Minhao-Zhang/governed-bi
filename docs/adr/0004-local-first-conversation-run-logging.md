@@ -168,13 +168,20 @@ to reference later."
   terminal-outcome functions calls, so a refusal or a safety block carries the
   same metadata as a success (see Decision §3).
 
+  > **2026-07-28:** the cache-hit terminal is gone — `_try_cache_hit` and the
+  > `cache` node were deleted with the never-wired semantic cache, so that branch
+  > of the enumeration no longer exists and M5 has one fewer call site to cover.
+  > The remaining line numbers in this bullet predate that deletion; treat the
+  > function names as authoritative and re-locate them.
+
 ### 3. One thin decoupled portable append (the only addition beyond pure-native)
 
 The roll-up in §2 and this portable append must both run from a single shared
 finalize-and-log helper, invoked by EVERY terminal-outcome function, not from
 `_finalize_success` alone: success (`_finalize_success`, `governance.py:561`),
-a cache hit (`_try_cache_hit`, `governance.py:401`, which returns via
-`assemble(...)` at `governance.py:457`), a refusal, a safety block, or a
+~~a cache hit (`_try_cache_hit`, `governance.py:401`, which returns via
+`assemble(...)` at `governance.py:457`)~~ *(deleted 2026-07-28 with the
+never-wired semantic cache — no longer a terminal to cover)*, a refusal, a safety block, or a
 graded/unverified delivery (`_finish_unsuccessful`, `governance.py:460`, via
 `refusal(...)` / `graded_delivery(...)` at `governance.py:497,518,542,550`), a
 `GovernanceHardStop` (caught directly in `agent.py`, e.g. `agent.py:691`), and
@@ -220,10 +227,13 @@ per-run record. One mechanism, three producers (serve, curator, SME).
   record, not the conversation store.) This preserves R3's capture-first /
   "feedback is a validated hypothesis, never a direct edit" stance
   (`design-decisions.md:437-446`) and avoids the degenerate feedback loop R2/R3
-  warns against. Contrast: `SqlCache` (`analyst/cache.py:56-89`) *is* a live-path
-  input by design: `_try_cache_hit` (`governance.py:401,417`) is called from the
-  `cache_lookup` node (`agent.py:451-454`) and can short-circuit the current turn
-  on a hit. The metadata log deliberately has no equivalent read path.
+  warns against. (This bullet originally contrasted the write-only log against
+  `SqlCache` in `analyst/cache.py` as a component that *was* a live-path input by
+  design. That cache was deleted 2026-07-28 — it turned out never to have been wired
+  into any caller, so it was not in fact a live-path input; see
+  `design-decisions.md`. The write-only invariant stated here is unaffected: there is
+  now no live-path read of any durable store, which makes it easier to hold, not
+  harder.)
 - **Metadata-only default; full content opt-in (H11 — resolved).** Three tiers:
   **Tier A** metadata always (turn id, tokens, cost, duration, outcome, ledger
   verdicts — no verbatim question / SQL / answer / rows); **Tier B** verbatim
@@ -288,9 +298,10 @@ per-run record. One mechanism, three producers (serve, curator, SME).
   later or eval reuse, which is exactly why the decoupled portable append exists
   instead.
 - **Make the log a live-path input (read past turns to steer the run).**
-  Rejected by the owner: the log is write-only; live reuse is `SqlCache`'s job
-  (`analyst/cache.py`), and auto-learning from the log is the degenerate loop
-  R3 guards against (`design-decisions.md:437-446`).
+  Rejected by the owner: the log is write-only, and auto-learning from it is the
+  degenerate loop R3 guards against (`design-decisions.md:437-446`). Live reuse was
+  to be `SqlCache`'s job; that cache was deleted 2026-07-28 as never-wired, so today
+  nothing reuses a past turn on the live path at all.
 
 ## Migration (phased; each phase independently shippable)
 

@@ -79,7 +79,7 @@ uv run python scripts/live_smoke.py       # end-to-end over a real model (needs 
 已构建并测试：受治理的 agentic serve 核心（[ADR
 0002](docs/adr/0002-governed-agentic-serve-runtime.md)：一个确定性的 rails 图，外层包着一个受限的
 `create_agent` 循环，循环之下是若干只读工具，配合护栏 + 审计中间件）、corpus 契约与校验器、五层
-护栏、curator、检索、eval harness、语义 SQL 缓存，以及审计 API（默认只读；corpus 写操作需要
+护栏、curator、检索、eval harness，以及审计 API（默认只读；corpus 写操作需要
 `allow_edit`，并在设置了 `[serve].api_key_env` 时叠加可选的 API-key 鉴权）。
 
 **本仓库现在没有任何可引用的评测数字**——2026-07-26 之前产出的数字全部作废（见
@@ -92,7 +92,7 @@ uv run python scripts/live_smoke.py       # end-to-end over a real model (needs 
 
 仅设计、尚未构建：`CorpusRelease`（不可变、按内容哈希锁定的服务发布）。已接入预留接口（seam）但
 默认关闭（属于企业分支范围）：身份 → 查询范围（RLS / 租户隔离）、人工审批闸门、按范围限定的
-记忆/缓存。Redshift 只有离线连接器测试。
+记忆。Redshift 只有离线连接器测试。
 
 ## Web 界面
 
@@ -118,11 +118,11 @@ src/governed_bi/
   llm/              ChatClient / Embedder seams (OpenAI + LangChain + offline defaults)
   corpus/           schemas, IDs, CI validator, loader, serializer, CLI
   gateway/          connectors (SQLite / Postgres / Redshift), read-only gateway, five-layer guardrails
-  curator/          Facts profiling, proposers, adversary review, curate loop, deepagents build harness
+  curator/          Facts profiling, deepagents batch curator (proposes Inference assets), adversary review, SME round-trip, corpus write
   graph/            FK graph projection + Steiner-tree join planning
   retrieval/        BM25 + grounding + vector channel (RRF fusion)
   memory/           working memory (session-scoped)
-  analyst/          the ADR-0002 governed agentic core (sole serve path): agent, tools, middleware, governance, cache, stamp
+  analyst/          the ADR-0002 governed agentic core (sole serve path): agent, tools, middleware, governance, stamp
   eval/             execution accuracy, arm harness, refuse-gate
   viz/              audit surface (UI-agnostic presenter view models; API write gated by allow_edit)
 tests/              unit + end-to-end suites

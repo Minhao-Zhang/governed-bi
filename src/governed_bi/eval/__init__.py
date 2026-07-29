@@ -22,8 +22,14 @@ confound; do not read the delta as evidence for the protocol. ``ceiling`` remain
 oracle reference line — designed, not built; counterfactual oracle rungs live in
 :mod:`governed_bi.eval.oracle` and are not fair ``Arm`` members.
 
-The **curator reads ``train_final.jsonl`` only**; grading is on held-out
-``test_final.jsonl`` (disjoint seeded split = structural leakage prevention).
+The **curator reads ``train_final.jsonl`` only**. Grading defaults to held-out
+``test_final.jsonl`` (disjoint seeded split = structural leakage prevention), and
+that is the **only quotable split**. ``run_datalake --split train|both`` will also
+score the train questions, but only as a diagnostic: the curator was built from
+that gold SQL, so a curated arm's train EX is partly recall of statements it read.
+:func:`governed_bi.eval.index.quotable` refuses a train-scored run for exactly
+that reason ("a diagnostic, not a result"); what the pair is *for* is the
+train-vs-test gap in :mod:`governed_bi.eval.split_gap`.
 
 - ``ex``: execution-accuracy scoring vs gold SQL.
 - ``arms``: the arm harness (EX + free behavioral signals) and solvers.

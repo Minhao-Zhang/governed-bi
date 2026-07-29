@@ -15,10 +15,10 @@ corpus 校验、gateway 与检索都不需要模型或网络（embedder 仍会�
 | corpus 的模式、ID、验证器、加载器、序列化器、CLI | 可运行 | `src/governed_bi/corpus/` |
 | 示例 corpus（`beer_factory`，真实 BIRD 数据库） | 可运行 | `corpus/beer_factory/` |
 | SQLite 连接器 + gateway（只读、带审计）+ 五层护栏 | 可运行 | `src/governed_bi/gateway/` |
-| Curator：Facts 层画像分析、deepagents 的 Phase A/B、adversary 结构闸门 | 可运行 | `src/governed_bi/curator/` |
+| Curator：Facts 层画像分析、deep-agent 批量 curator、adversary、SME 往返 | 可运行，curated 各臂需要实时模型 | `src/governed_bi/curator/` |
 | 图投影 + Steiner 连接规划 | 可运行 | `src/governed_bi/graph/` |
 | 检索（BM25 + 接地，外加由 embedder 门控的向量通道） | 可运行 | `src/governed_bi/retrieval/` |
-| serve（智能体核心：路由、上下文、受治理的工具、护栏、自修复、缓存、标记） | 可运行，需要实时模型 | `src/governed_bi/analyst/` |
+| serve（智能体核心：路由、上下文、受治理的工具、护栏、自修复、标记） | 可运行，需要实时模型 | `src/governed_bi/analyst/` |
 | Memory（working）+ eval（EX、评测阶梯（ladder）、refuse-gate）+ viz presenter（审计视图模型） | 可运行 | `src/governed_bi/{memory,eval,viz}/` |
 | 模型客户端（原生 OpenAI / LangChain） | 可运行（由一次普通的 `uv sync` 安装，不需要任何 extra） | `src/governed_bi/llm/` |
 | 智能体 harness（LangGraph 受治理 serve 核心、deepagents 的 curator） | 可运行（由一次普通的 `uv sync` 安装，不需要任何 extra） | `analyst/agent.py`, `curator/deep_agent.py` |
@@ -195,7 +195,7 @@ curl -s localhost:8000/chat -H 'content-type: application/json' \
 标志）。本机覆盖写在 git-ignored 的 `governed_bi.local.toml`。由于展示逻辑位于与
 UI 无关的 `governed_bi.viz.presenter` 中（不依赖任何 UI 框架），一个独立的前端可以
 消费同样的视图模型——交互式 UI 是一个独立项目，参见
-[docs/ui-frontend-design.md](ui-frontend-handoff.md)。
+[docs/ui-frontend-handoff.md](ui-frontend-handoff.md)。
 
 ## 运行测试
 

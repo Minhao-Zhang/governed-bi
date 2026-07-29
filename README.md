@@ -107,7 +107,7 @@ Built and tested: the governed agentic serve core ([ADR
 0002](docs/adr/0002-governed-agentic-serve-runtime.md): a deterministic rails
 graph wrapping a bounded `create_agent` loop over read-only tools, with guardrail
 + audit middleware), the corpus contract and validator, the five-layer
-guardrails, the curator, retrieval, eval harness, semantic SQL cache, and the
+guardrails, the curator, retrieval, eval harness, and the
 audit API (read-only by default; corpus writes need `allow_edit` plus optional
 API-key auth when `[serve].api_key_env` is set).
 
@@ -123,7 +123,7 @@ the [experiment runbook](docs/plans/experiment-runbook.md)).
 
 Designed but not yet built: `CorpusRelease` (immutable, hash-pinned serving
 release). Seamed but toggled off (enterprise-fork scope): identity → query scope
-(RLS / tenant isolation), the human approval gate, scoped memory/cache. Redshift
+(RLS / tenant isolation), the human approval gate, scoped memory. Redshift
 has offline connector tests only.
 
 ## Web UI
@@ -151,11 +151,11 @@ src/governed_bi/
   llm/              ChatClient / Embedder seams (OpenAI + LangChain + offline defaults)
   corpus/           schemas, IDs, CI validator, loader, serializer, CLI
   gateway/          connectors (SQLite / Postgres / Redshift), read-only gateway, five-layer guardrails
-  curator/          Facts profiling, proposers, adversary review, curate loop, deepagents build harness
+  curator/          Facts profiling, deepagents batch curator (proposes Inference assets), adversary review, SME round-trip, corpus write
   graph/            FK graph projection + Steiner-tree join planning
   retrieval/        BM25 + grounding + vector channel (RRF fusion)
   memory/           working memory (session-scoped)
-  analyst/          the ADR-0002 governed agentic core (sole serve path): agent, tools, middleware, governance, cache, stamp
+  analyst/          the ADR-0002 governed agentic core (sole serve path): agent, tools, middleware, governance, stamp
   eval/             execution accuracy, arm harness, refuse-gate
   viz/              audit surface (UI-agnostic presenter view models; API write gated by allow_edit)
 tests/              unit + end-to-end suites

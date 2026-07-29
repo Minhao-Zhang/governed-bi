@@ -287,6 +287,11 @@ node runs before `agent_core`**, reusing the flow's exact front half
 (`route_intent` → `retrieve`/`route_schemas` → `detect_missing_join_path` →
 `_licensed_table_ids` → `assemble_context`). Then:
 
+> As decided. `route_intent` was deleted 2026-07-28 — it classified every question
+> into one of four routes and nothing downstream read the result — so the front half
+> `assemble` reuses today starts at `retrieve`/`route_schemas`. The decision this ADR
+> records is unaffected; see `docs/analyst.md` for the current rails.
+
 1. **Seed the prompt.** Inject `PromptContext.render()` (tables, joins, terms,
    metrics, few-shots, caveats, skills — identical to what the flow feeds its
    generator) as a `## Governed context` block in the agent system prompt.
@@ -395,7 +400,8 @@ the agent path; `run_experiment` is agent-only.
    (and after a cache hit): `ingest → refuse_gate → prepare → cache → assemble
    → agent_core → narrate`. Previously the LLM narrator was invoked as a side
    call buried inside the finalizers (`_finalize_success` / `_try_cache_hit` /
-   `_finish_unsuccessful`, via `_answer_text`); those finalizers now emit only
+   `_finish_unsuccessful`, via `_answer_text` — `_try_cache_hit` and the `cache` node
+   were deleted 2026-07-28 with the never-wired semantic cache); those finalizers now emit only
    the deterministic fallback text, and `narrate_answer` (`analyst/governance.py`)
    does the LLM phrasing from the `narrate` node. **Why:** the narrator's model
    call becomes a first-class, individually-traced graph step instead of a loose

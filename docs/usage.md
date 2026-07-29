@@ -16,10 +16,10 @@ the [design docs](README.md).
 | Corpus schemas, IDs, validator, loader, serializer, CLI | runnable | `src/governed_bi/corpus/` |
 | Example corpus (`beer_factory`, real BIRD DB) | runnable | `corpus/beer_factory/` |
 | SQLite connector + gateway (read-only, audit) + five-layer guardrails | runnable | `src/governed_bi/gateway/` |
-| Curator: Facts profiling, heuristic + LLM proposer, adversary, curate loop | runnable | `src/governed_bi/curator/` |
+| Curator: Facts profiling, deep-agent batch curator, adversary, SME round-trip | runnable, needs a live model for the curated arms | `src/governed_bi/curator/` |
 | Graph projection + Steiner join planning | runnable | `src/governed_bi/graph/` |
 | Retrieval (BM25 + grounding, + embedder-gated vector channel) | runnable | `src/governed_bi/retrieval/` |
-| Serve (agentic core: route, context, governed tools, guardrails, self-repair, cache, stamp) | runnable, needs a live model | `src/governed_bi/analyst/` |
+| Serve (agentic core: route, context, governed tools, guardrails, self-repair, stamp) | runnable, needs a live model | `src/governed_bi/analyst/` |
 | Memory (working) + eval (EX, ladder, refuse-gate) + viz presenter (audit view models) | runnable | `src/governed_bi/{memory,eval,viz}/` |
 | Model clients (raw OpenAI / LangChain) | runnable (installed by a plain `uv sync`, no extra) | `src/governed_bi/llm/` |
 | Agent harnesses (LangGraph governed serve core, deepagents curator) | runnable (installed by a plain `uv sync`, no extra) | `analyst/agent.py`, `curator/deep_agent.py` |

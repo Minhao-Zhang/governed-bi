@@ -100,9 +100,10 @@ are the emit points that produce it.
    flow keeps using the bare `_emit` legacy `{stage}` shape, so the two paths
    never collide.
 2. **Outer rails** (`analyst/agent.py::build_serve_rails`): `ingest`,
-   `refuse_gate`, `cache_lookup`, and `assemble` now emit `rail` events; every
-   terminal answer (success, refusal, graded delivery, cache hit) emits one
-   `final` event carrying the answer stamp. The shared finalize helpers are
+   `refuse_gate` and `assemble` now emit `rail` events; every terminal answer
+   (success, refusal, graded delivery) emits one `final` event carrying the answer
+   stamp. (A `cache_lookup` rail and a cache-hit terminal were in this list until
+   2026-07-28, when the never-wired semantic cache and its node were deleted.) The shared finalize helpers are
    called with `on_event=None` on the agent path so only the rich contract is
    emitted.
 3. **Agent loop** (`analyst/agent.py::agent_core_node`): switched

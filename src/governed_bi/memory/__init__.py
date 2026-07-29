@@ -6,11 +6,14 @@ Durable memory is PR-gated exactly like the corpus, so the memory/corpus
 distinction collapses: correction memory is a PR to a reference doc; promoted
 episodic is a gated few-shot. Only working/ephemeral memory is outside the gate.
 
-Identity-scoping covers memory + cache, not just the live query (D7): episodic
-memory and result caching leak across users if not scoped, which is why we
-cache SQL text (re-run per user), never results.
+Identity-scoping covers the live query and anything durable keyed off it (D7):
+episodic memory leaks across users if not scoped. There is no result cache and no
+SQL cache — the semantic cache this module used to name was never wired into the
+serve path and has been deleted, so the D7 argument for caching SQL text rather
+than results is history, not a description of the code.
 
-TTLs / gates / route budgets live in ``governed_bi.config``.
+TTLs, gates and route budgets are design targets in ``docs/architecture.md`` §7;
+they are not knobs on ``Settings`` today.
 """
 
 from __future__ import annotations

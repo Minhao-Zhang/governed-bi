@@ -404,7 +404,7 @@ your model provider, not this code.
    *across* the two keys, because a negative figure is the best case under one and not the
    other. Read `_correct_answers` first to know which key you are looking at.
 
-7. `summary.json` → `arms.<arm>.by_tier`, `by_semantic_assurance`,
+7. `summary.json` → `arms.<arm>.ex_by_tier`, `ex_by_semantic_assurance`,
    `graded_delivery_rate`, `safety_clearance_rate`. **EX alone cannot support the claim.**
    The benchmark exists to show that governed metadata improves answers, and reliability
    is graded on `semantic_assurance` — so an arm that raises EX while shifting mass from
@@ -412,6 +412,14 @@ your model provider, not this code.
    (`graded_delivery_rate` up), has traded governance for score rather than improving the
    product. Each is also reported as a ladder delta, so the trade is visible per step
    rather than only per arm.
+
+   The two `ex_by_*` conditionals replace the raw `by_tier` / `by_semantic_assurance`
+   counts for this reading: the counts show only how mass is distributed, while the
+   conditionals show whether the levels rank correctness at all (if `unflagged` does not
+   out-score `heuristic`, the stamp is decoration). Read them **within** an arm only —
+   the split is on an output of the system, so comparing a stratum across arms is
+   post-treatment selection, not an effect. See
+   [measurement](../measurement.md#the-conditional-metrics-are-observational-not-causal).
 
    Read the `n_*_observed` denominators beside the rates. A rate is `null` when nothing
    recorded the field, which is different from a rate of `0.0`. The three boolean rates
