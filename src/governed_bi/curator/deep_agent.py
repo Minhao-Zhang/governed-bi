@@ -219,6 +219,15 @@ def curator_tools(
                 certified=False,
             )
 
+        # This list is the agent's entire write surface, and what it OMITS is a
+        # governance boundary. Reliability is AI-authorable: `annotate_column(
+        # suspect=True, ...)` is how a decoy or a broken column gets marked, and
+        # since `_mark_columns_absent_from_gold` was deleted it is the ONLY way.
+        # `governance.excluded` is human-only, enforced by absence — there is no
+        # exclusion tool here and no reference to `excluded` anywhere under
+        # `curator/`. Do not add one. Suspect argues against a column and the
+        # analyst still sees it; excluded removes it from the corpus, which is a
+        # decision a person signs for.
         tools.extend(
             [
                 upsert_join,

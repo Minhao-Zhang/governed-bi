@@ -246,4 +246,7 @@ def test_only_the_curator_agent_can_produce_a_few_shot():
         "not"
     )
     assert "seed_from_train_sql" in mechanical
-    assert "_mark_columns_absent_from_gold" in mechanical
+    # The mechanical portion used to also run `_mark_columns_absent_from_gold`. That
+    # mask is deleted (B6) and the `seeded` rung now carries joins and metrics only;
+    # the guard that it authors no reliability lives in
+    # `tests/test_eval_ladder.py::test_the_mechanical_build_authors_no_suspect_columns`.

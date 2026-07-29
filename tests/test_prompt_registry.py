@@ -35,12 +35,19 @@ from governed_bi import prompts
 #: destroyed by the contradiction; both were deleted and the digest repinned to
 #: the single replacement variant. Every number taken under the old text is
 #: discarded, which is what licenses the repin.
+#:
+#: Both ``curator_phase_*`` entries were repinned for the same reason. Deleting
+#: ``_mark_columns_absent_from_gold`` moved the curated arm's entire decoy defence
+#: out of code and into the curator prompt (Phase A step 5, the reliability sweep;
+#: Phase B step 3, folding an SME's disowned column into a suspect mark). Keeping
+#: the old digest would have pinned a baseline whose corpora no longer exist —
+#: every curated corpus has to be rebuilt for this change regardless.
 V1_DIGESTS = {
     "agent_core": "12944b9758e09b8edf08667f11e6f59ac9b512d93ef63580e3a15f526ff7fe97",
     "schema_pick": "5d7f170fe6d12c96ceec36ef7fd1e69eb2396f52efedeaed691c756a8d8b8253",
     "narrator": "91886100a9010256574f6ca3bc0264726bf27117b0096cdf05934e8458b07824",
-    "curator_phase_a": "207a2737d6d58d542f851ce49fba698b1e4dc19e0687bf1f0c0979d26556cba2",
-    "curator_phase_b": "473708cc6ec6737defdf6318fbda0fd6653b167e19a060a4c5cbe0fc7ac665c5",
+    "curator_phase_a": "cbceb4e0ec7f7b1a8dfedf952def664a5a13bd92e04b743e7f7725c19c91e5db",
+    "curator_phase_b": "8f6d3f6f2d5233d2389f2aabf5fd1db166acc93627af6a20f99a6ee5c5ef0bb9",
     "sme_rules": "c4c9fbff43d00c59f658485fe6b4fa8f790362206aa2388a40f889ab3aae67c0",
 }
 

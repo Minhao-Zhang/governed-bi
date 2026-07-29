@@ -154,14 +154,32 @@ only claims that survive.
 upsert_few_shot, annotate_table, and annotate_column. If you can infer a \
 meaning/role/join from the SQL, the joins, or the other pairs, that is enough — \
 just write it down (no question needed). Prefer verifying seed candidates over \
-inventing new ones. Columns in the catalog that never appear in working SQL are \
-strong suspect candidates (annotate_column suspect=true). If a pair's question \
-and gold SQL disagree (mislabeled/annotation error), do NOT upsert_few_shot from \
-it — raise a clarification scoped pair:<id> noting the discrepancy instead.
-5. RAISE a clarification (do not silently guess) when: a table or column is not \
+inventing new ones. If a pair's question and gold SQL disagree \
+(mislabeled/annotation error), do NOT upsert_few_shot from it — raise a \
+clarification scoped pair:<id> noting the discrepancy instead.
+5. SWEEP THE WHOLE SCHEMA FOR RELIABILITY, and do it before you stop. Reliability \
+is yours to author and nothing else writes it: any column you do not mark is \
+served to the analyst as usable. Go table by table and column by column — \
+read_corpus with no filter lists them all — and for each column decide whether an \
+analyst should trust it. Mark the ones that should not be used with \
+annotate_column(suspect=true, note="<why>"); the note is shown to the analyst, so \
+give the reason, not just a verdict. What earns a mark: a column no working SQL \
+touches and whose purpose you cannot establish; a name that promises something the \
+data does not deliver (probe it and see); values that are empty, constant, \
+duplicated, or contradicted by a sibling column that answers the same question \
+better; a near-duplicate of another column where only one is maintained. Two \
+columns that look interchangeable and disagree cannot both be reliable — probe, \
+then mark the loser. Do not mark a column merely because the pairs never used it \
+if a probe shows it is populated and sensible; say what it means instead. You \
+cannot exclude a column — that is a human decision and you have no tool for it. \
+Suspect is the strongest mark you can make, so make it deliberately.
+6. RAISE a clarification (do not silently guess) when: a table or column is not \
 touched by any question and you cannot infer its purpose; something looks missing \
 or inconsistent; or a query's structure does not make sense to you and you cannot \
-reconcile it. These are exactly what an SME should confirm. Maintain \
+reconcile it. These are exactly what an SME should confirm. When the doubt is \
+about one column, scope the question to that column — table:<Table>.<column>, not \
+table:<Table> — because a column-scoped answer folds back onto the column itself \
+and a table-scoped one cannot. Maintain \
 /clarifications.jsonl with the built-in file tools (ls/read_file/write_file/\
 edit_file/grep). Paths are rooted at / (virtual filesystem). Each line is one \
 JSON object:
@@ -170,7 +188,7 @@ JSON object:
    ALWAYS grep before adding. If a prior question covers the same scope, \
 edit_file that record (same id) to broaden/merge rather than appending a \
 duplicate. Do not use file tools for corpus assets — only /clarifications.jsonl.
-6. Zero clarifications is acceptable if you genuinely resolved everything, but \
+7. Zero clarifications is acceptable if you genuinely resolved everything, but \
 prefer curiosity: an unexamined table or an unexplained column is usually worth \
 a question. Ground everything in Facts or a probe result; never invent columns \
 or joins.
@@ -186,12 +204,21 @@ scope field plus read_corpus to locate the target table/column/asset.
 2. Apply knowledge via annotate_table / annotate_column / upsert_* tools. \
 Writes carry curator/proposed provenance automatically — do not claim human \
 certification; that stamp is reserved for the non-agent fold path.
-3. Do not invent new open questions. Prefer editing existing assets over \
+3. When an answer says the SME does not recognise a column, that it is not part of \
+the schema they know, that they would not rely on it, or that it is unreliable or \
+misleading, that is a reliability verdict and not just a description: call \
+annotate_column(suspect=true, note=<the SME's reason>) on that column so the \
+analyst is steered off it. If the answer names a better column, describe that one \
+too. You still cannot exclude anything — exclusion is a human decision and there \
+is no tool for it.
+4. Do not invent new open questions. Prefer editing existing assets over \
 duplicating them. Use run_probe_query only if an answer still needs a data check.
-4. Focus on table:/column:/join:/metric: scoped answers. Answers scoped pair: or \
+5. Focus on table:/column:/join:/metric: scoped answers. Answers scoped pair: or \
 query: (data-quality or annotation-error findings) are recorded as governance rules \
-automatically — you do not need to act on those.
-5. Stop once every answered clarification has been reflected in the corpus.
+automatically — you do not need to act on those. One exception: if such an answer \
+names a specific column as unrecognised or unreliable, still mark that column per \
+step 3, since the automatic rule carries prose only.
+6. Stop once every answered clarification has been reflected in the corpus.
 """
 
 # --------------------------------------------------------------------------- #
@@ -379,13 +406,29 @@ _ALL: tuple[PromptVariant, ...] = (
         stage="curator_phase_a",
         variant="v1",
         text=_CURATOR_PHASE_A_V1,
-        rationale="Shipped text; a variant here means rebuilding every corpus to test it.",
+        rationale=(
+            "Shipped text; a variant here means rebuilding every corpus to test it. "
+            "Step 5 (the reliability sweep) carries load that used to sit in code: "
+            "`_mark_columns_absent_from_gold` stamped every column train gold never "
+            "referenced as suspect, and it is deleted, so the curated arm's decoy "
+            "defence is now exactly what this prompt elicits. Refuted if "
+            "`decoy_touch_rate` on the curated arms does not recover toward the "
+            "masked baseline while the corpus's suspect count stays plausible; "
+            "watch for the opposite failure too, a sweep that suspects most of the "
+            "schema and hard-blocks columns the analyst needs."
+        ),
     ),
     PromptVariant(
         stage="curator_phase_b",
         variant="v1",
         text=_CURATOR_PHASE_B_V1,
-        rationale="Shipped text; a variant here means rebuilding every corpus to test it.",
+        rationale=(
+            "Shipped text; a variant here means rebuilding every corpus to test it. "
+            "Step 3 mirrors the deterministic fold's suspect marking "
+            "(`AssetBag.mark_unrecognised_columns`), which the agent fold path does "
+            "not run: without it, an SME who disowns a column reaches the corpus as "
+            "prose only."
+        ),
     ),
     PromptVariant(
         stage="sme_rules",

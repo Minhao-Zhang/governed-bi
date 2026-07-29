@@ -501,112 +501,14 @@ def _corpora_differ(curated_root: Path, curated_sme_root: Path, schema: str) -> 
     return _fingerprint(curated_root) != _fingerprint(curated_sme_root)
 
 
-def _mark_columns_absent_from_gold(
-    bag: AssetBag, sqls: Sequence[str], *, dialect: str = "postgres"
-) -> dict[str, int]:
-    """Heuristic decoy defense: columns never referenced by train gold SQL."""
-    import sqlglot
-    from sqlglot import exp
-    from sqlglot.optimizer.scope import traverse_scope
-
-    # Track qualified (table.column) references separately from unqualified ones so
-    # a decoy column sharing a bare name with a *different* table's used column is
-    # not spuriously spared. Aliases in the gold SQL are resolved to physical table
-    # names; an unqualified reference still spares any same-named column (the query
-    # itself is ambiguous, so we cannot attribute it — the adversary + review pass
-    # backstop this heuristic).
-    referenced_unqualified: set[str] = set()
-    referenced_qualified: set[str] = set()  # "physical_table.col", lowercased
-    unscoped_sql = 0
-    unresolved_columns = 0
-
-    def _binding(scope: Any, qualifier: str) -> Any | None:
-        """Innermost lexical binding for a column qualifier, or None if undeclared.
-
-        Walks up the enclosing scopes because a correlated subquery may legitimately
-        qualify a column with an alias declared by the outer query.
-        """
-        want = qualifier.lower()
-        current = scope
-        while current is not None:
-            for name, source in current.sources.items():
-                if name.lower() == want:
-                    return source
-            current = current.parent
-        return None
-
-    for sql in sqls:
-        try:
-            tree = sqlglot.parse_one(sql, read=dialect)
-        except sqlglot.errors.SqlglotError:
-            continue  # unparseable gold SQL is tolerated; a non-parse bug is not
-        try:
-            scopes = traverse_scope(tree)
-        except Exception:
-            scopes = []
-        if not scopes:
-            # No lexical scopes means no trustworthy alias map, so spare every bare
-            # name the statement mentions rather than attribute any of them.
-            unscoped_sql += 1
-            for col in tree.find_all(exp.Column):
-                referenced_unqualified.add(col.name.lower())
-            continue
-        # Resolve each qualifier inside the scope it was written in. A single flat
-        # alias map per statement lets a reused alias (``t`` naming a different table
-        # in an outer and an inner query) attribute an outer column to the inner
-        # table, so a column the gold SQL really does use reads as never-referenced
-        # and gets stamped DO NOT USE. ``Scope.find_all`` stops at nested-scope
-        # boundaries, so every column node is claimed by exactly one scope.
-        for scope in scopes:
-            for col in scope.find_all(exp.Column):
-                if isinstance(col.this, exp.Star):
-                    continue  # ``t.*`` names no column to attribute
-                cname = col.name.lower()
-                if not col.table:
-                    referenced_unqualified.add(cname)
-                    continue
-                source = _binding(scope, col.table)
-                if isinstance(source, exp.Table):
-                    referenced_qualified.add(f"{source.name.lower()}.{cname}")
-                elif source is None:
-                    # Qualifier declared nowhere up the chain: spare the bare name
-                    # everywhere instead of guessing a table. Sparing a decoy costs a
-                    # line of prompt; banning a used column misdirects generation.
-                    unresolved_columns += 1
-                    referenced_unqualified.add(cname)
-                # else: a CTE or derived table — its base columns are attributed
-                # inside its own scope, so the projection reference adds nothing.
-
-    marked = 0
-    for table in list(bag.tables.values()):
-        tname = table.physical_name.lower()
-        for col in table.columns:
-            cname = col.physical_name.lower()
-            if (
-                cname in referenced_unqualified
-                or f"{tname}.{cname}" in referenced_qualified
-            ):
-                continue
-            if col.is_unique:
-                continue
-            before = bag.suspect_count()
-            bag.mark_column_suspect(
-                table.physical_name,
-                col.physical_name,
-                note="DO NOT USE — never referenced by working train SQL (likely unreliable)",
-            )
-            if bag.suspect_count() > before:
-                marked += 1
-    if unscoped_sql or unresolved_columns:
-        print(
-            f"decoy defense: {unscoped_sql} train SQL without lexical scopes, "
-            f"{unresolved_columns} unresolved qualified column(s) spared, not marked"
-        )
-    return {
-        "marked": marked,
-        "unscoped_sql": unscoped_sql,
-        "unresolved_columns": unresolved_columns,
-    }
+# `_mark_columns_absent_from_gold` used to live here: a mask that stamped every
+# column no train gold SQL referenced as suspect. It is gone, and it should not come
+# back. "BIRD never queried this column" is not evidence the column is unreliable,
+# and where the gold SQL was defective the mask was actively wrong — it banned
+# columns the generator needed. Reliability is now authored: the curator agent marks
+# suspect columns with `annotate_column(suspect=True, ...)` after sweeping the
+# schema, and an SME answer that disowns a column folds into the same mark
+# (`AssetBag.mark_unrecognised_columns`). `governance.excluded` stays human-only.
 
 
 def _write_sme_clarifications_log(
@@ -697,23 +599,10 @@ def build_curated_corpus(
             f"seed: {seed_stats['joins_ok']} joins applied, "
             f"{seed_stats['joins_fail']} failed lookup (check alias resolution)"
         )
-    # Only with train SQL to reason from. The rule is "columns never referenced by
-    # working train SQL are suspect"; with NO train SQL every non-unique column is
-    # unreferenced, so the heuristic marks essentially the whole schema DO NOT USE —
-    # 53 of 61 columns on the shipped fixture — and under the dev profile's
-    # `hard_block_suspect_columns=True` that hard-blocks 87% of the corpus. Anyone
-    # following the README curates without train SQL, so the unguarded version was
-    # broken for exactly the path the docs describe (AUDIT E3).
-    train_sqls = [it.sql for it in train_items if getattr(it, "sql", None)]
-    if train_sqls:
-        decoy_stats = _mark_columns_absent_from_gold(bag, train_sqls, dialect=dialect)
-    else:
-        decoy_stats = {"skipped_no_train_sql": 1}
-        print(
-            "decoy defense: skipped — no train SQL to derive 'never referenced' from "
-            "(marking every unreferenced column would suspect the whole schema)"
-        )
-
+    # No deterministic suspect marking happens here any more (see the note where
+    # `_mark_columns_absent_from_gold` used to be, above). Between this point and the
+    # agent pass the corpus carries zero suspect columns, so the curated arm's decoy
+    # defence is entirely whatever the agent authors.
     tool_counts = _empty_tool_counts()
     fix_counts = _empty_tool_counts()
     agent_error: str | None = None
@@ -814,7 +703,10 @@ def build_curated_corpus(
             # Non-empty means the agent tried to answer its own questions (AUDIT C6).
             "agent_forged_answers": forged_answers,
             "seed": seed_stats,
-            "decoy_defense": decoy_stats,
+            # Successor to the deleted `decoy_defense` block: every suspect column in
+            # this corpus is now agent-authored, so one count is the whole story. Zero
+            # means the curated arm went out with no decoy defence at all.
+            "suspect_columns": bag.suspect_count(),
             "tool_calls": tool_counts,
             "fix_pass_tool_calls": fix_counts,
             "error": agent_error,
@@ -1034,6 +926,18 @@ def build_curated_corpus_with_sme(
         fold_mode = "deterministic"
         applied = bag.apply_answered_clarifications(answered)
 
+    # An SME who says they do not recognise a column has delivered a reliability
+    # verdict, and neither fold mode reliably records it as one: the deterministic
+    # fold writes prose into the description, and the agent fold is asked to mark the
+    # column but may not. Runs for both modes, after them, so the mark lands on top
+    # of whatever description they wrote.
+    unrecognised = bag.mark_unrecognised_columns(answered)
+    if unrecognised["no_column_in_scope"]:
+        print(
+            f"sme fold: {unrecognised['no_column_in_scope']} unrecognised-column "
+            "answer(s) had no column in scope — recorded as notes only"
+        )
+
     # pair:/query:-scoped answers (trap / annotation-error findings) don't map to a
     # table/column asset, so the fold above skips them. Land them as governance
     # rules so the caveat reaches the served corpus instead of dying in the ledger.
@@ -1062,6 +966,8 @@ def build_curated_corpus_with_sme(
             "fold_mode": fold_mode,
             "clarifications_applied": applied,
             "caveats_recorded": caveats_recorded,
+            "unrecognised_column_marks": unrecognised,
+            "suspect_columns": bag.suspect_count(),
             "clarification_count": len(answered),
             "tool_calls": tool_counts,
             "fix_pass_tool_calls": fix_counts,

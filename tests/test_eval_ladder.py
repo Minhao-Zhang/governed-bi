@@ -282,70 +282,169 @@ def _two_table_bag() -> AssetBag:
     )
 
 
-def _mark_absent_from_gold(sql: str) -> tuple[set[str], dict[str, int]]:
+def _suspect_names(bag: AssetBag) -> set[str]:
     from governed_bi.corpus.schemas import ReliabilityStatus
-    from governed_bi.curator.pipeline import _mark_columns_absent_from_gold
 
-    bag = _two_table_bag()
-    stats = _mark_columns_absent_from_gold(bag, [sql], dialect="postgres")
-    suspect = {
+    return {
         f"{t.physical_name}.{c.physical_name}"
         for t in bag.tables.values()
         for c in t.columns
         if c.reliability.status is ReliabilityStatus.suspect
     }
-    return suspect, stats
 
 
-def test_absent_from_gold_resolves_reused_alias_per_scope():
-    """A subquery may reuse an alias letter for a different table. One flat alias map
-    per statement resolves the outer ``t.a`` to the inner table, so a column the gold
-    SQL genuinely uses reads as never-referenced and gets stamped DO NOT USE — the
-    heuristic then argues against the column the generator needs."""
-    suspect, stats = _mark_absent_from_gold(
-        "SELECT t.a FROM tbl_x t WHERE t.a IN (SELECT t.b FROM tbl_y t)"
+# --------------------------------------------------------------------------- #
+# Reliability is AI-authored (B6). `_mark_columns_absent_from_gold` used to stamp
+# every column train gold never referenced as suspect, and five tests here pinned
+# its alias resolution. It is deleted: "BIRD never queried this column" is not
+# evidence the column is unreliable, and where the gold SQL was defective the mask
+# banned columns the generator needed. What replaces those tests is the boundary
+# the ladder now depends on — the mechanical rungs author no reliability at all,
+# and the two authored paths (the agent's tool, the SME's answer) do.
+# --------------------------------------------------------------------------- #
+
+
+def test_the_mechanical_build_authors_no_suspect_columns():
+    """The `seeded` rung's attribution. Seeding derives joins and metrics from train
+    gold SQL and nothing else; if it ever marks a column suspect again, the ladder
+    stops separating "metadata the machine derived" from "reliability a model judged"
+    and the curated arm's decoy numbers become unattributable."""
+    import inspect
+
+    from governed_bi.curator import pipeline
+
+    bag = _two_table_bag()
+    stats = pipeline._apply_seed(
+        bag, seed_from_train_sql(["SELECT a FROM tbl_x"], dialect="postgres")
     )
-    assert "tbl_x.a" not in suspect  # outer scope: t = tbl_x
-    assert "tbl_y.b" not in suspect  # inner scope: t = tbl_y
-    # Qualified attribution must still bite, or this degrades to the old lenient set.
-    assert {"tbl_x.b", "tbl_y.a", "tbl_x.decoy", "tbl_y.decoy"} == suspect
-    assert stats["unresolved_columns"] == 0
+    assert stats["joins_fail"] == 0
+    assert _suspect_names(bag) == set()
+
+    mechanical = inspect.getsource(pipeline.build_curated_corpus).split(
+        "if run_agent and model is not None:"
+    )[0]
+    assert "seed_from_train_sql" in mechanical
+    for banned in ("mark_column_suspect", "suspect=True", "absent_from_gold("):
+        assert banned not in mechanical, (
+            f"the non-agent build path writes reliability again ({banned}); B6 moved "
+            "that judgement to the curator agent and the SME fold"
+        )
 
 
-def test_absent_from_gold_self_join_spares_both_aliases():
-    """Two aliases for one physical table must both resolve to it."""
-    suspect, _ = _mark_absent_from_gold(
-        "SELECT p.a, c.b FROM tbl_x p JOIN tbl_x c ON p.a = c.b"
+def test_the_curator_agent_can_mark_suspect_but_cannot_exclude():
+    """The governance boundary, enforced by absence. Suspect argues against a column
+    and the analyst still sees it; `governance.excluded` removes it and is a human
+    decision. The agent has a tool for the first and none for the second."""
+    import io
+    import tokenize
+    from pathlib import Path as _Path
+
+    import governed_bi.curator as curator_pkg
+    from governed_bi.curator.deep_agent import curator_tools
+
+    bag = _two_table_bag()
+    names = {t.__name__ for t in curator_tools(None, "demo", bag=bag)}
+    assert "annotate_column" in names
+    assert not {n for n in names if "exclu" in n.lower()}, names
+
+    # Code only: comments and docstrings under curator/ discuss the boundary at
+    # length, and the point is that no statement crosses it.
+    for path in sorted(_Path(curator_pkg.__file__).parent.glob("*.py")):
+        code = [
+            tok.string
+            for tok in tokenize.generate_tokens(
+                io.StringIO(path.read_text(encoding="utf-8")).readline
+            )
+            if tok.type not in (tokenize.COMMENT, tokenize.STRING)
+        ]
+        assert "excluded" not in "".join(code), (
+            f"{path.name} now touches governance.excluded; that field is human-only "
+            "and is enforced by there being no way for the agent to reach it"
+        )
+
+
+def test_an_sme_who_disowns_a_column_marks_it_suspect_not_just_described():
+    """The signal the SME brief exists to produce. `reliability.status` is the field
+    serve reads to steer generation off a column, so an answer that says "I have never
+    heard of this column" has to land there and not only in prose."""
+    from governed_bi.curator.clarifications import (
+        ClarificationRecord,
+        ClarificationRecordStatus,
     )
-    assert {"tbl_x.a", "tbl_x.b"}.isdisjoint(suspect)
-    assert {"tbl_y.a", "tbl_y.b"} <= suspect  # gold never touches the other table
 
-
-def test_absent_from_gold_single_scope_query_unchanged():
-    """No-regression guard for the ordinary shape: one scope, qualified references."""
-    suspect, stats = _mark_absent_from_gold("SELECT tbl_x.a FROM tbl_x WHERE tbl_x.b > 1")
-    assert {"tbl_x.decoy", "tbl_y.a", "tbl_y.b", "tbl_y.decoy"} == suspect
-    assert stats == {"marked": 4, "unscoped_sql": 0, "unresolved_columns": 0}
-
-
-def test_absent_from_gold_undeclared_qualifier_spares_instead_of_marking():
-    """Fail safe: an alias declared in no scope leaves the column unattributable, so
-    spare the bare name everywhere and count it. A wrongly kept column costs a line of
-    prompt; a wrongly banned one misdirects generation."""
-    suspect, stats = _mark_absent_from_gold("SELECT z.a FROM tbl_x")
-    assert {"tbl_x.a", "tbl_y.a"}.isdisjoint(suspect)
-    assert stats["unresolved_columns"] == 1
-
-
-def test_absent_from_gold_credits_cte_columns_to_the_base_table():
-    """A CTE alias is not a physical table: its base columns are attributed inside the
-    CTE's own scope, and the projection reference must not spare that name elsewhere."""
-    suspect, _ = _mark_absent_from_gold(
-        "WITH q AS (SELECT tbl_y.b FROM tbl_y) SELECT q.b FROM q"
+    answer = (
+        "I do not recognise `decoy` — it is not part of the documented schema I know, "
+        "and I would not rely on it for analysis. Use `a` instead."
     )
-    assert "tbl_y.b" not in suspect
-    assert "tbl_x.b" in suspect
+    rec = ClarificationRecord(
+        id="q001",
+        scope="table:tbl_x.decoy",
+        question="What does decoy hold?",
+        status=ClarificationRecordStatus.answered,
+        answer=answer,
+        answered_by="sme",
+    )
+    bag = _two_table_bag()
+    assert bag.apply_answered_clarifications([rec]) == 1
+    assert _suspect_names(bag) == set(), "precondition: the fold alone only describes"
 
+    stats = bag.mark_unrecognised_columns([rec])
+    assert stats == {"marked": 1, "no_column_in_scope": 0, "unknown_column": 0}
+    assert _suspect_names(bag) == {"tbl_x.decoy"}
+    col = next(c for c in bag.tables["tbl_x"].columns if c.physical_name == "decoy")
+    assert col.reliability.note.startswith("DO NOT USE — ")
+    assert col.description == answer  # the fold's prose is not overwritten
+
+
+def test_an_ordinary_sme_answer_leaves_reliability_alone():
+    """The false-positive guard. Most answers are definitions, and a definition that
+    happens to discuss reliability in the positive must not hard-block a column."""
+    from governed_bi.curator.clarifications import (
+        ClarificationRecord,
+        ClarificationRecordStatus,
+    )
+
+    rec = ClarificationRecord(
+        id="q002",
+        scope="table:tbl_x.a",
+        question="What does a hold?",
+        status=ClarificationRecordStatus.answered,
+        answer="`a` is the account balance in cents. It is populated and reliable.",
+        answered_by="sme",
+    )
+    bag = _two_table_bag()
+    stats = bag.mark_unrecognised_columns([rec])
+    assert stats["marked"] == 0
+    assert _suspect_names(bag) == set()
+
+
+def test_a_disowned_column_with_no_column_in_scope_is_counted_not_dropped():
+    """The known gap, reported rather than hidden. `parse_scope` yields a column only
+    for `table:Name.col`; a `pair:`- or `table:`-scoped question about one column has
+    nowhere to put the mark, so the answer stays a note and the count says so."""
+    from governed_bi.curator.clarifications import (
+        ClarificationRecord,
+        ClarificationRecordStatus,
+    )
+
+    recs = [
+        ClarificationRecord(
+            id="q003",
+            scope=scope,
+            question="Is decoy real?",
+            status=ClarificationRecordStatus.answered,
+            answer="I have never heard of that column and would not rely on it.",
+            answered_by="sme",
+        )
+        for scope in ("pair:t14", "table:tbl_x")
+    ]
+    bag = _two_table_bag()
+    stats = bag.mark_unrecognised_columns(recs)
+    assert stats["no_column_in_scope"] == 2
+    assert stats["marked"] == 0
+    assert _suspect_names(bag) == set()
+    # The caveat still reaches the corpus for the scope that has no asset at all.
+    assert bag.record_caveats(recs) == 1
 
 def test_asset_bag_propose_join_and_suspect(bird_connector, tmp_path: Path):
     tables = profile_database(bird_connector, schema="beer_factory")

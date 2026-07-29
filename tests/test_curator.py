@@ -20,6 +20,7 @@ from governed_bi.corpus.schemas import (
     Provenance,
     ProvenanceSource,
     ProvenanceStatus,
+    ReliabilityStatus,
     TableAsset,
 )
 from governed_bi.corpus.validate import Finding
@@ -431,36 +432,23 @@ def test_quarantined_record_cannot_mint_a_certified_fact(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# AUDIT E3: the decoy defence derives "suspect" from train gold SQL. With no
-# train SQL that rule suspects the entire schema.
+# AUDIT E3 used to live here: the decoy defence derived "suspect" from train gold
+# SQL, and with no train SQL that rule suspected 53 of the fixture's 61 columns.
+# `_mark_columns_absent_from_gold` is now deleted (B6), which settles E3 by
+# construction. What is still worth pinning is the consequence for the README path
+# — and for every path — that a build with no model authors no reliability at all.
 # --------------------------------------------------------------------------- #
 
 
-def test_decoy_defense_marks_unreferenced_columns_when_train_sql_exists():
-    from governed_bi.curator.asset_bag import AssetBag
-    from governed_bi.curator.pipeline import _mark_columns_absent_from_gold
+def test_a_build_with_no_model_authors_no_reliability(monkeypatch, tmp_path):
+    """The README path, and the wider invariant behind it: reliability is authored by
+    the curator agent or folded from an SME answer, never derived from which columns
+    BIRD happened to query. With no model there is no author, so nothing is marked."""
+    import json
 
-    bag = AssetBag.from_tables("demo", [_orders_table()])
-    stats = _mark_columns_absent_from_gold(
-        bag, ["SELECT amount FROM orders"], dialect="sqlite"
-    )
-    assert sum(v for k, v in stats.items() if "mark" in k) >= 1, stats
-
-
-def test_decoy_defense_is_skipped_with_no_train_sql(monkeypatch, tmp_path):
-    """The README path: curating without train SQL must not suspect the schema."""
     from governed_bi.curator import pipeline
 
-    called = []
-    monkeypatch.setattr(
-        pipeline,
-        "_mark_columns_absent_from_gold",
-        lambda *a, **k: called.append(a) or {},
-    )
     monkeypatch.setattr(pipeline, "profile_database", lambda *a, **k: [_orders_table()])
-    monkeypatch.setattr(
-        pipeline, "seed_from_train_sql", lambda *a, **k: pipeline.SeedBundle([], [])
-    )
 
     class _Connector:
         """Enough surface for validate_corpus's physical-existence probe."""
@@ -481,7 +469,7 @@ def test_decoy_defense_is_skipped_with_no_train_sql(monkeypatch, tmp_path):
 
             return _Info()
 
-    pipeline.build_curated_corpus(
+    out = pipeline.build_curated_corpus(
         _Connector(),
         object(),  # gateway (unused without a model)
         "demo",
@@ -490,4 +478,18 @@ def test_decoy_defense_is_skipped_with_no_train_sql(monkeypatch, tmp_path):
         model=None,
         dialect="sqlite",
     )
-    assert called == [], "the decoy heuristic ran with nothing to derive suspicion from"
+
+    corpus = load_corpus(out)
+    suspect = [
+        f"{t.physical_name}.{c.physical_name}"
+        for t in corpus.tables()
+        for c in t.columns
+        if c.reliability.status is ReliabilityStatus.suspect
+    ]
+    assert suspect == []
+    manifest = json.loads((out / "run_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["suspect_columns"] == 0
+    assert "decoy_defense" not in manifest, (
+        "the deterministic decoy mask is gone; a manifest key nothing writes is a "
+        "field a reader will quote as zero"
+    )

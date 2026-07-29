@@ -216,8 +216,28 @@ defence, so `decoy_touch_rate` may get worse before it gets better. That is prec
 what the experiment exists to measure, so it has to be measured rather than assumed.
 It also moves `corpus_content_hash`, which is expected.
 
-To verify: run the decoy-touch metric on a small curated build before and after, and
-report the direction rather than landing the change silently.
+Done. The mask and its `decoy_stats` plumbing are gone; its one consumer, the Phase A
+manifest key `decoy_defense`, is replaced by `suspect_columns: bag.suspect_count()` so
+a reader who quoted the old key has an honest successor rather than an orphan. The
+`curator_phase_a` prompt gained a reliability sweep with named grounds and an
+anti-over-marking clause, plus "you cannot exclude". The SME fold gained
+`answer_disowns_column` and `mark_unrecognised_columns`, wired into both fold modes.
+
+On the scope-granularity constraint, both options were taken. The fold marks at column
+granularity when the scope allows and counts `no_column_in_scope` otherwise, printing
+it so the gap is measured rather than hidden; and Phase A now tells the curator to scope
+column doubts as `table:T.col` while Phase B tells the agent to mark suspect itself,
+because the agent fold path never calls the deterministic fold and option (b) alone
+would have left it unbacked.
+
+The human-only exclusion invariant still holds and is now pinned by a test that checks
+code tokens rather than prose, plus a comment at the tool list and a line in
+docs/curator.md.
+
+Still to verify against a real build: whether the agent actually marks decoys often
+enough to replace what the mask did. Until a curated build runs, the curated arm's
+decoy defence is untested rather than known-good. `X2`'s `mask_only` ablation is moot
+and marked so in open-work.md.
 
 ### D2: attribute routing failure
 
@@ -313,8 +333,10 @@ Phase 3 is D2 steps 2 and 3, once step 1 says whether existing runs suffice.
 | C1 | Replace contradictory SME rules prompt; fix sanitiser | done, one variant |
 | pool-hash | `question_pool_hash` in `MANIFEST_KNOBS` and the gate | done |
 | D2 step 1 | Is the three-way split computable? | done, yes, no rerun needed |
+| B6 | Delete `_mark_columns_absent_from_gold`; AI-authored suspect marks | done, sweep untested |
+| artifact cleanup | Wipe pre-rebuild artifacts | done, 89M, routing columns kept |
 | T1 | Wire `pin_triggers_enabled` for eval, or drop trigger authoring | open decision |
-| B6 | Delete `_mark_columns_absent_from_gold`; AI-authored suspect marks | not started |
+| B6-verify | Does the agent sweep actually mark decoys? Needs a curated build | not started |
 | D2 step 2 | Land the three-way split as a summary metric | not started |
-| artifact cleanup | Delete `runs/`, `corpora/`, `data/checkpoints/`; retire stale routing table | not started, see D2 collision |
+| routing table | Retire the stale recall numbers in `datalake-run.md` and its 2 citations | not started |
 | naming | `*_GLOBAL_MAX` now means per-turn; rename in `config.py` | not started |

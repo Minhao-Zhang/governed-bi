@@ -1,9 +1,12 @@
 """Train-vs-test gap: the overfitting measure for a corpus-as-treatment run.
 
-Scoring the train split is not a second result. The curator reads train gold SQL —
+Scoring the train split is not a second result. The curator reads train gold SQL:
 :func:`governed_bi.curator.seed.seed_from_train_sql` extracts joins and metrics from
-it, and ``_mark_columns_absent_from_gold`` derives the decoy mask from it — so a
-curated arm's train EX is partly recall of statements it was built from.
+it, so a curated arm's train EX is partly recall of statements it was built from.
+(A second reader used to exist, a decoy mask derived from the same gold SQL. It was
+deleted 2026-07-29 because "BIRD never queried this column" is not evidence the column
+is unreliable; reliability is authored by the curator agent now. The leakage argument
+is unaffected: the seed still reads train gold.)
 :func:`governed_bi.eval.index.quotable` already refuses a train-scored run for
 exactly this reason ("a diagnostic, not a result").
 

@@ -147,6 +147,64 @@ def derive_keyword_triggers(question: str, answer: str | None = None) -> list[Tr
     return [Trigger(kind="keyword", value=v) for v in values[:_TRIGGERS_PER_NOTE]]
 
 
+# ── SME answers that disown a column ─────────────────────────────────────── #
+# The SME brief lists every table and column the SME knows about, and ``sme_rules``
+# tells them that an identifier absent from it is one they have never heard of, to
+# say so plainly, and to say they would not rely on it. On the graded database that
+# answer is the strongest reliability signal in the system: 1,486 invented columns
+# sit beside the real ones and the brief is the only thing separating them.
+#
+# It used to reach the corpus as prose only — a description on the column, or a
+# schema-scoped note — while ``reliability.status``, the field that actually steers
+# the analyst away, stayed ``ok``. These patterns turn the answer into the mark.
+# They are matched against the ANSWER text and cover the phrasings ``sme_rules``
+# asks for plus the ordinary ways a person says the same thing. Deliberately not a
+# semantic judgement: a regex that misses a paraphrase costs one unmarked column,
+# whereas asking a model to re-read every answer adds a stochastic step to a fold
+# that has to be replayable.
+_DISOWN_PATTERNS = (
+    r"do(?:es)?\s+not\s+recogni[sz]e",
+    r"do\s?n'?t\s+recogni[sz]e",
+    r"not\s+recogni[sz]ed",
+    r"never\s+heard\s+of",
+    r"not\s+(?:a\s+)?part\s+of\s+(?:the\s+)?(?:documented\s+)?schema",
+    r"not\s+in\s+the\s+(?:documented\s+)?schema",
+    r"no\s+such\s+(?:column|field)",
+    r"(?:column|field)\s+(?:does\s+not|doesn'?t)\s+exist",
+    r"(?:would|do|does|should)\s+not\s+(?:rely|be\s+relied)",
+    r"would\s?n'?t\s+rely",
+    r"\bunreliable\b",
+    r"\bmisleading\b",
+    r"\bnot\s+trustworthy\b",
+    r"do(?:\s+not|\s?n'?t)\s+use\b",
+    r"avoid\s+using\b",
+    r"should\s+not\s+be\s+used\b",
+    r"recommend\s+not\s+using\b",
+)
+_DISOWNS_COLUMN = re.compile("|".join(_DISOWN_PATTERNS), re.IGNORECASE)
+
+# The answer becomes the analyst-visible reliability note, and SME answers run to a
+# paragraph. Suspect notes are rendered on the schema card for every marked column,
+# so the untruncated version spends the card's budget on prose the analyst only
+# needs the gist of. The full answer survives in the ledger and in the column
+# description the fold writes.
+_SUSPECT_NOTE_MAX_CHARS = 200
+
+
+def answer_disowns_column(answer: str | None) -> bool:
+    """True when an SME answer says the column is unrecognised or not to be relied on."""
+    return bool(answer and _DISOWNS_COLUMN.search(answer))
+
+
+def _suspect_note_from_answer(answer: str) -> str:
+    """One line of the SME's own words, short enough to sit on a schema card."""
+    text = " ".join(answer.split())
+    if len(text) <= _SUSPECT_NOTE_MAX_CHARS:
+        return text
+    cut = text[:_SUSPECT_NOTE_MAX_CHARS].rsplit(" ", 1)[0]
+    return f"{cut} …"
+
+
 def _inference_audit(
     *,
     model: str | None = None,
@@ -739,6 +797,59 @@ class AssetBag:
             return f"error: invalid NoteAsset: {err}"
         self.notes[note_id] = asset
         return f"ok: wrote {note_id}"
+
+    def mark_unrecognised_columns(
+        self, records: Iterable[ClarificationRecord]
+    ) -> dict[str, int]:
+        """Fold "I don't recognise that column" answers into a column-level suspect
+        mark. Returns counts of what landed and what could not.
+
+        Runs after BOTH fold modes, deterministic and agent, and independently of
+        them. The deterministic fold writes the answer as a description; the agent
+        fold is asked to mark the column itself but is a model and may not; neither
+        guarantees the one field serve reads to steer generation away
+        (``reliability.status``). This is the mechanical backstop, and it is not the
+        deleted gold-SQL mask returning: the verdict is the SME's, taken from their
+        answer, not inferred from which columns BIRD happened to query.
+
+        The scope decides the granularity, and today it often is not fine enough.
+        ``parse_scope`` yields a column only for ``table:Name.col``; a decoy question
+        scoped ``table:Name`` or ``pair:<id>`` names no column, so there is nothing
+        to mark and the answer stays a note. Those are counted in
+        ``no_column_in_scope`` rather than passed over silently — a rising count means
+        the curator is still asking table-scoped questions about single columns, which
+        the Phase A prompt now tells it not to do.
+        """
+        stats = {"marked": 0, "no_column_in_scope": 0, "unknown_column": 0}
+        for rec in records:
+            if rec.status is not ClarificationRecordStatus.answered or not rec.answer:
+                continue
+            if not answer_disowns_column(rec.answer):
+                continue
+            try:
+                table, column = parse_scope(rec.scope)
+            except ValueError:
+                stats["no_column_in_scope"] += 1
+                continue
+            if column is None:
+                stats["no_column_in_scope"] += 1
+                continue
+            msg = self.annotate_column(
+                table,
+                column,
+                suspect=True,
+                note=_suspect_note_from_answer(rec.answer),
+                certified=True,
+                answered_by=rec.answered_by or "sme",
+            )
+            if msg.startswith("ok:"):
+                stats["marked"] += 1
+            else:
+                # The scope named a column the corpus does not have. Worth counting:
+                # on the graded database it usually means the curator asked about an
+                # identifier it hallucinated, which is its own finding.
+                stats["unknown_column"] += 1
+        return stats
 
     def record_caveats(self, records: Iterable[ClarificationRecord]) -> int:
         """Fold answered clarifications that don't map to an asset (``pair:`` /

@@ -880,10 +880,12 @@ and changes three things.
 against the same corpora, writing `split_gap.json` with `train − test` per arm.
 
 The training questions are the ones the curator read: `seed_from_train_sql` extracts
-its joins and metrics from their gold SQL, and `_mark_columns_absent_from_gold`
-derives the decoy mask from it. So a curated arm's train EX is partly recall of
-statements it was built from, and `eval.index.quotable` refuses a train-scored run
-for exactly that reason. Do not quote it, and do not average the two splits.
+its joins and metrics from their gold SQL. So a curated arm's train EX is partly
+recall of statements it was built from, and `eval.index.quotable` refuses a
+train-scored run for exactly that reason. Do not quote it, and do not average the two
+splits. (A decoy mask derived from the same gold SQL was a second reader until
+2026-07-29; it is gone, and reliability is authored by the curator agent. The seed
+still reads train gold, so the argument stands unchanged.)
 
 What the pair buys is the gap, which is the overfitting measure this benchmark
 otherwise has no number for:
