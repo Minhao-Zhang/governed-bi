@@ -113,6 +113,28 @@ reviewable, and a test asserts every declared rate names one.
 | `schema_pick_accuracy_excl_fallback` | …excluding picker fallbacks | picks that did not fall back |
 | `share_with_a_note` | turns that received at least one note | all scored rows (n) |
 
+### Conditional diagnostics — which part of the governance is doing the work
+
+Each of these reports a rate on **both sides** of something the corpus injected.
+Every input was already recorded per row and aggregated against nothing until
+2026-07-28. They are within-arm, so they cost no extra serve and apply
+retroactively to any existing `generations.<arm>.jsonl`.
+
+Each block carries its own `n_*` counts, and where a row can fail to record the
+input, an `n_unstamped` count — an absent input is counted out, never filed on the
+negative side. That is the trap the twin strata already document: `not r.get(...)`
+puts an ABSENT key in the FALSE stratum, which silently turns one side of a split
+into the pooled figure.
+
+| block | meaning | denominator |
+|---|---|---|
+| `ex_by_semantic_assurance` | EX per assurance level — the calibration of the semantic axis. If `unflagged` does not out-score `heuristic`, the stamp is decoration. | rows that recorded an assurance level |
+| `ex_by_tier` | EX per display tier — the same calibration for the compact projection | rows that recorded a tier |
+| `decoy_touch_by_caveat` | decoy-touch rate with vs without an injected suspect caveat — whether the caveat is what stops the model reaching for the decoy | delivered rows that recorded a caveat count |
+| `ex_by_note_injected` | EX with vs without an injected note (ADR 0003's claim, previously unscored) | rows that recorded a note count |
+| `ex_by_repair` | EX after a repair (>1 run_query attempt) vs first-attempt — whether self-repair recovers correctness or just produces valid-but-wrong SQL | rows that recorded an attempt count |
+| `guardrail_cost_ceiling` | CEILING on answers a guardrail block may have cost, not the cost: blocked SQL cannot be graded without executing un-guardrailed SQL. Counts turns where a layer blocked and the turn still ended wrong. Note that `by_guardrail_layer` creates a key at 0 when a layer is merely evaluated, so blocked means `any(v > 0)`, never a truthiness test on the dict. | rows where at least one layer blocked |
+
 ### Counts
 
 Each count exists so an exclusion from a rate above stays visible: a rate

@@ -354,6 +354,56 @@ SUMMARY_RATES: tuple[Metric, ...] = (
     Metric("share_with_a_note", "turns that received at least one note", "all scored rows (n)"),
 )
 
+#: Conditional diagnostics: blocks that report a rate on both sides of something
+#: the corpus injected, so a per-arm number can say *which part* of the governance
+#: is doing the work. Every input was already recorded per row and aggregated
+#: against nothing before 2026-07-28.
+#:
+#: Each block carries its own ``n_*`` and, where a row can fail to record the
+#: input, ``n_unstamped`` — an absent input is counted out, never filed on the
+#: negative side. That is the same trap the twin strata document: ``not
+#: r.get(...)`` puts an ABSENT key in the FALSE stratum, which silently turns one
+#: side of the split into the pooled figure.
+SUMMARY_CONDITIONALS: tuple[Metric, ...] = (
+    Metric(
+        "ex_by_semantic_assurance",
+        "EX per assurance level — the calibration of the semantic axis. If "
+        "`unflagged` does not out-score `heuristic`, the stamp is decoration.",
+        "rows that recorded an assurance level",
+    ),
+    Metric(
+        "ex_by_tier",
+        "EX per display tier — the same calibration for the compact projection",
+        "rows that recorded a tier",
+    ),
+    Metric(
+        "decoy_touch_by_caveat",
+        "decoy-touch rate with vs without an injected suspect caveat — whether the "
+        "caveat is what stops the model reaching for the decoy",
+        "delivered rows that recorded a caveat count",
+    ),
+    Metric(
+        "ex_by_note_injected",
+        "EX with vs without an injected note (ADR 0003's claim, previously unscored)",
+        "rows that recorded a note count",
+    ),
+    Metric(
+        "ex_by_repair",
+        "EX after a repair (>1 run_query attempt) vs first-attempt — whether "
+        "self-repair recovers correctness or just produces valid-but-wrong SQL",
+        "rows that recorded an attempt count",
+    ),
+    Metric(
+        "guardrail_cost_ceiling",
+        "CEILING on answers a guardrail block may have cost, not the cost: blocked "
+        "SQL cannot be graded without executing un-guardrailed SQL. Counts turns "
+        "where a layer blocked and the turn still ended wrong. Note that "
+        "`by_guardrail_layer` creates a key at 0 when a layer is merely evaluated, "
+        "so blocked means `any(v > 0)`, never a truthiness test on the dict.",
+        "rows where at least one layer blocked",
+    ),
+)
+
 #: Counts. Each exists so an exclusion from some rate above stays visible: a rate
 #: reported without its excluded count reads as full coverage.
 SUMMARY_COUNTS: tuple[str, ...] = (
@@ -388,6 +438,9 @@ SUMMARY_BLOCKS: tuple[str, ...] = (
 )
 
 SUMMARY_FIELDS: tuple[str, ...] = (
-    tuple(m.name for m in SUMMARY_RATES) + SUMMARY_COUNTS + SUMMARY_MEANS
+    tuple(m.name for m in SUMMARY_RATES)
+    + tuple(m.name for m in SUMMARY_CONDITIONALS)
+    + SUMMARY_COUNTS
+    + SUMMARY_MEANS
     + SUMMARY_BLOCKS
 )

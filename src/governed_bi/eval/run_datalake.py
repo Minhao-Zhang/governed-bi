@@ -1980,6 +1980,32 @@ def _twin_stamps_complete(rows: "Sequence[dict[str, Any]]") -> bool:
     return bool(rows) and all(r.get("gold_twin_in_train") is not None for r in rows)
 
 
+def _guardrail_ceiling(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Upper bound on answers a guardrail block may have cost.
+
+    Module-level so it can be tested without building a whole summary. See the call
+    site for why this is a ceiling and not a measurement.
+    """
+
+    def blocked_layers(row: dict[str, Any]) -> list[str]:
+        raw = row.get("by_guardrail_layer")
+        if not isinstance(raw, dict):
+            return []
+        return sorted(k for k, v in raw.items() if isinstance(v, int) and v > 0)
+
+    blocked = [r for r in rows if blocked_layers(r)]
+    wrong = [r for r in blocked if not r.get("correct")]
+    by_layer: Counter[str] = Counter()
+    for r in wrong:
+        by_layer.update(blocked_layers(r))
+    return {
+        "n_blocked": len(blocked),
+        "n_blocked_and_wrong": len(wrong),
+        "blocked_then_wrong_rate": (len(wrong) / len(blocked)) if blocked else None,
+        "by_layer": dict(by_layer.most_common()),
+    }
+
+
 def _summarise_rows(
     arm: str,
     rows: list[dict[str, Any]],
@@ -2139,6 +2165,70 @@ def _summarise_rows(
             }
             for k, v in sorted(groups.items())
         }
+
+    def _ex_of(group: list[dict[str, Any]]) -> float | None:
+        return (sum(1 for r in group if r.get("correct")) / len(group)) if group else None
+
+    def _ex_by_stamp(key: str) -> dict[str, dict[str, Any]]:
+        """EX per stamped value of ``key``, excluding rows that never recorded it.
+
+        Deliberately not :func:`_bucket`, which groups on ``str(r.get(key))`` and so
+        renders an unstamped row as a ``"None"`` bucket sitting beside the real stamp
+        values. An instrumentation gap must not look like a stamp level.
+        """
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for r in rows:
+            raw = r.get(key)
+            if not raw:
+                continue
+            groups.setdefault(str(getattr(raw, "value", raw)), []).append(r)
+        return {
+            k: {"n": len(v), "ex_lenient": _ex_of(v)} for k, v in sorted(groups.items())
+        }
+
+    def _split(
+        population: list[dict[str, Any]],
+        flag: "Callable[[dict[str, Any]], bool | None]",
+        outcome: str,
+    ) -> dict[str, Any]:
+        """Rate of ``outcome`` on both sides of a per-row predicate.
+
+        ``flag`` returns ``None`` for a row that never recorded the input, and those
+        rows are counted out rather than filed on the negative side — the failure mode
+        the twin strata already document: ``not r.get(...)`` puts an ABSENT key in the
+        FALSE stratum, which silently turns one side into the pooled figure.
+        """
+        yes: list[dict[str, Any]] = []
+        no: list[dict[str, Any]] = []
+        unstamped = 0
+        for r in population:
+            v = flag(r)
+            if v is None:
+                unstamped += 1
+            elif v:
+                yes.append(r)
+            else:
+                no.append(r)
+
+        def rate(group: list[dict[str, Any]]) -> float | None:
+            return (
+                (sum(1 for r in group if r.get(outcome)) / len(group)) if group else None
+            )
+
+        return {
+            "with": rate(yes),
+            "without": rate(no),
+            "n_with": len(yes),
+            "n_without": len(no),
+            "n_unstamped": unstamped,
+        }
+
+    def _positive(key: str) -> "Callable[[dict[str, Any]], bool | None]":
+        def flag(r: dict[str, Any]) -> bool | None:
+            v = r.get(key)
+            return None if v is None else bool(v) and v > 0
+
+        return flag
 
     # Every rate below is ``None`` when its denominator is empty. An arm that scored
     # zero rows measured nothing, and rendering that as 0.0 makes a run that never
@@ -2308,6 +2398,72 @@ def _summarise_rows(
             ).most_common()
         ),
         "n_with_governance_stamp": sum(1 for r in rows if r.get("tier")),
+        # ── Conditional diagnostics: does the governance actually do anything? ──
+        #
+        # Every input below was already recorded per row and aggregated against
+        # nothing. The summary had two shapes of breakdown — EX per bucket
+        # (``by_difficulty``, ``by_gold_rank``) and bare counts
+        # (``by_semantic_assurance``, ``by_tier``) — and the counts landed on exactly
+        # the slices a reader needs a rate for.
+        #
+        # These are all within-arm, so they cost no extra serve and apply retroactively
+        # to any generations file. They give a partial answer to the question the
+        # placebo and mask-ablation arms exist to isolate: which part of the corpus is
+        # doing the work.
+        #
+        # Calibration of the two-axis stamp. ``by_semantic_assurance`` says how many
+        # turns were ``unflagged``; it never said whether those turns were more often
+        # right. That is the whole claim of the stamp, and ``analyst.md`` calls the
+        # tiers uncalibrated heuristics to be tuned in eval — this is the number that
+        # tunes them. If ``unflagged`` does not out-score ``heuristic``, the stamp is
+        # decoration. Both blocks exclude unstamped rows (see ``_ex_by_stamp``).
+        "ex_by_semantic_assurance": {} if nested else _ex_by_stamp("semantic_assurance"),
+        "ex_by_tier": {} if nested else _ex_by_stamp("tier"),
+        # Does the suspect caveat stop the model reaching for the decoy? Conditioned on
+        # DELIVERY, matching ``decoy_touch_rate``'s denominator. Unconditioned, the rate
+        # cannot separate "the caveat worked" from "the model never wanted that column".
+        # Within one arm a stratum is often empty (baseline injects no caveats at all),
+        # so ``None`` here is routine and means exactly that — read it across arms.
+        "decoy_touch_by_caveat": (
+            {}
+            if nested
+            else _split(produced, _positive("n_caveats_injected"), "decoy_touch")
+        ),
+        # Do injected notes help? ADR 0003's claim, never scored. ``share_with_a_note``
+        # reported the injection rate and stopped there.
+        "ex_by_note_injected": (
+            {} if nested else _split(rows, _positive("n_notes_injected"), "correct")
+        ),
+        # Does self-repair recover correctness, or produce valid-but-wrong SQL? The
+        # serve path stamps a repaired answer ``heuristic`` and never ``unflagged``;
+        # that assertion has been unfalsified rather than verified. ``with`` = took more
+        # than one ``run_query`` attempt.
+        "ex_by_repair": (
+            {}
+            if nested
+            else _split(
+                rows,
+                lambda r: (
+                    None if r.get("attempts") is None else int(r["attempts"]) > 1
+                ),
+                "correct",
+            )
+        ),
+        # A CEILING on guardrail-induced loss, not the loss. Blocked SQL cannot be
+        # graded: grading it means executing un-guardrailed SQL, which is the one thing
+        # the gateway exists to prevent. So this counts turns where a layer blocked at
+        # least once AND the turn still ended wrong — an upper bound, because some of
+        # those were wrong for reasons the block had nothing to do with.
+        #
+        # ``by_guardrail_layer`` creates a key with 0 when a layer is merely EVALUATED
+        # and increments only on failure (``governance.py``: ``+ (0 if passed else 1)``),
+        # so a clean turn carries all five layers at zero. "Blocked" is therefore
+        # ``any(v > 0)``, never a truthiness test on the dict.
+        #
+        # Worth reporting because ``by_guardrail_layer`` counts blocks as though they
+        # were free. For a system whose thesis is governance-by-construction, the
+        # false-positive cost is the missing counterweight to safety.
+        "guardrail_cost_ceiling": {} if nested else _guardrail_ceiling(rows),
         # All three are conditioned on DELIVERY (``produced``), not on every row.
         # Refusing is neither delivering nor clearing, so over all rows an arm that
         # refuses more looks like an arm that governs better; refusal behaviour is
@@ -4268,6 +4424,36 @@ def run_datalake(
                 f"decoy={_fmt_rate(summary['decoy_touch_rate'], 4)} "
                 f"refuse={_fmt_rate(summary['refusal_rate'])} "
                 f"crash={_fmt_rate(summary['crash_rate'])}"
+            )
+            # A metric nobody prints is a metric nobody reads, and the calibration is
+            # the one that decides whether the trust stamp means anything. Ordered by
+            # the assurance ladder rather than alphabetically, because the whole
+            # question is whether EX falls as assurance drops.
+            _cal = summary.get("ex_by_semantic_assurance") or {}
+            if _cal:
+                ladder = [k for k in ("unflagged", "heuristic", "unverified") if k in _cal]
+                ladder += [k for k in sorted(_cal) if k not in ladder]
+                print(
+                    "         calibration  "
+                    + "  ".join(
+                        f"{k}={_fmt_rate(_cal[k]['ex_lenient'])}(n={_cal[k]['n']})"
+                        for k in ladder
+                    )
+                )
+            _rep = summary.get("ex_by_repair") or {}
+            _note = summary.get("ex_by_note_injected") or {}
+            _gc = summary.get("guardrail_cost_ceiling") or {}
+            print(
+                "         EX|repaired="
+                f"{_fmt_rate(_rep.get('with'))}(n={_rep.get('n_with', 0)}) "
+                f"EX|first_try={_fmt_rate(_rep.get('without'))}"
+                f"(n={_rep.get('n_without', 0)})  "
+                f"EX|note={_fmt_rate(_note.get('with'))}"
+                f"(n={_note.get('n_with', 0)}) "
+                f"EX|no_note={_fmt_rate(_note.get('without'))}"
+                f"(n={_note.get('n_without', 0)})  "
+                f"blocked_then_wrong={_fmt_rate(_gc.get('blocked_then_wrong_rate'))}"
+                f"(n={_gc.get('n_blocked', 0)}, ceiling)"
             )
     finally:
         stage_sink.close()

@@ -332,3 +332,147 @@ def test_the_row_register_covers_what_the_summariser_reads():
     assert not undeclared, (
         f"the summariser reads row keys that are not declared: {undeclared}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Conditional diagnostics
+# --------------------------------------------------------------------------- #
+
+
+def _c(qid, **over):
+    """A delivered, correct row with every conditional input stamped."""
+    r = {
+        "arm": "curated", "question_id": qid, "db_id": "beer", "correct": True,
+        "correct_strict": True, "outcome": "answered",
+        "generated_sql": "SELECT 1 FROM t", "gold_nrows": 1, "pred_nrows": 1,
+        "nrows_match": True, "attempts": 1, "latency_sec": 1.0, "tier": "governed",
+        "safety_clearance": True, "semantic_assurance": "unflagged",
+        "n_notes_injected": 1, "n_caveats_injected": 2, "decoy_touch": False,
+        "by_guardrail_layer": {"syntax": 0, "column_allowlist": 0},
+    }
+    r.update(over)
+    return r
+
+
+def test_the_stamp_is_calibrated_against_correctness():
+    """The point of the whole block. ``by_semantic_assurance`` reported how many
+    turns were ``unflagged`` and never whether they were more often right — which is
+    the stamp's entire claim, and which analyst.md calls an uncalibrated heuristic to
+    be tuned in eval."""
+    rows = [
+        _c("q1"),
+        _c("q2"),
+        _c("q3", semantic_assurance="heuristic", tier="lineage", correct=False),
+        _c("q4", semantic_assurance="heuristic", tier="lineage"),
+        _c("q5", semantic_assurance="unverified", tier="fenced_raw", correct=False),
+    ]
+    s = _summarise_rows("curated", rows)
+
+    assert s["ex_by_semantic_assurance"]["unflagged"] == {"n": 2, "ex_lenient": 1.0}
+    assert s["ex_by_semantic_assurance"]["heuristic"] == {"n": 2, "ex_lenient": 0.5}
+    assert s["ex_by_semantic_assurance"]["unverified"] == {"n": 1, "ex_lenient": 0.0}
+    assert s["ex_by_tier"]["governed"]["ex_lenient"] == 1.0
+    assert s["ex_by_tier"]["fenced_raw"]["ex_lenient"] == 0.0
+
+
+def test_an_unstamped_row_is_not_a_stamp_level():
+    """``_bucket`` groups on ``str(r.get(key))``, which renders a missing stamp as a
+    ``"None"`` bucket sitting beside the real levels. An instrumentation gap must not
+    read as a governance outcome, so these blocks exclude it instead."""
+    rows = [_c("q1"), _c("q2", semantic_assurance=None, tier=None)]
+    s = _summarise_rows("curated", rows)
+    assert "None" not in s["ex_by_semantic_assurance"]
+    assert "None" not in s["ex_by_tier"]
+    assert s["ex_by_semantic_assurance"]["unflagged"]["n"] == 1
+
+
+def test_a_missing_conditional_input_is_counted_out_not_filed_as_false():
+    """The trap the twin strata document: ``not r.get(...)`` puts an ABSENT key in
+    the FALSE stratum, which silently turns one side of the split into the pooled
+    figure. Here a row with no recorded note count must land in neither side."""
+    rows = [
+        _c("q1", n_notes_injected=1),
+        _c("q2", n_notes_injected=0, correct=False),
+        _c("q3", n_notes_injected=None),
+    ]
+    block = _summarise_rows("curated", rows)["ex_by_note_injected"]
+    assert block["n_with"] == 1
+    assert block["n_without"] == 1
+    assert block["n_unstamped"] == 1
+    assert block["with"] == 1.0
+    assert block["without"] == 0.0
+
+
+def test_an_empty_stratum_reports_none_rather_than_zero():
+    """Routine, not exceptional: the baseline arm injects no caveats at all, so its
+    caveat-present stratum is empty. ``0.0`` there would claim it was measured."""
+    rows = [_c("q1", n_caveats_injected=0), _c("q2", n_caveats_injected=0)]
+    block = _summarise_rows("curated", rows)["decoy_touch_by_caveat"]
+    assert block["with"] is None
+    assert block["n_with"] == 0
+    assert block["without"] == 0.0
+
+
+def test_the_caveat_split_is_conditioned_on_delivery():
+    """Same denominator as ``decoy_touch_rate``: a refusal touched no column, and
+    counting it dilutes both sides."""
+    rows = [
+        _c("q1", decoy_touch=True),
+        _c("q2", generated_sql=None, outcome="refused", refused_by="refuse_gate",
+           correct=False),
+    ]
+    block = _summarise_rows("curated", rows)["decoy_touch_by_caveat"]
+    assert block["n_with"] + block["n_without"] + block["n_unstamped"] == 1
+
+
+def test_repair_recovery_is_split_on_the_attempt_count():
+    rows = [
+        _c("q1", attempts=1),
+        _c("q2", attempts=1, correct=False),
+        _c("q3", attempts=3),
+        _c("q4", attempts=None),
+    ]
+    block = _summarise_rows("curated", rows)["ex_by_repair"]
+    assert block["without"] == 0.5      # first-attempt rows
+    assert block["with"] == 1.0         # took a repair
+    assert block["n_unstamped"] == 1
+
+
+def test_the_guardrail_ceiling_counts_blocks_not_evaluations():
+    """``by_guardrail_layer`` creates a key at 0 when a layer is merely EVALUATED and
+    increments only on failure (``governance.py``: ``+ (0 if passed else 1)``), so a
+    clean turn carries all five layers at zero. A truthiness test on the dict would
+    report every governed turn as blocked."""
+    rows = [
+        _c("q1"),  # evaluated, nothing blocked
+        _c("q2", by_guardrail_layer={"column_allowlist": 2}, correct=False),
+        _c("q3", by_guardrail_layer={"term_semantics": 1}),  # blocked but still right
+    ]
+    block = _summarise_rows("curated", rows)["guardrail_cost_ceiling"]
+    assert block["n_blocked"] == 2, "a clean turn's zero-valued layers are not blocks"
+    assert block["n_blocked_and_wrong"] == 1
+    assert block["blocked_then_wrong_rate"] == 0.5
+    assert block["by_layer"] == {"column_allowlist": 1}
+
+
+def test_the_guardrail_ceiling_is_none_when_nothing_blocked():
+    block = _summarise_rows("curated", [_c("q1")])["guardrail_cost_ceiling"]
+    assert block["n_blocked"] == 0
+    assert block["blocked_then_wrong_rate"] is None
+
+
+def test_every_conditional_names_its_denominator():
+    for m in metrics.SUMMARY_CONDITIONALS:
+        assert m.denominator, f"{m.name} declares no denominator"
+
+
+def test_the_ceiling_is_documented_as_a_ceiling():
+    """It counts turns where a layer blocked and the turn still ended wrong. Some of
+    those were wrong for reasons the block had nothing to do with, and blocked SQL
+    cannot be graded — grading it means executing un-guardrailed SQL. If the register
+    ever describes this as measured loss, that is the bug."""
+    entry = next(
+        m for m in metrics.SUMMARY_CONDITIONALS if m.name == "guardrail_cost_ceiling"
+    )
+    assert "CEILING" in entry.meaning
+    assert "cannot be graded" in entry.meaning

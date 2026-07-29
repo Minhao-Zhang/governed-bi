@@ -18,6 +18,7 @@ print(json.dumps({
     "scope": [(x.name, x.meaning) for x in m.MANIFEST_SCOPE],
     "operational": [(x.name, x.meaning) for x in m.MANIFEST_OPERATIONAL],
     "rates": [(x.name, x.meaning, x.denominator) for x in m.SUMMARY_RATES],
+    "conditionals": [(x.name, x.meaning, x.denominator) for x in m.SUMMARY_CONDITIONALS],
     "counts": list(m.SUMMARY_COUNTS),
     "means": list(m.SUMMARY_MEANS),
     "blocks": list(m.SUMMARY_BLOCKS),
@@ -116,6 +117,21 @@ looks like a rung that governs better. Naming the population is what makes that
 reviewable, and a test asserts every declared rate names one.
 
 {table(d["rates"], ["rate", "meaning", "denominator"])}
+
+### Conditional diagnostics — which part of the governance is doing the work
+
+Each of these reports a rate on **both sides** of something the corpus injected.
+Every input was already recorded per row and aggregated against nothing until
+2026-07-28. They are within-arm, so they cost no extra serve and apply
+retroactively to any existing `generations.<arm>.jsonl`.
+
+Each block carries its own `n_*` counts, and where a row can fail to record the
+input, an `n_unstamped` count — an absent input is counted out, never filed on the
+negative side. That is the trap the twin strata already document: `not r.get(...)`
+puts an ABSENT key in the FALSE stratum, which silently turns one side of a split
+into the pooled figure.
+
+{table(d["conditionals"], ["block", "meaning", "denominator"])}
 
 ### Counts
 
