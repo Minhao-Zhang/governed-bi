@@ -87,10 +87,14 @@ Markdown-first. The graph earns its place only for joins and lineage. A heavy LL
 ## 6. Runtime Query Flow (Analyst)
 
 ```
-ask → supervisor → query understanding → intent route → SQL cache check →
-RVGD retrieval → Steiner-tree join plan → SQL gen → five-layer guardrails →
-execute (as-user) → narrate → answer + provenance
+ingest → refuse_gate → assemble (RVGD retrieval + Steiner-tree join plan +
+licensed table scope) → agent_core (tool loop; every run_query re-guardrailed
+by wrap_tool_call) → narrate → answer + provenance
 ```
+
+Five nodes, compiled in `analyst.agent.build_serve_rails`. SQL generation is not
+a node: it happens inside `agent_core`'s tool loop (ADR 0002). Any node can end
+the turn with a refusal.
 
 The full stage-by-stage design is in [Analyst](analyst.md), along with the three points where the curator's inference drives serve behavior.
 
@@ -179,7 +183,6 @@ Guardrails, in order (fail-closed on any, all five enforced): syntax → policy 
 > | SQL cache TTL | 15 min |
 > | Cache-hit gate | cosine ≥ 0.92 (see §6) |
 > | Few-shot recall gate | cosine ≥ 0.95, confidence ≥ 0.9, fail_count ≤ 3 |
-> | Route memory budget (Profile / Episodic / Correction) | nl2sql 5/2/5 · kpi_lookup 2/0/1 · knowledge_qa 3/1/1 · deep_analysis 8/8/4 |
 > | Few-shot promotion gate | `pending_review` → human `approve` → retrieval-time threshold check |
 >
 > Source: the book's directly-reusable blueprint. See the *Data Agent Memory Design Overview* §5.

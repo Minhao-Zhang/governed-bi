@@ -62,7 +62,6 @@ from .middleware import (
     licensed_physical_names,
     result_from_ledger,
 )
-from .routing import bind_terms, route_intent
 from .run_log import FinalizeCtx, amend_run_tokens, finalize_and_log, new_run_id
 from .sqlgen import GeneratedSql, _tables_used
 from .tools import make_tools
@@ -523,19 +522,14 @@ def build_serve_rails(
                 token_usage=[],
                 question=question,
             )
-        with stages.stage(Stage.route) as detail:
-            route = route_intent(question)
-            bound_terms = bind_terms(corpus, question)
-            detail["intent"] = route.value
-            detail["n_bound_terms"] = len(bound_terms)
+        with stages.stage(Stage.route):
+            pass  # the turn's first recorded stage; term binding is the agent's job now
         base = {
-            "route": route.value,
-            "bound_terms": bound_terms,
             "session_id": state.get("session_id") or session_id,
             "user": identity.user,
             "runtime": "agent",
         }
-        events.rail("route", intent=route.value)
+        events.rail("route")
         return {
             "base_provenance": base,
             "session_id": state.get("session_id") or session_id,

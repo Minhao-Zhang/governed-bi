@@ -51,6 +51,29 @@ generate the fields or delete them from `corpus/schemas.py`:
   trigger-pinned (PIN) retrieval mode has no data exercising it.
 - `NegativeExampleAsset` — never generated (see X6).
 
+## Test debt blocked on the eval driver
+
+Twenty tests assert on implementation **source text** via `inspect.getsource`
+(`test_ladder_design`, `test_hash_grade`, `test_datalake_routing`,
+`test_build_isolation`, `test_run_experiment_parity`, `test_oracle_and_probes`,
+`test_retrieval_index_cache`, `test_curator_seed_joins`,
+`test_middleware_guardrail`). A reformat breaks them and an equivalent rewrite
+defeats them.
+
+They are **not** dead weight, and they should not be deleted as they stand. Each
+pins a call-site or ordering invariant in `run_datalake()` — a 798-line function
+that needs live Postgres, a model and about an hour to drive — and most say so in
+their own docstring. Two examples of what they hold: the gold pre-flight must run
+*before* the build phase, or a bad DSN costs a full curator pass over every
+schema; the replicate must be appended *last* in `serve_order`, or the noise
+floor it measures is a within-moment figure rather than one that spans an arm's
+serve.
+
+The fix is not to delete the tests, it is to make the driver drivable. Once the
+two eval drivers are unified behind a testable `grade_one` / `run_arm` seam,
+these become ordinary behavioural tests. `tests/test_eval_index.py` (the
+`manifest_model` rewrite) is the worked precedent for the conversion.
+
 ## Governance gaps
 
 - A simulated SME's answer defaults to `status=certified` (`corpus/clarify.py`),

@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pytest
 
-from governed_bi.analyst import Route, bind_terms, route_intent
 from governed_bi.analyst.answer import (
     ReliabilityTier,
     SemanticAssurance,
@@ -56,30 +55,6 @@ def mem_gateway():
 # --------------------------------------------------------------------------- #
 # Routing + term binding
 # --------------------------------------------------------------------------- #
-
-
-@pytest.mark.parametrize(
-    "question,expected",
-    [
-        ("What is revenue?", Route.knowledge_qa),
-        ("Show the revenue trend over time", Route.deep_analysis),
-        ("How many customers are there?", Route.kpi_lookup),
-        ("Revenue by brand for premium labels", Route.nl2sql),
-    ],
-)
-def test_route_intent(question, expected):
-    assert route_intent(question) == expected
-
-
-def test_bind_terms(corpus):
-    bound = bind_terms(corpus, "total revenue by brand")
-    assert "term_revenue" in bound
-    assert "term_brand" in bound
-
-
-def test_bind_terms_no_false_fire(corpus):
-    # "brandish" contains "brand" as a substring but not as a token.
-    assert bind_terms(corpus, "the knight brandished a sword") == []
 
 
 # --------------------------------------------------------------------------- #

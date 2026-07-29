@@ -24,8 +24,7 @@ The outer rails and the agent's `GovernanceMiddleware` **share one governance co
 ## The flow
 
 1. **Ingest**: question + identity (D7, as-user) + working memory (D8, session-scoped).
-2. **Query understanding + term binding**: resolve business language via `term` assets. Synonyms and `term_relationship` map varied phrasings → the canonical asset (strong-routing, not an LLM guess).
-3. **Intent routing**: hard-wired route (`nl2sql | kpi_lookup | knowledge_qa | deep_analysis`), each with its own retrieval and memory budget.
+2. **Term resolution**: `term` assets map business language onto the canonical asset. The agent reaches them through `search_corpus` and the seeded `## Governed context` block; the deterministic pre-pass (`route_intent` / `bind_terms`) was deleted 2026-07-28 — it classified every question into one of four routes and bound terms into provenance, and nothing downstream ever read either.
 5. **RVGD retrieval**: R exact / V semantic / G graph / D dictionary. Four-stage rerank, token-budgeted, Corrective-RAG fallback. **Facts + Inference tiers only** (loader contract); Audit and `excluded` assets never retrieved. *Built:* the pure-Python **BM25** lexical channel plus deterministic grounding (a bound term pulls in its target, a metric its base table, a table its columns), and the **V (vector) channel** (`retrieval.embedding`): an injected `Embedder` (OpenAI `text-embedding-3-small`, or the deterministic offline `HashingEmbedder`) ranks by cosine and is fused with BM25 via Reciprocal Rank Fusion. Off unless an embedder is passed, so the default is pure BM25. The graph channel (G) and Corrective-RAG rerank remain later slices.
    - **Context assembly** (`analyst.context.assemble_context`): retrieval returns ids; this resolves the L4-licensed table scope into a `PromptContext` (physical schema, join paths with confidence, terms, metrics, suspect-column caveats, gold exemplars, notes). The guardrail's `allowed_tables` is derived from it, so **what the generator can see is exactly what L4 permits**.
 6. **Steiner-tree join planning** over the inferred FK graph.
@@ -40,26 +39,21 @@ The runtime answer path at a glance:
 
 ```mermaid
 flowchart TD
-    Ask["Question + identity + session_id"] --> Ingest["Ingest<br/>attach working memory + identity (audit scope)"]
-    Ingest --> Bind["Query understanding<br/>bind terms to canonical assets"]
-    Bind --> Route{"Intent route<br/>nl2sql / kpi_lookup / knowledge_qa / deep_analysis<br/>shared pipeline; per-route retrieval + memory budgets"}
-    Route --> Assemble["Assemble<br/>RVGD retrieval, Steiner-tree join planning,<br/>seed Governed context + licensed table scope"]
-    Assemble --> AgentCore{"agent_core: create_agent tool loop<br/>GovernanceMiddleware.wrap_tool_call gates every call"}
-    Bind --> RefuseGate{"Refuse-gate<br/>negative example match?"}
-
+    Ask["Question + identity + session_id"] --> Ingest["ingest<br/>attach working memory + identity (audit scope)"]
+    Ingest --> RefuseGate{"refuse_gate<br/>negative example match?"}
     RefuseGate -->|match| Refuse["Refuse / clarify<br/>fail closed"]
-    RefuseGate -->|no match| AgentCore
+    RefuseGate -->|no match| Assemble{"assemble<br/>RVGD retrieval, Steiner-tree join planning,<br/>seed Governed context + licensed table scope"}
+    Assemble -->|no curated cross-schema join| Refuse
+    Assemble -->|licensed| AgentCore{"agent_core: create_agent tool loop<br/>GovernanceMiddleware.wrap_tool_call gates every call"}
     AgentCore -->|search_corpus / inspect_schema / sample_rows| AgentCore
     AgentCore -->|run_query blocked, attempts remain| AgentCore
     AgentCore -->|run_query blocked: attempt cap or recursion_limit exhausted| Refuse
     AgentCore -->|run_query passes five guardrails| Execute["Gateway.execute()<br/>read-only, row-cap + timeout, audit"]
-    Reexecute --> Execute
     Execute --> Result["Rows + provenance"]
-    Result --> Narrate["Narrate<br/>LLM phrases the delivered answer"]
+    Execute --> Audit["Audit/replay log"]
+    Result --> Narrate["narrate<br/>LLM phrases the delivered answer"]
     Narrate --> Stamp["Finalize<br/>two-axis reliability stamp"]
     Stamp --> User["Answer to user"]
-    Execute --> Audit["Audit/replay log"]
-    Stamp --> CacheWrite["Cache successful SQL text<br/>TTL 15 minutes"]
 ```
 
 ## The agentic path (ADR 0002)

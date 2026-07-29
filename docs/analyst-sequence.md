@@ -60,7 +60,7 @@ sequenceDiagram
     participant DB as Read-only gateway
 
     U->>R: ask(question, identity)
-    Note over R: ingest — route_intent + bind_terms (no memory read yet)
+    Note over R: ingest — stamp identity + session (no memory read yet)
     R->>RG: match(question, negative examples)
     alt matches a curated negative example
         RG-->>R: refuse

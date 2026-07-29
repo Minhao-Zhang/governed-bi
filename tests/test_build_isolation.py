@@ -788,22 +788,6 @@ def test_a_clean_arm_reports_nothing(tmp_path):
     d.mkdir()
     (d / "run_manifest.json").write_text(json.dumps({"phase": "A"}), encoding="utf-8")
     assert _collect_curator_errors({"curated": d}) == {}
-
-
-def test_the_run_manifest_holds_no_absolute_path(tmp_path):
-    """It was the one field that differed between two byte-identical builds, because
-    it embedded the run's own output directory — enough to make "did these two runs
-    produce the same corpus?" un-answerable with a plain diff, and it leaked a
-    machine-local path into a durable artifact."""
-    import inspect
-
-    from governed_bi.curator import pipeline
-
-    src = inspect.getsource(pipeline.build_curated_corpus)
-    assert '"clarifications_path": clarifications_path(out_root).name' in src
-    assert '"clarifications_path": str(clarifications_path(out_root))' not in src
-
-
 def test_a_real_curator_agent_build_creates_no_checkpoint_file(tmp_path: Path):
     """deepagents needs a checkpointer only for `interrupt_on`, which the curator does
     not use. The sqlite saver it used to create was written, closed, relocated and
@@ -811,6 +795,7 @@ def test_a_real_curator_agent_build_creates_no_checkpoint_file(tmp_path: Path):
     every curated build. Removing it deletes the failure class instead of guarding it.
     """
     pytest.importorskip("deepagents")
+    import pathlib
     import sqlite3
 
     from langchain_core.messages import AIMessage
@@ -856,32 +841,18 @@ def test_a_real_curator_agent_build_creates_no_checkpoint_file(tmp_path: Path):
     assert manifest["error"] is None, f"the agent failed: {manifest['error']}"
     assert manifest.get("agent_ran") is True
 
+    # No absolute path in a durable artifact. It was the one field that differed
+    # between two byte-identical builds, because it embedded the run's own output
+    # directory — which made "did these two runs produce the same corpus?"
+    # un-answerable with a plain diff, and leaked a machine-local path.
+    recorded = manifest["clarifications_path"]
+    assert recorded == pathlib.Path(recorded).name, recorded
+    assert str(out_root) not in recorded
+
     assert any(out_root.rglob("*.yaml"))
     # ...and everything it did write is promotable, with no marker.
     _relocate_sidecars(out_root, "main")
     assert not (out_root / "main" / "_build" / "UNPROMOTED_SIDECARS.json").exists()
-
-
-def test_the_curator_creates_no_checkpointer_at_all():
-    """Not "creates one and closes it carefully" — creates none. deepagents needs a
-    checkpointer only for `interrupt_on`, which the curator does not use, and the
-    sqlite saver it used to make was never read back while its open handle aborted
-    builds on Windows. The release-in-finally plumbing that guarded it is gone with
-    it; keeping dead teardown for an object that is always None is how the next
-    reader concludes there is still something to release.
-    """
-    import inspect
-
-    from governed_bi.curator import pipeline
-
-    src = inspect.getsource(pipeline)
-    assert "make_durable_checkpointer" not in src
-    assert "_release_checkpointer" not in src
-    assert "checkpointer=" not in src
-    for fn in (pipeline.build_curated_corpus, pipeline.build_curated_corpus_with_sme):
-        assert "_ckpt" not in inspect.getsource(fn), fn.__name__
-
-
 def test_the_serve_paths_clarify_checkpointer_is_untouched():
     """That one IS used — `ask_user` interrupts need it — so the removal must not
     have reached it."""

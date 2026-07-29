@@ -13,8 +13,7 @@ fail-closed lives.
 
 Modules map to the pipeline (``docs/analyst.md``):
 
-- ``routing``: query understanding, term binding, intent route.
-- ``sqlgen``: SQL generation (deterministic template + LLM seam).
+- ``sqlgen``: the flow-free value objects the agent core still needs.
 - ``agent``: the governed agentic core + outer deterministic rails (ADR 0002);
   entry point ``answer_question_agent``.
 - ``governance``: shared stamping/refusal helpers the agent core calls.
@@ -39,7 +38,6 @@ from .answer import (
 )
 from .context import PromptContext, assemble_context
 from .narrate import AnswerNarrator, LlmAnswerNarrator
-from .routing import Route, bind_terms, route_intent
 from .sqlgen import GeneratedSql
 
 __all__ = [
@@ -51,12 +49,9 @@ __all__ = [
     "ReliabilityTier",
     "ResultTable",
     "SemanticAssurance",
-    "Route",
     "UncertaintySignals",
     "assemble",
     "assemble_context",
-    "bind_terms",
     "reliability_tier",
     "semantic_assurance",
-    "route_intent",
 ]
