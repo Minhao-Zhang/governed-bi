@@ -7,6 +7,12 @@ whose closed items now live only in git history. Nothing here is a design
 record — decisions belong in [design-decisions.md](design-decisions.md) and
 [adr/](adr/).
 
+**The eval rebuild has its own tracker.** All prior BIRD numbers are discarded, and
+the four fixes that follow (notes without triggers, the contradictory SME prompt, the
+gold-SQL-derived decoy mask, routing-failure attribution) are tracked in
+[plans/eval-rebuild.md](plans/eval-rebuild.md), not here. Items below that the rebuild
+supersedes are marked where they occur.
+
 ## Correctness
 
 | # | What | Where |

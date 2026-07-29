@@ -1,5 +1,11 @@
 # What we measure, and where a failure shows up
 
+> **Every prior BIRD eval number is discarded.** The evaluation was found broken in
+> five independent ways, from defective BIRD gold SQL through to SME notes that fired
+> on every question in their schema. Read
+> [plans/eval-rebuild.md](plans/eval-rebuild.md) before quoting any figure from a run
+> that predates it. The metric definitions below still stand; the numbers do not.
+
 A three-arm data-lake run once had to be discarded because the harness could
 say a turn failed but not *where*. A solver crash and a deliberate refusal
 both arrived as `error="refusal"`, so `refusal_rate` absorbed the crash count
