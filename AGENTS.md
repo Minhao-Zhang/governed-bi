@@ -1,7 +1,6 @@
-# This is a reference document for the agents in the project.
+# This is a reference document for the agents in the project
 
-**THIS PROJECT IS A GREENFILED PROJECT WITH NO USERS. YOU CAN BE BOLD IN MAKING CHANGES.**
-
+**THIS PROJECT IS A GREENFIELD PROJECT WITH NO USERS. YOU CAN BE BOLD IN MAKING CHANGES.**
 
 ## Shape of projects
 
@@ -10,9 +9,9 @@
 
 ## Coding guidelines
 
-- No need to have a test for everthing, unless it is a problem we encountered in the past and we want to avoid it in the future.
+- No need to have a test for everything, unless it is a problem we encountered in the past and we want to avoid it in the future.
 - Before you write any LangGraph, LangChain, DeepAgents related code, use the relavent skill like `langgraph-fundementals` to understand the basic concepts and principles.
-- When writing docs, always use Sonnet 5 subagent to generate the docs. After you do that, use the `humanizer` skill to refine the docs.
+- When writing docs, always use the `humanizer` skill to refine the docs.
 
 ## Documentation language workflow
 
@@ -30,5 +29,6 @@ Everything else is **English only** — do not create a `.zh.md` for it.
 - **When the work is done** (before commit): align the affected twins to the finalized English, then refine each with the `qu-ai-wei` skill.
 
 ## External dependencies
-- The UI is a separate project, you can find it in the [governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui) repository and it is available locally at `../governed-bi-ui`.
-- The data is avaialble in `../BIRD-Data-Obfuscation` locally.
+
+- The UI can be found in the [governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui) repository, and is available locally at `../governed-bi-ui`.
+- The data can be found in the [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) repository, and is available locally at `../BIRD-Data-Obfuscation`.
