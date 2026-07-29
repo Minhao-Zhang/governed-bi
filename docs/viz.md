@@ -2,12 +2,12 @@
 
 _[English](viz.md) · [简体中文](viz.zh.md)_
 
-The **audit surface** for the [Agentic BI System](system-overview.md) corpus —
+The **audit surface** for the [Agentic BI System](architecture.md) corpus —
 **read-only by default**. This repo ships **no bundled UI**; instead it ships the
 pieces a UI reads from — the `presenter` view models (UI-agnostic) and the
 `governed_bi.api` HTTP/JSON API — so you can browse and audit the AI-built layer,
 and ask a question to see the governed answer plus its reliability stamp. The
-interactive UI is a separate project (see [ui-frontend-design.md](ui-frontend-design.md)).
+interactive UI is a separate project (see [ui-frontend-handoff.md](ui-frontend-handoff.md)).
 
 **Interactive corpus editing and opening PRs are intentionally not built here**
 as a product surface. `POST /corpus/edit` can write YAML when `[serve].allow_edit`

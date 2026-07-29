@@ -1,6 +1,6 @@
 """Thread-pool serve scheduler for the eval drivers.
 
-Spec: ``docs/plans/eval-concurrency-design.md`` (the ``workers`` knob).
+Spec: ``docs/measurement.md`` (the ``workers`` knob).
 
 The per-question serve loop is the wall-clock bottleneck (one LLM-and-DB-bound
 agentic turn per question). This module runs that loop across ``workers`` OS

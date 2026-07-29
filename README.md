@@ -67,7 +67,7 @@ PG_DSN=host=... port=5432 dbname=... user=... password=...
 uv run langgraph dev          # starts the `serve` graph; POST questions to /chat
 ```
 
-See [walkthrough](docs/walkthrough.md) for a guided first-question tour and
+See [usage](docs/usage.md) for a guided first-question tour and
 [usage](docs/usage.md) for the full reference. To drive the agent core directly
 from Python, see [`docs/analyst.md`](docs/analyst.md).
 
@@ -114,7 +114,7 @@ API-key auth when `[serve].api_key_env` is set).
 **No eval number in this repo is currently quotable** — every number produced
 before 2026-07-26 is discarded (see [`docs/README.md`](docs/README.md)). The
 prior single-seed ladder run is a historical record only
-([eval-ladder-results](docs/plans/eval-ladder-results.md): arm definitions and
+(the v5 run record in git history: arm definitions and
 method survive; **do not quote its numbers**). The current milestone is the
 **scale run** — all 69 BIRD DBs loaded as Postgres schemas (8,134 train /
 2,030 test) — where a large held-out test set is the unit of evidence (see

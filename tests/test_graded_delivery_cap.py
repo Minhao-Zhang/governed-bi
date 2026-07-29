@@ -112,7 +112,7 @@ def test_recheck_refuses_mislabeled_semantic_entry():
 
 def test_recheck_allows_clean_l4_scope_failure():
     """The re-check must NOT block a legitimate L4 (scope-only) graded delivery:
-    a query over allowlisted columns still delivers-and-grades (pipeline-design §6)."""
+    a query over allowlisted columns still delivers-and-grades (D5)."""
     corpus = load_corpus(CORPUS_ROOT, schema="beer_factory").for_analyst()
     gw = _CountingGateway()
     answer = _finish_unsuccessful(

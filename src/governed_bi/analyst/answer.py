@@ -216,7 +216,7 @@ def graded_delivery(
     result: "ResultTable | None" = None,
     text: str | None = None,
 ) -> Answer:
-    """pipeline-design §6: deliver SQL with ``unverified`` assurance instead of refusing.
+    """D5: deliver SQL with ``unverified`` assurance instead of refusing.
 
     Used when a *semantic* failure (coverage / L3–L5 repair exhaustion / execution
     exhaustion) would formerly hard-refuse, but a generated SQL exists to grade.

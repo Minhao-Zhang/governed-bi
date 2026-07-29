@@ -2,7 +2,7 @@
 
 _Implements [D15](../design-decisions.md#d15-multi-schema-serving-one-database-many-schemas)
 (one database, many schemas). Companion to
-[eval-ladder-results.md](eval-ladder-results.md) (single-DB arms, method,
+the single-DB arm/method record in git history (
 terminology) and the operator checklist in
 [experiment-runbook.md](experiment-runbook.md). Read the runbook before a paid
 pooled run. Arm names: `baseline` / `seeded` / `curated` / `curated_sme`
@@ -101,7 +101,7 @@ Two `Settings` knobs, new for this run, drive the schema router:
 | `schema_pick_max_columns` | column names per table shown to the picker (0 = names only) | 12 | 12 |
 
 When `schema_route_llm_pick=True`, an LLM picks exactly one schema from the
-shortlist (pipeline-design §5.1) and **cross-schema join expansion is
+shortlist (D15) and **cross-schema join expansion is
 skipped**. This is the single-schema-answer regime, which is correct for
 BIRD (every test question targets exactly one `db_id`). The default
 (`False`) is the general cross-schema regime and is unchanged for the

@@ -55,5 +55,5 @@ def test_l3_column_failure_is_hard_refused_never_executed():
 def test_l4_scope_failure_still_graded_delivers():
     gw = _CountingGateway()
     answer = _finish(gw, "term_semantics")
-    assert gw.calls == 1, "L4 scope failures still deliver-and-grade (pipeline-design §6)"
+    assert gw.calls == 1, "L4 scope failures still deliver-and-grade (D5)"
     assert answer.result is not None

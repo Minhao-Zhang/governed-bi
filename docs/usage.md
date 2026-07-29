@@ -2,7 +2,6 @@
 
 _[English](usage.md) · [简体中文](usage.zh.md)_
 
-> New here? The [Walkthrough](walkthrough.md) is a guided clone → first-question
 > tour. This page is the reference quickstart.
 
 The full question -> answer pipeline runs end to end today over the committed
@@ -204,7 +203,7 @@ datasource, serve flags). Local overrides go in git-ignored
 `governed_bi.local.toml`. Because the display logic lives in the UI-agnostic
 `governed_bi.viz.presenter` (no UI dependency), a separate frontend can consume
 the same view models — the interactive UI is a separate project, see
-[docs/ui-frontend-design.md](ui-frontend-design.md).
+[docs/ui-frontend-handoff.md](ui-frontend-handoff.md).
 
 ## Run the tests
 

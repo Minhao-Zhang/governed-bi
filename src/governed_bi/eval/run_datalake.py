@@ -2442,7 +2442,7 @@ def _summarise_rows(
         "n_safety_clearance_observed": sum(
             1 for r in produced if r.get("safety_clearance") is not None
         ),
-        # Delivered under grading semantics (pipeline-design §6): the turn handed back SQL
+        # Delivered under grading semantics (D5): the turn handed back SQL
         # whose semantic assurance was below the bar rather than refusing. A rung that
         # raises EX mostly by delivering more of these is trading governance for score,
         # and that is invisible without the rate.
@@ -2586,7 +2586,7 @@ def _summarise_rows(
         # fields above. Widening the picker context raises input tokens on every
         # question, so a total is needed — but latency is scheduler-dependent by
         # design, and a serial run and a pooled run must still agree on every
-        # number that is a *result* (docs/plans/eval-concurrency-design.md).
+        # number that is a *result* (docs/measurement.md).
         # Shared with ``run_experiment`` so the two drivers cannot disagree about
         # what a cost block is, and so a measured 0.0 stays 0.0 rather than
         # collapsing into "not measured".
@@ -3875,7 +3875,7 @@ def run_datalake(
         datasource=datasource,
         corpus_root=str(out_dir),
     )
-    # pipeline-design §6 (deliver-and-grade semantic failures); D15 routing knobs.
+    # D5 (deliver-and-grade semantic failures); D15 routing knobs.
     settings = replace(
         settings,
         hard_block_suspect_columns=False,
@@ -4205,7 +4205,7 @@ def run_datalake(
             sme_fold[db] = fold
             _warn_if_sme_noop(fold, db_id=db)
 
-    # Serve concurrency (docs/plans/eval-concurrency-design.md): only fan out when
+    # Serve concurrency (docs/measurement.md): only fan out when
     # there is a live model. The refuse-all path returns without work, so there is
     # nothing to overlap. The one exception is ``oracle_sql``, which executes real
     # gold SQL under ``--skip-agent`` and so *would* overlap — left serial on purpose:

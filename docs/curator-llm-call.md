@@ -4,7 +4,7 @@ This traces the offline curation pipeline (`curator/`) call by call: which step
 sends which prompt, what the user message looks like with the placeholders where
 dynamic content is injected, and each deep-agent's tool loop shown as an
 illustrative transcript. It complements [Curator](curator.md) and
-[Pipeline design](pipeline-design.md), which describe the surrounding design.
+which describe the surrounding design.
 
 **Prompt text itself is not reproduced here.** `_PHASE_A_PROMPT` and
 `_PHASE_B_PROMPT` (`curator/prompts.py`) are re-exports of the `curator_phase_a` /
@@ -238,7 +238,7 @@ its system prompt's method step 4 above.
 7. **Validate** again → the **`curated_sme`** corpus is written.
 
 **See also:** [Curator](curator.md) for the proposer/adversary design and the
-provenance lifecycle; [Pipeline design](pipeline-design.md) for how Phase A/B fit the
+provenance lifecycle; [Curator](curator.md) for how Phase A/B fit the
 eval-ladder experiment; [Prompt-variant experiments](prompt-experiments.md) for the
 registry, variant selection, and end-to-end attribution; [Asset schemas](asset-schemas.md)
 for what `upsert_*` / `annotate_*` actually write.

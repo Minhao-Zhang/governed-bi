@@ -111,7 +111,7 @@ _GENERIC_KEYWORDS = frozenset(
 #     ``failed_layer=None``). A capped attempt cleared NO layer, so its SQL is never
 #     executed on the graded-delivery path (audit Vuln 2 / broken access control).
 # L3/L4/L5 stay *repairable mid-loop* (the agent retries on a BLOCKED ToolMessage,
-# D5/D11); only the FINAL disposition is fixed here (pipeline-design §6).
+# D5/D11); only the FINAL disposition is fixed here.
 _GRADED_DELIVERY_LAYERS = frozenset(
     {
         GuardrailLayer.term_semantics.value,
@@ -297,7 +297,7 @@ def _answer_text(
 
 
 def _unverified_prefix(provenance: dict) -> str:
-    """The graded-delivery caveat banner (pipeline-design §6).
+    """The graded-delivery caveat banner (D5).
 
     Shared by the deterministic finalizer text and the LLM ``narrate`` node so the
     two phrasings of an unverified answer never drift.

@@ -4,7 +4,7 @@ A thin, **stateless** JSON API: read endpoints serialize the ``viz.presenter``
 view models (schema, relationship graph, corpus assets, health); ``/chat``
 runs one turn through ``answer_question_agent`` with working memory rebuilt from the
 turns the caller sends. It is the interface a separate frontend (Next.js) consumes
-— see ``docs/ui-frontend-design.md``.
+— see ``docs/ui-frontend-handoff.md``.
 
 The audit surface is **read-only by default**. ``POST /corpus/edit`` writes only
 when ``[serve].allow_edit`` is true; mutating routes also require a shared secret

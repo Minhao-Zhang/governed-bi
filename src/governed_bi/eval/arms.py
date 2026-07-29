@@ -1,4 +1,4 @@
-"""The eval-ladder harness (Architecture section 8; D4; terminology-refactor).
+"""The eval-ladder harness (Architecture section 8; D4).
 
 Runs a set of questions through a *solver* (question -> SQL, or None if it
 declines/refuses) and scores EX plus the free behavioral signals:
@@ -31,7 +31,7 @@ see test *questions* and their evidence, but never test gold SQL. That leakage
 boundary is its definition, not a detail — it is what makes ``1 - ceiling`` read
 as irreducible SQL-generation error. It is still designed, not built; there is no
 split-scoped index in :mod:`governed_bi.curator.sme`, whose brief remains
-train-only. See ``docs/plans/terminology-refactor.md`` and the D14 amendment.
+train-only. See ``docs/glossary.md`` and the D14 amendment.
 
 The counterfactual oracle rungs in :mod:`governed_bi.eval.oracle` (``oracle_sql``,
 ``oracle_schema``, ``oracle_tables``, ``oracle_tables_padded``) do exist, and they

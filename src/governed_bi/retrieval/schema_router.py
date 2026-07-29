@@ -530,7 +530,7 @@ def pick_schema(
     max_columns: int = 0,
     system_prompt: str | None = None,
 ) -> SchemaPick:
-    """LLM picks the single best schema from ``candidates`` (pipeline-design §5.1).
+    """LLM picks the single best schema from ``candidates`` (D15).
 
     Retrieval has already shortlisted ``candidates`` in relevance order. This node
     shows the LLM each candidate's tables (and, when ``max_columns > 0``, their

@@ -4,7 +4,7 @@ _[English](0001-langgraph-server-chat-runtime.md) · [简体中文](0001-langgra
 
 - **Status:** Accepted (2026-07-10); superseded in part by [ADR 0002](0002-governed-agentic-serve-runtime.md) (2026-07-14) — the runtime choice (LangGraph Server + `useStream`) still stands; the single-node `answer_question` framing was replaced.
 - **Deciders:** project owner + design session
-- **Related:** [ui-frontend-design.md](../ui-frontend-design.md), [ui-frontend-handoff.md](../ui-frontend-handoff.md)
+- **Related:** [ui-frontend-handoff.md](../ui-frontend-handoff.md)
 
 ## Context
 

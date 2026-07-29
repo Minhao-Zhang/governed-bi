@@ -1,7 +1,7 @@
 """Tests for the UI-agnostic viz presenter (view models, no UI dependency).
 
 These import only ``governed_bi.viz.presenter``; there is no bundled UI to test.
-The interactive frontend is a separate project (see docs/ui-frontend-design.md);
+The interactive frontend is a separate project (see docs/ui-frontend-handoff.md);
 it renders these view models, which the HTTP API (``governed_bi.api``) also serves.
 """
 

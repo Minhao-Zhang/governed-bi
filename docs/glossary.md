@@ -2,7 +2,7 @@
 
 _[English](glossary.md) · [简体中文](glossary.zh.md)_
 
-Canonical terms for the [Agentic BI System](system-overview.md). When a term
+Canonical terms for the [Agentic BI System](architecture.md). When a term
 below conflicts with how something is being described, the term below wins.
 
 > **Retired vocabulary**
@@ -11,7 +11,7 @@ below conflicts with how something is being described, the term below wins.
 > → **governed dataset** (optionally materialized); `app_ci` → the gateway's
 > execution target.
 >
-> Also retired by the [terminology refactor](plans/terminology-refactor.md):
+> Also retired by the 2026-07-16 terminology refactor:
 > `A1` / `A2` / `A3` — these mapped onto the old three-rung ladder
 > (`baseline` / `curated` / `curated_sme`), which has since been split so that each
 > adjacent step changes one thing, so there is no longer a 1:1 successor for the old

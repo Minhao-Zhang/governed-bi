@@ -10,10 +10,10 @@ _[English](0003-governed-notes-tri-modal-retrieval.md) · [简体中文](0003-go
   shipped the schema, storage, and CI; M4 added trigger PIN (default-off),
   injection wiring, the agent-fetch tools, and the offline gates. Phase 6
   (max-pool vector) stays deferred. Build order in
-  [the implementation plan](../plans/implementation-plan-notes-and-run-logging.md).
+  the implementation plan (removed once M1–M4 shipped; see git history).
 - **Deciders:** project owner + design session
 - **Related:** [0002](0002-governed-agentic-serve-runtime.md);
-  [pipeline-design.md](../pipeline-design.md);
+  pipeline-design.md (removed; see git history);
   [design-decisions.md](../design-decisions.md) (D6 human gate, D9 corpus
   file-structure, D10 proposer+adversary, D15 multi-schema, D16 agentic core);
   [asset-schemas.md](../asset-schemas.md);

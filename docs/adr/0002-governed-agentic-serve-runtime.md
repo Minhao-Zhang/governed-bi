@@ -6,7 +6,7 @@ _[English](0002-governed-agentic-serve-runtime.md) · [简体中文](0002-govern
   2026-07-13; cutover landed on `main` 2026-07-14 (commit `d2fdd6a`).
 - **Deciders:** project owner + design session
 - **Related:** [0001](0001-langgraph-server-chat-runtime.md),
-  [pipeline-design.md](../pipeline-design.md) (§8 invariants; the serve §§5–7 it once had are removed),
+  pipeline-design.md (§8 invariants; removed — see git history),
   [design-decisions.md](../design-decisions.md) (D2, D5, D11, D15)
 - **Supersedes:** the pipeline-design §8 invariant *"Serve stays a deterministic
   DAG; LLM appears only as bounded node operations, never as an autonomous loop"*

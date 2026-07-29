@@ -1,4 +1,4 @@
-"""Serve-loop concurrency invariance (docs/plans/eval-concurrency-design.md).
+"""Serve-loop concurrency invariance (docs/measurement.md).
 
 The executable form of the design's results-invariance argument: the parallel
 serve routine with ``workers >= 3`` must produce byte-identical per-question rows

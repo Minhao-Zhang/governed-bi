@@ -13,7 +13,7 @@ so swapping frontends touches only the renderer, never this module.
 Editing the corpus and opening PRs is out of scope for these view models: git is
 the source of truth (D9), and the write primitives an editor reuses live in
 ``corpus.schemas`` / ``corpus.serialize`` / ``corpus.validate``. See
-``docs/viz.md`` and ``docs/ui-frontend-design.md``.
+``docs/viz.md`` and ``docs/ui-frontend-handoff.md``.
 """
 
 from __future__ import annotations

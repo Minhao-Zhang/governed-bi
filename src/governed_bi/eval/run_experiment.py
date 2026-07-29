@@ -204,7 +204,7 @@ def _cost_block(rows: list[dict[str, Any]]) -> dict[str, Any]:
     Kept out of :class:`ArmSummary` on purpose: latency is scheduler-dependent, and
     the workers-invariance test compares the whole summary — a serial and a pooled
     run must agree on every number that is a *result*
-    (docs/plans/eval-concurrency-design.md). Nesting it here instead is what lets
+    (docs/measurement.md). Nesting it here instead is what lets
     that comparison stay total while the cost still lands in ``summary.json``.
     """
     return {
@@ -759,7 +759,7 @@ def run_experiment(
         datasource=datasource,
         corpus_root=str(out_dir),
     )
-    # pipeline-design §6: semantic/coverage/repair-exhaustion deliver-and-grade;
+    # D5: semantic/coverage/repair-exhaustion deliver-and-grade;
     # suspect soft-warn only. Safety (L2 + refuse-gate) stays hard.
     settings = replace(
         settings,
@@ -970,7 +970,7 @@ def run_experiment(
     suspect_curated = _suspect_from_corpus(corpus_curated, db_id) | trap_cols
     suspect_curated_sme = _suspect_from_corpus(corpus_curated_sme, db_id) | trap_cols
 
-    # Serve concurrency (docs/plans/eval-concurrency-design.md): only fan out when
+    # Serve concurrency (docs/measurement.md): only fan out when
     # there is a live model — the offline refuse-all path has nothing to overlap.
     effective_workers = serve_workers if lc_model is not None else 1
     if effective_workers > 1:

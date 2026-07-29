@@ -2,7 +2,7 @@
 
 _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 
-Settled decisions D1-D18 for the [Agentic BI System](system-overview.md), with
+Settled decisions D1–D19 for the [Agentic BI System](architecture.md), with
 the alternatives considered and the trade-offs. The **ADR-grade** ones are hard
 to reverse. Treat them as ADRs.
 
@@ -348,7 +348,7 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
 - **The guardrail becomes schema-qualified and remains the sole table-scoping gate.** Retrieval and the L4 license scope span all schemas: a **schema router** shortlists the relevant schemas, then expands **along curated joins** so a bridge table sitting in a third schema is not dropped (a similarity-only shortlist would cause *spurious* refusals indistinguishable from the honest one above). The L4 allow-set becomes fully-qualified `schema.table` membership; a bare reference resolves only to a designated default schema and is **refused as ambiguous** when the licensed set holds that name in more than one schema — this is what forbids a self-authorized off-scope schema. L3 keys become three-part `schema.table.column`; L5 union-find keys on `schema.table`. The licensed *id* set was already schema-correct (IDs embed the schema), so this is a projection fix. Read-only, the forced row cap, and the statement timeout are untouched — they live in the connectors, not the guardrail — and `search_path` is **not** used (L2 forbids `Command`); full qualification is the mechanism.
 - **Alternatives:** a true three-level `connection → schema → table` model with cross-connection federation (rejected — one engine cannot join across physical connections; federation is a warehouse concern); auto-discovering cross-schema joins from FK metadata or name heuristics (rejected — cross-schema FKs rarely exist, and guessing them is the dominant error mode in FK-less settings); unconditional qualification (rejected — it breaks the SQLite/BIRD graded path).
 - **Consequence:** refines **D1**'s target (multi-schema-capable within one database, tenancy still out) and **D9**'s corpus contract (`db` → `schema`; the `<db>/` subtree becomes `<schema>/`). **Cross-schema serving is un-graded by BIRD** (**D14**), an accepted, documented limitation covered instead by guardrail unit tests, a two-schema Postgres integration fixture, and a CI check for `(schema, physical_name)` uniqueness and non-ambiguous allow-set keys. **Status: building in verified increments (from 2026-07-12).** Shipped: increment 1, the gateway foundation (span-all connector + `multi_schema` config); increment 2, the schema-qualified guardrail (L3/L4/L5 keyed on `schema.table`); increment 3, multi-schema as the Postgres/Redshift **serve default** (qualified SQL-gen + guardrails wired; SQLite stays single-schema for BIRD); increment 4, **missing-edge refusal** (cross-schema retrieval with no curated `JoinAsset` refuses before generate, with a D12 `clarification_hint`); increment 5, **API wire rename** (`db` → `schema` on presenter/OpenAPI responses and `?schema=` filters only — no `?db=` alias; graph **nodes** carry `schema`); increment 6, **server-side graph scoping** (`?schema=` / `focus` / `radius` / `node_budget` on `/graph` and `/knowledge-graph`, plus KG `kinds=`, with `boundary` + `meta.scope` envelope; param-less remains the full graph); increment 7, **on-disk YAML rename** (`TableAsset` / `FewShotAsset` / skill frontmatter field `db` → `schema`; `load_corpus`/`write_corpus`serve always loads every `corpus/<schema>/` subtree); and increment 8, **join-aware schema router** (BM25 schema shortlist + curated cross-schema join expansion before RVGD on the multi-schema path; single-schema/SQLite unchanged). Still deferred: server `/search` (client Fuse remains default per Q6). **`DataSourceConfig.db`'s collapse into a single pin field is now done** (terminology refactor): the field is renamed `corpus_pin` (unifying the BIRD `db_id` and the default write subtree). The LLM coarse-to-fine pruning pass stays deferred behind the pluggable generator seam. Increment 9 (2026-07-17): the `multi_schema` mode flag is removed — see the superseding note below.
-- **Superseded (2026-07-17): uniformly schema-qualified.** The `multi_schema` on/off mode is removed; SQLite no longer stays bare. The SQLite connector `ATTACH`es the database file under a schema alias (the `corpus_pin`/BIRD `db_id`), so a generated `schema.table` query runs natively against SQLite, read-only preserved via `PRAGMA query_only`. `DataSourceConfig` drops `is_multi_schema()` for `serving_schema()` (the ATTACH alias, the pinned Postgres schema, or `None` to span all schemas), collapsing the three-mode distinction (SQLite-single / Postgres-pinned / Postgres-span-all) into one qualified convention — the only variable left is how many schemas exist and what a bare reference defaults to. The guardrail and `PromptContext` (which drops `multi_schema`) are unconditionally schema-qualified; `default_schema` is always the serving schema. No corpus regeneration was needed — BIRD assets already carried `schema: <db_id>`. `run_experiment.py` no longer pins `multi_schema=False`. See [schema-qualification-scale-risk.md](plans/schema-qualification-scale-risk.md) (§Resolution) and [engineering-gaps-2026-07-16.md](plans/engineering-gaps-2026-07-16.md) #9.
+- **Superseded (2026-07-17): uniformly schema-qualified.** The `multi_schema` on/off mode is removed; SQLite no longer stays bare. The SQLite connector `ATTACH`es the database file under a schema alias (the `corpus_pin`/BIRD `db_id`), so a generated `schema.table` query runs natively against SQLite, read-only preserved via `PRAGMA query_only`. `DataSourceConfig` drops `is_multi_schema()` for `serving_schema()` (the ATTACH alias, the pinned Postgres schema, or `None` to span all schemas), collapsing the three-mode distinction (SQLite-single / Postgres-pinned / Postgres-span-all) into one qualified convention — the only variable left is how many schemas exist and what a bare reference defaults to. The guardrail and `PromptContext` (which drops `multi_schema`) are unconditionally schema-qualified; `default_schema` is always the serving schema. No corpus regeneration was needed — BIRD assets already carried `schema: <db_id>`. `run_experiment.py` no longer pins `multi_schema=False`.
 
 ## D16: Governed Agentic Serve Core
 
@@ -356,7 +356,7 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
 > invariants, and phased migration in
 > [ADR 0002](adr/0002-governed-agentic-serve-runtime.md); the historical
 > agent-vs-flow A/B (flow now deleted) is summarized in
-> [eval-ladder-results](plans/eval-ladder-results.md) (numbers discarded; method
+> the 2026-07-14 v5 run record in git history (numbers discarded; method
 > and arm definitions only).
 >
 > Serve is reworked from a deterministic single-shot DAG into a **governed
@@ -461,7 +461,7 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
   Postgres (BIRD-Obfuscation `pg_rename_decoy`, `127.0.0.1:5435`) with a live
   model — the working daily eval path, not an offline double. Connector docstrings
   (`gateway/connectors/{base,__init__}.py`, `gateway/__init__.py`), `usage.md`,
-  and `system-overview.md` are corrected accordingly. **Redshift** remains
+  and the architecture doc are corrected accordingly. **Redshift** remains
   genuinely unverified against a live cluster. Sub-points on the "one defensible
   run" milestone: **(4.1) live-model runs** — already happening (see above);
   **(4.2) the gold reference arm** — see R-gold below.
@@ -544,7 +544,7 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
 > **Decided (2026-07-22); M3 + M4 landed 2026-07-22.** Full rationale,
 > data model, and phased migration in
 > [ADR 0003](adr/0003-governed-notes-tri-modal-retrieval.md); build order in
-> [the implementation plan](plans/implementation-plan-notes-and-run-logging.md).
+> ADR 0003 / ADR 0004 (M1–M5 shipped).
 > M3 shipped the schema, storage, and CI; M4 added trigger PIN (default-off),
 > injection wiring, the agent-fetch tools, and offline gates. Phase 6 (max-pool
 > vector) stays deferred; see "Status" below.
@@ -602,7 +602,7 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
   GATE-RECALL / GATE-ADV-WRONG-NOTE. Phase 6 max-pool vector deferred (only if
   recall still caps EX). LLM `refute()` for non-notes remains model-gated;
   notes have an offline structural `refute()`. See ADR 0003 and the
-  [implementation plan](plans/implementation-plan-notes-and-run-logging.md).
+  ADR 0004 (M1–M2, M5 shipped).
   ADR 0003's design questions are resolved (see locked decisions above).
 
 ## D18: Local-first Conversation + Run Logging

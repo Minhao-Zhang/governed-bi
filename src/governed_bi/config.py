@@ -196,7 +196,7 @@ class Settings:
     # ── Analyst: suspect-column enforcement (Analyst §"three points" #1) ──
     hard_block_suspect_columns: bool  # dev/BIRD: True; prod/enterprise: soft-warn + drop reliability tier
 
-    # ── pipeline-design §6: deliver-and-grade semantic failures ──
+    # ── D5: deliver-and-grade semantic failures ──
     # When True, coverage / L3–L5 repair-exhaustion / execution-exhaustion
     # return the last generated SQL with ``semantic_assurance=unverified``
     # instead of a hard refusal. L2 policy + curated refuse-gate stay hard.
@@ -224,7 +224,7 @@ class Settings:
     # when the corpus spans >1 schema.
     schema_route_top_k: int = 3
     # When True, an LLM picks exactly ONE schema from the shortlist
-    # (pipeline-design §5.1) and cross-schema join-expansion is skipped — the
+    # (D15) and cross-schema join-expansion is skipped — the
     # single-schema-answer regime (e.g. the BIRD data-lake, where every question
     # targets one db_id). When False (default), keep the shortlist and expand along
     # curated cross-schema joins (cross-schema answering).
@@ -294,7 +294,7 @@ class Settings:
     log_row_previews: bool = False  # Tier C; needs log_full_content too
     log_full_content_ttl_days: int = 30
 
-    # ── Eval harness concurrency (see [eval]; docs/plans/eval-concurrency-design.md) ──
+    # ── Eval harness concurrency (see [eval]; docs/measurement.md) ──
     # Serve-loop worker threads for the BIRD eval drivers. 1 = fully serial and
     # byte-identical to the pre-concurrency behaviour (the non-negotiable default).
     # ``eval_serve_workers`` overrides ``eval_workers`` for the per-question serve
@@ -645,7 +645,7 @@ def load_settings(
                 bool(value) if field_name == "schema_route_llm_pick" else int(value)
             )
 
-    # Optional [eval] table (docs/plans/eval-concurrency-design.md). TOML keys are
+    # Optional [eval] table (docs/measurement.md). TOML keys are
     # short (``workers`` / ``serve_workers`` / ``build_workers``); they map onto the
     # ``eval_*`` fields on Settings.
     eval_tbl = data.get("eval", {})

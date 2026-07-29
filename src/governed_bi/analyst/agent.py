@@ -421,7 +421,7 @@ def build_serve_rails(
         )
     # Schema-routing knobs (D15). ``schema_route_top_k`` widens the BM25/embedder
     # shortlist; ``schema_route_llm_pick`` collapses it to a single LLM-chosen schema
-    # (pipeline-design §5.1 — the single-schema-answer regime, e.g. the BIRD data
+    # (D15 — the single-schema-answer regime, e.g. the BIRD data
     # lake). Both only bite when the corpus spans schemas. The router chat wraps the
     # raw model in a ChatClient (``pick_schema`` needs ``.complete``); built once.
     route_top_k = settings.schema_route_top_k

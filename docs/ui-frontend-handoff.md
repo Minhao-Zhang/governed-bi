@@ -3,7 +3,7 @@
 _[English](ui-frontend-handoff.md) · [简体中文](ui-frontend-handoff.zh.md)_
 
 The build brief + contract for the **governed-bi** frontend. Pair with the
-architecture rationale in [ui-frontend-design.md](ui-frontend-design.md) and the
+architecture rationale in [ADR 0001](adr/0001-langgraph-server-chat-runtime.md) and the
 runtime decision in [ADR 0001](adr/0001-langgraph-server-chat-runtime.md).
 
 > **Status: the backend rework has landed; this contract is live.** Chat is served
@@ -15,7 +15,7 @@ runtime decision in [ADR 0001](adr/0001-langgraph-server-chat-runtime.md).
 > [ADR 0002](adr/0002-governed-agentic-serve-runtime.md).
 >
 > **Incoming design change — read §13 before touching the answer card.** The new
-> [pipeline-design.md](pipeline-design.md) reworks how low-confidence answers
+> [D5](design-decisions.md) reworks how low-confidence answers
 > are delivered: most refusals become **delivered-but-graded** answers the UI must
 > render with a reliability treatment, not hide. Some of that contract is already
 > live (the two-axis stamp, `graded_delivery`); some is gated on backend work. §13
@@ -278,7 +278,7 @@ The backend owner's answers to the eight questions in the frontend's
 ## 13. Reliability & deliver-and-grade (new design)
 
 Source: [D5 (two-axis stamp + graded delivery)](design-decisions.md#d5-refusal--best-effort);
-pinned-corpus context in [pipeline-design.md §1](pipeline-design.md). Motivation:
+pinned-corpus context in [curator.md](curator.md). Motivation:
 the reliability treatment is the product surface for the engine's
 **deliver-and-grade** decision — a coverage / L3–L5 / execution failure delivers
 the SQL with an `unverified` stamp instead of refusing, so the curated arm isn't

@@ -2,7 +2,7 @@
 
 ``build_baseline_corpus``: deterministic, DB-derivable corpus only (names,
 types, sample values, naming-convention FK candidates) — no curator LLM, no
-train-SQL seeding. The eval floor (plan: ``docs/plans/terminology-refactor.md``).
+train-SQL seeding. The eval floor (arm naming: ``docs/glossary.md``).
 
 ``build_curated_corpus`` (Phase A / ``curated``): Facts profile → deterministic
 train-SQL seed → deep-agent explore (all pairs + ``clarifications.jsonl`` via
