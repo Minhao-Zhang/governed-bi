@@ -17,17 +17,14 @@ off a 4,700-line driver, not scaffolding for the merge.
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from ..corpus import load_corpus
 from ..corpus.schemas import ReliabilityStatus, TableAsset
 from ..corpus.validate import validate_corpus
-
-if TYPE_CHECKING:
-    pass
+from .atomic import atomic_write_text
 
 
 def _dsn_host(dsn: str) -> str:
@@ -113,24 +110,16 @@ def _cost_block(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    """Overwrite ``path`` atomically (temp + flush/fsync + replace).
+    """Overwrite ``path`` atomically (see :mod:`governed_bi.eval.atomic`).
 
     Crash-row resume rewrites generations files through this helper. An in-place
     ``open("w")`` truncate left a kill mid-write able to destroy already-scored
     rows; the temp-file swap keeps the previous file until the new one is durable.
     """
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + f".tmp{os.getpid()}")
-    try:
-        with tmp.open("w", encoding="utf-8") as fh:
-            for row in rows:
-                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-    finally:
-        tmp.unlink(missing_ok=True)
+    atomic_write_text(
+        path, "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)
+    )
 
 
 def _validate_corpora(corpora: dict[str, Any], *, connector: Any = None) -> dict[str, dict]:
