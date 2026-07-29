@@ -216,7 +216,20 @@ def extract_metrics_from_sql(
             if col.table:
                 phys = _resolve(col.table, aliases)
                 if phys:
-                    col.set("table", phys)
+                    # An Identifier, not a raw str. Assigned raw, sqlglot renders the
+                    # name verbatim and unquoted, so a physical name with a space —
+                    # BIRD ships `Air Carriers` — produced ``COUNT(Air Carriers."Code")``,
+                    # which does not parse. The join half of this module already learned
+                    # this (see :func:`_qualified`); the metric half was the site it
+                    # missed, and the seeded/curated/SME arms carried the malformed
+                    # expression into every prompt that rendered the metric block.
+                    #
+                    # ``to_identifier`` quotes on the same condition ``_SIMPLE_IDENT``
+                    # tests, so the two paths agree on what needs quoting. A mixed-case
+                    # name with no space stays unquoted here, exactly as it does in an ON
+                    # clause; the guardrails' identifier re-quote (AUDIT S1) is what
+                    # restores its case at the engine.
+                    col.set("table", exp.to_identifier(phys))
         expr = agg_copy.sql(dialect=dialect)
         if expr in seen:
             continue

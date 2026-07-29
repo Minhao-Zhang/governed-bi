@@ -32,6 +32,7 @@ from .clarifications import (
     clarifications_path,
     fill_clarifications_with_responder,
     load_clarifications,
+    load_clarifications_with_repairs,
     quarantine_agent_answers,
     resolve_clarifications_path,
     seed_gap_clarifications,
@@ -671,7 +672,14 @@ def build_curated_corpus(
     _run_adversary_signal(bag, connector=connector, out_root=out_root)
     bag.write(out_root)
 
-    ledger = load_clarifications(clarifications_path(out_root))
+    ledger, ledger_repairs = load_clarifications_with_repairs(clarifications_path(out_root))
+    if ledger_repairs:
+        logger.warning(
+            "curator ledger for %s needed %d repair(s): %s",
+            schema,
+            len(ledger_repairs),
+            "; ".join(ledger_repairs),
+        )
     if clarifications_path(out_root).exists():
         ledger_source = "agent" if agent_ran else "preexisting"
     else:
@@ -683,8 +691,14 @@ def build_curated_corpus(
     forged_answers: list[str] = []
     if ledger and ledger_source == "agent":
         ledger, forged_answers = quarantine_agent_answers(ledger)
-        if forged_answers:
+        # Rewritten when the loader repaired anything too, not only on a forged
+        # answer. A repair that stays in memory leaves the malformed line on disk for
+        # the SME arm and every later resume to re-repair — and for any future strict
+        # reader to die on. Write the normalised form once, here, where the artifact
+        # is still owned.
+        if forged_answers or ledger_repairs:
             write_clarifications(clarifications_path(out_root), ledger)
+        if forged_answers:
             logger.warning(
                 "curator agent pre-answered %d clarification(s) in %s; reset to open: %s",
                 len(forged_answers),
@@ -702,6 +716,12 @@ def build_curated_corpus(
             "clarification_count": len(ledger),
             # Non-empty means the agent tried to answer its own questions (AUDIT C6).
             "agent_forged_answers": forged_answers,
+            # Non-empty means the agent wrote a record this loader had to normalise
+            # (an out-of-enum status, an undeclared key). Recorded because the
+            # alternative reading — a clean ledger — is indistinguishable otherwise,
+            # and because the rate is what says whether the prompt needs the schema
+            # spelled out more plainly.
+            "ledger_repairs": ledger_repairs,
             "seed": seed_stats,
             # Successor to the deleted `decoy_defense` block: every suspect column in
             # this corpus is now agent-authored, so one count is the whole story. Zero

@@ -17,7 +17,7 @@ which biases the exact deltas the ladder exists to produce.
 from __future__ import annotations
 
 from governed_bi.corpus.validate import validate_corpus
-from governed_bi.curator.seed import extract_joins_from_sql
+from governed_bi.curator.seed import extract_joins_from_sql, extract_metrics_from_sql
 
 # --------------------------------------------------------------------------- #
 # join-on-unparseable: physical names containing a space
@@ -56,6 +56,41 @@ def test_ordinary_identifiers_are_left_unquoted():
         "ON T1.district = T2.cognress_rep_id"
     )
     assert joins[0].on == "zip_congress.district = congress.cognress_rep_id"
+
+
+# --------------------------------------------------------------------------- #
+# The same defect in the metric extractor, which had no test of its own
+# --------------------------------------------------------------------------- #
+
+
+def test_a_metric_expression_over_a_spaced_table_name_parses():
+    """The join half of `seed.py` was fixed for `Air Carriers`; the metric half was not.
+
+    `extract_metrics_from_sql` rewrote alias-qualified columns by assigning the
+    physical name as a raw `str`, which sqlglot renders unquoted —
+    `COUNT(Air Carriers."Code")`. Nothing re-parsed the expression, so it reached the
+    metric block of every seeded / curated / SME prompt as SQL the model could copy
+    and the syntax layer would then refuse.
+    """
+    metrics = extract_metrics_from_sql(
+        'SELECT COUNT(T1."Code") FROM "Air Carriers" AS T1 '
+        'JOIN "Airlines" AS T2 ON T1."Code" = T2.OP_CARRIER_AIRLINE_ID'
+    )
+    assert len(metrics) == 1
+    expr = metrics[0].expression
+    assert '"Air Carriers"' in expr, f"unquoted identifier with a space: {expr!r}"
+
+    import sqlglot
+
+    sqlglot.parse_one(expr, read="postgres")  # raises if the fix regressed
+
+
+def test_a_metric_expression_over_an_ordinary_table_name_is_left_unquoted():
+    """Same restraint as the ON clause: quote what must be quoted, nothing else."""
+    metrics = extract_metrics_from_sql(
+        "SELECT SUM(T1.amount) FROM payments AS T1"
+    )
+    assert metrics[0].expression == "SUM(payments.amount)"
 
 
 # --------------------------------------------------------------------------- #

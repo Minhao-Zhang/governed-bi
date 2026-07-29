@@ -7,6 +7,7 @@ Phase B (plus the experiment SME fill helper) loads back.
 
 from __future__ import annotations
 
+import json
 from enum import Enum
 from pathlib import Path
 from typing import Iterable, Protocol, Sequence, runtime_checkable
@@ -83,25 +84,133 @@ def resolve_clarifications_path(run_dir: Path | str, schema: str) -> Path | None
 
 
 def parse_line(line: str) -> ClarificationRecord:
-    """Parse and validate one JSONL line."""
+    """Parse and validate one JSONL line. Strict — the validating primitive."""
     return ClarificationRecord.model_validate_json(line)
 
 
-def load_clarifications(path: Path | str) -> list[ClarificationRecord]:
-    """Load all records from a JSONL file. Missing file → empty list."""
+#: Fields the model declares. Anything else the agent invents is dropped on repair
+#: rather than rejected, because ``extra="forbid"`` turns one stray key into a lost
+#: schema.
+_KNOWN_FIELDS: frozenset[str] = frozenset(ClarificationRecord.model_fields)
+
+#: The fields a record cannot be reconstructed without. Everything else has a
+#: default, so a record holding these three is still a usable question.
+_CORE_FIELDS: tuple[str, ...] = ("id", "scope", "question")
+
+
+def repair_record(obj: object) -> tuple[ClarificationRecord | None, str | None]:
+    """Best-effort recovery of one model-authored record. Never raises.
+
+    Returns ``(record, note)`` — ``note`` is ``None`` when the object validated
+    as-is, a short description of what was repaired otherwise, and ``record`` is
+    ``None`` only when not even a question could be recovered.
+
+    Repairs, in the order tried:
+
+    1. A ``status`` outside the enum becomes ``open``. This is the fail-safe
+       direction and it is not a new policy: ``open`` is exactly what
+       :func:`quarantine_agent_answers` resets a forged answer to, so an
+       unrecognised status is treated as what it is — not evidence a human
+       answered. ``answer`` / ``answered_by`` are deliberately left in place, so a
+       record like ``{"status": "resolved", "answer": "Verified: …",
+       "answered_by": "curator_probe"}`` is still caught by that guard and still
+       reported as forged.
+    2. Keys the model does not declare are dropped (``extra="forbid"``).
+    3. Failing both, the core three fields are kept and everything else reset to
+       its default — a type slip in ``raised_by`` or ``answer`` costs that field,
+       not the schema.
+    """
+    if not isinstance(obj, dict):
+        return None, "not a JSON object"
+    notes: list[str] = []
+    data = dict(obj)
+
+    raw_status = data.get("status")
+    if raw_status is not None and raw_status not in tuple(
+        s.value for s in ClarificationRecordStatus
+    ):
+        data["status"] = ClarificationRecordStatus.open.value
+        notes.append(f"status={raw_status!r} is not in the enum, read as open")
+
+    unknown = sorted(set(data) - _KNOWN_FIELDS)
+    if unknown:
+        for key in unknown:
+            data.pop(key, None)
+        notes.append("dropped undeclared key(s) " + ", ".join(repr(k) for k in unknown))
+
+    try:
+        return ClarificationRecord.model_validate(data), "; ".join(notes) or None
+    except ValidationError:
+        pass
+
+    core = {k: data.get(k) for k in _CORE_FIELDS}
+    if not all(isinstance(v, str) and v for v in core.values()):
+        return None, "; ".join([*notes, "no recoverable id / scope / question"])
+    try:
+        record = ClarificationRecord.model_validate(core)
+    except ValidationError as err:
+        return None, "; ".join([*notes, f"unrepairable: {err}"])
+    notes.append("kept id/scope/question only; other fields reset to defaults")
+    return record, "; ".join(notes)
+
+
+def load_clarifications_with_repairs(
+    path: Path | str,
+) -> tuple[list[ClarificationRecord], list[str]]:
+    """Load all records, repairing what the agent got wrong. Never raises.
+
+    The second element names every line that needed repair or was unusable —
+    empty on a clean ledger. Callers that hold the durable artifact should record
+    it and rewrite the file, so the repair happens once rather than on every read.
+
+    This function used to be strict, and a single bad line raised ``ValueError``
+    through :func:`~governed_bi.curator.pipeline.build_curated_corpus` and out to
+    the eval driver, which recorded the whole schema as a build failure. On
+    ``ice_hockey_draft`` that cost three perfectly good clarifications and the
+    entire schema because the fourth said ``"status": "resolved"`` — a near-synonym
+    for ``answered`` that any model will reach for eventually. Worse, the record it
+    died on was a *self-answered* one, which the pipeline already has a guard for
+    (:func:`quarantine_agent_answers`): strictness here meant the ValueError fired
+    before the guard designed for exactly that case could run.
+
+    The ledger is model-authored through ordinary file tools. Parsing it as if it
+    were a trusted schema, and letting the parse failure decide whether a schema
+    enters the experiment, is the defect — not the model's word choice.
+    """
     p = Path(path)
     if not p.exists():
-        return []
+        return [], []
     records: list[ClarificationRecord] = []
+    repairs: list[str] = []
     for i, raw in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
         line = raw.strip()
         if not line:
             continue
         try:
             records.append(parse_line(line))
-        except ValidationError as err:
-            raise ValueError(f"{p}: line {i}: invalid clarification record: {err}") from err
-    return records
+            continue
+        except ValidationError:
+            pass
+        try:
+            obj = json.loads(line)
+        except ValueError as err:
+            repairs.append(f"line {i}: dropped, not valid JSON ({err})")
+            continue
+        record, note = repair_record(obj)
+        if record is None:
+            repairs.append(f"line {i}: dropped, {note}")
+            continue
+        records.append(record)
+        repairs.append(f"line {i} ({record.id}): {note}")
+    return records, repairs
+
+
+def load_clarifications(path: Path | str) -> list[ClarificationRecord]:
+    """Load all records from a JSONL file. Missing file → empty list.
+
+    Repairs silently; see :func:`load_clarifications_with_repairs` for the report.
+    """
+    return load_clarifications_with_repairs(path)[0]
 
 
 def write_clarifications(path: Path | str, records: Sequence[ClarificationRecord]) -> Path:
