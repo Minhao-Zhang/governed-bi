@@ -330,12 +330,18 @@ record answers two questions that used to live only in someone's memory:
   lists `claim_ready_requires` rather than pretending to evaluate those conditions.
 - **`comparable(a, b)`** — may two runs be put in the same sentence? Only if
   `split`, `model`, `llm_temperature`, `prompt_set_hash`, `corpus_content_hash`,
-  `route_top_k`, `route_llm_pick`, `schema_pick_max_columns` and `use_embedder`
-  all match. That list is **derived** from `MANIFEST_KNOBS` minus a documented
+  `question_pool_hash`, `route_top_k`, `route_llm_pick`,
+  `schema_pick_max_columns` and `use_embedder` all match.
+  That list is **derived** from `MANIFEST_KNOBS` minus a documented
   `COMPARABILITY_EXCLUSIONS`, not spelled out a second time, so a knob added to
   the register joins the gate by default — it was spelled out separately once,
   and `llm_temperature` was simply missing from it, so two runs decoded at
-  different temperatures compared as the same experiment. `git_sha` and
+  different temperatures compared as the same experiment. `question_pool_hash`
+  digests the graded questions *and* the gold each is graded against
+  (`metrics.question_pool_hash`), because the question set is filtered in the
+  sibling dataset repo: rows whose gold SQL contradicts their `evidence` are
+  dropped, which moves the pool while every knob in this repo stays put.
+  `git_sha` and
   `skip_agent` are excluded here and checked as resume drift instead: two runs
   at different commits are the normal case, but a commit changing *within* one
   run directory corrupts that run.
@@ -629,20 +635,20 @@ and 162 invented tables. None has a BIRD description or a rename-map entry, so
 none can reach the brief — and the drop rule now guarantees it. Measured against
 the SQLite schemas: all 2,893 real physical column names are described and zero
 decoy names are, which makes "absent from the brief" a sound signal rather than a
-coverage gap. Under `sme_rules` v1 the SME simply had nothing to say about
-precisely the columns a trap-avoiding curator most needs help on. `sme_rules` v2
-turns the absence into the answer — *I do not recognise that identifier, it is not
-part of the documented schema, I would not rely on it* — which is derivable from
-the brief alone and needs no trap manifest. Feeding it the manifest would be the
-tempting version and the wrong one: it hands the SME arm ground truth no other arm
-has, and the lift would be leakage wearing the costume of expertise.
+coverage gap. The `sme_rules` block turns that absence into the answer — *I do not
+recognise that identifier, it is not part of the documented schema, I would not rely
+on it* — which is derivable from the brief alone and needs no trap manifest. Feeding
+it the manifest would be the tempting version and the wrong one: it hands the SME arm
+ground truth no other arm has, and the lift would be leakage wearing the costume of
+expertise.
 
-v2 is **not** the default. It is a falsifiable candidate — refuted if
-`decoy_touch_rate` does not fall on the SME arms, with `refusal_rate` and
-clarification volume watched for the over-refusal it could buy instead — and
-`curated -> curated_sme` is a step this doc already flags as compound. Select it
-with a `[prompts]` entry (`sme_rules = "v2"`); the prompt-set hash moves, so a run
-can prove which rules block it sent.
+This rule is a falsifiable claim, not a settled one: refuted if `decoy_touch_rate`
+does not fall on the SME arms, with `refusal_rate` and clarification volume watched
+for the over-refusal it could buy instead. It now lives in the single `sme_rules`
+variant rather than an opt-in one, because the two variants it replaced both banned
+database queries while the same model call invited a read-only probe, and the
+sanitiser destroyed 11 of 381 answers resolving that contradiction. See
+[plans/eval-rebuild.md](plans/eval-rebuild.md).
 
 Two limits survive, both from the rename map being *flat* — one namespace for
 table and column names per db, so it cannot express a per-table column rename.

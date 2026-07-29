@@ -210,15 +210,20 @@ def test_the_narrator_takes_a_variant_and_defaults_to_v1():
 # --------------------------------------------------------------------------- #
 
 
-def test_the_sme_rules_block_is_injectable_and_defaults_to_v1(tmp_path):
+def test_the_sme_rules_block_is_injectable_and_defaults_to_the_registry_text(tmp_path):
+    """``sme_rules`` has a single variant, so the default is asked for by name
+    (``DEFAULT_VARIANT``) rather than hardcoded here — the assertion is that the
+    brief carries whatever the registry resolves and nothing else."""
     from governed_bi.curator.sme import build_sme_brief
 
+    resolved = prompts.get("sme_rules", prompts.DEFAULT_VARIANT).text.strip()
+
     default = build_sme_brief(tmp_path, [])
-    assert prompts.get("sme_rules", "v1").text.strip() in default
+    assert resolved in default
 
     injected = build_sme_brief(tmp_path, [], system_rules="RULES-SENTINEL")
     assert "RULES-SENTINEL" in injected
-    assert prompts.get("sme_rules", "v1").text.strip() not in injected
+    assert resolved not in injected
 
 
 def test_the_phase_a_prompt_is_injectable(tmp_path, monkeypatch):
@@ -612,6 +617,11 @@ def _manifest(**over):
         use_embedder=True,
         skip_agent=False,
         serve_workers=1,
+        # A gate key with no default, so it has to be spelled here. These tests are
+        # about the PROMPT stamp; the pool digest just has to be present and stable
+        # across the pair, or `comparable()` reports a question-pool difference the
+        # test never intended to introduce.
+        question_pool_hash="pool0000",
     )
     kwargs.update(over)
     return _build_manifest(**kwargs)

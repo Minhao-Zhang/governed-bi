@@ -126,6 +126,7 @@ def build_manifest(
     resolved_prompts: dict[str, str],
     limit: int | None,
     llm_temperature: float | None,
+    question_pool_hash: str | None,
 ) -> dict[str, Any]:
     """The single-schema driver's manifest, built through the shared register.
 
@@ -163,6 +164,12 @@ def build_manifest(
         # default recorded ``None`` — "provider default" — for every run of this driver,
         # and the manifest validator was satisfied because the key was present.
         llm_temperature=llm_temperature,
+        # Which questions this run grades, and the gold each is graded against. Required
+        # here for the same reason ``llm_temperature`` is: it is a gate key, and the
+        # dataset it identifies is filtered in a sibling repo — so the pool changes
+        # underneath a run whose every knob in this repo stayed put, and ``comparable()``
+        # would read the resulting ``None`` on both sides as agreement.
+        question_pool_hash=question_pool_hash,
         # One pinned schema: the router does not run, so there is no shortlist size
         # or picker setting to report.
         route_top_k=None,
@@ -556,6 +563,12 @@ def run_experiment(
         resolved_prompts=resolved_prompts,
         limit=limit,
         llm_temperature=settings.models.llm_temperature,
+        # ``test`` is post-``limit``, so this is the pool actually graded. One pinned
+        # schema, so ``db_id`` is the same on every line; the gold digests are what make
+        # a refiltered dataset visible here.
+        question_pool_hash=metrics.question_pool_hash(
+            (db_id, it.question_id or it.question, it.sql) for it in test
+        ),
     )
     metrics.write_manifest(run_root, manifest)
 

@@ -208,6 +208,45 @@ def test_sme_sanitizes_sql_in_answers(tmp_path: Path):
     assert "student" in ans.lower() or "Unsure" in ans
 
 
+def test_sme_sanitizer_keeps_the_prose_when_the_answer_leads_with_sql():
+    """The regression that cost 11 of 381 measured answers.
+
+    The sanitiser used to keep only the lines *before* the first keyword-bearing
+    line, so an answer that opened with the query it had just probed with sanitised
+    to the empty string and fell through to the canned "Unsure" fallback. That is
+    the shape a model produces when it is told to check the data first, and it hit
+    the decoy-confirmation questions hardest — precisely the ones the curator needed
+    answered. Recorded clarifications are stored post-sanitisation, so raw model
+    output cannot be replayed and this unit test is the only offline proof.
+    """
+    from governed_bi.curator.sme import _sanitize_sme_answer
+
+    leading = _sanitize_sme_answer(
+        "SELECT COUNT(*) FROM card_collections\nWHERE id IS NOT NULL;\n"
+        "card_collections is a redundant duplicate of sets — do not use it."
+    )
+    assert "card_collections is a redundant duplicate" in leading
+    assert "SELECT" not in leading.upper() and "WHERE" not in leading.upper()
+
+    # Prose on both sides of an unfenced multi-line query survives; the wrapped
+    # continuation lines (FROM / JOIN / ORDER BY) go with the keyword line.
+    sandwiched = _sanitize_sme_answer(
+        "I checked the data:\n"
+        "select a.x, b.y\n"
+        "  from a\n"
+        "  join b on a.id = b.id\n"
+        "order by a.x\n"
+        "Every row is null, so the column is useless for analysis."
+    )
+    assert sandwiched.splitlines() == [
+        "I checked the data:",
+        "Every row is null, so the column is useless for analysis.",
+    ]
+
+    # Only when nothing at all survives may the canned string appear.
+    assert _sanitize_sme_answer("```sql\nselect 1\n```").startswith("Unsure")
+
+
 
 def test_seed_bundle_dedupes():
     sql = 'SELECT SUM(x) FROM t JOIN u ON t.id = u.id'
@@ -699,37 +738,45 @@ def test_sme_clarifications_logged(bird_connector, tmp_path: Path):
     assert all(r["answered_by"] for r in answered)
 
 
-def test_sme_rules_v2_gives_the_sme_an_answer_for_decoys():
-    """The graded database is `rename_decoy`, and the decoys are undocumented.
+def test_the_only_sme_rules_variant_permits_probing_and_answers_for_decoys():
+    """One variant, and it has to carry both halves of what the SME is for.
 
-    1,486 invented columns and 162 invented tables sit alongside the real ones in
-    `pg_rename_decoy`. None has a BIRD description or a rename-map entry, so none
-    can reach the brief — verified separately against the SQLite schemas: every one
-    of the 2,893 real physical column names is described, and none of the decoys is.
-    That makes "absent from the brief" a sound signal, and v2 is what turns it into
-    an answer instead of silence. v1 left the SME with nothing to say about exactly
-    the columns a trap-avoiding curator most needs help on.
+    The graded database is `rename_decoy` and the decoys are undocumented: 1,486
+    invented columns and 162 invented tables sit alongside the real ones in
+    `pg_rename_decoy`, and none has a BIRD description or a rename-map entry, so
+    none can reach the brief — verified separately against the SQLite schemas, where
+    every one of the 2,893 real physical column names is described and none of the
+    decoys is. That makes "absent from the brief" a sound signal, and the
+    unknown-identifier rule is what turns it into an answer instead of silence.
 
-    v1 stays the default: v2 is a falsifiable candidate (see its registry
-    rationale), and folding it into the default would add a third mechanism to a
-    `curated -> curated_sme` step the docs already flag as compound.
+    The other half is the SQL clause. The two deleted variants banned database
+    queries outright while the runtime user message in the same call invited a
+    read-only probe; the surviving one permits the probe tool and restricts the ban
+    to the answer text, which is all `_sanitize_sme_answer` enforces.
     """
     from governed_bi import prompts
 
-    assert prompts.variants("sme_rules") == ["v1", "v2"]
+    assert prompts.variants("sme_rules") == ["v1"]
     assert prompts.resolve()["sme_rules"] == "v1"
 
-    v1 = prompts.text("sme_rules", {"sme_rules": "v1"})
-    v2 = prompts.text("sme_rules", {"sme_rules": "v2"})
-    assert "do not recognise it" in v2 and "would not rely on it" in v2
-    assert "do not recognise it" not in v1
-    # Selecting it must move the prompt-set hash, or a run could not prove which
-    # rules block it sent.
-    assert prompts.prompt_set_hash({"sme_rules": "v2"}) != prompts.prompt_set_hash()
+    rules = prompts.text("sme_rules")
+    assert "do not recognise it" in rules and "would not rely on it" in rules
+    assert "run_probe_query" in rules
+    # The contradiction itself, asserted absent: no blanket ban on queries may come
+    # back, because the same call hands the SME a query tool.
+    assert "Never write database queries" not in rules
+    assert "ANSWER itself must be plain prose" in rules
 
 
 def test_sme_brief_carries_the_selected_rules_variant(tmp_path: Path):
-    """The brief embeds whichever variant the caller resolved, not always v1."""
+    """The brief embeds whichever rules text the caller resolved.
+
+    Also the leakage guard, which the SQL clause walks straight into:
+    `assert_brief_no_leakage` is case-**sensitive** on `SELECT` and the rules block
+    is part of the brief, so a rules block that spelled the keyword to explain
+    itself would fail every leakage invariant in the harness and drop the schema
+    from the pool after its corpus had been paid for.
+    """
     from governed_bi import prompts
 
     desc = tmp_path / "database_description"
@@ -739,7 +786,9 @@ def test_sme_brief_carries_the_selected_rules_variant(tmp_path: Path):
         "value_description\nc,,a column,text,\n",
         encoding="utf-8",
     )
-    v2 = prompts.text("sme_rules", {"sme_rules": "v2"})
-    brief = build_sme_brief(desc, [], system_rules=v2, rename_map={"t": "t", "c": "c"})
+    rules = prompts.text("sme_rules")
+    brief = build_sme_brief(
+        desc, [], system_rules=rules, rename_map={"t": "t", "c": "c"}
+    )
     assert "do not recognise it" in brief
     assert_brief_no_leakage(brief, gold_sqls=[], test_questions=[])

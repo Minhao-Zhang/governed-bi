@@ -331,6 +331,7 @@ def test_manifest_records_limit_caps_and_scope_hash():
         use_embedder=True,
         skip_agent=False,
         serve_workers=1,
+        question_pool_hash="pool0000",
         limit=2,
         limit_dbs=1,
         question_scope_hash=h,

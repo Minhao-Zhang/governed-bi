@@ -32,9 +32,11 @@ is built from a flat tuple at import time and raises `RuntimeError` on a
 duplicate `(stage, variant)` pair, so a copy-paste typo in a new entry fails at
 import, not at some later lookup. `DEFAULTS` maps every stage to `"v1"`.
 
-Six registered stages, all `v1` byte-identical to the text this system sent
-before the registry existed: `agent_core`, `schema_pick`, `narrator`,
-`curator_phase_a`, `curator_phase_b`, `sme_rules`. The old module-level
+Six registered stages: `agent_core`, `schema_pick`, `narrator`,
+`curator_phase_a`, `curator_phase_b`, `sme_rules`. Five of the six `v1`s are
+byte-identical to the text this system sent before the registry existed; the
+exception is `sme_rules`, whose original `v1` and `v2` were both deleted and
+replaced (see [Deleting a variant](#deleting-a-variant)). The old module-level
 constants (`SYSTEM_PROMPT` in `analyst/agent.py`, `SCHEMA_PICK_SYSTEM` in
 `retrieval/schema_router.py`, `_NARRATOR_SYSTEM` in `analyst/narrate.py`,
 `_PHASE_A_PROMPT`/`_PHASE_B_PROMPT` in `curator/prompts.py`,
@@ -100,6 +102,32 @@ already-built corpus); `sme_rules` is "the rules block inside the
 code-assembled SME brief (the rest of that brief is data, not a prompt
 variant)" — the bulk of the brief is BIRD column descriptions and train
 evidence, which the registry has no business versioning.
+
+## Deleting a variant
+
+`sme_rules` is the one stage where a variant was deleted rather than added, and
+the reasoning generalises. Its `v1` and its `v2` candidate both said "Never
+write database queries. Describe meaning in prose only." while the runtime user
+message in the *same* model call (`SimulatedSme.answer`) said "You may run
+read-only probe queries to check the data first if it helps." Measured over 381
+real clarifications, 11 answers (2.9%) came back as the canned "Unsure —
+declining to invent a definition" fallback, concentrated on the
+decoy-confirmation questions the curator most needed answered (`card_games`,
+`restaurant` and `world` at 25% each), with transcripts visibly stuck between
+the two rules: *"I can't write SQL, but I can describe the intended logic."*
+
+Neither was kept as a baseline. A prompt that contradicts its own call site is
+not a measurement worth preserving comparability with, and the numbers taken
+under it are discarded anyway. The replacement permits the `run_probe_query`
+tool explicitly, restricts the SQL ban to the answer text — which is all
+`_sanitize_sme_answer` enforces — and keeps `v2`'s absent-identifier rule, the
+part that turns the brief's silence about a decoy into an answer.
+
+Two things follow for anyone doing this again. The pinned digest in
+`V1_DIGESTS` (`tests/test_prompt_registry.py`) has to be repinned, and that
+edit is the deliberate act of discarding the prior baseline — it is not a test
+fix. And `prompt_set_hash` moves for *every* run, including default ones, so no
+run recorded before the swap is comparable to one after it.
 
 ## Adding a variant
 

@@ -41,6 +41,7 @@ def _manifest(mode: str, **over):
         schema_pick_max_columns=12,
         use_embedder=True,
         llm_temperature=0.0,
+        question_pool_hash="pool0000",
         arms=("baseline", "curated"),
         oracles=(),
         replicate_of=None,
@@ -67,6 +68,7 @@ def _single_manifest(**over):
         resolved_prompts={},
         limit=None,
         llm_temperature=None,
+        question_pool_hash="pool0000",
     )
     base.update(over)
     return build_manifest(**base)  # type: ignore[arg-type]
@@ -170,7 +172,15 @@ def test_the_single_schema_driver_records_the_temperature_it_actually_used():
 
 @pytest.mark.parametrize(
     "knob",
-    ["llm_temperature", "arms", "oracles", "limit", "db_ids", "question_scope_hash"],
+    [
+        "llm_temperature",
+        "question_pool_hash",
+        "arms",
+        "oracles",
+        "limit",
+        "db_ids",
+        "question_scope_hash",
+    ],
 )
 def test_no_manifest_knob_or_scope_field_may_be_defaulted(knob):
     """A defaulted parameter records a value the run never used and passes every gate.
@@ -189,6 +199,7 @@ def test_no_manifest_knob_or_scope_field_may_be_defaulted(knob):
         schema_pick_max_columns=12,
         use_embedder=True,
         llm_temperature=0.0,
+        question_pool_hash="pool0000",
         arms=(),
         oracles=(),
         replicate_of=None,
@@ -340,6 +351,7 @@ def test_the_manifest_emits_exactly_the_declared_field_set(tmp_path):
         use_embedder=True,
         skip_agent=False,
         serve_workers=1,
+        question_pool_hash="pool0000",
     )
     single = _single_manifest()
 
@@ -401,6 +413,80 @@ def test_two_runs_at_different_temperatures_are_not_comparable():
     ok, diffs = comparable(a, b)
     assert not ok
     assert any("temperature" in d for d in diffs), diffs
+
+
+def test_the_question_pool_hash_joined_the_comparability_gate():
+    """Derivation is the claim; this is the check that it happened.
+
+    ``COMPARABILITY_KEYS`` is built from ``MANIFEST_KNOBS`` minus
+    ``COMPARABILITY_EXCLUSIONS``, so a new knob is *supposed* to join the gate with no
+    second edit. Asserted rather than assumed, because the value of that design is
+    entirely in the case nobody re-reads: a key that silently failed to join would leave
+    two runs over different question pools comparing as one experiment, which is the
+    defect this key exists for.
+    """
+    from governed_bi.eval.index import COMPARABILITY_EXCLUSIONS
+
+    assert ("question_pool_hash", "question pool") in COMPARABILITY_KEYS
+    # And in the resume guard, which is derived from the same tuple: a dataset
+    # regenerated halfway through a directory is the same corruption, one level down.
+    assert ("question_pool_hash", "question pool") in RESUME_DRIFT_KEYS
+    assert "question_pool_hash" not in COMPARABILITY_EXCLUSIONS
+
+
+def test_two_runs_over_different_question_pools_are_not_comparable():
+    """End to end, through the real driver builder and the real gate.
+
+    The sibling dataset repo filters questions whose gold SQL contradicts their
+    ``evidence``: schemas stay, the split moves. Every knob in *this* repo is unchanged
+    across that, so before this key the two runs matched on all of them.
+    """
+    from governed_bi.eval.index import comparable
+
+    a = _single_manifest(question_pool_hash="pool_before_the_filter")
+    b = _single_manifest(question_pool_hash="pool_after_the_filter")
+    for m in (a, b):
+        m["corpus_content_hash"] = "sha256:same"
+
+    ok, diffs = comparable(a, b)
+    assert not ok
+    assert any("question pool" in d for d in diffs), diffs
+    # The other direction: the same pool must still compare, or the gate is useless.
+    assert comparable(a, _single_manifest(question_pool_hash="pool_before_the_filter") | {
+        "corpus_content_hash": "sha256:same"
+    })[0]
+
+
+def test_the_pool_hash_moves_with_the_graded_set_and_with_its_gold():
+    """Both halves of the requirement: it must move when the graded pool moves, and
+    stay put otherwise.
+
+    The gold digest is in the payload for the same reason ``prompt_set_hash`` hashes
+    prompt TEXT rather than variant ids: an upstream correction that re-points a
+    ``question_id`` at different gold changes what every EX in the run means, while
+    leaving the id set — and therefore ``question_scope_hash`` — untouched.
+    """
+    pool = [
+        ("beer_factory", "q1", "SELECT 1"),
+        ("beer_factory", "q2", "SELECT 2"),
+    ]
+    base = metrics.question_pool_hash(pool)
+
+    # Order is not information: the drivers iterate dbs in argv order.
+    assert metrics.question_pool_hash(reversed(pool)) == base
+    # A question dropped by the upstream filter.
+    assert metrics.question_pool_hash(pool[:1]) != base
+    # Same ids, corrected gold.
+    assert metrics.question_pool_hash(
+        [("beer_factory", "q1", "SELECT 1"), ("beer_factory", "q2", "SELECT 2 AS n")]
+    ) != base
+    # Same ids and gold on a different schema is a different pool.
+    assert metrics.question_pool_hash(
+        [("restaurant", q, sql) for _db, q, sql in pool]
+    ) != base
+    # A schema the filter emptied reads as empty rather than as a digest of nothing,
+    # which the new dataset makes a real possibility.
+    assert metrics.question_pool_hash([]) == "empty"
 
 
 def test_a_record_with_no_manifest_schema_version_is_refused_not_passed():

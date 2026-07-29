@@ -16,7 +16,7 @@ documented subset of `summary.json`, so "declared but absent" is expected there.
 
 | Artifact | Fields | Consumer |
 |---|---|---|
-| `manifest.json` | 35 (30 in every run) | `index.COMPARABILITY_KEYS`, `index.RESUME_DRIFT_KEYS` |
+| `manifest.json` | 36 (31 in every run) | `index.COMPARABILITY_KEYS`, `index.RESUME_DRIFT_KEYS` |
 | `generations.<arm>.jsonl` | 72 per (question, arm) | `_summarise_rows`, `analysis`, `power`, `error_taxonomy` |
 | `summary.json` | 87 | `index.quotable` |
 | `stage_events.jsonl` | 7 per (question, arm, stage) | read by hand; per-stage latency attribution |
@@ -80,6 +80,7 @@ joins the comparability gate by default instead of silently skipping it.
 | `prompt_variants` | stage -> variant id map, for a human |
 | `prompt_set_hash` | hash of the prompt TEXT, so an in-place edit moves it |
 | `corpus_content_hash` | digest of the served corpora — the treatment itself |
+| `question_pool_hash` | digest of the graded questions AND the gold each is graded against, so a refiltered dataset stops comparing as the same experiment |
 | `git_sha` | the commit that produced the run |
 | `route_top_k` | schema shortlist size; None when routing is bypassed |
 | `route_llm_pick` | LLM picks one schema; None when routing is bypassed |

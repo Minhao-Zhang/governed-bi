@@ -93,6 +93,11 @@ _KNOB_LABELS: dict[str, str] = {
     # did not cover (AUDIT E5): two runs over different corpora compared cleanly.
     # `corpus_content_hash` is the per-arm corpus digest; `git_sha` covers the code.
     "corpus_content_hash": "corpus content",
+    # The graded question pool. Labelled rather than left as the field name because the
+    # difference it reports — "these two runs scored different questions" — is the one a
+    # reader is least likely to suspect: the dataset is filtered in a sibling repo, so
+    # the pool moves with no knob in this repo changing.
+    "question_pool_hash": "question pool",
 }
 
 #: Knobs that must match before two runs may be compared. Each is (record key,

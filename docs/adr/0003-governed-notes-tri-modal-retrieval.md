@@ -210,10 +210,18 @@ below).
 
 ### Always-note budget and precedence (H1)
 
-Global (`scope=[]`), `activation=always` notes are the ones that land in
-every prompt, so they need a hard cap, not just a convention. **Cap:** at
-most 8 global always notes AND at most 2000 chars of total injected notes
-text (config-driven, start conservative). **Precedence for overflow or
+`activation=always` notes are the ones that land in every prompt, so they
+need a hard cap, not just a convention. **Cap:** at most 8 always notes
+injected per turn AND at most 2000 chars of total injected notes text
+(config-driven, start conservative).
+
+> As decided, the count applied only to *global* (`scope=[]`) notes, which
+> turned out to cap nothing: every note a producer actually wrote was
+> `schema:`-scoped, so all of them cleared the count and only the char budget
+> bound. Corrected 2026-07-29 to count every injected always note. See
+> [../plans/eval-rebuild.md](../plans/eval-rebuild.md).
+
+**Precedence for overflow or
 conflict**, applied in order: (1) `publication_status` certified before
 draft before proposed, (2) `normative_force` must_honour before advisory,
 (3) `confidence` descending, (4) scope specificity, asset before schema
@@ -429,10 +437,10 @@ All open questions below are resolved; the canonical record is
    `grep_notes` already covers regex-over-text without taking on the
    ReDoS-dependency question, so building a separate regex-over-question mode
    is not worth it yet.
-4. **Global always-note budget: adopted (H1).** At most 8 global (`scope=[]`)
-   `always` notes AND at most 2000 chars of total injected notes text; see
-   "Always-note budget and precedence (H1)" above for the full cap and
-   precedence rule.
+4. **Always-note budget: adopted (H1).** At most 8 `always` notes injected per
+   turn AND at most 2000 chars of total injected notes text; see
+   "Always-note budget and precedence (H1)" above for the full cap, the
+   precedence rule, and why the original global-only count capped nothing.
 5. **PIN authority gate: draft-in-dev / certified-in-prod.** Confirmed as the
    default, backed by the serve-visible `publication_status` field (C1) that
    survives `for_analyst` and is cross-checked against `audit.provenance.status`

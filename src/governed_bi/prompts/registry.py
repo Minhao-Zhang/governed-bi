@@ -25,8 +25,10 @@ it must stay dependency-free in both directions — see :mod:`governed_bi.stages
 for the same shape.
 
 ``v1`` of every stage is byte-identical to the text that stage sent before this
-module existed, and the call sites now *derive* their constants from here rather
-than holding their own copy, so the two cannot drift apart.
+module existed — with one deliberate exception, ``sme_rules``, whose original
+``v1`` and ``v2`` were both deleted for contradicting their own call site (see
+the comment above the replacement). The call sites *derive* their constants from
+here rather than holding their own copy, so the two cannot drift apart.
 """
 
 from __future__ import annotations
@@ -192,11 +194,43 @@ automatically — you do not need to act on those.
 5. Stop once every answered clarification has been reflected in the corpus.
 """
 
+# --------------------------------------------------------------------------- #
+# ``sme_rules`` — the one stage whose ``v1`` is NOT the pre-registry text.
+#
+# The original v1 and its v2 candidate both said "Never write database queries.
+# Describe meaning in prose only." while the runtime user message in the *same*
+# call (``SimulatedSme.answer``) said "You may run read-only probe queries to
+# check the data first if it helps." The model was asked to obey both. Measured
+# over 381 real clarifications, 11 answers (2.9%) came back as the canned "Unsure
+# — declining to invent a definition" fallback, concentrated on the
+# decoy-confirmation questions the curator most needed answered (card_games,
+# restaurant and world at 25% each), with transcripts stuck between the two
+# rules: "I can't write SQL, but I can describe the intended logic."
+#
+# Both were deleted rather than kept as a baseline: a prompt that contradicts its
+# own call site is not a measurement anyone should preserve comparability with,
+# and every number taken under it is discarded. Only the replacement below ships,
+# so the stage has exactly one variant again.
+# --------------------------------------------------------------------------- #
+
 _SME_RULES_V1 = """\
 Rules you MUST follow:
 - Answer only from the brief below and ordinary domain sense. Do NOT invent \
 columns, tables, or labels that are not in the brief.
-- Never write database queries. Describe meaning in prose only.
+- The brief lists every table and column you know about. It is not a summary: if \
+an identifier the curator asks about does not appear in it, you have never heard \
+of that identifier. Say so plainly — that you do not recognise it, that it is not \
+part of the documented schema you know, and that you would not rely on it for \
+analysis — and point to the documented column that answers their underlying \
+question if there is one. Do not guess at its meaning from its name, and do not \
+soften this into "it probably holds ...".
+- You MAY check the real data before answering with the read-only \
+`run_probe_query` tool, and should whenever a claim about values, ranges, \
+duplicates or emptiness would otherwise be a guess.
+- Your ANSWER itself must be plain prose containing no SQL. Queries belong in the \
+tool call, not in what you hand back: SQL is stripped out of your answer before \
+the curator ever reads it, so an answer that is mostly query arrives mostly \
+empty. Report what the probe told you, not the query that told you.
 - If a column looks unreliable or misleading for analysis, say so explicitly and \
 recommend not using it (name a more reliable column if one exists).
 - If you are unsure, say you are unsure rather than fabricating a definition.
@@ -208,24 +242,6 @@ recommend not using it (name a more reliable column if one exists).
 # rationale names the metric that can refute it (docs and
 # ``governed_bi.eval.analysis`` carry the full argument).
 # --------------------------------------------------------------------------- #
-
-_SME_RULES_V2 = """\
-Rules you MUST follow:
-- Answer only from the brief below and ordinary domain sense. Do NOT invent \
-columns, tables, or labels that are not in the brief.
-- The brief lists every table and column you know about. It is not a summary: if \
-an identifier the curator asks about does not appear in it, you have never heard \
-of that identifier. Say so plainly — that you do not recognise it, that it is not \
-part of the documented schema you know, and that you would not rely on it for \
-analysis — and point to the documented column that answers their underlying \
-question if there is one. Do not guess at its meaning from its name, and do not \
-soften this into "it probably holds ...".
-- Never write database queries. Describe meaning in prose only.
-- If a column looks unreliable or misleading for analysis, say so explicitly and \
-recommend not using it (name a more reliable column if one exists).
-- If you are unsure, say you are unsure rather than fabricating a definition.
-"""
-
 
 _SCHEMA_PICK_V2 = """\
 You route a natural-language question to exactly ONE database schema, chosen from a short
@@ -376,24 +392,18 @@ _ALL: tuple[PromptVariant, ...] = (
         variant="v1",
         text=_SME_RULES_V1,
         rationale=(
-            "Shipped text; the rules block inside the code-assembled SME brief (the "
-            "rest of that brief is data, not a prompt variant)."
-        ),
-    ),
-    PromptVariant(
-        stage="sme_rules",
-        variant="v2",
-        text=_SME_RULES_V2,
-        rationale=(
-            "Gives the SME an answer for the decoys. The graded database is "
-            "rename_decoy: 1,486 invented columns and 162 invented tables sit "
-            "alongside the real ones, and none of them appears in the brief, so v1's "
-            "'answer only from the brief' left the SME with nothing to say about "
-            "exactly the columns a trap-avoiding curator needs help on. v2 makes the "
-            "absence itself the answer — not recognised, do not rely on it — which "
-            "is derivable from the brief alone and needs no trap manifest. Refuted "
-            "if decoy_touch_rate does not fall on the SME arms; watch refusal_rate "
-            "and clarification volume for the over-refusal it could buy instead."
+            "The rules block inside the code-assembled SME brief (the rest of that "
+            "brief is data, not a prompt variant). Replaces two deleted variants "
+            "that both banned database queries outright while the same call invited "
+            "a read-only probe, destroying 11 of 381 measured answers. This one "
+            "permits the probe tool and restricts the ban to the answer text, which "
+            "is all the sanitiser enforces, and keeps the absent-identifier rule "
+            "that turns the brief's silence into an answer: the graded database is "
+            "rename_decoy, where 1,486 invented columns and 162 invented tables sit "
+            "alongside the real ones and none of them can reach the brief. Refuted "
+            "if the canned-fallback rate does not fall below 2.9%, or if it falls "
+            "without decoy_touch_rate falling on the SME arms; watch refusal_rate "
+            "and clarification volume for over-refusal bought in exchange."
         ),
     ),
 )

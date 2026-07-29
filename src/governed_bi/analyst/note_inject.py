@@ -8,7 +8,7 @@ kinds, always vs on_match, H1 precedence, and must_honour vs advisory split.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Iterable
+from typing import TYPE_CHECKING, Iterable, Mapping
 
 from ..corpus.ids import derive_column_id
 from ..corpus.schemas import (
@@ -155,7 +155,9 @@ def scope_matches(note: NoteAsset, licensed: LicensedScope) -> bool:
     return False
 
 
-def _precedence_key(note: NoteAsset) -> tuple:
+def _precedence_key(
+    note: NoteAsset, relevance: Mapping[str, float] | None = None
+) -> tuple:
     """Order notes for the always-inject budget: normative force first.
 
     Publication status used to sort first, which meant a ``certified`` + ``advisory``
@@ -165,11 +167,21 @@ def _precedence_key(note: NoteAsset) -> tuple:
     certified advisory one is a suggestion, and dropping a constraint to keep a
     suggestion is the wrong trade at every budget. Status still breaks ties within a
     force level, so a certified must-honour note beats a draft must-honour note.
+
+    ``relevance`` (retrieval score by note id, absent = 0.0) breaks ties *below*
+    force and status. Without it the key is constant per note, so which notes a
+    binding cap dropped was decided by curator confidence and id — arbitrary with
+    respect to the question being asked. It sorts below force/status on purpose:
+    a note the question happens to lexically match is not thereby a constraint,
+    and R8's trade stands. Scores may be BM25 or RRF depending on the channel,
+    which is fine for a within-tier comparison of one ranking.
     """
     conf = note.confidence if isinstance(note.confidence, (int, float)) else 0.0
+    score = (relevance or {}).get(note.id, 0.0)
     return (
         _FORCE_RANK.get(_force_value(note), 9),
         _PUB_RANK.get(_pub_value(note), 9),
+        -float(score),
         -float(conf),
         _scope_specificity(note.scope),
         note.id,
@@ -181,22 +193,30 @@ def apply_always_budget(
     *,
     global_max: int = DEFAULT_ALWAYS_NOTE_GLOBAL_MAX,
     char_max: int = DEFAULT_ALWAYS_NOTE_CHAR_MAX,
+    relevance: Mapping[str, float] | None = None,
 ) -> list[NoteAsset]:
-    """Keep notes under H1 caps using the 5-tuple precedence order.
+    """Keep notes under H1 caps using the precedence order.
 
-    Global (``scope=[]``) always-notes are capped at ``global_max``. All
-    injected always-note summaries together are capped at ``char_max``.
-    Contradictory must_honour notes on the same scope are both kept when both
-    fit; overflow drops lower-precedence notes.
+    ``global_max`` caps the always-notes injected this turn, and ``char_max`` caps
+    their summaries together. Contradictory must_honour notes on the same scope are
+    both kept when both fit; overflow drops lower-precedence notes.
+
+    The count cap used to apply only to notes with an EMPTY scope, on the reading
+    that a scoped note is already narrowed by ``scope_matches``. In a curated corpus
+    nothing is globally scoped — the 2026-07-27 build wrote every note as
+    ``schema:<name>`` — so the cap was dead and ``char_max`` was the only gate,
+    which let dozens of short caveats in. A scoped note occupies the prompt and
+    dilutes its authority exactly as a global one does, so every always-note counts
+    here. Scope decides *eligibility*; this cap decides *how many*. A per-schema cap
+    would not have caught the same bug: the licensed tables of one turn are usually
+    one schema, so per-schema and per-turn coincide there.
     """
-    ordered = sorted(notes, key=_precedence_key)
+    ordered = sorted(notes, key=lambda n: _precedence_key(n, relevance))
     kept: list[NoteAsset] = []
-    n_global = 0
     chars = 0
     for note in ordered:
-        is_global = not note.scope
-        if is_global and n_global >= global_max:
-            continue
+        if len(kept) >= global_max:
+            break
         add = len(note.summary)
         if chars + add > char_max and kept:
             continue
@@ -205,8 +225,6 @@ def apply_always_budget(
             pass
         kept.append(note)
         chars += add
-        if is_global:
-            n_global += 1
     return kept
 
 
@@ -221,6 +239,11 @@ def select_notes_for_injection(
     """Choose notes that land in the prompt for this turn."""
     matched_ids = set(getattr(retrieval, "note_ids", ()) or ())
     matched_ids.update(getattr(retrieval, "triggered_note_ids", ()) or ())
+    # Ranking score per matched note. Grounded-but-unmatched assets are absent from
+    # ``scores`` rather than zero, and ``_precedence_key`` reads an absent id as 0.0,
+    # so an always-note that the question did not match simply has no relevance
+    # bonus. Empty when the caller passes a retrieval result without scores.
+    relevance: Mapping[str, float] = getattr(retrieval, "scores", None) or {}
 
     always_candidates: list[NoteAsset] = []
     on_match: list[NoteAsset] = []
@@ -238,13 +261,13 @@ def select_notes_for_injection(
                 on_match.append(asset)
 
     always_kept = apply_always_budget(
-        always_candidates, global_max=global_max, char_max=char_max
+        always_candidates, global_max=global_max, char_max=char_max, relevance=relevance
     )
     # on_match notes are not subject to the global always budget, but share the
     # char budget remaining after always notes.
     chars = sum(len(n.summary) for n in always_kept)
     on_match_kept: list[NoteAsset] = []
-    for note in sorted(on_match, key=_precedence_key):
+    for note in sorted(on_match, key=lambda n: _precedence_key(n, relevance)):
         add = len(note.summary) + (len(note.body) if note.body else 0)
         if chars + add > char_max and on_match_kept:
             continue

@@ -119,10 +119,35 @@ clarification text, sets `activation=on_match` when it finds any, and keeps `alw
 when it finds none. Emit keyword triggers only, since ADR 0003 defers regex and
 `fire_triggers` leaves regex triggers inert. Cap always-notes properly while there.
 
-To verify: a unit test asserting that emitted triggers fire on the originating
-question and do not fire on a sibling question in the same schema. Then one small
-live `curated_sme` build over 2 or 3 schemas, confirming the emitted mix is not 100%
-`always` again.
+Done. On the real 2026-07-27 clarifications the 162 notes now split 133 `on_match`
+to 29 `always`. `apply_always_budget` counts every always-note against `global_max`
+rather than only the global-scoped ones, and `_precedence_key` takes an optional
+relevance term that sorts below force and status, so the AUDIT R8 ordering still
+holds.
+
+The trigger channel is dead on the eval path, which changes what this bought.
+`pin_triggers_enabled` defaults False (`config.py:249`), `governed_bi.toml` has no
+`[notes]` table, and both drivers build `Settings.for_env(Environment.dev, ...)`
+(`run_datalake.py:3922`, `run_experiment.py:521`) which sets only four fields, so
+TOML note knobs never reach it and `fire_triggers` returns an empty list. The
+derived triggers are authored correctly and inert at runtime.
+
+Delivery therefore runs entirely through the other channel, which is live:
+`retrieval.note_ids`. `asset_document` indexes `NoteAsset.summary` (`rvgd.py:146`),
+notes get a `note_k=5` per-type budget (`rvgd.py:511`), and eval runs with an
+embedder by default. So an `on_match` note reaches the prompt when it lands in the
+semantic top 5 for the question and its scope matches. What D1 bought is narrowing
+from "every note in the schema" to "the five most relevant", not trigger-driven
+pinning.
+
+**Open decision (T1).** Either wire `pin_triggers_enabled` through to the eval
+profile so the authored triggers actually fire, or accept semantic-only delivery and
+stop authoring triggers the runtime ignores. The second is cheaper and may be
+sufficient; the first is what ADR 0003 designed. Not decided.
+
+**Naming drift to clean up.** `always_note_global_max` and
+`DEFAULT_ALWAYS_NOTE_GLOBAL_MAX` now mean per-turn rather than global-scoped. The
+rename touches `config.py`, which D1 did not own.
 
 ### C1: replace the SME rules prompt
 
@@ -216,14 +241,40 @@ the whole shortlist plus curated-join expansion gets licensed and notes from 3 o
 schemas fire on every question. That is structural rather than a misroute symptom. Any
 reported figure has to state `top_k` and `llm_pick`.
 
-Three steps:
+Step 1 is answered: all three buckets are computable from artifacts we already have,
+with no new provenance field and no rerun. The generations row carries
+`shortlisted_schemas` in relevance order (`agent.py:640` through `arms.py:492` to
+`run_datalake.py:3629`), the picked schema (`schema_pick`, `pick_hit`), the fallback
+*reason* string (`schema_pick_fallback`, one of `call_failed` /
+`unparseable_reply` / `parsed_nonfinal_line`), `gold_schema_rank`, and the true
+schema as `db_id`. So:
 
-1. Check whether the shortlist contents are recorded per row in provenance. The stage
-   detail records `n_candidates` and `fallback`, but if the members are absent then the
-   split cannot be computed on existing runs and needs one cheap provenance field.
-2. Compute the three-way split: true schema absent from the shortlist, present but
-   picked wrong, or pick fell back.
-3. Land it as a summary metric, so it is tracked rather than re-derived by hand.
+| Bucket | Predicate on a generations row |
+| --- | --- |
+| shortlist miss | `shortlisted_schemas` non-empty and `db_id` not in it |
+| picked wrong | `db_id` in `shortlisted_schemas`, `schema_pick != db_id`, no fallback |
+| pick fell back | `schema_pick_fallback in {"call_failed", "unparseable_reply"}` |
+
+`stage_events.jsonl` is the weak surface and cannot do this alone: its stage detail
+holds only `n_candidates` (a count) and `fallback` (a bool), confirmed on disk.
+
+No existing metric reports the split. `schema_pick_accuracy` is
+`n_pick_hit / len(picks)` (`run_datalake.py:2238-2240, 2591`) and conflates all
+three; `schema_pick_accuracy_excl_fallback` removes only the fallback bucket;
+`by_gold_rank` (`analysis.py:563-609`) separates the shortlist miss but not the
+fallback.
+
+Step 2 remains: land the three-way split as a summary metric so it is tracked rather
+than re-derived by hand.
+
+**This collides with the artifact wipe.** The only run directories carrying usable
+rows are `runs/serial-v1`, `runs/serial-v2`, `runs/smefix-v1` and `runs/smefix-v2`
+(52 and 34 rows each, 3-schema pools), and those are the ones section 2 deletes. The
+code records everything needed, so a rerun regenerates it, but until then there is no
+on-disk data to compute against. Extract the six routing columns to a small file
+before wiping, or accept the gap. On `serial-v1` the split is already 52 rows with 0
+shortlist misses, 1 picked wrong and 0 fallbacks; `smefix-v1` has 2 rows with
+`schema_pick_fallback == "call_failed"`.
 
 ## 4. Cross-cutting: the new dataset
 
@@ -258,9 +309,12 @@ Phase 3 is D2 steps 2 and 3, once step 1 says whether existing runs suffice.
 
 | Item | What | Status |
 | --- | --- | --- |
-| D1 | Notes carry triggers; `on_match` replaces default-always | not started |
-| C1 | Replace contradictory SME rules prompt; fix sanitiser | not started |
+| D1 | Notes carry triggers; `on_match` replaces default-always | done, 133/29 split |
+| C1 | Replace contradictory SME rules prompt; fix sanitiser | done, one variant |
+| pool-hash | `question_pool_hash` in `MANIFEST_KNOBS` and the gate | done |
+| D2 step 1 | Is the three-way split computable? | done, yes, no rerun needed |
+| T1 | Wire `pin_triggers_enabled` for eval, or drop trigger authoring | open decision |
 | B6 | Delete `_mark_columns_absent_from_gold`; AI-authored suspect marks | not started |
-| D2 | Attribute routing failure (shortlist-miss, pick-wrong, fallback) | not started |
-| pool-hash | `question_pool_hash` in `MANIFEST_KNOBS` | not started |
-| artifact cleanup | Delete `runs/`, `corpora/`, `data/checkpoints/`; retire stale routing table | not started |
+| D2 step 2 | Land the three-way split as a summary metric | not started |
+| artifact cleanup | Delete `runs/`, `corpora/`, `data/checkpoints/`; retire stale routing table | not started, see D2 collision |
+| naming | `*_GLOBAL_MAX` now means per-turn; rename in `config.py` | not started |

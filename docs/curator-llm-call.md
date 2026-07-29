@@ -50,6 +50,13 @@ BIRD column descriptions and train evidence, which the registry does not version
 is a test harness for the eval-ladder experiment, not part of the production curation
 pipeline. See the source file directly if you need its prompt shape.
 
+One thing about that block is worth knowing here, because it is a trap the curator
+side shares: the SME holds a read-only `run_probe_query` tool, and the rules bar SQL
+from its **answer** only, not from the tool call. The two used to disagree — the rules
+banned queries outright while the user message in the same call invited a probe — and
+the model resolved it by refusing to answer, which cost 11 of 381 clarifications. See
+[Deleting a variant](prompt-experiments.md#deleting-a-variant).
+
 ## (1) Phase A deep agent
 
 `deep_agent.build_curator_agent` builds this agent with

@@ -878,6 +878,13 @@ def _build_manifest(
     use_embedder: bool,
     skip_agent: bool,
     serve_workers: int,
+    # The graded pool's identity, from ``metrics.question_pool_hash``. Required, unlike
+    # the scope arguments below, because it is a comparability GATE key: an omitted
+    # scope field is compared only within this directory on resume, while an omitted
+    # gate key reads as "both runs agree" in the ledger for every future pair. The
+    # dataset is filtered upstream, so this is the only field that moves when the
+    # question pool does.
+    question_pool_hash: str | None,
     build_workers: int = 1,
     # The run's SCOPE. Not knobs — they decide which arms exist and which questions
     # are in the pool, so a resume that disagrees is not the same experiment at all.
@@ -916,6 +923,7 @@ def _build_manifest(
         route_llm_pick=route_llm_pick,
         schema_pick_max_columns=schema_pick_max_columns,
         use_embedder=use_embedder,
+        question_pool_hash=question_pool_hash,
         arms=arms,
         oracles=oracles,
         replicate_of=replicate_of,
@@ -3983,6 +3991,13 @@ def run_datalake(
         limit=limit,
         limit_dbs=limit_dbs,
         question_scope_hash=_question_scope_hash(scope_pairs),
+        # Same rows as the scope hash, plus the gold each is graded against. Both come
+        # off ``scope_pairs``, which is already in memory, so the dataset is not read
+        # again for either.
+        question_pool_hash=metrics.question_pool_hash(
+            (db, item.question_id or item.question, item.sql)
+            for item, db in scope_pairs
+        ),
         allow_git_sha_drift=allow_git_sha_drift,
         llm_temperature=settings.models.llm_temperature,
     )

@@ -435,7 +435,7 @@ def test_every_resume_drift_key_is_actually_checked(tmp_path, key, label):
                 "skip_agent": False, "prompt_set_hash": "h0", "route_top_k": 10,
                 "route_llm_pick": True, "schema_pick_max_columns": 12,
                 "use_embedder": True, "corpus_content_hash": "c0",
-                "llm_temperature": 0.0}
+                "llm_temperature": 0.0, "question_pool_hash": "pool0"}
     changed = dict(original)
     was = original[key]
     changed[key] = (not was) if isinstance(was, bool) else f"{was}-changed"
@@ -804,6 +804,7 @@ def test_both_drivers_record_no_model_under_skip_agent():
         use_embedder=False,
         skip_agent=True,
         serve_workers=1,
+        question_pool_hash="pool0000",
     )
     single = run_experiment.build_manifest(
         db_id="restaurant",
@@ -815,6 +816,7 @@ def test_both_drivers_record_no_model_under_skip_agent():
         resolved_prompts={},
         limit=None,
         llm_temperature=None,
+        question_pool_hash="pool0000",
     )
     for name, built in (("run_datalake", pooled), ("run_experiment", single)):
         assert built["model"] is None, (
@@ -836,6 +838,7 @@ def test_both_drivers_record_no_model_under_skip_agent():
             resolved_prompts={},
             limit=None,
             llm_temperature=None,
+            question_pool_hash="pool0000",
         )["model"]
         == "gpt-5.6-luna"
     )

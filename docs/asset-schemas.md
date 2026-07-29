@@ -364,7 +364,7 @@ CI validates the corpus and its pass doubles as the curator's machine-checkable 
 - **Physical existence**: every `physical_name` / `on` column exists in the live catalog.
 - **Reference resolution**: `references`, `binding.asset_id`, `related_terms[].id`, `metric.base_table`, `note.scope[]` all resolve to existing assets (including `schema:` / `db:` sentinels).
 - **Note publication drift**: when a note has Audit, `publication_status` must match `audit.provenance.status`.
-- **Always-note budget**: at most 8 global `activation=always` notes and at most 2000 chars of always-note `summary` text.
+- **Always-note budget**: at most 8 `activation=always` notes injected per turn, and at most 2000 chars of always-note `summary` text. The count used to apply only to *global* (`scope=[]`) notes, which capped nothing in practice: every SME note is `schema:`-scoped, so all of them cleared the count and only the char budget applied.
 - **Enum validity**: `role`, `reliability.status`, `logical_type`, `complexity`, `cardinality`, `relation`, `kind` ∈ their allowed sets.
 - *(Eval-harness layer, not schema)*: few-shot `source_refs ⊆ train split` (leakage guard).
 

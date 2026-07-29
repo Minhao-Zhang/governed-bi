@@ -53,9 +53,10 @@ it.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Iterable, Literal
 
 from ..prompts import prompt_set_hash
 from ..provenance import corpus_content_hash, corpus_release_hash
@@ -119,6 +120,11 @@ MANIFEST_KNOBS: tuple[Metric, ...] = (
     Metric("prompt_variants", "stage -> variant id map, for a human"),
     Metric("prompt_set_hash", "hash of the prompt TEXT, so an in-place edit moves it"),
     Metric("corpus_content_hash", "digest of the served corpora — the treatment itself"),
+    Metric(
+        "question_pool_hash",
+        "digest of the graded questions AND the gold each is graded against, so a "
+        "refiltered dataset stops comparing as the same experiment",
+    ),
     Metric("git_sha", "the commit that produced the run"),
     Metric("route_top_k", "schema shortlist size; None when routing is bypassed"),
     Metric("route_llm_pick", "LLM picks one schema; None when routing is bypassed"),
@@ -209,6 +215,50 @@ MANIFEST_DECLARED: tuple[Metric, ...] = (
 )
 
 
+def question_pool_hash(rows: Iterable[tuple[str, str, str]]) -> str:
+    """Digest of the graded question pool: which questions, and what gold grades them.
+
+    ``rows`` are ``(db_id, question_key, gold_sql)`` for exactly the rows a run
+    scores, where ``question_key`` is the caller's ``question_id or question`` — the
+    same identity :func:`governed_bi.eval.run_datalake._question_scope_hash` uses, so
+    a dataset with no ids still produces a stable digest instead of a constant one.
+
+    Why a second hash beside ``question_scope_hash``, which covers the same rows: that
+    one is SCOPE, checked only *within* one run directory on resume and only when the
+    prior manifest happened to record it. This one is a KNOB, so it joins
+    :data:`governed_bi.eval.index.COMPARABILITY_KEYS` and decides whether two separate
+    runs may be quoted in one sentence. It also binds the **gold**, which the scope
+    hash does not: a corrected gold statement under an unchanged ``question_id``
+    re-points the grader without moving a single id, and every EX in the run means
+    something different afterwards.
+
+    The dataset this repo scores against is filtered upstream (``BIRD-Data-Obfuscation``
+    drops rows whose gold SQL contradicts their ``evidence``), so runs either side of a
+    refilter are measuring different question pools. Without this key they compare as
+    the same experiment — the defect already fixed once for ``split`` and once for
+    ``corpus_content_hash``.
+
+    Deliberately NOT a digest of the whole split file. Reading every row would make a
+    single-schema run's knob move when an unrelated schema was refiltered, which is
+    the "changes for an unrelated reason" half of the requirement. The rows a run
+    grades are also already in memory at manifest time in both drivers, so this costs
+    one sha256 per question and one sort, once per run — milliseconds over the full
+    pool, against the minutes the run itself takes.
+
+    ``"empty"`` rather than a digest when there are no rows: the upstream filter can
+    leave a schema with no questions at all, and a graded pool of nothing must read as
+    nothing rather than as a hexadecimal value that looks like a real pool.
+    """
+    lines = sorted(
+        f"{db_id}\t{question_key}\t"
+        + hashlib.sha256((gold_sql or "").encode("utf-8")).hexdigest()
+        for db_id, question_key, gold_sql in rows
+    )
+    if not lines:
+        return "empty"
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()[:16]
+
+
 def build_manifest(
     *,
     mode: Mode,
@@ -233,6 +283,13 @@ def build_manifest(
     # (``llm.langchain_client.from_config``). ``None`` still means "never set, so the
     # provider's default applied", and it now means that because a caller said so.
     llm_temperature: float | None,
+    # The graded question pool's identity, from :func:`question_pool_hash`. Required for
+    # the same reason ``llm_temperature`` is: this is a gate key, and a default would
+    # record ``None`` — which ``comparable()`` reads as "both runs agree" — for a run
+    # whose pool is perfectly well known at this point. The upstream dataset is filtered
+    # (rows whose gold SQL contradicts their ``evidence`` are dropped), so the pool moves
+    # without any knob in this repo changing, and nothing else in the manifest notices.
+    question_pool_hash: str | None,
     # Scope. Required for the same reason as the knobs: an unstated scope is recorded
     # as the empty/absent value, and ``arms=()`` for a run that served three arms, or
     # ``limit=None`` for a run capped at five questions, is a false record that no
@@ -296,6 +353,7 @@ def build_manifest(
         "prompt_variants": dict(prompt_variants),
         "prompt_set_hash": prompt_set_hash(prompt_variants),
         "corpus_content_hash": None,
+        "question_pool_hash": question_pool_hash,
         "git_sha": corpus_release_hash(),
         "route_top_k": route_top_k,
         "route_llm_pick": route_llm_pick,

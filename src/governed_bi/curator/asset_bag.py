@@ -16,6 +16,7 @@ from ..corpus.schemas import (
     FewShotAsset,
     JoinAsset,
     MetricAsset,
+    NoteActivation,
     NoteAsset,
     NoteKind,
     Provenance,
@@ -25,6 +26,7 @@ from ..corpus.schemas import (
     ReliabilityStatus,
     TableAsset,
     TermAsset,
+    Trigger,
 )
 from ..corpus.serialize import write_corpus
 from .clarifications import ClarificationRecord, ClarificationRecordStatus, parse_scope
@@ -34,6 +36,115 @@ _Asset = TableAsset | JoinAsset | MetricAsset | TermAsset | FewShotAsset | NoteA
 
 def _slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "x"
+
+
+# ── Keyword triggers from clarification text ──────────────────────────────── #
+# A clarification is raised about ONE question, so the caveat it produces is a
+# statement about that question's values, not about the schema. Deriving the
+# firing condition from the text is what lets the note be ``on_match`` instead of
+# ``always``; with no trigger there is nothing to match on and the note goes back
+# to firing on every question in its schema.
+#
+# Only KEYWORD triggers are emitted: ADR 0003 defers regex-over-the-question and
+# ``fire_triggers`` leaves a regex trigger inert (tests/test_triggers.py), so a
+# regex here would be an authored condition that can never fire.
+
+# A quoted span: 'value', "value" or `identifier`. The single-quote arm requires a
+# non-word character on both sides, because SME prose is full of possessives and
+# contractions ("the airport's name is …") and a naive ``'([^']+)'`` reads the text
+# BETWEEN two apostrophes as a literal — which yielded triggers like
+# "s readable name comes from the".
+_QUOTED_SPAN = re.compile(r"(?<!\w)'([^']{1,60})'(?!\w)|\"([^\"]{1,60})\"|`([^`]{1,60})`")
+
+# Values and entity names only: letters, digits, spaces, hyphens, ampersands. This
+# rejects the SQL that dominates a curator's suspicion text (``SUM(x)=1``,
+# ``population_2010``, ``T2.district``) — an expression or a physical identifier is
+# not what an analyst types.
+_VALUE_LIKE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 &\-]*$")
+
+# SQL fragments that survive the character filter but are not values.
+_TRIGGER_STOPWORDS = frozenset(
+    {
+        "between",
+        "boolean",
+        "count",
+        "distinct",
+        "false",
+        "group by",
+        "having",
+        "integer",
+        "limit",
+        "limit 1",
+        "null",
+        "on true",
+        "order by",
+        "select",
+        "true",
+        "unknown",
+        "varchar",
+    }
+)
+
+# English function words. A span made only of these ("how many", "more than") is a
+# fragment of the question's phrasing, which every sibling question shares.
+_FUNCTION_WORDS = frozenset(
+    "a an and are as at be been by can did do does for from had has have how in is"
+    " it its many more most much no not of on or per that the then there these this"
+    " to was were what which who whom whose why will with".split()
+)
+
+_TRIGGER_MIN_CHARS = 5  # ``fire_triggers`` matches bare substrings: 'mary' hits 'primary'
+_TRIGGER_MAX_CHARS = 40
+_TRIGGER_MAX_WORDS = 4  # a value or a name, not a clause
+_TRIGGERS_PER_NOTE = 3  # mirrors ``settings.pin_max``: a legible firing condition
+
+
+def _trigger_candidates(text: str | None) -> list[str]:
+    """Quoted value/entity spans in one blob of clarification text, most specific first."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for match in _QUOTED_SPAN.finditer(text or ""):
+        value = (match.group(1) or match.group(2) or match.group(3) or "").strip()
+        words = value.split()
+        folded = value.casefold()
+        if not _TRIGGER_MIN_CHARS <= len(value) <= _TRIGGER_MAX_CHARS:
+            continue
+        if len(words) > _TRIGGER_MAX_WORDS:
+            continue
+        if not _VALUE_LIKE.match(value):
+            continue
+        # A bare lower-case single word is the schema's own vocabulary ("station",
+        # "events"), which fires on every question in the schema — the bug this
+        # extraction exists to fix. A capital, a digit, a hyphen or a second word
+        # is what distinguishes a value or a name ("Monterey", "Net 30",
+        # "monterey county", "StarRating") from a common noun.
+        if not (any(c.isdigit() or c.isupper() for c in value) or " " in value or "-" in value):
+            continue
+        if folded in _TRIGGER_STOPWORDS or folded in seen:
+            continue
+        if all(w.casefold() in _FUNCTION_WORDS for w in words):
+            continue
+        seen.add(folded)
+        out.append(value)
+    # Fewest words, then shortest, then alphabetical: a short literal is the more
+    # robust substring, and the order has to be deterministic because the cap below
+    # decides which candidates become the note's firing condition.
+    out.sort(key=lambda v: (len(v.split()), len(v), v.casefold()))
+    return out
+
+
+def derive_keyword_triggers(question: str, answer: str | None = None) -> list[Trigger]:
+    """Keyword triggers for the note a clarification produces (may be empty).
+
+    The curator's ``question`` is the suspicion — it is where the question-specific
+    literal lives ("the actual county value is 'monterey county'"), so it is read
+    first and the SME's ``answer`` is consulted only when the question yields
+    nothing. Reading both always would let the answer's schema prose (backticked
+    column names, quoted general vocabulary) outvote the literal that identifies
+    the one question this caveat is about.
+    """
+    values = _trigger_candidates(question) or _trigger_candidates(answer)
+    return [Trigger(kind="keyword", value=v) for v in values[:_TRIGGERS_PER_NOTE]]
 
 
 def _inference_audit(
@@ -592,26 +703,38 @@ class AssetBag:
         confidence: float = 0.7,
         certified: bool = False,
         answered_by: str | None = None,
+        triggers: Iterable[Trigger] = (),
+        activation: NoteActivation | None = None,
     ) -> str:
-        """Record a governed note/caveat that serve should heed."""
+        """Record a governed note/caveat that serve should heed.
+
+        ``triggers`` / ``activation`` are OMITTED from the payload when not given,
+        so ``NoteAsset._defaults_from_kind`` still derives the activation from
+        ``kind``. Passing ``activation=None`` explicitly would mean the same thing
+        here, but writing the key would make every caller look like it had decided.
+        """
         summary = (summary or "").strip()
         if not summary:
             return "error: empty note summary"
         note_id = f"note_{_slug(self.schema)}_{len(self.notes) + 1}"
+        payload: dict[str, object] = {
+            "id": note_id,
+            "kind": kind,
+            "scope": list(scope),
+            "summary": summary,
+            "confidence": confidence,
+            "publication_status": (
+                ProvenanceStatus.certified if certified else ProvenanceStatus.proposed
+            ),
+            "audit": self._audit(certified=certified, answered_by=answered_by),
+        }
+        trigger_list = list(triggers)
+        if trigger_list:
+            payload["triggers"] = trigger_list
+        if activation is not None:
+            payload["activation"] = activation
         try:
-            asset = NoteAsset.model_validate(
-                {
-                    "id": note_id,
-                    "kind": kind,
-                    "scope": list(scope),
-                    "summary": summary,
-                    "confidence": confidence,
-                    "publication_status": (
-                        ProvenanceStatus.certified if certified else ProvenanceStatus.proposed
-                    ),
-                    "audit": self._audit(certified=certified, answered_by=answered_by),
-                }
-            )
+            asset = NoteAsset.model_validate(payload)
         except ValidationError as err:
             return f"error: invalid NoteAsset: {err}"
         self.notes[note_id] = asset
@@ -623,6 +746,15 @@ class AssetBag:
         ``NoteAsset``s, so the caveat reaches the served corpus instead of dying
         in the ledger. Runs after both fold modes (deterministic + agent).
         Returns the number of notes recorded.
+
+        Activation is derived, not fixed. ``NoteKind.context`` defaults to
+        ``always``, and taking that default is why all 162 notes of the 2026-07-27
+        corpus fired on every question in their schema: a caveat raised about one
+        BIRD question was injected into all of them. When the clarification names a
+        specific value or entity (``'monterey county'``, ``'Elvis Marx'``), that
+        literal is the caveat's firing condition and the note becomes ``on_match``.
+        When it names none — a statement about a table's general reliability — there
+        is nothing to match on and ``always`` is the honest activation.
         """
         n = 0
         for rec in records:
@@ -633,9 +765,12 @@ class AssetBag:
                 continue
             except ValueError:
                 pass  # non-asset scope (pair:/query:/…) → record as a caveat
+            triggers = derive_keyword_triggers(rec.question, rec.answer)
             msg = self.propose_note(
                 rec.answer,
                 kind=NoteKind.context,
+                triggers=triggers,
+                activation=NoteActivation.on_match if triggers else None,
                 # Scope to the owning schema. A caveat written for one schema is
                 # not a statement about the other 68 in a pooled data lake, but an
                 # empty scope is *global* — ``scope_matches`` then returns True for

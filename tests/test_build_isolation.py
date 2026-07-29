@@ -391,6 +391,7 @@ def test_build_workers_is_recorded_in_the_manifest_but_is_not_a_resume_knob():
         use_embedder=True,
         skip_agent=False,
         serve_workers=4,
+        question_pool_hash="pool0000",
         build_workers=6,
     )
     assert m["build_workers"] == 6

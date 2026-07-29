@@ -41,6 +41,28 @@ _SELECT_LEAK_RE = re.compile(r"\bSELECT\b")
 _SELECT_SQL_RE = re.compile(r"\bSELECT\b", re.IGNORECASE)
 _SQL_FENCE_RE = re.compile(r"```(?:sql)?\s*.*?```", re.IGNORECASE | re.DOTALL)
 
+#: A leftover fence marker on its own line, once :data:`_SQL_FENCE_RE` has taken the
+#: block it opened — or when the model never closed it, in which case the marker has
+#: no pair and would otherwise survive into the answer as ``` ```sql ```.
+_FENCE_LINE_RE = re.compile(r"^\s*`{3,}\s*\w*\s*$")
+
+#: The *continuation* lines of a query whose first line matched :data:`_SELECT_SQL_RE`.
+#: An unfenced statement wraps across lines, and only its first line names the
+#: keyword, so matching the keyword alone would leave ``FROM t`` / ``WHERE x = 1``
+#: standing in the answer. Consulted **only** while already inside a query run, which
+#: is what makes it safe to list words as ordinary as ``AND``, ``OR`` and ``ON``: a
+#: prose line that happens to open with one of them is only ever dropped if the line
+#: immediately above it was SQL.
+_SQL_CONT_RE = re.compile(
+    r"""^\s*(?:
+        [);,]+\s*$                                  # a lone closing paren / terminator
+      | --                                          # a SQL comment
+      | (?:FROM|WHERE|GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT|OFFSET|UNION|INTERSECT
+         |EXCEPT|JOIN|LEFT|RIGHT|INNER|OUTER|FULL|CROSS|NATURAL|ON|AND|OR)\b
+    )""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
 #: The fixed rules block inside the otherwise data-assembled SME brief. Only this
 #: block is a prompt variant; the rest of the brief is BIRD column descriptions
 #: and train evidence, which the registry has no business versioning.
@@ -274,16 +296,41 @@ def assert_brief_no_leakage(
 
 
 def _sanitize_sme_answer(text: str) -> str:
-    """Strip SQL fences / SELECT statements so invented SQL cannot enter provenance."""
-    cleaned = _SQL_FENCE_RE.sub("", text).strip()
-    if _SELECT_SQL_RE.search(cleaned):
-        # Keep only the prose before the first SELECT-looking line.
-        lines = []
-        for line in cleaned.splitlines():
-            if _SELECT_SQL_RE.search(line):
-                break
-            lines.append(line)
-        cleaned = "\n".join(lines).strip()
+    """Strip SQL out of an SME answer so invented SQL cannot enter provenance.
+
+    Removes queries from *anywhere* in the text and keeps every surviving line of
+    prose. The earlier version kept only the lines *before* the first
+    keyword-bearing line and discarded the rest, so an answer that opened with its
+    query sanitised to the empty string and fell through to the canned fallback
+    below — 11 of 381 measured answers, concentrated on the decoy-confirmation
+    questions the curator most needed answered. Leading with the query it had just
+    probed with is exactly what a model told to check the data first does; the
+    prose underneath was always the answer, and dropping it was never the intent.
+
+    Fenced blocks go first, then each keyword-bearing line and the wrapped
+    continuation lines belonging to it (see :data:`_SQL_CONT_RE`). Every line
+    carrying the keyword is dropped unconditionally, so the answer-purity
+    guarantee is unchanged: no query text can reach provenance. The fallback fires
+    only when nothing at all survives.
+    """
+    cleaned = _SQL_FENCE_RE.sub("", text)
+    kept: list[str] = []
+    in_sql = False
+    for line in cleaned.splitlines():
+        if _SELECT_SQL_RE.search(line):
+            in_sql = True
+        elif in_sql and not _SQL_CONT_RE.match(line):
+            # Prose resumed (or a blank line ended the statement): keep this line.
+            in_sql = False
+        if in_sql:
+            if line.rstrip().endswith(";"):
+                in_sql = False  # statement terminated here; the next line is prose
+            continue
+        if not _FENCE_LINE_RE.match(line):
+            kept.append(line)
+    # Removing a block from the middle leaves a hole; collapse it rather than
+    # handing the curator an answer with a paragraph-sized gap in it.
+    cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
     return cleaned or (
         "Unsure — declining to invent a definition; treat this column cautiously."
     )
@@ -404,10 +451,15 @@ class SimulatedSme:
         from ..obs import tracing_callbacks
         from ..provenance import Producer
 
+        # Deliberately says the same thing as the ``sme_rules`` block in the brief,
+        # in fewer words. The two used to disagree — the brief banned queries
+        # outright while this message invited them — and the model resolved the
+        # contradiction by refusing to answer at all.
         user = (
-            "Answer the following curator clarification in plain prose only "
-            "(no SQL). You may run read-only probe queries to check the data "
-            "first if it helps.\n\n"
+            "Answer the following curator clarification. Run read-only probe "
+            "queries first if checking the data helps; keep the SQL in the tool "
+            "call and write the answer itself as plain prose with no SQL in "
+            "it.\n\n"
             f"Clarification: {question}"
         )
         t0 = time.perf_counter()

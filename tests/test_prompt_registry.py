@@ -2,11 +2,13 @@
 
 Three things here are load-bearing rather than merely nice:
 
-* **``v1`` is the text this system has always sent.** The call sites now derive
-  their constants from the registry, so the two cannot silently disagree — but an
-  in-place edit of ``v1`` would still redefine the baseline that every prior
-  number was measured under. The pinned digests below make that edit a failing
-  test that names the consequence, instead of a quiet reinterpretation of history.
+* **``v1`` is pinned by digest.** The call sites now derive their constants from
+  the registry, so the two cannot silently disagree — but an in-place edit of
+  ``v1`` would still redefine the baseline that every prior number was measured
+  under. The pinned digests below make that edit a failing test that names the
+  consequence, instead of a quiet reinterpretation of history. Repinning one is a
+  deliberate act that discards the numbers taken under it, and has happened once
+  (``sme_rules``; see the table).
 * **An unknown stage or variant raises.** A silent fall back to ``v1`` is how a
   prompt experiment becomes a lie: the run reports a variant it never sent.
 * **The hash covers the text, not just the id.** Otherwise an edited prompt
@@ -26,13 +28,20 @@ from governed_bi import prompts
 #: stood before the registry existed. A mismatch means either the registry text
 #: was edited or a call site stopped deriving from it. Both invalidate the
 #: baseline; neither should be fixed by editing this table without saying so.
+#:
+#: ``sme_rules`` is the one entry that is **not** pre-registry text. Its original
+#: v1 and v2 both forbade database queries outright while the runtime user message
+#: in the same call invited a read-only probe, and 11 of 381 measured answers were
+#: destroyed by the contradiction; both were deleted and the digest repinned to
+#: the single replacement variant. Every number taken under the old text is
+#: discarded, which is what licenses the repin.
 V1_DIGESTS = {
     "agent_core": "12944b9758e09b8edf08667f11e6f59ac9b512d93ef63580e3a15f526ff7fe97",
     "schema_pick": "5d7f170fe6d12c96ceec36ef7fd1e69eb2396f52efedeaed691c756a8d8b8253",
     "narrator": "91886100a9010256574f6ca3bc0264726bf27117b0096cdf05934e8458b07824",
     "curator_phase_a": "207a2737d6d58d542f851ce49fba698b1e4dc19e0687bf1f0c0979d26556cba2",
     "curator_phase_b": "473708cc6ec6737defdf6318fbda0fd6653b167e19a060a4c5cbe0fc7ac665c5",
-    "sme_rules": "557773916c44247b92fa25fb4b4a4cfe1d73afe274a480e1f40cb5f3bc00581c",
+    "sme_rules": "c4c9fbff43d00c59f658485fe6b4fa8f790362206aa2388a40f889ab3aae67c0",
 }
 
 
@@ -46,7 +55,7 @@ def _sha(text: str) -> str:
 
 
 @pytest.mark.parametrize("stage", sorted(V1_DIGESTS))
-def test_v1_is_byte_identical_to_the_pre_registry_text(stage):
+def test_v1_is_byte_identical_to_its_pinned_digest(stage):
     assert _sha(prompts.get(stage, "v1").text) == V1_DIGESTS[stage]
 
 
