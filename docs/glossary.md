@@ -47,7 +47,7 @@ below conflicts with how something is being described, the term below wins.
 | **Analyst** (serve agent) | Online governed agent that *consumes* the corpus to answer. Fail-closed, auditable. Formerly "Server"; "server" / "LangGraph Server" now mean infra only. |
 | **Tool** | A coded function the model may decide to call. |
 | **Hook** (middleware) | Deterministic code firing on loop events to inject context and/or veto actions. |
-| **Memory** | Four designed stores (Architecture §7): **Working** (built, session-scoped) plus three durable ones, off-by-default and adopted only when eval earns it — **Profile**, **Episodic**, **Correction**. Only Working is implemented; Episodic/Correction are unimplemented protocol seams; Profile is config-only (a route budget + `profile_ttl_days`, no store seam yet — the lowest-priority durable store). |
+| **Memory** | Four designed stores (Architecture §7). Only **Working** exists (built, session-scoped). **Profile**, **Episodic** and **Correction** are design, not code — their empty protocols and config were deleted 2026-07-28 (D8). |
 | **Working memory** | Verbatim per-session context (checkpointer). Ephemeral; identity-scoped. |
 | **Governed path** | Answering from the semantic layer (the default). |
 | **Discovery path** | Fenced raw exploration for questions the semantic layer does not cover. |

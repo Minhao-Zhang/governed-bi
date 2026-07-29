@@ -85,19 +85,20 @@ def serve_config_hash(
         "environment": settings.environment.value,
         "prompt_set_hash": prompt_set_hash(settings.prompt_variants),
         "auto_accept_corpus": settings.auto_accept_corpus,
-        "working_memory": settings.working_memory,
-        "episodic_memory": settings.episodic_memory,
-        "correction_memory": settings.correction_memory,
         "schema_route_top_k": settings.schema_route_top_k,
         "schema_route_llm_pick": settings.schema_route_llm_pick,
         "schema_pick_max_columns": settings.schema_pick_max_columns,
         "hard_block_suspect_columns": settings.hard_block_suspect_columns,
         "grade_semantic_failures": settings.grade_semantic_failures,
-        "cache_hit_cosine_gate": settings.cache_hit_cosine_gate,
-        "few_shot_recall_cosine_gate": settings.few_shot_recall_cosine_gate,
-        "few_shot_recall_confidence_gate": settings.few_shot_recall_confidence_gate,
-        "few_shot_recall_max_fail_count": settings.few_shot_recall_max_fail_count,
-        "sql_cache_ttl_minutes": settings.sql_cache_ttl_minutes,
+        # Note governance (ADR 0003): these decide which notes reach the model and
+        # under what authority, so two runs that differ here are two configurations.
+        # They were absent while eight dead memory/cache knobs were hashed, which
+        # made flipping note-pinning produce an identical digest.
+        "pin_triggers_enabled": settings.pin_triggers_enabled,
+        "pin_require_certified": settings.pin_require_certified,
+        "pin_max": settings.pin_max,
+        "always_note_global_max": settings.always_note_global_max,
+        "always_note_char_max": settings.always_note_char_max,
     }
     if routing_knobs:
         payload["routing_knobs"] = dict(routing_knobs)

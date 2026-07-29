@@ -1,7 +1,7 @@
 """Governed agentic serve core + outer deterministic rails (ADR 0002).
 
 Inner loop: ``create_agent`` + ``GovernanceMiddleware`` + governed tools.
-Outer loop: thin LangGraph ``StateGraph`` — refuse-gate, cache, agent_core,
+Outer loop: thin LangGraph ``StateGraph`` — refuse-gate, agent_core,
 finalize / refuse. Agent-internal ``messages`` / ``licensed`` / ``ledger`` stay
 node-local and never merge into the chat transcript (ADR 0001 / gotcha G2).
 Deployment deps (corpus, gateway, graph, allowlist) are closures — not state
@@ -52,7 +52,6 @@ from .governance import (
     _finish_unsuccessful,
     _licensed_table_ids,
     _match_negative_example,
-    _try_cache_hit,
     missing_edge_refusal,
     narrate_answer,
 )
@@ -77,7 +76,6 @@ if TYPE_CHECKING:
     from ..llm import Embedder
     from ..memory import WorkingMemory
     from .answer import Answer
-    from .cache import SqlCache
     from .narrate import AnswerNarrator
 
 #: The default agent-core system prompt. Derived from the registry rather than
@@ -362,7 +360,6 @@ def build_serve_rails(
     identity: "Identity",
     model: Any,
     embedder: "Embedder | None" = None,
-    cache: "SqlCache | None" = None,
     working_memory: "WorkingMemory | None" = None,
     narrator: "AnswerNarrator | None" = None,
     on_event: "Callable[[dict], None] | None" = None,
@@ -372,11 +369,8 @@ def build_serve_rails(
     clarify_resume: Any = None,
     run_id: str | None = None,
     n_human: int = 1,
-    # Caller-owned, reusable across turns. The rails are rebuilt per question (the
-    # per-turn closures make that the simple thing), which meant re-embedding every
-    # schema document and every routed asset on every question (AUDIT R6). Passing a
-    # cache in decouples the expensive, corpus-constant work from graph construction.
-    # ``None`` keeps the old behaviour: a fresh, graph-scoped cache.
+    # Caller-owned, reusable across turns: the rails are rebuilt per question, which
+    # would otherwise re-embed every schema document on every question (AUDIT R6).
     index_cache: "RetrievalIndexCache | None" = None,
     schema_vectors: Any = None,
 ):
@@ -495,8 +489,8 @@ def build_serve_rails(
         def run(state: ServeRailsState) -> dict:
             with stages.stage(stage):
                 update = node(state)
-            # A node can end the turn from inside the block (a missing-edge refusal,
-            # a cache hit), and its own record did not exist yet when `final()`
+            # A node can end the turn from inside the block (a missing-edge
+            # refusal), and its own record did not exist yet when `final()`
             # stamped the answer. Re-stamp so the enclosing stage is not missing from
             # exactly the turns that stopped in it — that absence would bias any
             # average over the records towards the turns that got further.
@@ -564,8 +558,8 @@ def build_serve_rails(
         events.rail("refuse_gate", "ok")
         return {"outcome": "continue"}
 
-    def after_refuse(state: ServeRailsState) -> Literal["cache", "__end__"]:
-        return END if state.get("outcome") == "refuse" else "cache"
+    def after_refuse(state: ServeRailsState) -> Literal["assemble", "__end__"]:
+        return END if state.get("outcome") == "refuse" else "assemble"
 
     def assemble(state: ServeRailsState) -> dict:
         """Amendment 1: run the deterministic front half and seed the semantic layer.
@@ -773,39 +767,6 @@ def build_serve_rails(
 
     def after_assemble(state: ServeRailsState) -> Literal["agent_core", "__end__"]:
         return END if state.get("outcome") == "refuse" else "agent_core"
-
-    def cache_lookup(state: ServeRailsState) -> dict:
-        if cache is None:
-            # No cache configured: ``cache_hit`` stays unset. A False here would
-            # report a miss on a lookup the turn never made.
-            return {"outcome": "miss"}
-        hit = _try_cache_hit(
-            cache,
-            state["question"],
-            gateway,
-            identity,
-            settings,
-            allowlist,
-            dialect,
-            graph_obj,
-            state["base_provenance"],
-            default_schema=default_schema,
-            narrator=None,  # narration is a dedicated graph node (see narrate_node)
-            stages=stages,
-        )
-        if hit is not None:
-            events.rail("cache", "hit", metric_id=hit.provenance.get("metric_id"))
-            hit = events.final(hit)
-            return {"answer": hit, "outcome": "finalize"}
-        return {
-            "outcome": "miss",
-            "base_provenance": {**state["base_provenance"], "cache_hit": False},
-        }
-
-    def after_cache(state: ServeRailsState) -> Literal["assemble", "narrate"]:
-        # A cache hit is a delivered answer → phrase it in the narrate node too, so
-        # cached and freshly-generated answers take the identical finalization path.
-        return "narrate" if state.get("outcome") == "finalize" else "assemble"
 
     def _tool_start_detail(step: str, args: dict) -> dict:
         if step == "search_corpus":
@@ -1234,8 +1195,6 @@ def build_serve_rails(
             metric_id=None,
         )
         attempts = sum(1 for e in ledger if e.get("action") == "run_query")
-        # Cache licensed set = physical names of tables the SQL actually touched.
-        licensed_phys = frozenset(licensed_physical_names(corpus, tables_used))
         ans = _finalize_success(
             question=question,
             graph=graph_obj,
@@ -1245,8 +1204,6 @@ def build_serve_rails(
             base_provenance=base_provenance,
             dialect=dialect,
             allowlist=allowlist,
-            licensed=licensed_phys,
-            cache=cache,
             narrator=None,  # narration deferred to narrate_node
             ledger=ledger,
         )
@@ -1256,8 +1213,8 @@ def build_serve_rails(
     def narrate_node(state: ServeRailsState) -> dict:
         """Phrase the delivered answer into grounded English — a first-class graph
         step so the narrator's model call is one trace span under the turn (not a
-        side call inside finalization). No-op for refusals / cache-miss passthrough
-        (no ``answer`` with a result grid) and when no narrator is configured; a
+        side call inside finalization). No-op for refusals (no ``answer`` with a
+        result grid) and when no narrator is configured; a
         narrator failure keeps the deterministic finalizer text (see
         ``narrate_answer``)."""
         answer = state.get("answer")
@@ -1296,14 +1253,12 @@ def build_serve_rails(
     builder = StateGraph(ServeRailsState)
     builder.add_node("ingest", ingest)
     builder.add_node("refuse_gate", refuse_gate)
-    builder.add_node("cache", _timed(Stage.cache, cache_lookup))
     builder.add_node("assemble", _timed(Stage.assemble, assemble))
     builder.add_node("agent_core", agent_core_node)
     builder.add_node("narrate", narrate_node)
     builder.add_edge(START, "ingest")
     builder.add_edge("ingest", "refuse_gate")
-    builder.add_conditional_edges("refuse_gate", after_refuse, ["cache", END])
-    builder.add_conditional_edges("cache", after_cache, ["assemble", "narrate"])
+    builder.add_conditional_edges("refuse_gate", after_refuse, ["assemble", END])
     builder.add_conditional_edges("assemble", after_assemble, ["agent_core", END])
     builder.add_edge("agent_core", "narrate")
     builder.add_edge("narrate", END)
@@ -1320,7 +1275,6 @@ def answer_question_agent(
     session_id: str,
     model: Any,
     embedder: "Embedder | None" = None,
-    cache: "SqlCache | None" = None,
     working_memory: "WorkingMemory | None" = None,
     narrator: "AnswerNarrator | None" = None,
     on_event: "Callable[[dict], None] | None" = None,
@@ -1347,7 +1301,6 @@ def answer_question_agent(
         identity=identity,
         model=model,
         embedder=embedder,
-        cache=cache,
         working_memory=working_memory,
         narrator=narrator,
         on_event=on_event,

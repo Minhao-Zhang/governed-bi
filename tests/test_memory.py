@@ -5,8 +5,6 @@ from __future__ import annotations
 import pytest
 
 from governed_bi.memory import (
-    CorrectionMemory,
-    EpisodicMemory,
     InMemoryWorkingMemory,
     WorkingMemory,
 )
@@ -62,9 +60,3 @@ def test_max_turns_must_be_positive():
 
 def test_in_memory_store_satisfies_protocol():
     assert isinstance(InMemoryWorkingMemory(), WorkingMemory)
-
-
-def test_durable_store_protocols_are_runtime_checkable():
-    # The seams exist as interfaces; nothing implements them yet (off by default).
-    assert not isinstance(InMemoryWorkingMemory(), EpisodicMemory)
-    assert not isinstance(InMemoryWorkingMemory(), CorrectionMemory)

@@ -34,24 +34,6 @@ class Environment(str, Enum):
 
 
 @dataclass(frozen=True)
-class MemoryBudget:
-    """Per-route memory injection budget (Profile / Episodic / Correction)."""
-
-    profile: int
-    episodic: int
-    correction: int
-
-
-# Architecture §7 route memory budgets.
-ROUTE_MEMORY_BUDGETS: dict[str, MemoryBudget] = {
-    "nl2sql": MemoryBudget(5, 2, 5),
-    "kpi_lookup": MemoryBudget(2, 0, 1),
-    "knowledge_qa": MemoryBudget(3, 1, 1),
-    "deep_analysis": MemoryBudget(8, 8, 4),
-}
-
-
-@dataclass(frozen=True)
 class ModelConfig:
     """Which models the LLM and embedding seams call, and where the key lives.
 
@@ -202,22 +184,6 @@ class Settings:
     # instead of a hard refusal. L2 policy + curated refuse-gate stay hard.
     grade_semantic_failures: bool = False
 
-    # ── Memory (D8) — working always on; episodic/correction off until eval earns it ──
-    working_memory: bool = True
-    episodic_memory: bool = False
-    correction_memory: bool = False
-
-    # ── Reusable numbers (Architecture §7; tune on BIRD first) ──
-    profile_ttl_days: int = 365
-    episodic_ttl_days: int = 90
-    episodic_decay_per_day: float = 0.02
-    correction_ttl_days: int = 180
-    sql_cache_ttl_minutes: int = 15
-    cache_hit_cosine_gate: float = 0.92
-    few_shot_recall_cosine_gate: float = 0.95
-    few_shot_recall_confidence_gate: float = 0.90
-    few_shot_recall_max_fail_count: int = 3
-
     # ── Schema routing (D15; multi-schema / data-lake serve) ──
     # Candidate shortlist size for the router (embedding similarity, BM25 fallback).
     # Wider raises schema recall at the cost of more per-question context. Only used
@@ -234,10 +200,6 @@ class Settings:
     # 0 restores the names-only summary. Capped per table so one wide table cannot
     # dominate the picker context across every candidate.
     schema_pick_max_columns: int = 12
-
-    route_memory_budgets: dict[str, MemoryBudget] = field(
-        default_factory=lambda: dict(ROUTE_MEMORY_BUDGETS)
-    )
 
     # ── Model seam (see [models] in governed_bi.toml) ──
     models: ModelConfig = field(default_factory=ModelConfig)

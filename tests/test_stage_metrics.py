@@ -16,7 +16,6 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import AIMessage
 
-from governed_bi.analyst import SqlCache
 from governed_bi.analyst.agent import answer_question_agent
 from governed_bi.analyst.answer import refusal
 from governed_bi.analyst.governance import GovEventStream, StageRecorder
@@ -32,7 +31,6 @@ from governed_bi.config import Environment, Settings
 from governed_bi.corpus import load_corpus
 from governed_bi.gateway import Gateway, GuardrailLayer, Identity, SqliteConnector, check
 from governed_bi.graph import MissingJoinPath
-from governed_bi.llm import HashingEmbedder
 from governed_bi.llm.fake import FakeToolModel, ai_tool_turn
 from governed_bi.stages import Stage
 
@@ -372,7 +370,6 @@ def test_the_turn_reports_a_timing_for_every_stage_it_ran(served):
     by_stage = {e["stage"] for e in events}
     assert {
         "route",
-        "cache",
         "schema_pick",
         "retrieve",
         "assemble",
@@ -413,35 +410,13 @@ def test_the_guardrail_stage_carries_the_deciding_layer(served):
     assert guardrails[1]["detail"]["passed"] is True
 
 
-def test_no_cache_configured_leaves_cache_hit_unmeasured(served):
-    """A ``False`` here would report a miss on a lookup the turn never made."""
-    assert served.provenance["cache_hit"] is None
-
-
-def test_a_configured_cache_records_a_miss_as_a_measured_false(
-    corpus, bird_gateway, settings, identity
-):
-    ans = answer_question_agent(
-        "total revenue",
-        identity,
-        corpus=corpus,
-        gateway=bird_gateway,
-        settings=settings,
-        session_id="stage-metrics-cache",
-        model=FakeToolModel(responses=_repair_trajectory()),
-        cache=SqlCache(HashingEmbedder()),
-    )
-    assert ans.provenance["cache_hit"] is False
-
-
 def test_the_durable_run_log_keeps_the_counts_and_timings(served, settings):
     """Blind spot #2: a deployment not running the eval harness had no durable
-    record of its own routing / retrieval / cache / tool-call behaviour."""
+    record of its own routing / retrieval / tool-call behaviour."""
     rec = load_run_record(served.provenance["turn_id"], settings)
     assert rec is not None
     assert rec["n_tool_calls"] == {"search_corpus": 1, "inspect_schema": 1, "run_query": 2}
     assert rec["by_guardrail_layer"]["term_semantics"] == 1
-    assert rec["cache_hit"] is None  # no cache configured for this turn
     assert rec["attempts"] == 2
     assert {e["stage"] for e in rec["stage_events"]} >= {"route", "agent_core", "execute"}
 

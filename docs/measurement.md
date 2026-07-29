@@ -118,7 +118,7 @@ answer *before* the portable append, so the durable run log carries a turn's
 own timings and counters too, not only the eval harness. Which provenance
 keys must survive onto every terminal `Answer` is pinned in
 `METADATA_PROVENANCE_KEYS` (`src/governed_bi/analyst/run_log.py`), which
-includes `stage_events`, `n_tool_calls`, `by_guardrail_layer`, `cache_hit`,
+includes `stage_events`, `n_tool_calls`, `by_guardrail_layer`,
 `attempts` (the `_INSTRUMENTATION_KEYS` block) alongside the run-identity
 fields (`turn_id`, `run_id`, `outcome`, `model`, ...). An unmeasured
 instrumentation field is written as `None`, never `0` or `{}` — a producer

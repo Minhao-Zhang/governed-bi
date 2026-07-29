@@ -39,7 +39,7 @@ llm_model = "gpt-5.6-luna"
 llm_reasoning_effort = "low" # none | low | medium | high | xhigh | max
 # llm_max_output_tokens = 4096   # omit for provider default
 
-# Embedding model for the retrieval vector channel and the SQL semantic cache.
+# Embedding model for the retrieval vector channel.
 # The search space is small, so a compact model is enough; swap freely.
 embedding_model = "text-embedding-3-small"
 # embedding_dimensions = 1536    # omit for model default

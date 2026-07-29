@@ -50,7 +50,6 @@ _INSTRUMENTATION_KEYS: tuple[str, ...] = (
     "stage_events",
     "n_tool_calls",
     "by_guardrail_layer",
-    "cache_hit",
     "attempts",
 )
 
@@ -458,7 +457,6 @@ def build_metadata_record(answer: Any, *, ctx: FinalizeCtx, provenance: dict) ->
         "stage_events": strip_stage_events_for_log(provenance.get("stage_events")),
         "n_tool_calls": provenance.get("n_tool_calls"),
         "by_guardrail_layer": provenance.get("by_guardrail_layer"),
-        "cache_hit": provenance.get("cache_hit"),
         "attempts": provenance.get("attempts"),
         "governance_ledger": strip_ledger_for_log(
             provenance.get("governance_ledger"),

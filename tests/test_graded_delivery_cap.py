@@ -10,7 +10,7 @@ must be hard-refused, never executed.
 
 Graded delivery is now an allowlist: only a curated SEMANTIC failure (L4/L5) —
 which proves L1/L2/L3 were cleared — is ever re-executed, and even then the SQL is
-re-checked immediately before execution (mirroring ``_try_cache_hit``).
+re-checked immediately before execution.
 """
 
 from __future__ import annotations
@@ -85,7 +85,7 @@ def test_recheck_refuses_mislabeled_semantic_entry():
     """Even if the ledger LABELS a failure semantic (``term_semantics``), the
     pre-execute re-check re-runs check() and refuses when the SQL actually trips a
     safety/confidentiality layer (here L3, an excluded column) — never trusting the
-    label, mirroring _try_cache_hit."""
+    label."""
     corpus = load_corpus(CORPUS_ROOT, schema="beer_factory").for_analyst()
     gw = _CountingGateway()
     answer = _finish_unsuccessful(

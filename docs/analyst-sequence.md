@@ -14,7 +14,6 @@ stage. Source: [`analyst/agent.py`](../src/governed_bi/analyst/agent.py)
 | Serve rails | `analyst/agent.py` · `build_serve_rails` StateGraph |
 | Working memory | `memory/store.py` · `WorkingMemory` |
 | Refuse-gate | `analyst/agent.py` · `refuse_gate` (curated `NegativeExampleAsset`s) |
-| SQL cache | `analyst/governance.py` · `_try_cache_hit` |
 | RVGD retrieval | `retrieval/rvgd.py` · `retrieve`; `retrieval/schema_router.py` |
 | Graph planner | `graph/planner.py` · `detect_missing_join_path`, `plan_joins` |
 | Corpus | `corpus/loader.py` · `Corpus.for_analyst()` view |
@@ -34,9 +33,7 @@ flowchart TD
     Q([question]) --> ING[ingest<br/>route + bind terms]
     ING --> RG{refuse-gate}
     RG -->|matches negative| XO([REFUSE · out of scope])
-    RG -->|in scope| CA{semantic cache}
-    CA -->|hit, re-verified| NAR[narrate + stamp]
-    CA -->|miss| ASM{assemble<br/>RVGD + license}
+    RG -->|in scope| ASM{assemble<br/>RVGD + license}
     ASM -->|no curated join| XE([REFUSE · missing join])
     ASM -->|licensed| AG{governed agent core}
     AG -->|guardrail hard-stop| XG([REFUSE · guardrail])

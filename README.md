@@ -154,7 +154,7 @@ src/governed_bi/
   curator/          Facts profiling, proposers, adversary review, curate loop, deepagents build harness
   graph/            FK graph projection + Steiner-tree join planning
   retrieval/        BM25 + grounding + vector channel (RRF fusion)
-  memory/           working memory; episodic/correction seams
+  memory/           working memory (session-scoped)
   analyst/          the ADR-0002 governed agentic core (sole serve path): agent, tools, middleware, governance, cache, stamp
   eval/             execution accuracy, arm harness, refuse-gate
   viz/              audit surface (UI-agnostic presenter view models; API write gated by allow_edit)

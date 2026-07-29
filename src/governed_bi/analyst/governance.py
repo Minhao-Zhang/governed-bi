@@ -1,7 +1,7 @@
 """Shared governance helpers for the agentic serve core (ADR 0002).
 
 The single source of truth for the fail-closed paths (refuse-gate matching, L4
-licensing scope, cache re-guardrailing, answer finalization, the two-axis stamp,
+licensing scope, answer finalization, the two-axis stamp,
 and the live event stream) that ``analyst.agent``'s outer rails + middleware call,
 so governance decisions live in exactly one place and cannot drift.
 """
@@ -546,7 +546,7 @@ class GovEventStream:
             pass
 
     def rail(self, step: str, status: str = "ok", *, label: str | None = None, **detail) -> None:
-        """A deterministic outer-rail step (route/refuse_gate/cache/assemble)."""
+        """A deterministic outer-rail step (route/refuse_gate/assemble)."""
         self._emit_event("rail", step, status, label=label, detail=detail)
 
     def tool(
@@ -607,7 +607,7 @@ def _out_of_band_ledger_entry(
 ) -> dict:
     """A ledger entry for an execution that did not go through ``wrap_tool_call``.
 
-    Two paths execute outside the middleware: a semantic-cache hit and graded
+    One path executes outside the middleware: graded
     delivery. Both re-run ``check()`` first, so they are governed — but they built no
     ledger entry, so their answers carried no ``governance_ledger`` and the audit
     trail showed a query that never happened (AUDIT R4). ``path`` names which one, so
@@ -634,73 +634,6 @@ def _out_of_band_ledger_entry(
     return entry
 
 
-def _try_cache_hit(
-    cache, question, gateway, identity, settings, allowlist, dialect, graph, base_provenance,
-    *,
-    default_schema: str | None = None,
-    narrator: "AnswerNarrator | None" = None,
-    stages: "StageRecorder | None" = None,
-) -> "Answer | None":
-    """Serve a semantic-cache hit, or return None to fall through to the pipeline.
-
-    A hit is re-guardrailed (against the licensed tables stored with it) and
-    re-executed for freshness (D7). If the re-check fails - a corpus change now
-    blocks the cached SQL - or execution errors, this returns None so the full
-    pipeline runs instead. Fail-closed: a stale/blocked cached query is never
-    served. The reliability stamp is **re-derived** from the current graph (over
-    the stored ``tables_used``), identical to a fresh miss, so it never goes stale.
-    """
-    entry = cache.lookup(question)
-    if entry is None:
-        return None
-    with _stage(stages, Stage.guardrail, path="cache") as detail:
-        verdict = check(
-            entry.sql,
-            allowed_columns=set(allowlist.allowed),
-            suspect_columns=allowlist.suspect,
-            allowed_tables=entry.licensed_tables,
-            hard_block_suspect=settings.hard_block_suspect_columns,
-            dialect=dialect,
-            default_schema=default_schema,
-            on_layer=_layer_observer(stages),
-        )
-        detail["passed"] = verdict.passed
-    if not verdict.passed:
-        return None
-    t0 = time.perf_counter()
-    try:
-        with _stage(stages, Stage.execute, path="cache") as detail:
-            result = gateway.execute(entry.sql, identity)
-            detail["rows"] = result.row_count
-    except Exception:
-        return None
-    cache_ledger = [_out_of_band_ledger_entry(entry.sql, result, path="cache", t0=t0)]
-    try:
-        stamp_plan = plan_joins(graph, set(entry.tables_used))
-        join_ids, min_confidence = stamp_plan.join_ids, stamp_plan.min_confidence
-    except ValueError:
-        join_ids, min_confidence = [], 1.0
-    signals = UncertaintySignals(
-        low_confidence_join=min_confidence < LOW_CONFIDENCE_JOIN,
-        suspect_in_scope=_suspect_in_scope(entry.sql, allowlist.suspect, dialect),
-        weak_retrieval=_weak_retrieval(base_provenance),
-    )
-    provenance = {
-        **base_provenance,
-        "metric_id": entry.metric_id,
-        "tables_used": sorted(entry.tables_used),
-        "join_ids": join_ids,
-        "min_join_confidence": min_confidence,
-        "row_count": result.row_count,
-        "truncated": result.truncated,
-        "cache_hit": True,
-        "governance_ledger": cache_ledger,
-    }
-    table = _result_table(result)
-    text = _answer_text(question, entry.sql, result, table, narrator)
-    return assemble(text=text, sql=entry.sql, signals=signals, provenance=provenance, result=table)
-
-
 def _finish_unsuccessful(
     *,
     settings: "Settings",
@@ -720,7 +653,7 @@ def _finish_unsuccessful(
 
     ``allowlist``/``dialect``/``default_schema`` (threaded from ``analyst.agent``)
     let this re-run :func:`check` on the SQL right before executing it, mirroring
-    :func:`_try_cache_hit`. Absent (a direct unit call), the semantic-layer
+    the graded-delivery path. Absent (a direct unit call), the semantic-layer
     allowlist gate below already fails closed.
     """
     record = dict(last_refusal)
@@ -740,7 +673,7 @@ def _finish_unsuccessful(
         return refusal(escalation=escalation, provenance=provenance)
 
     # Defense-in-depth: re-run the guardrail right before executing, so nothing but
-    # check() itself ever authorizes an execution (mirrors _try_cache_hit; never
+    # check() itself ever authorizes an execution (never
     # trust the ledger's ``failed_layer`` label). ``allowed_tables=None`` skips L4
     # (the term-scope layer graded delivery exists to forgive), so a genuine L4/L5
     # failure still delivers — but if the SQL now trips a safety/confidentiality
@@ -826,7 +759,7 @@ def _weak_retrieval(base_provenance: Mapping[str, Any] | dict) -> bool:
     the corpus — "how many employees do we have?" against a corpus with no employee
     table still returns ``top_k`` tables, because the budget cut has no minimum and
     the embedding channel scores everything above zero (AUDIT C2). Absent key ->
-    False: a path that never retrieved (a cache hit on a pre-existing entry) has no
+    False: a path that never retrieved has no
     evidence either way, and inventing a flag there would make the stamp less
     honest, not more.
     """
@@ -840,12 +773,12 @@ def _weak_retrieval(base_provenance: Mapping[str, Any] | dict) -> bool:
 
 
 def _finalize_success(
-    *, question, graph, generated, result, attempts, base_provenance, dialect, allowlist, licensed,
-    cache, narrator: "AnswerNarrator | None" = None,
+    *, question, graph, generated, result, attempts, base_provenance, dialect, allowlist,
+    narrator: "AnswerNarrator | None" = None,
     coverage_best_effort: bool = False,
     ledger: list | None = None,
 ) -> "Answer":
-    """Stamp + assemble a successful answer, and write back a clean one to the cache.
+    """Stamp + assemble a successful answer.
 
     The stamp reflects the joins the executed SQL actually needs and whether it
     took a repair to get here (a repaired answer is lineage, not governed). Kept
@@ -881,18 +814,6 @@ def _finalize_success(
         provenance["governance_ledger"] = list(ledger)
     table = _result_table(result)
     text = _answer_text(question, generated.sql, result, table, narrator)
-    answer = assemble(
+    return assemble(
         text=text, sql=generated.sql, signals=signals, provenance=provenance, result=table
     )
-    # Cache admission gates on the *semantic* axis, never on safety alone: only an
-    # ``unflagged`` answer (clean run, no uncertainty flag) is written back, so a
-    # later hit is always high-assurance. Cache SQL text only, never results (D7).
-    if cache is not None and answer.semantic_assurance is SemanticAssurance.unflagged:
-        cache.put(
-            question,
-            generated.sql,
-            licensed_tables=licensed,
-            tables_used=frozenset(generated.tables_used),
-            metric_id=generated.metric_id,
-        )
-    return answer

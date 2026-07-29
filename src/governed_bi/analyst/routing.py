@@ -3,7 +3,7 @@
 Term binding resolves business language via ``term`` assets: synonyms map varied
 phrasings to the canonical asset (strong routing, not an LLM guess). Intent
 routing is **hard-wired** to one of four routes, each with its own retrieval and
-memory budget (``config.ROUTE_MEMORY_BUDGETS``).
+memory budget.
 
 Both are deterministic here. In an enterprise deployment the router may be
 model-assisted, but the route set and the term-binding contract stay the same.

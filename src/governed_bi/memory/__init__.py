@@ -16,16 +16,12 @@ TTLs / gates / route budgets live in ``governed_bi.config``.
 from __future__ import annotations
 
 from .store import (
-    CorrectionMemory,
-    EpisodicMemory,
     InMemoryWorkingMemory,
     Turn,
     WorkingMemory,
 )
 
 __all__ = [
-    "CorrectionMemory",
-    "EpisodicMemory",
     "InMemoryWorkingMemory",
     "Turn",
     "WorkingMemory",

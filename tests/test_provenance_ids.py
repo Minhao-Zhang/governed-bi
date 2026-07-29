@@ -43,14 +43,21 @@ def test_serve_config_hash_stable_and_sensitive():
     changed_top_k = replace(a, schema_route_top_k=a.schema_route_top_k + 1)
     assert serve_config_hash(changed_top_k) != serve_config_hash(a)
 
-    changed_gate = replace(a, cache_hit_cosine_gate=0.5)
-    assert serve_config_hash(changed_gate) != serve_config_hash(a)
-
-    # Memory / acceptance flags are in the curated set (review feedback #3).
-    changed_mem = replace(a, episodic_memory=True)
-    assert serve_config_hash(changed_mem) != serve_config_hash(a)
     changed_accept = replace(a, auto_accept_corpus=False)
     assert serve_config_hash(changed_accept) != serve_config_hash(a)
+
+    # Note governance decides which notes reach the model and under what authority,
+    # so it has to move the digest. It did not: the hash spent five slots on dead
+    # memory/cache knobs and omitted every pin knob, so a run could flip
+    # note-pinning and still claim the same configuration.
+    for field, value in (
+        ("pin_triggers_enabled", not a.pin_triggers_enabled),
+        ("pin_require_certified", not a.pin_require_certified),
+        ("pin_max", a.pin_max + 1),
+        ("always_note_global_max", a.always_note_global_max + 1),
+        ("always_note_char_max", a.always_note_char_max + 1),
+    ):
+        assert serve_config_hash(replace(a, **{field: value})) != serve_config_hash(a), field
 
     # Prompt text is part of the configuration: two runs that sent different
     # prompts are not the same setup, however identical every other knob is.

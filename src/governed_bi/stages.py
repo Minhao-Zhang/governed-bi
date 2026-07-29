@@ -69,7 +69,6 @@ class Stage(str, Enum):
     # Graph rails, in execution order.
     route = "route"
     refuse_gate = "refuse_gate"
-    cache = "cache"
     assemble = "assemble"
     agent_core = "agent_core"
     narrate = "narrate"

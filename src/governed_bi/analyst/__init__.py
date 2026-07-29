@@ -15,10 +15,9 @@ Modules map to the pipeline (``docs/analyst.md``):
 
 - ``routing``: query understanding, term binding, intent route.
 - ``sqlgen``: SQL generation (deterministic template + LLM seam).
-- ``cache``: SQL semantic-cache fast path.
 - ``agent``: the governed agentic core + outer deterministic rails (ADR 0002);
   entry point ``answer_question_agent``.
-- ``governance``: shared stamping/refusal/cache-hit helpers the agent core calls.
+- ``governance``: shared stamping/refusal helpers the agent core calls.
 - ``middleware``: before_model / wrap_tool_call hooks.
 - ``answer``: answer assembly + reliability stamp.
 
@@ -38,7 +37,6 @@ from .answer import (
     reliability_tier,
     semantic_assurance,
 )
-from .cache import CacheEntry, SqlCache
 from .context import PromptContext, assemble_context
 from .narrate import AnswerNarrator, LlmAnswerNarrator
 from .routing import Route, bind_terms, route_intent
@@ -47,14 +45,12 @@ from .sqlgen import GeneratedSql
 __all__ = [
     "Answer",
     "AnswerNarrator",
-    "CacheEntry",
     "GeneratedSql",
     "LlmAnswerNarrator",
     "PromptContext",
     "ReliabilityTier",
     "ResultTable",
     "SemanticAssurance",
-    "SqlCache",
     "Route",
     "UncertaintySignals",
     "assemble",

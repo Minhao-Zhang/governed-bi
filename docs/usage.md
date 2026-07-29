@@ -139,7 +139,7 @@ physical-existence check (every `physical_name` exists in the live catalog).
 
 Serve is agent-only (ADR 0002): `create_agent` + `GovernanceMiddleware` +
 governed read-only tools, wrapped by an outer LangGraph rails graph that
-routes the question, checks the semantic cache, runs the agent core, and
+routes the question, runs the agent core, and
 stamps the answer. There is no deterministic fallback for answering: it needs
 a live model, and fails closed rather than guessing without one:
 

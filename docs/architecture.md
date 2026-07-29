@@ -96,15 +96,6 @@ The full stage-by-stage design is in [Analyst](analyst.md), along with the three
 
 Per D15, on the multi-schema Postgres / Redshift path a join-aware schema router precedes RVGD retrieval, so retrieval spans schemas; the single-schema path skips it. **Shipped** (`retrieval.schema_router`; wired in `analyst.agent`).
 
-> **SQL semantic cache fast path**
->
-> Embed the question → cosine similarity ≥0.92 against the cached-SQL library →
-> hit skips retrieval, planning, and generation, but **always re-executes** the
-> cached SQL (freshness over latency; cache SQL text only, never results,
-> matching D7's identity scoping). Miss → full pipeline, then write back to the
-> cache on success. TTL 15 min. Single global threshold, a known gap that is
-> not tuned per domain. See the *Data Agent Memory Design Overview* §5.
-
 Guardrails, in order (fail-closed on any, all five enforced): syntax → policy blacklist → AST column allowlist → term-semantics → cost. The AST allowlist is scope-aware (resolves each column against its own query scope and blocks star projections); term-semantics licenses the retrieved tables plus their FK join-neighborhood, the join plan's Steiner points (not just the exact retrieved set, so it is decoupled from retrieval recall), and any curated cross-schema join targets, and blocks any table name outside that licensed scope. The cost layer is a structural cross-join guard for now; numeric EXPLAIN-based cost (Postgres / Redshift) is future per-dialect work. Stage-by-stage detail is in [Analyst](analyst.md) step 8.
 
 > **D15: L4 scope is schema-qualified and spans schemas.** Cross-schema names are licensed only via a curated join — with none, the engine refuses rather than guessing. The single-schema / SQLite / BIRD path is **also** schema-qualified: the SQLite connector `ATTACH`es its file under the `corpus_pin` alias, so `beer_factory.customers` executes natively (this line said "stays bare/unqualified", which the 2026-07-17 supersession made false). Guardrail + serve wiring + missing-edge refusal + join-aware schema router are shipped.
