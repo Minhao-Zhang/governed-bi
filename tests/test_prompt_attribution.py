@@ -622,6 +622,15 @@ def _manifest(**over):
         # across the pair, or `comparable()` reports a question-pool difference the
         # test never intended to introduce.
         question_pool_hash="pool0000",
+        # Note governance joined MANIFEST_KNOBS, so these are required here too.
+        # These tests are about the PROMPT stamp; the note knobs only need to be
+        # present and identical across a pair, or `comparable()` reports a
+        # difference the test never meant to introduce.
+        always_note_global_max=8,
+        always_note_char_max=2000,
+        pin_triggers_enabled=False,
+        pin_require_certified=True,
+        pin_max=3,
     )
     kwargs.update(over)
     return _build_manifest(**kwargs)

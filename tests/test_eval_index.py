@@ -21,6 +21,19 @@ from governed_bi.eval.index import (
     render_index,
 )
 
+#: The note-governance knobs every `build_manifest` caller must now spell, at their
+#: `Settings` defaults. Shared so a sixth knob joining the register is one edit here
+#: rather than a hunt through every call site — which is the whole argument for the
+#: register in the first place. `build_manifest` nulls `pin_require_certified` and
+#: `pin_max` itself when PIN is off, so callers pass the real values regardless.
+_NOTES = {
+    "always_note_global_max": 8,
+    "always_note_char_max": 2000,
+    "pin_triggers_enabled": False,
+    "pin_require_certified": True,
+    "pin_max": 3,
+}
+
 
 def _write_run(
     tmp_path,
@@ -435,7 +448,13 @@ def test_every_resume_drift_key_is_actually_checked(tmp_path, key, label):
                 "skip_agent": False, "prompt_set_hash": "h0", "route_top_k": 10,
                 "route_llm_pick": True, "schema_pick_max_columns": 12,
                 "use_embedder": True, "corpus_content_hash": "c0",
-                "llm_temperature": 0.0, "question_pool_hash": "pool0"}
+                "llm_temperature": 0.0, "question_pool_hash": "pool0",
+                # Note governance (ADR 0003). Present with real values rather than
+                # None, because this test flips each key in turn and a None start
+                # would make the flip untypeable for the int knobs.
+                "always_note_global_max": 8, "always_note_char_max": 2000,
+                "pin_triggers_enabled": False, "pin_require_certified": True,
+                "pin_max": 3}
     changed = dict(original)
     was = original[key]
     changed[key] = (not was) if isinstance(was, bool) else f"{was}-changed"
@@ -805,6 +824,7 @@ def test_both_drivers_record_no_model_under_skip_agent():
         skip_agent=True,
         serve_workers=1,
         question_pool_hash="pool0000",
+        **_NOTES,
     )
     single = run_experiment.build_manifest(
         db_id="restaurant",
@@ -817,6 +837,7 @@ def test_both_drivers_record_no_model_under_skip_agent():
         limit=None,
         llm_temperature=None,
         question_pool_hash="pool0000",
+        **_NOTES,
     )
     for name, built in (("run_datalake", pooled), ("run_experiment", single)):
         assert built["model"] is None, (
@@ -839,6 +860,7 @@ def test_both_drivers_record_no_model_under_skip_agent():
             limit=None,
             llm_temperature=None,
             question_pool_hash="pool0000",
+        **_NOTES,
         )["model"]
         == "gpt-5.6-luna"
     )

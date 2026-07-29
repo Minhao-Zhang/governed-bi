@@ -21,7 +21,15 @@ environment = "dev"
 # Optional per-toggle overrides (otherwise follow environment defaults above):
 # auto_accept_corpus = true
 # single_all_access_identity = true
+# grade_semantic_failures = true   # D5: deliver + grade semantic failures instead
+#                                  # of refusing; L2 policy stays a hard refusal.
 # hard_block_suspect_columns = true
+# hard_block_suspect_columns now gates ONLY reliability marks an AI wrote: the
+# curator agent's `annotate_column(suspect=True, ...)`, and the SME round-trip
+# feeding that same channel. No deterministic pass marks reliability any more —
+# the gold-derived mask that used to stamp every column train gold never touched
+# is deleted — so on a corpus whose curator marked nothing, this toggle has
+# nothing to block and its value makes no difference.
 
 [paths]
 # Corpus root (D9/D13). Relative values resolve against the repo root, not CWD,
@@ -113,14 +121,63 @@ cors_origins = ["http://localhost:3000"]
 # run_log_path = "data/logs/runs.sqlite"
 
 # Which registered prompt variant each stage sends (the governed_bi.prompts
-# registry). Omitted = every stage on v1, byte-identical to the text this system
-# has always sent. A stage or variant this build does not know fails at startup
-# rather than falling back to v1: a run must never report a prompt it did not
-# send. Read src/governed_bi/prompts/registry.py for the stage list and each
-# variant's rationale. The eval CLIs take --prompt stage=variant for one-offs.
+# registry). Omitted = every stage on v1. That v1 is byte-identical to the text the
+# stage sent before the registry existed for every stage EXCEPT `sme_rules`: its
+# original v1 and its v2 candidate both forbade SQL while the same call handed the
+# SME a read-only probe-query tool, so both were deleted rather than kept as a
+# baseline. The replacement is that stage's ONLY variant — there is nothing to
+# select, and `sme_rules = "v2"` now fails at startup.
+# A stage or variant this build does not know fails at startup rather than falling
+# back to v1: a run must never report a prompt it did not send. Read
+# src/governed_bi/prompts/registry.py for the stage list and each variant's
+# rationale. The eval CLIs take --prompt stage=variant for one-offs.
 # [prompts]
 # schema_pick = "v2"
 # agent_core = "v3"
+
+[notes]
+# Governed-note prompt budget and PIN authority (ADR 0003; the code lives in
+# analyst/note_inject.py and retrieval/triggers.py). Every value below IS the
+# dataclass default — spelled out because nothing else in the tree names them, and
+# each one silently DROPS corpus content when it binds.
+
+# Max `activation = always` notes injected into one turn's prompt. Counts EVERY
+# injected always-note. It used to count only notes with an empty scope, on the
+# theory that a scoped note is already narrowed by scope matching — but a curated
+# build writes every note as `schema:<name>`, so the cap was dead and char_max was
+# the only gate, which let dozens of short caveats through. Raise it and the rules
+# dilute each other; lower it and the tail is dropped in precedence order
+# (must_honour first, then publication status, then retrieval relevance — see
+# note_inject._precedence_key). It is a PER-TURN cap, not a per-schema one.
+always_note_global_max = 8
+# Total characters of the injected always-note SUMMARIES (an always-note never
+# contributes its body; that is on_match-only progressive disclosure). On a wordy
+# corpus this binds before the count cap. A single note longer than the whole
+# budget is still injected, alone, rather than vanishing silently.
+always_note_char_max = 2000
+
+# PIN channel master switch (ADR 0003 H2), off by default. False = triggers are
+# authored and stored but inert: fire_triggers() returns [] before it reads the
+# corpus, so an `on_match` note reaches the prompt only by ordinary retrieval
+# match. Two non-obvious effects when true:
+#  1. A pinned note is FORCED in — rvgd adds it to the grounded set directly,
+#     bypassing RRF ranking entirely, and being on_match it is exempt from
+#     always_note_global_max (it shares only the char budget).
+#  2. It ADDITIVELY prepends the note's `schema:` scope to the router shortlist
+#     while KEEPING every top_k-ranked schema (cap = top_k + pins), so a wrong or
+#     hostile note can widen the shortlist but can never evict the correct schema
+#     (GATE-ADV-WRONG-NOTE, retrieval/schema_router.py).
+# This flag is hashed into serve_config_hash (provenance.py), so flipping it is
+# attributable in the run ledger — a run cannot quietly claim the default.
+pin_triggers_enabled = false
+# Only `publication_status = certified` notes may PIN. Set false and an
+# unreviewed proposed/draft note can steer routing and force itself into the
+# prompt. Also part of serve_config_hash.
+pin_require_certified = true
+# Max notes pinned per question, applied after the certified filter and the
+# certified > confidence > id tiebreak. curator/asset_bag.py mirrors this value as
+# _TRIGGERS_PER_NOTE, the cap on how many triggers one authored note may carry.
+pin_max = 3
 
 [eval]
 # BIRD eval-harness concurrency (docs/measurement.md).
@@ -135,6 +192,13 @@ cors_origins = ["http://localhost:3000"]
 workers = 1
 # serve_workers = 1
 # build_workers = 1   # per-schema corpus builds; each gets its own staging root
+
+# NOT a knob, but it decides whether two runs may be compared: the graded question
+# pool's identity is hashed into every manifest as `question_pool_hash` (questions
+# AND the gold each is graded against) and is a comparability-gate key. A sibling
+# repo refilters the BIRD question set, so a refiltered pool stops comparing as the
+# same experiment instead of silently shifting EX. Nothing here to set — it is
+# derived from the pool the driver actually graded (eval/metrics.py).
 
 # Optional eval routing profile (D15 schema router). Distinct from product
 # dataclass defaults (shortlist@3, no LLM pick). Uncomment to pin a deployment

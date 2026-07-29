@@ -131,6 +131,31 @@ MANIFEST_KNOBS: tuple[Metric, ...] = (
     Metric("schema_pick_max_columns", "columns shown to the picker; None when bypassed"),
     Metric("use_embedder", "embedding channel on; None when routing is bypassed"),
     Metric("skip_agent", "no model was called at all"),
+    # ── note governance (ADR 0003) ──
+    # The always-note budget is live on every run: `analyst.agent` forwards both caps
+    # into `apply_always_budget` unconditionally, so they decide how much of the
+    # corpus's note text reaches the prompt at all. Two runs at 8/2000 and 2/200 serve
+    # different context on every question.
+    Metric(
+        "always_note_global_max",
+        "always-notes admitted per turn; the budget applies whether or not PIN is on",
+    ),
+    Metric("always_note_char_max", "character ceiling on the admitted always-notes"),
+    Metric(
+        "pin_triggers_enabled",
+        "keyword-triggered notes PIN: forced into the prompt ahead of RRF, AND their "
+        "schema prepended to the router shortlist — so this moves ROUTING too",
+    ),
+    Metric(
+        "pin_require_certified",
+        "only certified notes may PIN; None when pin_triggers_enabled is False, "
+        "because nothing could pin and a recorded True would claim a gate that never ran",
+    ),
+    Metric(
+        "pin_max",
+        "cap on pinned notes, and so on the schemas PIN adds to the shortlist; "
+        "None when pin_triggers_enabled is False",
+    ),
 )
 
 #: Scope: not knobs, but they decide which arms exist and which questions are in
@@ -290,6 +315,18 @@ def build_manifest(
     # (rows whose gold SQL contradicts their ``evidence`` are dropped), so the pool moves
     # without any knob in this repo changing, and nothing else in the manifest notices.
     question_pool_hash: str | None,
+    # Note governance (ADR 0003), as ``Settings`` had it at serve time. Required, not
+    # defaulted, for the reason the whole register is: ``pin_triggers_enabled`` reached
+    # eval as a dataclass default that nothing could change, and the manifest carried
+    # neither it nor ``serve_config_hash``, so a run WITH trigger pinning and a run
+    # without it agreed on every recorded key and compared as the same experiment.
+    # Pass the raw ``Settings`` values; the "did it apply" derivation happens here so
+    # the two drivers cannot answer it differently.
+    always_note_global_max: int,
+    always_note_char_max: int,
+    pin_triggers_enabled: bool,
+    pin_require_certified: bool,
+    pin_max: int,
     # Scope. Required for the same reason as the knobs: an unstated scope is recorded
     # as the empty/absent value, and ``arms=()`` for a run that served three arms, or
     # ``limit=None`` for a run capped at five questions, is a false record that no
@@ -360,6 +397,15 @@ def build_manifest(
         "schema_pick_max_columns": schema_pick_max_columns,
         "use_embedder": use_embedder,
         "skip_agent": skip_agent,
+        "always_note_global_max": always_note_global_max,
+        "always_note_char_max": always_note_char_max,
+        "pin_triggers_enabled": pin_triggers_enabled,
+        # Same shape as ``model`` under ``--skip-agent``: a knob whose value is a
+        # claim about a mechanism that did not run gets recorded as None, and the
+        # switch above says why. Otherwise two PIN-off runs configured with
+        # different caps read as incomparable over a difference neither run had.
+        "pin_require_certified": pin_require_certified if pin_triggers_enabled else None,
+        "pin_max": pin_max if pin_triggers_enabled else None,
         # ── operational ──
         "bird_dir": str(bird_dir),
         "created_at_utc": created_at_utc,

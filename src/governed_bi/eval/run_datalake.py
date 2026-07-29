@@ -60,7 +60,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from ..config import DataSourceConfig, Environment, Settings, load_dotenv, load_settings
+from ..config import (
+    DataSourceConfig,
+    Environment,
+    NoteGovernance,
+    Settings,
+    load_dotenv,
+    load_settings,
+)
 from ..corpus import Corpus, load_corpus
 from ..corpus.schemas import NoteAsset
 from ..gateway import Gateway, Identity
@@ -885,6 +892,15 @@ def _build_manifest(
     # dataset is filtered upstream, so this is the only field that moves when the
     # question pool does.
     question_pool_hash: str | None,
+    # ADR 0003 note governance, as ``Settings`` has it for this run. Gate keys, so
+    # required here for the same reason ``question_pool_hash`` is: ``pin_triggers_enabled``
+    # decides whether the corpus's authored triggers fire at all, and it moves the
+    # router's shortlist as well as the prompt.
+    always_note_global_max: int,
+    always_note_char_max: int,
+    pin_triggers_enabled: bool,
+    pin_require_certified: bool,
+    pin_max: int,
     build_workers: int = 1,
     # The run's SCOPE. Not knobs — they decide which arms exist and which questions
     # are in the pool, so a resume that disagrees is not the same experiment at all.
@@ -924,6 +940,11 @@ def _build_manifest(
         schema_pick_max_columns=schema_pick_max_columns,
         use_embedder=use_embedder,
         question_pool_hash=question_pool_hash,
+        always_note_global_max=always_note_global_max,
+        always_note_char_max=always_note_char_max,
+        pin_triggers_enabled=pin_triggers_enabled,
+        pin_require_certified=pin_require_certified,
+        pin_max=pin_max,
         arms=arms,
         oracles=oracles,
         replicate_of=replicate_of,
@@ -3828,6 +3849,14 @@ def run_datalake(
     # ``None`` keeps whatever Settings says, so a caller that does not care about
     # the picker's column budget need not know the default.
     schema_pick_max_columns: int | None = None,
+    # ADR 0003 PIN. False (the default) is the arm every prior run served: keyword
+    # triggers authored into the corpus stay inert, and notes reach the prompt only by
+    # landing in retrieval's semantic top-k. True turns the trigger channel on, which
+    # changes TWO things — pinned note text, and the router's shortlist (a pinned
+    # note's schema is prepended to it) — so it is a separate arm, not a variation of
+    # ``curated_sme``. Reaches Settings through ``NoteGovernance``; recorded in the
+    # manifest as a gate key, so the ledger stops comparing across it.
+    pin_triggers: bool = False,
     # Serve this arm a second time as ``<arm>__replicate`` to measure the run's own
     # noise floor. Costs one extra serve pass and is the only way to know what the
     # run could resolve, because the proxy drops temperature and the sampling cannot
@@ -3932,6 +3961,11 @@ def run_datalake(
         models=base_settings.models,
         datasource=datasource,
         corpus_root=str(corpus_dir),
+        # ADR 0003 note governance. Carried across the rebuild instead of left at the
+        # dataclass defaults: this Settings replaces the one ``load_settings`` just
+        # produced, so without it the ``[notes]`` table configures every deployment
+        # except the one that measures them, and ``--pin-triggers`` has nowhere to land.
+        notes=NoteGovernance.from_settings(base_settings, pin_triggers=pin_triggers),
     )
     # D5 (deliver-and-grade semantic failures); D15 routing knobs.
     settings = replace(
@@ -3981,6 +4015,13 @@ def run_datalake(
         route_llm_pick=route_llm_pick,
         schema_pick_max_columns=settings.schema_pick_max_columns,
         use_embedder=bool(embedder),
+        # Off ``settings``, i.e. what the serve path will actually read: the CLI flag is
+        # only one of the three inputs (flag, ``[notes]`` TOML, dataclass default).
+        always_note_global_max=settings.always_note_global_max,
+        always_note_char_max=settings.always_note_char_max,
+        pin_triggers_enabled=settings.pin_triggers_enabled,
+        pin_require_certified=settings.pin_require_certified,
+        pin_max=settings.pin_max,
         skip_agent=skip_agent,
         serve_workers=serve_workers,
         build_workers=build_workers,
@@ -4741,6 +4782,18 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     p.add_argument("--no-llm-pick", action="store_true", help="Keep shortlist (no single-schema LLM pick)")
+    p.add_argument(
+        "--pin-triggers",
+        action="store_true",
+        help=(
+            "Turn ADR 0003 keyword PINs on (default off, which is the baseline every "
+            "prior run served). A note whose triggers match the question is forced "
+            "into the prompt ahead of RRF ranking AND its schema is prepended to the "
+            "router shortlist, so this moves ROUTING as well as note text. It is its "
+            "own knob, not part of an arm: the manifest records it and the ledger "
+            "refuses to compare a PIN run against a non-PIN one."
+        ),
+    )
     p.add_argument("--no-embedder", action="store_true", help="BM25-only routing (no embeddings)")
     p.add_argument(
         "--workers",
@@ -5000,6 +5053,7 @@ def _score_one_split(
             schema_pick_max_columns=args.schema_pick_max_columns,
             route_llm_pick=not args.no_llm_pick,
             use_embedder=not args.no_embedder,
+            pin_triggers=args.pin_triggers,
             serve_workers=workers,
             build_workers=build_workers,
             gold_per_db=args.gold_per_db,

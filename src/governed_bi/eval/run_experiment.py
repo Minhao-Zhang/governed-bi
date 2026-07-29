@@ -19,7 +19,14 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from ..config import DataSourceConfig, Environment, Settings, load_dotenv, load_settings
+from ..config import (
+    DataSourceConfig,
+    Environment,
+    NoteGovernance,
+    Settings,
+    load_dotenv,
+    load_settings,
+)
 from ..corpus import load_corpus
 from ..corpus.schemas import NoteAsset
 from ..gateway import Gateway, Identity
@@ -127,6 +134,14 @@ def build_manifest(
     limit: int | None,
     llm_temperature: float | None,
     question_pool_hash: str | None,
+    # ADR 0003 note governance, spelled out for the same reason ``llm_temperature`` is:
+    # every gate key is stated by name here, so a knob cannot reach the manifest as a
+    # default nobody chose. Read off ``Settings`` at the call site.
+    always_note_global_max: int,
+    always_note_char_max: int,
+    pin_triggers_enabled: bool,
+    pin_require_certified: bool,
+    pin_max: int,
 ) -> dict[str, Any]:
     """The single-schema driver's manifest, built through the shared register.
 
@@ -150,6 +165,11 @@ def build_manifest(
 
     Routing knobs are passed as ``None`` deliberately, with ``routing_bypassed``
     recording *why*, so "not applicable" and "not recorded" stop looking alike.
+
+    The note knobs are NOT ``None``-ed the same way. PIN has two effects and only one
+    of them needs a router: pinned note text still reaches the prompt in single mode,
+    so ``pin_triggers_enabled`` here means "the prompt half applied, the shortlist half
+    had nothing to reorder".
     """
     return metrics.build_manifest(
         mode="single",
@@ -170,6 +190,11 @@ def build_manifest(
         # underneath a run whose every knob in this repo stayed put, and ``comparable()``
         # would read the resulting ``None`` on both sides as agreement.
         question_pool_hash=question_pool_hash,
+        always_note_global_max=always_note_global_max,
+        always_note_char_max=always_note_char_max,
+        pin_triggers_enabled=pin_triggers_enabled,
+        pin_require_certified=pin_require_certified,
+        pin_max=pin_max,
         # One pinned schema: the router does not run, so there is no shortlist size
         # or picker setting to report.
         route_top_k=None,
@@ -470,6 +495,9 @@ def run_experiment(
     resume_curated: Path | None = None,
     serve_workers: int = 1,
     prompt_variants: dict[str, str] | None = None,
+    # ADR 0003 PIN. False = the arm every prior run of this driver served: the corpus's
+    # keyword triggers stay inert and notes arrive only via retrieval's semantic top-k.
+    pin_triggers: bool = False,
 ) -> dict[str, Any]:
     """Run baseline/curated/curated_sme for one DB; write generations + summary
     under ``out_dir``.
@@ -481,7 +509,11 @@ def run_experiment(
 
     ``prompt_variants`` (``stage -> variant``, empty = all ``v1``) selects
     registered prompt text per stage; it reaches serve through ``Settings``, and
-    the resolved map plus its text hash land in ``manifest.json``."""
+    the resolved map plus its text hash land in ``manifest.json``.
+
+    ``pin_triggers`` turns ADR 0003 keyword pinning on: notes whose triggers match the
+    question are forced into the prompt ahead of RRF ranking. It is a knob in the
+    manifest, so the ledger refuses to compare a PIN run against a non-PIN one."""
     # Resolved before any database work: a bad stage or variant must cost nothing.
     resolved_prompts = resolve_prompts(prompt_variants)
     load_dotenv()
@@ -530,6 +562,10 @@ def run_experiment(
         models=base_settings.models,
         datasource=datasource,
         corpus_root=str(out_dir),
+        # ADR 0003. This Settings replaces the one ``load_settings`` produced, so the
+        # note knobs have to be carried over or the ``[notes]`` table configures every
+        # deployment except the runs that measure it.
+        notes=NoteGovernance.from_settings(base_settings, pin_triggers=pin_triggers),
     )
     # D5: semantic/coverage/repair-exhaustion deliver-and-grade;
     # suspect soft-warn only. Safety (L2 + refuse-gate) stays hard.
@@ -569,6 +605,14 @@ def run_experiment(
         question_pool_hash=metrics.question_pool_hash(
             (db_id, it.question_id or it.question, it.sql) for it in test
         ),
+        # Off ``settings``, i.e. what the serve path will actually read — not off the
+        # CLI flag, which is only one of the three inputs (flag, ``[notes]`` TOML,
+        # dataclass default) that decide the value.
+        always_note_global_max=settings.always_note_global_max,
+        always_note_char_max=settings.always_note_char_max,
+        pin_triggers_enabled=settings.pin_triggers_enabled,
+        pin_require_certified=settings.pin_require_certified,
+        pin_max=settings.pin_max,
     )
     metrics.write_manifest(run_root, manifest)
 
@@ -979,6 +1023,16 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     parser.add_argument(
+        "--pin-triggers",
+        action="store_true",
+        help=(
+            "Turn ADR 0003 keyword PINs on (default off, which is what every prior "
+            "run served). A note whose triggers match the question is forced into the "
+            "prompt ahead of RRF ranking. Recorded in the manifest as a knob, so the "
+            "ledger refuses to compare a PIN run against a non-PIN one."
+        ),
+    )
+    parser.add_argument(
         "--prompt",
         action="append",
         metavar="STAGE=VARIANT",
@@ -1016,6 +1070,7 @@ def main(argv: list[str] | None = None) -> None:
             resume_curated=args.resume_curated,
             serve_workers=workers,
             prompt_variants=prompt_overrides,
+            pin_triggers=args.pin_triggers,
         )
         print(json.dumps(result["arms"], indent=2))
         print("deltas:", json.dumps(result["deltas"], indent=2))

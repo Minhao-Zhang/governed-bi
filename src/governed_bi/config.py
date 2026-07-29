@@ -163,6 +163,74 @@ class DataSourceConfig:
 
 
 @dataclass(frozen=True)
+class NoteGovernance:
+    """The five note-delivery knobs as ONE :meth:`Settings.for_env` argument.
+
+    Not a field on :class:`Settings` — the five live flat there, and
+    ``provenance.serve_config_hash``, ``retrieval.triggers`` and
+    ``analyst.context`` all read them flat. This is a parameter object: a carrier
+    that ``for_env`` expands, so a caller that wants note governance says it in one
+    argument instead of five, and the group is named in one place instead of a
+    fourth hand-maintained list of the same five strings.
+
+    It exists because ``for_env`` was the ONLY way the eval drivers built Settings
+    and it could not express any of these, so ADR 0003's trigger channel was
+    unreachable from a run: :func:`load_settings` read a ``[notes]`` table, the
+    drivers threw that Settings away and kept only ``.models``, and
+    ``fire_triggers`` returned ``[]`` on every question of every graded run while
+    the corpus carried triggers authored for exactly that path.
+
+    Every field is ``X | None`` where ``None`` means "leave the ``Settings``
+    default" — the same convention every other ``for_env`` keyword uses, one level
+    down. Absence is therefore not expressible as a value here; that is what
+    :meth:`overrides` is for.
+    """
+
+    always_note_global_max: int | None = None
+    always_note_char_max: int | None = None
+    pin_triggers_enabled: bool | None = None
+    pin_require_certified: bool | None = None
+    pin_max: int | None = None
+
+    def overrides(self) -> dict[str, Any]:
+        """Only the knobs this carrier actually states, as ``Settings`` kwargs.
+
+        Keys are OMITTED rather than set to ``None``: every one of the five is
+        non-optional on :class:`Settings`, so passing ``None`` through would replace
+        an int with ``None`` and break ``apply_always_budget`` arithmetic at serve
+        time instead of leaving the default in place.
+        """
+        return {
+            f.name: value
+            for f in fields(self)
+            if (value := getattr(self, f.name)) is not None
+        }
+
+    @classmethod
+    def from_settings(
+        cls, settings: "Settings", *, pin_triggers: bool = False
+    ) -> "NoteGovernance":
+        """Carry an existing Settings' note knobs across a ``for_env`` rebuild.
+
+        Both eval drivers read :func:`load_settings` for its ``models`` and then build
+        a FRESH Settings through ``for_env``, which drops everything else the TOML
+        said. This carries the ``[notes]`` half back over, so an operator can configure
+        note governance for a run by file and not only by flag.
+
+        ``pin_triggers`` can only turn PIN **on**. The drivers expose it as a
+        ``store_true`` and OFF is the baseline arm, so "the flag was not passed" must
+        mean "no opinion", not a silent override of a TOML that asked for pinning.
+        """
+        return cls(
+            always_note_global_max=settings.always_note_global_max,
+            always_note_char_max=settings.always_note_char_max,
+            pin_triggers_enabled=pin_triggers or settings.pin_triggers_enabled,
+            pin_require_certified=settings.pin_require_certified,
+            pin_max=settings.pin_max,
+        )
+
+
+@dataclass(frozen=True)
 class Settings:
     """Runtime configuration. Construct via ``Settings.for_env(...)`` or
     :func:`load_settings`."""
@@ -307,6 +375,8 @@ class Settings:
         conversation_checkpointer_dsn_env: str | None = None,
         run_log_kind: str | None = None,
         run_log_path: str | None = None,
+        # One carrier rather than five more scalars (see :class:`NoteGovernance`).
+        notes: NoteGovernance | None = None,
     ) -> "Settings":
         env = Environment(environment)
         base: dict[str, Any] = {}
@@ -334,6 +404,8 @@ class Settings:
             base["run_log_kind"] = run_log_kind
         if run_log_path is not None:
             base["run_log_path"] = run_log_path
+        if notes is not None:
+            base.update(notes.overrides())
         if env is Environment.dev:
             # Local demo: file-write edits on unless TOML / caller opts out.
             return cls(
@@ -542,7 +614,11 @@ def load_settings(
     run_log_kind = logging_tbl.get("run_log_kind")
     run_log_path = logging_tbl.get("run_log_path")
 
-    notes_tbl = data.get("notes", {})
+    # Optional [notes] table (ADR 0003 always-note budget + PIN trigger authority).
+    # Passed through ``for_env`` rather than a post-hoc ``replace``, because
+    # ``for_env`` is what every non-TOML caller uses — the eval drivers included —
+    # and a knob only ``load_settings`` can set is a knob no measured run can vary.
+    notes = NoteGovernance(**_known_kwargs(NoteGovernance, data.get("notes", {})))
 
     settings = Settings.for_env(
         env,
@@ -560,33 +636,18 @@ def load_settings(
         ),
         run_log_kind=str(run_log_kind) if run_log_kind is not None else None,
         run_log_path=str(run_log_path) if run_log_path is not None else None,
+        notes=notes,
     )
 
     knob_overrides: dict[str, Any] = {}
-    for src, keys in (
-        (
-            notes_tbl,
-            (
-                "always_note_global_max",
-                "always_note_char_max",
-                "pin_triggers_enabled",
-                "pin_require_certified",
-                "pin_max",
-            ),
-        ),
-        (
-            logging_tbl,
-            (
-                "log_full_content",
-                "log_full_content_ack",
-                "log_row_previews",
-                "log_full_content_ttl_days",
-            ),
-        ),
+    for k in (
+        "log_full_content",
+        "log_full_content_ack",
+        "log_row_previews",
+        "log_full_content_ttl_days",
     ):
-        for k in keys:
-            if k in src:
-                knob_overrides[k] = src[k]
+        if k in logging_tbl:
+            knob_overrides[k] = logging_tbl[k]
 
     # Optional [routing] table (D15 data-lake schema routing). These three were
     # reachable only through the eval CLI, so the pooled benchmark ran shortlist@10

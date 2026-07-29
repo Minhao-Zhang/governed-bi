@@ -331,7 +331,9 @@ record answers two questions that used to live only in someone's memory:
 - **`comparable(a, b)`** — may two runs be put in the same sentence? Only if
   `split`, `model`, `llm_temperature`, `prompt_set_hash`, `corpus_content_hash`,
   `question_pool_hash`, `route_top_k`, `route_llm_pick`,
-  `schema_pick_max_columns` and `use_embedder` all match.
+  `schema_pick_max_columns`, `use_embedder`, `always_note_global_max`,
+  `always_note_char_max`, `pin_triggers_enabled`, `pin_require_certified` and
+  `pin_max` all match.
   That list is **derived** from `MANIFEST_KNOBS` minus a documented
   `COMPARABILITY_EXCLUSIONS`, not spelled out a second time, so a knob added to
   the register joins the gate by default — it was spelled out separately once,
@@ -341,6 +343,21 @@ record answers two questions that used to live only in someone's memory:
   (`metrics.question_pool_hash`), because the question set is filtered in the
   sibling dataset repo: rows whose gold SQL contradicts their `evidence` are
   dropped, which moves the pool while every knob in this repo stays put.
+
+  The five note-governance knobs are the same story one more time.
+  `pin_triggers_enabled` was already folded into `serve_config_hash`, so per-row
+  provenance moved when it flipped, but the *manifest* carried neither the hash nor
+  the knob and `comparable()` reads the manifest — so a run with trigger pinning
+  and a run without it compared as the same experiment. Worth knowing when you read
+  a pair that differs on it: **PIN has two effects, not one.** A matched note is
+  forced into the prompt ahead of RRF ranking (`retrieval/rvgd.py`), *and* its
+  schema is prepended to the router shortlist (`retrieval/schema_router.py`). The
+  merge is additive and keeps every `top_k`-ranked schema, so a wrong note cannot
+  evict the correct one, but a PIN difference can still move **routing** and not
+  just note text. `pin_require_certified` and `pin_max` are recorded as `None`
+  when pinning is off, so "the gate held" and "the gate was never reached" do not
+  look alike.
+
   `git_sha` and
   `skip_agent` are excluded here and checked as resume drift instead: two runs
   at different commits are the normal case, but a commit changing *within* one

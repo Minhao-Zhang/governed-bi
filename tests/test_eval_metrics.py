@@ -42,6 +42,13 @@ def _manifest(mode: str, **over):
         use_embedder=True,
         llm_temperature=0.0,
         question_pool_hash="pool0000",
+        # ADR 0003 note governance, at the Settings defaults: gate keys with no default
+        # in the builder, so every caller states them.
+        always_note_global_max=8,
+        always_note_char_max=2000,
+        pin_triggers_enabled=False,
+        pin_require_certified=True,
+        pin_max=3,
         arms=("baseline", "curated"),
         oracles=(),
         replicate_of=None,
@@ -69,6 +76,11 @@ def _single_manifest(**over):
         limit=None,
         llm_temperature=None,
         question_pool_hash="pool0000",
+        always_note_global_max=8,
+        always_note_char_max=2000,
+        pin_triggers_enabled=False,
+        pin_require_certified=True,
+        pin_max=3,
     )
     base.update(over)
     return build_manifest(**base)  # type: ignore[arg-type]
@@ -352,6 +364,11 @@ def test_the_manifest_emits_exactly_the_declared_field_set(tmp_path):
         skip_agent=False,
         serve_workers=1,
         question_pool_hash="pool0000",
+        always_note_global_max=8,
+        always_note_char_max=2000,
+        pin_triggers_enabled=False,
+        pin_require_certified=True,
+        pin_max=3,
     )
     single = _single_manifest()
 
@@ -871,3 +888,79 @@ def test_the_ceiling_is_documented_as_a_ceiling():
     )
     assert "CEILING" in entry.meaning
     assert "cannot be graded" in entry.meaning
+
+
+# --------------------------------------------------------------------------- #
+# Note governance as a measurable knob (T1)
+# --------------------------------------------------------------------------- #
+
+
+def test_flipping_pin_triggers_makes_two_runs_incomparable():
+    """The reason the note knobs joined the register at all.
+
+    `pin_triggers_enabled` was already hashed into `serve_config_hash`, so per-row
+    provenance moved when it flipped — but the MANIFEST carried neither the hash nor
+    the knob, and `comparable()` reads the manifest. So a run with trigger pinning and
+    a run without it compared as the same experiment, which is the third instance of
+    the defect class already fixed for `llm_temperature` and `question_pool_hash`.
+    """
+    from governed_bi.eval.index import comparable
+
+    v = metrics.MANIFEST_SCHEMA_VERSION
+    off = {"model": "m", "manifest_schema_version": v, "pin_triggers_enabled": False}
+    on = {"model": "m", "manifest_schema_version": v, "pin_triggers_enabled": True}
+    ok, diffs = comparable(off, on)
+    assert not ok, "PIN on and PIN off are two configurations"
+    assert any("pin_triggers_enabled" in d for d in diffs), diffs
+
+
+def test_the_pin_gates_are_null_when_pinning_is_off():
+    """`pin_require_certified=True` recorded on a run where nothing could pin claims a
+    gate that never ran. Recorded as None instead, so "the gate held" and "the gate was
+    never reached" stop looking alike in the artifact."""
+    from governed_bi.eval import run_experiment
+
+    common = dict(
+        db_id="restaurant",
+        bird_dir=Path("."),
+        pg_dsn="host=127.0.0.1 port=5435",
+        max_agent_steps=8,
+        skip_agent=True,
+        model_name=None,
+        resolved_prompts={},
+        limit=None,
+        llm_temperature=None,
+        question_pool_hash="pool0",
+        always_note_global_max=8,
+        always_note_char_max=2000,
+        pin_require_certified=True,
+        pin_max=3,
+    )
+    off = run_experiment.build_manifest(pin_triggers_enabled=False, **common)
+    assert off["pin_require_certified"] is None
+    assert off["pin_max"] is None
+    # ...and the real values survive when pinning IS on, or the knob would be
+    # unmeasurable in exactly the runs that use it.
+    on = run_experiment.build_manifest(pin_triggers_enabled=True, **common)
+    assert on["pin_require_certified"] is True
+    assert on["pin_max"] == 3
+
+
+def test_the_driver_flag_reaches_settings():
+    """`--pin-triggers` has to survive the hop the whole item exists to fix: the
+    drivers build Settings through `for_env`, which could not express any note knob,
+    so ADR 0003's trigger channel was unreachable from a graded run."""
+    from governed_bi.config import Environment, NoteGovernance, Settings
+
+    base = Settings.for_env(Environment.dev)
+    assert base.pin_triggers_enabled is False, "the default must stay off"
+
+    on = Settings.for_env(
+        Environment.dev,
+        notes=NoteGovernance.from_settings(base, pin_triggers=True),
+    )
+    assert on.pin_triggers_enabled is True
+    # The rest of the group must ride along unchanged, or turning pinning on would
+    # silently reset the budget too.
+    assert on.always_note_global_max == base.always_note_global_max
+    assert on.pin_max == base.pin_max

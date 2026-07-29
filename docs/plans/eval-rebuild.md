@@ -126,8 +126,8 @@ relevance term that sorts below force and status, so the AUDIT R8 ordering still
 holds.
 
 The trigger channel is dead on the eval path, which changes what this bought.
-`pin_triggers_enabled` defaults False (`config.py:249`), `governed_bi.toml` has no
-`[notes]` table, and both drivers build `Settings.for_env(Environment.dev, ...)`
+`pin_triggers_enabled` defaults False (`config.py:249`), `governed_bi.toml` had no
+`[notes]` table (added since), and both drivers build `Settings.for_env(Environment.dev, ...)`
 (`run_datalake.py:3922`, `run_experiment.py:521`) which sets only four fields, so
 TOML note knobs never reach it and `fire_triggers` returns an empty list. The
 derived triggers are authored correctly and inert at runtime.
@@ -140,10 +140,29 @@ semantic top 5 for the question and its scope matches. What D1 bought is narrowi
 from "every note in the schema" to "the five most relevant", not trigger-driven
 pinning.
 
-**Open decision (T1).** Either wire `pin_triggers_enabled` through to the eval
-profile so the authored triggers actually fire, or accept semantic-only delivery and
-stop authoring triggers the runtime ignores. The second is cheaper and may be
-sufficient; the first is what ADR 0003 designed. Not decided.
+**T1: resolved, option A.** `pin_triggers_enabled` is wired through to eval and made
+separately measurable rather than bundled into the `curated_sme` arm.
+
+`for_env` could not express any note knob, which is why the channel was unreachable
+from a graded run: `load_settings` read a `[notes]` table, the drivers threw that
+Settings away and kept only `.models`. It now takes a `NoteGovernance` parameter
+object carrying the five knobs, both drivers gained a `--pin-triggers` flag defaulting
+off so current behaviour stays the baseline, and `governed_bi.toml` documents the
+`[notes]` table for the first time.
+
+The load-bearing half was attribution. `pin_triggers_enabled` was already in
+`serve_config_hash`, but the *manifest* carried neither the hash nor the knob, and
+`comparable()` reads the manifest — so PIN on and PIN off compared as the same
+experiment. That is the third instance of the defect class already fixed for
+`llm_temperature` and `question_pool_hash`. All five knobs joined `MANIFEST_KNOBS`, so
+they entered the comparability gate through the derivation rather than a fourth
+hand-maintained list. `pin_require_certified` and `pin_max` record `None` when pinning
+is off, so a manifest cannot claim a gate that never ran.
+
+One thing to carry into any comparison: **PIN has two effects.** It forces a matched
+note into the prompt ahead of RRF, and it prepends that note's schema to the router
+shortlist. The merge is additive and cannot evict the correct schema, but a PIN
+difference can move routing and not only note text.
 
 **Naming drift to clean up.** `always_note_global_max` and
 `DEFAULT_ALWAYS_NOTE_GLOBAL_MAX` now mean per-turn rather than global-scoped. The
@@ -335,7 +354,8 @@ Phase 3 is D2 steps 2 and 3, once step 1 says whether existing runs suffice.
 | D2 step 1 | Is the three-way split computable? | done, yes, no rerun needed |
 | B6 | Delete `_mark_columns_absent_from_gold`; AI-authored suspect marks | done, sweep untested |
 | artifact cleanup | Wipe pre-rebuild artifacts | done, 89M, routing columns kept |
-| T1 | Wire `pin_triggers_enabled` for eval, or drop trigger authoring | open decision |
+| T1 | Wire `pin_triggers_enabled` for eval; make it separately measurable | done, option A |
+| config | `[notes]` table documented; stale toml/env comments corrected | done |
 | B6-verify | Does the agent sweep actually mark decoys? Needs a curated build | not started |
 | D2 step 2 | Land the three-way split as a summary metric | not started |
 | routing table | Retire the stale recall numbers in `datalake-run.md` and its 2 citations | not started |
