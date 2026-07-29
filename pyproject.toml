@@ -108,7 +108,9 @@ select = ["E", "F", "I"]
 [tool.mypy]
 python_version = "3.13"
 # `uv run mypy src` checks the whole tree (~89 findings, mostly Optional narrowing) —
-# useful locally. CI gates the governance spine only; the file list lives in
+# useful locally. CI gates a named subset: the governance spine (what decides whether
+# a query executes) plus the eval register/harness/split-gap modules (what decides
+# whether a number is comparable and quotable). The file list lives in
 # .github/workflows/ci.yml so widening it is a visible, reviewable change.
 packages = ["governed_bi"]
 warn_return_any = false

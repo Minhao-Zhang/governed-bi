@@ -626,17 +626,51 @@
           "corpus"
         ],
         "summary": "Corpus Edit",
-        "description": "Validate a corpus asset and, in dev, write it to the YAML tree.\n\nGated on ``capabilities.can_edit`` (403 otherwise). The asset is schema-\nvalidated (422 on a bad shape) then reference-checked against the rest of\nthe corpus; findings block the write and are returned with the diff so the\neditor can fix them. Prod PR mode is deferred; the request shape is stable.",
+        "description": "Validate a corpus asset and, when enabled, write it to the YAML tree.\n\nGated on auth (401 when ``[serve].api_key_env`` is configured but the key\nis missing/wrong) then ``capabilities.can_edit`` (403 otherwise). The asset\nis schema-validated (422 on a bad shape) then reference-checked against the\nrest of the corpus; findings block the write and are returned with the diff\nso the editor can fix them. Prod PR mode is deferred; the request shape is\nstable.",
         "operationId": "corpus_edit_corpus_edit_post",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/EditRequest"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -670,15 +704,49 @@
         "summary": "Chat",
         "description": "Answer one turn. Working memory is rebuilt from ``history`` (the API is\nstateless); the caller persists the transcript.",
         "operationId": "chat_chat_post",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/ChatRequest"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {

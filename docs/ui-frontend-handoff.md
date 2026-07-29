@@ -114,8 +114,19 @@ requires a live model and returns `503` without one.)
 ## 4. Custom routes (REST, on the same server)
 
 `fetch` these from `NEXT_PUBLIC_LANGGRAPH_URL`. Shapes mirror
-`governed_bi.viz.presenter`; a machine-readable schema will be re-exported after
-the rework.
+`governed_bi.viz.presenter`. The machine-readable schema is
+[openapi.json](openapi.json), generated from the app by
+`uv run python scripts/export_openapi.py`; CI runs the same script with
+`--check`, so a route change that is not re-exported fails the build. Generate
+your client from that file, not from this table.
+
+**Auth on the mutating routes.** `POST /chat` and `POST /corpus/edit` accept a
+shared secret as `X-API-Key: <secret>` or `Authorization: Bearer <secret>` (both
+are in the spec as optional headers). They are only *enforced* when the
+deployment sets `[serve].api_key_env` in `governed_bi.toml`; unset (the local
+demo default) means no secret is required. When it is set and the header is
+missing or wrong, both routes return `401` with `WWW-Authenticate: Bearer`. Reads
+are never gated.
 
 | Method + path | Purpose |
 |---|---|
@@ -128,7 +139,7 @@ the rework.
 | `GET /knowledge-graph` | **full knowledge graph** `{ nodes, edges, boundary?, meta? }` over every asset kind (table/join/metric/term/note/few_shot/negative_example); table nodes carry `schema`; edges typed `join`/`measures`/`grounds`/`related:*`/`scopes`/`exemplifies`. Same scope params as `/graph`, plus `?kinds=` (comma-separated) |
 | `GET /columns/{column_id}/related` | every semantic-layer item that touches one physical column: `terms`, `rules` (notes scoped to the column; wire key kept for now), `fk_out`, `fk_in`, `joins` (resolved server-side), `metrics` (table-grain). `column_id` = `col_<table>_<physical_name>`. Full contract in **§14** |
 | `GET /corpus/assets?type=` | non-table assets (`note` replaces former `rule`; `skill` removed — `?type=rule` is 422) |
-| `POST /corpus/edit` *(dev only; gated on `can_edit`)* | validate the submitted asset → write YAML (dev) / PR (prod); returns validation + diff |
+| `POST /corpus/edit` *(dev only; gated on `can_edit`, plus the shared secret above)* | validate the submitted asset → write YAML (dev) / PR (prod); returns validation + diff |
 
 ---
 
@@ -166,7 +177,8 @@ path is the same.
   state (no `ServeState` serialization needed); stage streaming via
   `get_stream_writer()`; custom routes mounted (`http.app`); `GET /knowledge-graph`
   (full graph) alongside `GET /graph` (ER); `POST /corpus/edit` (dev); LangSmith +
-  Langfuse tracing (opt-in); re-exported [openapi.json](openapi.json). Plus the
+  Langfuse tracing (opt-in); [openapi.json](openapi.json) exported by
+  `scripts/export_openapi.py` and drift-checked in CI. Plus the
   earlier `presenter` view models, REST reads, `stack` factory, and the
   non-streaming `/chat` REST endpoint (also requires a live model).
 - **Shipped since (server side):** human-gate **clarification interrupts** —
@@ -177,7 +189,8 @@ path is the same.
   — it is not tracked here. Durable (Postgres) checkpointing of an interrupt is
   deferred.
 - **Deferred:** prod PR editing (dev is file-write today), public-demo cost
-  strategy, auth/RLS, durable HITL persistence.
+  strategy, per-user identity + gateway RLS (the shared-secret gate on the
+  mutating routes in §4 is all the auth there is), durable HITL persistence.
 
 Everything above is live behind `langgraph dev`; build against it now.
 

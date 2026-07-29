@@ -48,6 +48,11 @@ jobs:
       # whether a query executes. A whole-tree gate would need ~90 fixes first, and
       # an unenforceable gate is what AUDIT T5 was about. Widen this list as files
       # are typed; never widen it past what stays green.
+      #
+      # The eval trio is gated for the same reason as the gateway files: they decide
+      # whether a run's numbers are comparable and quotable, so a wrong type there
+      # corrupts a published figure instead of crashing. Verified clean before being
+      # added here.
       - name: Type-check (mypy, governance spine)
         run: >-
           uv run mypy
@@ -57,6 +62,28 @@ jobs:
           src/governed_bi/analyst/governance.py
           src/governed_bi/analyst/answer.py
           src/governed_bi/analyst/middleware.py
+          src/governed_bi/eval/metrics.py
+          src/governed_bi/eval/harness.py
+          src/governed_bi/eval/split_gap.py
+          src/governed_bi/eval/atomic.py
+
+      # docs/eval-metrics.md is GENERATED from the metric register and claims in its
+      # own header that it cannot drift. The pytest covering it only greps for field
+      # names in backticks, so a changed denominator, a wrong count, or a phantom
+      # table row all stay green — and the count was in fact wrong (said 80, register
+      # declared 86) when this step was added. `--check` regenerates in memory and
+      # fails on any byte difference, which is the only version of "cannot drift"
+      # that is actually true. Writes nothing; fix by re-running without --check.
+      - name: Check generated docs are current (eval metrics)
+        run: uv run python scripts/gen_eval_metrics_doc.py --check
+
+      # docs/openapi.json is a cross-repo contract: the frontend (../governed-bi-ui)
+      # is built against it. It had no generator and no check, and had already
+      # drifted — two mutating routes were missing their auth headers, so a client
+      # written from the doc would call a gated API unauthenticated. Same `--check`
+      # semantics; runs offline with no OPENAI_API_KEY, which CI does not have.
+      - name: Check the OpenAPI contract is current
+        run: uv run python scripts/export_openapi.py --check
 
       # -rs surfaces skip reasons. --strict-markers + ResourceWarning visibility
       # come from [tool.pytest.ini_options] in pyproject.toml (AUDIT T5).
