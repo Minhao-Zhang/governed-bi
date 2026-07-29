@@ -8,6 +8,7 @@ import json
 
 import pytest
 
+from governed_bi.eval import metrics
 from governed_bi.eval.index import (
     COMPARABILITY_KEYS,
     RESUME_DRIFT_KEYS,
@@ -37,6 +38,10 @@ def _write_run(
     manifest = {
         "mode": "datalake",
         "created_at_utc": name,
+        # A fixture standing in for a CURRENT run, so it carries the presence
+        # guarantee. Without it `comparable()` refuses the pair outright, which is
+        # the point of the field — see the two tests below that pin both sides.
+        "manifest_schema_version": metrics.MANIFEST_SCHEMA_VERSION,
         "model": "gpt-5.6-luna",
         "split": split,
         "route_top_k": 10,
@@ -221,8 +226,14 @@ def test_a_different_split_makes_two_runs_incomparable(tmp_path):
 
 
 def test_a_knob_absent_from_both_runs_is_not_a_difference():
-    # Two runs that both predate a knob did not differ in it.
-    ok, diffs = comparable({"model": "m"}, {"model": "m"})
+    # Two runs that both predate a knob did not differ in it. Both sides carry the
+    # schema version, which is what makes that reading sound: under the presence
+    # guarantee an absent knob really is "neither run had it", not "unrecorded".
+    v = metrics.MANIFEST_SCHEMA_VERSION
+    ok, diffs = comparable(
+        {"model": "m", "manifest_schema_version": v},
+        {"model": "m", "manifest_schema_version": v},
+    )
     assert ok, diffs
 
 
@@ -384,8 +395,14 @@ def test_two_configuration_unknown_runs_are_not_comparable(tmp_path):
 
 
 def test_a_record_predating_the_flag_is_not_penalised():
-    # `manifest_readable` absent means "this record is old", not "unreadable".
-    ok, _ = comparable({"model": "m"}, {"model": "m"})
+    # `manifest_readable` absent means "this record is old", not "unreadable". Isolated
+    # to that one property by carrying the schema version: a record missing THAT is
+    # refused on purpose (tests/test_eval_metrics.py), which is a different rule.
+    v = metrics.MANIFEST_SCHEMA_VERSION
+    ok, _ = comparable(
+        {"model": "m", "manifest_schema_version": v},
+        {"model": "m", "manifest_schema_version": v},
+    )
     assert ok
 
 
@@ -417,7 +434,8 @@ def test_every_resume_drift_key_is_actually_checked(tmp_path, key, label):
     original = {"split": "test", "model": "gpt-5.6-luna", "git_sha": "abc123",
                 "skip_agent": False, "prompt_set_hash": "h0", "route_top_k": 10,
                 "route_llm_pick": True, "schema_pick_max_columns": 12,
-                "use_embedder": True, "corpus_content_hash": "c0"}
+                "use_embedder": True, "corpus_content_hash": "c0",
+                "llm_temperature": 0.0}
     changed = dict(original)
     was = original[key]
     changed[key] = (not was) if isinstance(was, bool) else f"{was}-changed"
@@ -795,6 +813,8 @@ def test_both_drivers_record_no_model_under_skip_agent():
         skip_agent=True,
         model_name=settings.models.llm_model,
         resolved_prompts={},
+        limit=None,
+        llm_temperature=None,
     )
     for name, built in (("run_datalake", pooled), ("run_experiment", single)):
         assert built["model"] is None, (
@@ -814,6 +834,8 @@ def test_both_drivers_record_no_model_under_skip_agent():
             skip_agent=False,
             model_name="gpt-5.6-luna",
             resolved_prompts={},
+            limit=None,
+            llm_temperature=None,
         )["model"]
         == "gpt-5.6-luna"
     )
@@ -864,11 +886,16 @@ def test_the_ledger_swap_retries_a_reader_holding_the_file_open(tmp_path, monkey
     The paid run calls ``append_run`` once, so this is a single-shot race — but it
     fires at the end of a multi-hour run, and the traceback is the whole notification
     that the run is not in the ledger.
+
+    Patched at ``eval.atomic``, which is where the retry lives now: the ledger, the
+    manifest and the generations files all swap through it, and this test drives the
+    ledger's path to it.
     """
+    from governed_bi.eval import atomic as atomic_mod
     from governed_bi.eval import index as index_mod
 
     ledger = tmp_path / "index.jsonl"
-    real_replace = index_mod.os.replace
+    real_replace = atomic_mod.os.replace
     calls = {"n": 0}
 
     def flaky_replace(src, dst, *a, **kw):
@@ -877,7 +904,7 @@ def test_the_ledger_swap_retries_a_reader_holding_the_file_open(tmp_path, monkey
             raise PermissionError(13, "Access is denied")
         return real_replace(src, dst, *a, **kw)
 
-    monkeypatch.setattr(index_mod.os, "replace", flaky_replace)
+    monkeypatch.setattr(atomic_mod.os, "replace", flaky_replace)
     index_mod.append_run({"run_dir": "r1", "quotable": False}, path=ledger)
 
     assert calls["n"] >= 3, "the swap was not contended, so the retry path never ran"

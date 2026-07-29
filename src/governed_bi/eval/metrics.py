@@ -1,7 +1,7 @@
 """The eval metric register: one declaration of every field a run records.
 
-Three artifacts carry a run's meaning, and every one of them used to be an
-undeclared dict built independently by each driver:
+Five artifacts can carry a run's meaning, and the first three used to be
+undeclared dicts built independently by each driver:
 
 - the **manifest** (``manifest.json``) — the knobs and scope that decide what a
   scored row *means*. Read by name by :data:`governed_bi.eval.index.COMPARABILITY_KEYS`
@@ -10,6 +10,18 @@ undeclared dict built independently by each driver:
   (question, arm).
 - the **arm summary** (``summary.json``) — the aggregate, read by
   :func:`governed_bi.eval.index.quotable`.
+- **stage events** (``stage_events.jsonl``, pooled driver) — one record per
+  (question, arm, stage), declared as :data:`STAGE_EVENT_FIELDS`.
+- the **split gap** (``split_gap.json``, only under ``--split both``) — per-arm
+  ``train - test`` on :data:`SPLIT_GAP_RATES`.
+
+"One declaration of every field" is meant literally, and it is checked: the
+manifest, the summary and the row each have a test asserting nothing reaches the
+artifact undeclared. That check is what this file's own claim used to lack — four
+manifest fields (``corpus_content_hash_observed``, ``corpus_content_hash_by_arm``,
+``db_id``, ``completed_at_utc``) were written by code in this very module and by
+both drivers while the register described none of them, because only the summary
+side had the emitted-but-undeclared test.
 
 Why a register rather than two builders
 ---------------------------------------
@@ -28,6 +40,15 @@ numbers were historically quoted.
 :func:`validate_manifest` refuses a manifest that omits a gate key. A knob that
 genuinely does not apply is recorded as ``None`` *explicitly*, alongside a flag
 saying so, so "not applicable" and "not recorded" stop looking alike.
+
+Presence, though, is all a validator can check — and a *defaulted* parameter passes
+a presence check while recording a value the run never used, which is the same
+failure one layer in. So every knob and every scope field is a required keyword of
+:func:`build_manifest`, and :data:`MANIFEST_SCHEMA_VERSION` records that this is
+true of a given manifest: ``comparable()``'s "``None`` on both sides counts as
+agreement" rule holds only under that guarantee, and it refuses a pair whose
+records predate it rather than extending the rule to manifests that cannot support
+it.
 """
 
 from __future__ import annotations
@@ -60,6 +81,34 @@ class Metric:
 # --------------------------------------------------------------------------- #
 # Manifest
 # --------------------------------------------------------------------------- #
+
+#: The contract version of ``manifest.json``. Bump it when a manifest's *presence*
+#: guarantee or a declared field's meaning changes such that an older manifest must
+#: not be silently compared against a newer one.
+#:
+#: ``1`` is the first version in which every declared field is guaranteed present —
+#: :func:`build_manifest` is the only builder, it takes every knob and every scope
+#: field as a required keyword, and :func:`validate_manifest` refuses a manifest that
+#: omits one. That guarantee is what makes
+#: :func:`governed_bi.eval.index.comparable`'s "``None`` on both sides counts as
+#: agreement" rule sound, and no manifest written before this version has it: there,
+#: a key that was never recorded is indistinguishable from two runs agreeing on it.
+#: So ``comparable()`` refuses a pair that does not carry this field rather than
+#: extending the rule to records that cannot support it.
+#:
+#: An integer rather than a date, because the only question anyone asks of it is
+#: "is this at least version N" and a date invites string comparison.
+MANIFEST_SCHEMA_VERSION = 1
+
+#: The version stamp itself. Not a knob and not operational: it says how much the
+#: other fields can be trusted.
+MANIFEST_SCHEMA: tuple[Metric, ...] = (
+    Metric(
+        "manifest_schema_version",
+        "contract version of this manifest; comparable() refuses a pair without it, "
+        "because only from version 1 on is every declared field guaranteed present",
+    ),
+)
 
 #: Knobs that change what a scored row means. Every one of these must be present
 #: in every manifest, in every mode — ``None`` when it does not apply, never absent.
@@ -105,8 +154,58 @@ MANIFEST_OPERATIONAL: tuple[Metric, ...] = (
     Metric("allow_git_sha_drift", "operator opted out of the resume git-sha guard"),
 )
 
+#: Fields no *builder* can fill, because the value does not exist yet when the
+#: manifest is written. Declared here and NOT in :data:`MANIFEST_FIELDS`: requiring
+#: them would make :func:`validate_manifest` reject the early write that exists so a
+#: crashed run still leaves a manifest behind.
+#:
+#: All four used to reach ``manifest.json`` undeclared, which is how the register's
+#: own opening claim was false: the summary had an emitted-but-undeclared test and
+#: the manifest did not, so a field written by :func:`stamp_corpus_hashes` — twelve
+#: lines below the register that failed to mention it — hid in plain sight.
+MANIFEST_STAMPED: tuple[Metric, ...] = (
+    Metric(
+        "corpus_content_hash_observed",
+        "digest of the corpora actually built, filled by stamp_corpus_hashes; differs "
+        "from `corpus_content_hash` exactly when a resume served a moved corpus",
+    ),
+    Metric(
+        "corpus_content_hash_by_arm",
+        "per-arm digests, so a reader sees WHICH arm's corpus moved, not only that one did",
+    ),
+    Metric(
+        "completed_at_utc",
+        "when the run finished; absent on a crashed run, which is the signal that it "
+        "did not finish (`created_at_utc` records the start)",
+    ),
+    Metric(
+        "resumes",
+        "one appended copy of each later invocation's knobs; the top level keeps the "
+        "ORIGINAL run's, so this is the only record of what the earliest rows were "
+        "scored under (read by index._resume_drift)",
+    ),
+)
+
+#: Present in one mode only, so not required of every manifest.
+MANIFEST_MODE_SPECIFIC: tuple[Metric, ...] = (
+    Metric(
+        "db_id",
+        "single mode only: the one pinned schema, kept beside `db_ids` for readers and "
+        "artifacts that address a single-schema run by its schema",
+    ),
+)
+
+#: Must be present in every manifest, in every mode. :func:`validate_manifest`
+#: enforces it, because a gate key absent from the manifest can never fire.
 MANIFEST_FIELDS: tuple[Metric, ...] = (
-    MANIFEST_KNOBS + MANIFEST_SCOPE + MANIFEST_OPERATIONAL
+    MANIFEST_SCHEMA + MANIFEST_KNOBS + MANIFEST_SCOPE + MANIFEST_OPERATIONAL
+)
+
+#: Every field that may legitimately appear in ``manifest.json``. The superset
+#: ``tests/test_eval_metrics.py`` checks the drivers against, in the
+#: emitted-but-undeclared direction.
+MANIFEST_DECLARED: tuple[Metric, ...] = (
+    MANIFEST_FIELDS + MANIFEST_STAMPED + MANIFEST_MODE_SPECIFIC
 )
 
 
@@ -125,23 +224,41 @@ def build_manifest(
     route_llm_pick: bool | None,
     schema_pick_max_columns: int | None,
     use_embedder: bool | None,
-    # Scope
-    arms: tuple[str, ...] = (),
-    oracles: tuple[str, ...] = (),
-    replicate_of: str | None = None,
-    db_ids: list[str] | None = None,
-    limit: int | None = None,
-    limit_dbs: int | None = None,
-    question_scope_hash: str | None = None,
-    # Operational
+    # The decoding temperature the model was actually configured with. Required, not
+    # defaulted: ``validate_manifest`` checks that a knob is PRESENT, so a default
+    # here satisfies every gate while recording the wrong value. That is not
+    # hypothetical — this parameter defaulted to ``None`` and ``run_experiment`` never
+    # passed it, so every single-schema manifest recorded "provider default" for runs
+    # whose temperature was configured and really forwarded to the model
+    # (``llm.langchain_client.from_config``). ``None`` still means "never set, so the
+    # provider's default applied", and it now means that because a caller said so.
+    llm_temperature: float | None,
+    # Scope. Required for the same reason as the knobs: an unstated scope is recorded
+    # as the empty/absent value, and ``arms=()`` for a run that served three arms, or
+    # ``limit=None`` for a run capped at five questions, is a false record that no
+    # presence check can catch.
+    arms: tuple[str, ...],
+    oracles: tuple[str, ...],
+    replicate_of: str | None,
+    db_ids: list[str] | None,
+    limit: int | None,
+    limit_dbs: int | None,
+    question_scope_hash: str | None,
+    # Operational. These keep defaults: they change how long a run takes, never what a
+    # scored row means, so a wrong one misleads nobody about a result.
     pg_dsn_host: str | None = None,
     serve_workers: int = 1,
     build_workers: int = 1,
     max_agent_steps: int | None = None,
     allow_git_sha_drift: bool = False,
-    llm_temperature: float | None = None,
 ) -> dict[str, Any]:
     """The one manifest builder, for both modes.
+
+    Every parameter that maps to a :data:`MANIFEST_KNOBS` or :data:`MANIFEST_SCOPE`
+    field is keyword-**required**. :func:`validate_manifest` can only check that a key
+    exists, so a defaulted parameter produces a manifest that passes every gate and
+    describes a different run than the one that executed. Only
+    :data:`MANIFEST_OPERATIONAL` parameters may default.
 
     ``model_name`` is the CONFIGURED name, not a resolved value: ``manifest_model``
     is applied inside, so a caller cannot write a model name for a run that never
@@ -160,6 +277,8 @@ def build_manifest(
     routing_bypassed = route_top_k is None and route_llm_pick is None
 
     return {
+        # ── contract ──
+        "manifest_schema_version": MANIFEST_SCHEMA_VERSION,
         # ── scope ──
         "mode": mode,
         "arms": list(arms),
@@ -225,19 +344,14 @@ def write_manifest(out_dir: Path, manifest: dict[str, Any]) -> None:
     at the call sites so a new write path cannot skip it.
     """
     import json
-    import os
+
+    from .atomic import atomic_write_text
 
     validate_manifest(manifest)
-    path = out_dir / "manifest.json"
-    tmp = path.with_suffix(f".json.tmp{os.getpid()}")
-    try:
-        with tmp.open("w", encoding="utf-8") as fh:
-            fh.write(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-    finally:
-        tmp.unlink(missing_ok=True)
+    atomic_write_text(
+        out_dir / "manifest.json",
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+    )
 
 
 def validate_manifest(manifest: dict[str, Any]) -> None:
@@ -364,40 +478,63 @@ SUMMARY_RATES: tuple[Metric, ...] = (
 #: negative side. That is the same trap the twin strata document: ``not
 #: r.get(...)`` puts an ABSENT key in the FALSE stratum, which silently turns one
 #: side of the split into the pooled figure.
+#: OBSERVATIONAL, every one of them. Each splits an arm's own rows on something the
+#: run produced, so none is a randomised contrast and none may be read as the effect
+#: of the thing it splits on. The clause saying so is part of each declaration below,
+#: because a block named ``ex_by_note_injected`` reads like a treatment effect to
+#: anyone who does not go looking for the caveat.
 SUMMARY_CONDITIONALS: tuple[Metric, ...] = (
     Metric(
         "ex_by_semantic_assurance",
         "EX per assurance level — the calibration of the semantic axis. If "
-        "`unflagged` does not out-score `heuristic`, the stamp is decoration.",
+        "`unflagged` does not out-score `heuristic`, the stamp is decoration. "
+        "OBSERVATIONAL: the split is on an output of the system itself, so this is "
+        "within-arm calibration and post-treatment selection ACROSS arms — comparing "
+        "one arm's `unflagged` EX to another's compares differently-selected "
+        "populations. `n_unstamped` counts rows that recorded no level; they are "
+        "excluded, never filed under a `None` level beside the real ones.",
         "rows that recorded an assurance level",
     ),
     Metric(
         "ex_by_tier",
-        "EX per display tier — the same calibration for the compact projection",
+        "EX per display tier — the same calibration for the compact projection, and "
+        "OBSERVATIONAL in the same way: the tier is the system's own output, so the "
+        "strata are within-arm calibration, not an across-arm contrast. `n_unstamped` "
+        "counts rows that recorded no tier, excluded rather than bucketed as `None`.",
         "rows that recorded a tier",
     ),
     Metric(
         "decoy_touch_by_caveat",
         "decoy-touch rate with vs without an injected suspect caveat — whether the "
-        "caveat is what stops the model reaching for the decoy",
+        "caveat is what stops the model reaching for the decoy. OBSERVATIONAL: the "
+        "split is on whether retrieval matched, so a difference is confounded with "
+        "which questions the corpus happens to cover.",
         "delivered rows that recorded a caveat count",
     ),
     Metric(
         "ex_by_note_injected",
-        "EX with vs without an injected note (ADR 0003's claim, previously unscored)",
+        "EX with vs without an injected note (ADR 0003's claim, previously unscored). "
+        "OBSERVATIONAL: the split is on whether retrieval matched, so it measures "
+        "corpus COVERAGE of the questions, not the value of a note.",
         "rows that recorded a note count",
     ),
     Metric(
         "ex_by_repair",
         "EX after a repair (>1 run_query attempt) vs first-attempt — whether "
-        "self-repair recovers correctness or just produces valid-but-wrong SQL",
+        "self-repair recovers correctness or just produces valid-but-wrong SQL. "
+        "OBSERVATIONAL: the `with` stratum is by construction the questions that "
+        "already failed once, so the two sides are different difficulty populations "
+        "and the gap is not the cost of repairing.",
         "rows that recorded an attempt count",
     ),
     Metric(
         "guardrail_cost_ceiling",
         "CEILING on answers a guardrail block may have cost, not the cost: blocked "
         "SQL cannot be graded without executing un-guardrailed SQL. Counts turns "
-        "where a layer blocked and the turn still ended wrong. Note that "
+        "where a layer blocked and the turn still ended wrong, out of `n_observed` "
+        "turns that recorded a `by_guardrail_layer` map at all — a run whose serve "
+        "path never stamped one has `n_blocked == 0` for want of instrumentation, "
+        "which without `n_observed` reads as a run that blocked nothing. Note that "
         "`by_guardrail_layer` creates a key at 0 when a layer is merely evaluated, "
         "so blocked means `any(v > 0)`, never a truthiness test on the dict.",
         "rows where at least one layer blocked",
@@ -420,6 +557,10 @@ SUMMARY_COUNTS: tuple[str, ...] = (
     "n_correct_routing_unrecorded", "n_correct_via_routing_escape",
     "n_correct_unaccounted", "n_safety_clearance_observed",
     "n_graded_delivery_observed", "n_coverage_best_effort_observed",
+    # ``share_with_a_note`` divides by ``n``, so an arm whose serve path stamped no
+    # note counts at all reports 0.0 — "the corpus reached nothing" and "nobody
+    # measured" render identically. This is the denominator that tells them apart.
+    "n_notes_observed",
     # Grading free passes (audit E2): a correct answer that was correct for the
     # wrong reason. quotable() reads all three.
     "n_correct_with_empty_gold", "n_correct_and_pred_has_no_from",
@@ -443,4 +584,55 @@ SUMMARY_FIELDS: tuple[str, ...] = (
     + SUMMARY_COUNTS
     + SUMMARY_MEANS
     + SUMMARY_BLOCKS
+)
+
+
+# --------------------------------------------------------------------------- #
+# Stage events
+# --------------------------------------------------------------------------- #
+
+#: One record per (question, arm, stage) in ``stage_events.jsonl``, written by the
+#: pooled driver from the serve path's own ``stage_events`` provenance. A separate
+#: file rather than a row field because a turn emits many of these and the row is
+#: already the widest artifact.
+#:
+#: Declared because this file is the only per-stage timing record a run leaves, and
+#: it was absent from the register entirely — including from the doc's list of what a
+#: run writes, so a reader looking for latency attribution had no reason to know it
+#: existed.
+STAGE_EVENT_FIELDS: tuple[str, ...] = (
+    "question_id", "arm", "db_id", "stage", "status", "ms", "detail",
+)
+
+
+# --------------------------------------------------------------------------- #
+# Split gap
+# --------------------------------------------------------------------------- #
+
+#: The rates :mod:`governed_bi.eval.split_gap` gaps, ``train - test`` per arm, in
+#: ``split_gap.json`` under ``--split both``. Every one is accuracy-like, so "train is
+#: higher" means "did not transfer"; gapping ``crash_rate`` or ``refusal_rate`` would
+#: invite reading operational noise as overfitting, which is why this is a chosen
+#: subset of :data:`SUMMARY_RATES` rather than all of them.
+#:
+#: Declared here so the seven cannot drift from the summary rates they read: a rate
+#: renamed in :data:`SUMMARY_RATES` would otherwise leave ``split_gap`` reading a key
+#: nobody writes and reporting ``None`` gaps that look like "not measured on one
+#: split". ``tests/test_eval_metrics.py`` asserts this equals
+#: ``split_gap.GAPPED_RATES`` and that every entry is a declared rate.
+SPLIT_GAP_RATES: tuple[str, ...] = (
+    "ex_lenient",
+    "ex_strict",
+    "ex_gradeable",
+    "conditional_ex_lenient",
+    "cond_ex_given_routing",
+    "routing_recall",
+    "schema_pick_accuracy",
+)
+
+#: ``split_gap.json``'s own top-level keys. ``error`` replaces the rest when a summary
+#: could not be read — the two scored splits are already on disk by then, so the
+#: reporting fault is recorded rather than raised.
+SPLIT_GAP_FIELDS: tuple[str, ...] = (
+    "reading", "arms", "arms_not_in_both", "train_dir", "test_dir", "error",
 )

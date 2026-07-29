@@ -1,32 +1,44 @@
 # Eval metrics: every field a run records
 
-A run writes three artifacts, and this is the register of what is in them. The
+A run writes up to five artifacts, and this is the register of what is in them. The
 machine-readable source of truth is
 [`src/governed_bi/eval/metrics.py`](../src/governed_bi/eval/metrics.py); this page
-is generated from it, and `tests/test_eval_metrics.py` asserts the register
-matches what the drivers actually emit — in both directions, so a field that is
-emitted-but-undeclared or declared-but-absent fails the suite.
+is generated from it — every field name and every count below comes from a register
+tuple, so `uv run python scripts/gen_eval_metrics_doc.py --check` fails in CI if the
+two disagree.
+
+`tests/test_eval_metrics.py` checks the register against what the drivers emit:
+the pooled driver's manifest and arm summary **in both directions** (a field that is
+emitted-but-undeclared or declared-but-absent fails the suite), the generation row
+against what the summariser reads off it, and the single-schema driver's
+`ArmSummary` in the emitted-but-undeclared direction only — that driver reports a
+documented subset of `summary.json`, so "declared but absent" is expected there.
 
 | Artifact | Fields | Consumer |
 |---|---|---|
-| `manifest.json` | 29 | `index.COMPARABILITY_KEYS`, `index.RESUME_DRIFT_KEYS` |
+| `manifest.json` | 35 (30 in every run) | `index.COMPARABILITY_KEYS`, `index.RESUME_DRIFT_KEYS` |
 | `generations.<arm>.jsonl` | 72 per (question, arm) | `_summarise_rows`, `analysis`, `power`, `error_taxonomy` |
-| `summary.json` | 80 | `index.quotable` |
+| `summary.json` | 87 | `index.quotable` |
+| `stage_events.jsonl` | 7 per (question, arm, stage) | read by hand; per-stage latency attribution |
+| `split_gap.json` | 6 | read by hand; `--split both` only |
+
+`stage_events.jsonl` is written by the pooled driver only, and `split_gap.json` only
+under `--split both`. Neither is read by a gate.
 
 ## Why this file exists
 
-Every one of the three used to be an undeclared dict built independently by each
-of the two drivers, and consumed by `.get()` in eight modules — where a renamed
+Every one of the first three used to be an undeclared dict built independently by
+each of the two drivers, and consumed by `.get()` in eight modules — where a renamed
 or missing key degrades silently to `None` instead of raising.
 
 That is not hypothetical. `comparable()` skips a knob that is `None` on both
 sides, reasoning that two runs which both predate a knob did not differ in it.
 Correct — and it is exactly why an *absent* key is dangerous: absence is
 indistinguishable from agreement. The single-schema driver's manifest omitted six
-of the eight comparability keys. Four were harmless (it pins one schema, so the
-router never runs and its knobs have no value to record). Two were not: `split`,
-and `corpus_content_hash` — which `index.py`'s own comment names as the one thing
-the check did not cover, *because the corpus is the treatment*. So two runs of
+of the eight comparability keys of the time. Four were harmless (it pins one schema,
+so the router never runs and its knobs have no value to record). Two were not:
+`split`, and `corpus_content_hash` — which `index.py`'s own comment names as the one
+thing the check did not cover, *because the corpus is the treatment*. So two runs of
 that driver, over different corpora on different splits, compared as the same
 configuration. And it was the driver whose numbers were historically quoted.
 
@@ -35,9 +47,30 @@ Both modes now build through `metrics.build_manifest`, and
 apply is recorded as `None` **explicitly**, with `routing_bypassed` saying why, so
 "not applicable" and "not recorded" stop looking alike.
 
+Presence is all a validator can check, though, and a *defaulted* parameter passes a
+presence check while recording a value the run never used. That happened:
+`llm_temperature` defaulted to `None` and the single-schema driver never passed it,
+so every one of its manifests recorded "provider default" for runs whose temperature
+was configured and really forwarded to the model. So every knob and every scope field
+is now a **required** keyword of `build_manifest`, and `manifest_schema_version`
+records that a given manifest was built that way — `comparable()` refuses a pair
+whose records predate the guarantee rather than applying the None-on-both-sides rule
+to manifests that cannot support it.
+
 ## 1. Manifest — what makes a row mean something
 
+### Contract
+
+| field | meaning |
+|---|---|
+| `manifest_schema_version` | contract version of this manifest; comparable() refuses a pair without it, because only from version 1 on is every declared field guaranteed present |
+
 ### Knobs (gate keys: must be present in every mode, `None` when N/A)
+
+Every one of these is a required keyword of `build_manifest`, and
+`index.COMPARABILITY_KEYS` is **derived** from this list minus an explicit,
+documented exclusion set (`index.COMPARABILITY_EXCLUSIONS`) — so a knob added here
+joins the comparability gate by default instead of silently skipping it.
 
 | field | meaning |
 |---|---|
@@ -56,6 +89,9 @@ apply is recorded as `None` **explicitly**, with `routing_bypassed` saying why, 
 
 ### Scope (a resume that disagrees is a different experiment)
 
+Also required keywords: `arms=()` recorded for a run that served three arms is a
+false record no presence check can catch.
+
 | field | meaning |
 |---|---|
 | `mode` | 'single' (one pinned schema) or 'datalake' (pooled, unpinned) |
@@ -70,7 +106,8 @@ apply is recorded as `None` **explicitly**, with `routing_bypassed` saying why, 
 
 ### Operational (recorded, deliberately not gate keys)
 
-These change how long a run takes, never what a scored row means.
+These change how long a run takes, never what a scored row means, so these are the
+only `build_manifest` parameters allowed a default.
 
 | field | meaning |
 |---|---|
@@ -82,6 +119,25 @@ These change how long a run takes, never what a scored row means.
 | `max_agent_steps` | recursion limit on the agent loop |
 | `serve_path` | always agent_core (ADR 0002) |
 | `allow_git_sha_drift` | operator opted out of the resume git-sha guard |
+
+### Stamped after the build (declared, not required)
+
+No builder can fill these, because the value does not exist when the manifest is
+written — and the manifest is written *before* the run phase so that a crashed run
+still leaves its knobs on disk.
+
+| field | meaning |
+|---|---|
+| `corpus_content_hash_observed` | digest of the corpora actually built, filled by stamp_corpus_hashes; differs from `corpus_content_hash` exactly when a resume served a moved corpus |
+| `corpus_content_hash_by_arm` | per-arm digests, so a reader sees WHICH arm's corpus moved, not only that one did |
+| `completed_at_utc` | when the run finished; absent on a crashed run, which is the signal that it did not finish (`created_at_utc` records the start) |
+| `resumes` | one appended copy of each later invocation's knobs; the top level keeps the ORIGINAL run's, so this is the only record of what the earliest rows were scored under (read by index._resume_drift) |
+
+### Mode-specific (present in one mode only)
+
+| field | meaning |
+|---|---|
+| `db_id` | single mode only: the one pinned schema, kept beside `db_ids` for readers and artifacts that address a single-schema run by its schema |
 
 ## 2. Arm summary — the rates and their denominators
 
@@ -115,10 +171,17 @@ reviewable, and a test asserts every declared rate names one.
 
 ### Conditional diagnostics — which part of the governance is doing the work
 
-Each of these reports a rate on **both sides** of something the corpus injected.
-Every input was already recorded per row and aggregated against nothing until
-2026-07-28. They are within-arm, so they cost no extra serve and apply
-retroactively to any existing `generations.<arm>.jsonl`.
+Each of these reports a rate on **both sides** of something the run produced. Every
+input was already recorded per row and aggregated against nothing until 2026-07-28.
+They are within-arm, so they cost no extra serve and apply retroactively to any
+existing `generations.<arm>.jsonl`.
+
+**All of them are observational.** None is a randomised contrast, so none may be read
+as the effect of the thing it splits on: two of them condition on an output of the
+system itself (post-treatment selection across arms), two split on whether retrieval
+matched (corpus coverage, not note value), and one compares questions that already
+failed against questions that did not (two difficulty populations). Each declaration
+below carries the specific caveat.
 
 Each block carries its own `n_*` counts, and where a row can fail to record the
 input, an `n_unstamped` count — an absent input is counted out, never filed on the
@@ -128,19 +191,19 @@ into the pooled figure.
 
 | block | meaning | denominator |
 |---|---|---|
-| `ex_by_semantic_assurance` | EX per assurance level — the calibration of the semantic axis. If `unflagged` does not out-score `heuristic`, the stamp is decoration. | rows that recorded an assurance level |
-| `ex_by_tier` | EX per display tier — the same calibration for the compact projection | rows that recorded a tier |
-| `decoy_touch_by_caveat` | decoy-touch rate with vs without an injected suspect caveat — whether the caveat is what stops the model reaching for the decoy | delivered rows that recorded a caveat count |
-| `ex_by_note_injected` | EX with vs without an injected note (ADR 0003's claim, previously unscored) | rows that recorded a note count |
-| `ex_by_repair` | EX after a repair (>1 run_query attempt) vs first-attempt — whether self-repair recovers correctness or just produces valid-but-wrong SQL | rows that recorded an attempt count |
-| `guardrail_cost_ceiling` | CEILING on answers a guardrail block may have cost, not the cost: blocked SQL cannot be graded without executing un-guardrailed SQL. Counts turns where a layer blocked and the turn still ended wrong. Note that `by_guardrail_layer` creates a key at 0 when a layer is merely evaluated, so blocked means `any(v > 0)`, never a truthiness test on the dict. | rows where at least one layer blocked |
+| `ex_by_semantic_assurance` | EX per assurance level — the calibration of the semantic axis. If `unflagged` does not out-score `heuristic`, the stamp is decoration. OBSERVATIONAL: the split is on an output of the system itself, so this is within-arm calibration and post-treatment selection ACROSS arms — comparing one arm's `unflagged` EX to another's compares differently-selected populations. `n_unstamped` counts rows that recorded no level; they are excluded, never filed under a `None` level beside the real ones. | rows that recorded an assurance level |
+| `ex_by_tier` | EX per display tier — the same calibration for the compact projection, and OBSERVATIONAL in the same way: the tier is the system's own output, so the strata are within-arm calibration, not an across-arm contrast. `n_unstamped` counts rows that recorded no tier, excluded rather than bucketed as `None`. | rows that recorded a tier |
+| `decoy_touch_by_caveat` | decoy-touch rate with vs without an injected suspect caveat — whether the caveat is what stops the model reaching for the decoy. OBSERVATIONAL: the split is on whether retrieval matched, so a difference is confounded with which questions the corpus happens to cover. | delivered rows that recorded a caveat count |
+| `ex_by_note_injected` | EX with vs without an injected note (ADR 0003's claim, previously unscored). OBSERVATIONAL: the split is on whether retrieval matched, so it measures corpus COVERAGE of the questions, not the value of a note. | rows that recorded a note count |
+| `ex_by_repair` | EX after a repair (>1 run_query attempt) vs first-attempt — whether self-repair recovers correctness or just produces valid-but-wrong SQL. OBSERVATIONAL: the `with` stratum is by construction the questions that already failed once, so the two sides are different difficulty populations and the gap is not the cost of repairing. | rows that recorded an attempt count |
+| `guardrail_cost_ceiling` | CEILING on answers a guardrail block may have cost, not the cost: blocked SQL cannot be graded without executing un-guardrailed SQL. Counts turns where a layer blocked and the turn still ended wrong, out of `n_observed` turns that recorded a `by_guardrail_layer` map at all — a run whose serve path never stamped one has `n_blocked == 0` for want of instrumentation, which without `n_observed` reads as a run that blocked nothing. Note that `by_guardrail_layer` creates a key at 0 when a layer is merely evaluated, so blocked means `any(v > 0)`, never a truthiness test on the dict. | rows where at least one layer blocked |
 
 ### Counts
 
 Each count exists so an exclusion from a rate above stays visible: a rate
 reported without its excluded count reads as full coverage.
 
-**counts** — `n`, `n_answered`, `n_correct`, `n_refused`, `n_crashed`, `n_missing_gold`, `n_gradeable`, `n_gold_unusable`, `n_frozen_gold`, `n_order_sensitive_gold`, `n_twin_gradeable`, `n_no_twin_gradeable`, `n_twin_unstamped`, `n_gold_twin_in_train`, `n_decoy_touch`, `n_wrong_but_nrows_match`, `n_unmapped_refused_by`, `n_with_difficulty`, `n_with_governance_stamp`, `n_tables_used_unresolved`, `n_rows_no_db_id`, `n_pick_fallback`, `n_routing_observed`, `n_routing_bypassed`, `n_routing_crashed`, `n_routing_unrecorded`, `n_routing_escaped`, `n_routing_escape_observed`, `n_routing_escape_unknown`, `n_correct_routed`, `n_correct_unrouted`, `n_correct_bypassed`, `n_correct_routing_crashed`, `n_correct_routing_unrecorded`, `n_correct_via_routing_escape`, `n_correct_unaccounted`, `n_safety_clearance_observed`, `n_graded_delivery_observed`, `n_coverage_best_effort_observed`, `n_correct_with_empty_gold`, `n_correct_and_pred_has_no_from`, `n_correct_and_zero_table_overlap`
+**counts** — `n`, `n_answered`, `n_correct`, `n_refused`, `n_crashed`, `n_missing_gold`, `n_gradeable`, `n_gold_unusable`, `n_frozen_gold`, `n_order_sensitive_gold`, `n_twin_gradeable`, `n_no_twin_gradeable`, `n_twin_unstamped`, `n_gold_twin_in_train`, `n_decoy_touch`, `n_wrong_but_nrows_match`, `n_unmapped_refused_by`, `n_with_difficulty`, `n_with_governance_stamp`, `n_tables_used_unresolved`, `n_rows_no_db_id`, `n_pick_fallback`, `n_routing_observed`, `n_routing_bypassed`, `n_routing_crashed`, `n_routing_unrecorded`, `n_routing_escaped`, `n_routing_escape_observed`, `n_routing_escape_unknown`, `n_correct_routed`, `n_correct_unrouted`, `n_correct_bypassed`, `n_correct_routing_crashed`, `n_correct_routing_unrecorded`, `n_correct_via_routing_escape`, `n_correct_unaccounted`, `n_safety_clearance_observed`, `n_graded_delivery_observed`, `n_coverage_best_effort_observed`, `n_notes_observed`, `n_correct_with_empty_gold`, `n_correct_and_pred_has_no_from`, `n_correct_and_zero_table_overlap`
 
 ### Means and breakdown blocks
 
@@ -170,11 +233,37 @@ reported without its excluded count reads as full coverage.
 
 **provenance** — `prompt_set_hash`, `prompt_variants`
 
+## 4. Stage events — one record per (question, arm, stage)
+
+`stage_events.jsonl`, pooled driver only, flattened from the serve path's own
+`stage_events` provenance. A separate file rather than row fields because a turn
+emits many of these and the row is already the widest artifact.
+
+**fields** — `question_id`, `arm`, `db_id`, `stage`, `status`, `ms`, `detail`
+
+## 5. Split gap — `train - test` per arm
+
+`split_gap.json`, written only under `--split both`. Scoring the train split is not
+a second result (`index.quotable` refuses a train-scored run); the *gap* is how much
+of an arm's score does not survive being asked something new. Not paired and not
+significance tested — a within-arm diagnostic, never a headline.
+
+The gapped rates are a chosen subset of the rates above: every one is accuracy-like,
+so "train is higher" means "did not transfer". Gapping `crash_rate` or
+`refusal_rate` would invite reading operational noise as overfitting.
+
+**gapped rates** — `ex_lenient`, `ex_strict`, `ex_gradeable`, `conditional_ex_lenient`, `cond_ex_given_routing`, `routing_recall`, `schema_pick_accuracy`
+
+**file fields** — `reading`, `arms`, `arms_not_in_both`, `train_dir`, `test_dir`, `error`
+
 ## Regenerating this page
 
-The tables above come from the register. After editing
+The tables and every count above come from the register. After editing
 `src/governed_bi/eval/metrics.py`, re-run the generator and commit both:
 
 ```bash
 uv run python scripts/gen_eval_metrics_doc.py
 ```
+
+CI runs `--check`, which writes nothing and fails if this file is not what a fresh
+generation would produce.

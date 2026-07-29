@@ -109,8 +109,10 @@ class ArmSummary:
     mean_attempts: float | None = None
 
 
-
-
+#: The rungs this driver always serves, in ladder order. Recorded in the manifest as
+#: the run's SCOPE: ``arms=()`` — the shared builder's old default, which this driver
+#: never overrode — said "no arms were served" for every single-schema run ever made.
+LADDER_ARMS: tuple[str, ...] = ("baseline", "curated", "curated_sme")
 
 
 def build_manifest(
@@ -122,9 +124,16 @@ def build_manifest(
     skip_agent: bool,
     model_name: str | None,
     resolved_prompts: dict[str, str],
-    split: str = "test",
+    limit: int | None,
+    llm_temperature: float | None,
 ) -> dict[str, Any]:
     """The single-schema driver's manifest, built through the shared register.
+
+    This driver scores the **test** split only, always: ``--split`` is deliberately a
+    pooled-driver flag, and the train side of a split pair needs the same corpora
+    served twice, which only ``run_datalake`` does. So ``split`` is not a parameter
+    here — it was one, with a default of ``"test"`` that no caller ever overrode, which
+    read as "this driver can score train" to anyone auditing the manifest.
 
     It used to be an independent dict, and it was missing six of the eight keys
     ``eval.index.COMPARABILITY_KEYS`` reads. Four of those omissions were harmless
@@ -144,18 +153,32 @@ def build_manifest(
     return metrics.build_manifest(
         mode="single",
         bird_dir=bird_dir,
-        split=split,
+        split="test",
         model_name=model_name,
         prompt_variants=resolved_prompts,
         skip_agent=skip_agent,
         created_at_utc=_utc_ts(),
+        # The configured decoding temperature, forwarded because it IS forwarded to the
+        # model (``llm.langchain_client.from_config``). Left unpassed, the builder's old
+        # default recorded ``None`` — "provider default" — for every run of this driver,
+        # and the manifest validator was satisfied because the key was present.
+        llm_temperature=llm_temperature,
         # One pinned schema: the router does not run, so there is no shortlist size
         # or picker setting to report.
         route_top_k=None,
         route_llm_pick=None,
         schema_pick_max_columns=None,
         use_embedder=None,
+        # Scope, every field stated. None of these has a default in the shared builder
+        # any more, precisely so a driver cannot leave one unsaid and have the empty
+        # value recorded as fact.
+        arms=LADDER_ARMS,
+        oracles=(),           # oracle rungs are a pooled-driver feature
+        replicate_of=None,    # no serve-replicate control arm here
         db_ids=[db_id],
+        limit=limit,
+        limit_dbs=None,       # one schema by construction, not by a cap
+        question_scope_hash=None,  # scores the whole test split of the one schema
         pg_dsn_host=_dsn_host(pg_dsn),
         max_agent_steps=max_agent_steps,
     ) | {
@@ -163,32 +186,6 @@ def build_manifest(
         # single-schema run by its one schema.
         "db_id": db_id,
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def _run_arm_generations(
@@ -345,6 +342,13 @@ def _run_arm_generations(
     n_refused = 0
     n_decoy = 0
     n_produced = 0
+    # Correct answers among the rows that PRODUCED SQL — the numerator
+    # ``conditional_ex_lenient`` needs, drawn from the same rows as its denominator.
+    # It used to divide ``n_correct`` (every row) by ``n_produced``, the same population
+    # mix the pooled driver carried; see the comment beside ``n_correct_produced`` in
+    # ``run_datalake._summarise_rows``. It happened to agree only because ``hash_grade``
+    # never marks a row correct without SQL, an invariant nothing asserts.
+    n_correct_produced = 0
     n_missing_gold = 0
     n_wrong_but_nrows_match = 0
     n_crashed = 0
@@ -373,6 +377,8 @@ def _run_arm_generations(
             n_produced += 1
             if b["decoy"]:
                 n_decoy += 1
+            if b["correct"]:
+                n_correct_produced += 1
         if b["correct"]:
             n_correct += 1
         if b["correct_strict"]:
@@ -403,7 +409,9 @@ def _run_arm_generations(
         by_failed_stage=by_failed_stage,
         n_unmapped_refused_by=n_unmapped_refused_by,
         decoy_touch_rate=(n_decoy / n_produced) if n_produced else None,
-        conditional_ex_lenient=(n_correct / n_produced) if n_produced else None,
+        conditional_ex_lenient=(
+            (n_correct_produced / n_produced) if n_produced else None
+        ),
         by_difficulty={
             d: (sum(1 for x in xs if x) / len(xs) if xs else 0.0)
             for d, xs in sorted(by_diff_correct.items())
@@ -441,10 +449,6 @@ def _run_arm_generations(
         ).to_dict(),
     }
     return rows, summary, summary_extra
-
-
-
-
 
 
 def run_experiment(
@@ -531,6 +535,30 @@ def run_experiment(
         prompt_variants=resolved_prompts,
     )
 
+    # --- manifest, BEFORE the run phase ---------------------------------------- #
+    # Written here rather than beside summary.json at the end, for three reasons the
+    # end-of-run write got wrong. ``created_at_utc`` is declared "when the run started"
+    # and was recording the finish; ``git_sha`` likewise named the commit at the end of
+    # a multi-hour run rather than the one that produced it; and a crashed run left NO
+    # manifest at all, which ``index.comparable()`` then reads as
+    # ``manifest_readable: False`` — "every knob unknown" for a run whose knobs were
+    # all known before it started. ``build_manifest``'s declared-then-filled corpus
+    # hash exists exactly so this write can happen before any corpus does.
+    run_root = out_dir
+    run_root.mkdir(parents=True, exist_ok=True)
+    manifest = build_manifest(
+        db_id=db_id,
+        bird_dir=bird_dir,
+        pg_dsn=pg_dsn,
+        max_agent_steps=max_agent_steps,
+        skip_agent=skip_agent,
+        model_name=settings.models.llm_model,
+        resolved_prompts=resolved_prompts,
+        limit=limit,
+        llm_temperature=settings.models.llm_temperature,
+    )
+    metrics.write_manifest(run_root, manifest)
+
     # Live self-check: re-exec a sample of gold SQL and confirm hash_grade matches
     # the precomputed gold hashes (catches normalizer drift / bad DSN).
     gold_check = validate_gold_hashes_live(
@@ -565,8 +593,6 @@ def run_experiment(
 
         chat = StaticChatClient(responses="CANNOT_ANSWER")
 
-    run_root = out_dir
-    run_root.mkdir(parents=True, exist_ok=True)
     corpus_baseline = run_root / "corpus_baseline"
     corpus_curated = run_root / "corpus_curated"
     corpus_curated_sme = run_root / "corpus_curated_sme"
@@ -698,6 +724,20 @@ def run_experiment(
 
     sme_fold = _sme_fold_signal(corpus_curated, corpus_curated_sme, db_id)
     _warn_if_sme_noop(sme_fold, db_id=db_id)
+
+    # The corpus IS the treatment, so the digest of what was actually served has to
+    # reach the ledger. Filled here — the earliest point at which all three corpora
+    # exist — and the manifest rewritten immediately, so the gate key is on disk before
+    # the serve loop, which is the phase that takes hours and can die.
+    metrics.stamp_corpus_hashes(
+        manifest,
+        {
+            "baseline": corpus_baseline,
+            "curated": corpus_curated,
+            "curated_sme": corpus_curated_sme,
+        },
+    )
+    metrics.write_manifest(run_root, manifest)
 
     if lc_model is not None:
         baseline = agent_solver(
@@ -880,27 +920,9 @@ def run_experiment(
     (run_root / "summary.json").write_text(
         json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
-    manifest = build_manifest(
-        db_id=db_id,
-        bird_dir=bird_dir,
-        pg_dsn=pg_dsn,
-        max_agent_steps=max_agent_steps,
-        skip_agent=skip_agent,
-        model_name=settings.models.llm_model,
-        resolved_prompts=resolved_prompts,
-    )
-    # The corpus IS the treatment, so the digest of what was actually served has to
-    # reach the ledger. Stamped here rather than in the builder because the corpora
-    # do not exist when the manifest is first shaped.
-    metrics.stamp_corpus_hashes(
-        manifest,
-        {
-            "baseline": corpus_baseline,
-            "curated": corpus_curated,
-            "curated_sme": corpus_curated_sme,
-        },
-    )
-    metrics.write_manifest(run_root, manifest)
+    # Stamp the finish. Everything else in the manifest was written before the run, so
+    # this key's ABSENCE is the record that a run did not get here.
+    metrics.write_manifest(run_root, {**manifest, "completed_at_utc": _utc_ts()})
 
     connector.close()
     return result

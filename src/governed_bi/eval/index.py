@@ -38,6 +38,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable
 
+from .atomic import atomic_write_text
+from .metrics import MANIFEST_KNOBS, MANIFEST_SCHEMA_VERSION
+
 DEFAULT_INDEX = Path("runs/index.jsonl")
 
 #: Share of an arm's questions that may score correct for a non-SQL reason before the
@@ -45,22 +48,63 @@ DEFAULT_INDEX = Path("runs/index.jsonl")
 #: rather than the previous absence of one (AUDIT E2).
 FREE_PASS_QUOTABLE_FRACTION = 0.10
 
-#: Knobs that must match before two runs may be compared. Each is (record key,
-#: human label). Keep this list in sync with ``run_datalake``'s resume-drift
-#: guard: both answer the same question — "would mixing these two mislead?" —
-#: one across a resume, one across two runs.
-COMPARABILITY_KEYS: tuple[tuple[str, str], ...] = (
-    ("split", "split"),
-    ("model", "model"),
-    ("prompt_set_hash", "prompt set"),
-    ("route_top_k", "route_top_k"),
-    ("route_llm_pick", "llm_pick"),
-    ("schema_pick_max_columns", "schema_pick_max_columns"),
-    ("use_embedder", "embedder"),
+#: Knobs the gate deliberately does NOT check, each with the reason. This is the only
+#: way a manifest knob leaves :data:`COMPARABILITY_KEYS`, because the list is DERIVED
+#: from :data:`~governed_bi.eval.metrics.MANIFEST_KNOBS` rather than spelled again.
+#:
+#: It used to be spelled again, and it had already drifted: ``llm_temperature`` was
+#: declared a knob — a field documented as changing what a scored row *means* — and
+#: was simply absent here, so two runs decoded at different temperatures compared as
+#: the same experiment. Nothing failed; the key was just not in the tuple. Deriving
+#: makes the next knob's default membership *inclusion*, so skipping the gate takes an
+#: entry here and a reason beside it.
+#:
+#: An exclusion removes the key from the loop entirely. It must never be implemented by
+#: leaving the value ``None`` instead — ``comparable()`` skips a key that is ``None`` on
+#: both sides, so a value-level exclusion would read as agreement and be invisible.
+COMPARABILITY_EXCLUSIONS: dict[str, str] = {
+    "prompt_variants": (
+        "the human-readable stage->variant map. `prompt_set_hash` is the "
+        "machine-checkable identity of the same thing, and it hashes the prompt TEXT, "
+        "so it also catches an in-place edit that leaves the variant ids identical"
+    ),
+    "git_sha": (
+        "two runs built at different commits are the NORMAL case here — that is what "
+        "comparing a change against its baseline IS, so gating on it would declare "
+        "almost every pair in the ledger incomparable. Corrupting *within* one "
+        "directory, which is why it is in RESUME_DRIFT_KEYS instead"
+    ),
+    "skip_agent": (
+        "`quotable()` refuses a --skip-agent run outright, and `manifest_model` forces "
+        "its `model` to None, so a smoke/real pair is already caught by a key that IS "
+        "gated. Corrupting within one directory: RESUME_DRIFT_KEYS"
+    ),
+}
+
+#: Human labels for the derived keys, where the field name is not the clearest label.
+#: Preserved verbatim from the hand-written tuple this replaced, because they appear in
+#: `comparable()`'s diff strings and in the rendered ledger.
+_KNOB_LABELS: dict[str, str] = {
+    "llm_temperature": "temperature",
+    "prompt_set_hash": "prompt set",
+    "route_llm_pick": "llm_pick",
+    "use_embedder": "embedder",
     # The corpus IS the treatment, and it was the one thing the comparability check
     # did not cover (AUDIT E5): two runs over different corpora compared cleanly.
     # `corpus_content_hash` is the per-arm corpus digest; `git_sha` covers the code.
-    ("corpus_content_hash", "corpus content"),
+    "corpus_content_hash": "corpus content",
+}
+
+#: Knobs that must match before two runs may be compared. Each is (record key,
+#: human label). Derived from the register in declaration order, minus
+#: :data:`COMPARABILITY_EXCLUSIONS`, so a knob added to the register joins the gate by
+#: default. Keep in mind that ``run_datalake``'s resume-drift guard reads
+#: :data:`RESUME_DRIFT_KEYS`, which is built from this: both answer the same question —
+#: "would mixing these two mislead?" — one across a resume, one across two runs.
+COMPARABILITY_KEYS: tuple[tuple[str, str], ...] = tuple(
+    (knob.name, _KNOB_LABELS.get(knob.name, knob.name))
+    for knob in MANIFEST_KNOBS
+    if knob.name not in COMPARABILITY_EXCLUSIONS
 )
 
 #: Knobs whose change *within a single run directory* corrupts that run, checked by
@@ -254,6 +298,10 @@ def record_for_run(run_dir: Path | str) -> dict[str, Any]:
 
     record = {
         "run_dir": str(run_dir).replace("\\", "/"),
+        # Lifted so `comparable()` can tell a manifest that GUARANTEES every knob is
+        # present from one that merely happens to carry the knobs it recorded. Without
+        # it the None-on-both-sides rule is applied to records that cannot support it.
+        "manifest_schema_version": manifest.get("manifest_schema_version"),
         "mode": summary.get("mode") or manifest.get("mode"),
         "created_at_utc": manifest.get("created_at_utc"),
         "completed_at_utc": manifest.get("completed_at_utc"),
@@ -693,6 +741,13 @@ def comparable(a: dict[str, Any], b: dict[str, Any]) -> tuple[bool, list[str]]:
     A knob that is ``None`` on both sides counts as matching — two runs that both
     predate a knob did not differ in it. A knob recorded on one side and not the
     other is a genuine difference, because one of them is unknown.
+
+    That rule is only sound where the manifest GUARANTEES every knob is present, which
+    is what ``manifest_schema_version`` records. Without the guarantee, "``None`` on
+    both sides" cannot be told apart from "neither run ever recorded this" — so a pair
+    of pre-guarantee records would be reported as agreeing on knobs they never wrote
+    down, which is the exact failure the guarantee was added to end. Such a pair is
+    refused here rather than passed, because the previous behaviour was to pass it.
     """
     diffs: list[str] = []
     # A run whose manifest could not be read has no configuration to match on, so
@@ -700,6 +755,17 @@ def comparable(a: dict[str, Any], b: dict[str, Any]) -> tuple[bool, list[str]]:
     for side, rec in (("a", a), ("b", b)):
         if rec.get("manifest_readable") is False:
             diffs.append(f"run {side}'s manifest is unreadable, so its knobs are unknown")
+    # Explicitly a REFUSAL, not a warning. A record with no version stamp predates the
+    # presence guarantee, so every knob it omitted reads as "we agree" below.
+    for side, rec in (("a", a), ("b", b)):
+        if rec.get("manifest_schema_version") is None:
+            diffs.append(
+                f"run {side} records no manifest_schema_version (current: "
+                f"{MANIFEST_SCHEMA_VERSION}), so it predates the guarantee that every "
+                "knob is present — a knob it never recorded would be read below as "
+                "agreement. Re-index it with `--reindex` if its manifest carries the "
+                "field, or treat the pair as incomparable"
+            )
     for key, label in COMPARABILITY_KEYS:
         av, bv = a.get(key), b.get(key)
         if av is None and bv is None:
@@ -790,37 +856,6 @@ def _ledger_lock(path: Path, *, timeout_s: float = 30.0):
             pass
 
 
-def _replace_with_retry(tmp: Path, dest: Path, *, timeout_s: float) -> None:
-    """``os.replace``, retried, because on Windows a *reader* can block the swap.
-
-    The lock serialises writers. It does nothing about readers, and on Windows
-    ``os.replace`` over a file any process holds open raises ``PermissionError:
-    [WinError 5]`` — so opening ``runs/index.jsonl`` in an editor, or a virus
-    scanner touching it, or the reader the runbook itself tells the operator to
-    run, is enough to lose the record. Reproduced at 8 writers x 40 appends with one
-    concurrent reader: 8 of 320 records survived.
-
-    The run's own ``summary.json`` and ``manifest.json`` are already on disk by the
-    time this is called, so the data survives a failure here and
-    ``python -m governed_bi.eval.index --add <run_dir>`` re-indexes it. That is a
-    documented recovery, not a reason to let a multi-hour run end on a traceback.
-    """
-    deadline = time.monotonic() + timeout_s
-    try:
-        while True:
-            try:
-                os.replace(tmp, dest)
-                return
-            except PermissionError:
-                if time.monotonic() >= deadline:
-                    raise
-                time.sleep(0.05)
-    finally:
-        # A failed swap used to leave the ``.tmp<pid>`` beside the ledger, one per
-        # failure, where ``load_index`` does not read it and nobody collects it.
-        tmp.unlink(missing_ok=True)
-
-
 def append_run(
     record: dict[str, Any],
     path: Path | str = DEFAULT_INDEX,
@@ -832,10 +867,11 @@ def append_run(
     Upsert rather than append: a resumed run is written twice and must leave one
     row, or the ledger's own count of runs becomes a count of invocations.
 
-    Locked and written atomically. The rewrite is the whole file, so an
-    unsynchronised writer loses other runs' records, and a kill mid-write would
-    truncate the ledger rather than damage a tail — ``os.replace`` makes the
-    swap atomic on both POSIX and Windows.
+    Locked and written atomically through :func:`governed_bi.eval.atomic.atomic_write_text`.
+    The rewrite is the whole file, so an unsynchronised writer loses other runs'
+    records, and a kill mid-write would truncate the ledger rather than damage a tail.
+    This path used to swap with a retry but write with a bare ``Path.write_text``, so
+    the bytes were not synced before the swap; the shared writer has both halves.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -847,9 +883,7 @@ def append_run(
         text = "".join(
             json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n" for r in existing
         )
-        tmp = path.with_suffix(path.suffix + f".tmp{os.getpid()}")
-        tmp.write_text(text, encoding="utf-8")
-        _replace_with_retry(tmp, path, timeout_s=lock_timeout_s)
+        atomic_write_text(path, text, timeout_s=lock_timeout_s)
     return path
 
 
@@ -1032,9 +1066,7 @@ def prune_index(
             text = "".join(
                 json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n" for r in kept
             )
-            tmp = path.with_suffix(path.suffix + f".tmp{os.getpid()}")
-            tmp.write_text(text, encoding="utf-8")
-            _replace_with_retry(tmp, path, timeout_s=30.0)
+            atomic_write_text(path, text, timeout_s=30.0)
     return dropped
 
 

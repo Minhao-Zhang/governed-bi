@@ -14,11 +14,17 @@ where an *absent* key is indistinguishable from "both runs agree".
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 
 from governed_bi.eval import metrics
 from governed_bi.eval.index import COMPARABILITY_KEYS, RESUME_DRIFT_KEYS
 from governed_bi.eval.run_datalake import _summarise_rows
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+EVAL_DIR = Path(metrics.__file__).resolve().parent
 
 
 def _manifest(mode: str, **over):
@@ -34,9 +40,36 @@ def _manifest(mode: str, **over):
         route_llm_pick=False,
         schema_pick_max_columns=12,
         use_embedder=True,
+        llm_temperature=0.0,
+        arms=("baseline", "curated"),
+        oracles=(),
+        replicate_of=None,
+        db_ids=None,
+        limit=None,
+        limit_dbs=None,
+        question_scope_hash="abc123",
     )
     base.update(over)
     return metrics.build_manifest(**base)  # type: ignore[arg-type]
+
+
+def _single_manifest(**over):
+    """The single-schema driver's own builder, with its required arguments."""
+    from governed_bi.eval.run_experiment import build_manifest
+
+    base = dict(
+        db_id="beer_factory",
+        bird_dir="/d",
+        pg_dsn="host=h port=5435",
+        max_agent_steps=8,
+        skip_agent=False,
+        model_name="gpt-5.6-luna",
+        resolved_prompts={},
+        limit=None,
+        llm_temperature=None,
+    )
+    base.update(over)
+    return build_manifest(**base)  # type: ignore[arg-type]
 
 
 # --------------------------------------------------------------------------- #
@@ -84,28 +117,20 @@ def test_two_single_schema_runs_over_different_corpora_are_not_comparable():
     """The end-to-end regression, through the real driver builder and the real gate.
 
     Before the register, this pair returned ``comparable() == True``: six of the
-    eight keys were absent from this driver's manifest, ``comparable()`` skips a key
-    that is ``None`` on both sides, and the two that remained (``model``,
+    eight keys of the time were absent from this driver's manifest, ``comparable()``
+    skips a key that is ``None`` on both sides, and the two that remained (``model``,
     ``prompt_set_hash``) were identical. So a run over corpus A on the test split
     and a run over corpus B on the train split were reported as the same
     configuration — by the driver whose numbers were quoted.
+
+    ``split`` is set by hand here rather than passed: this driver scores test only,
+    which is why it no longer takes a ``split`` parameter. The gate still has to fire
+    on a directory whose manifest says otherwise.
     """
     from governed_bi.eval.index import comparable
-    from governed_bi.eval.run_experiment import build_manifest
 
-    def single(**over):
-        return build_manifest(
-            db_id="beer_factory",
-            bird_dir="/d",
-            pg_dsn="host=h port=5435",
-            max_agent_steps=8,
-            skip_agent=False,
-            model_name="gpt-5.6-luna",
-            resolved_prompts={},
-            **over,
-        )
-
-    a, b = single(), single(split="train")
+    a, b = _single_manifest(), _single_manifest()
+    b["split"] = "train"
     a["corpus_content_hash"] = "sha256:corpusA"
     b["corpus_content_hash"] = "sha256:corpusB"
 
@@ -120,23 +145,61 @@ def test_two_single_schema_runs_of_the_same_configuration_stay_comparable():
     knobs are ``None`` on both sides because neither run routed, and that is a
     genuine agreement, not a missing key."""
     from governed_bi.eval.index import comparable
-    from governed_bi.eval.run_experiment import build_manifest
 
     def single():
-        m = build_manifest(
-            db_id="beer_factory",
-            bird_dir="/d",
-            pg_dsn="host=h port=5435",
-            max_agent_steps=8,
-            skip_agent=False,
-            model_name="gpt-5.6-luna",
-            resolved_prompts={},
-        )
+        m = _single_manifest()
         m["corpus_content_hash"] = "sha256:same"
         return m
 
     ok, diffs = comparable(single(), single())
     assert ok, diffs
+
+
+def test_the_single_schema_driver_records_the_temperature_it_actually_used():
+    """Presence is all ``validate_manifest`` can check, and a silent default satisfies
+    it. ``llm_temperature`` defaulted to ``None`` and this driver never passed it, so
+    every single-schema manifest recorded "provider default" for runs whose configured
+    temperature really was forwarded to the model
+    (``llm.langchain_client.from_config``) — and every gate was satisfied, because the
+    key was there."""
+    assert _single_manifest(llm_temperature=0.7)["llm_temperature"] == 0.7
+    # And ``None`` still means "never set, so the provider default applied" — now
+    # because a caller said so rather than because nobody did.
+    assert _single_manifest(llm_temperature=None)["llm_temperature"] is None
+
+
+@pytest.mark.parametrize(
+    "knob",
+    ["llm_temperature", "arms", "oracles", "limit", "db_ids", "question_scope_hash"],
+)
+def test_no_manifest_knob_or_scope_field_may_be_defaulted(knob):
+    """A defaulted parameter records a value the run never used and passes every gate.
+    Parametrized over the register's own fields, so the next one added cannot quietly
+    acquire a default."""
+    base = dict(
+        mode="datalake",
+        bird_dir="/data/bird",
+        split="test",
+        model_name="m",
+        prompt_variants={},
+        skip_agent=False,
+        created_at_utc="20260728T000000Z",
+        route_top_k=3,
+        route_llm_pick=False,
+        schema_pick_max_columns=12,
+        use_embedder=True,
+        llm_temperature=0.0,
+        arms=(),
+        oracles=(),
+        replicate_of=None,
+        db_ids=None,
+        limit=None,
+        limit_dbs=None,
+        question_scope_hash=None,
+    )
+    base.pop(knob)
+    with pytest.raises(TypeError, match=knob):
+        metrics.build_manifest(**base)  # type: ignore[arg-type]
 
 
 def test_the_validator_rejects_a_manifest_missing_a_gate_key():
@@ -218,6 +281,155 @@ def test_a_resume_keeps_the_declared_hash_so_the_caller_can_compare(tmp_path):
     assert m["corpus_content_hash_observed"] == observed
 
 
+# A manifest key set anywhere other than inside ``build_manifest``. Both drivers and
+# ``stamp_corpus_hashes`` add keys after the fact, and those are exactly the four that
+# hid from the register: no builder returns them, so a test that only inspects a built
+# manifest cannot see them.
+_MANIFEST_MUTATION_PATTERNS = (
+    r'manifest\["(\w+)"\]\s*=',
+    r'\{\*\*(?:manifest|prior),\s*"(\w+)"',
+)
+
+
+def _manifest_keys_added_outside_the_builder() -> set[str]:
+    found: set[str] = set()
+    for name in ("metrics.py", "run_datalake.py", "run_experiment.py"):
+        src = (EVAL_DIR / name).read_text(encoding="utf-8")
+        for pattern in _MANIFEST_MUTATION_PATTERNS:
+            found |= set(re.findall(pattern, src))
+    return found
+
+
+def test_the_post_build_manifest_scan_still_finds_the_known_mutations():
+    """A canary for the scan below. If the drivers change how they stamp a manifest and
+    these patterns stop matching, the emitted-but-undeclared check silently becomes a
+    check of the builder only — which is the state that let four fields hide."""
+    found = _manifest_keys_added_outside_the_builder()
+    for name in (
+        "corpus_content_hash_observed",
+        "corpus_content_hash_by_arm",
+        "completed_at_utc",
+        "resumes",
+    ):
+        assert name in found, (
+            f"the scan no longer sees {name} being written; _MANIFEST_MUTATION_PATTERNS "
+            "is stale and this file's manifest check has gone blind"
+        )
+
+
+def test_the_manifest_emits_exactly_the_declared_field_set(tmp_path):
+    """The check the manifest side did not have, and whose absence made this module's
+    own opening claim false.
+
+    ``corpus_content_hash_observed`` and ``corpus_content_hash_by_arm`` are written by
+    ``stamp_corpus_hashes`` twelve lines below the register that failed to declare them;
+    ``db_id`` by ``run_experiment.build_manifest``; ``completed_at_utc`` by the pooled
+    driver at write time. All four reached ``manifest.json`` undeclared, because the
+    summary had this test and the manifest did not.
+    """
+    from governed_bi.eval.run_datalake import _build_manifest
+
+    pooled = _build_manifest(
+        bird_dir=tmp_path,
+        split="test",
+        model_name="gpt-5.6-luna",
+        prompt_variants={},
+        route_top_k=3,
+        route_llm_pick=False,
+        schema_pick_max_columns=12,
+        use_embedder=True,
+        skip_agent=False,
+        serve_workers=1,
+    )
+    single = _single_manifest()
+
+    root = tmp_path / "corpus_baseline" / "beer_factory" / "tables"
+    root.mkdir(parents=True)
+    (root / "t.yaml").write_text("asset_type: table\nid: tbl_x\n", encoding="utf-8")
+    for m in (pooled, single):
+        metrics.stamp_corpus_hashes(m, {"baseline": tmp_path / "corpus_baseline"})
+
+    emitted = set(pooled) | set(single) | _manifest_keys_added_outside_the_builder()
+    declared = {m.name for m in metrics.MANIFEST_DECLARED}
+
+    assert not emitted - declared, (
+        f"manifest.json carries undeclared fields: {sorted(emitted - declared)} — "
+        "add them to governed_bi.eval.metrics"
+    )
+    # The other direction, for the fields every manifest must carry. The stamped and
+    # mode-specific groups are deliberately excluded: requiring them would reject the
+    # pre-run write that exists so a crashed run still leaves its knobs on disk.
+    required = {m.name for m in metrics.MANIFEST_FIELDS}
+    assert not required - (set(pooled) & set(single)), (
+        "declared-and-required fields missing from a built manifest: "
+        f"{sorted(required - (set(pooled) & set(single)))}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# The comparability gate is derived from the register, not spelled beside it
+# --------------------------------------------------------------------------- #
+
+
+def test_every_declared_knob_is_either_gated_or_explicitly_excused():
+    """The defect: ``llm_temperature`` was declared a knob — a field documented as
+    changing what a scored row means — and was simply absent from
+    ``COMPARABILITY_KEYS``, so two runs decoded at different temperatures compared as
+    the same experiment. Nothing failed; the key was just not in the tuple."""
+    from governed_bi.eval.index import COMPARABILITY_EXCLUSIONS
+
+    gated = {k for k, _ in COMPARABILITY_KEYS}
+    declared = {m.name for m in metrics.MANIFEST_KNOBS}
+    assert gated | set(COMPARABILITY_EXCLUSIONS) == declared, (
+        "every declared knob must be gated or carry a written reason not to be; "
+        f"ungated and unexcused: {sorted(declared - gated - set(COMPARABILITY_EXCLUSIONS))}"
+    )
+    # A stale exclusion is its own hazard: it reads as a considered decision about a
+    # knob that no longer exists.
+    assert not set(COMPARABILITY_EXCLUSIONS) - declared
+    assert "llm_temperature" in gated
+    assert all(reason.strip() for reason in COMPARABILITY_EXCLUSIONS.values())
+
+
+def test_two_runs_at_different_temperatures_are_not_comparable():
+    from governed_bi.eval.index import comparable
+
+    a = _single_manifest(llm_temperature=0.0)
+    b = _single_manifest(llm_temperature=0.7)
+    for m, h in ((a, "sha256:same"), (b, "sha256:same")):
+        m["corpus_content_hash"] = h
+    ok, diffs = comparable(a, b)
+    assert not ok
+    assert any("temperature" in d for d in diffs), diffs
+
+
+def test_a_record_with_no_manifest_schema_version_is_refused_not_passed():
+    """``comparable()`` skips a knob that is ``None`` on both sides, which is sound only
+    where the manifest guarantees every knob is present. A record written before that
+    guarantee has no such promise, so its omissions would read as agreement — the exact
+    failure the guarantee exists to end. Refused rather than silently passed."""
+    from governed_bi.eval.index import comparable
+
+    modern = _single_manifest()
+    modern["corpus_content_hash"] = "sha256:same"
+    legacy = dict(modern)
+    del legacy["manifest_schema_version"]
+
+    ok, diffs = comparable(modern, legacy)
+    assert not ok
+    assert any("manifest_schema_version" in d for d in diffs), diffs
+    # Both sides missing is worse, not better.
+    older = dict(legacy)
+    assert not comparable(legacy, older)[0]
+    # ...and a pair that both carry it compares on the knobs, as before.
+    assert comparable(modern, dict(modern))[0]
+
+
+def test_the_version_stamp_is_set_by_the_builder_so_no_call_site_changed():
+    for m in (_manifest("datalake"), _single_manifest()):
+        assert m["manifest_schema_version"] == metrics.MANIFEST_SCHEMA_VERSION
+
+
 # --------------------------------------------------------------------------- #
 # Arm summary
 # --------------------------------------------------------------------------- #
@@ -291,25 +503,122 @@ def test_quotability_free_pass_counters_are_declared():
 # --------------------------------------------------------------------------- #
 
 
+def _doc() -> str:
+    return (REPO_ROOT / "docs" / "eval-metrics.md").read_text(encoding="utf-8")
+
+
 def test_the_generated_doc_lists_every_declared_field():
     """``docs/eval-metrics.md`` is generated from the register. A stale generated doc
     is worse than no doc, so the field names have to still be in it — the generator
     is `scripts/gen_eval_metrics_doc.py`."""
-    from pathlib import Path
-
-    doc = (Path(__file__).resolve().parents[1] / "docs" / "eval-metrics.md").read_text(
-        encoding="utf-8"
-    )
+    doc = _doc()
     declared = (
-        [m.name for m in metrics.MANIFEST_FIELDS]
+        [m.name for m in metrics.MANIFEST_DECLARED]
         + list(metrics.SUMMARY_FIELDS)
         + list(metrics.ROW_FIELDS)
+        + list(metrics.STAGE_EVENT_FIELDS)
+        + list(metrics.SPLIT_GAP_RATES)
+        + list(metrics.SPLIT_GAP_FIELDS)
     )
     absent = sorted({name for name in declared if f"`{name}`" not in doc})
     assert not absent, (
         f"docs/eval-metrics.md does not mention {absent} — "
         "re-run scripts/gen_eval_metrics_doc.py"
     )
+
+
+def test_the_counts_printed_in_the_doc_match_the_register():
+    """Names in backticks were the only thing checked, and a count is not a name.
+
+    The generator summed rates + counts + means + blocks and omitted
+    ``SUMMARY_CONDITIONALS`` entirely, so the page advertised 80 summary fields against
+    86 declared — and every one of the six missing fields still appeared in the counts
+    table, so the name-grep above passed. Each count now comes from ``len()`` of the
+    register tuple; these assertions are what makes that checkable rather than claimed.
+    """
+    doc = _doc()
+    for expected in (
+        f"| `manifest.json` | {len(metrics.MANIFEST_DECLARED)} "
+        f"({len(metrics.MANIFEST_FIELDS)} in every run) |",
+        f"| `generations.<arm>.jsonl` | {len(metrics.ROW_FIELDS)} per (question, arm) |",
+        f"| `summary.json` | {len(metrics.SUMMARY_FIELDS)} |",
+        f"| `stage_events.jsonl` | {len(metrics.STAGE_EVENT_FIELDS)} "
+        "per (question, arm, stage) |",
+        f"| `split_gap.json` | {len(metrics.SPLIT_GAP_FIELDS)} |",
+    ):
+        assert expected in doc, (
+            f"docs/eval-metrics.md does not print {expected!r} — the count it prints "
+            "disagrees with the register; re-run scripts/gen_eval_metrics_doc.py"
+        )
+
+
+def test_the_single_schema_summary_emits_nothing_undeclared():
+    """The direction the doc's "in both directions" claim overstated.
+
+    ``run_experiment`` hand-builds its ``summary.json`` from ``ArmSummary`` plus three
+    nested blocks, and nothing checked it against the register at all — only the pooled
+    driver's ``_summarise_rows`` was. The reverse direction genuinely does not apply
+    here: this driver reports a documented SUBSET of the pooled fields, so
+    declared-but-absent is expected and only emitted-but-undeclared is a defect.
+    """
+    from dataclasses import fields
+
+    from governed_bi.eval.run_experiment import ArmSummary
+
+    # ``run_experiment`` writes each arm as ``asdict(ArmSummary)`` and then attaches
+    # these three blocks under the same ``arms.<arm>`` path the pooled driver uses.
+    emitted = {f.name for f in fields(ArmSummary)} | {"cost", "errors", "treatment"}
+    undeclared = sorted(emitted - set(metrics.SUMMARY_FIELDS))
+    assert not undeclared, (
+        f"the single-schema arm summary emits undeclared fields: {undeclared} — "
+        "add them to governed_bi.eval.metrics, or the register does not describe the "
+        "driver whose numbers were historically quoted"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# The other two artifacts
+# --------------------------------------------------------------------------- #
+
+
+def test_the_stage_event_register_matches_what_the_driver_writes():
+    from governed_bi.eval.run_datalake import _stage_event_rows
+
+    (row,) = _stage_event_rows(
+        {"stage_events": [{"stage": "route", "status": "ok", "ms": 12, "detail": None}]},
+        question_id="q1",
+        arm="curated",
+        db_id="beer_factory",
+    )
+    assert set(row) == set(metrics.STAGE_EVENT_FIELDS)
+
+
+def test_the_split_gap_rates_are_the_ones_split_gap_actually_gaps():
+    """``split_gap.json``'s seven rates were undeclared, and the doc did not list the
+    file among a run's artifacts at all. Declared here so a rate renamed in
+    ``SUMMARY_RATES`` cannot leave ``split_gap`` reading a key nobody writes and
+    reporting ``None`` gaps that read as "not measured on one split"."""
+    from governed_bi.eval import split_gap
+
+    assert metrics.SPLIT_GAP_RATES == split_gap.GAPPED_RATES
+    rates = {m.name for m in metrics.SUMMARY_RATES}
+    assert not set(metrics.SPLIT_GAP_RATES) - rates, (
+        "a gapped rate that is not a declared summary rate cannot be read off either "
+        f"split's summary: {sorted(set(metrics.SPLIT_GAP_RATES) - rates)}"
+    )
+
+
+def test_the_split_gap_file_fields_are_the_ones_it_writes(tmp_path):
+    from governed_bi.eval.split_gap import split_gap, write_split_gap
+
+    report = split_gap(
+        {"arms": {"curated": {"n": 4, "ex_lenient": 0.5}}},
+        {"arms": {"curated": {"n": 4, "ex_lenient": 0.25}}},
+    )
+    assert not set(report) - set(metrics.SPLIT_GAP_FIELDS)
+    # The error branch too: it replaces the rest of the block rather than joining it.
+    broken = write_split_gap(tmp_path, tmp_path / "nope", tmp_path / "nope")
+    assert not set(broken) - set(metrics.SPLIT_GAP_FIELDS)
 
 
 def test_the_row_register_has_no_duplicates_across_its_groups():
