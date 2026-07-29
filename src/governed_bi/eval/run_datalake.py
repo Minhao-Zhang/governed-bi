@@ -3729,6 +3729,11 @@ def run_datalake(
     bird_dir: Path,
     pg_dsn: str,
     out_dir: Path,
+    # Where the arm corpora live. Defaults to ``out_dir``, which is the single-split
+    # case. Split out so two scored splits can share ONE build: the curator is
+    # stochastic, so rebuilding per split would make a train-vs-test gap a mix of
+    # overfitting and curator variance — the confound the gap exists to measure.
+    corpus_dir: Path | None = None,
     db_ids: list[str] | None = None,
     arms: tuple[str, ...] = _ARMS,
     limit_dbs: int | None = None,
@@ -3801,7 +3806,9 @@ def run_datalake(
     load_dotenv()
     dataset_dir = bird_dir / "eval_dataset"
     out_dir.mkdir(parents=True, exist_ok=True)
-    roots = {arm: out_dir / f"corpus_{arm}" for arm in _ARMS}
+    corpus_dir = out_dir if corpus_dir is None else corpus_dir
+    corpus_dir.mkdir(parents=True, exist_ok=True)
+    roots = {arm: corpus_dir / f"corpus_{arm}" for arm in _ARMS}
     if split == "train":
         print(
             "\n*** NOTE: --split train scores the questions the curator was BUILT "
@@ -3849,7 +3856,7 @@ def run_datalake(
         Environment.dev,
         models=base_settings.models,
         datasource=datasource,
-        corpus_root=str(out_dir),
+        corpus_root=str(corpus_dir),
     )
     # D5 (deliver-and-grade semantic failures); D15 routing knobs.
     settings = replace(
@@ -3960,7 +3967,7 @@ def run_datalake(
     # Inside the run directory, not a system temp dir: a build that dies partway
     # leaves its staging root next to the run it belongs to, where it can be
     # inspected, rather than somewhere the operator has to be told about.
-    staging_root = out_dir / "_staging"
+    staging_root = corpus_dir / "_staging"
     build_workers = resolve_workers(build_workers)
 
     built = run_build_phase(
@@ -4563,11 +4570,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", type=Path, default=Path("runs/datalake"))
     p.add_argument(
         "--split",
-        choices=_SPLITS,
+        choices=(*_SPLITS, "both"),
         default="test",
         help=(
-            "Question split to score. 'train' is larger but is what the curator "
-            "was built from — a diagnostic, not a held-out result."
+            "Question split to score. 'train' is larger but is what the curator was "
+            "built from — a diagnostic, not a held-out result, and eval.index.quotable "
+            "refuses it. 'both' builds the corpora ONCE and scores each split into its "
+            "own subdirectory, then writes split_gap.json: train-minus-test per arm, "
+            "which is how much of an arm's score does not survive a new question. "
+            "Sharing the build is the point — the curator is stochastic, so rebuilding "
+            "per split would mix overfitting with curator variance."
         ),
     )
     p.add_argument(
@@ -4773,11 +4785,74 @@ def main(argv: list[str] | None = None) -> int:
     else:
         out_dir = args.out / _utc_ts()
         print(f"run dir: {out_dir}")
+    # ``both`` scores each split into its own subdirectory off ONE corpus build.
+    # Per-split directories rather than per-split filenames inside one: every
+    # downstream reader (``analyse_run``, ``index_run``, ``quotable``, the resume
+    # guard) is keyed to a run directory holding one split's artifacts, and the
+    # resume guard refuses a directory whose manifest names a different ``--split``
+    # precisely so two splits cannot be mixed in one generations file.
+    splits = _SPLITS if args.split == "both" else (args.split,)
+    corpus_dir = out_dir if len(splits) == 1 else out_dir / "corpora"
+    results: dict[str, dict] = {}
+    for split in splits:
+        split_dir = out_dir if len(splits) == 1 else out_dir / split
+        if len(splits) > 1:
+            print(f"\n=== scoring split {split!r} -> {split_dir} ===")
+        result = _score_one_split(
+            args,
+            p,
+            bird_dir=bird_dir,
+            out_dir=split_dir,
+            corpus_dir=corpus_dir,
+            split=split,
+            arms=arms,
+            oracles=oracles,
+            prompt_overrides=prompt_overrides,
+            workers=workers,
+            build_workers=build_workers,
+        )
+        results[split] = result
+    if len(splits) > 1:
+        from .split_gap import format_split_gap, write_split_gap
+
+        gap = write_split_gap(out_dir, out_dir / "train", out_dir / "test")
+        print("\ntrain-vs-test gap (diagnostic; train is never quotable):")
+        print(format_split_gap(gap))
+
+    # 2, not 1: distinguishes "ran to completion but is not quotable" from a crash.
+    # With ``--split both`` the train split is unquotable BY DESIGN, so its verdict
+    # must not decide the exit code — otherwise every combined run exits 2 and the
+    # signal stops meaning anything. Only the held-out split gates.
+    gating = results.get("test") or results[splits[0]]
+    return 0 if gating.get("quotable", True) else 2
+
+
+def _score_one_split(
+    args,
+    p,
+    *,
+    bird_dir: Path,
+    out_dir: Path,
+    corpus_dir: Path,
+    split: str,
+    arms: tuple[str, ...],
+    oracles: tuple[str, ...],
+    prompt_overrides: dict[str, str],
+    workers: int,
+    build_workers: int,
+) -> dict:
+    """One split's build-or-reuse, serve, score and report.
+
+    Extracted from ``main`` so ``--split both`` runs it twice without duplicating the
+    twenty-odd argument hand-off. The second call finds every corpus already complete
+    under ``corpus_dir`` and skips the build phase.
+    """
     try:
         result = run_datalake(
             bird_dir=bird_dir,
             pg_dsn=args.pg_dsn,
             out_dir=out_dir,
+            corpus_dir=corpus_dir,
             db_ids=[d.strip() for d in args.dbs.split(",")] if args.dbs else None,
             arms=arms,
             limit_dbs=args.limit_dbs,
@@ -4785,7 +4860,7 @@ def main(argv: list[str] | None = None) -> int:
             max_agent_steps=args.max_agent_steps,
             skip_agent=args.skip_agent,
             resume=not args.no_resume,
-            split=args.split,
+            split=split,
             route_top_k=args.route_top_k,
             schema_pick_max_columns=args.schema_pick_max_columns,
             route_llm_pick=not args.no_llm_pick,
@@ -4835,8 +4910,7 @@ def main(argv: list[str] | None = None) -> int:
 
         flush_tracing()
 
-    # 2, not 1: distinguishes "ran to completion but is not quotable" from a crash.
-    return 0 if result.get("quotable", True) else 2
+    return result
 
 
 if __name__ == "__main__":

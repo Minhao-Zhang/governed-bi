@@ -340,9 +340,55 @@ The full 69-schema run has **not** been executed. Two operational notes for it:
 `--split test` (default) scores the held-out split. `--split train` scores the
 larger training split, but those are the very questions the curator read to build
 `curated` / `curated_sme`, so it is a **diagnostic for comparing routing or prompt
-changes at higher power, never a held-out result**.
-The driver prints a warning and records the split in `manifest.json`,
-`summary.json` and every generation row.
+changes at higher power, never a held-out result**. `eval.index.quotable` refuses a
+train-scored run outright ("scored on the train split, which the curator read — a
+diagnostic, not a result"). The driver records the split in `manifest.json`,
+`summary.json` and every generation row, and `split` is a comparability key, so a
+train run can never be compared against a test run by accident.
+
+### `--split both`: the overfitting measure
+
+```bash
+uv run python -m governed_bi.eval.run_datalake --split both --arms baseline,seeded,curated,curated_sme
+```
+
+Builds the corpora **once** and scores each split against them, producing the full
+artifact set per split:
+
+```
+runs/<ts>/corpora/          corpus_baseline/ corpus_seeded/ ... (built once)
+runs/<ts>/test/             generations.<arm>.jsonl, stage_events.jsonl,
+runs/<ts>/train/              summary.json, manifest.json, analysis.json
+runs/<ts>/split_gap.json    train-minus-test per arm
+```
+
+Per-split *directories* rather than per-split filenames, because every downstream
+reader — `analyse_run`, `index_run`, `quotable`, the resume guard — is keyed to a run
+directory holding exactly one split's artifacts. Each split is indexed into the
+ledger separately, and the train one lands not-quotable.
+
+**Sharing the build is the point, not an optimisation.** The curator is stochastic,
+so rebuilding between splits would make the gap a mixture of overfitting and curator
+variance — which is the confound the gap exists to measure. This is why
+`run_datalake` takes `corpus_dir` separately from `out_dir`.
+
+Read `split_gap.json` as: `gap = train − test` per arm, i.e. how much of that arm's
+score did not survive being asked something new. A *small* gap says the corpus
+encodes something reusable; a *large* one says it encodes the training statements.
+The gap is within-arm, so it is **not** paired and carries no p-value — treat the
+sign as informative and the magnitude as approximate. Only `ex_lenient`,
+`ex_strict`, `ex_gradeable`, the two conditional EXs, `routing_recall` and
+`schema_pick_accuracy` are gapped; gapping `crash_rate` or `refusal_rate` would
+invite reading operational noise as overfitting.
+
+Exit code comes from the **held-out** split only. train is unquotable by design, so
+letting it gate would make every combined run exit 2 and the signal stop meaning
+anything.
+
+One asymmetry worth knowing: on the train split every scored statement is by
+definition its own train twin, so `ex_no_twin` — the defensible headline on test —
+is empty there and `ex_twin` equals the pooled EX. The train split's headline is the
+gap, not its own EX.
 
 Serve-phase resume is separate from the build resume above. Rows stream to
 `generations.<arm>.jsonl` as they are scored, so an interrupted run keeps its

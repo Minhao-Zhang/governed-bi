@@ -817,6 +817,33 @@ Removing it did not hide the confound: the step is now adjacent, so nothing is
 step declares two mechanisms. Same shape as `baseline → seeded`, which is adjacent
 and changes three things.
 
+## The train split, and the gap
+
+`--split both` builds the corpora once and scores the held-out and training splits
+against the same corpora, writing `split_gap.json` with `train − test` per arm.
+
+The training questions are the ones the curator read: `seed_from_train_sql` extracts
+its joins and metrics from their gold SQL, and `_mark_columns_absent_from_gold`
+derives the decoy mask from it. So a curated arm's train EX is partly recall of
+statements it was built from, and `eval.index.quotable` refuses a train-scored run
+for exactly that reason. Do not quote it, and do not average the two splits.
+
+What the pair buys is the gap, which is the overfitting measure this benchmark
+otherwise has no number for:
+
+- a **small** gap says the corpus encodes something reusable;
+- a **large** gap says it encodes the training statements.
+
+That distinction is the same one `ex_twin` / `ex_no_twin` addresses per question, at
+corpus level instead. It is a within-arm quantity, so it is not paired and gets no
+p-value — read the sign, not the digits. And note that on train every scored
+statement is its own train twin by construction, so `ex_no_twin` is empty there;
+the train split's headline is the gap, not its own EX.
+
+Both splits must share one build. The curator is stochastic, so a rebuild between
+them mixes overfitting with curator variance and the gap stops meaning either — which
+is why `run_datalake` takes `corpus_dir` separately from `out_dir`.
+
 ## Concurrency, and what it is allowed to change
 
 Two independent knobs, because they exhaust different resources. `--workers` fans out
