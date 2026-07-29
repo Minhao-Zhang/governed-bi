@@ -1,22 +1,28 @@
-"""Project the YAML corpus into an in-memory property graph (networkx).
+"""Project the corpus's join structure into an in-memory graph (networkx).
 
-Edges (all derived from YAML; Neo4j never authored) per ``docs/asset-schemas.md``:
+One consumer, one shape: :mod:`governed_bi.graph.planner` walks ``NODE_TABLE``
+nodes over ``JOINS_TO`` edges to plan joins, find the join neighbourhood L4
+licenses, and detect a missing cross-schema edge. That is the whole contract.
 
-| Edge          | From -> To                | Sourced from            |
-|---------------|---------------------------|-------------------------|
-| HAS_COLUMN    | Table -> Column           | inline ``columns[]``    |
-| JOINS_TO      | Table -> Table            | ``join`` (on/card/cost) |
-| REFERENCES    | Column -> Column          | ``column.references``   |
-| BINDS_TO      | Term -> Metric/Table/Col  | ``term.binding``        |
-| SYNONYM_OF /  | Term -> Term              | ``term.related_terms``  |
-| BROADER_THAN /|                           |                         |
-| USES          |                           |                         |
-| DERIVED_FROM  | Metric -> Table/Column    | ``metric.base_table``   |
+| Edge     | From -> To     | Sourced from                              |
+|----------|----------------|-------------------------------------------|
+| JOINS_TO | Table -> Table | ``join`` (on/cardinality/cost/confidence) |
+
+This used to also project column, term and metric nodes with ``HAS_COLUMN``,
+``REFERENCES``, ``BINDS_TO``, ``DERIVED_FROM`` and term-relation edges. Nothing
+in the serve path ever walked them — only ``tests/test_graph.py`` did — while
+:func:`build_graph` runs once per turn, so every turn paid to build about 60% of
+a graph it would not read. The asset-to-asset graph the **API** serves is a
+separate derivation in :func:`governed_bi.viz.presenter.knowledge_graph`, built
+straight from the corpus; that one is the richer view, and it is the one to
+extend if the audit surface needs more edge types.
 
 The graph is a rebuildable projection, not a source of truth: it assumes the
-corpus already passed ``validate_corpus`` (all references resolve), so edges are
-added unconditionally. Feeding an unvalidated corpus with a dangling reference
-would create a bare target node; validate first.
+corpus already passed ``validate_corpus`` (all references resolve). Join
+endpoints are still guarded, because ``for_analyst()`` can drop an excluded table
+while a surviving join still points at it, and networkx would otherwise
+auto-create a bare, kind-less node — re-materializing the excluded asset in the
+Analyst-facing graph.
 """
 
 from __future__ import annotations
@@ -25,38 +31,22 @@ from typing import TYPE_CHECKING
 
 import networkx as nx
 
-from ..corpus.ids import derive_column_id
-from ..corpus.schemas import JoinAsset, MetricAsset, TableAsset, TermAsset
+from ..corpus.schemas import JoinAsset, TableAsset
 
 if TYPE_CHECKING:
     from ..corpus import Corpus
 
 # ── Node kinds (the ``kind`` node attribute) ──
 NODE_TABLE = "table"
-NODE_COLUMN = "column"
-NODE_TERM = "term"
-NODE_METRIC = "metric"
 
 # ── Edge types (the ``type`` edge attribute, also the MultiDiGraph edge key) ──
-EDGE_HAS_COLUMN = "HAS_COLUMN"
 EDGE_JOINS_TO = "JOINS_TO"
-EDGE_REFERENCES = "REFERENCES"
-EDGE_BINDS_TO = "BINDS_TO"
-EDGE_DERIVED_FROM = "DERIVED_FROM"
-# Term -> term edges use the relation value upper-cased (SYNONYM_OF / BROADER_THAN / USES).
 
 
 def build_graph(corpus: "Corpus") -> nx.MultiDiGraph:
-    """Build the property graph from a parsed corpus. Rebuildable at any time.
-
-    Pass the ``Corpus.for_analyst()`` view so ``governance.excluded`` assets are
-    already absent (D6): the Analyst-facing graph must not surface excluded
-    tables/columns, same as retrieval and the presented schema.
-    """
+    """Build the join graph from a parsed corpus. Rebuildable at any time."""
     g = nx.MultiDiGraph()
 
-    # Pass 1: create every node (tables + inline columns, terms, metrics) so the
-    # cross-asset edges in pass 2 never auto-create a bare, kind-less node.
     for a in corpus.assets:
         if isinstance(a, TableAsset):
             g.add_node(
@@ -66,46 +56,10 @@ def build_graph(corpus: "Corpus") -> nx.MultiDiGraph:
                 schema=a.schema,
                 row_count=a.row_count,
             )
-            for col in a.columns:
-                col_id = derive_column_id(a.id, col.physical_name)
-                g.add_node(
-                    col_id,
-                    kind=NODE_COLUMN,
-                    physical_name=col.physical_name,
-                    table=a.id,
-                    role=col.role.value if col.role else None,
-                    reliability=col.reliability.status.value,
-                    excluded=col.governance.excluded,
-                )
-                g.add_edge(a.id, col_id, key=EDGE_HAS_COLUMN, type=EDGE_HAS_COLUMN)
-        elif isinstance(a, TermAsset):
-            g.add_node(a.id, kind=NODE_TERM, name=a.name)
-        elif isinstance(a, MetricAsset):
-            g.add_node(
-                a.id,
-                kind=NODE_METRIC,
-                name=a.name,
-                base_table=a.base_table,
-                expression=a.expression,
-            )
-
-    # Pass 2: cross-asset edges. Endpoints are guarded: for_analyst() can drop an
-    # excluded table/column while a surviving FK reference or join still points at
-    # it, and networkx would otherwise auto-create a bare, kind-less node,
-    # re-materializing the excluded asset in the Analyst-facing graph. Skipping such
-    # an edge keeps the graph free of both phantom nodes and excluded assets.
-    def _edge(u: str, v: str, **attrs: object) -> None:
-        if u in g and v in g:
-            g.add_edge(u, v, **attrs)
 
     for a in corpus.assets:
-        if isinstance(a, TableAsset):
-            for col in a.columns:
-                if col.references:
-                    col_id = derive_column_id(a.id, col.physical_name)
-                    _edge(col_id, col.references, key=EDGE_REFERENCES, type=EDGE_REFERENCES)
-        elif isinstance(a, JoinAsset):
-            _edge(
+        if isinstance(a, JoinAsset) and a.left_table in g and a.right_table in g:
+            g.add_edge(
                 a.left_table,
                 a.right_table,
                 key=a.id,
@@ -116,13 +70,5 @@ def build_graph(corpus: "Corpus") -> nx.MultiDiGraph:
                 cost=a.cost,
                 confidence=a.confidence,
             )
-        elif isinstance(a, TermAsset):
-            if a.binding:
-                _edge(a.id, a.binding.asset_id, key=EDGE_BINDS_TO, type=EDGE_BINDS_TO)
-            for rel in a.related_terms:
-                edge_type = rel.relation.value.upper()  # e.g. "uses" -> "USES"
-                _edge(a.id, rel.id, key=edge_type, type=edge_type, relation=rel.relation.value)
-        elif isinstance(a, MetricAsset):
-            _edge(a.id, a.base_table, key=EDGE_DERIVED_FROM, type=EDGE_DERIVED_FROM)
 
     return g

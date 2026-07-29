@@ -17,18 +17,7 @@ from .planner import (
     join_neighborhood,
     plan_joins,
 )
-from .projection import (
-    EDGE_BINDS_TO,
-    EDGE_DERIVED_FROM,
-    EDGE_HAS_COLUMN,
-    EDGE_JOINS_TO,
-    EDGE_REFERENCES,
-    NODE_COLUMN,
-    NODE_METRIC,
-    NODE_TABLE,
-    NODE_TERM,
-    build_graph,
-)
+from .projection import EDGE_JOINS_TO, NODE_TABLE, build_graph
 
 __all__ = [
     "build_graph",
@@ -37,13 +26,6 @@ __all__ = [
     "detect_missing_join_path",
     "join_neighborhood",
     "plan_joins",
-    "EDGE_BINDS_TO",
-    "EDGE_DERIVED_FROM",
-    "EDGE_HAS_COLUMN",
     "EDGE_JOINS_TO",
-    "EDGE_REFERENCES",
-    "NODE_COLUMN",
-    "NODE_METRIC",
     "NODE_TABLE",
-    "NODE_TERM",
 ]

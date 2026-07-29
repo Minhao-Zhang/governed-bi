@@ -368,19 +368,43 @@ CI validates the corpus and its pass doubles as the curator's machine-checkable 
 - **Enum validity**: `role`, `reliability.status`, `logical_type`, `complexity`, `cardinality`, `relation`, `kind` ∈ their allowed sets.
 - *(Eval-harness layer, not schema)*: few-shot `source_refs ⊆ train split` (leakage guard).
 
-## Graph projection (all derived from YAML; Neo4j never authored)
+## Graph projections (all derived from YAML; Neo4j never authored)
+
+There are **two** derivations, for two consumers. Keeping them separate is
+deliberate: the serve one runs once per turn and must stay cheap.
+
+**1. The serve join graph** — `graph/projection.py`, walked by `graph/planner.py`
+for Steiner planning, the L4 join neighbourhood, and missing-edge detection. One
+node kind, one edge type:
 
 | Edge | From → To | Sourced from |
 |---|---|---|
-| `HAS_COLUMN` | Table → Column | inline `columns[]` |
-| `JOINS_TO` | Table → Table (props: on, cardinality, cost) | `join` |
-| `REFERENCES` | Column → Column | `column.references` |
-| `BINDS_TO` | Term → Metric/Table/Column | `term.binding` |
-| `SYNONYM_OF` / `BROADER_THAN` / `USES` | Term → Term | `term.related_terms[]` |
-| `DERIVED_FROM` | Metric → Table/Column | `metric.base_table` / expression |
-| `SCOPES` | Note → scoped asset id | `note.scope[]` |
+| `JOINS_TO` | Table → Table (props: on, cardinality, cost, confidence) | `join` |
 
-BIRD uses an in-memory graph (networkx) for Steiner planning; Neo4j is the optional enterprise-scale projection.
+**2. The audit knowledge graph** — `viz/presenter.knowledge_graph`, served by
+`/knowledge-graph` for the UI. Every asset is a node (`node.kind` is the
+`asset_type`); columns are not separate nodes, so a binding or scope that targets
+a column is redirected to the owning table. This is the rich view, and the one to
+extend. The `relation` labels are asset-centric, not SQL-centric:
+
+| `relation` | From → To | Sourced from |
+|---|---|---|
+| `join` | Join → each of its two tables | `join.left_table` / `right_table` |
+| `measures` | Metric → Table | `metric.base_table` |
+| `grounds` | Term → Metric/Table/Column | `term.binding` |
+| `related:<relation>` | Term → Term | `term.related_terms[]` |
+| `scopes` | Note → scoped asset id | `note.scope[]` |
+| `exemplifies` | Few-shot → Term | `few_shot.bound_terms[]` |
+
+Duplicate edges are collapsed and an edge whose target is not a node is dropped,
+so the graph is always internally consistent.
+
+Until 2026-07-28 the serve projection built the whole second table too. Nothing
+on the serve path walked the extra nodes and edges — only `tests/test_graph.py`
+did — so every turn paid to build about 60% of a graph it would not read.
+
+BIRD uses an in-memory graph (networkx); Neo4j is the optional enterprise-scale
+projection.
 
 ## Curator vs the retired gold filler
 
