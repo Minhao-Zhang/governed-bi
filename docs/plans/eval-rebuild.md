@@ -253,10 +253,37 @@ The human-only exclusion invariant still holds and is now pinned by a test that 
 code tokens rather than prose, plus a comment at the tool list and a line in
 docs/curator.md.
 
-Still to verify against a real build: whether the agent actually marks decoys often
-enough to replace what the mask did. Until a curated build runs, the curated arm's
-decoy defence is untested rather than known-good. `X2`'s `mask_only` ablation is moot
-and marked so in open-work.md.
+**B6-verify: the sweep works, on one schema.** A live curated build on `toxicology`
+(27 columns, 16 reachable trap columns, 8 scored questions) marked 16 columns suspect:
+
+| | baseline | curated |
+| --- | --- | --- |
+| marked suspect | 0 | 16 |
+| trap hits | 0 | 16 (precision 100%) |
+| reachable traps missed | 16 | 0 (recall 100%) |
+| real columns wrongly banned | 0 | 0 |
+
+Zero false positives is the part that matters, because banning a real column is exactly
+how the deleted mask failed: it flagged `persons_per_household` for the crime of never
+appearing in train gold SQL. The sweep is strictly better here, not merely different.
+
+Denominator note, because the first pass got it wrong: `load_trap_columns` emits each
+ref under both the pre-rename and renamed table spellings, so the manifest's 24
+qualified refs are not 24 reachable targets. Only 16 name a table and column that exist
+in the served schema. Recall against the raw 24 reads 67% and is meaningless.
+
+What this does NOT establish: one schema, the smallest in the pool, with n=8. The
+`+0.375` EX delta carries `p=0.25` with no noise floor measured, so it is not a result.
+And these traps are near-duplicate shaped, the easiest kind to spot. Worth repeating on
+a mid-sized schema before trusting the sweep at 69.
+
+One observation from the marks themselves. The agent's notes cite "not used by working
+SQL" alongside "disagrees with canonical" and "unresolved parallel label field", so it
+partly rediscovered the train-SQL signal the mask encoded, but as one input among
+several rather than as the whole rule. That is precisely the difference that produced
+100% precision where the mechanical version banned real columns.
+
+`X2`'s `mask_only` ablation is moot and marked so in open-work.md.
 
 ### D2: attribute routing failure
 
@@ -332,6 +359,30 @@ Deferred: a guard for schemas that end up with zero questions, which must not co
 built-but-unscored and must not break the pool census. That needs the real dataset to
 test against.
 
+### A stale split label was hiding 79% of the gold hashes
+
+Found while setting up the B6 verification run, and fixed. `load_gold_hashes` filtered on
+each gold row's own `split` label, and that label is stale in the shipped artifact: the
+train/test split was re-drawn after the hashes were computed and the label was never
+regenerated with it. 79% of rows marked `split=test` are questions that now live in
+`train_final.jsonl`, and 20% of rows marked `split=train` are now test questions. Grading
+resolved 286 of 1,389 test questions (21%) when every one of them has a hash.
+
+Why it went unnoticed is the part worth keeping. It produced no wrong number, only a
+silently smaller n, and the ungradeable rows land in the missing-gold counters where they
+are indistinguishable from ordinary dataset gaps. It surfaced only because a `--limit 8`
+run drew questions that all fell in the unlabelled 79%, leaving the gold pre-flight with
+nothing to verify and correctly aborting.
+
+Keyed on `(db_id, question_id)` now, label ignored. Safe rather than convenient: the two
+splits are disjoint on that pair and no pair carries more than one gold row, both checked
+against the artifact, and a genuine conflict raises instead of letting an arbitrary row
+win. Coverage is 100%.
+
+**For the sibling repo.** The refiltering work regenerates the split, so the hash file's
+`split` field should be regenerated with it or dropped outright. It is derivable from the
+split files and it has now been wrong once.
+
 ## 5. Ordering
 
 Phase 1 runs in parallel, because the files are disjoint and none of it has open
@@ -356,7 +407,9 @@ Phase 3 is D2 steps 2 and 3, once step 1 says whether existing runs suffice.
 | artifact cleanup | Wipe pre-rebuild artifacts | done, 89M, routing columns kept |
 | T1 | Wire `pin_triggers_enabled` for eval; make it separately measurable | done, option A |
 | config | `[notes]` table documented; stale toml/env comments corrected | done |
-| B6-verify | Does the agent sweep actually mark decoys? Needs a curated build | not started |
+| B6-verify | Does the agent sweep mark decoys? | done: 100%/100% on 1 schema, n=8 |
+| B6-verify at scale | Repeat on a mid-sized schema before trusting 69 | not started |
 | D2 step 2 | Land the three-way split as a summary metric | not started |
+| gold split label | 79% of gold hashes were unreachable; keyed on (db_id, question_id) now | done, 21% -> 100% |
 | routing table | Retire the stale recall numbers in `datalake-run.md` and its 2 citations | not started |
 | naming | `*_GLOBAL_MAX` now means per-turn; rename in `config.py` | not started |
