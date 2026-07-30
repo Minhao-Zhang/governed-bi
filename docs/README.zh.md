@@ -61,6 +61,7 @@ ADR 记录的是某个时点的决策。它不会为了跟上后来的现实而�
 - [Data-lake 运行](plans/datalake-run.md)：多 schema 池化运行（D15）的操作手册与状态。
 - [HITL 澄清契约](plans/hitl-clarification-contract.md)：服务时向人追问的服务端 ↔ 前端契约，服务端已实现。
 - [Agent 步骤可视化](plans/agent-step-visualization.md)（英文）：前端怎么展示受治理服务流的每一步。
+- [模块加深](plans/module-deepening.zh.md)：六条行为保持的结构性工作线，讲接口该放在哪里，以及「越过接口伸手进去」的次数说明了什么。
 
 已关闭的跟踪表和被取代的计划不再以文件形式保留——git 历史就是归档。它们里面还没做完的条目
 都收进了[待办工作](open-work.md)。

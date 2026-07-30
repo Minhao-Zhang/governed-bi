@@ -21,6 +21,9 @@ supersedes are marked where they occur.
 | C9 | Pooled `_validate_corpora(corpora)` is called with no connector, so nothing checks asset references against the live catalog at scale. | `eval/run_datalake.py:4122` → `eval/harness.py` |
 | G8 | The grader self-check was only ever validated on a 5-row sample. A full head-to-head needs the live DB. | `eval/hash_grade.py` |
 | C10 | `curator_trace.jsonl` / `curator_sme_trace.jsonl` are written at the arm root but are not in `_SIDECARS`, so `_relocate_sidecars` never promotes them and `_promote_build` deletes the staging root holding them. The pooled driver therefore keeps the derived counts (`tool_calls.repeats`, `n_tool_calls`, `n_steps`) and loses the verbatim argument list, which is the only artifact that says *what* a capped agent looped on. The single-schema driver keeps it. | `eval/run_datalake.py:_SIDECARS` |
+| C11 | The oracle rungs write **answer-key-derived turns into the durable run log**. `oracle_solver` passes `settings` through without `run_log_kind="off"` (which `arms.py:430-434` does do), so every oracle turn lands as a row stamped `producer=serve, serve_path=agent`, with `oracle_rung` living only in the eval `meta` and never in provenance — indistinguishable from a real serve turn except by a `thread_id` prefix convention. `oracle.py:55-58` says these can never be reported as system performance. One-line fix. | `eval/oracle.py:342` |
+| C12 | **The refuse-gate eval collapses an N-question run into one durable row.** `agent_refuser` builds a fresh graph per question and defaults `n_human`, so `turn_id == f"{session_id}:1"` every time and `append_run_record` UPSERTs over it. It is the one serve call site that got neither the per-invoke turn counter (`test_eval_run_log_turns.py:60` pins it for `arms`) nor the AUDIT R6 index-cache fix, so it also re-embeds the whole corpus per question. Latent while X6 keeps the scorer unwired, but it will bite the moment a real out-of-scope set exists. | `eval/refuse_gate.py:71` |
+| C13 | Unqualified bare table names resolve to **whichever schema loaded first**. Three copies of "table by id, falling back to physical name" (`analyst/tools.py:38`, `analyst/middleware.py:118`, `analyst/agent.py:465`) take the first match in `corpus.assets` order; `retrieval/rvgd.py:530-538` already implements the correct policy for the same lookup ("rather than to whichever table happened to be loaded last") and returns `None` on ambiguity. Measured on `BIRD-corpus` at HEAD: **27 ambiguous bare names covering 67 of 731 table assets (9.2%)** — `pais` ×5, `kunden` ×4. Reachable without an adversary: the agent reads `physical: sales.kunden` from `render_columns`, calls `sample_rows("kunden")`, and is told `tbl_beer_factory_kunden: not licensed this turn` — a table it never named, in a schema outside its routed scope, whose name the message leaks. Costs a step, can dead-loop to a step-cap refusal that scores as an **agent** failure, and flips with the order of `built` in `_load_built_corpus`. No lookup accepts the qualified form either, though that is the form the context block and `render_columns` both print. | [module deepening](plans/module-deepening.md) W1 |
 
 ## Efficiency
 
@@ -166,6 +169,31 @@ these become ordinary behavioural tests. `tests/test_eval_index.py` (the
 
 ## Governance gaps
 
+- **The graded-delivery re-check is weaker than the check that blocked the query.**
+  `analyst/governance.py:696` re-runs `check()` before the second
+  `gateway.execute` at `:720` with `allowed_tables=None`, which skips **L4
+  term-semantics entirely**, and `:708` lets an L5 `cost_estimate` re-check
+  *failure* fall through to execution as well. Verified by running `check()`
+  directly on a two-schema pooled allowlist: a query blocked as "table outside the
+  retrieved scope" passes the re-check, and so does `SELECT COUNT(*) FROM
+  pg_catalog.pg_authid` (no `Column` nodes, so L3 has nothing to reject). The
+  trigger needs no adversary — ask something whose answer needs an un-routed
+  schema and let that be the turn's last `run_query`; `governance.py:737` then
+  narrates the real rows behind an `(unverified)` prefix. The L4 skip is a
+  designed trade-off and the comment at `:677` says so; what is not covered by
+  that design is the L5 fall-through, and the surrounding prose reading as if the
+  re-check were equivalent. Bounded by `grade_semantic_failures=False` being the
+  serve default — but it is `true` in `governed_bi.local.toml` and on in both eval
+  drivers, and on the 69-schema pooled lake it is a cross-schema read of
+  un-licensed data, which is the boundary D15 exists to enforce. Design context and
+  the token that would make the asymmetry visible: [module
+  deepening](plans/module-deepening.md) W4.
+- Curator probe SQL (`curator/deep_agent.py:118`, `curator/sme.py:355`) reaches
+  `gateway.execute` under an `all_access` identity with no guardrail at all —
+  defensible, since the curator is what *builds* the allowlist, but L1/L2 need no
+  allowlist and would still catch `pg_read_file` / `dblink`. Either run those two
+  layers on probes or carve the exception out of [architecture](architecture.md)
+  §1's "executes only guardrail-passed SQL".
 - A simulated SME's answer defaults to `status=certified` (`corpus/clarify.py`),
   and `pin_require_certified` gates note pinning on that status — the top trust
   tier is minted by a model.

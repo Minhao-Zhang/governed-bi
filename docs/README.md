@@ -72,6 +72,7 @@ quotable — every number produced before 2026-07-26 is discarded.**
 - [Data-lake run](plans/datalake-run.md): the pooled multi-schema run (D15) — runbook and status.
 - [HITL clarification contract](plans/hitl-clarification-contract.md): serve-time clarification, server ↔ frontend. Server side implemented.
 - [Agent-step visualization](plans/agent-step-visualization.md): frontend spec for the governed serve stream.
+- [Module deepening](plans/module-deepening.md): six behaviour-preserving structural workstreams. Where the interfaces sit, and what the reach-past-the-interface counts say about it.
 
 Closed trackers and superseded plans are not kept as files — git history holds
 them. Open items from all of them live in [open work](open-work.md).
