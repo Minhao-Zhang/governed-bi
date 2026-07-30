@@ -120,10 +120,14 @@ The sweep is per column over schemas that run to 703 columns, so it is also the 
 
 ## The step budget
 
-Phase A is one agent invoke per schema, and that invoke is bounded. The bound is
-denominated in **tool calls**, not in LangGraph super-steps:
-`derive_step_budget(n_tables=, n_columns=, n_pairs=)` returns
-`30 + 3*tables + columns//10 + pairs//2`, and `recursion_limit_for(budget)` converts
+Phase A is up to `MAX_PAIR_BATCHES` (3) agent invokes per schema, one per batch of train
+pairs, and each invoke is bounded separately. The bound is denominated in **tool calls**,
+not in LangGraph super-steps: `derive_step_budget(n_tables=, n_columns=, n_pairs=)`
+returns `30 + 3*tables + columns//10 + pairs//2`, where `n_pairs` is now that **batch's**
+width rather than the whole split, and each batch is granted the result. The manifest
+records both: `tool_call_budget` stays the per-invocation scalar that
+`recursion_limit_for` is checked against, and `tool_call_budget_total` sums the batches.
+`recursion_limit_for(budget)` converts
 it for the graph as `3 * budget + 4`. The factor of three is measured, not assumed:
 the deepagents loop is `model -> TodoListMiddleware.after_model -> tools`, so one
 *sequential* tool call costs three super-steps (deepagents 0.6.12 / langgraph 1.2.8).

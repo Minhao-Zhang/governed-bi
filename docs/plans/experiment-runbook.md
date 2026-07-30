@@ -315,7 +315,12 @@ your model provider, not this code.
 
 1. `runs/index.jsonl`, last row. Prefer `ledger_ok` / `hygiene_ok` (aliases of
    `quotable`). If false, read `not_ledger_ok_because` / `not_quotable_because` and
-   stop. Every reason there is a thing that makes the numbers mean something other than
+   stop. When you do quote a number, quote the `EX*` column, which is the
+   pre-registered headline named by the row's own `headline_rate` (`ex_no_twin`
+   since 2026-07-30). `EX_bird` beside it is `ex_lenient`, kept because it is the
+   denominator published BIRD numbers use, and explicitly not the headline. A `!`
+   next to a value means that arm recorded unstamped twin rows, so its strata are
+   not trustworthy. Every reason there is a thing that makes the numbers mean something other than
    what they appear to mean. **`ledger_ok: true` is hygiene only** — never treat it as
    `claim_ready`. The ledger always keeps `claim_ready: false` and lists
    `claim_ready_requires`; the checklist below is the claim gate. The field
@@ -529,6 +534,11 @@ supply. Until then, report the SME delta with its two mechanisms named —
       (aliases for the same artifact-hygiene gate). That is **not** claim readiness:
       the ledger always sets `claim_ready: false` and lists `claim_ready_requires`.
       Clear hygiene, then walk this checklist.
+- [ ] The number you are about to quote is the row's `headline_rate` (the `EX*` column),
+      not `EX_bird`. If you have a reason to quote `ex_lenient` instead, state that you
+      are quoting the BIRD-comparable denominator rather than the pre-registered
+      headline, and give both. Silently switching between them is the post-hoc selection
+      X11 existed to prevent.
 - [ ] The run had a `--replicate` arm, so `comparisons[].reading` says what it could
       resolve rather than "no noise floor measured".
 - [ ] The delta you want to quote clears `comparisons[].detectable.mde_questions`

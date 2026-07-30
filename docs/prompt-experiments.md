@@ -103,10 +103,30 @@ sweep runs column by column off an unfiltered `read_corpus` that grows as the ag
 writes. And the close, "prefer curiosity", is unbounded pressure against a bounded
 loop. `v2` batches, sweeps with one `annotate_columns` per table against
 `read_corpus(todo_only=true)`, names the seeded joins and metrics as already recorded
-and therefore droppable, and states the 40-pair render cap that `_render_train_batch`
-imposes. `v1` is unchanged and remains the default, so the comparison is available
-rather than assumed. See [the step budget](curator.md#the-step-budget) for the run that
-produced the cap rate. One naming slip to know about: the rationale points at
+and therefore droppable, and stated the 40-pair render cap that `_render_train_batch`
+imposed at the time. `v1` is unchanged and remains the default, so the comparison is
+available rather than assumed. See [the step budget](curator.md#the-step-budget) for the
+run that produced the cap rate.
+
+`v3` (2026-07-30) changes what the curator asks about, and pairs with the intake fix
+that removed the 40-pair ceiling, so its batching paragraph replaces v2's statement of
+that cap. Three changes: clarifications move from rank 3 to rank 2 in the triage order,
+because nothing else in the system asks a person anything; step 6 describes who reads
+the questions, a domain expert holding column documentation who has never seen this
+database and cannot run a query, and lists the four kinds worth asking; and count-based
+questions are ruled out explicitly, since a row-count anomaly is the curator's own
+finding to record with `annotate_columns(suspect=true, note=…)` rather than something an
+SME can answer. Step 7 is the quota. Motivated by measurement rather than taste: on the
+20260730 run the curator raised a median of 3 clarifications per schema against roughly
+104 columns, and 45.7% of the answers it did get disclaimed knowledge of the object it
+asked about. See [plans/sme-channel-repair.md](plans/sme-channel-repair.md) F2 and F3.
+
+Note that `_budget_brief` in `curator/pipeline.py`, not the registered variant, is what
+ranks clarifications for `v1` and `v2`. It is un-versioned code sent on every run, so it
+takes a `triage` flag whose default branch is byte-identical to the shipped text;
+`_SELF_TRIAGING_PHASE_A_VARIANTS` suppresses it for variants that carry their own order.
+Editing that text directly would have silently redefined the baseline of every run
+already stamped `v1` or `v2`. One naming slip to know about: the rationale points at
 `repeat_summary.distinct/total`, and the field is `tool_calls.repeats` in
 `run_manifest.json`.
 

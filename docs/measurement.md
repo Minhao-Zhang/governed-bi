@@ -311,7 +311,7 @@ All of this lands in `summary.json`.
 flat ledger, one record per run, appended automatically at the end of
 `run_datalake()` and available standalone via
 `uv run python -m governed_bi.eval.index --add runs/datalake/<ts>`. Every
-record answers two questions that used to live only in someone's memory:
+record answers three questions that used to live only in someone's memory:
 
 - **`quotable` / `ledger_ok` / `hygiene_ok`** — is this run's *artifact hygiene*
   good enough to consider quoting? A run is *not* ledger-ok if any arm crashed
@@ -320,14 +320,31 @@ record answers two questions that used to live only in someone's memory:
   `train` split (the curator read those questions, so it is a diagnostic, not a
   result), or if `n_questions` is below the Holm arithmetic floor for the arm
   family on the record (`arithmetic_floor_for_arms`; default four-arm floor is 8,
-  five arms need 9). The unrecorded-crash-rate case fails closed on purpose: a run
-  predating the crash/refusal split has not shown that it had no crashes, because
-  its `refusal_rate` and EX would have absorbed them either way.
+  five arms need 9). Two more since 2026-07-30, both about the twin strata: an arm
+  that recorded `n_twin_unstamped > 0`, because a partially stamped run cannot be
+  read as a clean one, and an arm that recorded a twin-free denominator but no
+  headline number beside it. Both fire only on positive evidence, so an arm from
+  before the strata existed is not retro-accused. The unrecorded-crash-rate case
+  fails closed on purpose: a run predating the crash/refusal split has not shown
+  that it had no crashes, because its `refusal_rate` and EX would have absorbed
+  them either way.
   `not_quotable_because` / `not_ledger_ok_because` names every reason, not just the
   first. **`quotable: true` is not "publishable."** Statistical claim readiness
   (replicate, MDE, Holm, cluster, single-variable, twin) lives in the
   experiment-runbook checklist; the ledger always sets `claim_ready: false` and
   lists `claim_ready_requires` rather than pretending to evaluate those conditions.
+- **`headline_rate`**: which number did this run commit to in advance? Stamped per
+  record from `metrics.HEADLINE_RATE`, which names `ex_no_twin` (X11, 2026-07-30).
+  The per-arm block carries that rate beside its denominator
+  (`n_no_twin_gradeable`) and its stamp coverage (`n_twin_unstamped`), because a
+  twin-stratified rate is uninterpretable without both. `ex_lenient` is still
+  recorded and still rendered, as `EX_bird`, since its denominator is the one
+  published BIRD numbers use, but the renderer no longer heads any column plain
+  `EX`: the pre-registered rate is `EX*` and the legend disowns the other. Two runs
+  stamped with different `headline_rate` values are refused by `comparable()` as an
+  explicit pre-check. It is deliberately not in `COMPARABILITY_KEYS`, because the
+  headline is a result rather than a configuration knob and that set must equal the
+  declared knob set.
 - **`comparable(a, b)`** — may two runs be put in the same sentence? Only if
   `split`, `model`, `llm_temperature`, `prompt_set_hash`, `corpus_content_hash`,
   `question_pool_hash`, `route_top_k`, `route_llm_pick`,

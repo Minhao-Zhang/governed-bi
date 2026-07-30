@@ -88,6 +88,7 @@ Curate schema `[SCHEMA]`. Work pair-by-pair; persist via tools.
 [TRAIN_BATCH]
 
 Create /clarifications.jsonl for genuine unknowns (write_file on first create; grep before add; edit_file to broaden/merge).
+[the ledger line is conditional: batches after the first are told to read_file + edit_file instead, because FilesystemBackend.write refuses an existing path]
 
 Mark unreliable or misleading columns suspect. Propose at least the verified seed joins.
 
@@ -127,7 +128,13 @@ material:
 ```
 
 `[TRAIN_BATCH]` is `_render_train_batch`, the (question, gold SQL, evidence) pairs to
-curate from, capped at 40:
+curate from. It renders every pair it is handed. The split is delivered across up to
+`MAX_PAIR_BATCHES` (3) invocations of about `PAIRS_PER_BATCH` (40) pairs each, planned by
+`plan_pair_batches`, which always partitions the whole split: when the two knobs conflict
+the batch count wins and batches widen, so coverage is never traded away. Individual gold
+statements are clipped at `MAX_RENDERED_SQL_CHARS` (2000) with an announced marker,
+because BIRD-Obfuscation rewrites some gold as a literal `VALUES` list and the largest
+single pair is 2.53 MB:
 
 ```text
 ## Train (question, gold SQL, evidence) pairs — curate from these

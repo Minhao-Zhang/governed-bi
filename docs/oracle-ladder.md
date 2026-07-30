@@ -182,6 +182,13 @@ the fair ladder's `agent_solver` implements, so it drives through the same
 scoring code (`run_arm` / the pooled driver's per-arm loop) rather than a
 parallel path that could silently diverge from it.
 
+It also takes `enable_run_log: bool = False`. Durable run logging is off for a
+rung unless a caller asks for it, mirroring `arms.agent_solver`. Until 2026-07-30
+this was convention rather than code: every oracle turn landed in the run log
+stamped `producer=serve, serve_path=agent`, indistinguishable from a real serve
+turn except by a `thread_id` prefix. The rule that a rung's turns can never be
+reported as system performance is now enforced where it is claimed.
+
 - **`GoldIndex`** looks gold up by question *text*, because the `MetaSolver`
   protocol is `solve(question)` with no id. That is safe only if the mapping
   from text to gold is unambiguous, and on this benchmark it nearly isn't:
