@@ -289,8 +289,10 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   FK 候选，以及一个包装 CI 校验器的 adversary `review`），再加上
   **deepagents 构建 harness**（`curator/deep_agent.py`：一个
   运行在 Facts 画像分析 + 只读探测工具之上的 deep agent；其构建过程已
-  离线验证，自主运行则受模型门控）。仍是接缝的有：join/term/metric/
-  note 的 LLM 撰写、逐资产实时的 adversary `refute`，以及自评估的
+  离线验证，自主运行则受模型门控）。adversary 只做结构性检查——引用
+  完整性、id 命名约定、join-ON 列归属、note 预算——通过检查不代表语义上
+  已被认证；为此设计的逐资产 LLM `refute` 从未接入任何调用方，已被删除
+  （R6）。仍是接缝的有：join/term/metric/note 的 LLM 撰写，以及自评估的
   train-EX 循环（`rule`/`skill` 是已退役的旧名——D17）；正是这些让 `curated`
   能够胜过 `baseline`。参见[Curator](curator.md)。
 
@@ -558,10 +560,13 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   **显式报错**（启动时自检），使其永不盲跑。*状态：暂靠 Langfuse/LangSmith；应用内持久捕获与
   原生聚合/监控/告警视图均为未来工作（暂缓）。*
 
-- **R6 —— 策展器对抗 `refute()` + 自评/修复循环：暂缓（细化 D10）。**
-  确认未建；`refute()` 是 `NotImplementedError`，结构化 `review()` 在
-  `curator/pipeline.py` 中仅作信号（写审计注记、扣置信度，从不设卡）。目前明确暂缓。
-  *状态：暂缓。*
+- **R6 —— 策展器对抗 `refute()`：已通过删除解决（2026-07-29，细化 D10）；
+  自评/修复循环仍暂缓。** `refute()` 从无调用方（`grep -rn "refute(" src/
+  tests/` 只命中它自身的定义）——它从未真正可达，删除它不改变任何运行时
+  行为。`curated` 层的对抗审查者一直就是 `curator/pipeline.py` 中的结构化
+  `review()`（写审计注记、扣置信度、且仅在硬性发现上设卡）；文档现在如实
+  描述它，而不再把它当作某个语义版本的占位符。自评估的 train-EX 循环仍然
+  暂缓。*状态：`refute()` 已删除；自评循环暂缓。*
 
 - **R7 —— 拒答闸门未被 BIRD EX 数字检验——记为当前评测的局限（细化 D5 / D14）。**
   BIRD 问题全部可答，故评测阶梯的 EX 指标从不触发拒答闸门，其**误拒率也未被其测量**。留出的
@@ -626,8 +631,9 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   on_match 注入（5 种 scope）、H1 预算/优先级、`read_notes` / `grep_notes`、
   C5 排除 id 扫描、带 certified 门控的关键词 PIN，以及离线的
   GATE-RECALL / GATE-ADV-WRONG-NOTE。Phase 6 的 max-pool 向量方案已推迟（只有
-  在召回仍卡住 EX 时才会启用）。非笔记资产的 LLM `refute()` 仍受模型门控；
-  笔记有自己的离线结构化 `refute()`。见 ADR 0003 与
+  在召回仍卡住 EX 时才会启用）。逐资产的 LLM `refute()`（无论笔记还是
+  非笔记资产）从未接入任何调用方，已于 2026-07-29 删除（R6）；结构化
+  `review()` 对笔记与其他资产一视同仁。见 ADR 0003 与
   ADR 0004（M1–M2、M5 已落地）。ADR 0003
   的设计问题均已解决（见上文已锁定的决策）。
 

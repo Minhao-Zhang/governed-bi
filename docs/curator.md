@@ -20,9 +20,11 @@ maintainer**: cold-start plus ongoing drift-repair. Untended corpora rot
 > `build_curator_agent` wires a deep agent over grounded tools — `profile_facts`
 > (the Facts tier) and `run_probe_query` (a read-only SQL probe) — and Phase A
 > authors descriptions, joins, terms, metrics and notes through `AssetBag`, while
-> Phase B folds SME-answered clarifications back in. Still seams: the **per-asset
-> adversary `refute`** (probe queries — it currently raises `NotImplementedError`,
-> so the `curated` rung's only reviewer is the structural gate) and the
+> Phase B folds SME-answered clarifications back in. The `curated` rung's only
+> reviewer is the structural gate: a per-asset LLM adversary that re-derives and
+> falsifies each proposed claim was designed (see D10) but never reached a
+> caller (`adversary.refute` raised `NotImplementedError` with zero call sites)
+> and was deleted 2026-07-29 rather than left as a stub. The remaining seam is the
 > **self-eval train-EX loop**. A step marked *(seam)* is not yet run.
 
 ## Inputs / outputs
@@ -35,9 +37,9 @@ maintainer**: cold-start plus ongoing drift-repair. Untended corpora rot
 The curator is **two roles, not one agent:**
 
 - **Proposer:** hypothesizes Inference-tier assets (descriptions, joins, reliability caveats, terms/metrics/rules, routing/gotcha notes), probing the DB to ground each claim.
-- **Adversary (structural gate, built):** wraps `validate_corpus` plus cheap self-consistency checks. Hard findings (dangling refs, bad / duplicate ids, missing physical tables, join-on failures, note-budget / excluded-identifier violations, …) **block corpus write** — fail closed. Soft heuristic notes (`missing-provenance`, `fk-missing-ref`) only discount confidence and are recorded on the asset audit trail. The designed accept / revise / reject loop with an LLM that re-derives claims and runs falsifying probes is still a **seam** (`adversary.refute` for non-note assets raises `NotImplementedError`; the deep-agent author is told to self-review in the meantime).
+- **Adversary (structural gate, built):** wraps `validate_corpus` plus cheap self-consistency checks. Hard findings (dangling refs, bad / duplicate ids, missing physical tables, join-on failures, note-budget / excluded-identifier violations, …) **block corpus write** — fail closed. Soft heuristic notes (`missing-provenance`, `fk-missing-ref`) only discount confidence and are recorded on the asset audit trail. A per-asset LLM adversary that re-derives claims and runs falsifying probes was designed but never reached a caller (`adversary.refute` raised `NotImplementedError` with zero call sites) and was deleted 2026-07-29; the deep-agent author is told to self-review instead, and the structural gate is the only automated reviewer.
 
-**The adversary boundary = the Facts/Inference boundary.** Facts (dtypes, nullability, uniqueness, samples, row counts) are generated **programmatically** as the deterministic foundation. They are never proposed and never checked. Everything the *model asserts* must clear the structural gate before emit; per-claim LLM refutation is the remaining seam.
+**The adversary boundary = the Facts/Inference boundary.** Facts (dtypes, nullability, uniqueness, samples, row counts) are generated **programmatically** as the deterministic foundation. They are never proposed and never checked. Everything the *model asserts* must clear the structural gate before emit. That gate is structural, not semantic: it checks reference integrity, id conventions, join-ON column membership and note budgets, so a corpus that passes it is not thereby semantically certified.
 
 Status lifecycle in each asset's `provenance.status`:
 
@@ -52,7 +54,7 @@ Both the proposer's claim/evidence **and** the adversary's findings land in the 
 
 1. **Profile (Facts, programmatic).** *(built)* Read catalog + sample data → emit the Facts tier for every table/column. Deterministic; no LLM; correct in every arm.
 2. **Propose (Inference + notes).** *(built: the Phase A deep agent)* The proposer hypothesizes descriptions, joins (value-overlap + seed-SQL join patterns — **within a schema**; cross-schema joins are never FK/overlap-discovered, only curated from SME / example SQL / usage per D15, else the Analyst refuses), reliability caveats (execute-and-observe against the traps), terms/synonyms, metrics/rules (from `evidence` + recurring computations), and authors **routing/gotcha/pattern notes**. Free exploration is confined to this pocket. Roles, confidence and provenance come from Facts; the Phase A deep agent authors the descriptions, `suspect` caveats and derived assets (joins/terms/metrics/notes) through `AssetBag`.
-3. **Adversary pass.** *(structural gate built; per-asset LLM `refute` seam)* Hard structural findings refuse the write. Soft heuristic notes discount confidence only. The built `review` is the deterministic structural gate (CI validator + self-consistency); the per-claim refutation with probe queries is the LLM seam.
+3. **Adversary pass.** *(structural gate, built)* Hard structural findings refuse the write. Soft heuristic notes discount confidence only. `review` is the deterministic structural gate (CI validator + self-consistency); it is the only automated reviewer — a per-claim LLM refutation with probe queries was designed but deleted (never reached a caller).
 4. **Self-eval & repair (inner loop, capped).** *(seam)* Assemble the draft layer → run the Analyst pipeline on the DB's **train** questions → measure EX → diagnose failures → proposer patches (a failed question often *becomes* the gotcha note that fixes it) → adversary re-checks the patch → repeat until train-EX plateaus or the iteration/budget cap hits. **Train-only.**
 5. **Propose corpus.** *(emit downstream)* Structural gate green ∧ train-EX plateaued → emit (dev auto-accepts; prod opens a PR to the owner, D6).
 
@@ -85,7 +87,7 @@ flowchart TD
 
 No deterministic path marks reliability any more. `_mark_columns_absent_from_gold` used to stamp every column that train gold SQL never referenced, and it is deleted: "BIRD never queried this column" is not evidence the column is unreliable, and where the gold SQL was defective the mask banned columns the generator needed. The curated arm's decoy defence is now exactly what the Phase A prompt's reliability sweep elicits plus what the SME round-trip returns, so a build's `run_manifest.json` reports `suspect_columns` and a zero there means the arm went out undefended.
 
-*(Built: the Phase A agent sweeps every table and column and flags `suspect` from the table's Facts and probe results. The structured-signal scoring below is the fuller design the prompt approximates.)* The curator flags an unreliable column via **general data-quality anomalies, not BIRD-trap-specific detectors** (P2, so it transfers to an enterprise deployment; BIRD's traps merely validate that the signals fire). Each signal contributes to a confidence score. A column is marked `suspect` only above a threshold. Per-claim LLM adversary refutation of each caveat is still a seam; today only the structural gate runs before write.
+*(Built: the Phase A agent sweeps every table and column and flags `suspect` from the table's Facts and probe results. The structured-signal scoring below is the fuller design the prompt approximates.)* The curator flags an unreliable column via **general data-quality anomalies, not BIRD-trap-specific detectors** (P2, so it transfers to an enterprise deployment; BIRD's traps merely validate that the signals fire). Each signal contributes to a confidence score. A column is marked `suspect` only above a threshold. A per-claim LLM adversary refutation of each caveat was designed but deleted (never reached a caller); only the structural gate runs before write.
 
 | Signal | Generic form | Catches (BIRD trap) |
 |---|---|---|
@@ -95,7 +97,7 @@ No deterministic path marks reliability any more. `_mark_columns_absent_from_gol
 | **Distributional implausibility** | values wrong for the apparent meaning | sparse-perturb / null |
 | **Usage corroboration** (weak, never standalone) | unused while a near-synonym twin is used | (strengthens the above) |
 
-**False-positive guards:** a confidence threshold; the designed LLM adversary would refute ("unreliable, or just rare / legitimately different?"); flag only when a clear real alternative (the used twin) exists; in the enterprise setting a false positive only degrades the stamp, it never blocks (Analyst env-toggle). **Usage (#5) is corroborating-only.** Never flag on "unused" alone (rare ≠ fake, and it wouldn't transfer). **Grading (BIRD):** `decoy_touch_rate` from the run's metrics, against the trap manifest; the corpus side of it is the build manifest's `suspect_columns`.
+**False-positive guards:** a confidence threshold; the designed-but-deleted LLM adversary would have pushed back ("unreliable, or just rare / legitimately different?"); flag only when a clear real alternative (the used twin) exists; in the enterprise setting a false positive only degrades the stamp, it never blocks (Analyst env-toggle). **Usage (#5) is corroborating-only.** Never flag on "unused" alone (rare ≠ fake, and it wouldn't transfer). **Grading (BIRD):** `decoy_touch_rate` from the run's metrics, against the trap manifest; the corpus side of it is the build manifest's `suspect_columns`.
 
 **One granularity limit to know about.** An SME answer folds onto a column only when the clarification's scope names one (`table:<Table>.<column>`). A question scoped `table:<Table>` or `pair:<id>` has nowhere to put a column-level mark, so the answer reaches the corpus as a note instead; the Phase A prompt asks for column-scoped questions when the doubt is about one column, and Phase B's `unrecognised_column_marks.no_column_in_scope` counts the ones that still arrive too coarse.
 

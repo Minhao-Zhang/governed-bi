@@ -318,6 +318,56 @@ _REDACTED = "[redacted: instruction-shaped line in corpus content]"
 _FENCE = chr(96) * 3
 
 
+def _sanitize_lines(text: str) -> list[str]:
+    """The per-line defences every corpus-prose sanitizer needs: drop lines that open
+    like an instruction to the model, defuse fence and heading markers, strip the
+    author's own indentation.
+
+    Shared because the defect was never note-specific — a column description is the
+    same untrusted, LLM-authorable string pasted into the same authoritative prompt —
+    and a second copy of this list would be a second thing to keep in step.
+    """
+    kept: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.lower().startswith(_INSTRUCTION_PREFIXES):
+            kept.append(_REDACTED)
+            continue
+        if line.startswith(_FENCE):
+            line = line.replace(_FENCE, "'''")
+        if line.startswith("#"):
+            line = line.lstrip("#").lstrip()
+        kept.append(line)
+    return kept
+
+
+def _cap(text: str, max_chars: int, *, sep: str) -> str:
+    """Truncate visibly at ``max_chars``, marking the cut with ``sep`` so the marker
+    lands on whatever line shape the caller renders."""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + sep + "[truncated at " + str(max_chars) + " chars]"
+
+
+def sanitize_inline_text(text: str, *, max_chars: int) -> str:
+    """Make corpus prose safe to interpolate into a line the renderer already built.
+
+    The same defences as :func:`sanitize_note_text`, plus one the note path does not
+    need: the surviving lines are joined with a space rather than a newline. A note is
+    rendered line by line and re-indented under its own heading, so a newline inside
+    one goes nowhere. Every other corpus field — a column description, a table
+    description, a term name — is spliced into the middle of a line the renderer
+    composed, so a newline inside it escapes that line's indentation and lets curator
+    prose start a top-level prompt section of its own.
+
+    ``max_chars`` is required. These fields differ by more than an order of magnitude
+    in how many times they render per turn, and a shared default would quietly hand a
+    per-column description a note-sized budget.
+    """
+    joined = " ".join(part for part in _sanitize_lines(text) if part)
+    return _cap(joined, max_chars, sep=" ")
+
+
 def sanitize_note_text(text: str, *, max_chars: int = NOTE_TEXT_MAX_CHARS) -> str:
     """Make one note safe to paste into an authoritative prompt section.
 
@@ -341,21 +391,7 @@ def sanitize_note_text(text: str, *, max_chars: int = NOTE_TEXT_MAX_CHARS) -> st
     corpus-as-context. This removes the cheap mechanical version and the
     unbounded-length one.
     """
-    kept: list[str] = []
-    for raw in text.splitlines():
-        line = raw.strip()
-        if line.lower().startswith(_INSTRUCTION_PREFIXES):
-            kept.append(_REDACTED)
-            continue
-        if line.startswith(_FENCE):
-            line = line.replace(_FENCE, "'''")
-        if line.startswith("#"):
-            line = line.lstrip("#").lstrip()
-        kept.append(line)
-    out = "\n".join(kept)
-    if len(out) > max_chars:
-        out = out[:max_chars] + "\n" + "[truncated at " + str(max_chars) + " chars]"
-    return out
+    return _cap("\n".join(_sanitize_lines(text)), max_chars, sep="\n")
 
 
 def format_note_lines(notes: Iterable[InjectedNote]) -> tuple[list[str], list[str]]:

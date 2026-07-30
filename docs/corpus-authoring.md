@@ -3,13 +3,16 @@
 How to write and validate corpus assets by hand. The [asset schemas](asset-schemas.md)
 page is the field-by-field reference; this page is the task-oriented walkthrough.
 
-In the finished system the curator agent generates these assets and an
-adversary checks them, then a human audits the result (D9, D10). A deterministic
-proposer/adversary scaffold runs today (Facts profiling, heuristic + LLM
-proposers, the structural adversary `review`, and the `curate` promote loop); the
-autonomous self-eval repair loop and per-asset LLM `refute` are still seams. You
-still author assets by hand: to seed a corpus, to build test fixtures, or to
-correct what the curator produced. Either way the rule is
+In the finished system the curator agent generates these assets and a
+structural adversary checks them, then a human audits the result (D9, D10). A
+deterministic proposer/adversary scaffold runs today (Facts profiling, heuristic
++ LLM proposers, the structural adversary `review`, and the `curate` promote
+loop); the adversary checks structure only (reference integrity, id
+conventions, join-ON column membership, note budgets) — passing it is not
+semantic certification. The autonomous self-eval repair loop is still a seam;
+a per-asset LLM refutation was designed but never reached a caller and was
+deleted. You still author assets by hand: to seed a corpus, to build test
+fixtures, or to correct what the curator produced. Either way the rule is
 the same. The Git-tracked YAML and Markdown files **are** the source of truth;
 editing them is editing the semantic layer. The graph, vector, and BM25 stores
 are rebuildable projections and are never edited directly.

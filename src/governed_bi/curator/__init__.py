@@ -5,15 +5,17 @@ one-shot bootstrapper but a **permanent maintainer** (cold-start + drift-repair;
 untended corpora rot ~95%→65%/month).
 
 Proposer + adversary (D10): the proposer hypothesizes Inference-tier assets +
-notes; an independent adversary tries to **refute** each before it commits
+notes; a structural adversary checks each before it commits
 (``proposed -> draft``). **Facts** are generated programmatically and never
-checked; the adversary boundary *is* the Facts/Inference boundary.
+checked; the adversary boundary *is* the Facts/Inference boundary. The
+adversary checks structure (reference integrity, id conventions, join-ON
+column membership, note budgets) — passing it is not semantic certification.
 
 Modules map to the per-DB loop (``docs/curator.md``):
 
 - ``profile``   - step 1: Facts tier, programmatic, no LLM.
 - ``deep_agent`` - step 2: hypothesize Inference assets (Phase A/B).
-- ``adversary`` - step 3: refute each proposed asset.
+- ``adversary`` - step 3: structural review of each proposed asset.
 - ``pipeline``  - steps 4-5: self-eval & repair, then write the corpus.
 """
 

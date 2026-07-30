@@ -21,11 +21,6 @@ from governed_bi.eval.index import (
     render_index,
 )
 
-#: The note-governance knobs every `build_manifest` caller must now spell, at their
-#: `Settings` defaults. Shared so a sixth knob joining the register is one edit here
-#: rather than a hunt through every call site — which is the whole argument for the
-#: register in the first place. `build_manifest` nulls `pin_require_certified` and
-#: `pin_max` itself when PIN is off, so callers pass the real values regardless.
 #: The three grading free-pass counters, at "measured, and zero". ``quotable()`` fails
 #: closed when an arm omits them — an absent counter cannot be told from a measured zero,
 #: and these guard a FLATTERING result — so a fixture standing in for a real run has to
@@ -36,6 +31,11 @@ _MEASURED_FREE_PASSES = {
     "n_correct_and_zero_table_overlap": 0,
 }
 
+#: The note-governance knobs every `build_manifest` caller must now spell, at their
+#: `Settings` defaults. Shared so a sixth knob joining the register is one edit here
+#: rather than a hunt through every call site — which is the whole argument for the
+#: register in the first place. `build_manifest` nulls `pin_require_certified` and
+#: `pin_max` itself when PIN is off, so callers pass the real values regardless.
 _NOTES = {
     "always_note_global_max": 8,
     "always_note_char_max": 2000,
@@ -43,6 +43,11 @@ _NOTES = {
     "pin_require_certified": True,
     "pin_max": 3,
 }
+
+#: Graded delivery, at what both eval drivers really set it to. Separate from `_NOTES`
+#: because `run_experiment.build_manifest` does not take it — the shared builder defaults
+#: it, and only the pooled driver's wrapper requires it stated.
+_GRADED = {"grade_semantic_failures": True}
 
 
 def _write_run(
@@ -472,7 +477,12 @@ def test_every_resume_drift_key_is_actually_checked(tmp_path, key, label):
                 # would make the flip untypeable for the int knobs.
                 "always_note_global_max": 8, "always_note_char_max": 2000,
                 "pin_triggers_enabled": False, "pin_require_certified": True,
-                "pin_max": 3}
+                "pin_max": 3,
+                # Graded delivery, at what both eval drivers actually serve with.
+                # Flipping it mid-directory files rows the grader was handed an
+                # unverified answer for beside rows that were refused outright, under
+                # one arm's score.
+                "grade_semantic_failures": True}
     changed = dict(original)
     was = original[key]
     changed[key] = (not was) if isinstance(was, bool) else f"{was}-changed"
@@ -731,16 +741,24 @@ def test_a_run_predating_the_presence_check_is_not_accused(tmp_path):
     assert quotable(record)[0]
 
 
-def test_the_three_kinds_of_attrition_are_reported_separately(tmp_path):
-    """Absent from Postgres, failed to build, and gold-unverified are three different
-    faults with three different fixes. Collapsing them into one count is how "the run
-    covered 40 schemas" came to mean three unrelated things."""
+def test_the_four_kinds_of_attrition_are_reported_separately(tmp_path):
+    """Absent from Postgres, failed to build, gold-unverified, and withheld after a
+    curator crash are four different faults with four different fixes. Collapsing them
+    into one count is how "the run covered 40 schemas" came to mean four unrelated
+    things.
+
+    The fourth arrived last and is the one that used to have no field at all: a schema
+    the curator crashed on was built, served, and scored on a partial corpus, so it was
+    not attrition — it was worse than attrition."""
     run = _write_run(
         tmp_path,
         build_errors={"broken_build": {"error": "curator crash"}},
         summary_extra={
             "dbs_absent_from_postgres": ["not_loaded"],
             "n_dbs_requested": 69,
+            "dbs_quarantined_curator_error": {
+                "recursion_limit_hit": "curated: GraphRecursionError: Recursion limit"
+            },
             "gold_hash_self_check": {
                 "n_checked": 60, "agree_rate": 1.0, "n_dbs": 67,
                 "exec_error_dbs": {"bad_gold": "q: exec timeout"},
@@ -752,6 +770,7 @@ def test_the_three_kinds_of_attrition_are_reported_separately(tmp_path):
     assert record["dbs_absent_from_postgres"] == ["not_loaded"]
     assert record["build_errors"] == ["broken_build"]
     assert record["gold_unverified_dbs"] == ["bad_gold"]
+    assert record["dbs_quarantined_curator_error"] == ["recursion_limit_hit"]
 
     ok, reasons = quotable(record)
     assert not ok
@@ -759,6 +778,7 @@ def test_the_three_kinds_of_attrition_are_reported_separately(tmp_path):
     assert "not on Postgres" in joined
     assert "failed to build" in joined
     assert "gold would not execute" in joined
+    assert "withheld from serving" in joined
 
 
 def test_a_skip_agent_run_is_never_quotable(tmp_path):
@@ -843,6 +863,7 @@ def test_both_drivers_record_no_model_under_skip_agent():
         serve_workers=1,
         question_pool_hash="pool0000",
         **_NOTES,
+        **_GRADED,
     )
     single = run_experiment.build_manifest(
         db_id="restaurant",
@@ -882,6 +903,51 @@ def test_both_drivers_record_no_model_under_skip_agent():
         )["model"]
         == "gpt-5.6-luna"
     )
+
+
+def test_two_runs_that_graded_semantic_failures_differently_are_not_comparable(tmp_path):
+    """``config.py`` ships ``grade_semantic_failures=False`` — serve refuses rather than
+    answering — and both eval drivers force it on. It is the largest single gap between
+    what eval measures and what a deployment does: under it, a coverage / L3-L5 /
+    execution-exhaustion failure hands the grader the last generated SQL stamped
+    ``unverified`` instead of refusing, so the same turn scores 0 one way and can score 1
+    the other.
+
+    It reached ``summary.json``'s ``serve_policy`` block and stopped there — no manifest
+    field, no comparability key, no resume knob — so a run that graded those failures and
+    a run that refused them agreed on every recorded key and were reported COMPARABLE.
+    Asserted through ``record_for_run`` rather than on hand-built dicts, because the gate
+    reads the RECORD: declaring the knob in the register and not lifting it here would
+    leave the derived key present and permanently inert.
+    """
+    graded = record_for_run(
+        _write_run(tmp_path, name="graded", manifest_extra={"grade_semantic_failures": True})
+    )
+    refused = record_for_run(
+        _write_run(tmp_path, name="refused", manifest_extra={"grade_semantic_failures": False})
+    )
+    assert graded["grade_semantic_failures"] is True
+    assert refused["grade_semantic_failures"] is False
+
+    ok, diffs = comparable(graded, refused)
+    assert not ok
+    assert any("grade_semantic_failures" in d for d in diffs)
+
+    # ...and two runs that graded the same way still compare, or the key would simply
+    # break the ledger instead of gating it.
+    same = record_for_run(
+        _write_run(tmp_path, name="graded2", manifest_extra={"grade_semantic_failures": True})
+    )
+    assert comparable(graded, same)[0]
+
+
+def test_graded_delivery_is_a_resume_knob_too(tmp_path):
+    """Within one directory the same difference is fatal rather than merely
+    incomparable: rows the grader was handed an unverified answer for sit in one
+    ``generations.<arm>.jsonl`` beside rows that were refused outright, with nothing
+    separating them, and the arm's score averages the two policies."""
+    keys = {k for k, _ in RESUME_DRIFT_KEYS}
+    assert "grade_semantic_failures" in keys
 
 
 def test_the_ledger_lock_retries_a_windows_permission_error(tmp_path, monkeypatch):

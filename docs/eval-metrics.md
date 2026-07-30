@@ -16,7 +16,7 @@ documented subset of `summary.json`, so "declared but absent" is expected there.
 
 | Artifact | Fields | Consumer |
 |---|---|---|
-| `manifest.json` | 41 (36 in every run) | `index.COMPARABILITY_KEYS`, `index.RESUME_DRIFT_KEYS` |
+| `manifest.json` | 42 (37 in every run) | `index.COMPARABILITY_KEYS`, `index.RESUME_DRIFT_KEYS` |
 | `generations.<arm>.jsonl` | 72 per (question, arm) | `_summarise_rows`, `analysis`, `power`, `error_taxonomy` |
 | `summary.json` | 87 | `index.quotable` |
 | `stage_events.jsonl` | 7 per (question, arm, stage) | read by hand; per-stage latency attribution |
@@ -87,6 +87,7 @@ joins the comparability gate by default instead of silently skipping it.
 | `schema_pick_max_columns` | columns shown to the picker; None when bypassed |
 | `use_embedder` | embedding channel on; None when routing is bypassed |
 | `skip_agent` | no model was called at all |
+| `grade_semantic_failures` | graded delivery: a coverage / L3-L5 / execution-exhaustion failure hands the grader its last generated SQL stamped `unverified` instead of refusing, so the same turn scores 0 under one setting and can score 1 under the other |
 | `always_note_global_max` | always-notes admitted per turn; the budget applies whether or not PIN is on |
 | `always_note_char_max` | character ceiling on the admitted always-notes |
 | `pin_triggers_enabled` | keyword-triggered notes PIN: forced into the prompt ahead of RRF, AND their schema prepended to the router shortlist — so this moves ROUTING too |

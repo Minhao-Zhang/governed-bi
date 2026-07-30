@@ -10,11 +10,13 @@ assert otherwise (AUDIT S6). The parameter is the seam an enterprise fork wires;
 this repo it is provenance, not enforcement.
 
 Row cap is connector-enforced: every dialect uses ``fetchmany(max_rows + 1)``
-plus a statement timeout. Postgres/Redshift also best-effort inject a root
-``LIMIT`` on simple ``SELECT`` / ``UNION`` SQL that lacks one (sqlglot rewrite;
-CTEs kept intact — no subquery wrap). Queries that already carry a LIMIT, or
-that fail to parse as a single Select/Union, still rely on fetchmany alone —
-client-side cursors can buffer that result set. SQLite has no LIMIT rewrite yet.
+plus a statement timeout. Every dialect — SQLite included — also best-effort
+injects a root ``LIMIT`` on simple ``SELECT`` / ``UNION`` SQL that lacks one, via
+the shared ``connectors.base._force_row_limit`` (sqlglot rewrite; CTEs kept
+intact — no subquery wrap). Redshift inherits Postgres's ``execute``, so its
+rewrite parses as ``postgres`` rather than as ``redshift``. Queries that
+already carry a LIMIT, or that fail to parse as a single Select/Union, still rely
+on fetchmany alone — client-side cursors can buffer that result set.
 
 The gateway wraps a per-dialect ``Connector``: SQLite is proven against the
 committed fixture; Postgres is exercised live by the eval harness

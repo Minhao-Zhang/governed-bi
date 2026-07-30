@@ -19,7 +19,7 @@ Source: [`curator/pipeline.py`](../src/governed_bi/curator/pipeline.py) and
 | Read-only gateway | `gateway/…` · `Gateway` (probes run read-only) |
 | clarifications.jsonl | `deepagents` `FilesystemBackend` · the open-question ledger |
 | Validator | `corpus/validate.py` · `validate_corpus` |
-| Adversary | `curator/adversary.py` · structural `review` (refute-first LLM adversary deferred) |
+| Adversary | `curator/adversary.py` · structural `review` (per-claim LLM adversary designed but deleted, never reached a caller) |
 | SME | `curator/clarifications.py` · `Responder` (human / stand-in) |
 | Corpus (on disk) | `corpus/<schema>/…` typed YAML + run manifest |
 
@@ -164,7 +164,7 @@ sequenceDiagram
         VAL-->>P: remaining findings → validate_findings.jsonl
     end
     P->>ADV: structural review signal (validate_corpus wrapper)
-    Note right of ADV: refute-first LLM adversary is deferred (a stub) —<br/>structural review + validate are a signal, not a hard gate
+    Note right of ADV: per-claim LLM adversary was deleted (unreachable stub) —<br/>structural review + validate are a signal, not a hard gate
     ADV-->>P: signal
     P->>DISK: write curated corpus + manifest (findings recorded, not blocking)
 ```

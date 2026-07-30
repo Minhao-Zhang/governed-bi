@@ -920,6 +920,48 @@ Both splits must share one build. The curator is stochastic, so a rebuild betwee
 them mixes overfitting with curator variance and the gap stops meaning either — which
 is why `run_datalake` takes `corpus_dir` separately from `out_dir`.
 
+## The graded configuration is not the serve default
+
+Before either driver serves a question it replaces the `Settings` that
+`load_settings` produced (`run_datalake.py` at the `replace(settings, ...)` call,
+`run_experiment.py` at its own). Four of the replaced fields decide what a turn is
+allowed to do, and each is set the way that helps the harness score:
+
+| Field | Serve default (`config.py`) | Eval driver | What the override does |
+|---|---|---|---|
+| `grade_semantic_failures` | `False` | `True`, hardcoded in both drivers | Coverage / L3–L5 repair-exhaustion / execution-exhaustion returns the last generated SQL stamped `unverified` instead of refusing. Serve refuses and scores nothing; the harness gets a row that can be right. |
+| `hard_block_suspect_columns` | `True` in `dev` | `False`, hardcoded in both drivers | SQL touching a suspect column is soft-warned and delivered rather than blocked, so it reaches the grader. |
+| `schema_route_top_k` | `3` | `10`, the `run_datalake()` signature default | A wider shortlist raises the chance the gold schema survives routing, which caps EX. Pooled driver only; the single-db ladder pins one schema and never routes. |
+| `schema_route_llm_pick` | `False` | `True`, same place | Switches to the single-schema-answer regime: an LLM picks exactly one schema and cross-schema join expansion is skipped. This is correct for BIRD because every question targets one `db_id` — which is a property of the benchmark, not something a deployment knows in advance. |
+
+Three of the four loosen a bound. The fourth assumes a fact about the questions
+that serve cannot assume. None of them moves in the direction that would make the
+harness stricter than serve.
+
+So **an EX figure from the ladder is not an estimate of what a default deployment
+would answer to the same question.** The gap between the two has never been
+measured — no arm in any run has been served on the serve defaults — but its
+*sign* is known: the harness is uniformly the more permissive configuration, so
+serve-default EX is bounded above by the ladder's rather than bracketed by it.
+Quoting a ladder EX as product accuracy overstates it by an unmeasured amount.
+
+What is recorded, and what that does not buy. `summary.json`'s `serve_policy`
+block carries `grade_semantic_failures` and `hard_block_suspect_columns`;
+`summary.json`'s `routing` block and the manifest's `route_top_k` /
+`route_llm_pick` carry the other two. Only the routing pair is in
+`MANIFEST_KNOBS`, so only that pair reaches `comparable()` — two ladder runs at
+different shortlist widths are flagged incomparable, and two runs that differ on
+graded delivery would not be. That exclusion is currently harmless and
+structurally misleading for the same reason: both policy fields are hardcoded, so
+they cannot differ between two runs of *this* repo, which is also why the one
+comparison that matters here is invisible to a ledger that only compares runs to
+each other.
+
+Do not quote a ladder EX as what this system answers in production. Closing the
+gap needs an arm served on the serve defaults — graded delivery off, suspect
+columns hard-blocked, shortlist 3, no LLM pick — reported as its own number and
+never as a rung, since it differs from `baseline` in four things at once.
+
 ## Concurrency, and what it is allowed to change
 
 Two independent knobs, because they exhaust different resources. `--workers` fans out
@@ -969,6 +1011,7 @@ crashes were `RateLimitError` — re-run narrower — or something else.
 | A db's decoy-touch rate reads suspiciously clean | `decoy_manifest_missing_dbs` | `summary.json` (`run_datalake.py`) |
 | "How much exploring did this arm do?" | `n_tool_calls` (per row), `tool_calls` (summed) | `generations.<arm>.jsonl`; `summary.json` |
 | Is this run's EX safe to quote | `ledger_ok` / `quotable` (hygiene only), then the runbook claim checklist; never `claim_ready` from the ledger alone | `runs/index.jsonl` |
+| Whether an EX figure describes a default deployment | `serve_policy` (graded delivery, suspect blocking) and `routing.top_k` / `routing.llm_pick` — all four are set more permissively than `config.py`'s serve defaults, so it does not | `summary.json`; `manifest.json` |
 | Are two runs actually the same experiment | `comparable(a, b)` diff list | `runs/index.jsonl` via `eval.index` CLI |
 | A wrong answer used the right schema — retrieval or generation? | `table_selection_report()`: `n_retrieval_miss` vs `n_selection_miss` | `analysis.json` via `eval.analysis` |
 | A wrong answer's stage and kind, beyond "right schema, wrong SQL" | `by_error_stage`, `by_error_primary`, `error_class_incidence`, `n_classes` | `summary.json` (`arms.<arm>.errors`); `governed_bi.eval.error_taxonomy` |

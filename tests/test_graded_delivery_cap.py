@@ -81,6 +81,34 @@ def test_cap_entry_is_refused_never_executed():
     assert answer.tier is ReliabilityTier.refused
 
 
+def test_a_missing_allowlist_refuses_instead_of_executing():
+    """The pre-execute re-check is the only thing that authorizes this execution, and
+    with no allowlist it cannot run — so the answer must be a refusal, not a delivered
+    result. The old guard wrapped the re-check in ``if allowlist is not None`` and let
+    control fall through to ``gateway.execute``, which meant the SQL that reached the
+    database was the one NO layer had vouched for."""
+    gw = _CountingGateway()
+    answer = _finish_unsuccessful(
+        settings=_settings(),
+        gateway=gw,
+        identity=_IDENTITY,
+        last_refusal={
+            "refused_by": "guardrail",
+            "failed_layer": "term_semantics",  # a deliverable layer, so only the
+            "sql": EXCLUDED_SQL,               # allowlist gate stands between it and execute
+            "escalation": "escalate",
+        },
+        attempts=3,
+        base_provenance={},
+        question="q",
+        # no allowlist / dialect / default_schema
+    )
+    assert gw.calls == 0, "an unverifiable SQL must never be executed"
+    assert answer.result is None
+    assert answer.tier is ReliabilityTier.refused
+    assert answer.provenance.get("graded_delivery_recheck_skipped") == "no_allowlist"
+
+
 def test_recheck_refuses_mislabeled_semantic_entry():
     """Even if the ledger LABELS a failure semantic (``term_semantics``), the
     pre-execute re-check re-runs check() and refuses when the SQL actually trips a

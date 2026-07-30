@@ -36,10 +36,36 @@ from ..corpus.schemas import (
     TermAsset,
 )
 from .answer import LOW_CONFIDENCE_JOIN
+from .note_inject import sanitize_inline_text
 
 if TYPE_CHECKING:
     from ..corpus import Corpus
     from ..retrieval import RetrievalResult
+
+
+# Per-field budgets for the curator prose :func:`_render` emits. Notes were sanitized
+# from the start; the schema block around them was not, so a column description was a
+# cheaper poisoning vector than the notes the defence was written for (AUDIT S5) — and
+# an unbounded one, since nothing capped how much prose one asset could spend.
+#
+# Three budgets, and what separates them is how many times a field renders per turn,
+# not how far it is trusted:
+#
+# - LABEL: identifier-shaped fields (grain, term name and synonyms, metric name,
+#   dimension names). These name a thing rather than explain it, so 160 chars is
+#   already far past any legitimate one.
+# - SENTENCE: the per-COLUMN fields (description, reliability caveat). A licensed table
+#   set renders one line per column — hundreds a turn — so this is the cap that decides
+#   whether the schema block still leaves room for the question.
+# - PARAGRAPH: the low-multiplicity prose (table description, few-shot question). Dozens
+#   a turn at most, and legitimately several sentences.
+#
+# All three sit well above the committed corpus (longest column description 46 chars,
+# longest table description 76), so no real curator text is clipped today; they exist
+# to bound an LLM-authored or edited corpus, not to trim this one.
+LABEL_MAX_CHARS = 160
+SENTENCE_MAX_CHARS = 400
+PARAGRAPH_MAX_CHARS = 800
 
 
 # --------------------------------------------------------------------------- #
@@ -323,9 +349,14 @@ def _render_column(col: ColumnView) -> str:
     bits[-1] += f", {col.role})" if col.role else ")"
     line = "    - " + " ".join(bits)
     if col.description:
-        line += f": {col.description}"
+        line += f": {sanitize_inline_text(col.description, max_chars=SENTENCE_MAX_CHARS)}"
     if col.suspect:
-        line += f"  [SUSPECT - DO NOT USE: {col.caveat or 'flagged unreliable'}]"
+        caveat = (
+            sanitize_inline_text(col.caveat, max_chars=SENTENCE_MAX_CHARS)
+            if col.caveat
+            else "flagged unreliable"
+        )
+        line += f"  [SUSPECT - DO NOT USE: {caveat}]"
     return line
 
 
@@ -333,6 +364,11 @@ def _render(ctx: PromptContext) -> str:
     lines: list[str] = []
 
     if ctx.conversation:
+        # Deliberately NOT sanitized, unlike the corpus prose below. These turns are the
+        # user's own questions and this engine's own answers to them, so a redaction here
+        # would silently rewrite what the user asked, and the guardrails — not the
+        # prompt — are what stop a self-injected turn from producing a query that runs.
+        # A separate call from the corpus case, left open on purpose.
         lines.append(
             "## Conversation so far (oldest first; use ONLY to resolve references "
             "in the latest question, e.g. 'that', 'last year')"
@@ -348,10 +384,10 @@ def _render(ctx: PromptContext) -> str:
         name = f"{tv.schema}.{tv.physical_name}"
         header = f"### {name}{tag}"
         if tv.grain:
-            header += f"  (grain: {tv.grain})"
+            header += f"  (grain: {sanitize_inline_text(tv.grain, max_chars=LABEL_MAX_CHARS)})"
         lines.append(header)
         if tv.description:
-            lines.append(f"  {tv.description}")
+            lines.append(f"  {sanitize_inline_text(tv.description, max_chars=PARAGRAPH_MAX_CHARS)}")
         for col in tv.columns:
             lines.append(_render_column(col))
 
@@ -367,28 +403,41 @@ def _render(ctx: PromptContext) -> str:
             if j.low_confidence:
                 note.append("LOW CONFIDENCE")
             suffix = f"  ({', '.join(note)})" if note else ""
+            # ``on`` is a SQL fragment, emitted verbatim. Sanitizing it would mangle the
+            # quoting and dots the generator has to copy exactly (the reason
+            # ``COUNT("Air Carriers"."Code")`` broke once already). Same for a metric's
+            # ``expression`` below.
             lines.append(f"  {j.on}{suffix}")
 
     if ctx.terms:
         lines.append("")
         lines.append("## Business terms")
         for t in ctx.terms:
-            syn = f" (synonyms: {', '.join(t.synonyms)})" if t.synonyms else ""
-            binds = f" -> {t.binds_to}" if t.binds_to else ""
-            lines.append(f"  {t.name}{syn}{binds}")
+            syn_names = [sanitize_inline_text(s, max_chars=LABEL_MAX_CHARS) for s in t.synonyms]
+            syn = f" (synonyms: {', '.join(syn_names)})" if t.synonyms else ""
+            binds = (
+                f" -> {sanitize_inline_text(t.binds_to, max_chars=LABEL_MAX_CHARS)}"
+                if t.binds_to
+                else ""
+            )
+            lines.append(f"  {sanitize_inline_text(t.name, max_chars=LABEL_MAX_CHARS)}{syn}{binds}")
 
     if ctx.metrics:
         lines.append("")
         lines.append("## Metrics (meaning; map to physical columns)")
         for m in ctx.metrics:
-            dims = f"  (dimensions: {', '.join(m.dimensions)})" if m.dimensions else ""
-            lines.append(f"  {m.name} = {m.expression}  over {m.base_table}{dims}")
+            dim_names = [sanitize_inline_text(d, max_chars=LABEL_MAX_CHARS) for d in m.dimensions]
+            dims = f"  (dimensions: {', '.join(dim_names)})" if m.dimensions else ""
+            name = sanitize_inline_text(m.name, max_chars=LABEL_MAX_CHARS)
+            lines.append(f"  {name} = {m.expression}  over {m.base_table}{dims}")
 
     if ctx.caveats:
         lines.append("")
         lines.append("## Reliability caveats (DO NOT USE these columns)")
         for c in ctx.caveats:
-            lines.append(f"  {c}")
+            # ``table.column: <curator note>`` — the identifiers are corpus-derived, the
+            # note is free prose, and the whole line reads as an authoritative directive.
+            lines.append(f"  {sanitize_inline_text(c, max_chars=SENTENCE_MAX_CHARS)}")
 
     if ctx.rules:
         lines.append("")
@@ -408,7 +457,9 @@ def _render(ctx: PromptContext) -> str:
         lines.append("")
         lines.append("## Example questions with gold SQL")
         for fs in ctx.few_shots:
-            lines.append(f"  Q: {fs.question}")
+            # The question is curator prose; the SQL is the exemplar the generator
+            # imitates and stays verbatim.
+            lines.append(f"  Q: {sanitize_inline_text(fs.question, max_chars=PARAGRAPH_MAX_CHARS)}")
             lines.append(f"  A: {fs.sql}")
 
     return "\n".join(lines)

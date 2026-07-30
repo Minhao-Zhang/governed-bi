@@ -631,6 +631,10 @@ def _manifest(**over):
         pin_triggers_enabled=False,
         pin_require_certified=True,
         pin_max=3,
+        # ...and so did graded delivery, for the same reason: the pooled driver forces
+        # the shipped ``False`` on, so the value it served with has to be stated rather
+        # than defaulted. ``True`` is what this driver always sets.
+        grade_semantic_failures=True,
     )
     kwargs.update(over)
     return _build_manifest(**kwargs)

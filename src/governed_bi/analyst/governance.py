@@ -653,8 +653,8 @@ def _finish_unsuccessful(
 
     ``allowlist``/``dialect``/``default_schema`` (threaded from ``analyst.agent``)
     let this re-run :func:`check` on the SQL right before executing it, mirroring
-    the graded-delivery path. Absent (a direct unit call), the semantic-layer
-    allowlist gate below already fails closed.
+    the graded-delivery path. Without an ``allowlist`` there is nothing to re-check
+    against, so graded delivery refuses rather than delivering.
     """
     record = dict(last_refusal)
     escalation = record.pop("escalation", _ESCALATION_NO_COVERAGE)
@@ -678,25 +678,38 @@ def _finish_unsuccessful(
     # (the term-scope layer graded delivery exists to forgive), so a genuine L4/L5
     # failure still delivers — but if the SQL now trips a safety/confidentiality
     # layer (L2/L3), or any non-semantic layer, refuse and never execute.
-    if allowlist is not None:
-        with _stage(stages, Stage.guardrail, path="graded_delivery_recheck") as detail:
-            verdict = check(
-                sql,
-                allowed_columns=set(allowlist.allowed),
-                suspect_columns=allowlist.suspect,
-                allowed_tables=None,
-                hard_block_suspect=settings.hard_block_suspect_columns,
-                dialect=dialect,
-                default_schema=default_schema,
-                on_layer=_layer_observer(stages),
-            )
-            detail["passed"] = verdict.passed
-        recheck_layer = verdict.failed_layer.value if verdict.failed_layer else None
-        if not verdict.passed and recheck_layer not in _GRADED_DELIVERY_LAYERS:
-            return refusal(
-                escalation=escalation,
-                provenance={**provenance, "graded_delivery_recheck_failed": recheck_layer},
-            )
+    #
+    # A missing allowlist used to skip the whole re-check and fall through to
+    # ``gateway.execute`` — the guard added to make this path defence-in-depth
+    # silently removed the only authorization step on it, which is the opposite of
+    # what the paragraph above claims. Nothing passes None today (``analyst.agent``
+    # builds the allowlist unconditionally and all four call sites thread it), so the
+    # hole is invisible until a refactor drops the argument, and what it costs then is
+    # an unverified query running against the database. Refuse instead.
+    if allowlist is None:
+        return refusal(
+            escalation=escalation,
+            provenance={**provenance, "graded_delivery_recheck_skipped": "no_allowlist"},
+        )
+
+    with _stage(stages, Stage.guardrail, path="graded_delivery_recheck") as detail:
+        verdict = check(
+            sql,
+            allowed_columns=set(allowlist.allowed),
+            suspect_columns=allowlist.suspect,
+            allowed_tables=None,
+            hard_block_suspect=settings.hard_block_suspect_columns,
+            dialect=dialect,
+            default_schema=default_schema,
+            on_layer=_layer_observer(stages),
+        )
+        detail["passed"] = verdict.passed
+    recheck_layer = verdict.failed_layer.value if verdict.failed_layer else None
+    if not verdict.passed and recheck_layer not in _GRADED_DELIVERY_LAYERS:
+        return refusal(
+            escalation=escalation,
+            provenance={**provenance, "graded_delivery_recheck_failed": recheck_layer},
+        )
 
     # §6: deliver the last generated SQL with unverified assurance. Try to
     # execute for a complete answer; if execute fails, still return the SQL so

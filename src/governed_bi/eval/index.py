@@ -302,7 +302,25 @@ def record_for_run(run_dir: Path | str) -> dict[str, Any]:
             "n_correct_and_zero_table_overlap": s.get("n_correct_and_zero_table_overlap"),
         }
 
-    record = {
+    # EVERY declared knob, derived from the register — not a hand-written subset.
+    #
+    # `COMPARABILITY_KEYS` is derived from `MANIFEST_KNOBS` so that a new knob joins the
+    # gate by default, and this block was the hole in that argument: `comparable()` reads
+    # the RECORD, so a knob the record never lifted is `None` on both sides of every
+    # pair, which this module's own rule reads as AGREEMENT. Eight declared gates were
+    # inert on every real comparison — `llm_temperature`, `question_pool_hash`, the five
+    # note-governance knobs, and `corpus_content_hash`, the one the labels above call
+    # "the corpus IS the treatment" (AUDIT E5). The derived list and the hand-written
+    # list had simply never been reconciled, and nothing failed, because an absent key
+    # cannot make a diff.
+    #
+    # Spelled entries below still win: several are not straight manifest reads (`model`
+    # via `manifest_model`, `git_sha` falling back to `corpus_release_hash`, `split`
+    # preferring the summary). This fills in the rest rather than replacing them.
+    record: dict[str, Any] = {
+        knob.name: manifest.get(knob.name) for knob in MANIFEST_KNOBS
+    }
+    record |= {
         "run_dir": str(run_dir).replace("\\", "/"),
         # Lifted so `comparable()` can tell a manifest that GUARANTEES every knob is
         # present from one that merely happens to carry the knobs it recorded. Without
@@ -323,6 +341,14 @@ def record_for_run(run_dir: Path | str) -> dict[str, Any]:
         "route_llm_pick": manifest.get("route_llm_pick"),
         "schema_pick_max_columns": manifest.get("schema_pick_max_columns"),
         "use_embedder": manifest.get("use_embedder"),
+        # Graded delivery. Lifted because ``comparable()`` reads the RECORD, not the
+        # manifest: a comparability key the record never carries is ``None`` on both sides
+        # of every pair, which this module's own rule reads as agreement — so declaring the
+        # knob in the register and stopping there would leave the gate derived, present in
+        # ``COMPARABILITY_KEYS``, and permanently inert. Both drivers force the shipped
+        # ``False`` to ``True``, so eval EX and serve behaviour part company here: a turn
+        # serve would refuse becomes a row the grader can mark correct.
+        "grade_semantic_failures": manifest.get("grade_semantic_failures"),
         "serve_workers": manifest.get("serve_workers"),
         "headline": headline,
         # Kept verbatim so `quotable` can explain itself without re-reading files.
@@ -382,6 +408,18 @@ def record_for_run(run_dir: Path | str) -> dict[str, Any]:
         "dbs_absent_from_postgres": sorted(
             summary.get("dbs_absent_from_postgres") or []
         ),
+        # Schemas that built, recorded a curator error, and were withheld from the serve
+        # loop rather than scored on a partially-authored corpus. Given the same
+        # treatment as ``dbs_absent_from_postgres`` for the same reason: neither appears
+        # in ``built_dbs`` nor in ``build_errors``, so a reader comparing the two lists
+        # sees a pool that looks fully covered and is smaller than the one requested.
+        # ``curator_error_keys`` above still fires on the same schemas — it says the
+        # curator crashed; this says the pool shrank, and dropping either check would
+        # leave one of those two facts unstated.
+        "dbs_quarantined_curator_error": sorted(
+            summary.get("dbs_quarantined_curator_error") or {}
+        ),
+        "n_dbs_built_before_quarantine": summary.get("n_dbs_built_before_quarantine"),
         "n_dbs_requested": summary.get("n_dbs_requested"),
         "gold_unverified_dbs": sorted(
             (summary.get("gold_hash_self_check") or {}).get("exec_error_dbs") or {}
@@ -725,6 +763,25 @@ def quotable(record: dict[str, Any]) -> tuple[bool, list[str]]:
             + (" +more" if len(absent) > 10 else "")
             + ") — the pool measured is smaller than the pool requested, so this is not "
             "the benchmark it names"
+        )
+
+    # Schemas withheld from serving because their curator crashed. The neighbouring
+    # ``curator_error_keys`` check reports that a curator error happened; this one reports
+    # that the benchmark named in the run's title is not the benchmark that was scored.
+    # Both are needed: a future run that stops filing withheld schemas under
+    # ``curator_errors`` would keep the first reason silent, and one that stops
+    # quarantining would keep the second silent.
+    withheld = record.get("dbs_quarantined_curator_error") or []
+    if withheld:
+        requested = record.get("n_dbs_requested")
+        scale = f" of {requested}" if requested else ""
+        reasons.append(
+            f"{len(withheld)}{scale} schema(s) were withheld from serving after their "
+            "curator recorded an error, so their questions went unscored ("
+            + ", ".join(withheld[:10])
+            + (" +more" if len(withheld) > 10 else "")
+            + ") — the surviving pool is intact, but it is smaller than the pool this "
+            "run names, so its numbers are that subset's and not this benchmark's"
         )
 
     # Gold that would not execute on some schemas. The run was allowed to proceed — the

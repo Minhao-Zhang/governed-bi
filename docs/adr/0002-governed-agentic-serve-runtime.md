@@ -87,7 +87,7 @@ with
 | Q3 | How durable must the audit be? | **(a) on-`Answer` provenance now**; design a durable-sink **(c)** seam fed from the same choke point; migrate to durable **(b)/(c)** later. |
 | Q4 | Keep two generation paths? | **No — one agentic architecture. A key is required.** `TemplateSqlGenerator` is removed as a serve path; CI/offline determinism moves to a `FakeListChatModel` agent harness. |
 | Q5 | What data may reach the LLM? | **Public data — send everything, no egress bound now.** Data-privacy/egress governance is a separate future branch; keep the tool boundary shaped so an egress knob can slot in. |
-| Q6 | Agent bounds? | `recursion_limit ≈ 15` super-steps; **`run_query` attempt cap = 3** enforced in `wrap_tool_call`; exhaustion → §6 graded-delivery / refuse; one model tier (`settings.models.llm_model`). |
+| Q6 | Agent bounds? | `recursion_limit = 40` super-steps (`AGENT_RECURSION_LIMIT`, `analyst/middleware.py`); **`run_query` attempt cap = 3** enforced in `wrap_tool_call`; exhaustion → §6 graded-delivery / refuse; one model tier (`settings.models.llm_model`). The review's first guess here was ~15; sequential tool calls (G1) cost ~2 super-steps per tool call, so 40 is what a search → inspect×4 → query → repair×2 chain needs, and `tests/test_agent_governance_fixes.py::test_recursion_limit_leaves_room_for_a_realistic_tool_chain` pins that property rather than the digits. |
 
 ### Architecture: agent on rails
 
@@ -153,8 +153,11 @@ reliability stamp. It reasons; the middleware and the rails govern.
    **never self-reported**. The agent cannot claim `unflagged`.
 6. **`safety_clearance` stays binary-hard** — only `semantic_assurance` is graded
    (§6 deliver-and-grade unchanged).
-7. **Bounded** — `recursion_limit ≈ 15` + `run_query` attempt cap = 3; exhaustion
-   → graded delivery or refuse.
+7. **Bounded** — `recursion_limit = 40` + `run_query` attempt cap = 3; exhaustion
+   → graded delivery or refuse. 40, not the ~15 first guessed, because sequential
+   tool calls cost ~2 super-steps each and 15 was hit by ordinary live questions;
+   `tests/test_agent_governance_fixes.py::test_recursion_limit_leaves_room_for_a_realistic_tool_chain`
+   asserts the budget still covers the tool chain it is sized for.
 8. **Leakage boundary unchanged** — gold SQL/answers never reach serve.
 9. **Production serves a pinned, reviewed corpus revision** — unchanged (§1).
 10. **Enforcement and audit share the interception point** — the `wrap_tool_call`

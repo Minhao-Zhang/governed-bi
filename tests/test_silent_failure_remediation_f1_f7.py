@@ -337,6 +337,7 @@ def test_manifest_records_limit_caps_and_scope_hash():
         pin_triggers_enabled=False,
         pin_require_certified=True,
         pin_max=3,
+        grade_semantic_failures=True,
         limit=2,
         limit_dbs=1,
         question_scope_hash=h,

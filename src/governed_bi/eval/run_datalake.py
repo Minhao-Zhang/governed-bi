@@ -168,6 +168,27 @@ _GOLD_EXEC_FAILURE_ABORT_FRACTION = 0.25
 #: ...and at least this many schemas, so the share cannot fire on a single failure in a
 #: small pool. Without it, one slow gold row aborted every ``--limit-dbs 3`` run.
 _GOLD_EXEC_FAILURE_ABORT_MIN_DBS = 2
+#: Share of the requested pool that may be withheld for a recorded curator error before
+#: the run aborts rather than serving what is left.
+#:
+#: The incident: a paid 55-schema run hit the curator's recursion limit on 13 schemas.
+#: ``_invoke_agent`` records that in the per-db ``run_manifest.json`` and lets the build
+#: finish, so 13 partially-authored corpora were served, scored, and ranked by the
+#: pooled router as if they were complete — and the only consequence was that
+#: ``quotable()`` disqualified the whole run, which cannot say "the other 42 are fine".
+#:
+#: A quarter, and measured against ``wanted`` rather than against what built, so it
+#: shares the gold guard's denominator: two shares of the same requested pool can be
+#: read side by side, and quarantining after a lossy build does not get a flattering
+#: smaller denominator. 13/55 is 24%, just under — which is the intent. That run should
+#: withhold 13 schemas and still report the 42, not throw away a paid build; a run where
+#: a third of the pool came back partial is a broken curator configuration, and serving
+#: it only spends the serve budget on a benchmark far smaller than the one it names.
+_CURATOR_ERROR_QUARANTINE_ABORT_FRACTION = 0.25
+#: ...and at least this many, for the reason its gold twin has one: on the runbook's
+#: ``--limit-dbs 3`` smoke a single quarantine is 33% and no evidence of anything
+#: systematic. The "nothing survived" case is caught unconditionally instead.
+_CURATOR_ERROR_QUARANTINE_ABORT_MIN_DBS = 2
 # A gold answer that is a literal ``VALUES (...)`` constant hands back a precomputed
 # row instead of querying anything, so no generated SQL can match it. These are
 # counted out of ``ex_gradeable`` and reported, rather than silently deflating EX
@@ -640,6 +661,99 @@ def _assert_build_coverage(
         )
 
 
+def _quarantine_curator_failures(
+    built: "Sequence[str]",
+    curator_errors: dict[str, dict],
+    *,
+    n_requested: int,
+) -> tuple[list[str], dict[str, str]]:
+    """Withhold schemas whose curator recorded an error, before serve spends on them.
+
+    Returns ``(servable, reason_by_db)``.
+
+    The incident is in :data:`_CURATOR_ERROR_QUARANTINE_ABORT_FRACTION`: 13 of 55
+    schemas hit the curator's recursion limit, ``_invoke_agent`` filed the crash in
+    ``run_manifest.json`` and let the build finish, and 13 partial corpora were then
+    served, scored, and ranked against the complete ones. The driver already *knew* —
+    it collected these errors and printed a warning per schema — and the knowledge was
+    spent on nothing but that warning plus an end-of-run gate that can only disqualify
+    the run whole.
+
+    A partial corpus is not a weaker treatment, it is an unknown one: nobody can say
+    which tables got descriptions before the agent ran out of steps, so its arm-to-arm
+    delta measures the recursion limit. It also pollutes the schemas that ARE intact,
+    because the pooled router ranks every schema in the pool against every question.
+
+    ``reason_by_db`` carries the per-schema reason into ``summary.json`` and the ledger.
+    A schema that simply disappeared from the pool is the failure
+    ``dbs_absent_from_postgres`` exists to prevent, one layer in: the run would report
+    full coverage of a pool it had silently shrunk.
+
+    Module-level and returning its decision rather than mutating, for the reason
+    :func:`_assert_build_coverage` is: the inline version of that gate had a test that
+    asserted arithmetic about its threshold and never called it, so it would have
+    passed with the gate deleted.
+    """
+    reason_by_db: dict[str, str] = {}
+    for db in built:
+        errs = curator_errors.get(db)
+        if not errs:
+            continue
+        # First line per arm. ``_collect_curator_errors`` already truncates, but
+        # ``_invoke_agent`` deliberately keeps the FULL traceback in the file it reads —
+        # so anything that stops going through that truncation would paste a stack into a
+        # ``summary.json`` field and a ledger record, where it is unreadable in both.
+        reason_by_db[db] = "; ".join(
+            f"{arm}: "
+            + str(block.get("error") or block.get("fix_pass_error")).splitlines()[0]
+            for arm, block in sorted(errs.items())
+        )
+    servable = [db for db in built if db not in reason_by_db]
+    if not reason_by_db:
+        return servable, reason_by_db
+
+    # Unconditional, and ahead of the proportional test: with nothing left to serve the
+    # pool is empty and every downstream aggregate divides by zero, so the share (and
+    # its small-pool floor) must not get a chance to wave it through.
+    if not servable:
+        raise RuntimeError(
+            f"every one of the {len(built)} built schema(s) recorded a curator error, so "
+            "there is no intact corpus left to serve: "
+            + "; ".join(f"{db} ({why})" for db, why in sorted(reason_by_db.items())[:3])
+            + ". Fix the curator (a recursion-limit hit needs --max-agent-steps raised "
+            "or the schema split), then rebuild."
+        )
+    share = len(reason_by_db) / n_requested if n_requested else 0.0
+    systematic = (
+        len(reason_by_db) >= _CURATOR_ERROR_QUARANTINE_ABORT_MIN_DBS
+        and share > _CURATOR_ERROR_QUARANTINE_ABORT_FRACTION
+    )
+    if systematic:
+        detail = "; ".join(f"{db}: {why}" for db, why in sorted(reason_by_db.items())[:3])
+        more = "" if len(reason_by_db) <= 3 else f" (+{len(reason_by_db) - 3} more)"
+        raise RuntimeError(
+            f"{len(reason_by_db)} of {n_requested} requested schema(s) recorded a "
+            f"curator error and would be withheld ({share:.0%}, above the "
+            f"{_CURATOR_ERROR_QUARANTINE_ABORT_FRACTION:.0%} ceiling) — refusing to "
+            f"serve the remaining {len(servable)}, because at this share the curator is "
+            f"misconfigured rather than unlucky and the surviving pool is a much smaller "
+            f"benchmark than the one this run names. A recursion-limit hit needs "
+            f"--max-agent-steps raised; then rebuild, or narrow the request with "
+            f"--limit-dbs so the pool you score is the pool you asked for. "
+            f"Errors: {detail}{more}"
+        )
+    print(
+        f"*** WARNING: withholding {len(reason_by_db)} of {n_requested} requested "
+        f"schema(s) from the serve loop — the curator recorded an error, so their "
+        f"corpora are partial and neither their questions nor their tables should reach "
+        f"the router: {sorted(reason_by_db)[:10]}"
+        + (f" (+{len(reason_by_db) - 10} more)" if len(reason_by_db) > 10 else "")
+        + f". Serving the remaining {len(servable)}; recorded as "
+        "`dbs_quarantined_curator_error` and this blocks quotability ***"
+    )
+    return servable, reason_by_db
+
+
 def _pooled_items(
     dataset_dir: Path, db_ids: list[str], *, limit: int | None, split: str = "test"
 ) -> list[tuple[Any, str]]:
@@ -902,6 +1016,12 @@ def _build_manifest(
     pin_triggers_enabled: bool,
     pin_require_certified: bool,
     pin_max: int,
+    # Graded delivery. Required here even though the shared builder defaults it, because
+    # this driver *overrides* the shipped ``False`` and is the reason the knob is a gate
+    # key at all: a run that handed the grader an unverified answer where serve would have
+    # refused is not comparable to one that refused. Read off ``Settings``, never
+    # restated, so the manifest cannot claim a policy the serve path did not use.
+    grade_semantic_failures: bool,
     build_workers: int = 1,
     # The run's SCOPE. Not knobs — they decide which arms exist and which questions
     # are in the pool, so a resume that disagrees is not the same experiment at all.
@@ -946,6 +1066,7 @@ def _build_manifest(
         pin_triggers_enabled=pin_triggers_enabled,
         pin_require_certified=pin_require_certified,
         pin_max=pin_max,
+        grade_semantic_failures=grade_semantic_failures,
         arms=arms,
         oracles=oracles,
         replicate_of=replicate_of,
@@ -4072,6 +4193,10 @@ def run_datalake(
         pin_triggers_enabled=settings.pin_triggers_enabled,
         pin_require_certified=settings.pin_require_certified,
         pin_max=settings.pin_max,
+        # Off ``settings`` for the same reason as the note knobs: this driver forces the
+        # shipped default off a few lines above, and the manifest has to record the policy
+        # the serve path will read rather than the literal someone typed there.
+        grade_semantic_failures=settings.grade_semantic_failures,
         skip_agent=skip_agent,
         serve_workers=serve_workers,
         build_workers=build_workers,
@@ -4173,6 +4298,61 @@ def run_datalake(
         ),
     )
     _assert_build_coverage(built, wanted, build_errors)
+
+    # Lift swallowed curator build errors per db. The pooled driver relocates each db's
+    # run_manifest.json into <root>/<db>/_build/, so the single-schema root reader never
+    # sees them — read the relocated location.
+    #
+    # Read HERE, immediately after the build and before the pool is fixed, rather than
+    # after the corpora are loaded where it used to sit. The information was already in
+    # hand before a single serve dollar was spent and was used for a warning only, so 13
+    # partial corpora out of 55 were served and scored anyway (see
+    # ``_quarantine_curator_failures``). Nothing writes into ``_build/`` between the
+    # build phase and here, so moving it earlier reads the same files.
+    curator_errors: dict[str, dict] = {}
+    for db in built:
+        # EVERY arm that ran, not a hardcoded pair. This listed only
+        # ``curated``/``curated_sme``, which was complete when those were the only
+        # arms that invoked the curator — and silently stopped being complete the
+        # moment ``seeded`` was added. A swallowed curator error, or an
+        # unpromoted-diagnostic marker, on a newly added arm was invisible to
+        # ``summary.json`` and therefore to ``quotable()``.
+        #
+        # ``baseline`` writes a manifest too and never runs an agent, so it simply has
+        # nothing to report; including it costs one missing-file check and removes the
+        # need to keep this list in step with the ladder.
+        errs = _collect_curator_errors(
+            {arm: roots[arm] / db / "_build" for arm in arms}
+        )
+        if errs:
+            curator_errors[db] = errs
+            for arm, block in errs.items():
+                print(
+                    f"\n*** WARNING: curator error on {db!r}/{arm} was swallowed "
+                    f"during build: error={block['error']!r} "
+                    f"fix_pass_error={block['fix_pass_error']!r} ***"
+                )
+    # ``built`` becomes the pool that is served and scored, so every derivation below it
+    # — questions, gold, corpora, the router's index, the census — narrows with it in one
+    # place instead of each remembering to filter.
+    #
+    # Resume-safe in both directions. Re-inclusion: the ``run_manifest.json`` that
+    # records the error is promoted next to the corpus and a resumed build adopts the
+    # completed tree rather than re-running the curator, so the same schema is withheld
+    # again — and if a rebuild genuinely succeeds, the error is gone from the file and
+    # the schema returns, which is a decision the artifact records rather than hides.
+    # Double-counting: rows for a withheld schema that a pre-quarantine invocation left
+    # in ``generations.<arm>.jsonl`` are outside ``wanted_ids`` in ``_run_pool_arm``, so
+    # they are excluded from the summary and reported as out-of-pool instead of being
+    # replayed into the denominator. The manifest's ``question_scope_hash`` /
+    # ``question_pool_hash`` are computed over ``wanted`` before the build, so a
+    # quarantine does not move them and cannot make a legitimate resume look like a
+    # scope change.
+    built_ok, quarantined_dbs = _quarantine_curator_failures(
+        built, curator_errors, n_requested=len(wanted)
+    )
+    n_built = len(built)
+    built = built_ok
 
     # --- POOL gold + test + per-db suspects (only successfully-built dbs) ---
     leakage = _assert_train_test_disjoint(dataset_dir, built)
@@ -4322,35 +4502,14 @@ def run_datalake(
                 "not a measurement of that layer ***\n"
             )
 
-    # Lift swallowed curator build errors + SME no-op signals per db. The pooled
-    # driver relocates each db's run_manifest.json into <root>/<db>/_build/, so the
-    # single-schema root reader never sees them — read the relocated location, and
-    # flag any db whose curated_sme ended byte-identical to curated (no real fold).
-    curator_errors: dict[str, dict] = {}
+    # SME no-op signals per db: flag any db whose curated_sme ended byte-identical to
+    # curated (no real fold). Over the pool that will actually be SERVED — a withheld
+    # schema's fold cannot affect an EX nobody computes for it, and naming it in the
+    # ledger's ``sme_noop_dbs`` would report a defect in a measurement that was never
+    # taken.
     sme_fold: dict[str, dict] = {}
-    for db in built:
-        # EVERY arm that ran, not a hardcoded pair. This listed only
-        # ``curated``/``curated_sme``, which was complete when those were the only
-        # arms that invoked the curator — and silently stopped being complete the
-        # moment ``seeded`` was added. A swallowed curator error, or an
-        # unpromoted-diagnostic marker, on a newly added arm was invisible to
-        # ``summary.json`` and therefore to ``quotable()``.
-        #
-        # ``baseline`` writes a manifest too and never runs an agent, so it simply has
-        # nothing to report; including it costs one missing-file check and removes the
-        # need to keep this list in step with the ladder.
-        errs = _collect_curator_errors(
-            {arm: roots[arm] / db / "_build" for arm in arms}
-        )
-        if errs:
-            curator_errors[db] = errs
-            for arm, block in errs.items():
-                print(
-                    f"\n*** WARNING: curator error on {db!r}/{arm} was swallowed "
-                    f"during build (corpus still scored): error={block['error']!r} "
-                    f"fix_pass_error={block['fix_pass_error']!r} ***"
-                )
-        if "curated" in arms and "curated_sme" in arms:
+    if "curated" in arms and "curated_sme" in arms:
+        for db in built:
             fold = _sme_fold_signal(roots["curated"], roots["curated_sme"], db)
             sme_fold[db] = fold
             _warn_if_sme_noop(fold, db_id=db)
@@ -4652,6 +4811,17 @@ def run_datalake(
         "n_dbs_built": len(built),
         "built_dbs": built,
         "build_errors": build_errors,
+        # Built, then withheld from the serve loop because the curator recorded an error
+        # for it (``_quarantine_curator_failures``). A FOURTH kind of attrition, beside
+        # absent-from-Postgres, failed-to-build and gold-unverified, and the one with no
+        # home before now: these schemas are absent from ``built_dbs`` and
+        # absent from ``build_errors``, so without this field they would simply be gone
+        # and the run would report full coverage of a pool it had shrunk — the failure
+        # ``dbs_absent_from_postgres`` exists to catch, one layer in. ``n_dbs_built``
+        # counts what was SERVED, so the pre-quarantine count is stated beside it rather
+        # than left to be inferred from two lists.
+        "dbs_quarantined_curator_error": quarantined_dbs,
+        "n_dbs_built_before_quarantine": n_built,
         # Requested but not loaded on Postgres. Distinct from ``build_errors`` (loaded
         # but the build failed): neither the coverage gate nor the gold share can see
         # these, because both measure against the already-filtered ``wanted``.

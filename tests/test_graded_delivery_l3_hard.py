@@ -12,10 +12,14 @@ from dataclasses import replace
 
 from governed_bi.analyst.governance import _finish_unsuccessful
 from governed_bi.config import Environment, Settings
-from governed_bi.gateway import Identity
+from governed_bi.gateway import ColumnAllowlist, Identity
 from governed_bi.gateway.connectors.base import QueryResult
 
 _IDENTITY = Identity(user="u", all_access=True)
+# Graded delivery re-runs check() before executing and refuses when it has no allowlist
+# to check against, so a test about which LAYER is deliverable has to supply one that
+# lets the SQL through — otherwise it would pass for the wrong reason.
+_ALLOWLIST = ColumnAllowlist(frozenset({"s.t.secret"}), frozenset())
 
 
 class _CountingGateway:
@@ -42,6 +46,8 @@ def _finish(gateway, failed_layer: str):
         attempts=3,
         base_provenance={},
         question="q",
+        allowlist=_ALLOWLIST,
+        default_schema="s",
     )
 
 

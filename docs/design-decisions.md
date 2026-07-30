@@ -200,7 +200,7 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 
 - **Alternative:** a single-agent curator (cheaper, but self-review is weak: a model rarely refutes its own plausible inference, and that's where owner-less layers silently rot).
 - **Consequence:** dev = adversary is the only reviewer (auto-accept on pass); prod = automated first-line reviewer before human certification (D6). Proposer claim + adversary verdict both land in the asset `audit` block → the viz/audit surface.
-- **Built:** the deterministic scaffold (programmatic Facts profiling, naming-convention FK candidates, and an adversary `review` wrapping the CI validator) plus the **deepagents build harness** (`curator/deep_agent.py`: a deep agent over Facts-profiling + read-only-probe tools; construction verified offline, the autonomous run model-gated). Still seams: LLM authoring of joins / terms / metrics / notes, the live per-asset adversary `refute`, and the self-eval train-EX loop (`rule` / `skill` are retired names — D17); those are what make `curated` beat `baseline`. See [Curator](curator.md).
+- **Built:** the deterministic scaffold (programmatic Facts profiling, naming-convention FK candidates, and an adversary `review` wrapping the CI validator) plus the **deepagents build harness** (`curator/deep_agent.py`: a deep agent over Facts-profiling + read-only-probe tools; construction verified offline, the autonomous run model-gated). The adversary is structural only — reference integrity, id conventions, join-ON column membership, note budgets — so a corpus that clears it is not semantically certified; the per-asset LLM `refute` designed for that role never reached a caller and was deleted (R6). Still seams: LLM authoring of joins / terms / metrics / notes, and the self-eval train-EX loop (`rule` / `skill` are retired names — D17); those are what make `curated` beat `baseline`. See [Curator](curator.md).
 
 ## D11: External review (2026-07-09)
 
@@ -517,11 +517,16 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
   for now; in-app durable capture + a native aggregate/monitoring/alerting view are
   future work (deferred).*
 
-- **R6 — Curator adversary `refute()` + self-eval/repair loop: deferred
-  (refines [D10](#d10-curator--proposer--adversary)).** Confirmed unbuilt;
-  `refute()` is `NotImplementedError` and the structural `review()` remains
-  signal-only in `curator/pipeline.py` (annotates audit notes, docks confidence,
-  never gates). Explicitly deferred for now. *Status: deferred.*
+- **R6 — Curator adversary `refute()`: resolved by deletion (2026-07-29,
+  refines [D10](#d10-curator--proposer--adversary)); self-eval/repair loop
+  remains deferred.** `refute()` had zero callers (`grep -rn "refute(" src/
+  tests/` matched only its own definition) — it was never reachable, so
+  deleting it changes no runtime behavior. The `curated` rung's adversary has
+  always been the structural `review()` in `curator/pipeline.py` (annotates
+  audit notes, docks confidence, gates on hard findings only); docs now
+  describe that as the adversary, not as a placeholder for a semantic one. The
+  self-eval train-EX loop is still deferred. *Status: `refute()` deleted;
+  self-eval loop deferred.*
 
 - **R7 — The refuse-gate is untested by the BIRD EX number — documented eval
   limitation (refines [D5](#d5-refusal--best-effort) /
@@ -600,8 +605,9 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
   always + on_match injection (5 scopes), H1 budget/precedence, `read_notes` /
   `grep_notes`, C5 excluded-id scan, keyword PIN with certified gate + offline
   GATE-RECALL / GATE-ADV-WRONG-NOTE. Phase 6 max-pool vector deferred (only if
-  recall still caps EX). LLM `refute()` for non-notes remains model-gated;
-  notes have an offline structural `refute()`. See ADR 0003 and the
+  recall still caps EX). The per-asset LLM `refute()` (notes and non-notes
+  alike) never reached a caller and was deleted 2026-07-29 (R6); structural
+  `review()` covers notes the same as every other asset. See ADR 0003 and the
   ADR 0004 (M1–M2, M5 shipped).
   ADR 0003's design questions are resolved (see locked decisions above).
 

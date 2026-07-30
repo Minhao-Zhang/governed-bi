@@ -131,6 +131,12 @@ MANIFEST_KNOBS: tuple[Metric, ...] = (
     Metric("schema_pick_max_columns", "columns shown to the picker; None when bypassed"),
     Metric("use_embedder", "embedding channel on; None when routing is bypassed"),
     Metric("skip_agent", "no model was called at all"),
+    Metric(
+        "grade_semantic_failures",
+        "graded delivery: a coverage / L3-L5 / execution-exhaustion failure hands the "
+        "grader its last generated SQL stamped `unverified` instead of refusing, so the "
+        "same turn scores 0 under one setting and can score 1 under the other",
+    ),
     # ── note governance (ADR 0003) ──
     # The always-note budget is live on every run: `analyst.agent` forwards both caps
     # into `apply_always_budget` unconditionally, so they decide how much of the
@@ -327,6 +333,23 @@ def build_manifest(
     pin_triggers_enabled: bool,
     pin_require_certified: bool,
     pin_max: int,
+    # Graded delivery, as ``Settings`` had it at serve time. ``config.py`` ships this
+    # ``False`` — serve refuses rather than answering — and both eval drivers override it
+    # to ``True``, which is the single largest gap between what eval measures and what a
+    # deployment does: a turn that serve would have refused becomes a row the grader can
+    # mark correct. It reached ``summary.json``'s ``serve_policy`` block and stopped
+    # there, so it was neither a manifest field, nor a comparability key, nor a resume
+    # knob, and two runs that graded differently compared as one experiment.
+    #
+    # The one knob here with a default, and the exception is narrow: both drivers pass
+    # the value they actually served with (the pooled one reads it back off ``Settings``
+    # rather than restating the literal), and ``validate_manifest`` requires the key, so
+    # the default cannot silence a driver that starts disagreeing with it. It exists
+    # because a required parameter here is a ``TypeError`` in the single-schema driver at
+    # call time, and a manifest builder that raises is worse than one that records a
+    # value a test pins. ``tests/test_eval_metrics.py`` pins both drivers against the
+    # ``Settings`` they serve with.
+    grade_semantic_failures: bool = True,
     # Scope. Required for the same reason as the knobs: an unstated scope is recorded
     # as the empty/absent value, and ``arms=()`` for a run that served three arms, or
     # ``limit=None`` for a run capped at five questions, is a false record that no
@@ -406,6 +429,7 @@ def build_manifest(
         # different caps read as incomparable over a difference neither run had.
         "pin_require_certified": pin_require_certified if pin_triggers_enabled else None,
         "pin_max": pin_max if pin_triggers_enabled else None,
+        "grade_semantic_failures": grade_semantic_failures,
         # ── operational ──
         "bird_dir": str(bird_dir),
         "created_at_utc": created_at_utc,

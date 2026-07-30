@@ -397,6 +397,7 @@ def test_build_workers_is_recorded_in_the_manifest_but_is_not_a_resume_knob():
         pin_triggers_enabled=False,
         pin_require_certified=True,
         pin_max=3,
+        grade_semantic_failures=True,
         build_workers=6,
     )
     assert m["build_workers"] == 6

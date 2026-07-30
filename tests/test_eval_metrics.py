@@ -225,6 +225,74 @@ def test_no_manifest_knob_or_scope_field_may_be_defaulted(knob):
         metrics.build_manifest(**base)  # type: ignore[arg-type]
 
 
+#: Every value ``run_experiment`` configures graded delivery with. Read out of the source
+#: because that driver has no seam returning its serve-time ``Settings``, and it takes the
+#: shared builder's DEFAULT for this knob rather than passing a value — so the default has
+#: to equal what it serves with, and nothing else can check that.
+#: The lookahead keeps prose out: the same file explains the knob in a summary note that
+#: reads ``grade_semantic_failures=True: coverage/L3-L5 ...``, which is documentation
+#: rather than a keyword argument.
+_GRADED_DELIVERY_ASSIGNMENTS = re.compile(r"grade_semantic_failures=([\w.]+)(?=[,)\s])")
+
+
+def test_the_single_schema_driver_serves_the_graded_delivery_its_manifest_claims():
+    """The tripwire that lets ``grade_semantic_failures`` carry a default at all.
+
+    Every other gate key is keyword-required, because a defaulted parameter records a
+    value the run never used and satisfies every presence check. This one defaults,
+    because a required parameter is a ``TypeError`` in a driver that does not pass it and
+    a manifest builder that raises is worse than one a test pins. So: the pooled driver
+    passes the value it served with, and this asserts the default still describes the
+    single-schema driver. Change ``run_experiment``'s override and this fails, which is
+    the signal to thread the parameter through rather than to edit the number here.
+    """
+    src = (EVAL_DIR / "run_experiment.py").read_text(encoding="utf-8")
+    configured = set(_GRADED_DELIVERY_ASSIGNMENTS.findall(src))
+    assert configured, (
+        "run_experiment no longer configures grade_semantic_failures anywhere — this "
+        "scan has gone blind and the manifest default is unchecked"
+    )
+    assert configured == {"True"}, (
+        f"run_experiment configures graded delivery as {sorted(configured)} but its "
+        "manifest takes build_manifest's default — pass the value it serves with, the "
+        "way run_datalake._build_manifest does"
+    )
+    assert _single_manifest()["grade_semantic_failures"] is True
+
+
+def test_the_pooled_driver_may_not_default_the_graded_delivery_it_overrides():
+    """It forces the shipped ``False`` on, so it is the driver whose manifest could most
+    easily claim a policy the serve path did not use. Required there, and recorded from
+    ``Settings`` rather than restated as a literal."""
+    from governed_bi.eval.run_datalake import _build_manifest
+
+    base = dict(
+        bird_dir=Path("."),
+        split="test",
+        model_name="m",
+        prompt_variants={},
+        route_top_k=3,
+        route_llm_pick=False,
+        schema_pick_max_columns=12,
+        use_embedder=True,
+        skip_agent=False,
+        serve_workers=1,
+        question_pool_hash="pool0000",
+        always_note_global_max=8,
+        always_note_char_max=2000,
+        pin_triggers_enabled=False,
+        pin_require_certified=True,
+        pin_max=3,
+    )
+    with pytest.raises(TypeError, match="grade_semantic_failures"):
+        _build_manifest(**base)  # type: ignore[arg-type]
+    # And it records what it is told, both ways — a knob that could only ever be True
+    # would gate nothing.
+    for value in (True, False):
+        built = _build_manifest(**base, grade_semantic_failures=value)  # type: ignore[arg-type]
+        assert built["grade_semantic_failures"] is value
+
+
 def test_the_validator_rejects_a_manifest_missing_a_gate_key():
     m = _manifest("datalake")
     del m["corpus_content_hash"]
@@ -369,6 +437,9 @@ def test_the_manifest_emits_exactly_the_declared_field_set(tmp_path):
         pin_triggers_enabled=False,
         pin_require_certified=True,
         pin_max=3,
+        # Required by the pooled wrapper, defaulted by the shared builder — which is why
+        # ``_single_manifest`` below does not spell it. See ``build_manifest``.
+        grade_semantic_failures=True,
     )
     single = _single_manifest()
 
