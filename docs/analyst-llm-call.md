@@ -52,7 +52,7 @@ plus a `HumanMessage`, and the model is called repeatedly inside that agent's ow
 
 **System prompt:** `prompts.text("schema_pick", prompt_variants)`, resolved once when
 the serve stack is built (`build_serve_rails`), not per turn. Two variants exist
-today (`v1`, `v2` — see [Prompt-variant experiments](prompt-experiments.md#the-three-real-variants)
+today (`v1`, `v2` — see [Prompt-variant experiments](prompt-experiments.md#the-four-real-variants)
 for what changes between them); both ask the model to decompose the question into
 the concrete parts it needs (entities, filters, joins, the returned value or measure)
 and check every candidate against them, because near-duplicate sibling schemas (two
@@ -115,7 +115,7 @@ system_prompt = f"{system_prompt}\n\n## Current time\n{now_local:%Y-%m-%d %H:%M:
 ```
 
 Three variants exist today (`v1`/`v2`/`v3`; see
-[Prompt-variant experiments](prompt-experiments.md#the-three-real-variants)). All
+[Prompt-variant experiments](prompt-experiments.md#the-four-real-variants)). All
 three share the same shape — license the governed context over guessing, choose
 tables deliberately (reject a suspect/duplicate/alternate copy even when its column
 names fit), write SQL using only the shown identifiers, return exactly what was asked

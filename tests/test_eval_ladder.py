@@ -742,9 +742,9 @@ def test_deep_agent_invoke_receives_tracing_callbacks(bird_connector, tmp_path: 
         def __init__(self):
             self.configs: list = []
 
-        def invoke(self, payload, config=None):
+        def stream(self, payload, config=None, stream_mode=None):
             self.configs.append(config)
-            return {}
+            yield "values", {"messages": []}
 
     rec = _RecordingAgent()
     monkeypatch.setattr(da_mod, "build_curator_agent", lambda *a, **k: rec)

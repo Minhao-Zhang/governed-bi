@@ -989,6 +989,16 @@ Staging is cleared at the start of every build; only a durable
 `BUILD_COMPLETE.json` counts as finished, so a kill mid-build cannot leave
 partial YAML that resume would later adopt as a complete corpus.
 
+**The curator tool-call trace does not survive the pooled driver.** `curator_trace.jsonl`
+and `curator_sme_trace.jsonl` are written next to `run_manifest.json` at the arm root,
+but `_SIDECARS` in `run_datalake.py` names five files and these are not among them, so
+`_relocate_sidecars` leaves them behind and `_promote_build` deletes the staging root
+that holds them. Everything derived from the trace does survive: the manifest's
+`tool_calls.repeats` block and the run record's `n_tool_calls` / `n_steps`. What is lost
+is the verbatim argument list, which is the artifact that answers *what* a run looped on
+rather than *that* it looped. The single-schema driver (`run_experiment.py`) keeps it,
+because there the corpus root belongs to one db and is never promoted.
+
 A rate-limit storm is legible rather than silent: those turns classify as crashes (not
 refusals), which blocks quotability, and `arms.<arm>.by_error_type` says whether the
 crashes were `RateLimitError` — re-run narrower — or something else.
@@ -1010,6 +1020,9 @@ crashes were `RateLimitError` — re-run narrower — or something else.
 | EX denominator looks padded by rows with no usable gold | `n_gold_unusable` (alongside `n_missing_gold`) | `summary.json` |
 | A db's decoy-touch rate reads suspiciously clean | `decoy_manifest_missing_dbs` | `summary.json` (`run_datalake.py`) |
 | "How much exploring did this arm do?" | `n_tool_calls` (per row), `tool_calls` (summed) | `generations.<arm>.jsonl`; `summary.json` |
+| A curated corpus has few suspect columns or few notes and you want to know whether the agent decided that or ran out of room | `tool_calls.exhausted`, `n_super_steps` against `recursion_limit`, `tool_call_budget` | `run_manifest.json` per schema (`<db>/_build/`) |
+| A curator agent burned its budget and you want to know on what | `tool_calls.repeats` (`total` vs `distinct`, `max_repeat`, `top_repeated`) | `run_manifest.json`; verbatim args in `curator_trace.jsonl` (single-schema driver only) |
+| Seed coverage looks lower than the seed's own success count | `assets` (joins/metrics/terms/few_shots actually written) against the seed's `joins_ok` / `metrics_ok` | `run_manifest.json` |
 | Is this run's EX safe to quote | `ledger_ok` / `quotable` (hygiene only), then the runbook claim checklist; never `claim_ready` from the ledger alone | `runs/index.jsonl` |
 | Whether an EX figure describes a default deployment | `serve_policy` (graded delivery, suspect blocking) and `routing.top_k` / `routing.llm_pick` — all four are set more permissively than `config.py`'s serve defaults, so it does not | `summary.json`; `manifest.json` |
 | Are two runs actually the same experiment | `comparable(a, b)` diff list | `runs/index.jsonl` via `eval.index` CLI |

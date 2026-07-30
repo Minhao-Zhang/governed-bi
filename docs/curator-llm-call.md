@@ -11,8 +11,9 @@ which describe the surrounding design.
 `curator_phase_b` entries in `governed_bi.prompts` — `src/governed_bi/prompts/registry.py`
 is the single source, so quoting the text here would drift the moment either is
 edited or a variant is added. Read the registry directly, and
-[Prompt-variant experiments](prompt-experiments.md) for how a run selects a variant
-and why only `v1` exists for these two stages today.
+[Prompt-variant experiments](prompt-experiments.md) for how a run selects a variant.
+`curator_phase_a` now has a `v2` (`v1` is unchanged and still the default);
+`curator_phase_b` and `sme_rules` carry only `v1`.
 
 > Implementation: [`prompts.py`](../src/governed_bi/curator/prompts.py),
 > [`pipeline.py`](../src/governed_bi/curator/pipeline.py),
@@ -66,11 +67,16 @@ the model resolved it by refusing to answer, which cost 11 of 381 clarifications
 schema with the full batch of train pairs.
 
 **System prompt:** the `curator_phase_a` registry entry. It sets up the curator as
-its own adversary — work the (question, gold SQL) pairs one at a time, call
-`read_corpus` to see Facts and prior Inference writes, `run_probe_query` to refute a
-claim before asserting it, persist surviving claims via the `upsert_*`/`annotate_*`
-tools, and raise a `clarifications.jsonl` entry rather than silently guess when a
-table or column's purpose cannot be inferred.
+its own adversary — call `read_corpus` to see Facts and prior Inference writes,
+`run_probe_query` to refute a claim before asserting it, persist surviving claims via
+the `upsert_*`/`annotate_*` tools, and raise a `clarifications.jsonl` entry rather than
+silently guess when a table or column's purpose cannot be inferred. `v1` tells it to
+work the (question, gold SQL) pairs one at a time; `v2` tells it to batch, group the
+pairs by the tables they touch, run the reliability sweep as one `annotate_columns` per
+table against `read_corpus(todo_only=true)`, and treat re-verifying seeded joins and
+metrics as the first work to drop. See
+[Prompt-variant experiments](prompt-experiments.md#the-four-real-variants) for what
+would refute `v2`.
 
 **User task message (`pipeline.py`, joined from these parts with blank lines):**
 
@@ -86,7 +92,25 @@ Create /clarifications.jsonl for genuine unknowns (write_file on first create; g
 Mark unreliable or misleading columns suspect. Propose at least the verified seed joins.
 
 Stop once pairs are covered, seed joins verified, and obviously unreliable columns marked.
+
+## Budget
+You have about [N] tool calls. Several tool calls in ONE reply cost the same as one, so batch aggressively — emit all the probes for a table together, and use annotate_columns to do a whole table's columns in a single call ([N_TABLES] tables here).
+If you cannot do everything, this is the order that matters, most first:
+1. Mark unreliable columns suspect (annotate_columns). ...
+2. Describe what tables and columns mean.
+3. Raise clarifications for genuine unknowns.
+4. Few-shots and terms.
+5. Re-verifying seeded joins and metrics — they are already recorded, so this is the first thing to skip.
+Do not re-issue a call you have already made; read_corpus(todo_only=true) tells you what is left.
 ```
+
+The `## Budget` block is `_budget_brief(tool_calls, n_tables=...)` in `pipeline.py`
+(abridged above; read it there for the full text). `[N]` is the resolved tool-call
+budget for this schema, so the figure differs per schema. It exists because nothing
+else in the context mentioned a limit while the deepagents base prompt says to keep
+working until the task is fully complete, and because the stages that died when the
+budget ran out were the ones no other mechanism produces. See
+[the step budget](curator.md#the-step-budget).
 
 `[SEED_RENDER]` is `SeedBundle.render()`, the deterministic join/metric candidates
 extracted from the train gold SQL by `sqlglot`, offered as "verify, do not invent"
@@ -122,9 +146,13 @@ curate from, capped at 40:
 Grounded tools (`curator_tools`, quoted docstrings, i.e. what the model sees as each
 tool's description), plus the built-in file tools scoped to `/clarifications.jsonl`:
 
-- **`read_corpus(table="", kind="")`**: "Return the live corpus — Facts and Inference
-  written so far. Optional table (physical name) and kind (table/join/metric/term/
-  few_shot) filters bound context on wide schemas."
+- **`read_corpus(table="", kind="", todo_only=False)`**: "Return the live corpus — Facts
+  and Inference written so far. Optional table (physical name) and kind (table/join/
+  metric/term/few_shot) filters bound context on wide schemas. Set todo_only=true to
+  list ONLY the columns still lacking both a description and a suspect mark — a worklist
+  that shrinks as you write, and the cheapest way to check whether the reliability sweep
+  is done." The render is capped at `READ_CORPUS_MAX_CHARS` (20,000) and says so when it
+  truncates.
 - **`run_probe_query(sql)`**: "Run a read-only SELECT to confirm or falsify a claim
   about the data. Returns the rows (truncated) or an error string. Never mutates data."
 - **`upsert_join(left_table, right_table, on, ...)`**: "Record a validated JoinAsset
@@ -140,6 +168,19 @@ tool's description), plus the built-in file tools scoped to `/clarifications.jso
 - **`annotate_column(table, column, description="", role="", reliability="",
   suspect=False, note="", ...)`**: "Set column Inference: description, role,
   reliability, and/or suspect."
+- **`annotate_columns(table, columns: list[dict])`**: "Annotate MANY columns of one
+  table in a single call — the way to do the reliability sweep. … Returns one result
+  line per column; a column that fails does not stop the others." Each dict needs
+  `column` plus any of `description` / `role` / `reliability` / `suspect` / `note` /
+  `confidence`, with the same per-column semantics as `annotate_column`. It swallows a
+  per-spec exception on purpose: a raising tool returns nothing at all, so one bad spec
+  would cost every good annotation in the call and the agent would redo them, which is
+  the churn the tool exists to prevent.
+
+That is seven write tools. `annotate_columns` is the one that exists for the step
+budget rather than for a new capability: the reliability sweep is per column over
+schemas up to 703 columns wide, and one call per column made the budget scale with
+schema width.
 
 **Illustrative transcript:**
 
@@ -171,29 +212,39 @@ One line of `/clarifications.jsonl`, exactly the shape given in the prompt:
 
 ## (2) Phase B deep agent
 
-Same harness, same tool set (`curator_tools(..., certified_writes=True)`), different
-system prompt and user task. `pipeline.build_curated_corpus_with_sme` invokes it once
-per schema after the Simulated SME (or a real SME) has answered the Phase A ledger.
+Same harness, same tool set, different system prompt and user task.
+`pipeline.build_curated_corpus_with_sme` invokes it once per schema after the Simulated
+SME (or a real SME) has answered the Phase A ledger. `curator_tools` takes a
+`certified_writes` flag but the pipeline never sets it and it would not matter if it
+did: every write tool passes `certified=False`, because certification is a human,
+non-agent path (D6/C6).
 
 **System prompt:** the `curator_phase_b` registry entry
 (`system_prompt=prompt_text("curator_phase_b", prompt_variants)`, default `v1`, i.e.
 `_PHASE_B_PROMPT`). It puts the agent in ingest mode: read the answered
-`/clarifications.jsonl`, apply each answer via `annotate_*`/`upsert_*` with
-`certified=true` and `answered_by` set from the record, and stop once every answered
-clarification is reflected in the corpus. `pair:`/`query:`-scoped answers
+`/clarifications.jsonl`, locate each target from the record's `scope`, apply the answer
+via `annotate_*`/`upsert_*`, and stop once every answered clarification is reflected in
+the corpus. Its step 2 is explicit that writes carry curator/proposed provenance and
+that the agent must not claim human certification, because that stamp belongs to the
+non-agent fold path. `pair:`/`query:`-scoped answers
 (data-quality or annotation-error findings raised in Phase A) are not folded this
 way — they land as governance rules automatically.
 
 **User task message (verbatim, `pipeline.py`):**
 
 ```text
-Ingest answered clarifications for schema `[SCHEMA]`. Read /clarifications.jsonl and fold each answered record into the corpus via annotate/upsert tools with certified=true.
+Ingest answered clarifications for schema `[SCHEMA]`. Read /clarifications.jsonl and fold each answered record into the corpus via annotate/upsert tools (curator/proposed provenance only). There are [N_ANSWERED] answered record(s). You have about [N] tool calls; several calls in ONE reply cost the same as one, so batch them, and use annotate_columns for several columns of the same table at once.
 ```
+
+`[N]` is `30 + 3 * [N_ANSWERED]`, derived rather than constant for the same reason Phase
+A's budget is, and because Phase B's work scales with the ledger (one locate plus one
+write per record) rather than with schema width.
 
 ### Phase B tool loop
 
-Same tools as Phase A, but every write now carries certified provenance
-(`certified=true`, `answered_by=[SME]`):
+Same tools as Phase A, and the exposed wrappers accept neither `certified` nor
+`answered_by`: those are `AssetBag` parameters the deterministic fold
+(`mark_unrecognised_columns`, `record_caveats`) uses, not agent-callable arguments.
 
 ```text
 assistant → read_file("/clarifications.jsonl")
@@ -202,8 +253,9 @@ tool     → [ANSWERED RECORDS, one JSON object per line]
 assistant → read_corpus(table="[TABLE_FROM_SCOPE]")
 tool     → [FACTS + INFERENCE SO FAR]  # locate the asset the record's `scope` names
 
-assistant → annotate_column(table="[T]", column="[C]", description="[ANSWER-DERIVED TEXT]", certified=true, answered_by="[SME]")
+assistant → annotate_columns(table="[T]", columns=[{"column":"[C]","description":"[ANSWER-DERIVED TEXT]"}, ...])
 tool     → ok: [ASSET_ID] updated
+            ok: [ASSET_ID] updated
 ```
 
 Answers scoped `pair:` or `query:` (data-quality or mislabeled-annotation findings raised in
@@ -218,16 +270,20 @@ its system prompt's method step 4 above.
 2. **Seed** (deterministic, no model): `seed_from_train_sql` extracts join/metric
    candidates from the train gold SQL via `sqlglot`.
 3. **(1) Phase A deep agent**, one agent run for the whole schema, system prompt from
-   the `curator_phase_a` registry entry, user task = seed render + train batch; the
-   model calls `read_corpus` / `run_probe_query` / `upsert_*` / `annotate_*` / file
-   tools repeatedly, writing assets and `/clarifications.jsonl` as it goes.
+   the `curator_phase_a` registry entry, user task = seed render + train batch +
+   `## Budget`; the model calls `read_corpus` / `run_probe_query` / `upsert_*` /
+   `annotate_*` / file tools repeatedly, writing assets and `/clarifications.jsonl` as
+   it goes. The run is streamed under `recursion_limit = 3 * budget + 4` and every tool
+   call lands in `curator_trace.jsonl`.
 4. **Validate + optional fix pass** (deterministic `validate_corpus`, then one more
-   agent invocation only if findings exist) → the **`curated`** corpus is written.
+   agent invocation only if findings exist, on `max(budget // 2, 8)` tool calls) → the
+   **`curated`** corpus is written.
 5. *(Aside, out of scope for this doc)* the Simulated SME (or a real SME) answers
    `/clarifications.jsonl`.
 6. **(2) Phase B deep agent**, one agent run, system prompt from the
-   `curator_phase_b` registry entry, user task = the fixed ingest instruction above;
-   folds answered records into the corpus with `certified=true`.
+   `curator_phase_b` registry entry, user task = the ingest instruction above; folds
+   answered records into the corpus with curator/proposed provenance, traced to
+   `curator_sme_trace.jsonl`.
 7. **Validate** again → the **`curated_sme`** corpus is written.
 
 **See also:** [Curator](curator.md) for the proposer/adversary design and the

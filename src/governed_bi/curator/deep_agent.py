@@ -9,8 +9,11 @@ grounded tools:
 
 - ``read_corpus`` — live Facts + Inference already written (filterable).
 - ``run_probe_query`` — read-only SQL probe against the gateway.
-- Six validated write tools (``upsert_*`` / ``annotate_*``) that mutate the
-  in-memory :class:`~governed_bi.curator.asset_bag.AssetBag`.
+- Seven validated write tools (``upsert_*`` / ``annotate_*``) that mutate the
+  in-memory :class:`~governed_bi.curator.asset_bag.AssetBag`. ``annotate_columns``
+  is the batch form of ``annotate_column``: the reliability sweep is per-column
+  work over a schema that can be 700 columns wide, and one tool call per column
+  makes the step budget scale with schema width.
 - Built-in file tools (``ls``/``read_file``/``write_file``/``edit_file``/``grep``)
   via ``FilesystemBackend(run_dir)`` — **only** for ``clarifications.jsonl``.
 
@@ -83,13 +86,17 @@ def curator_tools(
 
     if bag is not None:
 
-        def read_corpus(table: str = "", kind: str = "") -> str:
+        def read_corpus(table: str = "", kind: str = "", todo_only: bool = False) -> str:
             """Return the live corpus — Facts and Inference written so far.
             Optional table (physical name) and kind (table/join/metric/term/
-            few_shot) filters bound context on wide schemas."""
+            few_shot) filters bound context on wide schemas.
+            Set todo_only=true to list ONLY the columns still lacking both a
+            description and a suspect mark — a worklist that shrinks as you write,
+            and the cheapest way to check whether the reliability sweep is done."""
             return bag.read_corpus(
                 table=table or None,
                 kind=kind or None,
+                todo_only=todo_only,
             )
 
         tools.append(read_corpus)
@@ -219,6 +226,46 @@ def curator_tools(
                 certified=False,
             )
 
+        def annotate_columns(table: str, columns: list[dict]) -> str:
+            """Annotate MANY columns of one table in a single call — the way to do
+            the reliability sweep. `columns` is a list of objects, each with a
+            required "column" plus any of "description", "role", "reliability",
+            "suspect" (bool), "note", "confidence". Same semantics per column as
+            annotate_column. Returns one result line per column; a column that
+            fails does not stop the others."""
+            if not columns:
+                return "error: columns is empty"
+            out: list[str] = []
+            for i, spec in enumerate(columns):
+                if not isinstance(spec, dict):
+                    out.append(f"[{i}] error: expected an object, got {type(spec).__name__}")
+                    continue
+                name = str(spec.get("column") or "").strip()
+                if not name:
+                    out.append(f"[{i}] error: missing required key 'column'")
+                    continue
+                # One bad spec must not cost the whole batch: a raising tool returns
+                # nothing at all, so the agent would lose every good annotation in
+                # the call and have to redo them — the exact churn this tool exists
+                # to prevent.
+                try:
+                    out.append(
+                        bag.annotate_column(
+                            table,
+                            name,
+                            description=str(spec["description"]) if spec.get("description") else None,
+                            role=str(spec["role"]) if spec.get("role") else None,
+                            reliability=str(spec["reliability"]) if spec.get("reliability") else None,
+                            suspect=True if spec.get("suspect") else None,
+                            note=str(spec["note"]) if spec.get("note") else None,
+                            confidence=float(spec["confidence"]) if spec.get("confidence") else None,
+                            certified=False,
+                        )
+                    )
+                except Exception as err:  # noqa: BLE001 — surface, never abort the batch
+                    out.append(f"[{i}] {name}: error: {type(err).__name__}: {err}")
+            return "\n".join(out)
+
         # This list is the agent's entire write surface, and what it OMITS is a
         # governance boundary. Reliability is AI-authorable: `annotate_column(
         # suspect=True, ...)` is how a decoy or a broken column gets marked, and
@@ -236,6 +283,7 @@ def curator_tools(
                 upsert_few_shot,
                 annotate_table,
                 annotate_column,
+                annotate_columns,
             ]
         )
 

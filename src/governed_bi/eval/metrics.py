@@ -186,7 +186,12 @@ MANIFEST_OPERATIONAL: tuple[Metric, ...] = (
     Metric("pg_dsn_host", "host actually connected to"),
     Metric("serve_workers", "serve-loop concurrency"),
     Metric("build_workers", "curator-build concurrency"),
-    Metric("max_agent_steps", "recursion limit on the agent loop"),
+    Metric(
+        "max_agent_steps",
+        "operator override for the curator's per-schema TOOL-CALL budget; null = "
+        "derived from schema size, and the resolved figure is each corpus's "
+        "run_manifest.json tool_call_budget. Effective recursion limit is 3x + 4",
+    ),
     Metric("serve_path", "always agent_core (ADR 0002)"),
     Metric("allow_git_sha_drift", "operator opted out of the resume git-sha guard"),
 )

@@ -210,11 +210,30 @@ instead of hard-coding `None`.
 
 The serve agent (`create_agent` + `GovernanceMiddleware`, assembled in
 `build_agent_core`, `agent.py:163-211`) and the curator/SME deep agents
-(`create_deep_agent`: `curator/deep_agent.py:285`, `curator/sme.py:164`) are
-all LangGraph graphs. Attach the same durable checkpointer plus a thread/run
-id to their invoke configs (today `pipeline.py:263-268` and `sme.py:219-221`
-each pass only `recursion_limit` and `callbacks`), and emit the same portable
-per-run record. One mechanism, three producers (serve, curator, SME).
+(`create_deep_agent`: `curator/deep_agent.py`, `curator/sme.py`) are all LangGraph
+graphs, and all three emit the same portable per-run record. One mechanism, three
+producers (serve, curator, SME).
+
+**The curator deliberately runs without a checkpointer, and that stands.** The config
+`pipeline._invoke_agent` passes carries `recursion_limit`, `callbacks` and a
+`configurable.thread_id`, and the run record is emitted by `emit_run_record` around the
+stream rather than by a saver. deepagents needs a checkpointer only for `interrupt_on`,
+which the curator does not use: it invokes once per phase and never resumes. The sqlite
+saver it used to create was written, closed, relocated and never read back by anything.
+The harness's own `--resume` decides from existing YAML, and the validate fix pass mints
+a fresh thread instead of continuing the fold's. It was not free either: an open sqlite
+handle is unmovable on Windows, which aborted every curated build and would have ended a
+paid run with "every db failed to build", and the release-in-finally, copy-fallback and
+promotion-exemption code all existed to protect a file nothing read. So the third
+producer's durable record comes from the portable append, not from a checkpoint table.
+
+`_invoke_agent` also **streams** (`stream_mode=["updates", "values"]`) rather than
+calling `.invoke()`, keeping the last `values` chunk. That is what makes the record
+honest on the failure path: `.invoke()` returns accumulated state only on success, so a
+`GraphRecursionError` used to leave the tool counts unmeasurable. The run record's Tier
+A extra carries `n_tool_calls` and `n_steps` (both already on `_TIER_A_EXTRA_KEYS`, so
+they survive with full-content logging off), which is what puts step counts in the
+durable sqlite log where only tokens and latency were available as proxies before.
 
 ### Owner invariants + local-first posture
 
@@ -264,7 +283,9 @@ per-run record. One mechanism, three producers (serve, curator, SME).
 - Closes the eval `usage: None` gap (`run_experiment.py:213`); token/cost/
   latency finally measurable locally, without a vendor dashboard.
 - Deep-agent (curator/SME) runs get the same durable record as serve turns: one
-  mechanism, not three bespoke ones.
+  mechanism, not three bespoke ones. For the curator that record is the portable
+  append alone, with no checkpointer behind it (§4), and it carries `n_tool_calls` /
+  `n_steps` as well as tokens and latency.
 
 **Negative / costs**
 - The durable checkpointer needs a real database in prod (Postgres), the
@@ -339,9 +360,11 @@ per-run record. One mechanism, three producers (serve, curator, SME).
    hard-coding `"usage": None` (`run_experiment.py:213`).
 5. Add FULL-CONTENT logging (verbatim questions, SQL, row previews) under H11
    tiers + TTL + POSIX perms + prod-ack (M5). Metadata-only remains the default.
-6. Extend to DeepAgents: `make_durable_checkpointer` + `emit_run_record` for the
-   curator and SME invokes (one mechanism, three producers); usage via
-   `UsageMetadataCallbackHandler`; failed-invoke fallback record.
+6. Extend to DeepAgents: `emit_run_record` for the curator and SME invokes (one
+   mechanism, three producers); usage via `UsageMetadataCallbackHandler`;
+   failed-invoke fallback record. The `make_durable_checkpointer` half is **not**
+   wanted on the curator: it invokes once and never resumes, nothing read the saver
+   back, and the open handle broke Windows builds. See §4.
 7. (Deferred) optional relational upgrade of the portable store for
    dashboards/metrics, per R5 items 4-5 (`design-decisions.md:513-514`:
    OpenTelemetry/Prometheus surface, fail-loud tracing). Retention/rotation for

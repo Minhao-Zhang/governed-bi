@@ -15,13 +15,14 @@ Source: [`curator/pipeline.py`](../src/governed_bi/curator/pipeline.py) and
 | Profiler | `curator/profile.py` · `profile_database` |
 | Seeder | `curator/seed.py` · `seed_from_train_sql` |
 | AssetBag | `curator/asset_bag.py` · typed assets + validated writes |
-| Deep agent | `curator/deep_agent.py` · `create_deep_agent` (max-autonomy LLM) |
+| Deep agent | `curator/deep_agent.py` · `create_deep_agent`, no checkpointer, streamed under a derived tool-call budget |
 | Read-only gateway | `gateway/…` · `Gateway` (probes run read-only) |
 | clarifications.jsonl | `deepagents` `FilesystemBackend` · the open-question ledger |
 | Validator | `corpus/validate.py` · `validate_corpus` |
 | Adversary | `curator/adversary.py` · structural `review` (per-claim LLM adversary designed but deleted, never reached a caller) |
 | SME | `curator/clarifications.py` · `Responder` (human / stand-in) |
 | Corpus (on disk) | `corpus/<schema>/…` typed YAML + run manifest |
+| Tool-call trace | `curator_trace.jsonl` / `curator_sme_trace.jsonl` · one line per call, verbatim args |
 
 ---
 
@@ -93,17 +94,28 @@ sequenceDiagram
     P->>BAG: seed facts (tables + columns)
     P->>SD: seed_from_train_sql(train pairs)
     SD-->>P: SeedBundle (join / metric / term / few-shot candidates)
-    P->>BAG: apply seed candidates
-    P->>BAG: mark decoy / suspect columns absent from gold SQL
+    P->>BAG: apply seed candidates (join id = schema + table pair + ON digest)
+    P->>P: derive the tool-call budget from tables / columns / pairs
 ```
+
+No deterministic suspect marking happens here. `_mark_columns_absent_from_gold` used to
+run at this point and was deleted on 2026-07-29 (see [Curator](curator.md)), so the
+corpus carries zero suspect columns when the agent starts.
+
+`_apply_seed` reports both `joins_ok`/`metrics_ok` (calls that succeeded) and
+`joins_written`/`metrics_written` (assets that exist afterwards). The gap between them
+is upsert collisions, and the build prints a line when it is non-zero. Reporting one
+number is what let a phantom "the agent deleted 21 joins" diagnosis stand, since the
+only way to see coverage was to difference a call count against a YAML count.
 
 ---
 
 ## 3 · Phase A — deep-agent explore loop
 
-The max-autonomy agent works pair by pair: it reads the live corpus, probes the
+The agent works the pairs in batches: it reads the live corpus, probes the
 database **read-only**, and persists typed assets through validated write tools.
-Genuine unknowns become questions rather than guesses.
+Genuine unknowns become questions rather than guesses. The loop is bounded, the bound
+is stated to the agent, and every call is traced.
 
 ```mermaid
 sequenceDiagram
@@ -113,16 +125,17 @@ sequenceDiagram
     participant BAG as AssetBag
     participant DB as Read-only gateway
     participant FS as clarifications.jsonl
+    participant TR as curator_trace.jsonl
 
-    P->>AG: build agent (grounded tools + PHASE_A_PROMPT + train batch)
-    P->>AG: invoke — explore every pair
-    loop reasoning steps (plan → act)
-        AG->>BAG: read_corpus(table?, kind?)
-        BAG-->>AG: facts + inference written so far
+    P->>AG: build agent (grounded tools + PHASE_A_PROMPT + train batch + ## Budget)
+    P->>AG: stream (updates + values), recursion_limit = 3 * budget + 4
+    loop reasoning steps (plan → act), several tool calls per reply
+        AG->>BAG: read_corpus(table?, kind?, todo_only?) — capped at 20k chars
+        BAG-->>AG: facts + inference written so far (or the shrinking column worklist)
         AG->>DB: run_probe_query(SELECT) — confirm / falsify a claim
         DB-->>AG: rows (read-only, truncated)
         alt confident from the data
-            AG->>BAG: upsert_join / metric / term / few_shot · annotate_table / column
+            AG->>BAG: upsert_join / metric / term / few_shot · annotate_table / column / columns
             BAG->>BAG: validate binding resolves to a real asset
             alt binding invalid
                 BAG-->>AG: error → fix and retry
@@ -133,9 +146,25 @@ sequenceDiagram
             AG->>FS: append clarification (open question)
             FS-->>AG: recorded
         end
+        P->>TR: record i, tool, args_digest, args from the updates stream
     end
-    AG-->>P: exploration complete
+    AG-->>P: exploration complete, or GraphRecursionError with state intact
 ```
+
+Three things about this loop are load-bearing and easy to miss.
+
+- **It streams, it does not invoke.** `.invoke()` returns accumulated state only on
+  success, so a crash used to forfeit the tool counts exactly when they were needed.
+  Keeping the last `values` chunk means an exhausted run still reports what it did.
+- **Batching is the difference between finishing and not.** Several tool calls in one
+  assistant message cost one `tools` super-step; the same calls across N replies cost
+  3N. `annotate_columns` and `read_corpus(todo_only=true)` exist to make the reliability
+  sweep cost one call per table with a worklist that shrinks. See
+  [the step budget](curator.md#the-step-budget).
+- **`read_corpus` is capped at 20,000 characters.** It was unbounded, and the widest
+  benchmark schema renders 664 KB, past the point where the deepagents filesystem
+  middleware evicts a tool result to a file and charges extra turns to read it back.
+  Truncation names what was cut and how to narrow the call.
 
 ---
 
@@ -173,8 +202,12 @@ sequenceDiagram
 
 ## 5 · Phase B — fold in SME answers
 
-The subject-matter expert answers Phase A's open questions; the agent ingests them
-with certified provenance.
+The subject-matter expert answers Phase A's open questions and the agent folds each
+answer into the corpus. It does **not** stamp certification: `certified_writes` is
+accepted by `curator_tools` for API compatibility and every write tool passes
+`certified=False`, because human sign-off is a non-agent path (D6/C6). Phase B's
+budget is `30 + 3 * n_answered`, since its work scales with the ledger rather than the
+schema.
 
 ```mermaid
 sequenceDiagram
@@ -194,9 +227,9 @@ sequenceDiagram
     P->>SME: answer(open questions)
     SME-->>P: answers (domain truth profiling can't infer)
     P->>FS: write answered ledger
-    P->>AG: fresh agent (PHASE_B_PROMPT — ingest answers)
-    loop each answered clarification
-        AG->>BAG: upsert / annotate (certified, answered_by = SME)
+    P->>AG: fresh agent (PHASE_B_PROMPT + record count + budget)
+    loop answered clarifications, batched per table
+        AG->>BAG: upsert / annotate / annotate_columns (answered_by = SME)
         BAG-->>AG: written
     end
     P->>VAL: validate_corpus (fix pass + record findings)
@@ -221,6 +254,15 @@ sequenceDiagram
   `validate_findings.jsonl`; `repair_references()` fixes danglers first. The corpus
   is written **regardless** — in this greenfield harness the findings are a signal
   in the run manifest, not a write-blocking gate.
+- **The invoke is bounded, and the manifest says by how much.** Each phase derives a
+  tool-call budget (Phase A from tables/columns/pairs, Phase B from the number of
+  answered records) unless an operator passes `--max-agent-steps`. `run_manifest.json`
+  records `tool_call_budget` plus `tool_calls.n_super_steps`, `.recursion_limit`,
+  `.exhausted` and a `.repeats` block, and an `assets` block counting what is actually
+  in the corpus. `exhausted: true` means the agent ran out of steps, and the triage
+  order in the prompt's `## Budget` section says which stages it lost.
+  [The step budget](curator.md#the-step-budget) has the derivation and the run that
+  motivated it.
 
 Companion: [analyst-sequence.md](analyst-sequence.md) — how this corpus is read at
 serve time.

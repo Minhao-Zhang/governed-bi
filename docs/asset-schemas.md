@@ -90,7 +90,7 @@ audit:
 corpus/
   <schema>/
     tables/      tbl_<schema>_<name>.yaml      # columns inline
-    joins/       join_<left>_<right>.yaml
+    joins/       join_<schema>_<left>_<right>_<on-digest>.yaml
     few-shots/   fs_<schema>_<n>.yaml
     terms/       term_<name>.yaml
     metrics/     metric_<name>.yaml
@@ -107,12 +107,28 @@ corpus/
 |---|---|---|
 | table | `tbl_<schema>_<name>` | `tbl_beer_factory_customers` |
 | column *(inline; id derived by loader)* | `col_<schema>_<table>_<physical>` | `col_beer_factory_customers_CustomerID` |
-| join | `join_<left>_<right>` | `join_transaction_customers` |
+| join | `join_<schema>_<left>_<right>_<on-digest>` | `join_beer_factory_transaction_customers_2a171c` |
 | few_shot | `fs_<schema>_<n>` | `fs_beer_factory_001` |
 | term | `term_<name>` | `term_revenue` |
 | metric | `metric_<name>` | `metric_revenue` |
 | note | `note_<name>` | `note_boolean_flags` |
 | negative_example | `neg_<schema>_<n>` | `neg_beer_factory_001` |
+
+The join id's last segment is `on_clause_digest(on)`: the first six hex characters of
+a sha256 over the normalised ON clause (`curator/asset_bag.py`). It is part of the
+**identity**, so two different relationships between the same pair of tables are two
+assets. Without it they were one, and the second `upsert_join` overwrote the first
+silently — 33 of 57 benchmark schemas lost at least one gold-derived edge that way
+before 2026-07-29 (see [Curator](curator.md)). Normalisation is what keeps the digest
+an identity of the relationship rather than of the text: an equality is unordered
+(`a.x = b.y` and `b.y = a.x` digest the same), the `AND`-conjuncts of a composite key
+are unordered, and case and whitespace are collapsed. So re-proposing an edge already
+recorded still upserts onto it. The regex check is unchanged and still only pins the
+prefix and shape (`ID_PATTERNS["join"]` in `corpus/ids.py`), which a lowercase hex
+suffix satisfies. So the digest is what the *curator* emits, not something the
+validator demands: a hand-authored join id only has to be unique and match
+`join_<name>`, which is why the bundled `corpus/beer_factory/joins/` still carries the
+shorter `join_transaction_customers` shape.
 
 The **physical ↔ meaning bridge** runs through every table/column: `physical_name` is the identifier as it exists in the live DB (obfuscated for BIRD, cryptic in enterprise data). SQL emits this; the Inference tier carries the *meaning*. The curator's whole job is filling meaning for cryptic physical names, and this is identical in BIRD and enterprise deployments.
 
@@ -180,9 +196,9 @@ audit:
 ## Asset: `join` (FK is inferred; BIRD withholds it)
 
 ```yaml
-# joins/join_transaction_customers.yaml
+# joins/join_beer_factory_transaction_customers_2a171c.yaml
 asset_type: join
-id: join_transaction_customers
+id: join_beer_factory_transaction_customers_2a171c   # ...._<digest of the ON clause>
 
 # ── Facts (the referenced physical columns exist in the catalog) ──
 left_table: tbl_beer_factory_transaction

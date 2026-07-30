@@ -127,7 +127,10 @@ def build_manifest(
     db_id: str,
     bird_dir: Any,
     pg_dsn: str,
-    max_agent_steps: int,
+    # Tool-call budget for the curator. ``None`` = derived from the schema's size, so
+    # the manifest records ``null`` and the resolved figure lives in the corpus's own
+    # ``run_manifest.json`` as ``tool_call_budget``.
+    max_agent_steps: int | None,
     skip_agent: bool,
     model_name: str | None,
     resolved_prompts: dict[str, str],
@@ -489,7 +492,10 @@ def run_experiment(
     bird_dir: Path,
     pg_dsn: str,
     out_dir: Path,
-    max_agent_steps: int = 25,
+    # ``None`` (the default, and what an unset ``--max-agent-steps`` gives) derives the
+    # curator's tool-call budget from the schema's size; an explicit int overrides it
+    # and caps cost.
+    max_agent_steps: int | None = None,
     skip_agent: bool = False,
     limit: int | None = None,
     resume_curated: Path | None = None,
@@ -999,7 +1005,18 @@ def main(argv: list[str] | None = None) -> None:
         default="host=127.0.0.1 port=5435 dbname=bird user=bird password=bird",
     )
     parser.add_argument("--out", type=Path, default=Path("runs"))
-    parser.add_argument("--max-agent-steps", type=int, default=25)
+    parser.add_argument(
+        "--max-agent-steps",
+        type=int,
+        default=None,
+        help=(
+            "Per-schema curator budget in TOOL CALLS (not super-steps). Unset derives "
+            "it from the schema's size — tables, columns, rendered pairs. An explicit "
+            "N is an operator override that caps cost. The effective LangGraph "
+            "recursion_limit is 3 * budget + 4, because one tool call costs up to "
+            "three super-steps."
+        ),
+    )
     parser.add_argument(
         "--skip-agent",
         action="store_true",

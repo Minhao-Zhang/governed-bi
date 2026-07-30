@@ -20,6 +20,7 @@ supersedes are marked where they occur.
 | C3 | `ex_strict` is unguarded: `validate_gold_hashes_live` hashes only the lenient normaliser and compares it to `gold.hash_lenient`. `hash_normalised_result_strict` is never checked against `gold.hash_strict` before a run trusts `ex_strict`. | `eval/hash_grade.py` |
 | C9 | Pooled `_validate_corpora(corpora)` is called with no connector, so nothing checks asset references against the live catalog at scale. | `eval/run_datalake.py:4122` → `eval/harness.py` |
 | G8 | The grader self-check was only ever validated on a 5-row sample. A full head-to-head needs the live DB. | `eval/hash_grade.py` |
+| C10 | `curator_trace.jsonl` / `curator_sme_trace.jsonl` are written at the arm root but are not in `_SIDECARS`, so `_relocate_sidecars` never promotes them and `_promote_build` deletes the staging root holding them. The pooled driver therefore keeps the derived counts (`tool_calls.repeats`, `n_tool_calls`, `n_steps`) and loses the verbatim argument list, which is the only artifact that says *what* a capped agent looped on. The single-schema driver keeps it. | `eval/run_datalake.py:_SIDECARS` |
 
 ## Efficiency
 
@@ -63,9 +64,10 @@ null caveat split is not an answer to X2; X2 still has to be run.
 | X9 | **`--replicate` defaults to `None`** (`run_datalake` arg parser), so the noise-floor / MDE arm is absent unless an operator asks for it — while p-values print regardless. | The default run reports significance it cannot bound: no floor, no MDE. The `claim_ready` gate catches this, but only after the spend. |
 | X10 | **The Holm family covers fair-ladder pairs only.** `analysis.py` adjusts pairs where `k in on_ladder`; the six conditional-diagnostic blocks (each a multi-level contrast) carry no p-value, no interval and no adjustment. | Reading a conditional split as a result is an unadjusted comparison outside the declared family. |
 | X11 | **Two conflicting declared headlines.** `metrics.py` labels `ex_lenient` "headline execution accuracy" and `ex_no_twin` "EX with no train twin — the defensible headline". Nothing pre-registers which one is *the* number. | Two candidate headlines with no prior commitment is the shape of post-hoc selection. |
+| X12 | **The curator's derived step budget and `curator_phase_a@v2` are both unmeasured.** The budget replaced a constant that capped 30 of 57 Phase A agents ([Curator](curator.md#the-step-budget)); `v2` is registered and `v1` is still the default. Testing either means a rebuild, and the cap rate has to be read next to suspect coverage per column and `decoy_touch_rate`, because `v2` buying completion by curating less would look like a win on the cap rate alone. | Every curated-arm number to date comes from a build whose reliability sweep may never have run, so a curated-vs-baseline delta is confounded with how far the agent got. |
 
-X8–X11 are reporting-side and cost no extra serve pass. Run-to-run variance is X4,
-not a separate item.
+X8–X11 are reporting-side and cost no extra serve pass. X12 needs a rebuild.
+Run-to-run variance is X4, not a separate item.
 
 ## Corpus coverage
 

@@ -28,7 +28,7 @@ per-type folders under it:
 corpus/
   <schema>/
     tables/      tbl_<schema>_<name>.yaml      # columns are inline
-    joins/       join_<left>_<right>.yaml
+    joins/       join_<left>_<right>.yaml      # curator-written ones add _<on-digest>
     terms/       term_<name>.yaml
     metrics/     metric_<name>.yaml
     notes/       note_<name>.yaml
@@ -121,6 +121,16 @@ cardinality: many_to_one         # one_to_one | one_to_many | many_to_one | many
 cost: 1.0
 confidence: 0.8
 ```
+
+**Two joins between the same pair of tables need two ids.** The validator only checks
+that a join id matches `join_<name>` and is unique, so this one is on you. The curator
+solves it by appending a digest of the normalised ON clause
+(`join_<schema>_<left>_<right>_<on-digest>`, see
+[Asset schemas](asset-schemas.md#id-conventions-ci-regex-checked)); hand-authoring, add
+whatever distinguishes them, e.g. `join_orders_customers_billing` and
+`join_orders_customers_shipping`. Reusing one id for both is not a `duplicate-id`
+finding if you only wrote one file: it is a missing edge, which the graph planner sees
+as an unreachable table.
 
 ## 5. Reference wiring (the part the validator checks)
 

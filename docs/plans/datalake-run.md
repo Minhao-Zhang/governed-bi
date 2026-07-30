@@ -212,8 +212,17 @@ Other flags: `--dbs a,b,c` (explicit db list instead of all test dbs),
 `--arms baseline,seeded,curated,curated_sme` (subset of
 `baseline,seeded,curated,curated_sme`; baseline-only skips
 expensive curation), `--limit N` (cap test questions per db), `--limit-dbs N`,
-`--pg-dsn`, `--bird-dir`, `--max-agent-steps`, `--allow-git-sha-drift` (paid
+`--pg-dsn`, `--bird-dir`, `--allow-git-sha-drift` (paid
 resume after a code edit; ledger still marks the run unquotable).
+
+`--max-agent-steps` deserves its own line, because it is an override and not a
+setting you should reach for. Leave it unset and each schema's curator budget is
+derived from that schema's size, which is what a 3-table and a 73-table schema in
+one pool both need. Passing an explicit N applies the same figure to every schema
+and is a cost cap, not a tuning knob. It counts **tool calls**, and the effective
+LangGraph `recursion_limit` is `3 * N + 4`; each corpus's `run_manifest.json`
+records the `tool_call_budget` it actually ran with. See
+[the step budget](../curator.md#the-step-budget).
 
 ## Outputs
 

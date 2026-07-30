@@ -493,3 +493,81 @@ def test_a_build_with_no_model_authors_no_reliability(monkeypatch, tmp_path):
         "the deterministic decoy mask is gone; a manifest key nothing writes is a "
         "field a reader will quote as zero"
     )
+
+
+# --------------------------------------------------------------------------- #
+# read_corpus: bounded render + the sweep worklist
+#
+# `read_corpus` was unbounded. The median benchmark schema renders ~6 KB but the
+# widest renders 664 KB (~166k tokens), it grows monotonically with the agent's own
+# writes, and past ~80 KB the deepagents filesystem middleware evicts a tool result
+# to a file and hands back a preview — so an oversized read silently costs extra
+# turns out of the step budget. The Phase A prompt told the agent to use the
+# unfiltered form to drive the per-column reliability sweep, i.e. at the point in the
+# run where the corpus is largest and with no signal about what was left to do.
+# --------------------------------------------------------------------------- #
+
+
+def _wide_table(n_columns: int) -> TableAsset:
+    return TableAsset(
+        id="tbl_demo_wide",
+        schema="demo",
+        physical_name="wide",
+        columns=[
+            _facts_column(f"col_{i:04d}", LogicalType.string, is_unique=False)
+            for i in range(n_columns)
+        ],
+    )
+
+
+def test_read_corpus_render_is_bounded_and_says_so():
+    from governed_bi.curator.asset_bag import READ_CORPUS_MAX_CHARS, AssetBag
+
+    bag = AssetBag.from_tables("demo", [_wide_table(4000)])
+    out = bag.read_corpus()
+    assert len(out) <= READ_CORPUS_MAX_CHARS + 200, "the cap must actually bind"
+    assert "truncated" in out
+    # Truncation has to be actionable, not just terse: the agent needs to know the
+    # call itself was too broad.
+    assert "todo_only" in out and "table=" in out
+
+
+def test_read_corpus_respects_an_explicit_smaller_cap():
+    from governed_bi.curator.asset_bag import AssetBag
+
+    bag = AssetBag.from_tables("demo", [_wide_table(500)])
+    assert len(bag.read_corpus(max_chars=500)) <= 700
+
+
+def test_todo_only_is_a_worklist_that_shrinks():
+    """The anti-churn mechanism: the agent can ask what is LEFT instead of
+    re-deriving it from a full dump each turn."""
+    from governed_bi.curator.asset_bag import AssetBag
+
+    bag = AssetBag.from_tables("demo", [_orders_table()])
+    first = bag.read_corpus(todo_only=True)
+    assert "OrderID" in first and "amount" in first and "note" in first
+    assert "3 of 3 columns undecided" in first
+
+    # Either acceptable outcome retires a column: a description ...
+    bag.annotate_column("orders", "OrderID", description="Order identifier")
+    # ... or a reliability verdict.
+    bag.annotate_column("orders", "amount", suspect=True, note="all zeroes")
+    second = bag.read_corpus(todo_only=True)
+    assert "OrderID" not in second and "amount" not in second
+    assert "note" in second
+    assert "1 of 3 columns undecided" in second
+
+    bag.annotate_column("orders", "note", description="Free text")
+    assert "every column" in bag.read_corpus(todo_only=True)
+
+
+def test_todo_only_omits_the_kinds_that_have_no_undecided_state():
+    """Including joins/metrics/terms would defeat a shrinking worklist."""
+    from governed_bi.curator.asset_bag import AssetBag
+
+    bag = AssetBag.from_tables("demo", [_orders_table()])
+    bag.upsert_metric("total", "orders", "SUM(amount)")
+    out = bag.read_corpus(todo_only=True)
+    assert "[metric]" not in out
+    assert "[metric]" in bag.read_corpus()

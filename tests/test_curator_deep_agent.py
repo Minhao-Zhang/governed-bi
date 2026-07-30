@@ -49,7 +49,7 @@ def test_tool_set_depends_on_gateway_and_bag(bird_connector, bird_bag):
     assert len(curator_tools(bird_connector, "beer_factory")) == 1
     gateway = Gateway(bird_connector)
     assert len(curator_tools(bird_connector, "beer_factory", gateway=gateway)) == 2
-    # bag → read_corpus + 6 writes; + probe → 8
+    # bag → read_corpus + 7 writes; + probe → 9
     tools = curator_tools(
         bird_connector, "beer_factory", gateway=gateway, bag=bird_bag
     )
@@ -63,6 +63,7 @@ def test_tool_set_depends_on_gateway_and_bag(bird_connector, bird_bag):
         "upsert_few_shot",
         "annotate_table",
         "annotate_column",
+        "annotate_columns",
     ]
 
 
@@ -118,3 +119,76 @@ def test_build_curator_agent_constructs_with_filesystem_backend(
     assert hasattr(agent, "invoke")
     nodes = set(agent.get_graph().nodes)
     assert "model" in nodes and "tools" in nodes
+
+
+# --------------------------------------------------------------------------- #
+# annotate_columns — the batch write that stops the step budget scaling with
+# schema width. One call per table instead of one per column; N tool calls in ONE
+# assistant message cost a single `tools` super-step, N calls across N replies
+# cost 3N. On a 703-column schema the per-column form alone exceeded the whole
+# budget 23x.
+# --------------------------------------------------------------------------- #
+
+
+def _annotate_columns_tool(connector, bag):
+    tools = curator_tools(connector, "beer_factory", bag=bag)
+    return next(t for t in tools if t.__name__ == "annotate_columns")
+
+
+def test_annotate_columns_writes_a_whole_table_in_one_call(bird_connector, bird_bag):
+    table = next(iter(bird_bag.tables))
+    cols = [c.physical_name for c in bird_bag.tables[table].columns][:3]
+    tool = _annotate_columns_tool(bird_connector, bird_bag)
+
+    out = tool(table, [{"column": c, "description": f"desc {c}"} for c in cols])
+    assert len(out.splitlines()) == len(cols)
+    assert all(line.startswith("ok:") for line in out.splitlines()), out
+    written = {c.physical_name: c.description for c in bird_bag.tables[table].columns}
+    for c in cols:
+        assert written[c] == f"desc {c}"
+
+
+def test_annotate_columns_carries_suspect_marks(bird_connector, bird_bag):
+    from governed_bi.corpus.schemas import ReliabilityStatus
+
+    table = next(iter(bird_bag.tables))
+    col = bird_bag.tables[table].columns[0].physical_name
+    tool = _annotate_columns_tool(bird_connector, bird_bag)
+    tool(table, [{"column": col, "suspect": True, "note": "constant value"}])
+    marked = bird_bag.tables[table].columns[0]
+    assert marked.reliability.status is ReliabilityStatus.suspect
+    # `annotate_column` prefixes the note ("DO NOT USE — ..."); the batch form must
+    # go through it rather than reimplementing the write.
+    assert "constant value" in marked.reliability.note
+
+
+def test_annotate_columns_one_bad_spec_does_not_lose_the_batch(bird_connector, bird_bag):
+    """A raising tool returns nothing, so the agent would lose every good
+    annotation in the call and have to redo them — the churn this tool prevents."""
+    table = next(iter(bird_bag.tables))
+    good = bird_bag.tables[table].columns[0].physical_name
+    tool = _annotate_columns_tool(bird_connector, bird_bag)
+
+    out = tool(
+        table,
+        [
+            {"column": good, "description": "kept"},
+            {"description": "no column key"},
+            {"column": "does_not_exist", "description": "unknown column"},
+            "not even an object",
+        ],
+    )
+    lines = out.splitlines()
+    assert len(lines) == 4
+    assert lines[0].startswith("ok:")
+    assert "missing required key" in lines[1]
+    assert "error" in lines[2]
+    assert "expected an object" in lines[3]
+    # The good write survived its bad neighbours.
+    assert bird_bag.tables[table].columns[0].description == "kept"
+
+
+def test_annotate_columns_rejects_an_empty_batch(bird_connector, bird_bag):
+    assert _annotate_columns_tool(bird_connector, bird_bag)(
+        next(iter(bird_bag.tables)), []
+    ).startswith("error:")

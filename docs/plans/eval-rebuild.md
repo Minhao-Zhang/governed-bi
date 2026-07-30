@@ -342,6 +342,36 @@ before wiping, or accept the gap. On `serial-v1` the split is already 52 rows wi
 shortlist misses, 1 picked wrong and 0 fallbacks; `smefix-v1` has 2 rows with
 `schema_pick_fallback == "call_failed"`.
 
+### Two build-side defects found on 2026-07-29
+
+Both predate the rebuild and both cost corpus content on every arm, so any corpus built
+before they landed is stale for the same reason the pre-rebuild numbers are.
+
+**The curator's step budget was a constant that no `--max-agent-steps` value could
+raise.** `recursion_limit = max(max_agent_steps * 4, 100)` pinned the real limit at 100
+super-steps for every value at or below the shipped default of 25, and 100 super-steps
+buys 33 sequential tool calls. 30 of 57 Phase A agents hit it. On the median schema (8
+tables, 74 columns, 40 rendered pairs) the prompt asks for roughly 126 calls read
+charitably and 238 read literally, so the budget was oversubscribed 3.8x to 7.2x, and
+the flat cap rate across schema size says the shortfall was in the fixed costs rather
+than in hard schemas. The stages that died were the late ones, which are exactly the
+agent-only ones: the reliability sweep and the clarifications. That makes it the direct
+confound on B6-verify at scale, since a schema whose sweep never ran cannot be scored on
+whether the sweep marks decoys. The budget is now derived per schema and the manifest
+records `tool_call_budget`, `exhausted`, `n_super_steps` and a repeat summary. See
+[Curator](../curator.md#the-step-budget).
+
+**Two different joins between the same table pair collapsed onto one asset.** The join
+id was `join_<schema>_<left>_<right>`, so the second `upsert_join` overwrote the first
+with no error and no finding. `soccer_2016` lost 22 of 54 gold-derived edges, including
+all three distinct `mannschaft`/`spiel` relationships, and 33 of 57 schemas lost at
+least one edge. It happened in `_apply_seed`, before any agent ran, so `seeded`,
+`curated` and `curated_sme` were hit equally and the arm-to-arm deltas were taken on
+corpora missing edges the gold SQL needs. The id now carries a digest of the normalised
+ON clause. `_apply_seed` also reports `joins_written` alongside `joins_ok` so a collapse
+is visible rather than inferable, which is what one earlier "the agent deleted 21 joins"
+reading was actually seeing.
+
 ## 4. Cross-cutting: the new dataset
 
 The sibling `BIRD-Data-Obfuscation` repo is filtering questions down to a set whose
@@ -408,7 +438,10 @@ Phase 3 is D2 steps 2 and 3, once step 1 says whether existing runs suffice.
 | T1 | Wire `pin_triggers_enabled` for eval; make it separately measurable | done, option A |
 | config | `[notes]` table documented; stale toml/env comments corrected | done |
 | B6-verify | Does the agent sweep mark decoys? | done: 100%/100% on 1 schema, n=8 |
-| B6-verify at scale | Repeat on a mid-sized schema before trusting 69 | not started |
+| B6-verify at scale | Repeat on a mid-sized schema before trusting 69 | not started; blocked on the step budget below |
+| step budget | Derive the curator's tool-call budget per schema; state it to the agent; record it | done, unrun |
+| join identity | ON-clause digest in the join id; report written assets vs calls | done, needs a rebuild |
+| `curator_phase_a@v2` | Batching / triage variant registered; `v1` still default | registered, unmeasured |
 | D2 step 2 | Land the three-way split as a summary metric | not started |
 | gold split label | 79% of gold hashes were unreachable; keyed on (db_id, question_id) now | done, 21% -> 100% |
 | routing table | Retire the stale recall numbers in `datalake-run.md` and its 2 citations | not started |

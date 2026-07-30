@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from typing import Iterable
@@ -36,6 +37,76 @@ _Asset = TableAsset | JoinAsset | MetricAsset | TermAsset | FewShotAsset | NoteA
 
 def _slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "x"
+
+
+#: Char cap on one :meth:`AssetBag.read_corpus` render. Chosen to sit under the
+#: deepagents filesystem middleware's ``tool_token_limit_before_evict`` (20k
+#: tokens ≈ 80k chars), above which a tool result is written to a file and
+#: replaced by a preview — turning one read into several turns out of the step
+#: budget. Staying below it keeps a read costing exactly one call.
+READ_CORPUS_MAX_CHARS = 20_000
+
+
+def _column_is_todo(column) -> bool:
+    """True while a column has neither a description nor a reliability verdict.
+
+    "Undecided" is the union of both marks because the prompt offers the agent
+    exactly two acceptable outcomes per column — explain what it means, or mark it
+    suspect — so a column carrying either one is done.
+
+    Note there is no ``unknown`` reliability status: an unmarked column is ``ok``,
+    which the prompt describes as "served to the analyst as usable". So ``ok``
+    cannot be distinguished from "considered and cleared", and this treats a
+    described-``ok`` column as decided and a bare-``ok`` one as not.
+    """
+    if column.description:
+        return False
+    return column.reliability.status is not ReliabilityStatus.suspect
+
+
+def _clip_render(lines: list[str], max_chars: int) -> str:
+    """Join ``lines``, truncating on a line boundary at ``max_chars``."""
+    out: list[str] = []
+    used = 0
+    for i, line in enumerate(lines):
+        if used + len(line) + 1 > max_chars:
+            out.append(
+                f"... (render truncated at {max_chars} chars; {len(lines) - i} of "
+                f"{len(lines)} lines omitted — narrow the call with table=, kind=, "
+                f"or todo_only=true)"
+            )
+            break
+        out.append(line)
+        used += len(line) + 1
+    return "\n".join(out)
+
+
+def on_clause_digest(on: str) -> str:
+    """Short stable digest of a join's ON clause, for use in the join asset id.
+
+    A join id keyed on ``(schema, left, right)`` alone makes the ON clause
+    invisible to identity, so two *different* relationships between the same pair
+    of tables collapse onto one asset and the last write wins. That is real join
+    coverage loss with no error and no finding: on ``soccer_2016`` the three
+    distinct ``mannschaft ⋈ spiel`` edges the gold SQL uses (``mannschaft_1``,
+    ``mannschaft_2``, ``spiel_gewinner``) became one, and 33 of 57 benchmark
+    schemas lost at least one edge before the curator agent was ever invoked.
+
+    Normalisation makes the digest an identity of the *relationship*, not of the
+    text: an equality is unordered (``a.x = b.y`` and ``b.y = a.x`` are the same
+    edge), the conjuncts of a composite key are unordered, and case and
+    whitespace do not matter. So a re-proposal of an edge already recorded still
+    upserts onto it instead of accumulating duplicates.
+    """
+    conjuncts = []
+    for part in re.split(r"(?i)\band\b", on):
+        sides = [s.strip().lower() for s in part.split("=")]
+        # Only an equality has a canonical operand order to recover; anything
+        # else (``<``, ``BETWEEN``, a function call) keeps its written order.
+        conjuncts.append(" = ".join(sorted(sides)) if len(sides) == 2 else part.strip().lower())
+    canonical = " and ".join(sorted(c for c in conjuncts if c))
+    canonical = re.sub(r"\s+", " ", canonical)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:6]
 
 
 # ── Keyword triggers from clarification text ──────────────────────────────── #
@@ -273,11 +344,34 @@ class AssetBag:
 
     # -- reads ------------------------------------------------------------- #
 
-    def read_corpus(self, table: str | None = None, kind: str | None = None) -> str:
+    def read_corpus(
+        self,
+        table: str | None = None,
+        kind: str | None = None,
+        *,
+        todo_only: bool = False,
+        max_chars: int = READ_CORPUS_MAX_CHARS,
+    ) -> str:
         """Render the live corpus (Facts + Inference written so far).
 
         ``table`` filters to one physical table (plus joins/metrics that mention
         it). ``kind`` is one of ``table``/``join``/``metric``/``term``/``few_shot``.
+
+        ``todo_only`` renders only the columns still awaiting a decision — no
+        description and no reliability verdict. The unfiltered render is the
+        agent's map, but it is the wrong tool for driving the reliability sweep:
+        it grows monotonically as the agent writes, so the sweep re-reads
+        everything it has already done at exactly the point in the run where the
+        corpus is largest, with no signal about what is left. ``todo_only`` is a
+        worklist that shrinks, which is what makes "am I finished?" answerable
+        without re-deriving it from a full dump each turn.
+
+        ``max_chars`` bounds the render. It was previously unbounded: the median
+        benchmark schema renders ~6 KB but the widest renders **664 KB** (~166k
+        tokens), and past ~80 KB the deepagents filesystem middleware evicts the
+        result to a file, so an oversized read silently costs extra turns out of
+        the step budget to read back. Truncation names what was cut and how to
+        narrow the call, so the agent can act on it instead of guessing.
         """
         kinds = {kind.lower()} if kind else None
         lines: list[str] = []
@@ -294,13 +388,18 @@ class AssetBag:
                 else list(self.tables.values())
             )
             for t in tables:
+                columns = [c for c in t.columns if not todo_only or _column_is_todo(c)]
+                if todo_only and not columns:
+                    continue
                 header = t.physical_name
                 if t.row_count is not None:
                     header += f" ({t.row_count} rows)"
                 if t.description:
                     header += f" — {t.description}"
+                if todo_only:
+                    header += f" [{len(columns)} of {len(t.columns)} columns undecided]"
                 lines.append(f"[table] {header}")
-                for c in t.columns:
+                for c in columns:
                     samples = ", ".join(str(v) for v in c.sample_values[:3])
                     line = (
                         f"  - {c.physical_name}: {c.logical_type.value}, "
@@ -315,6 +414,12 @@ class AssetBag:
                     if samples:
                         line += f" e.g. [{samples}]"
                     lines.append(line)
+
+        if todo_only:
+            # The other kinds have no "undecided" state to report, and including
+            # them would defeat the point of a shrinking worklist.
+            body = "\n".join(lines)
+            return body if body else "(every column has a description or a reliability verdict)"
 
         if want("join"):
             for j in self.joins.values():
@@ -372,7 +477,9 @@ class AssetBag:
                     f"[few_shot] {fs.id}: Q={fs.question!r} sql={fs.sql[:80]!r}..."
                 )
 
-        return "\n".join(lines) if lines else "(corpus empty for this filter)"
+        if not lines:
+            return "(corpus empty for this filter)"
+        return _clip_render(lines, max_chars)
 
     # -- mutations --------------------------------------------------------- #
 
@@ -394,7 +501,13 @@ class AssetBag:
                 f"error: unknown table(s) left={left_table!r} right={right_table!r}; "
                 f"known={sorted(self.tables)}"
             )
-        jid = f"join_{_slug(self.schema)}_{_slug(left_table)}_{_slug(right_table)}"
+        # The ON digest is part of the identity: see ``on_clause_digest``. Without
+        # it a second relationship between the same pair silently overwrites the
+        # first.
+        jid = (
+            f"join_{_slug(self.schema)}_{_slug(left_table)}_{_slug(right_table)}"
+            f"_{on_clause_digest(on)}"
+        )
         try:
             card = Cardinality(cardinality)
         except ValueError:

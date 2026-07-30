@@ -71,7 +71,7 @@ serve path and the curator path import it, and `provenance.py` hashes from it,
 so a dependency cycle would break both directions if this module ever grew one
 (same shape as `governed_bi.stages` — see [`measurement.md`](measurement.md)).
 
-## The three real variants
+## The four real variants
 
 Everything below `v1` exists because a specific failure mode, measured by
 `eval.analysis` or `summary.json`, named it. Quoting the rationales as written
@@ -82,6 +82,7 @@ in `registry.py`, so they stay accurate as the registry grows:
 | `schema_pick` | `v2` | "Forces one explicit rejection reason per candidate, turning a topical-similarity guess into a column-vocabulary check, and moves the answer onto a strict FINAL: line. Refuted if `pick_accuracy` in the `by_gold_rank['1']` bucket does not rise — no other bucket is its fault." |
 | `agent_core` | `v2` | "Makes the suspect/duplicate-copy check its own step with visible output, so a long context cannot bury it. Refuted if `n_selection_miss` does not fall with `n_retrieval_miss` flat (also watch `decoy_touch_rate` and `total_tokens`)." |
 | `agent_core` | `v3` | "Commits to the output columns and grain before writing SQL, targeting the right-rows/wrong-projection class. Refuted if `n_wrong_but_nrows_match` does not fall, or falls without `ex_gradeable` rising by about the same count." |
+| `curator_phase_a` | `v2` | "Re-budgets v1 rather than rewriting it: same contracts, different cost. The 2026-07-29 run capped 30 of 57 Phase A agents at the step limit, and the prompt is half the cause … v2 batches explicitly, does the sweep as one `annotate_columns` per table with `read_corpus(todo_only=true)` as the worklist, says seeded joins/metrics are already recorded and are the first thing to drop, and states the 40-pair render cap. Refuted if the cap rate does not fall, or if it falls while suspect coverage per column drops or `decoy_touch_rate` on the curated arms rises … Watch `repeat_summary.distinct/total` for the churn it targets." |
 
 Concretely: `schema_pick@v2` makes the picker write one line per candidate —
 either the columns that cover every part of the question, or the first part it
@@ -93,12 +94,27 @@ own numbered step that must state which table it rejected and why.
 *before* writing SQL, then check the `SELECT` list against that statement and
 delete anything not on it.
 
-`narrator`, `curator_phase_a`, `curator_phase_b`, and `sme_rules` have only
-`v1` today, each for a reason recorded in its own rationale: the narrator
-"runs after grading and cannot move EX" (there is no failure mode a narrator
-variant could be measured against); a `curator_phase_a`/`curator_phase_b`
-variant "means rebuilding every corpus to test it" (no cheap A/B against an
-already-built corpus); `sme_rules` is "the rules block inside the
+`curator_phase_a@v2` is the odd one out: its target is not accuracy but *completion*.
+It keeps every contract `v1` states and changes what they cost. Three things in `v1`
+spend the budget without buying anything. "Work through the pairs ONE AT A TIME" is the
+worst of them, because N tool calls in one assistant message cost a single super-step
+while N calls across N replies cost 3N, so serialising is pure loss. The reliability
+sweep runs column by column off an unfiltered `read_corpus` that grows as the agent
+writes. And the close, "prefer curiosity", is unbounded pressure against a bounded
+loop. `v2` batches, sweeps with one `annotate_columns` per table against
+`read_corpus(todo_only=true)`, names the seeded joins and metrics as already recorded
+and therefore droppable, and states the 40-pair render cap that `_render_train_batch`
+imposes. `v1` is unchanged and remains the default, so the comparison is available
+rather than assumed. See [the step budget](curator.md#the-step-budget) for the run that
+produced the cap rate. One naming slip to know about: the rationale points at
+`repeat_summary.distinct/total`, and the field is `tool_calls.repeats` in
+`run_manifest.json`.
+
+`narrator`, `curator_phase_b`, and `sme_rules` have only `v1` today, each for a reason
+recorded in its own rationale: the narrator "runs after grading and cannot move EX"
+(there is no failure mode a narrator variant could be measured against); a
+`curator_phase_b` variant "means rebuilding every corpus to test it" (no cheap A/B
+against an already-built corpus); `sme_rules` is "the rules block inside the
 code-assembled SME brief (the rest of that brief is data, not a prompt
 variant)" — the bulk of the brief is BIRD column descriptions and train
 evidence, which the registry has no business versioning.
@@ -150,8 +166,9 @@ instead of holding its own copy, and a pinned digest added to
 
 For `curator_phase_a` / `curator_phase_b` / `sme_rules` specifically: there is
 no cheap way to try a new variant against an already-built corpus. Testing one
-means rebuilding `curated` / `curated_sme` under it, which is the reason those
-three stages carry only `v1` today.
+means rebuilding `curated` / `curated_sme` under it, which is why `curator_phase_b` and
+`sme_rules` still carry only `v1`. `curator_phase_a@v2` was worth the rebuild because
+the failure it targets was throwing away whole schemas, not shaving a rate.
 
 ## Selecting a variant
 

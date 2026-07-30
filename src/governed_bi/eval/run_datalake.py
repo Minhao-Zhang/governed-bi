@@ -206,12 +206,21 @@ _UNPROMOTED_MARKER = "UNPROMOTED_SIDECARS.json"
 #: marker; that tree is debris, not a finished corpus.
 _BUILD_COMPLETE_MARKER = "BUILD_COMPLETE.json"
 
+#: Per-(arm, db) build artifacts promoted out of the staging root into
+#: ``<db>/_build/``. Anything NOT listed here is deleted with the staging tree, so a
+#: new curator artifact has to be added here or it is written and then thrown away.
 _SIDECARS = (
     "run_manifest.json",
     "validate_findings.jsonl",
     "adversary_findings.jsonl",
     "sme_clarifications.jsonl",
     "clarifications.jsonl",
+    # The per-tool-call traces. The manifest keeps the derived counters, but only
+    # these carry the ordered calls and their argument digests — the sole record of
+    # *what* an agent that exhausted its budget was doing. Dropping them would
+    # reproduce, one layer down, the 2026-07-29 gap they were added to close.
+    "curator_trace.jsonl",
+    "curator_sme_trace.jsonl",
 )
 
 
@@ -720,8 +729,11 @@ def _quarantine_curator_failures(
             f"every one of the {len(built)} built schema(s) recorded a curator error, so "
             "there is no intact corpus left to serve: "
             + "; ".join(f"{db} ({why})" for db, why in sorted(reason_by_db.items())[:3])
-            + ". Fix the curator (a recursion-limit hit needs --max-agent-steps raised "
-            "or the schema split), then rebuild."
+            + ". Fix the curator, then rebuild. On a GraphRecursionError: the tool-call "
+            "budget is derived per schema when --max-agent-steps is unset, so check "
+            "whether an explicit --max-agent-steps is capping it below what the schema "
+            "needs (each schema's run_manifest.json records the tool_call_budget it "
+            "ran with, and the effective recursion limit is 3 * budget + 4)."
         )
     share = len(reason_by_db) / n_requested if n_requested else 0.0
     systematic = (
@@ -737,8 +749,12 @@ def _quarantine_curator_failures(
             f"{_CURATOR_ERROR_QUARANTINE_ABORT_FRACTION:.0%} ceiling) — refusing to "
             f"serve the remaining {len(servable)}, because at this share the curator is "
             f"misconfigured rather than unlucky and the surviving pool is a much smaller "
-            f"benchmark than the one this run names. A recursion-limit hit needs "
-            f"--max-agent-steps raised; then rebuild, or narrow the request with "
+            f"benchmark than the one this run names. On a GraphRecursionError: the "
+            f"tool-call budget derives from each schema's size when --max-agent-steps "
+            f"is unset, so drop an explicit --max-agent-steps (or raise it) rather "
+            f"than assume the default is the cap — each schema's run_manifest.json "
+            f"records the tool_call_budget it ran with, and the effective recursion "
+            f"limit is 3 * budget + 4. Then rebuild, or narrow the request with "
             f"--limit-dbs so the pool you score is the pool you asked for. "
             f"Errors: {detail}{more}"
         )
@@ -2889,7 +2905,11 @@ def _build_db_corpora(
     chat_client: Any,
     lc_model: Any,
     skip_agent: bool,
-    max_agent_steps: int,
+    # Per-schema curator budget in TOOL CALLS. ``None`` = let the curator derive it
+    # from the schema's size (``curator.pipeline.derive_step_budget``), which is what
+    # an unset ``--max-agent-steps`` means. Passed straight through, per schema, so a
+    # 3-table and a 73-table schema in the same pool do not share one constant.
+    max_agent_steps: int | None,
     resume: bool,
     # ``None`` = every stage at v1. Defaulted only so an offline caller that builds
     # no agent need not know about prompts; the driver always passes the run's map.
@@ -3993,7 +4013,10 @@ def run_datalake(
     arms: tuple[str, ...] = _ARMS,
     limit_dbs: int | None = None,
     limit: int | None = None,
-    max_agent_steps: int = 25,
+    # Tool-call budget per curator invoke. ``None`` (the default, and what an unset
+    # ``--max-agent-steps`` gives) derives it per schema from that schema's size; an
+    # explicit int is an operator override that caps cost for every schema alike.
+    max_agent_steps: int | None = None,
     skip_agent: bool = False,
     resume: bool = True,
     split: str = "test",
@@ -4971,7 +4994,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--limit-dbs", type=int, default=None, help="Cap the number of dbs")
     p.add_argument("--limit", type=int, default=None, help="Cap questions PER db")
-    p.add_argument("--max-agent-steps", type=int, default=25)
+    p.add_argument(
+        "--max-agent-steps",
+        type=int,
+        default=None,
+        help=(
+            "Per-schema curator budget in TOOL CALLS (not super-steps). Unset "
+            "derives it from each schema's size — tables, columns, rendered pairs — "
+            "so a 3-table and a 73-table schema do not share one constant. An "
+            "explicit N is an operator override that caps cost and applies to every "
+            "schema alike. The effective LangGraph recursion_limit is 3 * budget + 4, "
+            "because one tool call costs up to three super-steps."
+        ),
+    )
     p.add_argument("--skip-agent", action="store_true", help="Offline smoke (no model)")
     p.add_argument(
         "--allow-git-sha-drift",

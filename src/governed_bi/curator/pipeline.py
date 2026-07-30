@@ -16,10 +16,12 @@ mechanical ledger seeding requires explicit opt-in.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
 import traceback
+from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
@@ -61,11 +63,19 @@ _WRITE_TOOLS = frozenset(
         "upsert_few_shot",
         "annotate_table",
         "annotate_column",
+        "annotate_columns",
     }
 )
 
 
-def _render_train_batch(items: Sequence["EvalItem"], *, max_pairs: int = 40) -> str:
+#: (question, gold SQL) pairs rendered into the Phase A user turn. The driver passes
+#: the whole train split — a median 86 pairs, up to 306 — so most schemas have pairs
+#: the agent never sees. Budgeting against the full split would buy calls for work
+#: that is not in the context.
+MAX_RENDERED_PAIRS = 40
+
+
+def _render_train_batch(items: Sequence["EvalItem"], *, max_pairs: int = MAX_RENDERED_PAIRS) -> str:
     lines = ["## Train (question, gold SQL, evidence) pairs — curate from these"]
     for i, item in enumerate(items[:max_pairs], 1):
         evidence = (item.evidence or "").strip()
@@ -80,7 +90,19 @@ def _render_train_batch(items: Sequence["EvalItem"], *, max_pairs: int = 40) -> 
 
 
 def _apply_seed(bag: AssetBag, seed: SeedBundle) -> dict[str, int]:
-    """Materialise seed candidates. Returns ``{joins_ok, joins_fail, metrics_ok}``."""
+    """Materialise seed candidates.
+
+    Returns ``{joins_ok, joins_fail, metrics_ok, joins_written, metrics_written}``.
+
+    The ``*_ok`` counts are **calls that succeeded**; the ``*_written`` counts are
+    assets that exist afterwards. They used to be reported as one number, and the
+    gap between them is not noise: an upsert whose id already exists overwrites,
+    so a call count overstates coverage by however many candidates collided. That
+    gap is what made a run look like the agent had deleted joins — the manifest's
+    call count was differenced against a YAML asset count, and the residue was read
+    as agent churn. Reporting both makes the collapse visible instead of inferable.
+    """
+    joins_before, metrics_before = len(bag.joins), len(bag.metrics)
     joins_ok = joins_fail = metrics_ok = 0
     for j in seed.joins:
         msg = bag.propose_join(j.left_table, j.right_table, j.on, confidence=0.55)
@@ -92,7 +114,13 @@ def _apply_seed(bag: AssetBag, seed: SeedBundle) -> dict[str, int]:
         msg = bag.propose_metric(m.name, m.base_table, m.expression, confidence=0.5)
         if msg.startswith("ok:"):
             metrics_ok += 1
-    return {"joins_ok": joins_ok, "joins_fail": joins_fail, "metrics_ok": metrics_ok}
+    return {
+        "joins_ok": joins_ok,
+        "joins_fail": joins_fail,
+        "metrics_ok": metrics_ok,
+        "joins_written": len(bag.joins) - joins_before,
+        "metrics_written": len(bag.metrics) - metrics_before,
+    }
 
 
 def _norm_name(name: str) -> str:
@@ -278,6 +306,162 @@ def _count_tool_calls(result: Any) -> dict[str, Any]:
     return counts
 
 
+def _budget_brief(tool_calls: int, *, n_tables: int) -> str:
+    """The step budget and a triage order, stated to the agent.
+
+    Two separate failures on the 2026-07-29 run motivate this. First, the budget was
+    never disclosed: nothing in the system prompt, the user turn, or the harness
+    mentions a limit, and the deepagents base prompt pushes the other way. Second,
+    the prompt's ordering put the agent-only work — the reliability sweep,
+    clarifications — *last*, so exhaustion took exactly the assets no other
+    mechanism produces. Joins and metrics are seeded deterministically before the
+    agent starts and survive regardless, which is why re-deriving them is the
+    cheapest thing to drop and marking columns is the most expensive.
+    """
+    return (
+        f"## Budget\n"
+        f"You have about {tool_calls} tool calls. Several tool calls in ONE reply cost "
+        f"the same as one, so batch aggressively — emit all the probes for a table "
+        f"together, and use annotate_columns to do a whole table's columns in a single "
+        f"call ({n_tables} tables here).\n"
+        f"If you cannot do everything, this is the order that matters, most first:\n"
+        f"1. Mark unreliable columns suspect (annotate_columns). Nothing else in the "
+        f"system writes reliability; an unmarked column is served to the analyst as "
+        f"usable.\n"
+        f"2. Describe what tables and columns mean.\n"
+        f"3. Raise clarifications for genuine unknowns.\n"
+        f"4. Few-shots and terms.\n"
+        f"5. Re-verifying seeded joins and metrics — they are already recorded, so this "
+        f"is the first thing to skip.\n"
+        f"Do not re-issue a call you have already made; read_corpus(todo_only=true) "
+        f"tells you what is left."
+    )
+
+
+def _args_digest(args: Any) -> str:
+    """Stable short digest of one tool call's arguments.
+
+    The point is repeat detection. Two calls with the same (tool, digest) are the
+    same request issued twice, which is the churn signature; the raw arguments are
+    not needed to see that, and keeping them out of the summary keeps SQL and
+    column prose out of the manifest.
+    """
+    try:
+        canonical = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        canonical = repr(args)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:8]
+
+
+def _collect_trace(update: dict, trace: list[dict[str, Any]]) -> None:
+    """Append one record per tool call found in a streamed ``updates`` chunk."""
+    for node_update in update.values():
+        if not isinstance(node_update, dict):
+            continue
+        for msg in node_update.get("messages") or []:
+            tool_calls = getattr(msg, "tool_calls", None) or []
+            if not tool_calls and isinstance(msg, dict):
+                tool_calls = msg.get("tool_calls") or []
+            for tc in tool_calls:
+                if isinstance(tc, dict):
+                    name, args = tc.get("name"), tc.get("args") or {}
+                else:
+                    name, args = getattr(tc, "name", None), getattr(tc, "args", None) or {}
+                if not name:
+                    continue
+                trace.append(
+                    {
+                        "i": len(trace),
+                        "tool": name,
+                        "args_digest": _args_digest(args),
+                        "args": args,
+                    }
+                )
+
+
+def _write_trace(path: Path, trace: list[dict[str, Any]]) -> None:
+    """Write the per-tool-call trace as JSONL. Never raises — it is diagnostics.
+
+    Verbatim arguments live here and nowhere else. This sits in the run directory
+    beside ``run_manifest.json``, which already carries full tracebacks, so it
+    inherits that artifact's trust level rather than the portable log's content
+    tiers; only the derived counts are promoted into the manifest and the run
+    record.
+    """
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as fh:
+            for row in trace:
+                fh.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+    except OSError as err:
+        print(f"*** WARNING: could not write curator trace to {path}: {err} ***")
+
+
+def _repeat_summary(trace: list[dict[str, Any]], *, top: int = 5) -> dict[str, Any]:
+    """Identical-call statistics — the compact answer to "did it loop?".
+
+    ``distinct`` against ``total`` is the headline: a run that spent 300 calls on
+    40 distinct requests was churning, and no other recorded field would show it.
+    """
+    keys = [(row["tool"], row["args_digest"]) for row in trace]
+    counter = Counter(keys)
+    repeated = [(k, n) for k, n in counter.most_common(top) if n > 1]
+    return {
+        "total": len(trace),
+        "distinct": len(counter),
+        "max_repeat": max(counter.values()) if counter else 0,
+        "top_repeated": [{"tool": t, "args_digest": d, "n": n} for (t, d), n in repeated],
+    }
+
+
+#: Super-steps LangGraph spends per *sequential* tool call in the deepagents graph.
+#: The loop is ``model → TodoListMiddleware.after_model → tools``, so it is three,
+#: not the two a plain ``create_agent`` model+ToolNode loop would cost. Measured
+#: against deepagents 0.6.12 / langgraph 1.2.8: a 100-step limit admits exactly 33
+#: sequential tool calls. N tool calls emitted in ONE assistant message still cost a
+#: single ``tools`` super-step, so a batching agent gets far more than the budget
+#: nominally buys — this constant is the pessimistic (fully serial) rate.
+SUPER_STEPS_PER_TOOL_CALL = 3
+
+#: Fixed super-step overhead: the one-off ``before_agent`` node plus a final model
+#: turn that answers without calling a tool.
+_RECURSION_SLACK = 4
+
+
+def derive_step_budget(*, n_tables: int, n_columns: int, n_pairs: int) -> int:
+    """Tool-call budget for one Phase A curator invoke, scaled to the schema.
+
+    The 2026-07-29 run capped 30 of 57 curator agents at a **constant** 100
+    super-steps — 33 sequential tool calls — while the Phase A prompt asks for
+    per-pair work AND a column-by-column reliability sweep. On the median
+    benchmark schema (8 tables, 74 columns, 40 rendered pairs) that is roughly 126
+    calls at the most charitable reading and 238 read literally: oversubscribed
+    3.8×-7.2×. Cap rate was flat across schema size, which is the signature of a
+    budget too small for the *fixed* costs rather than one exhausted by hard
+    schemas.
+
+    A constant cannot be right for a pool spanning 3-73 tables and 25-703 columns,
+    so the budget is derived. ``annotate_columns`` makes the sweep cost per *table*
+    rather than per column, which is why the column term is small — it is slack for
+    probes, not one call per column.
+
+    This is a knob with a cost consequence: every unit is up to one more model
+    call. It is deliberately generous, because the failure it replaces silently
+    discarded whole schemas from a paid run.
+    """
+    return 30 + 3 * max(n_tables, 0) + max(n_columns, 0) // 10 + max(n_pairs, 0) // 2
+
+
+def recursion_limit_for(tool_calls: int) -> int:
+    """LangGraph ``recursion_limit`` that admits ``tool_calls`` sequential calls.
+
+    Note ``create_deep_agent`` already defaults this to ``9_999``
+    (``deepagents/graph.py:880``); the curator was *lowering* it to 100. Nothing
+    framework-imposed was being hit.
+    """
+    return SUPER_STEPS_PER_TOOL_CALL * max(tool_calls, 1) + _RECURSION_SLACK
+
+
 def _write_run_manifest(out_root: Path, payload: dict) -> None:
     path = out_root / "run_manifest.json"
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -345,8 +529,25 @@ def _invoke_agent(
     settings: "Settings | None" = None,
     run_id: str | None = None,
     thread_id: str | None = None,
+    trace_path: Path | None = None,
 ) -> tuple[Any | None, dict[str, Any], str | None]:
-    """Invoke agent; return (result, tool_counts, error_string)."""
+    """Stream the agent to completion; return (result, tool_counts, error_string).
+
+    **Streams rather than invokes**, which is what makes an exhausted run
+    diagnosable. ``agent.invoke`` returns the accumulated state only on success, so
+    every crash — including the recursion exhaustion that cost 30 of 57 schemas on
+    2026-07-29 — left ``result=None`` and the tool counts unmeasurable. Accumulating
+    the last ``values`` chunk keeps the message history that was already built, so
+    the counts are real on the failure path and the trajectory can be written out.
+    This is the same technique the analyst already uses for the same reason
+    (``analyst/agent.py::_stream_agent``, which carries ``partial_state`` onto
+    ``GraphRecursionError`` so the governance ledger survives).
+
+    ``trace_path`` writes one JSON line per tool call — ordered, with an argument
+    digest — which is the artifact that can answer "what did it loop on". The
+    digest is what makes a loop legible: a repeated (tool, digest) pair is a
+    re-issued identical call, which counts alone cannot show.
+    """
     import time
 
     from ..analyst.run_log import emit_run_record, new_run_id
@@ -363,15 +564,28 @@ def _invoke_agent(
         if type(cb).__name__ == "UsageMetadataCallbackHandler":
             usage_cb = cb
             break
+    limit = recursion_limit_for(max_agent_steps)
+    trace: list[dict[str, Any]] = []
+    n_super_steps = 0
     try:
-        result = agent.invoke(
+        for mode, chunk in agent.stream(
             {"messages": [{"role": "user", "content": user}]},
             config={
-                "recursion_limit": max(max_agent_steps * 4, 100),
+                "recursion_limit": limit,
                 "callbacks": cbs,
                 "configurable": {"thread_id": tid},
             },
-        )
+            stream_mode=["updates", "values"],
+        ):
+            if mode == "values":
+                # One `values` chunk per super-step, and the last one is what
+                # `.invoke()` would have returned.
+                n_super_steps += 1
+                if isinstance(chunk, dict):
+                    result = chunk
+                continue
+            if isinstance(chunk, dict):
+                _collect_trace(chunk, trace)
     except Exception as err:
         # Keep the FULL traceback, not just class + message. The bare
         # "KeyError: 'restaurant'" that lands in run_manifest.json is
@@ -381,7 +595,22 @@ def _invoke_agent(
         # to stdout for a readable progress line.
         short = f"{type(err).__name__}: {err}"
         error = f"{short}\n{traceback.format_exc()}"
-        print(f"deep-agent stopped early ({short})")
+        print(
+            f"deep-agent stopped early ({short}) after {len(trace)} tool call(s) / "
+            f"{n_super_steps} of {limit} super-steps"
+        )
+    if trace_path is not None:
+        _write_trace(trace_path, trace)
+    # A crash no longer forfeits the counts: `result` holds the last streamed state,
+    # so the tally is reconstructible from the messages the agent actually produced.
+    # `_unmeasured_tool_counts` remains for the case where not even one `values`
+    # chunk arrived (a failure before the first super-step committed) — that really
+    # is unmeasured, and must not be reported as zero.
+    counts = _count_tool_calls(result) if result is not None else _unmeasured_tool_counts()
+    counts["n_super_steps"] = n_super_steps
+    counts["recursion_limit"] = limit
+    counts["exhausted"] = error is not None and "GraphRecursionError" in error
+    counts["repeats"] = _repeat_summary(trace)
     settings = _settings_or_load(settings)
     if settings is not None:
         usage_list: list = []
@@ -398,8 +627,12 @@ def _invoke_agent(
             error=error,
             token_usage=usage_list,
             t0=t0,
+            # Both keys are already on `_TIER_A_EXTRA_KEYS`, so they survive with
+            # full-content logging off. This is what puts step/tool counts in the
+            # durable sqlite log, where previously only tokens and latency were
+            # available as proxies for how far the agent got.
+            extra={"n_tool_calls": len(trace), "n_steps": n_super_steps},
         )
-    counts = _unmeasured_tool_counts() if error is not None else _count_tool_calls(result)
     return result, counts, error
 
 
@@ -606,7 +839,7 @@ def build_curated_corpus(
     *,
     model: Any | None = None,
     dialect: str = "postgres",
-    max_agent_steps: int = 25,
+    max_agent_steps: int | None = None,
     run_agent: bool = True,
     system_prompt: str | None = None,
     settings: "Settings | None" = None,
@@ -627,6 +860,14 @@ def build_curated_corpus(
     ``settings``, so re-deriving config here would record the corpus under the
     TOML's prompt set while the agent ran on the caller's — the same mismatch, one
     layer down, and invisible because both halves look internally consistent.
+
+    ``max_agent_steps`` is the agent's budget in **tool calls**. ``None`` derives it
+    from the schema's size (:func:`derive_step_budget`), which is the default
+    because no constant fits a pool spanning 3-73 tables. An explicit value wins
+    and is the way to cap cost. It was previously a constant 25 fed through
+    ``max(steps * 4, 100)``, which pinned the real limit at 100 super-steps for
+    every value at or below the default — so the knob the drivers tell an operator
+    to raise did nothing.
     """
     out_root = Path(out_root)
     out_root.mkdir(parents=True, exist_ok=True)
@@ -640,6 +881,22 @@ def build_curated_corpus(
             f"seed: {seed_stats['joins_ok']} joins applied, "
             f"{seed_stats['joins_fail']} failed lookup (check alias resolution)"
         )
+    if seed_stats["joins_ok"] != seed_stats["joins_written"]:
+        print(
+            f"seed: {seed_stats['joins_ok']} join upserts collapsed onto "
+            f"{seed_stats['joins_written']} assets (same table pair AND same ON clause)"
+        )
+    step_budget = (
+        max_agent_steps
+        if max_agent_steps is not None
+        else derive_step_budget(
+            n_tables=len(tables),
+            n_columns=sum(len(t.columns) for t in tables),
+            # The rendered count, not the split size: the agent cannot work a pair
+            # it was never shown.
+            n_pairs=min(len(train_items), MAX_RENDERED_PAIRS),
+        )
+    )
     # No deterministic suspect marking happens here any more (see the note where
     # `_mark_columns_absent_from_gold` used to be, above). Between this point and the
     # agent pass the corpus carries zero suspect columns, so the curated arm's decoy
@@ -691,15 +948,22 @@ def build_curated_corpus(
                 "(write_file on first create; grep before add; edit_file to broaden/merge).",
                 "Mark unreliable or misleading columns suspect. Propose at least the verified seed joins.",
                 "Stop once pairs are covered, seed joins verified, and obviously unreliable columns marked.",
+                # Stating the budget is the point: nothing else in the context does,
+                # and the deepagents harness prompt says "Keep working until the task
+                # is fully complete. Don't stop partway." An agent that cannot see a
+                # limit cannot triage against it, and the stages that died on the
+                # 2026-07-29 run were the late ones.
+                _budget_brief(step_budget, n_tables=len(tables)),
             ]
         )
         _result, tool_counts, agent_error = _invoke_agent(
             make_agent(),
             user=user,
-            max_agent_steps=max_agent_steps,
+            max_agent_steps=step_budget,
             settings=_settings,
             run_id=_run_id,
             thread_id=_thread_id,
+            trace_path=out_root / "curator_trace.jsonl",
         )
 
     findings, fix_counts, fix_error = _validate_fix_pass(
@@ -707,7 +971,7 @@ def build_curated_corpus(
         bag,
         connector=connector,
         out_root=out_root,
-        max_agent_steps=max_agent_steps,
+        max_agent_steps=step_budget,
     )
     _run_adversary_signal(bag, connector=connector, out_root=out_root)
     bag.write(out_root)
@@ -767,6 +1031,18 @@ def build_curated_corpus(
             # this corpus is now agent-authored, so one count is the whole story. Zero
             # means the curated arm went out with no decoy defence at all.
             "suspect_columns": bag.suspect_count(),
+            # Assets actually in the corpus, so a reader never has to difference a
+            # call count against a YAML count to find out (which is what produced a
+            # phantom "the agent deleted 21 joins" diagnosis).
+            "assets": {
+                "joins": len(bag.joins),
+                "metrics": len(bag.metrics),
+                "terms": len(bag.terms),
+                "few_shots": len(bag.few_shots),
+            },
+            # The budget the agent actually ran under, so a capped run is legible
+            # without re-deriving it from the driver's flags.
+            "tool_call_budget": step_budget,
             "tool_calls": tool_counts,
             "fix_pass_tool_calls": fix_counts,
             "error": agent_error,
@@ -794,7 +1070,7 @@ def build_curated_corpus_with_sme(
     curated_root: Path | str | None = None,
     model: Any | None = None,
     dialect: str = "postgres",
-    max_agent_steps: int = 15,
+    max_agent_steps: int | None = None,
     run_agent_repass: bool | None = None,
     seed_ledger_if_empty: bool = False,
     system_prompt: str | None = None,
@@ -923,6 +1199,14 @@ def build_curated_corpus_with_sme(
     write_clarifications(clarifications_path(out_root), answered)
     _write_sme_clarifications_log(answered, out_root, schema=schema, tables=tables)
 
+    # Phase B's work is bounded by the ledger, not by schema width: each answered
+    # record needs a locate and a write. Derived rather than constant for the same
+    # reason as Phase A — and note the old constant 15 was never the real limit
+    # either, since `max(15 * 4, 100)` floored it at 100 super-steps.
+    step_budget = (
+        max_agent_steps if max_agent_steps is not None else 30 + 3 * len(answered)
+    )
+
     bag = AssetBag.from_tables(schema, tables)
     for asset in other:
         if asset.asset_type == "join":
@@ -969,15 +1253,20 @@ def build_curated_corpus_with_sme(
         user = (
             f"Ingest answered clarifications for schema `{schema}`. "
             "Read /clarifications.jsonl and fold each answered record into the "
-            "corpus via annotate/upsert tools (curator/proposed provenance only)."
+            "corpus via annotate/upsert tools (curator/proposed provenance only). "
+            f"There are {len(answered)} answered record(s). You have about "
+            f"{step_budget} tool calls; several calls in ONE reply cost the same as "
+            "one, so batch them, and use annotate_columns for several columns of the "
+            "same table at once."
         )
         _result, tool_counts, agent_error = _invoke_agent(
             make_agent(),
             user=user,
-            max_agent_steps=max_agent_steps,
+            max_agent_steps=step_budget,
             settings=_settings,
             run_id=_run_id,
             thread_id=_thread_id,
+            trace_path=out_root / "curator_sme_trace.jsonl",
         )
         # Count successful writes via tool totals; unanswered leftovers are NOT
         # folded — agent owns the fold.
@@ -1008,7 +1297,7 @@ def build_curated_corpus_with_sme(
         bag,
         connector=connector,
         out_root=out_root,
-        max_agent_steps=max_agent_steps,
+        max_agent_steps=step_budget,
     )
     # Phase B has no separate soft-adversary pass; validate findings are all hard.
     from .adversary import gate_hard_findings
@@ -1029,6 +1318,13 @@ def build_curated_corpus_with_sme(
             "unrecognised_column_marks": unrecognised,
             "suspect_columns": bag.suspect_count(),
             "clarification_count": len(answered),
+            "assets": {
+                "joins": len(bag.joins),
+                "metrics": len(bag.metrics),
+                "terms": len(bag.terms),
+                "few_shots": len(bag.few_shots),
+            },
+            "tool_call_budget": step_budget,
             "tool_calls": tool_counts,
             "fix_pass_tool_calls": fix_counts,
             "error": agent_error,

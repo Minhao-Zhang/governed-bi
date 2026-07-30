@@ -139,8 +139,11 @@ def test_invoke_agent_emits_once_on_error(tmp_path: Path):
         run_log_path=str(tmp_path / "runs.sqlite"),
     )
     agent = MagicMock()
-    agent.invoke.side_effect = RuntimeError("invoke exploded")
-    result, _counts, err = _invoke_agent(
+    # `_invoke_agent` streams rather than invokes, so a crash can keep the state
+    # accumulated up to that point. This agent fails before yielding anything, which
+    # is the one case that really is unmeasured.
+    agent.stream.side_effect = RuntimeError("invoke exploded")
+    result, counts, err = _invoke_agent(
         agent,
         user="curate please",
         max_agent_steps=2,
@@ -149,6 +152,7 @@ def test_invoke_agent_emits_once_on_error(tmp_path: Path):
         thread_id="thread-x",
     )
     assert result is None
+    assert counts["read_total"] is None, "nothing streamed → unmeasured, never zero"
     assert err is not None and "invoke exploded" in err
     assert count_run_records(settings) == 1
     rec = load_run_record("thread-x:1", settings)
