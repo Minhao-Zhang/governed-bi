@@ -123,7 +123,7 @@ only `build_manifest` parameters allowed a default.
 | `pg_dsn_host` | host actually connected to |
 | `serve_workers` | serve-loop concurrency |
 | `build_workers` | curator-build concurrency |
-| `max_agent_steps` | operator override for the curator's per-schema **tool-call** budget; `null` means it was derived from schema size, and the resolved figure is the `tool_call_budget` in each corpus's own `run_manifest.json`. The effective LangGraph recursion limit is `3 * budget + 4` |
+| `max_agent_steps` | operator override for the curator's per-schema TOOL-CALL budget; null = derived from schema size, and the resolved figure is each corpus's run_manifest.json tool_call_budget. Effective recursion limit is 3x + 4 |
 | `serve_path` | always agent_core (ADR 0002) |
 | `allow_git_sha_drift` | operator opted out of the resume git-sha guard |
 
