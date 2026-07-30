@@ -235,6 +235,11 @@ def make_tools(
     # unbounded, which is correct for a single-schema corpus (BIRD / demo / eval) and
     # wrong for a pooled lake: see :func:`_in_licensable_scope`.
     licensable_schemas: "frozenset[str] | set[str] | None" = None,
+    # Side channel for the live timeline: ``search_corpus`` stashes a JSON-safe hit
+    # snapshot under ``"last"`` so ``_resolve_tool`` can emit identity without parsing
+    # the rendered tool string. Tools are forced sequential (G1), so one slot is enough.
+    # ``None`` (unit tests that only care about the rendered string) skips the stash.
+    search_hits: dict | None = None,
 ):
     """Factory: the governed read-only tools closed over deployment deps.
 
@@ -267,6 +272,22 @@ def make_tools(
         """
         return scope is None or asset.schema in scope
 
+    def _search_hit_item(aid: str) -> dict[str, Any]:
+        """``{id, name}`` for the stream; ``name`` is the best display string on hand."""
+        item: dict[str, Any] = {"id": aid}
+        asset = corpus.by_id(aid)
+        if asset is None:
+            return item
+        name = (
+            getattr(asset, "name", None)
+            or getattr(asset, "physical_name", None)
+            or getattr(asset, "question", None)
+            or getattr(asset, "summary", None)
+        )
+        if name:
+            item["name"] = name
+        return item
+
     @tool
     def search_corpus(query: str) -> str:
         """Find more governed context for a query beyond what you were given.
@@ -292,6 +313,22 @@ def make_tools(
             table_ids=kept,
             scores={k: v for k, v in r.scores.items() if k in kept or not str(k).startswith("tbl_")},
         )
+        if search_hits is not None:
+            # Counts stay ints (UI countLabel); identity nests under items.
+            search_hits["last"] = {
+                "tables": len(kept),
+                "few_shots": len(r.few_shot_ids),
+                "metrics": len(r.metric_ids),
+                "notes": len(r.note_ids),
+                "terms": len(r.term_ids),
+                "items": {
+                    "tables": [_search_hit_item(i) for i in kept],
+                    "few_shots": [_search_hit_item(i) for i in r.few_shot_ids],
+                    "metrics": [_search_hit_item(i) for i in r.metric_ids],
+                    "notes": [_search_hit_item(i) for i in r.note_ids],
+                    "terms": [_search_hit_item(i) for i in r.term_ids],
+                },
+            }
         out = [render_retrieval(filtered)]
         fs = render_few_shots(corpus, r.few_shot_ids)
         if fs:

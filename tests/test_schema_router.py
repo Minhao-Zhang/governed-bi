@@ -121,6 +121,39 @@ def test_shortlist_prefers_lexically_matching_schema():
     assert top == ["finance"]
 
 
+def test_shortlist_ranked_out_preserves_channel_scores():
+    """``ranked_out`` receives (schema, score) pairs the serve path maps onto candidates."""
+    corpus = _three_schema_bridge()
+    ranked: list = []
+    channel: dict = {}
+    top = shortlist_schemas(
+        corpus,
+        "total invoice billing amount",
+        top_k=2,
+        channel_out=channel,
+        ranked_out=ranked,
+    )
+    assert channel["schema_route_channel"] == "bm25_fallback"
+    assert ranked, "ranked_out must be filled when the channel scored something"
+    assert all(isinstance(s, str) and isinstance(sc, (int, float)) for s, sc in ranked)
+    # Shortlist order matches the head of the ranked list.
+    assert top == [s for s, _ in ranked[:2]]
+    # Scores are descending.
+    scores = [sc for _, sc in ranked]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_schema_pick_max_tables_constant_is_the_pick_default():
+    import inspect
+
+    from governed_bi.retrieval import SCHEMA_PICK_MAX_TABLES
+    from governed_bi.retrieval.schema_router import pick_schema
+
+    assert SCHEMA_PICK_MAX_TABLES == 15
+    params = inspect.signature(pick_schema).parameters
+    assert params["max_tables"].default == SCHEMA_PICK_MAX_TABLES
+
+
 def test_expand_pulls_bridge_schema_via_curated_joins():
     corpus = _three_schema_bridge()
     expanded = expand_schemas_via_curated_joins(corpus, {"finance"})
@@ -163,6 +196,7 @@ def test_retrieve_after_routing_excludes_unrelated_schema():
 def test_route_schemas_recorded_in_provenance(monkeypatch):
     """Multi-schema serve path stamps routed_schemas into answer provenance."""
     from dataclasses import replace
+    import json
 
     from langchain_core.messages import AIMessage
 
@@ -193,6 +227,7 @@ def test_route_schemas_recorded_in_provenance(monkeypatch):
     # still carries that provenance — no live model, no DB tables needed.
     monkeypatch.setattr("governed_bi.analyst.agent.retrieve", _fake_retrieve)
 
+    events: list[dict] = []
     conn = SqliteConnector(":memory:")
     try:
         ans = answer_question_agent(
@@ -203,6 +238,7 @@ def test_route_schemas_recorded_in_provenance(monkeypatch):
             settings=settings,
             session_id="s",
             model=FakeToolModel(responses=[AIMessage(content="done")]),
+            on_event=events.append,
         )
     finally:
         conn.close()
@@ -210,3 +246,17 @@ def test_route_schemas_recorded_in_provenance(monkeypatch):
     assert "routed_schemas" in ans.provenance
     assert "finance" in ans.provenance["routed_schemas"]
     assert "hr" not in ans.provenance["routed_schemas"]
+
+    # Serve-transparency C2: schema_route fires before assemble, payload is JSON-safe.
+    route_ev = next(e for e in events if e.get("step") == "schema_route")
+    assemble_ev = next(
+        e for e in events if e.get("step") == "assemble" and e.get("status") == "ok"
+    )
+    assert route_ev["seq"] < assemble_ev["seq"]
+    detail = route_ev["detail"]
+    assert detail["n_total"] == 4
+    assert detail["channel"] in ("embedding", "bm25_fallback", "none")
+    ranks = [c["rank"] for c in detail["candidates"]]
+    assert ranks == sorted(ranks)
+    assert ranks == list(range(1, len(ranks) + 1))
+    json.dumps(detail)  # GovEventStream swallows serialisation bugs (§2.1)

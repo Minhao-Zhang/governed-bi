@@ -1,11 +1,13 @@
 """Agent step-event stream (backend for the UI timeline).
 
 Covers the ``GovEventStream`` emitter contract and the end-to-end event trace the
-agent serve path streams, per docs/plans/agent-step-visualization.md.
+agent serve path streams, per docs/plans/agent-step-visualization.md and
+docs/plans/serve-transparency-handoff.md (C1 / C2 / C4 phase 1).
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -64,6 +66,32 @@ def test_none_values_are_dropped_from_detail():
     s = GovEventStream(out.append)
     s.tool("run_query", "blocked", step_id="c1", sql="SELECT 1", layer=None, rows=None)
     assert out[0]["detail"] == {"sql": "SELECT 1"}
+
+
+def test_schema_route_fallback_and_candidates_survive_json_dumps():
+    """C2 contract: fallback + ranked candidates must be JSON-serialisable (§2.1)."""
+    out: list[dict] = []
+    s = GovEventStream(out.append)
+    s.rail(
+        "schema_route",
+        "ok",
+        n_total=57,
+        channel="embedding",
+        candidates=[
+            {"schema": "mondial_geo", "rank": 1, "score": 0.81},
+            {"schema": "world", "rank": 2, "score": 0.55},
+        ],
+        picked="world",
+        fallback="call_failed",
+        truncated=[
+            {"schema": "mondial_geo", "tables_shown": 15, "tables_total": 42},
+        ],
+    )
+    detail = out[0]["detail"]
+    assert detail["fallback"] == "call_failed"
+    assert detail["candidates"][0]["rank"] == 1
+    assert detail["truncated"][0]["tables_total"] == 42
+    json.dumps(detail)
 
 
 def test_final_maps_both_axes_for_a_delivered_answer():
@@ -169,15 +197,51 @@ def test_agent_path_streams_rail_tool_and_final_events(
     assert seqs == sorted(seqs)
     assert len(set(seqs)) == len(seqs)
 
-    # Outer rails.
+    # Outer rails. Single-schema corpus: no schema_route rail.
     rails = {(e["step"], e["status"]) for e in events if e["kind"] == "rail"}
     assert ("route", "ok") in rails
     assert ("refuse_gate", "ok") in rails
     assert ("assemble", "ok") in rails
+    assert "schema_route" not in {e["step"] for e in events if e["kind"] == "rail"}
+
+    # C1: assemble keeps int counts and nests identity under items (§7 trap).
+    assemble_ev = next(
+        e
+        for e in events
+        if e["kind"] == "rail" and e["step"] == "assemble" and e["status"] == "ok"
+    )
+    ad = assemble_ev["detail"]
+    assert isinstance(ad["tables"], int)
+    assert isinstance(ad["few_shots"], int)
+    assert isinstance(ad["notes"], int)
+    assert isinstance(ad["caveats"], int)
+    assert isinstance(ad["context_chars"], int)
+    items = ad["items"]
+    assert items["tables"], "assembled tables should be non-empty on this question"
+    assert all("retrieved" in t and "id" in t for t in items["tables"])
+    assert isinstance(items.get("notes"), list)
+    for note in items["notes"]:
+        assert "id" in note
+    json.dumps(ad)
 
     # Tool starts pair with resolves by id.
     starts = {e["id"] for e in events if e.get("status") == "start"}
-    assert {"c1", "c2", "c3"} <= starts
+    assert {"c0", "c1", "c2", "c3"} <= starts
+
+    # C4 phase 1: search_corpus resolve carries int counts + items.
+    search = [
+        e
+        for e in events
+        if e["kind"] == "tool" and e["step"] == "search_corpus" and e["status"] != "start"
+    ]
+    assert search
+    sd = search[0]["detail"]
+    assert sd.get("query") == "total revenue"
+    assert isinstance(sd["tables"], int)
+    assert isinstance(sd["few_shots"], int)
+    assert isinstance(sd["metrics"], int)
+    assert "items" in sd and "tables" in sd["items"]
+    json.dumps(sd)
 
     # inspect_schema resolved as licensed with a column count.
     insp = [
@@ -234,7 +298,9 @@ def test_negative_example_refusal_stops_at_the_gate(
     )
 
     steps = [e["step"] for e in events]
-    assert ("refuse_gate", "refused") in {(e["step"], e["status"]) for e in events if e["kind"] == "rail"}
+    assert ("refuse_gate", "refused") in {
+        (e["step"], e["status"]) for e in events if e["kind"] == "rail"
+    }
     # Stopped at the gate: no tool activity, no assemble.
     assert "assemble" not in steps
     assert not any(e["kind"] == "tool" for e in events)

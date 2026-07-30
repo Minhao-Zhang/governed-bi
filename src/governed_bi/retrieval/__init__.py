@@ -3,10 +3,22 @@
 Four retrieval modes, four-stage rerank, token-budgeted, Corrective-RAG
 fallback:
 
-- **R** exact (id / physical-name lookup)
-- **V** semantic (vector index)
+RVGD names four **retrieval methods**, not four asset classes. Any asset type can
+in principle be reached by more than one method, and a method's coverage is a
+property of what we index, not of the asset:
+
+- **R** exact (id / physical-name lookup, and exact hits on a term's synonyms)
+- **V** semantic (dense vector index) and the lexical BM25 channel
 - **G** graph (neighborhood over the projected FK graph)
-- **D** dictionary (term / synonym resolution)
+- **D** dynamic few-shot (retrieve past question -> SQL pairs by similarity, and
+  accumulate new ones from verified successes)
+
+Coverage today: R and V ship. **G is not built**, which matters most for joins,
+whose only natural method it is (``asset_document`` gives ``JoinAsset`` no
+language surface, so R and V cannot reach it either; ``assemble_context``
+therefore takes joins by licensed scope rather than by retrieval). **D is only
+half-built**: few-shots are retrieved by V over their question text, but they are
+authored at build time only, so nothing accumulates from a successful serve.
 
 Retrieves the **Facts + Inference tiers only** (loader contract); Audit and
 ``governance.excluded`` assets are never retrieved. The vector / BM25 indexes
@@ -44,6 +56,7 @@ from .rvgd import (
     tokenize,
 )
 from .schema_router import (
+    SCHEMA_PICK_MAX_TABLES,
     SchemaPick,
     embed_schema_documents,
     expand_schemas_via_curated_joins,
@@ -70,6 +83,7 @@ __all__ = [
     "corpus_index_key",
     "retrieve",
     "route_schemas",
+    "SCHEMA_PICK_MAX_TABLES",
     "SchemaPick",
     "pick_schema",
     "shortlist_schemas",

@@ -30,6 +30,7 @@ from ..gateway import column_allowlist
 from ..graph import build_graph, detect_missing_join_path, plan_joins
 from ..obs import tracing_callbacks
 from ..retrieval import (
+    SCHEMA_PICK_MAX_TABLES,
     RetrievalIndexCache,
     embed_schema_documents,
     expand_schemas_via_curated_joins,
@@ -87,6 +88,38 @@ _ESCALATION_CLARIFY_DECLINED = (
     "I needed one clarification to answer this safely, but didn't receive an "
     "answer, so I stopped rather than guess. Re-ask with the detail and I'll continue."
 )
+
+
+def _assemble_note_item(corpus: "Corpus", nid: str) -> dict[str, Any]:
+    """One note entry for the ``assemble`` stream ``items.notes`` list."""
+    item: dict[str, Any] = {"id": nid}
+    asset = corpus.by_id(nid)
+    force = getattr(asset, "normative_force", None) if asset is not None else None
+    if force is not None:
+        item["normative_force"] = force
+    return item
+
+
+def _schema_table_totals(
+    corpus: "Corpus", schemas: list[str] | set[str]
+) -> dict[str, int]:
+    """Analyst-visible table counts per schema, without ``for_analyst()`` deep-copies.
+
+    Matches the table population ``_schema_pick_summary`` shows (non-excluded
+    ``TableAsset`` rows). Used only for the ``schema_route.truncated`` wire field —
+    calling ``_analyst_tables`` per candidate would re-copy the corpus every turn
+    and break the index-cache copy budget.
+    """
+    wanted = set(schemas)
+    counts = {s: 0 for s in wanted}
+    for a in corpus.assets:
+        if not isinstance(a, TableAsset) or a.schema not in wanted:
+            continue
+        gov = getattr(a, "governance", None)
+        if gov is not None and getattr(gov, "excluded", False):
+            continue
+        counts[a.schema] += 1
+    return counts
 
 
 class ClarificationPending:
@@ -216,6 +249,8 @@ def build_agent_core(
     # The routed schema set for this turn; bounds what ``inspect_schema`` may license
     # (AUDIT S4). None = unbounded, correct for a single-schema corpus.
     licensable_schemas: "frozenset[str] | set[str] | None" = None,
+    # Live timeline side channel for ``search_corpus`` hits. See :func:`make_tools`.
+    search_hits: dict | None = None,
 ):
     """Assemble ``create_agent`` with governed tools + middleware.
 
@@ -233,6 +268,7 @@ def build_agent_core(
         enable_clarify=enable_clarify,
         index_cache=index_cache,
         licensable_schemas=licensable_schemas,
+        search_hits=search_hits,
     )
     mw = GovernanceMiddleware(
         corpus,
@@ -439,6 +475,9 @@ def build_serve_rails(
     # on per-worker isolation); they die with the graph, so nothing crosses runs.
     _index_cache = index_cache if index_cache is not None else RetrievalIndexCache()
     _routed_corpora: dict[frozenset, "Corpus"] = {}
+    # Side channel: search_corpus → _resolve_tool (serve-transparency C4). Cleared
+    # on each ingest so a prior turn's hit cannot leak into the next.
+    _search_hits: dict = {}
     # One rich-event emitter for the whole turn (reset in `ingest`); the agent path
     # emits the {seq,kind,step,status,detail} contract, never the legacy {stage}
     # shape governance.py's on_event helpers still accept but which agent.py never
@@ -512,6 +551,7 @@ def build_serve_rails(
 
     def ingest(state: ServeRailsState) -> dict:
         events.reset()  # new turn: fresh seq + serve_path tag + stage records
+        _search_hits.clear()
         _turn_n[0] += 1
         question = state["question"]
         if events._finalize_ctx is not None:
@@ -620,6 +660,7 @@ def build_serve_rails(
             # shortlist prunes and where it routed (silent mis-routing would
             # otherwise be invisible in the EX number).
             route_channel: dict = {}
+            route_ranked: list = []
             shortlisted = shortlist_schemas(
                 corpus,
                 question,
@@ -629,6 +670,7 @@ def build_serve_rails(
                 settings=settings,
                 index_cache=_index_cache,
                 channel_out=route_channel,
+                ranked_out=route_ranked,
             )
             # A silent embedding->BM25 degradation halves routing recall
             # (0.70 -> 0.35); recorded so the drop is attributable (AUDIT R8).
@@ -689,6 +731,41 @@ def build_serve_rails(
                 # decision the model made.
                 "schema_pick_fallback": pick_fallback,
             }
+            # Live timeline: which schemas were shortlisted and which one won.
+            # Scores only when the embedding channel ran; truncated only when the
+            # picker saw fewer tables than the schema has (SCHEMA_PICK_MAX_TABLES).
+            channel = route_channel.get("schema_route_channel")
+            score_by = {s: sc for s, sc in route_ranked}
+            candidates = []
+            for rank, name in enumerate(shortlisted, start=1):
+                row: dict[str, Any] = {"schema": name, "rank": rank}
+                if channel == "embedding" and name in score_by:
+                    row["score"] = score_by[name]
+                candidates.append(row)
+            truncated = []
+            table_totals = _schema_table_totals(corpus, shortlisted)
+            for name in shortlisted:
+                tables_total = table_totals.get(name, 0)
+                tables_shown = min(SCHEMA_PICK_MAX_TABLES, tables_total)
+                if tables_total > tables_shown:
+                    truncated.append(
+                        {
+                            "schema": name,
+                            "tables_shown": tables_shown,
+                            "tables_total": tables_total,
+                        }
+                    )
+            events.rail(
+                "schema_route",
+                "ok",
+                n_total=len(_corpus_schemas),
+                channel=channel,
+                degraded=route_channel.get("schema_route_degraded"),
+                candidates=candidates,
+                picked=picked,
+                fallback=pick_fallback,
+                truncated=truncated or None,
+            )
         else:
             # A single-schema corpus never routes. Recorded, not omitted: an absent
             # schema_pick record would read as a build that cannot measure the pick.
@@ -793,6 +870,35 @@ def build_serve_rails(
             tables=len(context.tables),
             few_shots=len(context.few_shots),
             notes=len(context.injected_note_ids),
+            caveats=len(context.caveats),
+            context_chars=len(rendered),
+            items={
+                "tables": [
+                    {
+                        "id": t.id,
+                        "physical_name": t.physical_name,
+                        "schema": t.schema,
+                        "retrieved": t.retrieved,
+                    }
+                    for t in context.tables
+                ],
+                "joins": [
+                    {
+                        "on": j.on,
+                        "cardinality": j.cardinality,
+                        "confidence": j.confidence,
+                        "low_confidence": j.low_confidence,
+                    }
+                    for j in context.joins
+                ],
+                "few_shots": [{"question": fs.question} for fs in context.few_shots],
+                "notes": [
+                    _assemble_note_item(corpus, nid)
+                    for nid in context.injected_note_ids
+                ],
+                "terms": [{"name": t.name} for t in context.terms],
+                "metrics": [{"name": m.name} for m in context.metrics],
+            },
         )
         # ``base_provenance`` is always a new dict by this point (table provenance
         # is recorded unconditionally above), so it always propagates.
@@ -867,7 +973,19 @@ def build_serve_rails(
                 licensed=licensed,
             )
         elif step == "search_corpus":
-            events.tool("search_corpus", "ok", step_id=tcid, query=args.get("query"))
+            hit = _search_hits.pop("last", {})
+            events.tool(
+                "search_corpus",
+                "ok",
+                step_id=tcid,
+                query=args.get("query"),
+                tables=hit.get("tables"),
+                few_shots=hit.get("few_shots"),
+                metrics=hit.get("metrics"),
+                notes=hit.get("notes"),
+                terms=hit.get("terms"),
+                items=hit.get("items"),
+            )
         else:
             events.tool(step, "ok", step_id=tcid)
         return attempt
@@ -982,6 +1100,7 @@ def build_serve_rails(
                 state.get("base_provenance", {}).get("routed_schemas") or ()
             )
             or None,
+            search_hits=_search_hits,
         )
 
         # One tracing handler per turn: it is attached at the outer graph.invoke

@@ -38,6 +38,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger("governed_bi.retrieval")
 
 DEFAULT_SCHEMA_TOP_K = 3
+# Hard cap on tables shown to the LLM schema picker per candidate. Not a settings
+# knob: raising it invites papering over R1 (rank which 15 to show) instead of
+# fixing it. Import this when emitting ``schema_route.truncated``.
+SCHEMA_PICK_MAX_TABLES = 15
 
 
 def list_schemas(corpus: "Corpus") -> list[str]:
@@ -188,6 +192,10 @@ def shortlist_schemas(
     # (AUDIT R8) — a run could look like a curation failure when it was a dead
     # embedding endpoint. Values: "embedding" | "bm25_fallback" | "none".
     channel_out: dict | None = None,
+    # Out-param: ``(schema, score)`` pairs from the ranking channel, before top_k /
+    # PIN prepend. The serve path maps these onto the final shortlist for the
+    # ``schema_route`` stream event (scores are otherwise discarded here).
+    ranked_out: list | None = None,
 ) -> list[str]:
     """Rank schemas against ``question`` and return up to ``top_k`` names.
 
@@ -254,6 +262,9 @@ def shortlist_schemas(
         if channel_out is not None:
             channel_out["schema_route_channel"] = "none"
         return schemas  # fail-open: no signal → keep all
+    if ranked_out is not None:
+        ranked_out.clear()
+        ranked_out.extend(ranked)
     out = [s for s, _ in ranked[:top_k]]
 
     if settings is not None and settings.pin_triggers_enabled:
@@ -332,7 +343,7 @@ def _schema_pick_summary(
     corpus: "Corpus",
     schema: str,
     *,
-    max_tables: int = 15,
+    max_tables: int = SCHEMA_PICK_MAX_TABLES,
     max_columns: int = 0,
 ) -> str:
     """Compact one-block summary of a schema for the LLM picker: name + tables
@@ -526,7 +537,7 @@ def pick_schema(
     candidates: list[str],
     *,
     chat,
-    max_tables: int = 15,
+    max_tables: int = SCHEMA_PICK_MAX_TABLES,
     max_columns: int = 0,
     system_prompt: str | None = None,
 ) -> SchemaPick:
