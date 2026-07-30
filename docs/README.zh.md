@@ -59,9 +59,11 @@ ADR 记录的是某个时点的决策。它不会为了跟上后来的现实而�
 
 - [实验操作手册](plans/experiment-runbook.md)：跑什么、按什么顺序跑，以及一个数字要满足哪些条件才值得引用。**做评测就从这里开始。**
 - [Data-lake 运行](plans/datalake-run.md)：多 schema 池化运行（D15）的操作手册与状态。
-- [HITL 澄清契约](plans/hitl-clarification-contract.md)：服务时向人追问的服务端 ↔ 前端契约，服务端已实现。
-- [Agent 步骤可视化](plans/agent-step-visualization.md)（英文）：前端怎么展示受治理服务流的每一步。
-- [模块加深](plans/module-deepening.zh.md)：六条行为保持的结构性工作线，讲接口该放在哪里，以及「越过接口伸手进去」的次数说明了什么。
+- [服务透明度](plans/serve-transparency.md)及其[交接文档](plans/serve-transparency-handoff.md)（英文）：把 agent 看到的**输入**显示到界面上。四项改动已落地两项。
+- [SME 通道修复](plans/sme-channel-repair.md)（英文）：`curated_sme` 这一臂为什么没带来变化，以及该按什么顺序修。
+- [评测重建](plans/eval-rebuild.md)（英文）：2026-07-26 之前的数字为什么全部作废，以及跟着要做的四项修复。
+
+另有两份计划已经做完，文件也删了。它们定下的接口契约挪进了[分析师](analyst.md)（英文）：[治理事件流](analyst.md#the-event-contract-per-step)和[服务时澄清](analyst.md#serve-time-clarification-hitl)。删的是计划，不是能力。模块加深计划一项未做就删掉了，其中还要紧的条目留在[待办工作](open-work.md)（英文），剩下的翻 git 历史。
 
 已关闭的跟踪表和被取代的计划不再以文件形式保留——git 历史就是归档。它们里面还没做完的条目
 都收进了[待办工作](open-work.md)。

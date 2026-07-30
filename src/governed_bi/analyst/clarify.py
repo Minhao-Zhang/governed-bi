@@ -1,7 +1,7 @@
 """Serve-time clarification (HITL) — the ``ask_user`` payload contract.
 
 Implements the server side of
-``docs/plans/hitl-clarification-contract.md``. The agent asks the user one
+``docs/analyst.md`` (serve-time clarification). The agent asks the user one
 question mid-turn via the ``ask_user`` tool, which calls ``interrupt(request)``;
 the request surfaces to the ``useStream`` client as ``stream.interrupt.value``.
 The client answers with ``stream.respond(response)``; that ``response`` is what

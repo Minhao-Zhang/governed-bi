@@ -70,9 +70,15 @@ quotable — every number produced before 2026-07-26 is discarded.**
 
 - [Experiment runbook](plans/experiment-runbook.md): what to run, in what order, and what must be true before a number is worth quoting. **The entry point for any eval work.**
 - [Data-lake run](plans/datalake-run.md): the pooled multi-schema run (D15) — runbook and status.
-- [HITL clarification contract](plans/hitl-clarification-contract.md): serve-time clarification, server ↔ frontend. Server side implemented.
-- [Agent-step visualization](plans/agent-step-visualization.md): frontend spec for the governed serve stream.
-- [Module deepening](plans/module-deepening.md): six behaviour-preserving structural workstreams. Where the interfaces sit, and what the reach-past-the-interface counts say about it.
+- [Serve transparency](plans/serve-transparency.md) and its [handoff](plans/serve-transparency-handoff.md): making the agent's *inputs* visible in the UI. Two of four changes have landed.
+- [SME channel repair](plans/sme-channel-repair.md): why the `curated_sme` arm moved nothing, and the fixes in order.
+- [Eval rebuild](plans/eval-rebuild.md): why every pre-2026-07-26 number is discarded, and the four fixes that follow.
+
+Two plans finished and were deleted; their wire contracts now live in
+[Analyst](analyst.md) — the [governance event stream](analyst.md#the-event-contract-per-step)
+and [serve-time clarification](analyst.md#serve-time-clarification-hitl). The module
+deepening plan was deleted unstarted; the items from it that still matter are in
+[open work](open-work.md), and the rest is in git history.
 
 Closed trackers and superseded plans are not kept as files — git history holds
 them. Open items from all of them live in [open work](open-work.md).

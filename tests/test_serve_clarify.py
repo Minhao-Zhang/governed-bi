@@ -3,7 +3,7 @@
 Drives the real chat graph (api/graph_app.py -> answer_question_agent -> agent
 core) through the ask_user interrupt/resume round trip, using a scripted
 FakeToolModel instead of a live model. Verifies the wire contract
-(docs/plans/hitl-clarification-contract.md): the ClarificationRequest surfaces as
+(docs/analyst.md, serve-time clarification): the ClarificationRequest surfaces as
 the outer graph's __interrupt__ value, stream.respond/Command(resume) continues to
 a governed answer, provenance records the clarification, and a decline fails closed.
 """

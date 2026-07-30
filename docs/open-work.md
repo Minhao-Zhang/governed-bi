@@ -23,12 +23,14 @@ supersedes are marked where they occur.
 | C10 | `curator_trace.jsonl` / `curator_sme_trace.jsonl` are written at the arm root but are not in `_SIDECARS`, so `_relocate_sidecars` never promotes them and `_promote_build` deletes the staging root holding them. The pooled driver therefore keeps the derived counts (`tool_calls.repeats`, `n_tool_calls`, `n_steps`) and loses the verbatim argument list, which is the only artifact that says *what* a capped agent looped on. The single-schema driver keeps it. | `eval/run_datalake.py:_SIDECARS` |
 | ~~C11~~ | ~~**Fixed 2026-07-30.**~~ The oracle rungs wrote **answer-key-derived turns into the durable run log**. `oracle_solver` passed `settings` through without `run_log_kind="off"` (which `arms.py:430-434` does do), so every oracle turn landed as a row stamped `producer=serve, serve_path=agent`, with `oracle_rung` living only in the eval `meta` and never in provenance, indistinguishable from a real serve turn except by a `thread_id` prefix convention. `oracle.py:55-58` says these can never be reported as system performance. **Fix:** `oracle_solver` gained `enable_run_log: bool = False` and routes `dc_replace(settings, run_log_kind="off")` into `build_serve_rails`, mirroring `arms.agent_solver` rather than inventing a second pattern. Regression test `test_oracle_rungs_stay_out_of_the_durable_run_log` in `tests/test_eval_run_log_turns.py` is parametrised `(False, 0)` / `(True, 2)`; the `True` leg is a control proving the write path was live, so the `False` leg's zero is suppression and not a vacuous pass. Verified failing before the fix (`assert 2 == 0`). Confirmed `run_log_kind` is the complete guard: the only durable serve sink is `finalize_and_log → append_run_record`, which short-circuits on `kind == "off"` (`analyst/run_log.py:503-505`), and the conversation checkpointer is never wired on the eval path. | `eval/oracle.py` |
 | C12 | **The refuse-gate eval collapses an N-question run into one durable row.** `agent_refuser` builds a fresh graph per question and defaults `n_human`, so `turn_id == f"{session_id}:1"` every time and `append_run_record` UPSERTs over it. It is the one serve call site that got neither the per-invoke turn counter (`test_eval_run_log_turns.py:60` pins it for `arms`) nor the AUDIT R6 index-cache fix, so it also re-embeds the whole corpus per question. Latent while X6 keeps the scorer unwired, but it will bite the moment a real out-of-scope set exists. **Added 2026-07-30 while fixing C11:** the same call site also passes `settings` to `answer_question_agent` with no `run_log_kind` guard, so it has C11's defect too. `arms.py:433` and now `eval/oracle.py` both guard it; this is the last unguarded serve call site on the eval path. Fold into this item rather than opening a third. | `eval/refuse_gate.py:71-80` |
-| C13 | Unqualified bare table names resolve to **whichever schema loaded first**. Three copies of "table by id, falling back to physical name" (`analyst/tools.py:38`, `analyst/middleware.py:118`, `analyst/agent.py:465`) take the first match in `corpus.assets` order; `retrieval/rvgd.py:530-538` already implements the correct policy for the same lookup ("rather than to whichever table happened to be loaded last") and returns `None` on ambiguity. Measured on `BIRD-corpus` at HEAD: **27 ambiguous bare names covering 67 of 731 table assets (9.2%)** — `pais` ×5, `kunden` ×4. Reachable without an adversary: the agent reads `physical: sales.kunden` from `render_columns`, calls `sample_rows("kunden")`, and is told `tbl_beer_factory_kunden: not licensed this turn` — a table it never named, in a schema outside its routed scope, whose name the message leaks. Costs a step, can dead-loop to a step-cap refusal that scores as an **agent** failure, and flips with the order of `built` in `_load_built_corpus`. No lookup accepts the qualified form either, though that is the form the context block and `render_columns` both print. | [module deepening](plans/module-deepening.md) W1 |
+| C13 | Unqualified bare table names resolve to **whichever schema loaded first**. Three copies of "table by id, falling back to physical name" (`analyst/tools.py:38`, `analyst/middleware.py:118`, `analyst/agent.py:465`) take the first match in `corpus.assets` order; `retrieval/rvgd.py:530-538` already implements the correct policy for the same lookup ("rather than to whichever table happened to be loaded last") and returns `None` on ambiguity. Measured on `BIRD-corpus` at HEAD: **27 ambiguous bare names covering 67 of 731 table assets (9.2%)** — `pais` ×5, `kunden` ×4. Reachable without an adversary: the agent reads `physical: sales.kunden` from `render_columns`, calls `sample_rows("kunden")`, and is told `tbl_beer_factory_kunden: not licensed this turn` — a table it never named, in a schema outside its routed scope, whose name the message leaks. Costs a step, can dead-loop to a step-cap refusal that scores as an **agent** failure, and flips with the order of `built` in `_load_built_corpus`. No lookup accepts the qualified form either, though that is the form the context block and `render_columns` both print. **Fix:** one `Corpus.table_by_name` that accepts the qualified form and returns `None` on an ambiguous bare name, replacing all three copies — `rvgd.py` already has the policy, it just is not shared. Ship it with a `Corpus.concat` constructor or the index goes stale on the pooled path. | `analyst/tools.py:38`, `analyst/middleware.py:118`, `analyst/agent.py:465` |
 | ~~C14~~ | ~~**Fixed 2026-07-30.**~~ `read_corpus(todo_only=True)` bypassed the `READ_CORPUS_MAX_CHARS` (20k) cap: the normal render ended with `return _clip_render(lines, max_chars)`, but the `todo_only` branch returned early via `return body if body else "..."` with no clip. On a wide schema the worklist render was enormous: `works_cycles` (73 tables / 703 columns) renders **668 KB**, far past the ~20k deepagents `tool_token_limit_before_evict`, so the result was evicted to a file and the agent burned extra turns reading it back. This re-created, on the one path the fix didn't cover, exactly the read_corpus-eviction churn that `079d1fe` set out to kill, and `todo_only` was *added by that same commit* as the shrinking-worklist remedy. Observed live in the 20260730T031119Z fixed-code test build: curated `works_cycles` wrote 0 durable assets in ~18 min while repeatedly regenerating 668 KB / 212 KB `todo_only` dumps, wedging the whole build at 54/57. **Fix:** the `todo_only` early return now routes through `_clip_render(lines, max_chars)`; regression test `test_todo_only_render_is_also_bounded` in `tests/test_curator.py`. Filed as C11 on the run server, where that id was free; renumbered here because C11 was already taken by the oracle run-log finding above. | `curator/asset_bag.py` `read_corpus` (`todo_only` branch), cap at `:47` `READ_CORPUS_MAX_CHARS` |
 
 | C15 | **`note-excluded-identifier` (C5) has the same pooled-population bug F7 just fixed.** `_excluded_identifier_tokens` collects excluded physical names from *every* table in the pooled corpus, then scans *every* note against all of them, so a note about schema B that mentions `phone` is flagged because schema A excludes a column named `phone`. Latent rather than live: measured against the 20260730 `curated_sme` corpus there are **0** excluded tables/columns, so the check is inert there and flagged nothing. The fix is to scope tokens per schema and match a note only against tokens from the schemas its scope licenses, globals against all. Deferred because it needs a decision about `tests/test_notes_c5_withholding.py`'s contract. **Compounded 2026-07-30:** `validate.py:265` scans `note.body` as well as the summary, and `note-excluded-identifier` is a **hard** finding (`adversary.py:42` blocks the write), so it aborts a schema build. Caveat notes now carry the full SME answer in `body` (F5 fix), which widens the text this pooled check scans. Still cannot fire on BIRD runs because nothing in the curator or eval path sets `governance.excluded`, but on a hand-authored corpus with exclusions a cross-schema false positive would now abort a build rather than be silently discarded. Fix the pooling before anyone relies on exclusions. | `corpus/validate.py:259-279` |
 | C18 | **Nothing bounds the size of a rendered train pair except a pair *count*.** BIRD-Obfuscation rewrites some gold as a literal `VALUES` list: 48 of 5392 train pairs carry `sql_rename` over 2000 chars and the largest single pair (`video_games/train_3491`) is **2,527,929 chars**, roughly 630k tokens, larger than any context window in play. Until 2026-07-30 the 40-pair render cap was the only thing standing between that and the prompt, and it was already failing: the worst first-40 render is **323,403 chars** (`language_corpus`), re-sent on every turn of the agent loop, and 19 of 57 schemas would exceed 60k chars on a full render. Mitigated by the F1 intake fix, which clips each rendered statement at `MAX_RENDERED_SQL_CHARS` (2000) with an announced marker, bringing the widest single batch render to 43,848 chars. **Still open:** the clip is a curator-side render guard only. No other consumer of `sql_rename` bounds it, and nothing rejects or flags a 2.5 MB gold statement at dataset-load time, so the next path that renders gold inherits the same hazard. | `curator/pipeline.py` `MAX_RENDERED_SQL_CHARS`, `eval/bird_loader.py` |
 | C17 | **The suspect-note character cap binds only the path that does not dominate.** `_suspect_note_from_answer` clips `mark_unrecognised_columns` output at `_SUSPECT_NOTE_MAX_CHARS` (200) and discards the remainder, justified as protecting the per-turn schema-card budget. But the agent's own `annotate_column(note=...)` is **unbounded** on the same field: the 20260730 run carries reliability notes up to 619 chars across 2104 suspect columns, against 47 clipped by the mechanical backstop. So the budget rationale is enforced on the minority path and absent from the majority one. Unlike the caveat case there is no free carrier to move the tail into (`Reliability` has only `status` and `note`, both per-turn card text), so the fix is a decision about which cap is real, not a mechanical change. Every clipped answer does survive in full in `<schema>/_build/clarifications.jsonl`. | `curator/asset_bag.py` `_suspect_note_from_answer` |
+| C19 | **`events.final` appends the durable record before `narrate` runs**, so the stored row lacks the `narrate` stage whenever no narrator was passed. The re-append only happens on the narrator-ran path — which is the path the eval drivers never take, so every eval row is missing it. Append after narration, or record the stage unconditionally. | `analyst/agent.py:1265-1268` |
+| C20 | **`run_id` is a parameter the code discards**: `ingest` overwrites it unconditionally, so a caller that passes one is silently ignored. Delete the parameter or stop overwriting it. | `analyst/agent.py:518-525` |
 | C16 | **Pooled validation makes `dangling-ref` weaker, not stronger.** A note scoped `schema:X`, or a reference to a table id living in another schema, resolves fine in a 57-schema pool but would dangle in that schema's own corpus. This direction produces no false positives, so it is not urgent, but it means a green pooled `finding_count: 0` is **not** evidence of per-schema reference integrity, and the CI-green gate is quietly weaker than it reads. Found while fixing F7. | `eval/harness.py:125-140` |
 
 ## Efficiency
@@ -40,6 +42,12 @@ supersedes are marked where they occur.
 | E3 | `profile_database` runs twice per db (baseline and curated each profile independently). | `curator/pipeline.py` |
 | E4 | Baseline is rebuilt unconditionally on `--resume-curated`; `run_datalake` already guards with `_has_yaml`. | `eval/run_experiment.py` |
 | E5 | The gold self-check opens a fresh schema-pinned connector per sampled db, separate from the shared unpinned serve connector. | `eval/run_datalake.py` |
+| E6 | **`schema_vectors` is passed by nothing**, so on a multi-schema corpus every live turn re-embeds every schema document, because the API paths rebuild the graph per turn. `index_cache` cannot cover it: `schema_router.py:224-231` short-circuits on `schema_vectors` *ahead of* the cache branch, so the stack's cache never sees the call. | `retrieval/schema_router.py:224` |
+| E7 | **`licensed_physical_names` is re-derived on every `run_query` attempt** as well as twice per question: ~29,000 asset visits per question through one 8-line function, for a value that changes only when `inspect_schema` licenses something. Memoise per licensed-id set. | `analyst/middleware.py:84` |
+| E8 | **`_excluded_identifier_tokens` is uncached** and visits 731 assets plus all 6,877 columns per call, once per `render_notes` / `read_notes` / `grep_notes`, for a pure function of the corpus. | `analyst/tools.py:148`, `:397`, `:420` |
+| E9 | **`oracle_tables` re-embeds a large corpus per question**, and a corpus-keyed cache cannot fix it: the key is the sorted asset-id tuple and the gold table set differs per question, so every lookup is a guaranteed miss. `restrict_corpus` also keeps every term, note and negative-example asset whole, all three with non-blank documents. Needs a per-document embedding memo. | `eval/oracle.py:264` |
+| E10 | **`run_datalake` compiles a serial solver's graph the pooled path never uses**, paying one full schema-document embed per arm. Build it lazily. | `eval/run_datalake.py:4636-4668` |
+| E11 | **`rvgd.py:597` calls `corpus.by_id` T times** while the local id→asset dict built at `:488` is in scope, and the comment at `:485-487` explains precisely why that dict exists. | `retrieval/rvgd.py:597` |
 
 ## Experiment design
 
@@ -173,6 +181,40 @@ two eval drivers are unified behind a testable `grade_one` / `run_arm` seam,
 these become ordinary behavioural tests. `tests/test_eval_index.py` (the
 `manifest_model` rewrite) is the worked precedent for the conversion.
 
+## Serve-time clarification (HITL)
+
+The contract is agreed, the server implements it and the frontend renders it, so its
+plan doc is deleted and the contract now lives in
+[Analyst](analyst.md#serve-time-clarification-hitl). Four things it left open.
+
+- **The `ask_user` timeline row carries almost nothing.** `_tool_start_detail` emits
+  `{question, why}`, and the resolve has **no branch at all** — it falls through to the
+  generic `events.tool(step, "ok")`. So `clarification_id` never reaches the stream
+  (the design made it the join key across interrupt, resume, timeline and provenance;
+  on the wire the UI pairs by tool-call id instead), `answered_by` is never emitted, and
+  **a declined clarification resolves as `ok`**: the fail-closed refusal appears only in
+  the final stamp as `refused_by: clarification_declined`, never on the row that caused
+  it. `governed-bi-ui`'s `StepStatus` union already carries a `declined` value nothing
+  on this side sends. Found 2026-07-30 while verifying the contract against the code —
+  the deleted plan's §5 table described the intended payload, not the built one.
+- **Durable clarification is deferred.** The clarify checkpointer is in-memory and
+  per-process (`ServeStack.clarify_checkpointer`), so a paused turn dies on server
+  restart and a declined turn leaves the inner thread paused in memory until GC or
+  thread reuse. Needs the Postgres checkpointer — ADR 0002's deferred item.
+- **Resume re-runs the deterministic prefix.** The whole pipeline sits in one `answer`
+  node, so on resume route/refuse_gate/assemble re-execute while the inner agent
+  replays from its checkpoint. Never confirmed to be acceptable rather than merely
+  harmless; the alternative is lifting the prefix into graph nodes, which W2's
+  `ServeRuntime` would make cheap.
+- **`ask_user` versus `recursion_limit` is unaudited.** An interrupt pauses without
+  consuming a super-step, but the resumed tool round-trip does. The cap accounting was
+  never checked, so a clarifying turn's real step budget is unknown.
+
+- **`api/app.py` omits `clarify_checkpointer` entirely**, so `enable_clarify` is False
+  and `ask_user` is not bound at all. The REST `/chat` agent has a different tool set
+  from the streaming path, and nothing in provenance records that clarification was
+  unavailable. Decide whether REST should clarify; record the capability either way.
+
 ## Governance gaps
 
 - **The graded-delivery re-check is weaker than the check that blocked the query.**
@@ -191,9 +233,12 @@ these become ordinary behavioural tests. `tests/test_eval_index.py` (the
   re-check were equivalent. Bounded by `grade_semantic_failures=False` being the
   serve default — but it is `true` in `governed_bi.local.toml` and on in both eval
   drivers, and on the 69-schema pooled lake it is a cross-schema read of
-  un-licensed data, which is the boundary D15 exists to enforce. Design context and
-  the token that would make the asymmetry visible: [module
-  deepening](plans/module-deepening.md) W4.
+  un-licensed data, which is the boundary D15 exists to enforce. What would make the
+  asymmetry visible rather than buried: make the guardrail verdict a *scoped* value —
+  a token carrying the allowlist it was checked against, so re-checking with
+  `allowed_tables=None` cannot silently mean "checked" — and make the checked tree the
+  executed tree, which also closes `_force_row_limit` re-serialising under a hardcoded
+  dialect while `check()` parses under `gateway.catalog().dialect`.
 - Curator probe SQL (`curator/deep_agent.py:118`, `curator/sme.py:355`) reaches
   `gateway.execute` under an `all_access` identity with no guardrail at all —
   defensible, since the curator is what *builds* the allowlist, but L1/L2 need no
@@ -219,3 +264,18 @@ ADR 0003 M1–M4 and ADR 0004 M1–M2, M5 all landed (`b157834`, `3ae4eec`,
 protocol and Simulated SME landed with D12–D14. The 2026-07-25 measurement
 integrity overhaul (`stages.py`, `stage_events.jsonl`, `runs/index.jsonl`) is
 complete, and every number produced before 2026-07-26 is discarded.
+
+Two plan docs were **deleted on 2026-07-30 because their work is finished**, backend
+and frontend both: the agent step timeline and the HITL clarification contract. Neither
+is a gap. What each one specified now lives in [Analyst](analyst.md) — the
+[event contract](analyst.md#the-event-contract-per-step) and
+[serve-time clarification](analyst.md#serve-time-clarification-hitl) — because shipped
+code and ADR 0002 cite them as live interfaces, not as plans. The residue that was
+genuinely still open is the HITL section above.
+
+The **module deepening** plan was deleted the same day, and unlike those two it was
+deleted **unstarted** — none of its seven workstreams shipped. That is a decision to
+stop tracking a refactor, not a claim that the refactor happened. Its findings that
+stand on their own are folded in above: C13 and C19–C20 in Correctness, E6–E11 in
+Efficiency, the guardrail-scoping note under Governance gaps, and the REST clarify gap
+under HITL. The workstream designs themselves are in git history.

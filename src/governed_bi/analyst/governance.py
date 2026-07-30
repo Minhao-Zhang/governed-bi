@@ -473,7 +473,7 @@ class GovEventStream:
     One instance per turn (call :meth:`reset` at the turn boundary). Stamps a
     monotonic ``seq`` so the frontend can order events, and tags the first event
     of the turn with ``serve_path`` so the UI picks the agent renderer (see
-    docs/plans/agent-step-visualization.md).
+    docs/analyst.md, the event contract).
 
     Best-effort: a callback that raises must never turn a governed answer into an
     error, so failures are swallowed.

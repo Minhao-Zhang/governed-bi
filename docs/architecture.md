@@ -140,7 +140,7 @@ Guardrails, in order (fail-closed on any, all five enforced): syntax → policy 
 > typed step event (`rail` / `tool` / `final`), so the UI renders a per-attempt
 > live audit of the loop. The `run_query` event detail is the ledger entry itself,
 > so the live stream and the stored ledger cannot drift. Contract:
-> [`docs/plans/agent-step-visualization.md`](plans/agent-step-visualization.md).
+> [`docs/analyst.md`](analyst.md#the-event-contract-per-step).
 >
 > Since Amendment 3, observability also collapses to **one inherited tracing
 > handler per turn**: Langfuse is attached once at the outer `graph.invoke` and

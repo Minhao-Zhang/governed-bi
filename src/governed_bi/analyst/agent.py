@@ -126,7 +126,7 @@ class ClarificationPending:
     """Returned by :func:`answer_question_agent` instead of an ``Answer`` when the
     inner agent paused on ``ask_user``. The caller (the chat-graph node) turns
     ``request`` into a client-visible ``interrupt`` and calls back with the answer
-    (contract: docs/plans/hitl-clarification-contract.md §2)."""
+    (contract: docs/analyst.md, serve-time clarification)."""
 
     __slots__ = ("request",)
 
@@ -412,7 +412,7 @@ def build_serve_rails(
 ):
     """Compile the outer deterministic StateGraph wrapping the agent core.
 
-    HITL clarification (contract: docs/plans/hitl-clarification-contract.md) is on
+    HITL clarification (contract: docs/analyst.md, serve-time clarification) is on
     only when ``clarify_checkpointer`` is set — then ``agent_core`` runs the inner
     agent on that checkpointer + ``clarify_thread`` so ``ask_user``'s ``interrupt``
     can pause/resume. ``clarify_resume`` (a ``ClarificationResponse``) resumes a
@@ -481,7 +481,7 @@ def build_serve_rails(
     # One rich-event emitter for the whole turn (reset in `ingest`); the agent path
     # emits the {seq,kind,step,status,detail} contract, never the legacy {stage}
     # shape governance.py's on_event helpers still accept but which agent.py never
-    # feeds a callback into (docs/plans/agent-step-visualization.md).
+    # feeds a callback into (docs/analyst.md, the event contract).
     _run_id = run_id or new_run_id()
     _t0 = time.perf_counter()
     _finalize_ctx = FinalizeCtx(
@@ -1446,7 +1446,7 @@ def answer_question_agent(
     """Run one question through the agentic serve rails.
 
     Returns an ``Answer`` normally, or a :class:`ClarificationPending` when the
-    inner agent paused on ``ask_user`` (HITL, contract §2). Clarification is active
+    inner agent paused on ``ask_user`` (HITL; contract in docs/analyst.md). Clarification is active
     only when ``clarify_checkpointer`` is passed; the eval path calls this without
     it and always gets an ``Answer``.
     """

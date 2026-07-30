@@ -127,7 +127,7 @@ execute (as-user) → narrate → answer + provenance
 > 并通过 `on_event` 把每个受治理动作重新发出为一条有类型的步骤事件（`rail` / `tool`
 > / `final`），于是 UI 能对整个循环渲染出逐次尝试的实时审计。`run_query` 事件的
 > detail 就是账本条目本身，因此实时流与已存账本不会漂移。契约见
-> [`docs/plans/agent-step-visualization.md`](plans/agent-step-visualization.md)。
+> [`docs/analyst.md`](analyst.md#the-event-contract-per-step)（英文）。
 >
 > 自 Amendment 3 起，可观测性（observability）也收敛为**每轮只有一个被继承的追踪
 > handler**：Langfuse 只在外层 `graph.invoke` 处附加一次，并被其下的一切继承，

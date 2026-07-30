@@ -374,7 +374,8 @@ worker thread. The shared finalize helpers run with `on_event=None` on this path
 so only the rich contract is emitted. The deterministic flow path is unchanged —
 it keeps emitting the legacy `{stage}` events.
 
-Frontend spec + full event contract: [`docs/plans/agent-step-visualization.md`](../plans/agent-step-visualization.md).
+Full event contract: [`docs/analyst.md`](../analyst.md#the-event-contract-per-step).
+The frontend that renders it is built, in [`governed-bi-ui`](https://github.com/Minhao-Zhang/governed-bi-ui).
 Tests: `tests/test_agent_step_events.py`.
 
 ## Implementation note (2026-07-14): P2 cutover landed on `main`
@@ -442,8 +443,8 @@ has since landed server-side**: `analyst/tools.py::ask_user` calls `interrupt()`
 wires `can_clarify` + a `clarify_checkpointer` (covered by
 `tests/test_serve_clarify.py`). What remains deferred is only the **durable**
 checkpointer (Postgres) — today's checkpointer is in-memory, so a clarification
-does not survive a process restart. The frontend contract is in
-[hitl-clarification-contract.md](../plans/hitl-clarification-contract.md); the
-frontend's build status lives in [`governed-bi-ui`](https://github.com/Minhao-Zhang/governed-bi-ui),
+does not survive a process restart. The wire contract is in
+[`docs/analyst.md`](../analyst.md#serve-time-clarification-hitl); the frontend
+that consumes it is built, in [`governed-bi-ui`](https://github.com/Minhao-Zhang/governed-bi-ui),
 not here. So
 "Open questions → HITL" now scopes to *durable persistence*, not the mechanism.

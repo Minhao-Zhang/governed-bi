@@ -11,7 +11,6 @@
 
 - No need to have a test for everything, unless it is a problem we encountered in the past and we want to avoid it in the future.
 - Before you write any LangGraph, LangChain, DeepAgents related code, use the relavent skill like `langgraph-fundementals` to understand the basic concepts and principles.
-- When writing docs, always use the `humanizer` skill to refine the docs.
 
 ## Documentation language workflow
 
@@ -26,7 +25,6 @@ docs/architecture.md     docs/usage.md               data/generated/README.md
 Everything else is **English only** — do not create a `.zh.md` for it.
 
 - **While the work is in progress**: edit the **English docs only**. Let the Chinese twins drift.
-- **When the work is done** (before commit): align the affected twins to the finalized English, then refine each with the `qu-ai-wei` skill.
 
 ## External dependencies
 

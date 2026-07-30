@@ -80,7 +80,77 @@ The SQL-gen-and-execute middle (steps 6-9 above) is a bounded `create_agent` rea
 
 **Amendment 1: seed the semantic layer.** A first live A/B showed the tools-only agent *regressing* vs. the (since-removed) deterministic flow, because the P1 tools surfaced only names and none of the curated semantic layer (few-shots, join `ON` clauses, metric expressions, terms, rules). The fix: a deterministic **`assemble` node runs before `agent_core`** and seeds the agent with that same semantic-layer context (`PromptContext.render()`) as a `## Governed context` block, and pre-populates the `licensed` channel with the base (retrieved + FK-neighborhood + Steiner) table scope. Tools become **refinement, not discovery**. This is the *deterministic* L4 floor the guardrails enforce (not agent-claimed), so the seeded scope is strictly ≥ that floor and never self-authorized. See ADR 0002 Amendment 1.
 
-**Live governance-event stream (Amendment 2).** The governance ledger is streamed live, not just attached to the finished answer. `agent_core` runs `agent.stream(...)` (not `invoke`) and re-emits each governed action through the existing `on_event` callback as a typed event: `rail` for each outer step (`route` / `refuse_gate` / `assemble`), `tool` for each `search_corpus` / `inspect_schema` / `sample_rows` / `run_query` (a `start` then an `ok` / `blocked` / `error` / `cap` / `miss` resolve, paired by tool-call id), and one `final` carrying the two-axis stamp. Each event is `{seq, kind, step, status, id?, detail, serve_path?}`; the `run_query` / `sample_rows` `detail` is the **ledger entry itself**, so the live view and the final `governance_ledger` never drift. `GovEventStream` (`analyst.governance`) is the per-turn emitter for this contract. This is the audit surface the UI renders as a live step timeline — contract and frontend plan in [`docs/plans/agent-step-visualization.md`](plans/agent-step-visualization.md).
+**Live governance-event stream (Amendment 2).** The governance ledger is streamed live, not just attached to the finished answer. `agent_core` runs `agent.stream(...)` (not `invoke`) and re-emits each governed action through the existing `on_event` callback as a typed event: `rail` for each outer step (`route` / `refuse_gate` / `assemble`), `tool` for each `search_corpus` / `inspect_schema` / `sample_rows` / `run_query` (a `start` then an `ok` / `blocked` / `error` / `cap` / `miss` resolve, paired by tool-call id), and one `final` carrying the two-axis stamp. Each event is `{seq, kind, step, status, id?, detail, serve_path?}`; the `run_query` / `sample_rows` `detail` is the **ledger entry itself**, so the live view and the final `governance_ledger` never drift. `GovEventStream` (`analyst.governance`) is the per-turn emitter for this contract. This is the audit surface the UI renders as a live step timeline; the frontend that renders it lives in the sibling [`governed-bi-ui`](https://github.com/Minhao-Zhang/governed-bi-ui) repo and is built.
+
+### The event contract, per step
+
+The wire format between this repo and the UI. Emit sites are all in `analyst/agent.py` unless noted; `GovEventStream._emit_event` builds every envelope.
+
+| kind | step | status | `detail` keys |
+|---|---|---|---|
+| rail | `route` | ok | *none* — fires with no arguments, marking the stage only |
+| rail | `schema_route` | ok | `n_total`, `channel`, `degraded`, `candidates` (each `{schema, rank, score?}` in rank order), `picked`, `fallback`, `truncated` (each `{schema, tables_shown, tables_total}`) |
+| rail | `refuse_gate` | ok / refused | `negative_example` (id, on refusal only) |
+| rail | `assemble` | ok / refused | `schema`, `tables`, `few_shots`, `notes`, `caveats`, `context_chars` — all counts — plus `items`, the **identities** behind them (`tables`, `joins`, `few_shots`, `notes`, `terms`, `metrics`); `missing_edge` + `schemas` on refusal |
+| tool | `search_corpus` | start / ok | `query` on start; on resolve also `tables`, `few_shots`, `metrics`, `notes`, `terms`, `items` — what that pass actually found |
+| tool | `inspect_schema` | start / ok | `table_id`, `columns`, `licensed` |
+| tool | `sample_rows` | start / ok / blocked | `table_id`, `rows`, `reason` |
+| tool | `run_query` | start / ok / blocked / error / cap | `attempt`, `sql`, `verdict`, `layer`, `reason`, `allowed`, `rows` |
+| tool | `ask_user` | start / ok | `question`, `why` on start; **nothing on resolve** — it falls through to the generic `events.tool(step, "ok")`. See the clarification section |
+| final | `finalize` | ok / refused | the two-axis stamp plus the whole `provenance` dict |
+
+Three properties a consumer has to know:
+
+- **`None` is dropped from `detail`**, not sent as `null`. Absent and null are the same thing.
+- **Emission is best effort.** `_emit_event` swallows callback exceptions, so a payload that fails to serialise disappears silently and the answer still succeeds. A serialisation bug looks exactly like a stage that never ran, which is why every payload needs a `json.dumps` round-trip test rather than a live-run eyeball.
+- **`seq` is monotonic per turn**, reset by `GovEventStream.reset()`. Order by it, not by arrival.
+
+`run_query` is the event to copy when adding another: `attempt` + `verdict` + `layer` carry *identity*, not just arithmetic, which is what makes a repair loop legible ("attempt 1 blocked by term_semantics, attempt 2 ran").
+
+Terminal states a renderer has to keep distinct: a negative-example refusal stops at `refuse_gate/refused` with no further rows; a missing governed join is `assemble` then refusal; a repair is stacked `run_query` attempt rows ending in success; an exhausted budget is failed attempts then `finalize/refused` or a graded `unverified` row.
+
+## Serve-time clarification (HITL)
+
+When the agent hits genuine ambiguity mid-turn it **asks the user one question and waits**, instead of guessing or refusing. On the answer it resumes the same turn. Agreed and implemented on both sides 2026-07-14; the six decisions behind it are D12's clarification protocol.
+
+**Server-only, and streaming-only.** HITL lives in the deployed serve path (LangGraph Server chat graph → inner agent). The eval and offline harnesses **never interrupt** — there is no human there, so they proceed or fail closed exactly as before, and `ask_user` is not registered on those paths. It rides the same `useStream` connection as the answer and the event stream above: no new endpoint, no new socket.
+
+**Mechanism.** The inner `create_agent` runs on a per-turn in-memory checkpointer (`ServeStack.clarify_checkpointer`). `ask_user` (`analyst/tools.py`, bound only when `enable_clarify`) calls `interrupt(clarification_request(...))`; the chat-graph `answer` node (`api/graph_app.py`) detects the pause and re-`interrupt`s so the **outer** graph pauses, which puts the request on `stream.interrupt.value`. `Command(resume=response)` round-trips back in. Payload builder and response parser are `analyst/clarify.py`; `clarification_id` is derived deterministically from the question, so a re-run re-derives it — no clock, no RNG.
+
+**Server → client**, the `interrupt()` value:
+
+```jsonc
+{
+  "kind": "clarification",          // discriminator; reserved for future interrupt kinds
+  "clarification_id": "clar_ab12",  // join key: ledger, timeline, resume, provenance
+  "question": "Which 'active' did you mean — logged in last 30 days, or account status = 'active'?",
+  "why": "The corpus has two competing definitions of \"active\".",
+  "choices": [                      // OPTIONAL. absent => freeform only
+    { "id": "opt_login30", "label": "Logged in within 30 days" },
+    { "id": "opt_status",  "label": "Account status = 'active'" }
+  ],
+  "allow_freeform": true,           // when choices present: is a text box also offered?
+  "tier": "audit"                   // provenance tier of the question (D12)
+}
+```
+
+`question` and `why` are always present, because the user seeing *why* they are being asked is the governance point.
+
+**Client → server**, the `resume` value — exactly one of the three fields is set:
+
+```jsonc
+{ "clarification_id": "clar_ab12", "answer": "logged in last 30 days" }
+{ "clarification_id": "clar_ab12", "choice_id": "opt_login30" }
+{ "clarification_id": "clar_ab12", "declined": true }
+```
+
+**A decline fails closed.** The agent does not guess; it refuses with reason `clarification_declined`. The server validates `clarification_id` against the pending question and re-emits the interrupt on a mismatch.
+
+**It is a governed tool call**, so it also appears on the event stream. The UI therefore has two coordinated surfaces for one clarification: the passive timeline row and the active prompt. The question and the answer both land in provenance (Inv #10) — clarification is an audited action, not a side channel.
+
+That row is thinner than it should be, and the gap is worth stating rather than inheriting. The `start` event carries `{question, why}` and the resolve carries **nothing at all**: `ask_user` has no branch in `_resolve_tool`, so it falls through to the generic `events.tool(step, "ok")`. Three consequences. `clarification_id` never reaches the stream, so the timeline row and the interrupt prompt have no join key and the UI pairs them by tool-call id instead. `answered_by` is never emitted. And a declined clarification resolves as `ok` — the refusal shows up only in the final stamp (`refused_by: clarification_declined`), never on the row that caused it. The UI already carries a `declined` value in its `StepStatus` union that nothing on this side sends. Open: [open work](open-work.md).
+
+**v1 limits, all deliberate.** One question at a time; a turn may ask several in sequence, never in parallel. No server timeout — the thread waits. `/capabilities` reports `can_clarify` (true only with a live model on the streaming path), though the UI gates on the arriving interrupt rather than the flag, so a stale flag can never hide a real question. What is **deferred**: the clarify checkpointer is in-memory and per-process, so a paused turn dies on server restart. See [open work](open-work.md).
 
 ## Three points where curator inference drives serve behavior
 

@@ -85,7 +85,7 @@ stream.submit(
   agent tool-loop** — all seven governed tools: `search_corpus`, `inspect_schema`,
   `sample_rows`, `run_query`, `read_notes`, `grep_notes`, and `ask_user` (serve-only,
   needs a checkpointer) — **not** a fixed 6-stage list. See
-  **[agent-step-visualization.md](plans/agent-step-visualization.md)** for the
+  **[analyst.md](analyst.md#the-event-contract-per-step)** for the
   authoritative event contract and the `buildStepsFromLedger` mapping. This
   reflects real backend progress, not a timer.
 - **Final answer** is a custom **`answer` state channel**: read `stream.values.answer`
@@ -184,10 +184,9 @@ path is the same.
 - **Shipped since (server side):** human-gate **clarification interrupts** —
   `interrupt()` in `analyst/tools.py::ask_user`, resume via `submit(command.resume)`,
   gated by `capabilities.can_clarify` (contract:
-  [hitl-clarification-contract.md](plans/hitl-clarification-contract.md)). For the
-  frontend's build status, see [`governed-bi-ui`](https://github.com/Minhao-Zhang/governed-bi-ui)
-  — it is not tracked here. Durable (Postgres) checkpointing of an interrupt is
-  deferred.
+  [analyst.md](analyst.md#serve-time-clarification-hitl)). The frontend is built, in
+  [`governed-bi-ui`](https://github.com/Minhao-Zhang/governed-bi-ui) — not tracked
+  here. Durable (Postgres) checkpointing of an interrupt is deferred.
 - **Deferred:** prod PR editing (dev is file-write today), public-demo cost
   strategy, per-user identity + gateway RLS (the shared-secret gate on the
   mutating routes in §4 is all the auth there is), durable HITL persistence.

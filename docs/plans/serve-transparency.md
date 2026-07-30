@@ -10,10 +10,9 @@
 ## Problem
 
 A user watching a governed answer arrive can see *which steps ran* but not *what the
-agent was looking at* when it ran them. The step timeline shipped in
-[agent-step-visualization.md](agent-step-visualization.md) and is live: rows stream in,
-`run_query` attempts expand to show SQL and the guardrail layer that blocked them. That
-part works.
+agent was looking at* when it ran them. The step timeline is shipped and live on both
+sides: rows stream in, `run_query` attempts expand to show SQL and the guardrail layer
+that blocked them. That part works.
 
 What is missing is content. The stream reports that assembly injected five tables and
 three few-shots; it does not say which five. It reports that routing happened; it says
@@ -33,12 +32,13 @@ found defects are both invisible from the frontend:
 
 A user checking "did it look at the right things?" cannot answer that question today.
 
-## Relationship to the existing step plan
+## Relationship to the shipped timeline
 
-[agent-step-visualization.md](agent-step-visualization.md) owns the *timeline*: the
-transport, the `{seq, kind, step, status, detail}` envelope, row lifecycle, terminal
-states, and the components (`lib/steps.ts`, `agent-timeline.tsx`, `step-row.tsx`,
-`serve-progress.tsx`, all present in the UI repo). None of that changes here.
+The timeline is finished work and its plan doc is gone. The transport, the
+`{seq, kind, step, status, detail}` envelope, row lifecycle and terminal states are
+now documented in [Analyst](../analyst.md#the-event-contract-per-step); the components
+(`lib/steps.ts`, `agent-timeline.tsx`, `step-row.tsx`, `serve-progress.tsx`) are all
+present in the UI repo. None of that changes here.
 
 This plan owns the *contents*: what goes inside `detail`, and one new step. It also
 resolves an open question that plan left standing, quoted verbatim from its Open

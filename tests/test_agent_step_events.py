@@ -1,7 +1,7 @@
 """Agent step-event stream (backend for the UI timeline).
 
 Covers the ``GovEventStream`` emitter contract and the end-to-end event trace the
-agent serve path streams, per docs/plans/agent-step-visualization.md and
+agent serve path streams, per docs/analyst.md (the event contract) and
 docs/plans/serve-transparency-handoff.md (C1 / C2 / C4 phase 1).
 """
 

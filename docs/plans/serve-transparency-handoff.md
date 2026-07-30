@@ -2,7 +2,7 @@
 
 Implementation handoff for making the governed answer's *inputs* visible in the UI.
 Design rationale and the measurements behind it: [serve-transparency.md](serve-transparency.md).
-The event transport this extends: [agent-step-visualization.md](agent-step-visualization.md).
+The event transport this extends: [Analyst](../analyst.md#the-event-contract-per-step).
 
 **Two repos.** Backend is this repo (`governed-bi`). Frontend is the sibling
 `governed-bi-ui` (Next.js, LangChain `useStream`), local at `../governed-bi-ui`. Every
