@@ -157,11 +157,11 @@ reviewable, and a test asserts every declared rate names one.
 
 | rate | meaning | denominator |
 |---|---|---|
-| `ex_lenient` | headline execution accuracy | all scored rows (n) |
+| `ex_lenient` | EX over all scored rows, twins included: the figure comparable to published BIRD numbers. Reported, not the headline (see HEADLINE_RATE) | all scored rows (n) |
 | `ex_strict` | EX under the strict normaliser | all scored rows (n) |
 | `ex_gradeable` | EX excluding un-gradeable gold | gradeable rows |
 | `ex_twin` | EX where the gold statement exists in train | twin rows |
-| `ex_no_twin` | EX with no train twin — the defensible headline | twin-free rows |
+| `ex_no_twin` | EX on rows with no train twin: the PRE-REGISTERED HEADLINE, the one number this harness commits to in advance (HEADLINE_RATE) | twin-free rows |
 | `conditional_ex_lenient` | EX among turns that produced SQL | rows that produced SQL |
 | `cond_ex_given_routing` | EX among correctly-routed turns | rows the router hit |
 | `refusal_rate` | GENUINE refusals; a crash is not a refusal | all scored rows (n) |

@@ -68,24 +68,120 @@ _WRITE_TOOLS = frozenset(
 )
 
 
-#: (question, gold SQL) pairs rendered into the Phase A user turn. The driver passes
-#: the whole train split — a median 86 pairs, up to 306 — so most schemas have pairs
-#: the agent never sees. Budgeting against the full split would buy calls for work
-#: that is not in the context.
-MAX_RENDERED_PAIRS = 40
+#: (question, gold SQL) pairs rendered into ONE Phase A user turn — the target batch
+#: width, not a ceiling on intake. It used to be both: ``_render_train_batch`` sliced
+#: ``items[:40]`` and was called once, so on the 57-schema benchmark (49 pairs at the
+#: smallest, 86 median, 306 largest — every schema over 40) the curator saw 2094 of
+#: the 4900 unique ``evidence`` hints in the train split, a median 47.1% per schema.
+#: The remaining 57.3% reached the SME brief, which caps nothing
+#: (:mod:`governed_bi.curator.sme`, "dropping any starves the SME"), and never
+#: reached the arm that produces the +11.5pp step.
+PAIRS_PER_BATCH = 40
+
+#: How many Phase A invocations one schema may cost. **This is the cost knob.** Each
+#: batch is a separate :func:`_invoke_agent` with its own budget, so raising it buys
+#: whole extra agent runs, not extra tool calls: at the default the 57-schema
+#: benchmark takes 147 Phase A invocations (24 schemas at 2 batches, 33 at 3) against
+#: 57 before. Bounded on purpose, and bounded on the *count* — a schema with more
+#: pairs than ``max_batches * PAIRS_PER_BATCH`` gets wider batches rather than more
+#: of them, so every pair is still rendered somewhere. On this benchmark that means
+#: the widest schema's 306 pairs arrive as 3 turns of 102 instead of 8 of 40, and no
+#: schema drops a pair at any setting.
+MAX_PAIR_BATCHES = 3
+
+#: Per-pair ceiling on rendered gold SQL. The 40-pair slice was never a size bound
+#: and the split contains 48 pairs whose ``sql_rename`` exceeds this — BIRD-
+#: Obfuscation rewrites some gold as a literal ``VALUES`` list, and the largest single
+#: pair renders 2.53 MB (~630k tokens, more than any context window here). Uncapped,
+#: ``language_corpus``'s first 40 pairs alone rendered 323k chars, re-sent on every
+#: turn of the agent loop. Clipping at 2000 chars costs the curator nothing on those
+#: pairs (a materialised ``VALUES`` list names no table or column) and brings the
+#: widest single batch to ~44k chars, below the old worst case by 7x. Every clip is
+#: announced in the rendered text.
+MAX_RENDERED_SQL_CHARS = 2000
 
 
-def _render_train_batch(items: Sequence["EvalItem"], *, max_pairs: int = MAX_RENDERED_PAIRS) -> str:
-    lines = ["## Train (question, gold SQL, evidence) pairs — curate from these"]
-    for i, item in enumerate(items[:max_pairs], 1):
+def plan_pair_batches(
+    n_items: int,
+    *,
+    max_batches: int = MAX_PAIR_BATCHES,
+    per_batch: int = PAIRS_PER_BATCH,
+) -> list[tuple[int, int]]:
+    """Contiguous ``[start, stop)`` slices covering **all** ``n_items`` train pairs.
+
+    ``per_batch`` is the target width and ``max_batches`` the hard bound on how many
+    invocations one schema may cost. When the two conflict the bound wins and the
+    batches widen, so the return value always partitions the whole split: nothing is
+    dropped at any setting, which is the property the 40-pair truncation lacked.
+
+    Widths are balanced to within one pair rather than ``per_batch``-then-remainder:
+    a 49-pair split is 25 + 24, not 40 + 9, so no invocation pays a whole agent's fixed
+    overhead to render nine pairs — and one budget figure fits every batch, which keeps
+    ``tool_call_budget`` in the manifest a scalar (see :func:`derive_step_budget`).
+    """
+    if n_items <= 0:
+        return []
+    max_batches = max(int(max_batches), 1)
+    per_batch = max(int(per_batch), 1)
+    n_batches = min(max_batches, -(-n_items // per_batch))
+    base, wide = divmod(n_items, n_batches)
+    out: list[tuple[int, int]] = []
+    start = 0
+    for i in range(n_batches):
+        stop = start + base + (1 if i < wide else 0)
+        out.append((start, stop))
+        start = stop
+    return out
+
+
+def _render_train_batch(
+    items: Sequence["EvalItem"],
+    *,
+    start: int = 0,
+    total: int | None = None,
+    batch: int = 1,
+    n_batches: int = 1,
+    max_sql_chars: int = MAX_RENDERED_SQL_CHARS,
+) -> str:
+    """Render one batch of pairs. Renders **every** item it is given.
+
+    Truncation used to live here (``items[:40]`` plus an "N more pairs omitted" line);
+    slicing is :func:`plan_pair_batches`'s job now. ``start`` keeps the displayed
+    numbering global across batches so a ``raised_by`` reference means the same pair
+    in every batch.
+    """
+    total = len(items) if total is None else total
+    header = "## Train (question, gold SQL, evidence) pairs — curate from these"
+    if n_batches > 1:
+        first = start + 1 if items else start
+        # Only the true half of each statement. A first batch told that earlier writes
+        # exist goes looking for them, and a last batch told more pairs are coming
+        # leaves work for a turn that never runs.
+        note = ""
+        if batch > 1:
+            note += " Your writes from the earlier batch(es) are already in the corpus."
+        if batch < n_batches:
+            note += " The remaining pairs arrive in later batches."
+        header += (
+            f"\n(batch {batch} of {n_batches}: pairs {first}-{start + len(items)} of "
+            f"{total}.{note})"
+        )
+    lines = [header]
+    for offset, item in enumerate(items):
+        i = start + offset + 1
         evidence = (item.evidence or "").strip()
         qid = item.question_id or f"t{i}"
+        sql = item.sql or ""
         lines.append(f"{i}. id={qid} Q: {item.question}")
         if evidence:
             lines.append(f"   evidence: {evidence}")
-        lines.append(f"   sql: {item.sql}")
-    if len(items) > max_pairs:
-        lines.append(f"... ({len(items) - max_pairs} more pairs omitted from prompt)")
+        if max_sql_chars > 0 and len(sql) > max_sql_chars:
+            lines.append(f"   sql: {sql[:max_sql_chars]}")
+            lines.append(
+                f"   ... (gold SQL clipped at {max_sql_chars} of {len(sql)} chars)"
+            )
+        else:
+            lines.append(f"   sql: {sql}")
     return "\n".join(lines)
 
 
@@ -283,6 +379,55 @@ def _unmeasured_tool_counts() -> dict[str, Any]:
     }
 
 
+def _merge_tool_counts(parts: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Sum per-batch Phase A tool counts into one tally.
+
+    A single part is returned unchanged, so the one-batch shape (and everything that
+    reads ``run_manifest.json``'s ``tool_calls``) is untouched.
+
+    ``None`` wins over a number rather than summing as zero. That is the whole point
+    of :func:`_unmeasured_tool_counts`: a batch that died before its first super-step
+    is unmeasured, and adding it in as 0 would report a partial Phase A as a complete
+    one — the 2026-07-29 failure, one level up. ``repeats`` is deliberately absent from
+    the merge: ``distinct`` is a property of one trace and summing it across
+    independent traces would overcount, so per-batch repeat summaries stay in
+    ``pair_batches`` where each belongs to exactly one invocation.
+    """
+    if not parts:
+        return _empty_tool_counts()
+    if len(parts) == 1:
+        return dict(parts[0])
+
+    def _add(values: list[Any]) -> Any:
+        return None if any(v is None for v in values) else sum(values)
+
+    merged: dict[str, Any] = {
+        "read": {
+            name: _add([p.get("read", {}).get(name) for p in parts])
+            for name in sorted(_READ_TOOLS)
+        },
+        "write": {
+            name: _add([p.get("write", {}).get(name) for p in parts])
+            for name in sorted(_WRITE_TOOLS)
+        },
+    }
+    for key in ("other", "read_total", "write_total", "n_super_steps"):
+        merged[key] = _add([p.get(key) for p in parts])
+    merged["n_batches"] = len(parts)
+    merged["exhausted"] = any(bool(p.get("exhausted")) for p in parts)
+    # The per-invocation limit, which every batch shares (equal batch widths => one
+    # budget). Kept a scalar so `recursion_limit_for(tool_call_budget)` still checks out
+    # against it; the summed ceiling is `tool_call_budget_total` in the manifest.
+    limits = {p.get("recursion_limit") for p in parts if p.get("recursion_limit")}
+    merged["recursion_limit"] = limits.pop() if len(limits) == 1 else sorted(limits)
+    reasons = [p["unmeasured_reason"] for p in parts if p.get("unmeasured_reason")]
+    if reasons:
+        merged["unmeasured_reason"] = (
+            f"{len(reasons)} of {len(parts)} pair batch(es) unmeasured: {reasons[0]}"
+        )
+    return merged
+
+
 def _count_tool_calls(result: Any) -> dict[str, Any]:
     """Tally domain tool calls, split into read vs write."""
     counts = _empty_tool_counts()
@@ -306,7 +451,39 @@ def _count_tool_calls(result: Any) -> dict[str, Any]:
     return counts
 
 
-def _budget_brief(tool_calls: int, *, n_tables: int) -> str:
+#: ``curator_phase_a`` variants whose own TEXT states the triage order, so
+#: :func:`_budget_brief` must not state a second one. v1 and v2 leave the ordering to
+#: the user turn and are measured with it; v3 was written because that ordering ranks
+#: clarifications third and the agent obeyed it (186 questions across 57 schemas,
+#: median 3, budget-to-question correlation -0.353). Shipping both lists would put a
+#: prompt in contradiction with its own call site, which is the failure the
+#: ``sme_rules`` note in the registry documents costing 11 of 381 answers. A later
+#: variant that also carries its own order must be named here.
+_SELF_TRIAGING_PHASE_A_VARIANTS = frozenset({"v3"})
+
+
+def _phase_a_variant(system_prompt: str | None) -> str | None:
+    """The registered ``curator_phase_a`` variant id whose text this is, or ``None``.
+
+    The drivers resolve a variant to *text* before calling
+    (``prompt_text("curator_phase_a", ...)``), so the id never arrives as an argument.
+    Recovering it by exact text match cannot drift: it compares against the same
+    registry the caller resolved from, and follows any edit to that text
+    automatically. ``None`` means an unregistered prompt — a test fixture, or a caller
+    passing its own — which is treated as not self-triaging. ``None`` *input* means
+    the caller took the default variant.
+    """
+    from .. import prompts
+
+    if system_prompt is None:
+        return prompts.DEFAULT_VARIANT
+    for variant_id, variant in prompts.REGISTRY["curator_phase_a"].items():
+        if variant.text == system_prompt:
+            return variant_id
+    return None
+
+
+def _budget_brief(tool_calls: int, *, n_tables: int, triage: bool = True) -> str:
     """The step budget and a triage order, stated to the agent.
 
     Two separate failures on the 2026-07-29 run motivate this. First, the budget was
@@ -317,24 +494,37 @@ def _budget_brief(tool_calls: int, *, n_tables: int) -> str:
     mechanism produces. Joins and metrics are seeded deterministically before the
     agent starts and survive regardless, which is why re-deriving them is the
     cheapest thing to drop and marking columns is the most expensive.
+
+    ``triage=False`` emits the budget without the numbered order, for a system prompt
+    that carries its own (:data:`_SELF_TRIAGING_PHASE_A_VARIANTS`). The order below is
+    byte-identical to what v1 and v2 were measured with and must stay that way: it is
+    un-versioned text, so editing it silently re-defines the baseline of every run
+    stamped ``curator_phase_a=v1`` or ``v2``.
     """
-    return (
+    brief = (
         f"## Budget\n"
         f"You have about {tool_calls} tool calls. Several tool calls in ONE reply cost "
         f"the same as one, so batch aggressively — emit all the probes for a table "
         f"together, and use annotate_columns to do a whole table's columns in a single "
         f"call ({n_tables} tables here).\n"
-        f"If you cannot do everything, this is the order that matters, most first:\n"
-        f"1. Mark unreliable columns suspect (annotate_columns). Nothing else in the "
-        f"system writes reliability; an unmarked column is served to the analyst as "
-        f"usable.\n"
-        f"2. Describe what tables and columns mean.\n"
-        f"3. Raise clarifications for genuine unknowns.\n"
-        f"4. Few-shots and terms.\n"
-        f"5. Re-verifying seeded joins and metrics — they are already recorded, so this "
-        f"is the first thing to skip.\n"
-        f"Do not re-issue a call you have already made; read_corpus(todo_only=true) "
-        f"tells you what is left."
+    )
+    if triage:
+        brief += (
+            "If you cannot do everything, this is the order that matters, most first:\n"
+            "1. Mark unreliable columns suspect (annotate_columns). Nothing else in the "
+            "system writes reliability; an unmarked column is served to the analyst as "
+            "usable.\n"
+            "2. Describe what tables and columns mean.\n"
+            "3. Raise clarifications for genuine unknowns.\n"
+            "4. Few-shots and terms.\n"
+            "5. Re-verifying seeded joins and metrics — they are already recorded, so this "
+            "is the first thing to skip.\n"
+        )
+    else:
+        brief += "Triage against the order of work in your instructions.\n"
+    return brief + (
+        "Do not re-issue a call you have already made; read_corpus(todo_only=true) "
+        "tells you what is left."
     )
 
 
@@ -379,7 +569,13 @@ def _collect_trace(update: dict, trace: list[dict[str, Any]]) -> None:
                 )
 
 
-def _write_trace(path: Path, trace: list[dict[str, Any]]) -> None:
+def _write_trace(
+    path: Path,
+    trace: list[dict[str, Any]],
+    *,
+    append: bool = False,
+    tag: str | None = None,
+) -> None:
     """Write the per-tool-call trace as JSONL. Never raises — it is diagnostics.
 
     Verbatim arguments live here and nowhere else. This sits in the run directory
@@ -387,11 +583,20 @@ def _write_trace(path: Path, trace: list[dict[str, Any]]) -> None:
     inherits that artifact's trust level rather than the portable log's content
     tiers; only the derived counts are promoted into the manifest and the run
     record.
+
+    ``append`` exists for Phase A's pair batches: they are several invocations
+    writing one artifact, and the pooled driver promotes a fixed list of sidecar
+    *names* (``run_datalake._SIDECARS``), so a per-batch filename would be written and
+    then deleted. Truncating instead would leave only the last batch's trace — the
+    same blind spot the trace was added to close. ``tag`` labels which invocation a
+    row came from, since ``i`` restarts per invocation.
     """
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as fh:
+        with path.open("a" if append else "w", encoding="utf-8") as fh:
             for row in trace:
+                if tag is not None:
+                    row = {**row, "tag": tag}
                 fh.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
     except OSError as err:
         print(f"*** WARNING: could not write curator trace to {path}: {err} ***")
@@ -530,6 +735,8 @@ def _invoke_agent(
     run_id: str | None = None,
     thread_id: str | None = None,
     trace_path: Path | None = None,
+    trace_append: bool = False,
+    trace_tag: str | None = None,
 ) -> tuple[Any | None, dict[str, Any], str | None]:
     """Stream the agent to completion; return (result, tool_counts, error_string).
 
@@ -600,7 +807,7 @@ def _invoke_agent(
             f"{n_super_steps} of {limit} super-steps"
         )
     if trace_path is not None:
-        _write_trace(trace_path, trace)
+        _write_trace(trace_path, trace, append=trace_append, tag=trace_tag)
     # A crash no longer forfeits the counts: `result` holds the last streamed state,
     # so the tally is reconstructible from the messages the agent actually produced.
     # `_unmeasured_tool_counts` remains for the case where not even one `values`
@@ -840,6 +1047,7 @@ def build_curated_corpus(
     model: Any | None = None,
     dialect: str = "postgres",
     max_agent_steps: int | None = None,
+    max_pair_batches: int = MAX_PAIR_BATCHES,
     run_agent: bool = True,
     system_prompt: str | None = None,
     settings: "Settings | None" = None,
@@ -861,13 +1069,21 @@ def build_curated_corpus(
     TOML's prompt set while the agent ran on the caller's — the same mismatch, one
     layer down, and invisible because both halves look internally consistent.
 
-    ``max_agent_steps`` is the agent's budget in **tool calls**. ``None`` derives it
-    from the schema's size (:func:`derive_step_budget`), which is the default
-    because no constant fits a pool spanning 3-73 tables. An explicit value wins
-    and is the way to cap cost. It was previously a constant 25 fed through
-    ``max(steps * 4, 100)``, which pinned the real limit at 100 super-steps for
-    every value at or below the default — so the knob the drivers tell an operator
-    to raise did nothing.
+    ``max_agent_steps`` is the agent's budget in **tool calls**, granted to *each*
+    pair batch. ``None`` derives it from the schema's size and the batch width
+    (:func:`derive_step_budget`), which is the default because no constant fits a pool
+    spanning 3-73 tables. An explicit value wins and is the way to cap cost. It was
+    previously a constant 25 fed through ``max(steps * 4, 100)``, which pinned the real
+    limit at 100 super-steps for every value at or below the default — so the knob the
+    drivers tell an operator to raise did nothing.
+
+    ``max_pair_batches`` bounds how many agent invocations the train split may cost
+    (:func:`plan_pair_batches`). It is the other cost knob and the more expensive one:
+    ``max_agent_steps`` buys tool calls, this buys whole agent runs. Every pair is
+    rendered at any setting — batches widen rather than multiply — so lowering it
+    trades per-turn context size for invocation count, never coverage. Set it to 1 to
+    reproduce the single-invocation shape (which is *not* the pre-batching behaviour:
+    that one also truncated the split at 40 pairs).
     """
     out_root = Path(out_root)
     out_root.mkdir(parents=True, exist_ok=True)
@@ -886,15 +1102,25 @@ def build_curated_corpus(
             f"seed: {seed_stats['joins_ok']} join upserts collapsed onto "
             f"{seed_stats['joins_written']} assets (same table pair AND same ON clause)"
         )
+    # Every pair reaches the agent, across as many as `max_pair_batches` invocations.
+    # `[(0, 0)]` for an empty split: the agent still has a schema to sweep, and the
+    # fix pass still needs a budget.
+    pair_batches = plan_pair_batches(len(train_items), max_batches=max_pair_batches) or [(0, 0)]
+    # One budget for every batch, derived from the widest. Batch widths differ by at
+    # most one pair, so a single figure is accurate for all of them and
+    # `tool_call_budget` in the manifest stays the scalar that
+    # `recursion_limit_for()` was derived from.
+    batch_width = max(stop - start for start, stop in pair_batches)
     step_budget = (
         max_agent_steps
         if max_agent_steps is not None
         else derive_step_budget(
             n_tables=len(tables),
             n_columns=sum(len(t.columns) for t in tables),
-            # The rendered count, not the split size: the agent cannot work a pair
-            # it was never shown.
-            n_pairs=min(len(train_items), MAX_RENDERED_PAIRS),
+            # The pairs in ONE batch, not the whole split: the agent cannot work a
+            # pair that is not in the turn it is answering. The rest are budgeted for
+            # in the batches that carry them.
+            n_pairs=batch_width,
         )
     )
     # No deterministic suspect marking happens here any more (see the note where
@@ -907,6 +1133,7 @@ def build_curated_corpus(
     fix_error: str | None = None
     make_agent: "Callable[[], Any] | None" = None
     agent_ran = False
+    batch_records: list[dict[str, Any]] = []
 
     if run_agent and model is not None:
         from ..analyst.run_log import new_run_id
@@ -939,32 +1166,105 @@ def build_curated_corpus(
             )
 
         agent_ran = True
-        user = "\n\n".join(
-            [
-                f"Curate schema `{schema}`. Work pair-by-pair; persist via tools.",
-                seed.render(),
-                _render_train_batch(train_items),
-                "Create /clarifications.jsonl for genuine unknowns "
-                "(write_file on first create; grep before add; edit_file to broaden/merge).",
-                "Mark unreliable or misleading columns suspect. Propose at least the verified seed joins.",
-                "Stop once pairs are covered, seed joins verified, and obviously unreliable columns marked.",
-                # Stating the budget is the point: nothing else in the context does,
-                # and the deepagents harness prompt says "Keep working until the task
-                # is fully complete. Don't stop partway." An agent that cannot see a
-                # limit cannot triage against it, and the stages that died on the
-                # 2026-07-29 run were the late ones.
-                _budget_brief(step_budget, n_tables=len(tables)),
-            ]
+        n_batches = len(pair_batches)
+        # v3 carries its own triage order; v1/v2 get theirs from `_budget_brief`. Two
+        # copies would contradict each other — see `_SELF_TRIAGING_PHASE_A_VARIANTS`.
+        variant_states_own_triage = (
+            _phase_a_variant(system_prompt) in _SELF_TRIAGING_PHASE_A_VARIANTS
         )
-        _result, tool_counts, agent_error = _invoke_agent(
-            make_agent(),
-            user=user,
-            max_agent_steps=step_budget,
-            settings=_settings,
-            run_id=_run_id,
-            thread_id=_thread_id,
-            trace_path=out_root / "curator_trace.jsonl",
-        )
+        counts_per_batch: list[dict[str, Any]] = []
+        errors: list[str] = []
+        for i, (lo, hi) in enumerate(pair_batches, 1):
+            last = i == n_batches
+            # Read at loop time, not before it: the previous batch's agent may have
+            # created the ledger, and `write_file` FAILS on an existing path (deepagents
+            # `FilesystemBackend.write`). An agent told to "create" a file that is
+            # already there spends a turn on a guaranteed error.
+            ledger_exists = clarifications_path(out_root).exists()
+            user = "\n\n".join(
+                [
+                    f"Curate schema `{schema}`. Work pair-by-pair; persist via tools.",
+                    seed.render(),
+                    _render_train_batch(
+                        train_items[lo:hi],
+                        start=lo,
+                        total=len(train_items),
+                        batch=i,
+                        n_batches=n_batches,
+                    ),
+                    (
+                        "/clarifications.jsonl already exists — read_file it, then "
+                        "edit_file to append or broaden (write_file FAILS on a path that "
+                        "exists). grep before adding."
+                        if ledger_exists
+                        else "Create /clarifications.jsonl for genuine unknowns "
+                        "(write_file on first create; grep before add; edit_file to "
+                        "broaden/merge)."
+                    ),
+                    "Mark unreliable or misleading columns suspect. Propose at least the verified seed joins.",
+                    (
+                        "Stop once pairs are covered, seed joins verified, and obviously "
+                        "unreliable columns marked."
+                        if last
+                        else "Stop once THIS batch's pairs are covered and the columns they "
+                        "reach are described or marked. Do not redo work "
+                        "read_corpus(todo_only=true) no longer lists — the next batch "
+                        "continues from the corpus you leave behind."
+                    ),
+                    # Stating the budget is the point: nothing else in the context does,
+                    # and the deepagents harness prompt says "Keep working until the task
+                    # is fully complete. Don't stop partway." An agent that cannot see a
+                    # limit cannot triage against it, and the stages that died on the
+                    # 2026-07-29 run were the late ones.
+                    _budget_brief(
+                        step_budget,
+                        n_tables=len(tables),
+                        triage=not variant_states_own_triage,
+                    ),
+                ]
+            )
+            _result, batch_counts, batch_error = _invoke_agent(
+                make_agent(),
+                user=user,
+                max_agent_steps=step_budget,
+                settings=_settings,
+                # One run_id per batch, or the durable run log records N invocations
+                # under one id and their token totals collapse into the last writer's.
+                run_id=_run_id if n_batches == 1 else f"{_run_id}-b{i}",
+                thread_id=_thread_id if n_batches == 1 else f"{_thread_id}:b{i}",
+                trace_path=out_root / "curator_trace.jsonl",
+                # Appended, because the pooled driver promotes sidecars by NAME and a
+                # per-batch filename would be deleted with the staging tree.
+                trace_append=i > 1,
+                trace_tag=None if n_batches == 1 else f"pairs_batch_{i}",
+            )
+            counts_per_batch.append(batch_counts)
+            batch_records.append(
+                {
+                    "batch": i,
+                    "pairs": [lo, hi],
+                    "n_pairs": hi - lo,
+                    "tool_call_budget": step_budget,
+                    "read_total": batch_counts.get("read_total"),
+                    "write_total": batch_counts.get("write_total"),
+                    "n_super_steps": batch_counts.get("n_super_steps"),
+                    "exhausted": batch_counts.get("exhausted"),
+                    "repeats": batch_counts.get("repeats"),
+                    "error": batch_error,
+                }
+            )
+            if batch_error:
+                errors.append(f"[pairs_batch_{i}] {batch_error}")
+                if not batch_counts.get("exhausted"):
+                    # Exhaustion is local to a batch: the next one is a fresh agent with
+                    # a fresh budget on different pairs, so it is worth running. Any
+                    # other exception is an environment failure (a dead connector, a
+                    # revoked key) that would repeat, and repeating it costs another
+                    # paid invocation per batch for nothing.
+                    batch_records[-1]["stopped_remaining_batches"] = True
+                    break
+        tool_counts = _merge_tool_counts(counts_per_batch)
+        agent_error = "\n\n".join(errors) if errors else None
 
     findings, fix_counts, fix_error = _validate_fix_pass(
         make_agent if agent_ran else None,
@@ -1041,8 +1341,26 @@ def build_curated_corpus(
                 "few_shots": len(bag.few_shots),
             },
             # The budget the agent actually ran under, so a capped run is legible
-            # without re-deriving it from the driver's flags.
+            # without re-deriving it from the driver's flags. Per INVOCATION: every pair
+            # batch is granted this, and `recursion_limit_for()` of it is the limit each
+            # one ran with. `tool_call_budget_total` is the Phase A ceiling.
             "tool_call_budget": step_budget,
+            "tool_call_budget_total": step_budget * max(len(batch_records), 1),
+            # Intake, recorded because its absence is what hid the 40-pair ceiling: the
+            # manifest reported budgets and tool calls and never how much of the split
+            # the agent was shown. `rendered` short of `available` means a pair was
+            # dropped, which `plan_pair_batches` should make impossible.
+            "train_pairs": {
+                "available": len(train_items),
+                "rendered": sum(r["n_pairs"] for r in batch_records) if batch_records else 0,
+                "batches": len(batch_records),
+                "max_batches": max_pair_batches,
+                "per_batch_target": PAIRS_PER_BATCH,
+            },
+            # Per-invocation detail. The merged `tool_calls` cannot show that batch 2
+            # exhausted while batch 1 did not, and that difference is the whole reason
+            # to look.
+            "pair_batches": batch_records,
             "tool_calls": tool_counts,
             "fix_pass_tool_calls": fix_counts,
             "error": agent_error,

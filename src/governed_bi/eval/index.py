@@ -14,6 +14,15 @@ not, and says so in the artifact instead of in someone's memory. Absence of
 evidence counts as not-quotable: a run that never recorded its crash rate cannot
 claim it had none.
 
+**Headline.** Which of a run's rates is the number being claimed? Whichever
+:data:`~governed_bi.eval.metrics.HEADLINE_RATE` pre-registers — recorded under that
+name, with its denominator and its stamp coverage, and stamped with the name so a
+record says which pre-registration it was written under. ``ex_lenient`` is recorded
+and rendered beside it because its denominator is the one published BIRD numbers
+use, and labelled as not the headline. Nothing here picks between the two per run:
+that choice, made after seeing which stratum came out higher, is the failure the
+pre-registration exists to prevent.
+
 **Comparable.** May these two runs be put in the same sentence? Only if the
 independent variable is the one you think it is — same split, same model, same
 prompt set, same routing knobs. Comparing across a changed knob is the specific
@@ -39,10 +48,29 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from ..provenance import CORPUS_HASH_UNKNOWN
+from . import metrics
 from .atomic import atomic_write_text
 from .metrics import MANIFEST_KNOBS, MANIFEST_SCHEMA_VERSION
 
 DEFAULT_INDEX = Path("runs/index.jsonl")
+
+#: What a stratified headline rate needs beside itself to be readable at all, keyed by
+#: rate name: ``(denominator count, count of rows that landed in NEITHER stratum)``.
+#:
+#: A rate over a stratum is uninterpretable without both. With rows unstamped,
+#: ``ex_no_twin`` is not "EX on twin-free rows" — it is EX on the rows that happened to
+#: get stamped, which on a resumed run is the pooled EX under a different name. The
+#: summariser already gates on that (``run_datalake._twin_stamps_complete``), so the
+#: ledger has to carry the coverage count or it cannot tell a clean stratum from a
+#: silently-pooled one.
+#:
+#: Keyed by rate rather than derived from :data:`~governed_bi.eval.metrics.HEADLINE_RATE`
+#: alone because only the rate's own definition knows which counts bound it. It cannot go
+#: stale silently: ``tests/test_eval_index.py`` fails if the pre-registration moves to a
+#: rate with no entry here.
+_HEADLINE_SUPPORT: dict[str, tuple[str, str]] = {
+    "ex_no_twin": ("n_no_twin_gradeable", "n_twin_unstamped"),
+}
 
 #: Share of an arm's questions that may score correct for a non-SQL reason before the
 #: run stops being quotable. Not tuned against anything — a deliberate, visible line
@@ -157,6 +185,24 @@ def manifest_model(model_name: str | None, *, skip_agent: bool) -> str | None:
     did not. One definition is the only way that stays true.
     """
     return None if skip_agent else model_name
+
+
+def headline_keys() -> tuple[str, ...]:
+    """The arm-summary keys the ledger lifts for the pre-registered headline.
+
+    :data:`~governed_bi.eval.metrics.HEADLINE_RATE` first, then its support counts from
+    :data:`_HEADLINE_SUPPORT`.
+
+    Read out of the register at call time rather than snapshotted, so the *name* of the
+    headline has exactly one home (tracker X11). The register pre-registered
+    ``ex_no_twin`` and stopped there; this ledger — the artifact that decides what may be
+    quoted — recorded ``ex_lenient`` and not the headline at all, and rendered it under a
+    bare ``EX`` heading. A pre-registration the ledger does not record is decoration. A
+    ledger that spelled ``"ex_no_twin"`` itself would be the same defect one file over:
+    it would keep recording that rate after the pre-registration moved.
+    """
+    rate = metrics.HEADLINE_RATE
+    return (rate, *_HEADLINE_SUPPORT.get(rate, ()))
 
 
 # --------------------------------------------------------------------------- #
@@ -287,6 +333,16 @@ def record_for_run(run_dir: Path | str) -> dict[str, Any]:
             continue
         headline[arm] = {
             "n": s.get("n"),
+            # The PRE-REGISTERED headline and the counts that bound it, named by the
+            # register rather than spelled here. See :func:`headline_keys`.
+            **{key: s.get(key) for key in headline_keys()},
+            # ``ex_lenient`` stays, and stays labelled: its denominator is the one every
+            # published BIRD number uses, so dropping it would make this harness
+            # incomparable to the literature. The register explicitly disowns it as a
+            # headline, and on the 20260730 ladder the two disagree on the SIGN of the
+            # curated -> curated_sme step (0.585 -> 0.583 pooled, 0.591 -> 0.594
+            # twin-free; both far inside noise, neither a result) — which is exactly why
+            # the ledger must carry the pre-registered one and not choose per run.
             "ex_lenient": s.get("ex_lenient"),
             "ex_gradeable": s.get("ex_gradeable"),
             "refusal_rate": s.get("refusal_rate"),
@@ -351,6 +407,12 @@ def record_for_run(run_dir: Path | str) -> dict[str, Any]:
         "grade_semantic_failures": manifest.get("grade_semantic_failures"),
         "serve_workers": manifest.get("serve_workers"),
         "headline": headline,
+        # WHICH rate the block above calls the headline, stamped at index time. The
+        # constant can move; a record is a historical artifact and has to say which
+        # pre-registration it was written under, or a future reader comparing two
+        # records' headline numbers cannot tell whether they are the same quantity.
+        # ``comparable()`` refuses a pair whose stamps disagree.
+        "headline_rate": metrics.HEADLINE_RATE,
         # Kept verbatim so `quotable` can explain itself without re-reading files.
         "build_errors": sorted((summary.get("build_errors") or {}).keys()),
         "curator_error_keys": sorted((summary.get("curator_errors") or {}).keys()),
@@ -696,6 +758,47 @@ def quotable(record: dict[str, Any]) -> tuple[bool, list[str]]:
                 "silently absorb any crashes"
             )
 
+        # The pre-registered headline is a STRATUM, so it is only the population it
+        # names while every scored row carries the stamp that assigns it. An unstamped
+        # row is not a twin-free row.
+        #
+        # Positive evidence only, like ``manifest_readable`` above: an arm carrying no
+        # twin fields at all predates the strata and is not accused — the renderer shows
+        # ``-`` in the headline column instead, and ``--reindex`` rebuilds the record from
+        # the run directory. What is refused is an arm that RECORDED unstamped rows, and
+        # an arm that recorded a headline denominator and still has no headline number.
+        rate = metrics.HEADLINE_RATE
+        support = _HEADLINE_SUPPORT.get(rate)
+        if support:
+            denominator_key, unstamped_key = support
+            unstamped = {
+                arm: s.get(unstamped_key)
+                for arm, s in headline.items()
+                if isinstance(s, dict) and s.get(unstamped_key)
+            }
+            if unstamped:
+                detail = ", ".join(f"{a}={v}" for a, v in sorted(unstamped.items()))
+                reasons.append(
+                    f"rows with no stratum stamp ({detail}) — `{rate}` is the "
+                    f"pre-registered headline and `{unstamped_key}` is not zero, so those "
+                    "rows landed in neither stratum and the headline is not the "
+                    "population it names"
+                )
+            unmeasured_headline = sorted(
+                arm
+                for arm, s in headline.items()
+                if isinstance(s, dict)
+                and s.get(denominator_key)
+                and s.get(rate) is None
+            )
+            if unmeasured_headline:
+                reasons.append(
+                    f"`{rate}` not recorded for "
+                    + ", ".join(unmeasured_headline)
+                    + f" despite a non-empty `{denominator_key}` — the one rate this "
+                    "harness pre-registered is the one number those arms do not carry"
+                )
+
     if record.get("resumed_with_drift"):
         reasons.append(
             "resumed under changed "
@@ -858,6 +961,25 @@ def comparable(a: dict[str, Any], b: dict[str, Any]) -> tuple[bool, list[str]]:
                 "tree was readable when its manifest was written, so the treatment has no "
                 "recorded identity and cannot be matched against anything"
             )
+    # Two records written under DIFFERENT pre-registrations do not carry the same
+    # quantity under the word "headline", so putting their headline numbers in one
+    # sentence is the post-hoc selection the pre-registration exists to prevent, done
+    # across runs instead of within one. Not a member of ``COMPARABILITY_KEYS``: that
+    # tuple is derived from the manifest register and every entry must be a declared knob
+    # (``tests/test_eval_metrics.py``), and this is a property of the ledger's own
+    # bookkeeping rather than of the run's configuration.
+    #
+    # Only when BOTH sides recorded a stamp. An absent stamp means the record predates
+    # the field, which is the ordinary state of the archive and is repaired by
+    # ``--reindex`` — flagging it here would declare every old-vs-new pair incomparable
+    # on a bookkeeping detail while the configuration keys below still agree.
+    a_rate, b_rate = a.get("headline_rate"), b.get("headline_rate")
+    if a_rate and b_rate and a_rate != b_rate:
+        diffs.append(
+            f"pre-registered headline: {a_rate!r} vs {b_rate!r} — the two records call "
+            "different rates the headline, so their headline numbers are not the same "
+            "quantity. Re-index both (`--reindex`) to put them under one register"
+        )
     for key, label in COMPARABILITY_KEYS:
         av, bv = a.get(key), b.get(key)
         if av is None and bv is None:
@@ -1023,6 +1145,16 @@ def render_index(records: Iterable[dict[str, Any]]) -> str:
     if not records:
         return "(no runs indexed yet)"
 
+    rate = metrics.HEADLINE_RATE
+    support = _HEADLINE_SUPPORT.get(rate)
+    denominator_key, unstamped_key = support if support else (None, None)
+
+    # Two EX columns, and neither is called plain ``EX`` any more. The heading used to be
+    # ``EX`` over ``ex_lenient`` — the rate the register explicitly disowns — which
+    # presented the non-headline as THE number in the one artifact that decides what may
+    # be quoted. Both are shown rather than one: ``EX*`` is what the harness committed to
+    # in advance, ``EX_bird`` is the denominator published BIRD numbers use, and a reader
+    # who can see them side by side can see when they disagree.
     headers = [
         "run",
         "split",
@@ -1030,7 +1162,9 @@ def render_index(records: Iterable[dict[str, Any]]) -> str:
         "prompts",
         "arm",
         "n",
-        "EX",
+        "EX*",
+        "n*",
+        "EX_bird",
         "EX_grad",
         "refuse",
         "crash",
@@ -1038,6 +1172,9 @@ def render_index(records: Iterable[dict[str, Any]]) -> str:
         "pick_acc",
         "ok",
     ]
+    # Every column between ``arm`` and ``ok``, so adding one above cannot silently
+    # misalign the no-arms row.
+    n_metric_columns = len(headers) - 6
     rows: list[list[str]] = []
     for r in records:
         headline = r.get("headline") or {}
@@ -1052,13 +1189,21 @@ def render_index(records: Iterable[dict[str, Any]]) -> str:
                     _fmt(r.get("model")),
                     prompts,
                     "(no arms)",
-                    *["-"] * 7,
+                    *["-"] * n_metric_columns,
                     "n" if not r.get("quotable") else "y",
                 ]
             )
             continue
         for arm in sorted(headline):
             s = headline[arm] if isinstance(headline[arm], dict) else {}
+            # A record predating the pre-registration has neither key, so both cells read
+            # ``-``: not measured, which is what the legend below says and what
+            # ``--reindex`` fixes.
+            head_cell = _fmt(s.get(rate))
+            n_unstamped = s.get(unstamped_key) if unstamped_key else None
+            if isinstance(n_unstamped, (int, float)) and n_unstamped > 0:
+                # Never render an unstamped stratum as if it were a clean one.
+                head_cell += "!"
             rows.append(
                 [
                     run_label,
@@ -1067,6 +1212,8 @@ def render_index(records: Iterable[dict[str, Any]]) -> str:
                     prompts,
                     arm,
                     _fmt(s.get("n")),
+                    head_cell,
+                    _fmt(s.get(denominator_key) if denominator_key else None),
                     _fmt(s.get("ex_lenient")),
                     _fmt(s.get("ex_gradeable")),
                     _fmt(s.get("refusal_rate")),
@@ -1078,6 +1225,40 @@ def render_index(records: Iterable[dict[str, Any]]) -> str:
             )
 
     parts = [_table(rows, headers)]
+    parts.append(
+        f"\nEX* = `{rate}`, the PRE-REGISTERED headline "
+        "(governed_bi.eval.metrics.HEADLINE_RATE) — the one rate this harness commits to "
+        "in advance."
+    )
+    if support:
+        parts.append(
+            f"n*  = `{denominator_key}`, its denominator. A trailing `!` on EX* means the "
+            f"run recorded rows with no stratum stamp (`{unstamped_key}` > 0), so that "
+            "figure is not the population it names."
+        )
+    parts.append(
+        "EX_bird = `ex_lenient`, every scored row including train twins. Reported "
+        "because its denominator is the one published BIRD numbers use; explicitly NOT "
+        "the headline."
+    )
+    parts.append(
+        "`-` under EX*/n* means the record predates the pre-registration, not that the "
+        "run scored zero; `--reindex` rebuilds it from the run directory."
+    )
+    other_registers = sorted(
+        {
+            str(r.get("headline_rate"))
+            for r in records
+            if r.get("headline_rate") and r.get("headline_rate") != rate
+        }
+    )
+    if other_registers:
+        parts.append(
+            "! some records were indexed under a different pre-registration ("
+            + ", ".join(other_registers)
+            + f"); their EX* cell is read by the current name (`{rate}`) and is blank "
+            "unless their summary carried it. Re-index them (`--reindex`)."
+        )
 
     not_ok = [r for r in records if not r.get("quotable")]
     if not_ok:

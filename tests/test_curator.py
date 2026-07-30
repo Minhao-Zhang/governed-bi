@@ -539,6 +539,21 @@ def test_read_corpus_respects_an_explicit_smaller_cap():
     assert len(bag.read_corpus(max_chars=500)) <= 700
 
 
+def test_todo_only_render_is_also_bounded():
+    """Regression (C11): the ``todo_only`` worklist returned early *without*
+    clipping, so on a wide schema it rendered unbounded (works_cycles: 668 KB /
+    703 columns), got evicted to a file, and cost the exact read-back turns the
+    step-budget fix set out to kill — re-created on the one path it didn't cover.
+    Every column of a fresh wide table is undecided, so the worklist starts as
+    large as the full render and MUST clip the same way."""
+    from governed_bi.curator.asset_bag import READ_CORPUS_MAX_CHARS, AssetBag
+
+    bag = AssetBag.from_tables("demo", [_wide_table(4000)])
+    out = bag.read_corpus(todo_only=True)
+    assert len(out) <= READ_CORPUS_MAX_CHARS + 200, "the cap must bind on todo_only too"
+    assert "truncated" in out
+
+
 def test_todo_only_is_a_worklist_that_shrinks():
     """The anti-churn mechanism: the agent can ask what is LEFT instead of
     re-deriving it from a full dump each turn."""
@@ -571,3 +586,236 @@ def test_todo_only_omits_the_kinds_that_have_no_undecided_state():
     out = bag.read_corpus(todo_only=True)
     assert "[metric]" not in out
     assert "[metric]" in bag.read_corpus()
+
+
+# --------------------------------------------------------------------------- #
+# Phase A intake: every train pair reaches the agent.
+#
+# `_render_train_batch` sliced `items[:40]` and was called once. Every one of the 57
+# benchmark schemas has more than 40 train questions (49 smallest, 86 median, 306
+# largest), so the curator — the arm that produces the +11.5pp step — reasoned from
+# 2094 of the 4900 unique `evidence` hints in the split, a median 47.1% per schema.
+# The SME brief takes all of them uncapped and says why (`curator/sme.py`: "dropping
+# any starves the SME of exactly what it needs").
+#
+# The fix is a bounded batch loop, so both halves need pinning: that nothing is
+# dropped, and that the number of paid invocations stays bounded.
+# --------------------------------------------------------------------------- #
+
+
+def _pairs(n: int, *, sql: str = "SELECT 1"):
+    from governed_bi.eval.dataset import EvalItem
+
+    return [
+        EvalItem(question=f"q{i}?", sql=sql, question_id=f"t{i}", evidence=f"hint {i}")
+        for i in range(n)
+    ]
+
+
+@pytest.mark.parametrize("n_items", [1, 39, 40, 41, 49, 86, 120, 306, 1000])
+def test_plan_pair_batches_partitions_the_whole_split(n_items):
+    """The property the 40-pair slice lacked: the batches cover every index exactly
+    once, at every size in the benchmark's range and past it."""
+    from governed_bi.curator.pipeline import MAX_PAIR_BATCHES, plan_pair_batches
+
+    batches = plan_pair_batches(n_items)
+    assert [i for lo, hi in batches for i in range(lo, hi)] == list(range(n_items))
+    assert len(batches) <= MAX_PAIR_BATCHES, "the cost bound must hold"
+    widths = [hi - lo for lo, hi in batches]
+    assert max(widths) - min(widths) <= 1, "balanced, so one budget fits every batch"
+
+
+def test_the_batch_count_is_bounded_and_the_batches_widen_instead():
+    """`max_batches` is the cost knob: it bounds invocations, never coverage. A 306-pair
+    schema at the default is 3 turns of 102, not 8 of 40, and at 1 it is one turn of
+    306 — still every pair."""
+    from governed_bi.curator.pipeline import plan_pair_batches
+
+    assert plan_pair_batches(306) == [(0, 102), (102, 204), (204, 306)]
+    assert plan_pair_batches(306, max_batches=1) == [(0, 306)]
+    assert len(plan_pair_batches(306, max_batches=8)) == 8
+    assert plan_pair_batches(49) == [(0, 25), (25, 49)], "not 40 + a 9-pair invocation"
+    assert plan_pair_batches(0) == []
+
+
+def test_render_omits_nothing_and_numbers_pairs_globally():
+    """No "N more pairs omitted" line survives, and pair 41 is still called 41 in the
+    second batch — `raised_by` references have to mean the same thing in every batch."""
+    from governed_bi.curator.pipeline import _render_train_batch, plan_pair_batches
+
+    items = _pairs(86)
+    rendered = [
+        _render_train_batch(items[lo:hi], start=lo, total=86, batch=i, n_batches=3)
+        for i, (lo, hi) in enumerate(plan_pair_batches(86), 1)
+    ]
+    joined = "\n".join(rendered)
+    assert "omitted" not in joined
+    for i in range(86):
+        assert f"id=t{i} " in joined, f"pair {i} never reached the agent"
+    assert "30. id=t29" in joined, "numbering must not restart per batch"
+    assert "batch 2 of 3" in rendered[1]
+
+
+def test_a_pathological_gold_sql_is_clipped_and_says_so():
+    """The 40-pair slice was never a size bound. 48 train pairs carry gold SQL over
+    2000 chars — BIRD-Obfuscation rewrites some gold as a literal VALUES list — and the
+    largest single pair renders 2.53 MB, more than any context window here. Delivering
+    every pair without clipping would trade a coverage bug for an overflow."""
+    from governed_bi.curator.pipeline import MAX_RENDERED_SQL_CHARS, _render_train_batch
+
+    giant = "SELECT " + "x" * 50_000
+    out = _render_train_batch(_pairs(1, sql=giant))
+    assert len(out) < 5_000
+    assert f"clipped at {MAX_RENDERED_SQL_CHARS} of {len(giant)} chars" in out
+    # And an ordinary pair is untouched, or the marker would be noise on every line.
+    assert "clipped" not in _render_train_batch(_pairs(1))
+
+
+def _phase_a_spy(monkeypatch, tmp_path, n_pairs: int, **build_kwargs):
+    """Run Phase A with the agent stubbed out; return (user turns, manifest)."""
+    import json
+
+    pytest.importorskip("deepagents")
+
+    from governed_bi.curator import deep_agent, pipeline
+
+    monkeypatch.setattr(pipeline, "profile_database", lambda *a, **k: [_orders_table()])
+    monkeypatch.setattr(deep_agent, "build_curator_agent", lambda *a, **k: object())
+
+    seen: list[str] = []
+
+    def _fake_invoke(agent, *, user, max_agent_steps, **kwargs):
+        seen.append(user)
+        counts = pipeline._empty_tool_counts()
+        counts.update(
+            n_super_steps=1,
+            recursion_limit=pipeline.recursion_limit_for(max_agent_steps),
+            exhausted=False,
+            repeats={"total": 0, "distinct": 0, "max_repeat": 0, "top_repeated": []},
+        )
+        return {"messages": []}, counts, None
+
+    monkeypatch.setattr(pipeline, "_invoke_agent", _fake_invoke)
+
+    class _Connector:
+        def list_tables(self, schema=None):
+            return ["orders"]
+
+        def list_schemas(self):
+            return ["demo"]
+
+        def describe_table(self, table, schema=None):
+            class _Col:
+                def __init__(self, name):
+                    self.name = name
+
+            class _Info:
+                columns = [_Col("OrderID"), _Col("amount"), _Col("note")]
+
+            return _Info()
+
+    out = pipeline.build_curated_corpus(
+        _Connector(),
+        object(),
+        "demo",
+        _pairs(n_pairs),
+        tmp_path,
+        model=object(),
+        dialect="sqlite",
+        **build_kwargs,
+    )
+    manifest = json.loads((out / "run_manifest.json").read_text(encoding="utf-8"))
+    return seen, manifest
+
+
+def test_every_train_pair_reaches_the_agent_not_just_the_first_40(monkeypatch, tmp_path):
+    """The regression itself, at the median benchmark schema's 86 pairs. Before this,
+    pairs 41-86 were rendered nowhere and the manifest recorded no sign of it."""
+    seen, manifest = _phase_a_spy(monkeypatch, tmp_path, 86)
+
+    assert len(seen) == 3, "86 pairs at a 40-pair target is three batches"
+    joined = "\n".join(seen)
+    missing = [i for i in range(86) if f"id=t{i} " not in joined]
+    assert not missing, f"pairs never shown to the agent: {missing}"
+    assert manifest["train_pairs"] == {
+        "available": 86,
+        "rendered": 86,
+        "batches": 3,
+        "max_batches": 3,
+        "per_batch_target": 40,
+    }
+    assert [b["n_pairs"] for b in manifest["pair_batches"]] == [29, 29, 28]
+
+
+def test_the_step_budget_is_scaled_to_the_pairs_actually_shown(monkeypatch, tmp_path):
+    """`derive_step_budget` used `min(len(train_items), 40)` "because the agent cannot
+    work a pair it was never shown" — true, and now every pair IS shown, so the budget
+    has to track the batch width instead of a constant 40."""
+    from governed_bi.curator.pipeline import derive_step_budget
+
+    _seen, manifest = _phase_a_spy(monkeypatch, tmp_path, 86)
+    expected = derive_step_budget(n_tables=1, n_columns=3, n_pairs=29)
+    assert manifest["tool_call_budget"] == expected
+    # Per invocation, and the ceiling for the phase is the sum — one number cannot be
+    # both, so both are recorded.
+    assert manifest["tool_call_budget_total"] == expected * 3
+    assert all(b["tool_call_budget"] == expected for b in manifest["pair_batches"])
+
+
+def test_one_batch_still_delivers_the_whole_split(monkeypatch, tmp_path):
+    """`max_pair_batches=1` is the cheapest setting and still not the old behaviour:
+    one invocation, all 86 pairs. The old single invocation showed 40."""
+    seen, manifest = _phase_a_spy(monkeypatch, tmp_path, 86, max_pair_batches=1)
+    assert len(seen) == 1
+    assert all(f"id=t{i} " in seen[0] for i in range(86))
+    assert manifest["train_pairs"]["rendered"] == 86
+    # A single batch renders no batch header, so nothing tells the agent about a
+    # continuation that is not coming.
+    assert "batch 1 of" not in seen[0]
+
+
+def test_a_later_batch_is_told_the_ledger_already_exists(monkeypatch, tmp_path):
+    """`FilesystemBackend.write` refuses an existing path, so "create
+    /clarifications.jsonl" on batch 2 buys a guaranteed tool error. The instruction has
+    to follow the file, which only the loop can see."""
+    from governed_bi.curator.clarifications import clarifications_path
+
+    clarifications_path(tmp_path).parent.mkdir(parents=True, exist_ok=True)
+    clarifications_path(tmp_path).write_text(
+        '{"id":"q001","scope":"table:orders","question":"?","status":"open",'
+        '"raised_by":["t1"],"answer":null,"answered_by":null}\n',
+        encoding="utf-8",
+    )
+    seen, _manifest = _phase_a_spy(monkeypatch, tmp_path, 86)
+    assert all("already exists" in turn for turn in seen)
+    assert all("write_file on first create" not in turn for turn in seen)
+
+
+def test_the_user_turn_states_one_triage_order_not_two(monkeypatch, tmp_path):
+    """v1/v2 take their triage order from `_budget_brief`, which ranks clarifications
+    third; v3 carries its own, with them second. Sending both would put the prompt in
+    contradiction with its own call site — the `sme_rules` failure that cost 11 of 381
+    answers."""
+    from governed_bi import prompts
+    from governed_bi.curator.pipeline import _SELF_TRIAGING_PHASE_A_VARIANTS
+
+    order_line = "this is the order that matters, most first"
+
+    v2, _ = _phase_a_spy(
+        monkeypatch, tmp_path / "v2", 40,
+        system_prompt=prompts.get("curator_phase_a", "v2").text,
+    )
+    assert order_line in v2[0]
+
+    v3, _ = _phase_a_spy(
+        monkeypatch, tmp_path / "v3", 40,
+        system_prompt=prompts.get("curator_phase_a", "v3").text,
+    )
+    assert order_line not in v3[0], "v3 states its own order; the user turn must not"
+    assert "Order of work when the budget is tight" in prompts.get("curator_phase_a", "v3").text
+
+    # Coupling guard: every self-triaging variant must actually contain an order, and
+    # every variant that does must be named in the set, or one ships with two lists.
+    for variant_id, variant in prompts.REGISTRY["curator_phase_a"].items():
+        states_own = "Order of work when the budget is tight" in variant.text
+        assert states_own == (variant_id in _SELF_TRIAGING_PHASE_A_VARIANTS), variant_id

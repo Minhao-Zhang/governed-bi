@@ -660,6 +660,26 @@ def test_every_declared_rate_names_its_denominator():
         assert m.denominator, f"{m.name} declares no denominator"
 
 
+def test_exactly_one_rate_calls_itself_the_headline():
+    """X11: the register declared two. ``ex_lenient`` said "headline execution
+    accuracy" and ``ex_no_twin`` said "the defensible headline", so a run could be
+    read off whichever stratum came out higher. ``HEADLINE_RATE`` now names one and
+    only that one may use the word."""
+    marked = [m.name for m in metrics.SUMMARY_RATES if "PRE-REGISTERED HEADLINE" in m.meaning]
+    assert marked == [metrics.HEADLINE_RATE], (
+        f"rates carrying the pre-registration marker: {marked}; "
+        f"HEADLINE_RATE declares {metrics.HEADLINE_RATE!r}"
+    )
+    assert metrics.HEADLINE_RATE in metrics.SUMMARY_FIELDS
+    # Any other rate may reference the word only to disown it.
+    for m in metrics.SUMMARY_RATES:
+        if m.name == metrics.HEADLINE_RATE or "headline" not in m.meaning.lower():
+            continue
+        assert "not the headline" in m.meaning.lower(), (
+            f"{m.name} mentions headline without disowning it: {m.meaning!r}"
+        )
+
+
 def test_quotability_free_pass_counters_are_declared():
     """``index.quotable()`` reads these three by name. They arrive in the summary
     through a ``**free_pass_counts(...)`` splat, which is exactly the shape a

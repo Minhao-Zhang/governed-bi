@@ -257,8 +257,19 @@ _DISOWNS_COLUMN = re.compile("|".join(_DISOWN_PATTERNS), re.IGNORECASE)
 # The answer becomes the analyst-visible reliability note, and SME answers run to a
 # paragraph. Suspect notes are rendered on the schema card for every marked column,
 # so the untruncated version spends the card's budget on prose the analyst only
-# needs the gist of. The full answer survives in the ledger and in the column
-# description the fold writes.
+# needs the gist of.
+#
+# Unlike a caveat note, this clip DOES lose the tail: ``Reliability`` has ``status``
+# and ``note`` and no long-form field, and the alternatives — a longer note, or the
+# column description — are both per-column schema-card text on every turn, which is
+# the budget the cap protects. What survives is the ledger entry, which keeps every
+# answer in full (``<schema>/_build/clarifications.jsonl``), plus the column
+# description when the fold wrote one: on the 20260730T034522Z run 47 suspect notes
+# were clipped here and 38 of those columns also carry a description. The remaining
+# 9 hold the gist only.
+#
+# The cap binds this mechanical backstop alone. ``annotate_column(note=...)`` from
+# the agent is unbounded — the same run has reliability notes up to 619 chars.
 _SUSPECT_NOTE_MAX_CHARS = 200
 
 
@@ -418,8 +429,14 @@ class AssetBag:
         if todo_only:
             # The other kinds have no "undecided" state to report, and including
             # them would defeat the point of a shrinking worklist.
-            body = "\n".join(lines)
-            return body if body else "(every column has a description or a reliability verdict)"
+            if not lines:
+                return "(every column has a description or a reliability verdict)"
+            # Clip like the unfiltered render: a shrinking worklist still starts
+            # huge on a wide schema (works_cycles renders 668 KB / 703 columns),
+            # and an oversized result is evicted by the deepagents filesystem
+            # middleware to a file, costing extra turns out of the step budget to
+            # read back — the exact churn the step-budget fix set out to kill.
+            return _clip_render(lines, max_chars)
 
         if want("join"):
             for j in self.joins.values():
@@ -881,6 +898,7 @@ class AssetBag:
         self,
         summary: str,
         *,
+        body: str | None = None,
         kind: NoteKind = NoteKind.context,
         scope: Iterable[str] = (),
         confidence: float = 0.7,
@@ -895,6 +913,28 @@ class AssetBag:
         so ``NoteAsset._defaults_from_kind`` still derives the activation from
         ``kind``. Passing ``activation=None`` explicitly would mean the same thing
         here, but writing the key would make every caller look like it had decided.
+
+        ``body`` is the long form (``NoteAsset.body``), for text a caller had to clip
+        out of ``summary`` and does not want to throw away. What it costs, exactly:
+
+        - Never embedded. ``retrieval.rvgd.asset_document`` indexes a note by
+          ``summary`` alone, so a long body cannot dilute the note's own vector or
+          its BM25 document.
+        - Never in the always-injection payload.
+          ``select_notes_for_injection`` sets ``body=None`` for an ``always`` note,
+          and both budgets that gate always-notes — ``validate_corpus``'s hard
+          ``ALWAYS_NOTE_TOTAL_CHARS_MAX`` and ``apply_always_budget`` — sum
+          ``summary`` lengths only. So a body on an ``always`` note is reachable only
+          through ``read_notes`` / ``grep_notes``.
+        - NOT free on an ``on_match`` note. Once retrieval or a trigger matches one,
+          ``select_notes_for_injection`` passes the body through and
+          ``format_note_lines`` renders it under the summary — that is the intended
+          progressive disclosure, but it does spend the shared note char budget on
+          the turns it fires, and since ``record_caveats`` writes the whole answer to
+          ``body`` its first ``summary``-worth of characters appears twice there.
+
+        A body equal to the summary is dropped rather than stored, and empty means
+        the key is omitted so the asset keeps the schema default of ``None``.
         """
         summary = (summary or "").strip()
         if not summary:
@@ -911,6 +951,9 @@ class AssetBag:
             ),
             "audit": self._audit(certified=certified, answered_by=answered_by),
         }
+        body = (body or "").strip()
+        if body and body != summary:
+            payload["body"] = body
         trigger_list = list(triggers)
         if trigger_list:
             payload["triggers"] = trigger_list
@@ -1006,6 +1049,16 @@ class AssetBag:
         #
         # Only ``always`` notes count against it, so a triggered (``on_match``) caveat
         # is unbounded by the budget and merely clipped.
+        #
+        # Clipping bounds the SUMMARY, not the answer. The clip alone used to discard
+        # the tail of every caveat it touched — on the 20260730T034522Z run all 31
+        # recorded caveats hit the 400-char ceiling, and what fell off the end was the
+        # reasoning behind the conclusion (which gold literal is wrong, why
+        # ``congress.first_name`` holds surnames while ``last_name`` holds given
+        # names). ``NoteAsset.body`` carries it now: it stays out of the embedding and
+        # out of the always-injection payload, so the cap above still means what it
+        # says, and the analyst can reach the rest with ``read_notes`` /
+        # ``grep_notes``. ``propose_note`` documents where each of those is enforced.
         budget_used = sum(
             len(a.summary)
             for a in self.notes.values()
@@ -1023,9 +1076,13 @@ class AssetBag:
             except ValueError:
                 pass  # non-asset scope (pair:/query:/…) → record as a caveat
             triggers = derive_keyword_triggers(rec.question, rec.answer)
-            summary = _clip_words(rec.answer, _CAVEAT_NOTE_MAX_CHARS)
-            if summary != " ".join(rec.answer.split()):
-                clipped += 1
+            answer = " ".join(rec.answer.split())
+            summary = _clip_words(answer, _CAVEAT_NOTE_MAX_CHARS)
+            # The whole answer, not the discarded tail: ``body`` is read on its own
+            # (``read_notes``, ``grep_notes``), so a fragment that starts mid-sentence
+            # would need the summary beside it to make sense. ``None`` when nothing
+            # was clipped, to keep the note from carrying the same text twice.
+            body = answer if summary != answer else None
             if not triggers:
                 # No trigger → this note fires on every question in the schema.
                 if budget_used + len(summary) > ALWAYS_NOTE_TOTAL_CHARS_MAX:
@@ -1034,6 +1091,7 @@ class AssetBag:
                 budget_used += len(summary)
             msg = self.propose_note(
                 summary,
+                body=body,
                 kind=NoteKind.context,
                 triggers=triggers,
                 activation=NoteActivation.on_match if triggers else None,
@@ -1048,14 +1106,21 @@ class AssetBag:
             )
             if msg.startswith("ok:"):
                 n += 1
+                # Counted only for a note that was actually written: a caveat the
+                # always budget dropped keeps nothing, and reporting it as clipped
+                # would claim the answer survived somewhere.
+                if body is not None:
+                    clipped += 1
         if clipped or over_budget:
             # Said out loud rather than silently absorbed: a dropped caveat is an SME
             # statement that never reaches serve, which is exactly the shape of the
             # note-injection losses this project has already published a result on top
-            # of. The build survives; the loss is on the record.
+            # of. The build survives; the loss is on the record. A clipped caveat is no
+            # longer a loss — the counter stays because a rising share of clipped
+            # summaries means more of the SME's text is reachable only on demand.
             print(
-                f"record_caveats: {n} recorded, {clipped} clipped to "
-                f"{_CAVEAT_NOTE_MAX_CHARS} chars"
+                f"record_caveats: {n} recorded, {clipped} summaries clipped to "
+                f"{_CAVEAT_NOTE_MAX_CHARS} chars (full answer kept in note.body)"
                 + (
                     f", {len(over_budget)} dropped over the always-note budget "
                     f"({', '.join(over_budget[:5])})"

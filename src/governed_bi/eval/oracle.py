@@ -303,6 +303,7 @@ def oracle_solver(
     # own solver, so the run's total is this times the worker count; the caller
     # divides the budget rather than multiplying the footprint.
     graph_cache_max: int = 32,
+    enable_run_log: bool = False,
 ):
     """A solver for one oracle rung.
 
@@ -312,9 +313,28 @@ def oracle_solver(
     distinct gold table set, which is roughly one per question. Graph construction
     is small next to a model call, but it is not free, and that is the honest cost
     of the most informative rung.
+
+    Portable run logging is forced off, as in ``arms.agent_solver`` — and with more
+    at stake here. A rung's corpus is built from the answer key, so its turns are
+    answer-key-derived by construction; landing them in the durable log stamps them
+    ``producer=serve, serve_path=agent``, with ``oracle_rung`` living only in the eval
+    ``meta`` and never in provenance. Such a row is indistinguishable from a real
+    serve turn except by a ``thread_id`` prefix convention, which is not a governance
+    boundary. The module docstring says these numbers can never be reported as system
+    performance; keeping them out of the log is how that holds when someone later
+    queries the log instead of the run directory. Opt in with ``enable_run_log=True``
+    and settings whose ``run_log_kind`` points somewhere deliberate.
     """
+    from dataclasses import replace as dc_replace
+
     from ..analyst.agent import build_serve_rails
     from ..obs import tracing_callbacks
+
+    log_settings = (
+        settings
+        if enable_run_log
+        else dc_replace(settings, run_log_kind="off")
+    )
 
     # Bounded LRU, not an unbounded dict. ``oracle_schema`` needs one graph per
     # schema (tens), but ``oracle_tables`` needs one per distinct gold table set —
@@ -342,7 +362,7 @@ def oracle_solver(
         graph = build_serve_rails(
             corpus=narrowed,
             gateway=gateway,
-            settings=settings,
+            settings=log_settings,
             identity=identity,
             model=model,
             embedder=embedder,

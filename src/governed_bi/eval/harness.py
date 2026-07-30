@@ -131,6 +131,13 @@ def _validate_corpora(corpora: dict[str, Any], *, connector: Any = None) -> dict
     unnoticed: the count is now a headline field, not something buried in a
     per-corpus manifest. ``connector`` (optional) additionally checks physical
     existence against the live catalog.
+
+    ``loaded.assets`` is the arm's WHOLE corpus — 57 schemas at once under the
+    data-lake driver, which loads one pooled corpus per arm. Any check inside
+    ``validate_corpus`` whose budget is per-turn or per-schema therefore has to group
+    by that scope itself; summing across the pool disqualified a 1351-question run on
+    2026-07-30 over an always-note budget no single schema exceeded (see
+    ``corpus.validate._check_always_note_budget``).
     """
 
     out: dict[str, dict] = {}

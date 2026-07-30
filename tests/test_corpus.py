@@ -209,6 +209,82 @@ def test_always_note_budget_is_reported():
     assert sum(f.code == "always-note-budget" for f in findings) == 2
 
 
+def _schema_with_notes(schema: str, *, count: int, chars: int) -> list:
+    """A table plus ``count`` schema-scoped always-notes of ``chars`` each."""
+    table = TableAsset(id=f"tbl_{schema}_t", schema=schema, physical_name="t")
+    notes = [
+        NoteAsset(
+            id=f"note_{schema}_{i}",
+            kind="context",
+            scope=[f"schema:{schema}"],
+            summary="x" * chars,
+        )
+        for i in range(count)
+    ]
+    return [table, *notes]
+
+
+def test_always_note_budget_is_per_schema_not_pooled():
+    """The 2026-07-30 false positive: the pooled data-lake corpus summed a per-turn
+    budget across 57 schemas and disqualified a 1351-question run, while its worst
+    single schema held 1591 chars in 4 notes. Notes are ``schema:``-scoped, so no turn
+    ever sees more than one schema's worth."""
+    pooled: list = []
+    for i in range(6):
+        pooled += _schema_with_notes(f"db{i}", count=4, chars=400)  # 1600 chars each
+    always_findings = [
+        f for f in validate_corpus(pooled) if f.code == "always-note-budget"
+    ]
+    assert always_findings == [], "\n".join(str(f) for f in always_findings)
+
+    # ...but one schema genuinely over the char budget is still caught, and the finding
+    # names the scope that blew it rather than the pool.
+    pooled += _schema_with_notes("hot", count=6, chars=400)  # 2400 chars
+    always_findings = [
+        f for f in validate_corpus(pooled) if f.code == "always-note-budget"
+    ]
+    assert len(always_findings) == 1
+    assert "schema:hot" in always_findings[0].message
+    assert "2400 characters" in always_findings[0].message
+
+
+def test_always_note_count_cap_counts_scoped_notes_like_serve():
+    """``apply_always_budget`` counts every always-note toward ``global_max``; the
+    validator used to count only empty-scope ones, so the cap was dead for a curated
+    corpus (nothing in one is globally scoped) and short caveats piled up unflagged."""
+    over = _schema_with_notes("busy", count=9, chars=10)  # 9 notes, 90 chars
+    findings = [f for f in validate_corpus(over) if f.code == "always-note-budget"]
+    assert len(findings) == 1
+    assert "9 always notes" in findings[0].message
+
+    # A global note is paid for by every turn, so it counts against each schema group.
+    two_schemas = _schema_with_notes("a", count=8, chars=10) + _schema_with_notes(
+        "b", count=1, chars=10
+    )
+    assert [f for f in validate_corpus(two_schemas) if f.code == "always-note-budget"] == []
+    two_schemas.append(NoteAsset(id="note_everywhere", kind="context", summary="x" * 10))
+    findings = [f for f in validate_corpus(two_schemas) if f.code == "always-note-budget"]
+    assert len(findings) == 1  # only schema:a crosses 8; schema:b sits at 2
+    assert "schema:a" in findings[0].message
+
+
+def test_always_note_budget_on_match_notes_are_exempt():
+    """Only ``always`` notes are always-injected; an ``on_match`` caveat is gated by
+    retrieval, which is why ``AssetBag.record_caveats`` only charges always-notes."""
+    assets = _schema_with_notes("s", count=1, chars=10)
+    assets += [
+        NoteAsset(
+            id=f"note_s_match_{i}",
+            kind="context",
+            scope=["schema:s"],
+            activation="on_match",
+            summary="x" * 500,
+        )
+        for i in range(9)
+    ]
+    assert [f for f in validate_corpus(assets) if f.code == "always-note-budget"] == []
+
+
 def test_metric_expression_unparseable_is_reported():
     table = TableAsset(
         id="tbl_demo_orders",

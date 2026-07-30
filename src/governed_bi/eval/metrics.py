@@ -576,16 +576,59 @@ ROW_FIELDS: tuple[str, ...] = (
 # Arm summary
 # --------------------------------------------------------------------------- #
 
+#: The pre-registered headline rate. Exactly one name, fixed here before the run that
+#: quotes it, because two candidate headlines let a result be read off whichever
+#: stratum came out higher.
+#:
+#: ``ex_no_twin`` is it, and the register used to name two: ``ex_lenient`` was labelled
+#: "headline execution accuracy" while ``ex_no_twin`` was labelled "the defensible
+#: headline". Evidence for picking the twin-free one, recomputed from
+#: ``runs/datalake/20260730T034522Z-test-ladder-fixed2/20260730T034543Z/summary.json``
+#: (test split, 57 schemas, 1351 questions per arm):
+#:
+#: - 115 of 1200 scored rows carry a structural gold twin in train, a twin rate of
+#:   9.6%, and it is not uniform: ``books`` is 11 of 34.
+#: - Twin stamp coverage is complete. ``n_twin_unstamped`` is 0 on all four arms, so
+#:   every scored row landed in one stratum or the other and neither side is the
+#:   pooled figure under a different name.
+#: - ``ex_twin`` runs 0.557 / 0.643 / 0.870 / 0.843 across the ladder against
+#:   ``ex_no_twin``'s 0.404 / 0.484 / 0.591 / 0.594. The twin rows score far higher,
+#:   which is where a recall-shaped gain would hide.
+#: - The two candidates agree on the result: baseline to ``curated`` is +18.7pp
+#:   twin-free against +19.3pp on ``ex_lenient``. So committing to the twin-free
+#:   number costs no measured effect, which is why it can be committed to now instead
+#:   of after the next run.
+#:
+#: ``ex_lenient`` stays computed and reported, because its denominator is the one every
+#: published BIRD number uses and dropping it would make this harness incomparable. It
+#: is not a headline. Twins are measured rather than excluded by decision
+#: (:mod:`governed_bi.eval.leakage`), so both strata keep existing; only the label is
+#: exclusive.
+HEADLINE_RATE: str = "ex_no_twin"
+
 #: Every rate, with the population it is computed over. This is the register's
 #: main job: the recurring defect class in this harness is a rate whose
 #: denominator silently absorbs another outcome's failures, so an arm that
 #: refuses more looks like an arm that governs better.
+#:
+#: Only :data:`HEADLINE_RATE` may call itself a headline. ``ex_lenient`` also claimed
+#: the word, which is tracker item X11.
 SUMMARY_RATES: tuple[Metric, ...] = (
-    Metric("ex_lenient", "headline execution accuracy", "all scored rows (n)"),
+    Metric(
+        "ex_lenient",
+        "EX over all scored rows, twins included: the figure comparable to published "
+        "BIRD numbers. Reported, not the headline (see HEADLINE_RATE)",
+        "all scored rows (n)",
+    ),
     Metric("ex_strict", "EX under the strict normaliser", "all scored rows (n)"),
     Metric("ex_gradeable", "EX excluding un-gradeable gold", "gradeable rows"),
     Metric("ex_twin", "EX where the gold statement exists in train", "twin rows"),
-    Metric("ex_no_twin", "EX with no train twin — the defensible headline", "twin-free rows"),
+    Metric(
+        "ex_no_twin",
+        "EX on rows with no train twin: the PRE-REGISTERED HEADLINE, the one number "
+        "this harness commits to in advance (HEADLINE_RATE)",
+        "twin-free rows",
+    ),
     Metric("conditional_ex_lenient", "EX among turns that produced SQL", "rows that produced SQL"),
     Metric("cond_ex_given_routing", "EX among correctly-routed turns", "rows the router hit"),
     Metric("refusal_rate", "GENUINE refusals; a crash is not a refusal", "all scored rows (n)"),

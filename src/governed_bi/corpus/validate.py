@@ -11,6 +11,9 @@ module checks everything verifiable *from the corpus alone*:
 - Join ``on``-clause columns: parsed with ``sqlglot`` and confirmed to belong to
   one of the join's two tables (corpus-only; catches typo'd/hallucinated columns
   that would otherwise mis-join at serve time).
+- Always-note prompt budget, evaluated **per turn scope** rather than over the whole
+  asset list, since the numbers it enforces describe one analyst prompt
+  (``_check_always_note_budget``).
 - Metric ``expression`` parseability: ``sqlglot`` parse of the expression fragment
   (dialect from ``settings.datasource.kind`` when available, else postgres).
   Offline-safe — no connector. Does **not** execute the metric or type-check
@@ -74,8 +77,17 @@ from .schemas import (
 #: ``gate_hard_findings`` refused the corpus — which discards the whole build rather
 #: than the note that did not fit. Mirrors ``[notes] always_note_global_max`` /
 #: ``always_note_char_max`` in Settings; keep them in step.
+#:
+#: Both are **per-turn** numbers: they describe one analyst prompt, because that is
+#: what ``analyst.note_inject.apply_always_budget`` spends them on. Check them per
+#: turn scope, never over the whole asset list — see
+#: :func:`_check_always_note_budget`.
 ALWAYS_NOTE_GLOBAL_MAX = 8
 ALWAYS_NOTE_TOTAL_CHARS_MAX = 2000
+
+#: Group key for always-notes that every turn pays for, used when a corpus has no
+#: schema-bearing group to fold them into.
+_EVERY_TURN = ""
 
 
 @dataclass(frozen=True)
@@ -228,33 +240,8 @@ def validate_corpus(
                         )
                     )
 
-    # -- Always-injected note budget ---------------------------------------- #
-    always_notes = [
-        a
-        for a in assets
-        if isinstance(a, NoteAsset)
-        and getattr(a.activation, "value", a.activation) == "always"
-    ]
-    global_always = [a for a in always_notes if not a.scope]
-    if len(global_always) > ALWAYS_NOTE_GLOBAL_MAX:
-        findings.append(
-            Finding(
-                "always-note-budget",
-                "",
-                f"{len(global_always)} global always notes exceed the maximum of "
-                f"{ALWAYS_NOTE_GLOBAL_MAX}",
-            )
-        )
-    total_summary_chars = sum(len(a.summary) for a in always_notes)
-    if total_summary_chars > ALWAYS_NOTE_TOTAL_CHARS_MAX:
-        findings.append(
-            Finding(
-                "always-note-budget",
-                "",
-                f"always-note summaries total {total_summary_chars} characters; "
-                f"maximum is {ALWAYS_NOTE_TOTAL_CHARS_MAX}",
-            )
-        )
+    # -- Always-injected note budget (per turn scope, not per corpus) -------- #
+    _check_always_note_budget(assets, findings, db_name=db_name)
 
     # -- C5: notes must not name governance-excluded identifiers (summary first) -- #
     excluded_tokens = _excluded_identifier_tokens(assets)
@@ -332,6 +319,156 @@ def _names_identifier(text: str, tok: str) -> bool:
     names still match as whole tokens. Case-insensitive (Postgres folds unquoted
     identifiers to lowercase)."""
     return re.search(rf"\b{re.escape(tok)}\b", text, re.IGNORECASE) is not None
+
+
+def _is_always(note: NoteAsset) -> bool:
+    """Mirror of ``note_inject._act_value``: a note with no explicit activation is an
+    always-note. ``NoteAsset._defaults_from_kind`` fills the field during validation,
+    so the ``None`` arm only matters for a note whose field was cleared afterwards."""
+    act = note.activation
+    if act is None:
+        return True
+    return getattr(act, "value", act) == "always"
+
+
+def _scope_schemas(assets: list[Asset]) -> dict[str, set[str]]:
+    """Map each asset id usable in ``note.scope`` to the schema(s) whose turns can
+    license it.
+
+    A table and its derived column ids carry the table's own schema; a metric inherits
+    its base table's; a few-shot carries its own. Ids that name no schema at all
+    (terms, notes, negative examples) are absent, and so is a join whose two sides live
+    in different schemas — that join is only licensed on a cross-schema turn, which
+    :func:`_check_always_note_budget` deliberately does not bound.
+    """
+    out: dict[str, set[str]] = {}
+    tables = {a.id: a for a in assets if isinstance(a, TableAsset)}
+    for t in tables.values():
+        out[t.id] = {t.schema}
+        for col in t.columns:
+            out[ids.derive_column_id(t.id, col.physical_name)] = {t.schema}
+    for a in assets:
+        if isinstance(a, FewShotAsset):
+            out[a.id] = {a.schema}
+        elif isinstance(a, MetricAsset):
+            base = tables.get(a.base_table)
+            if base is not None:
+                out[a.id] = {base.schema}
+        elif isinstance(a, JoinAsset):
+            sides = {
+                tables[t].schema for t in (a.left_table, a.right_table) if t in tables
+            }
+            if len(sides) == 1:
+                out[a.id] = sides
+    return out
+
+
+def _check_always_note_budget(
+    assets: list[Asset], findings: list[Finding], *, db_name: str
+) -> None:
+    """Enforce the always-note budget per TURN SCOPE rather than per asset list.
+
+    ``ALWAYS_NOTE_GLOBAL_MAX`` and ``ALWAYS_NOTE_TOTAL_CHARS_MAX`` describe one
+    analyst prompt: ``note_inject.apply_always_budget`` admits always-notes in
+    precedence order until it hits either cap and silently drops the rest. The
+    population those numbers bound is therefore "the always-notes a single turn can
+    carry", so the check has to group notes the way a turn licenses them.
+
+    Summing over whatever list the caller passes gets that wrong as soon as the caller
+    passes more than one schema, and one caller does: ``eval.harness._validate_corpora``
+    hands this function an arm's entire pooled corpus, which for the data-lake driver is
+    57 schemas at once. On 2026-07-30 that reported ``always-note summaries total 5178
+    characters; maximum is 2000`` against a corpus whose worst single schema held 1591
+    characters in 4 notes — every schema inside both caps, and the build log recording
+    ``0 dropped over the always-note budget``. The finding was false, and it cost a
+    1351-question run its quotable status.
+
+    Grouping, mirroring ``note_inject.scope_matches``:
+
+    - A note with an empty scope, or a ``db:`` scope naming this corpus's database,
+      matches every turn. It is counted into every group, because every turn pays for
+      it.
+    - ``schema:<name>`` groups under that schema; an asset id groups under the
+      schema(s) that own it (:func:`_scope_schemas`).
+    - A scope id that resolves to no schema gets a group of its own rather than a free
+      pass. It is already reported as ``dangling-ref`` when it resolves to nothing at
+      all.
+
+    Both caps count every always-note in the group. The count cap used to apply only to
+    empty-scope notes, which ``apply_always_budget`` established as wrong: in a curated
+    corpus nothing is globally scoped, so that reading left the count cap dead and the
+    character cap as the only gate, "which let dozens of short caveats in". Validation
+    now agrees with what serve does.
+
+    Known limit: a turn licensing tables from two schemas carries the union of both
+    groups, and CI cannot bound that — which schemas co-occur is a serve-time routing
+    decision, not a corpus property. Widening groups to every pair of joinable schemas
+    would repeat the error being fixed here, failing a corpus over a turn no run
+    performs. ``apply_always_budget`` covers that case by dropping in precedence order
+    instead of failing.
+    """
+    always_notes = [a for a in assets if isinstance(a, NoteAsset) and _is_always(a)]
+    if not always_notes:
+        return
+
+    schemas_by_scope = _scope_schemas(assets)
+    everywhere: list[NoteAsset] = []
+    scoped: list[tuple[NoteAsset, set[str]]] = []
+    for note in always_notes:
+        if not note.scope:
+            everywhere.append(note)
+            continue
+        keys: set[str] = set()
+        matches_every_turn = False
+        for sid in note.scope:
+            if sid.startswith("db:"):
+                if sid.removeprefix("db:") == db_name:
+                    matches_every_turn = True
+                else:
+                    keys.add(sid)  # resolves to nothing; already a dangling-ref
+                continue
+            if sid.startswith("schema:"):
+                keys.add(sid)
+                continue
+            owners = schemas_by_scope.get(sid)
+            keys |= {f"schema:{s}" for s in owners} if owners else {sid}
+        if matches_every_turn:
+            everywhere.append(note)
+        else:
+            scoped.append((note, keys))
+
+    groups: dict[str, list[NoteAsset]] = {}
+    for _note, keys in scoped:
+        for key in keys:
+            groups.setdefault(key, list(everywhere))
+    if not groups:
+        groups[_EVERY_TURN] = list(everywhere)
+    for note, keys in scoped:
+        for key in keys:
+            groups[key].append(note)
+
+    for key in sorted(groups):
+        notes = groups[key]
+        where = "every turn" if key == _EVERY_TURN else f"a turn scoped to '{key}'"
+        if len(notes) > ALWAYS_NOTE_GLOBAL_MAX:
+            findings.append(
+                Finding(
+                    "always-note-budget",
+                    "",
+                    f"{len(notes)} always notes apply to {where}, over the per-turn "
+                    f"maximum of {ALWAYS_NOTE_GLOBAL_MAX}",
+                )
+            )
+        chars = sum(len(n.summary) for n in notes)
+        if chars > ALWAYS_NOTE_TOTAL_CHARS_MAX:
+            findings.append(
+                Finding(
+                    "always-note-budget",
+                    "",
+                    f"always-note summaries for {where} total {chars} characters; the "
+                    f"per-turn maximum is {ALWAYS_NOTE_TOTAL_CHARS_MAX}",
+                )
+            )
 
 
 def _check_join_on_columns(assets: list[Asset], findings: list[Finding]) -> None:

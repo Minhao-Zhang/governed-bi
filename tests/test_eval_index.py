@@ -10,10 +10,12 @@ import pytest
 
 from governed_bi.eval import metrics
 from governed_bi.eval.index import (
+    _HEADLINE_SUPPORT,
     COMPARABILITY_KEYS,
     RESUME_DRIFT_KEYS,
     append_run,
     comparable,
+    headline_keys,
     index_run,
     load_index,
     quotable,
@@ -1077,6 +1079,206 @@ def test_a_run_too_small_to_ever_reach_significance_is_not_quotable():
     n_tests = 6
     assert 2 * 0.5**MIN_QUOTABLE_QUESTIONS * n_tests < 0.05
     assert 2 * 0.5 ** (MIN_QUOTABLE_QUESTIONS - 1) * n_tests >= 0.05
+
+
+# --------------------------------------------------------------------------- #
+# The pre-registered headline (tracker X11)
+#
+# `metrics.HEADLINE_RATE` pre-registers ONE rate. The ledger is the artifact that
+# decides what may be quoted, and it recorded `ex_lenient` — the rate the register
+# explicitly disowns — and not the headline at all. A pre-registration the ledger does
+# not record is decoration, and on the 20260730 ladder the two rates disagree on the
+# sign of the curated -> curated_sme step, so which one the ledger carries changes the
+# sign of a reported delta.
+# --------------------------------------------------------------------------- #
+
+
+def _ladder_arms():
+    """The 20260730 test-ladder arms, twin fields and all, at their real values."""
+    def arm(ex_lenient, ex_no_twin, ex_twin):
+        return {
+            "n": 1351,
+            "crash_rate": 0.0,
+            "ex_lenient": ex_lenient,
+            "ex_no_twin": ex_no_twin,
+            "ex_twin": ex_twin,
+            "n_no_twin_gradeable": 1085,
+            "n_twin_gradeable": 115,
+            "n_twin_unstamped": 0,
+        }
+
+    return {
+        "baseline": arm(0.3923019985196151, 0.40368663594470044, 0.5565217391304348),
+        "seeded": arm(0.4700222057735011, 0.4838709677419355, 0.6434782608695652),
+        "curated": arm(0.5847520355292376, 0.5907834101382489, 0.8695652173913043),
+        "curated_sme": arm(0.5832716506291635, 0.5944700460829493, 0.8434782608695652),
+    }
+
+
+def test_the_ledger_record_carries_the_pre_registered_headline(tmp_path):
+    """The hole X11 left: the register named a headline the ledger did not record.
+
+    Both numbers and the denominator, because a stratified rate without its denominator
+    and its stamp coverage is not interpretable — and because ``ex_lenient`` has to stay
+    for comparability with published BIRD numbers.
+    """
+    record = record_for_run(_write_run(tmp_path, arms=_ladder_arms()))
+
+    assert record["headline_rate"] == metrics.HEADLINE_RATE
+    denominator_key, unstamped_key = _HEADLINE_SUPPORT[metrics.HEADLINE_RATE]
+    for arm, expected in (
+        ("baseline", 0.40368663594470044),
+        ("curated", 0.5907834101382489),
+        ("curated_sme", 0.5944700460829493),
+    ):
+        block = record["headline"][arm]
+        assert block[metrics.HEADLINE_RATE] == expected
+        assert block[denominator_key] == 1085
+        assert block[unstamped_key] == 0
+    # And the BIRD-comparable figure is still there, so the ledger reports both rather
+    # than swapping one silently-preferred rate for another.
+    assert record["headline"]["curated"]["ex_lenient"] == 0.5847520355292376
+    # The two really do disagree on the sign of this step, which is why the choice
+    # cannot be made per run.
+    curated, sme = record["headline"]["curated"], record["headline"]["curated_sme"]
+    assert curated["ex_lenient"] > sme["ex_lenient"]
+    assert curated[metrics.HEADLINE_RATE] < sme[metrics.HEADLINE_RATE]
+    assert record["quotable"], record["not_quotable_because"]
+
+
+def test_the_headline_name_is_not_spelled_in_the_ledger(tmp_path, monkeypatch):
+    """The name has to live in ONE place, or X11 is only half done.
+
+    A ledger that spelled ``"ex_no_twin"`` itself would keep recording that rate after
+    the pre-registration moved — the same drift the pre-registration exists to prevent,
+    one file over. Driven by moving the register and checking the record follows, rather
+    than by grepping the source for the literal.
+    """
+    monkeypatch.setattr(metrics, "HEADLINE_RATE", "ex_twin")
+    monkeypatch.setitem(_HEADLINE_SUPPORT, "ex_twin", ("n_twin_gradeable", "n_twin_unstamped"))
+    assert headline_keys() == ("ex_twin", "n_twin_gradeable", "n_twin_unstamped")
+
+    record = record_for_run(_write_run(tmp_path, arms=_ladder_arms()))
+    assert record["headline_rate"] == "ex_twin"
+    block = record["headline"]["curated"]
+    assert block["ex_twin"] == 0.8695652173913043
+    assert block["n_twin_gradeable"] == 115
+    # The rate that USED to be pre-registered is no longer lifted, which is the proof
+    # that nothing here is hardcoded to it.
+    assert "ex_no_twin" not in block
+    assert "n_no_twin_gradeable" not in block
+    # ...and the renderer's own heading follows the register too.
+    assert "ex_twin" in render_index([record])
+
+
+def test_the_pre_registered_headline_declares_its_denominator():
+    """A stratified rate needs its denominator and its stamp coverage to be readable at
+    all, and only the rate's own definition knows which counts those are. So if the
+    pre-registration moves to a rate with no entry in ``_HEADLINE_SUPPORT``, the ledger
+    would record a bare number over an unknown population — this fails first instead."""
+    assert metrics.HEADLINE_RATE in _HEADLINE_SUPPORT, (
+        f"{metrics.HEADLINE_RATE} is pre-registered but declares no denominator or "
+        "stamp-coverage count in governed_bi.eval.index._HEADLINE_SUPPORT"
+    )
+    assert metrics.HEADLINE_RATE in {m.name for m in metrics.SUMMARY_RATES}
+    for key in _HEADLINE_SUPPORT[metrics.HEADLINE_RATE]:
+        assert key in metrics.SUMMARY_COUNTS, (
+            f"{key} is not a declared summary count, so the ledger would lift a key no "
+            "summariser writes and record None"
+        )
+    # Every key the record lifts is a declared summary field, or the block is silently
+    # all-None.
+    for key in headline_keys():
+        assert key in metrics.SUMMARY_FIELDS
+
+
+def test_rows_that_landed_in_neither_stratum_make_a_run_unquotable(tmp_path):
+    """An unstamped run must not look like a clean one.
+
+    ``ex_no_twin`` over a partially-stamped run is not "EX on twin-free rows" — it is EX
+    over whatever got stamped, which on a resumed run is the pooled figure under the
+    headline's name. The summariser reports ``None`` there; the ledger has to say why.
+    """
+    arms = _ladder_arms()
+    arms["curated"]["n_twin_unstamped"] = 25
+    ok, reasons = quotable(record_for_run(_write_run(tmp_path, arms=arms)))
+    assert not ok
+    assert any("no stratum stamp" in r and "curated=25" in r for r in reasons), reasons
+    # The marker reaches the rendered table too, so a reader scanning rows sees it.
+    assert "!" in render_index([record_for_run(_write_run(tmp_path, name="b", arms=arms))])
+
+
+def test_a_recorded_denominator_with_no_headline_number_is_not_quotable(tmp_path):
+    """Fails closed like every other gate here: an arm with 1085 twin-free rows and no
+    headline rate did not measure the one number this harness pre-registered."""
+    arms = _ladder_arms()
+    arms["curated"]["ex_no_twin"] = None
+    ok, reasons = quotable(record_for_run(_write_run(tmp_path, arms=arms)))
+    assert not ok
+    assert any("not recorded for curated" in r for r in reasons), reasons
+
+
+def test_an_arm_predating_the_strata_is_not_accused(tmp_path):
+    """The default fixture carries no twin fields at all — the shape of every archived
+    run. Absence means "predates the strata", and retro-flagging the archive would bury
+    the real cases; the renderer shows ``-`` instead."""
+    record = record_for_run(_write_run(tmp_path))
+    block = record["headline"]["curated"]
+    assert block[metrics.HEADLINE_RATE] is None
+    assert record["quotable"], record["not_quotable_because"]
+
+
+def test_the_render_labels_the_headline_and_disowns_ex_lenient(tmp_path):
+    """The heading used to be a bare ``EX`` over ``ex_lenient``, which presented the
+    rate the register disowns as THE number in the artifact that decides what may be
+    quoted. Whatever the ledger renders, it must agree with ``metrics.py`` about which
+    rate is the headline."""
+    text = render_index([record_for_run(_write_run(tmp_path, arms=_ladder_arms()))])
+    assert "EX*" in text
+    assert f"`{metrics.HEADLINE_RATE}`" in text
+    assert "PRE-REGISTERED headline" in text
+    assert "NOT the headline" in text
+    # Both rates are readable off one table: 0.591 twin-free beside 0.585 pooled.
+    assert "0.591" in text
+    assert "0.585" in text
+    assert "1085" in text
+
+
+def test_a_record_written_before_the_headline_existed_still_renders():
+    """`runs/index.jsonl` predates this field. Reading an old record must not crash the
+    renderer and must not print a missing number as a zero."""
+    legacy = {
+        "run_dir": "runs/datalake/20260101T000000Z",
+        "split": "test",
+        "model": "gpt-5.6-luna",
+        "quotable": True,
+        "headline": {"curated": {"n": 72, "ex_lenient": 0.33, "crash_rate": 0.0}},
+    }
+    text = render_index([legacy])
+    assert "curated" in text
+    assert "0.330" in text
+    assert "predates the pre-registration" in text
+    # A record with no arms at all takes the other branch, whose column count also has
+    # to keep up with the two new columns.
+    assert "(no arms)" in render_index([{"run_dir": "runs/x", "headline": {}}])
+
+
+def test_two_records_under_different_pre_registrations_are_not_comparable(tmp_path):
+    """Their "headline" numbers are different quantities, so quoting a delta across the
+    pair is the same post-hoc selection, done across runs instead of within one."""
+    a = record_for_run(_write_run(tmp_path, name="a", arms=_ladder_arms()))
+    b = record_for_run(_write_run(tmp_path, name="b", arms=_ladder_arms()))
+    assert comparable(a, b)[0]
+
+    b["headline_rate"] = "ex_lenient"
+    ok, diffs = comparable(a, b)
+    assert not ok
+    assert any("pre-registered headline" in d for d in diffs), diffs
+
+    # An ABSENT stamp is the archive's ordinary state, not a difference: the pair still
+    # compares on the configuration knobs, which is what the ledger is for.
+    del b["headline_rate"]
+    assert comparable(a, b)[0]
 
 
 def test_prune_can_drop_scratch_runs_before_their_directories_vanish(tmp_path, monkeypatch):
