@@ -444,7 +444,7 @@ def test_an_evicted_graph_is_rebuilt_with_a_fresh_session_id():
     saved = agent_mod.build_serve_rails
 
     def _fake(**kw):
-        seen_ids.append(kw.get("session_id"))
+        seen_ids.append(kw["deployment"].session_id)
         return SimpleNamespace(invoke=lambda *a, **k: {"answer": None})
 
     agent_mod.build_serve_rails = _fake

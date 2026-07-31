@@ -141,7 +141,7 @@ def test_the_serve_graph_reuses_indexes_across_turns_on_one_graph(monkeypatch):
     for real. The agent core then fails on the dummy model and degrades to a refusal,
     which is fine — retrieval has already happened by then.
     """
-    from governed_bi.analyst.agent import build_serve_rails
+    from governed_bi.analyst.agent import ServeDeployment, build_serve_rails
 
     corpus = Corpus(assets=[_table("s", "orders"), _table("s", "customers")]).for_analyst()
     settings = replace(
@@ -153,13 +153,15 @@ def test_the_serve_graph_reuses_indexes_across_turns_on_one_graph(monkeypatch):
     conn = SqliteConnector(":memory:")
     try:
         graph = build_serve_rails(
-            corpus=corpus,
-            gateway=Gateway(conn),
-            settings=settings,
-            identity=Identity(user="dev", all_access=True),
-            model=None,
-            embedder=embedder,
-            session_id="s",
+            ServeDeployment(
+                corpus=corpus,
+                gateway=Gateway(conn),
+                settings=settings,
+                identity=Identity(user="dev", all_access=True),
+                model=None,
+                embedder=embedder,
+                session_id="s",
+            )
         )
         for q in ("total amount", "how many customers", "amount by customer"):
             graph.invoke({"question": q, "session_id": "s"})
@@ -181,7 +183,7 @@ def test_routed_corpus_reuse_survives_a_multi_schema_graph(monkeypatch):
     thing keeping the index cache warm.
     """
     import governed_bi.analyst.agent as agent_mod
-    from governed_bi.analyst.agent import build_serve_rails
+    from governed_bi.analyst.agent import ServeDeployment, build_serve_rails
     from governed_bi.retrieval import SchemaPick
 
     corpus = Corpus(
@@ -213,13 +215,15 @@ def test_routed_corpus_reuse_survives_a_multi_schema_graph(monkeypatch):
     conn = SqliteConnector(":memory:")
     try:
         graph = build_serve_rails(
-            corpus=corpus,
-            gateway=Gateway(conn),
-            settings=settings,
-            identity=Identity(user="dev", all_access=True),
-            model=object(),
-            embedder=embedder,
-            session_id="s",
+            ServeDeployment(
+                corpus=corpus,
+                gateway=Gateway(conn),
+                settings=settings,
+                identity=Identity(user="dev", all_access=True),
+                model=object(),
+                embedder=embedder,
+                session_id="s",
+            )
         )
         for q in ("orders total", "orders by month", "orders count"):
             graph.invoke({"question": q, "session_id": "s"})
@@ -348,7 +352,7 @@ def test_corpus_deep_copies_do_not_grow_with_the_number_of_questions():
     timing, so it cannot flake on a slow machine and cannot be satisfied by a cache
     that merely exists.
     """
-    from governed_bi.analyst.agent import build_serve_rails
+    from governed_bi.analyst.agent import ServeDeployment, build_serve_rails
 
     def _copies_for(n_questions: int) -> int:
         corpus = _multi_schema_corpus(n_schemas=3, per_schema=4)
@@ -362,13 +366,15 @@ def test_corpus_deep_copies_do_not_grow_with_the_number_of_questions():
         conn = SqliteConnector(":memory:")
         try:
             graph = build_serve_rails(
-                corpus=corpus,
-                gateway=Gateway(conn),
-                settings=settings,
-                identity=Identity(user="dev", all_access=True),
-                model=None,
-                embedder=None,
-                session_id="s",
+                ServeDeployment(
+                    corpus=corpus,
+                    gateway=Gateway(conn),
+                    settings=settings,
+                    identity=Identity(user="dev", all_access=True),
+                    model=None,
+                    embedder=None,
+                    session_id="s",
+                )
             )
             # Count only what the QUESTIONS cost, not graph construction.
             Corpus.for_analyst = lambda self: (  # type: ignore[method-assign]
@@ -523,15 +529,15 @@ def test_build_agent_core_forwards_its_cache_to_the_tools():
 
 def test_the_serve_graph_hands_its_cache_to_the_agent_core():
     """The outer hop. Scoped to the `build_agent_core(` call rather than searched over the
-    whole function: `index_cache=_index_cache` appears at three sites in
-    `build_serve_rails` — the shortlist, the retrieve, and this one — so an unscoped
-    substring check stayed green when the one that matters was deleted.
+    whole module: `index_cache=rt.index_cache` appears at three sites across the rails —
+    the shortlist, the retrieve, and this one — so an unscoped substring check stayed
+    green when the one that matters was deleted.
     """
     import inspect
 
-    from governed_bi.analyst.agent import _build_serve_rails
+    from governed_bi.analyst.agent import agent_core_node
 
-    src = inspect.getsource(_build_serve_rails)
+    src = inspect.getsource(agent_core_node)
     call_start = src.index("build_agent_core(")
     depth, end = 0, call_start
     for i, ch in enumerate(src[call_start:], call_start):
@@ -547,7 +553,7 @@ def test_the_serve_graph_hands_its_cache_to_the_agent_core():
     # only for the keyword let `index_cache=None` through — a complete revert of the perf
     # fix on the real serve path — which is the same class of hole as the unscoped
     # substring check this replaced.
-    assert "index_cache=_index_cache" in call, (
+    assert "index_cache=rt.index_cache" in call, (
         "the rails no longer pass their shared index to build_agent_core, so search_corpus "
         f"rebuilds its index on every call. Call site was: {call!r}"
     )
@@ -560,7 +566,7 @@ def test_the_serve_graph_hands_its_cache_to_the_agent_core():
 
 
 def test_build_serve_rails_reuses_a_caller_supplied_cache():
-    from governed_bi.analyst.agent import build_serve_rails
+    from governed_bi.analyst.agent import ServeDeployment, build_serve_rails
     from governed_bi.config import Environment, Settings
     from governed_bi.corpus import load_corpus
     from governed_bi.gateway import Gateway, Identity, SqliteConnector
@@ -579,12 +585,14 @@ def test_build_serve_rails_reuses_a_caller_supplied_cache():
         # Two "turns": two graph builds, one cache.
         for _ in range(2):
             build_serve_rails(
-                corpus=corpus,
-                gateway=gateway,
-                settings=settings,
-                identity=Identity(user="dev", all_access=True),
-                model=None,
-                index_cache=shared,
+                ServeDeployment(
+                    corpus=corpus,
+                    gateway=gateway,
+                    settings=settings,
+                    identity=Identity(user="dev", all_access=True),
+                    model=None,
+                    index_cache=shared,
+                )
             )
     finally:
         connector.close()

@@ -166,17 +166,19 @@ def test_the_governed_context_still_appends_after_the_variant(monkeypatch):
 def test_an_unknown_variant_in_settings_fails_the_graph_build():
     """Fail closed at build, not per turn: a stack that quietly served v1 while
     Settings said v9 would stamp v9 on every row it produced."""
-    from governed_bi.analyst.agent import build_serve_rails
+    from governed_bi.analyst.agent import ServeDeployment, build_serve_rails
 
     conn = SqliteConnector(":memory:")
     try:
         with pytest.raises(KeyError):
             build_serve_rails(
-                corpus=_two_schema_corpus(),
-                gateway=Gateway(conn),
-                settings=_lake_settings(prompt_variants={"agent_core": "v9"}),
-                identity=Identity(user="dev", all_access=True),
-                model=None,
+                ServeDeployment(
+                    corpus=_two_schema_corpus(),
+                    gateway=Gateway(conn),
+                    settings=_lake_settings(prompt_variants={"agent_core": "v9"}),
+                    identity=Identity(user="dev", all_access=True),
+                    model=None,
+                )
             )
     finally:
         conn.close()

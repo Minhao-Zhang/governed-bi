@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import AIMessage
 
-from governed_bi.analyst.agent import build_serve_rails
+from governed_bi.analyst.agent import ServeDeployment, build_serve_rails
 from governed_bi.analyst.run_log import count_run_records, load_run_record
 from governed_bi.config import Environment, Settings
 from governed_bi.corpus import load_corpus
@@ -40,12 +40,14 @@ def test_reused_rails_graph_unique_turn_ids_and_run_log_rows(
         # Scripted refusals via empty agent turns that still finalize.
         model = FakeToolModel(responses=[AIMessage(content="no tools")])
         graph = build_serve_rails(
-            corpus=corpus,
-            gateway=gateway,
-            settings=settings,
-            identity=Identity(user="dev", all_access=True),
-            model=model,
-            session_id="eval-curated",
+            ServeDeployment(
+                corpus=corpus,
+                gateway=gateway,
+                settings=settings,
+                identity=Identity(user="dev", all_access=True),
+                model=model,
+                session_id="eval-curated",
+            )
         )
         turn_ids = []
         for q in ("q1", "q2", "q3"):

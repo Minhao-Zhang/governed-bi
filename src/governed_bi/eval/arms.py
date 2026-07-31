@@ -449,7 +449,7 @@ def agent_solver(
     """
     from dataclasses import replace as dc_replace
 
-    from ..analyst.agent import build_serve_rails
+    from ..analyst.agent import ServeDeployment, build_serve_rails
 
     log_settings = (
         settings
@@ -458,13 +458,15 @@ def agent_solver(
     )
 
     graph = build_serve_rails(
-        corpus=corpus,
-        gateway=gateway,
-        settings=log_settings,
-        identity=identity,
-        model=model,
-        embedder=embedder,
-        session_id=session_id,
+        deployment=ServeDeployment(
+            corpus=corpus,
+            gateway=gateway,
+            settings=log_settings,
+            identity=identity,
+            model=model,
+            embedder=embedder,
+            session_id=session_id,
+        )
     )
 
     class _AgentSolver:

@@ -327,7 +327,7 @@ def oracle_solver(
     """
     from dataclasses import replace as dc_replace
 
-    from ..analyst.agent import build_serve_rails
+    from ..analyst.agent import ServeDeployment, build_serve_rails
     from ..logging_setup import bind_log_context, reset_log_context
     from ..obs import RunContext, tracing_invoke_config
     from ..prompts import prompt_set_hash as _psh
@@ -363,15 +363,17 @@ def oracle_solver(
             graphs.move_to_end(key)
             return cached
         graph = build_serve_rails(
-            corpus=narrowed,
-            gateway=gateway,
-            settings=log_settings,
-            identity=identity,
-            model=model,
-            embedder=embedder,
-            # Distinct per BUILD, not per cache slot: an evicted-then-rebuilt graph
-            # must not reuse a session id, or two graphs' turns collide on it.
-            session_id=f"{session_id}:{n_built}",
+            deployment=ServeDeployment(
+                corpus=narrowed,
+                gateway=gateway,
+                settings=log_settings,
+                identity=identity,
+                model=model,
+                embedder=embedder,
+                # Distinct per BUILD, not per cache slot: an evicted-then-rebuilt
+                # graph must not reuse a session id, or two graphs' turns collide.
+                session_id=f"{session_id}:{n_built}",
+            )
         )
         n_built += 1
         graphs[key] = graph

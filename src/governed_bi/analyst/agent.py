@@ -1214,6 +1214,396 @@ def _stream_agent(rt: ServeRuntime, agent, init: dict, config: dict) -> dict:
     return final_state
 
 
+def _drain_failed_model_calls(rt: ServeRuntime, agent) -> None:
+    """Fold the middleware's failed-model-call token stubs into the turn's usage.
+
+    A raised model call still burned tokens. Every exit from ``agent_core`` — the
+    clean one and all three failure ones — has to drain them, or a turn's cost is
+    understated by exactly the calls that went wrong.
+    """
+    mw = getattr(agent, "_gov_middleware", None)
+    if mw is not None and mw.failed_model_calls:
+        rt.events.add_token_usage(mw.failed_model_calls)
+        mw.failed_model_calls.clear()
+
+
+def _turn_system_prompt(rt: ServeRuntime, context_block: str) -> str:
+    """The agent-core prompt for this turn: registry text + governed context + now."""
+    system_prompt = rt.agent_core_prompt
+    if context_block:
+        system_prompt = f"{rt.agent_core_prompt}\n\n## Governed context\n{context_block}"
+    # Ground relative-date reasoning ("today", "this month", "last quarter") in
+    # the machine's LOCAL wall-clock time, stamped per turn (never import-time).
+    now_local = datetime.now().astimezone()
+    return (
+        f"{system_prompt}\n\n## Current time\n"
+        f"The current date and time is {now_local.strftime('%Y-%m-%d %H:%M:%S %Z (UTC%z)')} "
+        f"(the user's local time). Resolve any relative dates in the question against it."
+    )
+
+
+def _clarify_preflight(
+    rt: ServeRuntime, state: ServeRailsState, agent, inner_cfg: dict
+) -> "tuple[dict | None, Any]":
+    """Handle an inner agent already paused on ``ask_user`` from a prior pass.
+
+    Returns ``(rails update, agent input override)``. A non-None update ends the
+    node immediately (re-surface the request, or refuse a declined clarification);
+    a non-None override is the ``Command(resume=...)`` that unpauses the agent.
+    Both None means there is nothing pending and the turn starts fresh.
+    """
+    snap = agent.get_state(inner_cfg)
+    if not (snap.next and getattr(snap, "interrupts", None)):
+        return None, None
+    request = snap.interrupts[0].value
+    if rt.clarify_resume is None:
+        # Outer graph re-ran before interrupt() returned the answer;
+        # re-surface the same request (contract §2 re-execution).
+        return {"outcome": "clarify", "clarification": request}, None
+    parsed = parse_response(rt.clarify_resume)
+    if parsed["declined"]:
+        ledger = list((snap.values or {}).get("ledger") or [])
+        ans = refusal(
+            escalation=_ESCALATION_CLARIFY_DECLINED,
+            provenance={
+                **state["base_provenance"],
+                "refused_by": "clarification_declined",
+                "clarification_id": request.get("clarification_id"),
+                "governance_ledger": ledger,
+            },
+        )
+        ans = rt.events.final(ans)
+        return {"answer": ans, "outcome": "refuse"}, None
+    # Resume the paused inner agent with the user's answer.
+    return None, Command(resume=rt.clarify_resume)
+
+
+def _refuse_hard_stop(
+    rt: ServeRuntime, state: ServeRailsState, agent, e: GovernanceHardStop
+) -> dict:
+    """L2 block raised out of the tool wrapper — refuse with the ledger in hand."""
+    _drain_failed_model_calls(rt, agent)
+    ledger = list(e.ledger)
+    entry = e.entry
+    hard_stop_tables = _tables_used_in(
+        entry.get("sql"), rt.corpus, rt.dialect, rt.default_schema
+    )
+    ans = refusal(
+        escalation=_ESCALATION_GUARDRAIL,
+        provenance={
+            **state["base_provenance"],
+            "refused_by": "guardrail",
+            "failed_layer": entry.get("layer"),
+            "reason": entry.get("reason"),
+            "sql": entry.get("sql"),
+            "governance_ledger": ledger,
+            # A hard stop is a refusal *with* SQL in hand. See
+            # :func:`_tables_used_in`.
+            **({"tables_used": hard_stop_tables} if hard_stop_tables else {}),
+        },
+    )
+    ans = rt.events.final(ans)
+    return {"answer": ans, "outcome": "refuse"}
+
+
+def _refuse_recursion_exhausted(
+    rt: ServeRuntime, state: ServeRailsState, question: str, e: GraphRecursionError
+) -> dict:
+    """Step budget exhausted without a final answer → fail closed (§6),
+    never crash the caller (the eval arm / a live turn). Recovers the
+    accumulated ledger from the exhausted stream (attached by
+    :func:`_stream_agent`) so the refusal still carries its real audit trail
+    and attempt count, not an empty placeholder (Inv #10)."""
+    partial_state = getattr(e, "partial_state", None) or {}
+    ledger = list(partial_state.get("ledger") or [])
+    attempts = sum(1 for x in ledger if x.get("action") == "run_query")
+    ans = _finish_unsuccessful(
+        settings=rt.settings,
+        gateway=rt.gateway,
+        identity=rt.identity,
+        last_refusal={
+            "refused_by": "exhausted",
+            "escalation": _ESCALATION_NO_COVERAGE,
+            "reason": f"agent exceeded {AGENT_RECURSION_LIMIT}-step budget",
+            "governance_ledger": ledger,
+        },
+        attempts=attempts,
+        base_provenance={
+            **state["base_provenance"],
+            "recursion_exhausted": True,
+            "governance_ledger": ledger,
+        },
+        question=question,
+        narrator=None,  # narration deferred to narrate_node
+        stages=rt.stages,
+        allowlist=rt.allowlist,
+        allowed_tables=frozenset(
+            licensed_physical_names(rt.corpus, partial_state.get("licensed") or [])
+        ),
+        dialect=rt.dialect,
+        default_schema=rt.default_schema,
+    )
+    ans = rt.events.final(ans)
+    return {"answer": ans, "outcome": "refuse"}
+
+
+def _refuse_model_error(
+    rt: ServeRuntime, state: ServeRailsState, agent, e: Exception
+) -> dict:
+    """L4: model/call failure — drain failed-call stubs and still emit one
+    portable record (metadata-only; no exception message text).
+    Distinct from coverage refusals: do not tell the user to add coverage
+    when the failure was infrastructure (AUDIT R2)."""
+    _drain_failed_model_calls(rt, agent)
+    ans = refusal(
+        escalation=_ESCALATION_MODEL_ERROR,
+        provenance={
+            **state["base_provenance"],
+            "refused_by": "model_error",
+            "error_type": type(e).__name__,
+        },
+    )
+    ans = rt.events.final(ans)
+    return {"answer": ans, "outcome": "refuse"}
+
+
+def _finish_without_passing_sql(
+    rt: ServeRuntime,
+    question: str,
+    final: dict,
+    ledger: list,
+    base_provenance: dict,
+) -> dict:
+    """The agent stopped with no query that both ran and passed: refuse.
+
+    Charged to the guardrail when the ledger holds a rejected ``run_query``, and
+    to coverage when it holds none at all — the two call for opposite fixes.
+    """
+    last = next(
+        (
+            e
+            for e in reversed(ledger)
+            if e.get("action") == "run_query" and e.get("verdict") != "pass"
+        ),
+        None,
+    )
+    last_refusal = {
+        "refused_by": "guardrail" if last else "no_coverage",
+        "escalation": _ESCALATION_GUARDRAIL if last else _ESCALATION_NO_COVERAGE,
+        "failed_layer": (last or {}).get("layer"),
+        "reason": (last or {}).get("reason"),
+        "sql": (last or {}).get("sql"),
+        "governance_ledger": ledger,
+    }
+    attempts = sum(1 for e in ledger if e.get("action") == "run_query")
+    # The tables the blocked SQL referenced. Without this, a turn that generated a
+    # query and had it *rejected* carries no ``tables_used`` at all — and offline
+    # analysis that reads that field to ask "did this answer reach past the router"
+    # gets ``None`` and drops the row.
+    #
+    # That exclusion is not random, which is what makes it worth stamping: the
+    # escape most likely to trip L4 term-semantics is precisely one that reached an
+    # out-of-routed table *without* ``inspect_schema`` licensing it first. So the
+    # rows silently dropped correlate with the event being measured, and the
+    # escape rate is biased low by an unknown amount.
+    #
+    # Resolved against the full serve ``corpus``, the same map the success path
+    # uses, so an out-of-routed table resolves rather than being dropped.
+    blocked_tables = _tables_used_in(
+        (last or {}).get("sql"), rt.corpus, rt.dialect, rt.default_schema
+    )
+    ans = _finish_unsuccessful(
+        settings=rt.settings,
+        gateway=rt.gateway,
+        identity=rt.identity,
+        last_refusal=last_refusal,
+        attempts=attempts or 0,
+        base_provenance={
+            **base_provenance,
+            "governance_ledger": ledger,
+            # Absent, not empty, when there was no SQL to parse: a turn that never
+            # generated one used no tables, which is a different fact from a turn
+            # whose tables could not be resolved.
+            **({"tables_used": blocked_tables} if blocked_tables else {}),
+        },
+        question=question,
+        narrator=None,  # narration deferred to narrate_node
+        stages=rt.stages,
+        allowlist=rt.allowlist,
+        allowed_tables=frozenset(
+            licensed_physical_names(rt.corpus, final.get("licensed") or [])
+        ),
+        dialect=rt.dialect,
+        default_schema=rt.default_schema,
+    )
+    if ans.provenance.get("governance_ledger") is None:
+        ans = replace(
+            ans,
+            provenance={**ans.provenance, "governance_ledger": ledger},
+        )
+    ans = rt.events.final(ans)
+    return {"answer": ans, "outcome": "refuse"}
+
+
+def _refuse_missing_ledger_result(
+    rt: ServeRuntime,
+    question: str,
+    final: dict,
+    ledger: list,
+    sql: str,
+    base_provenance: dict,
+) -> dict:
+    """Should not happen for a pass entry; fail closed rather than re-execute."""
+    ans = _finish_unsuccessful(
+        settings=rt.settings,
+        gateway=rt.gateway,
+        identity=rt.identity,
+        last_refusal={
+            "refused_by": "execution",
+            "escalation": _ESCALATION_GUARDRAIL,
+            "error": "missing ledger result for passing SQL",
+            "sql": sql,
+            "governance_ledger": ledger,
+        },
+        attempts=sum(1 for e in ledger if e.get("action") == "run_query"),
+        base_provenance=base_provenance,
+        question=question,
+        narrator=None,  # narration deferred to narrate_node
+        stages=rt.stages,
+        allowlist=rt.allowlist,
+        allowed_tables=frozenset(
+            licensed_physical_names(rt.corpus, final.get("licensed") or [])
+        ),
+        dialect=rt.dialect,
+        default_schema=rt.default_schema,
+    )
+    ans = rt.events.final(ans)
+    return {"answer": ans, "outcome": "refuse"}
+
+
+def agent_core_node(rt: ServeRuntime, state: ServeRailsState) -> dict:
+    """Run the governed agent core for one turn and finalize its outcome.
+
+    Every exit is one of: a delivered answer, a refusal, or a clarification to
+    surface. The three ``except`` clauses are the fail-closed paths (§6) — a crash
+    inside the inner agent must never reach the caller as an exception.
+    """
+    question = state["question"]
+    seed_licensed = list(state.get("seed_licensed") or [])
+    clarify_on = rt.clarify_checkpointer is not None
+    agent = build_agent_core(
+        rt.corpus,
+        rt.gateway,
+        rt.identity,
+        rt.model,
+        settings=rt.settings,
+        dialect=rt.dialect,
+        default_schema=rt.default_schema,
+        embedder=rt.embedder,
+        system_prompt=_turn_system_prompt(rt, state.get("context_block") or ""),
+        enable_clarify=clarify_on,
+        checkpointer=rt.clarify_checkpointer,
+        stages=rt.stages,
+        index_cache=rt.index_cache,
+        # Recorded by assemble_node; absent (or empty) on a single-schema corpus
+        # where routing never runs, which leaves the scope unbounded as before.
+        licensable_schemas=frozenset(
+            state.get("base_provenance", {}).get("routed_schemas") or ()
+        )
+        or None,
+        search_hits=rt.search_hits,
+    )
+
+    # One tracing handler per turn: it is attached at the outer graph.invoke
+    # (answer_question_agent) and propagates into this inner agent.stream via the
+    # run context. Attaching a *second* handler here logged every model call
+    # twice (same LangChain run_id → two Langfuse generations under different
+    # parents → ~2x trace cost/tokens), so inherit rather than re-attach.
+    inner_cfg: dict = {
+        "recursion_limit": AGENT_RECURSION_LIMIT,
+    }
+    agent_input: Any = {
+        "messages": [HumanMessage(content=question)],
+        "licensed": seed_licensed,
+        "ledger": [],
+    }
+    if clarify_on:
+        inner_cfg["configurable"] = {"thread_id": rt.clarify_thread}
+        early, resume_input = _clarify_preflight(rt, state, agent, inner_cfg)
+        if early is not None:
+            return early
+        if resume_input is not None:
+            agent_input = resume_input
+
+    try:
+        # Timed inside the try, not around the node: every ``except`` below
+        # converts a crash into a fail-closed refusal, so a node-level record
+        # would stamp ``ok`` on the exact failures this measurement exists to
+        # find. The recorder marks the stage ``error`` and re-raises into them.
+        with rt.stages.stage(Stage.agent_core) as detail:
+            final = _stream_agent(rt, agent, agent_input, inner_cfg)
+            detail["n_messages"] = len(final.get("messages") or [])
+        rt.events.add_token_usage(final.get("token_usage"))
+        _drain_failed_model_calls(rt, agent)
+    except GovernanceHardStop as e:
+        return _refuse_hard_stop(rt, state, agent, e)
+    except GraphRecursionError as e:
+        return _refuse_recursion_exhausted(rt, state, question, e)
+    except Exception as e:
+        return _refuse_model_error(rt, state, agent, e)
+
+    # Local provenance copy — never mutate the input state in place (a LangGraph
+    # node returns updates, it does not edit `state`; the in-place write would
+    # bite once a checkpointer or a parallel branch is added). Finalizers below
+    # read this local.
+    base_provenance = state["base_provenance"]
+    if clarify_on:
+        # The inner agent may have paused on a fresh ask_user this pass; bubble
+        # it up so the chat-graph node surfaces it as a client interrupt.
+        snap2 = agent.get_state(inner_cfg)
+        if snap2.next and getattr(snap2, "interrupts", None):
+            return {"outcome": "clarify", "clarification": snap2.interrupts[0].value}
+        # Otherwise fold the turn's answered clarifications into provenance (§7),
+        # so both success and refusal finalizers below carry them.
+        answered = _extract_clarifications(final.get("messages"))
+        if answered:
+            base_provenance = {**base_provenance, "clarifications": answered}
+
+    ledger = list(final.get("ledger") or [])
+    sql, tables_used, pass_entry = extract_final_sql(
+        final, corpus=rt.corpus, dialect=rt.dialect, default_schema=rt.default_schema
+    )
+    if not sql or pass_entry is None:
+        return _finish_without_passing_sql(rt, question, final, ledger, base_provenance)
+
+    result = result_from_ledger(pass_entry)
+    if result is None:
+        return _refuse_missing_ledger_result(
+            rt, question, final, ledger, sql, base_provenance
+        )
+
+    generated = GeneratedSql(
+        sql=sql,
+        tables_used=tables_used,
+        metric_id=None,
+    )
+    attempts = sum(1 for e in ledger if e.get("action") == "run_query")
+    ans = _finalize_success(
+        question=question,
+        graph=rt.graph_obj,
+        generated=generated,
+        result=result,
+        attempts=attempts,
+        base_provenance=base_provenance,
+        dialect=rt.dialect,
+        allowlist=rt.allowlist,
+        narrator=None,  # narration deferred to narrate_node
+        ledger=ledger,
+    )
+    ans = rt.events.final(ans)
+    return {"answer": ans, "outcome": "finalize"}
+
+
 def narrate_node(rt: ServeRuntime, state: ServeRailsState) -> dict:
     """Phrase the delivered answer into grounded English — a first-class graph
     step so the narrator's model call is one trace span under the turn (not a
@@ -1250,56 +1640,7 @@ def narrate_node(rt: ServeRuntime, state: ServeRailsState) -> dict:
     return {"answer": narrated}
 
 
-def build_serve_rails(
-    *,
-    corpus: "Corpus",
-    gateway: "Gateway",
-    settings: "Settings",
-    identity: "Identity",
-    model: Any,
-    embedder: "Embedder | None" = None,
-    working_memory: "WorkingMemory | None" = None,
-    narrator: "AnswerNarrator | None" = None,
-    on_event: "Callable[[dict], None] | None" = None,
-    session_id: str = "agent",
-    clarify_checkpointer: Any = None,
-    clarify_thread: str | None = None,
-    clarify_resume: Any = None,
-    run_id: str | None = None,
-    n_human: int = 1,
-    index_cache: "RetrievalIndexCache | None" = None,
-    schema_vectors: Any = None,
-):
-    """Legacy keyword entry point — packs a :class:`ServeDeployment` and forwards.
-
-    Transitional shell so the nine existing construction sites keep working while
-    the rails are taken apart. Migrate to ``_build_serve_rails(deployment)``; this
-    goes away once they have.
-    """
-    return _build_serve_rails(
-        ServeDeployment(
-            corpus=corpus,
-            gateway=gateway,
-            settings=settings,
-            identity=identity,
-            model=model,
-            embedder=embedder,
-            working_memory=working_memory,
-            narrator=narrator,
-            on_event=on_event,
-            session_id=session_id,
-            clarify_checkpointer=clarify_checkpointer,
-            clarify_thread=clarify_thread,
-            clarify_resume=clarify_resume,
-            run_id=run_id,
-            n_human=n_human,
-            index_cache=index_cache,
-            schema_vectors=schema_vectors,
-        )
-    )
-
-
-def _build_serve_rails(deployment: "ServeDeployment"):
+def build_serve_rails(deployment: "ServeDeployment"):
     """Compile the outer deterministic StateGraph wrapping the agent core.
 
     HITL clarification (contract: docs/analyst.md, serve-time clarification) is on
@@ -1309,347 +1650,13 @@ def _build_serve_rails(deployment: "ServeDeployment"):
     paused inner agent. All three default off/None, leaving the eval path
     byte-for-byte unchanged."""
     rt = ServeRuntime.build(deployment)
-    # Transitional: the one node still nested below closes over these. They go
-    # away with the last closure (N18 step 4).
-    corpus = rt.corpus
-    gateway = rt.gateway
-    settings = rt.settings
-    identity = rt.identity
-    model = rt.model
-    embedder = rt.embedder
-    clarify_checkpointer = rt.clarify_checkpointer
-    clarify_thread = rt.clarify_thread
-    clarify_resume = rt.clarify_resume
-    default_schema = rt.default_schema
-    dialect = rt.dialect
-    agent_core_prompt = rt.agent_core_prompt
-    graph_obj = rt.graph_obj
-    allowlist = rt.allowlist
-    _index_cache = rt.index_cache
-    _search_hits = rt.search_hits
-    stages = rt.stages
-    events = rt.events
-
-    def agent_core_node(state: ServeRailsState) -> dict:
-        question = state["question"]
-        context_block = state.get("context_block") or ""
-        seed_licensed = list(state.get("seed_licensed") or [])
-        system_prompt = agent_core_prompt
-        if context_block:
-            system_prompt = f"{agent_core_prompt}\n\n## Governed context\n{context_block}"
-        # Ground relative-date reasoning ("today", "this month", "last quarter") in
-        # the machine's LOCAL wall-clock time, stamped per turn (never import-time).
-        now_local = datetime.now().astimezone()
-        system_prompt = (
-            f"{system_prompt}\n\n## Current time\n"
-            f"The current date and time is {now_local.strftime('%Y-%m-%d %H:%M:%S %Z (UTC%z)')} "
-            f"(the user's local time). Resolve any relative dates in the question against it."
-        )
-
-        clarify_on = clarify_checkpointer is not None
-        agent = build_agent_core(
-            corpus,
-            gateway,
-            identity,
-            model,
-            settings=settings,
-            dialect=dialect,
-            default_schema=default_schema,
-            embedder=embedder,
-            system_prompt=system_prompt,
-            enable_clarify=clarify_on,
-            checkpointer=clarify_checkpointer,
-            stages=stages,
-            index_cache=_index_cache,
-            # Recorded by assemble_node; absent (or empty) on a single-schema corpus
-            # where routing never runs, which leaves the scope unbounded as before.
-            licensable_schemas=frozenset(
-                state.get("base_provenance", {}).get("routed_schemas") or ()
-            )
-            or None,
-            search_hits=_search_hits,
-        )
-
-        # One tracing handler per turn: it is attached at the outer graph.invoke
-        # (answer_question_agent) and propagates into this inner agent.stream via the
-        # run context. Attaching a *second* handler here logged every model call
-        # twice (same LangChain run_id → two Langfuse generations under different
-        # parents → ~2x trace cost/tokens), so inherit rather than re-attach.
-        inner_cfg: dict = {
-            "recursion_limit": AGENT_RECURSION_LIMIT,
-        }
-        agent_input: Any = {
-            "messages": [HumanMessage(content=question)],
-            "licensed": seed_licensed,
-            "ledger": [],
-        }
-        if clarify_on:
-            inner_cfg["configurable"] = {"thread_id": clarify_thread}
-            snap = agent.get_state(inner_cfg)
-            if snap.next and getattr(snap, "interrupts", None):
-                # The inner agent is paused on an ask_user from a prior pass.
-                request = snap.interrupts[0].value
-                if clarify_resume is None:
-                    # Outer graph re-ran before interrupt() returned the answer;
-                    # re-surface the same request (contract §2 re-execution).
-                    return {"outcome": "clarify", "clarification": request}
-                parsed = parse_response(clarify_resume)
-                if parsed["declined"]:
-                    ledger = list((snap.values or {}).get("ledger") or [])
-                    ans = refusal(
-                        escalation=_ESCALATION_CLARIFY_DECLINED,
-                        provenance={
-                            **state["base_provenance"],
-                            "refused_by": "clarification_declined",
-                            "clarification_id": request.get("clarification_id"),
-                            "governance_ledger": ledger,
-                        },
-                    )
-                    ans = events.final(ans)
-                    return {"answer": ans, "outcome": "refuse"}
-                # Resume the paused inner agent with the user's answer.
-                agent_input = Command(resume=clarify_resume)
-
-        try:
-            # Timed inside the try, not around the node: every ``except`` below
-            # converts a crash into a fail-closed refusal, so a node-level record
-            # would stamp ``ok`` on the exact failures this measurement exists to
-            # find. The recorder marks the stage ``error`` and re-raises into them.
-            with stages.stage(Stage.agent_core) as detail:
-                final = _stream_agent(rt, agent, agent_input, inner_cfg)
-                detail["n_messages"] = len(final.get("messages") or [])
-            events.add_token_usage(final.get("token_usage"))
-            mw = getattr(agent, "_gov_middleware", None)
-            if mw is not None and mw.failed_model_calls:
-                events.add_token_usage(mw.failed_model_calls)
-                mw.failed_model_calls.clear()
-        except GovernanceHardStop as e:
-            mw = getattr(agent, "_gov_middleware", None)
-            if mw is not None and mw.failed_model_calls:
-                events.add_token_usage(mw.failed_model_calls)
-                mw.failed_model_calls.clear()
-            ledger = list(e.ledger)
-            entry = e.entry
-            hard_stop_tables = _tables_used_in(
-                entry.get("sql"), corpus, dialect, default_schema
-            )
-            ans = refusal(
-                escalation=_ESCALATION_GUARDRAIL,
-                provenance={
-                    **state["base_provenance"],
-                    "refused_by": "guardrail",
-                    "failed_layer": entry.get("layer"),
-                    "reason": entry.get("reason"),
-                    "sql": entry.get("sql"),
-                    "governance_ledger": ledger,
-                    # A hard stop is a refusal *with* SQL in hand. See
-                    # :func:`_tables_used_in`.
-                    **({"tables_used": hard_stop_tables} if hard_stop_tables else {}),
-                },
-            )
-            ans = events.final(ans)
-            return {"answer": ans, "outcome": "refuse"}
-        except GraphRecursionError as e:
-            # Step budget exhausted without a final answer → fail closed (§6),
-            # never crash the caller (the eval arm / a live turn). Recover the
-            # accumulated ledger from the exhausted stream (attached by
-            # `_stream_agent`) so the refusal still carries its real audit trail
-            # and attempt count, not an empty placeholder (Inv #10).
-            partial = getattr(e, "partial_state", None) or {}
-            ledger = list(partial.get("ledger") or [])
-            attempts = sum(1 for x in ledger if x.get("action") == "run_query")
-            ans = _finish_unsuccessful(
-                settings=settings,
-                gateway=gateway,
-                identity=identity,
-                last_refusal={
-                    "refused_by": "exhausted",
-                    "escalation": _ESCALATION_NO_COVERAGE,
-                    "reason": f"agent exceeded {AGENT_RECURSION_LIMIT}-step budget",
-                    "governance_ledger": ledger,
-                },
-                attempts=attempts,
-                base_provenance={
-                    **state["base_provenance"],
-                    "recursion_exhausted": True,
-                    "governance_ledger": ledger,
-                },
-                question=question,
-                narrator=None,  # narration deferred to narrate_node
-                stages=stages,
-                allowlist=allowlist,
-                allowed_tables=frozenset(
-                    licensed_physical_names(corpus, partial.get("licensed") or [])
-                ),
-                dialect=dialect,
-                default_schema=default_schema,
-            )
-            ans = events.final(ans)
-            return {"answer": ans, "outcome": "refuse"}
-        except Exception as e:
-            # L4: model/call failure — drain failed-call stubs and still emit one
-            # portable record (metadata-only; no exception message text).
-            # Distinct from coverage refusals: do not tell the user to add coverage
-            # when the failure was infrastructure (AUDIT R2).
-            mw = getattr(agent, "_gov_middleware", None)
-            if mw is not None and mw.failed_model_calls:
-                events.add_token_usage(mw.failed_model_calls)
-                mw.failed_model_calls.clear()
-            ans = refusal(
-                escalation=_ESCALATION_MODEL_ERROR,
-                provenance={
-                    **state["base_provenance"],
-                    "refused_by": "model_error",
-                    "error_type": type(e).__name__,
-                },
-            )
-            ans = events.final(ans)
-            return {"answer": ans, "outcome": "refuse"}
-
-        # Local provenance copy — never mutate the input state in place (a LangGraph
-        # node returns updates, it does not edit `state`; the in-place write would
-        # bite once a checkpointer or a parallel branch is added). Finalizers below
-        # read this local.
-        base_provenance = state["base_provenance"]
-        if clarify_on:
-            # The inner agent may have paused on a fresh ask_user this pass; bubble
-            # it up so the chat-graph node surfaces it as a client interrupt.
-            snap2 = agent.get_state(inner_cfg)
-            if snap2.next and getattr(snap2, "interrupts", None):
-                return {"outcome": "clarify", "clarification": snap2.interrupts[0].value}
-            # Otherwise fold the turn's answered clarifications into provenance (§7),
-            # so both success and refusal finalizers below carry them.
-            answered = _extract_clarifications(final.get("messages"))
-            if answered:
-                base_provenance = {**base_provenance, "clarifications": answered}
-
-        ledger = list(final.get("ledger") or [])
-        sql, tables_used, pass_entry = extract_final_sql(
-            final, corpus=corpus, dialect=dialect, default_schema=default_schema
-        )
-        if not sql or pass_entry is None:
-            last = next(
-                (
-                    e
-                    for e in reversed(ledger)
-                    if e.get("action") == "run_query" and e.get("verdict") != "pass"
-                ),
-                None,
-            )
-            last_refusal = {
-                "refused_by": "guardrail" if last else "no_coverage",
-                "escalation": _ESCALATION_GUARDRAIL if last else _ESCALATION_NO_COVERAGE,
-                "failed_layer": (last or {}).get("layer"),
-                "reason": (last or {}).get("reason"),
-                "sql": (last or {}).get("sql"),
-                "governance_ledger": ledger,
-            }
-            attempts = sum(1 for e in ledger if e.get("action") == "run_query")
-            # The tables the blocked SQL referenced. Without this, a turn that generated a
-            # query and had it *rejected* carries no ``tables_used`` at all — and offline
-            # analysis that reads that field to ask "did this answer reach past the router"
-            # gets ``None`` and drops the row.
-            #
-            # That exclusion is not random, which is what makes it worth stamping: the
-            # escape most likely to trip L4 term-semantics is precisely one that reached an
-            # out-of-routed table *without* ``inspect_schema`` licensing it first. So the
-            # rows silently dropped correlate with the event being measured, and the
-            # escape rate is biased low by an unknown amount.
-            #
-            # Resolved against the full serve ``corpus``, the same map the success path
-            # uses, so an out-of-routed table resolves rather than being dropped.
-            blocked_tables = _tables_used_in(
-                (last or {}).get("sql"), corpus, dialect, default_schema
-            )
-            ans = _finish_unsuccessful(
-                settings=settings,
-                gateway=gateway,
-                identity=identity,
-                last_refusal=last_refusal,
-                attempts=attempts or 0,
-                base_provenance={
-                    **base_provenance,
-                    "governance_ledger": ledger,
-                    # Absent, not empty, when there was no SQL to parse: a turn that never
-                    # generated one used no tables, which is a different fact from a turn
-                    # whose tables could not be resolved.
-                    **({"tables_used": blocked_tables} if blocked_tables else {}),
-                },
-                question=question,
-                narrator=None,  # narration deferred to narrate_node
-                stages=stages,
-                allowlist=allowlist,
-                allowed_tables=frozenset(
-                    licensed_physical_names(corpus, final.get("licensed") or [])
-                ),
-                dialect=dialect,
-                default_schema=default_schema,
-            )
-            if ans.provenance.get("governance_ledger") is None:
-                ans = replace(
-                    ans,
-                    provenance={**ans.provenance, "governance_ledger": ledger},
-                )
-            ans = events.final(ans)
-            return {"answer": ans, "outcome": "refuse"}
-
-        result = result_from_ledger(pass_entry)
-        if result is None:
-            # Should not happen for a pass entry; fail closed rather than re-execute.
-            ans = _finish_unsuccessful(
-                settings=settings,
-                gateway=gateway,
-                identity=identity,
-                last_refusal={
-                    "refused_by": "execution",
-                    "escalation": _ESCALATION_GUARDRAIL,
-                    "error": "missing ledger result for passing SQL",
-                    "sql": sql,
-                    "governance_ledger": ledger,
-                },
-                attempts=sum(1 for e in ledger if e.get("action") == "run_query"),
-                base_provenance=base_provenance,
-                question=question,
-                narrator=None,  # narration deferred to narrate_node
-                stages=stages,
-                allowlist=allowlist,
-                allowed_tables=frozenset(
-                    licensed_physical_names(corpus, final.get("licensed") or [])
-                ),
-                dialect=dialect,
-                default_schema=default_schema,
-            )
-            ans = events.final(ans)
-            return {"answer": ans, "outcome": "refuse"}
-
-        generated = GeneratedSql(
-            sql=sql,
-            tables_used=tables_used,
-            metric_id=None,
-        )
-        attempts = sum(1 for e in ledger if e.get("action") == "run_query")
-        ans = _finalize_success(
-            question=question,
-            graph=graph_obj,
-            generated=generated,
-            result=result,
-            attempts=attempts,
-            base_provenance=base_provenance,
-            dialect=dialect,
-            allowlist=allowlist,
-            narrator=None,  # narration deferred to narrate_node
-            ledger=ledger,
-        )
-        ans = events.final(ans)
-        return {"answer": ans, "outcome": "finalize"}
-
     builder = StateGraph(ServeRailsState)
     builder.add_node("ingest", partial(ingest_node, rt))
     builder.add_node("refuse_gate", partial(refuse_gate_node, rt))
     builder.add_node(
         "assemble", _timed(rt, Stage.assemble, partial(assemble_node, rt))
     )
-    builder.add_node("agent_core", agent_core_node)
+    builder.add_node("agent_core", partial(agent_core_node, rt))
     builder.add_node("narrate", partial(narrate_node, rt))
     builder.add_edge(START, "ingest")
     builder.add_edge("ingest", "refuse_gate")
@@ -1698,23 +1705,25 @@ def answer_question_agent(
     log_tokens = bind_log_context(run_id=_run_id, turn_id=tid)
     try:
         graph = build_serve_rails(
-            corpus=corpus,
-            gateway=gateway,
-            settings=settings,
-            identity=identity,
-            model=model,
-            embedder=embedder,
-            working_memory=working_memory,
-            narrator=narrator,
-            on_event=on_event,
-            session_id=session_id,
-            clarify_checkpointer=clarify_checkpointer,
-            clarify_thread=clarify_thread,
-            clarify_resume=clarify_resume,
-            run_id=_run_id,
-            n_human=n_human,
-            index_cache=index_cache,
-            schema_vectors=schema_vectors,
+            deployment=ServeDeployment(
+                corpus=corpus,
+                gateway=gateway,
+                settings=settings,
+                identity=identity,
+                model=model,
+                embedder=embedder,
+                working_memory=working_memory,
+                narrator=narrator,
+                on_event=on_event,
+                session_id=session_id,
+                clarify_checkpointer=clarify_checkpointer,
+                clarify_thread=clarify_thread,
+                clarify_resume=clarify_resume,
+                run_id=_run_id,
+                n_human=n_human,
+                index_cache=index_cache,
+                schema_vectors=schema_vectors,
+            )
         )
         ctx = RunContext(
             run_id=_run_id,

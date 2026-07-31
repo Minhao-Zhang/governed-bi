@@ -139,6 +139,33 @@ their absence as "never existed".
   (the strict normaliser is never self-checked). `eval.ex.execution_match` itself
   is untouched and still tested.
 
+## Left behind by the serve-rails split (N18, 2026-07-31)
+
+N18 was a pure move: `build_serve_rails` went from a 1,032-line function with 17
+keyword arguments and 13 closures to a one-argument entry over a
+`ServeDeployment`, with the rails as module-level functions over a `ServeRuntime`.
+Nothing about behaviour changed. Three things were noticed while moving it and
+deliberately not touched, because fixing any of them would have hidden the move.
+
+- **`answer_question_agent` still takes the same 17 keyword arguments** and its
+  body does nothing with them but retype them into a `ServeDeployment`
+  (`analyst/agent.py`). The duplication is now literal — two argument lists that
+  must be edited together, and the second one exists only to feed the first. It
+  should take a `ServeDeployment` (plus `question` and `identity`), but that
+  changes every caller of the public serve entry point, which is a wider blast
+  radius than N18's file. The same applies to `eval/arms.py::agent_solver` and
+  `eval/oracle.py::oracle_solver`, which each thread a subset of the same fields.
+- **`ingest_node` writes `rt.events._finalize_ctx` from outside the class.** That
+  was a closure poking at a private attribute of an object in the same file; it is
+  now one module-level function reaching into another module's private state. The
+  honest shape is a method on `GovEventStream` — `rebind_turn(run_id=…, n_human=…,
+  question=…)` — since the four fields it replaces are exactly one turn's identity.
+- **`ruff check .` has been failing on 8 pre-existing findings** (7 × I001 unsorted
+  lazy import blocks, 1 × F401) since before this batch, in files N18 does not
+  touch. CI runs `ruff check .` as a gate (`.github/workflows/ci.yml:45`), so
+  either the gate is not actually red in CI (version skew with the pinned ruff) or
+  it has been red for a while. Worth one minute to establish which.
+
 ## Test debt blocked on the eval driver
 
 Seventeen tests across ten files assert on implementation **source text** via
