@@ -73,37 +73,37 @@ def configure_logging(
 ) -> None:
     """Install a root handler with timestamps and ContextVar correlation ids.
 
-    Idempotent: a second call is a no-op so library imports and CLI entry points
-    can both call it safely. Does not replace existing handlers that already
-    carry our filter (tests that attach ``caplog`` keep working).
+    The stream handler is installed once. A ``log_path`` may be supplied on a
+    later call (e.g. once the run directory exists) and adds a file handler for
+    that path without resetting the stream setup.
     """
     global _CONFIGURED
-    if _CONFIGURED:
-        return
     root = logging.getLogger()
     root.setLevel(level)
     fmt = logging.Formatter(_LOG_FORMAT, datefmt=_DATE_FORMAT)
     filt = _ContextFilter()
 
-    stream = logging.StreamHandler(sys.stderr)
-    stream.setFormatter(fmt)
-    stream.addFilter(filt)
-    root.addHandler(stream)
+    if not _CONFIGURED:
+        stream = logging.StreamHandler(sys.stderr)
+        stream.setFormatter(fmt)
+        stream.addFilter(filt)
+        root.addHandler(stream)
+        logging.getLogger("governed_bi").addFilter(filt)
+        _CONFIGURED = True
 
     if log_path is not None:
         path = Path(log_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(path, encoding="utf-8")
-        file_handler.setFormatter(fmt)
-        file_handler.addFilter(filt)
-        root.addHandler(file_handler)
-
-    # Ensure every logger under governed_bi inherits the filter even if a
-    # handler was attached earlier without it.
-    for name in ("governed_bi",):
-        logging.getLogger(name).addFilter(filt)
-
-    _CONFIGURED = True
+        already = any(
+            isinstance(h, logging.FileHandler)
+            and Path(getattr(h, "baseFilename", "")) == path.resolve()
+            for h in root.handlers
+        )
+        if not already:
+            file_handler = logging.FileHandler(path, encoding="utf-8")
+            file_handler.setFormatter(fmt)
+            file_handler.addFilter(filt)
+            root.addHandler(file_handler)
 
 
 def _reset_for_tests() -> None:

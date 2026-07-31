@@ -226,6 +226,40 @@ _SIDECARS = (
 )
 
 
+class _ServeProgress:
+    """Driver-side serve progress + ETA (N11). Lives here, not in ``eval.parallel``.
+
+    ``on_result`` already fires per completed question; this only prints. Call
+    :meth:`tick` from the driver's persist callback / serial loop.
+    """
+
+    def __init__(self, *, arm: str, total: int, every: int | None = None) -> None:
+        self.arm = arm
+        self.total = max(0, total)
+        self.done = 0
+        self._t0 = time.perf_counter()
+        # Small runs: every question. Large runs: about 20 lines max.
+        self.every = every if every is not None else (
+            1 if self.total <= 20 else max(1, self.total // 20)
+        )
+
+    def tick(self) -> None:
+        self.done += 1
+        if self.done != self.total and self.done % self.every != 0:
+            return
+        elapsed = time.perf_counter() - self._t0
+        if self.done > 0 and elapsed > 0 and self.done < self.total:
+            eta_s = (self.total - self.done) * (elapsed / self.done)
+            eta = f", eta {eta_s:.0f}s"
+        else:
+            eta = ""
+        print(
+            f"  serve [{self.arm}]: {self.done}/{self.total} "
+            f"({100.0 * self.done / self.total if self.total else 100.0:.0f}%)"
+            f" in {elapsed:.0f}s{eta}"
+        )
+
+
 def _has_yaml(root: Path, db_id: str) -> bool:
     d = root / db_id
     return d.is_dir() and any(d.rglob("*.yaml"))
@@ -480,7 +514,7 @@ def run_build_phase(
             detail = f"{type(err).__name__}: {err}"
             with build_lock:
                 build_errors[db] = detail
-            print(f"*** build FAILED for {db!r} — dropped from pool: {detail}")
+            print(f"*** build FAILED for [{db}] — dropped from pool: {detail}")
             if staged:
                 # The staging roots are KEPT, not deleted. They hold whatever the
                 # failed build managed to write — findings, a run manifest, a partial
@@ -495,14 +529,17 @@ def run_build_phase(
                 # operator has to be told about.
                 kept = [str(p) for p in build_roots.values() if p.exists()]
                 if kept:
-                    print(f"    staging kept for inspection: {', '.join(sorted(kept))}")
+                    print(
+                        f"    [{db}] staging kept for inspection: "
+                        f"{', '.join(sorted(kept))}"
+                    )
             return None
 
     def _consume(results: "Iterable[str | None]") -> None:
         for done in results:
             if done is not None:
                 built.append(done)
-                print(f"  built corpora: {done} ({len(built)}/{len(wanted)})")
+                print(f"  build [{done}]: corpora ready ({len(built)}/{len(wanted)})")
 
     # Consumed INSIDE the ``with``, not after it. ``Executor.map`` submits eagerly but
     # yields lazily, and ``pool.__exit__`` calls ``shutdown(wait=True)`` — so draining
@@ -3931,6 +3968,7 @@ def _run_pool_arm(
     fresh: list[dict[str, Any]] = []
     if todo:
         sink = _RowSink(out_path)
+        progress = _ServeProgress(arm=arm, total=len(todo))
 
         def _persist(scored: tuple[dict[str, Any], list[dict[str, Any]]]) -> None:
             """Flush one question's row and its stage records before the next starts."""
@@ -3939,6 +3977,7 @@ def _run_pool_arm(
             if stage_sink is not None:
                 for stage_row in stage_rows:
                     stage_sink.write(stage_row)
+            progress.tick()
 
         try:
             if serve_workers > 1:
@@ -4124,6 +4163,9 @@ def run_datalake(
     load_dotenv()
     dataset_dir = bird_dir / "eval_dataset"
     out_dir.mkdir(parents=True, exist_ok=True)
+    from ..logging_setup import configure_logging
+
+    configure_logging(log_path=out_dir / "run.log")
     corpus_dir = out_dir if corpus_dir is None else corpus_dir
     corpus_dir.mkdir(parents=True, exist_ok=True)
     roots = {arm: corpus_dir / f"corpus_{arm}" for arm in _ARMS}
@@ -5362,7 +5404,15 @@ def _score_one_split(
             oracles=oracles,
             reuse_corpus=reuse_corpus,
         )
-        print(json.dumps(result["arms"], indent=2, ensure_ascii=False))
+        arms_path = out_dir / "arms_summary.json"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        arms_path.write_text(
+            json.dumps(result["arms"], indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        print(
+            f"arms summary: {len(result['arms'])} arm(s) -> {arms_path}"
+        )
         # Printed BEFORE any delta, because these are the two questions that decide
         # whether a delta means anything: did the arms differ, and could this run have
         # seen it if they did. They used to come after, which is the reading order
@@ -5400,8 +5450,15 @@ def _score_one_split(
                 print(f"      by database: {cluster['reading']}")
         # Raw marginal-rate differences last, and labelled: they ignore that both arms
         # answered the same questions, so the paired comparisons above supersede them.
-        print("\nunpaired marginal deltas (prefer the paired comparisons above):")
-        print(json.dumps(result["deltas"], indent=2))
+        deltas_path = out_dir / "deltas.json"
+        deltas_path.write_text(
+            json.dumps(result["deltas"], indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        print(
+            f"\nunpaired marginal deltas (prefer the paired comparisons above) "
+            f"-> {deltas_path}"
+        )
     finally:
         from ..obs import flush_tracing
 
