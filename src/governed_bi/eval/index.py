@@ -422,13 +422,22 @@ def record_for_run(run_dir: Path | str) -> dict[str, Any]:
         # detectors existed; nothing read them. That is the shape of every defect
         # this ledger was built to end, reproduced one layer up.
         #
-        # ``corpus_validation`` -> per-arm reference-integrity finding counts. A note
-        # whose scope can never match is a ``dangling-ref`` here, and that exact
-        # defect once silently zeroed 9,154 notes.
+        # ``corpus_validation`` -> per-arm finding counts AND codes. Counts alone
+        # cannot tell ``dangling-ref`` from ``always-note-budget``; harness findings
+        # are ``"code [asset_id]: message"`` (``harness._validate_corpora``), and a
+        # single catch-all quotable sentence once mislabelled a budget finding as a
+        # dangling reference. Codes let ``quotable`` pick the wording.
         "corpus_finding_counts": {
             arm: block.get("finding_count")
             for arm, block in (summary.get("corpus_validation") or {}).items()
             if isinstance(block, dict) and block.get("finding_count")
+        },
+        "corpus_finding_codes": {
+            arm: codes
+            for arm, block in (summary.get("corpus_validation") or {}).items()
+            if isinstance(block, dict)
+            and block.get("finding_count")
+            and (codes := _codes_from_corpus_findings(block.get("findings") or []))
         },
         # ``sme_fold`` -> the SME arm produced a corpus byte-identical to the arm it
         # is supposed to improve on. Its EX equals ``curated`` by construction, not
@@ -598,6 +607,96 @@ def _attach_hygiene_and_claim_fields(
             "ledger_ok is false; fix hygiene before any claim checklist",
             *reasons,
         ]
+
+
+#: Finding codes whose quotable refusal is "reference integrity" — an asset that
+#: resolves to nothing never reaches a prompt. Kept narrow on purpose: the point of
+#: diverting by code is that *other* codes must not reuse this sentence.
+_CORPUS_REF_INTEGRITY_CODES = frozenset({"dangling-ref"})
+
+#: Finding codes whose quotable refusal is the always-note budget (per turn scope),
+#: not dangling references. The 2026-07-30 pooled false positive used this code.
+_CORPUS_ALWAYS_NOTE_BUDGET_CODES = frozenset({"always-note-budget"})
+
+
+def _codes_from_corpus_findings(findings: list[Any]) -> list[str]:
+    """Extract unique finding codes from harness ``corpus_validation`` lines.
+
+    Harness format is ``"code [asset_id]: message"``; fixtures sometimes pass a
+    bare code. Counts alone cannot distinguish the two, so the ledger stores codes.
+    """
+    codes: list[str] = []
+    seen: set[str] = set()
+    for line in findings:
+        if not isinstance(line, str) or not line.strip():
+            continue
+        code = line.split(" ", 1)[0].strip()
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        codes.append(code)
+    return codes
+
+
+def _corpus_finding_reasons(record: dict[str, Any]) -> list[str]:
+    """Refuse quoting when any arm recorded corpus-validation findings.
+
+    Message text follows the finding *codes*, not a single dangling-ref sentence.
+    Arms without recorded codes (legacy ledger rows that only stored counts) fall
+    through to a generic validation wording rather than inventing dangling-ref.
+    """
+    counts = record.get("corpus_finding_counts") or {}
+    if not counts:
+        return []
+    codes_by_arm = record.get("corpus_finding_codes") or {}
+    all_codes: set[str] = set()
+    for codes in codes_by_arm.values():
+        if isinstance(codes, (list, tuple, set)):
+            all_codes.update(c for c in codes if isinstance(c, str) and c)
+
+    def _detail(for_codes: frozenset[str] | None = None) -> str:
+        if for_codes is None or not codes_by_arm:
+            arms = counts
+        else:
+            arms = {
+                arm: n
+                for arm, n in counts.items()
+                if for_codes.intersection(codes_by_arm.get(arm) or ())
+            }
+            if not arms:
+                arms = counts
+        return ", ".join(f"{arm}={n}" for arm, n in sorted(arms.items()))
+
+    reasons: list[str] = []
+    if not all_codes:
+        detail = _detail()
+        reasons.append(
+            f"corpus validation findings ({detail}) — the arm's corpus did not pass "
+            "its own checks, so the scored treatment is not what the arm holds"
+        )
+        return reasons
+
+    if all_codes & _CORPUS_REF_INTEGRITY_CODES:
+        detail = _detail(_CORPUS_REF_INTEGRITY_CODES)
+        reasons.append(
+            f"corpus reference-integrity findings ({detail}) — assets that resolve to "
+            "nothing cannot reach a prompt, so the arm did not serve what it holds"
+        )
+    if all_codes & _CORPUS_ALWAYS_NOTE_BUDGET_CODES:
+        detail = _detail(_CORPUS_ALWAYS_NOTE_BUDGET_CODES)
+        reasons.append(
+            f"corpus always-note-budget findings ({detail}) — always-notes exceed the "
+            "per-turn budget for a scope, so the arm did not serve the notes it authored"
+        )
+    other = all_codes - _CORPUS_REF_INTEGRITY_CODES - _CORPUS_ALWAYS_NOTE_BUDGET_CODES
+    if other:
+        detail = _detail(frozenset(other))
+        code_list = ", ".join(sorted(other))
+        reasons.append(
+            f"corpus validation findings ({detail}; codes={code_list}) — the arm's "
+            "corpus failed its own checks, so the scored treatment is not what it holds"
+        )
+    return reasons
 
 
 def quotable(record: dict[str, Any]) -> tuple[bool, list[str]]:
@@ -795,19 +894,13 @@ def quotable(record: dict[str, Any]) -> tuple[bool, list[str]]:
     # rather than relying on a reader to notice.
     reasons.extend(record.get("treatment_not_delivered") or [])
 
-    # A corpus that does not pass its own reference check was still scored. The
-    # findings were computed, written to summary.json, printed as a warning, and
-    # never read by anything that could stop the number being quoted — which is how
-    # a corpus whose 9,154 notes all had unmatchable scopes produced a published
-    # result. A dangling reference is not a style issue: an asset nothing resolves to
-    # is an asset that never reaches a prompt.
-    findings = record.get("corpus_finding_counts") or {}
-    if findings:
-        detail = ", ".join(f"{arm}={n}" for arm, n in sorted(findings.items()))
-        reasons.append(
-            f"corpus reference-integrity findings ({detail}) — assets that resolve to "
-            "nothing cannot reach a prompt, so the arm did not serve what it holds"
-        )
+    # A corpus that does not pass its own validation was still scored. Findings were
+    # computed, written to summary.json, printed as a warning, and never read by
+    # anything that could stop the number being quoted — which is how a corpus whose
+    # 9,154 notes all had unmatchable scopes produced a published result. Word the
+    # refusal by finding *code*: a catch-all dangling-ref sentence once labelled a
+    # pooled always-note-budget false positive as "assets that resolve to nothing".
+    reasons.extend(_corpus_finding_reasons(record))
 
     # The SME arm produced a corpus byte-identical to the arm it is meant to improve
     # on. Its EX equals `curated` by construction; any difference is noise. This is

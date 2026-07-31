@@ -539,7 +539,12 @@ def test_corpus_reference_integrity_findings_make_a_run_unquotable(tmp_path):
         tmp_path,
         summary_extra={
             "corpus_validation": {
-                "curated": {"finding_count": 9154, "findings": ["dangling-ref"]},
+                "curated": {
+                    "finding_count": 9154,
+                    "findings": [
+                        "dangling-ref [note_x]: scope schema:gone does not resolve"
+                    ],
+                },
                 "baseline": {"finding_count": 0},
             }
         },
@@ -547,9 +552,69 @@ def test_corpus_reference_integrity_findings_make_a_run_unquotable(tmp_path):
     record = record_for_run(run)
     # Only the arm with findings is carried; a zero count is not a finding.
     assert record["corpus_finding_counts"] == {"curated": 9154}
+    assert record["corpus_finding_codes"] == {"curated": ["dangling-ref"]}
     ok, reasons = quotable(record)
     assert not ok
-    assert any("curated=9154" in r for r in reasons)
+    assert any("curated=9154" in r and "reference-integrity" in r for r in reasons)
+    assert any("resolve to nothing" in r for r in reasons)
+    assert not any("always-note-budget" in r for r in reasons)
+
+
+def test_always_note_budget_findings_use_budget_wording_not_dangling_ref(tmp_path):
+    """Counts alone cannot distinguish codes; the 2026-07-30 finding was
+    always-note-budget, and the catch-all dangling-ref sentence mislabelled it."""
+    run = _write_run(
+        tmp_path,
+        summary_extra={
+            "corpus_validation": {
+                "curated_sme": {
+                    "finding_count": 1,
+                    "findings": [
+                        "always-note-budget []: always-note summaries total 5178 "
+                        "characters; maximum is 2000"
+                    ],
+                },
+                "curated": {"finding_count": 0},
+            }
+        },
+    )
+    record = record_for_run(run)
+    assert record["corpus_finding_counts"] == {"curated_sme": 1}
+    assert record["corpus_finding_codes"] == {"curated_sme": ["always-note-budget"]}
+    ok, reasons = quotable(record)
+    assert not ok
+    budget = [r for r in reasons if "always-note-budget" in r]
+    assert budget, reasons
+    assert "per-turn budget" in budget[0]
+    assert not any("resolve to nothing" in r for r in reasons)
+    assert not any("reference-integrity" in r for r in reasons)
+
+
+def test_other_corpus_validation_codes_use_generic_wording(tmp_path):
+    """A non-dangling, non-budget code must not reuse either specialised sentence."""
+    run = _write_run(
+        tmp_path,
+        summary_extra={
+            "corpus_validation": {
+                "curated": {
+                    "finding_count": 2,
+                    "findings": [
+                        "duplicate-id [tbl_x]: id used by more than one asset",
+                        "bad-id [weird]: id does not match the table convention",
+                    ],
+                }
+            }
+        },
+    )
+    record = record_for_run(run)
+    assert record["corpus_finding_codes"] == {"curated": ["duplicate-id", "bad-id"]}
+    ok, reasons = quotable(record)
+    assert not ok
+    generic = [r for r in reasons if "codes=" in r]
+    assert generic, reasons
+    assert "bad-id" in generic[0] and "duplicate-id" in generic[0]
+    assert not any("resolve to nothing" in r for r in reasons)
+    assert not any("per-turn budget" in r for r in reasons)
 
 
 def test_a_clean_corpus_validation_block_does_not_block_quoting(tmp_path):
@@ -560,6 +625,7 @@ def test_a_clean_corpus_validation_block_does_not_block_quoting(tmp_path):
     })
     record = record_for_run(run)
     assert record["corpus_finding_counts"] == {}
+    assert record["corpus_finding_codes"] == {}
     assert quotable(record)[0]
 
 
