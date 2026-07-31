@@ -31,14 +31,22 @@ a reused alias in a nested query does not cross-attribute.
 Pure and offline: no database, no model, no settings. It runs over an archived
 ``generations.*.jsonl`` as happily as over a live row, which is the point — the
 diagnosis can be recomputed on old runs when the taxonomy improves.
+
+CLI::
+
+    uv run python -m governed_bi.eval.sql_diff runs/datalake/<ts> \\
+      --bird-dir ../BIRD-Data-Obfuscation --arm curated_sme
 """
 
 from __future__ import annotations
 
+import argparse
+import json
 import re
 from collections import Counter
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any, Iterable
 
 __all__ = [
@@ -50,7 +58,12 @@ __all__ = [
     "diff_sql",
     "extract_features",
     "is_frozen_constant",
+    "main",
 ]
+
+#: When a filter leaves at most this many rows, the CLI includes per-row diffs
+#: alongside the aggregate incidence. Larger sets stay aggregate-only.
+_PER_ROW_CAP = 20
 
 
 class Dimension(str, Enum):
@@ -577,3 +590,169 @@ def diff_sql(
 
     diff.dimensions = computed
     return diff
+
+
+# --------------------------------------------------------------------------- #
+# CLI
+# --------------------------------------------------------------------------- #
+
+
+def _resolve_split(
+    arms: dict[str, list[dict[str, Any]]],
+    *,
+    run_dir: Path,
+    split: str | None,
+) -> str:
+    """Same refusal rules as :func:`governed_bi.eval.analysis.analyse_run`."""
+    if split is not None:
+        return split
+    recorded = {r.get("split") for rows in arms.values() for r in rows}
+    splits = recorded - {None}
+    if len(splits) > 1:
+        raise RuntimeError(f"{run_dir} mixes splits {sorted(map(str, splits))}")
+    if not splits:
+        raise RuntimeError(
+            f"{run_dir} records no split on any row (empty, or predating the "
+            "field); pass --split explicitly instead of letting the gold file "
+            "be guessed"
+        )
+    if None in recorded:
+        raise RuntimeError(
+            f"{run_dir} mixes rows recording split {next(iter(splits))!r} with "
+            "rows recording no split at all; the unlabelled rows may be from "
+            "another split. Pass --split explicitly to assert they are not."
+        )
+    return splits.pop()  # type: ignore[return-value]
+
+
+def _filter_rows(
+    rows: Iterable[dict[str, Any]],
+    *,
+    db: str | None,
+    question_id: str | None,
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if db is not None and str(row.get("db_id") or "") != db:
+            continue
+        if question_id is not None and str(
+            row.get("question_id") or row.get("request_id") or ""
+        ) != question_id:
+            continue
+        out.append(row)
+    return out
+
+
+def report_run(
+    run_dir: Path | str,
+    *,
+    bird_dir: Path | str,
+    split: str | None = None,
+    arm: str | None = None,
+    db: str | None = None,
+    question_id: str | None = None,
+    dialect: str = "postgres",
+) -> dict[str, Any]:
+    """Diff filtered generations against gold; return a JSON-safe report."""
+    # Lazy: analysis imports this module at top level.
+    from .analysis import load_arm_rows, load_gold_sql
+
+    run_dir = Path(run_dir)
+    arms = load_arm_rows(run_dir)
+    if not arms:
+        raise FileNotFoundError(f"no generations.*.jsonl under {run_dir}")
+    if arm is not None:
+        if arm not in arms:
+            raise SystemExit(
+                f"unknown arm {arm!r}; available: {sorted(arms)}"
+            )
+        arms = {arm: arms[arm]}
+
+    split = _resolve_split(arms, run_dir=run_dir, split=split)
+    gold_sql = load_gold_sql(bird_dir, split=split)
+    qids = {str(r.get("question_id")) for rows in arms.values() for r in rows}
+    if qids and not qids & gold_sql.keys():
+        raise RuntimeError(
+            f"none of the {len(qids)} question ids under {run_dir} appear in the "
+            f"{split!r} gold file; wrong --split or wrong --bird-dir"
+        )
+
+    include_rows = question_id is not None
+    out: dict[str, Any] = {
+        "run_dir": str(run_dir),
+        "split": split,
+        "filters": {
+            "arm": arm,
+            "db": db,
+            "question_id": question_id,
+        },
+        "arms": {},
+    }
+    for name, rows in arms.items():
+        filtered = _filter_rows(rows, db=db, question_id=question_id)
+        incidence: Counter = Counter()
+        row_payloads: list[dict[str, Any]] = []
+        n_comparable = 0
+        for row in filtered:
+            qid = str(row.get("question_id") or row.get("request_id") or "")
+            gold = gold_sql.get(qid) or None
+            diff = diff_sql(row.get("generated_sql"), gold, dialect=dialect)
+            if diff.comparable():
+                n_comparable += 1
+            for dim in diff.mismatched():
+                incidence[dim.value] += 1
+            row_payloads.append(
+                {
+                    "question_id": qid,
+                    "db_id": row.get("db_id"),
+                    "correct": bool(row.get("correct")),
+                    "diff": diff.to_dict(),
+                }
+            )
+        arm_out: dict[str, Any] = {
+            "n": len(filtered),
+            "n_comparable": n_comparable,
+            "dimension_incidence": dict(incidence.most_common()),
+        }
+        if include_rows or len(row_payloads) <= _PER_ROW_CAP:
+            arm_out["rows"] = row_payloads
+        out["arms"][name] = arm_out
+    return out
+
+
+def main(argv: list[str] | None = None) -> None:
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("run_dir", type=Path, help="A runs/datalake/<timestamp> directory")
+    p.add_argument("--bird-dir", type=Path, default=Path("../BIRD-Data-Obfuscation"))
+    p.add_argument(
+        "--split",
+        default=None,
+        help="Override the split recorded in rows; required if no row records one",
+    )
+    p.add_argument("--arm", default=None, help="Restrict to one arm (default: all)")
+    p.add_argument("--db", default=None, help="Restrict to one db_id")
+    p.add_argument(
+        "--question-id",
+        default=None,
+        help="Restrict to one question_id (also emits per-row diffs)",
+    )
+    p.add_argument("--out", type=Path, default=None, help="Write JSON here as well")
+    args = p.parse_args(argv)
+
+    report = report_run(
+        args.run_dir,
+        bird_dir=args.bird_dir,
+        split=args.split,
+        arm=args.arm,
+        db=args.db,
+        question_id=args.question_id,
+    )
+    text = json.dumps(report, indent=2, ensure_ascii=False)
+    print(text)
+    if args.out is not None:
+        args.out.write_text(text + "\n", encoding="utf-8")
+        print(f"\nwrote {args.out}")
+
+
+if __name__ == "__main__":
+    main()

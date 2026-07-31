@@ -33,16 +33,25 @@ headroom — "how much EX would I gain by fixing table selection" is a counterfa
 question, and the honest answer comes from :mod:`governed_bi.eval.oracle`, which
 substitutes gold for one stage and re-measures. Read this module for *where* the
 errors are and that module for *what they cost*.
+
+CLI::
+
+    uv run python -m governed_bi.eval.error_taxonomy runs/datalake/<ts> \\
+      --bird-dir ../BIRD-Data-Obfuscation --arm curated_sme
 """
 
 from __future__ import annotations
 
+import argparse
+import json
 from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from ..stages import Outcome, Stage, classify_row
+from .analysis import load_arm_rows, load_gold_sql
 from .sql_diff import Dimension, SqlDiff, Verdict, diff_sql
 
 __all__ = [
@@ -51,7 +60,12 @@ __all__ = [
     "attribute_row",
     "attribute_rows",
     "summarise_attributions",
+    "main",
 ]
+
+#: When a filter leaves at most this many rows, the CLI includes per-row
+#: attributions alongside the summary. Larger sets stay summary-only.
+_PER_ROW_CAP = 20
 
 
 class ErrorClass(str, Enum):
@@ -545,3 +559,155 @@ def summarise_attributions(attributions: Iterable[Attribution]) -> dict[str, Any
         "multi_class_share": (multi / total_classed) if total_classed else None,
         "n_multi_class_denominator": total_classed,
     }
+
+
+# --------------------------------------------------------------------------- #
+# CLI
+# --------------------------------------------------------------------------- #
+
+
+def _resolve_split(
+    arms: Mapping[str, list[dict[str, Any]]],
+    *,
+    run_dir: Path,
+    split: str | None,
+) -> str:
+    """Same refusal rules as :func:`governed_bi.eval.analysis.analyse_run`."""
+    if split is not None:
+        return split
+    recorded = {r.get("split") for rows in arms.values() for r in rows}
+    splits = recorded - {None}
+    if len(splits) > 1:
+        raise RuntimeError(f"{run_dir} mixes splits {sorted(map(str, splits))}")
+    if not splits:
+        raise RuntimeError(
+            f"{run_dir} records no split on any row (empty, or predating the "
+            "field); pass --split explicitly instead of letting the gold file "
+            "be guessed"
+        )
+    if None in recorded:
+        raise RuntimeError(
+            f"{run_dir} mixes rows recording split {next(iter(splits))!r} with "
+            "rows recording no split at all; the unlabelled rows may be from "
+            "another split. Pass --split explicitly to assert they are not."
+        )
+    return splits.pop()  # type: ignore[return-value]
+
+
+def _filter_rows(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    db: str | None,
+    question_id: str | None,
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if db is not None and str(row.get("db_id") or "") != db:
+            continue
+        if question_id is not None and str(
+            row.get("question_id") or row.get("request_id") or ""
+        ) != question_id:
+            continue
+        out.append(dict(row))
+    return out
+
+
+def _attribution_payload(attr: Attribution) -> dict[str, Any]:
+    payload = attr.to_dict()
+    payload["question_id"] = attr.question_id
+    payload["correct"] = attr.correct
+    payload["outcome"] = attr.outcome.value
+    if attr.diff is not None:
+        payload["diff"] = attr.diff.to_dict()
+    return payload
+
+
+def report_run(
+    run_dir: Path | str,
+    *,
+    bird_dir: Path | str,
+    split: str | None = None,
+    arm: str | None = None,
+    db: str | None = None,
+    question_id: str | None = None,
+) -> dict[str, Any]:
+    """Attribute filtered generations under ``run_dir``; return a JSON-safe report."""
+    run_dir = Path(run_dir)
+    arms = load_arm_rows(run_dir)
+    if not arms:
+        raise FileNotFoundError(f"no generations.*.jsonl under {run_dir}")
+    if arm is not None:
+        if arm not in arms:
+            raise SystemExit(
+                f"unknown arm {arm!r}; available: {sorted(arms)}"
+            )
+        arms = {arm: arms[arm]}
+
+    split = _resolve_split(arms, run_dir=run_dir, split=split)
+    gold_sql = load_gold_sql(bird_dir, split=split)
+    qids = {str(r.get("question_id")) for rows in arms.values() for r in rows}
+    if qids and not qids & gold_sql.keys():
+        raise RuntimeError(
+            f"none of the {len(qids)} question ids under {run_dir} appear in the "
+            f"{split!r} gold file; wrong --split or wrong --bird-dir"
+        )
+
+    include_rows = question_id is not None
+    out: dict[str, Any] = {
+        "run_dir": str(run_dir),
+        "split": split,
+        "filters": {
+            "arm": arm,
+            "db": db,
+            "question_id": question_id,
+        },
+        "arms": {},
+    }
+    for name, rows in arms.items():
+        filtered = _filter_rows(rows, db=db, question_id=question_id)
+        attributions = attribute_rows(filtered, gold_sql)
+        arm_out: dict[str, Any] = {
+            "summary": summarise_attributions(attributions),
+        }
+        if include_rows or len(attributions) <= _PER_ROW_CAP:
+            arm_out["rows"] = [_attribution_payload(a) for a in attributions]
+        out["arms"][name] = arm_out
+    return out
+
+
+def main(argv: list[str] | None = None) -> None:
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("run_dir", type=Path, help="A runs/datalake/<timestamp> directory")
+    p.add_argument("--bird-dir", type=Path, default=Path("../BIRD-Data-Obfuscation"))
+    p.add_argument(
+        "--split",
+        default=None,
+        help="Override the split recorded in rows; required if no row records one",
+    )
+    p.add_argument("--arm", default=None, help="Restrict to one arm (default: all)")
+    p.add_argument("--db", default=None, help="Restrict to one db_id")
+    p.add_argument(
+        "--question-id",
+        default=None,
+        help="Restrict to one question_id (also emits per-row attributions)",
+    )
+    p.add_argument("--out", type=Path, default=None, help="Write JSON here as well")
+    args = p.parse_args(argv)
+
+    report = report_run(
+        args.run_dir,
+        bird_dir=args.bird_dir,
+        split=args.split,
+        arm=args.arm,
+        db=args.db,
+        question_id=args.question_id,
+    )
+    text = json.dumps(report, indent=2, ensure_ascii=False)
+    print(text)
+    if args.out is not None:
+        args.out.write_text(text + "\n", encoding="utf-8")
+        print(f"\nwrote {args.out}")
+
+
+if __name__ == "__main__":
+    main()
