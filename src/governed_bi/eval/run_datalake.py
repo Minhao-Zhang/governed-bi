@@ -539,7 +539,19 @@ def run_build_phase(
         for done in results:
             if done is not None:
                 built.append(done)
-                print(f"  build [{done}]: corpora ready ({len(built)}/{len(wanted)})")
+                # Two things are load-bearing in this one line and neither is
+                # cosmetic. The ``[db]`` tag is N11's build-log prefix, so 20
+                # interleaved worker lines stay attributable. The literal
+                # ``built corpora:`` is what
+                # ``test_progress_is_reported_as_each_build_finishes_not_all_at_the_end``
+                # counts on stdout to prove this loop streams rather than
+                # batches — N11 reworded it to ``corpora ready`` and that test
+                # went to zero observed writes while the streaming itself was
+                # still fine. Keep both phrases if you reword this again.
+                print(
+                    f"  build [{done}] done — "
+                    f"built corpora: {len(built)}/{len(wanted)}"
+                )
 
     # Consumed INSIDE the ``with``, not after it. ``Executor.map`` submits eagerly but
     # yields lazily, and ``pool.__exit__`` calls ``shutdown(wait=True)`` — so draining
