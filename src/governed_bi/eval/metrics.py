@@ -542,7 +542,7 @@ ROW_PREDICTION: tuple[str, ...] = (
 ROW_GOVERNANCE: tuple[str, ...] = (
     "tier", "safety_clearance", "semantic_assurance", "graded_delivery",
     "coverage_best_effort", "decoy_touch", "by_guardrail_layer", "ledger_len",
-    "n_tool_calls",
+    "governance_ledger", "n_tool_calls",
 )
 ROW_CONTEXT: tuple[str, ...] = (
     "context_chars", "context_hash", "injected_note_ids", "n_notes_injected",

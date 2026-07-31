@@ -393,6 +393,27 @@ def run_arms(
     }
 
 
+def _ledger_for_artifact(ledger: list | None) -> list | None:
+    """Project the serve-path ledger for generations jsonl.
+
+    Keep per-action layer/verdict fields needed to prove graded-delivery recheck
+    after the fact. Drop ``result`` (full row payloads — up to ``max_rows`` and
+    non-JSON types like ``Decimal`` / ``bytes``) and every other key.
+    """
+    if ledger is None:
+        return None
+    out: list[dict[str, Any]] = []
+    for entry in ledger:
+        if not isinstance(entry, dict):
+            continue
+        row = {k: entry.get(k) for k in ("action", "verdict", "layer", "sql", "allowed")}
+        result = entry.get("result")
+        if isinstance(result, dict) and "row_count" in result:
+            row["row_count"] = result["row_count"]
+        out.append(row)
+    return out
+
+
 def agent_solver(
     corpus: "Corpus",
     gateway: "Gateway",
@@ -478,6 +499,12 @@ def agent_solver(
                 # into the second, which is how "we never looked" reads as "nothing
                 # happened".
                 "ledger_len": len(ledger) if ledger is not None else None,
+                # Per-action layer/verdict list (projected — no query result rows).
+                # Kept under the serve-path name ``governance_ledger`` (do not rename
+                # to ``guardrail_log`` here — that is checklist 4.1).
+                "governance_ledger": _ledger_for_artifact(
+                    list(ledger) if ledger is not None else None
+                ),
                 # Per-stage diagnostics the serve path stamps on provenance. Relayed
                 # verbatim with no default: a missing key means the producer recorded
                 # no stages, and an empty dict there would assert the different (and

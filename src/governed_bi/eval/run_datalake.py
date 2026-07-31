@@ -3939,6 +3939,7 @@ def _run_pool_arm(
             # length, and the per-tool call counts that are the only record of
             # search_corpus / inspect_schema activity.
             "ledger_len": meta.get("ledger_len"),
+            "governance_ledger": meta.get("governance_ledger"),
             "n_tool_calls": meta.get("n_tool_calls"),
             "by_guardrail_layer": meta.get("by_guardrail_layer"),
         }

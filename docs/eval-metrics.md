@@ -17,7 +17,7 @@ documented subset of `summary.json`, so "declared but absent" is expected there.
 | Artifact | Fields | Consumer |
 |---|---|---|
 | `manifest.json` | 42 (37 in every run) | `index.COMPARABILITY_KEYS`, `index.RESUME_DRIFT_KEYS` |
-| `generations.<arm>.jsonl` | 72 per (question, arm) | `_summarise_rows`, `analysis`, `power`, `error_taxonomy` |
+| `generations.<arm>.jsonl` | 73 per (question, arm) | `_summarise_rows`, `analysis`, `power`, `error_taxonomy` |
 | `summary.json` | 87 | `index.quotable` |
 | `stage_events.jsonl` | 7 per (question, arm, stage) | read by hand; per-stage latency attribution |
 | `split_gap.json` | 6 | read by hand; `--split both` only |
@@ -226,7 +226,7 @@ reported without its excluded count reads as full coverage.
 
 **prediction** — `generated_sql`, `pred_nrows`, `pred_ncols`, `gold_nrows`, `attempts`, `tables_used`, `tables_used_unresolved`, `n_tables_used_unresolved`, `licensed_tables`
 
-**governance** — `tier`, `safety_clearance`, `semantic_assurance`, `graded_delivery`, `coverage_best_effort`, `decoy_touch`, `by_guardrail_layer`, `ledger_len`, `n_tool_calls`
+**governance** — `tier`, `safety_clearance`, `semantic_assurance`, `graded_delivery`, `coverage_best_effort`, `decoy_touch`, `by_guardrail_layer`, `ledger_len`, `governance_ledger`, `n_tool_calls`
 
 **context** — `context_chars`, `context_hash`, `injected_note_ids`, `n_notes_injected`, `n_caveats_injected`, `n_few_shots_injected`, `n_joins_injected`, `n_metrics_injected`, `n_terms_injected`, `retrieved_tables`
 

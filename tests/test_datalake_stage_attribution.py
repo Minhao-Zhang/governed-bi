@@ -271,11 +271,38 @@ def test_malformed_stage_events_are_dropped_loudly(payload, expected_n, capsys):
 def test_ledger_and_tool_counts_reach_the_row_and_the_summary(tmp_path):
     meta = {
         "ledger_len": 3,
+        "governance_ledger": [
+            {
+                "action": "run_query",
+                "verdict": "block",
+                "layer": "term_semantics",
+                "sql": "SELECT 1",
+                "allowed": [],
+            },
+            {
+                "action": "run_query",
+                "verdict": "pass",
+                "layer": None,
+                "sql": "SELECT 1",
+                "allowed": ["beer_factory.transaction"],
+                "row_count": 1,
+            },
+            {
+                "action": "sample_rows",
+                "verdict": "pass",
+                "layer": None,
+                "sql": None,
+                "allowed": ["beer_factory.transaction"],
+                "row_count": 5,
+            },
+        ],
         "n_tool_calls": {"search_corpus": 2, "run_query": 1},
         "by_guardrail_layer": {"ast_column_allowlist": 1},
     }
     rows, summary = _run(tmp_path, {"answered": ("SELECT 1", meta)})
     assert rows[0]["ledger_len"] == 3
+    assert rows[0]["governance_ledger"] == meta["governance_ledger"]
+    assert all("result" not in e for e in rows[0]["governance_ledger"])
     assert rows[0]["n_tool_calls"] == {"search_corpus": 2, "run_query": 1}
     assert summary["tool_calls"] == {"run_query": 1, "search_corpus": 2}
     assert summary["by_guardrail_layer"] == {"ast_column_allowlist": 1}
