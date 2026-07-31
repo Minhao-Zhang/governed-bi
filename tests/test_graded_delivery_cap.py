@@ -36,6 +36,16 @@ TXN = "tbl_beer_factory_transaction"
 # A curator-flagged `excluded` column on beer_factory.transaction (confidentiality
 # control): touching it fails L3 and, if ever executed, leaks card numbers.
 EXCLUDED_SQL = 'SELECT "CreditCardNumber" FROM "transaction"'
+# train_5163 shape: real column refs on a table outside the licensed set. Under a
+# pooled L3 allowlist those columns are admitted, so L4 is the only gate — and the
+# graded-delivery recheck used to skip L4 (``allowed_tables=None``), silently
+# delivering the unauthorized SQL. A no-column ``SELECT COUNT(*)`` would pass for
+# the wrong reason and must not be used here.
+UNAUTHORIZED_SCOPE_SQL = (
+    'SELECT T1."PurchasePrice", T1."CustomerID" FROM "transaction" AS T1'
+)
+# Licensed set that deliberately excludes ``transaction`` (the SQL's only base table).
+_LICENSED_CUSTOMERS_ONLY = frozenset({"beer_factory.customers"})
 
 _IDENTITY = Identity(user="u", all_access=True)
 
@@ -162,6 +172,39 @@ def test_recheck_allows_clean_l4_scope_failure():
     )
     assert gw.calls == 1, "a clean L4 scope failure still delivers-and-grades"
     assert answer.result is not None
+
+
+def test_graded_delivery_refuses_unauthorized_base_tables_with_column_refs():
+    """Unauthorized base tables with column refs must be refused, not delivered.
+
+    Mirrors the 20260730 train_5163 hole: pooled L3 admits the columns, the turn's
+    licensed set does not include the tables, and graded delivery must not skip L4
+    on recheck. Asserts refuse — red until the recheck threads ``allowed_tables``.
+    """
+    corpus = load_corpus(CORPUS_ROOT, schema="beer_factory").for_analyst()
+    gw = _CountingGateway()
+    answer = _finish_unsuccessful(
+        settings=_settings(),
+        gateway=gw,
+        identity=_IDENTITY,
+        last_refusal={
+            "refused_by": "guardrail",
+            "failed_layer": "term_semantics",
+            "sql": UNAUTHORIZED_SCOPE_SQL,
+            "escalation": "escalate",
+        },
+        attempts=3,
+        base_provenance={},
+        question="q",
+        allowlist=column_allowlist(corpus),
+        allowed_tables=_LICENSED_CUSTOMERS_ONLY,
+        dialect="sqlite",
+        default_schema="beer_factory",
+    )
+    assert gw.calls == 0, "unauthorized-table SQL must never be graded-delivered"
+    assert answer.result is None
+    assert answer.tier is ReliabilityTier.refused
+    assert answer.provenance.get("graded_delivery_recheck_failed") == "term_semantics"
 
 
 # --- Integration: the full agent cap flow ------------------------------------
