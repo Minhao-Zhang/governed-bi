@@ -1076,6 +1076,10 @@ def test_a_run_too_small_to_ever_reach_significance_is_not_quotable():
     ok, reasons = quotable({**base, "n_questions": MIN_QUOTABLE_QUESTIONS - 1})
     assert not ok
     assert any("arithmetic floor" in r for r in reasons), reasons
+    # Single-arm from headline — not "arm count unknown" (C3).
+    floor_reasons = [r for r in reasons if "arithmetic floor" in r]
+    assert floor_reasons and "single-arm" in floor_reasons[0], floor_reasons
+    assert "arm count unknown" not in floor_reasons[0]
 
     ok, reasons = quotable({**base, "n_questions": MIN_QUOTABLE_QUESTIONS})
     assert ok, reasons

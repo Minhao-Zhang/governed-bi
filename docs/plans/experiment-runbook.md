@@ -530,15 +530,17 @@ Every term is mechanical and already computed:
 | arm pair | `seeded → curated` — the rung that isolates the LLM curator from the free deterministic pass. Not `baseline → curated`, which bundles two mechanisms. |
 | metric | `comparisons[].net_questions` / `ex_lenient` delta, paired (`eval.analysis`), never a point-estimate difference across runs |
 | stratum | the twin-free stratum (§Quote the twin-free stratum) — gold-SQL twins in train make recall and generalisation indistinguishable |
-| effect size | +2.0 EX points. Below the ~+1.6-point band the MDE machinery treats as resolvable, a "win" is not separable from decoding noise. |
+| effect size | +2.0 EX points. Below the MDE ≈ 2.3pp band (see Hard MDE bound below), a "win" is not separable from the arm-discordance noise floor. |
 | curator draws | three. `n=1` on a stochastic agent is a sample of one from the treatment distribution, which `power.py` says in its own docstring. |
 
 ### Hard MDE bound on the SME step (read before quoting SME)
 
 Measured on the 20260730 fixed2 run: 31 byte-identical `context_hash` pairs flipped
-`correct` on 4 questions (12.9%); full-split discordance **122/1351 = 9.03%**;
-paired SE ≈ 0.0082 → 80% power **MDE ≈ 2.3pp**. The SME step under debate is on
-the order of **0.2pp**.
+`correct` on 4 questions (12.9%); full-split **arm discordance** curated↔curated_sme
+**122/1351 = 9.03%** (an upper bound on pure decode noise — the two arms serve different
+corpora; only the 4/31 same-context flips are true re-serve noise); paired SE ≈ 0.0082 →
+80% power **MDE ≈ 2.3pp**. The SME step under debate measured **−0.15pp** on that run
+(curated 0.588 → curated_sme 0.586), on the order of **0.2pp**.
 
 > Under a ~9.03% noise floor (MDE ≈ 2.3pp), no affordable N resolves a 0.2pp SME
 > step. `--replicate` only licenses **「未检出」**, not **「无效果」**.
@@ -553,10 +555,11 @@ Two honest caveats on the abandon criterion above:
   semantic layers in general. A null result here would not show that curation cannot
   help; it would show that *this* curator, on obfuscated BIRD, does not pay for
   itself — which is the decision the project actually faces.
-- The MDE it leans on is derived from **serve** noise (re-serving one corpus) while
-  the treatment is **corpus-level**. That bound is therefore optimistic: it measures
-  decoding variance, not curator variance. The three-draw requirement exists to cover
-  the gap, and until a three-draw run exists the criterion cannot be evaluated.
+- The MDE it leans on is derived from **arm discordance** (curated↔curated_sme), which
+  upper-bounds pure decode / re-serve noise. The treatment under debate is still
+  **corpus-level**, so curator variance is not in this bound. The three-draw requirement
+  exists to cover that gap, and until a three-draw run exists the criterion cannot be
+  evaluated.
 
 The quotability gates enforce the symmetric half of this: a run whose correct rows are
 mostly free passes (empty gold, no `FROM`, zero table overlap) is now non-quotable, so

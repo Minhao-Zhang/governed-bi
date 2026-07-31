@@ -896,6 +896,32 @@ def _quarantine_zero_question_schemas(
     return servable, empty
 
 
+def _prepare_scored_pool(
+    dataset_dir: Path,
+    built: "Sequence[str]",
+    *,
+    limit: int | None,
+    split: str,
+) -> tuple[list[str], list[tuple[Any, str]], list[str], dict[str, Any]]:
+    """Load the scored split, quarantine zero-question schemas, then check leakage.
+
+    Returns ``(servable_built, pairs, zero_question_dbs, leakage)``.
+
+    Order matters: :func:`_assert_train_test_disjoint` must run on the *servable*
+    pool. A zero-question schema can still have train rows; counting it in
+    ``n_train_ids`` while it is absent from ``built_dbs`` reintroduces the census
+    inconsistency the quarantine exists to fix.
+
+    The driver calls this after curator quarantine and before corpora / census /
+    routing. Tests that exercise this helper (or assert the driver still calls it)
+    are what keep the wiring from silently disappearing.
+    """
+    pairs = _pooled_items(dataset_dir, list(built), limit=limit, split=split)
+    servable, zero_question_dbs = _quarantine_zero_question_schemas(built, pairs)
+    leakage = _assert_train_test_disjoint(dataset_dir, servable)
+    return servable, pairs, zero_question_dbs, leakage
+
+
 def _pooled_items(
     dataset_dir: Path, db_ids: list[str], *, limit: int | None, split: str = "test"
 ) -> list[tuple[Any, str]]:
@@ -2947,19 +2973,21 @@ def run_datalake(
     built = built_ok
 
     # --- POOL gold + test + per-db suspects (only successfully-built dbs) ---
-    leakage = _assert_train_test_disjoint(dataset_dir, built)
+    # Zero-question schemas after rescreening (eval-rebuild §4): still built
+    # (curator model calls already spent) but they contribute no graded rows.
+    # Quarantine them from the serve / census / routing pool — not from the
+    # already-finished build — or they look built-but-unscored and inflate the
+    # pool census against a denominator that never includes them. Leakage runs
+    # on the servable set only (see :func:`_prepare_scored_pool`).
+    built, pairs, zero_question_dbs, leakage = _prepare_scored_pool(
+        dataset_dir, built, limit=limit, split=split
+    )
     # The FINE form of leakage the id check cannot see: a scored question whose gold
     # statement already exists in train, modulo literals. Not a gate — twins are a
     # property of the benchmark, and refusing to score them would discard an eighth of
     # the split and change the denominator every published BIRD number uses. Reported,
     # stamped per row, and given its own EX stratum so the defensible headline (the
     # twin-free stratum) can be stated separately from the recall-flavoured one.
-    pairs = _pooled_items(dataset_dir, built, limit=limit, split=split)
-    # Zero-question schemas after rescreening (eval-rebuild §4): still in ``built``
-    # because the curator ran, but they contribute no graded rows. Drop them before
-    # corpora / census / routing, or they look built-but-unscored and inflate the
-    # pool census against a denominator that never includes them.
-    built, zero_question_dbs = _quarantine_zero_question_schemas(built, pairs)
     # The dataset's OWN exclusion list, which nothing here read. Its note says to
     # exclude these from cross-variant EX; 25 of the 2030 test questions qualify and
     # each was scored wrong for every arm, depressing every absolute EX including the

@@ -11,8 +11,11 @@ delivers the command, guards, runbook text, and a 5-question smoke shaped like M
 | N15.1 | `52d89f1` | `error_taxonomy` + `sql_diff` `__main__` mirroring `analysis.main` |
 | N15.2–4 | `d38beff` | BIRD-basis funnel / twins / DISTINCT; questions sidecar; question view |
 | N15.5 | `49033f2` | `run_datalake` auto-writes `analysis.json` + `questions.jsonl` |
-| N16 | `2c6cb3a` | Quotable corpus findings diverted by code; always-note verify accepted |
+| N16 | `2c6cb3a` + multi-schema verify below | Quotable corpus findings diverted by code; pooled corpus re-validated |
 | N17 | this batch | Zero-question guard + runbook (full ladder / TOML / hard MDE) + 5q smoke |
+
+Post-review (see [m5-review-findings.md](m5-review-findings.md)): adjudication and
+wiring fixes below; tool mechanics largely kept.
 
 ---
 
@@ -22,35 +25,45 @@ Canonical tooling path:
 `runs/datalake/20260730T034522Z-test-ladder-fixed2/20260730T034543Z`.
 Pinned in `tests/test_bird_basis_report.py`.
 
-Population for twin/attractor cells: **BIRD-basis pick-stage** (gold shortlisted,
-picker chose another; n=96). Report §3 twin/attractor cells look counted on a
-broader `routed_hit=False` set; even that set does not fully reproduce every
-attractor. Tool keeps the pick-stage definition; report is named high where it
-diverges.
+**Two populations, not one correction.**
 
-| Claim | Report | Tool | Verdict |
-|---|---|---|---|
-| Seeded §1 table / wrong_shape | 139 / 155 | 138 / 156 | **Report cell wrong**; sum of the two stages matches. Tool is the defined cascade. |
-| Rank overrides (“44 misroutes overrode better rank”) | 44 in `…-results.md` | **41** (`schema_pick_report` rank_overrides on BIRD-basis pick stage) | **Report high / tool mechanical.** Tool is the shortlist-index comparison; results.md is high. |
-| Twin: mondial_geo → world | 10 / 3 | **8 / 3** | **Report high / tool pick-stage.** Report counted a broader misroute set. |
-| Twin: simpson_episodes → law_episode | 8 / 1 | **6 / 1** | **Report high / tool pick-stage.** Same broader-set story. |
-| Twin: regional_sales → superstore | 7 | 7 | Match |
-| Twin: food_inspection ↔ food_inspection_2 | 6 / 1 | 6 / 1 | Match |
-| Twin: soccer_2016 → ice_hockey_draft | 3 | 3 | Match |
-| Attractor: superstore | 12 | **11** | **Report high / tool pick-stage** |
-| Attractor: world | 12 | **10** | **Report high / tool pick-stage** |
-| Attractor: ice_hockey_draft | 9 | 9 | Match |
-| Attractor: law_episode | 8 | **6** | **Report high / tool pick-stage** |
-| Attractor: movies_4 | 7 | **5** | **Report high / tool pick-stage** |
-| Attractor: food_inspection_2 | 7 | 7 | Match |
-| Extra DISTINCT (stage-4) | 75 | **76** | Tool +1 vs report |
-| Over-join (stage-4) | 113 | **110** | Tool −3 vs report |
-| Missing DISTINCT / LIKE | 19 / 26 | 19 / 26 | Match |
+| Population | Definition | What it reproduces |
+|---|---|---|
+| **Report misroute** (`schema_misroute_report`) | `routed_hit=False` and gold in `shortlisted_schemas` (no `correct`/refused filter; n=107 on fixed2 curated_sme) | Rank overrides **44** and all six §3 attractors exactly |
+| **Tool pick-stage** (`schema_pick_report`) | BIRD-basis funnel stage `pick` (drops `correct=True` and refused; n=96) | Rank histogram 26/31/39; a stricter pick metric |
+
+The earlier "report high / tool mechanical" verdicts on twin/attractor cells were
+wrong: the report is correct on its own population. Tool pick-stage is a different
+metric (it drops two `mondial_geo→world` rows that graded correct, which is the
+entire `world` 12→10 gap).
+
+| Claim | Report | Tool (pick-stage) | Report population | Verdict |
+|---|---|---|---|---|
+| Seeded §1 table / wrong_shape | 139 / 155 | 138 / 156 | — | **口径未定，无法判定** (AST parser → 138/156; naive parse → 140/155). Partition sum matches. |
+| Rank overrides (“44 misroutes overrode better rank”) | 44 | 41 | **44** | **不同 population；报告在它自己的口径上正确.** Tool pick-stage is another metric. |
+| Twin: mondial_geo → world | 10 / 3 | 8 / 3 | **10 / 3** | **不同 population；报告在它自己的口径上正确** |
+| Twin: simpson_episodes → law_episode | 8 / 1 | 6 / 1 | **8 / 1** | **不同 population；报告在它自己的口径上正确** |
+| Twin: regional_sales → superstore | 7 | 7 | 7 | Match |
+| Twin: food_inspection ↔ food_inspection_2 | 6 / 1 | 6 / 1 | 6 / 1 | Match |
+| Twin: soccer_2016 → ice_hockey_draft | 3 | 3 | 3 | Match |
+| Attractor: superstore | 12 | 11 | **12** | **不同 population；报告在它自己的口径上正确** |
+| Attractor: world | 12 | 10 | **12** | **不同 population；报告在它自己的口径上正确** |
+| Attractor: ice_hockey_draft | 9 | 9 | 9 | Match |
+| Attractor: law_episode | 8 | 6 | **8** | **不同 population；报告在它自己的口径上正确** |
+| Attractor: movies_4 | 7 | 5 | **7** | **不同 population；报告在它自己的口径上正确** |
+| Attractor: food_inspection_2 | 7 | 7 | 7 | Match |
+| Extra DISTINCT (stage-4) | 75 | **76** | — | **Report cell wrong** (independent recomputation = 76; no reasonable variant yields 75) |
+| Over-join (stage-4) | 113 | **41** (was 110 before frozen exclusion) | — | **Both report 113 and prior tool 110 include ~69 frozen-gold noise.** Tool now excludes `is_frozen_constant` gold. §5 recommendation #3 marked 待重算. |
+| Missing DISTINCT / LIKE | 19 / 26 | 19 / 26 | — | Match |
 
 Other §1 waterfall cells (except the seeded table/wrong_shape cell above), EX
 rates, and the pick-wrong gold-rank histogram (26/31/39) match the
-error-analysis doc on the fixed2 run. **The twin/attractor matrix does not
-blanket-match** — mismatched cells are named in the table above.
+error-analysis doc on the fixed2 run.
+
+**Stage-3 coverage gate note:** frozen / empty-`gold_tables` rows skip
+`if gold_tables and ...` in `funnel_stage`, so they never enter stage 3 and land
+in stage 4 — inflating stage 4 relative to stage 3. Documented; cascade left
+unchanged to keep waterfall cells that currently match the report.
 
 ---
 
@@ -65,7 +78,7 @@ Side-car chosen over inlining question + gold on every generations row.
 
 ---
 
-## N16 (already landed — pointer only)
+## N16 (already landed — multi-schema verify)
 
 - Always-note budget: per-turn scope already in `corpus/validate.py`; unit
   `tests/test_corpus.py::test_always_note_budget_is_per_schema_not_pooled`.
@@ -73,6 +86,17 @@ Side-car chosen over inlining question + gold on every generations row.
   `eval/index.py` (`2c6cb3a`).
 - `sme_noop_dbs` lottery: accepted this batch (no floor).
 - Full `not_quotable_because == []` still waits on a future paid ladder (out of N17 scope).
+
+**Multi-schema re-validation (B1 — the false positive needs a pooled corpus):**
+
+```text
+_load_built_corpus(fixed2/corpus_curated_sme, 4 schemas) → always-note-budget = 0
+_load_built_corpus(fixed2/corpus_curated_sme, all 57)   → always-note-budget = 0
+  (3070 assets, finding_count = 0)
+```
+
+Zero model calls — load already-built corpora and `validate_corpus`. A single-schema
+smoke cannot reproduce the original pooled-budget false positive; this can.
 
 ---
 
@@ -84,7 +108,7 @@ File: [experiment-runbook.md](experiment-runbook.md)
 |---|---|
 | `## Step 2 — the real run` | Full ladder with `--split` / `--build-workers` / `--workers` / `--replicate` / optional `--dbs`; **no `--model`** |
 | Same section, TOML preflight | `Settings.for_env(Environment.dev).models.llm_model` then re-check `manifest.json` `model` |
-| `### Hard MDE bound on the SME step` | Hard sentence: ~9.03% floor / MDE ≈ 2.3pp / 0.2pp SME → 「未检出」 not 「无效果」 |
+| `### Hard MDE bound on the SME step` | Hard sentence: ~9.03% floor / MDE ≈ 2.3pp / measured SME −0.15pp (~0.2pp) → 「未检出」 not 「无效果」. MDE source = arm discordance (upper bound on decode noise), not re-serve replicate. |
 
 ---
 
@@ -92,10 +116,11 @@ File: [experiment-runbook.md](experiment-runbook.md)
 
 | Piece | Location |
 |---|---|
-| Pool partition | `run_datalake._quarantine_zero_question_schemas` — empty schemas leave `built` before corpora / census / routing |
+| Pool partition | `run_datalake._prepare_scored_pool` → `_quarantine_zero_question_schemas` — empty schemas leave the *serve / census / routing* pool after build (corpora were still built; model cost already spent) |
+| Leakage order | `_assert_train_test_disjoint` runs on the servable set only (after quarantine) |
 | Summary field | `dbs_zero_questions` |
 | Hygiene | `index.record_for_run` + `quotable()` reason (“zero questions… not built-but-unscored”) |
-| Tests | `tests/test_zero_question_guard.py` (synthetic empty db; ledger block; absent-key not accused) |
+| Tests | `tests/test_zero_question_guard.py` — helper + **driver wiring** (`_prepare_scored_pool` → `dbs_zero_questions`; census scoped to servable) |
 | Spec note | [eval-rebuild.md](eval-rebuild.md) §4 deferred note updated to “landed M5 N17” |
 
 ---

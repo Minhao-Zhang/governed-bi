@@ -3,7 +3,8 @@
 Pins the cascade against synthetic rows, and — when the fixed2 ladder artifacts
 are present — against every number in
 ``docs/experiments/20260730T034522Z-curated-sme-error-analysis.md`` that the
-tool can reproduce. Mismatches are named (tool vs report), never waved away.
+tool can reproduce. Two populations for twin/attractor cells: report misroute
+(``schema_misroute_report``) and tool pick-stage (``schema_pick_report``).
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from governed_bi.eval.bird_basis import (
     bird_basis_report,
     funnel_stage,
     question_arm_view,
+    schema_misroute_report,
     schema_pick_report,
     sme_perturbation_report,
     stage4_structural_report,
@@ -28,7 +30,7 @@ FIXED2 = Path(
 )
 BIRD = Path("../BIRD-Data-Obfuscation")
 
-# Report §1 (BIRD n=1325). Seeded table/wrong_shape differ by one cell — see
+# Report §1 (BIRD n=1325). Seeded table/wrong_shape: parser-dependent — see
 # ``test_fixed2_waterfall_matches_report``.
 REPORT_WATERFALL = {
     "baseline": {
@@ -186,6 +188,32 @@ def test_question_arm_view_lists_all_arms():
     assert view["arms"]["baseline"]["generated_sql"]
 
 
+def test_over_join_excludes_frozen_gold():
+    """Frozen VALUES gold has zero tables; pred−gold would always look like over-join."""
+    gold = {
+        "live": 'SELECT a FROM "s"."t"',
+        "frozen": 'SELECT "v"."c0" FROM (VALUES (5.0)) AS "v"("c0")',
+    }
+    rows = [
+        _row(
+            question_id="live",
+            generated_sql='SELECT a FROM "s"."t" JOIN "s"."extra" ON true',
+            nrows_match=True,
+            correct=False,
+        ),
+        _row(
+            question_id="frozen",
+            generated_sql='SELECT 1 FROM "s"."t"',
+            nrows_match=True,
+            correct=False,
+        ),
+    ]
+    s4 = stage4_structural_report(rows, gold)
+    assert s4["n_stage4"] == 2
+    assert s4["n_frozen_gold_excluded_from_over_join"] == 1
+    assert s4["over_join"] == 1  # only the live extra-table row
+
+
 @pytest.mark.skipif(not FIXED2.is_dir(), reason="fixed2 run artifacts not present")
 @pytest.mark.skipif(not (BIRD / "eval_dataset" / "test_final.jsonl").is_file(), reason="BIRD data missing")
 def test_fixed2_waterfall_matches_report():
@@ -193,7 +221,6 @@ def test_fixed2_waterfall_matches_report():
     gold = load_gold_sql(BIRD, split="test")
     report = bird_basis_report(arms, gold)
 
-    # Exact matches for every arm except seeded table/wrong_shape (off-by-one).
     for arm, expected in REPORT_WATERFALL.items():
         got = report["waterfall"][arm]
         assert got["n"] == 1325
@@ -204,9 +231,9 @@ def test_fixed2_waterfall_matches_report():
             assert got["stages"]["table"] == expected["table"]
             assert got["stages"]["wrong_shape"] == expected["wrong_shape"]
         else:
-            # Tool: table=138, wrong_shape=156. Report: 139 / 155.
-            # Same partition sum; one row differs. Tool side is the defined cascade;
-            # report cell wrong.
+            # Tool (AST): table=138, wrong_shape=156. Report: 139 / 155.
+            # Independent naive parse can yield 140/155 —口径未定,无法判定.
+            # Characterization of the defined cascade only; partition sum matches.
             assert got["stages"]["table"] == 138
             assert got["stages"]["wrong_shape"] == 156
             assert (
@@ -231,38 +258,56 @@ def _attractor_n(pick: dict, schema: str) -> int:
 
 @pytest.mark.skipif(not FIXED2.is_dir(), reason="fixed2 run artifacts not present")
 @pytest.mark.skipif(not (BIRD / "eval_dataset" / "test_final.jsonl").is_file(), reason="BIRD data missing")
+def test_fixed2_report_misroute_population_matches_section3():
+    """Report §3 twin/attractor cells: routed_hit=False ∩ gold shortlisted (n=107)."""
+    arms = load_arm_rows(FIXED2)
+    mis = schema_misroute_report(arms["curated_sme"])
+    assert mis["n_misroute_gold_shortlisted"] == 107
+    assert mis["rank_overrides"] == 44
+    assert _twin_n(mis, "mondial_geo", "world") == (10, 3)
+    assert _twin_n(mis, "simpson_episodes", "law_episode") == (8, 1)
+    assert _twin_n(mis, "regional_sales", "superstore") == (7, 0)
+    assert _twin_n(mis, "food_inspection", "food_inspection_2") == (6, 1)
+    assert _twin_n(mis, "soccer_2016", "ice_hockey_draft") == (3, 0)
+    assert _attractor_n(mis, "superstore") == 12
+    assert _attractor_n(mis, "world") == 12
+    assert _attractor_n(mis, "ice_hockey_draft") == 9
+    assert _attractor_n(mis, "law_episode") == 8
+    assert _attractor_n(mis, "movies_4") == 7
+    assert _attractor_n(mis, "food_inspection_2") == 7
+
+
+@pytest.mark.skipif(not FIXED2.is_dir(), reason="fixed2 run artifacts not present")
+@pytest.mark.skipif(not (BIRD / "eval_dataset" / "test_final.jsonl").is_file(), reason="BIRD data missing")
 def test_fixed2_schema_pick_and_stage4():
     arms = load_arm_rows(FIXED2)
     gold = load_gold_sql(BIRD, split="test")
     pick = schema_pick_report(arms["curated_sme"])
+    # Pick-stage characterization (stricter than report §3 population).
     assert pick["n_pick_wrong_gold_shortlisted"] == 96
     assert pick["gold_rank_histogram"] == {"1": 26, "2": 31, "3+": 39, "none": 0}
-    # results.md claims 44 overrides; tool on BIRD-basis pick stage gets 41.
-    # Tool side is the mechanical shortlist-index comparison; report is high.
     assert pick["rank_overrides"] == 41
-
-    # Twin / attractor matrix — tool on pick-stage (n=96). Report §3 cells are
-    # higher on several pairs/attractors (broader routed_hit=False counting);
-    # report is high / tool mechanical. Matching cells pinned too.
-    assert _twin_n(pick, "mondial_geo", "world") == (8, 3)  # report 10/3
-    assert _twin_n(pick, "simpson_episodes", "law_episode") == (6, 1)  # report 8/1
-    assert _twin_n(pick, "regional_sales", "superstore") == (7, 0)  # matches report
-    assert _twin_n(pick, "food_inspection", "food_inspection_2") == (6, 1)  # matches
-    assert _twin_n(pick, "soccer_2016", "ice_hockey_draft") == (3, 0)  # matches
-    assert _attractor_n(pick, "superstore") == 11  # report 12
-    assert _attractor_n(pick, "world") == 10  # report 12
-    assert _attractor_n(pick, "ice_hockey_draft") == 9  # report 9
-    assert _attractor_n(pick, "law_episode") == 6  # report 8
-    assert _attractor_n(pick, "movies_4") == 5  # report 7
-    assert _attractor_n(pick, "food_inspection_2") == 7  # report 7
+    assert _twin_n(pick, "mondial_geo", "world") == (8, 3)
+    assert _twin_n(pick, "simpson_episodes", "law_episode") == (6, 1)
+    assert _twin_n(pick, "regional_sales", "superstore") == (7, 0)
+    assert _twin_n(pick, "food_inspection", "food_inspection_2") == (6, 1)
+    assert _twin_n(pick, "soccer_2016", "ice_hockey_draft") == (3, 0)
+    assert _attractor_n(pick, "superstore") == 11
+    assert _attractor_n(pick, "world") == 10
+    assert _attractor_n(pick, "ice_hockey_draft") == 9
+    assert _attractor_n(pick, "law_episode") == 6
+    assert _attractor_n(pick, "movies_4") == 5
+    assert _attractor_n(pick, "food_inspection_2") == 7
 
     s4 = stage4_structural_report(arms["curated_sme"], gold)
     assert s4["n_stage4"] == 355
-    assert s4["missing_distinct"] == 19  # matches report
-    assert s4["like_vs_exact"] == 26  # matches report
-    # Report: extra DISTINCT 75, over-join 113. Tool: 76 / 110.
+    assert s4["missing_distinct"] == 19
+    assert s4["like_vs_exact"] == 26
+    # Extra DISTINCT: report 75 is wrong; independent recomputation is 76.
     assert s4["extra_distinct"] == 76
-    assert s4["over_join"] == 110
+    # Over-join excludes 69 frozen-gold rows (report 113 / prior tool 110 were noisy).
+    assert s4["n_frozen_gold_excluded_from_over_join"] == 69
+    assert s4["over_join"] == 41
 
     sme = sme_perturbation_report(arms["curated"], arms["curated_sme"])
     assert sme["sql_changed"] == 678

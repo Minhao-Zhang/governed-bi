@@ -257,6 +257,35 @@ def test_always_note_count_cap_counts_scoped_notes_like_serve():
     assert len(findings) == 1
     assert "9 always notes" in findings[0].message
 
+
+FIXED2_CORPUS = (
+    Path("runs/datalake/20260730T034522Z-test-ladder-fixed2/20260730T034543Z")
+    / "corpus_curated_sme"
+)
+
+
+@pytest.mark.skipif(not FIXED2_CORPUS.is_dir(), reason="fixed2 curated_sme corpus not present")
+def test_always_note_budget_stays_clear_on_multi_schema_fixed2_corpus():
+    """N16 B1: the false positive was pooled across schemas — single-schema cannot refute it.
+
+    Load several (and the full) fixed2 curated_sme schemas with zero model calls and
+    assert ``always-note-budget`` stays clear.
+    """
+    from governed_bi.eval.run_datalake import _load_built_corpus
+
+    dbs = sorted(
+        p.name for p in FIXED2_CORPUS.iterdir() if p.is_dir() and not p.name.startswith("_")
+    )
+    assert len(dbs) >= 4
+    for label, subset in (("four", dbs[:4]), ("full", dbs)):
+        corpus = _load_built_corpus(FIXED2_CORPUS, subset)
+        budget = [
+            f for f in validate_corpus(corpus.assets) if f.code == "always-note-budget"
+        ]
+        assert budget == [], f"{label} ({len(subset)} schemas): " + "; ".join(
+            f.message for f in budget
+        )
+
     # A global note is paid for by every turn, so it counts against each schema group.
     two_schemas = _schema_with_notes("a", count=8, chars=10) + _schema_with_notes(
         "b", count=1, chars=10

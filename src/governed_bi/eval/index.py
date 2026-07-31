@@ -745,6 +745,13 @@ def quotable(record: dict[str, Any]) -> tuple[bool, list[str]]:
                 f"(default four-arm floor is {MIN_QUOTABLE_QUESTIONS}) — see "
                 "arithmetic_floor_for_arms"
             )
+        elif n_arms == 1:
+            reasons.append(
+                f"{n_questions} questions is below the arithmetic floor of "
+                f"{MIN_QUOTABLE_QUESTIONS} — see MIN_QUOTABLE_QUESTIONS "
+                f"(single-arm run {arms!r}: Holm family size is 0, so the default "
+                "four-arm floor was used; a wider family needs a higher floor)"
+            )
         else:
             reasons.append(
                 f"{n_questions} questions is below the arithmetic floor of "

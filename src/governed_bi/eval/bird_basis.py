@@ -38,6 +38,7 @@ __all__ = [
     "funnel_stage",
     "stage_waterfall",
     "schema_pick_report",
+    "schema_misroute_report",
     "stage4_structural_report",
     "sme_perturbation_report",
     "decoy_touch_counts",
@@ -133,18 +134,10 @@ def _is_pick(row: Mapping[str, Any]) -> bool:
     return row.get("routed_hit") is False or row.get("pick_hit") is False
 
 
-def schema_pick_report(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
-    """Rank histogram, twin confusions, attractors, and rank-override count.
-
-    Population: BIRD-basis rows whose funnel stage is ``pick`` (gold shortlisted,
-    picker chose another). Rank histogram on this population matches the report's
-    26/31/39. Twin/attractor *cells* in the error-analysis §3 were counted on a
-    broader ``routed_hit=False`` set (and still do not fully reproduce every
-    attractor); see the pinned reproduction test for named report-vs-tool diffs.
-    """
-    basis = bird_basis_rows(rows)
-    picks = [r for r in basis if _is_pick(r)]
-
+def _schema_confusion_stats(
+    picks: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Rank histogram / twins / attractors / overrides over an already-filtered set."""
     rank_hist = {"1": 0, "2": 0, "3+": 0, "none": 0}
     overrides = 0
     pairs: Counter[tuple[str, str]] = Counter()
@@ -183,13 +176,63 @@ def schema_pick_report(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         for (g, p), n in pairs.most_common()
     ]
     return {
-        "n_pick_wrong_gold_shortlisted": len(picks),
+        "n": len(picks),
         "gold_rank_histogram": rank_hist,
         "rank_overrides": overrides,
         "twin_pairs": twin_pairs[:20],
         "attractors": [
             {"schema": s, "n": n} for s, n in attractors.most_common(15)
         ],
+    }
+
+
+def _is_report_misroute(row: Mapping[str, Any]) -> bool:
+    """Report §3 twin/attractor population: gold shortlisted, ``routed_hit`` false.
+
+    Broader than :func:`_is_pick`: keeps ``correct=True`` misroutes and does not
+    drop refused rows via the funnel. A wrong route is a confusion whether or not
+    the answer happened to grade correct.
+    """
+    short = row.get("shortlisted_schemas") or []
+    if row.get("db_id") not in short:
+        return False
+    return row.get("routed_hit") is False
+
+
+def schema_pick_report(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Rank histogram, twin confusions, attractors, and rank-override count.
+
+    Population: BIRD-basis rows whose funnel stage is ``pick`` (gold shortlisted,
+    picker chose another). Rank histogram on this population matches the report's
+    26/31/39.
+
+    Twin/attractor *cells* and the "44 overrides" claim in the error-analysis §3
+    were counted on the broader :func:`_is_report_misroute` set (n=107 on fixed2
+    curated_sme). That is a different metric, not a correction of this one — see
+    :func:`schema_misroute_report`.
+    """
+    basis = bird_basis_rows(rows)
+    picks = [r for r in basis if _is_pick(r)]
+    stats = _schema_confusion_stats(picks)
+    return {
+        "n_pick_wrong_gold_shortlisted": stats.pop("n"),
+        **stats,
+    }
+
+
+def schema_misroute_report(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Report-§3 twin/attractor population (``routed_hit=False``, gold shortlisted).
+
+    Does not apply the pick-stage ``correct`` / refused filters. On the fixed2
+    curated_sme arm this reproduces the report's 44 rank overrides and the six
+    attractor counts.
+    """
+    # Match the report: no BIRD-basis trim — every curated_sme row participates.
+    misroutes = [dict(r) for r in rows if _is_report_misroute(r)]
+    stats = _schema_confusion_stats(misroutes)
+    return {
+        "n_misroute_gold_shortlisted": stats.pop("n"),
+        **stats,
     }
 
 
@@ -201,9 +244,16 @@ def stage4_structural_report(
     ``extra_distinct`` / ``missing_distinct`` use a case-insensitive ``\\bDISTINCT\\b``
     scan (not only ``SELECT DISTINCT``), matching the report's "spurious DISTINCT"
     story that includes ``COUNT(DISTINCT ...)``. Over-join is any predicted table
-    absent from gold (``pred - gold`` nonempty), not requiring a proper superset.
+    absent from gold (``pred - gold`` nonempty), not requiring a proper superset —
+    but frozen ``VALUES(...)`` gold (zero tables) is excluded: ``pred - ∅`` is
+    always nonempty and would count every such row as an "over-join".
+
+    Note: frozen / unparseable gold with empty ``gold_tables`` also skips the
+    stage-3 coverage gate in :func:`funnel_stage` (``if gold_tables and ...``),
+    so those rows land in stage 4 and inflate it relative to stage 3.
     """
     from .analysis import sql_tables
+    from .sql_diff import is_frozen_constant
 
     basis = bird_basis_rows(rows)
     stage4 = [
@@ -212,6 +262,7 @@ def stage4_structural_report(
         if funnel_stage(r, gold_sql) in ("wrong_shape", "wrong_value")
     ]
     extra_distinct = missing_distinct = like = over_join = 0
+    n_frozen_gold = 0
     for r in stage4:
         gsql = gold_sql.get(str(r.get("question_id")), "")
         pred = r.get("generated_sql") or ""
@@ -223,6 +274,9 @@ def stage4_structural_report(
             missing_distinct += 1
         if _LIKE_RE.search(pred) and not _LIKE_RE.search(gsql):
             like += 1
+        if is_frozen_constant(gsql):
+            n_frozen_gold += 1
+            continue
         gold_tables = set(sql_tables(gsql))
         pred_tables = set(sql_tables(pred))
         if pred_tables - gold_tables:
@@ -233,6 +287,7 @@ def stage4_structural_report(
         "missing_distinct": missing_distinct,
         "like_vs_exact": like,
         "over_join": over_join,
+        "n_frozen_gold_excluded_from_over_join": n_frozen_gold,
     }
 
 

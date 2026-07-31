@@ -14,10 +14,15 @@ from pathlib import Path
 
 import pytest
 
+import inspect
+
 from governed_bi.eval.index import quotable, record_for_run
 from governed_bi.eval.run_datalake import (
+    _load_built_corpus,
     _pooled_items,
+    _prepare_scored_pool,
     _quarantine_zero_question_schemas,
+    run_datalake,
 )
 
 
@@ -162,3 +167,83 @@ def test_absent_key_is_not_accused(tmp_path):
     assert record["dbs_zero_questions"] == []
     ok, reasons = quotable(record)
     assert ok, reasons
+
+
+# --------------------------------------------------------------------------- #
+# Driver wiring — deleting the call site must fail these, not only unit tests.
+# --------------------------------------------------------------------------- #
+
+
+def test_prepare_scored_pool_names_empty_schemas_and_scopes_leakage(tmp_path):
+    """The helper the driver calls: empty schema leaves the pool and leakage."""
+    dataset = tmp_path / "eval_dataset"
+    _write_split(
+        dataset,
+        "test",
+        [_item_row("beer_factory", "q1"), _item_row("beer_factory", "q2")],
+    )
+    # Train rows for the empty test schema — leakage used to count these while
+    # built_dbs dropped the schema (B4).
+    _write_split(dataset, "train", [_item_row("ghost", "train_g1")])
+
+    built = ["beer_factory", "ghost"]
+    servable, pairs, empty, leakage = _prepare_scored_pool(
+        dataset, built, limit=None, split="test"
+    )
+
+    assert servable == ["beer_factory"]
+    assert empty == ["ghost"]
+    assert all(db == "beer_factory" for _item, db in pairs)
+    # Leakage is over the servable pool only — ghost's train id is not in n_train_ids.
+    assert leakage["n_train_ids"] == 0
+    assert leakage["n_test_ids"] == 2
+
+
+def test_driver_wires_prepare_scored_pool_before_corpora_load():
+    """Deleting ``_prepare_scored_pool`` from ``run_datalake`` must fail CI.
+
+    Unit tests on ``_quarantine_zero_question_schemas`` stay green if the call
+    site is removed; this pins the driver path that writes ``dbs_zero_questions``.
+    """
+    src = inspect.getsource(run_datalake)
+    prepare = src.index("_prepare_scored_pool(")
+    load = src.index("_load_built_corpus(")
+    assert prepare < load, (
+        "zero-question quarantine must run before corpora / census / routing, "
+        "or empty schemas re-enter the pool as built-but-unscored"
+    )
+    assert "dbs_zero_questions" in src
+
+
+def test_load_built_corpus_does_not_reintroduce_quarantined_schemas(tmp_path):
+    """Census half of eval-rebuild §4: corpora load only the servable ``built`` list.
+
+    Sibling of ``test_only_the_dbs_being_scored_enter_the_served_corpus`` — kept here
+    so the zero-question guard suite covers both halves of the §4 requirement.
+    """
+    from governed_bi.corpus import load_corpus, write_corpus
+    from governed_bi.corpus.schemas import Column, LogicalType, TableAsset
+
+    def _table(schema: str) -> TableAsset:
+        return TableAsset(
+            id=f"tbl_{schema}_orders",
+            schema=schema,
+            physical_name="orders",
+            columns=[
+                Column(
+                    physical_name="order_id",
+                    physical_type="INTEGER",
+                    logical_type=LogicalType.integer,
+                    nullable=True,
+                    is_unique=False,
+                )
+            ],
+        )
+
+    root = tmp_path / "corpus_baseline"
+    write_corpus(root, "beer_factory", [_table("beer_factory")])
+    write_corpus(root, "ghost", [_table("ghost")])
+
+    assert {t.schema for t in load_corpus(root).tables()} == {"beer_factory", "ghost"}
+    scoped = _load_built_corpus(root, ["beer_factory"])
+    assert {t.schema for t in scoped.tables()} == {"beer_factory"}

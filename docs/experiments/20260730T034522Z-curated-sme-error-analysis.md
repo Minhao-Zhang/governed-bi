@@ -202,6 +202,9 @@ a solved failure mode; not where the gap lives.
 3. **Curb stage-4 over-elaboration — ~110+ questions.** Over-joining (113), spurious DISTINCT (75), and
    lookup-join+LIKE (26) dominate. A prompt/term rule: "when evidence gives a literal code, filter on it
    directly; do not join a description table or add DISTINCT unless the join fans out."
+   **待重算 (M5 review A3):** the 113 over-join count includes ~69 frozen `VALUES(...)` gold
+   rows whose empty table set makes `pred − gold` always nonempty. Excluding them drops
+   over-join to ~41; this recommendation's magnitude must be recomputed before acting on it.
 4. **Retriever recall (stage 1) — 32 questions.** Gold never shortlisted; distinct from #2.
 5. **Table-coverage residual (stage 3) — 58 questions** on near-synonym-table schemas (hockey,
    works_cycles, professional_basketball).
