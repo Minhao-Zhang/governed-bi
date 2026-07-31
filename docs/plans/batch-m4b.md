@@ -1,0 +1,204 @@
+# 插入批次 · M4b 拆大文件（N18 / N19）
+
+2026-07-31 立。分支从 `impl/rebuild-first-batch` 起。**插在 M4 与 M5 之间。**体例同 [batch-m2.md](batch-m2.md) 起的各批。
+
+> **语言：简体中文，无英文孪生。**
+
+## 为什么插在这里
+
+这两项是 rebuild-checklist 的 **4.2 / 4.3**，也是**全案唯一真正回应「repo 里几千行的大文件都多的要死」的两条**。它们原本不在 [near-term-plan.md](near-term-plan.md) 里 —— 那是刻意的排除，理由是它们必须紧跟 5.3 的排序。四批做下来这个排除的代价已经可以量了：
+
+| | main | 现在 |
+|---|---|---|
+| `src/` 里 >1000 行的文件 | 7 个 | **6 个** |
+| `run_datalake.py` | 5371 | **5486** |
+| `analyst/agent.py` | 1500 | **1534** |
+| `src/` 净变化（扣掉被删的 `run_experiment.py`） | — | **+695 行** |
+
+**唯一减少的那个是被删掉的，不是被拆开的。剩下六个净增长。**
+
+两条硬时序，就是插在这里的理由：
+
+- **N18 必须排在任何往 `agent.py` 加东西的工作之前** —— 而 M4 的 N12a / N14 已经往里加过了。再拖，那 1032 行只会更长。
+- **N19 与 M5 的 N15 同域** —— 两者都要把 `run_datalake` 里的统计代码从头过一遍。分开做等于读两遍。
+
+| 项 | 一句话 | 估工 | 花钱？ |
+|---|---|---|---|
+| **N18**（checklist 4.2） | 拆 `build_serve_rails`：1032 行单函数、17 个 kwarg、14 个嵌套 def | 3 人日 | 否 |
+| **N19**（checklist 4.3） | 把 1138 行统计从 5486 行的 driver 里提出去 | 2 人日 | 否 |
+
+**两项文件不重叠，可以并行。**基线：**1701 passed / 10 skipped / 1 xfailed**。
+
+---
+
+## 开工前：上游 spec 的一处更正，而且是它最响的那句
+
+rebuild-checklist 4.2 写着：
+
+> **两个测试用 `inspect.getsource` 加手写括号匹配解析它的源码文本。这是全仓最刺眼的一处。**
+
+**核过：没有任何测试用 `inspect.getsource` 解析 `build_serve_rails`。**全仓 10 处 `getsource`，解析的是 `run_datalake`（5 处）、`pipeline`（3 处）、`_build_db_corpora`、`_summarise_rows`。
+
+那句话本身没错 —— **只是指错了对象。它描述的是 N19 的目标，不是 N18 的。**其中 `tests/test_eval_metrics.py:790` 解析的 `_summarise_rows` 正是 N19 要搬走的第一个函数。所以：
+
+- **N18 不能拿「消灭两个解析源码的测试」当收益**，那个收益不存在。
+- **N19 可以，而且它有六处**（下面列）。
+
+checklist 4.2 的其余数字**全部核实为真**：1032 行（build-sequence 逐字写的就是 "1,032 lines"）、17 个 kwarg、13 个 depth-1 闭包 / 14 个全深度嵌套 def。
+
+---
+
+## N18 · 拆 `build_serve_rails`（checklist 4.2）
+
+### 现状（AST 实测，不是 grep）
+
+```
+build_serve_rails   analyst/agent.py:408-1439   1032 行
+  keyword-only 参数  17 个（无位置参数）
+  嵌套 def          14 个（depth-1 有 13 个）
+  文件总行数         1534  ← 这个函数占 67%
+```
+
+十三个 depth-1 闭包，每一个都是图上的一个节点或一个节点的内脏：
+
+`_column_count` · `_timed` · `ingest` · `refuse_gate` · `after_refuse` · `assemble` · `_assemble_inner` · `after_assemble` · `_tool_start_detail` · `_resolve_tool` · `_stream_agent` · `agent_core_node` · `narrate_node`
+
+**外部代码引用不到任何一个**，所以测不了、也换不了。`_assemble_inner` 一个人从 `:651` 到 `:925`，**274 行**。
+
+十七个 kwarg：`corpus` · `gateway` · `settings` · `identity` · `model` · `embedder` · `working_memory` · `narrator` · `on_event` · `session_id` · `clarify_checkpointer` · `clarify_thread` · `clarify_resume` · `run_id` · `n_human` · `index_cache` · `schema_vectors`
+
+**九个构造点**（checklist 说 6 个，实测 9）：
+- `src/`：`analyst/agent.py:1479`、`eval/arms.py:460`、`eval/oracle.py:365`
+- `tests/`：`test_eval_run_log_turns.py:42`、`test_prompt_attribution.py:174`、`test_retrieval_index_cache.py:155/215/364/581`
+
+### 做什么
+
+一个 `ServeDeployment` 承载那 17 个 kwarg，加**模块级**的 rails 节点。三样症状一次消除：kwarg 穿层没了、构造点收成一处、闭包变成可寻址的函数。
+
+**建议的落地顺序**（每一步都可单独发、单独绿）：
+
+1. **先只做 `ServeDeployment` 数据类 + 一个 `build_serve_rails(deployment)` 重载**，旧签名保留成一层薄壳转发。九个构造点一个不动。这一步纯加法，行为零变化。
+2. **把最外围、依赖最少的闭包提到模块级**，一次一个，从 `_column_count`（M4 已经把它的主体抽成了 `_column_count_for`，是现成的样板）和 `_tool_start_detail` 开始。
+3. **`_assemble_inner`（274 行）单独一笔。**它是最大的一块，也是最值得的一块。
+4. **最后收构造点**，删薄壳。
+
+**不要一笔梭。**1032 行一次搬完的 diff 没人能 review，而这一项的全部价值在于之后有人能读懂它。
+
+### 安全网
+
+**18 个测试文件用 `FakeToolModel` 驱动完整的 governed turn** —— 离线、无模型、无 Postgres。这是这一项的主网，比任何新写的测试都强，因为它们是既有的、独立于这次改动的。
+
+每一步之后跑全套。**不许在中途留一个红的中间状态过夜。**
+
+### 验收
+
+- `analyst/agent.py` 里最大函数的行数**降到三位数以内**。
+- `build_serve_rails` 的 kwarg 数从 17 降到 1（或 2：deployment + 少数每轮变量）。
+- 至少 8 个原闭包变成模块级、可 import、可单测的函数。
+- `pytest tests/` 全绿，**测试数只许增不许减**。
+- 九个构造点收敛到「构造一个 `ServeDeployment`」加「用它建图」两步。
+
+### 禁止
+
+- **不许改 `index_cache=` 这个参数名。**`tests/test_retrieval_index_cache.py:333/534` 按字符串盯着它。改名归 X.5.5，不在这一批。
+- 不许顺手改任何节点的行为。这一项是**纯搬运** —— 有任何一处你觉得「顺便修一下」的，记进 `docs/open-work.md`。
+- 不许在这一项里动 `run_datalake.py`（那是 N19）。
+
+---
+
+## N19 · 把统计从 `run_datalake` 提出去（checklist 4.3）
+
+### 现状（AST 实测）
+
+```
+run_datalake.py   5486 行   57 个顶层函数
+```
+
+统计簇 **8 个函数 / 1138 行**：
+
+| 行数 | 函数 | 位置 |
+|---|---|---|
+| **629** | `_summarise_rows` | `2293-2921` |
+| 230 | `_compare_arms` | `1741-1970` |
+| 206 | `ladder_deltas` | `1533-1738` |
+| 41 | `_routing_escaped` | `2081-2121` |
+| 12 | `_bool_rate` | `2147-2158` |
+| 9 | `_fmt_rate` | `1304-1312` |
+| 8 | `_mean` | `1315-1322` |
+| 3 | `_rate_over` | `2161-2163` |
+
+**`_summarise_rows` 一个函数 629 行** —— 比这个仓库里大多数文件都长。
+
+### 它已经是一个事实上的库了
+
+checklist 说「6 个测试文件通过下划线名 import 它们」。**实测 19 个测试文件、181 处引用**，`_summarise_rows` 22 次、`_compare_arms` 17 次。
+
+**而且不止测试** —— 三个 `src/` 模块也在 import：`eval/analysis.py`、`eval/harness.py`、`eval/leakage.py`。
+
+所以这不是「把私有代码搬出去」，是**承认它早就是公共 API 了，只是藏在一个 driver 里、用下划线名假装私有**。搬出去之后那 181 处引用会从「伸手进别人的私处」变成「import 一个模块」。
+
+**六处 `inspect.getsource` 解析**（更正里说的那些）：`test_eval_metrics.py:790`（解析 `_summarise_rows` 本体）、`test_build_isolation.py:602/751`、`test_datalake_routing.py:618`、`test_hash_grade.py:582/611`、`test_ladder_design.py:94`。它们靠**源码文本**断言不变量 —— 搬模块会打断它们，这是这一项最大的摩擦，也是它最值得做的理由之一。
+
+### 安全网：这一项可以做到逐字节可证
+
+checklist 的验证条写的是「X.5.4 的 9 个基线数不变」。**那 9 个基线不存在** —— X.5 整块不在近期计划里，X.5.4 从没做过。
+
+**但这一项有个更好的网，而且现成：**
+
+```
+拿 runs/datalake/20260730T034522Z-test-ladder-fixed2 的 generations.*.jsonl
+→ 搬之前跑一遍 _summarise_rows / _compare_arms / ladder_deltas，存下输出
+→ 搬之后再跑一遍
+→ 两份 JSON 必须逐字节相同
+```
+
+离线、无模型、无 Postgres、分钟级。**先建这个网,再动刀** —— 这是这一项的第一笔 commit，不是最后一笔。
+
+### 做什么
+
+新建 `src/governed_bi/eval/statistics.py`（名字随你，但别叫 `utils`）。八个函数搬过去，`run_datalake` 从它 import。
+
+**下划线名怎么办**：搬过去时把真正对外的几个去掉下划线（`summarise_rows` / `compare_arms` / `routing_escaped`），在 `run_datalake` 里保留下划线别名转发**一个 release**，让 181 处引用可以分批迁。别名要在注释里写死「什么时候删」。
+
+> 这不违反决定 12 的「不给操作员建护栏」—— 那条管的是**拦操作员手滑的闸门**，不是**代码内部的迁移期别名**。M1 的 4.1 已经辨析过同一件事。
+
+### 验收
+
+- 逐字节 golden：搬前搬后三个函数在 20260730 数据上的输出完全相同。
+- `run_datalake.py` 行数从 5486 **显著下降**（预期 ~4350）。
+- 那六处 `inspect.getsource` 要么指向新模块、要么改成真断言 —— **在 PR 里逐条说明每一处怎么处理的**。
+- `pytest tests/` 全绿，测试数不减。
+
+### 禁止
+
+- **不许顺手改任何统计口径。**这一项是搬运。任何一个数变了都是 bug，golden 会抓到。
+- 不许把 eval driver 合并（那件事已推迟，见非目标）。
+- 不许在这一项里动 `analyst/agent.py`（那是 N18）。
+
+---
+
+## 顺序
+
+```
+N18 ──►         （硬时序：任何再往 agent.py 加东西之前）
+N19 ──►  N15    （N19 必须在 M5 的 N15 之前，两者同域）
+```
+
+N18 与 N19 **文件不重叠，可以两个人同时开**。
+
+## review 会挂在哪里
+
+1. **N18 一笔梭。**1032 行一次搬完的 diff 没人能 review，而这一项的全部价值是之后有人能读懂它。
+2. **N19 没有先建 golden 就动刀。**搬完再补 golden 等于用搬完的结果证明搬对了。
+3. **顺手改行为。**两项都是纯搬运。看见坑记 `open-work.md`。
+4. **N18 改了 `index_cache=`。**两个测试按字符串盯着它。
+5. **N19 直接删下划线别名**，让 181 处引用一次性全改 —— 那个 diff 会淹掉真正的改动。
+6. **拿「消灭两个解析源码的测试」当 N18 的收益。**那两个测试不存在（见开工前更正）。
+
+## 这两项做完之后
+
+`src/` 里 >1000 行的文件预期从 6 个降到 **4 个**（`agent.py` 约 500，`run_datalake.py` 约 4350 —— 后者仍然超标，但那 4350 里已经没有统计代码了，剩下的是 driver 本职）。
+
+**剩下四个大文件**：`run_datalake` ~4350、`pipeline` 1668、`index` 1409、`asset_bag` 1259、`run_log` 1066。checklist 里 `asset_bag` 有 X.1、其余三个都没有对应条目 —— **B 轴还没有走完，这两项只是第一步**。
+
+然后回 [batch-m5.md](batch-m5.md) 做 N15–N17。
