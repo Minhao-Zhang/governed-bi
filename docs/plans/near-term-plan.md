@@ -35,7 +35,7 @@
 |---|---|---|---|
 | ~~**M1**~~ **已完成 2026-07-31** | 未授权基表的用例修复前红、修复后绿；`generations.*.jsonl` 里读得到逐层判决列表 | N1–N4（`e94a133` / `af7fd37` / `6c4e709` / `db21779`） | 3.5 人日 |
 | ~~**M2**~~ **已完成 2026-07-31** | 三个重复名字各只剩一处定义（`_render` 是例外 —— 三者无关，改名不合并）；歧义裸名返回 `None`；约束真的会绑（把 `langgraph-api` 改成 `>=99` 后 `uv lock` 判定 unsatisfiable）；glossary 补出 ops/eval 半区 | N5–N8（`14d8172` / `8be261f` / `71aabfb` / `db6704d`） | 4 人日 |
-| **M3** 删双轨 | `grep -rn "run_experiment\|skip_agent\|git_sha_drift" src/` 零命中，`pytest` 全绿 | N9–N10 | 2.5 人日 |
+| **M3** 删双轨 | `grep -rn "run_experiment\|skip_agent\|git_sha_drift" src/` 零命中，`pytest` 全绿；rvgd ↔ `table_by_name` 歧义一致性测试绿 | N9–N10a | 2.5 人日 |
 | **M4** 看得见与对得上 | 5 题小跑：stdout ≤ 50 行且每行带时间戳；同一个 `run_id` 在三个 sink 里都查得到；`build_stack()` 两次调用返回同一对象 | N11–N14 | 7.5 人日 |
 | **M5** 工具与跑 | 用 20260730 那份数据重现出 `docs/experiments/` 报告里的**每一个**数字；带 `--replicate` 的完整命令行成立 | N15–N17 | 5.5 人日 |
 
@@ -181,6 +181,18 @@ grep -rn "skip_agent\|skip-agent" src/ --include=*.py -c | sort -t: -k2 -rn
 **验收**　`grep -rn "skip_agent\|skip-agent\|git_sha_drift" src/` 无结果。`tests/test_eval_index.py:516` 是一个**集合等式**，删的那一刻就 `AssertionError` —— 修好它、并且 `pytest` 全绿，是这一项的真闸门，不是形式检查。
 
 **动手前先确认一件事**　`--skip-agent --oracle oracle_sql` 现在被用作「grader 上限自检」，它确实不花钱。删之前确认这条自检有替代路径，或把它保留成一个**独立命令**而不是一个全局 flag。这个判断写进 PR 描述。
+
+### N10a · rvgd ↔ `Corpus.table_by_name` 歧义一致性（M2 遗留）
+
+**为什么单独开**　N7 把 tools / middleware / agent 收到 `Corpus.table_by_name`，但 `retrieval/rvgd.py` 里 `phys_to_table` 的内联策略原样还在（一趟 O(n) 建全量映射）。batch-m2 允许不调用 `table_by_name`（逐名去调会变 O(n²)），所以热路径不能硬合 —— 缺的是「两份会漂移」的钉。
+
+**改什么**　一致性测试，约 20 行：同一个 corpus，断言 `table_by_name(bare) is None` **当且仅当** rvgd 的 `phys_to_table[bare] is None`（可抽 rvgd 建映射的那段为可测 helper，或在测试里复刻同一循环）。**不改**热路径语义。
+
+**碰哪些文件**　`tests/` 新增（或扩 `test_corpus_table_by_name.py`）；必要时 `retrieval/rvgd.py` 只为可测性抽 helper —— 不许为了「调用 table_by_name」改成 O(n²)。
+
+**验收**　合成歧义 corpus +（有则）BIRD 跳过式：两边对同一批裸名的 `None`/非 `None` 完全一致。
+
+**排期**　与 N9/N10 同批交付即可；不碰它们要删的那些文件，无改动面冲突。
 
 ---
 

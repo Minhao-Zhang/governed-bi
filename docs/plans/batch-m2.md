@@ -330,4 +330,4 @@ N5 先落地（后面的术语判断都引用它）。N6 / N7 / N8 可以并行�
 
 M2 的出口判据（[near-term-plan.md](near-term-plan.md) 里那张表）：三个重复名字各只剩一处定义 —— 注意按本文档，**`_render` 是例外，它不是重复**；歧义裸名返回 `None`；`uv sync -U` 后线协议包仍在声明范围内；glossary 覆盖运维与实验词。
 
-下一批是 **M3（N9 → N10）**，两项**有严格顺序**：`skip_agent` 在 `src/` 里 75 处 / 8 个文件，其中 11 处在 `run_experiment.py` 里 —— 先做 N9 删掉那个 driver，N10 就少改 11 处。反过来做等于白改。
+下一批是 **M3（N9 → N10 → N10a）**。N9/N10 **有严格顺序**：`skip_agent` 在 `src/` 里 75 处 / 8 个文件，其中 11 处在 `run_experiment.py` 里 —— 先做 N9 删掉那个 driver，N10 就少改 11 处。反过来做等于白改。**N10a**（rvgd ↔ `table_by_name` 歧义一致性测试）是 M2 遗留：热路径故意不合成一份，用测试钉住两份不漂移；与 N9/N10 无文件冲突，见 [near-term-plan.md](near-term-plan.md) M3。

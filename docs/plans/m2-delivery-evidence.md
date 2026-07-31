@@ -8,6 +8,8 @@ Paste into each PR body. Recorded 2026-07-31 while closing the memoryless review
 - Ops/eval senses cite `file:line` where a concrete anchor exists.
 - `docs/glossary.zh.md` untouched (AGENTS.md mid-work English-only).
 - Coverage test: `tests/test_glossary_covers_load_bearing_terms.py` (`REQUIRED` hardcoded).
+- Post-review add: **`run` / `run_id` / `turn_id`** (rebuild-checklist 1.4.1 — omitted from the original batch-m2 42-word list; `runs/<dir>/` is not keyed by `run_id`).
+- Deferred to M3 **N10a**: rvgd `phys_to_table` ↔ `Corpus.table_by_name` consistency pin (do not fold hot path into O(n²)).
 
 ## N6 · consolidations
 
