@@ -114,6 +114,12 @@ class Metric:
 #:
 #: An integer rather than a date, because the only question anyone asks of it is
 #: "is this at least version N" and a date invites string comparison.
+#:
+#: Knob-set changes are pinned per version in
+#: ``tests/test_manifest_schema_bump.py`` (``_SNAPSHOTS``): the current
+#: ``MANIFEST_KNOBS`` name set must equal ``_SNAPSHOTS[MANIFEST_SCHEMA_VERSION]``.
+#: Changing a knob without bumping (or without registering a new snapshot)
+#: fails closed for every version, not only v1→v2.
 MANIFEST_SCHEMA_VERSION = 2
 
 #: The version stamp itself. Not a knob and not operational: it says how much the
