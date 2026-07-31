@@ -136,11 +136,28 @@ run_datalake.py   5486 行   57 个顶层函数
 
 checklist 说「6 个测试文件通过下划线名 import 它们」。**实测 19 个测试文件、181 处引用**，`_summarise_rows` 22 次、`_compare_arms` 17 次。
 
-**而且不止测试** —— 三个 `src/` 模块也在 import：`eval/analysis.py`、`eval/harness.py`、`eval/leakage.py`。
+> **2026-07-31 撤回第二条。**本节原先还写着「**三个 `src/` 模块也在 import：`eval/analysis.py`、`eval/harness.py`、`eval/leakage.py`**」。**假的 —— 没有任何 `src/` 模块 import `run_datalake`**（`grep -rn "import run_datalake" src/` 零命中）。那三个文件里只是**散文里提到了这些名字**（docstring 与注释）。
+>
+> 错因和本文档头号更正那条同源：我拿 `grep -rln` 的**文件名清单**当成了代码依赖的证据。**`-l` 只告诉你「这个文件里出现过这个字符串」,不告诉你它是不是 import。**一份工作单里同一类错误犯两次。
 
-所以这不是「把私有代码搬出去」，是**承认它早就是公共 API 了，只是藏在一个 driver 里、用下划线名假装私有**。搬出去之后那 181 处引用会从「伸手进别人的私处」变成「import 一个模块」。
+所以这不是「把私有代码搬出去」，是**承认它早就是测试的公共 API 了，只是藏在一个 driver 里、用下划线名假装私有**。
 
-**六处 `inspect.getsource` 解析**（更正里说的那些）：`test_eval_metrics.py:790`（解析 `_summarise_rows` 本体）、`test_build_isolation.py:602/751`、`test_datalake_routing.py:618`、`test_hash_grade.py:582/611`、`test_ladder_design.py:94`。它们靠**源码文本**断言不变量 —— 搬模块会打断它们，这是这一项最大的摩擦，也是它最值得做的理由之一。
+### `inspect.getsource` 那条摩擦，实测不成立
+
+原先本节写「搬模块会打断那六处 `getsource`，这是最大的摩擦」。**两层都错：**
+
+1. **`inspect.getsource` 通过函数自己的 code object 解析，所以一个普通别名会透明转发。**搬模块本身不打断任何东西。
+2. **我列的六处里有五处根本不解析被搬走的代码** —— 它们解析的是 `run_datalake` 这个模块或 `run_datalake()` 这个函数、以及 `_build_db_corpora`，三者都没搬。
+
+真正受影响的只有两处，而**其中一处不在我的清单里**：
+
+| 站点 | 解析什么 | 结果 |
+|---|---|---|
+| `test_eval_metrics.py:790` | `_summarise_rows` 本体 | 受影响，改指向 `eval.statistics` |
+| **`test_ladder_design.py:842`** | **`ladder_deltas` 本体** | **受影响 —— 我漏了这处** |
+| 其余五处（`test_build_isolation.py:602/751`、`test_datalake_routing.py:618`、`test_hash_grade.py:582/611`、`test_ladder_design.py:94`） | 未搬走的东西 | 不受影响，未改动 |
+
+**只按我给的六处清单做，会漏掉唯一真正需要改的另一处。**
 
 ### 安全网：这一项可以做到逐字节可证
 
@@ -208,7 +225,29 @@ N18 与 N19 **文件不重叠，可以两个人同时开**。
 >
 > **所以「拆函数」和「缩文件」是两件事，这一项只做了前者。**要让 `agent.py` 进 1000 以内，下一步是把 rails 提到 `analyst/rails.py` —— 现在这一步很便宜，因为那些节点已经是彼此独立的函数了。**没有并进这一批**：它不在条目里，而且会让第 4 笔 commit 不可 review。
 
-`src/` 里 >1000 行的文件在 N19 之后预期降到 **5 个**（`agent.py` 1764 未减、`run_datalake.py` 约 4350 —— 后者那 4350 里已经没有统计代码了，剩下的是 driver 本职）。
+> **2026-07-31 · N19 也已完成（`79ed49d` golden / `8785155` 搬运）。**
+>
+> `run_datalake.py` **5486 → 3919 行**（57 → 34 个顶层函数），新 `eval/statistics.py` **1666 行 / 23 个函数**。比预期的 ~4350 更低，因为实际搬了 **23 个函数不是 8 个** —— 另外 15 个（`price_verdict` 140 行等）只被这个簇和它自己用，留在原地会造成 `statistics` ↔ `run_datalake` 循环 import。
+>
+> **golden 我自己复跑过**：在 `cac0163` 的 worktree 里生成一份、在搬完的代码上生成一份，两份 **3,759,346 字节、SHA256 完全相同**（`8570aac3...`）。「after」那份的解析日志显示九个统计全部来自 `governed_bi.eval.statistics`，所以它跑的是搬过去的代码,不是 driver。
+
+### 净效果：>1000 行的文件从 6 个变成 **7 个**
+
+| 文件 | M4b 前 | 现在 |
+|---|---|---|
+| `eval/run_datalake.py` | 5486 | **3919** |
+| `analyst/agent.py` | 1534 | **1764** |
+| `curator/pipeline.py` | 1668 | 1668 |
+| **`eval/statistics.py`** | — | **1666**（新） |
+| `eval/index.py` | 1409 | 1409 |
+| `curator/asset_bag.py` | 1259 | 1259 |
+| `analyst/run_log.py` | 1066 | 1066 |
+
+**这两项修好的是「不可寻址」，不是「文件大」。**`run_datalake` 少的 1567 行几乎原样变成了 `statistics.py` 的 1666 行，`agent.py` 还涨了 230 行。总量基本持平。
+
+这不是失败，是**范围本来如此** —— 4.2 / 4.3 在 checklist 里的定义就是「让这些东西可寻址、可单测」，而它们做到了：`build_serve_rails` 从 1032 行降到 25 行、17 个 kwarg 降到 1 个、14 个嵌套 def 降到 0；1666 行统计有了逐字节 golden 和自己的模块。
+
+**但如果目标是「文件不要几千行」，还差一步**，而且这一步现在便宜：把 rails 提进 `analyst/rails.py`，把 `statistics.py` 按 summarise / compare / price 再分。**便宜的原因正是这两项做完了** —— 那些单元已经彼此独立，搬运不再需要理解它们。要不要走这一步是单独的决定。
 
 **剩下四个大文件**：`run_datalake` ~4350、`pipeline` 1668、`index` 1409、`asset_bag` 1259、`run_log` 1066。checklist 里 `asset_bag` 有 X.1、其余三个都没有对应条目 —— **B 轴还没有走完，这两项只是第一步**。
 
