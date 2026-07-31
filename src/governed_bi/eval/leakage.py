@@ -85,10 +85,9 @@ def canonical_sql(sql: str | None) -> str:
 def is_gradeable_gold(sql: str | None) -> bool:
     """Can a generator ever match this gold through a result hash?
 
-    Must agree with ``sql_diff.is_frozen_constant``, which decides the same thing
-    for ``ex_gradeable``. Pinned by a test rather than trusted to two copies of a
-    regex staying in step, because the defect this filter fixes WAS the twin rate
-    and the EX strata being computed over different populations.
+    Thin wrapper: non-empty SQL that is not a frozen ``VALUES(...)`` constant.
+    Detection lives only in ``sql_diff.is_frozen_constant`` (one regex). Empty /
+    ``None`` gold is not gradeable even though it is not frozen.
     """
     return bool(sql) and not is_frozen_constant(sql)
 

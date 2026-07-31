@@ -257,19 +257,26 @@ def test_frozen_gold_is_not_counted_as_a_twin():
     assert is_gradeable_gold("SELECT a FROM t WHERE b = 1")
 
 
-def test_the_two_frozen_gold_definitions_agree():
-    """`leakage` and `sql_diff` each decide "is this gold gradeable". Two copies of
-    a regex staying in step is exactly what produced the mismatched populations."""
+def test_is_gradeable_gold_excludes_frozen_and_empty():
+    """Gradeability = non-empty and not frozen; detector is only ``is_frozen_constant``.
+
+    After N6 there is one regex (in ``sql_diff``). This test pins the wrapper's
+    empty/None edge and a few frozen vs live examples — not a second definition.
+    """
     from governed_bi.eval.leakage import is_gradeable_gold
     from governed_bi.eval.sql_diff import is_frozen_constant
 
-    for sql in (
-        'SELECT "v"."c0" FROM (VALUES (5.0)) AS "v"("c0")',
-        "select x from (values ('a'),('b')) as v",
-        "SELECT a FROM t",
-        "SELECT count(*) FROM valuesomething",  # not a VALUES clause
-    ):
-        assert is_gradeable_gold(sql) is (not is_frozen_constant(sql)), sql
+    frozen = 'SELECT "v"."c0" FROM (VALUES (5.0)) AS "v"("c0")'
+    frozen_lower = "select x from (values ('a'),('b')) as v"
+    live = "SELECT a FROM t"
+    not_values_token = "SELECT count(*) FROM valuesomething"
+
+    assert is_frozen_constant(frozen) and not is_gradeable_gold(frozen)
+    assert is_frozen_constant(frozen_lower) and not is_gradeable_gold(frozen_lower)
+    assert not is_frozen_constant(live) and is_gradeable_gold(live)
+    assert not is_frozen_constant(not_values_token) and is_gradeable_gold(not_values_token)
+    assert not is_frozen_constant(None) and not is_gradeable_gold(None)
+    assert not is_frozen_constant("") and not is_gradeable_gold("")
 
 
 def test_a_quoted_apostrophe_does_not_split_one_literal_into_two():
