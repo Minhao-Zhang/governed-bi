@@ -14,7 +14,7 @@ import hashlib
 import re
 import time
 import traceback
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
@@ -405,6 +405,43 @@ def _column_count_for(corpus: "Corpus", table_id: str) -> int:
     )
 
 
+@dataclass(frozen=True)
+class ServeDeployment:
+    """Everything one compiled serve graph is deployed against.
+
+    One value in place of the seventeen keyword arguments :func:`build_serve_rails`
+    used to thread, so a caller that wants a graph names a deployment rather than
+    re-typing the same argument list (there were nine such sites). Nothing here is
+    per-question: the fields are the corpus, the connections, the model, and the
+    per-turn *identifiers* the rails stamp — the question itself arrives in
+    :class:`ServeRailsState`.
+
+    Frozen because a compiled graph closes over it; a caller that needs a variant
+    (a different ``session_id`` per eval graph, say) uses ``dataclasses.replace``
+    and gets a new graph, rather than mutating a deployment two graphs share.
+    """
+
+    corpus: "Corpus"
+    gateway: "Gateway"
+    settings: "Settings"
+    identity: "Identity"
+    model: Any
+    embedder: "Embedder | None" = None
+    working_memory: "WorkingMemory | None" = None
+    narrator: "AnswerNarrator | None" = None
+    on_event: "Callable[[dict], None] | None" = None
+    session_id: str = "agent"
+    clarify_checkpointer: Any = None
+    clarify_thread: str | None = None
+    clarify_resume: Any = None
+    run_id: str | None = None
+    n_human: int = 1
+    # Caller-owned, reusable across turns: the rails are rebuilt per question, which
+    # would otherwise re-embed every schema document on every question (AUDIT R6).
+    index_cache: "RetrievalIndexCache | None" = None
+    schema_vectors: Any = None
+
+
 def build_serve_rails(
     *,
     corpus: "Corpus",
@@ -422,11 +459,39 @@ def build_serve_rails(
     clarify_resume: Any = None,
     run_id: str | None = None,
     n_human: int = 1,
-    # Caller-owned, reusable across turns: the rails are rebuilt per question, which
-    # would otherwise re-embed every schema document on every question (AUDIT R6).
     index_cache: "RetrievalIndexCache | None" = None,
     schema_vectors: Any = None,
 ):
+    """Legacy keyword entry point — packs a :class:`ServeDeployment` and forwards.
+
+    Transitional shell so the nine existing construction sites keep working while
+    the rails are taken apart. Migrate to ``_build_serve_rails(deployment)``; this
+    goes away once they have.
+    """
+    return _build_serve_rails(
+        ServeDeployment(
+            corpus=corpus,
+            gateway=gateway,
+            settings=settings,
+            identity=identity,
+            model=model,
+            embedder=embedder,
+            working_memory=working_memory,
+            narrator=narrator,
+            on_event=on_event,
+            session_id=session_id,
+            clarify_checkpointer=clarify_checkpointer,
+            clarify_thread=clarify_thread,
+            clarify_resume=clarify_resume,
+            run_id=run_id,
+            n_human=n_human,
+            index_cache=index_cache,
+            schema_vectors=schema_vectors,
+        )
+    )
+
+
+def _build_serve_rails(deployment: "ServeDeployment"):
     """Compile the outer deterministic StateGraph wrapping the agent core.
 
     HITL clarification (contract: docs/analyst.md, serve-time clarification) is on
@@ -435,6 +500,23 @@ def build_serve_rails(
     can pause/resume. ``clarify_resume`` (a ``ClarificationResponse``) resumes a
     paused inner agent. All three default off/None, leaving the eval path
     byte-for-byte unchanged."""
+    corpus = deployment.corpus
+    gateway = deployment.gateway
+    settings = deployment.settings
+    identity = deployment.identity
+    model = deployment.model
+    embedder = deployment.embedder
+    working_memory = deployment.working_memory
+    narrator = deployment.narrator
+    on_event = deployment.on_event
+    session_id = deployment.session_id
+    clarify_checkpointer = deployment.clarify_checkpointer
+    clarify_thread = deployment.clarify_thread
+    clarify_resume = deployment.clarify_resume
+    run_id = deployment.run_id
+    n_human = deployment.n_human
+    index_cache = deployment.index_cache
+    schema_vectors = deployment.schema_vectors
     # Bare references resolve to the serving schema (the SQLite ATTACH alias, or the
     # pinned Postgres schema); None means the source spans every schema, so a bare
     # reference fails closed.

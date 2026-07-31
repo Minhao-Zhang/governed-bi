@@ -330,7 +330,7 @@ def test_the_serve_graph_passes_its_cache_to_the_router(monkeypatch):
 
     from governed_bi.analyst import agent as agent_mod
 
-    src = inspect.getsource(agent_mod.build_serve_rails)
+    src = inspect.getsource(agent_mod._build_serve_rails)
     call = src.split("shortlist_schemas(", 1)[1].split(")", 1)[0]
     assert "index_cache=_index_cache" in call, f"router call omits the cache: {call!r}"
 
@@ -529,9 +529,9 @@ def test_the_serve_graph_hands_its_cache_to_the_agent_core():
     """
     import inspect
 
-    from governed_bi.analyst.agent import build_serve_rails
+    from governed_bi.analyst.agent import _build_serve_rails
 
-    src = inspect.getsource(build_serve_rails)
+    src = inspect.getsource(_build_serve_rails)
     call_start = src.index("build_agent_core(")
     depth, end = 0, call_start
     for i, ch in enumerate(src[call_start:], call_start):
