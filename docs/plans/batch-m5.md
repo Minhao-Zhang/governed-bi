@@ -34,7 +34,7 @@ near-term-plan 的 M5 摘自 rebuild-checklist X.3 / 6.2 / 6.3。**2026-07-31 �
 | 2 | 「`analysis.py` 也不调用 `attribute_rows`」 | 字面为真但会误导。**`run_datalake.py:110` import 了它,`:2851` 在调它。**错误分类不是没接线的孤儿,它已经在 driver 里跑 |
 | 3 | 「`analysis.json` 从来没有被任何一次跑产出过」 | **成立,而且原因具体**:`run_datalake.py` 里 `analysis.json` 只出现在 `:1887` 一句注释里,driver 从不调用 `analyse_run`。手工跑 `python -m governed_bi.eval.analysis <run_dir>` 是能产出的 —— 所以缺的是**自动化**,不是能力 |
 | 4 | `sme_noop_dbs` 在 `index.py:452-456` 与 `:843-851`;误导性文案在 `:832-838` | 行号全漂了(M3 删了 knob)。现在:`sme_noop_dbs` 在 **`:436`** 与 **`:815`**;那句硬编码文案在 **`:809`** —— 是**一行**,不是七行 |
-| 5 | N17 的完整命令含 `--model` | **`--model` 不存在**,`run_datalake.py` 里零命中。它是 checklist 2.3,不在近期计划任何一批里。现有的是 `--split`(`:5048`)/`--dbs`(`:5071`)/`--limit`(`:5085`)/`--workers`(`:5144`)/`--replicate`(`:5199`) |
+| 5 | N17 的完整命令含 `--model` | **`--model` 不存在**,`run_datalake.py` 里零命中。它是 checklist 2.3,不在近期计划任何一批里。现有的是 `--split` / `--dbs` / `--limit` / `--workers` / `--replicate`（**不写行号** —— 本文档写于 N19 之前，那时引的 `:5048`–`:5199` 在 N19 从 `run_datalake.py` 搬走 1567 行之后全部作废。跨批次的 `file:line` 会烂，用 `--help` 或 `grep add_argument` 现查） |
 
 另外一条**已经被 M4 修掉、不用再做**:generations 行现在是 **73 字段**(M1 的 `governance_ledger` 投影加进去的),`docs/eval-metrics.md` 已同步。
 

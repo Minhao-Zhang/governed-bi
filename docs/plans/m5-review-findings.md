@@ -2,7 +2,12 @@
 
 2026-07-31。对 `impl/rebuild-first-batch` tip `9d851f6` 的 review。
 
-**结论：M5 不收。**工具本身是好的 —— `bird_basis.py` 的 cascade 比原报告规定得更清楚，§1 waterfall 四个臂逐位重现，N17 的守卫函数和 MDE 都过硬。**要撤的是裁定和几处接线，不是代码。**
+> **2026-07-31 复核（`499a3c0`）：15 条全部处置，M5 收。**
+> A1–A4、B1–B5、C1–C5 逐条复核通过，A4 我重新证伪过（删调用点现在会红）。
+> D 是我自己的文档错，已在 [batch-m5.md](batch-m5.md) 改掉。
+> 两条新的、小的，见文末「复核后的残留」。
+
+**原结论：M5 不收。**工具本身是好的 —— `bird_basis.py` 的 cascade 比原报告规定得更清楚，§1 waterfall 四个臂逐位重现，N17 的守卫函数和 MDE 都过硬。**要撤的是裁定和几处接线，不是代码。**
 
 全套 **1734 passed / 10 skipped / 1 xfailed**，工作区干净 —— 下面每一条都不是靠测试红发现的。
 
@@ -148,3 +153,32 @@ runbook 说那个 MDE「derived from **serve** noise (re-serving one corpus)」�
 A1 / A3 / A4 三条的复现命令都在上面，**都不需要模型、不需要 Postgres、不需要付费**。A1 和 A3 读 `runs/datalake/20260730T034522Z-test-ladder-fixed2/20260730T034543Z/`（**在 N15 收尾前不许删**），A4 是删一行跑一次全套。
 
 **不同意任何一条就回来说，带上你自己的复现。**A1 我最有把握 —— 报告那六个 attractor 加那个 44，在我这边和独立 review 那边各算了一次，两次都逐位落在报告上。
+
+
+---
+
+## 复核后的残留（2026-07-31，`499a3c0` 之后）
+
+修得干净，两处小的：
+
+### R1 · `over_join` 的排除谓词比需要的窄 2 行
+
+A3 用 `is_frozen_constant(gsql)` 排除，这是仓库的正典函数，选得对。但真正让 `over_join`
+失去意义的条件是「**gold 一张表都没命名**」—— frozen 是它的一个子集：
+
+```
+stage4 n = 355
+  frozen gold（现已排除）:            69
+  非 frozen 但 gold 解析出 0 张表:     2   ← 仍被计成 over-join
+```
+
+这正是我这边 41 与独立复核 39 的全部差距。一行的事：`if is_frozen_constant(gsql) or not gold_tables: continue`。
+不影响结论（2/41），但谓词该对准它真正要挡的东西。
+
+### R2 · 这一批给 ruff 又添了 2 个错误
+
+`ruff check .` 从 M4b 之后的 **7** 涨到 **9**，新增两处都是 `I001`，在这一批新建的两个测试文件里：
+`tests/test_bird_basis_report.py:10`、`tests/test_zero_question_guard.py:10`。
+
+CI 有 lint 门（`.github/workflows`，注释写着 "keep it green"）而它一直是红的 —— 这是既有问题，
+不是这一批造成的。但**在一个已经红的门上继续加**会让将来那次清理更难归因。九处全部 `--fix` 可自动修。
