@@ -726,6 +726,335 @@ def after_refuse(state: ServeRailsState) -> Literal["assemble", "__end__"]:
     return END if state.get("outcome") == "refuse" else "assemble"
 
 
+def _route_schemas(
+    rt: ServeRuntime, question: str, base_provenance: dict
+) -> tuple["Corpus", dict]:
+    """Pick the corpus slice this question retrieves against, and record how.
+
+    Returns the retrieval corpus and the provenance the routing decision earned.
+    A single-schema corpus never routes and takes the ``else`` branch — which
+    still records, because an absent record and a bypassed router are different
+    facts (see the comment there).
+    """
+    if not rt.spans_schemas:
+        # A single-schema corpus never routes. Recorded, not omitted: an absent
+        # schema_pick record would read as a build that cannot measure the pick.
+        rt.stages.skipped(Stage.schema_pick, spans_schemas=False)
+        # ...and the same is true of the *row*. Leaving `base_provenance`
+        # untouched here made a bypassed turn indistinguishable from a routed one
+        # that lost its provenance: the row recorded `routed_schemas=[]`, so
+        # `routed_hit` was False on every question and `routing_recall` read 0.0
+        # for a pool that has nothing to route. Worse, the eval's own
+        # "was routing bypassed?" guard tests `isinstance(total_schemas, int)`,
+        # which no single-schema turn could ever satisfy — so every wrong answer
+        # in a one-schema pool was charged to `schema_pick`, a stage that did not
+        # run. The bypass is now asserted by the code that knows it, not inferred
+        # downstream from a field's absence.
+        #
+        # `routed_schemas` is the schema the turn is pinned to, so `routed_hit`
+        # is true for the right reason. `schema_pick` and `shortlisted_schemas`
+        # stay ABSENT on purpose: stamping them would enrol these rows in
+        # `schema_pick_accuracy` and `gold_schema_rank` as unanimous successes of
+        # a picker and a shortlist that never ran, which is how a metric starts
+        # measuring its own denominator.
+        return rt.corpus, {
+            **base_provenance,
+            "routed_schemas": sorted(rt.corpus_schemas),
+            "total_schemas": len(rt.corpus_schemas),
+            "routing_bypassed": True,
+        }
+    # Shortlist by embedding similarity (BM25 fallback). Then either (a)
+    # collapse to a single LLM-chosen schema (``schema_route_llm_pick`` — the
+    # single-schema-answer regime, no cross-schema joins), or (b) expand the
+    # shortlist along curated cross-schema joins (the default cross-schema
+    # regime). Record both counts + the pick so a scale run can see how the
+    # shortlist prunes and where it routed (silent mis-routing would
+    # otherwise be invisible in the EX number).
+    route_channel: dict = {}
+    route_ranked: list = []
+    shortlisted = shortlist_schemas(
+        rt.corpus,
+        question,
+        top_k=rt.route_top_k,
+        embedder=rt.embedder,
+        schema_vectors=rt.router_schema_vectors,
+        settings=rt.settings,
+        index_cache=rt.index_cache,
+        channel_out=route_channel,
+        ranked_out=route_ranked,
+    )
+    # A silent embedding->BM25 degradation halves routing recall
+    # (0.70 -> 0.35); recorded so the drop is attributable (AUDIT R8).
+    base_provenance = {**base_provenance, **route_channel}
+    picked: str | None = None
+    pick_fallback: str | None = None
+    if rt.router_chat is not None and shortlisted:
+        # Its own sub-stage: a routing regression has to be separable from
+        # the rest of assemble, and this is the only LLM call in the node.
+        with rt.stages.stage(Stage.schema_pick, n_candidates=len(shortlisted)) as detail:
+            decision = pick_schema(
+                rt.corpus,
+                question,
+                shortlisted,
+                chat=rt.router_chat,
+                max_columns=rt.settings.schema_pick_max_columns,
+                system_prompt=rt.schema_pick_prompt,
+            )
+            detail["fallback"] = decision.fallback is not None
+        picked, pick_fallback = decision.schema, decision.fallback
+        if decision.usage_metadata:
+            rt.events.add_token_usage(
+                [
+                    {
+                        "source": "router",
+                        "usage_metadata": decision.usage_metadata,
+                    }
+                ]
+            )
+        routed = (
+            frozenset([picked])
+            if picked
+            else expand_schemas_via_curated_joins(rt.corpus, set(shortlisted))
+        )
+    else:
+        rt.stages.skipped(Stage.schema_pick, llm_pick=rt.router_chat is not None)
+        routed = expand_schemas_via_curated_joins(rt.corpus, set(shortlisted))
+    # Memoised by routed schema set. The filter is deterministic in
+    # ``routed``, so rebuilding it per question minted a fresh ``Corpus``
+    # object with identical contents every time — which then defeated the
+    # retrieval index cache below, because there was nothing stable to key on.
+    # Bounded by the number of distinct neighbourhoods a run visits.
+    routed_key = frozenset(routed)
+    retrieval_corpus = rt.routed_corpora.get(routed_key)
+    if retrieval_corpus is None:
+        retrieval_corpus = rt.routed_corpora[routed_key] = filter_corpus_for_retrieval(
+            rt.corpus, routed
+        )
+    base_provenance = {
+        **base_provenance,
+        "routed_schemas": sorted(routed),
+        # Kept in RELEVANCE order, not sorted: the position of the true
+        # schema in this list is the signal that separates "retrieval never
+        # surfaced it" from "the picker overrode a correct rank-1", and
+        # alphabetising would throw it away. (``routed`` is a frozenset, so
+        # it has no meaningful order and stays sorted for stable diffs.)
+        "shortlisted_schemas": list(shortlisted),
+        "total_schemas": len(rt.corpus_schemas),
+        "schema_pick": picked,
+        # Set when ``picked`` is really the rank-1 fallback after a failed
+        # or unparseable pick, so a degraded row is not scored as a
+        # decision the model made.
+        "schema_pick_fallback": pick_fallback,
+    }
+    # Live timeline: which schemas were shortlisted and which one won.
+    # Scores only when the embedding channel ran; truncated only when the
+    # picker saw fewer tables than the schema has (SCHEMA_PICK_MAX_TABLES).
+    channel = route_channel.get("schema_route_channel")
+    score_by = {s: sc for s, sc in route_ranked}
+    candidates = []
+    for rank, name in enumerate(shortlisted, start=1):
+        row: dict[str, Any] = {"schema": name, "rank": rank}
+        if channel == "embedding" and name in score_by:
+            row["score"] = score_by[name]
+        candidates.append(row)
+    truncated = []
+    table_totals = _schema_table_totals(rt.corpus, shortlisted)
+    for name in shortlisted:
+        tables_total = table_totals.get(name, 0)
+        tables_shown = min(SCHEMA_PICK_MAX_TABLES, tables_total)
+        if tables_total > tables_shown:
+            truncated.append(
+                {
+                    "schema": name,
+                    "tables_shown": tables_shown,
+                    "tables_total": tables_total,
+                }
+            )
+    rt.events.rail(
+        "schema_route",
+        "ok",
+        n_total=len(rt.corpus_schemas),
+        channel=channel,
+        degraded=route_channel.get("schema_route_degraded"),
+        candidates=candidates,
+        picked=picked,
+        fallback=pick_fallback,
+        truncated=truncated or None,
+    )
+    return retrieval_corpus, base_provenance
+
+
+def _assemble_inner(rt: ServeRuntime, state: ServeRailsState) -> dict:
+    """Amendment 1: run the deterministic front half and seed the semantic layer.
+
+    Reuses the exact deterministic assembly (retrieval + licensing +
+    ``assemble_context``) that used to feed the old template generator, so
+    the agent starts at parity (context + base licensed scope), then refines.
+    """
+    corpus = rt.corpus
+    settings = rt.settings
+    question = state["question"]
+    sid = state.get("session_id") or rt.session_id
+    history = list(rt.working_memory.history(sid)) if rt.working_memory is not None else []
+    retrieval_corpus, base_provenance = _route_schemas(rt, question, state["base_provenance"])
+    with rt.stages.stage(Stage.retrieve) as detail:
+        retrieval = retrieve(
+            retrieval_corpus,
+            question,
+            embedder=rt.embedder,
+            settings=settings,
+            index_cache=rt.index_cache,
+        )
+        detail["n_tables"] = len(retrieval.table_ids)
+    # Table-level provenance. Without it a wrong-table answer is indistinguishable
+    # from a wrong-*retrieval* one in the scored rows, and those need opposite
+    # fixes (retrieval tuning vs. generation prompting). Recorded before the
+    # missing-edge check so a refusal carries what retrieval offered.
+    base_provenance = {
+        **base_provenance,
+        "retrieved_tables": _table_provenance_names(corpus, retrieval.table_ids),
+        # Carried so the stamp can say something about the *evidence*, not only
+        # about what went wrong downstream (AUDIT C2). 0.0 = the question names
+        # nothing this corpus contains.
+        "retrieval_lexical_coverage": retrieval.lexical_coverage,
+    }
+    missing = detect_missing_join_path(corpus, rt.graph_obj, set(retrieval.table_ids))
+    if missing is not None:
+        rt.events.rail(
+            "assemble", "refused", missing_edge=True, schemas=sorted(missing.schemas)
+        )
+        ans = missing_edge_refusal(base_provenance, missing)
+        ans = rt.events.final(ans)
+        return {"answer": ans, "outcome": "refuse"}
+    try:
+        licensing_join_ids = plan_joins(rt.graph_obj, set(retrieval.table_ids)).join_ids
+    except ValueError:
+        licensing_join_ids = []
+    licensed_ids = _licensed_table_ids(corpus, rt.graph_obj, retrieval, licensing_join_ids)
+    base_provenance = {
+        **base_provenance,
+        "licensed_tables": _table_provenance_names(corpus, licensed_ids),
+    }
+    context = assemble_context(
+        corpus,
+        retrieval,
+        licensed_table_ids=licensed_ids,
+        history=history,
+        db_name=settings.datasource.db,
+        always_note_global_max=settings.always_note_global_max,
+        always_note_char_max=settings.always_note_char_max,
+    )
+    # What the model was actually handed. Outcome metrics alone cannot separate
+    # "the curated corpus did not help" from "the curated corpus never reached
+    # the prompt"; these do.
+    rendered = context.render()
+    base_provenance = {
+        **base_provenance,
+        "injected_note_ids": list(context.injected_note_ids),
+        "n_notes_injected": len(context.injected_note_ids),
+        "n_few_shots_injected": len(context.few_shots),
+        "n_joins_injected": len(context.joins),
+        "n_metrics_injected": len(context.metrics),
+        "n_terms_injected": len(context.terms),
+        "n_caveats_injected": len(context.caveats),
+        "context_chars": len(rendered),
+        # The identity of what was handed over, not just its size. Two arms
+        # differing only in corpus content can render byte-identical context —
+        # that is what a treatment failing to reach the model looks like, and a
+        # character count is too coarse to catch it. `eval.treatment` compares
+        # these across arms and voids the comparison when they agree too often.
+        "context_hash": hashlib.sha256(rendered.encode("utf-8")).hexdigest()[:16],
+    }
+    rt.events.rail(
+        "assemble",
+        "ok",
+        schema=rt.default_schema,
+        tables=len(context.tables),
+        few_shots=len(context.few_shots),
+        notes=len(context.injected_note_ids),
+        caveats=len(context.caveats),
+        context_chars=len(rendered),
+        items={
+            "tables": [
+                {
+                    "id": t.id,
+                    "physical_name": t.physical_name,
+                    "schema": t.schema,
+                    "retrieved": t.retrieved,
+                }
+                for t in context.tables
+            ],
+            "joins": [
+                {
+                    "on": j.on,
+                    "cardinality": j.cardinality,
+                    "confidence": j.confidence,
+                    "low_confidence": j.low_confidence,
+                }
+                for j in context.joins
+            ],
+            "few_shots": [{"question": fs.question} for fs in context.few_shots],
+            "notes": [
+                _assemble_note_item(corpus, nid) for nid in context.injected_note_ids
+            ],
+            "terms": [{"name": t.name} for t in context.terms],
+            "metrics": [{"name": m.name} for m in context.metrics],
+        },
+    )
+    # ``base_provenance`` is always a new dict by this point (table provenance
+    # is recorded unconditionally above), so it always propagates.
+    return {
+        "context_block": rendered,
+        "seed_licensed": sorted(licensed_ids),
+        "base_provenance": base_provenance,
+        "outcome": "continue",
+    }
+
+
+def assemble_node(rt: ServeRuntime, state: ServeRailsState) -> dict:
+    """Deterministic front half — fails closed like every other terminal path.
+
+    This was the one node in the outer rails with no exception handling. Its body
+    guards a single ``plan_joins`` ``ValueError``; everything else — schema
+    shortlisting, the LLM pick, retrieval, licensing, ``assemble_context`` — could
+    raise straight out of ``graph.invoke``. An embedder timeout or a retrieval bug
+    therefore produced no ``Answer``, no refusal, and no run-log row at all, which is
+    a worse audit gap than losing the ledger: there is nothing to find afterwards.
+
+    ``agent_core_node`` has had this protection on three separate paths for a while
+    (``GovernanceHardStop`` / ``GraphRecursionError`` / bare ``Exception``); this is
+    the same shape, so a failure here becomes an L4 model-error refusal that still
+    runs through ``events.final`` and therefore still logs.
+
+    In the eval harness the gap was masked one layer up — the driver wraps
+    ``solve_with_meta`` — so this mattered most in live chat, where
+    ``api/graph_app.py`` has only a ``finally``.
+    """
+    try:
+        return _assemble_inner(rt, state)
+    except Exception as err:
+        # ``configure_logging`` (M4 N12a) now installs a root handler, so a
+        # ``logger.exception`` would reach disk — but this path still prints
+        # (bulk print→logger is N11 / later, not a silent mid-N12a swap). The
+        # traceback remains the fastest operator signal when assemble dies.
+        print(f"*** assemble failed, refusing (model_error): {type(err).__name__}: {err}")
+        traceback.print_exc()
+        ans = refusal(
+            escalation=_ESCALATION_MODEL_ERROR,
+            provenance={
+                **state["base_provenance"],
+                "refused_by": "model_error",
+                "error_type": type(err).__name__,
+                # Which node died. Without it a `model_error` refusal is
+                # indistinguishable from one raised inside the agent core, and the
+                # two call for opposite investigations.
+                "failed_stage": Stage.assemble.value,
+            },
+        )
+        ans = rt.events.final(ans)
+        return {"answer": ans, "outcome": "refuse"}
+
+
 def after_assemble(state: ServeRailsState) -> Literal["agent_core", "__end__"]:
     return END if state.get("outcome") == "refuse" else "agent_core"
 
@@ -980,7 +1309,7 @@ def _build_serve_rails(deployment: "ServeDeployment"):
     paused inner agent. All three default off/None, leaving the eval path
     byte-for-byte unchanged."""
     rt = ServeRuntime.build(deployment)
-    # Transitional: the three nodes still nested below close over these. They go
+    # Transitional: the one node still nested below closes over these. They go
     # away with the last closure (N18 step 4).
     corpus = rt.corpus
     gateway = rt.gateway
@@ -988,344 +1317,18 @@ def _build_serve_rails(deployment: "ServeDeployment"):
     identity = rt.identity
     model = rt.model
     embedder = rt.embedder
-    working_memory = rt.working_memory
-    session_id = rt.session_id
     clarify_checkpointer = rt.clarify_checkpointer
     clarify_thread = rt.clarify_thread
     clarify_resume = rt.clarify_resume
     default_schema = rt.default_schema
     dialect = rt.dialect
     agent_core_prompt = rt.agent_core_prompt
-    schema_pick_prompt = rt.schema_pick_prompt
     graph_obj = rt.graph_obj
     allowlist = rt.allowlist
-    _corpus_schemas = rt.corpus_schemas
-    spans_schemas = rt.spans_schemas
-    route_top_k = rt.route_top_k
-    router_chat = rt.router_chat
-    router_schema_vectors = rt.router_schema_vectors
     _index_cache = rt.index_cache
-    _routed_corpora = rt.routed_corpora
     _search_hits = rt.search_hits
     stages = rt.stages
     events = rt.events
-
-    def assemble(state: ServeRailsState) -> dict:
-        """Deterministic front half — fails closed like every other terminal path.
-
-        This was the one node in the outer rails with no exception handling. Its body
-        guards a single ``plan_joins`` ``ValueError``; everything else — schema
-        shortlisting, the LLM pick, retrieval, licensing, ``assemble_context`` — could
-        raise straight out of ``graph.invoke``. An embedder timeout or a retrieval bug
-        therefore produced no ``Answer``, no refusal, and no run-log row at all, which is
-        a worse audit gap than losing the ledger: there is nothing to find afterwards.
-
-        ``agent_core_node`` has had this protection on three separate paths for a while
-        (``GovernanceHardStop`` / ``GraphRecursionError`` / bare ``Exception``); this is
-        the same shape, so a failure here becomes an L4 model-error refusal that still
-        runs through ``events.final`` and therefore still logs.
-
-        In the eval harness the gap was masked one layer up — the driver wraps
-        ``solve_with_meta`` — so this mattered most in live chat, where
-        ``api/graph_app.py`` has only a ``finally``.
-        """
-        try:
-            return _assemble_inner(state)
-        except Exception as err:
-            # ``configure_logging`` (M4 N12a) now installs a root handler, so a
-            # ``logger.exception`` would reach disk — but this path still prints
-            # (bulk print→logger is N11 / later, not a silent mid-N12a swap). The
-            # traceback remains the fastest operator signal when assemble dies.
-            print(f"*** assemble failed, refusing (model_error): {type(err).__name__}: {err}")
-            traceback.print_exc()
-            ans = refusal(
-                escalation=_ESCALATION_MODEL_ERROR,
-                provenance={
-                    **state["base_provenance"],
-                    "refused_by": "model_error",
-                    "error_type": type(err).__name__,
-                    # Which node died. Without it a `model_error` refusal is
-                    # indistinguishable from one raised inside the agent core, and the
-                    # two call for opposite investigations.
-                    "failed_stage": Stage.assemble.value,
-                },
-            )
-            ans = events.final(ans)
-            return {"answer": ans, "outcome": "refuse"}
-
-    def _assemble_inner(state: ServeRailsState) -> dict:
-        """Amendment 1: run the deterministic front half and seed the semantic layer.
-
-        Reuses the exact deterministic assembly (retrieval + licensing +
-        ``assemble_context``) that used to feed the old template generator, so
-        the agent starts at parity (context + base licensed scope), then refines.
-        """
-        question = state["question"]
-        sid = state.get("session_id") or session_id
-        history = list(working_memory.history(sid)) if working_memory is not None else []
-        base_provenance = state["base_provenance"]
-        retrieval_corpus = corpus
-        if spans_schemas:
-            # Shortlist by embedding similarity (BM25 fallback). Then either (a)
-            # collapse to a single LLM-chosen schema (``schema_route_llm_pick`` — the
-            # single-schema-answer regime, no cross-schema joins), or (b) expand the
-            # shortlist along curated cross-schema joins (the default cross-schema
-            # regime). Record both counts + the pick so a scale run can see how the
-            # shortlist prunes and where it routed (silent mis-routing would
-            # otherwise be invisible in the EX number).
-            route_channel: dict = {}
-            route_ranked: list = []
-            shortlisted = shortlist_schemas(
-                corpus,
-                question,
-                top_k=route_top_k,
-                embedder=embedder,
-                schema_vectors=router_schema_vectors,
-                settings=settings,
-                index_cache=_index_cache,
-                channel_out=route_channel,
-                ranked_out=route_ranked,
-            )
-            # A silent embedding->BM25 degradation halves routing recall
-            # (0.70 -> 0.35); recorded so the drop is attributable (AUDIT R8).
-            base_provenance = {**base_provenance, **route_channel}
-            picked: str | None = None
-            pick_fallback: str | None = None
-            if router_chat is not None and shortlisted:
-                # Its own sub-stage: a routing regression has to be separable from
-                # the rest of assemble, and this is the only LLM call in the node.
-                with stages.stage(Stage.schema_pick, n_candidates=len(shortlisted)) as detail:
-                    decision = pick_schema(
-                        corpus,
-                        question,
-                        shortlisted,
-                        chat=router_chat,
-                        max_columns=settings.schema_pick_max_columns,
-                        system_prompt=schema_pick_prompt,
-                    )
-                    detail["fallback"] = decision.fallback is not None
-                picked, pick_fallback = decision.schema, decision.fallback
-                if decision.usage_metadata:
-                    events.add_token_usage(
-                        [
-                            {
-                                "source": "router",
-                                "usage_metadata": decision.usage_metadata,
-                            }
-                        ]
-                    )
-                routed = (
-                    frozenset([picked])
-                    if picked
-                    else expand_schemas_via_curated_joins(corpus, set(shortlisted))
-                )
-            else:
-                stages.skipped(Stage.schema_pick, llm_pick=router_chat is not None)
-                routed = expand_schemas_via_curated_joins(corpus, set(shortlisted))
-            # Memoised by routed schema set. The filter is deterministic in
-            # ``routed``, so rebuilding it per question minted a fresh ``Corpus``
-            # object with identical contents every time — which then defeated the
-            # retrieval index cache below, because there was nothing stable to key on.
-            # Bounded by the number of distinct neighbourhoods a run visits.
-            routed_key = frozenset(routed)
-            retrieval_corpus = _routed_corpora.get(routed_key)
-            if retrieval_corpus is None:
-                retrieval_corpus = _routed_corpora[routed_key] = (
-                    filter_corpus_for_retrieval(corpus, routed)
-                )
-            base_provenance = {
-                **base_provenance,
-                "routed_schemas": sorted(routed),
-                # Kept in RELEVANCE order, not sorted: the position of the true
-                # schema in this list is the signal that separates "retrieval never
-                # surfaced it" from "the picker overrode a correct rank-1", and
-                # alphabetising would throw it away. (``routed`` is a frozenset, so
-                # it has no meaningful order and stays sorted for stable diffs.)
-                "shortlisted_schemas": list(shortlisted),
-                "total_schemas": len(_corpus_schemas),
-                "schema_pick": picked,
-                # Set when ``picked`` is really the rank-1 fallback after a failed
-                # or unparseable pick, so a degraded row is not scored as a
-                # decision the model made.
-                "schema_pick_fallback": pick_fallback,
-            }
-            # Live timeline: which schemas were shortlisted and which one won.
-            # Scores only when the embedding channel ran; truncated only when the
-            # picker saw fewer tables than the schema has (SCHEMA_PICK_MAX_TABLES).
-            channel = route_channel.get("schema_route_channel")
-            score_by = {s: sc for s, sc in route_ranked}
-            candidates = []
-            for rank, name in enumerate(shortlisted, start=1):
-                row: dict[str, Any] = {"schema": name, "rank": rank}
-                if channel == "embedding" and name in score_by:
-                    row["score"] = score_by[name]
-                candidates.append(row)
-            truncated = []
-            table_totals = _schema_table_totals(corpus, shortlisted)
-            for name in shortlisted:
-                tables_total = table_totals.get(name, 0)
-                tables_shown = min(SCHEMA_PICK_MAX_TABLES, tables_total)
-                if tables_total > tables_shown:
-                    truncated.append(
-                        {
-                            "schema": name,
-                            "tables_shown": tables_shown,
-                            "tables_total": tables_total,
-                        }
-                    )
-            events.rail(
-                "schema_route",
-                "ok",
-                n_total=len(_corpus_schemas),
-                channel=channel,
-                degraded=route_channel.get("schema_route_degraded"),
-                candidates=candidates,
-                picked=picked,
-                fallback=pick_fallback,
-                truncated=truncated or None,
-            )
-        else:
-            # A single-schema corpus never routes. Recorded, not omitted: an absent
-            # schema_pick record would read as a build that cannot measure the pick.
-            stages.skipped(Stage.schema_pick, spans_schemas=False)
-            # ...and the same is true of the *row*. Leaving `base_provenance`
-            # untouched here made a bypassed turn indistinguishable from a routed one
-            # that lost its provenance: the row recorded `routed_schemas=[]`, so
-            # `routed_hit` was False on every question and `routing_recall` read 0.0
-            # for a pool that has nothing to route. Worse, the eval's own
-            # "was routing bypassed?" guard tests `isinstance(total_schemas, int)`,
-            # which no single-schema turn could ever satisfy — so every wrong answer
-            # in a one-schema pool was charged to `schema_pick`, a stage that did not
-            # run. The bypass is now asserted by the code that knows it, not inferred
-            # downstream from a field's absence.
-            #
-            # `routed_schemas` is the schema the turn is pinned to, so `routed_hit`
-            # is true for the right reason. `schema_pick` and `shortlisted_schemas`
-            # stay ABSENT on purpose: stamping them would enrol these rows in
-            # `schema_pick_accuracy` and `gold_schema_rank` as unanimous successes of
-            # a picker and a shortlist that never ran, which is how a metric starts
-            # measuring its own denominator.
-            base_provenance = {
-                **base_provenance,
-                "routed_schemas": sorted(_corpus_schemas),
-                "total_schemas": len(_corpus_schemas),
-                "routing_bypassed": True,
-            }
-        with stages.stage(Stage.retrieve) as detail:
-            retrieval = retrieve(
-                retrieval_corpus,
-                question,
-                embedder=embedder,
-                settings=settings,
-                index_cache=_index_cache,
-            )
-            detail["n_tables"] = len(retrieval.table_ids)
-        # Table-level provenance. Without it a wrong-table answer is indistinguishable
-        # from a wrong-*retrieval* one in the scored rows, and those need opposite
-        # fixes (retrieval tuning vs. generation prompting). Recorded before the
-        # missing-edge check so a refusal carries what retrieval offered.
-        base_provenance = {
-            **base_provenance,
-            "retrieved_tables": _table_provenance_names(corpus, retrieval.table_ids),
-            # Carried so the stamp can say something about the *evidence*, not only
-            # about what went wrong downstream (AUDIT C2). 0.0 = the question names
-            # nothing this corpus contains.
-            "retrieval_lexical_coverage": retrieval.lexical_coverage,
-        }
-        missing = detect_missing_join_path(
-            corpus, graph_obj, set(retrieval.table_ids)
-        )
-        if missing is not None:
-            events.rail(
-                "assemble", "refused", missing_edge=True, schemas=sorted(missing.schemas)
-            )
-            ans = missing_edge_refusal(base_provenance, missing)
-            ans = events.final(ans)
-            return {"answer": ans, "outcome": "refuse"}
-        try:
-            licensing_join_ids = plan_joins(graph_obj, set(retrieval.table_ids)).join_ids
-        except ValueError:
-            licensing_join_ids = []
-        licensed_ids = _licensed_table_ids(corpus, graph_obj, retrieval, licensing_join_ids)
-        base_provenance = {
-            **base_provenance,
-            "licensed_tables": _table_provenance_names(corpus, licensed_ids),
-        }
-        context = assemble_context(
-            corpus,
-            retrieval,
-            licensed_table_ids=licensed_ids,
-            history=history,
-            db_name=settings.datasource.db,
-            always_note_global_max=settings.always_note_global_max,
-            always_note_char_max=settings.always_note_char_max,
-        )
-        # What the model was actually handed. Outcome metrics alone cannot separate
-        # "the curated corpus did not help" from "the curated corpus never reached
-        # the prompt"; these do.
-        rendered = context.render()
-        base_provenance = {
-            **base_provenance,
-            "injected_note_ids": list(context.injected_note_ids),
-            "n_notes_injected": len(context.injected_note_ids),
-            "n_few_shots_injected": len(context.few_shots),
-            "n_joins_injected": len(context.joins),
-            "n_metrics_injected": len(context.metrics),
-            "n_terms_injected": len(context.terms),
-            "n_caveats_injected": len(context.caveats),
-            "context_chars": len(rendered),
-            # The identity of what was handed over, not just its size. Two arms
-            # differing only in corpus content can render byte-identical context —
-            # that is what a treatment failing to reach the model looks like, and a
-            # character count is too coarse to catch it. `eval.treatment` compares
-            # these across arms and voids the comparison when they agree too often.
-            "context_hash": hashlib.sha256(rendered.encode("utf-8")).hexdigest()[:16],
-        }
-        events.rail(
-            "assemble",
-            "ok",
-            schema=default_schema,
-            tables=len(context.tables),
-            few_shots=len(context.few_shots),
-            notes=len(context.injected_note_ids),
-            caveats=len(context.caveats),
-            context_chars=len(rendered),
-            items={
-                "tables": [
-                    {
-                        "id": t.id,
-                        "physical_name": t.physical_name,
-                        "schema": t.schema,
-                        "retrieved": t.retrieved,
-                    }
-                    for t in context.tables
-                ],
-                "joins": [
-                    {
-                        "on": j.on,
-                        "cardinality": j.cardinality,
-                        "confidence": j.confidence,
-                        "low_confidence": j.low_confidence,
-                    }
-                    for j in context.joins
-                ],
-                "few_shots": [{"question": fs.question} for fs in context.few_shots],
-                "notes": [
-                    _assemble_note_item(corpus, nid)
-                    for nid in context.injected_note_ids
-                ],
-                "terms": [{"name": t.name} for t in context.terms],
-                "metrics": [{"name": m.name} for m in context.metrics],
-            },
-        )
-        # ``base_provenance`` is always a new dict by this point (table provenance
-        # is recorded unconditionally above), so it always propagates.
-        return {
-            "context_block": rendered,
-            "seed_licensed": sorted(licensed_ids),
-            "base_provenance": base_provenance,
-            "outcome": "continue",
-        }
 
     def agent_core_node(state: ServeRailsState) -> dict:
         question = state["question"]
@@ -1643,7 +1646,9 @@ def _build_serve_rails(deployment: "ServeDeployment"):
     builder = StateGraph(ServeRailsState)
     builder.add_node("ingest", partial(ingest_node, rt))
     builder.add_node("refuse_gate", partial(refuse_gate_node, rt))
-    builder.add_node("assemble", _timed(rt, Stage.assemble, assemble))
+    builder.add_node(
+        "assemble", _timed(rt, Stage.assemble, partial(assemble_node, rt))
+    )
     builder.add_node("agent_core", agent_core_node)
     builder.add_node("narrate", partial(narrate_node, rt))
     builder.add_edge(START, "ingest")
