@@ -50,7 +50,7 @@ from .schemas import (
     TableResponse,
     TableSummaryResponse,
 )
-from .stack import ServeStack, build_stack
+from .stack import ServeStack, build_stack, get_default_stack
 
 logger = logging.getLogger("governed_bi.api")
 
@@ -120,7 +120,7 @@ def create_app(stack: ServeStack | None = None):
     from fastapi import Depends, FastAPI, Header, HTTPException, Query
     from fastapi.middleware.cors import CORSMiddleware
 
-    stack = stack or build_stack()
+    stack = stack or get_default_stack()
     from ..logging_setup import configure_logging
 
     configure_logging()
@@ -465,6 +465,8 @@ def create_app(stack: ServeStack | None = None):
         except OSError:
             logger.exception("corpus edit write failed (asset=%s)", asset.id)
             raise HTTPException(status_code=500, detail="failed to write the asset")
+        # In-process readers (GET /schema, /chat) must see the write without a restart.
+        stack.reload_corpus()
         return EditResponse(
             written=True,
             asset_id=asset.id,

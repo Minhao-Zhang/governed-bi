@@ -77,7 +77,6 @@ class LangChainChatClient:
 
     def __init__(self, model: Any) -> None:
         self.model = model
-        self.last_usage_metadata: dict | None = None  # set by complete() for L4 capture
 
     @classmethod
     def from_config(cls, models: "ModelConfig") -> "LangChainChatClient":
@@ -106,7 +105,15 @@ class LangChainChatClient:
             kwargs["api_key"] = key
         return cls(ChatOpenAI(**kwargs))
 
-    def complete(self, system: str, user: str) -> str:
+    def complete_with_usage(
+        self, system: str, user: str
+    ) -> tuple[str, dict[str, Any] | None]:
+        """Complete and return ``(text, usage_metadata)`` from this call's response.
+
+        Concurrent serve runs share one client instance; reading an instance field
+        after ``complete`` races. Callers that need tokens must take them from this
+        return value (M4 N14).
+        """
         # Trace nesting: when this runs *inside* a LangGraph/LangChain run (e.g. the
         # serve-path narrator or schema router, called from a graph node), the
         # parent run already carries the tracing callbacks. Inherit them via the
@@ -138,8 +145,11 @@ class LangChainChatClient:
             config = None if (not cfg["callbacks"] and ctx is None) else cfg
             message = self.model.invoke(messages, config=config)
         usage = getattr(message, "usage_metadata", None)
-        self.last_usage_metadata = dict(usage) if usage else None
-        return _message_text(message)
+        return _message_text(message), (dict(usage) if usage else None)
+
+    def complete(self, system: str, user: str) -> str:
+        text, _usage = self.complete_with_usage(system, user)
+        return text
 
 
 class LangChainEmbedder:

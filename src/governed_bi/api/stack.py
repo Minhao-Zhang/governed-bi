@@ -10,6 +10,7 @@ configured API key is set, else the deterministic offline default.
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -25,6 +26,9 @@ if TYPE_CHECKING:
     from ..llm import Embedder
 
 logger = logging.getLogger("governed_bi.api")
+
+_DEFAULT_STACK: ServeStack | None = None
+_DEFAULT_STACK_LOCK = threading.Lock()
 
 
 def _new_index_cache() -> Any:
@@ -65,6 +69,18 @@ class ServeStack:
     # asset — text that is identical for the life of the stack (AUDIT R6). Content
     # keyed, so a corpus edit produces different entries rather than stale ones.
     index_cache: Any = field(default_factory=lambda: _new_index_cache())
+
+    def reload_corpus(self) -> None:
+        """Re-read the YAML tree into this stack (after ``POST /corpus/edit``).
+
+        ``ServeStack`` is frozen; corpus fields are replaced in place so every
+        holder of this object (routes + graph_app share one via
+        :func:`get_default_stack`) sees the write. Index cache entries are
+        content-keyed, so stale embeddings are not reused for edited assets.
+        """
+        fresh = load_corpus(self.corpus_root)
+        object.__setattr__(self, "corpus_full", fresh)
+        object.__setattr__(self, "corpus_analyst", fresh.for_analyst())
 
     def open_connector(self, *, connect_timeout: float | None = None) -> "Connector":
         """Open a fresh read-only connector for one request (caller closes it).
@@ -264,3 +280,25 @@ def build_stack(settings: Settings | None = None) -> ServeStack:
     # SQLite file). Without this, the first chat turn hangs on TCP connect.
     stack.verify_datasource()
     return stack
+
+
+def get_default_stack() -> ServeStack:
+    """Process-wide default stack (``build_stack()`` with TOML settings).
+
+    ``build_stack(settings=...)`` with an explicit Settings stays uncached —
+    Settings is not reliably hashable, and tests pass bespoke settings. Only the
+    no-arg path is shared so ``api.routes`` and ``api.graph_app`` cannot each
+    open a second corpus / checkpointer / index_cache in one process.
+    """
+    global _DEFAULT_STACK
+    with _DEFAULT_STACK_LOCK:
+        if _DEFAULT_STACK is None:
+            _DEFAULT_STACK = build_stack()
+        return _DEFAULT_STACK
+
+
+def _reset_default_stack_for_tests() -> None:
+    """Test helper: drop the cached default so the next call rebuilds."""
+    global _DEFAULT_STACK
+    with _DEFAULT_STACK_LOCK:
+        _DEFAULT_STACK = None

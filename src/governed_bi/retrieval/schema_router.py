@@ -525,10 +525,15 @@ class SchemaPick(NamedTuple):
     proxy timeouts is scored as that many rank-1 picks the model never made, and a
     reasoning heading mistaken for an answer is scored as a real pick — both
     biasing pick accuracy in an unknown direction.
+
+    ``usage_metadata`` is the token usage from *this* pick call (or ``None`` when
+    no LLM ran / the client does not report usage). Taken from the call return
+    value — never from a shared ``last_usage_metadata`` field (M4 N14).
     """
 
     schema: str
     fallback: str | None = None
+    usage_metadata: dict | None = None
 
 
 def pick_schema(
@@ -572,9 +577,16 @@ def pick_schema(
         f"Answer with exactly one of: {', '.join(candidates)}"
     )
     try:
-        reply = (
-            chat.complete(system_prompt or SCHEMA_PICK_SYSTEM, user) or ""
-        ).strip()
+        if hasattr(chat, "complete_with_usage"):
+            reply, usage = chat.complete_with_usage(
+                system_prompt or SCHEMA_PICK_SYSTEM, user
+            )
+            reply = (reply or "").strip()
+        else:
+            reply = (
+                chat.complete(system_prompt or SCHEMA_PICK_SYSTEM, user) or ""
+            ).strip()
+            usage = None
     except Exception:
         logger.warning(
             "schema-pick LLM call failed; falling back to top-ranked candidate %r",
@@ -591,7 +603,7 @@ def pick_schema(
             reply[:200],
             candidates[0],
         )
-        return SchemaPick(candidates[0], "unparseable_reply")
+        return SchemaPick(candidates[0], "unparseable_reply", usage)
     if picked.fallback:
         # INFO, not WARNING: the pick stands and this shape is common enough that
         # a warning per question would bury the two that mean data loss.
@@ -602,8 +614,7 @@ def pick_schema(
             picked.fallback,
             reply[:200],
         )
-    return picked
-
+    return SchemaPick(picked.schema, picked.fallback, usage)
 
 def filter_corpus_for_retrieval(corpus: "Corpus", schemas: frozenset[str]) -> "Corpus":
     """Subset of ``corpus`` whose assets are in scope for the routed schemas.

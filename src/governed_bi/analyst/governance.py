@@ -312,26 +312,36 @@ def _unverified_prefix(provenance: dict) -> str:
 
 def narrate_answer(
     answer: "Answer", question: str, narrator: "AnswerNarrator | None"
-) -> "Answer":
+) -> tuple["Answer", dict | None]:
     """Re-phrase a delivered answer's text with the LLM narrator.
 
-    The serve graph's dedicated ``narrate`` node calls this so the narrator's model
-    call is a first-class graph step (one trace span under the turn), not a side
-    call buried inside finalization. Only answers carrying an executed result grid
-    are narrated; refusals (no ``result``) and the no-narrator path return the
-    answer unchanged, and a narrator failure keeps the deterministic text so a
-    model hiccup never turns a governed answer into an error. A graded-delivery
-    answer keeps its unverified banner, identical to the deterministic path.
+    Returns ``(answer, usage_metadata)``. The serve graph's dedicated ``narrate``
+    node calls this so the narrator's model call is a first-class graph step (one
+    trace span under the turn), not a side call buried inside finalization. Only
+    answers carrying an executed result grid are narrated; refusals (no ``result``)
+    and the no-narrator path return the answer unchanged with ``usage=None``, and a
+    narrator failure keeps the deterministic text so a model hiccup never turns a
+    governed answer into an error. A graded-delivery answer keeps its unverified
+    banner, identical to the deterministic path.
+
+    Usage is taken from the narrator call's return value (M4 N14) — never from a
+    shared ``last_usage_metadata`` field on the stack-scoped chat client.
     """
     if narrator is None or answer is None or answer.result is None:
-        return answer
+        return answer, None
     try:
-        body = narrator.narrate(question, answer.sql or "", answer.result)
+        if hasattr(narrator, "narrate_with_usage"):
+            body, usage = narrator.narrate_with_usage(
+                question, answer.sql or "", answer.result
+            )
+        else:
+            body = narrator.narrate(question, answer.sql or "", answer.result)
+            usage = None
     except Exception:
-        return answer
+        return answer, None
     if answer.semantic_assurance is SemanticAssurance.unverified:
         body = _unverified_prefix(answer.provenance or {}) + body
-    return replace(answer, text=body)
+    return replace(answer, text=body), usage
 
 
 class StageRecorder:

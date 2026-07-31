@@ -228,9 +228,9 @@ def _build_graph():
     startup with a clear message rather than booting a serve process that would
     503 on every turn.
     """
-    from governed_bi.api.stack import build_stack
+    from governed_bi.api.stack import get_default_stack
 
-    stack = build_stack()
+    stack = get_default_stack()
     if stack.chat_model is None:
         models = stack.settings.models
         if models.has_credentials():

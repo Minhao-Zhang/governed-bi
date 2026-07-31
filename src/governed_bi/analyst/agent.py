@@ -700,10 +700,14 @@ def build_serve_rails(
                     )
                     detail["fallback"] = decision.fallback is not None
                 picked, pick_fallback = decision.schema, decision.fallback
-                usage = getattr(router_chat, "last_usage_metadata", None)
-                if usage:
+                if decision.usage_metadata:
                     events.add_token_usage(
-                        [{"source": "router", "usage_metadata": usage}]
+                        [
+                            {
+                                "source": "router",
+                                "usage_metadata": decision.usage_metadata,
+                            }
+                        ]
                     )
                 routed = (
                     frozenset([picked])
@@ -1396,7 +1400,7 @@ def build_serve_rails(
         if answer is None:
             return {}
         with stages.stage(Stage.narrate) as detail:
-            narrated = narrate_answer(answer, state["question"], narrator)
+            narrated, usage = narrate_answer(answer, state["question"], narrator)
             narrated_ran = narrated is not answer
             detail["narrated"] = narrated_ran
         # ``narrate`` is the turn's last stage but runs AFTER events.final() stamped
@@ -1407,13 +1411,10 @@ def build_serve_rails(
             narrated,
             provenance={**(narrated.provenance or {}), **stages.provenance()},
         )
-        # Only fold narrator tokens when the narrator actually ran. On refusals
-        # narrate_answer returns the same object without calling the model — do
-        # not read a stale last_usage_metadata from a prior success turn.
+        # Only fold narrator tokens when the narrator actually ran. Usage comes from
+        # narrate_answer's return value (M4 N14) — not a shared client field.
         if not narrated_ran:
             return {"answer": narrated}
-        chat = getattr(narrator, "_chat", None) or getattr(narrator, "chat", None)
-        usage = getattr(chat, "last_usage_metadata", None) if chat is not None else None
         if usage:
             narrated = amend_run_tokens(
                 narrated,
@@ -1421,8 +1422,6 @@ def build_serve_rails(
                 extra_usage=[{"source": "narrator", "usage_metadata": usage}],
                 model=getattr(settings.models, "llm_model", None),
             )
-            if chat is not None:
-                chat.last_usage_metadata = None
         return {"answer": narrated}
 
     builder = StateGraph(ServeRailsState)

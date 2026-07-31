@@ -12,6 +12,6 @@ configuration.
 from __future__ import annotations
 
 from .app import create_app
-from .stack import ServeStack, build_stack
+from .stack import ServeStack, build_stack, get_default_stack
 
-__all__ = ["create_app", "ServeStack", "build_stack"]
+__all__ = ["create_app", "ServeStack", "build_stack", "get_default_stack"]

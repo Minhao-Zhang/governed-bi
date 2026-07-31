@@ -83,10 +83,26 @@ class LlmAnswerNarrator:
         self.system_prompt = system_prompt or _NARRATOR_SYSTEM
 
     def narrate(self, question: str, sql: str, result: "ResultTable") -> str:
+        text, _usage = self.narrate_with_usage(question, sql, result)
+        return text
+
+    def narrate_with_usage(
+        self, question: str, sql: str, result: "ResultTable"
+    ) -> tuple[str, dict | None]:
+        """Narrate and return ``(text, usage_metadata)`` from this call.
+
+        Concurrent runs share one narrator; usage must come from the return
+        value, not a shared client field (M4 N14).
+        """
         user = (
             f"Question: {question}\n\n"
             f"SQL that ran:\n{sql}\n\n"
             f"Result:\n{_render_result_for_prompt(result)}"
         )
-        text = self.chat.complete(self.system_prompt, user).strip()
-        return text or _fallback_text(result)
+        if hasattr(self.chat, "complete_with_usage"):
+            text, usage = self.chat.complete_with_usage(self.system_prompt, user)
+            text = (text or "").strip()
+        else:
+            text = self.chat.complete(self.system_prompt, user).strip()
+            usage = None
+        return (text or _fallback_text(result), usage)
