@@ -29,8 +29,11 @@ dependencies = [
     # --- LLM + embedding seams (governed_bi.llm), OpenAI-backed ---
     "openai>=1.40",
     # --- Agent harnesses: LangGraph server DAG + deepagents curator + LangChain clients ---
-    "langgraph>=1.0",
-    "langgraph-cli[inmem]>=0.2",
+    # Upper bounds pin the wire-protocol generation this repo was built against
+    # (see docs/architecture.md §9). Transitive langgraph-api / langgraph-sdk are
+    # constrained under [tool.uv] rather than declared as direct deps.
+    "langgraph>=1.0,<2",
+    "langgraph-cli[inmem]>=0.4,<0.5",
     "langgraph-checkpoint-sqlite>=2.0",
     "langgraph-checkpoint-postgres>=2.0",
     "langchain>=1.0",
@@ -74,6 +77,16 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/governed_bi"]
+
+# Wire-protocol packages owned by the LangGraph Server stack arrive only as
+# transitive deps of langgraph-cli[inmem]. Pin them here so `uv sync -U` cannot
+# silently move /threads, /runs/stream, or stream_subgraphs without a deliberate
+# pyproject change. See docs/architecture.md §9.
+[tool.uv]
+constraint-dependencies = [
+    "langgraph-api>=0.11,<0.12",
+    "langgraph-sdk>=0.4.2,<0.5",
+]
 
 # --- Tooling (AUDIT T5) -------------------------------------------------------
 # Config lands here so local runs and CI share one source of truth. `ruff check` is

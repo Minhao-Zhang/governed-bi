@@ -223,3 +223,16 @@ Guardrails, in order (fail-closed on any, all five enforced): syntax → policy 
 | Serving | one process + files + SQLite | stateless server fleet; curator as async jobs; gateway/corpus/memory/eval as services; graph DB; caches |
 
 Bake in the abstractions now (identity object, gate, scoped memory/cache) as seams an enterprise fork can adapt — not "prod is a config flip" (see [D1](design-decisions.md#d1-target)).
+
+### Declared LangGraph SDK / wire-protocol ranges
+
+This repo's compatible generation of the LangGraph Server wire protocol is declared in `pyproject.toml`, not only in `uv.lock`:
+
+| Package | Range | How declared |
+|---|---|---|
+| `langgraph` | `>=1.0,<2` | direct dependency |
+| `langgraph-cli` | `>=0.4,<0.5` | direct (`langgraph-cli[inmem]`) |
+| `langgraph-api` | `>=0.11,<0.12` | `[tool.uv] constraint-dependencies` (transitive) |
+| `langgraph-sdk` | `>=0.4.2,<0.5` | `[tool.uv] constraint-dependencies` (transitive) |
+
+`langgraph-api` and `langgraph-sdk` own `/threads`, `/runs/stream`, and `stream_subgraphs`. They are not imported by this package; constraining them without promoting them to direct deps keeps `uv sync -U` from moving the wire protocol while a silent lockfile bump would leave no diff in application code. Widening a bound is a deliberate reviewable change.
