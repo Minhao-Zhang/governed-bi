@@ -88,6 +88,115 @@ def load_gold_sql(bird_dir: Path | str, *, split: str, field: str = "sql_rename"
     return out
 
 
+def load_questions_sidecar(run_dir: Path | str) -> dict[str, dict[str, Any]]:
+    """``{question_id: {question, gold_sql, db_id, ...}}`` from ``questions.jsonl``.
+
+    Empty dict when the side-car is absent — callers fall back to BIRD.
+    """
+    path = Path(run_dir) / "questions.jsonl"
+    if not path.is_file():
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    with path.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            qid = str(row.get("question_id") or "")
+            if qid:
+                out[qid] = row
+    return out
+
+
+def resolve_gold_sql(
+    run_dir: Path | str,
+    bird_dir: Path | str,
+    *,
+    split: str,
+) -> dict[str, str]:
+    """Prefer ``questions.jsonl`` gold SQL; fall back to the BIRD split file.
+
+    Old runs (no side-car) stay readable without migration. New runs write the
+    side-car so offline tools need not reach into the sibling BIRD repo.
+    """
+    gold = load_gold_sql(bird_dir, split=split)
+    sidecar = load_questions_sidecar(run_dir)
+    if not sidecar:
+        return gold
+    for qid, row in sidecar.items():
+        sql = row.get("gold_sql") or row.get("sql_rename") or ""
+        if sql:
+            gold[qid] = str(sql)
+    return gold
+
+
+def write_questions_sidecar(
+    run_dir: Path | str,
+    rows: Iterable[dict[str, Any]],
+) -> Path:
+    """Write ``questions.jsonl`` — one row per question_id (question text + gold SQL).
+
+    Deliberately a side-car, not inline fields on every generations row: inlining
+    question + gold across 5404 rows bloats the artifact for a join that analysis
+    only needs once. See N15 size measurement in the delivery evidence.
+    """
+    run_dir = Path(run_dir)
+    path = run_dir / "questions.jsonl"
+    seen: set[str] = set()
+    with path.open("w", encoding="utf-8") as fh:
+        for row in rows:
+            qid = str(row.get("question_id") or "")
+            if not qid or qid in seen:
+                continue
+            seen.add(qid)
+            fh.write(
+                json.dumps(
+                    {
+                        "question_id": qid,
+                        "db_id": row.get("db_id"),
+                        "question": row.get("question"),
+                        "gold_sql": row.get("gold_sql") or row.get("sql_rename") or "",
+                        "evidence": row.get("evidence"),
+                        "difficulty": row.get("difficulty"),
+                        "split": row.get("split"),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    return path
+
+
+def load_question_text(
+    run_dir: Path | str,
+    bird_dir: Path | str,
+    *,
+    split: str,
+) -> dict[str, str]:
+    """``{question_id: question text}`` from side-car, else BIRD split file."""
+    sidecar = load_questions_sidecar(run_dir)
+    if sidecar:
+        return {
+            qid: str(row.get("question") or "")
+            for qid, row in sidecar.items()
+            if row.get("question")
+        }
+    path = Path(bird_dir) / "eval_dataset" / f"{split}_final.jsonl"
+    out: dict[str, str] = {}
+    if not path.is_file():
+        return out
+    with path.open(encoding="utf-8") as fh:
+        for line in fh:
+            if line.strip():
+                row = json.loads(line)
+                out[str(row["question_id"])] = row.get("question") or ""
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Corpus census — the eval ladder's independent variable
 # --------------------------------------------------------------------------- #
@@ -617,13 +726,20 @@ def rank_report(rows: Iterable[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 
 
 def analyse_run(
-    run_dir: Path | str, *, bird_dir: Path | str, split: str | None = None
+    run_dir: Path | str,
+    *,
+    bird_dir: Path | str,
+    split: str | None = None,
+    question_id: str | None = None,
 ) -> dict[str, Any]:
     """Full offline report for one run directory.
 
     ``split`` is derived from the rows and must be passed explicitly for runs that
     predate the ``split`` field; it is never guessed, because the split chooses the
     gold file and a wrong gold file silently empties every comparison.
+
+    ``question_id`` adds a cross-arm debug view (SQL / outcome / funnel stage per
+    arm) without changing the rest of the report.
     """
     run_dir = Path(run_dir)
     arms = load_arm_rows(run_dir)
@@ -652,7 +768,7 @@ def analyse_run(
                 "another split. Pass --split explicitly to assert they are not."
             )
         split = splits.pop()
-    gold_sql = load_gold_sql(bird_dir, split=split)
+    gold_sql = resolve_gold_sql(run_dir, bird_dir, split=split)
 
     # Even an explicit --split can name the wrong file. Zero id overlap is never a
     # real run, and every downstream count would otherwise read as "nothing to
@@ -671,6 +787,18 @@ def analyse_run(
             "tables": asdict(table_selection_report(rows, gold_sql, arm=arm)),
             "by_gold_rank": rank_report(rows),
         }
+
+    # BIRD-basis funnel / twin matrix / stage-4 structural stats — the report-faithful
+    # reproduction path (see ``bird_basis`` and the 20260730 error-analysis doc).
+    from .bird_basis import bird_basis_report, question_arm_view
+
+    out["bird_basis"] = bird_basis_report(arms, gold_sql)
+    questions = load_questions_sidecar(run_dir)
+    out["questions_sidecar"] = {
+        "present": bool(questions),
+        "n": len(questions),
+        "path": str(run_dir / "questions.jsonl"),
+    }
 
     # Arms are only comparable over questions all of them scored. A truncated or
     # still-running arm otherwise yields a paired test on a silent subset.
@@ -806,6 +934,11 @@ def analyse_run(
             "summary.json's comparisons[] for that."
         ),
     }
+    if question_id is not None:
+        out["question_view"] = question_arm_view(arms, question_id, gold_sql)
+        qtext = load_question_text(run_dir, bird_dir, split=split)
+        if question_id in qtext:
+            out["question_view"]["question"] = qtext[question_id]
     return out
 
 
@@ -818,10 +951,20 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="Override the split recorded in rows; required if no row records one",
     )
+    p.add_argument(
+        "--question-id",
+        default=None,
+        help="Add a cross-arm debug view for this question_id",
+    )
     p.add_argument("--out", type=Path, default=None, help="Write JSON here as well")
     args = p.parse_args(argv)
 
-    report = analyse_run(args.run_dir, bird_dir=args.bird_dir, split=args.split)
+    report = analyse_run(
+        args.run_dir,
+        bird_dir=args.bird_dir,
+        split=args.split,
+        question_id=args.question_id,
+    )
     text = json.dumps(report, indent=2, ensure_ascii=False)
     print(text)
     out = args.out or (args.run_dir / "analysis.json")

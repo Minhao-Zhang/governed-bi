@@ -663,7 +663,7 @@ def test_cost_block_is_separate_from_the_scored_fields():
 
 def _write_run(tmp_path, bird_dir):
     """A two-arm run directory plus the gold split file it is analysed against."""
-    (bird_dir / "eval_dataset").mkdir(parents=True)
+    (bird_dir / "eval_dataset").mkdir(parents=True, exist_ok=True)
     gold = [
         {"question_id": "q1", "sql_rename": "SELECT * FROM t_a"},
         {"question_id": "q2", "sql_rename": "SELECT * FROM t_b"},
@@ -700,9 +700,21 @@ def test_analyse_run_reports_every_arm_and_pairing(tmp_path):
     assert report["question_coverage"]["n_common_to_all_arms"] == 2
     assert report["question_coverage"]["incomplete_arms"] == []
     assert report["mcnemar"]["baseline_vs_curated"]["b_only"] == 1
+    assert "bird_basis" in report
+    assert report["bird_basis"]["waterfall"]["baseline"]["n"] == 2
+    assert report["questions_sidecar"]["present"] is False
 
 
-def test_analyse_run_flags_an_arm_missing_questions(tmp_path):
+def test_analyse_run_question_view(tmp_path):
+    bird = tmp_path / "bird"
+    _write_run(tmp_path, bird)
+    report = analyse_run(tmp_path, bird_dir=bird, question_id="q1")
+    view = report["question_view"]
+    assert view["question_id"] == "q1"
+    assert set(view["arms"]) == {"baseline", "curated"}
+    assert view["arms"]["curated"]["correct"] is True
+    assert view["arms"]["baseline"]["generated_sql"]
+    assert view["gold_sql"] == "SELECT * FROM t_a"
     """The flagged arm is the truncated one. This test previously asserted
     ``["baseline"]`` — the untouched, complete arm — because the implementation
     compared each arm against the intersection, which the short arm itself shrinks."""
