@@ -91,7 +91,12 @@ from ..stages import (
     classify_row,
 )
 from . import metrics
-from .analysis import census_delta, corpus_census
+from .analysis import (
+    analyse_run,
+    census_delta,
+    corpus_census,
+    write_questions_sidecar,
+)
 from .arms import (
     ARM_ORDER,
     _touches_suspect,
@@ -2958,6 +2963,24 @@ def run_datalake(
             f"{len(collisions)} question_id(s) appear in more than one pooled db "
             f"(e.g. {collisions[:5]}): gold association and resume dedup key on it."
         )
+
+    # Question text + gold SQL as a side-car (not inlined into generations rows).
+    # Analysis tools join this at read time; old runs without it fall back to BIRD.
+    write_questions_sidecar(
+        out_dir,
+        [
+            {
+                "question_id": item.question_id,
+                "db_id": db,
+                "question": item.question,
+                "gold_sql": item.sql,
+                "evidence": item.evidence,
+                "difficulty": item.difficulty,
+                "split": split,
+            }
+            for item, db in pairs
+        ],
+    )
     gold_hashes: dict[str, Any] = {}
     suspect_by_db: dict[str, frozenset[str]] = {}
     # Which dbs actually had a trap manifest to load. ``load_trap_columns`` reports
@@ -3409,6 +3432,26 @@ def run_datalake(
         json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
     metrics.write_manifest(out_dir, {**manifest, "completed_at_utc": _utc_ts()})
+
+    # Offline analysis.json — same report ``python -m governed_bi.eval.analysis``
+    # produces. Failures are loud: a missing analysis.json used to go unnoticed
+    # forever because the driver never called analyse_run.
+    try:
+        analysis = analyse_run(out_dir, bird_dir=bird_dir, split=split)
+        analysis_path = out_dir / "analysis.json"
+        analysis_path.write_text(
+            json.dumps(analysis, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        print(f"wrote {analysis_path}")
+    except Exception as exc:
+        print(
+            f"\n*** WARNING: analyse_run failed after summary.json was written "
+            f"({type(exc).__name__}: {exc}). Re-run:\n"
+            f"  uv run python -m governed_bi.eval.analysis {out_dir} "
+            f"--bird-dir {bird_dir}\n"
+        )
+        traceback.print_exc()
 
     # A crashy arm is not a result: the crashes it absorbed are OUR failures, and
     # they are not distributed equally across arms, so the deltas move with them.
