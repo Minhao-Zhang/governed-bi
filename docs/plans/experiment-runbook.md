@@ -178,12 +178,43 @@ much safer to quote. Keep `--replicate curated` for the full split itself.
 
 ## Step 2 — the real run
 
+**Model comes from TOML, not the CLI.** There is no `--model` flag on
+`run_datalake`. The serve path reads `[models].llm_model` from
+`governed_bi.toml` (today `gpt-5.6-luna`). Changing the model means editing that
+file; forgetting to change it back does not error — it only leaves a `model`
+field in `manifest.json` you may not notice. **Before spending:**
+
 ```bash
-uv run python -m governed_bi.eval.run_datalake --build-workers 6 --workers 8 --replicate curated
+uv run python -c "from governed_bi.config import Settings, Environment; print(Settings.for_env(Environment.dev).models.llm_model)"
 ```
 
-Defaults: all databases in the test split, arms
-`baseline,seeded,curated,curated_sme`.
+After the run, re-check `manifest.json` → `model`. Same preflight M4 N12b used.
+
+Full ladder (test split, all schemas the split names, four fair arms, serve-side
+replicate of `curated`):
+
+```bash
+uv run python -m governed_bi.eval.run_datalake \
+  --split test \
+  --build-workers 6 \
+  --workers 8 \
+  --replicate curated \
+  --out runs/datalake
+```
+
+Defaults already cover all databases in the test split and arms
+`baseline,seeded,curated,curated_sme`. To pin an explicit schema list (stratified
+pilot, smoke, or a subset you intend to quote), pass `--dbs`:
+
+```bash
+uv run python -m governed_bi.eval.run_datalake \
+  --split test \
+  --dbs address,movies_4,beer_factory,european_football_2,language_corpus,superhero \
+  --build-workers 6 \
+  --workers 8 \
+  --replicate curated \
+  --out runs/datalake
+```
 
 **Know the size before you start it.** The test split is **69 databases / 2030
 questions**. With the four default arms plus `--replicate curated` that is five serve
@@ -502,7 +533,21 @@ Every term is mechanical and already computed:
 | effect size | +2.0 EX points. Below the ~+1.6-point band the MDE machinery treats as resolvable, a "win" is not separable from decoding noise. |
 | curator draws | three. `n=1` on a stochastic agent is a sample of one from the treatment distribution, which `power.py` says in its own docstring. |
 
-Two honest caveats on this criterion:
+### Hard MDE bound on the SME step (read before quoting SME)
+
+Measured on the 20260730 fixed2 run: 31 byte-identical `context_hash` pairs flipped
+`correct` on 4 questions (12.9%); full-split discordance **122/1351 = 9.03%**;
+paired SE ≈ 0.0082 → 80% power **MDE ≈ 2.3pp**. The SME step under debate is on
+the order of **0.2pp**.
+
+> Under a ~9.03% noise floor (MDE ≈ 2.3pp), no affordable N resolves a 0.2pp SME
+> step. `--replicate` only licenses **「未检出」**, not **「无效果」**.
+
+That is a conclusion, not a soft caution. A paid run that clears serve-replicate
+gates still cannot promote a sub-MDE SME delta into "SME does nothing" — only into
+"not detected at this budget".
+
+Two honest caveats on the abandon criterion above:
 
 - It is a statement about **this benchmark at this scale with this model**, not about
   semantic layers in general. A null result here would not show that curation cannot

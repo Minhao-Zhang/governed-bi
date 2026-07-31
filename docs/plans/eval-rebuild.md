@@ -413,9 +413,11 @@ and nothing records the difference today. Add a `question_pool_hash` to
 in `src/governed_bi/eval/index.py:104` is derived from `MANIFEST_KNOBS` minus an
 explicit exclusion set, the new key joins the comparability gate automatically.
 
-Deferred: a guard for schemas that end up with zero questions, which must not count as
-built-but-unscored and must not break the pool census. That needs the real dataset to
-test against.
+Zero-question guard (landed M5 N17): schemas that end up with zero questions must not
+count as built-but-unscored and must not break the pool census.
+``_quarantine_zero_question_schemas`` withholds them from ``built_dbs`` / census /
+routing, records ``dbs_zero_questions``, and ``quotable()`` refuses. Covered by
+``tests/test_zero_question_guard.py`` with a synthetic empty db.
 
 ### A stale split label was hiding 79% of the gold hashes
 

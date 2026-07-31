@@ -853,6 +853,49 @@ def _quarantine_curator_failures(
     return servable, reason_by_db
 
 
+def _quarantine_zero_question_schemas(
+    built: "Sequence[str]",
+    pairs: "Sequence[tuple[Any, str]]",
+) -> tuple[list[str], list[str]]:
+    """Withhold schemas that contribute zero questions from the serve / census pool.
+
+    Returns ``(servable, zero_question_dbs)``.
+
+    After the dataset rescreen (eval-rebuild §4), a schema can still *build* while
+    its split file has no rows left for it. Leaving it in ``built`` made it look
+    built-but-unscored, inflated ``corpus_census`` / router candidates with a
+    schema that never enters the graded denominator, and corrupted the pool
+    census against ``n_questions``. Quarantine is explicit: the schema leaves
+    ``built_dbs``, is named in ``dbs_zero_questions``, and ``quotable()`` refuses.
+
+    Order of ``built`` is preserved for the survivors (same contract as
+    :func:`_quarantine_curator_failures`).
+    """
+    scored = {db for _item, db in pairs}
+    empty = [db for db in built if db not in scored]
+    if not empty:
+        return list(built), []
+    servable = [db for db in built if db in scored]
+    if not servable:
+        raise RuntimeError(
+            f"every one of the {len(built)} built schema(s) has zero questions in "
+            "the scored split, so there is nothing to serve: "
+            + ", ".join(empty[:10])
+            + (" (+more)" if len(empty) > 10 else "")
+            + ". Narrow --dbs / --split, or fix the dataset filter that emptied "
+            "these schemas."
+        )
+    print(
+        f"*** WARNING: withholding {len(empty)} built schema(s) with zero questions "
+        f"in this split from the serve loop and corpus census: "
+        f"{empty[:10]}"
+        + (f" (+{len(empty) - 10} more)" if len(empty) > 10 else "")
+        + f". Serving the remaining {len(servable)}; recorded as "
+        "`dbs_zero_questions` and this blocks quotability ***"
+    )
+    return servable, empty
+
+
 def _pooled_items(
     dataset_dir: Path, db_ids: list[str], *, limit: int | None, split: str = "test"
 ) -> list[tuple[Any, str]]:
@@ -861,6 +904,11 @@ def _pooled_items(
 
     ``split="train"`` scores the questions the curator itself was built from, so it
     is a **diagnostic**, not a held-out measurement — see :func:`run_datalake`.
+
+    Schemas with no rows for the split contribute nothing here; callers must run
+    :func:`_quarantine_zero_question_schemas` before treating ``db_ids`` as the
+    scored pool, or a zero-question schema stays in ``built_dbs`` and corrupts
+    census / routing while looking built-but-unscored.
     """
     pairs: list[tuple[Any, str]] = []
     for db in db_ids:
@@ -2907,6 +2955,11 @@ def run_datalake(
     # stamped per row, and given its own EX stratum so the defensible headline (the
     # twin-free stratum) can be stated separately from the recall-flavoured one.
     pairs = _pooled_items(dataset_dir, built, limit=limit, split=split)
+    # Zero-question schemas after rescreening (eval-rebuild §4): still in ``built``
+    # because the curator ran, but they contribute no graded rows. Drop them before
+    # corpora / census / routing, or they look built-but-unscored and inflate the
+    # pool census against a denominator that never includes them.
+    built, zero_question_dbs = _quarantine_zero_question_schemas(built, pairs)
     # The dataset's OWN exclusion list, which nothing here read. Its note says to
     # exclude these from cross-variant EX; 25 of the 2030 test questions qualify and
     # each was scored wrong for every arm, depressing every absolute EX including the
@@ -3387,6 +3440,12 @@ def run_datalake(
         # than left to be inferred from two lists.
         "dbs_quarantined_curator_error": quarantined_dbs,
         "n_dbs_built_before_quarantine": n_built,
+        # Built, then withheld because the scored split has zero questions for them
+        # (``_quarantine_zero_question_schemas``). Same silent-attrition shape as
+        # curator quarantine: absent from ``built_dbs`` and from ``build_errors``,
+        # so without this field they vanish from the census while looking like a
+        # fully covered smaller pool.
+        "dbs_zero_questions": zero_question_dbs,
         # Requested but not loaded on Postgres. Distinct from ``build_errors`` (loaded
         # but the build failed): neither the coverage gate nor the gold share can see
         # these, because both measure against the already-filtered ``wanted``.

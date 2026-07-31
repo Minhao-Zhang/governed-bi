@@ -471,6 +471,9 @@ def record_for_run(run_dir: Path | str) -> dict[str, Any]:
             summary.get("dbs_quarantined_curator_error") or {}
         ),
         "n_dbs_built_before_quarantine": summary.get("n_dbs_built_before_quarantine"),
+        # Built schemas whose scored split contributed zero questions. Withheld from
+        # serve / census rather than counted as built-but-unscored (eval-rebuild §4).
+        "dbs_zero_questions": sorted(summary.get("dbs_zero_questions") or []),
         "n_dbs_requested": summary.get("n_dbs_requested"),
         "gold_unverified_dbs": sorted(
             (summary.get("gold_hash_self_check") or {}).get("exec_error_dbs") or {}
@@ -950,6 +953,22 @@ def quotable(record: dict[str, Any]) -> tuple[bool, list[str]]:
             + (" +more" if len(withheld) > 10 else "")
             + ") — the surviving pool is intact, but it is smaller than the pool this "
             "run names, so its numbers are that subset's and not this benchmark's"
+        )
+
+    # Schemas that built but the scored split has zero questions for them. Leaving
+    # them in built_dbs made them look built-but-unscored and inflated corpus census
+    # / router candidates against a graded denominator that never included them.
+    empty = record.get("dbs_zero_questions") or []
+    if empty:
+        requested = record.get("n_dbs_requested")
+        scale = f" of {requested}" if requested else ""
+        reasons.append(
+            f"{len(empty)}{scale} schema(s) built with zero questions in the scored "
+            "split and were withheld from serving and corpus census ("
+            + ", ".join(empty[:10])
+            + (" +more" if len(empty) > 10 else "")
+            + ") — they are not built-but-unscored; the pool measured excludes them, "
+            "so this is not the benchmark it names"
         )
 
     # Gold that would not execute on some schemas. The run was allowed to proceed — the

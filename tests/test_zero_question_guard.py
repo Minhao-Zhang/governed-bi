@@ -1,0 +1,164 @@
+"""Schemas with zero questions must not look built-but-unscored or corrupt census.
+
+eval-rebuild §4 deferred this guard: after rescreening, a schema can still build while
+its split has no rows. Leaving it in ``built_dbs`` inflated corpus census / router
+candidates against a graded denominator that never included it. The fix quarantines
+those schemas explicitly (``dbs_zero_questions``) the same way curator-error attrition
+is named rather than vanished.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from governed_bi.eval.index import quotable, record_for_run
+from governed_bi.eval.run_datalake import (
+    _pooled_items,
+    _quarantine_zero_question_schemas,
+)
+
+
+def _write_split(dataset_dir: Path, split: str, rows: list[dict]) -> None:
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+    path = dataset_dir / f"{split}_final.jsonl"
+    path.write_text(
+        "".join(json.dumps(r) + "\n" for r in rows),
+        encoding="utf-8",
+    )
+
+
+def _item_row(db_id: str, qid: str) -> dict:
+    return {
+        "db_id": db_id,
+        "question_id": qid,
+        "question": f"q for {qid}",
+        "sql_rename": f"SELECT 1 /* {qid} */",
+    }
+
+
+def test_zero_question_schema_leaves_the_pool_and_is_named(tmp_path):
+    """The whole fix in one assertion: empty schema leaves ``built``, and is named."""
+    dataset = tmp_path / "eval_dataset"
+    _write_split(
+        dataset,
+        "test",
+        [
+            _item_row("beer_factory", "q1"),
+            _item_row("beer_factory", "q2"),
+            # empty_db has no rows — synthetic empty after rescreen.
+        ],
+    )
+    built = ["beer_factory", "empty_db", "also_empty"]
+    pairs = _pooled_items(dataset, built, limit=None, split="test")
+
+    servable, empty = _quarantine_zero_question_schemas(built, pairs)
+
+    assert servable == ["beer_factory"]
+    assert empty == ["empty_db", "also_empty"]
+    assert all(db == "beer_factory" for _item, db in pairs)
+
+
+def test_order_of_surviving_pool_is_preserved(tmp_path):
+    dataset = tmp_path / "eval_dataset"
+    _write_split(
+        dataset,
+        "test",
+        [_item_row("zebra", "z1"), _item_row("monkey", "m1")],
+    )
+    built = ["zebra", "apple", "monkey"]
+    pairs = _pooled_items(dataset, built, limit=None, split="test")
+    servable, empty = _quarantine_zero_question_schemas(built, pairs)
+    assert servable == ["zebra", "monkey"]
+    assert empty == ["apple"]
+
+
+def test_all_schemas_empty_aborts(tmp_path):
+    dataset = tmp_path / "eval_dataset"
+    _write_split(dataset, "test", [])  # no questions for anyone
+    built = ["a", "b"]
+    pairs = _pooled_items(dataset, built, limit=None, split="test")
+    with pytest.raises(RuntimeError, match="zero questions"):
+        _quarantine_zero_question_schemas(built, pairs)
+
+
+def test_clean_pool_changes_nothing(tmp_path):
+    dataset = tmp_path / "eval_dataset"
+    _write_split(
+        dataset,
+        "test",
+        [_item_row("a", "a1"), _item_row("b", "b1")],
+    )
+    built = ["a", "b"]
+    pairs = _pooled_items(dataset, built, limit=None, split="test")
+    servable, empty = _quarantine_zero_question_schemas(built, pairs)
+    assert servable == built
+    assert empty == []
+
+
+def _run_dir(tmp_path, **summary_extra):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "manifest_schema_version": 1,
+                "model": "gpt-5.6-luna",
+                "split": "test",
+                "route_top_k": 10,
+                "route_llm_pick": True,
+                "grade_semantic_failures": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    arm = {
+        "n": 1500,
+        "ex_lenient": 0.33,
+        "crash_rate": 0.0,
+        "n_correct_with_empty_gold": 0,
+        "n_correct_and_pred_has_no_from": 0,
+        "n_correct_and_zero_table_overlap": 0,
+    }
+    summary = {
+        "mode": "datalake",
+        "split": "test",
+        "n_questions": 1500,
+        "n_dbs_built": 56,
+        "n_dbs_requested": 57,
+        "arms": {"baseline": dict(arm), "curated": dict(arm)},
+        "build_errors": {},
+        "curator_errors": {},
+    }
+    summary.update(summary_extra)
+    (run_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+    return run_dir
+
+
+def test_zero_question_schema_reaches_ledger_and_blocks_quoting(tmp_path):
+    record = record_for_run(
+        _run_dir(tmp_path, dbs_zero_questions=["ghost_schema"], n_dbs_requested=57)
+    )
+    assert record["dbs_zero_questions"] == ["ghost_schema"]
+    ok, reasons = quotable(record)
+    assert not ok
+    joined = " | ".join(reasons)
+    assert "zero questions" in joined
+    assert "ghost_schema" in joined
+    assert "1 of 57" in joined
+
+
+def test_a_run_with_no_empty_schemas_is_still_quotable(tmp_path):
+    record = record_for_run(_run_dir(tmp_path, dbs_zero_questions=[]))
+    ok, reasons = quotable(record)
+    assert ok, reasons
+
+
+def test_absent_key_is_not_accused(tmp_path):
+    """Predates the guard — absence is not a hidden empty-schema list."""
+    record = record_for_run(_run_dir(tmp_path))
+    assert record["dbs_zero_questions"] == []
+    ok, reasons = quotable(record)
+    assert ok, reasons
