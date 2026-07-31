@@ -16,6 +16,9 @@ GLOSSARY = REPO_ROOT / "docs" / "glossary.md"
 REQUIRED = (
     "arm",
     "rung",
+    "run",
+    "run_id",
+    "turn_id",
     "ledger",
     "stamp",
     "scope",
