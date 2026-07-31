@@ -735,12 +735,18 @@ def test_the_stage_event_register_matches_what_the_driver_writes():
     from governed_bi.eval.run_datalake import _stage_event_rows
 
     (row,) = _stage_event_rows(
-        {"stage_events": [{"stage": "route", "status": "ok", "ms": 12, "detail": None}]},
+        {
+            "run_id": "rid-1",
+            "turn_id": "tid-1",
+            "stage_events": [{"stage": "route", "status": "ok", "ms": 12, "detail": None}],
+        },
         question_id="q1",
         arm="curated",
         db_id="beer_factory",
     )
     assert set(row) == set(metrics.STAGE_EVENT_FIELDS)
+    assert row["run_id"] == "rid-1"
+    assert row["turn_id"] == "tid-1"
 
 
 def test_the_split_gap_rates_are_the_ones_split_gap_actually_gaps():

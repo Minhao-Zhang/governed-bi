@@ -216,6 +216,8 @@ def test_stage_events_are_written_one_record_per_stage(tmp_path):
         "question_id": "id_answered",
         "arm": "curated",
         "db_id": "db_a",
+        "run_id": None,
+        "turn_id": None,
         "stage": "route",
         "status": "ok",
         "ms": 1.5,

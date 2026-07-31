@@ -47,6 +47,7 @@ numbers being quoted as system performance, and it is pinned by
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Iterable, Protocol, runtime_checkable
@@ -56,6 +57,8 @@ from sqlglot import exp
 from sqlglot.optimizer.scope import traverse_scope
 
 from .ex import execution_match
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..config import Settings
@@ -476,6 +479,10 @@ def agent_solver(
             tid = make_turn_id(session_id, self._n)
             log_tokens = bind_log_context(run_id=rid, turn_id=tid)
             try:
+                # One line per question so run.log joins to Langfuse / stage_events
+                # on the same run_id (N12a three-sink accept). Progress stays on
+                # stdout via the driver's on_result hook — do not replace that.
+                _log.info("serve question n=%s session=%s", self._n, session_id)
                 ctx = RunContext(
                     run_id=rid,
                     turn_id=tid,
@@ -585,8 +592,10 @@ def agent_solver(
                 "token_usage": prov.get("token_usage"),
                 "cost_est_usd": prov.get("cost_est_usd"),
                 "usage": prov.get("token_sum") or prov.get("usage"),
-                "turn_id": prov.get("turn_id"),
-                "run_id": prov.get("run_id"),
+                # Prefer the ids bound into Langfuse / logging for this invoke —
+                # provenance should match, but the outer mint is the join key.
+                "turn_id": tid,
+                "run_id": rid,
             }
             return answer.sql, meta
 

@@ -826,7 +826,8 @@ SUMMARY_FIELDS: tuple[str, ...] = (
 #: run writes, so a reader looking for latency attribution had no reason to know it
 #: existed.
 STAGE_EVENT_FIELDS: tuple[str, ...] = (
-    "question_id", "arm", "db_id", "stage", "status", "ms", "detail",
+    "question_id", "arm", "db_id", "run_id", "turn_id",
+    "stage", "status", "ms", "detail",
 )
 
 

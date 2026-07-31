@@ -933,6 +933,9 @@ def _stage_event_rows(
                 "question_id": question_id,
                 "arm": arm,
                 "db_id": db_id,
+                # Same ids Langfuse / run.log use — join key for N12a three-sink accept.
+                "run_id": meta.get("run_id"),
+                "turn_id": meta.get("turn_id"),
                 "stage": event.get("stage"),
                 "status": event.get("status"),
                 "ms": event.get("ms"),
