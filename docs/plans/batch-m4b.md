@@ -31,20 +31,23 @@
 
 ---
 
-## 开工前：上游 spec 的一处更正，而且是它最响的那句
+## 开工前：checklist 4.2 的数字全部为真
 
-rebuild-checklist 4.2 写着：
+> **2026-07-31 撤回。**本节原先写着「**没有任何测试用 `inspect.getsource` 解析 `build_serve_rails`**」，并据此让 N18 不要把「消灭两个解析源码的测试」当收益。**那条更正是错的，checklist 是对的。**
+>
+> 错因：我那次 `grep -rn "inspect.getsource" tests/ | head` **被 `head` 截断在第 10 行**，而 `test_retrieval_index_cache.py` 按字母序正好排在第 11 位。
+>
+> 实际两处，逐字对上 checklist 的描述：
+> - **`tests/test_retrieval_index_cache.py:333`** —— `inspect.getsource(agent_mod.build_serve_rails)` 之后 `src.split("shortlist_schemas(", 1)[1].split(")", 1)[0]`。
+> - **`tests/test_retrieval_index_cache.py:534`** —— `inspect.getsource(build_serve_rails)` 之后**一个手写的括号配平循环**（`depth, end = 0, call_start` 逐字符数括号）。
+>
+> 「两个测试用 `inspect.getsource` **加手写括号匹配**解析它的源码文本」—— 一字不差。**这确实是全仓最刺眼的一处，而且它是 N18 的收益,不是 N19 的。**
+>
+> 教训按原样留在这里：一条 `| head` 截断过的 grep，被写成了一份工作单的头号更正。**这正是这几批文档反复在别人身上抓的那类错。**
 
-> **两个测试用 `inspect.getsource` 加手写括号匹配解析它的源码文本。这是全仓最刺眼的一处。**
+checklist 4.2 的数字，用 AST 逐个复核，**全部为真**：1032 行（build-sequence 逐字写的就是 "1,032 lines"）、17 个 kwarg、13 个 depth-1 闭包 / 14 个全深度嵌套 def。**唯一偏差是构造点：checklist 说 6 个，实测 9 个**（3 个在 `src/`，6 个在 `tests/`）。
 
-**核过：没有任何测试用 `inspect.getsource` 解析 `build_serve_rails`。**全仓 10 处 `getsource`，解析的是 `run_datalake`（5 处）、`pipeline`（3 处）、`_build_db_corpora`、`_summarise_rows`。
-
-那句话本身没错 —— **只是指错了对象。它描述的是 N19 的目标，不是 N18 的。**其中 `tests/test_eval_metrics.py:790` 解析的 `_summarise_rows` 正是 N19 要搬走的第一个函数。所以：
-
-- **N18 不能拿「消灭两个解析源码的测试」当收益**，那个收益不存在。
-- **N19 可以，而且它有六处**（下面列）。
-
-checklist 4.2 的其余数字**全部核实为真**：1032 行（build-sequence 逐字写的就是 "1,032 lines"）、17 个 kwarg、13 个 depth-1 闭包 / 14 个全深度嵌套 def。
+N19 那六处 `getsource` 仍然成立，见下 —— 两项各有各的源码解析债。
 
 ---
 
@@ -193,11 +196,19 @@ N18 与 N19 **文件不重叠，可以两个人同时开**。
 3. **顺手改行为。**两项都是纯搬运。看见坑记 `open-work.md`。
 4. **N18 改了 `index_cache=`。**两个测试按字符串盯着它。
 5. **N19 直接删下划线别名**，让 181 处引用一次性全改 —— 那个 diff 会淹掉真正的改动。
-6. **拿「消灭两个解析源码的测试」当 N18 的收益。**那两个测试不存在（见开工前更正）。
+6. **N18 把 `test_retrieval_index_cache.py:333` / `:534` 那两个源码解析测试删掉而不是改指向。**它们守的是「图自己的那份 index cache 按名字传进去了」，不是「有个 `index_cache=` 参数」—— 注释里写明了宽松的子串检查曾经放过 `index_cache=None`。改指向可以，删不行。
 
 ## 这两项做完之后
 
-`src/` 里 >1000 行的文件预期从 6 个降到 **4 个**（`agent.py` 约 500，`run_datalake.py` 约 4350 —— 后者仍然超标，但那 4350 里已经没有统计代码了，剩下的是 driver 本职）。
+> **2026-07-31 · N18 已完成（`f752fc9` / `82ef4a9` / `975b7e5` / `181880b`），下面这条预测错了一半。**
+>
+> `build_serve_rails` **1032 → 25 行**，17 个 kwarg → 1 个位置参数，14 个嵌套 def → **0**，最大函数 156 行。但 **`agent.py` 从 1534 涨到 1764**。
+>
+> 预测「约 500」的隐含前提是**有东西离开这个文件**，而这一项**什么都没搬出去** —— 它把闭包变成了同一个文件里的顶层函数。多出的 230 行是可寻址性的价码：12 个新顶层函数各自的 `def` 行与 docstring，加上 `ServeRuntime` 类的 190 行（其中约 36 行是显式 passthrough property）。
+>
+> **所以「拆函数」和「缩文件」是两件事，这一项只做了前者。**要让 `agent.py` 进 1000 以内，下一步是把 rails 提到 `analyst/rails.py` —— 现在这一步很便宜，因为那些节点已经是彼此独立的函数了。**没有并进这一批**：它不在条目里，而且会让第 4 笔 commit 不可 review。
+
+`src/` 里 >1000 行的文件在 N19 之后预期降到 **5 个**（`agent.py` 1764 未减、`run_datalake.py` 约 4350 —— 后者那 4350 里已经没有统计代码了，剩下的是 driver 本职）。
 
 **剩下四个大文件**：`run_datalake` ~4350、`pipeline` 1668、`index` 1409、`asset_bag` 1259、`run_log` 1066。checklist 里 `asset_bag` 有 X.1、其余三个都没有对应条目 —— **B 轴还没有走完，这两项只是第一步**。
 
