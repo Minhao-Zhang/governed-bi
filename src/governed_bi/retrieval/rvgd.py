@@ -394,6 +394,26 @@ class RetrievalIndexCache:
         return got
 
 
+def phys_name_to_table_id(corpus: "Corpus") -> dict[str, str | None]:
+    """Map physical table names to asset ids for few-shot SQL grounding.
+
+    Qualified ``schema.table`` keys always resolve. Bare names resolve only when
+    exactly one table corpus-wide carries that name; an ambiguous bare maps to
+    ``None`` (same contract as :meth:`Corpus.table_by_name`). Built in one O(n)
+    pass — callers must not replace this with per-name ``table_by_name`` loops.
+    """
+    phys_to_table: dict[str, str | None] = {}
+    bare_seen: dict[str, int] = {}
+    for a in corpus.assets:
+        if not isinstance(a, TableAsset):
+            continue
+        bare = a.physical_name.lower()
+        phys_to_table[f"{a.schema}.{bare}".lower()] = a.id
+        bare_seen[bare] = bare_seen.get(bare, 0) + 1
+        phys_to_table[bare] = a.id if bare_seen[bare] == 1 else None
+    return phys_to_table
+
+
 def _sql_table_ids(sql: str, phys_to_table: "dict[str, str | None]") -> list[str]:
     """Table asset ids referenced by ``sql`` (best-effort, for few-shot grounding).
 
@@ -528,14 +548,9 @@ def retrieve(
     # unambiguous) and the bare name (only when ONE table corpus-wide carries it —
     # an ambiguous bare name maps to None and grounds nothing, rather than to
     # whichever table happened to be loaded last).
-    phys_to_table: dict[str, str | None] = {}
-    _bare_seen: dict[str, int] = {}
+    phys_to_table = phys_name_to_table_id(corpus)
     for a in corpus.assets:
         if isinstance(a, TableAsset):
-            bare = a.physical_name.lower()
-            phys_to_table[f"{a.schema}.{bare}".lower()] = a.id
-            _bare_seen[bare] = _bare_seen.get(bare, 0) + 1
-            phys_to_table[bare] = a.id if _bare_seen[bare] == 1 else None
             for c in a.columns:
                 col_owner[derive_column_id(a.id, c.physical_name)] = a.id
 

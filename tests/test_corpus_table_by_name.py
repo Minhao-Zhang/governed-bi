@@ -145,3 +145,38 @@ def test_bird_corpus_has_ambiguous_bares_when_present():
     assert len(ambiguous) >= 1, "expected at least one ambiguous bare name in BIRD-corpus"
     for name in ambiguous[:5]:
         assert corpus.table_by_name(name) is None, name
+
+
+def test_rvgd_phys_map_agrees_with_table_by_name_on_none():
+    """N10a: two ambiguity strategies must not drift (do not fold into O(n²))."""
+    from governed_bi.retrieval.rvgd import phys_name_to_table_id
+
+    corpus = _ambiguous_corpus()
+    phys = phys_name_to_table_id(corpus)
+    bares = {a.physical_name.lower() for a in corpus.tables()}
+    for bare in bares:
+        by_name = corpus.table_by_name(bare)
+        mapped = phys.get(bare)
+        assert (by_name is None) == (mapped is None), bare
+        if by_name is not None:
+            assert mapped == by_name.id
+
+
+def test_rvgd_phys_map_agrees_on_bird_when_present():
+    bird = Path(__file__).resolve().parents[2] / "BIRD-corpus"
+    if not bird.is_dir():
+        pytest.skip("BIRD-corpus sibling not present")
+    from governed_bi.corpus import load_corpus
+    from governed_bi.retrieval.rvgd import phys_name_to_table_id
+
+    corpus = load_corpus(bird)
+    phys = phys_name_to_table_id(corpus)
+    bare_counts: dict[str, int] = {}
+    for a in corpus.tables():
+        bare_counts[a.physical_name.lower()] = bare_counts.get(a.physical_name.lower(), 0) + 1
+    for bare, count in bare_counts.items():
+        by_name = corpus.table_by_name(bare)
+        mapped = phys.get(bare)
+        assert (by_name is None) == (mapped is None) == (count > 1), bare
+        if count == 1:
+            assert by_name is not None and mapped == by_name.id
