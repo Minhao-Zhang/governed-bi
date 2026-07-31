@@ -48,3 +48,32 @@ def _hermetic_offline_env():
         for key, value in saved.items():
             if value is not None:
                 os.environ[key] = value
+
+
+@pytest.fixture(autouse=True)
+def _fresh_default_stack():
+    """Drop the process-wide default ServeStack around every test (N14).
+
+    ``api.stack.get_default_stack()`` memoises one stack per process so
+    ``api.routes`` and ``api.graph_app`` cannot each open a second corpus /
+    checkpointer / index cache. That cache is correct for a server process and
+    hostile to a test suite: whichever test happens to run first decides what
+    every later ``create_app()`` / ``make_graph()`` sees, under whatever env
+    vars, settings, or tmp corpus that first test had. Worse, the cached stack
+    is shared *mutable* state despite being a frozen dataclass — importing
+    ``governed_bi.api.routes`` does ``object.__setattr__(_stack, "can_stream",
+    True)`` on it, which used to leak into
+    ``test_capabilities_reports_offline_dev`` and fail it whenever the shuffled
+    order put ``test_routes_app_advertises_streaming`` first.
+
+    So reset before and after each test: the singleton stays (it is the point of
+    N14) but its lifetime is scoped to one test, and test order stops being
+    load-bearing. Rebuilding is cheap — a corpus load plus a SQLite probe.
+    """
+    from governed_bi.api.stack import _reset_default_stack_for_tests
+
+    _reset_default_stack_for_tests()
+    try:
+        yield
+    finally:
+        _reset_default_stack_for_tests()
