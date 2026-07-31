@@ -646,15 +646,20 @@ def _finish_unsuccessful(
     narrator: "AnswerNarrator | None" = None,
     stages: "StageRecorder | None" = None,
     allowlist: "ColumnAllowlist | None" = None,
+    allowed_tables: frozenset[str] | None = None,
     dialect: str | None = None,
     default_schema: str | None = None,
 ) -> "Answer":
     """Hard-refuse safety failures; §6 deliver-and-grade semantic ones when enabled.
 
-    ``allowlist``/``dialect``/``default_schema`` (threaded from ``analyst.agent``)
-    let this re-run :func:`check` on the SQL right before executing it, mirroring
-    the graded-delivery path. Without an ``allowlist`` there is nothing to re-check
-    against, so graded delivery refuses rather than delivering.
+    ``allowlist``/``allowed_tables``/``dialect``/``default_schema`` (threaded from
+    ``analyst.agent``) let this re-run :func:`check` on the SQL right before
+    executing it. Without an ``allowlist`` there is nothing to re-check against, so
+    graded delivery refuses rather than delivering. Without ``allowed_tables`` the
+    recheck cannot run L4, so graded delivery refuses the same way — never skip the
+    table-scope gate. When ``allowed_tables`` is provided (including empty), L4 runs
+    and unauthorized base tables are refused; only ``cost_estimate`` remains
+    forgivable on recheck.
     """
     record = dict(last_refusal)
     escalation = record.pop("escalation", _ESCALATION_NO_COVERAGE)
@@ -673,11 +678,12 @@ def _finish_unsuccessful(
         return refusal(escalation=escalation, provenance=provenance)
 
     # Defense-in-depth: re-run the guardrail right before executing, so nothing but
-    # check() itself ever authorizes an execution (never
-    # trust the ledger's ``failed_layer`` label). ``allowed_tables=None`` skips L4
-    # (the term-scope layer graded delivery exists to forgive), so a genuine L4/L5
-    # failure still delivers — but if the SQL now trips a safety/confidentiality
-    # layer (L2/L3), or any non-semantic layer, refuse and never execute.
+    # check() itself ever authorizes an execution (never trust the ledger's
+    # ``failed_layer`` label). Entry still allows L4/L5 failures into this path;
+    # recheck forgiveness is only ``cost_estimate`` — an L4 failure means
+    # unauthorized base tables and must refuse. Delivering an L4 miss requires the
+    # final ``allowed_tables`` to cover the SQL (e.g. licensed set grew after the
+    # mid-loop block).
     #
     # A missing allowlist used to skip the whole re-check and fall through to
     # ``gateway.execute`` — the guard added to make this path defence-in-depth
@@ -685,11 +691,20 @@ def _finish_unsuccessful(
     # what the paragraph above claims. Nothing passes None today (``analyst.agent``
     # builds the allowlist unconditionally and all four call sites thread it), so the
     # hole is invisible until a refactor drops the argument, and what it costs then is
-    # an unverified query running against the database. Refuse instead.
+    # an unverified query running against the database. Refuse instead. The same
+    # fail-closed rule applies to ``allowed_tables``: omitting it must not skip L4.
     if allowlist is None:
         return refusal(
             escalation=escalation,
             provenance={**provenance, "graded_delivery_recheck_skipped": "no_allowlist"},
+        )
+    if allowed_tables is None:
+        return refusal(
+            escalation=escalation,
+            provenance={
+                **provenance,
+                "graded_delivery_recheck_skipped": "no_allowed_tables",
+            },
         )
 
     with _stage(stages, Stage.guardrail, path="graded_delivery_recheck") as detail:
@@ -697,7 +712,7 @@ def _finish_unsuccessful(
             sql,
             allowed_columns=set(allowlist.allowed),
             suspect_columns=allowlist.suspect,
-            allowed_tables=None,
+            allowed_tables=allowed_tables,
             hard_block_suspect=settings.hard_block_suspect_columns,
             dialect=dialect,
             default_schema=default_schema,
@@ -705,7 +720,10 @@ def _finish_unsuccessful(
         )
         detail["passed"] = verdict.passed
     recheck_layer = verdict.failed_layer.value if verdict.failed_layer else None
-    if not verdict.passed and recheck_layer not in _GRADED_DELIVERY_LAYERS:
+    # Entry forgive set is L4+L5; recheck only forgives L5 (cost). L4 unauthorized
+    # tables are never delivered.
+    recheck_forgive = frozenset({GuardrailLayer.cost_estimate.value})
+    if not verdict.passed and recheck_layer not in recheck_forgive:
         return refusal(
             escalation=escalation,
             provenance={**provenance, "graded_delivery_recheck_failed": recheck_layer},

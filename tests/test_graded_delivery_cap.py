@@ -85,6 +85,7 @@ def test_cap_entry_is_refused_never_executed():
         attempts=3,
         base_provenance={},
         question="q",
+        allowed_tables=frozenset(),
     )
     assert gw.calls == 0, "unvalidated cap SQL must never be executed (Vuln 2)"
     assert answer.result is None  # a refusal, not a delivered result grid
@@ -111,12 +112,42 @@ def test_a_missing_allowlist_refuses_instead_of_executing():
         attempts=3,
         base_provenance={},
         question="q",
+        allowed_tables=frozenset(),
         # no allowlist / dialect / default_schema
     )
     assert gw.calls == 0, "an unverifiable SQL must never be executed"
     assert answer.result is None
     assert answer.tier is ReliabilityTier.refused
     assert answer.provenance.get("graded_delivery_recheck_skipped") == "no_allowlist"
+
+
+def test_a_missing_allowed_tables_refuses_instead_of_skipping_l4():
+    """Omitting ``allowed_tables`` must refuse — same fail-closed rule as a missing
+    allowlist — not skip L4 and deliver."""
+    corpus = load_corpus(CORPUS_ROOT, schema="beer_factory").for_analyst()
+    gw = _CountingGateway()
+    answer = _finish_unsuccessful(
+        settings=_settings(),
+        gateway=gw,
+        identity=_IDENTITY,
+        last_refusal={
+            "refused_by": "guardrail",
+            "failed_layer": "term_semantics",
+            "sql": 'SELECT SUM("PurchasePrice") FROM "transaction"',
+            "escalation": "escalate",
+        },
+        attempts=3,
+        base_provenance={},
+        question="q",
+        allowlist=column_allowlist(corpus),
+        # allowed_tables deliberately omitted
+        dialect="sqlite",
+        default_schema="beer_factory",
+    )
+    assert gw.calls == 0, "missing allowed_tables must not skip L4 and deliver"
+    assert answer.result is None
+    assert answer.tier is ReliabilityTier.refused
+    assert answer.provenance.get("graded_delivery_recheck_skipped") == "no_allowed_tables"
 
 
 def test_recheck_refuses_mislabeled_semantic_entry():
@@ -140,6 +171,7 @@ def test_recheck_refuses_mislabeled_semantic_entry():
         base_provenance={},
         question="q",
         allowlist=column_allowlist(corpus),
+        allowed_tables=frozenset({"beer_factory.transaction"}),
         dialect="sqlite",
         default_schema="beer_factory",
     )
@@ -148,9 +180,14 @@ def test_recheck_refuses_mislabeled_semantic_entry():
     assert answer.provenance.get("graded_delivery_recheck_failed") == "ast_column_allowlist"
 
 
-def test_recheck_allows_clean_l4_scope_failure():
-    """The re-check must NOT block a legitimate L4 (scope-only) graded delivery:
-    a query over allowlisted columns still delivers-and-grades (D5)."""
+def test_recheck_delivers_when_final_license_covers_tables():
+    """Production path: ledger recorded an L4 miss, but the final licensed set now
+    covers the SQL's tables — recheck passes L4 and graded delivery proceeds.
+
+    This is the only remaining L4 graded-delivery success path after recheck always
+    runs with ``allowed_tables`` (e.g. the agent licensed the table via
+    ``inspect_schema`` after the mid-loop block).
+    """
     corpus = load_corpus(CORPUS_ROOT, schema="beer_factory").for_analyst()
     gw = _CountingGateway()
     answer = _finish_unsuccessful(
@@ -160,17 +197,18 @@ def test_recheck_allows_clean_l4_scope_failure():
         last_refusal={
             "refused_by": "guardrail",
             "failed_layer": "term_semantics",
-            "sql": 'SELECT SUM("PurchasePrice") FROM "transaction"',  # allowlisted col
+            "sql": 'SELECT SUM("PurchasePrice") FROM "transaction"',
             "escalation": "escalate",
         },
         attempts=3,
         base_provenance={},
         question="q",
         allowlist=column_allowlist(corpus),
+        allowed_tables=frozenset({"beer_factory.transaction"}),
         dialect="sqlite",
         default_schema="beer_factory",
     )
-    assert gw.calls == 1, "a clean L4 scope failure still delivers-and-grades"
+    assert gw.calls == 1, "final license covering the tables must still deliver-and-grade"
     assert answer.result is not None
 
 
@@ -179,7 +217,7 @@ def test_graded_delivery_refuses_unauthorized_base_tables_with_column_refs():
 
     Mirrors the 20260730 train_5163 hole: pooled L3 admits the columns, the turn's
     licensed set does not include the tables, and graded delivery must not skip L4
-    on recheck. Asserts refuse — red until the recheck threads ``allowed_tables``.
+    on recheck.
     """
     corpus = load_corpus(CORPUS_ROOT, schema="beer_factory").for_analyst()
     gw = _CountingGateway()

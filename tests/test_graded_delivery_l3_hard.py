@@ -47,6 +47,7 @@ def _finish(gateway, failed_layer: str):
         base_provenance={},
         question="q",
         allowlist=_ALLOWLIST,
+        allowed_tables=frozenset({"s.t"}),
         default_schema="s",
     )
 

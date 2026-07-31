@@ -1211,6 +1211,9 @@ def build_serve_rails(
                 narrator=None,  # narration deferred to narrate_node
                 stages=stages,
                 allowlist=allowlist,
+                allowed_tables=frozenset(
+                    licensed_physical_names(corpus, partial.get("licensed") or [])
+                ),
                 dialect=dialect,
                 default_schema=default_schema,
             )
@@ -1309,6 +1312,9 @@ def build_serve_rails(
                 narrator=None,  # narration deferred to narrate_node
                 stages=stages,
                 allowlist=allowlist,
+                allowed_tables=frozenset(
+                    licensed_physical_names(corpus, final.get("licensed") or [])
+                ),
                 dialect=dialect,
                 default_schema=default_schema,
             )
@@ -1340,6 +1346,9 @@ def build_serve_rails(
                 narrator=None,  # narration deferred to narrate_node
                 stages=stages,
                 allowlist=allowlist,
+                allowed_tables=frozenset(
+                    licensed_physical_names(corpus, final.get("licensed") or [])
+                ),
                 dialect=dialect,
                 default_schema=default_schema,
             )

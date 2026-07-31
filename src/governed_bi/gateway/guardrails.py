@@ -88,6 +88,13 @@ def column_allowlist(corpus: "Corpus") -> ColumnAllowlist:
     Keys are three-part ``{schema}.{physical_name}.{column}`` (schema = the table's
     ``schema`` field) — the engine is uniformly schema-qualified, so a same-named
     column in two schemas never collides.
+
+    **Pooled asymmetry:** this walks every non-excluded table in the corpus. Under a
+    pooled (multi-schema) serve corpus it does **not** narrow to the turn's routed
+    schemas — L3 is a lake-wide pass for any column that exists somewhere in the
+    corpus. Table-level containment is L4's job (``allowed_tables``), which only
+    runs when that set is passed. Graded-delivery recheck must thread the turn's
+    licensed set or unauthorized-schema SQL with column refs clears L3 and executes.
     """
     allowed: set[str] = set()
     suspect: set[str] = set()
@@ -773,6 +780,14 @@ def _layer_terms(
     (see ``analyst.agent``, ``analyst.governance._licensed_table_ids``). A base table
     outside that set means the SQL wandered past the semantically grounded scope,
     so it is blocked fail-closed.
+
+    This layer runs **only** when ``allowed_tables`` is passed to :func:`check`
+    (see the module docstring). Under a pooled corpus, L3's allowlist is lake-wide
+    and does **not** narrow to routed schemas — so without this set, column-bearing
+    SQL against an un-routed schema clears L3 and never meets a table-scope gate.
+    Graded-delivery recheck must therefore thread the turn's licensed
+    ``schema.table`` set; omitting it skips L4 by design of ``check``, not because
+    unauthorized tables are safe to deliver.
 
     Scope-aware (via ``traverse_scope``): a real base table is a ``Table`` source
     in some scope, while a CTE is a derived ``Scope`` in the scope that references
