@@ -35,7 +35,7 @@
 |---|---|---|---|
 | ~~**M1**~~ **已完成 2026-07-31** | 未授权基表的用例修复前红、修复后绿；`generations.*.jsonl` 里读得到逐层判决列表 | N1–N4（`e94a133` / `af7fd37` / `6c4e709` / `db21779`） | 3.5 人日 |
 | ~~**M2**~~ **已完成 2026-07-31** | 三个重复名字各只剩一处定义（`_render` 是例外 —— 三者无关，改名不合并）；歧义裸名返回 `None`；约束真的会绑（把 `langgraph-api` 改成 `>=99` 后 `uv lock` 判定 unsatisfiable）；glossary 补出 ops/eval 半区 | N5–N8（`14d8172` / `8be261f` / `71aabfb` / `db6704d`） | 4 人日 |
-| **M3** 删双轨 | `grep -rn "run_experiment\|skip_agent\|git_sha_drift" src/` 零命中，`pytest` 全绿；rvgd ↔ `table_by_name` 歧义一致性测试绿 | N9–N10a | 2.5 人日 |
+| ~~**M3**~~ **已完成 2026-07-31** | `src/` 里零个活引用（余 10 处回溯性注释，刻意保留）；`drift - comparability == {"git_sha"}`（删成员，未改宽）；`--oracle-only` 取代双轨且 `arms = ()` 在库入口写死；37 removed / 18 added 的测试账逐条与独立 `--collect-only` 比对一致 | N9–N10a（`7f0fb97` / `fe895a1` / `d1f0306`）+ 三条返工（`975e8aa` / `1ea5c57`） | 3 人日 |
 | ~~**M4**~~ **已完成 2026-07-31** | 付费 5 题跑 `runs/datalake/20260731T195022Z`（`gpt-5.6-luna`，工作树干净，分支已推）：stdout 23 行；**5 个 `run_id` 在 generations / `stage_events.jsonl` / `run.log` 三个 sink 里集合完全相同**；manifest 四个字段齐（`git_branch` / `main_git_sha` / `dirty` / `diff_sha256`）；M1 遗留的投影 ledger 端到端结清（无 `result`） | N11–N14（`526f21a` / `477b453` / `afe7776` / `099833a` / `ec7be1c`）+ 四条修复（`d8e67c6` / `c9b1c19` / `c6c74b1` / `d29fb16`） | 7.5 人日 |
 | **M5** 工具与跑 | 用 20260730 那份数据重现出 `docs/experiments/` 报告里的**每一个**数字；带 `--replicate` 的完整命令行成立 | N15–N17 | 5.5 人日 |
 
@@ -253,6 +253,8 @@ grep -rn "skip_agent\|skip-agent" src/ --include=*.py -c | sort -t: -k2 -rn
 ---
 
 ## M5 · 工具与跑
+
+> **详细工作单：[batch-m5.md](batch-m5.md)。**下面三节只给目标。那一份更正了本节**五处事实**（`analysis.py` 其实有完整 CLI 和 `__main__`；`attribute_rows` 已经接在 `run_datalake.py:2851` 上；`sme_noop_dbs` 与那句误导性文案的行号在 M3 之后全漂了；**`--model` 根本不存在**，它是 checklist 2.3），并把「近期计划做完之后还剩什么」写在了文末 —— **B 轴（大文件）基本没动**，4.2 / 4.3 建议插在 M5 之前。
 
 ### N15 · 分析工具 CLI 化（checklist X.3）
 
