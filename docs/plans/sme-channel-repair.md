@@ -1,5 +1,27 @@
 # Curator intake and the SME clarification channel
 
+> **STATUS 2026-07-31 — LOAD-BEARING. This file falsified a claim in the current plan.**
+>
+> F7 here is why [rebuild-checklist.zh.md](rebuild-checklist.zh.md) §6.2's first blocker was
+> **wrong**. The ledger's "corpus reference-integrity findings" is `eval/index.py:836`'s
+> hardcoded generic wording for *any* corpus-validation finding; the actual finding, verbatim from
+> `summary.json`, is `always-note-budget []: always-note summaries total 5178 characters; maximum
+> is 2000` — a **per-turn** budget summed over a 57-schema pooled corpus, whose worst single
+> schema is 1591/2000. §6.2 has been corrected.
+>
+> Still to migrate: F6's noise floor → §6.3. 31 rows got byte-identical prompts in both arms
+> (equal `context_hash`); of the 26 gradeable ones, EX was 0.4231 vs 0.5000 with 4 flips —
+> **sampling randomness alone gives a 15% disagreement rate**. Without `--replicate`, a new run
+> reads SME as "not detected", not "no effect" · §5 item 4 + F4: `decoy_touch` is saturated at
+> 1/1351, so SME can only show up in the 78 schema-pick and 179 SQL-value errors → an SME
+> success criterion in §6.2/6.3 · optionally F2's elimination evidence (Phase-A budget vs
+> questions-raised correlates **−0.353**; `works_cycles` is the largest schema, budget 339, 1583
+> tool calls, **zero** questions raised) → `docs/prompt-experiments.md`, which took the
+> conclusion but not these two counter-examples.
+>
+> Absorbed already: three of its four fixes shipped; the three-db zero-fold finding is §6.2's
+> remaining blocker.
+
 The `curated_sme` arm moved EX by −0.2pp on a 1351-question test run. This plan
 records why, from evidence in that run's artifacts, and lists the fixes in the order
 worth doing them. The general tracker is [open-work.md](../open-work.md); the run

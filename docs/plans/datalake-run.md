@@ -1,5 +1,33 @@
 # Data-lake run: runbook + status
 
+> **STATUS 2026-07-31 — the numbers are retired; the operating knowledge is not.**
+>
+> Most heavily cited file in `docs/plans/` (9 external docs). Its *status* half is dead: the
+> three retired-numbers blocks say so themselves, the run they describe has had its artifacts
+> deleted, and the "69 databases / 2030 questions" scope is stale — the split is **57 / 1351**.
+>
+> **What must be moved before deletion, split by kind:**
+>
+> *Operating* → `docs/experiment-runbook.md` (new home): the `--split both` directory layout
+> (`corpora/` built once + `test/` + `train/` + `split_gap.json`) and **why shared construction is
+> the point, not an optimisation** — otherwise the gap absorbs curator variance; the full
+> `--resume-from` scope-flag set; the `--limit-dbs 5` pilot; rate-limit backoff; the
+> `build-workers` / `workers` division. Merge with the runbook's own copies — **do not write them
+> twice**.
+>
+> *Measurement semantics* → `docs/measurement.md`: the two safety arguments for pooled scoring
+> (`question_id` is globally unique so gold hashes may be merged across dbs; suspect/decoy columns
+> are **not** pooled but kept per-db, or one db's decoy name would falsely match another db's
+> question); the decoy-touch convention (`_touches_suspect` resolves column references inside each
+> query scope, and a bare ambiguous reference counts as a touch, fail-closed, same convention as
+> L3) — **and add code comments at `run_datalake.py:4446` / `:4458` / `:3919`, which today have
+> none**; the 2026-07-25 retirement statement, rewritten as self-contained text rather than a
+> pointer; "the data-lake mode does not cross-check EX" (gold `sql_rename` is schema-unqualified
+> and needs `search_path`).
+>
+> *Routing probe conditions* → `docs/adr/0003`:89 inline. That ADR is **Accepted**, so per the
+> checklist's X.5.8 policy its pointers get relocated one by one, not covered by a header note.
+
 _Implements [D15](../design-decisions.md#d15-multi-schema-serving-one-database-many-schemas)
 (one database, many schemas). Companion to
 the single-DB arm/method record in git history (

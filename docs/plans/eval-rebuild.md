@@ -1,5 +1,33 @@
 # Eval rebuild: tracking plan
 
+> **STATUS 2026-07-31 — three of four fixes shipped; §1's evidence has no other home.**
+>
+> Cited by `tests/test_note_triggers.py:9`. That citation can go: the same docstring's :6-11
+> already states the fact, and `MONTEREY_Q` / `ELVIS_Q` are verbatim from
+> `corpora/curated_sme_20260727`, so the test is self-contained.
+>
+> **§1's five pieces of evidence must move to `docs/measurement.md`** — it is already the
+> canonical "which numbers may be quoted" page, and today it only points here. Two of the five
+> are **executed verifications of BIRD gold-SQL errors** (the FL-10 households question whose gold
+> returns 59 while `SUM(households)` is 346,317, a 5,870× gap; the Atmore question whose evidence
+> says divide by `population_2020` while the gold SQL divides by `population_2010`, 0.5061 vs
+> 0.5176 — with `train_5082` as the control that uses `SUM(T1.households)` correctly), plus
+> **1,723 of 2,030 test rows (84.9%) appearing verbatim in BIRD's `train.json`**.
+>
+> **The retraction must move with them:** the "11% evidence/SQL contradiction rate" was
+> **withdrawn** (`COUNT(col)` vs `COUNT(*)` is an equivalent rewrite). Do not cite 11% anywhere.
+> So must the "verified good, do not re-check" list: Simulated SME addressed 0 wrong across 69
+> schemas, 8/8 adversarial inducements refused, 381 clarifications with zero test-set leakage,
+> `load_trap_columns` correctly schema-scoped, `_split_suspect_refs` already guards against bare-name
+> over-counting.
+>
+> Also unmigrated: D2 step 2's three-way shortlist-miss / picked-wrong / pick-fell-back split with
+> its predicates · B6-verify at scale · the `always_note_global_max` rename (its semantics are
+> already per-turn) → checklist 1.4.3 · §4's zero-question-schema guard → 6.3 · B6-verify's
+> toxicology table → `docs/curator.md`.
+>
+> Absorbed already: "all pre-2026-07-26 numbers are discarded" → decision 20.
+
 All prior BIRD eval numbers are discarded. Section 1 says why. The rest tracks the
 four fixes that follow, the artifact cleanup, and the order to do them in. The
 general tracker is [open-work.md](../open-work.md); the driver this eval runs on is

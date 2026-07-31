@@ -7,6 +7,15 @@ whose closed items now live only in git history. Nothing here is a design
 record — decisions belong in [design-decisions.md](design-decisions.md) and
 [adr/](adr/).
 
+**This file is the inventory; [plans/rebuild-checklist.zh.md](plans/rebuild-checklist.zh.md)
+is the order.** Five analyses on 2026-07-29/30 (module depth, reference-book fidelity,
+framework best practices, multi-turn, governance red team, corpus drift) produced 62 items,
+deduplicated to 41 in [plans/build-sequence.md](plans/build-sequence.md); a grill on
+2026-07-30 then reordered them into eleven cross-cutting items plus four parallel tracks
+([decisions](plans/rebuild-decisions.zh.md)). Items are not copied here — read this file for
+*what is broken*, the checklist for *what to do next*, `build-sequence.md` for *which
+analysis found it*.
+
 **The eval rebuild has its own tracker.** All prior BIRD numbers are discarded, and
 the four fixes that follow (notes without triggers, the contradictory SME prompt, the
 gold-SQL-derived decoy mask, routing-failure attribution) are tracked in

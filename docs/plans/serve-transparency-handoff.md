@@ -1,5 +1,29 @@
 # Serve transparency: backend ↔ frontend handoff
 
+> **STATUS 2026-07-31 — one unique measurement, then it is history.**
+>
+> Decision 13 ("the backend is authoritative, the frontend adapts, a full rewrite is acceptable")
+> invalidates every frontend line-number instruction in §3.3 / §4.3 / §5.1. Superseded overall by
+> [rebuild-checklist.zh.md](rebuild-checklist.zh.md) §5.3.
+>
+> **What is unique and unmigrated:** §3.1 + §3.2's causal quantification of picker truncation —
+> of 1351 questions, routed 1208, picker-chose-wrong-but-gold-was-in-shortlist 100, never-recalled
+> 43; rank-1 71.4%, top-10 96.8%, post-pick 89.4%. **87 of the 100 picker failures happened when
+> it only saw a partial view of the gold schema** (41 from the 15-table cap, 46 because a gold
+> table was wider than 12 columns, 13 fully visible); error rate 6.2% when gold fit inside 15
+> tables vs 11.6% when it did not; `mondial_geo` (42 tables shown as 15) lost to the five-table
+> `world` twelve times. That is an un-filed defect with a named cause. Reconcile against
+> `docs/experiments/20260730T034522Z-curated-sme-error-analysis.md` §2-3 before filing.
+>
+> Also unmigrated: §5.2's per-channel attribution (needs `retrieve()` to keep the pre-fusion
+> ranking) → 5.3.6 · §8's egress measurement (rendered context block averages 19537/21298 chars —
+> send it or not?) → 5.3.9's per-key egress decision · §9.1's `STAGE_ALIASES` claim, which names a
+> symbol that **does not exist in the UI repo** → add to 5.3.10's verification grep.
+>
+> Not worth migrating: §7's type-invariance rules (superseded by 5.3.7's `CONTRACT_VERSION`),
+> §2.2's status table (superseded by [analyst.md](../analyst.md):85-100), §10's first three steps
+> (done).
+
 Implementation handoff for making the governed answer's *inputs* visible in the UI.
 Design rationale and the measurements behind it: [serve-transparency.md](serve-transparency.md).
 The event transport this extends: [Analyst](../analyst.md#the-event-contract-per-step).

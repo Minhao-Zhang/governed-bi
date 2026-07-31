@@ -73,6 +73,15 @@ quotable — every number produced before 2026-07-26 is discarded.**
 - [Serve transparency](plans/serve-transparency.md) and its [handoff](plans/serve-transparency-handoff.md): making the agent's *inputs* visible in the UI. Two of four changes have landed.
 - [SME channel repair](plans/sme-channel-repair.md): why the `curated_sme` arm moved nothing, and the fixes in order.
 - [Eval rebuild](plans/eval-rebuild.md): why every pre-2026-07-26 number is discarded, and the four fixes that follow.
+- **[Rebuild checklist](plans/rebuild-checklist.zh.md) (Simplified Chinese): the current work queue. Eleven cross-cutting items in dependency order, plus the analysis-tooling, recording, observability, signal, and run tracks. Each item says what to change, which files it touches, and how to verify it. Start here.**
+- **[Rebuild decisions](plans/rebuild-decisions.zh.md) (Simplified Chinese): the twelve decisions behind that queue — what was chosen, why, and what was rejected. Read this before overturning anything in the checklist.**
+- [Build sequence](plans/build-sequence.md): **superseded** by the two above, kept as the evidence index — it maps each item back to the analysis that found it (62 items → 41, four phases, plus the non-goals).
+- [Grill agenda](plans/grill-agenda.zh.md) (Simplified Chinese): the pre-grill briefing — the five analyses turned into eight contested decisions with the sharpest objection to each option. **Consumed by the 2026-07-30 grill**; its conclusions live in `rebuild-decisions.zh.md`.
+- [Multi-turn adversarial](plans/multi-turn-adversarial.md): every number in this repo is turn 1. Routing and retrieval run on the coreference-unresolved question, and AUDIT S4's bound makes a mis-routed follow-up unrecoverable — a correct follow-up can be refused.
+- [Governance red team](plans/governance-red-team.md): attacking ADR 0002's topology-not-trust claim. Seven hypotheses, each with the test that settles it; the graded-delivery path re-checks with the scope argument disabled.
+- [Corpus drift](plans/corpus-drift.md): drift is checked once at build time and never again; `/health` runs the validator with no connector, so it cannot report the failure it implies.
+- [Framework + logging audit](plans/framework-and-logging-audit.md): best-practice scan of every LangGraph / LangChain-middleware / DeepAgents / Langfuse / checkpointer / memory site against the current skills and vendor docs, plus the one-identity design for logging everything. **Starts with a privacy finding: the Langfuse content mask does not cover callback data.**
+- [Book fidelity assessment](plans/book-fidelity-assessment.md): this repo measured against the reference document it grew out of — which divergences were deliberate (9), which are drift nobody decided (15), and which gaps the reference shares. Focused on routing, the semantic layer, and a nine-axis systematic analysis of RVGD retrieval.
 
 Two plans finished and were deleted; their wire contracts now live in
 [Analyst](analyst.md) — the [governance event stream](analyst.md#the-event-contract-per-step)

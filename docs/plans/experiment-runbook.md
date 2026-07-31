@@ -1,5 +1,32 @@
 # Experiment runbook
 
+> **STATUS 2026-07-31 — MOVE, not delete. This is a standing manual, not a plan.**
+>
+> It belongs at `docs/experiment-runbook.md`. Reason it cannot simply be deleted:
+> `eval/index.py:612` writes the string **"claim readiness is the experiment-runbook checklist"**
+> into the `claim_ready_blocked_because` field of **every** `runs/index.jsonl` record. Also cited
+> by `eval/power.py:119` and by `docs/README.md`:59 via the anchor
+> `#the-result-that-would-make-us-abandon-the-corpus-thesis`, which must survive the move.
+>
+> **Seven factual errors to fix during the move** (checklist D1 lists six):
+> 1. 69 db / 2030 questions → **57 / 1351**
+> 2. `--limit-dbs 3` selects `address, airline, app_store` → `address, airline, **authors**`
+>    (`app_store` is no longer in the split)
+> 3. stratified pilot 166 questions → **135**
+> 4. twin rate 182/1627 → **115/1200**
+> 5. "this repo has never run the full split with a model" → the 20260730 run did
+> 6. the `--pg-dsn` default shown with a password → `run_datalake` reads `GOVERNED_BI_PG_DSN`, no password
+> 7. **new** — the ladder table's baseline→seeded row says the step "applies a train-conditioned
+>    column mask covering ~86% of test-question gold columns". **That mask was deleted**
+>    (`_mark_columns_absent_from_gold` is gone). `docs/glossary.md`:70's Seeded-arm entry copied
+>    the same sentence and must change with it.
+>
+> Also: every `--skip-agent` command here is killed by checklist 0.2, and Step 0's zero-cost
+> property rests on that flag. Give the replacement path.
+>
+> Content to merge in from [datalake-run.md](datalake-run.md) — once, not twice: rate-limit
+> backoff, the `build-workers` / `workers` division, and the resume contract.
+
 What to run, in what order, and what has to be true before a number is worth
 quoting. Written for someone with the machine and the data who did not build the
 harness.
