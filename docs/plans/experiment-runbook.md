@@ -21,8 +21,8 @@
 >    (`_mark_columns_absent_from_gold` is gone). `docs/glossary.md`:70's Seeded-arm entry copied
 >    the same sentence and must change with it.
 >
-> Also: every `--skip-agent` command here is killed by checklist 0.2, and Step 0's zero-cost
-> property rests on that flag. Give the replacement path.
+> Also: Step 0/1 use `--oracle-only` (M3 N10 Option A / checklist 0.2): empty fair
+> arms + `oracle_sql`, no global `--skip-agent`.
 >
 > Content to merge in from [datalake-run.md](datalake-run.md) — once, not twice: rate-limit
 > backoff, the `build-workers` / `workers` division, and the resume contract.
@@ -51,7 +51,7 @@ prior result.
 ## Step 0 — prove the grader before spending anything on a model
 
 ```bash
-uv run python -m governed_bi.eval.run_datalake --skip-agent --arms baseline --oracle oracle_sql
+uv run python -m governed_bi.eval.run_datalake --oracle-only --oracle oracle_sql
 ```
 
 `oracle_sql` submits gold SQL straight to the grader. No model call, no retrieval, no
@@ -61,7 +61,7 @@ below 1.0 is a grading gap (a frozen `VALUES` constant, a stale hash, a normalis
 quirk), and every later number should be read against that ceiling rather than
 against an assumed 1.0.
 
-`--skip-agent` is what makes this free: it costs zero model calls, so run it over the
+`--oracle-only` is what makes this free (M3 N10 Option A: no-model is inferred from empty fair arms, not a global flag): it costs zero model calls, so run it over the
 whole split rather than a sample. The `baseline` arm alongside it will refuse
 everything and score 0 — that is expected and not what you are reading. Read
 `arms.oracle_sql.ex_gradeable`, and read the list of questions it got wrong: those
@@ -88,13 +88,13 @@ whose gold nothing confirmed is not a number to quote. If that happens, raise th
 sample rather than ignoring it:
 
 ```bash
-uv run python -m governed_bi.eval.run_datalake --skip-agent --arms baseline --oracle oracle_sql --gold-per-db 3
+uv run python -m governed_bi.eval.run_datalake --oracle-only --oracle oracle_sql --gold-per-db 3
 ```
 
 A schema counts as verified when *any* sampled row executes and agrees, so raising this
 buys redundancy against one awkward row rather than more ways to fail.
 
-Keep `--skip-agent --arms baseline` on it. Everything in this step is meant to cost
+Keep `--oracle-only` on it. Everything in this step is meant to cost
 nothing, and the bare command inherits the full default ladder — four arms, and a fifth
 serve pass if you add `--replicate`. That is the whole Step 2 budget, launched from the
 section that promises to spend none of it.
@@ -130,7 +130,7 @@ measure before spending a model budget.
 ## Step 1 — offline smoke, no model
 
 ```bash
-uv run python -m governed_bi.eval.run_datalake --skip-agent --limit-dbs 3 --limit 5
+uv run python -m governed_bi.eval.run_datalake --oracle-only --limit-dbs 3 --limit 5
 ```
 
 Exercises the harness around the model — build, pool, grade, summarise, index — with a
@@ -461,7 +461,7 @@ your model provider, not this code.
    `refusal_rate`'s job.
 
    **These three are the one part of the summary no offline run exercises.** A
-   `--skip-agent` run refuses everything and stamps none of them; `oracle_sql` stamps
+   an `--oracle-only` / refuse-all path refuses everything and stamps none of them; `oracle_sql` stamps
    `tier` and `semantic_assurance` but not the booleans. So the first real run is the
    first time they carry values — check `n_*_observed` is non-zero before reading the
    rates, and treat a `null` there as "the instrumentation did not reach this path"
@@ -618,7 +618,7 @@ are recorded in `manifest.json` under `arms` / `db_ids` / `oracles` / `replicate
 
 Questions already in `generations.<arm>.jsonl` are replayed, not re-served. Changing
 a prompt variant between the original run and a resume is fatal and refused, and so
-is changing `--skip-agent` — **a step 1 smoke directory is not resumable into step 2.**
+is changing from `--oracle-only` to a paid model run — **a step 1 smoke directory is not resumable into step 2.**
 Its rows are construction-refusals scoring 0, and replaying them would mix them into
 a paid arm's denominator. Start step 2 in a fresh directory. Concurrency knobs are
 safe to change (they are recorded in the manifest but are not
@@ -637,10 +637,10 @@ tree lands), so a kill mid-promote leaves either the old or the new corpus, not 
 empty hole. Crash-row resume rewrites `generations.<arm>.jsonl` through an atomic
 temp + replace, so a kill mid-rewrite keeps the previous file.
 
-**Code SHA on paid resume.** After a code edit, paid resume is refused on `git_sha`
-drift unless you pass `--allow-git-sha-drift` (or the prior manifest already recorded
-that override). The ledger still marks the run unquotable when rows span more than one
-SHA. Smoke (`--skip-agent`) warns and continues.
+**Code SHA on resume.** After a code edit, resume is refused on `git_sha` drift
+(always fatal as of M3 N10 — the smoke warn / `--allow-git-sha-drift` dual track is
+gone). Use a fresh `--out`. The ledger still marks a run unquotable when rows span
+more than one SHA.
 
 ## Quote the twin-free stratum
 

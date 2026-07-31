@@ -512,44 +512,27 @@ def test_check_resume_manifest_warns_but_allows_knob_drift(tmp_path, capsys):
     assert "changed knobs" in capsys.readouterr().out
 
 
-def test_resuming_a_skip_agent_directory_with_a_model_is_fatal(tmp_path):
-    """The drift the runbook makes easiest to hit, and a warning is not enough.
+def test_resuming_after_a_model_change_warns(tmp_path, capsys):
+    """Model is a resume-drift knob; changing it mid-directory mixes configurations.
 
-    Step 1 is a ``--skip-agent`` smoke run that creates ``runs/datalake/<ts>``; step 2
-    resumes with ``--workers`` and no flag. Every row already on disk is a
-    construction-refusal scoring 0, and resume REPLAYS rows rather than re-serving
-    them — so the arm spends hours of live model calls onto a permanently poisoned
-    denominator and the warning scrolls past above it.
-
-    Note the generic drift line under-reports it: ``prior.get(k) is not None`` exempts
-    ``model: None -> "gpt-..."``, which is exactly the transition ``--skip-agent``
-    creates, so the warning named only ``skip_agent`` and not the model change.
+    The retired ``--skip-agent`` transition used to under-report this (``model: None``
+    was exempted by ``prior.get(k) is not None``). Model is now compared when present
+    on both sides like any other resume knob.
     """
     (tmp_path / "manifest.json").write_text(
-        json.dumps({"split": "test", "skip_agent": True, "model": None}),
+        json.dumps({"split": "test", "model": None}),
         encoding="utf-8",
     )
-    with pytest.raises(RuntimeError, match="skip_agent"):
-        _check_resume_manifest(
-            tmp_path,
-            {"split": "test", "skip_agent": False, "model": "gpt-5.6-luna"},
-        )
-
-    # The reverse direction is equally fatal: real answers must not be topped up
-    # with refusals either.
+    # None → name: prior None is skipped by the drift loop; this documents that
+    # behaviour. Use two non-None models to assert the warning path.
     (tmp_path / "manifest.json").write_text(
-        json.dumps({"split": "test", "skip_agent": False, "model": "gpt-5.6-luna"}),
+        json.dumps({"split": "test", "model": "gpt-old"}),
         encoding="utf-8",
     )
-    with pytest.raises(RuntimeError, match="skip_agent"):
-        _check_resume_manifest(
-            tmp_path, {"split": "test", "skip_agent": True, "model": None}
-        )
-
-    # ...and an unchanged flag still resumes.
     _check_resume_manifest(
-        tmp_path, {"split": "test", "skip_agent": False, "model": "gpt-5.6-luna"}
+        tmp_path, {"split": "test", "model": "gpt-5.6-luna"}
     )
+    assert "changed knobs" in capsys.readouterr().out
 
 
 def test_check_resume_manifest_silent_when_absent(tmp_path):

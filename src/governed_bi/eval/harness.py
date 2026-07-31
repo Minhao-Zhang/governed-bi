@@ -286,7 +286,8 @@ def _suspect_from_corpus(corpus_root: Path, schema: str) -> frozenset[str]:
 
 
 class _RefuseAllSolver:
-    """Trivial solver for ``--skip-agent`` offline smoke runs (no live model):
+    """Trivial solver for a no-model offline smoke run (formerly ``--skip-agent``,
+    now what a fair arm degrades to if it is ever served with no model configured):
     refuses every question so the layered arms still produce a well-formed run.
 
     Implements ``solve_with_meta`` so both drivers use one uniform call path
@@ -305,8 +306,9 @@ def _delta(hi: float | None, lo: float | None) -> float | None:
 
     Rates became ``None`` at an empty denominator so a measurement of zero could be
     told from no measurement, but the delta arithmetic here kept subtracting them
-    and raised ``TypeError`` on the offline ``--skip-agent`` path, where no arm
-    produces SQL and every ``decoy_touch_rate`` is ``None``. The crash landed after
+    and raised ``TypeError`` on the offline no-model path (what ``--oracle-only``
+    replaced ``--skip-agent`` with), where no arm produces SQL and every
+    ``decoy_touch_rate`` is ``None``. The crash landed after
     the whole run, before ``summary.json`` was written, so the run's own artifacts
     were lost — which is exactly the shape of failure the offline smoke exists to
     catch before a live run hits it.

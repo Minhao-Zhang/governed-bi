@@ -411,7 +411,6 @@ def test_a_fully_built_db_is_not_rebuilt_or_re_probed(tmp_path, monkeypatch):
         arms=arms,
         chat_client=None,
         lc_model=None,
-        skip_agent=True,
         max_agent_steps=1,
         resume=True,
     )
@@ -450,30 +449,19 @@ def test_a_manifest_with_no_split_is_not_a_wildcard(tmp_path):
         rd._check_resume_manifest(tmp_path, {"split": "train"})
 
 
-def test_resuming_after_a_code_change_is_fatal_on_paid_resume(tmp_path):
+def test_resuming_after_a_code_change_is_fatal(tmp_path):
     """Two harness versions in one arm's rows is drift no field in the row records.
 
-    Smoke (--skip-agent) still warns; paid resume refuses unless --allow-git-sha-drift.
+    Always fatal (M3 N10): the smoke warn / ``--allow-git-sha-drift`` dual track is gone.
     """
     (tmp_path / "manifest.json").write_text(
-        json.dumps({"split": "test", "git_sha": "aaaa", "skip_agent": False}),
+        json.dumps({"split": "test", "git_sha": "aaaa"}),
         encoding="utf-8",
     )
     with pytest.raises(RuntimeError, match="git_sha"):
         rd._check_resume_manifest(
-            tmp_path, {"split": "test", "git_sha": "bbbb", "skip_agent": False}
+            tmp_path, {"split": "test", "git_sha": "bbbb"}
         )
-
-
-def test_resuming_after_a_code_change_warns_on_smoke(tmp_path, capsys):
-    (tmp_path / "manifest.json").write_text(
-        json.dumps({"split": "test", "git_sha": "aaaa", "skip_agent": True}),
-        encoding="utf-8",
-    )
-    rd._check_resume_manifest(
-        tmp_path, {"split": "test", "git_sha": "bbbb", "skip_agent": True}
-    )
-    assert "git_sha" in capsys.readouterr().out
 
 
 def test_rows_with_no_recorded_split_block_a_resume(tmp_path):

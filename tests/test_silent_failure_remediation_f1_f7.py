@@ -207,7 +207,7 @@ def test_paid_sme_fails_closed_when_recorded_ledger_is_missing(tmp_path: Path, m
         )
 
 
-def test_skip_agent_does_not_seed_over_a_resolved_relocated_ledger(
+def test_offline_sme_does_not_seed_over_a_resolved_relocated_ledger(
     tmp_path: Path, monkeypatch
 ):
     """If the relocated ledger exists (even all-answered), scaffolding must not invent."""
@@ -329,7 +329,6 @@ def test_manifest_records_limit_caps_and_scope_hash():
         route_llm_pick=True,
         schema_pick_max_columns=12,
         use_embedder=True,
-        skip_agent=False,
         serve_workers=1,
         question_pool_hash="pool0000",
         always_note_global_max=8,
@@ -389,43 +388,17 @@ def test_write_jsonl_is_atomic_temp_replace(tmp_path: Path, monkeypatch):
 # --------------------------------------------------------------------------- #
 
 
-def test_paid_resume_refuses_git_sha_drift_by_default(tmp_path: Path):
+def test_resume_refuses_git_sha_drift(tmp_path: Path):
+    """Always fatal (M3 N10): no smoke warn track, no --allow-git-sha-drift opt-in."""
     (tmp_path / "manifest.json").write_text(
-        json.dumps({"split": "test", "git_sha": "aaaa", "skip_agent": False}),
+        json.dumps({"split": "test", "git_sha": "aaaa"}),
         encoding="utf-8",
     )
     with pytest.raises(RuntimeError, match="git_sha"):
         _check_resume_manifest(
             tmp_path,
-            {"split": "test", "git_sha": "bbbb", "skip_agent": False},
+            {"split": "test", "git_sha": "bbbb"},
         )
-
-
-def test_smoke_resume_warns_on_git_sha_drift(tmp_path: Path, capsys):
-    (tmp_path / "manifest.json").write_text(
-        json.dumps({"split": "test", "git_sha": "aaaa", "skip_agent": True}),
-        encoding="utf-8",
-    )
-    _check_resume_manifest(
-        tmp_path,
-        {"split": "test", "git_sha": "bbbb", "skip_agent": True},
-    )
-    assert "git_sha" in capsys.readouterr().out
-
-
-def test_allow_git_sha_drift_opts_paid_resume_in(tmp_path: Path, capsys):
-    (tmp_path / "manifest.json").write_text(
-        json.dumps({"split": "test", "git_sha": "aaaa", "skip_agent": False}),
-        encoding="utf-8",
-    )
-    _check_resume_manifest(
-        tmp_path,
-        {"split": "test", "git_sha": "bbbb", "skip_agent": False},
-        allow_git_sha_drift=True,
-    )
-    out = capsys.readouterr().out
-    assert "git_sha" in out
-    assert "allow-git-sha-drift" in out
 
 
 # --------------------------------------------------------------------------- #

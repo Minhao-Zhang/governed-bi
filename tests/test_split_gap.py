@@ -160,7 +160,7 @@ def _argv(tmp_path, split):
         "--bird-dir", str(tmp_path / "bird"),
         "--out", str(tmp_path / "runs"),
         "--split", split,
-        "--skip-agent",
+        "--oracle-only",
         "--dbs", "beer_factory",
     ]
 

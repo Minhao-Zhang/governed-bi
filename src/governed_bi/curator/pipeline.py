@@ -1399,7 +1399,8 @@ def build_curated_corpus_with_sme(
 
     Requires an agent-authored (or explicitly planted) open ledger. Mechanical
     ``seed_gap_clarifications`` runs **only** when ``seed_ledger_if_empty=True``
-    (opt-in for ``--skip-agent``); the default path raises if the ledger is empty.
+    (opt-in for the no-model path, formerly ``--skip-agent`` and now
+    ``--oracle-only``); the default path raises if the ledger is empty.
 
     When ``model`` is set, ``run_agent_repass`` defaults to True and the ingest
     agent folds answers (no silent deterministic fold). When ``model`` is None,
@@ -1463,8 +1464,9 @@ def build_curated_corpus_with_sme(
     ledger_source = "agent" if open_records else "missing"
 
     if not open_records and seed_ledger_if_empty and ledger_path is None:
-        # Offline/--skip-agent scaffolding only: synthesize gap questions so the
-        # deterministic fold has something to do.
+        # Offline/no-model scaffolding only (formerly --skip-agent, now
+        # --oracle-only): synthesize gap questions so the deterministic fold has
+        # something to do.
         #
         # Never invent a ledger when a real one was resolved from the live root or
         # relocated ``<schema>/_build/`` — including an all-answered file. That is

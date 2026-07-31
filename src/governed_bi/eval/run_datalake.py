@@ -976,13 +976,14 @@ def _read_rows(path: Path) -> list[dict[str, Any]]:
 # drifted: this one named ``skip_agent`` and ``git_sha`` while the ledger's
 # ``_resume_drift`` iterated the *comparability* keys and saw neither, so a resume
 # after a code edit warned once on the console and then recorded no drift at all.
+# (``skip_agent`` itself was retired at ``MANIFEST_SCHEMA_VERSION`` 2, M3 N10.)
 #
 # Notable members, whose reasons live at the definition site:
 # ``prompt_set_hash`` is the hash and not the variant map, so editing a variant's
 # text cannot blend two prompts into one arm under an unchanged-looking id;
-# ``git_sha`` and ``skip_agent`` are fatal within a directory and unremarkable
-# between directories, which is exactly why ``RESUME_DRIFT_KEYS`` is a superset of
-# ``COMPARABILITY_KEYS`` instead of the same tuple.
+# ``git_sha`` is fatal within a directory and unremarkable between directories,
+# which is exactly why ``RESUME_DRIFT_KEYS`` is a superset of ``COMPARABILITY_KEYS``
+# instead of the same tuple.
 _RESUME_KNOBS = tuple(key for key, _label in RESUME_DRIFT_KEYS)
 
 
@@ -1004,18 +1005,17 @@ def _build_manifest(
     *,
     bird_dir: Path,
     split: str,
-    # The CONFIGURED name, not a resolved value. ``manifest_model`` is applied inside
-    # the shared builder, so a caller cannot write a model name for a run that never
-    # called one. Taking the resolved value here was the original drift: both drivers
-    # had to remember to apply the rule and one forgot, which let a smoke run be
-    # reported COMPARABLE to a real one.
+    # ``None`` when this run needs no model at all (an empty fair-arm set and no
+    # oracle rung beyond ``oracle_sql`` — the ``--oracle-only`` inference, M3 N10),
+    # the configured name otherwise. Decided by the caller, once, from ``arms`` /
+    # ``oracles`` — not a second flag this builder has to keep in sync with the real
+    # one, which is exactly how ``skip_agent`` (retired at schema version 2) drifted.
     model_name: str | None,
     prompt_variants: dict[str, str],
     route_top_k: int,
     route_llm_pick: bool,
     schema_pick_max_columns: int,
     use_embedder: bool,
-    skip_agent: bool,
     serve_workers: int,
     # The graded pool's identity, from ``metrics.question_pool_hash``. Required, unlike
     # the scope arguments below, because it is a comparability GATE key: an omitted
@@ -1053,7 +1053,6 @@ def _build_manifest(
     limit: int | None = None,
     limit_dbs: int | None = None,
     question_scope_hash: str | None = None,
-    allow_git_sha_drift: bool = False,
     llm_temperature: float | None = None,
 ) -> dict[str, Any]:
     """The pooled driver's manifest, built through the shared register.
@@ -1071,7 +1070,6 @@ def _build_manifest(
         split=split,
         model_name=model_name,
         prompt_variants=prompt_variants,
-        skip_agent=skip_agent,
         created_at_utc=_utc_ts(),
         route_top_k=route_top_k,
         route_llm_pick=route_llm_pick,
@@ -1094,7 +1092,6 @@ def _build_manifest(
         question_scope_hash=question_scope_hash,
         serve_workers=serve_workers,
         build_workers=build_workers,
-        allow_git_sha_drift=allow_git_sha_drift,
         llm_temperature=llm_temperature,
     )
 
@@ -1146,8 +1143,6 @@ def _merge_resume_manifest(
 def _check_resume_manifest(
     out_dir: Path,
     expected: dict[str, Any],
-    *,
-    allow_git_sha_drift: bool = False,
 ) -> None:
     """Refuse to resume a run whose recorded knobs differ from this one's.
 
@@ -1224,48 +1219,27 @@ def _check_resume_manifest(
             f"{now}. Rows already on disk keep the old prompts, and nothing "
             "downstream can separate them. Use a fresh --out directory."
         )
-    # Fatal for the same reason, and it is the drift the runbook makes easiest to
-    # hit: step 1 is a ``--skip-agent`` smoke run, step 2 resumes with workers and no
-    # flag. Every row already on disk is a construction-refusal scoring 0, they are
-    # *replayed* rather than re-served, and the resumed arm spends hours of live model
-    # calls onto a permanently poisoned denominator. Note that the generic ``drift``
-    # line under-reports it: ``prior.get(k) is not None`` exempts ``model: None ->
-    # "gpt-..."``, which is precisely the transition ``--skip-agent`` creates.
-    if "skip_agent" in drift:
-        was, now = drift["skip_agent"]
-        raise RuntimeError(
-            f"{out_dir} was scored with --skip-agent={was} and this run has "
-            f"--skip-agent={now}. The rows on disk were produced without a model and "
-            "are replayed, not re-served, so the resumed arm would mix real answers "
-            "with construction-refusals and score them as one. Use a fresh --out "
-            "directory."
-        )
-    # Code/git SHA drift: fatal on paid resume by default. Smoke (``skip_agent``)
-    # keeps warn-and-continue so local iteration stays usable. ``--allow-git-sha-drift``
-    # opts a paid resume in; the merge still records the drift and the ledger marks
-    # the run unquotable.
+    # Code/git SHA drift is ALWAYS fatal on resume. It used to keep a second track —
+    # smoke (``--skip-agent``) warned and continued, and a paid resume could opt in
+    # with ``--allow-git-sha-drift`` — and that dual-track judgment call is exactly
+    # what M3 N10 (Option A, ``--oracle-only``) retired: both the flag and the
+    # `skip_agent` manifest knob it read are gone, so there is no longer a smoke
+    # track to warn-and-continue on.
+    #
+    # THIS DOES NOT AUTHORIZE DELETING THE CHECK ITSELF. What this guard prevents —
+    # two harness versions' rows silently averaged into one arm's score — is not the
+    # hazard decision 12 was about (a global "no model was called" bypass that could
+    # combine with any configuration). A resume after a code edit stays fatal
+    # unconditionally; a fresh ``--out`` directory is always the answer. If a future
+    # change wants a controlled opt-in back, it needs its own decision, not a revival
+    # of this one.
     if "git_sha" in drift:
         was, now = drift.pop("git_sha")
-        smoke = bool(expected.get("skip_agent"))
-        if smoke or allow_git_sha_drift or prior.get("allow_git_sha_drift"):
-            print(
-                f"\n*** WARNING: resuming {out_dir.name} after a code change "
-                f"(git_sha: {was!r} -> {now!r}). Rows already scored keep the OLD "
-                "harness; the ledger will mark this run unquotable"
-                + (
-                    " (--allow-git-sha-drift)."
-                    if allow_git_sha_drift or prior.get("allow_git_sha_drift")
-                    else " (smoke / --skip-agent)."
-                )
-                + " ***\n"
-            )
-        else:
-            raise RuntimeError(
-                f"{out_dir} was scored under git_sha {was!r} and this run is "
-                f"{now!r}. Resuming would mix two harness versions into one arm's "
-                "rows. Use a fresh --out directory, or pass --allow-git-sha-drift "
-                "to continue anyway (the run will be recorded as unquotable)."
-            )
+        raise RuntimeError(
+            f"{out_dir} was scored under git_sha {was!r} and this run is "
+            f"{now!r}. Resuming would mix two harness versions into one arm's "
+            "rows. Use a fresh --out directory."
+        )
     if drift:
         detail = ", ".join(f"{k}: {was!r} -> {now!r}" for k, (was, now) in drift.items())
         print(
@@ -1395,8 +1369,8 @@ def price_verdict(
         )
     if lo_cost is None and hi_cost is None:
         return "no_cost", (
-            "no row on either side recorded a cost — a --skip-agent run bills nothing, "
-            "and a model absent from the price table cannot be priced"
+            "no row on either side recorded a cost — an --oracle-only run bills "
+            "nothing, and a model absent from the price table cannot be priced"
         )
     if lo_cost is None or hi_cost is None:
         # One side billed and the other not, which an "either side" wording used to
@@ -1588,7 +1562,7 @@ def ladder_deltas(
         # priced. Every real "we did not measure" case therefore came out as ``False``,
         # which is the reading this field exists to distinguish from "we measured and
         # it was incomplete" — an arm that priced 0 of 12 rows because nothing bills
-        # (a ``--skip-agent`` run) is not the same as one that priced 9 of 12 because
+        # (an ``--oracle-only`` run) is not the same as one that priced 9 of 12 because
         # three turns crashed.
         #
         # Unknown is: no cost recorded at all on a side. Incomplete is: some rows
@@ -2903,8 +2877,9 @@ def _build_db_corpora(
     roots: dict[str, Path],
     arms: tuple[str, ...],
     chat_client: Any,
+    # ``None`` when this run needs no model (see ``run_datalake``'s ``needs_model``):
+    # the arms below then build the deterministic halves only.
     lc_model: Any,
-    skip_agent: bool,
     # Per-schema curator budget in TOOL CALLS. ``None`` = let the curator derive it
     # from the schema's size (``curator.pipeline.derive_step_budget``), which is what
     # an unset ``--max-agent-steps`` means. Passed straight through, per schema, so a
@@ -3025,10 +3000,10 @@ def _build_db_corpora(
                 db_id,
                 train,
                 roots["curated"],
-                model=None if skip_agent else lc_model,
+                model=lc_model,
                 dialect="postgres",
                 max_agent_steps=max_agent_steps,
-                run_agent=not skip_agent,
+                run_agent=lc_model is not None,
                 system_prompt=prompt_text("curator_phase_a", prompt_variants),
                 settings=settings,
             )
@@ -3082,7 +3057,6 @@ def _build_db_corpora(
                 brief=brief,
                 chat_client=chat_client,
                 lc_model=lc_model,
-                skip_agent=skip_agent,
                 prompt_variants=prompt_variants,
                 settings=settings,
             )
@@ -3107,7 +3081,6 @@ def _build_sme_arm(
     brief: str,
     chat_client: Any,
     lc_model: Any,
-    skip_agent: bool,
     prompt_variants: dict[str, str],
     settings: Any,
 ) -> None:
@@ -3116,12 +3089,18 @@ def _build_sme_arm(
     Kept as its own function rather than inlined: the brief is the whole treatment,
     so a caller that wants a different one changes an argument instead of a code
     path. It carried two callers when a blind rung existed; one now.
+
+    ``run_agent`` is inferred from ``lc_model`` — the same pattern ``curated`` uses
+    (``run_agent=lc_model is not None``) — rather than a separate ``skip_agent``
+    flag this function had to keep in sync with the real one (retired at
+    ``MANIFEST_SCHEMA_VERSION`` 2, M3 N10).
     """
     from ..curator.clarifications import StaticResponder
     from ..curator.pipeline import build_curated_corpus_with_sme
     from ..curator.sme import SimulatedSme
 
-    if skip_agent:
+    run_agent = lc_model is not None
+    if not run_agent:
         build_curated_corpus_with_sme(
             connector,
             gateway,
@@ -3355,7 +3334,7 @@ def plan_arm_serving(
     """Decide the serving shape for one arm. Pure, so it can be tested.
 
     Extracted because the decision it encodes is unreachable before the paid run:
-    ``--skip-agent`` rejects every rung but ``oracle_sql``, and ``effective_workers``
+    ``--oracle-only`` rejects every rung but ``oracle_sql``, and ``effective_workers``
     is forced to 1 without a model, so no offline command exercises "oracle rung at
     width > 1". A mutation that dropped ``rung`` on the way to the worker factory left
     the whole suite green while making every rung serve as an ordinary arm under a
@@ -3404,7 +3383,7 @@ def arm_worker_factory(
     any test, and dropping ``rung=`` here left the entire suite green while making
     every oracle rung serve as an ordinary arm under a rung's name — replacing the
     headroom bounds the runbook reads every other number against. No offline command
-    reaches this path either: ``--skip-agent`` rejects all rungs but ``oracle_sql``,
+    reaches this path either: ``--oracle-only`` rejects all rungs but ``oracle_sql``,
     and the worker count is forced to 1 without a model.
     """
     return make_serve_worker_factory(
@@ -3747,9 +3726,10 @@ def _run_pool_arm(
         # facts here and the tail erased the difference. A turn that never reached
         # ``assemble`` records no ``routed_schemas`` at all, and coercing that to
         # ``[]`` made ``routed_hit=False`` — a routing MISS, indistinguishable from a
-        # router that ran and picked wrong. The whole-split ``--skip-agent`` ceiling
-        # published ``routing_recall: 0.0`` over 2030 rows on that path, for a router
-        # that was never invoked. Same for the shortlist: coerced to ``[]`` it gave
+        # router that ran and picked wrong. The whole-split no-model ceiling (what
+        # ``--oracle-only`` now runs) published ``routing_recall: 0.0`` over 2030 rows
+        # on that path, for a router that was never invoked. Same for the shortlist:
+        # coerced to ``[]`` it gave
         # every oracle row ``gold_schema_rank=None``, filing all 2030 under the
         # ``by_gold_rank["miss"]`` bucket whose documented meaning is "retrieval never
         # surfaced the schema" — a 100%-retrieval-failure reading at EX 1.0.
@@ -4018,7 +3998,14 @@ def run_datalake(
     # ``--max-agent-steps`` gives) derives it per schema from that schema's size; an
     # explicit int is an operator override that caps cost for every schema alike.
     max_agent_steps: int | None = None,
-    skip_agent: bool = False,
+    # Serve ONLY oracle rungs: no fair arm, no model load. The Option A replacement
+    # for the retired ``skip_agent`` global bypass (M3 N10, decision 12) — "no model
+    # was called" is now an INFERENCE from an empty fair-arm set, made once from
+    # ``arms``/``oracles`` below, rather than a second flag a caller could set
+    # inconsistently with the arms/oracles it actually asked for. When set, ``arms``
+    # is forced empty and ``oracles`` defaults to ``(oracle_sql,)`` if the caller left
+    # it empty too, so this always resolves to a servable, model-free scope.
+    oracle_only: bool = False,
     resume: bool = True,
     split: str = "test",
     # Shortlist width. Widening recovers schemas the picker would otherwise never
@@ -4062,9 +4049,6 @@ def run_datalake(
     # re-measures, so its lift IS that stage's headroom rather than an estimate
     # summed from per-class counts. Test-aware: diagnostics, never performance.
     oracles: tuple[str, ...] = (),
-    # Paid resume after a code edit: refuse by default; this opts in and is recorded
-    # so the ledger still marks the run unquotable via resume drift.
-    allow_git_sha_drift: bool = False,
     # Adopt whatever is already complete under ``corpus_dir`` even when ``resume`` is
     # off. Set by ``--split both`` for the second split, and for nothing else.
     #
@@ -4099,6 +4083,29 @@ def run_datalake(
     """
     if split not in _SPLITS:
         raise ValueError(f"split must be one of {_SPLITS}, got {split!r}")
+    if oracle_only:
+        # Ignore any fair arms the caller passed rather than erroring: the CLI
+        # refuses ``--arms`` alongside ``--oracle-only`` up front, but this is a
+        # library entry point too (tests call it directly), and forcing the scope
+        # here is what makes "no model was called" true BY CONSTRUCTION rather than
+        # by a caller remembering to pass ``arms=()`` itself.
+        arms = ()
+        if not oracles:
+            oracles = (OracleRung.sql.value,)
+    # Computed once, here, because the corpora-loading section below and the serve
+    # loop both need to know which arm's corpus an oracle rung narrows. A rung
+    # measures headroom *relative to* one arm's corpus — the last requested arm under
+    # the default ordering — but ``--oracle-only`` forces ``arms`` empty, so it falls
+    # back to ``baseline``: that arm is always built regardless of what ``arms``
+    # names (see ``_build_db_corpora``), so a rung always has a corpus to narrow even
+    # when nothing else is being served. Outside ``oracle_only``, an empty ``arms``
+    # alongside a requested rung is still refused — that combination was never valid
+    # and this fallback exists for the one flag that makes it a real scope, not a
+    # blanket "no arms, no problem".
+    oracle_rungs = {r.value: r for r in OracleRung if r.value in (oracles or ())}
+    oracle_base = arms[-1] if arms else (_ARMS[0] if (oracle_only and oracle_rungs) else None)
+    if oracle_rungs and oracle_base is None:
+        raise ValueError("--oracle needs at least one arm to measure against")
     # Resolve (and validate) before touching Postgres or a corpus: a bad stage or
     # variant must cost nothing, and the resolved map is what gets recorded.
     resolved_prompts = resolve_prompts(prompt_variants)
@@ -4186,7 +4193,15 @@ def run_datalake(
     chat_client = None
     lc_model = None
     embedder = None
-    if not skip_agent:
+    # A model is needed to serve a fair arm, or an oracle rung other than
+    # ``oracle_sql`` — the one rung that submits gold SQL straight to the grader and
+    # never touches the graph. This is an INFERENCE from ``arms``/``oracles``, not a
+    # flag: the retired ``skip_agent`` was a global bypass that could combine with any
+    # configuration (the exact hazard Option A / M3 N10 / decision 12 retires it
+    # over), so "no model was called" is decided here, once, from the scope that was
+    # actually requested rather than restated by the caller.
+    needs_model = bool(arms) or bool(set(oracles) - {OracleRung.sql.value})
+    if needs_model:
         from ..llm import LangChainChatClient, LangChainEmbedder
 
         chat_client = LangChainChatClient.from_config(settings.models)
@@ -4204,7 +4219,10 @@ def run_datalake(
     manifest = _build_manifest(
         bird_dir=bird_dir,
         split=split,
-        model_name=settings.models.llm_model,
+        # ``None`` verbatim when this run needs no model — decided above, once, from
+        # ``arms``/``oracles`` — never the configured name restated regardless of
+        # whether a model was actually loaded.
+        model_name=settings.models.llm_model if needs_model else None,
         prompt_variants=resolved_prompts,
         route_top_k=route_top_k,
         route_llm_pick=route_llm_pick,
@@ -4221,7 +4239,6 @@ def run_datalake(
         # shipped default off a few lines above, and the manifest has to record the policy
         # the serve path will read rather than the literal someone typed there.
         grade_semantic_failures=settings.grade_semantic_failures,
-        skip_agent=skip_agent,
         serve_workers=serve_workers,
         build_workers=build_workers,
         arms=arms,
@@ -4238,13 +4255,10 @@ def run_datalake(
             (db, item.question_id or item.question, item.sql)
             for item, db in scope_pairs
         ),
-        allow_git_sha_drift=allow_git_sha_drift,
         llm_temperature=settings.models.llm_temperature,
     )
     if resume:
-        _check_resume_manifest(
-            out_dir, manifest, allow_git_sha_drift=allow_git_sha_drift
-        )
+        _check_resume_manifest(out_dir, manifest)
         manifest = _merge_resume_manifest(_read_manifest(out_dir), manifest)
     metrics.write_manifest(out_dir, manifest)
 
@@ -4314,7 +4328,6 @@ def run_datalake(
             arms=arms,
             chat_client=chat_client,
             lc_model=lc_model,
-            skip_agent=skip_agent,
             max_agent_steps=max_agent_steps,
             resume=build_resume,
             prompt_variants=resolved_prompts,
@@ -4479,15 +4492,21 @@ def run_datalake(
     )
 
     # Load each requested arm's corpus for exactly the dbs being scored — NOT
-    # whatever the shared root happens to hold (see :func:`_load_built_corpus`).
-    corpora = {arm: _load_built_corpus(roots[arm], built) for arm in arms}
+    # whatever the shared root happens to hold (see :func:`_load_built_corpus`). Plus
+    # ``oracle_base``, even when it is not itself a requested arm: ``--oracle-only``
+    # serves a rung narrowed from ``baseline`` with ``arms == ()``, and a rung with no
+    # corpus to narrow is not a rung.
+    arms_with_oracle_base = tuple(
+        dict.fromkeys([*arms, *([oracle_base] if oracle_base is not None else [])])
+    )
+    corpora = {arm: _load_built_corpus(roots[arm], built) for arm in arms_with_oracle_base}
     # Amend the manifest with the digest of what was actually built. The manifest is
     # written before the build (the gold pre-flight has to run before anything is
     # spent on a model), so the corpus hash — the identity of the *treatment* — can
     # only be recorded here. Without it two runs over different curator draws
     # compared as if comparable (AUDIT E5).
     observed_corpus_hash = metrics.stamp_corpus_hashes(
-        manifest, {arm: roots[arm] for arm in sorted(arms)}
+        manifest, {arm: roots[arm] for arm in sorted(arms_with_oracle_base)}
     )
     # Already filled by ``stamp_corpus_hashes`` when this run declared none, so it is
     # never ``None`` here — re-implementing that fill in the caller only created a
@@ -4509,11 +4528,13 @@ def run_datalake(
     # neither SQL-gen nor the schema-routing index. Validation above and the census
     # below deliberately keep the full corpus — the C5 note scan needs the excluded
     # identifiers to check prose against, and the census counts what was excluded.
-    corpora_serve = {arm: corpora[arm].for_analyst() for arm in arms}
+    corpora_serve = {arm: corpora[arm].for_analyst() for arm in arms_with_oracle_base}
 
     # Census the independent variable. An arm-to-arm EX delta is uninterpretable
     # without knowing what the higher arm actually added, and a rung that added
-    # nothing is not evidence that its layer does not work.
+    # nothing is not evidence that its layer does not work. Only over ``arms`` (not
+    # ``arms_with_oracle_base``): ``oracle_base`` is loaded to serve, not to be
+    # reported as a rung of its own when it was not actually requested.
     corpus_census_by_arm = {arm: corpus_census(corpora[arm]) for arm in arms}
     census_deltas: dict[str, dict[str, Any]] = {}
     for lo, hi in ladder_steps(corpus_census_by_arm):
@@ -4541,7 +4562,7 @@ def run_datalake(
     # Serve concurrency (docs/measurement.md): only fan out when
     # there is a live model. The refuse-all path returns without work, so there is
     # nothing to overlap. The one exception is ``oracle_sql``, which executes real
-    # gold SQL under ``--skip-agent`` and so *would* overlap — left serial on purpose:
+    # gold SQL under ``--oracle-only`` and so *would* overlap — left serial on purpose:
     # the whole 2030-question split grades in well under ten minutes, once, and it is
     # the run every other number is read against. Not worth a concurrency bug.
     effective_workers = serve_workers if lc_model is not None else 1
@@ -4571,13 +4592,8 @@ def run_datalake(
         serve_order = list(arms)
         # Oracle rungs append after the fair arms: they are diagnostics, and a run
         # that dies partway should still have scored the arms that are results.
-        oracle_rungs = {r.value: r for r in OracleRung if r.value in (oracles or ())}
-        # A rung measures headroom *relative to* one arm's corpus. The last arm is
-        # the most curated one under the default ordering, which is the arm whose
-        # remaining headroom anyone is actually asking about.
-        oracle_base = arms[-1] if arms else None
-        if oracle_rungs and oracle_base is None:
-            raise ValueError("--oracle needs at least one arm to measure against")
+        # ``oracle_rungs`` / ``oracle_base`` were resolved once, above, because the
+        # corpora-loading section needed them before this loop exists.
         # Built before any serving so an ambiguous gold aborts the run up front,
         # rather than after a rung has already spent its model budget. Only five
         # BIRD questions collide by text and all of them share gold SQL, so this is
@@ -4630,10 +4646,10 @@ def run_datalake(
             # ``oracle_sql`` is the exception to the model requirement: it submits
             # gold SQL straight to the grader and never calls a model, so gating it
             # behind ``lc_model`` made the one rung that costs nothing silently
-            # degrade to refuse-all under ``--skip-agent`` — reporting EX 0.000 for
-            # the grader ceiling, which is the number every other number is supposed
-            # to be read against. The other rungs do serve through the real graph and
-            # genuinely need a model.
+            # degrade to refuse-all under a no-model run (what ``--oracle-only`` now
+            # runs) — reporting EX 0.000 for the grader ceiling, which is the number
+            # every other number is supposed to be read against. The other rungs do
+            # serve through the real graph and genuinely need a model.
             def _solver_for(plan: ArmServingPlan):
                 """The serial solver. The pool builds its own, per worker, via
                 ``make_serve_worker_factory`` — same branch, same plan."""
@@ -5008,15 +5024,16 @@ def main(argv: list[str] | None = None) -> int:
             "because one tool call costs up to three super-steps."
         ),
     )
-    p.add_argument("--skip-agent", action="store_true", help="Offline smoke (no model)")
     p.add_argument(
-        "--allow-git-sha-drift",
+        "--oracle-only",
         action="store_true",
         help=(
-            "Paid resume after a code edit: continue despite git_sha drift. "
-            "Smoke (--skip-agent) already warns and continues; without this flag a "
-            "paid resume refuses before spend. The ledger still records the drift "
-            "and marks the run unquotable."
+            "Serve only oracle rungs (default oracle_sql if --oracle names none): no "
+            "fair arm, no model load, effectively free. Replaces the retired "
+            "--skip-agent — Option A (M3 N10, decision 12) makes 'no model was "
+            "called' an inference from an empty fair-arm set rather than a global "
+            "flag that could combine with any configuration, so it refuses "
+            "combination with --arms or with an oracle rung other than oracle_sql."
         ),
     )
     p.add_argument(
@@ -5150,22 +5167,33 @@ def main(argv: list[str] | None = None) -> int:
                 f"unknown oracle rung(s): {', '.join(unknown)}. "
                 f"Choose from: {', '.join(sorted(known))}"
             )
+    if args.oracle_only:
+        # ``--oracle-only`` is the Option A replacement for the retired
+        # ``--skip-agent``: "no model was called" is now an INFERENCE from an empty
+        # fair-arm set (``run_datalake``'s ``oracle_only``), not a global flag that
+        # could combine with any configuration (M3 N10, decision 12). Forbidding
+        # explicit fair arms here, rather than silently dropping them, keeps that
+        # inference honest — a caller who typed --arms meant to serve them.
+        if args.arms:
+            p.error(
+                "--oracle-only and --arms are mutually exclusive: an oracle-only run "
+                "serves no fair arms by construction"
+            )
         # ``oracle_sql`` submits gold SQL and needs no model. Every other rung serves
         # through the real graph, so without one it would silently fall through to the
         # refuse-all solver and produce an arm that is shape-identical to a genuinely
         # refused one — an unmeasured rung indistinguishable from a measurement. Refuse
         # the combination instead of scoring it.
-        if args.skip_agent:
-            needs_model = sorted(set(oracles) - {OracleRung.sql.value})
-            if needs_model:
-                p.error(
-                    f"--skip-agent cannot serve {', '.join(needs_model)}: these rungs "
-                    "serve through the real graph and need a model, so they would "
-                    "score as refusals rather than as counterfactuals. Only "
-                    f"{OracleRung.sql.value} runs without a model — it submits gold "
-                    "SQL straight to the grader, which is why it is step 0 of the "
-                    "runbook."
-                )
+        needs_model = sorted(set(oracles) - {OracleRung.sql.value})
+        if needs_model:
+            p.error(
+                f"--oracle-only cannot serve {', '.join(needs_model)}: these rungs "
+                "serve through the real graph and need a model, so they would "
+                "score as refusals rather than as counterfactuals. Only "
+                f"{OracleRung.sql.value} runs without a model — it submits gold "
+                "SQL straight to the grader, which is why it is step 0 of the "
+                "runbook."
+            )
     bad = [a for a in arms if a not in _ARMS]
     if bad:
         p.error(f"--arms must be a subset of {_ARMS}; unknown: {bad}")
@@ -5302,7 +5330,7 @@ def _score_one_split(
             limit_dbs=args.limit_dbs,
             limit=args.limit,
             max_agent_steps=args.max_agent_steps,
-            skip_agent=args.skip_agent,
+            oracle_only=args.oracle_only,
             resume=not args.no_resume,
             split=split,
             route_top_k=args.route_top_k,
@@ -5317,7 +5345,6 @@ def _score_one_split(
             prompt_variants=prompt_overrides,
             replicate_of=args.replicate,
             oracles=oracles,
-            allow_git_sha_drift=args.allow_git_sha_drift,
             reuse_corpus=reuse_corpus,
         )
         print(json.dumps(result["arms"], indent=2, ensure_ascii=False))

@@ -577,7 +577,6 @@ def _manifest(**over):
         route_llm_pick=True,
         schema_pick_max_columns=12,
         use_embedder=True,
-        skip_agent=False,
         serve_workers=1,
         # A gate key with no default, so it has to be spelled here. These tests are
         # about the PROMPT stamp; the pool digest just has to be present and stable

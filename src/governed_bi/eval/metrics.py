@@ -97,9 +97,24 @@ class Metric:
 #: So ``comparable()`` refuses a pair that does not carry this field rather than
 #: extending the rule to records that cannot support it.
 #:
+#: ``2`` (M3 N10) drops the ``skip_agent`` and ``allow_git_sha_drift`` knobs: the
+#: global "no model was called" bypass is retired in favour of ``--oracle-only``
+#: (Option A — see ``docs/plans/batch-m3.md``), which makes "no model calls" an
+#: INFERENCE from an empty fair-arm set rather than a flag that can combine with any
+#: configuration. Bumping the version is what :data:`tests/test_manifest_schema_bump.py`
+#: exists to enforce: a knob-set change without a version bump would leave
+#: ``comparable()`` reading the missing key as "both sides agree" on a v1/v2 pair.
+#:
+#: ``comparable()`` only refuses a pair when a side's version is ``None`` (predates the
+#: guarantee entirely) — it does NOT refuse a v1-vs-v2 pair. That is deliberate: a v1
+#: record still guarantees every v1-era field is present, so the ones that survived
+#: into v2 unchanged are still safely comparable. Refusing every version mismatch would
+#: make the 2026-07-30 v1 ladder incomparable to anything this repo runs after M3,
+#: which is the opposite of what M5's analysis work (N15) needs from this archive.
+#:
 #: An integer rather than a date, because the only question anyone asks of it is
 #: "is this at least version N" and a date invites string comparison.
-MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 2
 
 #: The version stamp itself. Not a knob and not operational: it says how much the
 #: other fields can be trusted.
@@ -115,7 +130,11 @@ MANIFEST_SCHEMA: tuple[Metric, ...] = (
 #: in every manifest, in every mode — ``None`` when it does not apply, never absent.
 MANIFEST_KNOBS: tuple[Metric, ...] = (
     Metric("split", "which BIRD split was scored"),
-    Metric("model", "the configured serve model, or None under --skip-agent"),
+    Metric(
+        "model",
+        "the configured serve model, or None when no fair arm and no model-needing "
+        "oracle rung was requested (--oracle-only's inferred no-model path)",
+    ),
     Metric("llm_temperature", "decoding temperature; None = provider default"),
     Metric("prompt_variants", "stage -> variant id map, for a human"),
     Metric("prompt_set_hash", "hash of the prompt TEXT, so an in-place edit moves it"),
@@ -130,7 +149,6 @@ MANIFEST_KNOBS: tuple[Metric, ...] = (
     Metric("route_llm_pick", "LLM picks one schema; None when routing is bypassed"),
     Metric("schema_pick_max_columns", "columns shown to the picker; None when bypassed"),
     Metric("use_embedder", "embedding channel on; None when routing is bypassed"),
-    Metric("skip_agent", "no model was called at all"),
     Metric(
         "grade_semantic_failures",
         "graded delivery: a coverage / L3-L5 / execution-exhaustion failure hands the "
@@ -193,7 +211,6 @@ MANIFEST_OPERATIONAL: tuple[Metric, ...] = (
         "run_manifest.json tool_call_budget. Effective recursion limit is 3x + 4",
     ),
     Metric("serve_path", "always agent_core (ADR 0002)"),
-    Metric("allow_git_sha_drift", "operator opted out of the resume git-sha guard"),
 )
 
 #: Fields no *builder* can fill, because the value does not exist yet when the
@@ -302,7 +319,6 @@ def build_manifest(
     split: str,
     model_name: str | None,
     prompt_variants: dict[str, str],
-    skip_agent: bool,
     created_at_utc: str,
     # Routing. Pass None for all four when one schema is pinned: the router did not
     # run, and recording a default would claim it ran with that value.
@@ -373,7 +389,6 @@ def build_manifest(
     serve_workers: int = 1,
     build_workers: int = 1,
     max_agent_steps: int | None = None,
-    allow_git_sha_drift: bool = False,
 ) -> dict[str, Any]:
     """The one manifest builder, for both modes.
 
@@ -383,11 +398,14 @@ def build_manifest(
     describes a different run than the one that executed. Only
     :data:`MANIFEST_OPERATIONAL` parameters may default.
 
-    ``model_name`` is the CONFIGURED name, not a resolved value: ``manifest_model``
-    is applied inside, so a caller cannot write a model name for a run that never
-    called one. Taking the resolved value was the original drift — before N9 retired
-    the single-schema driver, each had to remember to apply the rule and one forgot,
-    which let a smoke run be reported comparable to a real one.
+    ``model_name`` is recorded VERBATIM as ``model`` — the caller decides what "no
+    model was called" means for its own arms/oracles and passes ``None`` for it
+    directly, rather than this builder inferring it from a global bypass flag. That
+    used to be ``skip_agent`` (a manifest knob of its own, retired at
+    ``MANIFEST_SCHEMA_VERSION`` 2 / M3 N10): a global flag that could combine with any
+    configuration is exactly the two-track hazard ``--oracle-only`` replaces it with —
+    "no model calls" is now an inference from an empty fair-arm set, made once by the
+    caller, not a second knob this builder has to keep in sync with the real one.
 
     ``corpus_content_hash`` is declared ``None`` here and filled by
     :func:`stamp_corpus_hashes` after the build: the manifest is written before any
@@ -395,8 +413,6 @@ def build_manifest(
     for. Declared-then-filled rather than added later, because a gate key absent
     from the manifest can never fire.
     """
-    from .index import manifest_model
-
     routing_bypassed = route_top_k is None and route_llm_pick is None
 
     return {
@@ -414,7 +430,7 @@ def build_manifest(
         "routing_bypassed": routing_bypassed,
         # ── knobs ──
         "split": split,
-        "model": manifest_model(model_name, skip_agent=skip_agent),
+        "model": model_name,
         "llm_temperature": llm_temperature,
         "prompt_variants": dict(prompt_variants),
         "prompt_set_hash": prompt_set_hash(prompt_variants),
@@ -425,14 +441,13 @@ def build_manifest(
         "route_llm_pick": route_llm_pick,
         "schema_pick_max_columns": schema_pick_max_columns,
         "use_embedder": use_embedder,
-        "skip_agent": skip_agent,
         "always_note_global_max": always_note_global_max,
         "always_note_char_max": always_note_char_max,
         "pin_triggers_enabled": pin_triggers_enabled,
-        # Same shape as ``model`` under ``--skip-agent``: a knob whose value is a
-        # claim about a mechanism that did not run gets recorded as None, and the
-        # switch above says why. Otherwise two PIN-off runs configured with
-        # different caps read as incomparable over a difference neither run had.
+        # Same shape as ``model`` when no fair arm ran: a knob whose value is a claim
+        # about a mechanism that did not run gets recorded as None, and the switch
+        # above says why. Otherwise two PIN-off runs configured with different caps
+        # read as incomparable over a difference neither run had.
         "pin_require_certified": pin_require_certified if pin_triggers_enabled else None,
         "pin_max": pin_max if pin_triggers_enabled else None,
         "grade_semantic_failures": grade_semantic_failures,
@@ -444,7 +459,6 @@ def build_manifest(
         "build_workers": build_workers,
         "max_agent_steps": max_agent_steps,
         "serve_path": "agent_core",
-        "allow_git_sha_drift": allow_git_sha_drift,
     }
 
 

@@ -459,16 +459,16 @@ def test_every_resume_drift_key_is_actually_checked(tmp_path, key, label):
     """Parametrized over the tuple itself, so a key added to it without a
     corresponding check fails here rather than going quietly unenforced.
 
-    `git_sha` and `skip_agent` were exactly that: both were named in the driver's
-    resume-knob list with comments explaining why changing them mid-run was
-    dangerous, while the ledger check iterated the *comparability* list and saw
+    `git_sha` and the now-retired `skip_agent` were exactly that: both were named in
+    the driver's resume-knob list with comments explaining why changing them mid-run
+    was dangerous, while the ledger check iterated the *comparability* list and saw
     neither. A run resumed after a code edit warned once on the console — which
     scrolls past in a multi-hour run — then recorded no drift and stayed quotable.
     """
     # `split` is refused outright at resume time rather than recorded as drift, but
     # the ledger still has to flag it for a directory that predates that check.
     original = {"split": "test", "model": "gpt-5.6-luna", "git_sha": "abc123",
-                "skip_agent": False, "prompt_set_hash": "h0", "route_top_k": 10,
+                "prompt_set_hash": "h0", "route_top_k": 10,
                 "route_llm_pick": True, "schema_pick_max_columns": 12,
                 "use_embedder": True, "corpus_content_hash": "c0",
                 "llm_temperature": 0.0, "question_pool_hash": "pool0",
@@ -511,7 +511,7 @@ def test_resume_drift_keys_are_a_superset_of_comparability_keys(tmp_path):
     comparability = {k for k, _ in COMPARABILITY_KEYS}
     drift = {k for k, _ in RESUME_DRIFT_KEYS}
     assert comparability < drift, "drift keys must be a strict superset"
-    assert drift - comparability == {"git_sha", "skip_agent"}
+    assert drift - comparability == {"git_sha"}
 
     # And the distinction has to hold in behaviour, not just in the tuples: two runs
     # differing only by commit stay comparable.
@@ -781,38 +781,11 @@ def test_the_four_kinds_of_attrition_are_reported_separately(tmp_path):
     assert "withheld from serving" in joined
 
 
-def test_a_skip_agent_run_is_never_quotable(tmp_path):
-    """`--skip-agent` serves a refuse-all solver, so every arm scores 0 by construction.
-    The runbook asks for one immediately before every real run, and they were landing in
-    the ledger marked `quotable: true` — a row that looks like a result and is a smoke
-    test."""
-    run = _write_run(tmp_path, manifest_extra={"skip_agent": True})
-    record = record_for_run(run)
-    assert record["skip_agent"] is True
-    ok, reasons = quotable(record)
-    assert not ok
-    assert any("--skip-agent" in r for r in reasons)
-
-
-def test_a_real_run_is_not_penalised_for_the_flag_being_recorded(tmp_path):
-    """The complementary case: `skip_agent: False` is the normal state and must not block."""
-    run = _write_run(tmp_path, manifest_extra={"skip_agent": False})
-    record = record_for_run(run)
-    assert record["skip_agent"] is False
-    assert quotable(record)[0]
-
-
-def test_a_run_predating_the_skip_agent_field_is_not_accused(tmp_path):
-    record = record_for_run(_write_run(tmp_path))
-    assert record["skip_agent"] is None
-    assert quotable(record)[0]
-
-
-def test_a_skip_agent_smoke_run_is_not_comparable_to_a_real_one():
+def test_a_smoke_run_with_no_model_is_not_comparable_to_a_real_one():
     """The quotability gate stops a smoke run being *quoted*; this stops it being
     *paired*. The single-schema driver (since retired) used to write a real model name
-    even under `--skip-agent`, so a run that never called a model matched a real one on
-    every comparability key."""
+    even under the retired `--skip-agent`, so a run that never called a model matched
+    a real one on every comparability key."""
     smoke = {
         "split": "test", "model": None, "prompt_set_hash": "h",
         "route_top_k": 10, "route_llm_pick": True,
@@ -824,48 +797,41 @@ def test_a_skip_agent_smoke_run_is_not_comparable_to_a_real_one():
     assert any("model" in d for d in diffs)
 
 
-def test_both_drivers_record_no_model_under_skip_agent():
-    """The single-schema driver (since retired, M3 N9) used to write a real model
-    name even under `--skip-agent`, so its smoke runs matched a real one on every
-    comparability key. The rule now has one definition (`index.manifest_model`),
-    shared by both manifest modes through `metrics.build_manifest`.
+def test_oracle_only_empty_arms_records_no_model_via_build_manifest():
+    """Option A (M3 N10, decision 12): "no model was called" is an INFERENCE the
+    caller makes from an empty fair-arm set (``run_datalake``'s ``oracle_only``), and
+    passes to ``build_manifest`` as ``model_name=None`` directly — not a second
+    ``skip_agent`` knob this builder has to keep in sync with the real one. The
+    single-schema driver (since retired, M3 N9) used to write a real model name even
+    under the old ``--skip-agent``, so its smoke runs matched a real one on every
+    comparability key; this pins that ``run_datalake._build_manifest`` cannot repeat
+    that mistake regardless of how the caller derived ``model_name``.
     """
-    from governed_bi.eval import run_datalake
-    from governed_bi.eval.index import manifest_model as shared
-
-    assert shared("gpt-5.6-luna", skip_agent=True) is None
-    assert shared("gpt-5.6-luna", skip_agent=False) == "gpt-5.6-luna"
-
-    # Asserted on the manifest the driver actually BUILDS. Sharing the helper is not
-    # enough on its own: keeping the import and inlining
-    # `"model": settings.models.llm_model` restores the drift with the suite green,
-    # which is what an `is shared` identity check alone lets through.
     from pathlib import Path
 
-    from governed_bi.config import Environment, Settings
-
-    settings = Settings.for_env(Environment.dev)
+    from governed_bi.eval import run_datalake
 
     pooled = run_datalake._build_manifest(
         bird_dir=Path("."),
         split="test",
-        model_name=settings.models.llm_model,
+        model_name=None,
         prompt_variants={},
         route_top_k=3,
         route_llm_pick=False,
         schema_pick_max_columns=8,
         use_embedder=False,
-        skip_agent=True,
         serve_workers=1,
         question_pool_hash="pool0000",
+        arms=(),
+        oracles=("oracle_sql",),
         **_NOTES,
         **_GRADED,
     )
     assert pooled["model"] is None, (
-        "run_datalake claims a model for a run that never called one, so its smoke "
-        "runs are comparable to real ones"
+        "an oracle-only / empty-fair-arm manifest must record no model, or its rows "
+        "are comparable to a real run's"
     )
-    assert pooled["skip_agent"] is True
+    assert pooled["arms"] == []
 
     # ...and it reports the real name when a model IS used, or the gate would be
     # satisfied by a driver that simply never records one.
@@ -879,9 +845,10 @@ def test_both_drivers_record_no_model_under_skip_agent():
             route_llm_pick=False,
             schema_pick_max_columns=8,
             use_embedder=False,
-            skip_agent=False,
             serve_workers=1,
             question_pool_hash="pool0000",
+            arms=("baseline",),
+            oracles=(),
             **_NOTES,
             **_GRADED,
         )["model"]

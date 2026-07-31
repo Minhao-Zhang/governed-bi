@@ -72,7 +72,7 @@ def resolve_clarifications_path(run_dir: Path | str, schema: str) -> Path | None
     Within one db build, sidecars still sit at the arm root until relocate runs.
     Across a resume, curated's ledger has already moved under ``<db>/_build/``; a
     reader that only checks the live root sees an empty ledger and folds nothing
-    (or, under skip-agent scaffolding, synthesises a misleading seed fold).
+    (or, under the no-model path's scaffolding, synthesises a misleading seed fold).
     """
     live = clarifications_path(run_dir)
     if live.exists():
@@ -325,7 +325,8 @@ def seed_gap_clarifications(
     """Explicit offline scaffolding only (``seed_ledger_if_empty=True``).
 
     Not used on the default Phase B path — agent-authored ledgers are required
-    unless the caller opts in (e.g. ``--skip-agent`` experiment runs).
+    unless the caller opts in (e.g. ``--oracle-only`` experiment runs, formerly
+    ``--skip-agent``).
     """
     records: list[ClarificationRecord] = []
     n = 0

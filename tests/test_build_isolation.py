@@ -389,7 +389,6 @@ def test_build_workers_is_recorded_in_the_manifest_but_is_not_a_resume_knob():
         route_llm_pick=True,
         schema_pick_max_columns=12,
         use_embedder=True,
-        skip_agent=False,
         serve_workers=4,
         question_pool_hash="pool0000",
         always_note_global_max=8,

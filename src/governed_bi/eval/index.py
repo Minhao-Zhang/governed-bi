@@ -103,11 +103,6 @@ COMPARABILITY_EXCLUSIONS: dict[str, str] = {
         "almost every pair in the ledger incomparable. Corrupting *within* one "
         "directory, which is why it is in RESUME_DRIFT_KEYS instead"
     ),
-    "skip_agent": (
-        "`quotable()` refuses a --skip-agent run outright, and `manifest_model` forces "
-        "its `model` to None, so a smoke/real pair is already caught by a key that IS "
-        "gated. Corrupting within one directory: RESUME_DRIFT_KEYS"
-    ),
 }
 
 #: Human labels for the derived keys, where the field name is not the clearest label.
@@ -154,11 +149,16 @@ COMPARABILITY_KEYS: tuple[tuple[str, str], ...] = tuple(
 #:
 #: Inside one directory the same difference is fatal instead of normal. Rows scored
 #: before and after a code edit sit in one ``generations.<arm>.jsonl`` with no field
-#: distinguishing them, so the arm's score averages two harness versions. Likewise
-#: ``skip_agent``: resuming a ``--skip-agent`` smoke directory without the flag
-#: blends refuse-all rows scoring zero with real model rows, and the runbook asks
-#: for a ``--skip-agent`` smoke run immediately before the real one, so those two
-#: directories sit side by side.
+#: distinguishing them, so the arm's score averages two harness versions.
+#:
+#: ``skip_agent`` used to be a second such member: resuming a ``--skip-agent`` smoke
+#: directory without the flag blended refuse-all rows scoring zero with real model
+#: rows. Retired at ``MANIFEST_SCHEMA_VERSION`` 2 (M3 N10, Option A) along with the
+#: flag itself — ``--oracle-only`` runs an empty fair-arm set into its own directory
+#: by construction, so the specific hazard this guarded (a smoke directory silently
+#: promoted to a paid resume) has no flag left to trigger it. A prior manifest whose
+#: ``model`` was ``None`` still drifts through the generic warn path below if a resume
+#: adds a real one; it is simply no longer FATAL the way the two named cases are.
 #:
 #: ``run_datalake._RESUME_KNOBS`` is derived from this tuple rather than spelled
 #: again. It used to be a second hand-maintained list, and it had already drifted:
@@ -167,25 +167,8 @@ COMPARABILITY_KEYS: tuple[tuple[str, str], ...] = tuple(
 #: neither. A resume after a code edit warned once on the console — which scrolls
 #: past in a multi-hour run — and then recorded no drift and stayed quotable.
 RESUME_DRIFT_KEYS: tuple[tuple[str, str], ...] = COMPARABILITY_KEYS + (
-    ("skip_agent", "skip_agent"),
     ("git_sha", "git_sha"),
 )
-
-
-def manifest_model(model_name: str | None, *, skip_agent: bool) -> str | None:
-    """The ``model`` a manifest may claim. ``None`` under ``--skip-agent``.
-
-    ``model`` is a comparability key, and a run that never called a model has none.
-    Writing the configured name anyway made a smoke run match a real one on every
-    key, so ``comparable()`` paired them — the quotability gate stops such a run
-    being *quoted*, but nothing stopped it being *paired*.
-
-    Lives here, beside the keys, because the manifest feeds the same ledger the
-    driver's own knobs do, and the retired single-schema driver (removed 2026-07-31,
-    M3 N9) once wrote this field differently and drifted. One definition is the
-    only way that stays true.
-    """
-    return None if skip_agent else model_name
 
 
 def headline_keys() -> tuple[str, ...]:
@@ -236,8 +219,8 @@ def _resume_drift(manifest: dict[str, Any]) -> list[str]:
     surfaced here or the run reads as internally consistent when it is not.
 
     Iterates :data:`RESUME_DRIFT_KEYS`, not :data:`COMPARABILITY_KEYS`: a changed
-    ``git_sha`` or ``skip_agent`` is unremarkable *between* runs and corrupting
-    *within* one. See that tuple for why the distinction is the whole point.
+    ``git_sha`` is unremarkable *between* runs and corrupting *within* one. See that
+    tuple for why the distinction is the whole point.
     """
     resumes = manifest.get("resumes")
     if not isinstance(resumes, list):
@@ -371,9 +354,9 @@ def record_for_run(run_dir: Path | str) -> dict[str, Any]:
     # list had simply never been reconciled, and nothing failed, because an absent key
     # cannot make a diff.
     #
-    # Spelled entries below still win: several are not straight manifest reads (`model`
-    # via `manifest_model`, `git_sha` falling back to `corpus_release_hash`, `split`
-    # preferring the summary). This fills in the rest rather than replacing them.
+    # Spelled entries below still win: several are not straight manifest reads
+    # (`git_sha` falling back to `corpus_release_hash`, `split` preferring the
+    # summary). This fills in the rest rather than replacing them.
     record: dict[str, Any] = {
         knob.name: manifest.get(knob.name) for knob in MANIFEST_KNOBS
     }
@@ -457,10 +440,6 @@ def record_for_run(run_dir: Path | str) -> dict[str, Any]:
         ),
         # ``leakage`` -> train/test contamination found before scoring.
         "leakage": summary.get("leakage") or {},
-        # A ``--skip-agent`` run serves a refuse-all solver: every arm scores 0 by
-        # construction. The runbook asks for one immediately before every real run, so
-        # these accumulate in the ledger — and they were landing there marked quotable.
-        "skip_agent": manifest.get("skip_agent"),
         # ``gold_hash_self_check`` -> schemas whose gold would not execute, so the
         # grader was never confirmed against them. Below the abort threshold the run
         # proceeds (one slow query must not make the split unrunnable), but a score for
@@ -642,14 +621,6 @@ def quotable(record: dict[str, Any]) -> tuple[bool, list[str]]:
         reasons.append(
             "manifest.json is missing or unreadable, so every configuration knob is "
             "unknown — the run cannot be compared to anything, including itself"
-        )
-
-    if record.get("skip_agent"):
-        reasons.append(
-            "run with --skip-agent: no model was called, so every fair arm refused and "
-            "scores 0 by construction. (An oracle_sql rung under --skip-agent is still "
-            "meaningful — it submits gold SQL to the grader — but it is the grader's "
-            "ceiling, not a system result.)"
         )
 
     if str(record.get("split")) == "train":
@@ -1311,9 +1282,9 @@ def prune_index(
 
     A record outlives its run: scratch and temp directories get collected, and the
     row stays, unverifiable and still carrying a ``quotable`` verdict. Worse, the
-    verdict was computed under whatever gates existed when it was written — the
-    ``--skip-agent`` gate is forward-only, so rows that predate the manifest field
-    sit in the ledger advertising a smoke run as quotable. Pruning the dead ones and
+    verdict was computed under whatever gates existed when it was written — a
+    forward-only gate leaves rows that predate it sitting in the ledger advertising
+    a run as quotable under rules it never passed. Pruning the dead ones and
     re-indexing the live ones (``reindex_all``) puts every surviving verdict under
     the current rules.
     """

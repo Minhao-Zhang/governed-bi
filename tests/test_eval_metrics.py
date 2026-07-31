@@ -34,7 +34,6 @@ def _manifest(mode: str, **over):
         split="test",
         model_name="gpt-5.6-luna",
         prompt_variants={},
-        skip_agent=False,
         created_at_utc="20260728T000000Z",
         route_top_k=3,
         route_llm_pick=False,
@@ -72,7 +71,6 @@ def _single_manifest(**over):
         split="test",
         model_name="gpt-5.6-luna",
         prompt_variants={},
-        skip_agent=False,
         created_at_utc="20260728T000000Z",
         # Routing is bypassed: one schema is pinned, so the router never runs.
         route_top_k=None,
@@ -221,7 +219,6 @@ def test_no_manifest_knob_or_scope_field_may_be_defaulted(knob):
         split="test",
         model_name="m",
         prompt_variants={},
-        skip_agent=False,
         created_at_utc="20260728T000000Z",
         route_top_k=3,
         route_llm_pick=False,
@@ -257,7 +254,6 @@ def test_the_pooled_driver_may_not_default_the_graded_delivery_it_overrides():
         route_llm_pick=False,
         schema_pick_max_columns=12,
         use_embedder=True,
-        skip_agent=False,
         serve_workers=1,
         question_pool_hash="pool0000",
         always_note_global_max=8,
@@ -298,19 +294,21 @@ def test_a_bypassed_router_records_none_explicitly_rather_than_a_default():
     assert _manifest("datalake")["routing_bypassed"] is False
 
 
-def test_skip_agent_records_no_model_in_either_mode():
-    """A smoke run that called no model must not report a model name, or it compares
-    as the same configuration as a real run."""
+def test_empty_fair_arms_record_no_model_when_caller_passes_none():
+    """Option A: no-model is inferred by the caller (oracle-only), not a skip_agent flag."""
     for mode in ("single", "datalake"):
         m = _manifest(
             mode,
-            skip_agent=True,
+            model_name=None,
+            arms=(),
+            oracles=("oracle_sql",),
             route_top_k=None if mode == "single" else 3,
             route_llm_pick=None if mode == "single" else False,
             schema_pick_max_columns=None if mode == "single" else 12,
             use_embedder=None if mode == "single" else True,
         )
         assert m["model"] is None, mode
+        assert m["arms"] == []
 
 
 def test_corpus_hash_is_declared_before_the_build_and_stamped_after(tmp_path):
@@ -412,7 +410,6 @@ def test_the_manifest_emits_exactly_the_declared_field_set(tmp_path):
         route_llm_pick=False,
         schema_pick_max_columns=12,
         use_embedder=True,
-        skip_agent=False,
         serve_workers=1,
         question_pool_hash="pool0000",
         always_note_global_max=8,
@@ -970,7 +967,6 @@ def test_the_pin_gates_are_null_when_pinning_is_off():
     never reached" stop looking alike in the artifact."""
     off = _single_manifest(
         db_id="restaurant",
-        skip_agent=True,
         model_name=None,
         pin_triggers_enabled=False,
         pin_require_certified=True,
@@ -982,7 +978,6 @@ def test_the_pin_gates_are_null_when_pinning_is_off():
     # unmeasurable in exactly the runs that use it.
     on = _single_manifest(
         db_id="restaurant",
-        skip_agent=True,
         model_name=None,
         pin_triggers_enabled=True,
         pin_require_certified=True,

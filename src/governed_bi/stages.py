@@ -123,9 +123,10 @@ REFUSED_BY_TO_STAGE: dict[str, Stage] = {
     "exhausted": Stage.agent_core,
     "model_error": Stage.agent_core,
     "clarification_declined": Stage.finalize,
-    # ``--skip-agent`` offline smoke runs: no model was configured, so every
-    # question refuses at the top of the turn. Omitting it made the whole offline
-    # path read as an unrecognised free-text typo on every single question.
+    # A no-model offline smoke run (formerly ``--skip-agent``, now what an arm
+    # served with no model configured degrades to): every question refuses at the
+    # top of the turn. Omitting it made the whole offline path read as an
+    # unrecognised free-text typo on every single question.
     "no_model": Stage.route,
 }
 

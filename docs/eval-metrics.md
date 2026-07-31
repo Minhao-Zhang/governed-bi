@@ -16,7 +16,7 @@ documented subset of `summary.json`, so "declared but absent" is expected there.
 
 | Artifact | Fields | Consumer |
 |---|---|---|
-| `manifest.json` | 42 (37 in every run) | `index.COMPARABILITY_KEYS`, `index.RESUME_DRIFT_KEYS` |
+| `manifest.json` | 40 (35 in every run) | `index.COMPARABILITY_KEYS`, `index.RESUME_DRIFT_KEYS` |
 | `generations.<arm>.jsonl` | 73 per (question, arm) | `_summarise_rows`, `analysis`, `power`, `error_taxonomy` |
 | `summary.json` | 87 | `index.quotable` |
 | `stage_events.jsonl` | 7 per (question, arm, stage) | read by hand; per-stage latency attribution |
@@ -75,7 +75,7 @@ joins the comparability gate by default instead of silently skipping it.
 | field | meaning |
 |---|---|
 | `split` | which BIRD split was scored |
-| `model` | the configured serve model, or None under --skip-agent |
+| `model` | the configured serve model, or None when no fair arm and no model-needing oracle rung was requested (--oracle-only's inferred no-model path) |
 | `llm_temperature` | decoding temperature; None = provider default |
 | `prompt_variants` | stage -> variant id map, for a human |
 | `prompt_set_hash` | hash of the prompt TEXT, so an in-place edit moves it |
@@ -86,7 +86,6 @@ joins the comparability gate by default instead of silently skipping it.
 | `route_llm_pick` | LLM picks one schema; None when routing is bypassed |
 | `schema_pick_max_columns` | columns shown to the picker; None when bypassed |
 | `use_embedder` | embedding channel on; None when routing is bypassed |
-| `skip_agent` | no model was called at all |
 | `grade_semantic_failures` | graded delivery: a coverage / L3-L5 / execution-exhaustion failure hands the grader its last generated SQL stamped `unverified` instead of refusing, so the same turn scores 0 under one setting and can score 1 under the other |
 | `always_note_global_max` | always-notes admitted per turn; the budget applies whether or not PIN is on |
 | `always_note_char_max` | character ceiling on the admitted always-notes |
@@ -125,7 +124,6 @@ only `build_manifest` parameters allowed a default.
 | `build_workers` | curator-build concurrency |
 | `max_agent_steps` | operator override for the curator's per-schema TOOL-CALL budget; null = derived from schema size, and the resolved figure is each corpus's run_manifest.json tool_call_budget. Effective recursion limit is 3x + 4 |
 | `serve_path` | always agent_core (ADR 0002) |
-| `allow_git_sha_drift` | operator opted out of the resume git-sha guard |
 
 ### Stamped after the build (declared, not required)
 

@@ -140,7 +140,6 @@ def _manifest(tmp_path, **kw):
         "route_llm_pick": True,
         "schema_pick_max_columns": 12,
         "use_embedder": True,
-        "skip_agent": False,
         "git_sha": "abc123",
     }
     base.update(kw)
