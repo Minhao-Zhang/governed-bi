@@ -9,7 +9,7 @@
 >
 > Delete once `tests/test_agent_step_events.py:5` stops citing it (that docstring should point
 > at `docs/analyst.md` instead). Superseded overall by
-> [rebuild-checklist.zh.md](rebuild-checklist.zh.md) §5.3 (backend contract publication, eleven
+> [rebuild-checklist.md](rebuild-checklist.md) §5.3 (backend contract publication, eleven
 > sub-items).
 
 > **This doc is the design and the measurements. To build it, read

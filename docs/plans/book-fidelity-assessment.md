@@ -3,7 +3,7 @@
 > **STATUS 2026-07-31 — KEEP. This is the evidence base for A0–A7, and it has known errors.**
 >
 > Decision 15 opened the reference book's seven structural choices as **seven separate projects,
-> each with its own baseline**. [rebuild-checklist.zh.md](rebuild-checklist.zh.md) X.5.10 gives
+> each with its own baseline**. [rebuild-checklist.md](rebuild-checklist.md) X.5.10 gives
 > each one or two lines; the book-side specification and our own mechanics are written **only
 > here**. It is also the only place holding the warning that the book's 95%+ / +12% / +24% / 35%
 > figures are its own extrapolations and **must not be used as targets**.

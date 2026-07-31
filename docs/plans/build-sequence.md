@@ -1,10 +1,10 @@
 # Build sequence
 
-> **Superseded 2026-07-30 by [rebuild-checklist.zh.md](rebuild-checklist.zh.md).** A grill
+> **Superseded 2026-07-30 by [rebuild-checklist.md](rebuild-checklist.md).** A grill
 > session replaced the four-phase structure below with eleven cross-cutting items plus four
 > parallel tracks, retired `run_experiment.py`, demoted 3.17, and added seven items that are
 > not in this file. The decisions and what they overturned are in
-> [rebuild-decisions.zh.md](rebuild-decisions.zh.md). **Keep this file as the evidence index**
+> [rebuild-decisions.md](rebuild-decisions.md). **Keep this file as the evidence index**
 > — its Sources table and Appendix still map every item back to the analysis that found it.
 >
 > **2026-07-31 — this file is more load-bearing than "superseded" suggests.** An audit found that

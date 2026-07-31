@@ -4,7 +4,7 @@
 >
 > §7 items 3 and 4 are the **only definition** of checklist items `1.7` (`corpus doctor`) and
 > `1.8` (`drift` category in `error_taxonomy`) — and
-> [rebuild-checklist.zh.md](rebuild-checklist.zh.md) §7.4 declares a dependency on both while
+> [rebuild-checklist.md](rebuild-checklist.md) §7.4 declares a dependency on both while
 > **not containing either**. Those are dangling pointers until this file's content is moved in.
 >
 > Still to migrate: §7.3 → new checklist 1.7 · §7.4 + §3's five-step chain → new 1.8 ·

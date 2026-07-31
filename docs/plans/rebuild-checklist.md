@@ -2,11 +2,11 @@
 
 2026-07-30 grill 之后定下的工作队列。按依赖链排序，不按重要性。
 
-每项只写三件事：**改什么**、**碰哪些文件**、**怎么验证**。理由不在这里，在 [rebuild-decisions.zh.md](rebuild-decisions.zh.md)。
+每项只写三件事：**改什么**、**碰哪些文件**、**怎么验证**。理由不在这里，在 [rebuild-decisions.md](rebuild-decisions.md)。
 
 **这份取代 [build-sequence.md](build-sequence.md)。**那份的四阶段结构（Phase 0-4，41 项）被推翻了：清单改成按横切概念组织，`run_experiment` 退役，3.17 降级，新增七项那份里没有的活。build-sequence 只保留作为证据索引，指向五份分析。
 
-> 中文文档，你要求的。AGENTS.md 规定 `docs/plans/` 只写英文，这里偏离了，记一笔。
+> **语言：简体中文，无英文孪生。**文件名不带 `.zh` 是刻意的 —— `.zh.md` 这个后缀宣称「我是某份英文文档的中文孪生」，而这份没有英文源头。AGENTS.md 那条规则（`tests/test_repo_contracts.py` 在守）防的是**孪生脱同步**，这里不适用。同目录另有 [rebuild-decisions.md](rebuild-decisions.md) 与 [grill-agenda.md](grill-agenda.md) 同为中文原生。
 
 ## ⚠ 2026-07-31 对抗审计的未修复项
 
@@ -174,7 +174,7 @@ correct        = True                              ← 而且它计入了 EX
 
 `ledger` 的实际规模：**527 次**（src 233 / tests 193 / docs 101），**四个**互不相关的意思，`docs/glossary.md` 里 **0 次**。
 
-> 一条更正：**`KMB` 在两个仓库里都是 0 命中。**那是描述 Steiner 树算法时从外部带进来的词，不是仓库术语。`docs/plans/grill-agenda.zh.md` 的 T8.Q4 用了它，读到时按「`graph/planner.py` 里那个 Steiner planner」理解。
+> 一条更正：**`KMB` 在两个仓库里都是 0 命中。**那是描述 Steiner 树算法时从外部带进来的词，不是仓库术语。`docs/plans/grill-agenda.md` 的 T8.Q4 用了它，读到时按「`graph/planner.py` 里那个 Steiner planner」理解。
 
 #### 1.4.1 · 一词多义，拆开
 
@@ -379,7 +379,7 @@ correct        = True                              ← 而且它计入了 EX
 
 **改什么**　约 1300 行统计代码私有于 5371 行的 driver，而 **6 个测试文件通过下划线名 import 它们**。提成一个独立模块。
 
-`grill-agenda.zh.md` 的 K2 曾建议「降级或直接删」这一条，至今无决定记录 —— 现在的决定是**做**，理由是 4.1（`GenerationRow`）本来就要把 `run_datalake` 里的行构造过一遍，两件事同域。
+`grill-agenda.md` 的 K2 曾建议「降级或直接删」这一条，至今无决定记录 —— 现在的决定是**做**，理由是 4.1（`GenerationRow`）本来就要把 `run_datalake` 里的行构造过一遍，两件事同域。
 
 **明确不是** eval driver 合并（那件事已推迟）。这是把不属于 driver 的东西搬出去。
 

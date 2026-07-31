@@ -4,7 +4,7 @@
 >
 > Ten findings here were checked against the **vendors' own current docs**, not against this
 > repo's assumptions. Re-deriving them means re-reading those docs, so this file is the cheapest
-> copy. A grep of [rebuild-checklist.zh.md](rebuild-checklist.zh.md) returns **zero hits** for
+> copy. A grep of [rebuild-checklist.md](rebuild-checklist.md) returns **zero hits** for
 > `RetryPolicy`, `get_stream_writer`, `on_event`, `durability`, and `Store` — all of them live
 > only here.
 >

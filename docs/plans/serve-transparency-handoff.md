@@ -4,7 +4,7 @@
 >
 > Decision 13 ("the backend is authoritative, the frontend adapts, a full rewrite is acceptable")
 > invalidates every frontend line-number instruction in §3.3 / §4.3 / §5.1. Superseded overall by
-> [rebuild-checklist.zh.md](rebuild-checklist.zh.md) §5.3.
+> [rebuild-checklist.md](rebuild-checklist.md) §5.3.
 >
 > **What is unique and unmigrated:** §3.1 + §3.2's causal quantification of picker truncation —
 > of 1351 questions, routed 1208, picker-chose-wrong-but-gold-was-in-shortlist 100, never-recalled

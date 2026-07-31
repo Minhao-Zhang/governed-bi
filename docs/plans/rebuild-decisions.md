@@ -1,12 +1,14 @@
 # 决定记录 · 2026-07-30
 
-**二十一条决定**，各写清楚**定了什么**、**为什么**、以及**否决了什么**。
+> **语言：简体中文，无英文孪生。**文件名不带 `.zh` 是刻意的 —— 那个后缀宣称「我是某份英文文档的中文孪生」，而这份没有英文源头。AGENTS.md 那条规则防的是孪生脱同步，这里不适用。
+
+**二十二条决定**，各写清楚**定了什么**、**为什么**、以及**否决了什么**。
 
 > **2026-07-31 更正：「没有未决项」这句话被审计推翻了。**逐词 grep 证实，build-sequence 41 项里约 28 项既没进清单也没进非目标，静默消失（`RetryPolicy`、`ServeDeployment`、`get_stream_writer`、`_generated`、`verified_at`、`durability`、`EXPLAIN` 等在清单里命中数均为 0）。而委托人的第一句要求就是「把我之前想出来的问题都实现一下」。
 >
-> 另有六条已核实的缺陷（A-1 到 A-7，其中 A-1/A-3/A-4/A-6 直接质疑决定 2、3、7、16 的成立性），见 [rebuild-checklist.zh.md](rebuild-checklist.zh.md) 顶部的审计小节。**在那张 carried / dropped / retired 三态表出来之前，这份决定记录不完整。**
+> 另有六条已核实的缺陷（A-1 到 A-7，其中 A-1/A-3/A-4/A-6 直接质疑决定 2、3、7、16 的成立性），见 [rebuild-checklist.md](rebuild-checklist.md) 顶部的审计小节。**在那张 carried / dropped / retired 三态表出来之前，这份决定记录不完整。**
 
-清单在 [rebuild-checklist.zh.md](rebuild-checklist.zh.md)。这一页只回答「当初为什么这么定」，将来反悔时先看这里。
+清单在 [rebuild-checklist.md](rebuild-checklist.md)。这一页只回答「当初为什么这么定」，将来反悔时先看这里。
 
 背景：2026-07-29 到 07-30 的五份分析产出 62 项工作，去重成 41 项（[build-sequence.md](build-sequence.md)）。07-30 的 grill 把它重排成十一项横切工作加若干并行的线。事实基础来自四个 subagent（前后端通信面、仓库结构度量、实验工作流全链路、术语审计）与两个 workflow（后端契约重设计、按书重组检索模块），共 14 个 agent。
 
@@ -198,7 +200,7 @@
 
 **为什么**　拆分本身已经包含七项实测出来的性能与正确性修复，不需要靠采纳书的设计来产生价值：`corpus.by_id` 的线性扫描占热态 `retrieve` 耗时的 **36%**；BM25 有 **76% 的打分花在零词重叠的文档上**；schema 向量没有记忆槽，**每轮 serve 白付 0.814 秒**；而 `oracle_tables_padded` 控制臂因为把 `top_k=8` 当成输出上限（它其实是种子上限，grounding 跑在预算之后）**系统性欠 pad 12%–50%**，`beer_factory` 直接退化回 `oracle_schema` —— 最后这条是 eval 有效性问题，不是重构附带项。
 
-而七项结构性没有一条便宜。详见 [rebuild-checklist.zh.md](rebuild-checklist.zh.md) 的 X.5.10。
+而七项结构性没有一条便宜。详见 [rebuild-checklist.md](rebuild-checklist.md) 的 X.5.10。
 
 **触发这条的事实**　两个文件在抢同一个字母：`retrieval/rvgd.py:5` 说 BM25 是「the 'V'/lexical channel」，`retrieval/embedding.py:1` 说「The V (vector / semantic) channel」。而 `RVGD` 这个缩写在两个仓库、所有文档里从未被完整展开过。
 
@@ -216,7 +218,7 @@
 
 > **2026-07-30 更正：这条决定的前提是错的，正在重新决策。**
 >
-> 我当时说「只采纳便宜的结构性」，前提是结构性里存在便宜的项。一组 agent 把书读完并逐条核过代码之后，**七项结构性（A0–A7）没有一条能在拆分 commit 里顺手做**，每条都是独立的行为变更加独立基线。具体见 [rebuild-checklist.zh.md](rebuild-checklist.zh.md) 的 X.5.10。
+> 我当时说「只采纳便宜的结构性」，前提是结构性里存在便宜的项。一组 agent 把书读完并逐条核过代码之后，**七项结构性（A0–A7）没有一条能在拆分 commit 里顺手做**，每条都是独立的行为变更加独立基线。具体见 [rebuild-checklist.md](rebuild-checklist.md) 的 X.5.10。
 >
 > 更要紧的是，**我用来论证这条决定的那句话，书里根本没有**。我写的「书里每个引擎拥有自己的槽、跨槽不竞争」出自 `book-fidelity-assessment.md` §3.2 —— 而书里没有这个陈述。实情是 V 拥有整个容器、D 寄生在 V 的 `few_shots` 里、R 的产出是个下划线前缀 view。同一节还有第二处错：它写「G runs serially over the **union** of collected asset_ids」，而书的代码是 `collect_asset_ids(vector_results)`，**只收 V 的结果**。
 >
@@ -341,5 +343,5 @@ P5 破例的理由不同：`stream_subgraphs=true` 绕过的是 presenter 的**�
 - **3.17（column 级检索单元）排在 Phase 3 中段** → 降级。理由：`retrieval_eval` 测的是表召回，而 column pruning 不改变表召回，要测它得先扩测量工具；再加上 X1（无长度匹配的 placebo 臂）意味着任何 EX 提升都和 prompt 长度混在一起。真实依赖链是三段，不是一段。
 - **「69-schema 只以 `--skip-agent` 跑过」（X5）** → 陈旧。20260730 真跑过了，是仓库文档落后于实际（文档写 69 db / 2030 题，实际 57 / 1351）。
 - **Langfuse mask 那条标成「高危 / 隐私」** → 应该归类为「代码声明了一个不存在的保护」，属于删假声明，不是隐私事故。降级不影响它该修，只让「高危」这个词在这个仓库里还有意义。
-- **`KMB` 是个不存在的术语** → 两个仓库里 0 命中。那是描述 Steiner 树算法时从外部带进来的词。`grill-agenda.zh.md` 的 T8.Q4 用了它，读到时按「`graph/planner.py` 里那个 Steiner planner」理解。
+- **`KMB` 是个不存在的术语** → 两个仓库里 0 命中。那是描述 Steiner 树算法时从外部带进来的词。`grill-agenda.md` 的 T8.Q4 用了它，读到时按「`graph/planner.py` 里那个 Steiner planner」理解。
 - **术语审计自己给的切线（前 10 项）** → 它的成本模型假设跨 wire 改名需要两个仓库协同发版。按决定 13，这个成本不存在，所以 `tier`、`asset_type`、`step`/`stage` 三项从切线外提到最前。

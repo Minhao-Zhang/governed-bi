@@ -2,7 +2,7 @@
 
 > **STATUS 2026-07-31 — LOAD-BEARING. Do not delete yet.**
 >
-> [rebuild-checklist.zh.md](rebuild-checklist.zh.md) §7.1 took this file's *conclusions* and
+> [rebuild-checklist.md](rebuild-checklist.md) §7.1 took this file's *conclusions* and
 > left the *reasoning*. Worse: the checklist's non-goals section says "multi-turn recovery is
 > handled by **3.12 / 3.13**" and **neither number exists in that document** — §8's F1
 > (retrieve on previous-turn + current question) and F2 (coverage floor + route stickiness) are

@@ -2,7 +2,7 @@
 
 > **STATUS 2026-07-31 — LOAD-BEARING. This file falsified a claim in the current plan.**
 >
-> F7 here is why [rebuild-checklist.zh.md](rebuild-checklist.zh.md) §6.2's first blocker was
+> F7 here is why [rebuild-checklist.md](rebuild-checklist.md) §6.2's first blocker was
 > **wrong**. The ledger's "corpus reference-integrity findings" is `eval/index.py:836`'s
 > hardcoded generic wording for *any* corpus-validation finding; the actual finding, verbatim from
 > `summary.json`, is `always-note-budget []: always-note summaries total 5178 characters; maximum
