@@ -14,8 +14,9 @@ import hashlib
 import re
 import time
 import traceback
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
+from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from langchain.agents import create_agent
@@ -442,6 +443,484 @@ class ServeDeployment:
     schema_vectors: Any = None
 
 
+@dataclass
+class ServeRuntime:
+    """What one compiled serve graph knows before the first question arrives.
+
+    A :class:`ServeDeployment` plus everything derived from it once per graph: the
+    dialect and serving schema, the join graph, the column allowlist, the resolved
+    prompt texts, the schema router's chat client and pre-embedded schema vectors,
+    the shared retrieval index, and the turn's two recorders.
+
+    This is what makes the rails nodes *addressable*. They used to be closures
+    inside ``build_serve_rails``, so no code outside that function could name one,
+    let alone test or replace it. They are now module-level functions whose first
+    argument is this object (N18).
+
+    Deployment deps live here rather than in :class:`ServeRailsState` (ADR 0001 /
+    finding #7): the state channels stay thin and serializable so a checkpointer
+    added later does not have to carry a corpus and a gateway.
+    """
+
+    deployment: ServeDeployment
+    dialect: str
+    default_schema: str | None
+    agent_core_prompt: str
+    schema_pick_prompt: str
+    #: Join graph over the serve corpus (``build_graph``).
+    graph_obj: Any
+    allowlist: Any
+    #: Every schema the corpus holds tables for.
+    corpus_schemas: set[str]
+    spans_schemas: bool
+    route_top_k: int
+    router_chat: Any
+    router_schema_vectors: Any
+    #: Resolved retrieval index — the caller's when it supplied one, else this
+    #: graph's own. Never ``None``, unlike ``deployment.index_cache``.
+    index_cache: "RetrievalIndexCache"
+    stages: StageRecorder
+    events: GovEventStream
+    #: Memoised ``filter_corpus_for_retrieval`` results, keyed by routed schema set.
+    routed_corpora: dict = field(default_factory=dict)
+    #: Side channel: ``search_corpus`` → :func:`_resolve_tool` (serve-transparency
+    #: C4). Cleared on each ingest so a prior turn's hit cannot leak into the next.
+    search_hits: dict = field(default_factory=dict)
+    #: Per-invoke turn counter in a one-cell list, so a reused rails graph (the eval
+    #: ``agent_solver``) mints a fresh turn_id / run_id per question instead of
+    #: UPSERT-colliding on ``eval:1``.
+    turn_n: list[int] = field(default_factory=lambda: [0])
+
+    # -- deployment passthroughs, so node bodies read `rt.corpus` not
+    # `rt.deployment.corpus` for the dozen deps they touch every turn.
+    @property
+    def corpus(self) -> "Corpus":
+        return self.deployment.corpus
+
+    @property
+    def gateway(self) -> "Gateway":
+        return self.deployment.gateway
+
+    @property
+    def settings(self) -> "Settings":
+        return self.deployment.settings
+
+    @property
+    def identity(self) -> "Identity":
+        return self.deployment.identity
+
+    @property
+    def model(self) -> Any:
+        return self.deployment.model
+
+    @property
+    def embedder(self) -> "Embedder | None":
+        return self.deployment.embedder
+
+    @property
+    def working_memory(self) -> "WorkingMemory | None":
+        return self.deployment.working_memory
+
+    @property
+    def narrator(self) -> "AnswerNarrator | None":
+        return self.deployment.narrator
+
+    @property
+    def session_id(self) -> str:
+        return self.deployment.session_id
+
+    @property
+    def clarify_checkpointer(self) -> Any:
+        return self.deployment.clarify_checkpointer
+
+    @property
+    def clarify_thread(self) -> str | None:
+        return self.deployment.clarify_thread
+
+    @property
+    def clarify_resume(self) -> Any:
+        return self.deployment.clarify_resume
+
+    @classmethod
+    def build(cls, deployment: ServeDeployment) -> "ServeRuntime":
+        """Derive the per-graph state. Runs once per compiled graph, never per turn."""
+        corpus = deployment.corpus
+        settings = deployment.settings
+        # Bare references resolve to the serving schema (the SQLite ATTACH alias, or the
+        # pinned Postgres schema); None means the source spans every schema, so a bare
+        # reference fails closed.
+        default_schema = settings.datasource.serving_schema()
+        # Prompt variants resolved ONCE per stack, not per turn: the map is what
+        # ``serve_config_hash`` / the stamped record claim this graph sent, so
+        # re-reading settings inside a node would let the claim and the bytes diverge.
+        prompt_variants = prompts.resolve(settings.prompt_variants)
+        # Schema routing (shortlist + curated cross-schema expansion) only earns its keep
+        # when the corpus actually spans multiple schemas (the scale run); a single-db
+        # corpus skips it. Cheap to compute once here from the licensed table assets.
+        corpus_schemas = {a.schema for a in corpus.assets if isinstance(a, TableAsset)}
+        spans_schemas = len(corpus_schemas) > 1
+        # A pinned serving schema (SQLite ATTACH alias / pinned Postgres schema) must be
+        # one the corpus actually holds tables for; otherwise the qualified allowlist
+        # keys never match and EVERY query silently false-refuses. Catch that config
+        # drift loudly here, where the datasource and corpus first meet. (None = span
+        # all schemas, so there is nothing to reconcile.)
+        if default_schema is not None and corpus_schemas and default_schema not in corpus_schemas:
+            raise ValueError(
+                f"serving schema {default_schema!r} has no tables in the corpus "
+                f"(schemas present: {sorted(corpus_schemas)}). Align the datasource "
+                "`schema`/`corpus_pin` with the loaded corpus, or leave `schema` unset "
+                "to span all schemas."
+            )
+        # Schema-routing knobs (D15). ``schema_route_top_k`` widens the BM25/embedder
+        # shortlist; ``schema_route_llm_pick`` collapses it to a single LLM-chosen schema
+        # (D15 — the single-schema-answer regime, e.g. the BIRD data
+        # lake). Both only bite when the corpus spans schemas. The router chat wraps the
+        # raw model in a ChatClient (``pick_schema`` needs ``.complete``); built once.
+        router_chat = None
+        if spans_schemas and settings.schema_route_llm_pick and deployment.model is not None:
+            from ..llm import LangChainChatClient  # noqa: PLC0415 (lazy: agents extra)
+
+            router_chat = LangChainChatClient(deployment.model)
+        # Schema-document vectors are constant per corpus: embed them once here rather
+        # than re-embedding every schema doc on each question (O(schemas) embed calls
+        # per turn at data-lake scale). Only the question is embedded per turn.
+        router_schema_vectors = deployment.schema_vectors
+        if router_schema_vectors is None and spans_schemas and deployment.embedder is not None:
+            router_schema_vectors = embed_schema_documents(corpus, deployment.embedder)
+        # One rich-event emitter for the whole turn (reset in `ingest_node`); the agent
+        # path emits the {seq,kind,step,status,detail} contract, never the legacy {stage}
+        # shape governance.py's on_event helpers still accept but which agent.py never
+        # feeds a callback into (docs/analyst.md, the event contract).
+        finalize_ctx = FinalizeCtx(
+            settings=settings,
+            run_id=deployment.run_id or new_run_id(),
+            thread_id=deployment.session_id,
+            n_human=deployment.n_human,
+            model=getattr(settings.models, "llm_model", None),
+            serve_path="agent",
+            t0=time.perf_counter(),
+        )
+        # The durable counterpart of the live stream: one recorder per turn, owned by
+        # the emitter so both reset on the same boundary (see StageRecorder).
+        stages = StageRecorder()
+        return cls(
+            deployment=deployment,
+            dialect=deployment.gateway.catalog().dialect.value,
+            default_schema=default_schema,
+            agent_core_prompt=prompts.text("agent_core", prompt_variants),
+            schema_pick_prompt=prompts.text("schema_pick", prompt_variants),
+            graph_obj=build_graph(corpus),
+            allowlist=column_allowlist(corpus),
+            corpus_schemas=corpus_schemas,
+            spans_schemas=spans_schemas,
+            route_top_k=settings.schema_route_top_k,
+            router_chat=router_chat,
+            router_schema_vectors=router_schema_vectors,
+            # Retrieval indexes are constant per routed corpus, exactly like the schema
+            # vectors above — but ``retrieve`` used to rebuild both on every question,
+            # which meant re-embedding every asset in the routed corpus per turn. Only
+            # the question embedding is genuinely per-turn. Both caches are graph-scoped,
+            # so each eval worker's graph owns its own and they need no lock (see
+            # ``eval/parallel.py`` on per-worker isolation); they die with the graph, so
+            # nothing crosses runs.
+            index_cache=(
+                deployment.index_cache
+                if deployment.index_cache is not None
+                else RetrievalIndexCache()
+            ),
+            stages=stages,
+            events=GovEventStream(
+                deployment.on_event, finalize_ctx=finalize_ctx, stages=stages
+            ),
+            turn_n=[deployment.n_human - 1],
+        )
+
+
+def _timed(rt: ServeRuntime, stage: Stage, node):
+    """Register a rails node with its own stage record.
+
+    Wrapping at registration rather than inside each body keeps the nodes
+    un-indented; a node that handles its own exception (``agent_core``) times
+    the inner call instead, so a caught crash is not recorded as a stage that
+    ran fine.
+    """
+
+    def run(state: ServeRailsState) -> dict:
+        with rt.stages.stage(stage):
+            update = node(state)
+        # A node can end the turn from inside the block (a missing-edge
+        # refusal), and its own record did not exist yet when `final()`
+        # stamped the answer. Re-stamp so the enclosing stage is not missing from
+        # exactly the turns that stopped in it — that absence would bias any
+        # average over the records towards the turns that got further.
+        answer = update.get("answer") if isinstance(update, dict) else None
+        if answer is not None:
+            update = {
+                **update,
+                "answer": replace(
+                    answer,
+                    provenance={
+                        **(answer.provenance or {}),
+                        **rt.stages.provenance(),
+                    },
+                ),
+            }
+        return update
+
+    return run
+
+
+def ingest_node(rt: ServeRuntime, state: ServeRailsState) -> dict:
+    """Open the turn: reset the emitter, mint this question's run id, seed provenance."""
+    rt.events.reset()  # new turn: fresh seq + serve_path tag + stage records
+    rt.search_hits.clear()
+    rt.turn_n[0] += 1
+    question = state["question"]
+    if rt.events._finalize_ctx is not None:
+        # Prefer a run_id bound by the outer invoke (logging_setup ContextVar)
+        # so Langfuse metadata, stage_events, and log lines share one key.
+        from ..logging_setup import peek_run_id  # noqa: PLC0415
+
+        rt.events._finalize_ctx = replace(
+            rt.events._finalize_ctx,
+            run_id=peek_run_id() or new_run_id(),
+            n_human=rt.turn_n[0],
+            t0=time.perf_counter(),
+            token_usage=[],
+            question=question,
+        )
+    with rt.stages.stage(Stage.route):
+        pass  # the turn's first recorded stage; term binding is the agent's job now
+    base = {
+        "session_id": state.get("session_id") or rt.session_id,
+        "user": rt.identity.user,
+        "runtime": "agent",
+    }
+    rt.events.rail("route")
+    return {
+        "base_provenance": base,
+        "session_id": state.get("session_id") or rt.session_id,
+    }
+
+
+def refuse_gate_node(rt: ServeRuntime, state: ServeRailsState) -> dict:
+    """Refuse before any model call when the question matches a curated negative."""
+    negative = _match_negative_example(rt.corpus, state["question"])
+    if negative is not None:
+        rt.events.rail("refuse_gate", "refused", negative_example=negative.id)
+        ans = refusal(
+            escalation=negative.escalation,
+            provenance={
+                **state["base_provenance"],
+                "refused_by": "refuse_gate",
+                "negative_example": negative.id,
+            },
+        )
+        ans = rt.events.final(ans)
+        return {"answer": ans, "outcome": "refuse"}
+    rt.events.rail("refuse_gate", "ok")
+    return {"outcome": "continue"}
+
+
+def after_refuse(state: ServeRailsState) -> Literal["assemble", "__end__"]:
+    return END if state.get("outcome") == "refuse" else "assemble"
+
+
+def after_assemble(state: ServeRailsState) -> Literal["agent_core", "__end__"]:
+    return END if state.get("outcome") == "refuse" else "agent_core"
+
+
+def _tool_start_detail(step: str, args: dict) -> dict:
+    """The live-timeline ``start`` detail for one governed or exploration tool call."""
+    if step == "search_corpus":
+        return {"query": args.get("query")}
+    if step in ("inspect_schema", "sample_rows"):
+        return {"table_id": args.get("table_id")}
+    if step == "run_query":
+        return {"sql": args.get("sql")}
+    if step == "ask_user":
+        # Timeline row for the clarification (contract §5); the active prompt is
+        # the interrupt value, this is the passive "asking…" step.
+        return {"question": args.get("question"), "why": args.get("why")}
+    return {}
+
+
+def _resolve_tool(rt: ServeRuntime, step, args, entry, tcid, licensed_delta, attempt):
+    """Emit one tool-resolve event; return the updated run_query attempt count.
+
+    For governed tools the ledger ``entry`` is the source of truth (verdict /
+    layer / reason / sql / rows), so the live event and the final
+    ``governance_ledger`` never drift (Inv #10). Exploration tools have no
+    ledger entry — their detail is reconstructed from args + the licensed delta.
+    """
+    entry = entry or {}
+    if step == "run_query":
+        attempt += 1
+        verdict = entry.get("verdict")
+        result = entry.get("result") or {}
+        rt.events.tool(
+            "run_query",
+            _LEDGER_STATUS.get(verdict, "error"),
+            step_id=tcid,
+            attempt=attempt,
+            sql=entry.get("sql") or args.get("sql"),
+            verdict=verdict,
+            layer=entry.get("layer"),
+            reason=entry.get("reason"),
+            allowed=entry.get("allowed"),
+            rows=result.get("row_count"),
+        )
+    elif step == "sample_rows":
+        verdict = entry.get("verdict")
+        result = entry.get("result") or {}
+        rt.events.tool(
+            "sample_rows",
+            _LEDGER_STATUS.get(verdict, "error"),
+            step_id=tcid,
+            table_id=args.get("table_id") or entry.get("table_id"),
+            rows=result.get("row_count"),
+            reason=entry.get("reason"),
+        )
+    elif step == "inspect_schema":
+        table_id = args.get("table_id")
+        licensed = bool(licensed_delta)
+        rt.events.tool(
+            "inspect_schema",
+            "ok" if licensed else "miss",
+            step_id=tcid,
+            table_id=table_id,
+            columns=_column_count_for(rt.corpus, table_id) if licensed else 0,
+            licensed=licensed,
+        )
+    elif step == "search_corpus":
+        hit = rt.search_hits.pop("last", {})
+        rt.events.tool(
+            "search_corpus",
+            "ok",
+            step_id=tcid,
+            query=args.get("query"),
+            tables=hit.get("tables"),
+            few_shots=hit.get("few_shots"),
+            metrics=hit.get("metrics"),
+            notes=hit.get("notes"),
+            terms=hit.get("terms"),
+            items=hit.get("items"),
+        )
+    else:
+        rt.events.tool(step, "ok", step_id=tcid)
+    return attempt
+
+
+def _stream_agent(rt: ServeRuntime, agent, init: dict, config: dict) -> dict:
+    """Consume ``agent.stream`` to emit live tool events; return the final state.
+
+    Tool calls are forced sequential (G1), so each ``tools`` super-step carries
+    exactly one ToolMessage (+ at most one ledger entry), which makes pairing a
+    model-node ``start`` with its ``tools``-node ``resolve`` trivial. The final
+    accumulated state comes from the last ``values`` chunk (replaces
+    ``agent.invoke``'s return value)."""
+    # ``init`` is the fresh input dict, or a ``Command(resume=...)`` on the
+    # HITL resume path — which isn't a mapping, so start empty and let the
+    # first ``values`` chunk populate it.
+    final_state: dict = dict(init) if isinstance(init, dict) else {}
+    pending: dict[str, dict] = {}  # tool_call_id → {"step","args"}
+    attempt = 0
+    try:
+        for mode, chunk in agent.stream(
+            init, config=config, stream_mode=["updates", "values"]
+        ):
+            if mode == "values":
+                if isinstance(chunk, dict):
+                    final_state = chunk
+                continue
+            if not isinstance(chunk, dict):
+                continue
+            for update in chunk.values():
+                if not isinstance(update, dict):
+                    continue
+                ledger_iter = iter(
+                    e for e in (update.get("ledger") or []) if isinstance(e, dict)
+                )
+                licensed_delta = update.get("licensed") or []
+                for msg in update.get("messages") or []:
+                    if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+                        for tc in msg.tool_calls:
+                            tcid = tc.get("id")
+                            step = tc.get("name") or "tool"
+                            args = tc.get("args") or {}
+                            pending[tcid] = {"step": step, "args": args}
+                            rt.events.tool(
+                                step, "start", step_id=tcid, **_tool_start_detail(step, args)
+                            )
+                    elif isinstance(msg, ToolMessage):
+                        tcid = getattr(msg, "tool_call_id", None)
+                        info = pending.pop(tcid, None) or {}
+                        step = info.get("step") or "tool"
+                        args = info.get("args") or {}
+                        entry = next(ledger_iter, None) if step in ("run_query", "sample_rows") else None
+                        attempt = _resolve_tool(rt, step, args, entry, tcid, licensed_delta, attempt)
+    except GovernanceHardStop as e:
+        # Pair the L2 block with its pending run_query start so the row resolves
+        # instead of hanging (the exception raised inside wrap_tool_call before
+        # the tools-node update was streamed).
+        tcid = next(iter(pending), None)
+        rt.events.tool(
+            "run_query",
+            "blocked",
+            step_id=tcid,
+            attempt=sum(1 for x in e.ledger if x.get("action") == "run_query"),
+            sql=e.entry.get("sql"),
+            verdict="block",
+            layer=e.entry.get("layer"),
+            reason=e.entry.get("reason"),
+            allowed=e.entry.get("allowed"),
+        )
+        raise
+    except GraphRecursionError as e:
+        # Step budget exhausted: carry the accumulated ledger (from the last
+        # streamed `values` chunk) to the caller so the audit trail survives
+        # the exhaustion path instead of being reported as empty (Inv #10).
+        e.partial_state = final_state  # type: ignore[attr-defined]
+        raise
+    return final_state
+
+
+def narrate_node(rt: ServeRuntime, state: ServeRailsState) -> dict:
+    """Phrase the delivered answer into grounded English — a first-class graph
+    step so the narrator's model call is one trace span under the turn (not a
+    side call inside finalization). No-op for refusals (no ``answer`` with a
+    result grid) and when no narrator is configured; a
+    narrator failure keeps the deterministic finalizer text (see
+    ``narrate_answer``)."""
+    answer = state.get("answer")
+    if answer is None:
+        return {}
+    with rt.stages.stage(Stage.narrate) as detail:
+        narrated, usage = narrate_answer(answer, state["question"], rt.narrator)
+        narrated_ran = narrated is not answer
+        detail["narrated"] = narrated_ran
+    # ``narrate`` is the turn's last stage but runs AFTER events.final() stamped
+    # provenance, so re-stamp the records here — and before the re-append below,
+    # so the durable row gets them too. Without this, the one stage that runs
+    # after finalization is the one stage no record ever mentions.
+    narrated = replace(
+        narrated,
+        provenance={**(narrated.provenance or {}), **rt.stages.provenance()},
+    )
+    # Only fold narrator tokens when the narrator actually ran. Usage comes from
+    # narrate_answer's return value (M4 N14) — not a shared client field.
+    if not narrated_ran:
+        return {"answer": narrated}
+    if usage:
+        narrated = amend_run_tokens(
+            narrated,
+            settings=rt.settings,
+            extra_usage=[{"source": "narrator", "usage_metadata": usage}],
+            model=getattr(rt.settings.models, "llm_model", None),
+        )
+    return {"answer": narrated}
+
+
 def build_serve_rails(
     *,
     corpus: "Corpus",
@@ -500,192 +979,36 @@ def _build_serve_rails(deployment: "ServeDeployment"):
     can pause/resume. ``clarify_resume`` (a ``ClarificationResponse``) resumes a
     paused inner agent. All three default off/None, leaving the eval path
     byte-for-byte unchanged."""
-    corpus = deployment.corpus
-    gateway = deployment.gateway
-    settings = deployment.settings
-    identity = deployment.identity
-    model = deployment.model
-    embedder = deployment.embedder
-    working_memory = deployment.working_memory
-    narrator = deployment.narrator
-    on_event = deployment.on_event
-    session_id = deployment.session_id
-    clarify_checkpointer = deployment.clarify_checkpointer
-    clarify_thread = deployment.clarify_thread
-    clarify_resume = deployment.clarify_resume
-    run_id = deployment.run_id
-    n_human = deployment.n_human
-    index_cache = deployment.index_cache
-    schema_vectors = deployment.schema_vectors
-    # Bare references resolve to the serving schema (the SQLite ATTACH alias, or the
-    # pinned Postgres schema); None means the source spans every schema, so a bare
-    # reference fails closed.
-    default_schema = settings.datasource.serving_schema()
-    dialect = gateway.catalog().dialect.value
-    # Prompt variants resolved ONCE per stack, not per turn: the map is what
-    # ``serve_config_hash`` / the stamped record claim this graph sent, so
-    # re-reading settings inside a node would let the claim and the bytes diverge.
-    prompt_variants = prompts.resolve(settings.prompt_variants)
-    agent_core_prompt = prompts.text("agent_core", prompt_variants)
-    schema_pick_prompt = prompts.text("schema_pick", prompt_variants)
-    # Closures — not state channels (ADR 0001 / finding #7).
-    graph_obj = build_graph(corpus)
-    allowlist = column_allowlist(corpus)
-    # Schema routing (shortlist + curated cross-schema expansion) only earns its keep
-    # when the corpus actually spans multiple schemas (the scale run); a single-db
-    # corpus skips it. Cheap to compute once here from the licensed table assets.
-    _corpus_schemas = {a.schema for a in corpus.assets if isinstance(a, TableAsset)}
-    spans_schemas = len(_corpus_schemas) > 1
-    # A pinned serving schema (SQLite ATTACH alias / pinned Postgres schema) must be
-    # one the corpus actually holds tables for; otherwise the qualified allowlist
-    # keys never match and EVERY query silently false-refuses. Catch that config
-    # drift loudly here, where the datasource and corpus first meet. (None = span
-    # all schemas, so there is nothing to reconcile.)
-    if default_schema is not None and _corpus_schemas and default_schema not in _corpus_schemas:
-        raise ValueError(
-            f"serving schema {default_schema!r} has no tables in the corpus "
-            f"(schemas present: {sorted(_corpus_schemas)}). Align the datasource "
-            "`schema`/`corpus_pin` with the loaded corpus, or leave `schema` unset "
-            "to span all schemas."
-        )
-    # Schema-routing knobs (D15). ``schema_route_top_k`` widens the BM25/embedder
-    # shortlist; ``schema_route_llm_pick`` collapses it to a single LLM-chosen schema
-    # (D15 — the single-schema-answer regime, e.g. the BIRD data
-    # lake). Both only bite when the corpus spans schemas. The router chat wraps the
-    # raw model in a ChatClient (``pick_schema`` needs ``.complete``); built once.
-    route_top_k = settings.schema_route_top_k
-    route_llm_pick = settings.schema_route_llm_pick
-    router_chat = None
-    if spans_schemas and route_llm_pick and model is not None:
-        from ..llm import LangChainChatClient  # noqa: PLC0415 (lazy: agents extra)
-
-        router_chat = LangChainChatClient(model)
-    # Schema-document vectors are constant per corpus: embed them once here rather
-    # than re-embedding every schema doc on each question (O(schemas) embed calls
-    # per turn at data-lake scale). Only the question is embedded per turn.
-    router_schema_vectors = schema_vectors
-    if router_schema_vectors is None and spans_schemas and embedder is not None:
-        router_schema_vectors = embed_schema_documents(corpus, embedder)
-    # Retrieval indexes are constant per routed corpus, exactly like the schema
-    # vectors above — but ``retrieve`` used to rebuild both on every question, which
-    # meant re-embedding every asset in the routed corpus per turn. Only the question
-    # embedding is genuinely per-turn. Both caches are graph-scoped closures, so each
-    # eval worker's graph owns its own and they need no lock (see ``eval/parallel.py``
-    # on per-worker isolation); they die with the graph, so nothing crosses runs.
-    _index_cache = index_cache if index_cache is not None else RetrievalIndexCache()
-    _routed_corpora: dict[frozenset, "Corpus"] = {}
-    # Side channel: search_corpus → _resolve_tool (serve-transparency C4). Cleared
-    # on each ingest so a prior turn's hit cannot leak into the next.
-    _search_hits: dict = {}
-    # One rich-event emitter for the whole turn (reset in `ingest`); the agent path
-    # emits the {seq,kind,step,status,detail} contract, never the legacy {stage}
-    # shape governance.py's on_event helpers still accept but which agent.py never
-    # feeds a callback into (docs/analyst.md, the event contract).
-    _run_id = run_id or new_run_id()
-    _t0 = time.perf_counter()
-    _finalize_ctx = FinalizeCtx(
-        settings=settings,
-        run_id=_run_id,
-        thread_id=session_id,
-        n_human=n_human,
-        model=getattr(settings.models, "llm_model", None),
-        serve_path="agent",
-        t0=_t0,
-    )
-    # The durable counterpart of the live stream: one recorder per turn, owned by
-    # the emitter so both reset on the same boundary (see StageRecorder).
-    stages = StageRecorder()
-    events = GovEventStream(on_event, finalize_ctx=_finalize_ctx, stages=stages)
-    # Per-invoke turn counter so a reused rails graph (eval agent_solver) mints a
-    # fresh turn_id / run_id each question instead of UPSERT-colliding on eval:1.
-    _turn_n = [n_human - 1]
-
-    def _column_count(table_id: str) -> int:
-        return _column_count_for(corpus, table_id)
-
-    def _timed(stage: Stage, node):
-        """Register a rails node with its own stage record.
-
-        Wrapping at registration rather than inside each body keeps the nodes
-        un-indented; a node that handles its own exception (``agent_core``) times
-        the inner call instead, so a caught crash is not recorded as a stage that
-        ran fine.
-        """
-
-        def run(state: ServeRailsState) -> dict:
-            with stages.stage(stage):
-                update = node(state)
-            # A node can end the turn from inside the block (a missing-edge
-            # refusal), and its own record did not exist yet when `final()`
-            # stamped the answer. Re-stamp so the enclosing stage is not missing from
-            # exactly the turns that stopped in it — that absence would bias any
-            # average over the records towards the turns that got further.
-            answer = update.get("answer") if isinstance(update, dict) else None
-            if answer is not None:
-                update = {
-                    **update,
-                    "answer": replace(
-                        answer,
-                        provenance={
-                            **(answer.provenance or {}),
-                            **stages.provenance(),
-                        },
-                    ),
-                }
-            return update
-
-        return run
-
-    def ingest(state: ServeRailsState) -> dict:
-        events.reset()  # new turn: fresh seq + serve_path tag + stage records
-        _search_hits.clear()
-        _turn_n[0] += 1
-        question = state["question"]
-        if events._finalize_ctx is not None:
-            # Prefer a run_id bound by the outer invoke (logging_setup ContextVar)
-            # so Langfuse metadata, stage_events, and log lines share one key.
-            from ..logging_setup import peek_run_id  # noqa: PLC0415
-
-            events._finalize_ctx = replace(
-                events._finalize_ctx,
-                run_id=peek_run_id() or new_run_id(),
-                n_human=_turn_n[0],
-                t0=time.perf_counter(),
-                token_usage=[],
-                question=question,
-            )
-        with stages.stage(Stage.route):
-            pass  # the turn's first recorded stage; term binding is the agent's job now
-        base = {
-            "session_id": state.get("session_id") or session_id,
-            "user": identity.user,
-            "runtime": "agent",
-        }
-        events.rail("route")
-        return {
-            "base_provenance": base,
-            "session_id": state.get("session_id") or session_id,
-        }
-
-    def refuse_gate(state: ServeRailsState) -> dict:
-        negative = _match_negative_example(corpus, state["question"])
-        if negative is not None:
-            events.rail("refuse_gate", "refused", negative_example=negative.id)
-            ans = refusal(
-                escalation=negative.escalation,
-                provenance={
-                    **state["base_provenance"],
-                    "refused_by": "refuse_gate",
-                    "negative_example": negative.id,
-                },
-            )
-            ans = events.final(ans)
-            return {"answer": ans, "outcome": "refuse"}
-        events.rail("refuse_gate", "ok")
-        return {"outcome": "continue"}
-
-    def after_refuse(state: ServeRailsState) -> Literal["assemble", "__end__"]:
-        return END if state.get("outcome") == "refuse" else "assemble"
+    rt = ServeRuntime.build(deployment)
+    # Transitional: the three nodes still nested below close over these. They go
+    # away with the last closure (N18 step 4).
+    corpus = rt.corpus
+    gateway = rt.gateway
+    settings = rt.settings
+    identity = rt.identity
+    model = rt.model
+    embedder = rt.embedder
+    working_memory = rt.working_memory
+    session_id = rt.session_id
+    clarify_checkpointer = rt.clarify_checkpointer
+    clarify_thread = rt.clarify_thread
+    clarify_resume = rt.clarify_resume
+    default_schema = rt.default_schema
+    dialect = rt.dialect
+    agent_core_prompt = rt.agent_core_prompt
+    schema_pick_prompt = rt.schema_pick_prompt
+    graph_obj = rt.graph_obj
+    allowlist = rt.allowlist
+    _corpus_schemas = rt.corpus_schemas
+    spans_schemas = rt.spans_schemas
+    route_top_k = rt.route_top_k
+    router_chat = rt.router_chat
+    router_schema_vectors = rt.router_schema_vectors
+    _index_cache = rt.index_cache
+    _routed_corpora = rt.routed_corpora
+    _search_hits = rt.search_hits
+    stages = rt.stages
+    events = rt.events
 
     def assemble(state: ServeRailsState) -> dict:
         """Deterministic front half — fails closed like every other terminal path.
@@ -1004,160 +1327,6 @@ def _build_serve_rails(deployment: "ServeDeployment"):
             "outcome": "continue",
         }
 
-    def after_assemble(state: ServeRailsState) -> Literal["agent_core", "__end__"]:
-        return END if state.get("outcome") == "refuse" else "agent_core"
-
-    def _tool_start_detail(step: str, args: dict) -> dict:
-        if step == "search_corpus":
-            return {"query": args.get("query")}
-        if step in ("inspect_schema", "sample_rows"):
-            return {"table_id": args.get("table_id")}
-        if step == "run_query":
-            return {"sql": args.get("sql")}
-        if step == "ask_user":
-            # Timeline row for the clarification (contract §5); the active prompt is
-            # the interrupt value, this is the passive "asking…" step.
-            return {"question": args.get("question"), "why": args.get("why")}
-        return {}
-
-    def _resolve_tool(step, args, entry, tcid, licensed_delta, attempt):
-        """Emit one tool-resolve event; return the updated run_query attempt count.
-
-        For governed tools the ledger ``entry`` is the source of truth (verdict /
-        layer / reason / sql / rows), so the live event and the final
-        ``governance_ledger`` never drift (Inv #10). Exploration tools have no
-        ledger entry — their detail is reconstructed from args + the licensed delta.
-        """
-        entry = entry or {}
-        if step == "run_query":
-            attempt += 1
-            verdict = entry.get("verdict")
-            result = entry.get("result") or {}
-            events.tool(
-                "run_query",
-                _LEDGER_STATUS.get(verdict, "error"),
-                step_id=tcid,
-                attempt=attempt,
-                sql=entry.get("sql") or args.get("sql"),
-                verdict=verdict,
-                layer=entry.get("layer"),
-                reason=entry.get("reason"),
-                allowed=entry.get("allowed"),
-                rows=result.get("row_count"),
-            )
-        elif step == "sample_rows":
-            verdict = entry.get("verdict")
-            result = entry.get("result") or {}
-            events.tool(
-                "sample_rows",
-                _LEDGER_STATUS.get(verdict, "error"),
-                step_id=tcid,
-                table_id=args.get("table_id") or entry.get("table_id"),
-                rows=result.get("row_count"),
-                reason=entry.get("reason"),
-            )
-        elif step == "inspect_schema":
-            table_id = args.get("table_id")
-            licensed = bool(licensed_delta)
-            events.tool(
-                "inspect_schema",
-                "ok" if licensed else "miss",
-                step_id=tcid,
-                table_id=table_id,
-                columns=_column_count(table_id) if licensed else 0,
-                licensed=licensed,
-            )
-        elif step == "search_corpus":
-            hit = _search_hits.pop("last", {})
-            events.tool(
-                "search_corpus",
-                "ok",
-                step_id=tcid,
-                query=args.get("query"),
-                tables=hit.get("tables"),
-                few_shots=hit.get("few_shots"),
-                metrics=hit.get("metrics"),
-                notes=hit.get("notes"),
-                terms=hit.get("terms"),
-                items=hit.get("items"),
-            )
-        else:
-            events.tool(step, "ok", step_id=tcid)
-        return attempt
-
-    def _stream_agent(agent, init: dict, config: dict) -> dict:
-        """Consume ``agent.stream`` to emit live tool events; return the final state.
-
-        Tool calls are forced sequential (G1), so each ``tools`` super-step carries
-        exactly one ToolMessage (+ at most one ledger entry), which makes pairing a
-        model-node ``start`` with its ``tools``-node ``resolve`` trivial. The final
-        accumulated state comes from the last ``values`` chunk (replaces
-        ``agent.invoke``'s return value)."""
-        # ``init`` is the fresh input dict, or a ``Command(resume=...)`` on the
-        # HITL resume path — which isn't a mapping, so start empty and let the
-        # first ``values`` chunk populate it.
-        final_state: dict = dict(init) if isinstance(init, dict) else {}
-        pending: dict[str, dict] = {}  # tool_call_id → {"step","args"}
-        attempt = 0
-        try:
-            for mode, chunk in agent.stream(
-                init, config=config, stream_mode=["updates", "values"]
-            ):
-                if mode == "values":
-                    if isinstance(chunk, dict):
-                        final_state = chunk
-                    continue
-                if not isinstance(chunk, dict):
-                    continue
-                for update in chunk.values():
-                    if not isinstance(update, dict):
-                        continue
-                    ledger_iter = iter(
-                        e for e in (update.get("ledger") or []) if isinstance(e, dict)
-                    )
-                    licensed_delta = update.get("licensed") or []
-                    for msg in update.get("messages") or []:
-                        if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
-                            for tc in msg.tool_calls:
-                                tcid = tc.get("id")
-                                step = tc.get("name") or "tool"
-                                args = tc.get("args") or {}
-                                pending[tcid] = {"step": step, "args": args}
-                                events.tool(
-                                    step, "start", step_id=tcid, **_tool_start_detail(step, args)
-                                )
-                        elif isinstance(msg, ToolMessage):
-                            tcid = getattr(msg, "tool_call_id", None)
-                            info = pending.pop(tcid, None) or {}
-                            step = info.get("step") or "tool"
-                            args = info.get("args") or {}
-                            entry = next(ledger_iter, None) if step in ("run_query", "sample_rows") else None
-                            attempt = _resolve_tool(step, args, entry, tcid, licensed_delta, attempt)
-        except GovernanceHardStop as e:
-            # Pair the L2 block with its pending run_query start so the row resolves
-            # instead of hanging (the exception raised inside wrap_tool_call before
-            # the tools-node update was streamed).
-            tcid = next(iter(pending), None)
-            events.tool(
-                "run_query",
-                "blocked",
-                step_id=tcid,
-                attempt=sum(1 for x in e.ledger if x.get("action") == "run_query"),
-                sql=e.entry.get("sql"),
-                verdict="block",
-                layer=e.entry.get("layer"),
-                reason=e.entry.get("reason"),
-                allowed=e.entry.get("allowed"),
-            )
-            raise
-        except GraphRecursionError as e:
-            # Step budget exhausted: carry the accumulated ledger (from the last
-            # streamed `values` chunk) to the caller so the audit trail survives
-            # the exhaustion path instead of being reported as empty (Inv #10).
-            e.partial_state = final_state  # type: ignore[attr-defined]
-            raise
-        return final_state
-
     def agent_core_node(state: ServeRailsState) -> dict:
         question = state["question"]
         context_block = state.get("context_block") or ""
@@ -1244,7 +1413,7 @@ def _build_serve_rails(deployment: "ServeDeployment"):
             # would stamp ``ok`` on the exact failures this measurement exists to
             # find. The recorder marks the stage ``error`` and re-raises into them.
             with stages.stage(Stage.agent_core) as detail:
-                final = _stream_agent(agent, agent_input, inner_cfg)
+                final = _stream_agent(rt, agent, agent_input, inner_cfg)
                 detail["n_messages"] = len(final.get("messages") or [])
             events.add_token_usage(final.get("token_usage"))
             mw = getattr(agent, "_gov_middleware", None)
@@ -1471,47 +1640,12 @@ def _build_serve_rails(deployment: "ServeDeployment"):
         ans = events.final(ans)
         return {"answer": ans, "outcome": "finalize"}
 
-    def narrate_node(state: ServeRailsState) -> dict:
-        """Phrase the delivered answer into grounded English — a first-class graph
-        step so the narrator's model call is one trace span under the turn (not a
-        side call inside finalization). No-op for refusals (no ``answer`` with a
-        result grid) and when no narrator is configured; a
-        narrator failure keeps the deterministic finalizer text (see
-        ``narrate_answer``)."""
-        answer = state.get("answer")
-        if answer is None:
-            return {}
-        with stages.stage(Stage.narrate) as detail:
-            narrated, usage = narrate_answer(answer, state["question"], narrator)
-            narrated_ran = narrated is not answer
-            detail["narrated"] = narrated_ran
-        # ``narrate`` is the turn's last stage but runs AFTER events.final() stamped
-        # provenance, so re-stamp the records here — and before the re-append below,
-        # so the durable row gets them too. Without this, the one stage that runs
-        # after finalization is the one stage no record ever mentions.
-        narrated = replace(
-            narrated,
-            provenance={**(narrated.provenance or {}), **stages.provenance()},
-        )
-        # Only fold narrator tokens when the narrator actually ran. Usage comes from
-        # narrate_answer's return value (M4 N14) — not a shared client field.
-        if not narrated_ran:
-            return {"answer": narrated}
-        if usage:
-            narrated = amend_run_tokens(
-                narrated,
-                settings=settings,
-                extra_usage=[{"source": "narrator", "usage_metadata": usage}],
-                model=getattr(settings.models, "llm_model", None),
-            )
-        return {"answer": narrated}
-
     builder = StateGraph(ServeRailsState)
-    builder.add_node("ingest", ingest)
-    builder.add_node("refuse_gate", refuse_gate)
-    builder.add_node("assemble", _timed(Stage.assemble, assemble))
+    builder.add_node("ingest", partial(ingest_node, rt))
+    builder.add_node("refuse_gate", partial(refuse_gate_node, rt))
+    builder.add_node("assemble", _timed(rt, Stage.assemble, assemble))
     builder.add_node("agent_core", agent_core_node)
-    builder.add_node("narrate", narrate_node)
+    builder.add_node("narrate", partial(narrate_node, rt))
     builder.add_edge(START, "ingest")
     builder.add_edge("ingest", "refuse_gate")
     builder.add_conditional_edges("refuse_gate", after_refuse, ["assemble", END])
