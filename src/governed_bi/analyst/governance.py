@@ -689,10 +689,11 @@ def _finish_unsuccessful(
     # ``gateway.execute`` — the guard added to make this path defence-in-depth
     # silently removed the only authorization step on it, which is the opposite of
     # what the paragraph above claims. Nothing passes None today (``analyst.agent``
-    # builds the allowlist unconditionally and all four call sites thread it), so the
-    # hole is invisible until a refactor drops the argument, and what it costs then is
-    # an unverified query running against the database. Refuse instead. The same
-    # fail-closed rule applies to ``allowed_tables``: omitting it must not skip L4.
+    # builds the allowlist unconditionally and every ``_finish_unsuccessful`` call
+    # site threads it), so the hole is invisible until a refactor drops the
+    # argument, and what it costs then is an unverified query running against the
+    # database. Refuse instead. The same fail-closed rule applies to
+    # ``allowed_tables``: omitting it must not skip L4.
     if allowlist is None:
         return refusal(
             escalation=escalation,
