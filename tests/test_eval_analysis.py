@@ -518,13 +518,15 @@ def test_resuming_after_a_model_change_warns(tmp_path, capsys):
     The retired ``--skip-agent`` transition used to under-report this (``model: None``
     was exempted by ``prior.get(k) is not None``). Model is now compared when present
     on both sides like any other resume knob.
+
+    The stronger ``--skip-agent`` → paid-model resume hazard (construction-refusal
+    rows permanently poisoning a resumed denominator) is not asserted here: Option A
+    makes it impossible by construction — ``run_datalake(..., oracle_only=True)``
+    forces ``arms = ()`` before any generations are written, so there are no fair-arm
+    rows to replay. Keep that invariant if you ever let ``--oracle-only`` emit
+    placeholder fair rows.
     """
-    (tmp_path / "manifest.json").write_text(
-        json.dumps({"split": "test", "model": None}),
-        encoding="utf-8",
-    )
-    # None → name: prior None is skipped by the drift loop; this documents that
-    # behaviour. Use two non-None models to assert the warning path.
+    # prior None is skipped by the drift loop; use two non-None models for the warn path.
     (tmp_path / "manifest.json").write_text(
         json.dumps({"split": "test", "model": "gpt-old"}),
         encoding="utf-8",

@@ -4089,6 +4089,18 @@ def run_datalake(
         # library entry point too (tests call it directly), and forcing the scope
         # here is what makes "no model was called" true BY CONSTRUCTION rather than
         # by a caller remembering to pass ``arms=()`` itself.
+        #
+        # Resume safety rides on the same line. The retired ``--skip-agent`` path
+        # wrote fair-arm ``generations.*.jsonl`` rows that were construction-
+        # refusals scoring 0; resume REPLAYS those rows rather than re-serving
+        # them, so hours of live model calls could land on a permanently poisoned
+        # denominator (see the docstring that used to live on
+        # ``test_resuming_a_skip_agent_directory_with_a_model_is_fatal``). With
+        # ``arms = ()`` here, an ``--oracle-only`` run never emits fair-arm
+        # generation rows at all — there is nothing to replay — so that hazard is
+        # structurally impossible. If a future change lets ``--oracle-only`` write
+        # placeholder fair rows, restore an explicit resume guard; the two facts
+        # must stay linked.
         arms = ()
         if not oracles:
             oracles = (OracleRung.sql.value,)
