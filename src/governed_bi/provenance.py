@@ -173,6 +173,10 @@ def corpus_release_hash(*, repo_root: Path | None = None) -> str:
     Reads ``.git/HEAD`` (and a loose/packed ref) under ``repo_root`` without
     ``subprocess``. Returns ``\"unknown\"`` when git metadata is missing or
     unreadable — never raises.
+
+    **No-subprocess is intentional and must stay.** This is called from the
+    serve / manifest path; :func:`working_tree_state` is the function that may
+    shell out, and only at eval-driver startup. Do not "unify" the two.
     """
     root = repo_root if repo_root is not None else _repo_root()
     try:
@@ -182,22 +186,101 @@ def corpus_release_hash(*, repo_root: Path | None = None) -> str:
         head = head_path.read_text(encoding="utf-8").strip()
         if head.startswith("ref:"):
             ref = head[len("ref:") :].strip()
-            ref_path = root / ".git" / ref
-            if ref_path.is_file():
-                return ref_path.read_text(encoding="utf-8").strip() or "unknown"
-            # Packed refs fallback.
-            packed = root / ".git" / "packed-refs"
-            if packed.is_file():
-                for line in packed.read_text(encoding="utf-8").splitlines():
-                    line = line.strip()
-                    if not line or line.startswith("#") or line.startswith("^"):
-                        continue
-                    sha, _, name = line.partition(" ")
-                    if name.strip() == ref and len(sha) >= 40:
-                        return sha.strip()
-            return "unknown"
+            return _read_ref_sha(root, ref)
         # Detached HEAD: bare SHA.
         return head if len(head) >= 40 else "unknown"
     except (OSError, ValueError):
         # UnicodeDecodeError is a ValueError subclass — corrupt/binary refs.
         return "unknown"
+
+
+def _read_ref_sha(root: Path, ref: str) -> str:
+    """Resolve ``ref`` (e.g. ``refs/heads/main``) to a SHA without subprocess."""
+    ref_path = root / ".git" / ref
+    if ref_path.is_file():
+        return ref_path.read_text(encoding="utf-8").strip() or "unknown"
+    packed = root / ".git" / "packed-refs"
+    if packed.is_file():
+        for line in packed.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or line.startswith("^"):
+                continue
+            sha, _, name = line.partition(" ")
+            if name.strip() == ref and len(sha) >= 40:
+                return sha.strip()
+    return "unknown"
+
+
+def git_head_branch(*, repo_root: Path | None = None) -> str | None:
+    """Branch name when HEAD is a symbolic ref; ``None`` when detached or unknown.
+
+    The branch string was already parsed inside :func:`corpus_release_hash` and
+    discarded — this surfaces it. Still no subprocess.
+    """
+    root = repo_root if repo_root is not None else _repo_root()
+    try:
+        head_path = root / ".git" / "HEAD"
+        if not head_path.is_file():
+            return None
+        head = head_path.read_text(encoding="utf-8").strip()
+        if not head.startswith("ref:"):
+            return None
+        ref = head[len("ref:") :].strip()
+        prefix = "refs/heads/"
+        if ref.startswith(prefix):
+            return ref[len(prefix) :] or None
+        return ref or None
+    except (OSError, ValueError):
+        return None
+
+
+def git_main_hash(*, repo_root: Path | None = None) -> str:
+    """SHA of ``refs/heads/main`` (no subprocess). ``\"unknown\"`` if absent."""
+    root = repo_root if repo_root is not None else _repo_root()
+    try:
+        return _read_ref_sha(root, "refs/heads/main")
+    except (OSError, ValueError):
+        return "unknown"
+
+
+def working_tree_state(*, repo_root: Path | None = None) -> tuple[bool, str | None]:
+    """Return ``(dirty, diff_sha256)`` for the working tree.
+
+    **May use ``subprocess``.** Call only from the eval driver at startup — never
+    from the serve hot path. :func:`corpus_release_hash` stays subprocess-free
+    for that reason; do not fold this into it.
+
+    ``diff_sha256`` is a SHA-256 of ``git status --porcelain`` plus ``git diff HEAD``
+    when dirty; ``None`` when clean. Returns ``(False, None)`` when git is
+    unavailable rather than raising.
+    """
+    import subprocess
+
+    root = repo_root if repo_root is not None else _repo_root()
+    try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        if status.returncode != 0:
+            return False, None
+        porcelain = status.stdout or ""
+        if not porcelain.strip():
+            return False, None
+        diff = subprocess.run(
+            ["git", "diff", "HEAD"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        payload = porcelain + "\n" + (diff.stdout or "")
+        digest = hashlib.sha256(payload.encode("utf-8", errors="replace")).hexdigest()
+        return True, digest
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return False, None

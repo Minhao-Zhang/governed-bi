@@ -16,7 +16,7 @@ documented subset of `summary.json`, so "declared but absent" is expected there.
 
 | Artifact | Fields | Consumer |
 |---|---|---|
-| `manifest.json` | 40 (35 in every run) | `index.COMPARABILITY_KEYS`, `index.RESUME_DRIFT_KEYS` |
+| `manifest.json` | 44 (39 in every run) | `index.COMPARABILITY_KEYS`, `index.RESUME_DRIFT_KEYS` |
 | `generations.<arm>.jsonl` | 73 per (question, arm) | `_summarise_rows`, `analysis`, `power`, `error_taxonomy` |
 | `summary.json` | 87 | `index.quotable` |
 | `stage_events.jsonl` | 7 per (question, arm, stage) | read by hand; per-stage latency attribution |
@@ -124,6 +124,10 @@ only `build_manifest` parameters allowed a default.
 | `build_workers` | curator-build concurrency |
 | `max_agent_steps` | operator override for the curator's per-schema TOOL-CALL budget; null = derived from schema size, and the resolved figure is each corpus's run_manifest.json tool_call_budget. Effective recursion limit is 3x + 4 |
 | `serve_path` | always agent_core (ADR 0002) |
+| `git_branch` | branch name when HEAD is a symbolic ref; null when detached — how the run was produced, not what was scored (operational, not a knob) |
+| `main_git_sha` | SHA of refs/heads/main at run start; null/unknown when the ref is absent |
+| `dirty` | True when the working tree had uncommitted changes at run start |
+| `diff_sha256` | SHA-256 of git status --porcelain + git diff HEAD when dirty; null when clean |
 
 ### Stamped after the build (declared, not required)
 

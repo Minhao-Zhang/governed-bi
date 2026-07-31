@@ -642,6 +642,11 @@ temp + replace, so a kill mid-rewrite keeps the previous file.
 gone). Use a fresh `--out`. The ledger still marks a run unquotable when rows span
 more than one SHA.
 
+**Push the branch before a quotable run (M4 N13).** The manifest records
+`git_branch`, `main_git_sha`, `dirty`, and `diff_sha256` as operational fields.
+A run whose tip was never pushed cannot be checked out elsewhere — treat an
+unpushed tip as not quotable, even when `dirty` is false.
+
 ## Quote the twin-free stratum
 
 **182 of the 1627 gradeable test questions (11.2%) have a gold statement that already

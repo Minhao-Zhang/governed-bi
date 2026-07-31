@@ -59,7 +59,13 @@ from pathlib import Path
 from typing import Any, Iterable, Literal
 
 from ..prompts import prompt_set_hash
-from ..provenance import corpus_content_hash, corpus_release_hash
+from ..provenance import (
+    corpus_content_hash,
+    corpus_release_hash,
+    git_head_branch,
+    git_main_hash,
+    working_tree_state,
+)
 
 Mode = Literal["single", "datalake"]
 
@@ -217,6 +223,23 @@ MANIFEST_OPERATIONAL: tuple[Metric, ...] = (
         "run_manifest.json tool_call_budget. Effective recursion limit is 3x + 4",
     ),
     Metric("serve_path", "always agent_core (ADR 0002)"),
+    Metric(
+        "git_branch",
+        "branch name when HEAD is a symbolic ref; null when detached — how the run "
+        "was produced, not what was scored (operational, not a knob)",
+    ),
+    Metric(
+        "main_git_sha",
+        "SHA of refs/heads/main at run start; null/unknown when the ref is absent",
+    ),
+    Metric(
+        "dirty",
+        "True when the working tree had uncommitted changes at run start",
+    ),
+    Metric(
+        "diff_sha256",
+        "SHA-256 of git status --porcelain + git diff HEAD when dirty; null when clean",
+    ),
 )
 
 #: Fields no *builder* can fill, because the value does not exist yet when the
@@ -420,6 +443,7 @@ def build_manifest(
     from the manifest can never fire.
     """
     routing_bypassed = route_top_k is None and route_llm_pick is None
+    dirty, diff_sha256 = working_tree_state()
 
     return {
         # ── contract ──
@@ -465,6 +489,10 @@ def build_manifest(
         "build_workers": build_workers,
         "max_agent_steps": max_agent_steps,
         "serve_path": "agent_core",
+        "git_branch": git_head_branch(),
+        "main_git_sha": git_main_hash(),
+        "dirty": dirty,
+        "diff_sha256": diff_sha256,
     }
 
 
