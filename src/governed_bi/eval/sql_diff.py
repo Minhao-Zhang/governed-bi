@@ -438,12 +438,12 @@ def _set_diff(dim: Dimension, gold: Iterable, gen: Iterable) -> DimensionDiff:
     return DimensionDiff(
         dim,
         Verdict.mismatch,
-        missing=tuple(sorted(_render(m) for m in missing)),
-        extra=tuple(sorted(_render(e) for e in extra)),
+        missing=tuple(sorted(_render_diff_value(m) for m in missing)),
+        extra=tuple(sorted(_render_diff_value(e) for e in extra)),
     )
 
 
-def _render(value) -> str:
+def _render_diff_value(value) -> str:
     """Stable text for a diff element, including the frozenset join-key pairs."""
     if isinstance(value, frozenset):
         return "=".join(sorted(str(v) for v in value))
@@ -462,8 +462,8 @@ def _seq_diff(dim: Dimension, gold: tuple, gen: tuple) -> DimensionDiff:
     return DimensionDiff(
         dim,
         Verdict.mismatch,
-        missing=tuple(sorted(_render(m) for m in gold_set - gen_set)),
-        extra=tuple(sorted(_render(e) for e in gen_set - gold_set)),
+        missing=tuple(sorted(_render_diff_value(m) for m in gold_set - gen_set)),
+        extra=tuple(sorted(_render_diff_value(e) for e in gen_set - gold_set)),
     )
 
 
@@ -473,8 +473,8 @@ def _flag_diff(dim: Dimension, gold: Any, gen: Any) -> DimensionDiff:
     return DimensionDiff(
         dim,
         Verdict.mismatch,
-        missing=(_render(gold),) if gold not in (None, False) else (),
-        extra=(_render(gen),) if gen not in (None, False) else (),
+        missing=(_render_diff_value(gold),) if gold not in (None, False) else (),
+        extra=(_render_diff_value(gen),) if gen not in (None, False) else (),
     )
 
 

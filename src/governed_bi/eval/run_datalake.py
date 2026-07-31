@@ -48,7 +48,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shutil
 import threading
 import time
@@ -130,6 +129,7 @@ from .index import RESUME_DRIFT_KEYS, index_run
 from .leakage import is_gradeable_eval_row, twin_report, ungradeable_question_ids
 from .oracle import GoldIndex, OracleRung, oracle_solver
 from .parallel import ServeWorker, resolve_workers, run_ordered_pool
+from .sql_diff import is_frozen_constant
 from .power import (
     cluster_sign_test,
     comparison_report,
@@ -192,8 +192,8 @@ _CURATOR_ERROR_QUARANTINE_ABORT_MIN_DBS = 2
 # A gold answer that is a literal ``VALUES (...)`` constant hands back a precomputed
 # row instead of querying anything, so no generated SQL can match it. These are
 # counted out of ``ex_gradeable`` and reported, rather than silently deflating EX
-# and diluting every arm-to-arm delta measured against it.
-_FROZEN_GOLD_RE = re.compile(r"\bVALUES\s*\(", re.IGNORECASE)
+# and diluting every arm-to-arm delta measured against it. Detection lives in
+# ``sql_diff.is_frozen_constant`` (shared with analysis / leakage).
 # Curator sidecar files written to the corpus *root* (not the per-schema subtree):
 # on a shared root each db would overwrite the last. Relocated per-db after build.
 #: Written into ``<db>/_build/`` when a curator diagnostic could not be promoted.
@@ -3808,7 +3808,7 @@ def _run_pool_arm(
             "difficulty": item.difficulty or "unknown",
             # Gold that is a literal VALUES(...) constant can never be matched;
             # flagged per row so ``ex_gradeable`` can exclude it by denominator.
-            "gold_frozen": bool(_FROZEN_GOLD_RE.search(item.sql or "")),
+            "gold_frozen": is_frozen_constant(item.sql),
             # Could the curator have answered this from train rather than generalised
             # to it? ``seeded`` derives its seed from train gold SQL and ``curated``
             # runs an agent over train, so on a question whose statement already exists

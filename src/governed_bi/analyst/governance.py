@@ -256,7 +256,7 @@ def _suspect_in_scope(sql: str, suspect: frozenset[str], dialect: str | None) ->
     return any(col.name in suspect_bare for col in tree.find_all(exp.Column))
 
 
-def _render(result, generated) -> str:
+def _render_result_summary(result, generated) -> str:
     """A compact textual answer from the executed result."""
     if result.row_count == 1 and len(result.columns) == 1:
         return f"{result.columns[0]} = {result.rows[0][0]}"
@@ -289,11 +289,11 @@ def _answer_text(
     the compact deterministic render. A narrator failure falls back to the render
     so a model hiccup never turns a governed answer into an error."""
     if narrator is None:
-        return _render(result, None)
+        return _render_result_summary(result, None)
     try:
         return narrator.narrate(question, sql, table)
     except Exception:
-        return _render(result, None)
+        return _render_result_summary(result, None)
 
 
 def _unverified_prefix(provenance: dict) -> str:

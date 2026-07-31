@@ -16,6 +16,17 @@ import re
 # validate the *prefix and shape*, not a segment-by-segment parse.
 _NAME = r"[a-z0-9]+(?:_[a-z0-9]+)*"
 _NUM = r"\d+"
+_SLUG_NON_ALNUM = re.compile(r"[^a-z0-9]+")
+
+
+def slug(name: str, *, fallback: str = "x") -> str:
+    """Make a regex-valid id segment from a real name (ids are lowercase a-z0-9_).
+
+    Empty results (all punctuation) become ``fallback`` so segments stay non-empty
+    under ``_NAME`` / ``is_valid_id``.
+    """
+    return _SLUG_NON_ALNUM.sub("_", name.lower()).strip("_") or fallback
+
 
 # asset_type -> compiled ID pattern.
 # \A...\Z, not ^...$: Python's $ also matches just before a trailing newline, so

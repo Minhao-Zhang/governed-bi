@@ -35,7 +35,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -46,8 +45,7 @@ from sqlglot import exp
 from .arms import ARM_ORDER, skipped_rungs, step_mechanisms
 from .leakage import is_gradeable_eval_row
 from .power import holm_adjust
-
-_FROZEN_GOLD_RE = re.compile(r"\bVALUES\s*\(", re.IGNORECASE)
+from .sql_diff import is_frozen_constant
 
 
 # --------------------------------------------------------------------------- #
@@ -343,7 +341,7 @@ def table_selection_report(
             n_missing += 1
             continue
         raw_gold = gold_sql[qid]
-        if _FROZEN_GOLD_RE.search(raw_gold or ""):
+        if is_frozen_constant(raw_gold):
             n_frozen += 1
             continue
         gold = sql_tables(raw_gold, dialect=dialect)
@@ -530,9 +528,7 @@ def gradeable_report(
             if r.get("gold_frozen") is not None
             else bool(
                 gold_sql is not None
-                and _FROZEN_GOLD_RE.search(
-                    gold_sql.get(str(r.get("question_id")), "") or ""
-                )
+                and is_frozen_constant(gold_sql.get(str(r.get("question_id"))))
             )
         )
     )

@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .bird_loader import load_bird_items
+from .sql_diff import is_frozen_constant
 
 #: Field carrying the obfuscated gold SQL. The un-obfuscated ``sql_sqlite`` would
 #: match across schemas that were renamed, inflating the twin rate with pairs the
@@ -77,19 +78,19 @@ def canonical_sql(sql: str | None) -> str:
 #: ``ex_gradeable``, so they can never reach ``ex_no_twin`` or ``ex_twin``: counting
 #: them made the quoted rate and the stratified metric describe different populations,
 #: and put three schemas in ``worst_dbs`` that carry no risk at all (one of them at a
-#: headline-grabbing 46% that is 14% once they are removed).
-_FROZEN_GOLD = re.compile(r"\bVALUES\s*\(", re.IGNORECASE)
+#: headline-grabbing 46% that is 14% once they are removed). Detection is
+#: ``sql_diff.is_frozen_constant``.
 
 
 def is_gradeable_gold(sql: str | None) -> bool:
     """Can a generator ever match this gold through a result hash?
 
-    Must agree with ``run_datalake``'s ``_FROZEN_GOLD_RE``, which decides the same
-    thing for ``ex_gradeable``. Pinned by a test rather than trusted to two copies of
-    a regex staying in step, because the defect this filter fixes WAS the twin rate
+    Must agree with ``sql_diff.is_frozen_constant``, which decides the same thing
+    for ``ex_gradeable``. Pinned by a test rather than trusted to two copies of a
+    regex staying in step, because the defect this filter fixes WAS the twin rate
     and the EX strata being computed over different populations.
     """
-    return bool(sql) and not _FROZEN_GOLD.search(str(sql))
+    return bool(sql) and not is_frozen_constant(sql)
 
 
 def is_gradeable_eval_row(
@@ -110,9 +111,7 @@ def is_gradeable_eval_row(
     if row.get("gold_frozen") is not None:
         frozen = bool(row["gold_frozen"])
     elif gold_sql is not None:
-        frozen = bool(
-            _FROZEN_GOLD.search(str(gold_sql.get(str(row.get("question_id")), "") or ""))
-        )
+        frozen = is_frozen_constant(gold_sql.get(str(row.get("question_id"))))
     else:
         frozen = False
     if frozen:

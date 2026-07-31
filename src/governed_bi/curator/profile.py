@@ -19,18 +19,13 @@ proposer fills the Inference tier (descriptions, roles, joins) on top.
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING
 
+from ..corpus.ids import slug
 from ..corpus.schemas import Column, LogicalType, TableAsset
 
 if TYPE_CHECKING:
     from ..gateway.connectors.base import Connector
-
-
-def _slug(name: str) -> str:
-    """Make a regex-valid id segment from a real name (ids are lowercase a-z0-9_)."""
-    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
 
 
 def _logical_type(raw: str) -> LogicalType:
@@ -82,7 +77,7 @@ def profile_database(
         ]
         tables.append(
             TableAsset(
-                id=f"tbl_{_slug(schema)}_{_slug(name)}",
+                id=f"tbl_{slug(schema)}_{slug(name)}",
                 schema=schema,
                 physical_name=name,
                 columns=columns,  # row_count left unset (no COUNT(*))

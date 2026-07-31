@@ -258,10 +258,10 @@ def test_frozen_gold_is_not_counted_as_a_twin():
 
 
 def test_the_two_frozen_gold_definitions_agree():
-    """`leakage` and `run_datalake` each decide "is this gold gradeable". Two copies of
+    """`leakage` and `sql_diff` each decide "is this gold gradeable". Two copies of
     a regex staying in step is exactly what produced the mismatched populations."""
     from governed_bi.eval.leakage import is_gradeable_gold
-    from governed_bi.eval.run_datalake import _FROZEN_GOLD_RE
+    from governed_bi.eval.sql_diff import is_frozen_constant
 
     for sql in (
         'SELECT "v"."c0" FROM (VALUES (5.0)) AS "v"("c0")',
@@ -269,7 +269,7 @@ def test_the_two_frozen_gold_definitions_agree():
         "SELECT a FROM t",
         "SELECT count(*) FROM valuesomething",  # not a VALUES clause
     ):
-        assert is_gradeable_gold(sql) is (not bool(_FROZEN_GOLD_RE.search(sql))), sql
+        assert is_gradeable_gold(sql) is (not is_frozen_constant(sql)), sql
 
 
 def test_a_quoted_apostrophe_does_not_split_one_literal_into_two():

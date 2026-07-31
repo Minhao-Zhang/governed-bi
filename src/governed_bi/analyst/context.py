@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from ..retrieval import RetrievalResult
 
 
-# Per-field budgets for the curator prose :func:`_render` emits. Notes were sanitized
+# Per-field budgets for the curator prose :func:`_render_prompt` emits. Notes were sanitized
 # from the start; the schema block around them was not, so a column description was a
 # cheaper poisoning vector than the notes the defence was written for (AUDIT S5) — and
 # an unbounded one, since nothing capped how much prose one asset could spend.
@@ -169,7 +169,7 @@ class PromptContext:
 
     def render(self) -> str:
         """Render the context as a text block for an LLM prompt."""
-        return _render(self)
+        return _render_prompt(self)
 
 
 # --------------------------------------------------------------------------- #
@@ -360,7 +360,7 @@ def _render_column(col: ColumnView) -> str:
     return line
 
 
-def _render(ctx: PromptContext) -> str:
+def _render_prompt(ctx: PromptContext) -> str:
     lines: list[str] = []
 
     if ctx.conversation:

@@ -9,6 +9,7 @@ from typing import Iterable
 
 from pydantic import ValidationError
 
+from ..corpus.ids import slug
 from ..corpus.schemas import (
     Audit,
     Cardinality,
@@ -33,10 +34,6 @@ from ..corpus.serialize import write_corpus
 from .clarifications import ClarificationRecord, ClarificationRecordStatus, parse_scope
 
 _Asset = TableAsset | JoinAsset | MetricAsset | TermAsset | FewShotAsset | NoteAsset
-
-
-def _slug(name: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "x"
 
 
 #: Char cap on one :meth:`AssetBag.read_corpus` render. Chosen to sit under the
@@ -522,7 +519,7 @@ class AssetBag:
         # it a second relationship between the same pair silently overwrites the
         # first.
         jid = (
-            f"join_{_slug(self.schema)}_{_slug(left_table)}_{_slug(right_table)}"
+            f"join_{slug(self.schema)}_{slug(left_table)}_{slug(right_table)}"
             f"_{on_clause_digest(on)}"
         )
         try:
@@ -565,7 +562,7 @@ class AssetBag:
             mid = name
             name = self.metrics[mid].name
         else:
-            mid = f"metric_{_slug(self.schema)}_{_slug(name)}"
+            mid = f"metric_{slug(self.schema)}_{slug(name)}"
         try:
             asset = MetricAsset.model_validate(
                 {
@@ -658,7 +655,7 @@ class AssetBag:
             tid = name
             name = self.terms[tid].name
         else:
-            tid = f"term_{_slug(self.schema)}_{_slug(name)}"
+            tid = f"term_{slug(self.schema)}_{slug(name)}"
         binding = None
         if binding_asset_id:
             resolved, err = self._resolve_binding(binding_asset_type, binding_asset_id)
@@ -691,7 +688,7 @@ class AssetBag:
         answered_by: str | None = None,
     ) -> str:
         n = len(self.few_shots) + 1
-        fid = f"fs_{_slug(self.schema)}_{n}"
+        fid = f"fs_{slug(self.schema)}_{n}"
         try:
             cx = Complexity(complexity)
         except ValueError:
@@ -939,7 +936,7 @@ class AssetBag:
         summary = (summary or "").strip()
         if not summary:
             return "error: empty note summary"
-        note_id = f"note_{_slug(self.schema)}_{len(self.notes) + 1}"
+        note_id = f"note_{slug(self.schema)}_{len(self.notes) + 1}"
         payload: dict[str, object] = {
             "id": note_id,
             "kind": kind,

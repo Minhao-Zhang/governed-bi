@@ -17,9 +17,7 @@ from dataclasses import dataclass, field
 import sqlglot
 from sqlglot import exp
 
-
-def _slug(name: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "x"
+from ..corpus.ids import slug
 
 
 @dataclass(frozen=True)
@@ -234,7 +232,7 @@ def extract_metrics_from_sql(
         if expr in seen:
             continue
         seen.add(expr)
-        name = _slug(expr)[:48]
+        name = slug(expr)[:48]
         out.append(
             MetricCandidate(
                 name=name,
