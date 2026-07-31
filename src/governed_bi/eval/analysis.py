@@ -142,7 +142,7 @@ def write_questions_sidecar(
 
     Deliberately a side-car, not inline fields on every generations row: inlining
     question + gold across 5404 rows bloats the artifact for a join that analysis
-    only needs once. See N15 size measurement in the delivery evidence.
+    only needs once. Measured size: see ``docs/plans/m5-delivery-evidence.md``.
     """
     run_dir = Path(run_dir)
     path = run_dir / "questions.jsonl"

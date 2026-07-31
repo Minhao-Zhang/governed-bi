@@ -19,19 +19,49 @@ delivers the command, guards, runbook text, and a 5-question smoke shaped like M
 ## N15 named mismatches (tool vs report)
 
 Canonical tooling path:
-`runs/datalake/20260730T034522Z-test-ladder-fixed2/20260730T034543Z/`.
+`runs/datalake/20260730T034522Z-test-ladder-fixed2/20260730T034543Z`.
 Pinned in `tests/test_bird_basis_report.py`.
+
+Population for twin/attractor cells: **BIRD-basis pick-stage** (gold shortlisted,
+picker chose another; n=96). Report §3 twin/attractor cells look counted on a
+broader `routed_hit=False` set; even that set does not fully reproduce every
+attractor. Tool keeps the pick-stage definition; report is named high where it
+diverges.
 
 | Claim | Report | Tool | Verdict |
 |---|---|---|---|
-| Seeded §1 table / wrong_shape | 139 / 155 | 138 / 156 | **Off-by-one cell swap**; sum of the two stages matches. Report and tool disagree on the boundary between table vs wrong_shape for one seeded row. |
+| Seeded §1 table / wrong_shape | 139 / 155 | 138 / 156 | **Report cell wrong**; sum of the two stages matches. Tool is the defined cascade. |
 | Rank overrides (“44 misroutes overrode better rank”) | 44 in `…-results.md` | **41** (`schema_pick_report` rank_overrides on BIRD-basis pick stage) | **Report high / tool mechanical.** Tool is the shortlist-index comparison; results.md is high. |
+| Twin: mondial_geo → world | 10 / 3 | **8 / 3** | **Report high / tool pick-stage.** Report counted a broader misroute set. |
+| Twin: simpson_episodes → law_episode | 8 / 1 | **6 / 1** | **Report high / tool pick-stage.** Same broader-set story. |
+| Twin: regional_sales → superstore | 7 | 7 | Match |
+| Twin: food_inspection ↔ food_inspection_2 | 6 / 1 | 6 / 1 | Match |
+| Twin: soccer_2016 → ice_hockey_draft | 3 | 3 | Match |
+| Attractor: superstore | 12 | **11** | **Report high / tool pick-stage** |
+| Attractor: world | 12 | **10** | **Report high / tool pick-stage** |
+| Attractor: ice_hockey_draft | 9 | 9 | Match |
+| Attractor: law_episode | 8 | **6** | **Report high / tool pick-stage** |
+| Attractor: movies_4 | 7 | **5** | **Report high / tool pick-stage** |
+| Attractor: food_inspection_2 | 7 | 7 | Match |
 | Extra DISTINCT (stage-4) | 75 | **76** | Tool +1 vs report |
 | Over-join (stage-4) | 113 | **110** | Tool −3 vs report |
 | Missing DISTINCT / LIKE | 19 / 26 | 19 / 26 | Match |
 
-Other §1 waterfall cells, EX rates, twin matrix, and pick-wrong histogram match the
-error-analysis doc on the fixed2 run.
+Other §1 waterfall cells (except the seeded table/wrong_shape cell above), EX
+rates, and the pick-wrong gold-rank histogram (26/31/39) match the
+error-analysis doc on the fixed2 run. **The twin/attractor matrix does not
+blanket-match** — mismatched cells are named in the table above.
+
+---
+
+## N15 questions.jsonl size
+
+Side-car chosen over inlining question + gold on every generations row.
+
+| Artifact | Rows | Size |
+|---|---:|---:|
+| Fixed2 recomputed sidecar (1351 unique qids from the ladder generations) | 1351 | **200853 bytes** |
+| N17 5q smoke (`runs/datalake/20260731T220403Z/questions.jsonl`) | 5 | **3325 bytes** |
 
 ---
 

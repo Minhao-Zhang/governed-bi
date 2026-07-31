@@ -206,13 +206,27 @@ def test_fixed2_waterfall_matches_report():
         else:
             # Tool: table=138, wrong_shape=156. Report: 139 / 155.
             # Same partition sum; one row differs. Tool side is the defined cascade;
-            # report cell is wrong (or used a one-row-different table extract).
+            # report cell wrong.
             assert got["stages"]["table"] == 138
             assert got["stages"]["wrong_shape"] == 156
             assert (
                 got["stages"]["table"] + got["stages"]["wrong_shape"]
                 == expected["table"] + expected["wrong_shape"]
             )
+
+
+def _twin_n(pick: dict, gold: str, picked: str) -> tuple[int, int]:
+    for row in pick["twin_pairs"]:
+        if row["gold"] == gold and row["picked"] == picked:
+            return row["n"], row["symmetric_n"]
+    return 0, 0
+
+
+def _attractor_n(pick: dict, schema: str) -> int:
+    for row in pick["attractors"]:
+        if row["schema"] == schema:
+            return row["n"]
+    return 0
 
 
 @pytest.mark.skipif(not FIXED2.is_dir(), reason="fixed2 run artifacts not present")
@@ -226,6 +240,21 @@ def test_fixed2_schema_pick_and_stage4():
     # results.md claims 44 overrides; tool on BIRD-basis pick stage gets 41.
     # Tool side is the mechanical shortlist-index comparison; report is high.
     assert pick["rank_overrides"] == 41
+
+    # Twin / attractor matrix — tool on pick-stage (n=96). Report §3 cells are
+    # higher on several pairs/attractors (broader routed_hit=False counting);
+    # report is high / tool mechanical. Matching cells pinned too.
+    assert _twin_n(pick, "mondial_geo", "world") == (8, 3)  # report 10/3
+    assert _twin_n(pick, "simpson_episodes", "law_episode") == (6, 1)  # report 8/1
+    assert _twin_n(pick, "regional_sales", "superstore") == (7, 0)  # matches report
+    assert _twin_n(pick, "food_inspection", "food_inspection_2") == (6, 1)  # matches
+    assert _twin_n(pick, "soccer_2016", "ice_hockey_draft") == (3, 0)  # matches
+    assert _attractor_n(pick, "superstore") == 11  # report 12
+    assert _attractor_n(pick, "world") == 10  # report 12
+    assert _attractor_n(pick, "ice_hockey_draft") == 9  # report 9
+    assert _attractor_n(pick, "law_episode") == 6  # report 8
+    assert _attractor_n(pick, "movies_4") == 5  # report 7
+    assert _attractor_n(pick, "food_inspection_2") == 7  # report 7
 
     s4 = stage4_structural_report(arms["curated_sme"], gold)
     assert s4["n_stage4"] == 355

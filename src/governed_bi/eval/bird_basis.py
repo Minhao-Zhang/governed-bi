@@ -138,8 +138,9 @@ def schema_pick_report(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
 
     Population: BIRD-basis rows whose funnel stage is ``pick`` (gold shortlisted,
     picker chose another). Rank histogram on this population matches the report's
-    26/31/39. Twin/attractor tables in the report were counted on a slightly
-    broader misroute set; see the pinned reproduction test for named diffs.
+    26/31/39. Twin/attractor *cells* in the error-analysis §3 were counted on a
+    broader ``routed_hit=False`` set (and still do not fully reproduce every
+    attractor); see the pinned reproduction test for named report-vs-tool diffs.
     """
     basis = bird_basis_rows(rows)
     picks = [r for r in basis if _is_pick(r)]
