@@ -36,7 +36,7 @@
 | ~~**M1**~~ **已完成 2026-07-31** | 未授权基表的用例修复前红、修复后绿；`generations.*.jsonl` 里读得到逐层判决列表 | N1–N4（`e94a133` / `af7fd37` / `6c4e709` / `db21779`） | 3.5 人日 |
 | ~~**M2**~~ **已完成 2026-07-31** | 三个重复名字各只剩一处定义（`_render` 是例外 —— 三者无关，改名不合并）；歧义裸名返回 `None`；约束真的会绑（把 `langgraph-api` 改成 `>=99` 后 `uv lock` 判定 unsatisfiable）；glossary 补出 ops/eval 半区 | N5–N8（`14d8172` / `8be261f` / `71aabfb` / `db6704d`） | 4 人日 |
 | **M3** 删双轨 | `grep -rn "run_experiment\|skip_agent\|git_sha_drift" src/` 零命中，`pytest` 全绿；rvgd ↔ `table_by_name` 歧义一致性测试绿 | N9–N10a | 2.5 人日 |
-| **M4** 看得见与对得上 | 5 题小跑：stdout ≤ 50 行且每行带时间戳；同一个 `run_id` 在三个 sink 里都查得到；`build_stack()` 两次调用返回同一对象 | N11–N14 | 7.5 人日 |
+| ~~**M4**~~ **已完成 2026-07-31** | 付费 5 题跑 `runs/datalake/20260731T195022Z`（`gpt-5.6-luna`，工作树干净，分支已推）：stdout 23 行；**5 个 `run_id` 在 generations / `stage_events.jsonl` / `run.log` 三个 sink 里集合完全相同**；manifest 四个字段齐（`git_branch` / `main_git_sha` / `dirty` / `diff_sha256`）；M1 遗留的投影 ledger 端到端结清（无 `result`） | N11–N14（`526f21a` / `477b453` / `afe7776` / `099833a` / `ec7be1c`）+ 四条修复（`d8e67c6` / `c9b1c19` / `c6c74b1` / `d29fb16`） | 7.5 人日 |
 | **M5** 工具与跑 | 用 20260730 那份数据重现出 `docs/experiments/` 报告里的**每一个**数字；带 `--replicate` 的完整命令行成立 | N15–N17 | 5.5 人日 |
 
 估工是我的一阶估计，不是从 checklist 顶部 A-7 那个「235–435 工时」拆出来的 —— 那个数建在一批已被审计打回重算的计数上（M5：`pooled 405→205`、`run ~330→1488`）。接手的人第一天就该自己重估，估完不一致以他的为准。
