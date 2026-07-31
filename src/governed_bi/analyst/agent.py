@@ -388,6 +388,24 @@ def extract_final_sql(
     return sql, tables_used, {**chosen, "final_sql_source": source}
 
 
+def _column_count_for(corpus: "Corpus", table_id: str) -> int:
+    """Resolve by asset id then physical name; ambiguous bare → 0.
+
+    Assemble rails use this to size licensed tables. Ambiguous bare names go
+    through :meth:`Corpus.table_by_name` (``None``, not first-match).
+    """
+    asset = corpus.by_id(table_id)
+    if not isinstance(asset, TableAsset):
+        asset = corpus.table_by_name(table_id)
+    if not isinstance(asset, TableAsset):
+        return 0
+    return sum(
+        1
+        for c in asset.columns
+        if not getattr(getattr(c, "governance", None), "excluded", False)
+    )
+
+
 def build_serve_rails(
     *,
     corpus: "Corpus",
@@ -502,19 +520,7 @@ def build_serve_rails(
     _turn_n = [n_human - 1]
 
     def _column_count(table_id: str) -> int:
-        asset = corpus.by_id(table_id)
-        if not isinstance(asset, TableAsset):
-            asset = next(
-                (a for a in corpus.assets if isinstance(a, TableAsset) and a.physical_name == table_id),
-                None,
-            )
-        if not isinstance(asset, TableAsset):
-            return 0
-        return sum(
-            1
-            for c in asset.columns
-            if not getattr(getattr(c, "governance", None), "excluded", False)
-        )
+        return _column_count_for(corpus, table_id)
 
     def _timed(stage: Stage, node):
         """Register a rails node with its own stage record.

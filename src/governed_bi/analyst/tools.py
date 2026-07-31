@@ -40,9 +40,10 @@ def _table_by_id(corpus: "Corpus", table_id: str) -> TableAsset | None:
     if isinstance(asset, TableAsset) and not _is_excluded(asset):
         return asset
     # Physical-name fallback (model sometimes echoes names from search output).
-    for a in corpus.assets:
-        if isinstance(a, TableAsset) and not _is_excluded(a) and a.physical_name == table_id:
-            return a
+    # Ambiguous bare names resolve to None (Corpus.table_by_name), not first match.
+    asset = corpus.table_by_name(table_id)
+    if isinstance(asset, TableAsset) and not _is_excluded(asset):
+        return asset
     return None
 
 

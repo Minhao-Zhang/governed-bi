@@ -122,15 +122,14 @@ def _table_by_id(corpus: "Corpus", table_id: str) -> TableAsset | None:
         if gov is not None and getattr(gov, "excluded", False):
             return None
         return asset
-    for a in corpus.assets:
-        if not isinstance(a, TableAsset):
-            continue
-        gov = getattr(a, "governance", None)
-        if gov is not None and getattr(gov, "excluded", False):
-            continue
-        if a.physical_name == table_id:
-            return a
-    return None
+    # Ambiguous bare names → None (not first match). Exclusion stays at this call site.
+    asset = corpus.table_by_name(table_id)
+    if not isinstance(asset, TableAsset):
+        return None
+    gov = getattr(asset, "governance", None)
+    if gov is not None and getattr(gov, "excluded", False):
+        return None
+    return asset
 
 
 class GovernanceMiddleware(AgentMiddleware):

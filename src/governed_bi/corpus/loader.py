@@ -86,6 +86,33 @@ class Corpus:
     def by_id(self, asset_id: str) -> Asset | None:
         return next((a for a in self.assets if a.id == asset_id), None)
 
+    def table_by_name(self, name: str) -> TableAsset | None:
+        """Resolve a physical table name.
+
+        Qualified ``schema.table`` always resolves when present (case-insensitive).
+        A bare name resolves only when exactly one table corpus-wide carries it;
+        ambiguous bare names return ``None`` rather than the first match.
+        Does not apply exclusion filtering — callers that need Analyst visibility
+        filter themselves (same contract as :meth:`by_id`).
+        """
+        key = name.lower()
+        if "." in key:
+            schema, _, table = key.rpartition(".")
+            for a in self.assets:
+                if (
+                    isinstance(a, TableAsset)
+                    and a.schema.lower() == schema
+                    and a.physical_name.lower() == table
+                ):
+                    return a
+            return None
+        matches = [
+            a
+            for a in self.assets
+            if isinstance(a, TableAsset) and a.physical_name.lower() == key
+        ]
+        return matches[0] if len(matches) == 1 else None
+
     def tables(self) -> list[TableAsset]:
         return [a for a in self.assets if isinstance(a, TableAsset)]
 
