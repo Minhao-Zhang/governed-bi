@@ -189,6 +189,31 @@ testable `grade_one` / `run_arm` seam so these become ordinary behavioural
 tests. `tests/test_eval_index.py` (the `manifest_model` rewrite) is the worked
 precedent for the conversion.
 
+### Statistics migration aliases (M4b N19) — delete after one release
+
+The statistics cluster moved to `eval/statistics.py`. `run_datalake` keeps four
+forwarding aliases (`_summarise_rows`, `_compare_arms`, `_routing_escaped`,
+`_fmt_rate`) plus eleven `noqa: F401` re-exports, so the ~180 existing references
+can migrate in batches instead of in one unreviewable diff. **They are meant to
+go.** The signal that it is safe:
+
+```
+grep -rn '_summarise_rows\|_compare_arms\|_routing_escaped\|_fmt_rate' src tests
+```
+
+returning only the alias block itself. `tests/test_statistics_module.py` pins the
+shim's contract in the meantime (aliases are the same objects, not copies; the
+driver itself calls the public names; `statistics` does not import the driver).
+Delete `test_the_migration_aliases_are_the_same_objects_not_copies` along with
+the aliases.
+
+While doing N19 the `getsource` inventory above was re-counted, and the M4b plan's
+claim that six sites break on the move did not survive contact: `inspect.getsource`
+resolves through a function's own code object, so a plain alias forwards it
+transparently. Four of the six parse `run_datalake()` or `_build_db_corpora`,
+neither of which moved. Only two parse moved code, and both were repointed at
+`eval.statistics` rather than left reaching through the shim.
+
 ## Serve-time clarification (HITL)
 
 The contract is agreed, the server implements it and the frontend renders it, so its

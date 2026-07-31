@@ -21,7 +21,12 @@ import pytest
 
 from governed_bi.eval import metrics
 from governed_bi.eval.index import COMPARABILITY_KEYS, RESUME_DRIFT_KEYS
-from governed_bi.eval.run_datalake import _summarise_rows
+
+# The new home, not the migration alias in `run_datalake`. This module parses the
+# summariser's own source with `inspect.getsource` (see
+# `test_the_row_register_covers_what_the_summariser_reads`), so it should name the
+# module whose text it is asserting about rather than reach through a shim.
+from governed_bi.eval.statistics import summarise_rows as _summarise_rows
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EVAL_DIR = Path(metrics.__file__).resolve().parent

@@ -14,12 +14,12 @@ These tests pin the decomposition, not the plumbing.
 
 from __future__ import annotations
 
-from governed_bi.eval.arms import Arm, step_mechanisms
-from governed_bi.eval.run_datalake import (
-    _ARMS,
-    ladder_steps,
-    skipped_rungs,
-)
+# `skipped_rungs` and `ladder_steps` are `.arms`'; they were only reachable through
+# `run_datalake` because the driver happened to import them. It no longer imports
+# `skipped_rungs` (the statistics that used it moved out in M4b N19), so this now
+# names their real home instead of a driver that re-exported them by accident.
+from governed_bi.eval.arms import Arm, ladder_steps, skipped_rungs, step_mechanisms
+from governed_bi.eval.run_datalake import _ARMS
 
 
 def test_the_ladder_has_a_rung_between_baseline_and_curated():
@@ -832,12 +832,15 @@ def test_every_metric_the_ladder_names_exists_in_a_real_summary():
     left the whole suite green.
 
     This closes it generally rather than per-metric: every name the loop reads must be a
-    key `_summarise_rows` actually produces.
+    key `summarise_rows` actually produces.
     """
     import inspect
     import re
 
-    from governed_bi.eval.run_datalake import _summarise_rows, ladder_deltas
+    # `eval.statistics`, not the migration alias in `run_datalake`: this parses
+    # `ladder_deltas`'s own source text, so it names the module that text lives in.
+    from governed_bi.eval.statistics import ladder_deltas
+    from governed_bi.eval.statistics import summarise_rows as _summarise_rows
 
     src = inspect.getsource(ladder_deltas)
     block = src[src.index("for metric, label in ("):]
