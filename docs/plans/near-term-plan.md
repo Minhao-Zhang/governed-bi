@@ -156,6 +156,8 @@
 
 ## M3 · 删双轨
 
+> **详细工作单：[batch-m3.md](batch-m3.md)。**下面两节只给目标。那一份加了本节没说的两件事：**`skip_agent` 不是一个 flag** —— 它同时是 `Metric` 注册项、manifest 字段和 `RESUME_DRIFT_KEYS` 成员，删它要 bump `MANIFEST_SCHEMA_VERSION`；以及 **`--skip-agent --oracle oracle_sql` 那个零成本 grader 自检去哪，必须在动手之前决定**（runbook 的 step 0 和 step 1 整个建在它上面）。**估工 2.5 → 3 人日。**
+
 依据决定 12：**跑实验的人是有智慧的**，不给操作员建拦手滑的闸门。注意这条**管不到**数据读取的向后兼容（见 N15 的说明），把它扩张成「不许有任何向后兼容」是范畴错误。
 
 ### N9 · `run_experiment.py` 退役（checklist 0.1）
