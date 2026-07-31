@@ -180,9 +180,10 @@ def manifest_model(model_name: str | None, *, skip_agent: bool) -> str | None:
     key, so ``comparable()`` paired them — the quotability gate stops such a run
     being *quoted*, but nothing stopped it being *paired*.
 
-    Lives here, beside the keys, because both drivers write this field into the same
-    ledger and they had drifted: the pooled driver cleared it and ``run_experiment``
-    did not. One definition is the only way that stays true.
+    Lives here, beside the keys, because the manifest feeds the same ledger the
+    driver's own knobs do, and the retired single-schema driver (removed 2026-07-31,
+    M3 N9) once wrote this field differently and drifted. One definition is the
+    only way that stays true.
     """
     return None if skip_agent else model_name
 

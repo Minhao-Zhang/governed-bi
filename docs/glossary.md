@@ -118,7 +118,7 @@ Descriptive of **what the code means now**. No renames. Product terms stay in th
 | **outcome** | How a scored turn ended: `answered` / `refused` / `clarification` / `capped` / `crashed` (`stages.py:94`). Orthogonal to gradeability. |
 | **pooled** | Multi-schema / multi-db lake mode: one serve corpus or one datalake driver pass over many schemas, not a single-db experiment. |
 | **licensed** | Tables/assets seeded into this turn’s L4 allow-set during assemble (agent state channel `licensed`). |
-| **driver** | Eval orchestrator that builds corpora, serves arms, writes artifacts (`run_datalake` / `run_experiment`); not the grader and not `eval/harness.py` helpers. |
+| **driver** | Eval orchestrator that builds corpora, serves arms, writes artifacts (`run_datalake`); not the grader and not `eval/harness.py` helpers. |
 | **refuse** | Turn-level decline: no delivered answer (`Outcome.refused` / refuse-gate / hard stop at `stages.py:107`). Stronger than a mid-loop **block**. |
 | **quotable** | Run-artifact hygiene gate: crashes, build errors, resume re-serves, twin-stamp coverage, arithmetic floor, etc. cleared (`eval/index.py:590`). Not “publishable” and not `claim_ready`. Aliases: `ledger_ok` / `hygiene_ok`. |
 | **solver** | `question → SQL \| None` callable for one arm (`Solver` / `agent_solver` in `eval/arms.py:211` / `:417`); what the driver invokes per question. |

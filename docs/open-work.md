@@ -29,7 +29,7 @@ supersedes are marked where they occur.
 | C3 | `ex_strict` is unguarded: `validate_gold_hashes_live` hashes only the lenient normaliser and compares it to `gold.hash_lenient`. `hash_normalised_result_strict` is never checked against `gold.hash_strict` before a run trusts `ex_strict`. | `eval/hash_grade.py` |
 | C9 | Pooled `_validate_corpora(corpora)` is called with no connector, so nothing checks asset references against the live catalog at scale. | `eval/run_datalake.py:4122` → `eval/harness.py` |
 | G8 | The grader self-check was only ever validated on a 5-row sample. A full head-to-head needs the live DB. | `eval/hash_grade.py` |
-| C10 | `curator_trace.jsonl` / `curator_sme_trace.jsonl` are written at the arm root but are not in `_SIDECARS`, so `_relocate_sidecars` never promotes them and `_promote_build` deletes the staging root holding them. The pooled driver therefore keeps the derived counts (`tool_calls.repeats`, `n_tool_calls`, `n_steps`) and loses the verbatim argument list, which is the only artifact that says *what* a capped agent looped on. The single-schema driver keeps it. | `eval/run_datalake.py:_SIDECARS` |
+| C10 | `curator_trace.jsonl` / `curator_sme_trace.jsonl` are written at the arm root but are not in `_SIDECARS`, so `_relocate_sidecars` never promotes them and `_promote_build` deletes the staging root holding them. The driver therefore keeps the derived counts (`tool_calls.repeats`, `n_tool_calls`, `n_steps`) and loses the verbatim argument list, which is the only artifact that says *what* a capped agent looped on. | `eval/run_datalake.py:_SIDECARS` |
 | ~~C11~~ | ~~**Fixed 2026-07-30.**~~ The oracle rungs wrote **answer-key-derived turns into the durable run log**. `oracle_solver` passed `settings` through without `run_log_kind="off"` (which `arms.py:430-434` does do), so every oracle turn landed as a row stamped `producer=serve, serve_path=agent`, with `oracle_rung` living only in the eval `meta` and never in provenance, indistinguishable from a real serve turn except by a `thread_id` prefix convention. `oracle.py:55-58` says these can never be reported as system performance. **Fix:** `oracle_solver` gained `enable_run_log: bool = False` and routes `dc_replace(settings, run_log_kind="off")` into `build_serve_rails`, mirroring `arms.agent_solver` rather than inventing a second pattern. Regression test `test_oracle_rungs_stay_out_of_the_durable_run_log` in `tests/test_eval_run_log_turns.py` is parametrised `(False, 0)` / `(True, 2)`; the `True` leg is a control proving the write path was live, so the `False` leg's zero is suppression and not a vacuous pass. Verified failing before the fix (`assert 2 == 0`). Confirmed `run_log_kind` is the complete guard: the only durable serve sink is `finalize_and_log → append_run_record`, which short-circuits on `kind == "off"` (`analyst/run_log.py:503-505`), and the conversation checkpointer is never wired on the eval path. | `eval/oracle.py` |
 | C12 | **The refuse-gate eval collapses an N-question run into one durable row.** `agent_refuser` builds a fresh graph per question and defaults `n_human`, so `turn_id == f"{session_id}:1"` every time and `append_run_record` UPSERTs over it. It is the one serve call site that got neither the per-invoke turn counter (`test_eval_run_log_turns.py:60` pins it for `arms`) nor the AUDIT R6 index-cache fix, so it also re-embeds the whole corpus per question. Latent while X6 keeps the scorer unwired, but it will bite the moment a real out-of-scope set exists. **Added 2026-07-30 while fixing C11:** the same call site also passes `settings` to `answer_question_agent` with no `run_log_kind` guard, so it has C11's defect too. `arms.py:433` and now `eval/oracle.py` both guard it; this is the last unguarded serve call site on the eval path. Fold into this item rather than opening a third. | `eval/refuse_gate.py:71-80` |
 | ~~C13~~ | ~~**Fixed 2026-07-31 (batch-m2 N7).**~~ Unqualified bare table names resolved to whichever schema loaded first. Replaced the three first-match lookups with `Corpus.table_by_name` (qualified always; ambiguous bare → `None`). No index cache / `Corpus.concat` in this batch — linear scan matches prior cost. Regression: `tests/test_corpus_table_by_name.py`. | `corpus/loader.py`, `analyst/tools.py`, `analyst/middleware.py`, `analyst/agent.py` |
@@ -46,10 +46,10 @@ supersedes are marked where they occur.
 
 | # | What | Where |
 | --- | --- | --- |
-| E1 | Cross-check re-executes gold **and** prediction per item per arm, though gold is arm-invariant. Memoise the gold hash per `question_id`. | `eval/run_experiment.py` → `eval/ex.py` |
-| E2 | Each corpus is loaded from disk twice — once for the solver, once by `_suspect_from_corpus`. Both drivers. | `eval/harness.py` |
+| E1 | Cross-check re-executes gold **and** prediction per item per arm, though gold is arm-invariant. Memoise the gold hash per `question_id`. | `eval/ex.py` |
+| E2 | Each corpus is loaded from disk twice — once for the solver, once by `_suspect_from_corpus`. | `eval/harness.py` |
 | E3 | `profile_database` runs twice per db (baseline and curated each profile independently). | `curator/pipeline.py` |
-| E4 | Baseline is rebuilt unconditionally on `--resume-curated`; `run_datalake` already guards with `_has_yaml`. | `eval/run_experiment.py` |
+| ~~E4~~ | ~~**Fixed 2026-07-31 (batch-m3 N9).**~~ Baseline was rebuilt unconditionally on `--resume-curated`; `run_datalake` guards with `_has_yaml`. | `eval/run_datalake.py` |
 | E5 | The gold self-check opens a fresh schema-pinned connector per sampled db, separate from the shared unpinned serve connector. | `eval/run_datalake.py` |
 | E6 | **`schema_vectors` is passed by nothing**, so on a multi-schema corpus every live turn re-embeds every schema document, because the API paths rebuild the graph per turn. `index_cache` cannot cover it: `schema_router.py:224-231` short-circuits on `schema_vectors` *ahead of* the cache branch, so the stack's cache never sees the call. | `retrieval/schema_router.py:224` |
 | E7 | **`licensed_physical_names` is re-derived on every `run_query` attempt** as well as twice per question: ~29,000 asset visits per question through one 8-line function, for a value that changes only when `inspect_schema` licenses something. Memoise per licensed-id set. | `analyst/middleware.py:84` |
@@ -84,7 +84,7 @@ null caveat split is not an answer to X2; X2 still has to be run.
 | X3 | ~~**`refute()` raises `NotImplementedError`.**~~ **Resolved by deletion (2026-07-29).** It had zero callers (`grep -rn "refute(" src/ tests/` matched only its own definition), so it was never the `curated` rung's adversary — the rung's adversary has always been the structural linter plus two confidence penalties. Deleted rather than implemented or left as an aspirational stub; docs now describe the `curated` rung as what it is. | — |
 | X4 | **Single seed everywhere.** Needs ≥3 curator draws plus a serve replicate to separate build variance from serve variance. | The largest live run is n=52 and the `curated`/`sme` sign flips between consecutive runs. |
 | X5 | **The 69-schema scale run** (8,134 train / 2,030 test) has only ever run with `--skip-agent`. | No result exists at the scale the design targets. |
-| X6 | **The refuse-gate is unexercised, and its only negative set does not survive pooling.** BIRD questions are all answerable and `NegativeExampleAsset` is never generated (0 files across every generated corpus). The only measurement that ever existed — `refusal_accuracy`, dropped from `run_experiment` in `9953b26` — drew its negatives from *other* `db_id`s, which `load_cross_db_unanswerable` documents as "unanswerable **for `db_id`**". That holds only because the single-schema driver pins the corpus to one schema. In a pooled run every other schema is in the pool, so those questions are **answerable**, and the metric would have scored every correct answer as a refuse-gate failure. A genuinely out-of-scope negative set (the shape of `dataset.BEER_FACTORY_UNANSWERABLE`, which is 3 hand-written questions) is what the pooled driver would need. | `false_refusal_rate` and `refusal_accuracy` are both unmeasured at scale; refusal is indistinguishable from failure. |
+| X6 | **The refuse-gate is unexercised, and its only negative set does not survive pooling.** BIRD questions are all answerable and `NegativeExampleAsset` is never generated (0 files across every generated corpus). The only measurement that ever existed — `refusal_accuracy`, dropped from the retired single-schema driver in `9953b26` — drew its negatives from *other* `db_id`s, which `load_cross_db_unanswerable` documents as "unanswerable **for `db_id`**". That held only when the corpus was pinned to one schema. In a pooled run every other schema is in the pool, so those questions are **answerable**, and the metric would have scored every correct answer as a refuse-gate failure. A genuinely out-of-scope negative set (the shape of `dataset.BEER_FACTORY_UNANSWERABLE`, which is 3 hand-written questions) is what the driver needs at scale. | `false_refusal_rate` and `refusal_accuracy` are both unmeasured at scale; refusal is indistinguishable from failure. |
 | X7 | **`curated_sme` bundles two mechanisms with no arm that separates them.** `STEP_MECHANISMS["curated_sme"]` (`eval/arms.py`) declares both "clarification protocol" and "BIRD human column documentation (SME brief)"; `curated_sme_blind` was removed in `c524513` as meaningless, because it built the brief from inputs Phase A already had. Splitting the confound needs a knowledge source the curator lacks and a human does not simulate — not another arm over the same inputs. Not covered by X1–X6. | The `curated_sme` delta can never be attributed to the clarification protocol, which is the headline claim. Permanent until a real external knowledge source exists. |
 | X8 | **No confidence intervals anywhere.** `analysis.py` / `power.py` publish `p_value` and `p_value_holm`; nothing computes an interval on any rate or delta. | A significance verdict with no interval hides effect size, so a barely-resolvable delta reads the same as a large one. |
 | X9 | **`--replicate` defaults to `None`** (`run_datalake` arg parser), so the noise-floor / MDE arm is absent unless an operator asks for it — while p-values print regardless. | The default run reports significance it cannot bound: no floor, no MDE. The `claim_ready` gate catches this, but only after the spend. |
@@ -107,29 +107,21 @@ generate the fields or delete them from `corpus/schemas.py`:
   trigger-pinned (PIN) retrieval mode has no data exercising it.
 - `NegativeExampleAsset` — never generated (see X6).
 
-## The two eval drivers, and what blocks collapsing them
+## Eval driver consolidation (N9, 2026-07-31)
 
-`run_datalake.py` (4,917 lines) is a fork of `run_experiment.py` (1,011 lines).
-The structural difference is one thing — the serve connector is pinned to
-`schema=db_id` in the single-schema driver and `schema=None` in the pooled one.
-Single-schema is the pooled case at n=1. Collapsing them deletes `run_experiment.py`
-and `tests/test_run_experiment_parity.py`: roughly 1,400 lines.
-
-**Done (2026-07-28):** the structural blockers are closed; only the tests remain.
-
-- The manifest is no longer forked. Both modes build through
-  `metrics.build_manifest`, which closed a real hole — see
-  [Eval metrics](eval-metrics.md).
-- Neither driver reaches into the other's privates any more (`ee3d9cf`). The ten
-  shared helpers live in `eval/harness.py` (313 lines) and both drivers import
-  from there. `curator/pipeline.py` does **not** import `_sme_fold_signal` — it
-  only names it in a comment.
+**Done (batch-m3 N9).** The single-schema driver (`run_experiment.py`, ~1,011
+lines) is retired. Single-schema eval is the pooled case at n=1:
+`run_datalake --dbs <db> --limit N`. The only eval driver left is
+`eval/run_datalake.py`; shared plumbing lives in `eval/harness.py`, and
+`metrics.build_manifest` is the sole manifest builder. The five test files that
+imported `run_experiment` were rewired to `run_datalake` / `metrics` / `harness`;
+`tests/test_run_experiment_parity.py` was deleted.
 
 ### Two metrics dropped on the record (decided 2026-07-28)
 
-Both were single-schema-driver-only, and both blocked the collapse. Dropping them
-is a **loss of measurement**, recorded here so nobody later reads their absence as
-"never existed".
+Both were single-schema-driver-only, and both blocked the collapse until N9.
+Dropping them is a **loss of measurement**, recorded here so nobody later reads
+their absence as "never existed".
 
 - **`refusal_accuracy`** — scored against a cross-DB negative set, whose validity
   rests on the corpus being pinned to one schema (see X6). Dropped rather than
@@ -143,38 +135,14 @@ is a **loss of measurement**, recorded here so nobody later reads their absence 
   (the strict normaliser is never self-checked). `eval.ex.execution_match` itself
   is untouched and still tested.
 
-### What is left to reach one file
-
-Only the tests hold it up now. `run_experiment.py` is imported by **5 test files** —
-`test_eval_concurrency`, `test_eval_index`, `test_eval_metrics`,
-`test_prompt_attribution`, `test_run_experiment_parity` — and by no `src/` module.
-
-1. Rewire the 5 test files. Three need structural rewrites, not import edits:
-   `test_eval_concurrency`, `test_prompt_attribution` and
-   `test_run_experiment_parity` drive `_run_arm_generations` (256 lines), the
-   single-schema arm loop. `test_run_experiment_parity`'s entire purpose — the two
-   drivers agree — dissolves when there is one driver. The other two need one-line
-   redirects (`test_eval_metrics` imports the `build_manifest` wrapper, which
-   already delegates to `metrics.build_manifest`).
-2. Confirm `--resume-curated` is subsumed by the pooled staging/promotion resume,
-   then delete `run_experiment.py`.
-3. Rename the survivor: `run_datalake` is the wrong name for the only driver.
-4. Fix the three stale docstrings that still point at it as the live harness:
-   `gateway/__init__.py`, `gateway/connectors/__init__.py`,
-   `gateway/connectors/base.py`.
-
-The register in `metrics.py` is the contract that makes step 1 checkable — it is
-why the merge is now a mechanical job rather than a risky one.
-
 ## Test debt blocked on the eval driver
 
-Twenty tests across eleven files assert on implementation **source text** via
-`inspect.getsource` (`test_ladder_design` 4, `test_run_experiment_parity` 3,
-`test_build_isolation` / `test_hash_grade` / `test_oracle_and_probes` /
-`test_retrieval_index_cache` 2 each, `test_curator_seed_joins`,
-`test_datalake_routing`, `test_eval_index`, `test_eval_metrics`,
-`test_middleware_guardrail` 1 each). A reformat breaks them and an equivalent
-rewrite defeats them.
+Seventeen tests across ten files assert on implementation **source text** via
+`inspect.getsource` (`test_ladder_design` 4, `test_build_isolation` /
+`test_hash_grade` / `test_oracle_and_probes` / `test_retrieval_index_cache` 2
+each, `test_curator_seed_joins`, `test_datalake_routing`, `test_eval_index`,
+`test_eval_metrics`, `test_middleware_guardrail` 1 each). A reformat breaks them
+and an equivalent rewrite defeats them.
 
 They are **not** dead weight, and they should not be deleted as they stand. Each
 pins a call-site or ordering invariant in `run_datalake()` — an 820-line function
@@ -185,10 +153,10 @@ schema; the replicate must be appended *last* in `serve_order`, or the noise
 floor it measures is a within-moment figure rather than one that spans an arm's
 serve.
 
-The fix is not to delete the tests, it is to make the driver drivable. Once the
-two eval drivers are unified behind a testable `grade_one` / `run_arm` seam,
-these become ordinary behavioural tests. `tests/test_eval_index.py` (the
-`manifest_model` rewrite) is the worked precedent for the conversion.
+The fix is not to delete the tests, it is to make the driver drivable behind a
+testable `grade_one` / `run_arm` seam so these become ordinary behavioural
+tests. `tests/test_eval_index.py` (the `manifest_model` rewrite) is the worked
+precedent for the conversion.
 
 ## Serve-time clarification (HITL)
 
@@ -240,8 +208,8 @@ plan doc is deleted and the contract now lives in
   designed trade-off and the comment at `:677` says so; what is not covered by
   that design is the L5 fall-through, and the surrounding prose reading as if the
   re-check were equivalent. Bounded by `grade_semantic_failures=False` being the
-  serve default — but it is `true` in `governed_bi.local.toml` and on in both eval
-  drivers, and on the 69-schema pooled lake it is a cross-schema read of
+  serve default — but it is `true` in `governed_bi.local.toml` and on in the eval
+  driver, and on the 69-schema pooled lake it is a cross-schema read of
   un-licensed data, which is the boundary D15 exists to enforce. What would make the
   asymmetry visible rather than buried: make the guardrail verdict a *scoped* value —
   a token carrying the allowlist it was checked against, so re-checking with

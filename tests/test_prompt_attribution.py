@@ -513,44 +513,6 @@ def test_an_unstamped_turn_relays_none_not_the_defaults(monkeypatch):
     assert meta["prompt_set_hash"] is None
 
 
-def test_the_pinned_driver_row_carries_the_prompt_stamp():
-    from governed_bi.eval.dataset import EvalItem
-    from governed_bi.eval.hash_grade import GoldHash
-    from governed_bi.eval.run_experiment import _run_arm_generations
-    from governed_bi.gateway.connectors.base import QueryResult
-
-    digest = prompts.prompt_set_hash({"agent_core": "v2"})
-    resolved = prompts.resolve({"agent_core": "v2"})
-
-    class _Gateway:
-        def execute(self, sql, identity):
-            return QueryResult(columns=["v"], rows=[(sql,)], row_count=1)
-
-    class _Solver:
-        def solve_with_meta(self, question):
-            return "SELECT 1", {
-                "prompt_variants": resolved,
-                "prompt_set_hash": digest,
-            }
-
-        def solve(self, question):
-            return self.solve_with_meta(question)[0]
-
-    rows, _summary, _extra = _run_arm_generations(
-        arm="curated",
-        solver=_Solver(),
-        items=[EvalItem(question="q", sql="SELECT 1", question_id="q0")],
-        gold_hashes={"q0": GoldHash("q0", hash_lenient="x", hash_strict=None, nrows=1)},
-        gateway=_Gateway(),
-        identity=Identity(user="eval", all_access=True),
-        bird_dir=None,
-        suspect_columns=frozenset(),
-        dialect="postgres",
-    )
-    assert rows[0]["prompt_variants"] == resolved
-    assert rows[0]["prompt_set_hash"] == digest
-
-
 def test_the_pooled_driver_row_carries_the_prompt_stamp(tmp_path):
     from governed_bi.eval.dataset import EvalItem
     from governed_bi.eval.hash_grade import GoldHash
@@ -737,26 +699,18 @@ def test_a_resume_on_the_same_prompt_set_is_silent(tmp_path, capsys):
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize(
-    "module", ["governed_bi.eval.run_datalake", "governed_bi.eval.run_experiment"]
-)
-def test_an_unknown_variant_on_the_cli_exits_before_any_work(module, monkeypatch):
+def test_an_unknown_variant_on_the_cli_exits_before_any_work(monkeypatch):
     """``--prompt sqlgen=v9`` must be a usage error. Reaching the run body first
     would spend a build (and, worse, could produce rows)."""
-    import importlib
+    from governed_bi.eval import run_datalake as mod
 
-    mod = importlib.import_module(module)
     ran = {"called": False}
-    entry = "run_datalake" if module.endswith("run_datalake") else "run_experiment"
     monkeypatch.setattr(
-        mod, entry, lambda **kw: ran.__setitem__("called", True) or {}
+        mod, "run_datalake", lambda **kw: ran.__setitem__("called", True) or {}
     )
 
-    argv = ["--prompt", "sqlgen=v9"]
-    if entry == "run_experiment":
-        argv = ["--db", "beer_factory", *argv]
     with pytest.raises(SystemExit):
-        mod.main(argv)
+        mod.main(["--prompt", "sqlgen=v9"])
     assert ran["called"] is False
 
 

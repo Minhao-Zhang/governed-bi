@@ -6,7 +6,7 @@ serve routine with ``workers >= 3`` must produce byte-identical per-question row
 serial ``workers == 1`` path.
 
 These tests isolate the *scheduler + aggregation + ordering* — the only thing
-concurrency can change — by driving the two drivers' serve routines with a
+concurrency can change — by driving the pooled driver's serve routine with a
 deterministic stub solver and an in-memory echo gateway. No real graph, model, or
 Postgres is involved, so any divergence is a scheduling/ordering bug, not model
 nondeterminism.
@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import asdict
 
 import pytest
 
@@ -34,7 +33,6 @@ from governed_bi.eval.parallel import (
     run_ordered_pool,
 )
 from governed_bi.eval.run_datalake import _read_rows, _run_pool_arm
-from governed_bi.eval.run_experiment import _run_arm_generations
 from governed_bi.gateway import Identity
 from governed_bi.gateway.connectors.base import QueryResult
 
@@ -448,73 +446,6 @@ def test_resume_refuses_to_mix_splits(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# Invariance: pinned per-DB driver (_run_arm_generations)
-# --------------------------------------------------------------------------- #
-
-
-def test_experiment_arm_generations_workers_invariance():
-    items = _build_items(12)
-    gold = _gold_hashes(items)
-    suspect = frozenset({"decoy_a", "decoy_b"})
-
-    common = dict(
-        arm="curated",
-        items=items,
-        gold_hashes=gold,
-        identity=IDENTITY,
-        bird_dir=None,
-        suspect_columns=suspect,
-        dialect="postgres",
-    )
-
-    rows_serial, summary_serial, extra_serial = _run_arm_generations(
-        solver=_StubSolver(), gateway=_EchoGateway(), serve_workers=1, **common
-    )
-
-    built: list[ServeWorker] = []
-
-    def factory(idx: int) -> ServeWorker:
-        w = ServeWorker(connector=_EchoConn(), gateway=_EchoGateway(), solver=_StubSolver())
-        built.append(w)
-        return w
-
-    rows_parallel, summary_parallel, extra_parallel = _run_arm_generations(
-        solver=_StubSolver(),
-        gateway=_EchoGateway(),
-        serve_workers=4,
-        worker_factory=factory,
-        **common,
-    )
-
-    assert len(built) >= 2, "expected real fan-out across worker threads"
-    assert _strip_latency(rows_parallel) == _strip_latency(rows_serial)
-    assert asdict(summary_parallel) == asdict(summary_serial)
-    assert extra_parallel == extra_serial
-    assert summary_serial.refusal_rate > 0
-    assert 0 < summary_serial.ex_lenient < 1
-    assert summary_serial.decoy_touch_rate > 0
-
-
-def test_missing_factory_when_parallel_raises():
-    items = _build_items(3)
-    gold = _gold_hashes(items)
-    with pytest.raises(ValueError, match="worker_factory"):
-        _run_arm_generations(
-            arm="curated",
-            solver=_StubSolver(),
-            items=items,
-            gold_hashes=gold,
-            gateway=_EchoGateway(),
-            identity=IDENTITY,
-            bird_dir=None,
-            suspect_columns=frozenset(),
-            dialect="postgres",
-            serve_workers=2,
-            worker_factory=None,
-        )
-
-
-# --------------------------------------------------------------------------- #
 # Pool-sizing guard (resolve_workers)
 # --------------------------------------------------------------------------- #
 
@@ -634,7 +565,7 @@ def test_config_eval_workers_defaults(tmp_path):
 
 def _write_rows(path, rows):
     """Rewrite a generations file. Local rather than imported: the driver's own writer
-    lives in `run_experiment` and this test only needs to stage a fixture."""
+    lives in `harness._write_jsonl` and this test only needs to stage a fixture."""
     payload = [json.dumps(r, ensure_ascii=False) for r in rows]
     nl = chr(10)
     path.write_text(nl.join(payload) + nl, encoding="utf-8")

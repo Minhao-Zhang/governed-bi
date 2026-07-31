@@ -154,16 +154,11 @@ actually scored.
 **Per run.** `_summarise_rows()` (`run_datalake.py`) aggregates from the
 **rows on disk**, not from in-flight results, which is what lets a resumed run
 summarise identically to an uninterrupted one — replayed and freshly-scored
-rows go through exactly this function. `run_experiment.py`'s `ArmSummary`
-aggregates the single-db ladder driver's rows the same way and now carries
-the same crash fields — this parity is recent: an adversarial review found the
-single-db driver still scoring a crash as a refusal, the exact defect that
-forced the pooled-driver retirement above, just sitting in the other driver.
-Both now write `by_outcome` (the complete outcome partition, so
+rows go through exactly this function. `ArmSummary` writes `by_outcome` (the complete outcome partition, so
 `n_answered`/`n_refused`/`n_crashed` can be checked against `n`),
 `by_failed_stage` (a bucket appears only when something actually observed it),
 `n_unmapped_refused_by`, and `crash_rate` (separate from `refusal_rate`, which
-is now genuine refusals only). Both drivers stamp a crash as
+is now genuine refusals only). The driver stamps a crash as
 `f"{type(err).__name__}: {err}"`, never bare `str(err)`: `str(KeyError("schema"))`
 is just `'schema'`, naming neither the failure kind nor the frame that raised
 it, and this string is the only surviving record of what happened.
@@ -303,8 +298,7 @@ denominator, so without the count the understatement is nameless), and, at
 the run level rather than per arm, `decoy_manifest_missing_dbs` in
 `summary.json` (a db with no trap manifest loaded cannot produce a meaningful
 decoy-touch rate; naming it keeps a `0.0` there from reading as "clean" when
-it means "untested" — datalake-only: `run_experiment.py` loads trap columns
-for its one db the same way but does not track or report manifest presence).
+it means "untested").
 All of this lands in `summary.json`.
 
 **Per project.** `runs/index.jsonl` (`src/governed_bi/eval/index.py`) is a
@@ -537,7 +531,7 @@ and re-measuring — see [The oracle ladder](oracle-ladder.md).
 
 Both blocks are computed once per arm at run-aggregation time, not stamped
 per row: `summarise_attributions(attribute_rows(rows, gold, shortlists=...))`
-runs in both `run_datalake.py` and `run_experiment.py`, and its output lands
+runs in `run_datalake.py`, and its output lands
 in `summary.json` at `arms.<arm>.errors` — `n`, `n_wrong`,
 `n_wrong_gradeable`, `n_gold_unusable`, `by_error_stage`, `by_error_primary`,
 `error_class_incidence`, `classes_per_query`, and `multi_class_share`. The offline
@@ -800,10 +794,8 @@ never appears in `summary.json` without `detectable` and `reading` beside
 it, so a delta cannot be read without also reading whether the run could have
 resolved it. Without a replicate, `reading` says so plainly: "no noise floor
 measured for this run — significance is reported without knowing what the
-run could resolve." This is a per-run measurement, not a constant, and today
-only `run_datalake.py` computes it — `run_experiment.py`'s single-db ladder
-does not wire `--replicate` or `power.py` at all, so a single-db run reports
-McNemar-free deltas with no stated resolution.
+run could resolve." This is a per-run measurement, not a constant, computed by
+`run_datalake.py` when `--replicate` is passed.
 
 **Zero observed discordance is not zero noise.** `minimum_detectable_effect()`
 used to return `0.0` questions when a replicate happened to agree with itself
@@ -939,16 +931,16 @@ is why `run_datalake` takes `corpus_dir` separately from `out_dir`.
 
 ## The graded configuration is not the serve default
 
-Before either driver serves a question it replaces the `Settings` that
-`load_settings` produced (`run_datalake.py` at the `replace(settings, ...)` call,
-`run_experiment.py` at its own). Four of the replaced fields decide what a turn is
+Before the driver serves a question it replaces the `Settings` that
+`load_settings` produced (`run_datalake.py` at the `replace(settings, ...)` call).
+Four of the replaced fields decide what a turn is
 allowed to do, and each is set the way that helps the harness score:
 
 | Field | Serve default (`config.py`) | Eval driver | What the override does |
 |---|---|---|---|
-| `grade_semantic_failures` | `False` | `True`, hardcoded in both drivers | Coverage / L3–L5 repair-exhaustion / execution-exhaustion returns the last generated SQL stamped `unverified` instead of refusing. Serve refuses and scores nothing; the harness gets a row that can be right. |
-| `hard_block_suspect_columns` | `True` in `dev` | `False`, hardcoded in both drivers | SQL touching a suspect column is soft-warned and delivered rather than blocked, so it reaches the grader. |
-| `schema_route_top_k` | `3` | `10`, the `run_datalake()` signature default | A wider shortlist raises the chance the gold schema survives routing, which caps EX. Pooled driver only; the single-db ladder pins one schema and never routes. |
+| `grade_semantic_failures` | `False` | `True`, hardcoded in `run_datalake` | Coverage / L3–L5 repair-exhaustion / execution-exhaustion returns the last generated SQL stamped `unverified` instead of refusing. Serve refuses and scores nothing; the harness gets a row that can be right. |
+| `hard_block_suspect_columns` | `True` in `dev` | `False`, hardcoded in `run_datalake` | SQL touching a suspect column is soft-warned and delivered rather than blocked, so it reaches the grader. |
+| `schema_route_top_k` | `3` | `10`, the `run_datalake()` signature default | A wider shortlist raises the chance the gold schema survives routing, which caps EX. With `--dbs <one>` the pool has one schema and routing is bypassed. |
 | `schema_route_llm_pick` | `False` | `True`, same place | Switches to the single-schema-answer regime: an LLM picks exactly one schema and cross-schema join expansion is skipped. This is correct for BIRD because every question targets one `db_id` — which is a property of the benchmark, not something a deployment knows in advance. |
 
 Three of the four loosen a bound. The fourth assumes a fact about the questions
@@ -1013,8 +1005,7 @@ but `_SIDECARS` in `run_datalake.py` names five files and these are not among th
 that holds them. Everything derived from the trace does survive: the manifest's
 `tool_calls.repeats` block and the run record's `n_tool_calls` / `n_steps`. What is lost
 is the verbatim argument list, which is the artifact that answers *what* a run looped on
-rather than *that* it looped. The single-schema driver (`run_experiment.py`) keeps it,
-because there the corpus root belongs to one db and is never promoted.
+rather than *that* it looped.
 
 A rate-limit storm is legible rather than silent: those turns classify as crashes (not
 refusals), which blocks quotability, and `arms.<arm>.by_error_type` says whether the
@@ -1026,7 +1017,7 @@ crashes were `RateLimitError` — re-run narrower — or something else.
 |---|---|---|
 | EX dropped and you can't tell if it's a bug or a real refusal | `outcome` (`crashed` vs `refused`), `failed_stage` | `generations.<arm>.jsonl`; `governed_bi.stages.classify_row` |
 | `refusal_rate` moved and you don't know which layer decided | `by_failed_stage`, `by_guardrail_layer` | `summary.json` |
-| The single-db ladder run's crash count, separate from its refusals | `crash_rate`, `n_crashed`, `by_outcome` on `ArmSummary` | `summary.json` (`run_experiment.py`) |
+| A run's crash count, separate from its refusals | `crash_rate`, `n_crashed`, `by_outcome` on `ArmSummary` | `summary.json` |
 | Something in the serve path threw and you need to know where | `stage_events` entries with `status=="error"` and `detail.error_type` | `stage_events.jsonl` |
 | A `refused_by` value you don't recognise | `n_unmapped_refused_by`; the printed `*** WARNING: unrecognised refused_by=...` | `summary.json` / driver stdout; `REFUSED_BY_TO_STAGE` in `stages.py` |
 | `routing_recall` looks impossibly high or low | `n_routing_observed` (excludes crashed AND bypassed turns) | `summary.json` |
@@ -1038,7 +1029,7 @@ crashes were `RateLimitError` — re-run narrower — or something else.
 | A db's decoy-touch rate reads suspiciously clean | `decoy_manifest_missing_dbs` | `summary.json` (`run_datalake.py`) |
 | "How much exploring did this arm do?" | `n_tool_calls` (per row), `tool_calls` (summed) | `generations.<arm>.jsonl`; `summary.json` |
 | A curated corpus has few suspect columns or few notes and you want to know whether the agent decided that or ran out of room | `tool_calls.exhausted`, `n_super_steps` against `recursion_limit`, `tool_call_budget` | `run_manifest.json` per schema (`<db>/_build/`) |
-| A curator agent burned its budget and you want to know on what | `tool_calls.repeats` (`total` vs `distinct`, `max_repeat`, `top_repeated`) | `run_manifest.json`; verbatim args in `curator_trace.jsonl` (single-schema driver only) |
+| A curator agent burned its budget and you want to know on what | `tool_calls.repeats` (`total` vs `distinct`, `max_repeat`, `top_repeated`) | `run_manifest.json`; verbatim args in `curator_trace.jsonl` when promoted (see C10) |
 | Seed coverage looks lower than the seed's own success count | `assets` (joins/metrics/terms/few_shots actually written) against the seed's `joins_ok` / `metrics_ok` | `run_manifest.json` |
 | Is this run's EX safe to quote | `ledger_ok` / `quotable` (hygiene only), then the runbook claim checklist; never `claim_ready` from the ledger alone | `runs/index.jsonl` |
 | Whether an EX figure describes a default deployment | `serve_policy` (graded delivery, suspect blocking) and `routing.top_k` / `routing.llm_pick` — all four are set more permissively than `config.py`'s serve defaults, so it does not | `summary.json`; `manifest.json` |
@@ -1064,10 +1055,8 @@ crashes were `RateLimitError` — re-run narrower — or something else.
 
 ## Prompt attribution
 
-`prompt_set_hash` is one of the `comparable()` keys, and both drivers write it now:
-`run_datalake.py`'s pooled manifest and `run_experiment.py`'s single-db manifest
-each stamp `prompt_variants` + `prompt_set_hash`, so two single-db runs on
-different prompt variants are flagged incomparable the same way two pooled runs
-are. The full attribution chain — registry to stamped row to manifest to ledger,
+`prompt_set_hash` is one of the `comparable()` keys, and `run_datalake.py`'s
+manifest stamps `prompt_variants` + `prompt_set_hash`, so two runs on different
+prompt variants are flagged incomparable. The full attribution chain — registry to stamped row to manifest to ledger,
 plus the fail-closed contract and the decision table for which variant a measured
 failure actually calls for — is in [Prompt-variant experiments](prompt-experiments.md).

@@ -62,18 +62,23 @@ def _manifest(mode: str, **over):
 
 
 def _single_manifest(**over):
-    """The single-schema driver's own builder, with its required arguments."""
-    from governed_bi.eval.run_experiment import build_manifest
-
+    """The single-schema driver's manifest, built straight off the shared
+    register — ``run_experiment`` was retired (M3 N9); the register is the only
+    builder left."""
+    db_id = over.pop("db_id", "beer_factory")
     base = dict(
-        db_id="beer_factory",
+        mode="single",
         bird_dir="/d",
-        pg_dsn="host=h port=5435",
-        max_agent_steps=8,
-        skip_agent=False,
+        split="test",
         model_name="gpt-5.6-luna",
-        resolved_prompts={},
-        limit=None,
+        prompt_variants={},
+        skip_agent=False,
+        created_at_utc="20260728T000000Z",
+        # Routing is bypassed: one schema is pinned, so the router never runs.
+        route_top_k=None,
+        route_llm_pick=None,
+        schema_pick_max_columns=None,
+        use_embedder=None,
         llm_temperature=None,
         question_pool_hash="pool0000",
         always_note_global_max=8,
@@ -81,9 +86,21 @@ def _single_manifest(**over):
         pin_triggers_enabled=False,
         pin_require_certified=True,
         pin_max=3,
+        arms=("baseline", "curated", "curated_sme"),
+        oracles=(),
+        replicate_of=None,
+        db_ids=[db_id],
+        limit=None,
+        limit_dbs=None,
+        question_scope_hash=None,
     )
     base.update(over)
-    return build_manifest(**base)  # type: ignore[arg-type]
+    return metrics.build_manifest(**base) | {  # type: ignore[arg-type]
+        # Kept beside `db_ids` for readers that address a single-schema run by
+        # its one schema — the same reason the retired `run_experiment.build_manifest`
+        # attached it.
+        "db_id": db_id,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -225,41 +242,6 @@ def test_no_manifest_knob_or_scope_field_may_be_defaulted(knob):
         metrics.build_manifest(**base)  # type: ignore[arg-type]
 
 
-#: Every value ``run_experiment`` configures graded delivery with. Read out of the source
-#: because that driver has no seam returning its serve-time ``Settings``, and it takes the
-#: shared builder's DEFAULT for this knob rather than passing a value — so the default has
-#: to equal what it serves with, and nothing else can check that.
-#: The lookahead keeps prose out: the same file explains the knob in a summary note that
-#: reads ``grade_semantic_failures=True: coverage/L3-L5 ...``, which is documentation
-#: rather than a keyword argument.
-_GRADED_DELIVERY_ASSIGNMENTS = re.compile(r"grade_semantic_failures=([\w.]+)(?=[,)\s])")
-
-
-def test_the_single_schema_driver_serves_the_graded_delivery_its_manifest_claims():
-    """The tripwire that lets ``grade_semantic_failures`` carry a default at all.
-
-    Every other gate key is keyword-required, because a defaulted parameter records a
-    value the run never used and satisfies every presence check. This one defaults,
-    because a required parameter is a ``TypeError`` in a driver that does not pass it and
-    a manifest builder that raises is worse than one a test pins. So: the pooled driver
-    passes the value it served with, and this asserts the default still describes the
-    single-schema driver. Change ``run_experiment``'s override and this fails, which is
-    the signal to thread the parameter through rather than to edit the number here.
-    """
-    src = (EVAL_DIR / "run_experiment.py").read_text(encoding="utf-8")
-    configured = set(_GRADED_DELIVERY_ASSIGNMENTS.findall(src))
-    assert configured, (
-        "run_experiment no longer configures grade_semantic_failures anywhere — this "
-        "scan has gone blind and the manifest default is unchecked"
-    )
-    assert configured == {"True"}, (
-        f"run_experiment configures graded delivery as {sorted(configured)} but its "
-        "manifest takes build_manifest's default — pass the value it serves with, the "
-        "way run_datalake._build_manifest does"
-    )
-    assert _single_manifest()["grade_semantic_failures"] is True
-
-
 def test_the_pooled_driver_may_not_default_the_graded_delivery_it_overrides():
     """It forces the shipped ``False`` on, so it is the driver whose manifest could most
     easily claim a policy the serve path did not use. Required there, and recorded from
@@ -384,7 +366,7 @@ _MANIFEST_MUTATION_PATTERNS = (
 
 def _manifest_keys_added_outside_the_builder() -> set[str]:
     found: set[str] = set()
-    for name in ("metrics.py", "run_datalake.py", "run_experiment.py"):
+    for name in ("metrics.py", "run_datalake.py"):
         src = (EVAL_DIR / name).read_text(encoding="utf-8")
         for pattern in _MANIFEST_MUTATION_PATTERNS:
             found |= set(re.findall(pattern, src))
@@ -414,9 +396,10 @@ def test_the_manifest_emits_exactly_the_declared_field_set(tmp_path):
 
     ``corpus_content_hash_observed`` and ``corpus_content_hash_by_arm`` are written by
     ``stamp_corpus_hashes`` twelve lines below the register that failed to declare them;
-    ``db_id`` by ``run_experiment.build_manifest``; ``completed_at_utc`` by the pooled
-    driver at write time. All four reached ``manifest.json`` undeclared, because the
-    summary had this test and the manifest did not.
+    ``db_id`` by the single-schema driver's manifest builder (since retired,
+    M3 N9 — ``_single_manifest`` here attaches it the same way); ``completed_at_utc``
+    by the pooled driver at write time. All four reached ``manifest.json`` undeclared,
+    because the summary had this test and the manifest did not.
     """
     from governed_bi.eval.run_datalake import _build_manifest
 
@@ -746,30 +729,6 @@ def test_the_counts_printed_in_the_doc_match_the_register():
         )
 
 
-def test_the_single_schema_summary_emits_nothing_undeclared():
-    """The direction the doc's "in both directions" claim overstated.
-
-    ``run_experiment`` hand-builds its ``summary.json`` from ``ArmSummary`` plus three
-    nested blocks, and nothing checked it against the register at all — only the pooled
-    driver's ``_summarise_rows`` was. The reverse direction genuinely does not apply
-    here: this driver reports a documented SUBSET of the pooled fields, so
-    declared-but-absent is expected and only emitted-but-undeclared is a defect.
-    """
-    from dataclasses import fields
-
-    from governed_bi.eval.run_experiment import ArmSummary
-
-    # ``run_experiment`` writes each arm as ``asdict(ArmSummary)`` and then attaches
-    # these three blocks under the same ``arms.<arm>`` path the pooled driver uses.
-    emitted = {f.name for f in fields(ArmSummary)} | {"cost", "errors", "treatment"}
-    undeclared = sorted(emitted - set(metrics.SUMMARY_FIELDS))
-    assert not undeclared, (
-        f"the single-schema arm summary emits undeclared fields: {undeclared} — "
-        "add them to governed_bi.eval.metrics, or the register does not describe the "
-        "driver whose numbers were historically quoted"
-    )
-
-
 # --------------------------------------------------------------------------- #
 # The other two artifacts
 # --------------------------------------------------------------------------- #
@@ -1009,30 +968,26 @@ def test_the_pin_gates_are_null_when_pinning_is_off():
     """`pin_require_certified=True` recorded on a run where nothing could pin claims a
     gate that never ran. Recorded as None instead, so "the gate held" and "the gate was
     never reached" stop looking alike in the artifact."""
-    from governed_bi.eval import run_experiment
-
-    common = dict(
+    off = _single_manifest(
         db_id="restaurant",
-        bird_dir=Path("."),
-        pg_dsn="host=127.0.0.1 port=5435",
-        max_agent_steps=8,
         skip_agent=True,
         model_name=None,
-        resolved_prompts={},
-        limit=None,
-        llm_temperature=None,
-        question_pool_hash="pool0",
-        always_note_global_max=8,
-        always_note_char_max=2000,
+        pin_triggers_enabled=False,
         pin_require_certified=True,
         pin_max=3,
     )
-    off = run_experiment.build_manifest(pin_triggers_enabled=False, **common)
     assert off["pin_require_certified"] is None
     assert off["pin_max"] is None
     # ...and the real values survive when pinning IS on, or the knob would be
     # unmeasurable in exactly the runs that use it.
-    on = run_experiment.build_manifest(pin_triggers_enabled=True, **common)
+    on = _single_manifest(
+        db_id="restaurant",
+        skip_agent=True,
+        model_name=None,
+        pin_triggers_enabled=True,
+        pin_require_certified=True,
+        pin_max=3,
+    )
     assert on["pin_require_certified"] is True
     assert on["pin_max"] == 3
 

@@ -573,7 +573,7 @@ def test_the_gold_preflight_runs_before_the_build_phase_spends_on_a_model():
     This is a source-order check, which is weaker than driving the harness — but the
     alternative needs live Postgres, a model and an hour, and the ordering is exactly
     the kind of thing a later edit reshuffles without noticing. Same technique as
-    `test_run_experiment_parity.py`'s row-builder check, and labelled as such.
+    `test_datalake_row_discipline.py`'s row-builder checks, and labelled as such.
     """
     import inspect
 

@@ -5,7 +5,7 @@ predicate is only *evaluated* when the corpus has at least one excluded
 table/column (``any()`` short-circuits an empty token set), and the only corpus the
 old tests fed the notes tools was the ``for_analyst()`` view — which drops excluded
 columns, so the token set was always empty and the crash was invisible. The eval
-harness feeds the **full** corpus (``run_experiment``/``run_datalake`` load without
+harness feeds the **full** corpus (``run_datalake`` loads without
 ``for_analyst()``), where every ``read_notes`` / ``grep_notes`` / ``search_corpus``
 call raised, and the rails turned that into a ``model_error`` refusal — i.e. a
 silently lower score for whichever arm surfaced more curated notes.

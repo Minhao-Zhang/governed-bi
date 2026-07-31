@@ -20,7 +20,7 @@ manifest, the summary and the row each have a test asserting nothing reaches the
 artifact undeclared. That check is what this file's own claim used to lack — four
 manifest fields (``corpus_content_hash_observed``, ``corpus_content_hash_by_arm``,
 ``db_id``, ``completed_at_utc``) were written by code in this very module and by
-both drivers while the register described none of them, because only the summary
+the drivers while the register described none of them, because only the summary
 side had the emitted-but-undeclared test.
 
 Why a register rather than two builders
@@ -28,15 +28,15 @@ Why a register rather than two builders
 ``comparable()`` skips a knob that is ``None`` on both sides, on the reasoning
 that two runs which both predate a knob did not differ in it. That is right, and
 it is also why a *missing* key is dangerous: an absent key is indistinguishable
-from "both runs agree". The single-schema driver's manifest was missing ``split``
+from "both runs agree". The retired single-schema driver's manifest was missing ``split``
 and ``corpus_content_hash``, so two of its runs over **different corpora on
 different splits** compared as identical — and the comment on
 ``COMPARABILITY_KEYS`` calls ``corpus_content_hash`` out as the one thing the
 check did not cover, because the corpus *is* the treatment. That fix had landed
-in the pooled driver only, while the single-schema driver was the one whose
+in the pooled driver first, while the single-schema driver was the one whose
 numbers were historically quoted.
 
-:func:`build_manifest` is now the only way either mode builds one, and
+:func:`build_manifest` is now the only way a manifest is built, and
 :func:`validate_manifest` refuses a manifest that omits a gate key. A knob that
 genuinely does not apply is recorded as ``None`` *explicitly*, alongside a flag
 saying so, so "not applicable" and "not recorded" stop looking alike.
@@ -277,7 +277,7 @@ def question_pool_hash(rows: Iterable[tuple[str, str, str]]) -> str:
     Deliberately NOT a digest of the whole split file. Reading every row would make a
     single-schema run's knob move when an unrelated schema was refiltered, which is
     the "changes for an unrelated reason" half of the requirement. The rows a run
-    grades are also already in memory at manifest time in both drivers, so this costs
+    grades are also already in memory at manifest time, so this costs
     one sha256 per question and one sort, once per run — milliseconds over the full
     pool, against the minutes the run itself takes.
 
@@ -313,9 +313,10 @@ def build_manifest(
     # The decoding temperature the model was actually configured with. Required, not
     # defaulted: ``validate_manifest`` checks that a knob is PRESENT, so a default
     # here satisfies every gate while recording the wrong value. That is not
-    # hypothetical — this parameter defaulted to ``None`` and ``run_experiment`` never
-    # passed it, so every single-schema manifest recorded "provider default" for runs
-    # whose temperature was configured and really forwarded to the model
+    # hypothetical — this parameter defaulted to ``None`` and the retired
+    # single-schema driver never passed it, so every single-schema manifest
+    # recorded "provider default" for runs whose temperature was configured and
+    # really forwarded to the model
     # (``llm.langchain_client.from_config``). ``None`` still means "never set, so the
     # provider's default applied", and it now means that because a caller said so.
     llm_temperature: float | None,
@@ -332,28 +333,28 @@ def build_manifest(
     # neither it nor ``serve_config_hash``, so a run WITH trigger pinning and a run
     # without it agreed on every recorded key and compared as the same experiment.
     # Pass the raw ``Settings`` values; the "did it apply" derivation happens here so
-    # the two drivers cannot answer it differently.
+    # the driver cannot answer it differently.
     always_note_global_max: int,
     always_note_char_max: int,
     pin_triggers_enabled: bool,
     pin_require_certified: bool,
     pin_max: int,
     # Graded delivery, as ``Settings`` had it at serve time. ``config.py`` ships this
-    # ``False`` — serve refuses rather than answering — and both eval drivers override it
+    # ``False`` — serve refuses rather than answering — and the eval driver overrides it
     # to ``True``, which is the single largest gap between what eval measures and what a
     # deployment does: a turn that serve would have refused becomes a row the grader can
     # mark correct. It reached ``summary.json``'s ``serve_policy`` block and stopped
     # there, so it was neither a manifest field, nor a comparability key, nor a resume
     # knob, and two runs that graded differently compared as one experiment.
     #
-    # The one knob here with a default, and the exception is narrow: both drivers pass
-    # the value they actually served with (the pooled one reads it back off ``Settings``
-    # rather than restating the literal), and ``validate_manifest`` requires the key, so
-    # the default cannot silence a driver that starts disagreeing with it. It exists
-    # because a required parameter here is a ``TypeError`` in the single-schema driver at
-    # call time, and a manifest builder that raises is worse than one that records a
-    # value a test pins. ``tests/test_eval_metrics.py`` pins both drivers against the
-    # ``Settings`` they serve with.
+    # The one knob here with a default, and the exception is narrow: the driver passes
+    # the value it actually served with (reading it back off ``Settings`` rather than
+    # restating the literal), and ``validate_manifest`` requires the key, so the
+    # default cannot silence a driver that starts disagreeing with it. It exists
+    # because a required parameter here was a ``TypeError`` in the retired
+    # single-schema driver at call time, and a manifest builder that raises is worse
+    # than one that records a value a test pins. ``tests/test_eval_metrics.py`` pins
+    # the ``Settings`` the driver serves with.
     grade_semantic_failures: bool = True,
     # Scope. Required for the same reason as the knobs: an unstated scope is recorded
     # as the empty/absent value, and ``arms=()`` for a run that served three arms, or
@@ -384,9 +385,9 @@ def build_manifest(
 
     ``model_name`` is the CONFIGURED name, not a resolved value: ``manifest_model``
     is applied inside, so a caller cannot write a model name for a run that never
-    called one. Taking the resolved value was the original drift — both drivers had
-    to remember to apply the rule and one forgot, which let a smoke run be reported
-    comparable to a real one.
+    called one. Taking the resolved value was the original drift — before N9 retired
+    the single-schema driver, each had to remember to apply the rule and one forgot,
+    which let a smoke run be reported comparable to a real one.
 
     ``corpus_content_hash`` is declared ``None`` here and filled by
     :func:`stamp_corpus_hashes` after the build: the manifest is written before any

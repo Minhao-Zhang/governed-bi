@@ -1,10 +1,12 @@
 """Pooled **data-lake** eval driver (D15 scale run).
 
-Where :mod:`governed_bi.eval.run_experiment` pins ONE ``db_id`` to one Postgres
-schema, this driver serves a whole BIRD split with **every** schema living in one
-database at once, so the schema router (``analyst.agent`` +
-``retrieval.schema_router``) must pick the right schema per question. It is the
-"one database, many schemas" experiment (docs/design-decisions.md D15).
+The only eval driver (`run_datalake`). The retired single-schema driver
+(``run_experiment``, removed 2026-07-31, M3 N9) was subsumed: single-schema eval
+is this driver at ``n=1`` via ``--dbs <db>``. This driver serves a whole BIRD split
+with **every** schema living in one database at once, so the schema router
+(``analyst.agent`` + ``retrieval.schema_router``) must pick the right schema per
+question when more than one schema is in the pool. It is the "one database, many
+schemas" experiment (docs/design-decisions.md D15).
 
 ``--split test`` (default) is the held-out score. ``--split train`` is larger but
 is what the curator was built from, so it is a diagnostic only. Rows stream to
@@ -795,9 +797,8 @@ def _assert_train_test_disjoint(dataset_dir: Path, db_ids: list[str]) -> dict[st
 
     The curator reads train; the score is test. An overlap means a scored question
     was in the curator's own input, and no downstream metric can see that — the run
-    just looks good. ``run_experiment`` asserts this for its one db; the pooled
-    driver serves dozens at once, which is exactly where a bad split regeneration
-    would hide.
+    just looks good. This driver serves dozens of dbs at once, which is exactly
+    where a bad split regeneration would hide.
     """
     overlaps: dict[str, list[str]] = {}
     text_overlaps: dict[str, list[str]] = {}
@@ -2839,8 +2840,7 @@ def _summarise_rows(
         # question, so a total is needed — but latency is scheduler-dependent by
         # design, and a serial run and a pooled run must still agree on every
         # number that is a *result* (docs/measurement.md).
-        # Shared with ``run_experiment`` so the two drivers cannot disagree about
-        # what a cost block is, and so a measured 0.0 stays 0.0 rather than
+        # Shared with ``eval.harness`` so a measured 0.0 stays 0.0 rather than
         # collapsing into "not measured".
         "cost": _cost_block(rows),
         # Picks that are really the logged rank-1 fallback after an LLM failure or
@@ -3926,9 +3926,9 @@ def _run_pool_arm(
             "graded_delivery": meta.get("graded_delivery"),
             "tier": meta.get("tier"),
             "semantic_assurance": meta.get("semantic_assurance"),
-            # The safety axis of the two-axis stamp. ``run_experiment`` recorded it
-            # and this driver did not, so the pooled run — the one that produces the
-            # scale numbers — could not report whether guardrails cleared.
+            # The safety axis of the two-axis stamp. Recorded here so the pooled
+            # run — the one that produces the scale numbers — can report whether
+            # guardrails cleared.
             "safety_clearance": meta.get("safety_clearance"),
             "coverage_best_effort": meta.get("coverage_best_effort"),
             # How the turn ended and where, in the one vocabulary the summary, the

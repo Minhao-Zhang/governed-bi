@@ -209,18 +209,17 @@ schema_pick = "v2"
 agent_core = "v3"
 ```
 
-**`--prompt STAGE=VARIANT`** (repeatable) is a CLI flag on both
-`eval/run_datalake.py` and `eval/run_experiment.py`, parsed by
+**`--prompt STAGE=VARIANT`** (repeatable) is a CLI flag on
+`eval/run_datalake.py`, parsed by
 `parse_cli_overrides()` and resolved *before* any Postgres connection or model
 call — a bad `--prompt` is a `parser.error()` usage exit, not a crash mid-run.
 
-The two do not merge for the eval drivers. `run_datalake()` and
-`run_experiment()` each build their `Settings` from
+`run_datalake()` builds its `Settings` from
 `Settings.for_env(Environment.dev, models=base_settings.models, ...)` — only
 `.models` is carried forward from `load_settings()`, and `prompt_variants` is
 set separately from `resolve_prompts(prompt_variants)` where `prompt_variants`
 is whatever `--prompt` produced (empty if none was passed). **Setting
-`[prompts]` in `governed_bi.toml` has no effect on either eval driver** — for
+`[prompts]` in `governed_bi.toml` has no effect on the eval driver** — for
 an experiment, `--prompt` is the only lever.
 
 ## What gets stamped, hop by hop
@@ -250,9 +249,8 @@ an experiment, `--prompt` is the only lever.
    both keys, never the `v1` defaults — "nothing recorded which prompt ran"
    and "`v1` ran" are different facts, and only the second may print as `v1`.
 7. The scored row in `generations.<arm>.jsonl` carries `prompt_variants` /
-   `prompt_set_hash` (`_run_arm_generations` in `run_experiment.py`,
-   `_run_pool_arm` in `run_datalake.py`).
-8. `manifest.json` — in **both** drivers now — carries the resolved map and
+   `prompt_set_hash` (`_run_pool_arm` in `run_datalake.py`).
+8. `manifest.json` carries the resolved map and
    the hash. In `run_datalake.py` the hash is also a `_RESUME_KNOBS` entry
    (see Fail-closed below).
 9. `eval.index.COMPARABILITY_KEYS` includes `prompt_set_hash`, so
@@ -275,7 +273,7 @@ landed (see `tests/test_prompt_attribution_gaps.py`): a corpus built with
 but if the run-record stamp came from a *fresh* `load_settings()` call instead
 of the caller's resolved `Settings`, that record would read whatever
 `governed_bi.toml`'s `[prompts]` says — `v1` by default, since (per the
-section above) the eval drivers don't even read `[prompts]`. The practical
+section above) the eval driver doesn't even read `[prompts]`. The practical
 consequence: querying the log for "every turn produced under prompt set X"
 would return the serve turns (correctly stamped, because `answer_question_agent`
 always has the caller's `settings` in scope) but silently miss the
@@ -360,8 +358,8 @@ and the reported diff names it: `prompt set: '<hash a>' vs '<hash b>'`.
 
 **A paired McNemar test** (keyed on `question_id`) is the actual significance
 test between two prompt sets, once `eval.index` has confirmed they are otherwise
-comparable. Use `eval.power`'s — exported as `paired_mcnemar`, and what the
-drivers write into `summary.json`. It reports the run's noise floor and minimum
+comparable. Use `eval.power`'s — exported as `paired_mcnemar`, and what
+`run_datalake` writes into `summary.json`. It reports the run's noise floor and minimum
 detectable effect beside the p-value, so a delta cannot be read without also
 reading whether the run could resolve it. `eval.analysis.mcnemar(rows_a, rows_b)`
 is the offline sibling behind `analysis.json`: same exact test, same p-value,
@@ -381,7 +379,7 @@ which variant is actually better.
 One-off single-schema experiment on the `v2` schema picker:
 
 ```bash
-uv run python -m governed_bi.eval.run_experiment --db beer_factory --prompt schema_pick=v2
+uv run python -m governed_bi.eval.run_datalake --dbs beer_factory --prompt schema_pick=v2
 ```
 
 Data-lake dry run on `agent_core@v2`, five dbs, into its own output directory

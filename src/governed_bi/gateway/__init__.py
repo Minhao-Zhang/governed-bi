@@ -20,9 +20,9 @@ on fetchmany alone — client-side cursors can buffer that result set.
 
 The gateway wraps a per-dialect ``Connector``: SQLite is proven against the
 committed fixture; Postgres is exercised live by the eval harness
-(``eval/run_experiment.py``) and unit-tested offline; Redshift is implemented but
-not yet run against a live cluster. See ``docs/analyst.md`` steps 8-9 and
-``docs/architecture.md``.
+(``eval/run_datalake.py``, pooled — the only driver left, M3 N9) and
+unit-tested offline; Redshift is implemented but not yet run against a live
+cluster. See ``docs/analyst.md`` steps 8-9 and ``docs/architecture.md``.
 """
 
 from __future__ import annotations

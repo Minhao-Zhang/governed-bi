@@ -46,9 +46,7 @@ _NOTES = {
     "pin_max": 3,
 }
 
-#: Graded delivery, at what both eval drivers really set it to. Separate from `_NOTES`
-#: because `run_experiment.build_manifest` does not take it — the shared builder defaults
-#: it, and only the pooled driver's wrapper requires it stated.
+#: Graded delivery, at what the eval driver really sets it to.
 _GRADED = {"grade_semantic_failures": True}
 
 
@@ -812,8 +810,9 @@ def test_a_run_predating_the_skip_agent_field_is_not_accused(tmp_path):
 
 def test_a_skip_agent_smoke_run_is_not_comparable_to_a_real_one():
     """The quotability gate stops a smoke run being *quoted*; this stops it being
-    *paired*. `run_experiment` wrote a real model name even under `--skip-agent`, so a
-    run that never called a model matched a real one on every comparability key."""
+    *paired*. The single-schema driver (since retired) used to write a real model name
+    even under `--skip-agent`, so a run that never called a model matched a real one on
+    every comparability key."""
     smoke = {
         "split": "test", "model": None, "prompt_set_hash": "h",
         "route_top_k": 10, "route_llm_pick": True,
@@ -826,23 +825,18 @@ def test_a_skip_agent_smoke_run_is_not_comparable_to_a_real_one():
 
 
 def test_both_drivers_record_no_model_under_skip_agent():
-    """The pooled driver already did; `run_experiment` did not, and the two manifests feed
-    the same ledger — so a `run_experiment` smoke run matched a real one on every
-    comparability key.
-
-    The two drivers spelled the guard differently and drifted apart, so the rule now has
-    one definition (`index.manifest_model`) and this asserts on its behaviour plus the
-    fact that both drivers route through it. The previous version of this test read the
-    two call sites out of `inspect.getsource` — a reformat broke it and an equivalent
-    rewrite defeated it, which is the shape of tautology it was written to replace.
+    """The single-schema driver (since retired, M3 N9) used to write a real model
+    name even under `--skip-agent`, so its smoke runs matched a real one on every
+    comparability key. The rule now has one definition (`index.manifest_model`),
+    shared by both manifest modes through `metrics.build_manifest`.
     """
-    from governed_bi.eval import run_datalake, run_experiment
+    from governed_bi.eval import run_datalake
     from governed_bi.eval.index import manifest_model as shared
 
     assert shared("gpt-5.6-luna", skip_agent=True) is None
     assert shared("gpt-5.6-luna", skip_agent=False) == "gpt-5.6-luna"
 
-    # Asserted on the manifest each driver actually BUILDS. Sharing the helper is not
+    # Asserted on the manifest the driver actually BUILDS. Sharing the helper is not
     # enough on its own: keeping the import and inlining
     # `"model": settings.models.llm_model` restores the drift with the suite green,
     # which is what an `is shared` identity check alone lets through.
@@ -867,41 +861,29 @@ def test_both_drivers_record_no_model_under_skip_agent():
         **_NOTES,
         **_GRADED,
     )
-    single = run_experiment.build_manifest(
-        db_id="restaurant",
-        bird_dir=Path("."),
-        pg_dsn="host=127.0.0.1 port=5435",
-        max_agent_steps=8,
-        skip_agent=True,
-        model_name=settings.models.llm_model,
-        resolved_prompts={},
-        limit=None,
-        llm_temperature=None,
-        question_pool_hash="pool0000",
-        **_NOTES,
+    assert pooled["model"] is None, (
+        "run_datalake claims a model for a run that never called one, so its smoke "
+        "runs are comparable to real ones"
     )
-    for name, built in (("run_datalake", pooled), ("run_experiment", single)):
-        assert built["model"] is None, (
-            f"{name} claims a model for a run that never called one, so its smoke "
-            "runs are comparable to real ones"
-        )
-        assert built["skip_agent"] is True
+    assert pooled["skip_agent"] is True
 
-    # ...and both report the real name when a model IS used, or the gate would be
+    # ...and it reports the real name when a model IS used, or the gate would be
     # satisfied by a driver that simply never records one.
     assert (
-        run_experiment.build_manifest(
-            db_id="restaurant",
+        run_datalake._build_manifest(
             bird_dir=Path("."),
-            pg_dsn="host=127.0.0.1 port=5435",
-            max_agent_steps=8,
-            skip_agent=False,
+            split="test",
             model_name="gpt-5.6-luna",
-            resolved_prompts={},
-            limit=None,
-            llm_temperature=None,
+            prompt_variants={},
+            route_top_k=3,
+            route_llm_pick=False,
+            schema_pick_max_columns=8,
+            use_embedder=False,
+            skip_agent=False,
+            serve_workers=1,
             question_pool_hash="pool0000",
-        **_NOTES,
+            **_NOTES,
+            **_GRADED,
         )["model"]
         == "gpt-5.6-luna"
     )

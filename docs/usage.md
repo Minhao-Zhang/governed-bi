@@ -110,7 +110,7 @@ is allowed to see (Facts + Inference, never Audit, and never an excluded asset).
 
 The gateway wraps a per-dialect connector. SQLite is proven (read-only, with an
 audit log and a forced row cap); Postgres (`information_schema`) is exercised live
-by the eval harness (`eval/run_experiment.py`, against a local BIRD-Obfuscation
+by the eval driver (`eval/run_datalake.py`, against a local BIRD-Obfuscation
 Postgres) and unit-tested offline; Redshift (`svv_*`) reuses the Postgres path but
 is not yet run against a live cluster (both ride psycopg, installed by a plain `uv
 sync`). Point it at a SQLite

@@ -1,17 +1,15 @@
-"""Shared helpers for the eval drivers.
+"""Shared helpers for the eval driver.
 
-Extracted from ``run_experiment`` because the pooled driver imported ten of that
-module's private symbols directly — a driver reaching into another driver's
+Originally extracted from the single-schema driver ``run_experiment`` (retired
+2026-07-31, M3 N9) because the pooled driver imported ten of that module's
+private symbols directly — a driver reaching into another driver's
 implementation, which is how the manifest builders drifted apart in the first
 place (see :mod:`governed_bi.eval.metrics`).
 
 Nothing here is a metric definition; the register lives in
-:mod:`governed_bi.eval.metrics`. This is the plumbing both drivers need: corpus
+:mod:`governed_bi.eval.metrics`. This is the plumbing the driver needs: corpus
 validation and curator-error collection, the atomic JSONL writer, the cost block,
 the SME no-op signal, and the refuse-everything solver used by the offline path.
-
-When the two drivers collapse into one, this module stays — it is the first slice
-off a 4,700-line driver, not scaffolding for the merge.
 """
 
 from __future__ import annotations

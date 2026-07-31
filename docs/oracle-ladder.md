@@ -233,10 +233,6 @@ its results scored; the diagnostics are what you lose. They also run serial
 even under `--workers N`, because each rung rebuilds a graph per narrowed
 corpus and cannot share the per-arm worker factory.
 
-`run_experiment.py`, the single-schema driver, has no equivalent flag. One rung
-would be degenerate there anyway: with a schema already pinned, `oracle_schema`
-is the ordinary arm.
-
 Every oracle row is stamped `oracle_rung`, so a number from one cannot be
 mistaken later for a product metric.
 

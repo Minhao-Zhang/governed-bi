@@ -2,9 +2,10 @@
 
 SQLite is implemented and tested against the committed fixture. Postgres
 (``information_schema`` introspection, read-only execution with a statement
-timeout) is **exercised live** by the eval harness (``eval/run_experiment.py``,
-against a local BIRD-Obfuscation Postgres) and is also unit-tested offline against
-a fake connection. Redshift reuses the Postgres path (``svv_*`` introspection) but
+timeout) is **exercised live** by the eval harness (``eval/run_datalake.py``,
+pooled — the only driver left, M3 N9 — against a local BIRD-Obfuscation
+Postgres) and is also unit-tested offline against a fake connection. Redshift
+reuses the Postgres path (``svv_*`` introspection) but
 is **not yet run against a live cluster**. The DB drivers are imported lazily, so
 importing these classes never requires the driver to be installed. See
 ``base.Connector`` for the interface every dialect implements.
