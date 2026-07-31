@@ -37,7 +37,7 @@
 | ~~**M2**~~ **已完成 2026-07-31** | 三个重复名字各只剩一处定义（`_render` 是例外 —— 三者无关，改名不合并）；歧义裸名返回 `None`；约束真的会绑（把 `langgraph-api` 改成 `>=99` 后 `uv lock` 判定 unsatisfiable）；glossary 补出 ops/eval 半区 | N5–N8（`14d8172` / `8be261f` / `71aabfb` / `db6704d`） | 4 人日 |
 | ~~**M3**~~ **已完成 2026-07-31** | `src/` 里零个活引用（余 10 处回溯性注释，刻意保留）；`drift - comparability == {"git_sha"}`（删成员，未改宽）；`--oracle-only` 取代双轨且 `arms = ()` 在库入口写死；37 removed / 18 added 的测试账逐条与独立 `--collect-only` 比对一致 | N9–N10a（`7f0fb97` / `fe895a1` / `d1f0306`）+ 三条返工（`975e8aa` / `1ea5c57`） | 3 人日 |
 | ~~**M4**~~ **已完成 2026-07-31** | 付费 5 题跑 `runs/datalake/20260731T195022Z`（`gpt-5.6-luna`，工作树干净，分支已推）：stdout 23 行；**5 个 `run_id` 在 generations / `stage_events.jsonl` / `run.log` 三个 sink 里集合完全相同**；manifest 四个字段齐（`git_branch` / `main_git_sha` / `dirty` / `diff_sha256`）；M1 遗留的投影 ledger 端到端结清（无 `result`） | N11–N14（`526f21a` / `477b453` / `afe7776` / `099833a` / `ec7be1c`）+ 四条修复（`d8e67c6` / `c9b1c19` / `c6c74b1` / `d29fb16`） | 7.5 人日 |
-| **M4b** 拆大文件（**插入批次**） | `agent.py` 最大函数降到三位数；1138 行统计移出 `run_datalake`，且搬前搬后在 20260730 数据上逐字节相同 | N18–N19（checklist 4.2 / 4.3，见 [batch-m4b.md](batch-m4b.md)） | 5 人日 |
+| ~~**M4b**~~ **已完成 2026-07-31** | `build_serve_rails` **1032 → 25 行**，17 kwarg → 1，14 个嵌套 def → **0**；`run_datalake` **5486 → 3919**，1666 行统计进 `eval/statistics.py`，**golden 前后 3,759,346 字节 SHA256 相同**（我在 `cac0163` worktree 上独立复跑过）。**注意净效果：>1000 行的文件 6 → 7 个** —— 这两项修的是可寻址性，不是文件大小 | N18–N19（`f752fc9` / `82ef4a9` / `975b7e5` / `181880b` / `79ed49d` / `8785155`） | 5 人日 |
 | **M5** 工具与跑 | 用 20260730 那份数据重现出 `docs/experiments/` 报告里的**每一个**数字；带 `--replicate` 的完整命令行成立 | N15–N17 | 5.5 人日 |
 
 估工是我的一阶估计，不是从 checklist 顶部 A-7 那个「235–435 工时」拆出来的 —— 那个数建在一批已被审计打回重算的计数上（M5：`pooled 405→205`、`run ~330→1488`）。接手的人第一天就该自己重估，估完不一致以他的为准。
