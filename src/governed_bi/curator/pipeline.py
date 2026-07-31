@@ -26,7 +26,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from ..corpus.validate import validate_corpus
-from ..obs import tracing_callbacks
 from .asset_bag import AssetBag
 from .clarifications import (
     ClarificationRecord,
@@ -766,81 +765,90 @@ def _invoke_agent(
     rid = run_id or new_run_id()
     tid = thread_id or rid
     usage_cb = None
-    cbs = tracing_callbacks(with_usage=True)
-    for cb in cbs:
-        if type(cb).__name__ == "UsageMetadataCallbackHandler":
-            usage_cb = cb
-            break
-    limit = recursion_limit_for(max_agent_steps)
-    trace: list[dict[str, Any]] = []
-    n_super_steps = 0
-    try:
-        for mode, chunk in agent.stream(
-            {"messages": [{"role": "user", "content": user}]},
-            config={
-                "recursion_limit": limit,
-                "callbacks": cbs,
-                "configurable": {"thread_id": tid},
-            },
-            stream_mode=["updates", "values"],
-        ):
-            if mode == "values":
-                # One `values` chunk per super-step, and the last one is what
-                # `.invoke()` would have returned.
-                n_super_steps += 1
-                if isinstance(chunk, dict):
-                    result = chunk
-                continue
-            if isinstance(chunk, dict):
-                _collect_trace(chunk, trace)
-    except Exception as err:
-        # Keep the FULL traceback, not just class + message. The bare
-        # "KeyError: 'restaurant'" that lands in run_manifest.json is
-        # un-diagnosable on its own (it hides which frame keyed on the schema);
-        # the manifest is the only durable artifact once runs/ is swept, so the
-        # frame has to be captured here or it is lost. The short form still goes
-        # to stdout for a readable progress line.
-        short = f"{type(err).__name__}: {err}"
-        error = f"{short}\n{traceback.format_exc()}"
-        print(
-            f"deep-agent stopped early ({short}) after {len(trace)} tool call(s) / "
-            f"{n_super_steps} of {limit} super-steps"
-        )
-    if trace_path is not None:
-        _write_trace(trace_path, trace, append=trace_append, tag=trace_tag)
-    # A crash no longer forfeits the counts: `result` holds the last streamed state,
-    # so the tally is reconstructible from the messages the agent actually produced.
-    # `_unmeasured_tool_counts` remains for the case where not even one `values`
-    # chunk arrived (a failure before the first super-step committed) — that really
-    # is unmeasured, and must not be reported as zero.
-    counts = _count_tool_calls(result) if result is not None else _unmeasured_tool_counts()
-    counts["n_super_steps"] = n_super_steps
-    counts["recursion_limit"] = limit
-    counts["exhausted"] = error is not None and "GraphRecursionError" in error
-    counts["repeats"] = _repeat_summary(trace)
-    settings = _settings_or_load(settings)
-    if settings is not None:
-        usage_list: list = []
-        if usage_cb is not None:
-            from ..analyst.run_log import usage_callback_entries
+    from ..logging_setup import bind_log_context, reset_log_context
+    from ..obs import RunContext, tracing_invoke_config
 
-            usage_list = usage_callback_entries(usage_cb, source="curator")
-        emit_run_record(
-            settings=settings,
-            producer=Producer.curator,
-            run_id=rid,
-            thread_id=tid,
-            outcome="error" if error else "ok",
-            error=error,
-            token_usage=usage_list,
-            t0=t0,
-            # Both keys are already on `_TIER_A_EXTRA_KEYS`, so they survive with
-            # full-content logging off. This is what puts step/tool counts in the
-            # durable sqlite log, where previously only tokens and latency were
-            # available as proxies for how far the agent got.
-            extra={"n_tool_calls": len(trace), "n_steps": n_super_steps},
-        )
-    return result, counts, error
+    ctx = RunContext(run_id=rid, turn_id=tid)
+    log_tokens = bind_log_context(run_id=rid, turn_id=tid)
+    try:
+        cbs_cfg = tracing_invoke_config(with_usage=True, ctx=ctx)
+        cbs = cbs_cfg["callbacks"]
+        for cb in cbs:
+            if type(cb).__name__ == "UsageMetadataCallbackHandler":
+                usage_cb = cb
+                break
+        limit = recursion_limit_for(max_agent_steps)
+        trace: list[dict[str, Any]] = []
+        n_super_steps = 0
+        try:
+            for mode, chunk in agent.stream(
+                {"messages": [{"role": "user", "content": user}]},
+                config={
+                    "recursion_limit": limit,
+                    "configurable": {"thread_id": tid},
+                    **cbs_cfg,
+                },
+                stream_mode=["updates", "values"],
+            ):
+                if mode == "values":
+                    # One `values` chunk per super-step, and the last one is what
+                    # `.invoke()` would have returned.
+                    n_super_steps += 1
+                    if isinstance(chunk, dict):
+                        result = chunk
+                    continue
+                if isinstance(chunk, dict):
+                    _collect_trace(chunk, trace)
+        except Exception as err:
+            # Keep the FULL traceback, not just class + message. The bare
+            # "KeyError: 'restaurant'" that lands in run_manifest.json is
+            # un-diagnosable on its own (it hides which frame keyed on the schema);
+            # the manifest is the only durable artifact once runs/ is swept, so the
+            # frame has to be captured here or it is lost. The short form still goes
+            # to stdout for a readable progress line.
+            short = f"{type(err).__name__}: {err}"
+            error = f"{short}\n{traceback.format_exc()}"
+            print(
+                f"deep-agent stopped early ({short}) after {len(trace)} tool call(s) / "
+                f"{n_super_steps} of {limit} super-steps"
+            )
+        if trace_path is not None:
+            _write_trace(trace_path, trace, append=trace_append, tag=trace_tag)
+        # A crash no longer forfeits the counts: `result` holds the last streamed state,
+        # so the tally is reconstructible from the messages the agent actually produced.
+        # `_unmeasured_tool_counts` remains for the case where not even one `values`
+        # chunk arrived (a failure before the first super-step committed) — that really
+        # is unmeasured, and must not be reported as zero.
+        counts = _count_tool_calls(result) if result is not None else _unmeasured_tool_counts()
+        counts["n_super_steps"] = n_super_steps
+        counts["recursion_limit"] = limit
+        counts["exhausted"] = error is not None and "GraphRecursionError" in error
+        counts["repeats"] = _repeat_summary(trace)
+        settings = _settings_or_load(settings)
+        if settings is not None:
+            usage_list: list = []
+            if usage_cb is not None:
+                from ..analyst.run_log import usage_callback_entries
+
+                usage_list = usage_callback_entries(usage_cb, source="curator")
+            emit_run_record(
+                settings=settings,
+                producer=Producer.curator,
+                run_id=rid,
+                thread_id=tid,
+                outcome="error" if error else "ok",
+                error=error,
+                token_usage=usage_list,
+                t0=t0,
+                # Both keys are already on `_TIER_A_EXTRA_KEYS`, so they survive with
+                # full-content logging off. This is what puts step/tool counts in the
+                # durable sqlite log, where previously only tokens and latency were
+                # available as proxies for how far the agent got.
+                extra={"n_tool_calls": len(trace), "n_steps": n_super_steps},
+            )
+        return result, counts, error
+    finally:
+        reset_log_context(log_tokens)
 
 
 def _validate_fix_pass(

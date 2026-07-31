@@ -28,7 +28,6 @@ from .. import prompts
 from ..corpus.schemas import TableAsset
 from ..gateway import column_allowlist
 from ..graph import build_graph, detect_missing_join_path, plan_joins
-from ..obs import tracing_callbacks
 from ..retrieval import (
     SCHEMA_PICK_MAX_TABLES,
     RetrievalIndexCache,
@@ -561,9 +560,13 @@ def build_serve_rails(
         _turn_n[0] += 1
         question = state["question"]
         if events._finalize_ctx is not None:
+            # Prefer a run_id bound by the outer invoke (logging_setup ContextVar)
+            # so Langfuse metadata, stage_events, and log lines share one key.
+            from ..logging_setup import peek_run_id  # noqa: PLC0415
+
             events._finalize_ctx = replace(
                 events._finalize_ctx,
-                run_id=new_run_id(),
+                run_id=peek_run_id() or new_run_id(),
                 n_human=_turn_n[0],
                 t0=time.perf_counter(),
                 token_usage=[],
@@ -624,10 +627,10 @@ def build_serve_rails(
         try:
             return _assemble_inner(state)
         except Exception as err:
-            # Printed, not logged: nothing in ``src/`` calls ``logging.basicConfig``, so a
-            # ``logger.exception`` here would be dropped by the default configuration —
-            # the same way a swallowed run-log write once was (AUDIT R4). The traceback is
-            # the only record of which sub-step died.
+            # ``configure_logging`` (M4 N12a) now installs a root handler, so a
+            # ``logger.exception`` would reach disk — but this path still prints
+            # (bulk print→logger is N11 / later, not a silent mid-N12a swap). The
+            # traceback remains the fastest operator signal when assemble dies.
             print(f"*** assemble failed, refusing (model_error): {type(err).__name__}: {err}")
             traceback.print_exc()
             ans = refusal(
@@ -1466,32 +1469,49 @@ def answer_question_agent(
     it and always gets an ``Answer``.
     """
     _run_id = run_id or new_run_id()
-    graph = build_serve_rails(
-        corpus=corpus,
-        gateway=gateway,
-        settings=settings,
-        identity=identity,
-        model=model,
-        embedder=embedder,
-        working_memory=working_memory,
-        narrator=narrator,
-        on_event=on_event,
-        session_id=session_id,
-        clarify_checkpointer=clarify_checkpointer,
-        clarify_thread=clarify_thread,
-        clarify_resume=clarify_resume,
-        run_id=_run_id,
-        n_human=n_human,
-        index_cache=index_cache,
-        schema_vectors=schema_vectors,
-    )
-    final = graph.invoke(
-        {
-            "question": question,
-            "session_id": session_id,
-        },
-        config={"callbacks": tracing_callbacks()},  # Langfuse; [] when unconfigured
-    )
+    from ..logging_setup import bind_log_context, reset_log_context
+    from ..obs import RunContext, tracing_invoke_config
+    from ..provenance import turn_id as make_turn_id
+    from ..prompts import prompt_set_hash as _prompt_set_hash
+
+    tid = make_turn_id(session_id, n_human)
+    log_tokens = bind_log_context(run_id=_run_id, turn_id=tid)
+    try:
+        graph = build_serve_rails(
+            corpus=corpus,
+            gateway=gateway,
+            settings=settings,
+            identity=identity,
+            model=model,
+            embedder=embedder,
+            working_memory=working_memory,
+            narrator=narrator,
+            on_event=on_event,
+            session_id=session_id,
+            clarify_checkpointer=clarify_checkpointer,
+            clarify_thread=clarify_thread,
+            clarify_resume=clarify_resume,
+            run_id=_run_id,
+            n_human=n_human,
+            index_cache=index_cache,
+            schema_vectors=schema_vectors,
+        )
+        ctx = RunContext(
+            run_id=_run_id,
+            turn_id=tid,
+            corpus_pin=getattr(settings.datasource, "corpus_pin", None),
+            prompt_set_hash=_prompt_set_hash(settings.prompt_variants),
+            identity=getattr(identity, "user", None),
+        )
+        final = graph.invoke(
+            {
+                "question": question,
+                "session_id": session_id,
+            },
+            config=tracing_invoke_config(ctx=ctx),
+        )
+    finally:
+        reset_log_context(log_tokens)
     if final.get("outcome") == "clarify":
         return ClarificationPending(final.get("clarification") or {})
     answer = final.get("answer")

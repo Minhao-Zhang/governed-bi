@@ -121,6 +121,9 @@ def create_app(stack: ServeStack | None = None):
     from fastapi.middleware.cors import CORSMiddleware
 
     stack = stack or build_stack()
+    from ..logging_setup import configure_logging
+
+    configure_logging()
     app = FastAPI(
         title="governed-bi API",
         version=__version__,

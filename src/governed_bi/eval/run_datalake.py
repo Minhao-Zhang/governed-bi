@@ -4968,6 +4968,9 @@ def main(argv: list[str] | None = None) -> int:
     clean result from one the ledger had already disqualified (AUDIT E5) — the
     operator had to read stdout.
     """
+    from ..logging_setup import configure_logging
+
+    configure_logging()
     p = argparse.ArgumentParser(description="Pooled data-lake BIRD eval (D15 scale run)")
     p.add_argument(
         "--bird-dir", type=Path, default=Path("../BIRD-Data-Obfuscation"),

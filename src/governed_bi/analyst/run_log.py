@@ -495,10 +495,11 @@ def append_run_record(record: Mapping[str, Any], settings: Settings) -> str | No
     written. Callers thread that into the answer's provenance
     (``run_log_write_error``) so a missing audit row is stated on the answer itself.
     The docs claim you cannot execute without a record; before this the failure went
-    to ``logger.exception`` and there is no ``logging.basicConfig`` anywhere in
+    to ``logger.exception`` and there was no ``logging.basicConfig`` anywhere in
     ``src/``, so the default configuration dropped it and the answer shipped looking
-    fully audited (AUDIT R4). Still non-fatal by design — refusing to answer because
-    a log write failed would trade a silent gap for an outage — but no longer silent.
+    fully audited (AUDIT R4). ``configure_logging`` (M4 N12a) installs a root handler
+    so that path is no longer silent — still non-fatal by design (refusing to answer
+    because a log write failed would trade a silent gap for an outage).
     """
     kind = (settings.run_log_kind or "sqlite").lower()
     if kind == "off":

@@ -328,7 +328,10 @@ def oracle_solver(
     from dataclasses import replace as dc_replace
 
     from ..analyst.agent import build_serve_rails
-    from ..obs import tracing_callbacks
+    from ..logging_setup import bind_log_context, reset_log_context
+    from ..obs import RunContext, tracing_invoke_config
+    from ..prompts import prompt_set_hash as _psh
+    from ..provenance import new_run_id, turn_id as make_turn_id
 
     log_settings = (
         settings
@@ -462,11 +465,25 @@ def oracle_solver(
 
             key = (schema, tables)
             graph = _graph_for(key, narrowed)
-            final = graph.invoke(
-                {"question": question, "session_id": session_id},
-                config={"callbacks": tracing_callbacks()},
-            )
-            answer = final.get("answer")
+            self._n = getattr(self, "_n", 0) + 1
+            rid = new_run_id()
+            tid = make_turn_id(session_id, self._n)
+            log_tokens = bind_log_context(run_id=rid, turn_id=tid)
+            try:
+                ctx = RunContext(
+                    run_id=rid,
+                    turn_id=tid,
+                    schema=schema,
+                    corpus_pin=getattr(log_settings.datasource, "corpus_pin", None),
+                    prompt_set_hash=_psh(log_settings.prompt_variants),
+                )
+                final = graph.invoke(
+                    {"question": question, "session_id": session_id},
+                    config=tracing_invoke_config(ctx=ctx),
+                )
+                answer = final.get("answer")
+            finally:
+                reset_log_context(log_tokens)
             if answer is None:
                 return None, {
                     "refused_by": "no_coverage",

@@ -122,12 +122,20 @@ class LangChainChatClient:
             # Inside a run: let LangChain propagate the parent trace via contextvar.
             message = self.model.invoke(messages)
         else:
-            from ..obs import (
-                tracing_callbacks,  # noqa: PLC0415 (lazy: avoid import cost when unused)
+            from ..logging_setup import peek_run_id, peek_turn_id  # noqa: PLC0415
+            from ..obs import (  # noqa: PLC0415
+                RunContext,
+                tracing_invoke_config,
             )
 
-            callbacks = tracing_callbacks()
-            config = {"callbacks": callbacks} if callbacks else None
+            rid = peek_run_id()
+            ctx = (
+                RunContext(run_id=rid, turn_id=peek_turn_id())
+                if rid is not None
+                else None
+            )
+            cfg = tracing_invoke_config(ctx=ctx)
+            config = None if (not cfg["callbacks"] and ctx is None) else cfg
             message = self.model.invoke(messages, config=config)
         usage = getattr(message, "usage_metadata", None)
         self.last_usage_metadata = dict(usage) if usage else None

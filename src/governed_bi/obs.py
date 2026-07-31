@@ -34,9 +34,55 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger("governed_bi.obs")
+
+
+@dataclass(frozen=True)
+class RunContext:
+    """Correlation fields for one serve / curator / eval invoke.
+
+    ``identity`` is carried for local use (logs, audit) but is **never** placed
+    in trace metadata: :func:`_trace_mask` does not cover callback data, so a
+    user principal in Langfuse/LangSmith metadata would ship unmasked.
+    """
+
+    run_id: str
+    turn_id: str | None = None
+    corpus_pin: str | None = None
+    arm: str | None = None
+    schema: str | None = None
+    prompt_set_hash: str | None = None
+    identity: str | None = None
+
+
+def tracing_config(ctx: RunContext) -> dict[str, Any]:
+    """RunnableConfig fragment that feeds both LangSmith and Langfuse.
+
+    LangSmith reads ``metadata`` and ``tags``. Langfuse's LangChain handler
+    reads ``langfuse_session_id`` / ``langfuse_user_id`` / ``langfuse_tags``
+    from the same ``metadata`` dict. ``identity`` is deliberately omitted.
+    """
+    tags = [t for t in (ctx.arm, ctx.schema, "governed-bi") if t]
+    metadata: dict[str, Any] = {
+        "run_id": ctx.run_id,
+        "langfuse_session_id": ctx.run_id,
+        "langfuse_user_id": ctx.arm or ctx.schema or "governed-bi",
+        "langfuse_tags": list(tags),
+    }
+    if ctx.turn_id is not None:
+        metadata["turn_id"] = ctx.turn_id
+    if ctx.corpus_pin is not None:
+        metadata["corpus_pin"] = ctx.corpus_pin
+    if ctx.arm is not None:
+        metadata["arm"] = ctx.arm
+    if ctx.schema is not None:
+        metadata["schema"] = ctx.schema
+    if ctx.prompt_set_hash is not None:
+        metadata["prompt_set_hash"] = ctx.prompt_set_hash
+    return {"metadata": metadata, "tags": list(tags)}
 
 _TRUTHY = {"1", "true", "yes", "on"}
 
@@ -142,7 +188,11 @@ def _langfuse_handler() -> Any | None:
         return None
 
 
-def tracing_callbacks(*, with_usage: bool = False) -> list:
+def tracing_callbacks(
+    *,
+    with_usage: bool = False,
+    ctx: RunContext | None = None,
+) -> list:
     """LangChain callbacks for external tracing (Langfuse) + optional usage.
 
     Empty when the ``tracing`` extra is not installed or the keys are unset, so it
@@ -151,7 +201,14 @@ def tracing_callbacks(*, with_usage: bool = False) -> list:
 
     When ``with_usage`` is True, append a ``UsageMetadataCallbackHandler`` so
     deep-agent (curator/SME) token totals can be read after ``invoke`` (F6).
+
+    ``ctx`` is accepted so call sites can pass a :class:`RunContext` through one
+    seam; it does not change the callback list. When ``ctx is None`` the returned
+    list is byte-stable with the pre-N12a behaviour. Merge :func:`tracing_config`
+    into the RunnableConfig (or use :func:`tracing_invoke_config`) to attach
+    metadata / tags.
     """
+    _ = ctx  # reserved for the shared seam; metadata lives on the RunnableConfig
     cbs: list = []
     handler = _langfuse_handler()
     if handler is not None:
@@ -164,6 +221,25 @@ def tracing_callbacks(*, with_usage: bool = False) -> list:
         except Exception:
             pass
     return cbs
+
+
+def tracing_invoke_config(
+    *,
+    with_usage: bool = False,
+    ctx: RunContext | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    """Full RunnableConfig fragment: callbacks, plus metadata/tags when ``ctx`` is set.
+
+    Still routes through :func:`tracing_callbacks` — not a second tracing channel.
+    """
+    cfg: dict[str, Any] = {
+        "callbacks": tracing_callbacks(with_usage=with_usage, ctx=ctx),
+    }
+    if ctx is not None:
+        cfg.update(tracing_config(ctx))
+    cfg.update(extra)
+    return cfg
 
 
 def flush_tracing() -> None:

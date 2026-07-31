@@ -448,7 +448,6 @@ class SimulatedSme:
         import time
 
         from ..analyst.run_log import emit_run_record, new_run_id
-        from ..obs import tracing_callbacks
         from ..provenance import Producer
 
         # Deliberately says the same thing as the ``sme_rules`` block in the brief,
@@ -469,24 +468,37 @@ class SimulatedSme:
         usage_list: list = []
         try:
             if self._agent is not None:
-                cbs = tracing_callbacks(with_usage=True)
-                usage_cb = next(
-                    (c for c in cbs if type(c).__name__ == "UsageMetadataCallbackHandler"),
-                    None,
-                )
-                result = self._agent.invoke(
-                    {"messages": [{"role": "user", "content": user}]},
-                    config={
-                        "recursion_limit": 40,
-                        "callbacks": cbs,
-                        "configurable": {"thread_id": rid},
-                    },
-                )
-                raw = _last_message_text(result)
-                if usage_cb is not None:
-                    from ..analyst.run_log import usage_callback_entries
+                from ..logging_setup import bind_log_context, reset_log_context
+                from ..obs import RunContext, tracing_invoke_config
 
-                    usage_list = usage_callback_entries(usage_cb, source="sme")
+                ctx = RunContext(run_id=rid, turn_id=rid)
+                log_tokens = bind_log_context(run_id=rid, turn_id=rid)
+                try:
+                    cbs_cfg = tracing_invoke_config(with_usage=True, ctx=ctx)
+                    cbs = cbs_cfg["callbacks"]
+                    usage_cb = next(
+                        (
+                            c
+                            for c in cbs
+                            if type(c).__name__ == "UsageMetadataCallbackHandler"
+                        ),
+                        None,
+                    )
+                    result = self._agent.invoke(
+                        {"messages": [{"role": "user", "content": user}]},
+                        config={
+                            "recursion_limit": 40,
+                            "configurable": {"thread_id": rid},
+                            **cbs_cfg,
+                        },
+                    )
+                    raw = _last_message_text(result)
+                    if usage_cb is not None:
+                        from ..analyst.run_log import usage_callback_entries
+
+                        usage_list = usage_callback_entries(usage_cb, source="sme")
+                finally:
+                    reset_log_context(log_tokens)
             else:
                 raw = self.chat.complete(self.brief, user)
         except Exception as err:  # noqa: BLE001 — always emit a record
