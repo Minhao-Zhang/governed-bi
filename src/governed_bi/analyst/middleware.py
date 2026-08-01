@@ -239,13 +239,48 @@ class GovernanceMiddleware(AgentMiddleware):
 
         Preserves ``usage_metadata`` and ``response_metadata`` through rebuild
         (SPIKE-1 / L4) so token capture survives coercion.
+
+        ``content`` is filtered alongside ``tool_calls``, and that is load-bearing
+        rather than tidy. Under the Responses API a reasoning model's ``content`` is
+        a list of blocks that INCLUDES one ``function_call`` block per tool call, so
+        truncating ``tool_calls`` alone truncates the parsed view while the raw
+        blocks — both of them — are what gets serialised back as ``input`` on the
+        next turn. The transcript then claims two tool calls and carries one
+        ``function_call_output``.
+
+        OpenAI accepts that. DeepSeek does not: it answers
+        ``400 No tool output found for tool call <id>`` and every multi-tool-call
+        turn dies, which on the eval path is a crashed row (measured: 4 of 6 on a
+        first smoke, ~23% of a real arm). ``parallel_tool_calls=False`` is not a
+        defence — DeepSeek documents it as always-on and ignores the field — so the
+        harness has to emit a self-consistent transcript rather than rely on the
+        provider never producing a second call.
         """
         from langchain.agents.middleware.types import ModelResponse
 
+        def _keep_first_call_block(content: Any, keep_id: str | None) -> Any:
+            """Drop every ``function_call`` block except the one being executed."""
+            if not isinstance(content, list):
+                return content
+            out, seen_call = [], False
+            for b in content:
+                if not (isinstance(b, dict) and b.get("type") == "function_call"):
+                    out.append(b)
+                    continue
+                bid = b.get("call_id") or b.get("id")
+                # Prefer the block matching the surviving tool_call; fall back to
+                # "the first one" when ids do not line up across providers.
+                if (keep_id is not None and bid == keep_id) or (keep_id is None and not seen_call):
+                    out.append(b)
+                    seen_call = True
+            return out
+
         def _rebuild(m: AIMessage) -> AIMessage:
+            kept = m.tool_calls[:1]
+            keep_id = kept[0].get("id") if kept else None
             kwargs: dict[str, Any] = {
-                "content": m.content,
-                "tool_calls": m.tool_calls[:1],
+                "content": _keep_first_call_block(m.content, keep_id),
+                "tool_calls": kept,
                 "id": getattr(m, "id", None),
                 "additional_kwargs": getattr(m, "additional_kwargs", {}) or {},
             }
