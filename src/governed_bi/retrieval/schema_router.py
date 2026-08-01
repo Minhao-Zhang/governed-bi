@@ -12,8 +12,10 @@ Single-schema / SQLite callers skip this module entirely.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
+import threading
 from typing import TYPE_CHECKING, NamedTuple
 
 from .. import prompts
@@ -162,19 +164,75 @@ def schema_documents(corpus: "Corpus") -> dict[str, str]:
     return {s: " ".join(p for p in ps if p) for s, ps in parts.items()}
 
 
+#: Process-wide memo for :func:`embed_schema_documents`, keyed on the CONTENT of
+#: the documents plus the embedder's identity. Guarded by a lock because the eval
+#: harness's workers are threads in one process.
+_SCHEMA_VECTOR_MEMO: dict[str, dict[str, list[float]]] = {}
+_SCHEMA_VECTOR_LOCK = threading.Lock()
+
+
+def _schema_vector_key(docs: dict[str, str], embedder: "Embedder") -> str:
+    """Identity of (these exact documents, this embedder).
+
+    Content-hashed, not id-hashed. ``rvgd.corpus_index_key`` keys its sibling cache
+    on asset IDs, which means an edited description reuses the stale vector — the
+    one thing a "content-keyed" cache is supposed to prevent. Not repeating that
+    here: an edit that changes a schema document changes this key.
+
+    The embedder is part of the key because the vectors are only comparable within
+    one model AND one width — ``text-embedding-3-small`` and ``-3-large`` produce
+    1536 and 3072 dimensions, and ``cosine`` silently returns 0.0 on a length
+    mismatch rather than raising, so a cross-model hit would degrade routing to
+    "nothing scores" with no error anywhere.
+    """
+    h = hashlib.sha256()
+    for schema in sorted(docs):
+        h.update(schema.encode("utf-8"))
+        h.update(b"\0")
+        h.update(docs[schema].encode("utf-8"))
+        h.update(b"\0")
+    model = getattr(getattr(embedder, "model", None), "model", None)
+    dims = getattr(getattr(embedder, "model", None), "dimensions", None)
+    h.update(f"|{type(embedder).__name__}|{model}|{dims}".encode())
+    return h.hexdigest()
+
+
 def embed_schema_documents(
     corpus: "Corpus", embedder: "Embedder"
 ) -> dict[str, list[float]]:
     """Embed each schema's document once. Schema vectors are constant per corpus,
     so serve callers precompute them at graph-build time and hand them to
     :func:`shortlist_schemas` (``schema_vectors=``) instead of re-embedding all
-    schema docs on every question."""
+    schema docs on every question.
+
+    "Once" now means once per PROCESS, not once per caller. The eval harness builds
+    one graph per worker and never passes ``schema_vectors``, so this ran N times
+    over identical text — and simultaneously, because the workers start together.
+    On a 57-schema lake that is ~118k embedding tokens per build; at 24 workers the
+    startup burst is ~2.8M tokens against a 1M-per-minute account limit, which is
+    exactly how a run took itself down (and a co-running one with it) on
+    2026-08-01. The vectors are a pure function of the document text and the
+    embedder, both of which are in the key, so the memo cannot serve a stale or
+    cross-model result.
+    """
     docs = schema_documents(corpus)
     named = [(s, docs[s]) for s in docs if docs[s].strip()]
     if not named:
         return {}
+    key = _schema_vector_key(dict(named), embedder)
+    with _SCHEMA_VECTOR_LOCK:
+        hit = _SCHEMA_VECTOR_MEMO.get(key)
+    if hit is not None:
+        return dict(hit)
+    # Deliberately OUTSIDE the lock: embedding is a network round-trip, and holding
+    # the lock across it would serialise every worker's startup behind the first
+    # one. Two workers racing here both call once and store the same value, which
+    # costs one redundant request in the worst case instead of N.
     vecs = embedder.embed([text for _s, text in named])
-    return dict(zip([s for s, _ in named], vecs))
+    built = dict(zip([s for s, _ in named], vecs))
+    with _SCHEMA_VECTOR_LOCK:
+        _SCHEMA_VECTOR_MEMO.setdefault(key, built)
+    return dict(built)
 
 
 def _embedding_ranking(
