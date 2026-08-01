@@ -1240,6 +1240,12 @@ def _build_manifest(
     # restated, so the manifest cannot claim a policy the serve path did not use.
     grade_semantic_failures: bool,
     build_workers: int = 1,
+    # WHERE the model answered from. Operational, so they may default —
+    # ``metrics.build_manifest``'s rule is that knobs are required keywords and
+    # operational fields are not. A caller that never leaves api.openai.com says
+    # nothing and records None, which is the truth about that run.
+    base_url: str | None = None,
+    embedding_base_url: str | None = None,
     # The run's SCOPE. Not knobs — they decide which arms exist and which questions
     # are in the pool, so a resume that disagrees is not the same experiment at all.
     # Recorded because none of them is derivable from the directory's contents, so
@@ -1272,6 +1278,8 @@ def _build_manifest(
         llm_reasoning_effort=llm_reasoning_effort,
         embedding_model=embedding_model,
         embedding_dimensions=embedding_dimensions,
+        base_url=base_url,
+        embedding_base_url=embedding_base_url,
         prompt_variants=prompt_variants,
         created_at_utc=_utc_ts(),
         route_top_k=route_top_k,
@@ -3106,6 +3114,11 @@ def run_datalake(
         # whether the channel ran at all.
         embedding_model=settings.models.embedding_model if embedder else None,
         embedding_dimensions=settings.models.embedding_dimensions if embedder else None,
+        # Unconditional: unlike the knobs above these are operational, and "which
+        # endpoint" is worth recording even for a run that called no model, because
+        # it is what a later reader uses to explain a number they cannot reproduce.
+        base_url=settings.models.base_url,
+        embedding_base_url=settings.models.embedding_base_url,
         prompt_variants=resolved_prompts,
         # All three off ``settings``, i.e. what the serve path will actually read,
         # for the same reason the note knobs below are: the CLI flag is one of

@@ -66,20 +66,52 @@ def reset_log_context(tokens: list[Token]) -> None:
         token.var.reset(token)
 
 
+#: Third-party loggers pinned above the root level, and why each one.
+#:
+#: ``level`` applies to the ROOT logger, so INFO turns on every library that logs
+#: at INFO too. ``httpx`` emits one line per HTTP request: a 1351-question arm
+#: makes ~5 model calls each, so `run.log` came out 8.8 MB of
+#: ``HTTP Request: POST .../responses "HTTP/1.1 200 OK"`` with the run's own
+#: messages scattered through it. That is not a cosmetic problem — it is why the
+#: rate-limit retries in the 20260801 luna run were nearly missed.
+#:
+#: ``openai._base_client`` is deliberately NOT quieted. Its INFO line is
+#: ``Retrying request to /responses in 6.6 seconds``, which is the ONLY early
+#: warning this stack gives before a rate limit turns into crashed rows — there is
+#: no rate limiter and no 429 handling anywhere in the repo, so the SDK's retry
+#: chatter is the whole signal. Silencing it would hide the failure it predicts.
+_QUIET_LOGGERS: dict[str, int] = {
+    "httpx": logging.WARNING,
+    "httpcore": logging.WARNING,
+    "urllib3": logging.WARNING,
+    "openai._base_client": logging.INFO,  # explicit: keep the retry lines
+    # Tracing exporters. Noisy on failure and irrelevant on success, and their
+    # failures are about the tracer, not the run.
+    "langfuse": logging.ERROR,
+    "opentelemetry": logging.ERROR,
+}
+
+
 def configure_logging(
     *,
     level: int = logging.INFO,
     log_path: Path | str | None = None,
+    quiet: dict[str, int] | None = None,
 ) -> None:
     """Install a root handler with timestamps and ContextVar correlation ids.
 
     The stream handler is installed once. A ``log_path`` may be supplied on a
     later call (e.g. once the run directory exists) and adds a file handler for
     that path without resetting the stream setup.
+
+    ``quiet`` pins noisy third-party loggers above ``level``; pass ``{}`` to keep
+    everything at the root level. See :data:`_QUIET_LOGGERS`.
     """
     global _CONFIGURED
     root = logging.getLogger()
     root.setLevel(level)
+    for name, lvl in (_QUIET_LOGGERS if quiet is None else quiet).items():
+        logging.getLogger(name).setLevel(lvl)
     fmt = logging.Formatter(_LOG_FORMAT, datefmt=_DATE_FORMAT)
     filt = _ContextFilter()
 

@@ -100,6 +100,11 @@ class LangChainChatClient:
         if models.request_timeout_s is not None:
             kwargs["timeout"] = models.request_timeout_s
         kwargs["max_retries"] = models.max_retries
+        # Explicit, so the endpoint is a recorded configuration value rather than
+        # whatever ``OPENAI_BASE_URL`` happens to be in the shell. Left None the SDK
+        # keeps its own resolution, so this is a no-op for an ordinary OpenAI setup.
+        if models.base_url:
+            kwargs["base_url"] = models.base_url
         key = os.environ.get(models.api_key_env)
         if key:
             kwargs["api_key"] = key
@@ -181,7 +186,15 @@ class LangChainEmbedder:
         if models.request_timeout_s is not None:
             kwargs["timeout"] = models.request_timeout_s
         kwargs["max_retries"] = models.max_retries
-        key = os.environ.get(models.api_key_env)
+        # The embedder's endpoint and key fall back to the chat model's, which is
+        # right for one vendor and wrong the moment the chat model moves elsewhere:
+        # an OpenAI-compatible chat vendor does not necessarily serve
+        # ``text-embedding-3-large``, and its key will not authenticate against
+        # OpenAI. Splitting them is what lets a generator swap leave the RETRIEVAL
+        # channel byte-identical, which is the only way the two runs compare.
+        if models.embedding_base_url or models.base_url:
+            kwargs["base_url"] = models.embedding_base_url or models.base_url
+        key = os.environ.get(models.embedding_api_key_env or models.api_key_env)
         if key:
             kwargs["api_key"] = key
         return cls(OpenAIEmbeddings(**kwargs))
