@@ -442,3 +442,77 @@ curated_sme(fixed) serve, + one 69-db build of each arm):
   the per-question governed context (curated/SME inject ~31k input tokens/question
   on average: 63–72M ÷ 2030), not output.
 
+
+---
+
+## 2026-08-01 22:28 UTC
+
+**E2 + E3 — offline routing probes.** No chat model, no SQL, no grading. Both run
+against the E1 corpus (`runs/datalake/20260731T233457Z-opus48-high-ladder/20260731T233545Z/corpus_curated`,
+57 schemas) and the BIRD `test` split (1351 questions), joined to that run's
+`generations.curated.jsonl`. Design write-up: `docs/plans/routing-redesign.md`.
+
+**E2 — `scripts/pick_evidence_probe.py`** → `runs/ablation/e2-pick-evidence.json`.
+Asks whether the tables the gold SQL reads are among the 15 the LLM picker is shown.
+1222 usable questions (129 dropped: gold SQL is a frozen `VALUES` constant reading no
+table). 9 of 57 schemas exceed `SCHEMA_PICK_MAX_TABLES = 15`; 325 questions have such
+a gold schema.
+
+| ordering of the 15 | all gold tables visible | same, gold schema > 15 tables |
+|---|---:|---:|
+| `alpha` (today, `physical_name` sort) | 0.840 | 0.400 |
+| `rel` (BM25 over `asset_document`) | 0.948 | 0.806 |
+| `rel_guard` (BM25, gated on table-description coverage) | 0.875 | 0.529 |
+| `rel_desconly` (BM25 over curated prose only) | 0.951 | 0.815 |
+| `rel_emb` (per-table `text-embedding-3-large` cosine) | **0.970** | **0.886** |
+
+Per-schema extremes: `works_cycles` (73 tables) 0.077 → 0.969, `hockey` (29) 0.034 →
+0.897. `rel` is the only variant that *loses* anywhere — `mondial_geo` (42 tables,
+0/42 table and 0/275 column descriptions) 0.179 → 0.154, on a spurious `name`
+identifier match. `rel_desconly` self-guards there (empty prose index → alphabetical);
+`rel_guard` does not (it disables the two biggest wins).
+
+Causal link NOT established: within-schema control over the 9 wide schemas gives 4
+positive / 3 negative, one-sided sign test **p = 0.50**. The "small schemas attract
+misroutes" asymmetry also fails: gold wider than picked in 72/106 misroutes vs 0.615
+expected under uniform choice among the non-gold candidates, p = 0.104.
+
+**E3 — `scripts/routing_fusion.py`** → `runs/ablation/e3-fusion.json`,
+`runs/ablation/e3-rankings.json` (per-question per-channel ranking cache, 17 MB;
+re-sweeping fusion weights or `top_k` off it is free). ~330k embedding tokens, < $0.05,
+7 minutes. Fidelity vs the recorded run (`emb_large`): gold rank 0.970, rank-1 identity
+0.990.
+
+| channel | @1 | @3 | @5 | @10 | @20 |
+|---|---:|---:|---:|---:|---:|
+| `bm25` | 0.736 | 0.844 | 0.879 | 0.906 | 0.920 |
+| `emb_large` (today) | 0.694 | 0.850 | 0.906 | 0.952 | 0.979 |
+| `tblmax_large` (per-table vectors, max-pooled) | **0.730** | **0.893** | **0.939** | **0.973** | **0.991** |
+| `rrf(bm25, emb_large)` | 0.733 | 0.871 | 0.898 | 0.922 | 0.943 |
+| `rrf(emb_large, tblmax_large)` | 0.710 | 0.887 | 0.931 | 0.976 | 0.991 |
+
+Negative results worth keeping: `bm25_tbl_max` (max-pooling the lexical channel)
+0.870@10 < `bm25` 0.906; `assetmax` (pooling metrics/few-shots/terms in as well, 2810
+documents) 0.942@10 < `tblmax_large` 0.973. Table granularity specifically.
+
+The table index is *cheaper* than today's: 656 docs / 95,750 tokens vs 57 docs /
+130,243 tokens. Per-question cosine goes 26 ms → 348 ms in pure Python (656 × 3072),
+1.17 ms with numpy — numpy is currently undeclared in `pyproject.toml`.
+
+**Confidence gate: falsified offline.** Simulating "keep rank 1 without asking the LLM
+when its relative margin `(s1-s2)/s1` ≥ t" against the recorded picks, net is ≤ 0 at
+every threshold on all four channels. On `emb_large` at t=0: saved 21, broken 264. The
+LLM picker is +17.9pp over rank 1 (0.873 vs 0.694) — it corrects 12.6 rank-1 errors for
+every one it introduces. Hedging cannot replace it either: gold in rank ≤ 2 is 0.790 and
+rank ≤ 3 is 0.850, both below the picker's 0.873. Only surviving use is cost:
+`tblmax_large` at t=0.20 covers 43.2% with saved 12 / broken 12 (net 0), and the router
+is 25.0% of an arm's tokens (12.4M in, 9185 in / 117 out per question) → ≈ −11% arm
+tokens for no measured accuracy change.
+
+Follow-up (not run): **E4, a pick-only harness** — `shortlist_schemas` + `pick_schema`
+only, graded against `db_id`. ~12.6M tokens ≈ 25% of one arm, 6% of a ladder, no serve
+loop. Pre-registered strata, with today's pick accuracy as the baseline: **A** no wide
+candidate, n=144, 0.938 (prompt is byte-identical under R1 — A/A control); **B** wide
+distractor only, n=838, 0.885 (risk stratum: R1 also makes distractors more persuasive);
+**C** wide gold, n=369, 0.821 (benefit stratum). R1 is refused if C does not rise or B's
+drop eats C's gain.
