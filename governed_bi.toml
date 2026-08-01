@@ -47,10 +47,35 @@ llm_model = "gpt-5.6-luna"
 llm_reasoning_effort = "low" # none | low | medium | high | xhigh | max
 # llm_max_output_tokens = 4096   # omit for provider default
 
+# Wall-clock bound per model call, and the SDK's retry budget. Both matter more than
+# they look, because this repo has NO rate limiter, NO token bucket and NO 429
+# backoff of its own — the provider SDK's exponential retry is the entire defence,
+# and these two numbers size it.
+#
+# 60s was calibrated for effort="low". A high/max-effort call routinely exceeds it,
+# and the failure is not a retry: `APITimeoutError` -> `Outcome.crashed` -> non-zero
+# crash_rate -> the whole run is unquotable. Two retries is likewise thin against a
+# provider rate limit; a burst converts directly into crashed rows.
+request_timeout_s = 900.0
+max_retries = 8
+
 # Embedding model for the retrieval vector channel.
-# The search space is small, so a compact model is enough; swap freely.
-embedding_model = "text-embedding-3-small"
-# embedding_dimensions = 1536    # omit for model default
+#
+# This channel IS the schema router: with 57 schemas competing and no schema pinned,
+# the shortlist decides which corpus the analyst ever sees, and a question that never
+# surfaces its gold schema scores ~2% (measured: 3 of 143 misrouted questions were
+# answered correctly anyway). A probe on the 2030-question pool measured embedding-only
+# recall@3 = 0.70 against BM25's 0.35, and fusing the two dragged the strong ranking
+# DOWN, so there is no lexical safety net — the embedder is the whole signal.
+#
+# -3-large (3072 dims) rather than -3-small (1536). It is 6.5x the price per token
+# and the volume is negligible: the schema documents are embedded once per graph
+# build (57 docs, median 2072 tokens, largest 5957) and each question once. A full
+# four-arm ladder spends single-digit dollars here against ~167M chat tokens.
+# `embedding_model` and `embedding_dimensions` are manifest knobs as of schema
+# version 3, so a run cannot quietly change this and still compare.
+embedding_model = "text-embedding-3-large"
+# embedding_dimensions = 3072    # omit for model default (3072 for -3-large)
 
 # Environment variable that holds the API key (the key itself never lives here).
 api_key_env = "OPENAI_API_KEY"
