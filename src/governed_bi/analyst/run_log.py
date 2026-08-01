@@ -80,20 +80,42 @@ METADATA_PROVENANCE_KEYS: tuple[str, ...] = (
 )
 
 # USD per 1M tokens (input, output). Unknown models → cost_est_usd=None.
-_PRICE_PER_1M: dict[str, tuple[float, float]] = {
-    "gpt-5.6-luna": (2.0, 8.0),
-    "gpt-5.5": (1.25, 10.0),
-    "gpt-5.5-mini": (0.25, 2.0),
-    "gpt-4o": (2.5, 10.0),
-    "gpt-4o-mini": (0.15, 0.6),
+#: USD per 1M tokens: ``(uncached_input, output, cached_input)``.
+#:
+#: The third slot is not a refinement. Measured cache-hit rates on this harness are
+#: 55-58% of all input tokens, and the cached rate is a tenth of the input rate on
+#: OpenAI and a FIFTIETH on DeepSeek, so pricing input flat overstated a real luna
+#: ladder by ~24%. Omit it and the rate falls back to the uncached one, i.e. the old
+#: behaviour, which is right for a provider with no cache tier.
+#:
+#: These are list prices and this table is a crude estimator, not an invoice. Two
+#: things it deliberately does not model: cache WRITES (billed at 1.25x uncached
+#: input, and `input_token_details` reports only `cache_read`, so writes are
+#: indistinguishable from fresh input here -- the estimate is a lower bound by that
+#: margin), and DeepSeek's peak-hour surcharge (2x during 09:00-12:00 and
+#: 14:00-18:00 Beijing time). A clock-dependent price would make the same run cost
+#: different amounts depending on when it was scored, which is worse than a stated
+#: floor.
+_PRICE_PER_1M: dict[str, tuple[float, float] | tuple[float, float, float]] = {
+    # OpenAI. gpt-5.6 was repriced 2026-07-30 (-80% on Luna); the entry here had
+    # been (2.0, 8.0), which matched neither the new price nor the old $1/$6 and
+    # overstated a measured run nine-fold.
+    "gpt-5.6-luna": (0.20, 1.20, 0.02),
+    "gpt-5.6-terra": (2.00, 12.00, 0.20),
+    "gpt-5.6-sol": (5.00, 30.00, 0.50),
+    "gpt-5.5": (1.25, 10.0, 0.125),
+    "gpt-5.5-mini": (0.25, 2.0, 0.025),
+    "gpt-4o": (2.5, 10.0, 1.25),
+    "gpt-4o-mini": (0.15, 0.6, 0.075),
     "text-embedding-3-small": (0.02, 0.0),
     "text-embedding-3-large": (0.13, 0.0),
-    # Anthropic tiers, so a Claude-served run is priced rather than reporting
-    # ``cost_est_usd: null`` on every row. Both 2026-07 ladders ran on
-    # ``Claude-Opus-4.8`` and produced no USD at all, which made cost the one metric
-    # that could not be compared across models even though the token counts could.
-    "Claude-Opus-4.8": (15.0, 75.0),
-    "Claude-Sonnet-5": (3.0, 15.0),
+    # DeepSeek. The cache tier matters most here: a hit is 1/50th of a miss.
+    "deepseek-v4-flash": (0.14, 0.28, 0.0028),
+    "deepseek-v4-pro": (0.435, 0.87, 0.003625),
+    # Anthropic, so a Claude-served run is priced rather than reporting null on
+    # every row -- both 2026-07 ladders produced no USD at all.
+    "Claude-Opus-4.8": (15.0, 75.0, 1.50),
+    "Claude-Sonnet-5": (3.0, 15.0, 0.30),
 }
 
 _LEDGER_META_KEYS = frozenset(
@@ -320,7 +342,8 @@ def estimate_cost_usd(model: str | None, token_sum: Mapping[str, int] | None) ->
                 break
     if prices is None:
         return None
-    pin, pout = prices
+    pin, pout = prices[0], prices[1]
+    pcached = prices[2] if len(prices) > 2 else pin
     inp = int(token_sum.get("input_tokens") or token_sum.get("prompt_tokens") or 0)
     out = int(token_sum.get("output_tokens") or token_sum.get("completion_tokens") or 0)
     if not inp and not out:
@@ -331,12 +354,17 @@ def estimate_cost_usd(model: str | None, token_sum: Mapping[str, int] | None) ->
         # observation rather than an absence. Live turns making two real model calls
         # recorded ``cost_est_usd: 0.0`` this way.
         return None
-    return round((inp * pin + out * pout) / 1_000_000.0, 8)
+    # `cache_read_tokens` is a SUBSET of `input_tokens`, so the fresh share is the
+    # difference. Clamped at 0: a provider reporting more cached than input would
+    # otherwise produce a negative cost, which reads as a credit.
+    cached = int(token_sum.get("cache_read_tokens") or 0)
+    fresh = max(0, inp - cached)
+    return round((fresh * pin + cached * pcached + out * pout) / 1_000_000.0, 8)
 
 
 def sum_token_usage(entries: list | None) -> dict[str, int]:
     """Sum input/output/total tokens across usage snapshots."""
-    inp = out = total = 0
+    inp = out = total = cached = 0
     for entry in entries or []:
         usage = entry.get("usage_metadata") if isinstance(entry, dict) else None
         if not isinstance(usage, Mapping):
@@ -344,10 +372,23 @@ def sum_token_usage(entries: list | None) -> dict[str, int]:
         i = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
         o = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
         t = int(usage.get("total_tokens") or (i + o))
+        # The cached share of `i`, not an addition to it. Providers bill cache reads
+        # at a fraction of the input rate -- 10% on OpenAI, 2% on DeepSeek -- and
+        # measured hit rates on this harness are 55-58%, so pricing input flat
+        # overstates every row. Absent (older payloads, providers that do not
+        # report it) reads as 0 cached, which prices the row exactly as before.
+        det = usage.get("input_token_details")
+        if isinstance(det, Mapping):
+            cached += int(det.get("cache_read") or 0)
         inp += i
         out += o
         total += t
-    return {"input_tokens": inp, "output_tokens": out, "total_tokens": total}
+    return {
+        "input_tokens": inp,
+        "output_tokens": out,
+        "total_tokens": total,
+        "cache_read_tokens": cached,
+    }
 
 
 def usage_callback_entries(usage_cb: Any, *, source: str = "deep_agent") -> list[dict]:
