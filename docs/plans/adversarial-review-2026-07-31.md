@@ -127,6 +127,50 @@ guardrails.check() on the SAME sql: passed=True  failed_layer=None
 
 **触发条件**:`grade_semantic_failures=True` **且**多 schema 进 shortlist。默认 pooled 跑有 `route_llm_pick=True` 会收敛到单 schema,**所以默认配置不暴露**;`--no-llm-pick` 或 local toml 开 `grade_semantic_failures` 就暴露。
 
+
+### 8 · headline 率和它的显著性检验算在**两个不同的总体**上,artifact 自己和自己矛盾
+
+**这一条最直接威胁那次付费跑。**
+
+- 每臂的 headline `ex_no_twin`(`statistics.py:1257`)分母是 **`n_no_twin_gradeable` = 1085**
+- 而 `comparisons[].no_twin`(`statistics.py:533`)建 `twin_free` 时**没有 `is_gradeable_eval_row` 过滤**,`n_shared` = **1236**
+
+实测:
+
+```
+twin-free (all rows): 1236   twin-free AND gradeable: 1085   difference: 151
+
+  curated      vs curated_sme  discordant=115  of which ungradeable=  7
+  baseline     vs curated      discordant=354  of which ungradeable= 25
+```
+
+那 151 行是 frozen-constant(125)加 order-sensitive(26)的 gold —— **生成器永远赢不了的题**,项目正是为此把它们排除在 `gradeable` 外。但它们**在显著性检验的分母里**,并且贡献了 7–25 个不一致对。
+
+**同一份 `summary.json` 里,同一个预登记量有两个数:**
+
+```
+curated  ex_no_twin=0.59078  →  curated_sme  ex_no_twin=0.59447   (1085 行, +4 题, +0.37pp)
+对应的 no_twin 比较块:        net_questions=1, net_rate=0.00081    (1236 行, +0.081pp)
+```
+
+**带 p 值的那一个,算在被排除的总体上。**
+
+在花 2 亿 token 之前必须修 —— 否则产出的 artifact 会像 20260730 这份一样,对自己的头号指标给出两个互相矛盾的数。
+
+### 9 · 脏工作树在 resume 上没有守卫
+
+```
+  git_sha                in RESUME_DRIFT_KEYS? True
+  dirty                  in RESUME_DRIFT_KEYS? False
+  diff_sha256            in RESUME_DRIFT_KEYS? False
+```
+
+M4 的 N13 加了 `dirty` / `diff_sha256`,但它们进的是 `MANIFEST_OPERATIONAL`,**不在 resume drift 键里**。
+
+所以:改一行代码不提交 → `--resume` → `git_sha` 没变 → `run_datalake.py:1394` 那道**致命**守卫不触发 → 「两个 harness 版本的行被平均进同一个臂」,**正是那道守卫点名要防的事**,而且不留任何痕迹。
+
+**在 57 schema / 4 臂 / 2 小时的跑上,中途改点东西再 resume 是最可能发生的操作员动作。**
+
 ---
 
 ## 二 · 机制成立、我未逐条复现(挑重要的)
