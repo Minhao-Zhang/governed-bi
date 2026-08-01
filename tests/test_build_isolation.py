@@ -1269,3 +1269,142 @@ def test_a_staging_failure_does_not_name_the_shared_roots_as_debris(tmp_path, ca
     # The earlier build's data is untouched, which is the thing that matters.
     for r in roots.values():
         assert (r / "db_ok" / "tables" / "t.yaml").is_file()
+
+
+# --------------------------------------------------------------------------- #
+# The completeness marker is not "any *.yaml" (A8)
+#
+# `_BUILD_COMPLETE_MARKER`'s own declaration says resume, staging seed, skip and
+# promote treat the marker — "not `any *.yaml`" — as the durable completeness
+# contract, and that a kill mid-build leaves YAML without it which is debris.
+# `run_build_phase` then inferred exactly that, over `roots`, which spans all four
+# arms regardless of `--arms`. So a narrower rerun stamped another arm's kill debris
+# as finished and a later `--resume` served it as the treatment.
+# --------------------------------------------------------------------------- #
+
+
+def _kill_debris(root, db):
+    """What a build killed mid-write leaves: YAML, no BUILD_COMPLETE.json."""
+    d = root / db / "tables"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{db}_partial.yaml").write_text(
+        f"physical_name: {db}_partial\ndescription: half written\n", encoding="utf-8"
+    )
+
+
+def test_a_narrower_rerun_does_not_stamp_another_arms_kill_debris(tmp_path, capsys):
+    """`--arms baseline,curated` killed mid-build, rerun as `--arms baseline`.
+
+    The rerun's `roots` still spans curated (the driver builds that dict from `_ARMS`,
+    not from `--arms`), and at `build_workers == 1` those roots ARE the shared ones. The
+    curated tree holding half-written YAML must come out of the rerun exactly as it went
+    in: unmarked, therefore rebuilt rather than served.
+    """
+    from governed_bi.eval.run_datalake import _corpus_complete, run_build_phase
+
+    out = tmp_path / "run"
+    roots = {a: out / f"corpus_{a}" for a in ("baseline", "seeded", "curated")}
+    for r in roots.values():
+        r.mkdir(parents=True)
+
+    # The killed attempt: baseline finished, curated did not.
+    _deterministic_build("db_a", {"baseline": roots["baseline"]})
+    _kill_debris(roots["curated"], "db_a")
+    assert _corpus_complete(roots["baseline"], "db_a")
+    assert not _corpus_complete(roots["curated"], "db_a")
+
+    # The rerun, `--arms baseline`: only the baseline root is written.
+    def _baseline_only(db, build_roots):
+        _deterministic_build(db, {"baseline": build_roots["baseline"]})
+
+    errors: dict[str, str] = {}
+    built = run_build_phase(
+        ["db_a"],
+        roots=roots,
+        staging_root=out / "_staging",
+        build_workers=1,
+        resume=True,
+        build_errors=errors,
+        build_lock=threading.Lock(),
+        build_one_db=_baseline_only,
+    )
+
+    assert built == ["db_a"] and errors == {}
+    assert not _corpus_complete(roots["curated"], "db_a"), (
+        "the half-built curated corpus was stamped COMPLETE by a run that never "
+        "built it — a later `--arms curated --resume` would serve kill debris as "
+        "the treatment"
+    )
+    # ...and the operator is told, rather than the tree quietly staying behind.
+    assert "kill debris" in capsys.readouterr().out
+    # The arm this invocation DID build is still stamped.
+    assert _corpus_complete(roots["baseline"], "db_a")
+
+
+def test_a_build_that_writes_yaml_without_marking_is_still_stamped(tmp_path):
+    """The back-compat need the inference actually serves.
+
+    `_promote_build` refuses to move an unmarked tree, so a build path that writes YAML
+    without calling `_mark_build_complete` — a test fake, or any future producer — must
+    still get the marker. Narrowing the inference must not take that away: the rule is
+    "this invocation wrote it", not "the producer remembered to mark it".
+    """
+    from governed_bi.eval.run_datalake import _corpus_complete, run_build_phase
+
+    out = tmp_path / "run"
+    roots = {a: out / f"corpus_{a}" for a in ("baseline", "curated")}
+    for r in roots.values():
+        r.mkdir(parents=True)
+
+    def _unmarking_build(db, build_roots):
+        for root in build_roots.values():
+            d = root / db / "tables"
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "t.yaml").write_text("physical_name: t\n", encoding="utf-8")
+
+    built = run_build_phase(
+        ["db_a"],
+        roots=roots,
+        staging_root=out / "_staging",
+        build_workers=1,
+        resume=False,
+        build_errors={},
+        build_lock=threading.Lock(),
+        build_one_db=_unmarking_build,
+    )
+    assert built == ["db_a"]
+    for arm in roots:
+        assert _corpus_complete(roots[arm], "db_a"), (
+            f"{arm} was written by this invocation and left unmarked, so promote "
+            "would refuse it and resume would rebuild it for nothing"
+        )
+
+
+def test_debris_under_a_staged_build_is_never_adopted_either(tmp_path):
+    """The same sequence at `--build-workers 2`, where the write goes to a private
+    staging root. `_stage_roots` discards the shared debris on resume; the promote that
+    follows must not re-create it from an unmarked staging tree."""
+    from governed_bi.eval.run_datalake import _corpus_complete, run_build_phase
+
+    out = tmp_path / "run"
+    roots = {a: out / f"corpus_{a}" for a in ("baseline", "curated")}
+    for r in roots.values():
+        r.mkdir(parents=True)
+    _kill_debris(roots["curated"], "db_a")
+
+    def _baseline_only(db, build_roots):
+        _deterministic_build(db, {"baseline": build_roots["baseline"]})
+
+    built = run_build_phase(
+        ["db_a", "db_b"],
+        roots=roots,
+        staging_root=out / "_staging",
+        build_workers=2,
+        resume=True,
+        build_errors={},
+        build_lock=threading.Lock(),
+        build_one_db=_baseline_only,
+    )
+    assert sorted(built) == ["db_a", "db_b"]
+    assert _corpus_complete(roots["baseline"], "db_a")
+    assert not _corpus_complete(roots["curated"], "db_a")

@@ -108,6 +108,53 @@ def test_the_headline_delta_is_tested_on_the_twin_free_stratum_too():
     )
 
 
+def test_the_twin_free_comparison_shares_the_headlines_denominator():
+    """AUDIT A6: one pre-registered quantity, two values in one ``summary.json``.
+
+    ``ex_no_twin`` is computed over rows that are twin-free AND gradeable
+    (``n_no_twin_gradeable``). ``comparisons[].no_twin`` — the block that carries the
+    p-value everyone quotes the headline with — built its population from the twin
+    stamp alone. On the 2026-07-31 ladder that is 1236 rows against 1085: 125
+    frozen-``VALUES`` golds and 26 order-sensitive golds, questions the generator can
+    never win and which the project deliberately excludes. They still flipped between
+    arms, so the two blocks disagreed on the SIGN of ``curated -> curated_sme``
+    (+0.0922pp headline, -0.1618pp beside the p-value).
+
+    Here the two twin-free frozen rows flip the wrong way while the two gradeable ones
+    flip the right way. Under the old population the block reads a net of zero; under
+    the shared one it reads the headline's +2.
+    """
+    from governed_bi.eval.run_datalake import _compare_arms
+
+    lo = (
+        [_row(f"n{i}", correct=False, twin=False) for i in range(2)]
+        + [_row(f"f{i}", correct=True, twin=False, frozen=True) for i in range(2)]
+        + [_row("t0", correct=False, twin=True)]
+    )
+    hi = (
+        [_row(f"n{i}", correct=True, twin=False) for i in range(2)]
+        + [_row(f"f{i}", correct=False, twin=False, frozen=True) for i in range(2)]
+        + [_row("t0", correct=False, twin=True)]
+    )
+    comparisons, _div = _compare_arms({"baseline": lo, "curated": hi})
+    no_twin = comparisons[0]["no_twin"]
+
+    lo_s = _summarise_rows("baseline", lo)
+    hi_s = _summarise_rows("curated", hi)
+    assert lo_s["n_no_twin_gradeable"] == 2, "the frozen golds are not in the headline"
+    assert no_twin["n_shared"] == lo_s["n_no_twin_gradeable"], (
+        "the block that carries the p-value must be computed over the population the "
+        "headline is computed over, or the same quantity has two values"
+    )
+    assert no_twin["net_questions"] == 2
+    assert no_twin["net_rate"] == pytest.approx(
+        hi_s["ex_no_twin"] - lo_s["ex_no_twin"]
+    ), "the net rate must reconstruct the headline delta exactly"
+    # Stamped, so an archived artifact carrying the OLD population under this key name
+    # can be told apart from a new one by more than its n_shared.
+    assert no_twin["gradeable_only"] is True
+
+
 # --------------------------------------------------------------------------- #
 # The dataset's own EX exclusions
 # --------------------------------------------------------------------------- #

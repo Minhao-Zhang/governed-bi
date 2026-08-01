@@ -680,6 +680,29 @@ def test_exactly_one_rate_calls_itself_the_headline():
         )
 
 
+def test_routing_recall_declares_that_it_is_the_pick_and_points_at_the_retrieval_rate():
+    """AUDIT A2. ``routing_recall`` and ``schema_pick_accuracy`` are numerically
+    identical to sixteen decimal places on every arm of every run with
+    ``route_llm_pick=True`` — ``analyst/agent.py`` sets ``routed = frozenset([picked])``,
+    so ``routed_hit`` IS ``pick_hit`` (checked row-by-row on all 1351 rows of the
+    2026-07-31 ladder). A reader who takes the name at face value reads a retrieval
+    figure off a picker figure, so the register has to say so, and has to say where the
+    retrieval figure actually is."""
+    meaning = {m.name: m.meaning for m in metrics.SUMMARY_RATES}
+    assert "shortlist_recall" in meaning, (
+        "the retrieval channel has no scalar anywhere; it was recoverable only by "
+        "summing the non-miss buckets of by_gold_rank"
+    )
+    routing = meaning["routing_recall"]
+    assert "schema_pick_accuracy" in routing, (
+        "routing_recall must name the rate it is identical to under route_llm_pick"
+    )
+    assert "shortlist_recall" in routing, (
+        "...and must point at the rate that does report retrieval"
+    )
+    assert "shortlist" in meaning["shortlist_recall"]
+
+
 def test_quotability_free_pass_counters_are_declared():
     """``index.quotable()`` reads these three by name. They arrive in the summary
     through a ``**free_pass_counts(...)`` splat, which is exactly the shape a

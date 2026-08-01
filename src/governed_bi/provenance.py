@@ -99,6 +99,14 @@ def serve_config_hash(
         "pin_max": settings.pin_max,
         "always_note_global_max": settings.always_note_global_max,
         "always_note_char_max": settings.always_note_char_max,
+        # Analyst-side context budget. Same argument as the note knobs one line up,
+        # and the same failure if omitted: these DROP corpus content from the prompt,
+        # so two runs that differ here served different context on every question
+        # while agreeing on every hashed field. `schema_pick_max_columns` above is
+        # the router's version of exactly this knob and has been hashed all along —
+        # the rule simply was not carried to the analyst side when it was added.
+        "analyst_max_table_columns": settings.analyst_max_table_columns,
+        "analyst_compact_suspect_caveats": settings.analyst_compact_suspect_caveats,
     }
     if routing_knobs:
         payload["routing_knobs"] = dict(routing_knobs)

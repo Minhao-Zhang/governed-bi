@@ -38,7 +38,7 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from ..stages import REFUSED_BY_TO_STAGE, Outcome, classify_row
-from .analysis import rank_report
+from .analysis import corpus_census, rank_report
 from .arms import ARM_ORDER, ladder_steps, skipped_rungs, step_mechanisms
 from .error_taxonomy import attribute_rows, summarise_attributions
 from .harness import _cost_block
@@ -530,9 +530,26 @@ def compare_arms(
     # ``is False``, not falsy: an unstamped row (a resume predating the flag) is not
     # known to be twin-free, and treating it as such turned this into the pooled
     # comparison wearing the stratum's name.
+    #
+    # ``is_gradeable_eval_row`` as well, and that filter is the whole point of the
+    # AUDIT A6 fix. ``summarise_rows`` computes the pre-registered headline
+    # ``ex_no_twin`` over ``gradeable`` rows that are twin-free (denominator
+    # ``n_no_twin_gradeable``); this block used to build its population from the twin
+    # stamp ALONE. On the 2026-07-31 ladder that is 1236 rows here against 1085 there
+    # — 125 frozen-``VALUES`` golds and 26 order-sensitive golds, questions the
+    # generator can never win and which the project deliberately excludes from
+    # ``ex_gradeable``. They still flipped between arms, contributing 7-25 discordant
+    # pairs, so ONE pre-registered quantity had TWO values in one ``summary.json``:
+    # ``curated -> curated_sme`` read +0.0922pp as the headline and -0.1618pp in the
+    # block that carries the p-value — opposite signs. Sharing the denominator is what
+    # makes ``no_twin.net_rate`` reconstruct the headline delta exactly.
     twin_free = {
         arm: correct_by_question(
-            [r for r in rows if r.get("gold_twin_in_train") is False]
+            [
+                r
+                for r in rows
+                if r.get("gold_twin_in_train") is False and is_gradeable_eval_row(r)
+            ]
         )
         for arm, rows in rows_by_arm.items()
     }
@@ -625,6 +642,12 @@ def compare_arms(
                 # survives".
                 report["no_twin"]["p_value_is_raw"] = True
                 report["no_twin"]["floor_from_full_split"] = True
+                # Which population this block was computed over, stamped rather than
+                # inferred: an archived artifact from before AUDIT A6 carries the
+                # twin-stamp-only population under the same key name, and its
+                # ``n_shared`` is the only hint. Absence of this flag is what tells a
+                # reader they are looking at the old, headline-disagreeing definition.
+                report["no_twin"]["gradeable_only"] = True
             # Only fair-ladder pairs enter the Holm family. Anything off the ladder is
             # a diagnostic by construction — the oracle rungs, the replicate arm, and
             # any arm not yet in ``ARM_ORDER`` — and its p-value is not a result. The
@@ -811,6 +834,127 @@ def _shortlists_from_rows(
         if qid is not None and isinstance(shortlisted, list) and shortlisted:
             out[str(qid)] = [str(s) for s in shortlisted]
     return out
+
+
+#: The three width figures :func:`schema_width_census` reports per schema, and the
+#: three keys :func:`summarise_rows` emits from them. Named once so the "not
+#: measured" shape below cannot drift from the measured one.
+WIDTH_FIELDS: tuple[str, ...] = ("n_tables", "n_columns", "max_table_columns")
+
+
+#: The channels :func:`governed_bi.retrieval.schema_router.shortlist_schemas` can
+#: report. Named here rather than imported so the summary's key set does not depend
+#: on the retrieval package, and so an unknown value is a loud KeyError-shaped gap in
+#: the census rather than a silently absent count.
+ROUTE_CHANNELS: frozenset[str] = frozenset({"embedding", "bm25_fallback", "none"})
+
+
+def routing_channel_counts(rows: "Sequence[dict[str, Any]]") -> dict[str, Any]:
+    """Per-arm routing-channel census, over the rows that recorded a channel.
+
+    Modelled on how ``routing_escaped`` is aggregated a few lines below: rows whose
+    value is ``None`` leave the denominator and are counted separately, never folded
+    into the healthy value. An arm that never recorded a channel reports
+    ``n_routing_channel_observed = 0`` and ``routing_degraded_rate = None`` -- "not
+    measured" -- rather than a 0.0 degradation rate, which reads as "the embedding
+    channel ran everywhere and never failed" and is the most misleading thing this
+    field could say.
+
+    It matters because the two channels are not equivalent: on the curated corpus the
+    embedding channel reaches 0.953 shortlist recall@10 against BM25's 0.906, so a
+    silent fallback is a real drop with nothing else in the record to explain it
+    (AUDIT R8).
+    """
+    observed = [r for r in rows if r.get("schema_route_channel") is not None]
+    degraded_seen = [r for r in observed if r.get("schema_route_degraded") is not None]
+    n_degraded = sum(1 for r in degraded_seen if r.get("schema_route_degraded"))
+    counts: dict[str, Any] = {
+        "n_routing_channel_observed": len(observed),
+        "n_routing_degraded_observed": len(degraded_seen),
+        "n_routing_degraded": n_degraded,
+        "routing_degraded_rate": (
+            n_degraded / len(degraded_seen) if degraded_seen else None
+        ),
+    }
+    for channel in sorted(ROUTE_CHANNELS):
+        counts[f"n_routing_channel_{channel}"] = sum(
+            1 for r in observed if r.get("schema_route_channel") == channel
+        )
+    return counts
+
+
+def schema_width_census(corpus: Any) -> dict[str, dict[str, int]]:
+    """``{schema: {n_tables, n_columns, max_table_columns}}`` for one arm's corpus.
+
+    Schema WIDTH was the one property of the pool no artifact recorded. ``by_db``
+    carried EX, routing and cost per schema and not one number saying how big that
+    schema is, and :func:`governed_bi.eval.analysis.corpus_census` counts tables and
+    columns per **arm**, not per schema. So every wide-table question — is EX lower on
+    wide schemas, does the 118-column table cost the model the answer — had to be
+    answered by querying the live Postgres catalog, which means the analysis cannot be
+    reproduced from a run directory and cannot be run at all once the database moves.
+
+    The counting is :func:`~governed_bi.eval.analysis.corpus_census` itself, called
+    over a per-schema view of the same assets, rather than a second implementation of
+    "count the columns". A second implementation is how ``n_columns`` in ``by_db``
+    would come to mean something ``corpus_census`` does not.
+
+    ``max_table_columns`` is the one figure ``corpus_census`` has no equivalent for,
+    and it is the one the wide-table hypothesis is actually about: a schema of 70
+    narrow tables and a schema with one 118-column table have similar totals and
+    nothing else in common.
+    """
+    from types import SimpleNamespace
+
+    from ..corpus.schemas import TableAsset
+
+    by_schema: dict[str, list[Any]] = {}
+    for asset in getattr(corpus, "assets", None) or ():
+        if isinstance(asset, TableAsset):
+            by_schema.setdefault(str(asset.schema), []).append(asset)
+
+    out: dict[str, dict[str, int]] = {}
+    for schema, tables in sorted(by_schema.items()):
+        census = corpus_census(SimpleNamespace(assets=tables))
+        out[schema] = {
+            "n_tables": census["n_tables"],
+            "n_columns": census["n_columns"],
+            "max_table_columns": max((len(t.columns) for t in tables), default=0),
+        }
+    return out
+
+
+def _width_of(
+    rows: list[dict[str, Any]],
+    schema_widths: "dict[str, dict[str, int]] | None",
+) -> dict[str, int | None]:
+    """Roll :func:`schema_width_census` up over the schemas these rows came from.
+
+    ``None`` on all three when no census was supplied, and ``None`` on all three when
+    the census does not cover every schema present in ``rows``. The second case is the
+    one worth spelling out: a sum over the schemas that happen to be in the census
+    would be published under a name that claims to describe the pool, and a pool width
+    that is short by one schema is indistinguishable from a narrower pool. Absent
+    beats understated — the rule the rest of this module applies to rates.
+
+    Not derived from the per-row ``gold_table_max_columns`` field, deliberately. That
+    field is the widest table the GOLD SQL touches, which is a property of the
+    question; these three are properties of the schema. Reporting the first under the
+    name of the second would put a number in ``max_table_columns`` that is a lower
+    bound on it, on a run where nothing said so.
+    """
+    absent: dict[str, int | None] = dict.fromkeys(WIDTH_FIELDS, None)
+    if not schema_widths:
+        return absent
+    present = {str(db) for r in rows if (db := r.get("db_id")) is not None}
+    if not present or any(db not in schema_widths for db in present):
+        return absent
+    known = [schema_widths[db] for db in sorted(present)]
+    return {
+        "n_tables": sum(int(w.get("n_tables") or 0) for w in known),
+        "n_columns": sum(int(w.get("n_columns") or 0) for w in known),
+        "max_table_columns": max(int(w.get("max_table_columns") or 0) for w in known),
+    }
 
 
 def _group_by(rows: list[dict[str, Any]], key: str) -> dict[str, list[dict[str, Any]]]:
@@ -1041,6 +1185,11 @@ def summarise_rows(
     *,
     gold: dict[str, str] | None = None,
     corpus_note_assets: int | None = None,
+    # Per-schema table/column counts from :func:`schema_width_census`, built off the
+    # corpus the arm actually served. Optional and defaulted to ``None`` because this
+    # function is also run over archived ``generations.*.jsonl`` with no corpus to
+    # hand; when it is absent the three width fields are ``None`` rather than zero.
+    schema_widths: "dict[str, dict[str, int]] | None" = None,
     nested: bool = False,
 ) -> dict[str, Any]:
     """Aggregate scored rows into one arm summary.
@@ -1059,6 +1208,15 @@ def summarise_rows(
     notes and injected none" — the signature of both interventions that were
     reported as measured nulls. Without it that check is unreachable, since its
     guard is ``if count and not injected``.
+
+    ``schema_widths`` is :func:`schema_width_census` over the corpus this arm served.
+    It is what puts ``n_tables`` / ``n_columns`` / ``max_table_columns`` on the summary
+    and on every ``by_db`` block, so wide-schema analysis reads a run directory instead
+    of the live catalog. It has to be *passed*: rows carry no schema inventory (the
+    widest field on one, ``licensed_tables``, is what the turn was licensed for, not
+    what the schema holds), and this module never reaches for a corpus itself — the
+    driver has ``arm_corpus`` in scope at the call site and hands it over there. Left
+    ``None``, the three fields are ``None``: not measured, not zero.
     """
     n = len(rows)
     n_correct = sum(1 for r in rows if r.get("correct"))
@@ -1105,6 +1263,40 @@ def summarise_rows(
     routing_rows = [r for r in uncrashed if r.get("routed_hit") is not None]
     n_routing_unrecorded = len(uncrashed) - len(routing_rows)
     n_routed_hit = sum(1 for r in routing_rows if r.get("routed_hit"))
+    # The RETRIEVAL channel's own recall, which `routing_recall` above cannot report.
+    #
+    # Under ``route_llm_pick=True`` the serve path sets ``routed = frozenset([picked])``
+    # (``analyst/agent.py``), so ``routed_hit`` IS ``pick_hit`` — verified row-by-row on
+    # all 1351 rows of the 2026-07-31 ladder, where ``routing_recall`` and
+    # ``schema_pick_accuracy`` agree to sixteen decimal places on every arm. What the
+    # shortlist actually surfaced was recoverable only by summing the non-miss buckets
+    # of ``by_gold_rank``; on that run it is 1286/1351 = 0.952 against a pick accuracy
+    # of 1180/1351 = 0.873, i.e. two thirds of the routing loss is the picker discarding
+    # a schema retrieval had already found. That is a different repair from widening
+    # the shortlist, and no scalar in any artifact said so.
+    #
+    # Same carve-outs as ``routing_recall``, in the same order and off the same
+    # populations: bypassed turns are gone (``unbypassed``), crashes are gone
+    # (``uncrashed``), and the denominator is then defined on POSITIVE evidence — a
+    # recorded shortlist — so a turn that ended before retrieval ran is excluded rather
+    # than counted as a miss. ``gold_schema_rank is not None`` is the hit test
+    # (``run_datalake`` sets it to ``shortlisted.index(db) + 1``), and it is checked
+    # against ``is not None`` rather than truthiness because rank 1 is the *best*
+    # possible value and ``not 1`` is False only by luck of the 1-based indexing.
+    #
+    # A row that recorded a rank but no shortlist list still counts as observed: the
+    # rank is itself the positive evidence, and dropping it would silently shrink the
+    # denominator toward the rows that happen to carry the wider field.
+    shortlist_rows = [
+        r
+        for r in uncrashed
+        if isinstance(r.get("shortlisted_schemas"), list)
+        or r.get("gold_schema_rank") is not None
+    ]
+    n_shortlist_observed = len(shortlist_rows)
+    n_shortlist_hit = sum(
+        1 for r in shortlist_rows if r.get("gold_schema_rank") is not None
+    )
     # How often an answer reached past the router. Drawn from ``routing_rows``, so it
     # inherits all three carve-outs above (bypassed, crashed, unrecorded) and then adds
     # its own: rows where ``routing_escaped`` is ``None``, because a refusal licensed
@@ -1187,6 +1379,7 @@ def summarise_rows(
 
     gradeable = [r for r in rows if is_gradeable_eval_row(r)]
     n_gradeable = len(gradeable)
+    width = _width_of(rows, schema_widths)
     _measured_notes = [
         r for r in rows if isinstance(r.get("n_notes_injected"), (int, float))
     ]
@@ -1310,6 +1503,19 @@ def summarise_rows(
         # ``n_routing_observed``). This is the ceiling on EX in the data lake.
         "routing_recall": (n_routed_hit / n_routing_observed) if n_routing_observed else None,
         "n_routing_observed": n_routing_observed,
+        # The retrieval channel, reported apart from the picker. See the derivation
+        # above for why ``routing_recall`` cannot stand in for it under
+        # ``route_llm_pick=True``.
+        "shortlist_recall": (
+            (n_shortlist_hit / n_shortlist_observed) if n_shortlist_observed else None
+        ),
+        "n_shortlist_hit": n_shortlist_hit,
+        # Its denominator, which is NOT ``n_routing_observed``: a turn can record a
+        # shortlist and no routing decision, or the reverse. Reported so
+        # ``shortlist_recall`` cannot be read over an unknown share of the arm — and so
+        # ``n_routing_observed - n_shortlist_observed`` names the gap rather than
+        # leaving a reader to assume the two rates share a population.
+        "n_shortlist_observed": n_shortlist_observed,
         # Turns with no routing decision to score (a one-schema corpus, or an oracle
         # rung that was handed its schema). Excluded from every routing metric above;
         # reported here so a ``routing_recall: null`` is legible as "nothing to route"
@@ -1484,6 +1690,13 @@ def summarise_rows(
         #
         # ``None`` at an empty denominator, as everywhere else here: no row was in a
         # position to escape.
+        # Which channel produced each ranking, and how often it was the degraded one.
+        # Emitted from inside `summarise_rows` rather than injected by the driver
+        # afterwards: the register's "declared fields the summary never emits" test
+        # only sees this function, so a driver-side injection is declared, emitted,
+        # and unguarded -- and a second injector under the same names with a
+        # different denominator would silently win.
+        **routing_channel_counts(rows),
         "n_routing_escape_observed": len(escape_rows),
         "n_routing_escaped": n_routing_escaped,
         "routing_escape_rate": (
@@ -1645,11 +1858,30 @@ def summarise_rows(
         # denominator, not by ``n`` (``cond_ex_given_routing`` by routed rows,
         # ``schema_pick_accuracy`` by rows with a pick), so the pooled figure is not
         # the ``n``-weighted mean of the per-db ones. ``nested`` stops the recursion.
+        # How WIDE the schemas behind these rows are. At the top level this is the
+        # whole pool the arm was scored over; inside a ``by_db`` block it is that one
+        # schema, which is where the wide-table hypothesis is actually testable —
+        # pooled, schema difficulty confounds it (see
+        # ``docs/plans/luna-max-routing-experiment.md`` §0.5: the pooled EX curve falls
+        # 26pp with gold-table width, and within-schema the same split is p=0.23).
+        #
+        # ``None``, not 0, when no census was passed: a schema with no tables and a
+        # summary computed off an archived generations file with no corpus to hand must
+        # not read the same.
+        "n_tables": width["n_tables"],
+        "n_columns": width["n_columns"],
+        "max_table_columns": width["max_table_columns"],
         "by_db": (
             {}
             if nested
             else {
-                db: summarise_rows(arm, db_rows, gold=gold, nested=True)
+                db: summarise_rows(
+                    arm,
+                    db_rows,
+                    gold=gold,
+                    schema_widths=schema_widths,
+                    nested=True,
+                )
                 for db, db_rows in sorted(
                     _group_by(rows, "db_id").items()
                 )

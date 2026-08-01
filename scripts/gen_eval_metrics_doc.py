@@ -48,6 +48,7 @@ print(json.dumps({
         "identity": list(m.ROW_IDENTITY), "verdict": list(m.ROW_VERDICT),
         "prediction": list(m.ROW_PREDICTION), "governance": list(m.ROW_GOVERNANCE),
         "context": list(m.ROW_CONTEXT), "routing": list(m.ROW_ROUTING),
+        "width": list(m.ROW_WIDTH),
         "leakage": list(m.ROW_LEAKAGE), "oracle": list(m.ROW_ORACLE),
         "cost": list(m.ROW_COST), "provenance": list(m.ROW_PROVENANCE),
     },
@@ -257,6 +258,8 @@ reported without its excluded count reads as full coverage.
 {group("context", d["row"]["context"])}
 
 {group("routing", d["row"]["routing"])}
+
+{group("width", d["row"]["width"])}
 
 {group("leakage", d["row"]["leakage"])}
 

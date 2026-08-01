@@ -269,6 +269,30 @@ class Settings:
     # dominate the picker context across every candidate.
     schema_pick_max_columns: int = 12
 
+    # ── Analyst prompt shaping (see [analyst] in governed_bi.toml) ──
+    # Columns per table in the ANALYST system prompt. Same argument as
+    # ``schema_pick_max_columns`` one field up — a wide table would otherwise dominate
+    # the context — applied to the prompt that actually writes the SQL, where nothing
+    # capped it: ``european_football_2.partido`` contributes 118 column lines today.
+    #
+    # ``0`` (the default) means NO CAP, i.e. exactly the behaviour every recorded run
+    # measured. The default is deliberately not the router's 12: whether capping helps
+    # is unsettled. Pooled BIRD rows show EX falling with gold-table width (70.7% under
+    # 15 columns -> 44.3% at 40+), but a within-schema median split does not reach
+    # significance (17/29 schemas, one-sided sign test p = 0.23), so most of that curve
+    # is schema difficulty. This knob exists to run the intervention that would settle
+    # it, and a non-zero default would confound the comparison it was added to make.
+    # Selection is by relevance with keys and SUSPECT columns never dropped
+    # (``analyst/context.py::_select_columns``).
+    # TOML: ``[analyst] max_table_columns``.
+    analyst_max_table_columns: int = 0
+    # When True the ``## Reliability caveats`` block lists DO-NOT-USE identifiers only.
+    # Each caveat is currently rendered twice — inline on the column line and again
+    # here with the same note text — and on the widest committed schemas the pair is
+    # ~half the context block. Off by default for the same comparability reason.
+    # TOML: ``[analyst] compact_suspect_caveats``.
+    analyst_compact_suspect_caveats: bool = False
+
     # ── Model seam (see [models] in governed_bi.toml) ──
     models: ModelConfig = field(default_factory=ModelConfig)
 
@@ -666,6 +690,23 @@ def load_settings(
             value = routing_tbl[toml_key]
             knob_overrides[field_name] = (
                 bool(value) if field_name == "schema_route_llm_pick" else int(value)
+            )
+
+    # Optional [analyst] table: prompt-shaping knobs for the SQL-writing prompt.
+    # Same reachability lesson as [routing] above — a knob only an eval CLI can set
+    # is a knob no deployment can run, so the benchmark ends up describing a
+    # configuration the product does not have.
+    analyst_tbl = data.get("analyst", {})
+    for toml_key, field_name in (
+        ("max_table_columns", "analyst_max_table_columns"),
+        ("compact_suspect_caveats", "analyst_compact_suspect_caveats"),
+    ):
+        if toml_key in analyst_tbl:
+            value = analyst_tbl[toml_key]
+            knob_overrides[field_name] = (
+                bool(value)
+                if field_name == "analyst_compact_suspect_caveats"
+                else int(value)
             )
 
     # Optional [eval] table (docs/measurement.md). TOML keys are

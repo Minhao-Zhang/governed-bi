@@ -135,14 +135,31 @@ BIRD (every test question targets exactly one `db_id`). The default
 (`False`) is the general cross-schema regime and is unchanged for the
 single-db/product serve paths.
 
-The data-lake driver also turns the embedder on by default, on top of
-`top_k=10` and `llm_pick=True`. Schema-document vectors are embedded once at
-rails-build time (`embed_schema_documents`), not re-embedded per question.
+The data-lake driver turns the embedder on by default. Schema-document vectors are
+embedded once at rails-build time (`embed_schema_documents`), not re-embedded per
+question.
 
-CLI knobs: `--route-top-k N`, `--schema-pick-max-columns N`, `--no-llm-pick`,
-`--no-embedder`. All four are recorded in `manifest.json`, guarded on `--resume`,
-and read by the run ledger's comparability rule, so two runs that differ in any of
-them are reported as not comparable rather than quietly compared.
+**The other three knobs come from `[routing]` in `governed_bi.toml`, not from the
+driver** (changed 2026-08-01). They used to be argparse defaults —
+`--route-top-k` defaulted to `10` and `--no-llm-pick` was a `store_true` — and both
+were passed unconditionally into the serve `Settings`, so `[routing] top_k = 3` had
+no effect on this driver at all while still being recorded in the manifest, guarded
+on resume and used as a comparability key. All three now use a `None` sentinel:
+unset means "whatever the config file says", a flag overrides it, and the manifest
+records the **resolved** value. The driver prints the resolved profile at startup.
+
+Read that carefully before a scale run: the committed `governed_bi.toml` ships
+`[routing]` **commented out**, so a checkout without a `governed_bi.local.toml`
+overlay resolves to the dataclass defaults — `top_k = 3`, `llm_pick = false` — and
+not to the `10` / `true` every run before 2026-08-01 used. The repo's local overlay
+sets `top_k = 10`, `llm_pick = true`, `pick_max_columns = 12`; without it, pass
+`--route-top-k 10 --llm-pick` explicitly.
+
+CLI knobs: `--route-top-k N`, `--schema-pick-max-columns N`,
+`--llm-pick` / `--no-llm-pick`, `--no-embedder`. All four are recorded in
+`manifest.json`, guarded on `--resume`, and read by the run ledger's comparability
+rule, so two runs that differ in any of them are reported as not comparable rather
+than quietly compared.
 
 ### The key risk (and the routing design)
 

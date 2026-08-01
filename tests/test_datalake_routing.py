@@ -621,3 +621,178 @@ def test_the_driver_supplies_the_arm_corpus_rather_than_disabling_the_metric():
         "for every row and the summary reports a null rate rather than a measurement"
     )
     assert "arm_corpus=None" not in src
+
+
+# --------------------------------------------------------------------------- #
+# The `[routing]` TOML table is not decoration (A7)
+#
+# `governed_bi.toml` ships `[routing]` with `top_k` / `llm_pick` /
+# `pick_max_columns` and a comment promising "CLI flags still override for a
+# one-off run". They did worse than override: `--route-top-k` defaulted to 10 and
+# `--no-llm-pick` was a `store_true`, and both were passed UNCONDITIONALLY into the
+# `replace(settings, ...)` that builds the serve settings. `[routing] top_k = 3` had
+# literally no effect on this driver — it was permanently 10, while being recorded
+# in the manifest, guarded on resume and used as a comparability key.
+# --------------------------------------------------------------------------- #
+
+
+def _settings_from_toml(tmp_path, body: str):
+    from governed_bi.config import load_settings
+
+    cfg = tmp_path / "governed_bi.toml"
+    cfg.write_text(body, encoding="utf-8")
+    # `apply_local=False`: the repo's git-ignored governed_bi.local.toml also carries
+    # a [routing] table, and picking it up here would make the test's answer depend on
+    # an untracked file on the machine running it.
+    return load_settings(cfg, apply_local=False)
+
+
+def test_the_toml_routing_table_decides_when_no_flag_is_passed(tmp_path):
+    from governed_bi.eval.run_datalake import _resolve_routing
+
+    settings = _settings_from_toml(
+        tmp_path, "[routing]\ntop_k = 3\nllm_pick = false\npick_max_columns = 5\n"
+    )
+    resolved = _resolve_routing(
+        settings, route_top_k=None, route_llm_pick=None, schema_pick_max_columns=None
+    )
+    assert (resolved.top_k, resolved.llm_pick, resolved.pick_max_columns) == (3, False, 5)
+
+
+def test_a_flag_still_overrides_the_toml(tmp_path):
+    from governed_bi.eval.run_datalake import _resolve_routing
+
+    settings = _settings_from_toml(
+        tmp_path, "[routing]\ntop_k = 3\nllm_pick = false\npick_max_columns = 5\n"
+    )
+    resolved = _resolve_routing(
+        settings, route_top_k=7, route_llm_pick=True, schema_pick_max_columns=0
+    )
+    assert (resolved.top_k, resolved.llm_pick, resolved.pick_max_columns) == (7, True, 0)
+
+
+def test_an_absent_routing_table_leaves_the_dataclass_defaults(tmp_path):
+    from governed_bi.config import Settings
+    from governed_bi.eval.run_datalake import _resolve_routing
+
+    settings = _settings_from_toml(tmp_path, "[runtime]\nenvironment = \"dev\"\n")
+    resolved = _resolve_routing(
+        settings, route_top_k=None, route_llm_pick=None, schema_pick_max_columns=None
+    )
+    assert resolved.top_k == Settings.schema_route_top_k
+    assert resolved.llm_pick == Settings.schema_route_llm_pick
+    assert resolved.pick_max_columns == Settings.schema_pick_max_columns
+
+
+def test_the_manifest_records_the_resolved_value_not_the_flag(tmp_path):
+    """The knob is a resume guard and a ledger comparability key, so a manifest that
+    records something the serve path did not read is worse than one that records
+    nothing: `comparable()` would clear two runs that routed differently."""
+    from governed_bi.eval.run_datalake import _build_manifest, _resolve_routing
+
+    settings = _settings_from_toml(tmp_path, "[routing]\ntop_k = 3\nllm_pick = false\n")
+    resolved = _resolve_routing(
+        settings, route_top_k=None, route_llm_pick=None, schema_pick_max_columns=None
+    )
+    manifest = _build_manifest(
+        bird_dir=tmp_path,
+        split="test",
+        model_name="m",
+        llm_reasoning_effort="low",
+        embedding_model="e",
+        embedding_dimensions=None,
+        prompt_variants={},
+        route_top_k=resolved.top_k,
+        route_llm_pick=resolved.llm_pick,
+        schema_pick_max_columns=resolved.pick_max_columns,
+        use_embedder=True,
+        question_pool_hash="h",
+        always_note_global_max=3,
+        always_note_char_max=400,
+        pin_triggers_enabled=False,
+        pin_require_certified=True,
+        pin_max=2,
+        grade_semantic_failures=True,
+        serve_workers=1,
+    )
+    assert manifest["route_top_k"] == 3
+    assert manifest["route_llm_pick"] is False
+
+
+def test_the_driver_records_the_resolved_knobs_rather_than_its_arguments():
+    """The one line the unit tests above cannot reach without Postgres. Reading the
+    raw parameters here is exactly what made `[routing]` dead: they are the CLI's
+    values, and after the sentinel they can be `None`."""
+    import inspect
+
+    from governed_bi.eval.run_datalake import run_datalake
+
+    src = inspect.getsource(run_datalake)
+    for line in (
+        "route_top_k=settings.schema_route_top_k,",
+        "route_llm_pick=settings.schema_route_llm_pick,",
+        "schema_pick_max_columns=settings.schema_pick_max_columns,",
+    ):
+        assert line in src, f"the manifest no longer records the resolved knob: {line}"
+    assert "schema_route_top_k=routing.top_k" in src
+    assert "schema_route_llm_pick=routing.llm_pick" in src
+
+
+def _knob_calls(monkeypatch, tmp_path, extra_argv):
+    """Drive the real argv parser, recording the kwargs `run_datalake` is called with."""
+    from governed_bi.eval import run_datalake as rd
+
+    calls: list[dict] = []
+
+    def _stub(**kwargs):
+        calls.append(kwargs)
+        return {"arms": {}, "treatment_divergence": {}, "comparisons": [],
+                "deltas": {}, "quotable": True}
+
+    monkeypatch.setattr(rd, "run_datalake", _stub)
+    rd.main([
+        "--bird-dir", str(tmp_path / "bird"),
+        "--out", str(tmp_path / "runs"),
+        "--oracle-only",
+        "--dbs", "beer_factory",
+        *extra_argv,
+    ])
+    return calls[0]
+
+
+def test_an_unpassed_flag_arrives_as_none_so_the_toml_can_win(monkeypatch, tmp_path):
+    call = _knob_calls(monkeypatch, tmp_path, [])
+    assert call["route_top_k"] is None
+    assert call["route_llm_pick"] is None
+    assert call["schema_pick_max_columns"] is None
+
+
+def test_the_flags_still_reach_the_driver_when_they_are_passed(monkeypatch, tmp_path):
+    call = _knob_calls(monkeypatch, tmp_path, ["--route-top-k", "3", "--no-llm-pick"])
+    assert call["route_top_k"] == 3
+    assert call["route_llm_pick"] is False
+
+    # And the affirmative half of the pair, which is the only way to ask for the LLM
+    # pick when the TOML turns it off.
+    call = _knob_calls(monkeypatch, tmp_path, ["--llm-pick"])
+    assert call["route_llm_pick"] is True
+
+
+def test_no_embedder_is_the_same_shape_of_flag_but_not_the_same_defect(monkeypatch, tmp_path):
+    """`--no-embedder` is also a `store_true`, and it is checked here because it looks
+    identical. It is not: there is no `Settings` field for the embedder channel, so
+    there is no configured value for the flag to overwrite and nothing a sentinel
+    could fall back to. The manifest records `use_embedder=bool(embedder)` — whether
+    the channel was actually built — rather than what was asked for.
+    """
+    from governed_bi.config import Settings
+
+    embedder_fields = [f for f in Settings.__dataclass_fields__ if "embedder" in f]
+    assert not embedder_fields, (
+        f"Settings grew {embedder_fields}, so `--no-embedder` now DOES overwrite a "
+        "configured value on every invocation — give it the same `None` sentinel the "
+        "three [routing] flags have, and delete this test"
+    )
+
+    assert _knob_calls(monkeypatch, tmp_path, [])["use_embedder"] is True
+    assert _knob_calls(monkeypatch, tmp_path, ["--no-embedder"])["use_embedder"] is False

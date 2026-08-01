@@ -17,8 +17,8 @@ documented subset of `summary.json`, so "declared but absent" is expected there.
 | Artifact | Fields | Consumer |
 |---|---|---|
 | `manifest.json` | 47 (42 in every run) | `index.COMPARABILITY_KEYS`, `index.RESUME_DRIFT_KEYS` |
-| `generations.<arm>.jsonl` | 73 per (question, arm) | `_summarise_rows`, `analysis`, `power`, `error_taxonomy` |
-| `summary.json` | 87 | `index.quotable` |
+| `generations.<arm>.jsonl` | 78 per (question, arm) | `_summarise_rows`, `analysis`, `power`, `error_taxonomy` |
+| `summary.json` | 100 | `index.quotable` |
 | `stage_events.jsonl` | 9 per (question, arm, stage) | read by hand; per-stage latency attribution |
 | `split_gap.json` | 6 | read by hand; `--split both` only |
 
@@ -175,8 +175,10 @@ reviewable, and a test asserts every declared rate names one.
 | `safety_clearance_rate` | delivered answers that cleared the guardrails | delivered rows |
 | `graded_delivery_rate` | delivered answers served as unverified | delivered rows |
 | `coverage_best_effort_rate` | answers delivered on partial coverage | delivered rows |
-| `routing_recall` | router included the gold schema | rows with a recorded routing decision |
+| `routing_recall` | the gold schema survived into `routed_schemas` — the set the turn was licensed against. NOT the retrieval channel's recall, and NOT independent of the picker: under `route_llm_pick=True` the serve path sets `routed = frozenset([picked])`, so `routed_hit` IS `pick_hit` and this rate equals `schema_pick_accuracy` BY CONSTRUCTION, to the last decimal place, on every arm of every such run (checked row-by-row on all 1351 rows of the 2026-07-31 ladder). Read `shortlist_recall` for what retrieval actually surfaced. Kept under this name and this definition because published artifacts quote it | rows with a recorded routing decision |
+| `shortlist_recall` | the gold schema was in the shortlist retrieval produced, before the LLM picker narrowed it to one (`gold_schema_rank is not None`). The retrieval channel's own recall, and the term `routing_recall` cannot report while the picker collapses the routed set to a single schema: 0.952 against a pick accuracy of 0.873 on the 2026-07-31 curated arm, so two thirds of the routing loss is the picker discarding a schema retrieval had already found | rows that recorded a shortlist (bypassed and crashed turns excluded, as for routing_recall) |
 | `routing_escape_rate` | SQL reached outside the routed schemas | rows where escape was observable |
+| `routing_degraded_rate` | the embedding channel failed and the ranking fell back to BM25; None (not 0.0) when no turn recorded a channel, because a run that measured nothing must not read as a run that degraded nowhere | rows where a routing channel was recorded |
 | `schema_pick_accuracy` | LLM picked the gold schema | rows that recorded a pick |
 | `schema_pick_accuracy_excl_fallback` | …excluding picker fallbacks | picks that did not fall back |
 | `share_with_a_note` | turns that received at least one note | all scored rows (n) |
@@ -215,7 +217,7 @@ into the pooled figure.
 Each count exists so an exclusion from a rate above stays visible: a rate
 reported without its excluded count reads as full coverage.
 
-**counts** — `n`, `n_answered`, `n_correct`, `n_refused`, `n_crashed`, `n_missing_gold`, `n_gradeable`, `n_gold_unusable`, `n_frozen_gold`, `n_order_sensitive_gold`, `n_twin_gradeable`, `n_no_twin_gradeable`, `n_twin_unstamped`, `n_gold_twin_in_train`, `n_decoy_touch`, `n_wrong_but_nrows_match`, `n_unmapped_refused_by`, `n_with_difficulty`, `n_with_governance_stamp`, `n_tables_used_unresolved`, `n_rows_no_db_id`, `n_pick_fallback`, `n_routing_observed`, `n_routing_bypassed`, `n_routing_crashed`, `n_routing_unrecorded`, `n_routing_escaped`, `n_routing_escape_observed`, `n_routing_escape_unknown`, `n_correct_routed`, `n_correct_unrouted`, `n_correct_bypassed`, `n_correct_routing_crashed`, `n_correct_routing_unrecorded`, `n_correct_via_routing_escape`, `n_correct_unaccounted`, `n_safety_clearance_observed`, `n_graded_delivery_observed`, `n_coverage_best_effort_observed`, `n_notes_observed`, `n_correct_with_empty_gold`, `n_correct_and_pred_has_no_from`, `n_correct_and_zero_table_overlap`
+**counts** — `n`, `n_answered`, `n_correct`, `n_refused`, `n_crashed`, `n_missing_gold`, `n_gradeable`, `n_gold_unusable`, `n_frozen_gold`, `n_order_sensitive_gold`, `n_twin_gradeable`, `n_no_twin_gradeable`, `n_twin_unstamped`, `n_gold_twin_in_train`, `n_decoy_touch`, `n_wrong_but_nrows_match`, `n_unmapped_refused_by`, `n_with_difficulty`, `n_with_governance_stamp`, `n_tables_used_unresolved`, `n_rows_no_db_id`, `n_pick_fallback`, `n_routing_observed`, `n_routing_bypassed`, `n_routing_crashed`, `n_shortlist_hit`, `n_shortlist_observed`, `n_routing_unrecorded`, `n_routing_escaped`, `n_routing_escape_observed`, `n_routing_channel_observed`, `n_routing_channel_embedding`, `n_routing_channel_bm25_fallback`, `n_routing_channel_none`, `n_routing_degraded_observed`, `n_routing_degraded`, `n_routing_escape_unknown`, `n_correct_routed`, `n_correct_unrouted`, `n_correct_bypassed`, `n_correct_routing_crashed`, `n_correct_routing_unrecorded`, `n_correct_via_routing_escape`, `n_correct_unaccounted`, `n_safety_clearance_observed`, `n_graded_delivery_observed`, `n_coverage_best_effort_observed`, `n_notes_observed`, `n_correct_with_empty_gold`, `n_correct_and_pred_has_no_from`, `n_correct_and_zero_table_overlap`, `n_tables`, `n_columns`, `max_table_columns`
 
 ### Means and breakdown blocks
 
@@ -233,9 +235,11 @@ reported without its excluded count reads as full coverage.
 
 **governance** — `tier`, `safety_clearance`, `semantic_assurance`, `graded_delivery`, `coverage_best_effort`, `decoy_touch`, `by_guardrail_layer`, `ledger_len`, `governance_ledger`, `n_tool_calls`
 
-**context** — `context_chars`, `context_hash`, `injected_note_ids`, `n_notes_injected`, `n_caveats_injected`, `n_few_shots_injected`, `n_joins_injected`, `n_metrics_injected`, `n_terms_injected`, `retrieved_tables`
+**context** — `context_chars`, `context_hash`, `injected_note_ids`, `n_notes_injected`, `n_caveats_injected`, `n_few_shots_injected`, `n_joins_injected`, `n_metrics_injected`, `n_terms_injected`, `retrieved_tables`, `n_columns_omitted`
 
-**routing** — `routed_schemas`, `routed_hit`, `routing_bypassed`, `routing_escaped`, `routing_escape_unknown`, `schema_pick`, `schema_pick_fallback`, `pick_hit`, `shortlisted_schemas`, `total_schemas`
+**routing** — `routed_schemas`, `routed_hit`, `routing_bypassed`, `routing_escaped`, `routing_escape_unknown`, `schema_pick`, `schema_pick_fallback`, `pick_hit`, `shortlisted_schemas`, `total_schemas`, `schema_route_channel`, `schema_route_degraded`
+
+**width** — `gold_table_max_columns`, `n_schema_tables`
 
 **leakage** — `gold_twin_in_train`, `gold_frozen`, `gold_order_sensitive`, `gold_schema_rank`
 

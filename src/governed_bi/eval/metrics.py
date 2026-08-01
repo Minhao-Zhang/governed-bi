@@ -642,11 +642,32 @@ ROW_CONTEXT: tuple[str, ...] = (
     "context_chars", "context_hash", "injected_note_ids", "n_notes_injected",
     "n_caveats_injected", "n_few_shots_injected", "n_joins_injected",
     "n_metrics_injected", "n_terms_injected", "retrieved_tables",
+    # How many columns the analyst-side per-table budget withheld this turn. 0 both
+    # when the budget is off and when it did not bind; non-zero is the only way to
+    # tell a naturally small context apart from a TRUNCATED one, which is the whole
+    # point of an experiment that varies the budget.
+    "n_columns_omitted",
 )
 ROW_ROUTING: tuple[str, ...] = (
     "routed_schemas", "routed_hit", "routing_bypassed", "routing_escaped",
     "routing_escape_unknown", "schema_pick", "schema_pick_fallback", "pick_hit",
     "shortlisted_schemas", "total_schemas",
+    # Which channel produced the ranking, and whether it was the degraded one.
+    # ``schema_route_degraded`` exists (AUDIT R8) so a dead embedding endpoint is
+    # visible: the embedding channel measures 0.953 shortlist recall@10 against
+    # BM25's 0.906 on the curated corpus, so a silent fallback is a real drop with
+    # nothing else in the record to explain it. Tri-state — ``None`` means the
+    # router did not run (bypassed, or crashed before routing), never "fine".
+    "schema_route_channel", "schema_route_degraded",
+)
+#: Catalog width, per row. Not routing and not context: these are properties of the
+#: CATALOG, identical across arms for a given question, which is exactly what makes
+#: them usable as covariates in a within-schema control. Pooled EX falls from 70.7%
+#: on gold tables under 15 columns to 44.3% at 40+, but the same split controlled for
+#: schema gives a sign test of p=0.23 — the observational data cannot settle it, so
+#: these fields exist to let an intervention try.
+ROW_WIDTH: tuple[str, ...] = (
+    "gold_table_max_columns", "n_schema_tables",
 )
 ROW_LEAKAGE: tuple[str, ...] = (
     "gold_twin_in_train", "gold_frozen", "gold_order_sensitive", "gold_schema_rank",
@@ -662,7 +683,7 @@ ROW_PROVENANCE: tuple[str, ...] = ("prompt_set_hash", "prompt_variants")
 
 ROW_FIELDS: tuple[str, ...] = (
     ROW_IDENTITY + ROW_VERDICT + ROW_PREDICTION + ROW_GOVERNANCE + ROW_CONTEXT
-    + ROW_ROUTING + ROW_LEAKAGE + ROW_ORACLE + ROW_COST + ROW_PROVENANCE
+    + ROW_ROUTING + ROW_WIDTH + ROW_LEAKAGE + ROW_ORACLE + ROW_COST + ROW_PROVENANCE
 )
 
 
@@ -731,8 +752,37 @@ SUMMARY_RATES: tuple[Metric, ...] = (
     Metric("safety_clearance_rate", "delivered answers that cleared the guardrails", "delivered rows"),
     Metric("graded_delivery_rate", "delivered answers served as unverified", "delivered rows"),
     Metric("coverage_best_effort_rate", "answers delivered on partial coverage", "delivered rows"),
-    Metric("routing_recall", "router included the gold schema", "rows with a recorded routing decision"),
+    Metric(
+        "routing_recall",
+        "the gold schema survived into `routed_schemas` — the set the turn was "
+        "licensed against. NOT the retrieval channel's recall, and NOT independent of "
+        "the picker: under `route_llm_pick=True` the serve path sets `routed = "
+        "frozenset([picked])`, so `routed_hit` IS `pick_hit` and this rate equals "
+        "`schema_pick_accuracy` BY CONSTRUCTION, to the last decimal place, on every "
+        "arm of every such run (checked row-by-row on all 1351 rows of the 2026-07-31 "
+        "ladder). Read `shortlist_recall` for what retrieval actually surfaced. Kept "
+        "under this name and this definition because published artifacts quote it",
+        "rows with a recorded routing decision",
+    ),
+    Metric(
+        "shortlist_recall",
+        "the gold schema was in the shortlist retrieval produced, before the LLM "
+        "picker narrowed it to one (`gold_schema_rank is not None`). The retrieval "
+        "channel's own recall, and the term `routing_recall` cannot report while the "
+        "picker collapses the routed set to a single schema: 0.952 against a pick "
+        "accuracy of 0.873 on the 2026-07-31 curated arm, so two thirds of the routing "
+        "loss is the picker discarding a schema retrieval had already found",
+        "rows that recorded a shortlist (bypassed and crashed turns excluded, as for "
+        "routing_recall)",
+    ),
     Metric("routing_escape_rate", "SQL reached outside the routed schemas", "rows where escape was observable"),
+    Metric(
+        "routing_degraded_rate",
+        "the embedding channel failed and the ranking fell back to BM25; None (not "
+        "0.0) when no turn recorded a channel, because a run that measured nothing "
+        "must not read as a run that degraded nowhere",
+        "rows where a routing channel was recorded",
+    ),
     Metric("schema_pick_accuracy", "LLM picked the gold schema", "rows that recorded a pick"),
     Metric("schema_pick_accuracy_excl_fallback", "…excluding picker fallbacks", "picks that did not fall back"),
     Metric("share_with_a_note", "turns that received at least one note", "all scored rows (n)"),
@@ -821,7 +871,19 @@ SUMMARY_COUNTS: tuple[str, ...] = (
     "n_unmapped_refused_by", "n_with_difficulty", "n_with_governance_stamp",
     "n_tables_used_unresolved", "n_rows_no_db_id", "n_pick_fallback",
     "n_routing_observed", "n_routing_bypassed", "n_routing_crashed",
+    # ``shortlist_recall``'s numerator and its own denominator. Separate from
+    # ``n_routing_observed`` because they are different populations: a turn can record
+    # a shortlist and no routing decision, or the reverse, and quoting the retrieval
+    # rate over the router's denominator is the class of error the whole register
+    # exists to stop.
+    "n_shortlist_hit", "n_shortlist_observed",
     "n_routing_unrecorded", "n_routing_escaped", "n_routing_escape_observed",
+    # Routing-channel census. ``*_observed`` is separate from the counts for the
+    # reason every ``*_observed`` in this tuple is: a run where nothing recorded a
+    # channel must not read as a run where every channel was healthy.
+    "n_routing_channel_observed", "n_routing_channel_embedding",
+    "n_routing_channel_bm25_fallback", "n_routing_channel_none",
+    "n_routing_degraded_observed", "n_routing_degraded",
     "n_routing_escape_unknown", "n_correct_routed", "n_correct_unrouted",
     "n_correct_bypassed", "n_correct_routing_crashed",
     "n_correct_routing_unrecorded", "n_correct_via_routing_escape",
@@ -835,6 +897,15 @@ SUMMARY_COUNTS: tuple[str, ...] = (
     # wrong reason. quotable() reads all three.
     "n_correct_with_empty_gold", "n_correct_and_pred_has_no_from",
     "n_correct_and_zero_table_overlap",
+    # Schema WIDTH of the pool these rows came from, and of each schema inside
+    # ``by_db`` (AUDIT A4). From ``statistics.schema_width_census`` over the corpus the
+    # arm served, which reuses ``analysis.corpus_census`` so a per-schema ``n_columns``
+    # cannot come to mean something the per-arm one does not. ``None`` — never 0 — when
+    # no census was passed, because this summariser also runs over archived
+    # generations files with no corpus to hand. ``max_table_columns`` has no
+    # ``corpus_census`` equivalent and is the figure the wide-table hypothesis is
+    # actually about: 70 narrow tables and one 118-column table are not the same pool.
+    "n_tables", "n_columns", "max_table_columns",
 )
 
 #: Means, and the nested breakdown blocks.

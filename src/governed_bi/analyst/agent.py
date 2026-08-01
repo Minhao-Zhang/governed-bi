@@ -740,6 +740,10 @@ def _route_schemas(
         # A single-schema corpus never routes. Recorded, not omitted: an absent
         # schema_pick record would read as a build that cannot measure the pick.
         rt.stages.skipped(Stage.schema_pick, spans_schemas=False)
+        # Same for the shortlist: a bypassed router recorded no channel, and the
+        # eval must read that as "not measured" rather than as a healthy embedding
+        # route. ``skipped`` says so positively.
+        rt.stages.skipped(Stage.shortlist, spans_schemas=False)
         # ...and the same is true of the *row*. Leaving `base_provenance`
         # untouched here made a bypassed turn indistinguishable from a routed one
         # that lost its provenance: the row recorded `routed_schemas=[]`, so
@@ -772,19 +776,31 @@ def _route_schemas(
     # otherwise be invisible in the EX number).
     route_channel: dict = {}
     route_ranked: list = []
-    shortlisted = shortlist_schemas(
-        rt.corpus,
-        question,
-        top_k=rt.route_top_k,
-        embedder=rt.embedder,
-        schema_vectors=rt.router_schema_vectors,
-        settings=rt.settings,
-        index_cache=rt.index_cache,
-        channel_out=route_channel,
-        ranked_out=route_ranked,
-    )
-    # A silent embedding->BM25 degradation halves routing recall
-    # (0.70 -> 0.35); recorded so the drop is attributable (AUDIT R8).
+    # Timed as its own stage, and not only for the timing. ``eval.arms``'s solver
+    # relay is an explicit ALLOW-LIST of provenance keys, so nothing this node adds
+    # to ``base_provenance`` reaches a scored row unless that list names it —
+    # ``schema_route_channel`` / ``schema_route_degraded`` did not, which is why
+    # two fields that existed for a year appeared in no artifact. ``stage_events``
+    # IS relayed verbatim (and lands in ``stage_events.jsonl`` besides), so the
+    # channel travels in this record's ``detail`` and the driver reads it there.
+    # Keep both: if the relay ever carries the keys directly, the driver prefers
+    # them.
+    with rt.stages.stage(Stage.shortlist) as shortlist_detail:
+        shortlisted = shortlist_schemas(
+            rt.corpus,
+            question,
+            top_k=rt.route_top_k,
+            embedder=rt.embedder,
+            schema_vectors=rt.router_schema_vectors,
+            settings=rt.settings,
+            index_cache=rt.index_cache,
+            channel_out=route_channel,
+            ranked_out=route_ranked,
+        )
+        # A silent embedding->BM25 degradation halves routing recall
+        # (0.70 -> 0.35); recorded so the drop is attributable (AUDIT R8).
+        shortlist_detail.update(route_channel)
+        shortlist_detail["n_candidates"] = len(shortlisted)
     base_provenance = {**base_provenance, **route_channel}
     picked: str | None = None
     pick_fallback: str | None = None
@@ -943,6 +959,13 @@ def _assemble_inner(rt: ServeRuntime, state: ServeRailsState) -> dict:
         db_name=settings.datasource.db,
         always_note_global_max=settings.always_note_global_max,
         always_note_char_max=settings.always_note_char_max,
+        # Both default to off (0 / False), so this wiring is a no-op until an
+        # experiment turns them on — deliberately, because a silent behaviour change
+        # here would make every existing run incomparable to every future one. Off,
+        # the rendered block is byte-identical (pinned by a hash test over the real
+        # 20260731 corpora).
+        max_table_columns=settings.analyst_max_table_columns,
+        compact_caveats=settings.analyst_compact_suspect_caveats,
     )
     # What the model was actually handed. Outcome metrics alone cannot separate
     # "the curated corpus did not help" from "the curated corpus never reached
@@ -958,6 +981,12 @@ def _assemble_inner(rt: ServeRuntime, state: ServeRailsState) -> dict:
         "n_terms_injected": len(context.terms),
         "n_caveats_injected": len(context.caveats),
         "context_chars": len(rendered),
+        # How much the column budget withheld this turn. 0 both when the budget is
+        # off and when it did not bind, which is the right conflation for analysis
+        # — either way the model saw every column — while a non-zero value is the
+        # only way to tell a small context apart from a TRUNCATED one. Without it
+        # the intervention would be visible in the config and invisible in the row.
+        "n_columns_omitted": context.n_columns_omitted,
         # The identity of what was handed over, not just its size. Two arms
         # differing only in corpus content can render byte-identical context —
         # that is what a treatment failing to reach the model looks like, and a

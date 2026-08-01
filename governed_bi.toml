@@ -225,12 +225,31 @@ workers = 1
 # same experiment instead of silently shifting EX. Nothing here to set — it is
 # derived from the pool the driver actually graded (eval/metrics.py).
 
-# Optional eval routing profile (D15 schema router). Distinct from product
-# dataclass defaults (shortlist@3, no LLM pick). Uncomment to pin a deployment
-# to the same knobs the pooled data-lake driver uses by default. Omit this
-# table (or leave it commented) for product defaults. CLI flags still override
-# for a one-off run.
-# [routing]
-# top_k = 10
-# llm_pick = true
-# pick_max_columns = 12
+# Eval routing profile (D15 schema router). Now UNCOMMENTED, and that is a change.
+#
+# It used to sit commented out with a note that the pooled driver defaulted to
+# 10/true anyway. It did — but by hardcoded CLI defaults that overwrote this table
+# unconditionally, so setting `top_k = 3` here did nothing and every measured run
+# was 10/true whatever the file said. That is now fixed (the flags are None
+# sentinels), which means this table finally decides, and leaving it commented would
+# silently move the driver to the dataclass defaults 3/false — a configuration no
+# published number was produced under.
+#
+# So it is spelled out at the values every run in `runs/index.jsonl` actually used.
+# Measured on the curated corpus over the 1351-question test split
+# (`scripts/routing_ablation.py`), shortlist recall is 0.852 @3 against 0.953 @10:
+# the shipped product default of 3 gives away ten points of ceiling before the model
+# is asked anything. Aligning the two is what this table is for — a benchmark number
+# should describe a configuration a deployment could run.
+[routing]
+top_k = 10
+llm_pick = true
+pick_max_columns = 12
+
+# Analyst-side context budget (`[analyst]`, loaded into Settings). Both OFF by
+# default and deliberately absent here: turning either on changes what the model is
+# shown on every question, so they are experiment knobs, not policy. They are hashed
+# into `serve_config_hash`, so a run cannot enable one and still compare.
+#   [analyst]
+#   max_table_columns = 20       # 0 = no cap; per-table, relevance-selected
+#   compact_suspect_caveats = true

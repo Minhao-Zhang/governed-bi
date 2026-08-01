@@ -89,7 +89,11 @@ def test_load_project_config_file():
     assert settings.environment is Environment.dev
     assert settings.models.llm_model == "gpt-5.6-luna"
     assert settings.models.llm_reasoning_effort == "low"
-    assert settings.models.embedding_model == "text-embedding-3-small"
+    # -3-large since d407d19: the embedding channel IS the schema router here, and
+    # its recall@3 (0.70, against BM25's 0.35) decides which corpus the analyst ever
+    # sees. That commit moved governed_bi.toml and left this assertion on the old
+    # value, so the suite was red at HEAD.
+    assert settings.models.embedding_model == "text-embedding-3-large"
     assert settings.corpus_root == "corpus"
     assert settings.datasource.kind == "sqlite"
     assert settings.can_stream is False

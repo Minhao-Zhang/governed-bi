@@ -71,7 +71,7 @@ from ..config import (
     load_settings,
 )
 from ..corpus import Corpus, load_corpus
-from ..corpus.schemas import NoteAsset
+from ..corpus.schemas import NoteAsset, TableAsset
 from ..gateway import Gateway, Identity
 from ..gateway.connectors.postgres import PostgresConnector
 from ..prompts import (
@@ -128,7 +128,7 @@ from .hash_grade import (
 )
 from .index import RESUME_DRIFT_KEYS, index_run
 from .leakage import twin_report, ungradeable_question_ids
-from .oracle import GoldIndex, OracleRung, oracle_solver
+from .oracle import GoldIndex, OracleRung, gold_tables_for, oracle_solver
 from .parallel import ServeWorker, resolve_workers, run_ordered_pool
 from .sql_diff import is_frozen_constant
 
@@ -137,6 +137,7 @@ from .sql_diff import is_frozen_constant
 # here keep working. Both groups have the same deadline as the alias block below.
 from .statistics import (
     PRICE_VERDICT_TAGS,  # noqa: F401
+    ROUTE_CHANNELS,
     _bool_rate,  # noqa: F401
     _ex_by_stamp,  # noqa: F401
     _guardrail_ceiling,  # noqa: F401
@@ -151,6 +152,7 @@ from .statistics import (
     ladder_deltas,
     price_verdict,  # noqa: F401
     routing_escaped,
+    schema_width_census,
     summarise_rows,
 )
 from .treatment import divergence_table
@@ -529,14 +531,46 @@ def run_build_phase(
             if build_workers > 1:
                 build_roots = _stage_roots(staging_root, roots, db, resume=resume)
                 staged = True
+            # Snapshot of the trees that ALREADY held YAML without the marker,
+            # taken before the build writes anything. Whatever is in here, this
+            # invocation did not produce — see the stamping loop below.
+            debris_before = {
+                arm
+                for arm, path in build_roots.items()
+                if _has_yaml(path, db) and not _corpus_complete(path, db)
+            }
             build_one_db(db, build_roots)
             # Completeness markers: a successful return from the build means each
-            # arm that holds YAML for this db is finished. Fake/test builds and
-            # paths that write YAML without calling ``_mark_build_complete`` still
-            # get the durable contract before promote/skip can see them.
-            for _arm, path in build_roots.items():
-                if _has_yaml(path, db) and not _corpus_complete(path, db):
-                    _mark_build_complete(path, db)
+            # arm THIS BUILD WROTE is finished. Fake/test builds and paths that
+            # write YAML without calling ``_mark_build_complete`` still get the
+            # durable contract before promote/skip can see them.
+            #
+            # ``_has_yaml`` alone is not that inference, and reading it as one
+            # inverted the marker's whole purpose. ``roots`` spans all four arms
+            # regardless of ``--arms``, and at ``build_workers == 1`` those roots
+            # are the shared ones — so: ``--arms baseline,curated`` killed
+            # mid-build, rerun as ``--arms baseline``, and the half-built
+            # ``corpus_curated/<db>`` (YAML, no marker, untouched by this
+            # invocation) was stamped COMPLETE here. A later ``--arms curated
+            # --resume`` then skipped the rebuild and served a killed partial
+            # corpus as the treatment, with nothing anywhere saying so.
+            #
+            # An arm that arrived holding unmarked YAML is left exactly as it was:
+            # unmarked, therefore discarded and rebuilt the next time ``--arms``
+            # names it (``_arm_done`` / ``_stage_roots``), which is the contract
+            # ``_BUILD_COMPLETE_MARKER`` declares.
+            for arm_name, path in build_roots.items():
+                if not _has_yaml(path, db) or _corpus_complete(path, db):
+                    continue
+                if arm_name in debris_before:
+                    print(
+                        f"  [{arm_name}] {db!r} holds YAML without "
+                        f"{_BUILD_COMPLETE_MARKER} and this build did not write it "
+                        "(kill debris from an earlier attempt) — left unmarked, so "
+                        "it will be discarded and rebuilt, never served"
+                    )
+                    continue
+                _mark_build_complete(path, db)
             if staged:
                 with build_lock:
                     for arm, path in build_roots.items():
@@ -1455,6 +1489,148 @@ def _schema_of_assets(
     return out, unresolved
 
 
+#: The three values ``retrieval.schema_router`` can record for a turn that routed.
+# The channel vocabulary now lives with the aggregation that consumes it.
+_ROUTE_CHANNELS = ROUTE_CHANNELS
+
+
+def _routing_channel(meta: dict[str, Any]) -> tuple[str | None, bool | None]:
+    """``(schema_route_channel, schema_route_degraded)`` for one served turn.
+
+    ``(None, None)`` means the turn recorded no channel at all — it crashed before
+    routing, or the router was bypassed (single-schema pool / oracle-pinned corpus).
+    That is NOT the same as ``("embedding", False)``, and the two must not be
+    collapsed: the second says the strong channel ran, the first says nothing was
+    measured. Same three-state discipline ``routed_hit`` / ``routing_escaped`` /
+    ``pick_hit`` already keep.
+
+    Two sources, in order. The serve path stamps both keys onto answer provenance,
+    but ``eval.arms``'s solver relay copies provenance into ``meta`` through an
+    explicit allow-list that does not name them — which is why both fields existed
+    while every ``generations.*.jsonl`` row lacked them. So the fallback (in
+    practice, today, the only source) is the ``shortlist`` stage record, whose
+    ``detail`` the serve path fills with the same two keys and which IS relayed
+    verbatim. The direct keys are preferred so that adding them to the relay later
+    is a no-op here rather than a second, disagreeing source.
+    """
+    channel = meta.get("schema_route_channel")
+    degraded = meta.get("schema_route_degraded")
+    if channel is None:
+        for event in meta.get("stage_events") or ():
+            if not isinstance(event, dict) or event.get("stage") != Stage.shortlist.value:
+                continue
+            detail = event.get("detail")
+            if isinstance(detail, dict) and detail.get("schema_route_channel"):
+                channel = detail.get("schema_route_channel")
+                degraded = detail.get("schema_route_degraded")
+    if channel is not None:
+        channel = str(channel)
+        if channel not in _ROUTE_CHANNELS:
+            # Loud, not dropped: an unrecognised channel means the router grew a
+            # branch this reader does not know about, and the summary's per-channel
+            # counts would otherwise silently stop summing to the observed total.
+            print(
+                f"*** WARNING: unrecognised schema_route_channel {channel!r} — "
+                "recorded on the row but absent from the summary's channel counts"
+            )
+    return channel, (None if degraded is None else bool(degraded))
+
+
+class ResolvedRouting(NamedTuple):
+    """The three ``[routing]`` knobs after CLI-over-TOML resolution."""
+
+    top_k: int
+    llm_pick: bool
+    pick_max_columns: int
+
+
+def _resolve_routing(
+    base_settings: Settings,
+    *,
+    route_top_k: int | None,
+    route_llm_pick: bool | None,
+    schema_pick_max_columns: int | None,
+) -> ResolvedRouting:
+    """CLI value when given, else what ``[routing]`` in the TOML resolved to.
+
+    ``base_settings`` must be the object ``load_settings()`` returned — the only
+    one that carries the ``[routing]`` table (``Settings.for_env`` does not take
+    routing arguments, so a rebuilt Settings is back at the dataclass defaults).
+
+    The sentinel is the whole point. With a concrete CLI default, "the operator
+    said nothing" and "the operator asked for the default" are the same value, so
+    the driver cannot avoid overwriting the config file — and the knob is then
+    recorded in the manifest, guarded on resume and used as a comparability key
+    while being permanently whatever argparse said. Three guards on a value
+    nothing could change.
+    """
+    return ResolvedRouting(
+        top_k=(
+            base_settings.schema_route_top_k if route_top_k is None else int(route_top_k)
+        ),
+        llm_pick=(
+            base_settings.schema_route_llm_pick
+            if route_llm_pick is None
+            else bool(route_llm_pick)
+        ),
+        pick_max_columns=(
+            base_settings.schema_pick_max_columns
+            if schema_pick_max_columns is None
+            else int(schema_pick_max_columns)
+        ),
+    )
+
+
+class _SchemaWidth(NamedTuple):
+    """Per-schema catalog width, read off an arm's corpus once per arm.
+
+    ``columns`` is keyed by ``(schema, lowercased physical table name)`` because
+    two schemas in a pooled lake routinely hold same-named tables, and ``tables``
+    counts the schema's tables. Both are properties of the CATALOG, not of the
+    turn, so they are identical across arms for a given question — which is what
+    makes ``gold_table_max_columns`` usable as a covariate in a within-schema
+    control rather than something an arm could move.
+    """
+
+    columns: dict[tuple[str, str], int]
+    tables: dict[str, int]
+
+    @classmethod
+    def of(cls, corpus: Any) -> "_SchemaWidth":
+        columns: dict[tuple[str, str], int] = {}
+        tables: dict[str, int] = {}
+        for asset in getattr(corpus, "assets", ()) or ():
+            if not isinstance(asset, TableAsset):
+                continue
+            schema = str(asset.schema)
+            columns[(schema, asset.physical_name.lower())] = len(asset.columns)
+            tables[schema] = tables.get(schema, 0) + 1
+        return cls(columns, tables)
+
+    def gold_max_columns(self, schema: str, gold_sql: str | None, *, dialect: str):
+        """Widest gold table's column count, or ``None`` when nothing resolves.
+
+        ``None`` covers three real cases and deliberately does not distinguish
+        them here: gold that does not parse, gold that is a frozen ``VALUES``
+        constant (it names no table), and a gold table absent from this arm's
+        corpus. All three mean "this question has no measured gold width", and a
+        ``0`` there would land in the narrowest stratum of the very analysis this
+        field exists to feed. ``gold_frozen`` / ``gold_order_sensitive`` are on the
+        same row for anyone who needs to tell them apart.
+
+        The count is the corpus's column list — the catalog width the profiler
+        recorded, including columns governance excludes from the prompt. The
+        hypothesis under test is about how wide the TABLE is, not about how much
+        of it a particular arm showed the model.
+        """
+        widths = [
+            n
+            for name in gold_tables_for(gold_sql, dialect=dialect)
+            if (n := self.columns.get((schema, name.lower()))) is not None
+        ]
+        return max(widths) if widths else None
+
+
 def _build_db_corpora(
     *,
     db_id: str,
@@ -2207,6 +2383,11 @@ def _run_pool_arm(
             f"({len(pairs)} total)"
         )
 
+    # Built once per arm, not per question: it is a scan of every table asset in the
+    # pooled corpus, and the serve loop already runs a model call per question.
+    # Read-only afterwards, so the ``serve_workers > 1`` threads share it safely.
+    schema_width = _SchemaWidth.of(arm_corpus)
+
     def _grade_one(
         pair: tuple[Any, str], *, solver, gateway
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -2351,6 +2532,7 @@ def _run_pool_arm(
             and meta.get("tables_used")
             and escaped is None
         )
+        route_channel, route_degraded = _routing_channel(meta)
         row = {
             "request_id": str(qid),
             "question_id": str(qid),
@@ -2391,6 +2573,25 @@ def _run_pool_arm(
             # absolute EX was depressed, including the one read against the oracle_sql
             # ceiling. Excluded from ``ex_gradeable`` the same way frozen gold is.
             "gold_order_sensitive": str(qid) in ungradeable_ids,
+            # Schema width, as a per-question covariate. Pooled, EX falls
+            # monotonically from 70.7% on questions whose widest gold table has
+            # <15 columns to 44.3% at 40+, but a within-schema control gives a
+            # sign test at p=0.23 — the observational split cannot separate table
+            # width from "which schema this question belongs to", and the planned
+            # intervention needs the covariate on the row either way. Recorded
+            # here so the analysis stops re-deriving it from a live catalog query,
+            # which is both slow and unavailable once the run directory is
+            # archived.
+            #
+            # Off the GOLD schema (``db``), never the picked one: the picked
+            # schema is an outcome of routing, so keying a covariate on it would
+            # make the covariate move with the treatment. ``schema_pick`` is on
+            # this row for anyone who wants the width of what the model actually
+            # saw.
+            "gold_table_max_columns": schema_width.gold_max_columns(
+                db, item.sql, dialect=dialect
+            ),
+            "n_schema_tables": schema_width.tables.get(db),
             "routed_schemas": routed,
             # ``None`` when the turn recorded no routing decision at all — see the
             # ``routed``/``shortlisted`` note above. ``summarise_rows`` drops those
@@ -2415,6 +2616,16 @@ def _run_pool_arm(
             "n_tables_used_unresolved": len(unresolved_tables),
             "routing_escaped": escaped,
             "routing_escape_unknown": routing_escape_unknown,
+            # WHICH channel ranked the schemas, and whether that was a degradation.
+            # ``schema_route_degraded`` exists (AUDIT R8) because the embedding
+            # channel's measured recall@3 is 0.70 against BM25's 0.35: a silently
+            # dead embedding endpoint halves routing recall, and every downstream
+            # number would read as a curation failure instead. Both are ``None``
+            # when the turn recorded no channel — bypassed, or crashed before the
+            # router — which is why the summary counts them over their own
+            # denominator rather than over ``n``.
+            "schema_route_channel": route_channel,
+            "schema_route_degraded": route_degraded,
             "shortlisted_schemas": shortlisted,
             # 1-based position of the TRUE schema in the relevance-ordered
             # shortlist, or None when retrieval never surfaced it at all.
@@ -2563,11 +2774,33 @@ def _run_pool_arm(
         if item.sql
     }
     summary = summarise_rows(
-        arm, rows, gold=gold_sql, corpus_note_assets=corpus_note_assets
+        arm,
+        rows,
+        gold=gold_sql,
+        corpus_note_assets=corpus_note_assets,
+        # Per-schema width into `by_db`. Without this the three width fields are
+        # declared and permanently None on every live run — the shape of defect this
+        # repo keeps producing, where a field exists, a test covers the function, and
+        # nothing calls it. `schema_width_census` counts via `corpus_census` so
+        # `by_db.n_columns` cannot come to mean something the arm-level census does
+        # not; `_SchemaWidth` above indexes the SAME corpus per table for the per-row
+        # `gold_table_max_columns`, and a test pins the two to agree.
+        schema_widths=schema_width_census(arm_corpus),
     )
     # Durable, not stdout-only: ``quotable()`` reads this from the arm summary in
     # ``summary.json``. Always present so absence cannot be confused with zero.
     summary["n_re_served"] = n_re_served
+    if summary["n_routing_degraded"]:
+        # An operator-visible line, because nothing gates on this yet: a run whose
+        # embedding endpoint died mid-way is still "quotable" while carrying a
+        # routing recall of roughly half what the manifest's embedding model
+        # implies.
+        print(
+            f"*** WARNING: [{arm}] {summary['n_routing_degraded']} of "
+            f"{summary['n_routing_degraded_observed']} routed question(s) fell back "
+            "to the BM25 channel (schema_route_degraded) — measured routing recall@3 "
+            "drops 0.70 -> 0.35 on those rows; check run.log for the embedder error"
+        )
     return rows, summary
 
 
@@ -2602,8 +2835,21 @@ def run_datalake(
     # Shortlist width. Widening recovers schemas the picker would otherwise never
     # see, at the cost of two more candidate summaries; measure recall@k with
     # ``eval.analysis`` (``by_gold_rank``) before changing it.
-    route_top_k: int = 10,
-    route_llm_pick: bool = True,
+    #
+    # ``None`` = whatever ``[routing]`` in ``governed_bi.toml`` says (see
+    # :func:`_resolve_routing`). These two were plain ``int``/``bool`` defaults
+    # passed UNCONDITIONALLY into the ``replace(settings, ...)`` below, so
+    # ``[routing] top_k`` was overwritten on every invocation of this driver and
+    # the table its own comment calls overridable by CLI flags could not change
+    # anything at all — the identical defect ``schema_pick_max_columns`` carries a
+    # comment about, three lines from where it was reproduced twice.
+    route_top_k: int | None = None,
+    route_llm_pick: bool | None = None,
+    # NOT a sentinel, and deliberately not made one: there is no Settings field for
+    # it, so ``None`` would have nothing to fall back to. ``--no-embedder`` is the
+    # only input, which is why it never had the defect above — nothing to overwrite.
+    # The manifest records ``use_embedder=bool(embedder)``, i.e. whether the channel
+    # was actually built, not what was asked for.
     use_embedder: bool = True,
     serve_workers: int = 1,
     # Per-db corpus builds to run concurrently. The dbs are independent (each
@@ -2776,20 +3022,40 @@ def run_datalake(
         notes=NoteGovernance.from_settings(base_settings, pin_triggers=pin_triggers),
     )
     # D5 (deliver-and-grade semantic failures); D15 routing knobs.
+    #
+    # All three routing knobs resolve through ONE helper against ``base_settings``
+    # — the object ``load_settings()`` just parsed ``[routing]`` into. Not against
+    # ``settings``: ``Settings.for_env`` above is a fresh construction that carries
+    # over only models / datasource / corpus_root / notes, so the TOML's routing
+    # values are already gone from it. ``schema_pick_max_columns`` had the sentinel
+    # but fell back to that rebuilt object, which means it was reading the
+    # dataclass default (12) and NOT ``[routing] pick_max_columns`` — the sentinel
+    # fixed the CLI half of the defect and not the TOML half.
+    routing = _resolve_routing(
+        base_settings,
+        route_top_k=route_top_k,
+        route_llm_pick=route_llm_pick,
+        schema_pick_max_columns=schema_pick_max_columns,
+    )
+    # Printed, because the resolution now has three inputs and the operator can no
+    # longer read the routing profile off the command line. The committed
+    # ``governed_bi.toml`` ships ``[routing]`` COMMENTED OUT, so a checkout without
+    # the local overlay resolves to the dataclass defaults (top_k=3, no LLM pick) —
+    # a different experiment from every run before 2026-08-01, which took the
+    # driver's own 10 / True. Manifest-recorded either way; this is so it is noticed
+    # at minute one rather than at the post-mortem.
+    print(
+        f"  routing: top_k={routing.top_k} llm_pick={routing.llm_pick} "
+        f"pick_max_columns={routing.pick_max_columns} "
+        f"(flags override [routing] in governed_bi.toml; unset = the file's value)"
+    )
     settings = replace(
         settings,
         hard_block_suspect_columns=False,
         grade_semantic_failures=True,
-        schema_route_top_k=route_top_k,
-        schema_route_llm_pick=route_llm_pick,
-        # ``None`` keeps the Settings default. Without this the knob was recorded in
-        # the manifest, guarded on resume, and used as a comparability key while
-        # being permanently 12 — three guards on a value nothing could change.
-        schema_pick_max_columns=(
-            settings.schema_pick_max_columns
-            if schema_pick_max_columns is None
-            else schema_pick_max_columns
-        ),
+        schema_route_top_k=routing.top_k,
+        schema_route_llm_pick=routing.llm_pick,
+        schema_pick_max_columns=routing.pick_max_columns,
         # The full resolved map, not just the overrides: every consumer downstream
         # (graph build, config hash, per-row stamp) then reads one description of
         # what this run sends instead of re-deriving the defaults itself.
@@ -2841,8 +3107,13 @@ def run_datalake(
         embedding_model=settings.models.embedding_model if embedder else None,
         embedding_dimensions=settings.models.embedding_dimensions if embedder else None,
         prompt_variants=resolved_prompts,
-        route_top_k=route_top_k,
-        route_llm_pick=route_llm_pick,
+        # All three off ``settings``, i.e. what the serve path will actually read,
+        # for the same reason the note knobs below are: the CLI flag is one of
+        # three inputs (flag, ``[routing]`` TOML, dataclass default), and a
+        # manifest that records the literal someone typed — or, worse, an argparse
+        # default nobody typed — describes a configuration the run did not serve.
+        route_top_k=settings.schema_route_top_k,
+        route_llm_pick=settings.schema_route_llm_pick,
         schema_pick_max_columns=settings.schema_pick_max_columns,
         use_embedder=bool(embedder),
         # Off ``settings``, i.e. what the serve path will actually read: the CLI flag is
@@ -3528,8 +3799,9 @@ def run_datalake(
         # corpora contain on disk.
         "treatment_divergence": divergences,
         "routing": {
-            "top_k": route_top_k,
-            "llm_pick": route_llm_pick,
+            # Resolved values (see ``_resolve_routing``), matching the manifest.
+            "top_k": settings.schema_route_top_k,
+            "llm_pick": settings.schema_route_llm_pick,
             "embedder": bool(embedder),
             "note": (
                 "routing_recall per arm is the share of questions whose true schema "
@@ -3715,17 +3987,43 @@ def main(argv: list[str] | None = None) -> int:
             "question even if already scored in the run directory."
         ),
     )
-    p.add_argument("--route-top-k", type=int, default=10, help="Schema shortlist size")
+    # ``default=None`` on all three routing flags, so "not passed" is distinguishable
+    # from "passed the default" and ``[routing]`` in governed_bi.toml is what decides
+    # when the operator says nothing. With a concrete default the flag overwrote the
+    # config file unconditionally and ``[routing] top_k`` could not change anything.
+    p.add_argument(
+        "--route-top-k",
+        type=int,
+        default=None,
+        help="Schema shortlist size (default: [routing] top_k in governed_bi.toml)",
+    )
     p.add_argument(
         "--schema-pick-max-columns",
         type=int,
         default=None,
         help=(
             "Column names per table shown to the LLM schema picker (0 = names only). "
-            "Column vocabulary is what separates same-topic sibling schemas."
+            "Column vocabulary is what separates same-topic sibling schemas. "
+            "(default: [routing] pick_max_columns in governed_bi.toml)"
         ),
     )
-    p.add_argument("--no-llm-pick", action="store_true", help="Keep shortlist (no single-schema LLM pick)")
+    pick = p.add_mutually_exclusive_group()
+    pick.add_argument(
+        "--llm-pick",
+        dest="llm_pick",
+        action="store_true",
+        default=None,
+        help=(
+            "Collapse the shortlist to ONE LLM-chosen schema (default: [routing] "
+            "llm_pick in governed_bi.toml)"
+        ),
+    )
+    pick.add_argument(
+        "--no-llm-pick",
+        dest="llm_pick",
+        action="store_false",
+        help="Keep shortlist (no single-schema LLM pick)",
+    )
     p.add_argument(
         "--pin-triggers",
         action="store_true",
@@ -4004,9 +4302,13 @@ def _score_one_split(
             oracle_only=args.oracle_only,
             resume=not args.no_resume,
             split=split,
+            # All three relayed VERBATIM, ``None`` included: the sentinel has to
+            # survive to ``run_datalake``, which is the only place that can see
+            # ``[routing]`` (``load_settings()`` is called there). A ``not
+            # args.no_llm_pick`` here would resurrect the defect one layer up.
             route_top_k=args.route_top_k,
             schema_pick_max_columns=args.schema_pick_max_columns,
-            route_llm_pick=not args.no_llm_pick,
+            route_llm_pick=args.llm_pick,
             use_embedder=not args.no_embedder,
             pin_triggers=args.pin_triggers,
             serve_workers=workers,

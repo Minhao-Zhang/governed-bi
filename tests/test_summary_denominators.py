@@ -128,6 +128,109 @@ def test_routing_recall_is_none_when_every_turn_crashed():
 
 
 # --------------------------------------------------------------------------- #
+# shortlist_recall is the RETRIEVAL channel, and routing_recall is not it
+#
+# AUDIT A2. Under ``route_llm_pick=True`` the serve path sets
+# ``routed = frozenset([picked])``, so ``routed_hit`` is ``pick_hit`` and
+# ``routing_recall`` equals ``schema_pick_accuracy`` to sixteen decimal places on
+# every arm of every such run — verified row-by-row on all 1351 rows of the
+# 2026-07-31 ladder. What the shortlist actually surfaced was reported nowhere as a
+# scalar; it was recoverable only by summing the non-miss buckets of ``by_gold_rank``.
+# --------------------------------------------------------------------------- #
+
+
+def _shortlisted(qid, *, rank, **kw):
+    """A routed row whose gold sat at ``rank`` in the shortlist (``None`` = a miss)."""
+    return _row(
+        qid,
+        shortlisted_schemas=["alpha", "beta", "gamma"],
+        gold_schema_rank=rank,
+        schema_pick="alpha",
+        **kw,
+    )
+
+
+def test_shortlist_recall_separates_retrieval_from_the_pick():
+    """The defect, in miniature: retrieval found the schema on every question and the
+    picker threw half of them away. One rate must not be able to report both."""
+    rows = [
+        # gold at rank 1, picker took it
+        _shortlisted("q1", rank=1, routed_hit=True, pick_hit=True),
+        # gold at rank 2 — retrieval found it, the picker chose something else
+        _shortlisted("q2", rank=2, routed_hit=False, pick_hit=False),
+    ]
+    s = _summarise_rows("curated", rows)
+    assert s["shortlist_recall"] == 1.0, "retrieval surfaced the gold schema on both"
+    assert s["routing_recall"] == 0.5
+    assert s["schema_pick_accuracy"] == 0.5
+    assert s["n_shortlist_hit"] == 2
+    assert s["n_shortlist_observed"] == 2
+    assert s["shortlist_recall"] != s["routing_recall"], (
+        "if these are ever equal by construction again, the retrieval channel has "
+        "stopped being reported"
+    )
+
+
+def test_a_shortlist_that_never_surfaced_the_gold_schema_is_a_miss():
+    rows = [
+        _shortlisted("q1", rank=1, routed_hit=True, pick_hit=True),
+        _shortlisted("q2", rank=None, routed_hit=False, pick_hit=False),
+    ]
+    s = _summarise_rows("curated", rows)
+    assert s["n_shortlist_observed"] == 2, "a recorded shortlist is an observation"
+    assert s["shortlist_recall"] == 0.5
+
+
+def test_a_turn_that_recorded_no_shortlist_is_neither_a_hit_nor_a_miss():
+    """The carve-out that matters. ``gold_schema_rank`` is ``None`` both for "retrieval
+    ran and missed" and for "retrieval never ran", so a denominator taken over every
+    row would book an instrumentation gap as a retrieval failure — and a numerator
+    taken over every row would book it as a pass. The denominator is positive evidence
+    only: a recorded shortlist, or a recorded rank."""
+    rows = [
+        _shortlisted("q1", rank=1, routed_hit=True, pick_hit=True),
+        _row("q2"),  # ended before retrieval: no shortlisted_schemas, no rank
+    ]
+    s = _summarise_rows("curated", rows)
+    assert s["n_shortlist_observed"] == 1, (
+        "the unrecorded turn must be carved out, not filed on either side"
+    )
+    assert s["n_shortlist_hit"] == 1
+    assert s["shortlist_recall"] == 1.0
+
+
+def test_a_rank_without_a_shortlist_list_still_counts_as_observed():
+    """A producer that stamps the rank and drops the wider field must not shrink the
+    denominator toward the rows that happen to carry both."""
+    rows = [_row("q1", gold_schema_rank=1), _shortlisted("q2", rank=None)]
+    s = _summarise_rows("curated", rows)
+    assert s["n_shortlist_observed"] == 2
+    assert s["shortlist_recall"] == 0.5
+
+
+def test_shortlist_recall_carves_out_crashes_and_bypassed_turns_like_routing_recall():
+    rows = [
+        _shortlisted("q1", rank=1, routed_hit=True, pick_hit=True),
+        # a crash carries no retrieval evidence, whatever its row happens to hold
+        _crash("q2"),
+        # a pinned single-schema turn was never routed and never shortlisted
+        _row("q3", routing_bypassed=True, routed_hit=None),
+    ]
+    s = _summarise_rows("curated", rows)
+    assert s["n_shortlist_observed"] == 1
+    assert s["shortlist_recall"] == 1.0
+    assert s["n_routing_observed"] == 1, "the same two carve-outs, in the same order"
+
+
+def test_shortlist_recall_is_unmeasured_rather_than_zero_when_nothing_recorded_one():
+    s = _summarise_rows("curated", [_row("q1"), _row("q2")])
+    assert s["n_shortlist_observed"] == 0
+    assert s["shortlist_recall"] is None, (
+        "no row recorded a shortlist, which is not a retrieval recall of zero"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # cond_ex_given_routing must draw both terms from the routed rows
 # --------------------------------------------------------------------------- #
 
@@ -462,6 +565,101 @@ def test_rows_with_no_db_id_do_not_become_a_phantom_database():
     s = _summarise_rows("curated", rows)
     assert sorted(s["by_db"]) == ["alpha"]
     assert "None" not in s["by_db"]
+
+
+# --------------------------------------------------------------------------- #
+# how WIDE each schema is (AUDIT A4)
+#
+# `by_db` carried EX, routing and cost per schema and not one number saying how big
+# that schema is, so every wide-table question had to be answered by querying the
+# live Postgres catalog — an analysis that cannot be reproduced from a run directory
+# and cannot be run at all once the database moves.
+# --------------------------------------------------------------------------- #
+
+_WIDTHS = {
+    "alpha": {"n_tables": 73, "n_columns": 703, "max_table_columns": 29},
+    "beta": {"n_tables": 9, "n_columns": 228, "max_table_columns": 118},
+}
+
+
+def test_each_database_records_how_wide_it_is():
+    rows = [_row("q1", db_id="alpha"), _row("q2", db_id="beta")]
+    s = _summarise_rows("curated", rows, schema_widths=_WIDTHS)
+    assert s["by_db"]["alpha"]["n_tables"] == 73
+    assert s["by_db"]["alpha"]["n_columns"] == 703
+    assert s["by_db"]["alpha"]["max_table_columns"] == 29
+    assert s["by_db"]["beta"]["max_table_columns"] == 118
+
+
+def test_the_pool_rolls_the_widths_up_and_keeps_the_widest_table():
+    """Totals add; the maximum does not. A pool of 82 narrow tables and a pool with
+    one 118-column table in it are the distinction the wide-table hypothesis is
+    about, and a summed maximum would erase it."""
+    rows = [_row("q1", db_id="alpha"), _row("q2", db_id="beta")]
+    s = _summarise_rows("curated", rows, schema_widths=_WIDTHS)
+    assert s["n_tables"] == 82
+    assert s["n_columns"] == 931
+    assert s["max_table_columns"] == 118
+
+
+def test_width_is_unmeasured_rather_than_zero_when_no_census_was_passed():
+    """This summariser also runs over archived generations files with no corpus to
+    hand. A schema with no tables and a run nobody measured must not read alike."""
+    s = _summarise_rows("curated", [_row("q1", db_id="alpha")])
+    assert s["n_tables"] is None
+    assert s["n_columns"] is None
+    assert s["max_table_columns"] is None
+    assert s["by_db"]["alpha"]["n_tables"] is None
+
+
+def test_a_census_that_misses_a_schema_reports_no_pool_width_at_all():
+    """Absent beats understated: a sum over the schemas that happen to be in the
+    census would be published under a name claiming to describe the whole pool, and a
+    pool short by one schema is indistinguishable from a narrower pool."""
+    rows = [_row("q1", db_id="alpha"), _row("q2", db_id="gamma")]
+    s = _summarise_rows("curated", rows, schema_widths=_WIDTHS)
+    assert s["n_tables"] is None, "gamma is not in the census"
+    assert s["n_columns"] is None
+    # ...but the schema that IS covered still reports its own width.
+    assert s["by_db"]["alpha"]["n_tables"] == 73
+    assert s["by_db"]["gamma"]["n_tables"] is None
+
+
+def test_the_width_census_counts_exactly_what_corpus_census_counts():
+    """One counting implementation, not two. A per-schema ``n_columns`` that drifts
+    from the per-arm one is how the same field name comes to mean two things across
+    ``summary.json`` and ``analysis.json``."""
+    from governed_bi.corpus import Corpus
+    from governed_bi.corpus.schemas import Column, LogicalType, TableAsset
+    from governed_bi.eval.analysis import corpus_census
+    from governed_bi.eval.statistics import schema_width_census
+
+    def col(n):
+        return Column(
+            physical_name=n, physical_type="TEXT", logical_type=LogicalType.string,
+            nullable=True, is_unique=False,
+        )
+
+    corpus = Corpus(
+        assets=[
+            TableAsset(id="t1", schema="a", physical_name="t1", columns=[col("x")]),
+            TableAsset(
+                id="t2", schema="a", physical_name="t2",
+                columns=[col("x"), col("y"), col("z")],
+            ),
+            TableAsset(
+                id="t3", schema="b", physical_name="t3", columns=[col("x"), col("y")]
+            ),
+        ]
+    )
+    census = schema_width_census(corpus)
+    assert census == {
+        "a": {"n_tables": 2, "n_columns": 4, "max_table_columns": 3},
+        "b": {"n_tables": 1, "n_columns": 2, "max_table_columns": 2},
+    }
+    whole = corpus_census(corpus)
+    assert sum(v["n_tables"] for v in census.values()) == whole["n_tables"]
+    assert sum(v["n_columns"] for v in census.values()) == whole["n_columns"]
 
 
 # --------------------------------------------------------------------------- #

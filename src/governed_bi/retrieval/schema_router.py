@@ -177,6 +177,64 @@ def embed_schema_documents(
     return dict(zip([s for s, _ in named], vecs))
 
 
+def _embedding_ranking(
+    corpus: "Corpus",
+    question: str,
+    *,
+    embedder: "Embedder",
+    schema_vectors: "dict[str, list[float]] | None",
+    index_cache: "RetrievalIndexCache | None",
+) -> list[tuple[str, float]]:
+    """``(schema, cosine)`` pairs, descending. Every network call lives in here.
+
+    Extracted so :func:`shortlist_schemas` can wrap the whole embedding channel —
+    the schema-doc batch embed AND the per-question ``embed_one`` — in one
+    ``try``. Both talk to the same endpoint; guarding only one of them would leave
+    a dead endpoint crashing on the other.
+    """
+    from ..llm import cosine
+
+    if schema_vectors is not None:
+        vec_items = list(schema_vectors.items())
+    else:  # embed the per-schema documents now (one batched call)
+        docs = (
+            index_cache.schema_docs(corpus)
+            if index_cache is not None
+            else schema_documents(corpus)
+        )
+        named = [(s, docs[s]) for s in docs if docs[s].strip()]
+        vec_items = list(
+            zip([s for s, _ in named], embedder.embed([t for _s, t in named]))
+        )
+    if not vec_items:
+        return []
+    q_vec = embedder.embed_one(question)
+    ranked = [(s, sc) for s, vec in vec_items if (sc := cosine(q_vec, vec)) > 0.0]
+    ranked.sort(key=lambda p: (-p[1], p[0]))
+    return ranked
+
+
+#: One traceback per process for a failing embedding channel, not one per question.
+#: A dead endpoint fails on every question of a 2030-question pool; the first
+#: traceback is diagnostic and the next 2029 are a log nobody can read. The
+#: per-question WARNING still fires every time, so the rate stays visible.
+_EMBED_FAILURE_LOGGED = False
+
+
+def _log_embed_failure(err: BaseException) -> None:
+    global _EMBED_FAILURE_LOGGED
+    first, _EMBED_FAILURE_LOGGED = not _EMBED_FAILURE_LOGGED, True
+    logger.warning(
+        "schema-route embedding channel failed (%s: %s) — falling back to BM25 for "
+        "this question. Measured recall@3 drops 0.70 -> 0.35, so this run's routing "
+        "is DEGRADED; the row is stamped schema_route_degraded=True.%s",
+        type(err).__name__,
+        err,
+        "" if first else " (traceback logged once, on the first failure)",
+        exc_info=first,
+    )
+
+
 def shortlist_schemas(
     corpus: "Corpus",
     question: str,
@@ -191,6 +249,13 @@ def shortlist_schemas(
     # roughly halves routing recall with nothing in the record to explain the drop
     # (AUDIT R8) — a run could look like a curation failure when it was a dead
     # embedding endpoint. Values: "embedding" | "bm25_fallback" | "none".
+    #
+    # ``schema_route_degraded`` is written on EVERY branch that ranks, ``False``
+    # included. Writing it only on the fallback branch left three states collapsed
+    # into two: a reader could not tell "the embedding channel ran and did not
+    # degrade" from "nothing recorded a channel at all" (bypassed / single-schema /
+    # crashed before routing), and the second is the one an eval must drop from a
+    # denominator rather than score as a pass.
     channel_out: dict | None = None,
     # Out-param: ``(schema, score)`` pairs from the ranking channel, before top_k /
     # PIN prepend. The serve path maps these onto the final shortlist for the
@@ -205,7 +270,9 @@ def shortlist_schemas(
     A probe over the 2030-question pool measured embedding-only recall@3 = 0.70 vs
     BM25 0.35 vs BM25+embedder RRF 0.535 — fusing the weak lexical signal
     measurably *drags the strong embedding ranking down*, so we do not fuse. When
-    nothing scores, fail open to every schema (full span).
+    nothing scores, fail open to every schema (full span). An embedding call that
+    RAISES degrades to the same BM25 fallback rather than propagating, and stamps
+    ``schema_route_degraded`` so the halved recall is attributable per question.
 
     ``schema_vectors`` (precomputed via :func:`embed_schema_documents`) skips
     re-embedding the schema docs on the hot path; only the question is embedded
@@ -227,29 +294,37 @@ def shortlist_schemas(
 
     ranked: list[tuple[str, float]] = []
     if embedder is not None:
-        from ..llm import cosine
-
-        if schema_vectors is not None:
-            vec_items = list(schema_vectors.items())
-        else:  # embed the per-schema documents now (one batched call)
-            docs = (
-                index_cache.schema_docs(corpus)
-                if index_cache is not None
-                else schema_documents(corpus)
+        try:
+            ranked = _embedding_ranking(
+                corpus,
+                question,
+                embedder=embedder,
+                schema_vectors=schema_vectors,
+                index_cache=index_cache,
             )
-            named = [(s, docs[s]) for s in docs if docs[s].strip()]
-            vec_items = list(
-                zip([s for s, _ in named], embedder.embed([t for _s, t in named]))
-            )
-        if vec_items:
-            q_vec = embedder.embed_one(question)
-            ranked = [
-                (s, sc) for s, vec in vec_items if (sc := cosine(q_vec, vec)) > 0.0
-            ]
-            ranked.sort(key=lambda p: (-p[1], p[0]))
+        except Exception as err:  # noqa: BLE001 — see the comment below
+            # A dead embedding endpoint is the exact failure the ``bm25_fallback``
+            # branch was written for (AUDIT R8), and until this ``try`` it could
+            # never reach it: ``embed_one`` raised, the exception left this module,
+            # and the driver scored the question as CRASHED. So the branch could not
+            # fire on the one failure mode it exists to cover, and the recorded
+            # channel never once said "degraded" in a real run.
+            #
+            # Catching here is deliberate and is NOT swallowing: the turn continues
+            # on the weaker channel *and* stamps ``schema_route_degraded=True``,
+            # which reaches the per-question eval row and the arm summary. The
+            # alternative — keep raising — trades a measurable 0.70->0.35 recall
+            # drop for a run that dies question by question, and it is strictly
+            # worse for the two readers that matter: an operator gets a crash whose
+            # cause is one frame deep in the router either way, and the analysis
+            # loses the rows entirely.
+            ranked = []
+            _log_embed_failure(err)
     if ranked and channel_out is not None:
         channel_out["schema_route_channel"] = "embedding"
-    if not ranked:  # no embedder, or it scored nothing → BM25 fallback
+        # Explicit False, not absent — see ``channel_out``'s note above.
+        channel_out["schema_route_degraded"] = False
+    if not ranked:  # no embedder, it scored nothing, or it RAISED → BM25 fallback
         if channel_out is not None:
             channel_out["schema_route_channel"] = "bm25_fallback"
             channel_out["schema_route_degraded"] = embedder is not None
@@ -260,6 +335,9 @@ def shortlist_schemas(
         ).rank(question)
     if not ranked:
         if channel_out is not None:
+            # ``schema_route_degraded`` keeps whatever the fallback branch just wrote
+            # (it is always reached before this one), so a dead embedder that also
+            # left BM25 with nothing still reports the degradation.
             channel_out["schema_route_channel"] = "none"
         return schemas  # fail-open: no signal → keep all
     if ranked_out is not None:

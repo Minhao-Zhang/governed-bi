@@ -41,6 +41,7 @@ from typing import Any
 from governed_bi.config import load_settings
 from governed_bi.corpus.loader import load_corpus
 from governed_bi.llm.langchain_client import LangChainEmbedder
+from governed_bi.retrieval.rvgd import RetrievalIndexCache
 from governed_bi.retrieval.schema_router import (
     embed_schema_documents,
     schema_documents,
@@ -87,6 +88,14 @@ def _sweep(
     if embedder is not None and not vectors:
         raise RuntimeError(f"{label}: embedder produced no schema vectors")
 
+    # Without this the BM25 arm rebuilds `schema_documents(corpus)` — a walk over
+    # every asset in the lake — AND the BM25 index over it, once per question. The
+    # first run of this sweep spent 25 minutes at 97% CPU on that alone, versus
+    # seconds of actual ranking. The serve path never hits it because `agent.py`
+    # passes a cache; this script has to as well or the floor arm dominates the
+    # wall-clock and hides how cheap the sweep really is.
+    index_cache = RetrievalIndexCache()
+
     t0 = time.time()
     ranks: list[int | None] = []
     channels: Counter[str] = Counter()
@@ -102,6 +111,7 @@ def _sweep(
             embedder=embedder,
             schema_vectors=vectors,
             channel_out=channel,
+            index_cache=index_cache,
         )
         r = _rank_of_gold(shortlist, gold)
         ranks.append(r)
