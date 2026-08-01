@@ -103,6 +103,7 @@ from .arms import (
     agent_solver,
     ladder_steps,
 )
+from .atomic import atomic_write_text
 from .bird_loader import (
     available_dbs,
     description_dir,
@@ -130,6 +131,7 @@ from .index import RESUME_DRIFT_KEYS, index_run
 from .leakage import twin_report, ungradeable_question_ids
 from .oracle import GoldIndex, OracleRung, gold_tables_for, oracle_solver
 from .parallel import ServeWorker, resolve_workers, run_ordered_pool
+from .serve_breaker import ServeCircuitBreaker, ServeCircuitBreakerTripped
 from .sql_diff import is_frozen_constant
 
 # The five the driver still calls, plus eleven it does not: those carry
@@ -2237,6 +2239,63 @@ def make_serve_worker_factory(
     return factory
 
 
+#: Written beside the generations file the moment the serve breaker fires.
+#:
+#: A tripped arm raises, so ``summary.json`` is never written and the run leaves no
+#: ledger record — invisible rather than flagged, which ``_grade_one``'s docstring calls
+#: "worse than every reason ``quotable()`` can state". The marker is the substitute: it
+#: carries the counts the decision was made on, the policy that made it, and the arm, in
+#: the run directory, before the exception unwinds anything.
+SERVE_BREAKER_MARKER = "SERVE_CIRCUIT_BREAKER.json"
+
+
+def _observe_serve_health(
+    breaker: "ServeCircuitBreaker | None",
+    row: dict[str, Any],
+    *,
+    out_path: Path,
+) -> None:
+    """Feed one scored row to the arm's breaker; warn, or write the marker and raise.
+
+    Module-level and taking the breaker as an argument, for the reason
+    :func:`_assert_build_coverage` is: the inline version of that gate had a test that
+    asserted arithmetic about its threshold and never called it, so it would have passed
+    with the gate deleted. ``tests/test_serve_breaker.py`` calls this one directly, and
+    ``tests/test_datalake_row_discipline.py`` pins that ``_persist`` still calls it.
+
+    The crash verdict comes from :func:`~governed_bi.stages.classify_row`, the same
+    function ``summarise_rows`` and ``quotable`` use, so the breaker cannot come to
+    disagree with the crash rate it is watching.
+    """
+    if breaker is None:
+        return
+    breaker.observe(crashed=classify_row(row)[0] is Outcome.crashed)
+    if breaker.should_warn:
+        print(
+            f"*** WARNING: [{breaker.arm}] {breaker.n_crashed} of "
+            f"{breaker.n_rows} scored rows crashed so far — on this trajectory the "
+            "serve circuit breaker will abort the arm. Check the provider (a shared "
+            "token budget is what did it on 2026-07-31) before it does. ***",
+            flush=True,
+        )
+    if not breaker.tripped:
+        return
+    marker = out_path.parent / SERVE_BREAKER_MARKER
+    try:
+        atomic_write_text(
+            marker,
+            json.dumps(
+                {"reason": breaker.message(), **breaker.state()},
+                indent=2,
+                ensure_ascii=False,
+            ),
+        )
+    except Exception as err:  # pragma: no cover - the raise below matters more
+        print(f"*** WARNING: could not write {marker}: {err} ***")
+    print(f"\n*** {breaker.message()} ***\n", flush=True)
+    raise ServeCircuitBreakerTripped(breaker.message())
+
+
 def _run_pool_arm(
     *,
     arm: str,
@@ -2279,6 +2338,12 @@ def _run_pool_arm(
     serve_workers: int = 1,
     worker_factory: "Callable[[int], ServeWorker] | None" = None,
     stage_sink: "_RowSink | None" = None,
+    # Abort this arm when its crash rate says the run is already lost
+    # (:mod:`governed_bi.eval.serve_breaker`). Default ON: the build phase has refused to
+    # spend on a doomed pool since ``_assert_build_coverage``, and serve is where the
+    # money is. ``--no-serve-breaker`` turns it off for the case where finishing a
+    # crashed arm is the point (reproducing a provider fault, say).
+    serve_breaker: bool = True,
     # How many notes the corpus this arm served actually held. Passed through to
     # the treatment fingerprint so "held notes, injected none" is checkable; that
     # check is unreachable without it.
@@ -2313,6 +2378,8 @@ def _run_pool_arm(
     """
     pairs = list(pairs)
     wanted_ids = {str(item.question_id or item.question) for item, _ in pairs}
+    # Stamped on every row this attempt writes. See the field's comment in the row dict.
+    attempt_utc = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
 
     done_rows: list[dict[str, Any]] = []
     if resume:
@@ -2539,6 +2606,31 @@ def _run_pool_arm(
             "db_id": db,
             "arm": arm,
             "split": split,
+            # WHICH ATTEMPT served this row. One constant per ``_run_pool_arm`` call,
+            # so every row a given process wrote carries the same value and rows from
+            # different attempts at the same directory carry different ones.
+            #
+            # Nothing else on the row could tell them apart. ``run_id`` and
+            # ``request_id`` are per-TURN (1351 distinct values in a 1351-row file);
+            # ``turn_id`` is the constant session name; ``latency_sec`` is a duration.
+            # ``manifest.resumes[]`` records each attempt's knobs and start time and
+            # says nothing about which rows belong to it — the 2026-08-01 luna-max
+            # ladder has FOUR attempts (16, 6, 6 and 3 workers) blended into one
+            # generations file with no way to separate them after the fact.
+            #
+            # It matters for two row fields specifically, and they are the two the
+            # integrity gates read: ``outcome == crashed`` and
+            # ``schema_route_degraded``. Worker isolation makes the SCORED fields
+            # invariant to worker count (tests/test_eval_concurrency.py), which is why
+            # ``serve_workers`` is deliberately not a comparability key — but crashes
+            # and embedding fallbacks come from a SHARED provider quota that the worker
+            # count is precisely what saturates. So an attempt at 16 workers and one at
+            # 3 produce systematically different values of exactly the fields
+            # ``quotable()`` gates on, and until now they were indistinguishable.
+            #
+            # Attempt-scoped, not sample-scoped: excluded from the pooled-vs-serial row
+            # comparison for the same reason ``latency_sec`` is.
+            "serve_attempt_utc": attempt_utc,
             "generated_sql": sql,
             "latency_sec": round(latency, 4),
             "usage": meta.get("usage"),
@@ -2617,10 +2709,11 @@ def _run_pool_arm(
             "routing_escaped": escaped,
             "routing_escape_unknown": routing_escape_unknown,
             # WHICH channel ranked the schemas, and whether that was a degradation.
-            # ``schema_route_degraded`` exists (AUDIT R8) because the embedding
-            # channel's measured recall@3 is 0.70 against BM25's 0.35: a silently
-            # dead embedding endpoint halves routing recall, and every downstream
-            # number would read as a curation failure instead. Both are ``None``
+            # ``schema_route_degraded`` exists (AUDIT R8) because a silently dead
+            # embedding endpoint costs 4.7pp of shortlist recall at the default
+            # ``route_top_k`` (0.953 -> 0.906, measured over all 1351 questions in
+            # ``runs/ablation/e1-shortlist-curated.json``) and every downstream number
+            # would otherwise read as a curation failure. Both are ``None``
             # when the turn recorded no channel — bypassed, or crashed before the
             # router — which is why the summary counts them over their own
             # denominator rather than over ``n``.
@@ -2729,6 +2822,12 @@ def _run_pool_arm(
     # (or an arm with no questions) should not leave an empty generations file
     # that later reads back as an arm scored over zero rows.
     fresh: list[dict[str, Any]] = []
+    # Built even when there is nothing to serve, so ``summary["circuit_breaker"]`` is
+    # always present: a block that appears only when the breaker fired cannot be told
+    # from a breaker nobody wired up.
+    breaker = (
+        ServeCircuitBreaker(arm=arm, total=len(todo)) if serve_breaker else None
+    )
     if todo:
         sink = _RowSink(out_path)
         progress = _ServeProgress(arm=arm, total=len(todo))
@@ -2741,6 +2840,13 @@ def _run_pool_arm(
                 for stage_row in stage_rows:
                     stage_sink.write(stage_row)
             progress.tick()
+            # The serve phase's only in-flight gate. Here rather than inside
+            # ``_grade_one`` because this callback is the one place that sees every row,
+            # on one thread, in submission order — in the pooled path as much as the
+            # serial one — so the breaker needs no lock and sees the same sequence
+            # either way. ``run_ordered_pool`` turns an exception raised from here into
+            # a cooperative abort, so the questions still queued cost nothing.
+            _observe_serve_health(breaker, row, out_path=out_path)
 
         try:
             if serve_workers > 1:
@@ -2790,16 +2896,27 @@ def _run_pool_arm(
     # Durable, not stdout-only: ``quotable()`` reads this from the arm summary in
     # ``summary.json``. Always present so absence cannot be confused with zero.
     summary["n_re_served"] = n_re_served
+    # Always written, whether or not the breaker fired and whether or not it was on.
+    # ``None`` says "disabled", a block with ``tripped: false`` says "watched and clean";
+    # an absent key would read as either.
+    summary["circuit_breaker"] = breaker.state() if breaker is not None else None
     if summary["n_routing_degraded"]:
-        # An operator-visible line, because nothing gates on this yet: a run whose
-        # embedding endpoint died mid-way is still "quotable" while carrying a
-        # routing recall of roughly half what the manifest's embedding model
-        # implies.
+        # ``eval.index.quotable`` now refuses the run above
+        # ``ROUTING_DEGRADED_QUOTABLE_FRACTION``, so this line is the early copy of a
+        # verdict the ledger will reach anyway — not, as it was, the only place the fact
+        # appeared. The magnitude is the MEASURED one
+        # (``runs/ablation/e1-shortlist-curated.json``, 1351 questions): 4.7pp of
+        # shortlist recall at the default top_k. The recall@3 figure that used to be
+        # printed here came from a probe on the retired 2030-question pool and is
+        # falsified 2.4x by that artifact; it was the same defect as the 9x-wrong price
+        # table, in an operator-facing warning. It is spelled out, once, in
+        # ``tests/test_repo_contracts._RETIRED_MEASURED_CLAIMS``, which fails if it
+        # reappears anywhere in ``src/``.
         print(
             f"*** WARNING: [{arm}] {summary['n_routing_degraded']} of "
             f"{summary['n_routing_degraded_observed']} routed question(s) fell back "
-            "to the BM25 channel (schema_route_degraded) — measured routing recall@3 "
-            "drops 0.70 -> 0.35 on those rows; check run.log for the embedder error"
+            "to the BM25 channel (schema_route_degraded) — measured shortlist recall@10 "
+            "drops 0.953 -> 0.906 on those rows; check run.log for the embedder error"
         )
     return rows, summary
 
@@ -2864,6 +2981,8 @@ def run_datalake(
     gold_per_db: int = 1,
     # Keep crashed rows on resume rather than re-serving them (see _run_pool_arm).
     replay_crashed: bool = False,
+    # Abort an arm whose crash rate says the run is already lost (eval.serve_breaker).
+    serve_breaker: bool = True,
     prompt_variants: dict[str, str] | None = None,
     # ``None`` keeps whatever Settings says, so a caller that does not care about
     # the picker's column budget need not know the default.
@@ -3640,6 +3759,7 @@ def run_datalake(
                 split=split,
                 resume=resume,
                 replay_crashed=replay_crashed,
+                serve_breaker=serve_breaker,
                 serve_workers=arm_workers,
                 worker_factory=worker_factory,
                 stage_sink=stage_sink,
@@ -4071,6 +4191,19 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     p.add_argument(
+        "--no-serve-breaker",
+        action="store_true",
+        help=(
+            "Serve every question even after the crash rate says the run is lost. Off "
+            "by default: the build phase has refused to spend on a doomed pool since "
+            "--assert-build-coverage, and serve is where the money goes — the "
+            "2026-07-31 incident ran an arm to 48% crashed over two hours before "
+            "crash_rate > 0 disqualified it from summary.json. Pass this when "
+            "finishing a crashed arm is the point (reproducing a provider fault). See "
+            "governed_bi.eval.serve_breaker for what trips it and how often."
+        ),
+    )
+    p.add_argument(
         "--gold-per-db",
         type=int,
         default=1,
@@ -4315,6 +4448,7 @@ def _score_one_split(
             build_workers=build_workers,
             gold_per_db=args.gold_per_db,
             replay_crashed=args.replay_crashed,
+            serve_breaker=not args.no_serve_breaker,
             prompt_variants=prompt_overrides,
             replicate_of=args.replicate,
             oracles=oracles,

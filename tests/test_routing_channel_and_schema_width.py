@@ -8,9 +8,20 @@ artifact has ever carried them: the serve path stamps them onto answer provenanc
 allow-list that does not name them, and the row builder therefore had nothing to
 copy. A real ``generations.curated.jsonl`` row from the 20260731 ladder has 73
 fields and not one is channel- or degradation-related. The measured cost of the
-gap: embedding recall@3 is 0.70 against BM25's 0.35, so a silently dead embedding
-endpoint halves routing recall and every downstream number reads as a curation
-failure instead.
+gap, from ``runs/ablation/e1-shortlist-curated.json`` (2026-07-31 curated corpus, 57
+schemas, all 1351 test questions): shortlist recall@10 — the default ``route_top_k`` —
+is 0.953 on ``text-embedding-3-large`` and 0.906 on BM25 alone, so a silently dead
+embedding endpoint costs 4.7pp and every downstream number reads as a curation failure
+instead.
+
+That figure USED to be quoted here, and in five places in ``src/`` including an
+operator-facing WARNING, as "recall@3 0.70 vs BM25 0.35 — degradation halves routing
+recall". It came from a probe on a retired 2030-question pool and the artifact above
+falsifies it by 2.4x: at ``recall@3`` the real gap is 0.852 vs 0.844, and at
+``recall@1`` BM25 is *ahead* (0.736 vs 0.694). It is the same defect as the price table
+that was wrong by 9x — a number describing the world, written as a literal in a log
+string with no path, no date and no test — and the test below used to pin the wrong
+value, which is how it survived a rewrite of the code around it.
 
 **Schema width (A4).** Pooled, EX falls monotonically from 70.7% (widest gold table
 under 15 columns) to 44.3% (40+), but a within-schema control gives a sign test at
@@ -248,8 +259,15 @@ def test_an_arm_with_no_routing_at_all_reports_null_not_zero():
 
 
 def test_a_degraded_arm_is_announced_to_the_operator(tmp_path, capsys):
-    """Nothing gates on the degradation yet, so the run stays quotable while its
-    routing recall is halved. The one thing that must not happen is silence."""
+    """The warning, and the magnitude it quotes.
+
+    ``eval.index.quotable`` now refuses the run above
+    ``ROUTING_DEGRADED_QUOTABLE_FRACTION``, so this line is no longer the only place the
+    fact appears — but it is still the one an operator sees while the run is alive, and
+    the number in it has to be one the repo can defend. ``0.953 -> 0.906`` is
+    ``runs/ablation/e1-shortlist-curated.json`` at the default ``route_top_k``; the
+    ``0.70 -> 0.35`` this assertion used to pin was falsified by that same artifact.
+    """
     _row, summary = _serve_one(
         tmp_path,
         meta={
@@ -260,7 +278,12 @@ def test_a_degraded_arm_is_announced_to_the_operator(tmp_path, capsys):
     )
     assert summary["n_routing_degraded"] == 1
     printed = capsys.readouterr().out
-    assert "schema_route_degraded" in printed and "0.70 -> 0.35" in printed
+    assert "schema_route_degraded" in printed
+    assert "0.953 -> 0.906" in printed
+    assert "0.70 -> 0.35" not in printed, (
+        "the retired 2030-question probe figure, falsified 2.4x by "
+        "runs/ablation/e1-shortlist-curated.json"
+    )
 
 
 # --------------------------------------------------------------------------- #

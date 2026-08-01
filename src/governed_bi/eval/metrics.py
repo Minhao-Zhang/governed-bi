@@ -623,6 +623,17 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
 ROW_IDENTITY: tuple[str, ...] = (
     "arm", "question_id", "request_id", "run_id", "turn_id", "db_id", "split",
     "difficulty",
+    # WHICH ATTEMPT wrote this row: one constant per ``_run_pool_arm`` call. None of the
+    # four ids above can say — ``run_id`` and ``request_id`` are per-turn, ``turn_id`` is
+    # the session name. ``manifest.resumes[]`` records each attempt's knobs and start
+    # time and never says which rows are its own, so the 2026-08-01 luna-max ladder
+    # blended FOUR attempts (16, 6, 6 and 3 workers) into one generations file with no
+    # way to separate them. Not scored, and not a comparability knob: worker isolation
+    # makes the scored fields invariant to worker count. It is the two UNSCORED fields
+    # the gates read — ``outcome == crashed`` and ``schema_route_degraded`` — that vary
+    # by attempt, because both come from a shared provider quota that the worker count
+    # is what saturates.
+    "serve_attempt_utc",
 )
 ROW_VERDICT: tuple[str, ...] = (
     "correct", "correct_strict", "error", "error_type", "outcome", "failed_stage",

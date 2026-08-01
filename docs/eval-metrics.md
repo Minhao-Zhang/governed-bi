@@ -17,7 +17,7 @@ documented subset of `summary.json`, so "declared but absent" is expected there.
 | Artifact | Fields | Consumer |
 |---|---|---|
 | `manifest.json` | 47 (42 in every run) | `index.COMPARABILITY_KEYS`, `index.RESUME_DRIFT_KEYS` |
-| `generations.<arm>.jsonl` | 78 per (question, arm) | `_summarise_rows`, `analysis`, `power`, `error_taxonomy` |
+| `generations.<arm>.jsonl` | 79 per (question, arm) | `_summarise_rows`, `analysis`, `power`, `error_taxonomy` |
 | `summary.json` | 100 | `index.quotable` |
 | `stage_events.jsonl` | 9 per (question, arm, stage) | read by hand; per-stage latency attribution |
 | `split_gap.json` | 6 | read by hand; `--split both` only |
@@ -227,7 +227,7 @@ reported without its excluded count reads as full coverage.
 
 ## 3. Generation row — one record per (question, arm)
 
-**identity** — `arm`, `question_id`, `request_id`, `run_id`, `turn_id`, `db_id`, `split`, `difficulty`
+**identity** — `arm`, `question_id`, `request_id`, `run_id`, `turn_id`, `db_id`, `split`, `difficulty`, `serve_attempt_utc`
 
 **verdict** — `correct`, `correct_strict`, `error`, `error_type`, `outcome`, `failed_stage`, `failed_layer`, `refused_by`, `nrows_match`
 

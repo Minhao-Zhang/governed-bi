@@ -37,7 +37,7 @@ discordant counts here are often small enough for the approximation to mislead.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from statistics import NormalDist
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -48,6 +48,7 @@ __all__ = [
     "mcnemar",
     "measure_floor",
     "minimum_detectable_effect",
+    "detectable_effect_for",
     "correct_by_question",
 ]
 
@@ -174,6 +175,15 @@ class DetectableEffect:
     #: ``resolves`` is unknowable and answers ``False``, because "we could not tell"
     #: must never read as "yes".
     measured: bool = True
+    #: How many paired questions the *replicate* that supplied ``discordance_rate``
+    #: actually covered. ``None`` when the rate did not come from a replicate.
+    #:
+    #: This exists because the rate and the population are two different sample sizes
+    #: and only one of them used to be recorded. ``n_pairs`` is the population the
+    #: effect is measured over; a cheaper replicate estimates the same rate on fewer
+    #: questions. Nothing in the artifact said which, so a reader could not tell a floor
+    #: measured on 1351 questions from one measured on 200.
+    floor_n_pairs: int | None = None
 
     def resolves(self, net_questions: int) -> bool:
         if not self.measured or self.questions is None:
@@ -210,6 +220,17 @@ class DetectableEffect:
             "mde_rate": self.rate,
             "from_zero_discordance": self.from_zero_discordance,
             "measured": self.measured,
+            "floor_n_pairs": self.floor_n_pairs,
+            # How much of this comparison's population the floor was measured on. 1.0 is
+            # a full replicate; 0.22 is a 300-question subsample against a 1351-question
+            # split. The MDE is unbiased either way — it is evaluated at ``n_pairs``, not
+            # at the floor's size — but the *rate* it rests on is noisier the smaller
+            # this is, and a reader has to be able to see that without opening the run.
+            "floor_coverage": (
+                None
+                if not self.floor_n_pairs or not self.n_pairs
+                else round(self.floor_n_pairs / self.n_pairs, 4)
+            ),
         }
 
 
@@ -376,6 +397,44 @@ def minimum_detectable_effect(
         rate=min(1.0, questions / n_pairs),
         from_zero_discordance=from_zero,
     )
+
+
+def detectable_effect_for(
+    result: McNemarResult,
+    floor: NoiseFloor,
+    *,
+    alpha: float = 0.05,
+    power: float = 0.80,
+) -> DetectableEffect | None:
+    """The MDE for ONE comparison: the replicate's *rate*, this pair's *population*.
+
+    The two inputs come from different places and that distinction was collapsed. The
+    caller used to build a single ``minimum_detectable_effect(floor.n_pairs,
+    floor.discordance_rate)`` and hand the same object to every comparison, so the MDE
+    was evaluated at the size of the **replicate** while ``resolves()`` compared it
+    against a ``net_questions`` counted over the size of the **comparison**.
+
+    With a full-split replicate the two happen to be the same number and nothing shows.
+    They stop being the same the moment anyone economises, and the error runs the
+    dangerous way: a 300-question replicate at a 10% discordance yields
+    ``2.80 * sqrt(30) = 15.3`` questions, while the honest threshold for a
+    1351-question comparison is ``2.80 * sqrt(135.1) = 32.6``. Every delta between
+    those two numbers would have been stamped ``resolvable: true``. The same mismatch
+    already applies, smaller and in the conservative direction, to the ``no_twin``
+    stratum, whose 1085 shared rows were being judged against a 1351-row threshold.
+
+    So: ``discordance_rate`` is a property of the pipeline and travels; ``n_pairs`` is a
+    property of the population under test and does not. ``floor_n_pairs`` records which
+    replicate the rate came from, because a rate estimated on 300 questions and one
+    estimated on 1351 are not equally trustworthy and the artifact has to say so.
+    """
+    rate = floor.discordance_rate
+    if rate is None:
+        return None
+    effect = minimum_detectable_effect(
+        result.n_shared, rate, alpha=alpha, power=power
+    )
+    return replace(effect, floor_n_pairs=floor.n_pairs)
 
 
 def comparison_report(

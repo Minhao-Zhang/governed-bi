@@ -77,6 +77,26 @@ _HEADLINE_SUPPORT: dict[str, tuple[str, str]] = {
 #: rather than the previous absence of one (AUDIT E2).
 FREE_PASS_QUOTABLE_FRACTION = 0.10
 
+#: Share of an arm's ROUTED questions whose ranking fell back off the embedding channel
+#: (``schema_route_degraded``) before the run stops being quotable.
+#:
+#: Derived, not chosen. The two channels were measured head to head on the 2026-07-31
+#: curated corpus over all 1351 test questions
+#: (``runs/ablation/e1-shortlist-curated.json``): shortlist recall@10 is 0.953 on
+#: ``text-embedding-3-large`` and 0.906 on BM25 alone, a 4.7pp penalty on a degraded row.
+#: At 2% degraded the pooled shortlist recall moves 0.09pp — an order of magnitude under
+#: the 2.5pp noise floor the runbook is currently borrowing — so below this line the
+#: fallback cannot account for an arm-to-arm difference. Above it, the router the run
+#: reports in its manifest is not the router that produced its shortlists.
+#:
+#: The incident this exists for: a schema-pick accuracy of 69.9% was recorded and quoted
+#: while the embedding endpoint was rate-limited into failure, and re-measured at 91.0%
+#: with the quota free. ``schema_route_degraded`` had been added precisely to make that
+#: visible, reached the arm summary as ``n_routing_degraded`` / ``routing_degraded_rate``
+#: — and ``quotable()`` did not read either, so the artifact carried the evidence and the
+#: gate passed the run.
+ROUTING_DEGRADED_QUOTABLE_FRACTION = 0.02
+
 #: Knobs the gate deliberately does NOT check, each with the reason. This is the only
 #: way a manifest knob leaves :data:`COMPARABILITY_KEYS`, because the list is DERIVED
 #: from :data:`~governed_bi.eval.metrics.MANIFEST_KNOBS` rather than spelled again.
@@ -348,6 +368,16 @@ def record_for_run(run_dir: Path | str) -> dict[str, Any]:
             "crash_rate": s.get("crash_rate"),
             "routing_recall": s.get("routing_recall"),
             "schema_pick_accuracy": s.get("schema_pick_accuracy"),
+            # The routing channel census. Lifted because ``quotable()`` reads the RECORD:
+            # these three were computed per row, aggregated into the arm summary, printed
+            # as a console warning — and dropped here, so the gate could not see them.
+            # ``n_routing_observed`` comes along as the positive evidence that routing
+            # happened at all, which is what separates "did not degrade" from "never
+            # recorded a channel".
+            "n_routing_observed": s.get("n_routing_observed"),
+            "n_routing_degraded": s.get("n_routing_degraded"),
+            "n_routing_degraded_observed": s.get("n_routing_degraded_observed"),
+            "routing_degraded_rate": s.get("routing_degraded_rate"),
             # Resume that deleted crashed rows and re-served them (audit E1).
             "n_re_served": s.get("n_re_served"),
             # Rows scored correct for a reason other than good SQL (audit E2): an
@@ -717,6 +747,73 @@ def _corpus_finding_reasons(record: dict[str, Any]) -> list[str]:
     return reasons
 
 
+def _routing_degradation_reasons(headline: dict[str, Any]) -> list[str]:
+    """Refuse quoting a run whose routing channel silently fell back to BM25.
+
+    Two failures, and they need separate wording because the fixes differ.
+
+    **Measured and material.** ``routing_degraded_rate`` above
+    :data:`ROUTING_DEGRADED_QUOTABLE_FRACTION` means a material share of the arm's
+    shortlists came off the weaker channel. The shortlist is the set the turn is
+    licensed against, so the arm's routing recall, schema-pick accuracy and every EX
+    number conditioned on them describe a retrieval configuration the manifest does not
+    name — and, because a rate-limit storm hits whichever arm happens to be serving, the
+    degradation is not balanced across arms and lands straight in the delta.
+
+    **Never measured.** An arm that recorded routing decisions and stamped a channel on
+    none of them cannot claim the embedding endpoint was alive. Fails closed for the
+    reason the ``crash_rate is None`` check next door does: absence of evidence is not
+    evidence of absence, and this is the counter that guards against a FLATTERING
+    routing number as much as a damning one.
+
+    Both are positive-evidence-gated on ``n_routing_observed``: a run whose pool held one
+    schema, or whose rungs pinned the corpus, never asked the router anything, and an arm
+    that routed nothing is not accused of routing it badly.
+    """
+    degraded: list[str] = []
+    unmeasured: list[str] = []
+    for arm, s in sorted(headline.items()):
+        if not isinstance(s, dict):
+            continue
+        n_routed = s.get("n_routing_observed")
+        if not isinstance(n_routed, (int, float)) or n_routed <= 0:
+            # Router never engaged (or the count predates the census). Nothing to say.
+            continue
+        n_observed = s.get("n_routing_degraded_observed")
+        if not isinstance(n_observed, (int, float)) or n_observed <= 0:
+            unmeasured.append(f"{arm} (routed {int(n_routed)})")
+            continue
+        n_degraded = s.get("n_routing_degraded")
+        if not isinstance(n_degraded, (int, float)):
+            unmeasured.append(f"{arm} (routed {int(n_routed)})")
+            continue
+        rate = n_degraded / n_observed
+        if rate > ROUTING_DEGRADED_QUOTABLE_FRACTION:
+            degraded.append(f"{arm}={int(n_degraded)}/{int(n_observed)} ({rate:.1%})")
+
+    reasons: list[str] = []
+    if unmeasured:
+        reasons.append(
+            "routing channel not recorded for "
+            + ", ".join(unmeasured)
+            + " — those arms routed questions and stamped `schema_route_degraded` on "
+            "none of them, so it is unknown whether the shortlists came from the "
+            "embedding channel the manifest names or from the BM25 fallback "
+            "(recall@10 0.953 vs 0.906), and every routing-conditioned rate inherits "
+            "that unknown"
+        )
+    if degraded:
+        reasons.append(
+            f"routing fell back off the embedding channel ({', '.join(degraded)}) — "
+            f"above the {ROUTING_DEGRADED_QUOTABLE_FRACTION:.0%} line, so the shortlist "
+            "these arms were licensed against is not the one this run's configuration "
+            "describes (recall@10 0.953 embedding vs 0.906 BM25), and a fallback caused "
+            "by a shared rate limit hits whichever arm was serving at the time rather "
+            "than all of them equally"
+        )
+    return reasons
+
+
 def quotable(record: dict[str, Any]) -> tuple[bool, list[str]]:
     """Is this run's artifact hygiene good enough to *consider* quoting?
 
@@ -853,6 +950,12 @@ def quotable(record: dict[str, Any]) -> tuple[bool, list[str]]:
                 + " — predates the crash/refusal split, so its refusal_rate and EX "
                 "silently absorb any crashes"
             )
+
+        # The routing channel. Every field this reads was already in summary.json and
+        # already printed as a warning; nothing consulted it, so a run whose embedding
+        # endpoint died mid-serve was quotable on the strength of a shortlist half of it
+        # never got.
+        reasons.extend(_routing_degradation_reasons(headline))
 
         # The pre-registered headline is a STRATUM, so it is only the population it
         # names while every scored row carries the stamp that assigns it. An unstamped
@@ -1276,6 +1379,9 @@ def render_index(records: Iterable[dict[str, Any]]) -> str:
         "crash",
         "route_rec",
         "pick_acc",
+        # Beside the two rates it corrupts, because that is where a reader comparing
+        # pick_acc across arms will be looking when one of them is an artifact.
+        "degr",
         "ok",
     ]
     # Every column between ``arm`` and ``ok``, so adding one above cannot silently
@@ -1326,6 +1432,7 @@ def render_index(records: Iterable[dict[str, Any]]) -> str:
                     _fmt(s.get("crash_rate")),
                     _fmt(s.get("routing_recall")),
                     _fmt(s.get("schema_pick_accuracy")),
+                    _fmt(s.get("routing_degraded_rate")),
                     "y" if r.get("quotable") else "n",
                 ]
             )
@@ -1350,6 +1457,13 @@ def render_index(records: Iterable[dict[str, Any]]) -> str:
     parts.append(
         "`-` under EX*/n* means the record predates the pre-registration, not that the "
         "run scored zero; `--reindex` rebuilds it from the run directory."
+    )
+    parts.append(
+        "degr = `routing_degraded_rate`, the share of routed questions whose shortlist "
+        "came off the BM25 fallback instead of the embedding channel (recall@10 0.906 vs "
+        f"0.953). Above {ROUTING_DEGRADED_QUOTABLE_FRACTION:.0%} the run is not "
+        "ledger_ok; `-` means the record predates the channel census, which is also not "
+        "ledger_ok if the arm routed anything."
     )
     other_registers = sorted(
         {

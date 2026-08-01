@@ -166,6 +166,115 @@ def test_an_unmeasured_crash_rate_fails_closed(tmp_path):
     assert any("crash rate not recorded" in r for r in reasons)
 
 
+# --------------------------------------------------------------------------- #
+# quotable: the routing channel (schema_route_degraded)
+#
+# The incident: a schema-pick accuracy of 69.9% was recorded and quoted while the
+# embedding endpoint was rate-limited into failure; re-measured at 91.0% with the quota
+# free. Every field these tests read was ALREADY in summary.json at the time and
+# ALREADY printed as a console warning. `quotable()` did not read any of them.
+#
+# Each of the four below fails if `_routing_degradation_reasons` is deleted, if the
+# threshold is moved to an unreachable value, or if the fields stop being lifted into
+# the ledger record — the three ways this gate can go quietly inert.
+# --------------------------------------------------------------------------- #
+
+
+def _routed(n, *, degraded, observed=None):
+    """An arm summary that routed ``n`` questions, ``degraded`` of them off-channel."""
+    observed = n if observed is None else observed
+    return {
+        "n": n,
+        "ex_lenient": 0.5,
+        "crash_rate": 0.0,
+        "n_routing_observed": n,
+        "n_routing_degraded_observed": observed,
+        "n_routing_degraded": degraded,
+        "routing_degraded_rate": (degraded / observed) if observed else None,
+    }
+
+
+def test_a_degraded_routing_channel_makes_a_run_unquotable(tmp_path):
+    run = _write_run(
+        tmp_path,
+        arms={
+            "baseline": _routed(72, degraded=0),
+            # 25% of shortlists off the embedding channel: recall@10 0.906 not 0.953.
+            "curated": _routed(72, degraded=18),
+        },
+    )
+    record = record_for_run(run)
+    # Lifted into the RECORD, not merely present in summary.json — that gap is the
+    # whole defect. `quotable()` reads the record.
+    assert record["headline"]["curated"]["n_routing_degraded"] == 18
+    ok, reasons = quotable(record)
+    assert not ok
+    degraded = [r for r in reasons if "fell back off the embedding channel" in r]
+    assert degraded, reasons
+    # The arm has to be named and the baseline must not be accused with it.
+    assert "curated=18/72" in degraded[0]
+    assert "baseline" not in degraded[0]
+
+
+def test_a_trace_of_degradation_stays_quotable(tmp_path):
+    """A gate that fires on four rows in 1351 trains people to ignore it.
+
+    These are the real counts from ``runs/datalake/luna-max/20260801T-ladder``: the
+    ``seeded`` arm recorded 4 degraded rows of 1351 (0.30%), which moves pooled
+    shortlist recall by 0.01pp. Not a reason to throw the run away.
+    """
+    run = _write_run(
+        tmp_path,
+        arms={
+            "baseline": _routed(1351, degraded=0),
+            "seeded": _routed(1351, degraded=4),
+        },
+        summary_extra={"n_questions": 1351},
+    )
+    record = record_for_run(run)
+    assert record["quotable"], record["not_quotable_because"]
+
+
+def test_an_unrecorded_routing_channel_fails_closed(tmp_path):
+    """Routed 72 questions, stamped a channel on none — cannot claim it did not degrade.
+
+    Same rule as the ``crash_rate is None`` check next door, on the counter that guards
+    a flattering routing number rather than a damning one.
+    """
+    arm = _routed(72, degraded=0)
+    arm["n_routing_degraded_observed"] = 0
+    arm["n_routing_degraded"] = 0
+    arm["routing_degraded_rate"] = None
+    run = _write_run(tmp_path, arms={"baseline": arm})
+    ok, reasons = quotable(record_for_run(run))
+    assert not ok
+    assert any("routing channel not recorded" in r for r in reasons), reasons
+
+
+def test_an_arm_that_never_routed_is_not_accused(tmp_path):
+    """`--limit-dbs 1` and the oracle rungs never ask the router anything.
+
+    Positive evidence only: an arm that routed nothing has not routed it badly, and a
+    gate that fires here would fire on every single-schema smoke run.
+    """
+    run = _write_run(
+        tmp_path,
+        arms={
+            "baseline": {
+                "n": 72,
+                "ex_lenient": 0.2,
+                "crash_rate": 0.0,
+                "n_routing_observed": 0,
+                "n_routing_degraded_observed": 0,
+                "n_routing_degraded": 0,
+                "routing_degraded_rate": None,
+            }
+        },
+    )
+    record = record_for_run(run)
+    assert record["quotable"], record["not_quotable_because"]
+
+
 def test_train_split_is_never_quotable(tmp_path):
     ok, reasons = quotable(record_for_run(_write_run(tmp_path, split="train")))
     assert not ok

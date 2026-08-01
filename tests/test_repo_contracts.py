@@ -140,5 +140,49 @@ def test_every_relative_markdown_link_resolves():
     assert not broken, "broken relative markdown links:\n  " + "\n  ".join(sorted(broken))
 
 
+#: Measured claims that the repo's own artifacts falsify, and which must not come back.
+#:
+#: Each entry is ``(literal, why)``. Kept to numbers with a *named, checked* refutation —
+#: this is not a style rule and not a ban on quoting figures.
+_RETIRED_MEASURED_CLAIMS: tuple[tuple[str, str], ...] = (
+    (
+        "0.70 -> 0.35",
+        "the embedding-vs-BM25 routing gap from a probe on the retired 2030-question "
+        "pool. runs/ablation/e1-shortlist-curated.json (2026-07-31 curated corpus, all "
+        "1351 test questions) measures recall@3 at 0.852 vs 0.844 and recall@10 — the "
+        "default route_top_k — at 0.953 vs 0.906. The retired figure overstates the "
+        "penalty 2.4x, and at recall@1 BM25 is actually ahead (0.736 vs 0.694). It had "
+        "spread to five places in src/ including an operator-facing WARNING, and a test "
+        "pinned the wrong value",
+    ),
+)
+
+
+def test_no_source_file_quotes_a_falsified_measurement():
+    """A number describing the world, written as a literal, pinned to nothing.
+
+    That is the shape of the price table that was wrong by 9x and of the routing-recall
+    claim that was wrong by 2.4x, and it is the shape the 2026-07-31 review named as this
+    repo's characteristic defect: the rule gets fixed where it was found and not pushed
+    to the adjacent copies. This is the cheap version of pushing it.
+
+    A grep, not a value check, on purpose. The authoritative artifact
+    (``runs/ablation/e1-shortlist-curated.json``) lives under a gitignored ``runs/``, so a
+    test that read it would silently skip on CI and on every fresh clone — which four
+    tests in this repo already do.
+    """
+    offenders: list[str] = []
+    files = sorted(set(_tracked("src/*.py") + _tracked("src/**/*.py")))
+    assert files, "found no tracked python sources — the glob broke"
+    for rel in files:
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        for literal, why in _RETIRED_MEASURED_CLAIMS:
+            if literal in text:
+                offenders.append(f"{rel}: {literal!r} — {why}")
+    assert not offenders, "retired measured claim(s) back in src/:\n  " + "\n  ".join(
+        sorted(offenders)
+    )
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))

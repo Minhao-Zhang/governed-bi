@@ -797,8 +797,10 @@ def _route_schemas(
             channel_out=route_channel,
             ranked_out=route_ranked,
         )
-        # A silent embedding->BM25 degradation halves routing recall
-        # (0.70 -> 0.35); recorded so the drop is attributable (AUDIT R8).
+        # A silent embedding->BM25 degradation costs 4.7pp of shortlist recall at the
+        # default top_k (0.953 -> 0.906, measured over 1351 questions in
+        # ``runs/ablation/e1-shortlist-curated.json``); recorded so the drop is
+        # attributable (AUDIT R8).
         shortlist_detail.update(route_channel)
         shortlist_detail["n_candidates"] = len(shortlisted)
     base_provenance = {**base_provenance, **route_channel}

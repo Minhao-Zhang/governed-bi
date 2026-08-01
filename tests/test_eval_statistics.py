@@ -84,6 +84,93 @@ def test_a_perfect_replicate_on_a_small_run_cannot_bless_a_one_question_delta():
 
 
 # --------------------------------------------------------------------------- #
+# The MDE's two sample sizes: the replicate's, and the comparison's
+#
+# The noise floor supplies a RATE; the comparison supplies the POPULATION. One shared
+# `DetectableEffect`, built at the replicate's own `n_pairs` and handed to every
+# comparison, collapsed the two. With a full-split replicate the numbers coincide and
+# nothing shows — which is exactly why this stayed invisible, and why it becomes live
+# the first time anyone runs the cheaper replicate the runbook is asking for.
+# --------------------------------------------------------------------------- #
+
+
+def test_a_subsample_replicate_does_not_lower_the_bar_for_the_full_split():
+    """The bug, at the sizes that would produce it.
+
+    300-question replicate at 10% discordance -> 2.80*sqrt(30) = 15.3 questions.
+    The honest threshold for a 1351-question comparison is 2.80*sqrt(135.1) = 32.6.
+    A net of 20 questions sits between them: 'resolvable' under the old wiring,
+    'below resolution' under the right one.
+    """
+    from governed_bi.eval.power import McNemarResult, NoiseFloor, detectable_effect_for
+
+    floor = NoiseFloor(n_pairs=300, n_discordant=30, net=0)
+    pooled = McNemarResult(
+        arm_a="baseline", arm_b="curated", n_shared=1351, n_b_only=30, n_a_only=10, p_value=0.01
+    )
+    mde = detectable_effect_for(pooled, floor)
+    z = 1.959963984540054 + 0.8416212335729143
+    # Evaluated at the COMPARISON's population, using the REPLICATE's rate.
+    assert math.isclose(mde.questions, z * math.sqrt(1351 * 0.10), rel_tol=1e-9)
+    assert mde.n_pairs == 1351
+    # And the delta that would have been blessed is not.
+    assert mde.resolves(20) is False
+    # The old wiring, spelled out so the regression is unambiguous.
+    old = minimum_detectable_effect(floor.n_pairs, floor.discordance_rate)
+    assert old.resolves(20) is True
+
+
+def test_the_artifact_says_which_replicate_the_rate_came_from():
+    """`floor_n_pairs` / `floor_coverage`: a rate off 300 questions and a rate off 1351
+    are not equally trustworthy, and the MDE alone cannot tell them apart."""
+    from governed_bi.eval.power import McNemarResult, NoiseFloor, detectable_effect_for
+
+    pooled = McNemarResult(
+        arm_a="a", arm_b="b", n_shared=1000, n_b_only=30, n_a_only=10, p_value=0.01
+    )
+    subsample = detectable_effect_for(
+        pooled, NoiseFloor(n_pairs=200, n_discordant=20, net=0)
+    ).to_dict()
+    assert subsample["floor_n_pairs"] == 200
+    assert subsample["floor_coverage"] == pytest.approx(0.2, abs=1e-4)
+    full = detectable_effect_for(
+        pooled, NoiseFloor(n_pairs=1000, n_discordant=100, net=0)
+    ).to_dict()
+    assert full["floor_coverage"] == pytest.approx(1.0)
+    # Same rate, same MDE — the coverage field is the only thing that differs, which is
+    # the point: the estimate is unbiased, its precision is not.
+    assert full["mde_questions"] == pytest.approx(subsample["mde_questions"])
+
+
+def test_a_full_replicate_is_byte_identical_to_the_old_wiring():
+    """No silent renumbering of the published runs. When the replicate covers the whole
+    split, the old shared-object MDE and the per-comparison one agree exactly."""
+    from governed_bi.eval.power import McNemarResult, NoiseFloor, detectable_effect_for
+
+    floor = NoiseFloor(n_pairs=1351, n_discordant=135, net=1)
+    pooled = McNemarResult(
+        arm_a="a", arm_b="b", n_shared=1351, n_b_only=60, n_a_only=55, p_value=0.8
+    )
+    new = detectable_effect_for(pooled, floor)
+    old = minimum_detectable_effect(floor.n_pairs, floor.discordance_rate)
+    assert new.questions == pytest.approx(old.questions)
+    assert new.rate == pytest.approx(old.rate)
+
+
+def test_the_no_twin_stratum_is_judged_on_its_own_population():
+    """1085 twin-free gradeable rows, not the 1351 the replicate covered."""
+    from governed_bi.eval.power import McNemarResult, NoiseFloor, detectable_effect_for
+
+    floor = NoiseFloor(n_pairs=1351, n_discordant=135, net=0)
+    stratum = McNemarResult(
+        arm_a="a", arm_b="b", n_shared=1085, n_b_only=60, n_a_only=55, p_value=0.8
+    )
+    mde = detectable_effect_for(stratum, floor)
+    z = 1.959963984540054 + 0.8416212335729143
+    assert math.isclose(mde.questions, z * math.sqrt(1085 * (135 / 1351)), rel_tol=1e-9)
+
+
+# --------------------------------------------------------------------------- #
 # Holm-Bonferroni
 # --------------------------------------------------------------------------- #
 

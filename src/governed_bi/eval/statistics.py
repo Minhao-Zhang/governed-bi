@@ -49,10 +49,10 @@ from .power import (
     cluster_sign_test,
     comparison_report,
     correct_by_question,
+    detectable_effect_for,
     holm_adjust,
     mcnemar,
     measure_floor,
-    minimum_detectable_effect,
 )
 
 # ``treatment.compare_arms`` compares what two arms were *served* (context
@@ -562,7 +562,6 @@ def compare_arms(
     }
 
     floor = None
-    mde = None
     replicate_arm = f"{replicate_of}__replicate" if replicate_of else None
     replicate_drifted = False
     if replicate_arm and replicate_arm in correct and replicate_of in correct:
@@ -594,8 +593,11 @@ def compare_arms(
             )
         if not replicate_drifted and not replicate_unverified:
             floor = measure_floor(correct[replicate_of], correct[replicate_arm])
-            if floor.discordance_rate is not None:
-                mde = minimum_detectable_effect(floor.n_pairs, floor.discordance_rate)
+            # The MDE is NOT built here. It is a per-comparison quantity: the
+            # discordance *rate* travels from the replicate, the *population* is
+            # whichever pair is being tested. One shared object evaluated at the
+            # replicate's own size was compared against net counts from a differently
+            # sized population — see ``power.detectable_effect_for``.
 
     # ``{question_id: db_id}`` for the cluster test below. Built from the rows the
     # run already wrote, so it costs nothing and cannot disagree with them.
@@ -610,8 +612,11 @@ def compare_arms(
     divergences: list[dict[str, Any]] = []
     for i, a in enumerate(names):
         for b in names[i + 1 :]:
+            pooled = mcnemar(a, correct[a], b, correct[b])
             report = comparison_report(
-                mcnemar(a, correct[a], b, correct[b]), mde, floor
+                pooled,
+                detectable_effect_for(pooled, floor) if floor else None,
+                floor,
             )
             # A second, weaker test that does not assume questions are independent.
             # Questions are nested in databases, so the question-level p-value is
@@ -627,16 +632,23 @@ def compare_arms(
             # ``None`` when the flag was never stamped (a run predating it), which is
             # not the same as a stratum that came out empty.
             tf_a, tf_b = twin_free.get(a) or {}, twin_free.get(b) or {}
-            report["no_twin"] = (
-                comparison_report(mcnemar(a, tf_a, b, tf_b), mde, floor)
-                if (tf_a and tf_b and twin_stamped.get(a) and twin_stamped.get(b))
-                else None
-            )
+            if tf_a and tf_b and twin_stamped.get(a) and twin_stamped.get(b):
+                stratum = mcnemar(a, tf_a, b, tf_b)
+                report["no_twin"] = comparison_report(
+                    stratum,
+                    detectable_effect_for(stratum, floor) if floor else None,
+                    floor,
+                )
+            else:
+                report["no_twin"] = None
             if report["no_twin"] is not None:
-                # The floor and MDE come from the FULL-split replicate, so they
-                # describe a population that still contains the twins. Conservative
-                # (the full-split threshold is the larger one) but mislabelled if left
-                # unsaid. And Holm runs over the top-level family only, so this p is
+                # The floor's RATE comes from the full-split replicate; the MDE built
+                # from it is evaluated on this stratum's own ``n_shared`` (1085, not
+                # 1351), because a threshold in questions is only meaningful against
+                # the population the net questions were counted over. It used to be the
+                # full-split threshold applied to a stratum's net — conservative here,
+                # and anti-conservative the moment the replicate is the smaller of the
+                # two. And Holm runs over the top-level family only, so this p is
                 # raw — comparing it against the pooled ``p_value_holm``, which the
                 # runbook used to tell readers to do, is biased toward "the effect
                 # survives".
