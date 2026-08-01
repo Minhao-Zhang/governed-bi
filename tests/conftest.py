@@ -77,3 +77,31 @@ def _fresh_default_stack():
         yield
     finally:
         _reset_default_stack_for_tests()
+
+
+@pytest.fixture(autouse=True)
+def _fresh_embedding_memos():
+    """Drop the two process-wide embedding memos around every test.
+
+    ``schema_router._SCHEMA_VECTOR_MEMO`` and ``rvgd._ASSET_VECTOR_MEMO`` exist so
+    the eval harness's worker threads pay for one embed of a given text instead of
+    N. They are keyed on content, so within a run they cannot serve a stale vector
+    — but across a *test suite* they make order load-bearing in exactly the way
+    ``_fresh_default_stack`` describes: several tests build the same three-table
+    fixture with the same fake embedder and then assert on the number of embed
+    calls, and whichever ran second would see zero.
+    """
+    from governed_bi.retrieval.rvgd import _reset_asset_vector_memo_for_tests
+    from governed_bi.retrieval.schema_router import (
+        _reset_schema_vector_memo_for_tests,
+    )
+
+    def _clear() -> None:
+        _reset_asset_vector_memo_for_tests()
+        _reset_schema_vector_memo_for_tests()
+
+    _clear()
+    try:
+        yield
+    finally:
+        _clear()

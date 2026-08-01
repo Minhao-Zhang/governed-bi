@@ -24,8 +24,10 @@ lengths are computed from the asset corpus itself.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
+import threading
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -313,6 +315,66 @@ def corpus_index_key(corpus: "Corpus") -> tuple[str, ...]:
     return tuple(sorted(a.id for a in corpus.assets))
 
 
+#: Process-wide memo for the ASSET embedding index, keyed on the CONTENT of the
+#: documents plus the embedder's identity — the same shape (and for the same
+#: reason) as ``schema_router._SCHEMA_VECTOR_MEMO``. See
+#: :meth:`RetrievalIndexCache.embedding` for why the per-graph layer above it is
+#: not enough.
+_ASSET_VECTOR_MEMO: dict[str, dict[str, list[float]]] = {}
+_ASSET_VECTOR_LOCK = threading.Lock()
+
+
+def _asset_vector_key(pairs: list[tuple[str, str]], embedder: "Embedder") -> str:
+    """Identity of (these exact asset documents, this embedder).
+
+    Content-hashed, NOT id-hashed. :func:`corpus_index_key` keys the per-graph
+    layer on asset ids, which is exactly as discriminating as content *within one
+    graph* — the corpus is immutable there. It is not sufficient process-wide: the
+    eval ladder serves a baseline / seeded / curated corpus in the same process,
+    and curation rewrites descriptions **in place under the same asset id**. On an
+    id key the curated arm would silently score against the baseline arm's vectors,
+    which is a wrong-answer bug that no test and no artifact would show.
+
+    The embedder is in the key for the reason ``schema_router`` documents: vectors
+    are comparable only within one model AND one width, and ``cosine`` returns 0.0
+    on a length mismatch instead of raising, so a cross-model hit degrades silently.
+
+    Hashing costs one pass over text we are about to send over the network anyway,
+    and it runs only on a per-graph MISS (hundreds of times per run), never per
+    question.
+    """
+    h = hashlib.sha256()
+    for asset_id, doc in pairs:  # already in corpus order, which is stable
+        h.update(asset_id.encode("utf-8"))
+        h.update(b"\0")
+        h.update(doc.encode("utf-8"))
+        h.update(b"\0")
+    model = getattr(getattr(embedder, "model", None), "model", None)
+    dims = getattr(getattr(embedder, "model", None), "dimensions", None)
+    h.update(f"|{type(embedder).__name__}|{model}|{dims}".encode())
+    return h.hexdigest()
+
+
+def _reset_asset_vector_memo_for_tests() -> None:
+    """Drop the process-wide asset-vector memo (conftest autouse).
+
+    A content-keyed process-wide cache makes test order load-bearing: two tests
+    that build the same tiny fixture corpus with the same fake embedder would
+    otherwise share a build, and whichever ran second would count zero embed calls
+    and fail an assertion about cost through no fault of its own. Same argument as
+    ``conftest._fresh_default_stack``.
+    """
+    with _ASSET_VECTOR_LOCK:
+        _ASSET_VECTOR_MEMO.clear()
+
+
+#: How many question vectors one cache keeps. A turn embeds its question twice
+#: (schema routing, then ``retrieve``) and then embeds one query per
+#: ``search_corpus`` tool call, so a handful is enough to collapse the duplicate
+#: without holding a run's worth of 3072-float vectors alive.
+_QUESTION_VECTOR_MAX = 8
+
+
 class RetrievalIndexCache:
     """Per-graph memo for the two indexes ``retrieve`` would otherwise rebuild.
 
@@ -330,15 +392,34 @@ class RetrievalIndexCache:
     visits, and every entry is live for the whole run.
     """
 
-    __slots__ = ("_bm25", "_embed", "_schema_docs", "_schema_bm25", "hits", "misses")
+    __slots__ = (
+        "_bm25",
+        "_embed",
+        "_schema_docs",
+        "_schema_bm25",
+        "_qvec",
+        "hits",
+        "misses",
+        "embed_builds",
+        "embed_shared",
+        "qvec_hits",
+    )
 
     def __init__(self) -> None:
         self._bm25: dict[tuple[str, ...], BM25Index] = {}
         self._embed: dict[tuple[str, ...], Any] = {}
         self._schema_docs: dict[tuple[str, ...], dict[str, str]] = {}
         self._schema_bm25: dict[tuple[str, ...], BM25Index] = {}
+        self._qvec: dict[tuple[str, str], list[float]] = {}
         self.hits = 0
         self.misses = 0
+        #: Asset-embedding builds that reached the network from this cache.
+        self.embed_builds = 0
+        #: Asset-embedding builds this cache got from the process-wide memo — i.e.
+        #: the network calls a sibling worker's build paid for.
+        self.embed_shared = 0
+        #: Question embeddings served from the per-turn memo instead of the network.
+        self.qvec_hits = 0
 
     def schema_docs(self, corpus: "Corpus") -> dict[str, str]:
         """Per-schema documents for the router, computed once per corpus.
@@ -385,13 +466,109 @@ class RetrievalIndexCache:
         return got
 
     def embedding(self, corpus: "Corpus", embedder: "Embedder"):
-        from .embedding import build_embedding_index
+        """Asset embedding index for ``corpus``. Two layers, on purpose.
+
+        The per-graph dict below is the hot path: one dict lookup per question, no
+        hashing, no lock, keyed on asset ids. It removes the *per-question* rebuild.
+
+        It does **not** remove the *per-worker* rebuild, because each eval worker
+        owns its own graph and therefore its own cache, and the workers all walk the
+        same pooled question list. Measured on the 20260801 three-arm ladder
+        (`runs/datalake/luna-max/20260801T-ladder`): 994 asset-embedding builds where
+        171 distinct routed corpora were ever visited — 1.21M embedding tokens sent
+        for 212k tokens of distinct text, 83% of the asset-embedding spend duplicated
+        across threads. Worse than the token bill, the builds are *correlated in
+        time*: workers start together and advance through the same region of the
+        question list, so every schema boundary is a simultaneous N-way burst against
+        a shared org TPM ceiling. That is the shape that took a run down on
+        2026-08-01 — the schema-document embed had exactly this bug
+        (``schema_router.embed_schema_documents``) and this is its sibling.
+
+        So a miss falls through to a process-wide, CONTENT-keyed memo. Content, not
+        ids: see :func:`_asset_vector_key`. The stored value is an immutable
+        ``EmbeddingIndex`` (built once, read-only ``rank``), so sharing one object
+        across worker threads needs no copy and no lock beyond the dict.
+
+        Memory is the quiet half of the same win. A 3072-dim vector is 97 KB as a
+        Python ``list[float]``, so ONE full set of the curated arm's 3686 asset
+        vectors is 351 MB — and every worker's cache is unbounded and held one. The
+        workers now share the vector lists rather than each holding their own, which
+        on the 6-worker curated arm is roughly 1.7 GB of resident memory that stops
+        existing.
+
+        The key hashes ``pairs`` in corpus order, so two callers whose asset order
+        differs would MISS rather than collide — a lost saving, never a wrong vector.
+        In practice ``filter_corpus_for_retrieval`` preserves corpus order, so they
+        agree.
+        """
+        from .embedding import EmbeddingIndex, index_documents
 
         key = corpus_index_key(corpus)
         got = self._embed.get(key)
-        if got is None:
-            got = self._embed[key] = build_embedding_index(corpus, embedder)
+        if got is not None:
+            return got
+
+        pairs = index_documents(corpus)
+        if not pairs:
+            got = self._embed[key] = EmbeddingIndex({})
+            return got
+
+        shared_key = _asset_vector_key(pairs, embedder)
+        with _ASSET_VECTOR_LOCK:
+            vectors = _ASSET_VECTOR_MEMO.get(shared_key)
+        if vectors is not None:
+            self.embed_shared += 1
+            got = self._embed[key] = EmbeddingIndex(vectors)
+            return got
+
+        # Deliberately OUTSIDE the lock, for the reason
+        # ``embed_schema_documents`` gives: holding it across a network round-trip
+        # serialises every worker behind the first one. A race costs one redundant
+        # request, not N.
+        self.embed_builds += 1
+        built = dict(
+            zip(
+                [asset_id for asset_id, _doc in pairs],
+                embedder.embed([doc for _id, doc in pairs]),
+            )
+        )
+        with _ASSET_VECTOR_LOCK:
+            vectors = _ASSET_VECTOR_MEMO.setdefault(shared_key, built)
+        got = self._embed[key] = EmbeddingIndex(vectors)
         return got
+
+    def question_vector(self, embedder: "Embedder", text: str) -> list[float]:
+        """Embed ``text`` once per turn instead of once per call site.
+
+        Every turn embeds its question **twice** — once to rank schemas
+        (``schema_router._embedding_ranking``) and once to rank assets
+        (:func:`retrieve`) — with the same string, the same embedder, and two
+        separate HTTP round-trips. On the 20260801 ladder the modal serve turn made
+        exactly 2 embedding requests and 1145 of 2294 logged turns made no others, so
+        this duplicate is roughly **half of all embedding traffic** the eval sends.
+        Tokens are trivial (a question is ~20 of them); *requests* are not, and the
+        embedding endpoint is the one that 429s first because it is shared org-wide
+        with whatever else is running.
+
+        Bounded at :data:`_QUESTION_VECTOR_MAX` with FIFO eviction. The cache is
+        per-graph and each eval worker owns its graph, so there is no cross-thread
+        access and no lock. Keyed on the embedder's identity as well as the text —
+        vectors from two models are not interchangeable (see
+        :func:`_asset_vector_key`).
+        """
+        model = getattr(getattr(embedder, "model", None), "model", None)
+        dims = getattr(getattr(embedder, "model", None), "dimensions", None)
+        key = (f"{type(embedder).__name__}|{model}|{dims}", text)
+        got = self._qvec.get(key)
+        if got is not None:
+            self.qvec_hits += 1
+            return got
+        vec = embedder.embed_one(text)
+        if len(self._qvec) >= _QUESTION_VECTOR_MAX:
+            # dicts preserve insertion order, so this evicts the oldest entry.
+            del self._qvec[next(iter(self._qvec))]
+        self._qvec[key] = vec
+        return vec
 
 
 def phys_name_to_table_id(corpus: "Corpus") -> dict[str, str | None]:
@@ -496,7 +673,15 @@ def retrieve(
             if index_cache is not None
             else build_embedding_index(corpus, embedder)
         )
-        emb_ranked = emb_index.rank(embedder.embed_one(question))
+        # Via the cache when there is one: the schema router already embedded this
+        # exact question a moment ago on the serve path (see
+        # :meth:`RetrievalIndexCache.question_vector`).
+        q_vec = (
+            index_cache.question_vector(embedder, question)
+            if index_cache is not None
+            else embedder.embed_one(question)
+        )
+        emb_ranked = emb_index.rank(q_vec)
         # ``vector_weight`` tunes the semantic channel's pull relative to lexical
         # (1.0 = equal). For governed BI an exact lexical name-match is usually the
         # stronger signal, so this can be dialed below 1.

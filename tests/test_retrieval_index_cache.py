@@ -614,3 +614,131 @@ def test_the_serve_stack_owns_one_cache():
     assert isinstance(made, RetrievalIndexCache)
     # Per-stack, not shared process-wide: two stacks must not cross-contaminate.
     assert made is not ServeStack.__dataclass_fields__["index_cache"].default_factory()
+
+
+# --------------------------------------------------------------------------- #
+# THROUGHPUT 2026-08-01: the per-graph cache is per *worker*, so a pooled eval
+# still paid N x for identical text. Measured on the 20260801 three-arm ladder:
+# 994 asset-embedding builds for 171 distinct routed corpora — 1.21M embedding
+# tokens sent for 212k tokens of distinct text (83% duplicated), issued in
+# time-correlated bursts against a shared org TPM ceiling. Same failure mode,
+# one layer down, as the schema-document embed fixed in c72f2e7.
+# --------------------------------------------------------------------------- #
+
+
+def test_sibling_caches_share_one_asset_embed_for_identical_content():
+    """Two workers' graphs = two caches. The network must be paid once."""
+    corpus_a = Corpus(assets=[_table("s", "orders"), _table("s", "customers")]).for_analyst()
+    # A separate object with identical content — what each worker's
+    # ``filter_corpus_for_retrieval`` independently produces for the same schema.
+    corpus_b = Corpus(assets=[_table("s", "orders"), _table("s", "customers")]).for_analyst()
+    assert corpus_a is not corpus_b
+
+    embedder = _CountingEmbedder()
+    worker0, worker1 = RetrievalIndexCache(), RetrievalIndexCache()
+    retrieve(corpus_a, "total amount", embedder=embedder, index_cache=worker0)
+    retrieve(corpus_b, "total amount", embedder=embedder, index_cache=worker1)
+
+    assert embedder.n_batch == 1, (
+        "the second worker re-embedded identical asset text; the process-wide memo "
+        "is not being consulted"
+    )
+    assert worker0.embed_builds == 1 and worker0.embed_shared == 0
+    assert worker1.embed_builds == 0 and worker1.embed_shared == 1
+
+
+def test_edited_content_under_the_same_asset_ids_is_not_shared():
+    """The safety half of the same fix.
+
+    The ladder serves baseline / seeded / curated in ONE process, and curation
+    rewrites descriptions in place under the same asset id. An id-keyed
+    process-wide memo would hand the curated arm the baseline arm's vectors and
+    silently corrupt the comparison the whole run exists to make.
+    """
+    plain = _table("s", "orders")
+    edited = plain.model_copy(update={"description": "quantity of beer shipped per order"})
+    assert plain.id == edited.id
+
+    embedder = _CountingEmbedder()
+    a, b = RetrievalIndexCache(), RetrievalIndexCache()
+    retrieve(Corpus(assets=[plain]).for_analyst(), "q", embedder=embedder, index_cache=a)
+    retrieve(Corpus(assets=[edited]).for_analyst(), "q", embedder=embedder, index_cache=b)
+
+    assert embedder.n_batch == 2, "edited text must NOT reuse the stale vectors"
+    assert a.embedding(Corpus(assets=[plain]).for_analyst(), embedder).vectors != (
+        b.embedding(Corpus(assets=[edited]).for_analyst(), embedder).vectors
+    )
+
+
+def test_a_different_embedder_width_is_not_shared():
+    """``cosine`` returns 0.0 on a length mismatch rather than raising, so a
+    cross-model hit degrades routing to 'nothing scores' with no error anywhere."""
+
+    class _WideEmbedder(_CountingEmbedder):
+        def embed(self, docs):
+            self.n_batch += 1
+            return [[float(len(d)), 1.0, 0.5] for d in docs]
+
+        def embed_one(self, text):
+            self.n_query += 1
+            return [float(len(text)), 1.0, 0.5]
+
+    corpus = Corpus(assets=[_table("s", "orders")]).for_analyst()
+    narrow, wide = _CountingEmbedder(), _WideEmbedder()
+    retrieve(corpus, "q", embedder=narrow, index_cache=RetrievalIndexCache())
+    retrieve(corpus, "q", embedder=wide, index_cache=RetrievalIndexCache())
+
+    assert narrow.n_batch == 1 and wide.n_batch == 1
+
+
+# --------------------------------------------------------------------------- #
+# THROUGHPUT 2026-08-01: every turn embedded its question TWICE — once to rank
+# schemas, once to rank assets — over the same string, in two HTTP round-trips.
+# On the ladder the modal serve turn made exactly 2 embedding requests, so this
+# duplicate was roughly half of all embedding traffic the eval sent.
+# --------------------------------------------------------------------------- #
+
+
+def test_the_same_question_is_embedded_once_per_turn():
+    from governed_bi.retrieval import shortlist_schemas
+
+    corpus = Corpus(
+        assets=[_table("sales", "orders"), _table("hr", "employees")]
+    ).for_analyst()
+    embedder = _CountingEmbedder()
+    cache = RetrievalIndexCache()
+    question = "total order amount"
+
+    # The serve path's two call sites, in order.
+    shortlist_schemas(corpus, question, embedder=embedder, index_cache=cache)
+    retrieve(corpus, question, embedder=embedder, index_cache=cache)
+
+    assert embedder.n_query == 1, (
+        f"the question was embedded {embedder.n_query}x in one turn; the router and "
+        "retrieve must share one vector"
+    )
+    assert cache.qvec_hits == 1
+
+
+def test_a_different_question_still_embeds():
+    """The memo must not answer with the previous turn's vector."""
+    corpus = Corpus(assets=[_table("s", "orders")]).for_analyst()
+    embedder = _CountingEmbedder()
+    cache = RetrievalIndexCache()
+
+    first = retrieve(corpus, "alpha", embedder=embedder, index_cache=cache)
+    second = retrieve(corpus, "beta beta", embedder=embedder, index_cache=cache)
+
+    assert embedder.n_query == 2
+    assert first.scores != second.scores or embedder.n_query == 2
+
+
+def test_the_question_vector_memo_is_bounded():
+    from governed_bi.retrieval.rvgd import _QUESTION_VECTOR_MAX
+
+    embedder = _CountingEmbedder()
+    cache = RetrievalIndexCache()
+    for i in range(_QUESTION_VECTOR_MAX * 3):
+        cache.question_vector(embedder, f"question {i}")
+
+    assert len(cache._qvec) <= _QUESTION_VECTOR_MAX

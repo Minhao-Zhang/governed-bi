@@ -15,6 +15,7 @@ nondeterminism.
 from __future__ import annotations
 
 import json
+import threading
 import time
 
 import pytest
@@ -157,8 +158,19 @@ def _gold_hashes(items: list[EvalItem]) -> dict[str, GoldHash]:
     return out
 
 
+#: Row fields that are properties of the ATTEMPT rather than of the measurement, so a
+#: pooled run and a serial run are not expected to agree on them. ``latency_sec`` is
+#: scheduler-dependent; ``serve_attempt_utc`` is a per-``_run_pool_arm``-call constant
+#: whose whole purpose is to DIFFER between attempts (see the field's comment in
+#: ``run_datalake``). Everything else must match exactly, which is the contract.
+_ATTEMPT_SCOPED_ROW_FIELDS = frozenset({"latency_sec", "serve_attempt_utc"})
+
+
 def _strip_latency(rows: list[dict]) -> list[dict]:
-    return [{k: v for k, v in r.items() if k != "latency_sec"} for r in rows]
+    return [
+        {k: v for k, v in r.items() if k not in _ATTEMPT_SCOPED_ROW_FIELDS}
+        for r in rows
+    ]
 
 
 def _strip_cost(summary: dict) -> dict:
@@ -184,6 +196,13 @@ def _strip_cost(summary: dict) -> dict:
             else (_scored_cost(val) if k == "cost" else val)
         )
         for k, val in summary.items()
+        # ``circuit_breaker`` is ATTEMPT-scoped, not sample-scoped — the same category as
+        # wall-clock. It counts the rows THIS process served, so a resumed run reports 7
+        # where a clean run reports 12, and that difference is the field being correct:
+        # the breaker exists to stop this attempt's spend, and replaying rows already on
+        # disk costs nothing and must not push it toward a trip. Feeding it the replayed
+        # rows instead would make a resume of a previously-crashed arm trip on history.
+        if k != "circuit_breaker"
     }
 
 
@@ -338,6 +357,68 @@ def test_resume_replays_scored_rows_and_matches_a_clean_run(tmp_path):
     # reason as in the concurrency test: a resumed run's wall-clock is split across
     # two processes, so equality there would be asserting the wrong invariant.
     assert _strip_cost(summary_resumed) == _strip_cost(summary_clean)
+
+
+def test_a_resumed_row_says_which_attempt_served_it(tmp_path, monkeypatch):
+    """The gap the 2026-08-01 luna-max ladder left behind.
+
+    That directory's ``manifest.json`` records FOUR attempts — 16, 6, 6 and 3 workers —
+    and its ``generations.curated.jsonl`` blends all four with no field distinguishing
+    them. ``run_id`` and ``request_id`` are per-turn (1351 distinct values in a 1351-row
+    file), ``turn_id`` is the constant session name, ``latency_sec`` is a duration, and
+    ``resumes[]`` records each attempt's knobs and never says which rows are its own.
+
+    It is not the scored fields that need this — worker isolation keeps those invariant,
+    which is why ``serve_workers`` is deliberately NOT a comparability key. It is
+    ``outcome == crashed`` and ``schema_route_degraded``: both come from a shared
+    provider quota, the worker count is what saturates it, and both are inputs to
+    ``eval.index.quotable``. Blending attempts pollutes exactly the gate inputs.
+    """
+    items = _build_items(6)
+    pairs = [(item, DBS[i % len(DBS)]) for i, item in enumerate(items)]
+    gold = _gold_hashes(items)
+    path = tmp_path / "gen.jsonl"
+
+    # Two attempts at the same directory, forced to distinguishable clocks. The real
+    # separation is wall-clock hours; the stamp only has to be constant WITHIN an
+    # attempt and different ACROSS them.
+    stamps = iter(["2026-08-01T06:13:06+00:00", "2026-08-01T19:15:26+00:00"])
+    import governed_bi.eval.run_datalake as rd
+
+    real_datetime = rd.datetime
+
+    class _Clock:
+        @staticmethod
+        def now(tz=None):
+            from datetime import datetime as _dt
+
+            return _dt.fromisoformat(next(stamps))
+
+        def __getattr__(self, name):  # pragma: no cover - passthrough
+            return getattr(real_datetime, name)
+
+    monkeypatch.setattr(rd, "datetime", _Clock())
+
+    _run_pool_arm(
+        solver=_StubSolver(), gateway=_EchoGateway(), out_path=path,
+        **_pool_args(pairs[:3], gold),
+    )
+    _run_pool_arm(
+        solver=_StubSolver(), gateway=_EchoGateway(), out_path=path, resume=True,
+        **_pool_args(pairs, gold),
+    )
+
+    rows = _read_rows(path)
+    assert len(rows) == 6
+    by_attempt: dict[str, int] = {}
+    for row in rows:
+        stamp = row.get("serve_attempt_utc")
+        assert stamp, "every row must name the attempt that served it"
+        by_attempt[stamp] = by_attempt.get(stamp, 0) + 1
+    assert by_attempt == {
+        "2026-08-01T06:13:06+00:00": 3,
+        "2026-08-01T19:15:26+00:00": 3,
+    }, by_attempt
 
 
 def test_without_resume_a_stale_file_is_truncated_not_appended(tmp_path):
@@ -819,3 +900,123 @@ def test_the_curried_factory_carries_the_rung_through(monkeypatch):
     )
     mod.arm_worker_factory(fair, bindings)(0)
     assert seen[0]["rung"] is None
+
+
+# --------------------------------------------------------------------------- #
+# THROUGHPUT 2026-08-01: `pool.map` yields in SUBMISSION order, so a slow head
+# task blocks the write stream while the workers behind it keep finishing. Every
+# progress signal a run emitted was downstream of that block, so a healthy run
+# read as a dead one. These pin what is and is not actually blocked.
+# --------------------------------------------------------------------------- #
+
+
+def test_a_slow_head_task_blocks_writes_but_not_workers():
+    """The diagnosis, as an executable statement.
+
+    If this ever fails the other way — tasks NOT finishing behind a slow head —
+    then `pool.map` has started throttling submission and the head-of-line problem
+    is a throughput problem after all, not just an observability one.
+    """
+    finished: list[int] = []
+    written: list[int] = []
+    lock = threading.Lock()
+
+    def slow_head(_w, i):
+        time.sleep(1.0 if i == 0 else 0.01)
+        with lock:
+            finished.append(i)
+        return i
+
+    def _note(r):
+        written.append((len(finished), r))
+
+    out = run_ordered_pool(
+        list(range(24)),
+        workers=4,
+        make_worker=_pool_factory(),
+        run_task=slow_head,
+        on_result=_note,
+        heartbeat_s=0,
+    )
+
+    assert list(out) == list(range(24)), "results must still arrive in submission order"
+    # When the FIRST row was finally written, nearly everything had already run.
+    n_finished_at_first_write = written[0][0]
+    assert n_finished_at_first_write >= 20, (
+        f"only {n_finished_at_first_write} tasks had finished when the first row was "
+        "written; the head-of-line characterisation is wrong"
+    )
+
+
+def test_the_heartbeat_shows_completions_the_write_stream_has_not_reached_yet():
+    """The number that would have prevented two wrong diagnoses on 2026-08-01.
+
+    Mid-run, behind a slow head task, ``done`` must be far ahead of ``written``. A
+    progress report derived from the write stream (a JSONL line count, or
+    ``_ServeProgress``, which ticks from the same blocked callback) reads 0 here and
+    says the run is dead.
+    """
+    snapshots: list[tuple[int, int]] = []
+
+    def slow_head(_w, i):
+        time.sleep(1.0 if i == 0 else 0.01)
+        return i
+
+    out = run_ordered_pool(
+        list(range(24)),
+        workers=4,
+        make_worker=_pool_factory(),
+        run_task=slow_head,
+        on_result=lambda _r: None,
+        heartbeat_s=0.05,
+        on_heartbeat=lambda p: snapshots.append((p.done, p.written)),
+    )
+
+    assert list(out) == list(range(24))
+    assert snapshots, "the heartbeat never fired"
+    best = max(done - written for done, written in snapshots)
+    assert best >= 10, (
+        f"the heartbeat never separated completed from written (max lag {best}); "
+        f"snapshots={snapshots[:8]}"
+    )
+    # And the end state still balances.
+    assert out.progress.done == out.progress.written == 24
+
+
+def test_pool_progress_reports_totals_and_latencies():
+    out = run_ordered_pool(
+        list(range(8)),
+        workers=3,
+        make_worker=_pool_factory(),
+        run_task=lambda _w, i: i,
+        heartbeat_s=0,
+    )
+    p = out.progress
+    assert (p.total, p.done, p.written, p.failed) == (8, 8, 8, 0)
+    assert len(p.durations) == 8
+    line = p.line()
+    assert "8/8 done" in line and "lag 0" in line
+
+
+def test_pool_progress_in_flight_excludes_crashed_tasks():
+    """A crashed question must stop counting as busy.
+
+    ``_run`` decrements in a ``finally`` for this reason: counting only successes
+    would leave a run with crashes reporting phantom busy workers forever, and the
+    ETA — computed off ``done`` — would never converge. Unit-level because
+    ``run_ordered_pool`` re-raises a task error, so a crashing run never returns a
+    ``PoolResult`` to read the counters off.
+    """
+    from governed_bi.eval.parallel import PoolProgress
+
+    prog = PoolProgress(total=3)
+    for _ in range(3):
+        with prog.lock:
+            prog.started += 1
+    assert prog.in_flight == 3
+    with prog.lock:  # one crashed, two returned
+        prog.failed += 1
+        prog.done = 3
+        prog.durations.extend([1.0, 2.0, 3.0])
+    assert prog.in_flight == 0
+    assert "1 failed" in prog.line()

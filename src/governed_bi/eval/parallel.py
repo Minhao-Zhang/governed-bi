@@ -26,12 +26,18 @@ default is byte-identical to the pre-concurrency behaviour.
 from __future__ import annotations
 
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, TypeVar
 
 T = TypeVar("T")
 R = TypeVar("R")
+
+#: Seconds between heartbeat lines. A three-arm ladder runs ~13 h with a p99
+#: question of ~6 min, so a minute is frequent enough to see a stall and rare
+#: enough not to bury the driver's own output.
+DEFAULT_HEARTBEAT_S = 60.0
 
 # Above this the operator is almost certainly starving their Postgres
 # ``max_connections`` budget; warn loudly but proceed unchanged (the box owner,
@@ -72,6 +78,16 @@ class ServeWorker:
     solver: Any
 
 
+class PoolAborted(RuntimeError):
+    """Placeholder raised INSTEAD of running a task once the pool is aborting.
+
+    Never surfaces to a caller: ``run_ordered_pool`` re-raises the original
+    ``on_result`` exception, and the tasks that raise this one are the ones whose
+    results are already being discarded. It exists so an abandoned task returns
+    immediately rather than spending a model call.
+    """
+
+
 @dataclass
 class WorkerStats:
     """How much work one worker thread actually did.
@@ -99,6 +115,8 @@ class PoolResult(list):
     """
 
     workers: "list[WorkerStats]"
+    #: Live counters for the run that produced this list (see :class:`PoolProgress`).
+    progress: "PoolProgress"
 
     @property
     def n_tasks(self) -> int:
@@ -113,6 +131,62 @@ class PoolResult(list):
         return [w.close_error for w in self.workers if w.close_error]
 
 
+@dataclass
+class PoolProgress:
+    """Live counters for one pool run. The distinction the ledger cannot make.
+
+    ``ThreadPoolExecutor.map`` submits every task eagerly and then yields results
+    **in submission order**, so a slow question at the head of the queue blocks
+    result *delivery* while the workers behind it keep finishing. Measured: with 4
+    workers, 40 tasks and a 5 s head task, 39 tasks had finished and **zero** rows
+    had been written at t = 4 s. Nothing is stalled — but the only two artifacts a
+    running eval produces (the generations JSONL, and ``_ServeProgress``, which
+    ticks from the same blocked callback) both report zero progress. On
+    2026-08-01 that made an operator twice declare a healthy run dead.
+
+    So: ``done`` counts tasks that RETURNED; ``written`` counts results that
+    reached ``on_result``. ``done - written`` is the head-of-line lag, and it is
+    the number that separates "nothing is happening" from "everything is happening
+    and one row is late". ``done`` is also the honest ETA denominator.
+
+    Counters are mutated under :attr:`lock` because worker threads write ``done``
+    while the calling thread writes ``written`` and the heartbeat thread reads both.
+    """
+
+    total: int
+    started: int = 0
+    done: int = 0
+    written: int = 0
+    failed: int = 0
+    #: Wall-clock seconds per completed task, for a real p50/p99.
+    durations: list[float] = field(default_factory=list)
+    lock: Any = field(default_factory=threading.Lock)
+    t0: float = field(default_factory=time.perf_counter)
+
+    @property
+    def in_flight(self) -> int:
+        return self.started - self.done
+
+    def line(self) -> str:
+        with self.lock:
+            started, done, written = self.started, self.done, self.written
+            failed = self.failed
+            durs = sorted(self.durations)
+        elapsed = time.perf_counter() - self.t0
+        rate = (done / elapsed * 60.0) if elapsed > 0 else 0.0
+        eta = ""
+        if 0 < done < self.total:
+            eta = f" | eta {(self.total - done) * (elapsed / done) / 60.0:.0f}m"
+        pct = f"p50 {durs[len(durs) // 2]:.0f}s" if durs else "p50 -"
+        p99 = f"p99 {durs[min(len(durs) - 1, int(0.99 * len(durs)))]:.0f}s" if durs else "p99 -"
+        return (
+            f"  pool [t+{elapsed / 60.0:.0f}m]: {done}/{self.total} done "
+            f"(written {written}, lag {done - written}), "
+            f"{started - done} in flight, {failed} failed | "
+            f"{rate:.1f}/min | {pct} {p99}{eta}"
+        )
+
+
 def run_ordered_pool(
     items: list[T],
     *,
@@ -120,6 +194,8 @@ def run_ordered_pool(
     make_worker: Callable[[int], ServeWorker],
     run_task: Callable[[ServeWorker, T], R],
     on_result: "Callable[[R], None] | None" = None,
+    heartbeat_s: float = DEFAULT_HEARTBEAT_S,
+    on_heartbeat: "Callable[[PoolProgress], None] | None" = None,
 ) -> PoolResult:
     """Run ``run_task`` over ``items`` across ``workers`` threads, in order.
 
@@ -139,6 +215,15 @@ def run_ordered_pool(
     The returned :class:`PoolResult` also carries a :class:`WorkerStats` per built
     worker, so a run can say how the work was distributed and whether any task or
     any teardown failed — the pool was previously unobserved end to end.
+
+    ``heartbeat_s`` reports a :class:`PoolProgress` snapshot from a daemon thread on
+    that interval (0 disables), through ``on_heartbeat`` (default: print its
+    ``line()``). It exists because every other progress signal a run emits is
+    downstream of ``on_result``, and ``on_result`` is head-of-line blocked — see
+    :class:`PoolProgress`. Emitted from here rather than from the driver so no call
+    site has to opt in: the run that most needed this had no way to ask for it. The
+    callback is also the only seam from which the *mid-run* counters are observable,
+    which is what a test of the lag has to look at — at the end, lag is always 0.
     """
     local = threading.local()
     built: list[tuple[ServeWorker, WorkerStats]] = []
@@ -158,9 +243,32 @@ def run_ordered_pool(
                 built.append(pair)
         return pair
 
+    progress = PoolProgress(total=len(items))
+
+    # Set when ``on_result`` raises. Checked before a task does any work, so the tasks
+    # ``ThreadPoolExecutor.__exit__`` insists on draining cost nothing.
+    #
+    # This is what makes an abort from ``on_result`` actually save money. ``pool.map``
+    # submits EVERY item up front, and ``__exit__`` calls ``shutdown(wait=True)`` — no
+    # ``cancel_futures`` — so an exception escaping the loop body below does not stop the
+    # remaining questions: the executor waits for all of them. On a 1351-question arm
+    # aborting at row 12, that is 1339 model calls after the decision to stop. The
+    # generator's own ``finally`` would cancel the queued futures, but it only runs when
+    # the generator is closed, and at ``__exit__`` time it is still referenced by the
+    # unwinding frame. Hence both halves: ``gen.close()`` below to cancel what has not
+    # started, and this flag for whatever the executor has already handed to a thread.
+    aborting = threading.Event()
+
     def _run(item: T) -> R:
+        if aborting.is_set():
+            # Not counted as a failure: nothing was attempted, and this result is
+            # discarded. Counting it would put phantom crashes in the pool's own stats.
+            raise PoolAborted("pool aborting; task not started")
         ctx, stats = _worker()
         stats.n_tasks += 1
+        with progress.lock:
+            progress.started += 1
+        t_start = time.perf_counter()
         try:
             return run_task(ctx, item)
         except Exception:
@@ -168,7 +276,29 @@ def run_ordered_pool(
             # crashing arm into a merely-refusing one, which is exactly the confusion
             # that made a whole three-arm run unquotable.
             stats.n_failures += 1
+            with progress.lock:
+                progress.failed += 1
             raise
+        finally:
+            # In a ``finally`` so a crashed question still counts as no longer in
+            # flight; otherwise a run with crashes reports phantom busy workers
+            # forever and the ETA never converges.
+            with progress.lock:
+                progress.done += 1
+                progress.durations.append(time.perf_counter() - t_start)
+
+    stop = threading.Event()
+
+    report = on_heartbeat or (lambda p: print(p.line(), flush=True))
+
+    def _heartbeat() -> None:
+        while not stop.wait(heartbeat_s):
+            report(progress)
+
+    beat: "threading.Thread | None" = None
+    if heartbeat_s and heartbeat_s > 0 and items:
+        beat = threading.Thread(target=_heartbeat, name="pool-heartbeat", daemon=True)
+        beat.start()
 
     try:
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -177,18 +307,34 @@ def run_ordered_pool(
             # (rather than materialising) lets ``on_result`` persist each row as it
             # lands instead of only after the last one finishes.
             results = PoolResult()
-            for result in pool.map(_run, items):
+            stream = pool.map(_run, items)
+            for result in stream:
                 if on_result is not None:
-                    on_result(result)
+                    try:
+                        on_result(result)
+                    except BaseException:
+                        # The durability seam is also the abort seam: it is the only
+                        # code that sees every row, on one thread, in order. A serve
+                        # circuit breaker lives here (see eval.serve_breaker), and it is
+                        # worthless if stopping costs the same as finishing.
+                        aborting.set()
+                        stream.close()  # cancels every future not yet started
+                        raise
                 results.append(result)
+                with progress.lock:
+                    progress.written += 1
             with built_lock:
                 # The same mutable ``WorkerStats`` objects the threads own, so the
                 # ``finally`` below can still record a teardown failure onto the object
                 # this call is about to hand back (``finally`` runs before the return
                 # value reaches the caller).
                 results.workers = [stats for _ctx, stats in built]
+            results.progress = progress
             return results
     finally:
+        stop.set()
+        if beat is not None:
+            beat.join(timeout=1.0)
         with built_lock:
             to_close = list(built)
         for ctx, stats in to_close:

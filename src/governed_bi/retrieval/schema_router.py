@@ -235,6 +235,17 @@ def embed_schema_documents(
     return dict(built)
 
 
+def _reset_schema_vector_memo_for_tests() -> None:
+    """Drop the process-wide schema-vector memo (conftest autouse).
+
+    Same argument as ``rvgd._reset_asset_vector_memo_for_tests``: without it the
+    memo survives between tests, so a test that counts embed calls passes or fails
+    on whether an earlier test happened to build the same documents.
+    """
+    with _SCHEMA_VECTOR_LOCK:
+        _SCHEMA_VECTOR_MEMO.clear()
+
+
 def _embedding_ranking(
     corpus: "Corpus",
     question: str,
@@ -266,7 +277,15 @@ def _embedding_ranking(
         )
     if not vec_items:
         return []
-    q_vec = embedder.embed_one(question)
+    # Through the cache when there is one. ``retrieve`` embeds this same question
+    # again a few lines later in the same turn; on the 20260801 ladder that
+    # duplicate was ~half of every embedding request the eval sent. See
+    # ``RetrievalIndexCache.question_vector``.
+    q_vec = (
+        index_cache.question_vector(embedder, question)
+        if index_cache is not None
+        else embedder.embed_one(question)
+    )
     ranked = [(s, sc) for s, vec in vec_items if (sc := cosine(q_vec, vec)) > 0.0]
     ranked.sort(key=lambda p: (-p[1], p[0]))
     return ranked
@@ -284,8 +303,8 @@ def _log_embed_failure(err: BaseException) -> None:
     first, _EMBED_FAILURE_LOGGED = not _EMBED_FAILURE_LOGGED, True
     logger.warning(
         "schema-route embedding channel failed (%s: %s) — falling back to BM25 for "
-        "this question. Measured recall@3 drops 0.70 -> 0.35, so this run's routing "
-        "is DEGRADED; the row is stamped schema_route_degraded=True.%s",
+        "this question. Measured shortlist recall@10 drops 0.953 -> 0.906, so this "
+        "run's routing is DEGRADED; the row is stamped schema_route_degraded=True.%s",
         type(err).__name__,
         err,
         "" if first else " (traceback logged once, on the first failure)",
@@ -302,11 +321,26 @@ def shortlist_schemas(
     schema_vectors: "dict[str, list[float]] | None" = None,
     settings: "Settings | None" = None,
     index_cache: "RetrievalIndexCache | None" = None,
-    # Out-param: the caller records WHICH channel produced the ranking. Embedding
-    # recall@3 is 0.70 and the BM25 fallback's is 0.35, so a silent degradation
-    # roughly halves routing recall with nothing in the record to explain the drop
-    # (AUDIT R8) — a run could look like a curation failure when it was a dead
-    # embedding endpoint. Values: "embedding" | "bm25_fallback" | "none".
+    # Out-param: the caller records WHICH channel produced the ranking, so a silent
+    # degradation is attributable and a run does not read as a curation failure when it
+    # was a dead embedding endpoint (AUDIT R8). Values: "embedding" | "bm25_fallback" |
+    # "none".
+    #
+    # HOW MUCH it costs, measured, on the corpus this repo actually serves:
+    # ``runs/ablation/e1-shortlist-curated.json`` (2026-07-31 curated corpus, 57 schemas,
+    # all 1351 test questions) puts ``text-embedding-3-large`` against BM25-only at
+    #
+    #     recall@1   0.694 vs 0.736   <- BM25 WINS
+    #     recall@3   0.852 vs 0.844
+    #     recall@10  0.953 vs 0.906   <- the default ``route_top_k``
+    #
+    # The figure that used to sit here — "recall@3 0.70 vs BM25 0.35, so degradation
+    # halves routing recall" — was quoted from a probe on a retired 2030-question pool
+    # and is falsified 2.4x by the artifact above. It was repeated in six places
+    # including an operator-facing WARNING, and was the stated reason not to fuse the two
+    # channels. At the configured top_k the real penalty is 4.7pp; at top_k=1 the fallback
+    # is better. Degradation still matters and is still worth refusing a run over (see
+    # ``eval.index.ROUTING_DEGRADED_QUOTABLE_FRACTION``) — it is just not a halving.
     #
     # ``schema_route_degraded`` is written on EVERY branch that ranks, ``False``
     # included. Writing it only on the fallback branch left three states collapsed
@@ -323,14 +357,22 @@ def shortlist_schemas(
     """Rank schemas against ``question`` and return up to ``top_k`` names.
 
     With an ``embedder``, rank by embedding similarity alone; without one, fall
-    back to BM25. Embedding recall dominates for schema routing: BIRD questions
-    rarely share identifiers with schema/table names, so lexical matching is weak.
-    A probe over the 2030-question pool measured embedding-only recall@3 = 0.70 vs
-    BM25 0.35 vs BM25+embedder RRF 0.535 — fusing the weak lexical signal
-    measurably *drags the strong embedding ranking down*, so we do not fuse. When
-    nothing scores, fail open to every schema (full span). An embedding call that
+    back to BM25. Embedding wins at the depth this router is configured for, but by
+    much less than this docstring used to claim, and not at every depth — see the
+    measured table on ``channel_out`` above (source:
+    ``runs/ablation/e1-shortlist-curated.json``, 1351 questions, 57 schemas). 0.953 vs
+    0.906 at ``recall@10``; BM25 is *ahead* at ``recall@1``.
+
+    The retired claim — "a probe over the 2030-question pool measured embedding-only
+    recall@3 = 0.70 vs BM25 0.35 vs RRF 0.535, so fusing drags the strong ranking
+    down" — is the stated reason this does not fuse the two channels, and the artifact
+    above does not support it. The no-fusion decision is therefore currently
+    **unjustified rather than refuted**: nothing here re-measures RRF. Treat it as an
+    open question, not as settled.
+
+    When nothing scores, fail open to every schema (full span). An embedding call that
     RAISES degrades to the same BM25 fallback rather than propagating, and stamps
-    ``schema_route_degraded`` so the halved recall is attributable per question.
+    ``schema_route_degraded`` so the loss is attributable per question.
 
     ``schema_vectors`` (precomputed via :func:`embed_schema_documents`) skips
     re-embedding the schema docs on the hot path; only the question is embedded

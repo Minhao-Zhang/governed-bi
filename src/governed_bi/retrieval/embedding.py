@@ -42,6 +42,17 @@ class EmbeddingIndex:
         return scored
 
 
+def index_documents(corpus: "Corpus") -> list[tuple[str, str]]:
+    """``(asset_id, document)`` for every asset that gets a vector, in corpus order.
+
+    The single definition of *which* assets this channel embeds — see
+    :func:`build_embedding_index` for the blank-document contract it encodes.
+    Split out so ``RetrievalIndexCache.embedding`` can content-hash exactly the text
+    it is about to send without re-deriving (and eventually mis-deriving) that rule.
+    """
+    return [(a.id, doc) for a in corpus.assets if (doc := asset_document(a)).strip()]
+
+
 def build_embedding_index(corpus: "Corpus", embedder: "Embedder") -> EmbeddingIndex:
     """Embed one document per asset (the same text BM25 indexes) into an index.
 
@@ -60,7 +71,7 @@ def build_embedding_index(corpus: "Corpus", embedder: "Embedder") -> EmbeddingIn
     drops ~a quarter of the calls on a join-heavy corpus, which matters because
     Bedrock's embedder issues one HTTP request per document.
     """
-    pairs = [(a.id, doc) for a in corpus.assets if (doc := asset_document(a)).strip()]
+    pairs = index_documents(corpus)
     if not pairs:
         return EmbeddingIndex({})
     vectors = embedder.embed([doc for _id, doc in pairs])
