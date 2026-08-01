@@ -195,8 +195,8 @@ def test_retrieve_after_routing_excludes_unrelated_schema():
 
 def test_route_schemas_recorded_in_provenance(monkeypatch):
     """Multi-schema serve path stamps routed_schemas into answer provenance."""
-    from dataclasses import replace
     import json
+    from dataclasses import replace
 
     from langchain_core.messages import AIMessage
 

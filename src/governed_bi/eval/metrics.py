@@ -118,6 +118,18 @@ class Metric:
 #: make the 2026-07-30 v1 ladder incomparable to anything this repo runs after M3,
 #: which is the opposite of what M5's analysis work (N15) needs from this archive.
 #:
+#: ``3`` adds the three MODEL-IDENTITY knobs the register was missing:
+#: ``llm_reasoning_effort``, ``embedding_model``, ``embedding_dimensions``. All three
+#: are live ``ModelConfig`` fields (``config.py``) that change what a scored row means,
+#: and none of them was recorded. This is not hypothetical: the 2026-07-30 and
+#: 2026-07-31 ladders differ ONLY in reasoning effort (medium vs high) and their
+#: manifests are indistinguishable — same ``model``, same ``llm_temperature``, no
+#: effort field anywhere — so ``comparable()`` could not see the one variable the
+#: second run existed to isolate. Effort moved the baseline arm +2.5pp against an
+#: MDE of 2.3pp, i.e. a treatment ABOVE the detection threshold was invisible to the
+#: comparability gate. ``llm_temperature`` one line above got exactly this treatment
+#: at AUDIT E5 and the rule was not carried to its neighbours.
+#:
 #: An integer rather than a date, because the only question anyone asks of it is
 #: "is this at least version N" and a date invites string comparison.
 #:
@@ -126,7 +138,7 @@ class Metric:
 #: ``MANIFEST_KNOBS`` name set must equal ``_SNAPSHOTS[MANIFEST_SCHEMA_VERSION]``.
 #: Changing a knob without bumping (or without registering a new snapshot)
 #: fails closed for every version, not only v1→v2.
-MANIFEST_SCHEMA_VERSION = 2
+MANIFEST_SCHEMA_VERSION = 3
 
 #: The version stamp itself. Not a knob and not operational: it says how much the
 #: other fields can be trusted.
@@ -148,6 +160,28 @@ MANIFEST_KNOBS: tuple[Metric, ...] = (
         "oracle rung was requested (--oracle-only's inferred no-model path)",
     ),
     Metric("llm_temperature", "decoding temperature; None = provider default"),
+    # The three below are the same class of fact as ``model`` and ``llm_temperature``:
+    # they identify what answered the question, and two runs that differ on any of
+    # them are two experiments. Recorded even when None ("provider default"), for the
+    # reason ``llm_temperature`` is: a stated default is comparable, an absent key is
+    # not. See MANIFEST_SCHEMA_VERSION 3.
+    Metric(
+        "llm_reasoning_effort",
+        "serve/curator reasoning budget (none|low|medium|high|xhigh|max); the "
+        "2026-07-30 vs 2026-07-31 ladders differ only here and moved baseline EX by "
+        "2.5pp against a 2.3pp MDE, so it is a treatment, not an operational detail",
+    ),
+    Metric(
+        "embedding_model",
+        "the embedding model behind the schema-routing vector channel; swapping it "
+        "moves shortlist recall, which is upstream of every scored row",
+    ),
+    Metric(
+        "embedding_dimensions",
+        "requested embedding width; None = the model's native size (1536 for "
+        "-3-small, 3072 for -3-large), so None means different things per model and "
+        "is only interpretable alongside embedding_model",
+    ),
     Metric("prompt_variants", "stage -> variant id map, for a human"),
     Metric("prompt_set_hash", "hash of the prompt TEXT, so an in-place edit moves it"),
     Metric("corpus_content_hash", "digest of the served corpora — the treatment itself"),
@@ -365,6 +399,14 @@ def build_manifest(
     # (``llm.langchain_client.from_config``). ``None`` still means "never set, so the
     # provider's default applied", and it now means that because a caller said so.
     llm_temperature: float | None,
+    # Model identity beyond the name. Required, not defaulted, for the reason
+    # ``llm_temperature`` is — and for a demonstrated one: two ladders that differed
+    # only in reasoning effort produced byte-indistinguishable manifests, so
+    # ``comparable()`` cleared a pair that was not comparable. A default here would
+    # satisfy ``validate_manifest`` while recording a value the run did not use.
+    llm_reasoning_effort: str | None,
+    embedding_model: str | None,
+    embedding_dimensions: int | None,
     # The graded question pool's identity, from :func:`question_pool_hash`. Required for
     # the same reason ``llm_temperature`` is: this is a gate key, and a default would
     # record ``None`` — which ``comparable()`` reads as "both runs agree" — for a run
@@ -462,6 +504,9 @@ def build_manifest(
         "split": split,
         "model": model_name,
         "llm_temperature": llm_temperature,
+        "llm_reasoning_effort": llm_reasoning_effort,
+        "embedding_model": embedding_model,
+        "embedding_dimensions": embedding_dimensions,
         "prompt_variants": dict(prompt_variants),
         "prompt_set_hash": prompt_set_hash(prompt_variants),
         "corpus_content_hash": None,

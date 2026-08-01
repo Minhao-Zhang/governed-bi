@@ -64,6 +64,31 @@ _SNAPSHOTS: dict[int, frozenset[str]] = {
             "pin_max",
         }
     ),
+    3: frozenset(
+        {
+            "split",
+            "model",
+            "llm_temperature",
+            "llm_reasoning_effort",
+            "embedding_model",
+            "embedding_dimensions",
+            "prompt_variants",
+            "prompt_set_hash",
+            "corpus_content_hash",
+            "question_pool_hash",
+            "git_sha",
+            "route_top_k",
+            "route_llm_pick",
+            "schema_pick_max_columns",
+            "use_embedder",
+            "grade_semantic_failures",
+            "always_note_global_max",
+            "always_note_char_max",
+            "pin_triggers_enabled",
+            "pin_require_certified",
+            "pin_max",
+        }
+    ),
 }
 
 

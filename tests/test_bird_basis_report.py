@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from governed_bi.eval.analysis import load_arm_rows, load_gold_sql
 from governed_bi.eval.bird_basis import (
     bird_basis_report,
     funnel_stage,
@@ -23,7 +24,6 @@ from governed_bi.eval.bird_basis import (
     stage4_structural_report,
     stage_waterfall,
 )
-from governed_bi.eval.analysis import load_arm_rows, load_gold_sql
 
 FIXED2 = Path(
     "runs/datalake/20260730T034522Z-test-ladder-fixed2/20260730T034543Z"

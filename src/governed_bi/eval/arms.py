@@ -474,7 +474,8 @@ def agent_solver(
             from ..logging_setup import bind_log_context, reset_log_context
             from ..obs import RunContext, tracing_invoke_config
             from ..prompts import prompt_set_hash as _psh
-            from ..provenance import new_run_id, turn_id as make_turn_id
+            from ..provenance import new_run_id
+            from ..provenance import turn_id as make_turn_id
 
             self._n = getattr(self, "_n", 0) + 1
             rid = new_run_id()

@@ -1169,6 +1169,14 @@ def _build_manifest(
     # ``oracles`` — not a second flag this builder has to keep in sync with the real
     # one, which is exactly how ``skip_agent`` (retired at schema version 2) drifted.
     model_name: str | None,
+    # The rest of the model's identity. ``None`` under the same ``needs_model``
+    # inference as ``model_name`` — a run that called no model must not claim an
+    # effort or an embedding model it never used. Gate keys (schema version 3): two
+    # ladders that differed only in reasoning effort were indistinguishable here, and
+    # ``comparable()`` cleared the pair.
+    llm_reasoning_effort: str | None,
+    embedding_model: str | None,
+    embedding_dimensions: int | None,
     prompt_variants: dict[str, str],
     route_top_k: int,
     route_llm_pick: bool,
@@ -1227,6 +1235,9 @@ def _build_manifest(
         bird_dir=bird_dir,
         split=split,
         model_name=model_name,
+        llm_reasoning_effort=llm_reasoning_effort,
+        embedding_model=embedding_model,
+        embedding_dimensions=embedding_dimensions,
         prompt_variants=prompt_variants,
         created_at_utc=_utc_ts(),
         route_top_k=route_top_k,
@@ -1398,6 +1409,20 @@ def _check_resume_manifest(
             f"{now!r}. Resuming would mix two harness versions into one arm's "
             "rows. Use a fresh --out directory."
         )
+    # An UNCOMMITTED edit is the same hazard wearing a disguise, and it is the one
+    # that actually got through: the 20260731 ladder resumed with an identical
+    # ``git_sha`` and a different ``diff_sha256``, so the guard above saw nothing
+    # while 1025 rows and 326 rows were scored under two different working trees.
+    # Fatal for the same reason and with the same escape hatch — a fresh --out.
+    for key, label in (("dirty", "working-tree cleanliness"), ("diff_sha256", "uncommitted diff")):
+        if key in drift:
+            was, now = drift.pop(key)
+            raise RuntimeError(
+                f"{out_dir} was scored with {label} {was!r} and this run has "
+                f"{now!r}. The commit is the same, so nothing else will catch this: "
+                "resuming would mix two working trees into one arm's rows. Commit "
+                "the change, or use a fresh --out directory."
+            )
     if drift:
         detail = ", ".join(f"{k}: {was!r} -> {now!r}" for k, (was, now) in drift.items())
         print(
@@ -2804,6 +2829,17 @@ def run_datalake(
         # ``arms``/``oracles`` — never the configured name restated regardless of
         # whether a model was actually loaded.
         model_name=settings.models.llm_model if needs_model else None,
+        # Gated on the same inference as ``model_name``: no model called, no effort to
+        # report. Recorded even when the provider default applies, because "the run
+        # stated its effort" and "nobody wrote it down" are different facts and only
+        # the first is comparable.
+        llm_reasoning_effort=settings.models.llm_reasoning_effort if needs_model else None,
+        # Gated on the EMBEDDER, not the chat model: the two are independent here
+        # (``--oracle-only`` builds neither, but a routing-only pass would build only
+        # the embedder). Paired with the ``use_embedder`` boolean below, which says
+        # whether the channel ran at all.
+        embedding_model=settings.models.embedding_model if embedder else None,
+        embedding_dimensions=settings.models.embedding_dimensions if embedder else None,
         prompt_variants=resolved_prompts,
         route_top_k=route_top_k,
         route_llm_pick=route_llm_pick,

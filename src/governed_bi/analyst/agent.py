@@ -1698,8 +1698,8 @@ def answer_question_agent(
     _run_id = run_id or new_run_id()
     from ..logging_setup import bind_log_context, reset_log_context
     from ..obs import RunContext, tracing_invoke_config
-    from ..provenance import turn_id as make_turn_id
     from ..prompts import prompt_set_hash as _prompt_set_hash
+    from ..provenance import turn_id as make_turn_id
 
     tid = make_turn_id(session_id, n_human)
     log_tokens = bind_log_context(run_id=_run_id, turn_id=tid)

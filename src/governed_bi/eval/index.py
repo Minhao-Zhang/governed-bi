@@ -166,8 +166,23 @@ COMPARABILITY_KEYS: tuple[tuple[str, str], ...] = tuple(
 #: dangerous, while the ledger check iterated the comparability list and saw
 #: neither. A resume after a code edit warned once on the console — which scrolls
 #: past in a multi-hour run — and then recorded no drift and stayed quotable.
+#: ``dirty`` / ``diff_sha256`` join ``git_sha`` for the same reason and against a
+#: DEMONSTRATED failure. They live in ``MANIFEST_OPERATIONAL`` (M4 N13 added them for
+#: traceability) and were not checked here, so the guard above could be walked
+#: straight past: edit a file, do not commit, ``--resume`` — ``git_sha`` is unchanged,
+#: the FATAL branch never fires, and rows scored before and after the edit average
+#: into one arm. That is verbatim the hazard the docstring above describes, and it
+#: already happened: the 20260731 ladder's ``curated_sme`` arm has 1025 rows under
+#: ``diff_sha256=dde6190b…`` and 326 under ``ba526fa4…``, with ``git_sha`` identical
+#: across the resume and not one gate firing.
+#:
+#: They are NOT comparability keys — an uncommitted edit is normal between two
+#: separate runs, and gating on it would refuse most useful pairs. Inside one
+#: directory it is the same fatal difference ``git_sha`` is.
 RESUME_DRIFT_KEYS: tuple[tuple[str, str], ...] = COMPARABILITY_KEYS + (
     ("git_sha", "git_sha"),
+    ("dirty", "uncommitted working tree"),
+    ("diff_sha256", "uncommitted diff"),
 )
 
 

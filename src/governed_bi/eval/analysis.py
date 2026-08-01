@@ -47,7 +47,6 @@ from .leakage import is_gradeable_eval_row
 from .power import holm_adjust
 from .sql_diff import is_frozen_constant
 
-
 # --------------------------------------------------------------------------- #
 # Row / gold loading
 # --------------------------------------------------------------------------- #

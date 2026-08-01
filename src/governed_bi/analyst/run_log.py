@@ -87,6 +87,13 @@ _PRICE_PER_1M: dict[str, tuple[float, float]] = {
     "gpt-4o": (2.5, 10.0),
     "gpt-4o-mini": (0.15, 0.6),
     "text-embedding-3-small": (0.02, 0.0),
+    "text-embedding-3-large": (0.13, 0.0),
+    # Anthropic tiers, so a Claude-served run is priced rather than reporting
+    # ``cost_est_usd: null`` on every row. Both 2026-07 ladders ran on
+    # ``Claude-Opus-4.8`` and produced no USD at all, which made cost the one metric
+    # that could not be compared across models even though the token counts could.
+    "Claude-Opus-4.8": (15.0, 75.0),
+    "Claude-Sonnet-5": (3.0, 15.0),
 }
 
 _LEDGER_META_KEYS = frozenset(

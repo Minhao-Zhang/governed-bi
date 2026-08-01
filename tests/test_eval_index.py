@@ -482,7 +482,16 @@ def test_every_resume_drift_key_is_actually_checked(tmp_path, key, label):
                 # Flipping it mid-directory files rows the grader was handed an
                 # unverified answer for beside rows that were refused outright, under
                 # one arm's score.
-                "grade_semantic_failures": True}
+                "grade_semantic_failures": True,
+                # Model identity (MANIFEST_SCHEMA_VERSION 3). Two ladders that
+                # differed only in reasoning effort had indistinguishable manifests.
+                "llm_reasoning_effort": "high",
+                "embedding_model": "text-embedding-3-small",
+                "embedding_dimensions": 1536,
+                # Working-tree state: `git_sha`'s blind spot. The 20260731 ladder
+                # resumed with the same commit and a different uncommitted diff.
+                "dirty": False,
+                "diff_sha256": "d0"}
     changed = dict(original)
     was = original[key]
     changed[key] = (not was) if isinstance(was, bool) else f"{was}-changed"
@@ -511,7 +520,10 @@ def test_resume_drift_keys_are_a_superset_of_comparability_keys(tmp_path):
     comparability = {k for k, _ in COMPARABILITY_KEYS}
     drift = {k for k, _ in RESUME_DRIFT_KEYS}
     assert comparability < drift, "drift keys must be a strict superset"
-    assert drift - comparability == {"git_sha"}
+    assert drift - comparability == {"git_sha", "dirty", "diff_sha256"}, (
+        "the three code-identity keys are fatal INSIDE one directory and normal "
+        "BETWEEN two runs; anything else here means a knob joined the wrong list"
+    )
 
     # And the distinction has to hold in behaviour, not just in the tuples: two runs
     # differing only by commit stay comparable.
@@ -881,6 +893,9 @@ def test_oracle_only_empty_arms_records_no_model_via_build_manifest():
         bird_dir=Path("."),
         split="test",
         model_name=None,
+        llm_reasoning_effort=None,
+        embedding_model=None,
+        embedding_dimensions=None,
         prompt_variants={},
         route_top_k=3,
         route_llm_pick=False,
@@ -906,6 +921,9 @@ def test_oracle_only_empty_arms_records_no_model_via_build_manifest():
             bird_dir=Path("."),
             split="test",
             model_name="gpt-5.6-luna",
+            llm_reasoning_effort=None,
+            embedding_model=None,
+            embedding_dimensions=None,
             prompt_variants={},
             route_top_k=3,
             route_llm_pick=False,

@@ -50,7 +50,7 @@ from .schemas import (
     TableResponse,
     TableSummaryResponse,
 )
-from .stack import ServeStack, build_stack, get_default_stack
+from .stack import ServeStack, get_default_stack
 
 logger = logging.getLogger("governed_bi.api")
 

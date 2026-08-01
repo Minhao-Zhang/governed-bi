@@ -16,7 +16,7 @@ documented subset of `summary.json`, so "declared but absent" is expected there.
 
 | Artifact | Fields | Consumer |
 |---|---|---|
-| `manifest.json` | 44 (39 in every run) | `index.COMPARABILITY_KEYS`, `index.RESUME_DRIFT_KEYS` |
+| `manifest.json` | 47 (42 in every run) | `index.COMPARABILITY_KEYS`, `index.RESUME_DRIFT_KEYS` |
 | `generations.<arm>.jsonl` | 73 per (question, arm) | `_summarise_rows`, `analysis`, `power`, `error_taxonomy` |
 | `summary.json` | 87 | `index.quotable` |
 | `stage_events.jsonl` | 9 per (question, arm, stage) | read by hand; per-stage latency attribution |
@@ -77,6 +77,9 @@ joins the comparability gate by default instead of silently skipping it.
 | `split` | which BIRD split was scored |
 | `model` | the configured serve model, or None when no fair arm and no model-needing oracle rung was requested (--oracle-only's inferred no-model path) |
 | `llm_temperature` | decoding temperature; None = provider default |
+| `llm_reasoning_effort` | serve/curator reasoning budget (none|low|medium|high|xhigh|max); the 2026-07-30 vs 2026-07-31 ladders differ only here and moved baseline EX by 2.5pp against a 2.3pp MDE, so it is a treatment, not an operational detail |
+| `embedding_model` | the embedding model behind the schema-routing vector channel; swapping it moves shortlist recall, which is upstream of every scored row |
+| `embedding_dimensions` | requested embedding width; None = the model's native size (1536 for -3-small, 3072 for -3-large), so None means different things per model and is only interpretable alongside embedding_model |
 | `prompt_variants` | stage -> variant id map, for a human |
 | `prompt_set_hash` | hash of the prompt TEXT, so an in-place edit moves it |
 | `corpus_content_hash` | digest of the served corpora — the treatment itself |

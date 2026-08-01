@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from governed_bi.eval import run_datalake
 from governed_bi.eval.dataset import EvalItem
-from governed_bi.eval.hash_grade import GoldHash, hash_normalised_result
 from governed_bi.eval.harness import _cost_block
+from governed_bi.eval.hash_grade import GoldHash, hash_normalised_result
 from governed_bi.gateway import Identity
 from governed_bi.gateway.connectors.base import QueryResult
 

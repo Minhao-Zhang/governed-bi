@@ -9,12 +9,11 @@ is named rather than vanished.
 
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 
 import pytest
-
-import inspect
 
 from governed_bi.eval.index import quotable, record_for_run
 from governed_bi.eval.run_datalake import (
