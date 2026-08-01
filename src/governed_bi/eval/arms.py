@@ -571,6 +571,14 @@ def agent_solver(
                 "n_terms_injected": prov.get("n_terms_injected"),
                 "n_caveats_injected": prov.get("n_caveats_injected"),
                 "context_chars": prov.get("context_chars"),
+                # How many columns the analyst-side per-table budget withheld. This
+                # relay is an explicit allow-list, so a field the serve path stamps
+                # and this list does not name simply never reaches an artifact —
+                # which is exactly how `schema_route_channel` stayed invisible for a
+                # year. A column-budget experiment whose only evidence is the config
+                # would repeat that: `context_chars` would drop and nothing on the
+                # row would say the drop was deliberate rather than a thin corpus.
+                "n_columns_omitted": prov.get("n_columns_omitted"),
                 # Identity of the assembled context, not just its size. Two arms
                 # whose corpora differ but whose prompts do not are not two arms;
                 # ``eval.treatment`` compares these to catch a treatment that was
