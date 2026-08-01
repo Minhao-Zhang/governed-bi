@@ -35,9 +35,26 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-# A join at or below this confidence lowers the stamp. Uncalibrated/tunable
-# threshold (a guessed cut, tune on the eval), not a calibrated probability. Kept
-# here so the planner's raw confidence and the stamp threshold stay separate.
+# A join BELOW this confidence lowers the stamp. Strictly below — the comparison
+# is `confidence < LOW_CONFIDENCE_JOIN` everywhere, and that is load-bearing
+# because the curator's default join confidence is EXACTLY this value
+# (`curator/asset_bag.py`). `<` therefore means "a default join is not flagged";
+# `<=` would mean "every default join is flagged".
+#
+# Both readings shipped at once. `governance.py` used `<` and `viz/presenter.py`
+# declared its own copy of the constant and used `<=`, so every default-confidence
+# join — the majority of them — was classified as fine by the scored artifact and
+# as low-confidence by the UI reading the same corpus. One definition now, imported
+# by both.
+#
+# The deeper problem is NOT fixed here and needs a decision: with the default
+# sitting exactly on the boundary, this threshold only ever fires on joins the
+# curator explicitly scored lower, so it is inert on default output either way.
+# Moving it (or moving the curator's default) changes what every published
+# reliability stamp meant, so it is a re-measurement, not a cleanup.
+#
+# Uncalibrated/tunable cut, not a calibrated probability. Kept here so the
+# planner's raw confidence and the stamp threshold stay separate.
 LOW_CONFIDENCE_JOIN = 0.7
 
 

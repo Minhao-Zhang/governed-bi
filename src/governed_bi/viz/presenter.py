@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from ..analyst.answer import LOW_CONFIDENCE_JOIN
 from ..corpus import validate_corpus
 from ..corpus.ids import derive_column_id
 from ..corpus.schemas import (
@@ -35,7 +36,6 @@ if TYPE_CHECKING:
     from ..corpus import Corpus
 
 # A join at or below this confidence is flagged in the health view (tunable).
-LOW_CONFIDENCE_JOIN = 0.7
 
 
 @dataclass(frozen=True)
@@ -160,7 +160,7 @@ class SchemaGraphEdge:
     on: str  # physical equality, e.g. "transaction.CustomerID = customers.CustomerID"
     cardinality: str | None
     confidence: float | None
-    low_confidence: bool  # confidence at or below LOW_CONFIDENCE_JOIN
+    low_confidence: bool  # confidence strictly below LOW_CONFIDENCE_JOIN (the curator's default 0.7 is NOT low)
 
 
 @dataclass(frozen=True)
@@ -360,7 +360,7 @@ def corpus_health(corpus: "Corpus") -> CorpusHealth:
                 if col.governance.excluded:
                     n_excluded += 1
         elif isinstance(asset, JoinAsset):
-            if asset.confidence is not None and asset.confidence <= LOW_CONFIDENCE_JOIN:
+            if asset.confidence is not None and asset.confidence < LOW_CONFIDENCE_JOIN:
                 n_low_conf_joins += 1
 
     findings = [str(f) for f in validate_corpus(corpus.assets)]
@@ -536,7 +536,7 @@ def schema_graph(corpus: "Corpus") -> SchemaGraphView:
             on=asset.on,
             cardinality=asset.cardinality.value if asset.cardinality else None,
             confidence=asset.confidence,
-            low_confidence=asset.confidence is not None and asset.confidence <= LOW_CONFIDENCE_JOIN,
+            low_confidence=asset.confidence is not None and asset.confidence < LOW_CONFIDENCE_JOIN,
         )
         for asset in corpus.assets
         if isinstance(asset, JoinAsset)
@@ -632,7 +632,7 @@ def knowledge_graph(corpus: "Corpus") -> KnowledgeGraphView:
 
     for asset in corpus.assets:
         if isinstance(asset, JoinAsset):
-            low = asset.confidence is not None and asset.confidence <= LOW_CONFIDENCE_JOIN
+            low = asset.confidence is not None and asset.confidence < LOW_CONFIDENCE_JOIN
             add_edge(asset.id, asset.left_table, "join", confidence=asset.confidence, low_confidence=low)
             add_edge(asset.id, asset.right_table, "join", confidence=asset.confidence, low_confidence=low)
         elif isinstance(asset, MetricAsset):
@@ -788,7 +788,7 @@ def related_to_column(corpus: "Corpus", column_id: str) -> ColumnRelatedView | N
                         cardinality=asset.cardinality.value if asset.cardinality else None,
                         confidence=asset.confidence,
                         low_confidence=asset.confidence is not None
-                        and asset.confidence <= LOW_CONFIDENCE_JOIN,
+                        and asset.confidence < LOW_CONFIDENCE_JOIN,
                     )
                 )
 

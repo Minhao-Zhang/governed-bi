@@ -186,3 +186,38 @@ def test_no_source_file_quotes_a_falsified_measurement():
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+def test_the_join_confidence_threshold_has_one_home_and_one_operator():
+    """The scored artifact and the UI must classify the same join the same way.
+
+    They did not. `viz/presenter.py` declared its own `LOW_CONFIDENCE_JOIN = 0.7`
+    and compared with `<=` while `analyst/governance.py` imported the real one and
+    compared with `<`. The curator's default join confidence is EXACTLY 0.7
+    (`curator/asset_bag.py`), so every default join — the majority — was "fine" in
+    the run artifact and "low confidence" in the viewer reading the same corpus.
+
+    Changing the operator broke no test, which is how the two drifted. This pins
+    both halves: one definition, and `<` everywhere.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "src" / "governed_bi"
+    defs, le_uses = [], []
+    for py in root.rglob("*.py"):
+        text = py.read_text(encoding="utf-8")
+        if re.search(r"^LOW_CONFIDENCE_JOIN\s*=", text, re.M):
+            defs.append(py.relative_to(root).as_posix())
+        if "<= LOW_CONFIDENCE_JOIN" in text:
+            le_uses.append(py.relative_to(root).as_posix())
+
+    assert defs == ["analyst/answer.py"], (
+        f"LOW_CONFIDENCE_JOIN must be defined exactly once, in analyst/answer.py; found {defs}. "
+        "A second literal is how the viewer and the scored artifact came to disagree."
+    )
+    assert not le_uses, (
+        f"`<= LOW_CONFIDENCE_JOIN` in {le_uses}: the curator's default confidence IS the "
+        "threshold, so `<=` flags every default join while `<` flags none. Pick `<` — it is "
+        "what every published reliability stamp was computed with."
+    )

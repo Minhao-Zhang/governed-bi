@@ -366,8 +366,11 @@ def shortlist_schemas(
     The retired claim — "a probe over the 2030-question pool measured embedding-only
     recall@3 = 0.70 vs BM25 0.35 vs RRF 0.535, so fusing drags the strong ranking
     down" — is the stated reason this does not fuse the two channels, and the artifact
-    above does not support it. The no-fusion decision is therefore currently
-    **unjustified rather than refuted**: nothing here re-measures RRF. Treat it as an
+    above does not support it. RRF HAS since been re-measured
+    (``scripts/routing_fusion.py`` -> ``runs/ablation/e3-fusion.json``): it wins at
+    @1 (0.733 vs 0.694) and @3 (0.871 vs 0.850) and loses at @10 (0.922 vs 0.952).
+    So not fusing is right AT THE SHIPPED ``route_top_k`` and wrong at a tight one —
+    the conclusion survived, the stated reason did not. Treat it as an
     open question, not as settled.
 
     When nothing scores, fail open to every schema (full span). An embedding call that
@@ -413,8 +416,8 @@ def shortlist_schemas(
             # Catching here is deliberate and is NOT swallowing: the turn continues
             # on the weaker channel *and* stamps ``schema_route_degraded=True``,
             # which reaches the per-question eval row and the arm summary. The
-            # alternative — keep raising — trades a measurable 0.70->0.35 recall
-            # drop for a run that dies question by question, and it is strictly
+            # alternative — keep raising — trades a measurable 0.953->0.906
+            # recall@10 drop for a run that dies question by question, and it is strictly
             # worse for the two readers that matter: an operator gets a crash whose
             # cause is one frame deep in the router either way, and the analysis
             # loses the rows entirely.

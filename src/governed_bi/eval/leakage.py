@@ -3,8 +3,10 @@
 ``_assert_train_test_disjoint`` checks that no *question id* appears in both splits.
 That is the coarse form of leakage and it is genuinely absent. The fine form is not:
 a test question whose gold SQL is structurally the same statement as some train
-question's, in the same schema. Measured over the obfuscated BIRD test split, **246 of
-2030 questions (12.1%)** have such a twin, and the rate is far from uniform — one
+question's, in the same schema. Measured over the obfuscated BIRD test split, **115 of 1200 questions (9.6%)**
+have such a twin (RETIRED figure, for the record: 246 of 2030 = 12.1%, from the
+pre-refilter pool — the dataset is filtered upstream, so a pool figure quoted from
+an older split describes a different experiment), and the rate is far from uniform — one
 schema is at 46%.
 
 That matters because of what the ladder's arms read. ``seeded`` derives its seed

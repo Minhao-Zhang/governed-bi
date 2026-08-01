@@ -64,13 +64,22 @@ max_retries = 8
 # This channel IS the schema router: with 57 schemas competing and no schema pinned,
 # the shortlist decides which corpus the analyst ever sees, and a question that never
 # surfaces its gold schema scores ~2% (measured: 3 of 143 misrouted questions were
-# answered correctly anyway). A probe on the 2030-question pool measured embedding-only
-# recall@3 = 0.70 against BM25's 0.35, and fusing the two dragged the strong ranking
-# DOWN, so there is no lexical safety net — the embedder is the whole signal.
+# answered correctly anyway). Measured on the CURATED corpus over all 1351 test
+# questions (`runs/ablation/e1-shortlist-curated.json`): embedding recall@10 = 0.953
+# against BM25's 0.906. At the shipped top_k that gap is what the embedder buys.
+#
+# It is NOT the 2x this comment used to claim. The retired figure ("recall@3 0.70 vs
+# BM25 0.35") came from a pre-refilter 2030-question pool on a corpus with no table
+# descriptions; on curated prose BM25 measures 0.844 @3 against 0.852, and at @1 BM25
+# is AHEAD. The "no lexical safety net" reading was wrong -- see
+# docs/plans/routing-redesign.md, which also shows a per-table embedding channel
+# beating this one at every k on 26% fewer tokens.
 #
 # -3-large (3072 dims) rather than -3-small (1536). It is 6.5x the price per token
 # and the volume is negligible: the schema documents are embedded once per graph
-# build (57 docs, median 2072 tokens, largest 5957) and each question once. A full
+# build (57 docs, median 2072 tokens, largest 5957) and each question once — both
+# are memoised process-wide now; before that a ladder spent ~1.0M duplicate
+# embedding tokens and blew a shared account limit. A full
 # four-arm ladder spends single-digit dollars here against ~167M chat tokens.
 # `embedding_model` and `embedding_dimensions` are manifest knobs as of schema
 # version 3, so a run cannot quietly change this and still compare.

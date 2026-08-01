@@ -506,6 +506,11 @@ def ladder_deltas(
     return deltas
 
 
+#: Family-wise error rate the Holm correction controls. Named and recorded
+#: beside every verdict it produces.
+HOLM_ALPHA = 0.05
+
+
 def compare_arms(
     rows_by_arm: dict[str, list[dict[str, Any]]],
     *,
@@ -759,7 +764,12 @@ def compare_arms(
     for comparison, p_adj in zip(family, adjusted):
         comparison["p_value_holm"] = p_adj
         comparison["family_size"] = len(family)
-        comparison["significant_holm"] = p_adj < 0.05
+        # The alpha travels with the verdict. `DetectableEffect.to_dict()` records
+        # its own; this one was a bare literal, so a reader of the artifact could
+        # not tell what "significant" was significant AT, and changing it would
+        # have moved every published verdict silently.
+        comparison["significant_holm"] = p_adj < HOLM_ALPHA
+        comparison["holm_alpha"] = HOLM_ALPHA
     in_family = {id(c) for c in family}
     for comparison in comparisons:
         if id(comparison) not in in_family:
