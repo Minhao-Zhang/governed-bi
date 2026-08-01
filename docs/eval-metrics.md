@@ -16,7 +16,7 @@ documented subset of `summary.json`, so "declared but absent" is expected there.
 
 | Artifact | Fields | Consumer |
 |---|---|---|
-| `manifest.json` | 47 (42 in every run) | `index.COMPARABILITY_KEYS`, `index.RESUME_DRIFT_KEYS` |
+| `manifest.json` | 49 (44 in every run) | `index.COMPARABILITY_KEYS`, `index.RESUME_DRIFT_KEYS` |
 | `generations.<arm>.jsonl` | 79 per (question, arm) | `_summarise_rows`, `analysis`, `power`, `error_taxonomy` |
 | `summary.json` | 100 | `index.quotable` |
 | `stage_events.jsonl` | 9 per (question, arm, stage) | read by hand; per-stage latency attribution |
@@ -121,6 +121,8 @@ only `build_manifest` parameters allowed a default.
 | field | meaning |
 |---|---|
 | `bird_dir` | dataset directory |
+| `base_url` | chat endpoint; None = provider default |
+| `embedding_base_url` | embedding endpoint; None = same as base_url |
 | `created_at_utc` | when the run started |
 | `pg_dsn_host` | host actually connected to |
 | `serve_workers` | serve-loop concurrency |

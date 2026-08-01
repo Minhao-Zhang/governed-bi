@@ -246,6 +246,17 @@ MANIFEST_SCOPE: tuple[Metric, ...] = (
 #: what a scored row means.
 MANIFEST_OPERATIONAL: tuple[Metric, ...] = (
     Metric("bird_dir", "dataset directory"),
+    # WHERE the model answered from. Operational rather than a knob only because
+    # `model` already gates any pair that changes vendor -- a DeepSeek run and an
+    # OpenAI run differ on `model` first, so `comparable()` refuses them without
+    # this. It is recorded anyway because "gpt-oss-120b via a gateway" and
+    # "gpt-oss-120b via the vendor" are not obviously the same experiment, and an
+    # endpoint that lives only in a shell variable is exactly the shape of thing
+    # this register exists to stop (see MANIFEST_SCHEMA_VERSION 3). None = the SDK
+    # default. The embedding endpoint is separate because an experiment isolating
+    # the generator must leave the retrieval channel where it was.
+    Metric("base_url", "chat endpoint; None = provider default"),
+    Metric("embedding_base_url", "embedding endpoint; None = same as base_url"),
     Metric("created_at_utc", "when the run started"),
     Metric("pg_dsn_host", "host actually connected to"),
     Metric("serve_workers", "serve-loop concurrency"),
@@ -407,6 +418,9 @@ def build_manifest(
     llm_reasoning_effort: str | None,
     embedding_model: str | None,
     embedding_dimensions: int | None,
+    # Operational, so these may default -- unlike the knobs above.
+    base_url: str | None = None,
+    embedding_base_url: str | None = None,
     # The graded question pool's identity, from :func:`question_pool_hash`. Required for
     # the same reason ``llm_temperature`` is: this is a gate key, and a default would
     # record ``None`` — which ``comparable()`` reads as "both runs agree" — for a run
@@ -534,6 +548,8 @@ def build_manifest(
         "build_workers": build_workers,
         "max_agent_steps": max_agent_steps,
         "serve_path": "agent_core",
+        "base_url": base_url,
+        "embedding_base_url": embedding_base_url,
         "git_branch": git_head_branch(),
         "main_git_sha": git_main_hash(),
         "dirty": dirty,

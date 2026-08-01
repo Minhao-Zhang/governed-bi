@@ -65,6 +65,25 @@ class ModelConfig:
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int | None = None  # None = model default (1536 for -3-small)
     api_key_env: str = "OPENAI_API_KEY"
+    # Which endpoint the OpenAI-shaped client talks to. ``None`` = the SDK's own
+    # default (api.openai.com, or whatever ``OPENAI_BASE_URL`` is set to).
+    #
+    # This record called itself "provider-agnostic by shape" while carrying no
+    # endpoint field at all, so the only way to reach an OpenAI-COMPATIBLE vendor
+    # (DeepSeek, vLLM, a gateway) was the ``OPENAI_BASE_URL`` environment variable —
+    # which the chat client and the embedder both read, so it moved BOTH at once.
+    # That is not a knob, it is a coin flip: DeepSeek serves chat and has no
+    # ``text-embedding-3-large``, so redirecting one necessarily broke the other.
+    #
+    # The two are therefore separate. Leaving ``embedding_base_url``/
+    # ``embedding_api_key_env`` unset means "same place and key as the chat model",
+    # which is right for a single-vendor setup; setting them splits the stack, which
+    # is what an experiment isolating the GENERATOR needs — the routing channel has
+    # to stay byte-identical to the run being compared against, or the comparison
+    # moves two variables and measures neither.
+    base_url: str | None = None
+    embedding_base_url: str | None = None
+    embedding_api_key_env: str | None = None
     region: str | None = None  # Bedrock only: AWS region; None = boto3 default (AWS_REGION)
     # Bedrock only: extra model-specific fields merged into the Converse request's
     # ``additionalModelRequestFields``. The escape hatch for anything the engine does
