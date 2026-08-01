@@ -225,3 +225,65 @@ M4 的 N13 加了 `dirty` / `diff_sha256`,但它们进的是 `MANIFEST_OPERATION
 
 - **analysis correctness** 那个视角撞限额后没重跑 —— `bird_basis.py` / `statistics.py` 的算术还没有被独立对抗过(M5 review 覆盖了一部分)。
 - **eval integrity** 与 **test quality** 已重跑,结果未回。test quality 那个做的是**变异测试**(改 12 个承重函数看测试红不红),它的结果会直接告诉我们这 1740 个测试里有多少是摆设。
+
+---
+
+## 六 · 变异测试:24 个变异,8 个存活
+
+最后一个视角(test quality)交了。做法是**改 12+ 个承重函数的语义,跑全套,看有没有测试变红** —— 活下来的就是洞。
+
+**我亲自复现了最重的两个。**
+
+### M-1 · L2 函数黑名单可以静默缩水(我复现了)
+
+删掉 `readfile` / `writefile` / `load_extension` / `system` 四个:
+
+```
+after deleting them: readfile blocked=False
+1740 passed, 10 skipped, 1 xfailed
+```
+
+**`SELECT readfile('/etc/passwd')` 从被拦变成放行,全套 1740 个测试没有一个发现。**
+
+九个条目在**任何测试文件里零命中**:`current_user` `current_database` `current_schema` `session_user` `set_config` `load_extension` `readfile` `writefile` `system`(我逐个确认它们**今天确实被拦**,所以这是覆盖洞不是活漏洞)。`test_guardrail_function_denylist.py` 只盖了 `pg_*` / `lo_*` / `dblink` 前缀那几族,而且**没有任何契约测试钉住 `_FORBIDDEN_FUNCTION_NAMES` 的内容**。
+
+按模块自己的注释,**L2 是唯一看得见这些的层** —— 一条不引用任何列的 `SELECT fn(...)` 对 L3/L4/L5 都是隐形的。
+
+### M-2 · `quotable()` 唯一挡「好看结果」的那道门,不可能被触发(我复现了)
+
+把阈值抬到够不着 → **0 红**。原因是结构性的,`tests/test_eval_index.py:101-104`:
+
+```python
+for _arm, _s in (summary.get("arms") or {}).items():
+    for _k, _v in _MEASURED_FREE_PASSES.items():
+        _s.setdefault(_k, _v)          # 三个计数器全是 0
+```
+
+每个 fixture 的每个臂都被塞进全零计数器,所以 `worst / n` 恒等于 0,**永远 > 0.10 不了**。
+
+fixture 的意图是对的(注释写着「a fixture standing in for a real run carries what a real run always writes」),**副作用是那道门在这个文件里不可能被测到**。
+
+而 agent 指出的不对称才是要害:**`quotable()` 的其他每一道门都有触发测试** —— `crash_rate=0.04`、`n_re_served=12`、低于下限的 `n_questions`、未测的 `crash_rate`、不可读的 manifest。**唯独这一道没有,而它正是挡「结果好看得可疑」的那一道**(AUDIT E2/C8 加它就是为了终结这种不对称)。
+
+### 其余六个存活的
+
+| # | 变异 | 后果 |
+|---|---|---|
+| **H3** | 不再抹掉客户端可见 ledger 的 `reason` | libpq 会把出错语句原样嵌进来(`LINE 1: SELECT ...`),可能回显问题字面量与 PII;唯一的测试 fixture **两条都不带 `reason` 键**,分支进不去 |
+| **H4** | `Gateway.execute` 的 `max_rows × 10` | 行上限只在 connector 层被断言,**没有任何测试在 `Gateway` 这个接缝上验截断** —— 而类 docstring 称这里是「every query flows through」 |
+| **H5** | always-note 字符预算完全不生效 | 两个测试都传 `char_max=10_000`,**永远不 binding**。兄弟项 `global_max` 是有覆盖的 |
+| **H6** | `funnel_stage` 的 `or` 改 `and` | 测试 fixture 里 `routed_hit` 和 `pick_hit` **永远取同一个值**,析取从没被行使。同一个谓词的另外两份拷贝都有覆盖 —— **只有这一份漂了** |
+| **H7** | `schema_route_degraded` 硬编码 `False` | 全仓测试**零命中这个字符串**。它存在的意义(AUDIT R8)就是让 embedding 端点挂掉可见 —— 而 embedding recall@3 是 0.70,BM25 是 0.35,**静默降级会腰斩路由召回** |
+| **H8** | 四个「一条测试之差」的薄边 | L4 空 `allowed_tables`、`top_k`、graded-delivery 的两处 —— 都只有一条测试拦着 |
+
+### 还有三处「函数有测试、调用点没有」
+
+- **`eval/bird_basis.py:223 schema_misroute_report`** —— 在 `__all__` 里、有测试、**被 `m5-delivery-evidence.md` 当证据引用**,而 `bird_basis_report()` **根本不调它**。**那张误路由表只由测试产出。**
+- `eval/treatment.py:281 treatment_reasons` —— 有测试、有导出、`src/` 里零调用;台账用自己的 `_undelivered()`。**一份被测试的平行实现,可以随意漂离生产路径。**
+- `analyst/answer.py:165 reliability_tier` —— 生产直接查 `_ASSURANCE_TO_TIER`,从不调它。
+
+### skip 掉的测试:CI 里 15 个
+
+**8 个是 `requires_live_serve`** —— `/chat` 的治理答案、拒答、多轮历史重放,**主用户路径,没有 key 就永不运行**。
+**4 个依赖 gitignore 掉的 `runs/` 数据**(`test_bird_basis_report.py` 三个 + `test_corpus.py` 一个)—— 在你机器上过,**在 CI 或新克隆上永远 skip**,而且路径是相对的,从别的目录跑 pytest 也会 skip。
+2 个可选依赖,1 个要活 Postgres。
