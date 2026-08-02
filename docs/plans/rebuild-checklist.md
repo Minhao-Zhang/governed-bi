@@ -1,5 +1,9 @@
 # 执行清单
 
+> **2026-08-02：Langfuse 已整体移除，LangSmith 是唯一 tracer**（[design-decisions.md](../design-decisions.md) D20）。
+> 下文凡写「同时喂两个 tracer」「Langfuse 读那三个 `langfuse_*` 键」的地方按历史读；
+> 三个 sink 的联合验收判据不变，第三个 sink 换成 LangSmith trace。
+
 2026-07-30 grill 之后定下的工作队列。按依赖链排序，不按重要性。
 
 每项只写三件事：**改什么**、**碰哪些文件**、**怎么验证**。理由不在这里，在 [rebuild-decisions.md](rebuild-decisions.md)。

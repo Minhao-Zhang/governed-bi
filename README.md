@@ -80,7 +80,7 @@ datasource, corpus path, serve flags. Machine-local overrides go in a git-ignore
 passwords) live only in the environment or a git-ignored `.env`, which is loaded
 on import and never overrides an already-exported variable.
 
-Optional tracing (LangSmith or Langfuse) is documented in
+Optional tracing (LangSmith — the only tracer since 2026-08-02) is documented in
 [`.env.example`](.env.example).
 
 ## Development
@@ -96,7 +96,7 @@ uv run python scripts/live_smoke.py       # end-to-end over a real model (needs 
 
 The offline suite exercises the serve core against deterministic model doubles,
 so it needs neither a key nor a network. Everything both harnesses need for the
-default OpenAI stack (LangGraph, deepagents, LangChain, OpenAI, Langfuse, psycopg)
+default OpenAI stack (LangGraph, deepagents, LangChain, OpenAI, psycopg)
 lives in `[project.dependencies]`, so a plain `uv sync` installs it all. The one
 extra is `bedrock` (`uv sync --extra bedrock`): it pulls `langchain-aws` + boto3
 for the AWS Bedrock provider — set `provider = "bedrock"` in `[models]` to use it.
@@ -150,7 +150,7 @@ src/governed_bi/
   config.py         environment toggles, models, datasource shape (load_settings)
   stages.py         shared Outcome / Stage vocabulary (serve + eval)
   provenance.py     serve-config / corpus hashes, release fingerprint
-  obs.py            tracing callbacks (Langfuse / LangSmith)
+  obs.py            LangSmith trace metadata/tags + the usage callback
   logging_setup.py  process logging bootstrap
   llm/              ChatClient / Embedder seams (OpenAI + LangChain + offline defaults)
   prompts/          prompt registry / variants hashed into serve_config

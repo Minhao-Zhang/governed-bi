@@ -419,7 +419,7 @@ the agent path; `run_experiment` is agent-only.
    when no narrator is configured; a narrator failure keeps the deterministic
    text. A graded-delivery (unverified) answer keeps its "⚠️ Unverified" banner.
 2. **One tracing (Langfuse) handler per turn, inherited downstream.** External
-   tracing (`obs.tracing_callbacks()`) is now attached once, at the outer
+   tracing (`obs.tracing_callbacks()`) is attached once, at the outer
    `graph.invoke` in `answer_question_agent`, and inherited by everything below
    it via the LangChain run context. This fixes two bugs: the inner
    `agent.stream(...)` in `agent_core` no longer attaches its own second
@@ -433,6 +433,16 @@ the agent path; `run_experiment` is agent-only.
    entire question-answering turn is one Langfuse trace, and cost/token
    aggregation is no longer double-counted. LangSmith is unaffected; it
    self-instruments from the environment.
+
+   > **Superseded in part, 2026-08-02.** Langfuse was removed; LangSmith is the
+   > only tracer. The *shape* this amendment established survives unchanged — one
+   > root run per turn, everything nested, no second handler — and it is now also
+   > the billing unit, since LangSmith charges per root invocation. What is gone
+   > is the Langfuse handler itself: `obs.tracing_callbacks()` was renamed
+   > `obs.usage_callbacks()` and returns only the `UsageMetadataCallbackHandler`
+   > that curator/SME token accounting reads back. `LangChainChatClient.complete()`
+   > still inherits the ambient run context for the same reason (nesting), it just
+   > no longer has a handler of its own to attach when standalone.
 
 ## Amendment 4 (2026-07-14): HITL clarification shipped server-side
 

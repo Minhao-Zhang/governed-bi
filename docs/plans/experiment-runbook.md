@@ -225,7 +225,7 @@ build.
 
 Cost and latency are already instrumented per turn — `arms.<arm>.cost` in
 `summary.json` (`total_tokens`, `total_cost_est_usd`, `n_rows_priced`), and the same
-fields in Langfuse — so if you want a figure before committing to the whole split,
+fields on the LangSmith trace — so if you want a figure before committing to the whole split,
 pilot first and multiply. The per-stage token split is on each row in
 `generations.<arm>.jsonl` under `token_usage`; it is not aggregated into the
 summary, so attributing spend to a stage means re-reading the row file. Do that rather

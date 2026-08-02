@@ -678,7 +678,7 @@ def ingest_node(rt: ServeRuntime, state: ServeRailsState) -> dict:
     question = state["question"]
     if rt.events._finalize_ctx is not None:
         # Prefer a run_id bound by the outer invoke (logging_setup ContextVar)
-        # so Langfuse metadata, stage_events, and log lines share one key.
+        # so trace metadata, stage_events, and log lines share one key.
         from ..logging_setup import peek_run_id  # noqa: PLC0415
 
         rt.events._finalize_ctx = replace(
@@ -1671,8 +1671,8 @@ def agent_core_node(rt: ServeRuntime, state: ServeRailsState) -> dict:
     # One tracing handler per turn: it is attached at the outer graph.invoke
     # (answer_question_agent) and propagates into this inner agent.stream via the
     # run context. Attaching a *second* handler here logged every model call
-    # twice (same LangChain run_id → two Langfuse generations under different
-    # parents → ~2x trace cost/tokens), so inherit rather than re-attach.
+    # twice (same LangChain run_id → two LLM runs under different parents → ~2x
+    # trace cost/tokens), so inherit rather than re-attach.
     inner_cfg: dict = {
         "recursion_limit": AGENT_RECURSION_LIMIT,
     }

@@ -1,5 +1,15 @@
 # 第四批工作单 · M4 看得见与对得上（N11–N14）
 
+> **2026-08-02：Langfuse 已整体移除，LangSmith 是唯一 tracer**（[design-decisions.md](../design-decisions.md) D20）。
+> 这份工作单里 N12 的做法有一半已经不成立，作历史记录读：`tracing_config` 不再产
+> `langfuse_session_id` / `langfuse_user_id` / `langfuse_tags` 三个键（LangSmith 不读它们，
+> 在它的 UI 里只是噪声）；`tracing_callbacks` 改名 `usage_callbacks`，只剩那个
+> `UsageMetadataCallbackHandler`（curator/SME 的 token 账靠它，所以它必须活下来）；
+> `_trace_mask` 和 `GOVERNED_BI_TRACE_MAX_CHARS` 随 Langfuse 一起删掉 —— trace 现在按决定
+> 全量上报。**N12a「三个 sink 联合验收」这条判据本身仍然成立**，只是第三个 sink 从
+> Langfuse session 换成 LangSmith trace。另外，当年那条「其余六个字段都不敏感、先别塞
+> `identity`」的判断留着：`identity` 至今不进 trace metadata。
+
 2026-07-31 立。分支从 `impl/rebuild-first-batch` 起。上游是 [near-term-plan.md](near-term-plan.md) 的 M4 一节 —— **那一节只给了目标，这一份给做法**。体例同 [batch-m2.md](batch-m2.md) / [batch-m3.md](batch-m3.md)。
 
 > **语言：简体中文，无英文孪生。**

@@ -8,7 +8,7 @@ license = { text = "MIT" }
 authors = [{ name = "Minhao Zhang" }]
 # Core + agent deps live here (no extra): a plain `uv sync` installs everything the
 # default OpenAI-backed stack needs, so dev never hits a "feature silently off
-# because its extra wasn't installed" bug (e.g. Langfuse tracing). The one extra is
+# because its extra wasn't installed" bug. The one extra is
 # `bedrock` (AWS Bedrock provider) — an alternate LLM/embedding backend that pulls a
 # heavy boto3 tree most runs don't need. See [project.optional-dependencies].
 dependencies = [
@@ -39,8 +39,9 @@ dependencies = [
     "langchain>=1.0",
     "langchain-openai>=1.0",
     "deepagents>=0.6",
-    # --- External tracing (Langfuse callback; LangSmith is env-native, no dep) ---
-    "langfuse>=3.0",
+    # --- Tracing: none. LangSmith is the only tracer and it is env-native — it
+    # rides langchain-core's own `langsmith` dependency and needs no declaration
+    # here. Langfuse (a `langfuse>=3.0` direct dep) was removed on 2026-08-02.
 ]
 
 [project.optional-dependencies]

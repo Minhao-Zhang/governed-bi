@@ -66,7 +66,7 @@ decision made while they are open is made on bad information.
 
 | # | Item | Source | Size |
 |---|---|---|---|
-| 0.1 | **Langfuse mask does not mask.** Legacy `mask` hook does not cover third-party instrumentation; the LangChain handler is third-party, so DB row previews export verbatim. Move to `mask_otel_spans`, add a test that a long tool output does not survive, correct `obs.py`'s claims. | FW-F1 | S |
+| ~~0.1~~ | ~~**Langfuse mask does not mask.**~~ **Closed 2026-08-02 by removing Langfuse (D20), not by fixing the mask.** The finding was real — the legacy `mask` hook does not cover third-party instrumentation, and the LangChain handler is third-party, so DB row previews exported verbatim. It is now moot: LangSmith is the only tracer, it has no mask hook at all, and traces log in full **by decision** (non-production repo; sensitive columns are filtered at the datasource). `obs.py`'s claims were corrected in the same change — that half of the item did land. A production deployment would need a masking layer; there is none here. | FW-F1 | S |
 | 0.2 | **Write the graded-delivery scope test.** `governance.py:698` re-checks with `allowed_tables=None`, which skips L4 entirely. Hypothesis: `SELECT COUNT(*) FROM <unlicensed>.<table>` clears L3 and executes. Test first, before any fix. | RT-R1 | S |
 | 0.3 | **Decide 0.2.** Either pass `allowed_tables` to the recheck and drop `term_semantics` from the forgivable set, or state the exception in L4's docstring — which currently promises fail-closed containment unqualified. Silence is the only wrong answer. | RT-R2 | S/M |
 | 0.4 | **Phase B drops notes and negative examples.** `pipeline.py:1528`'s `if/elif` chain has no `else`, so `curated_sme` silently loses two asset types — and the acceptance gate at `:1654` checks whether the corpora *differ*, not whether the corpus *grew*, so losing every note passes. | ARCH-6 | S |
@@ -86,16 +86,16 @@ between deciding and guessing.
 
 | # | Item | Source | Size | Unblocks |
 |---|---|---|---|---|
-| 1.1 | **`tracing_config(ctx)`** — one `metadata` dict attributing every run in *both* tracers (`run_id`, `turn_id`, `corpus_pin` for LangSmith; `langfuse_session_id`/`user_id`/`tags` for Langfuse). ~8 call sites. | FW-F2 | S | 1.2, 3.x, all trace-joined analysis |
+| 1.1 | **`tracing_config(ctx)`** — one `metadata` dict attributing every run. Shipped as N12a, then **corrected 2026-08-02 (D20)**: the `langfuse_*` half is deleted, and the fields the eval driver was declaring but never passing (`arm`, and a real `corpus_content_hash` rather than the mode label `corpus_pin`) are now threaded. | FW-F2 | S | 1.2, 3.x, all trace-joined analysis |
 | 1.2 | **`configure_logging()`** at every entry point + a ContextVar filter injecting `run_id`/`turn_id` into every record. The library keeps not calling `basicConfig`. | FW-F3 | S/M | makes the 32 existing `logger.` calls visible for the first time |
 | 1.3 | **`retrieval_eval.py` scores a session, not a question.** No LLM needed. | MT-M1 | S | 2.1, 2.3, 3.6, 3.7 |
 | 1.4 | **`max_rows` / `timeout_s` into `Settings`**, and stamp all three eval-vs-serve permissiveness deltas in the manifest. Currently a 200× cap divergence recorded nowhere. | BOOK-U-10 = RT-R3 = ARCH-4a | S | honest comparability |
-| 1.5 | **Raise dependency floors** to what we run (`langfuse>=4.14`, both checkpoint packages `>=3.1`). A `>=3.0` pin resolving to 4.14 can silently regress. | FW-F4 | XS | — |
+| 1.5 | **Raise dependency floors** to what we run (both checkpoint packages `>=3.1`). A `>=3.0` pin resolving to a later major can silently regress. *(The `langfuse>=4.14` half is void — the dependency was dropped 2026-08-02, D20.)* | FW-F4 | XS | — |
 | 1.6 | **`RetryPolicy` on model-calling nodes.** We added `error_type` specifically to tell a rate limit from a bug, and never absorb the rate limit. | FW-F5 | S | eval trust at `--workers > 1` |
 | 1.7 | **`corpus doctor`** — `validate_corpus(connector=...)` against a live DB, writing the existing `validate_findings.jsonl` shape. Runnable in CI and on a schedule. | DRIFT-D3 | S | 2.4 |
 | 1.8 | **`drift` category in `error_taxonomy`.** A dropped column and a hallucinated column are currently the same error; drift reads as model regression. | DRIFT-D4 | S | 2.4 |
 | 1.9 | **`report()` / `logger` split** + manifest fields for the four record-worthy prints (dropped caveats, seed collapse, reference repairs, skipped corpus files). Triage, not a blanket rewrite of 105 prints. | FW-F6 | M | — |
-| 1.10 | **Delete dead Langfuse v2 fallback; reword the v3 comments.** | FW-F13 | XS | — |
+| ~~1.10~~ | ~~**Delete dead Langfuse v2 fallback; reword the v3 comments.**~~ **Done 2026-08-02 (D20)** — the whole Langfuse handler went, fallback included. | FW-F13 | XS | — |
 | 1.11 | **Collapse the two `n_human` derivations** into one function. (They are equivalent — not a bug, just derived twice.) | MT-M7 | XS | — |
 | 1.12 | **Set `max_turns` at both `InMemoryWorkingMemory` sites; cap the rendered history block.** Both are currently unbounded and verbatim in every prompt. | MT-M4 | S | 2.1 |
 
@@ -131,7 +131,7 @@ change, and the retrieval bets.
 | 3.6 | **One declaration per config knob.** Four knobs declared 2–4× with different values; two TOML keys are dead because argparse defaults always win. | ARCH-5 | S/M | |
 | 3.7 | **`AssetBag.from_corpus` / `install`**, dicts private, 4 dead aliases deleted. | ARCH-6 | M | after 0.4 |
 | 3.8 | **Lift the summariser out of `run_datalake`** — 1,300 lines of statistics, all private, imported by 6 test files via underscore names. Not driver unification (deferred by decision). | ARCH-7 | M | 3.1 helps |
-| 3.9 | **Langfuse scores** from the eval verdicts we already compute. | FW-F7 | M | 1.1, 3.1 |
+| ~~3.9~~ | ~~**Langfuse scores** from the eval verdicts we already compute.~~ **Void 2026-08-02 (D20)** — no Langfuse. The equivalent on LangSmith is feedback on the run, and the grill already argued against it (`grill-agenda.md` T6.Q3: a second path to a question `generations.<arm>.jsonl` already answers). Re-open only with a question the trace UI can answer and the row files cannot. | FW-F7 | M | 1.1, 3.1 |
 | 3.10 | **presenter ↔ `api/schemas` parity test**; redaction becomes a parameter at the view interface rather than a private helper. | ARCH-8 | S | |
 | 3.11 | **Delete the six dead public names** (`route_schemas`, `Connector.explain`, two `PromptContext` methods, 4 `AssetBag` aliases, `sanitize_note_text`) and correct `context.py`'s stale contract docstring. | ARCH-9 | S | |
 

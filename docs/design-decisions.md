@@ -454,8 +454,12 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
     **interaction log** (keyed by turn + `corpus_release_hash`) is required future
     work — part of a broader internal-systems / backend build, and a soft
     dependency on CorpusRelease (D11).
-  *Status: direction set; v0 rides Langfuse/LangSmith; the dedicated interaction
-  log + mining pipeline are deferred to the internal-systems build.*
+  *Status: direction set; v0 rides LangSmith; the dedicated interaction
+  log + mining pipeline are deferred to the internal-systems build. **Amended
+  2026-08-02:** Langfuse was removed and LangSmith is the only tracer, so "the
+  tracers' feedback/scores API" above means LangSmith's. The disposition is
+  otherwise unchanged — one cloud tracer instead of two does not make a
+  vendor-independent interaction log any less required.*
 
 - **R4 — Live execution: the audit note was stale; corrected.** Postgres **is**
   run live. `eval/run_datalake.py` executes the eval-ladder arms (`baseline` /
@@ -515,9 +519,9 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
   the vendor-independent **interaction log** (see R3, keyed by turn +
   `corpus_release_hash`); (4) expose an OpenTelemetry/Prometheus `/metrics` +
   `/health` surface with alerting; (5) make tracing **fail-loud** (a startup check)
-  in the prod profile so it never runs blind. *Status: rely on Langfuse/LangSmith
-  for now; in-app durable capture + a native aggregate/monitoring/alerting view are
-  future work (deferred).*
+  in the prod profile so it never runs blind. *Status: rely on LangSmith
+  for now (Langfuse was removed 2026-08-02); in-app durable capture + a native
+  aggregate/monitoring/alerting view are future work (deferred).*
 
 - **R6 — Curator adversary `refute()`: resolved by deletion (2026-07-29,
   refines [D10](#d10-curator--proposer--adversary)); self-eval/repair loop
@@ -702,3 +706,71 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
   [Prompt-variant experiments](prompt-experiments.md) for the full runbook,
   including the decision table for which variant a specific measured failure calls
   for.
+
+## D20: LangSmith is the only tracer
+
+> **Decided (2026-08-02)**
+>
+> Langfuse is removed — dependency, callback handler, client mask, and the
+> `langfuse_*` metadata keys. LangSmith is the sole tracer, it needs no code
+> (`LANGSMITH_TRACING` + `LANGSMITH_API_KEY` and LangChain instruments itself),
+> and `obs.tracing_config` is enriched so a multi-arm run is actually filterable
+> in its UI.
+
+- **Why LangSmith won: the billing shape, not the feature list.** LangSmith's
+  Developer tier bills **one trace per root invocation**. A 48-second agentic turn
+  with 27 nested runs is one trace, so a 20-question debug run spent 20 of the
+  5,000/month free allowance — 0.4%. Self-hosting Langfuse to escape a cost that
+  does not exist would have been six containers of operations. Two tracers was
+  never a hedge; it was two things to keep correct.
+- **What survived the removal, deliberately.** `tracing_callbacks()` returned a
+  Langfuse handler *and* a `UsageMetadataCallbackHandler`, which share a function
+  and not a purpose: `curator/pipeline.py` and `curator/sme.py` read curator/SME
+  token totals straight off the usage handler. Deleting the callback plumbing along
+  with Langfuse would have silently zeroed the largest unpriced line in a run — the
+  same hole that already made curator spend unrecoverable from `run_manifest.json`.
+  The function is now `obs.usage_callbacks()` and its name says what it does.
+  `flush_tracing()` also survived: it exists because exporters run on a background
+  thread behind an `atexit` hook that SIGTERM / `os._exit` / CI cancellation
+  bypasses, which is not a Langfuse-specific failure, so it was re-pointed at
+  `langchain_core.tracers.langchain.wait_for_all_tracers`.
+- **Traces log in full, and that is the decision.** The Langfuse client's `mask`
+  hook (`_trace_mask`, `GOVERNED_BI_TRACE_MAX_CHARS`) and the once-per-process
+  "unmasked export" acknowledgement (`GOVERNED_BI_ALLOW_UNMASKED_LANGSMITH`) both
+  went with Langfuse rather than being ported. This repo is not production and
+  sensitive columns are filtered at the datasource before they can reach a tool
+  message, so there is nothing for a trace mask to do. A production deployment
+  would need a masking layer at this seam; there is none here, on purpose. This
+  supersedes AUDIT S7 and the headline finding of
+  [framework-and-logging-audit.md](plans/framework-and-logging-audit.md), both of
+  which were about a mask that did not mask.
+  `viz.presenter._redact_provenance_for_client` is unrelated and unchanged — it
+  guards an HTTP response body served to a caller, not a trace export.
+- **The metadata was the actual problem.** Every trace of a four-arm ladder carried
+  exactly one tag, `governed-bi`, because `tracing_config` builds tags from
+  `ctx.arm` / `ctx.schema` and the eval solver passed neither. Now `arm` is a tag
+  and a metadata key on both the fair solver and the oracle rungs (an untagged
+  oracle trace is indistinguishable from a real serve turn, and the rung read the
+  answer key), and a replicate keeps its own name rather than collapsing onto its
+  source.
+- **`corpus_content_hash` is in the metadata; `corpus_pin` stays but is labelled.**
+  `corpus_pin` reads like a corpus identity and is a mode label — `config.py`
+  documents it as "default corpus schema subtree / BIRD db_id", and every pooled
+  run carries the literal string `"datalake"`. The manifest's per-arm
+  `corpus_content_hash`, which is the treatment's real identity, reached no trace at
+  all. It is now threaded from the driver's manifest through the solver. `corpus_pin`
+  is kept rather than dropped because it is the join key to the durable run log's
+  `corpus_pin` column and is genuinely the `db_id` in a single-schema deployment —
+  the danger was never the field, it was a label reading as an identity while the
+  identity was missing. This is the same lesson `prompt_set_hash` already carried:
+  *"a fixed field list is exactly how prompt identity went unhashed in the first
+  place."*
+- **No per-question schema tag on the fair arms, on purpose.** The obvious value —
+  the question's own `db_id` — is known to the driver per question but not to a
+  solver, which is built per *worker* over a 57-schema pool. Attaching it would mean
+  a `bind_schema()`-then-`solve()` pair, re-introducing exactly the shared mutable
+  state that audit-backlog C5 removed from `MetaSolver` so that a result pairs to
+  its question by return value and not by call order. What *is* passed is the
+  datasource pin, which cannot be wrong: the real schema when the connector is
+  pinned, `None` when it is not. The oracle rungs do tag a per-question schema,
+  because they already resolve one from the gold SQL to narrow the corpus.

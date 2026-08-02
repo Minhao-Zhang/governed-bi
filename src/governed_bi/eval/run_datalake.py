@@ -1100,7 +1100,8 @@ def _stage_event_rows(
                 "question_id": question_id,
                 "arm": arm,
                 "db_id": db_id,
-                # Same ids Langfuse / run.log use — join key for N12a three-sink accept.
+                # Same ids the LangSmith trace / run.log use — the join key for the
+                # N12a three-sink accept.
                 "run_id": meta.get("run_id"),
                 "turn_id": meta.get("turn_id"),
                 # Per-turn order, from the producer. Rows from concurrent workers
@@ -2413,10 +2414,16 @@ class ServeBindings(NamedTuple):
     model: Any
     embedder: Any
     gold: Any
+    #: ``manifest["corpus_content_hash_by_arm"]`` — the digest of each arm's built
+    #: corpus, keyed by corpus arm. Run-wide like everything else here; the factory
+    #: picks its arm's entry out. Goes into LangSmith trace metadata so a trace is
+    #: attributable to the treatment it served, which ``corpus_pin`` (a mode label
+    #: that reads ``"datalake"`` for every pooled run) never was.
+    corpus_hash_by_arm: "dict[str, str] | None" = None
 
 
 def arm_worker_factory(
-    plan: ArmServingPlan, bindings: "ServeBindings"
+    plan: ArmServingPlan, bindings: "ServeBindings", *, serve_arm: str | None = None
 ) -> "Callable[[int], ServeWorker]":
     """Curry :func:`make_serve_worker_factory` onto one arm's plan.
 
@@ -2427,6 +2434,13 @@ def arm_worker_factory(
     headroom bounds the runbook reads every other number against. No offline command
     reaches this path either: ``--oracle-only`` rejects all rungs but ``oracle_sql``,
     and the worker count is forced to 1 without a model.
+
+    ``serve_arm`` is the arm name as the run reports it, which is NOT
+    ``plan.corpus_arm`` for the two arms that serve someone else's corpus: a
+    replicate (``curated__replicate``) and an oracle rung. It is used only as the
+    LangSmith ``arm`` tag, where collapsing a replicate onto its source would erase
+    the one comparison the replicate exists to make. Everything that has to name a
+    *corpus* still goes through the plan.
     """
     return make_serve_worker_factory(
         corpus=bindings.corpora_serve[plan.corpus_arm],
@@ -2436,9 +2450,14 @@ def arm_worker_factory(
         model=bindings.model,
         embedder=bindings.embedder,
         arm=plan.corpus_arm,
+        serve_arm=serve_arm,
         rung=plan.rung,
         gold=bindings.gold if plan.rung is not None else None,
         n_workers=plan.n_workers,
+        # Keyed on the CORPUS arm, like ``corpus`` two lines up: a replicate and an
+        # oracle rung both serve someone else's corpus, and the hash must describe
+        # what was served, not what the arm is called.
+        corpus_content_hash=(bindings.corpus_hash_by_arm or {}).get(plan.corpus_arm),
     )
 
 
@@ -2451,9 +2470,11 @@ def make_serve_worker_factory(
     model: Any,
     embedder: Any = None,
     arm: str,
+    serve_arm: str | None = None,
     rung: "OracleRung | None" = None,
     gold: "GoldIndex | None" = None,
     n_workers: int = 1,
+    corpus_content_hash: str | None = None,
 ) -> "Callable[[int], ServeWorker]":
     """Build the per-worker ``(connector, gateway, solver)`` factory for one arm.
 
@@ -2500,6 +2521,8 @@ def make_serve_worker_factory(
                 embedder=embedder,
                 gold=gold,
                 session_id=f"eval-{rung.value}-w{idx}",
+                arm=serve_arm or rung.value,
+                corpus_content_hash=corpus_content_hash,
                 graph_cache_max=max(4, 32 // max(1, n_workers)),
             )
         else:
@@ -2511,6 +2534,8 @@ def make_serve_worker_factory(
                 model=model,
                 embedder=embedder,
                 session_id=f"eval-{arm}-w{idx}",
+                arm=serve_arm or arm,
+                corpus_content_hash=corpus_content_hash,
             )
         return ServeWorker(connector=conn, gateway=gw, solver=slv)
 
@@ -4012,6 +4037,14 @@ def run_datalake(
             # runs) — reporting EX 0.000 for the grader ceiling, which is the number
             # every other number is supposed to be read against. The other rungs do
             # serve through the real graph and genuinely need a model.
+            # The digest of the corpus this arm serves, stamped into the manifest a
+            # few hundred lines up. Threaded into the solver so the LangSmith trace
+            # carries the treatment's identity; ``corpus_pin`` beside it is only a
+            # mode label (``"datalake"`` for every pooled run) and never was one.
+            arm_corpus_hash = (manifest.get("corpus_content_hash_by_arm") or {}).get(
+                served_corpus_arm
+            )
+
             def _solver_for(plan: ArmServingPlan):
                 """The serial solver. The pool builds its own, per worker, via
                 ``make_serve_worker_factory`` — same branch, same plan."""
@@ -4031,6 +4064,8 @@ def run_datalake(
                         embedder=embedder,
                         gold=oracle_gold,
                         session_id=f"eval-{arm}",
+                        arm=arm,
+                        corpus_content_hash=arm_corpus_hash,
                     )
                 if lc_model is not None:
                     return agent_solver(
@@ -4041,6 +4076,8 @@ def run_datalake(
                         model=lc_model,
                         embedder=embedder,
                         session_id=f"eval-{arm}",
+                        arm=arm,
+                        corpus_content_hash=arm_corpus_hash,
                     )
                 return _RefuseAllSolver()
 
@@ -4061,7 +4098,9 @@ def run_datalake(
                         model=lc_model,
                         embedder=embedder,
                         gold=oracle_gold,
+                        corpus_hash_by_arm=manifest.get("corpus_content_hash_by_arm") or {},
                     ),
+                    serve_arm=arm,
                 )
                 if plan.needs_factory
                 else None

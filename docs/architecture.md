@@ -143,12 +143,15 @@ Guardrails, in order (fail-closed on any, all five enforced): syntax → policy 
 > so the live stream and the stored ledger cannot drift. Contract:
 > [`docs/analyst.md`](analyst.md#the-event-contract-per-step).
 >
-> Since Amendment 3, observability also collapses to **one inherited tracing
-> handler per turn**: Langfuse is attached once at the outer `graph.invoke` and
-> inherited by everything below it, including the `narrate` node's model call
-> (narration is now its own graph step, not a side-call inside finalization) and
-> the inner `agent.stream`. A turn is therefore one Langfuse trace with no
-> doubled model-call cost/tokens.
+> Since Amendment 3, observability also collapses to **one trace per turn**: the
+> outer `graph.invoke` opens the root run and everything below it nests inside,
+> including the `narrate` node's model call (narration is now its own graph step,
+> not a side-call inside finalization) and the inner `agent.stream`. A turn is
+> therefore one LangSmith trace with no doubled model-call cost/tokens. (This was
+> originally about a Langfuse callback handler attached once at the outer invoke;
+> Langfuse was removed on 2026-08-02 and LangSmith, which self-instruments from
+> the environment, inherits the same shape — and bills per root invocation, so
+> "one turn, one trace" is also the billing unit.)
 
 > **Refusal & best-effort (two concurrent gates, not a waterfall)**
 >

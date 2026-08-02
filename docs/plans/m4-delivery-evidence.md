@@ -35,7 +35,7 @@ python -m governed_bi.eval.run_datalake --dbs beer_factory --limit 5 --arms base
 | Check | Result |
 |---|---|
 | **N11** stdout | **25** lines (≤ 50). Progress + ETA on every serve line; arms/deltas only path summaries. |
-| **N12a** three sinks | Probe `question_id=train_5247`, `run_id=2ae1f03b9dfc4bd68b7ab0e1b75314a6` present in `generations.baseline.jsonl`, `stage_events.jsonl`, and `run.log`. Langfuse `sessions get` → `id` matches, `n_traces=1`, HTTP 200. (One `run_id` per question by design.) |
+| **N12a** three sinks | Probe `question_id=train_5247`, `run_id=2ae1f03b9dfc4bd68b7ab0e1b75314a6` present in `generations.baseline.jsonl`, `stage_events.jsonl`, and `run.log`. Langfuse `sessions get` → `id` matches, `n_traces=1`, HTTP 200. (One `run_id` per question by design.) *(Evidence as taken. Langfuse was removed 2026-08-02, D20; the third sink is now a LangSmith trace, whose root-run metadata carries the same `run_id` — re-verified live on 2026-08-02 via `Client().list_runs(is_root=True)`.)* |
 | **N13** | `git_branch=impl/rebuild-first-batch`, `git_sha=ec7be1c…`, `main_git_sha=214b678…`, `dirty=false`, `diff_sha256=null` |
 | **M1 ledger** | All 5 rows carry projected `governance_ledger` (`action` / `verdict` / `layer` / `sql` / `allowed` / `row_count`); no `result`; `json.dumps` ok |
 | Quotable | Indexed **not** quotable — expected (`5 < MIN_QUOTABLE_QUESTIONS` floor of 8). Smoke only. |

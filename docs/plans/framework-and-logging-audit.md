@@ -1,5 +1,20 @@
 # Framework best practices, and one logging spine
 
+> **EVERY LANGFUSE FINDING BELOW IS HISTORY AS OF 2026-08-02.** Langfuse was
+> removed — dependency, handler, client mask, `langfuse_*` metadata keys — and
+> LangSmith is the only tracer (**D20** in [design-decisions.md](../design-decisions.md)).
+> The findings were correct when written and are kept as written, because what
+> they record is how a mask that masked nothing survived in the codebase for
+> months while `obs.py` claimed otherwise. What is no longer true is the
+> prescription: §1's `mask_otel_spans` fix skeleton, §2's `langfuse_*` metadata
+> keys, §L1–§L4, §8.5's Langfuse scores, and the `langfuse>=4.14` floor in §0 are
+> all void. Traces now log in full **by decision** — this repo is not production
+> and sensitive columns are filtered at the datasource — so §1's threat has no
+> mitigation and needs none here. §8.2's `tracing_config(ctx)` did ship, minus its
+> Langfuse half; see D20 for what it actually stamps now. The non-Langfuse findings
+> (§G1 `RetryPolicy`, §G4 `get_stream_writer`, §D3, §6 `Store`, §7's sink table)
+> are untouched by any of this and remain the reason to read this file.
+
 > **STATUS 2026-07-31 — LOAD-BEARING. Largest un-migrated block in `docs/plans/`.**
 >
 > Ten findings here were checked against the **vendors' own current docs**, not against this

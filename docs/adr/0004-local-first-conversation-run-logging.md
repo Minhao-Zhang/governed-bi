@@ -43,7 +43,9 @@
     no-ops when unset"; LangSmith gates on env vars
     (`obs.py:45-52`, `langsmith_enabled`), and `tracing_callbacks()` returns
     `[]` when the Langfuse keys are unset (`obs.py:125-133`). There is no
-    local, vendor-independent fallback.
+    local, vendor-independent fallback. *(2026-08-02: there is now one tracer,
+    LangSmith. The finding is unaffected — one cloud tracer, still opt-in, still
+    no local fallback without this ADR — and the line references are stale.)*
   - **Conversation history is ephemeral, or lives in a checkpointer nobody
     attaches.** `InMemoryWorkingMemory` (`memory/store.py:36-70`, D8) is
     explicitly "ephemeral by design (lost on restart)." Separately,
@@ -263,10 +265,13 @@ durable sqlite log where only tokens and latency were available as proxies befor
   on win32, `os.chmod` cannot restrict group/other — document the single-operator
   caveat, do not pretend. Prod gate: `environment=prod` + `log_full_content`
   without `log_full_content_ack` fails loud at `build_stack`. Cloud-tracer
-  masking (`GOVERNED_BI_TRACE_MAX_CHARS` in `obs.py`) is independent.
-- **Local-first, on by default.** Unlike the cloud tracers, which are "both
-  no-ops when unset" (`obs.py:1-4`), the local **metadata** log is on by default
-  and needs no keys. Full-content tiers stay opt-in.
+  masking was independent of this and no longer exists at all:
+  `GOVERNED_BI_TRACE_MAX_CHARS` went with Langfuse on 2026-08-02 and LangSmith
+  exports content in full by decision (see `obs.py`). This ADR's tiering is
+  therefore the only content control in the repo.
+- **Local-first, on by default.** Unlike the cloud tracer, which is a no-op when
+  unset, the local **metadata** log is on by default and needs no keys.
+  Full-content tiers stay opt-in.
 
 ## Consequences
 
@@ -304,7 +309,8 @@ durable sqlite log where only tokens and latency were available as proxies befor
 
 ## Alternatives considered
 
-- **Cloud tracers only (Langfuse/LangSmith).** Rejected: vendor-locked, a
+- **Cloud tracers only (Langfuse/LangSmith — LangSmith alone since 2026-08-02).**
+  Rejected: vendor-locked, a
   silent no-op without keys (`obs.py:1-4,125-133`), not a backend-owned
   frontend-agnostic record, and no local source of truth, exactly the R5 gap
   ("with tracing off ... there is no vendor-independent record",

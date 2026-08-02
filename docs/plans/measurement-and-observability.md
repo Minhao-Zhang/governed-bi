@@ -270,21 +270,39 @@ able to see the data*, not the absence of a frontend.
 
 ## D. LangSmith
 
-Already wired, zero code ([`obs.py`](../../src/governed_bi/obs.py)):
+The only tracer since 2026-08-02 (D20). Already wired, zero code
+([`obs.py`](../../src/governed_bi/obs.py)):
 
 ```bash
 LANGSMITH_TRACING=true
 LANGSMITH_API_KEY=lsv2_...
-GOVERNED_BI_ALLOW_UNMASKED_LANGSMITH=1
 ```
 
-The third line is an acknowledgement, not a switch: LangSmith has no `mask` hook (unlike
-Langfuse), so it uploads result rows verbatim. Acceptable here — BIRD is public,
-obfuscated data with no real PII. Not a habit to carry to a real customer.
+Traces upload inputs and outputs verbatim, result rows included. That is the
+decision, not an oversight: BIRD is public, obfuscated data with no real PII, and
+sensitive columns are filtered at the datasource before they can reach a tool
+message. There is no mask hook and no acknowledgement env var — both went with
+Langfuse. Not a habit to carry to a real customer, which would need a masking
+layer at this seam.
 
-`tracing_config()` already stamps `run_id` / `turn_id` / `arm` / `schema` / `corpus_pin` /
-`prompt_set_hash` into `metadata` and `tags`, and LangSmith reads both natively, so
-filtering by arm and by corpus version works out of the box.
+Billing is **one trace per root invocation**, so a whole agentic turn — dozens of
+nested runs — is one trace. A 20-question debug pass costs 20 of the 5,000/month
+free tier.
+
+`tracing_config()` stamps `run_id` / `turn_id` / `arm` / `schema` /
+`corpus_pin` / `corpus_content_hash` / `prompt_set_hash` into `metadata`, and
+`arm` / `schema` into `tags`; LangSmith reads both natively, so filtering by arm
+and by corpus version works.
+
+> **This paragraph used to be false and it is worth knowing why.** The fields were
+> declared on `RunContext` but the eval driver passed neither `arm` nor a corpus
+> digest, so every trace of a four-arm ladder carried the single tag `governed-bi`
+> — the axis you would most want to filter on was the one axis missing. Worse,
+> `corpus_pin` *was* present and reads like a corpus identity while being a mode
+> label (`"datalake"` for every pooled run); the manifest's real
+> `corpus_content_hash` was absent. Fixed 2026-08-02 and pinned by
+> `tests/test_trace_metadata.py`. A field existing on a dataclass is not evidence
+> that anything fills it.
 
 **Its role is drilling into one failing question.** It is a trace browser, not an
 aggregator; "how many `inspect_schema` calls per question across 1351 rows" belongs in

@@ -292,6 +292,8 @@ def oracle_solver(
     gold: GoldIndex,
     embedder=None,
     session_id: str = "oracle",
+    arm: str | None = None,
+    corpus_content_hash: str | None = None,
     dialect: str = "postgres",
     # How many tables ``oracle_tables_padded`` pads up to. Matches the retrieval
     # table budget (``retrieval.rvgd.retrieve``'s ``top_k``, 8 by default), because
@@ -324,6 +326,13 @@ def oracle_solver(
     performance; keeping them out of the log is how that holds when someone later
     queries the log instead of the run directory. Opt in with ``enable_run_log=True``
     and settings whose ``run_log_kind`` points somewhere deliberate.
+
+    ``arm`` (the rung's own name) and ``corpus_content_hash`` are trace metadata,
+    mirroring ``arms.agent_solver``. The rung name matters more here than on a fair
+    arm: an untagged oracle trace in LangSmith is indistinguishable from a real
+    serve turn, and this rung read the answer key. Unlike the fair path, ``schema``
+    IS per question here — the rung already resolves it from the gold SQL in order
+    to narrow the corpus, so tagging it costs nothing and is exact.
     """
     from dataclasses import replace as dc_replace
 
@@ -477,7 +486,9 @@ def oracle_solver(
                     run_id=rid,
                     turn_id=tid,
                     schema=schema,
+                    arm=arm or rung.value,
                     corpus_pin=getattr(log_settings.datasource, "corpus_pin", None),
+                    corpus_content_hash=corpus_content_hash,
                     prompt_set_hash=_psh(log_settings.prompt_variants),
                 )
                 final = graph.invoke(

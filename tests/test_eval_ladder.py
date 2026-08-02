@@ -732,20 +732,26 @@ def test_build_curated_corpus_with_sme_folds_human(bird_connector, tmp_path: Pat
     assert manifest["agent_ran"] is False
 
 
-def test_deep_agent_invoke_receives_tracing_callbacks(bird_connector, tmp_path: Path, monkeypatch):
-    """The curator deep agent must run with Langfuse callbacks in its config, or
-    its (majority) LLM volume is invisible to the dashboard. Regression guard.
+def test_deep_agent_invoke_receives_usage_callback(bird_connector, tmp_path: Path, monkeypatch):
+    """The curator deep agent must run with the usage callback in its config, or
+    its (majority) LLM volume is unpriceable. Regression guard.
 
-    Patched at ``governed_bi.obs.tracing_callbacks`` — the single producer every
-    call site draws from, since ``obs.tracing_invoke_config`` routes through it.
-    This used to patch the pipeline module's own re-exported name, which is not a
-    seam anyone promised to keep: M4 N12a (526f21a) replaced the module-level
-    ``from ..obs import tracing_callbacks`` with a function-local
+    This guarded a Langfuse handler AND the usage handler, which shared one
+    producer. Langfuse went on 2026-08-02; the usage handler is the load-bearing
+    half and stays — ``analyst.run_log.usage_callback_entries`` reads curator/SME
+    token totals straight off it, and curator spend is already the largest
+    unpriced line in a run.
+
+    Patched at ``governed_bi.obs.usage_callbacks`` (formerly ``tracing_callbacks``)
+    — the single producer every call site draws from, since
+    ``obs.tracing_invoke_config`` routes through it. This used to patch the
+    pipeline module's own re-exported name, which is not a seam anyone promised to
+    keep: M4 N12a (526f21a) replaced the module-level import with a function-local
     ``tracing_invoke_config`` call, and the guard started erroring on a missing
     attribute instead of checking anything. Patching the producer holds however
     the pipeline reaches it, and pins N12a's own contribution too — the
     :class:`~governed_bi.obs.RunContext` metadata, which is what correlates the
-    curator's Langfuse trace with ``runs/index.jsonl`` and the durable run log.
+    curator's trace with ``runs/index.jsonl`` and the durable run log.
     """
     from governed_bi import obs as obs_mod
     from governed_bi.curator import deep_agent as da_mod
@@ -762,7 +768,7 @@ def test_deep_agent_invoke_receives_tracing_callbacks(bird_connector, tmp_path: 
     rec = _RecordingAgent()
     monkeypatch.setattr(da_mod, "build_curator_agent", lambda *a, **k: rec)
     monkeypatch.setattr(
-        obs_mod, "tracing_callbacks", lambda **_kwargs: ["LF_SENTINEL"]
+        obs_mod, "usage_callbacks", lambda **_kwargs: ["USAGE_SENTINEL"]
     )
 
     gateway = Gateway(bird_connector)
@@ -782,17 +788,14 @@ def test_deep_agent_invoke_receives_tracing_callbacks(bird_connector, tmp_path: 
 
     assert rec.configs, "deep agent was never invoked"
     cfg = rec.configs[0]
-    assert cfg.get("callbacks") == ["LF_SENTINEL"], (
-        f"tracing callbacks not threaded into agent.invoke config: {cfg}"
+    assert cfg.get("callbacks") == ["USAGE_SENTINEL"], (
+        f"usage callback not threaded into agent.invoke config: {cfg}"
     )
     # N12a threads a RunContext alongside the callbacks. Without run_id in the
-    # trace metadata the curator's spans land in Langfuse unjoinable to the run
+    # trace metadata the curator's spans land in LangSmith unjoinable to the run
     # that produced them, which is the same blind spot one level down.
     metadata = cfg.get("metadata") or {}
     assert metadata.get("run_id"), f"RunContext run_id not threaded into agent config: {cfg}"
-    assert metadata.get("langfuse_session_id") == metadata.get("run_id"), (
-        f"Langfuse session not correlated to run_id: {cfg}"
-    )
 
 
 def test_sme_clarifications_logged(bird_connector, tmp_path: Path):

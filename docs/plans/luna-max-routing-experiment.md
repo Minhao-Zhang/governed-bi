@@ -196,6 +196,10 @@ wrong_filter_column    76  (30%)   ← 过滤在错的列上
 
 ### 0.9 Langfuse:**Opus 那两次跑的 trace 不在里面**
 
+> **2026-08-02:Langfuse 已整体移除,LangSmith 是唯一 tracer**([design-decisions.md](../design-decisions.md) D20)。
+> 本节的实测数字与结论作历史读。本节末尾列的三个缺陷里,**第一个已修**(`arm` 现在进
+> `RunContext`,并且额外补了 `corpus_content_hash`);后两个仍在。
+
 实测(`cloud.langfuse.com`,凭据可用):
 
 ```
@@ -237,7 +241,7 @@ wrong_filter_column    76  (30%)   ← 过滤在错的列上
 | **B1** | `embedding_model` 统一为 `text-embedding-3-large`(3072 维) | 你批准的;A1 保证它被记录 |
 | **B2** | `SCHEMA_PICK_MAX_TABLES` 从硬常量变成可配置 knob,并**加一条按问题相关性排序的路径**(候选:复用 schema 文档的 per-table 向量或 BM25 分数) | 这是 E2 的处理变量。**不排序就只是把 15 抬到 30,正是那条 docstring 反对的做法** |
 | **B3** | analyst prompt 加**每表列预算**(镜像 router 已有的 `schema_pick_max_columns`),按检索分数选列,`0 = 不限` | E3 的处理变量 |
-| **B4** | Langfuse:`RunContext` 传 `arm`、模型名、run dir;session id 改成每次跑一个 | 否则 5404 条 trace 无法按臂/按跑切片 |
+| **B4** | ~~Langfuse:~~ **LangSmith(2026-08-02 起唯一 tracer)**:`RunContext` 传 `arm`、模型名、run dir;session id 改成每次跑一个 | 否则 5404 条 trace 无法按臂/按跑切片 |<br>**2026-08-02 部分落地(D20)**:`arm` 已传(fair 臂与 oracle rung 都传,replicate 保留自己的名字),并且额外传了 `corpus_content_hash` —— 这一项当年没看出来,而它比 `arm` 更要紧:metadata 里原本那个 `corpus_pin` **看着像语料身份、其实是模式标签**(每次 pooled 跑都是字面量 `"datalake"`)。模型名与 run dir **仍未传**;session id 仍是每题一个(它不进 trace metadata,只进 `turn_id`)。 |
 | **B5** | `request_timeout_s` 60→900,`max_retries` 2→8 | **max effort 下 60 秒必超时** → `APITimeoutError` → `Outcome.crashed` → 整跑不可引用。仓库里**没有任何限流器、没有 429 退避**,SDK 的 2 次重试是唯一防线 |
 
 ### 批 C · 不阻塞(记录在案,排队)

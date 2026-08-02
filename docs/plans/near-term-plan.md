@@ -1,5 +1,10 @@
 # 近期计划：第一批实现
 
+> **2026-08-02：Langfuse 已整体移除，LangSmith 是唯一 tracer**（[design-decisions.md](../design-decisions.md) D20）。
+> 下文 N12 一节里「同时喂两个 tracer」「Langfuse 读 `langfuse_session_id` / `langfuse_user_id` /
+> `langfuse_tags`」按历史读 —— 那三个键已删。**「一个 `run_id` 在三个 sink 里都查得到」这条
+> 验收判据仍然成立**，第三个 sink 换成 LangSmith trace。
+
 2026-07-31 立。分支 `impl/rebuild-first-batch`。
 
 > **语言：简体中文，无英文孪生。**文件名不带 `.zh` 是刻意的 —— `.zh.md` 那个后缀宣称「我是某份英文文档的中文孪生」，而这份没有英文源头。同目录的 [rebuild-checklist.md](rebuild-checklist.md)、[rebuild-decisions.md](rebuild-decisions.md)、[grill-agenda.md](grill-agenda.md) 同为中文原生。

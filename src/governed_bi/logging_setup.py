@@ -19,7 +19,7 @@ _turn_id: ContextVar[str | None] = ContextVar("governed_bi_turn_id", default=Non
 _CONFIGURED = False
 
 #: Format used after :func:`configure_logging`. Includes correlation ids so a
-#: log line can be joined to ``stage_events.jsonl`` and a Langfuse session.
+#: log line can be joined to ``stage_events.jsonl`` and a LangSmith trace.
 _LOG_FORMAT = (
     "%(asctime)s %(levelname)s [run=%(run_id)s turn=%(turn_id)s] "
     "%(name)s: %(message)s"
@@ -87,7 +87,7 @@ _QUIET_LOGGERS: dict[str, int] = {
     "openai._base_client": logging.INFO,  # explicit: keep the retry lines
     # Tracing exporters. Noisy on failure and irrelevant on success, and their
     # failures are about the tracer, not the run.
-    "langfuse": logging.ERROR,
+    "langsmith": logging.ERROR,
     "opentelemetry": logging.ERROR,
 }
 

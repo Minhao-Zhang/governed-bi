@@ -445,6 +445,8 @@ def agent_solver(
     model,
     embedder=None,
     session_id: str = "eval",
+    arm: str | None = None,
+    corpus_content_hash: str | None = None,
     enable_run_log: bool = False,
 ) -> MetaSolver:
     """A :class:`MetaSolver` that drives the ADR-0002 agentic serve core.
@@ -465,6 +467,26 @@ def agent_solver(
     Portable run logging is forced off here: eval metrics live in the returned
     ``meta`` / experiment rows. Opt in by passing settings with ``run_log_kind``
     already set to a non-default destination via ``enable_run_log=True``.
+
+    ``arm`` and ``corpus_content_hash`` exist only to reach LangSmith. Both are
+    known to the driver and neither was being passed, so every trace of a
+    four-arm ladder carried the single tag ``governed-bi`` and no way back to the
+    treatment that produced it. ``corpus_content_hash`` is the manifest's digest of
+    the corpus this arm actually serves — see :func:`governed_bi.obs.tracing_config`
+    for why ``corpus_pin``, which was already there, is not a substitute for it.
+
+    There is deliberately **no per-question schema tag.** The obvious value, the
+    question's own ``db_id``, is known to the driver per question but not to a
+    solver: this object is built per *worker*, a pooled run spans 57 schemas, and
+    :class:`MetaSolver` is documented as having no shared mutable state so that a
+    result pairs to its question by return value rather than by call order
+    (audit-backlog C5 removed the last such attribute). Re-introducing a
+    ``bind_schema()``-then-``solve()`` pair would undo that for a trace tag whose
+    content is already on every row of ``generations.<arm>.jsonl`` and joinable by
+    ``run_id``. What *is* passed is the datasource pin below, which is structurally
+    incapable of being wrong: it is the connector's schema, so it is the real
+    schema in a single-schema deployment and ``None`` under the unpinned pooled
+    driver, where no solver-level schema exists.
     """
     from dataclasses import replace as dc_replace
 
@@ -501,14 +523,17 @@ def agent_solver(
             tid = make_turn_id(session_id, self._n)
             log_tokens = bind_log_context(run_id=rid, turn_id=tid)
             try:
-                # One line per question so run.log joins to Langfuse / stage_events
-                # on the same run_id (N12a three-sink accept). Progress stays on
-                # stdout via the driver's on_result hook — do not replace that.
+                # One line per question so run.log joins to the LangSmith trace and
+                # stage_events on the same run_id (N12a three-sink accept). Progress
+                # stays on stdout via the driver's on_result hook — do not replace that.
                 _log.info("serve question n=%s session=%s", self._n, session_id)
                 ctx = RunContext(
                     run_id=rid,
                     turn_id=tid,
                     corpus_pin=getattr(log_settings.datasource, "corpus_pin", None),
+                    arm=arm,
+                    schema=getattr(log_settings.datasource, "schema", None),
+                    corpus_content_hash=corpus_content_hash,
                     prompt_set_hash=_psh(log_settings.prompt_variants),
                 )
                 final = graph.invoke(
@@ -622,7 +647,7 @@ def agent_solver(
                 "token_usage": prov.get("token_usage"),
                 "cost_est_usd": prov.get("cost_est_usd"),
                 "usage": prov.get("token_sum") or prov.get("usage"),
-                # Prefer the ids bound into Langfuse / logging for this invoke —
+                # Prefer the ids bound into the trace / logging for this invoke —
                 # provenance should match, but the outer mint is the join key.
                 "turn_id": tid,
                 "run_id": rid,

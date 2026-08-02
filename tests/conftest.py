@@ -27,12 +27,10 @@ _config.APPLY_LOCAL_OVERLAY = False
 
 # Secrets/toggles that must not leak from a developer's .env into the hermetic
 # suite: the model key (would flip offline paths onto the live model) and the
-# external-tracing switches (would make tests phone home to Langfuse/LangSmith
-# now that the agent path threads tracing_callbacks() into its run config).
+# LangSmith switches (would make tests phone home, and traces log run content in
+# full — see governed_bi.obs).
 _STRIPPED_ENV = (
     "OPENAI_API_KEY",
-    "LANGFUSE_PUBLIC_KEY",
-    "LANGFUSE_SECRET_KEY",
     "LANGSMITH_API_KEY",
     "LANGSMITH_TRACING",
     "LANGCHAIN_TRACING_V2",

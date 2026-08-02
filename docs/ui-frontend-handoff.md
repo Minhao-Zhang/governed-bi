@@ -49,9 +49,10 @@ uv sync                                           # everything: LangGraph/LangCh
 uv run langgraph dev                              # LangGraph Server at :2024 (chat + custom routes)
 ```
 - Live model (NL answers + free-form SQL): set `OPENAI_API_KEY` (env or repo `.env`).
-- Tracing (optional; see `.env.example`):
-  - LangSmith: `LANGSMITH_API_KEY` + `LANGSMITH_TRACING=true` (or legacy `LANGCHAIN_TRACING_V2=true`)
-  - Langfuse: no extra needed (`langfuse` is a core dependency); set `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`
+- Tracing (optional; see `.env.example`): LangSmith is the only tracer since
+  2026-08-02 — set `LANGSMITH_API_KEY` + `LANGSMITH_TRACING=true` (or legacy
+  `LANGCHAIN_TRACING_V2=true`). No dependency to install and nothing to run: it
+  self-instruments from the environment. Traces carry inputs and outputs in full.
 - CORS: set `[serve].cors_origins` in `governed_bi.toml` (default includes `http://localhost:3000`).
 - **Local threads are ephemeral** under `langgraph dev` (durable persistence is the
   deployed Postgres). `/capabilities` reports `has_live_model`, `can_stream`,
@@ -176,8 +177,9 @@ path is the same.
   Server chat graph (`serve`) + `langgraph.json`; a thin `{messages, answer}` chat
   state (no `ServeState` serialization needed); stage streaming via
   `get_stream_writer()`; custom routes mounted (`http.app`); `GET /knowledge-graph`
-  (full graph) alongside `GET /graph` (ER); `POST /corpus/edit` (dev); LangSmith +
-  Langfuse tracing (opt-in); [openapi.json](openapi.json) exported by
+  (full graph) alongside `GET /graph` (ER); `POST /corpus/edit` (dev); LangSmith
+  tracing (opt-in; Langfuse was also wired at the time and was removed
+  2026-08-02); [openapi.json](openapi.json) exported by
   `scripts/export_openapi.py` and drift-checked in CI. Plus the
   earlier `presenter` view models, REST reads, `stack` factory, and the
   non-streaming `/chat` REST endpoint (also requires a live model).
