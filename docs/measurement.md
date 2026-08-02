@@ -91,11 +91,16 @@ into one unreadable record.
   LLM schema pick on a single-schema corpus). `ms` is `None`, not `0`: a stage
   that never ran did not take zero milliseconds, and an absent record would
   read as a stage this build cannot measure at all.
+- `record(name, ms=..., **detail)` records a stage that already finished,
+  timed by someone else. The agent's tool calls are observed at the far side of
+  `agent.stream`, so there is nothing to wrap; the caller passes the elapsed
+  time it measured, or `None` when nothing measured it.
 - `count_tool_call(name)` counts every tool invocation by name, independent of
   the governance ledger (which only records `run_query`/`sample_rows` —
-  widening it would widen what claims to be governed). Before this,
-  `search_corpus`/`inspect_schema` — most of a turn's tool calls — left no
-  durable trace anywhere.
+  widening it would widen what claims to be governed). It is now the *coarse*
+  view — the per-call records below carry the arguments and results — and stays
+  because it is the one count that is complete for every tool, including
+  `ask_user` and anything added later.
 - `guardrail_layer(layer, passed)` counts one guardrail layer's decision. A
   layer that ran and blocked nothing is keyed at `0`; a layer that never ran
   this turn (L4 term-semantics is skipped with no retrieval scope) is
@@ -132,7 +137,26 @@ the numeric shape of `stage_events` (`stage`/`status`/`ms`) but drops every
 string-valued `detail` key before the durable write: `detail` is free-form at
 the source, so the durable projection cannot trust it by key name — a later
 `detail["query"]` would otherwise put the user's own words into a
-metadata-only log (ADR 0004 H11 Tier A).
+metadata-only log (ADR 0004 H11 Tier A). That `detail["query"]` is no longer
+hypothetical — the agent's own tool calls are recorded now (below), and
+`search_corpus` records the model's search string — which is the point of
+filtering by *type* rather than by a key allowlist.
+
+Each record also carries `seq`, a per-turn monotonic counter reset on the same
+turn boundary as the recorder. It is the only ordering `stage_events.jsonl`
+has: concurrent workers append to one file, so a reader reconstructing one
+turn's trajectory sorts on `(turn_id, seq)`, never on line number. `seq`
+survives the Tier A projection because it is a number.
+
+**The agent's tool calls are stage records too.** `analyst.agent._resolve_tool`
+writes one record per `search_corpus` / `inspect_schema` / `read_notes` /
+`grep_notes`, carrying the query or table id and what came back. It writes
+**none** for `run_query`, and none for a `sample_rows` that reached the
+guardrail: the middleware already writes the `guardrail` + `execute` pair for
+those, and a third record would double-count an action the ledger and every
+rate derived from it agree on. The one exception is a `sample_rows` denied by
+the licensing check, which returns before `check()` runs and would otherwise
+leave no trace at all. See `docs/analyst.md`, "The same detail, durably".
 
 ## From one question, to one run, to the ledger
 
@@ -1028,6 +1052,8 @@ crashes were `RateLimitError` — re-run narrower — or something else.
 | EX denominator looks padded by rows with no usable gold | `n_gold_unusable` (alongside `n_missing_gold`) | `summary.json` |
 | A db's decoy-touch rate reads suspiciously clean | `decoy_manifest_missing_dbs` | `summary.json` (`run_datalake.py`) |
 | "How much exploring did this arm do?" | `n_tool_calls` (per row), `tool_calls` (summed) | `generations.<arm>.jsonl`; `summary.json` |
+| "What did the agent actually *do* on this question, in order?" | the turn's records sorted by `seq` — `search_corpus` carries its query and hit counts, `inspect_schema` its table and whether it licensed, `guardrail`/`execute` the query pairs | `stage_events.jsonl`, filtered to one `turn_id` |
+| A guardrail blocked and you need *why*, not just which layer | `governance_ledger[].reason` beside `layer` (kept in the eval artifact; the client API redacts it — AUDIT S7) | `generations.<arm>.jsonl` |
 | A curated corpus has few suspect columns or few notes and you want to know whether the agent decided that or ran out of room | `tool_calls.exhausted`, `n_super_steps` against `recursion_limit`, `tool_call_budget` | `run_manifest.json` per schema (`<db>/_build/`) |
 | A curator agent burned its budget and you want to know on what | `tool_calls.repeats` (`total` vs `distinct`, `max_repeat`, `top_repeated`) | `run_manifest.json`; verbatim args in `curator_trace.jsonl` when promoted (see C10) |
 | Seed coverage looks lower than the seed's own success count | `assets` (joins/metrics/terms/few_shots actually written) against the seed's `joins_ok` / `metrics_ok` | `run_manifest.json` |

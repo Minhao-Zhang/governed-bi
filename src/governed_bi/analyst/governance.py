@@ -357,20 +357,45 @@ class StageRecorder:
     Records are appended in *completion* order and nested stages overlap their
     parent by construction (``retrieve`` runs inside ``assemble``), so read a
     stage's ``ms`` on its own — summing the list double-counts.
+
+    Every record carries a per-turn monotonic ``seq``, the same concept
+    :class:`GovEventStream` stamps on its live events and reset on the same turn
+    boundary — but its own counter, not the stream's. The stream's ``_seq`` counts
+    only events it actually emitted, and it emits nothing at all when no
+    ``on_event`` callback is attached, which is precisely the eval path where these
+    records are the only trace that exists. Sharing it would leave every eval row
+    reading ``seq=0``. In the list, order and ``seq`` say the same thing; on disk
+    they do not, because ``stage_events.jsonl`` interleaves rows from concurrent
+    workers into one file and file order is then not turn order.
     """
 
-    __slots__ = ("_events", "_tool_calls", "_guardrail_layers")
+    __slots__ = ("_events", "_tool_calls", "_guardrail_layers", "_seq")
 
     def __init__(self) -> None:
         self._events: list[dict] = []
         self._tool_calls: dict[str, int] = {}
         self._guardrail_layers: dict[str, int] = {}
+        self._seq = 0
 
     def reset(self) -> None:
         """Start a fresh turn (drop the previous turn's records and counters)."""
         self._events = []
         self._tool_calls = {}
         self._guardrail_layers = {}
+        self._seq = 0
+
+    def _append(self, stage: "Stage | str", status: str, ms: float | None, detail: dict) -> None:
+        """Append one record, stamping this turn's next sequence number."""
+        self._events.append(
+            {
+                "seq": self._seq,
+                "stage": getattr(stage, "value", stage),
+                "status": status,
+                "ms": ms,
+                "detail": detail,
+            }
+        )
+        self._seq += 1
 
     @contextmanager
     def stage(self, stage: "Stage | str", **detail):
@@ -393,14 +418,27 @@ class StageRecorder:
             payload["error_type"] = type(err).__name__
             raise
         finally:
-            self._events.append(
-                {
-                    "stage": getattr(stage, "value", stage),
-                    "status": status,
-                    "ms": round((time.perf_counter() - t0) * 1000.0, 3),
-                    "detail": payload,
-                }
+            self._append(
+                stage, status, round((time.perf_counter() - t0) * 1000.0, 3), payload
             )
+
+    def record(
+        self, stage: "Stage | str", *, ms: float | None = None, status: str = "ok", **detail
+    ) -> None:
+        """Record a stage that has *already* finished, timed by someone else.
+
+        :meth:`stage` wraps the code it measures; this does not, because the agent's
+        tool calls are observed at the far side of ``agent.stream`` — the detail worth
+        keeping (a search's hit counts, whether an inspect licensed) is only assembled
+        once the ``ToolMessage`` comes back, long after the call itself ran. The
+        caller passes the elapsed time it measured across that gap, or ``None`` when
+        nothing measured it; ``None`` must read as "not measured", never as zero.
+
+        ``status`` follows the same rule as :meth:`stage`: it describes the stage's
+        own execution, so a tool that ran fine and returned "not licensed" is ``ok``
+        with the outcome in ``detail``, not ``blocked``.
+        """
+        self._append(stage, status, ms, dict(detail))
 
     def skipped(self, stage: "Stage | str", **detail) -> None:
         """Record a stage that deliberately did not run (no LLM schema pick on a
@@ -409,14 +447,7 @@ class StageRecorder:
         ``ms`` is ``None``: a stage that never ran did not take zero milliseconds,
         and an absent record would read as a stage this build cannot measure.
         """
-        self._events.append(
-            {
-                "stage": getattr(stage, "value", stage),
-                "status": "skipped",
-                "ms": None,
-                "detail": dict(detail),
-            }
-        )
+        self._append(stage, "skipped", None, dict(detail))
 
     def count_tool_call(self, name: str) -> None:
         """Count one tool invocation by name.

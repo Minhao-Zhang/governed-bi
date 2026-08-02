@@ -444,6 +444,17 @@ def strip_stage_events_for_log(events: Any) -> list[dict] | None:
     here rather than trusted. The live view and the eval harness read the unstripped
     list straight off ``Answer.provenance``, so nothing diagnostic is lost where
     content is already permitted.
+
+    "A later ``detail["query"]``" is no longer hypothetical: the agent's
+    ``search_corpus`` / ``grep_notes`` records carry the model's own search string,
+    which can echo the question. It reaches the eval artifacts (local files, and
+    the question is in them already) and the live event stream (the asker's own
+    turn); this projection is what keeps it out of the portable log, and it does so
+    by the rule above without needing to know the key exists.
+
+    ``seq`` rides along because it is the producer's per-turn ordering and a number
+    — the one field that makes a stripped record still reconstructable as a
+    trajectory.
     """
     if events is None:
         return None
@@ -454,6 +465,7 @@ def strip_stage_events_for_log(events: Any) -> list[dict] | None:
         detail = event.get("detail") or {}
         out.append(
             {
+                "seq": event.get("seq"),
                 "stage": event.get("stage"),
                 "status": event.get("status"),
                 "ms": event.get("ms"),
