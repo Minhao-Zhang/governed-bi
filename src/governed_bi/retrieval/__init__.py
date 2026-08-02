@@ -39,7 +39,9 @@ mild tie-breaker. On the multi-schema path, ``schema_router`` shortlists schemas
 tunable (``vector_weight``); graph (G) and Corrective-RAG reranking are later slices.
 
 Retrieval quality is measurable offline with ``eval/retrieval_eval.py`` (table
-recall@k over gold SQL, no LLM): ``python -m governed_bi.eval.retrieval_eval``.
+recall@k, corpus/licensed COLUMN recall, and the per-table column-budget width
+curve, all over gold SQL with no LLM):
+``python -m governed_bi.eval.retrieval_eval``.
 """
 
 from __future__ import annotations
