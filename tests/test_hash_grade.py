@@ -361,6 +361,110 @@ def test_missing_and_unusable_gold_are_counted_apart_from_exec_errors():
     assert res["n_unusable_gold"] == 1
 
 
+# --------------------------------------------------------------------------- #
+# The pre-flight must notice when the gold SQL we submit is not the statement the
+# gold hash was computed from.
+#
+# `GoldHash.sql_sha256` has always carried that identity and nothing read it. A
+# `SELECT *` gold on a decoy-bearing database is a different query from the
+# star-expanded statement the hash was taken of, so the answer key graded wrong
+# against itself: `correct=False`, `nrows_match=True`, `error=None` — a row that
+# reads exactly like a model being wrong. The sampled execution check cannot find
+# it (3 questions in 6,743), so the digest sweep is unsampled.
+# --------------------------------------------------------------------------- #
+
+
+def test_a_gold_sql_that_is_not_the_hashed_statement_is_counted(caplog):
+    import logging as _logging
+
+    from governed_bi.eval.hash_grade import (
+        GoldHash,
+        hash_normalised_result,
+        sql_sha256,
+        validate_gold_hashes_live,
+    )
+
+    rows = [(1,)]
+    h = hash_normalised_result(rows)
+    expanded = 'SELECT "a", "b" FROM t'
+    items = [_item("star", sql="SELECT * FROM t"), _item("plain", sql="SELECT 1")]
+    gold = {
+        # The hash was computed from the EXPANDED statement, not from what we submit.
+        "star": GoldHash(
+            question_id="star",
+            hash_lenient=h,
+            hash_strict=h,
+            sql_sha256=sql_sha256(expanded),
+        ),
+        "plain": GoldHash(
+            question_id="plain",
+            hash_lenient=h,
+            hash_strict=h,
+            sql_sha256=sql_sha256("SELECT 1"),
+        ),
+    }
+    with caplog.at_level(_logging.WARNING, logger="governed_bi.eval"):
+        res = validate_gold_hashes_live(
+            items, gold, _AgreeingGateway(rows), object(), sample=2
+        )
+
+    assert res["n_gold_sql_mismatch"] == 1
+    assert res["gold_sql_mismatch_ids"] == ["star"]
+    assert "sql_sha256 mismatch" in caplog.text
+    # And it is NOT folded into agree_rate: the sampled rows still agree here, which
+    # is exactly why the mismatch needs its own counter.
+    assert res["agree_rate"] == 1.0
+
+
+def test_the_digest_sweep_is_not_limited_by_sample():
+    """`sample` bounds executions. The digest costs nothing, so it sweeps everything —
+    otherwise a 5-item sample over thousands of questions never draws the offender."""
+    from governed_bi.eval.hash_grade import (
+        GoldHash,
+        hash_normalised_result,
+        sql_sha256,
+        validate_gold_hashes_live,
+    )
+
+    rows = [(1,)]
+    h = hash_normalised_result(rows)
+    items = [_item(f"q{i}", sql=f"SELECT {i}") for i in range(20)]
+    gold = {
+        f"q{i}": GoldHash(
+            question_id=f"q{i}",
+            hash_lenient=h,
+            hash_strict=h,
+            sql_sha256=sql_sha256("SOMETHING ELSE"),
+        )
+        for i in range(20)
+    }
+    res = validate_gold_hashes_live(
+        items, gold, _AgreeingGateway(rows), object(), sample=2
+    )
+
+    assert res["n_checked"] == 2
+    assert res["n_gold_sql_mismatch"] == 20
+    assert len(res["gold_sql_mismatch_ids"]) == 5  # capped for the log line only
+
+
+def test_gold_without_a_recorded_sql_sha256_is_not_reported_as_a_mismatch():
+    """An older artifact omits the field; absence of evidence is not a mismatch."""
+    from governed_bi.eval.hash_grade import (
+        GoldHash,
+        hash_normalised_result,
+        validate_gold_hashes_live,
+    )
+
+    rows = [(1,)]
+    h = hash_normalised_result(rows)
+    items = [_item("q0", sql="SELECT 1")]
+    gold = {"q0": GoldHash(question_id="q0", hash_lenient=h, hash_strict=h)}
+    res = validate_gold_hashes_live(
+        items, gold, _AgreeingGateway(rows), object(), sample=1
+    )
+    assert res["n_gold_sql_mismatch"] == 0
+
+
 def test_the_selfcheck_aggregate_reports_which_schemas_could_not_execute(monkeypatch):
     """`_datalake_gold_selfcheck` is what the run gates on. It has to surface exec
     failures per schema, not fold them into a rate computed over the survivors."""

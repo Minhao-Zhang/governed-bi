@@ -160,6 +160,11 @@ def hash_normalised_result_strict(rows) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def sql_sha256(sql: str) -> str:
+    """Identity of a gold statement, matching ``sql_sha256`` in the gold artifact."""
+    return hashlib.sha256(sql.encode("utf-8")).hexdigest()
+
+
 # --------------------------------------------------------------------------- #
 # Loaders + score
 # --------------------------------------------------------------------------- #
@@ -422,7 +427,39 @@ def validate_gold_hashes_live(
     This is the practical stand-in for a full ``grade_offline_eval.py`` handoff:
     it proves our vendored normalizer + live ``pg_rename_decoy`` agree with the
     precomputed ``gold_result_hashes_*.jsonl`` before any arm is scored.
+
+    Alongside the sampled execution it runs a *free, unsampled* statement-identity
+    sweep: the gold artifact records ``sql_sha256``, the digest of the exact
+    statement each hash was computed from, and nothing used to read it. If the gold
+    SQL we are about to submit is not that statement, the hash comparison is not a
+    comparison — a gold answer can be graded wrong against itself and look, on the
+    row, exactly like a wrong answer (``correct=False``, matching row counts, no
+    error). That is what a ``SELECT *`` gold on a decoy-bearing database did before
+    :func:`~.bird_loader.load_bird_items` learned to prefer the star-expanded twin.
+    Hashing every item's SQL costs nothing next to executing five of them, so the
+    sweep is not sampled: the sampled execution can only catch a mis-submission it
+    happens to draw, and this class of defect is a handful of questions in thousands.
     """
+    n_sql_mismatch = 0
+    sql_mismatch_ids: list[str] = []
+    for item in items:
+        ghash = gold_hashes.get(str(getattr(item, "question_id", "") or ""))
+        if ghash is None or not ghash.sql_sha256 or not item.sql:
+            continue
+        if sql_sha256(item.sql) != ghash.sql_sha256:
+            n_sql_mismatch += 1
+            if len(sql_mismatch_ids) < 5:
+                sql_mismatch_ids.append(str(item.question_id))
+    if n_sql_mismatch:
+        logger.warning(
+            "%d gold item(s) do not match the statement their gold hash was computed "
+            "from (sql_sha256 mismatch; e.g. %s). Those questions cannot be graded "
+            "correct by ANY arm, including the oracle — the gold hash describes a "
+            "different query. Check gold_star_expanded.jsonl and gold_sql_field.",
+            n_sql_mismatch,
+            ", ".join(sql_mismatch_ids),
+        )
+
     checked = 0
     matched = 0
     n_exec_errors = 0
@@ -470,6 +507,12 @@ def validate_gold_hashes_live(
         "n_exec_errors": n_exec_errors,
         "n_no_gold": n_no_gold,
         "n_unusable_gold": n_unusable,
+        # Swept over ALL ``items``, not just the executed sample — see the docstring.
+        # Non-zero means some questions are ungradeable for every arm, which is a
+        # different failure from "the normalizer disagrees" and must not be read off
+        # ``agree_rate``.
+        "n_gold_sql_mismatch": n_sql_mismatch,
+        "gold_sql_mismatch_ids": sql_mismatch_ids,
         "errors": errors[:5],
     }
 

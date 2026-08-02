@@ -141,6 +141,87 @@ def test_row_missing_sql_sqlite_raises_value_error_naming_question_id(tmp_path: 
 
 
 # --------------------------------------------------------------------------- #
+# `SELECT *` gold must be replaced by its star-expanded twin.
+#
+# The precomputed gold_result_hashes_rename_decoy.jsonl were computed from the
+# EXPANDED statement — its `sql_sha256` proves it: across the 6,743 gold rows the
+# digest equals sha256(sql_rename) for 6,740 and sha256(sql_rename_expanded) for the
+# other 3, with nothing unexplained. On a rename_decoy database the two are not the
+# same query: `SELECT *` also returns the injected decoy columns. Submitting the
+# unexpanded gold therefore produces a result the gold hash cannot match, and the
+# grader marks the ANSWER KEY wrong against itself — with `correct=False`,
+# `nrows_match=True` and no error, i.e. indistinguishable on the row from a model
+# that got it wrong. Observed on mondial_geo/train_8505 in the oracle_sql ladder
+# (7 columns submitted, 4 hashed).
+# --------------------------------------------------------------------------- #
+
+_STAR_ROW = {
+    "db_id": "mondial_geo",
+    "question": "Lists all governments with a parliamentary democracy.",
+    "question_id": "train_8505",
+    "difficulty": "",
+    "evidence": "",
+    "sql_base": 'SELECT * FROM "mondial_geo"."politics"',
+    "sql_rename": 'SELECT * FROM "mondial_geo"."zheng_zhi"',
+    "sql_sqlite": "SELECT * FROM politics",
+}
+
+_STAR_EXPANDED = {
+    "question_id": "train_8505",
+    "sql_base_expanded": 'SELECT "Country", "Government" FROM "mondial_geo"."politics"',
+    "sql_rename_expanded": (
+        'SELECT "guo_jia", "zheng_fu" FROM "mondial_geo"."zheng_zhi"'
+    ),
+}
+
+
+@pytest.fixture
+def star_dir(tmp_path: Path) -> Path:
+    from governed_bi.eval import bird_loader
+
+    bird_loader.clear_split_cache()
+    _write_jsonl(tmp_path / "test_final.jsonl", [_STAR_ROW])
+    _write_jsonl(tmp_path / "gold_star_expanded.jsonl", [_STAR_EXPANDED])
+    return tmp_path
+
+
+def test_star_gold_is_replaced_by_its_expanded_twin(star_dir: Path):
+    """Without this the oracle submits a query the gold hash was never taken of."""
+    items = load_bird_items(star_dir, "mondial_geo", gold_sql_field="sql_rename")
+    assert [it.sql for it in items] == [_STAR_EXPANDED["sql_rename_expanded"]]
+    assert "*" not in items[0].sql
+
+    base = load_bird_items(star_dir, "mondial_geo", gold_sql_field="sql_base")
+    assert [it.sql for it in base] == [_STAR_EXPANDED["sql_base_expanded"]]
+
+
+def test_sql_sqlite_is_not_expanded(star_dir: Path):
+    """The un-obfuscated vendored database has no decoy columns, so `SELECT *` there
+    is already the gold result; the sidecar ships no sqlite twin to substitute."""
+    items = load_bird_items(star_dir, "mondial_geo")
+    assert [it.sql for it in items] == ["SELECT * FROM politics"]
+
+
+def test_a_missing_star_sidecar_is_a_no_op(dataset_dir: Path):
+    """Fixtures and star-free datasets ship no sidecar; that must not raise."""
+    items = load_bird_items(dataset_dir, "beer_factory", gold_sql_field="sql_rename")
+    assert [it.sql for it in items] == [
+        "SELECT SUM(PurchasePrice) FROM decoy",
+        "SELECT COUNT(*) FROM decoy_c",
+    ]
+
+
+def test_a_question_absent_from_the_sidecar_keeps_its_own_sql(tmp_path: Path):
+    from governed_bi.eval import bird_loader
+
+    bird_loader.clear_split_cache()
+    _write_jsonl(tmp_path / "test_final.jsonl", [_STAR_ROW, _ROWS[0]])
+    _write_jsonl(tmp_path / "gold_star_expanded.jsonl", [_STAR_EXPANDED])
+    beer = load_bird_items(tmp_path, "beer_factory", gold_sql_field="sql_rename")
+    assert [it.sql for it in beer] == ["SELECT SUM(PurchasePrice) FROM decoy"]
+
+
+# --------------------------------------------------------------------------- #
 # Parse-once caching. The splits are ~9 MB / ~34 MB and a pooled run asks for them
 # dozens of times (per db per split, plus the disjointness assertion, plus
 # available_dbs), so this was tens of seconds of pure JSON parsing per run — paid
