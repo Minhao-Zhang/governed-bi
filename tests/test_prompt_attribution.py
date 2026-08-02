@@ -588,6 +588,8 @@ def _manifest(**over):
         # across the pair, or `comparable()` reports a question-pool difference the
         # test never intended to introduce.
         question_pool_hash="pool0000",
+        # Same again for the --questions probe-set identity (schema version 4).
+        question_subset=None,
         # Note governance joined MANIFEST_KNOBS, so these are required here too.
         # These tests are about the PROMPT stamp; the note knobs only need to be
         # present and identical across a pair, or `comparable()` reports a

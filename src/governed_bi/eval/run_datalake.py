@@ -938,6 +938,7 @@ def _prepare_scored_pool(
     *,
     limit: int | None,
     split: str,
+    question_ids: "frozenset[str] | None" = None,
 ) -> tuple[list[str], list[tuple[Any, str]], list[str], dict[str, Any]]:
     """Load the scored split, quarantine zero-question schemas, then check leakage.
 
@@ -952,17 +953,29 @@ def _prepare_scored_pool(
     routing. Tests that exercise this helper (or assert the driver still calls it)
     are what keep the wiring from silently disappearing.
     """
-    pairs = _pooled_items(dataset_dir, list(built), limit=limit, split=split)
+    pairs = _pooled_items(
+        dataset_dir, list(built), limit=limit, split=split, question_ids=question_ids
+    )
     servable, zero_question_dbs = _quarantine_zero_question_schemas(built, pairs)
     leakage = _assert_train_test_disjoint(dataset_dir, servable)
     return servable, pairs, zero_question_dbs, leakage
 
 
 def _pooled_items(
-    dataset_dir: Path, db_ids: list[str], *, limit: int | None, split: str = "test"
+    dataset_dir: Path,
+    db_ids: list[str],
+    *,
+    limit: int | None,
+    split: str = "test",
+    question_ids: "frozenset[str] | None" = None,
 ) -> list[tuple[Any, str]]:
     """Load one split's items for each db, tagged with their ``db_id`` (``EvalItem``
     carries no db_id). ``limit`` caps *per db* to keep a subset run balanced.
+
+    ``question_ids`` restricts the pool to an explicit id list (``--questions``). It
+    composes with ``db_ids`` but not with ``limit``: taking the first N per db of an
+    explicit list is a request nobody means, and the CLI refuses the pair rather than
+    guessing which one wins.
 
     ``split="train"`` scores the questions the curator itself was built from, so it
     is a **diagnostic**, not a held-out measurement — see :func:`run_datalake`.
@@ -980,7 +993,7 @@ def _pooled_items(
         if limit is not None:
             items = items[:limit]
         pairs.extend((it, db) for it in items)
-    return pairs
+    return _apply_question_subset(pairs, question_ids)
 
 
 def _assert_train_test_disjoint(dataset_dir: Path, db_ids: list[str]) -> dict[str, Any]:
@@ -1195,6 +1208,238 @@ def _question_scope_hash(pairs: "Sequence[tuple[Any, str]]") -> str:
     return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()[:16]
 
 
+# --------------------------------------------------------------------------- #
+# Question subsetting (E5) and the stratified draw both it and the capped
+# replicate (E6) use.
+# --------------------------------------------------------------------------- #
+
+
+def load_question_ids(path: Path | str) -> tuple[str, ...]:
+    """Question ids from a file, one per line. ``#`` comments and blanks ignored.
+
+    A file rather than a comma-separated argument because the motivating list is 131
+    ids long and the second use — a fixed probe set reused across experiments — wants
+    a thing that can be committed, diffed and referred to by name. A shell argument
+    can be none of those.
+
+    Only the first whitespace-separated token of a line is read, so a file may carry
+    ``<id>\\t<db_id>`` or ``<id>  # why`` for a human without a second format. The id
+    is what addresses a question; anything after it is commentary and is NOT checked
+    against the dataset, because a stale trailing db_id silently disagreeing with the
+    split would be worse than no annotation at all.
+
+    Duplicates are collapsed (the same question cannot be served twice in one arm —
+    ``correct_by_question`` raises on a repeated id) and reported, because a file
+    assembled by concatenating two attributions is the normal way this list is built.
+    Order is discarded: the pool is a set, and the run serves it in split order.
+    """
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(f"--questions file not found: {path}")
+    seen: dict[str, int] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        qid = line.split()[0]
+        seen[qid] = seen.get(qid, 0) + 1
+    if not seen:
+        raise ValueError(
+            f"--questions file {path} lists no question ids (blank lines and "
+            "'#' comments only). Serving nothing is never what was meant."
+        )
+    dupes = sorted(q for q, n in seen.items() if n > 1)
+    if dupes:
+        print(
+            f"  --questions: {len(dupes)} id(s) listed more than once, collapsed "
+            f"(e.g. {dupes[:5]})"
+        )
+    return tuple(sorted(seen))
+
+
+def question_subset_id(question_ids: "Sequence[str] | None") -> str | None:
+    """The manifest's ``question_subset`` value: ``'<n> ids @ <digest>'``, or ``None``.
+
+    Both halves earn their place. The digest is the identity — two runs over the same
+    probe set must match on it, and a run over a different 131 questions must not. The
+    count is there because this string is what a reader sees in ``comparable()``'s
+    refusal, and ``'131 ids @ 7f3a…' vs None`` says what happened in a way two bare
+    digests do not.
+
+    Hashes what was ASKED FOR, not what was found. ``question_pool_hash`` already
+    records what was served; this one has to stay stable across a re-run that narrows
+    ``--dbs``, or a probe set could not be recognised as itself.
+    """
+    if not question_ids:
+        return None
+    import hashlib
+
+    ids = sorted(set(question_ids))
+    digest = hashlib.sha256("\n".join(ids).encode("utf-8")).hexdigest()[:16]
+    return f"{len(ids)} ids @ {digest}"
+
+
+def stratified_sample(
+    pairs: "Sequence[tuple[Any, str]]",
+    *,
+    size: int,
+    seed: int,
+    by: str = "db",
+) -> list[tuple[Any, str]]:
+    """A seeded, reproducible ``size``-question draw, balanced across strata.
+
+    Stratified rather than a flat shuffle, and the reason is the same for both callers.
+    A capped replicate estimates the pipeline's discordance rate; that rate varies by
+    schema (schemas differ in width, ambiguity and how often the router lands on them),
+    so a draw that happens to over-weight three easy schemas produces a floor that is
+    not the pool's floor. A probe set has the same problem one layer up. Proportional
+    allocation removes the largest, cheapest chunk of that variance for the cost of a
+    sort.
+
+    Largest-remainder allocation: each stratum gets ``floor(share)`` questions, and the
+    leftover seats go to the strata with the largest fractional parts, ties broken by
+    stratum name so the result does not depend on dict ordering. Every stratum with at
+    least one question and a non-zero share keeps at least a chance of representation
+    through the remainder pass; nothing is force-included, because forcing one row per
+    stratum would over-weight the 3-question schemas the moment ``size`` drops below
+    the stratum count.
+
+    Deterministic given ``(pairs, size, seed, by)`` — the ids are sorted before the
+    shuffle, so the draw does not depend on the order the split file happened to be
+    read in.
+    """
+    import random
+
+    pairs = list(pairs)
+    if size >= len(pairs):
+        return pairs
+    if size <= 0:
+        return []
+
+    def _key(item: Any, db: str) -> str:
+        if by == "db":
+            return db
+        if by == "difficulty":
+            return str(getattr(item, "difficulty", None) or "unknown")
+        if by == "db+difficulty":
+            return f"{db}/{getattr(item, 'difficulty', None) or 'unknown'}"
+        raise ValueError(
+            f"unknown stratification {by!r}; choose db, difficulty or db+difficulty"
+        )
+
+    strata: dict[str, list[tuple[Any, str]]] = {}
+    for item, db in pairs:
+        strata.setdefault(_key(item, db), []).append((item, db))
+
+    total = len(pairs)
+    quotas: dict[str, int] = {}
+    remainders: list[tuple[float, str]] = []
+    for name, rows in strata.items():
+        exact = size * len(rows) / total
+        quotas[name] = min(len(rows), int(exact))
+        remainders.append((exact - int(exact), name))
+    # Largest fractional part first; the name is the tiebreak, ascending, so a tie is
+    # resolved the same way on every machine.
+    remainders.sort(key=lambda pair: (-pair[0], pair[1]))
+    short = size - sum(quotas.values())
+    for _frac, name in remainders:
+        if short <= 0:
+            break
+        if quotas[name] < len(strata[name]):
+            quotas[name] += 1
+            short -= 1
+
+    out: list[tuple[Any, str]] = []
+    for name in sorted(strata):
+        rows = sorted(
+            strata[name], key=lambda pair: str(pair[0].question_id or pair[0].question)
+        )
+        rng = random.Random(f"{seed}:{name}")
+        rng.shuffle(rows)
+        out.extend(rows[: quotas[name]])
+    return out
+
+
+def _narrow_dbs_to_subset(
+    dataset_dir: Path,
+    wanted: "Sequence[str]",
+    question_ids: "frozenset[str]",
+    *,
+    split: str,
+) -> list[str]:
+    """The schemas a ``--questions`` subset actually touches, verifying every id exists.
+
+    Two jobs, and the first is the whole economic point of ``--questions``. The build
+    phase is a deep-agent curator pass **per schema per arm** and is the dominant cost
+    of a scale run; a 131-question probe set typically touches half the pool, so
+    narrowing here is a larger saving than the serve pass the flag was asked for.
+
+    The second is refusing to guess. An id that matches nothing in this split is a
+    typo, a train id in a test run, or a list built against a dataset that has since
+    been refiltered — and the alternative to raising is a run that quietly serves 129
+    of 131 questions and reports a number for a pool nobody asked for. The message
+    separates "not in this split at all" from "in the split but outside the schemas
+    ``--dbs`` / ``--limit-dbs`` left", because those have different fixes.
+    """
+    by_db: dict[str, list[str]] = {}
+    for db in sorted(available_dbs(dataset_dir, split)):
+        hits = [
+            str(it.question_id or it.question)
+            for it in load_bird_items(
+                dataset_dir, db, split=split, gold_sql_field="sql_rename"
+            )
+            if str(it.question_id or it.question) in question_ids
+        ]
+        if hits:
+            by_db[db] = hits
+
+    found = {qid for hits in by_db.values() for qid in hits}
+    absent = sorted(question_ids - found)
+    if absent:
+        raise ValueError(
+            f"{len(absent)} of {len(question_ids)} --questions id(s) are not in the "
+            f"{split!r} split at all (e.g. {absent[:5]}). Serving a silently smaller "
+            "subset would report a number for a pool nobody chose; fix the file, or "
+            "check it was not built against the other split or a pre-refilter dataset."
+        )
+
+    keep = [db for db in wanted if db in by_db]
+    excluded = sorted(set(by_db) - set(wanted))
+    if excluded:
+        lost = sorted(q for db in excluded for q in by_db[db])
+        raise ValueError(
+            f"{len(lost)} --questions id(s) live in {len(excluded)} schema(s) this run "
+            f"excluded ({excluded[:5]}): --dbs / --limit-dbs and the id list disagree. "
+            "Drop the schema flags and let --questions decide the pool, or trim the "
+            "file — silently scoring the intersection would make the run's own "
+            "question_subset a claim about questions it never served."
+        )
+    print(
+        f"  --questions: {len(found)} question(s) across {len(keep)} schema(s) "
+        f"(narrowed from {len(wanted)}; the build phase pays per schema)"
+    )
+    return keep
+
+
+def _apply_question_subset(
+    pairs: "Sequence[tuple[Any, str]]",
+    question_ids: "frozenset[str] | None",
+) -> list[tuple[Any, str]]:
+    """``pairs`` restricted to ``question_ids``, or ``pairs`` when there is no subset.
+
+    Kept beside :func:`_pooled_items` rather than inside it because two call sites need
+    the same filter over pairs they already hold, and a filter spelled twice is how the
+    scope hash and the served pool would come to disagree.
+    """
+    if question_ids is None:
+        return list(pairs)
+    return [
+        (item, db)
+        for item, db in pairs
+        if str(item.question_id or item.question) in question_ids
+    ]
+
+
 def _build_manifest(
     *,
     bird_dir: Path,
@@ -1226,6 +1471,10 @@ def _build_manifest(
     # dataset is filtered upstream, so this is the only field that moves when the
     # question pool does.
     question_pool_hash: str | None,
+    # The ``--questions`` probe set's identity, or ``None``. A gate key, so required
+    # here for the same reason ``question_pool_hash`` is — see
+    # ``metrics.build_manifest``.
+    question_subset: str | None,
     # ADR 0003 note governance, as ``Settings`` has it for this run. Gate keys, so
     # required here for the same reason ``question_pool_hash`` is: ``pin_triggers_enabled``
     # decides whether the corpus's authored triggers fire at all, and it moves the
@@ -1257,6 +1506,8 @@ def _build_manifest(
     arms: tuple[str, ...] = (),
     oracles: tuple[str, ...] = (),
     replicate_of: str | None = None,
+    replicate_limit: int | None = None,
+    replicate_sample_seed: int | None = None,
     db_ids: list[str] | None = None,
     limit: int | None = None,
     limit_dbs: int | None = None,
@@ -1289,6 +1540,7 @@ def _build_manifest(
         schema_pick_max_columns=schema_pick_max_columns,
         use_embedder=use_embedder,
         question_pool_hash=question_pool_hash,
+        question_subset=question_subset,
         always_note_global_max=always_note_global_max,
         always_note_char_max=always_note_char_max,
         pin_triggers_enabled=pin_triggers_enabled,
@@ -1298,6 +1550,8 @@ def _build_manifest(
         arms=arms,
         oracles=oracles,
         replicate_of=replicate_of,
+        replicate_limit=replicate_limit,
+        replicate_sample_seed=replicate_sample_seed,
         # ``None`` means "the whole split", which is different from an empty list.
         db_ids=None if db_ids is None else sorted(db_ids),
         limit=limit,
@@ -1397,9 +1651,20 @@ def _check_resume_manifest(
         ("arms", "--arms"),
         ("oracles", "--oracle"),
         ("replicate_of", "--replicate"),
+        # Both halves of the capped replicate. ``question_scope_hash`` below does not
+        # move with either — the fair pool is unchanged — so without these a resume
+        # could quietly serve the rest of a 300-question replicate as a 1351-question
+        # one and leave the manifest claiming the cap. The floor's coverage is the
+        # single number a reader weighs every resolution verdict against.
+        ("replicate_limit", "--replicate-limit"),
+        ("replicate_sample_seed", "--sample-seed"),
         ("db_ids", "--dbs"),
         ("limit", "--limit"),
         ("limit_dbs", "--limit-dbs"),
+        # Named separately from ``question_scope_hash`` even though a changed subset
+        # moves both: this is the one an operator can act on, because it names the flag
+        # they left off the resume line.
+        ("question_subset", "--questions"),
         ("question_scope_hash", "question pool"),
     ):
         if key not in prior:
@@ -2943,6 +3208,11 @@ def run_datalake(
     arms: tuple[str, ...] = _ARMS,
     limit_dbs: int | None = None,
     limit: int | None = None,
+    # Serve EXACTLY these question ids (``--questions``) instead of the whole split.
+    # ``None`` = no subset. Narrows ``db_ids`` as a side effect: a 131-question probe
+    # set that touches 30 schemas must not pay for a curator pass on the other 39, and
+    # the build phase is the run's dominant cost.
+    question_ids: frozenset[str] | None = None,
     # Tool-call budget per curator invoke. ``None`` (the default, and what an unset
     # ``--max-agent-steps`` gives) derives it per schema from that schema's size; an
     # explicit int is an operator override that caps cost for every schema alike.
@@ -3008,6 +3278,23 @@ def run_datalake(
     # run could resolve, because the proxy drops temperature and the sampling cannot
     # be pinned. Without it, comparisons report significance but not resolution.
     replicate_of: str | None = None,
+    # Cap the REPLICATE arm at this many questions (``--replicate-limit``); ``None`` =
+    # a full second pass. The economy this exists for: the discordance *rate* is a
+    # property of the pipeline and travels between populations, while ``n_pairs`` is a
+    # property of the population under test and does not (``power.detectable_effect_for``
+    # is where that distinction is enforced). So a cheap replicate can estimate the rate
+    # while every comparison's minimum detectable effect is still evaluated at its own
+    # full population — no comparison's threshold shrinks because the replicate did.
+    #
+    # What a cap genuinely costs is precision in the rate, and that is recorded rather
+    # than hidden: ``detectable.floor_n_pairs`` / ``floor_coverage`` /
+    # ``floor_is_subsampled`` per comparison, ``replicate_limit`` in the manifest.
+    replicate_limit: int | None = None,
+    # Seed for the db-stratified draw behind ``replicate_limit`` (and, in the CLI, behind
+    # ``--write-question-sample``). Stratified and seeded because discordance varies by
+    # schema: a flat "first N" draw would estimate the rate on whichever schemas sort
+    # first, and an unseeded one could not be re-measured.
+    sample_seed: int = 0,
     # Counterfactual rungs to serve alongside the fair arms (``oracle_sql``,
     # ``oracle_schema``, ``oracle_tables``). Each hands one stage the gold answer and
     # re-measures, so its lift IS that stage's headroom rather than an estimate
@@ -3110,6 +3397,8 @@ def run_datalake(
     wanted = db_ids if db_ids is not None else sorted(available_dbs(dataset_dir, split))
     if limit_dbs is not None:
         wanted = wanted[:limit_dbs]
+    if question_ids is not None:
+        wanted = _narrow_dbs_to_subset(dataset_dir, wanted, question_ids, split=split)
     # Requested but not loaded. This is a *third* kind of attrition, distinct from the
     # two that already have gates: a schema absent from Postgres never enters ``wanted``,
     # so neither the build-coverage check nor the gold share can see it — both measure
@@ -3214,7 +3503,9 @@ def run_datalake(
     # would be missing in exactly the case resume exists for.)
     # Scope hash over the effective pool AFTER ``limit_dbs`` and Postgres filtering,
     # so a resume that changes caps fails before build/serve spend.
-    scope_pairs = _pooled_items(dataset_dir, wanted, limit=limit, split=split)
+    scope_pairs = _pooled_items(
+        dataset_dir, wanted, limit=limit, split=split, question_ids=question_ids
+    )
     manifest = _build_manifest(
         bird_dir=bird_dir,
         split=split,
@@ -3264,9 +3555,15 @@ def run_datalake(
         arms=arms,
         oracles=oracles,
         replicate_of=replicate_of,
+        replicate_limit=replicate_limit,
+        replicate_sample_seed=sample_seed,
         db_ids=db_ids,
         limit=limit,
         limit_dbs=limit_dbs,
+        # What was ASKED FOR, so a probe set stays recognisable as itself even when the
+        # split's rows move underneath it. ``question_scope_hash`` /
+        # ``question_pool_hash`` below record what was actually resolved.
+        question_subset=question_subset_id(sorted(question_ids) if question_ids else None),
         question_scope_hash=_question_scope_hash(scope_pairs),
         # Same rows as the scope hash, plus the gold each is graded against. Both come
         # off ``scope_pairs``, which is already in memory, so the dataset is not read
@@ -3303,7 +3600,9 @@ def run_datalake(
     print(f"  gold pre-flight over {len(wanted)} schema(s)...")
     _assert_gold_is_trustworthy(
         _datalake_gold_selfcheck(
-            _pooled_items(dataset_dir, wanted, limit=limit, split=split),
+            _pooled_items(
+                dataset_dir, wanted, limit=limit, split=split, question_ids=question_ids
+            ),
             preflight_gold,
             pg_dsn,
             preflight_identity,
@@ -3419,7 +3718,7 @@ def run_datalake(
     # pool census against a denominator that never includes them. Leakage runs
     # on the servable set only (see :func:`_prepare_scored_pool`).
     built, pairs, zero_question_dbs, leakage = _prepare_scored_pool(
-        dataset_dir, built, limit=limit, split=split
+        dataset_dir, built, limit=limit, split=split, question_ids=question_ids
     )
     # The FINE form of leakage the id check cannot see: a scored question whose gold
     # statement already exists in train, modulo literals. Not a gate — twins are a
@@ -3659,9 +3958,22 @@ def run_datalake(
             else None
         )
         serve_order.extend(oracle_rungs)
+        replicate_pairs = pairs
         if replicate_of:
             # Validated before the build phase, above.
             serve_order.append(f"{replicate_of}__replicate")
+            if replicate_limit is not None and replicate_limit < len(pairs):
+                replicate_pairs = stratified_sample(
+                    pairs, size=replicate_limit, seed=sample_seed, by="db"
+                )
+                print(
+                    f"  replicate capped: {len(replicate_pairs)} of {len(pairs)} "
+                    f"question(s), db-stratified, seed={sample_seed}. The discordance "
+                    "RATE it measures travels to every comparison; each comparison's "
+                    "minimum detectable effect is still evaluated at its own full "
+                    "population, so no threshold shrinks with this cap. What does "
+                    "shrink is confidence in the rate — see detectable.floor_coverage."
+                )
 
         for arm in serve_order:
             # A replicate serves its source arm's corpus; only the name differs, and
@@ -3754,7 +4066,12 @@ def run_datalake(
             _rows, summary = _run_pool_arm(
                 arm=arm,
                 solver=solver,
-                pairs=pairs,
+                # The replicate is the ONE arm whose pool may be smaller than the
+                # scored pool. Every fair arm and every oracle rung serves ``pairs``,
+                # so the populations the comparisons are counted over are untouched by
+                # ``--replicate-limit``; ``mcnemar`` intersects question ids, so the
+                # replicate-vs-source pair narrows to the cap by itself.
+                pairs=replicate_pairs if arm.endswith("__replicate") else pairs,
                 gold_hashes=gold_hashes,
                 gateway=gateway,
                 identity=identity,
@@ -4088,6 +4405,62 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--limit-dbs", type=int, default=None, help="Cap the number of dbs")
     p.add_argument("--limit", type=int, default=None, help="Cap questions PER db")
     p.add_argument(
+        "--questions",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=(
+            "Serve EXACTLY the question ids in FILE (one per line; blank lines and "
+            "'#' comments ignored, text after the id is free-form). Also narrows the "
+            "schemas built, so a 131-question probe over half the pool skips the other "
+            "half's curator passes. Every id must exist in the split or the run "
+            "refuses. NOT comparable to a full-split run: the manifest records the "
+            "subset's identity and the ledger refuses the pair, because a subset picked "
+            "for a reason is a biased sample of the split. Incompatible with --limit."
+        ),
+    )
+    p.add_argument(
+        "--write-question-sample",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=(
+            "Write a seeded, db-stratified sample of --sample-size question ids to "
+            "FILE and exit without serving anything. Needs no Postgres and no model. "
+            "The point is a FIXED probe set: commit the file, pass it to --questions "
+            "on every experiment, and successive runs measure the same questions "
+            "instead of each drawing its own sample."
+        ),
+    )
+    p.add_argument(
+        "--sample-size",
+        type=int,
+        default=None,
+        help="How many question ids --write-question-sample draws (required with it)",
+    )
+    p.add_argument(
+        "--sample-seed",
+        type=int,
+        default=0,
+        help=(
+            "Seed for --write-question-sample and for --replicate-limit's draw "
+            "(default 0). Recorded in the manifest when it drew a capped replicate, "
+            "and written into the sample file's header otherwise, so either draw can "
+            "be reproduced."
+        ),
+    )
+    p.add_argument(
+        "--stratify",
+        choices=("db", "difficulty", "db+difficulty"),
+        default="db",
+        help=(
+            "What --write-question-sample balances across (default db). Schema is the "
+            "dimension that moves accuracy most here, so db is the default; "
+            "db+difficulty gives finer balance and needs a larger --sample-size to "
+            "fill every cell."
+        ),
+    )
+    p.add_argument(
         "--max-agent-steps",
         type=int,
         default=None,
@@ -4210,7 +4583,10 @@ def main(argv: list[str] | None = None) -> int:
             "Serve every question even after the crash rate says the run is lost. Off "
             "by default: the build phase has refused to spend on a doomed pool since "
             "--assert-build-coverage, and serve is where the money goes — the "
-            "2026-07-31 incident ran an arm to 48% crashed over two hours before "
+            # ``48%%``, not ``48%``. argparse interpolates help text through ``%``, so
+            # a bare one followed by a letter is a format code: ``48% crashed`` became
+            # ``%c`` and made --help itself raise TypeError. Same bug, second instance.
+            "2026-07-31 incident ran an arm to 48%% crashed over two hours before "
             "crash_rate > 0 disqualified it from summary.json. Pass this when "
             "finishing a crashed arm is the point (reproducing a provider fault). See "
             "governed_bi.eval.serve_breaker for what trips it and how often."
@@ -4248,6 +4624,23 @@ def main(argv: list[str] | None = None) -> int:
             "the run reports p-values but cannot say what size of effect it was "
             "able to resolve — the gap that let a null result inside the noise be "
             "published as a finding."
+        ),
+    )
+    p.add_argument(
+        "--replicate-limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Cap --replicate at N questions (db-stratified, seeded by --sample-seed) "
+            "instead of a full second pass. Sound because the two inputs to a minimum "
+            "detectable effect come from different places: the discordance RATE is a "
+            "property of the pipeline and travels between populations, while n_pairs "
+            "is a property of the population under test and does not — so each "
+            "comparison's threshold is still evaluated at its own full population and "
+            "no delta becomes resolvable by shrinking the replicate. What the cap "
+            "costs is precision in the rate, recorded per comparison as "
+            "detectable.floor_n_pairs / floor_coverage / floor_is_subsampled."
         ),
     )
     p.add_argument(
@@ -4314,6 +4707,48 @@ def main(argv: list[str] | None = None) -> int:
         p.error(f"--arms must be a subset of {_ARMS}; unknown: {bad}")
     if args.resume_from is not None and args.no_resume:
         p.error("--resume-from and --no-resume are contradictory")
+    if args.questions is not None and args.limit is not None:
+        # Refused rather than ordered. "The first N per db OF an explicit id list" is
+        # not a request anyone means, and either resolution order silently serves a
+        # pool the operator did not choose — which is the whole failure --questions
+        # exists to remove.
+        p.error(
+            "--questions and --limit are contradictory: --limit takes the first N "
+            "questions per schema, and --questions already names exactly which "
+            "questions to serve. Drop one."
+        )
+    if args.replicate_limit is not None:
+        if args.replicate is None:
+            p.error("--replicate-limit needs --replicate: there is nothing to cap")
+        if args.replicate_limit < 1:
+            p.error(f"--replicate-limit must be at least 1, got {args.replicate_limit}")
+    if args.sample_size is not None and args.write_question_sample is None:
+        p.error("--sample-size only applies to --write-question-sample")
+    if args.write_question_sample is not None and args.sample_size is None:
+        p.error("--write-question-sample needs --sample-size")
+    if args.write_question_sample is not None:
+        if args.split == "both":
+            p.error(
+                "--write-question-sample draws from ONE split; pass --split test or "
+                "--split train"
+            )
+        # Before any Postgres probe, model load or run directory: this mode reads the
+        # split files and nothing else, so it must cost nothing and leave nothing.
+        return _write_question_sample(
+            bird_dir=args.bird_dir.resolve(),
+            out_path=args.write_question_sample,
+            split=args.split,
+            size=args.sample_size,
+            seed=args.sample_seed,
+            stratify=args.stratify,
+            db_ids=[d.strip() for d in args.dbs.split(",")] if args.dbs else None,
+            limit_dbs=args.limit_dbs,
+        )
+    question_ids = (
+        frozenset(load_question_ids(args.questions))
+        if args.questions is not None
+        else None
+    )
     try:
         prompt_overrides = parse_cli_overrides(args.prompt)
     except (KeyError, ValueError) as err:
@@ -4388,6 +4823,7 @@ def main(argv: list[str] | None = None) -> int:
             prompt_overrides=prompt_overrides,
             workers=workers,
             build_workers=build_workers,
+            question_ids=question_ids,
         )
         results[split] = result
     if len(splits) > 1:
@@ -4403,6 +4839,67 @@ def main(argv: list[str] | None = None) -> int:
     # signal stops meaning anything. Only the held-out split gates.
     gating = results.get("test") or results[splits[0]]
     return 0 if gating.get("quotable", True) else 2
+
+
+def _write_question_sample(
+    *,
+    bird_dir: Path,
+    out_path: Path,
+    split: str,
+    size: int,
+    seed: int,
+    stratify: str,
+    db_ids: list[str] | None,
+    limit_dbs: int | None,
+) -> int:
+    """Write a reproducible stratified probe set and exit. Returns a process code.
+
+    A generator rather than a documented recipe, because the value of a probe set is
+    that successive experiments measure the SAME questions: an ad-hoc draw per run
+    reintroduces between-run sampling variance on top of the pipeline noise the whole
+    power apparatus exists to account for. Committing this file is the point.
+
+    Serves nothing, opens no database and loads no model — it reads the split files.
+    The header records dataset, split, size, seed and stratification so the file can be
+    regenerated from itself, and so a reviewer can tell a principled sample from a
+    hand-edited list.
+    """
+    dataset_dir = bird_dir / "eval_dataset"
+    dbs = db_ids if db_ids is not None else sorted(available_dbs(dataset_dir, split))
+    if limit_dbs is not None:
+        dbs = dbs[:limit_dbs]
+    pairs = _pooled_items(dataset_dir, list(dbs), limit=None, split=split)
+    if not pairs:
+        raise RuntimeError(
+            f"no questions in split {split!r} for {len(dbs)} schema(s); nothing to sample"
+        )
+    if size > len(pairs):
+        raise ValueError(
+            f"--sample-size {size} exceeds the {len(pairs)} question(s) available in "
+            f"split {split!r} across {len(dbs)} schema(s). A 'sample' of everything is "
+            "the split; drop the flag."
+        )
+    drawn = stratified_sample(pairs, size=size, seed=seed, by=stratify)
+    n_dbs = len({db for _item, db in drawn})
+    lines = [
+        "# governed-bi eval question sample — pass to --questions",
+        f"# split={split} size={len(drawn)} seed={seed} stratify={stratify}",
+        f"# drawn from {len(pairs)} question(s) across {len(dbs)} schema(s); "
+        f"covers {n_dbs}",
+        f"# subset identity: {question_subset_id([str(i.question_id or i.question) for i, _ in drawn])}",
+        "# regenerate: --write-question-sample <this file> with the same flags",
+    ]
+    for item, db in sorted(
+        drawn, key=lambda pair: (pair[1], str(pair[0].question_id or pair[0].question))
+    ):
+        lines.append(f"{item.question_id or item.question}\t# {db}")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(out_path, "\n".join(lines) + "\n")
+    print(
+        f"wrote {len(drawn)} question id(s) across {n_dbs} schema(s) -> {out_path} "
+        f"(split={split}, seed={seed}, stratify={stratify})"
+    )
+    return 0
 
 
 def _score_one_split(
@@ -4425,6 +4922,10 @@ def _score_one_split(
     prompt_overrides: dict[str, str],
     workers: int,
     build_workers: int,
+    # Read from the ``--questions`` file ONCE in ``main``, for the reason every other
+    # resolved argument here is: two derivations of one pool is how the two splits of a
+    # single run could disagree about what they measured.
+    question_ids: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     """One split's build-or-reuse, serve, score and report.
 
@@ -4444,6 +4945,7 @@ def _score_one_split(
             arms=arms,
             limit_dbs=args.limit_dbs,
             limit=args.limit,
+            question_ids=question_ids,
             max_agent_steps=args.max_agent_steps,
             oracle_only=args.oracle_only,
             resume=not args.no_resume,
@@ -4464,6 +4966,8 @@ def _score_one_split(
             serve_breaker=not args.no_serve_breaker,
             prompt_variants=prompt_overrides,
             replicate_of=args.replicate,
+            replicate_limit=args.replicate_limit,
+            sample_seed=args.sample_seed,
             oracles=oracles,
             reuse_corpus=reuse_corpus,
         )

@@ -185,6 +185,30 @@ class DetectableEffect:
     #: measured on 1351 questions from one measured on 200.
     floor_n_pairs: int | None = None
 
+    @property
+    def floor_is_subsampled(self) -> bool:
+        """True when the rate came from FEWER questions than the comparison covers.
+
+        The state ``--replicate-limit`` creates deliberately, and the one the whole
+        ``floor_n_pairs`` apparatus exists to keep visible. It changes nothing about
+        whether :attr:`questions` is right — that is evaluated at :attr:`n_pairs`,
+        the population under test, per :func:`detectable_effect_for` — but it does
+        change how much to trust it: the threshold is proportional to
+        ``sqrt(rate)``, and a rate estimated on 300 questions carries a relative
+        standard error of roughly ``sqrt((1-p)/(p*300))``, about 15% at p=0.18. So a
+        verdict that lands within a few percent of the line was decided by the
+        replicate's own sampling noise as much as by the effect.
+
+        Reported rather than corrected. Widening the threshold by the rate's own
+        uncertainty is defensible and is a different, larger change; saying the
+        number is softer than it looks costs one boolean.
+        """
+        return (
+            self.floor_n_pairs is not None
+            and self.n_pairs > 0
+            and self.floor_n_pairs < self.n_pairs
+        )
+
     def resolves(self, net_questions: int) -> bool:
         if not self.measured or self.questions is None:
             return False
@@ -198,16 +222,34 @@ class DetectableEffect:
             )
         if self.resolves(net_questions):
             if self.from_zero_discordance:
-                return (
+                return self._qualify(
                     "resolvable against a rule-of-three bound: the replicate showed "
                     "no disagreement at all, so the floor is the most noise that "
                     "could hide behind that, not a measured one"
                 )
-            return "resolvable"
-        return (
+            return self._qualify("resolvable")
+        return self._qualify(
             f"below resolution: {abs(net_questions)} questions vs a minimum "
             f"detectable {self.questions:.0f} — this run cannot tell this "
             f"difference from sampling noise in either direction"
+        )
+
+    def _qualify(self, reading: str) -> str:
+        """Append the capped-replicate caveat, when there is one.
+
+        The threshold itself is already honest — :func:`detectable_effect_for`
+        evaluates it at this comparison's ``n_pairs``, never at the replicate's. What
+        a capped replicate costs is confidence in the *rate*, and that has to travel
+        with the sentence a reader quotes rather than sit in a field they have to go
+        looking for.
+        """
+        if not self.floor_is_subsampled:
+            return reading
+        return (
+            f"{reading} — but the discordance rate behind this threshold was "
+            f"estimated on {self.floor_n_pairs} replicate questions, not the "
+            f"{self.n_pairs} this comparison covers, so the threshold is itself a "
+            "noisier estimate than a full replicate would give"
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -231,6 +273,10 @@ class DetectableEffect:
                 if not self.floor_n_pairs or not self.n_pairs
                 else round(self.floor_n_pairs / self.n_pairs, 4)
             ),
+            # The one-boolean form of the line above, so a reader scanning for "is
+            # anything odd about this run" does not have to compute a ratio in their
+            # head. See :attr:`floor_is_subsampled`.
+            "floor_is_subsampled": self.floor_is_subsampled,
         }
 
 

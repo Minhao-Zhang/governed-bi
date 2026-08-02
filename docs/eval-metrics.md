@@ -16,7 +16,7 @@ documented subset of `summary.json`, so "declared but absent" is expected there.
 
 | Artifact | Fields | Consumer |
 |---|---|---|
-| `manifest.json` | 49 (44 in every run) | `index.COMPARABILITY_KEYS`, `index.RESUME_DRIFT_KEYS` |
+| `manifest.json` | 52 (47 in every run) | `index.COMPARABILITY_KEYS`, `index.RESUME_DRIFT_KEYS` |
 | `generations.<arm>.jsonl` | 79 per (question, arm) | `_summarise_rows`, `analysis`, `power`, `error_taxonomy` |
 | `summary.json` | 100 | `index.quotable` |
 | `stage_events.jsonl` | 9 per (question, arm, stage) | read by hand; per-stage latency attribution |
@@ -84,6 +84,7 @@ joins the comparability gate by default instead of silently skipping it.
 | `prompt_set_hash` | hash of the prompt TEXT, so an in-place edit moves it |
 | `corpus_content_hash` | digest of the served corpora — the treatment itself |
 | `question_pool_hash` | digest of the graded questions AND the gold each is graded against, so a refiltered dataset stops comparing as the same experiment |
+| `question_subset` | identity of an explicit --questions id list ('<n> ids @ <digest>'), None when the run served the whole split under its caps. A knob and not scope: a subset is chosen for a REASON — the 131 questions an intervention could move — so its EX is a biased sample of the split's and the two are different quantities. question_pool_hash refuses the pair on its own; this says why in words |
 | `git_sha` | the commit that produced the run |
 | `route_top_k` | schema shortlist size; None when routing is bypassed |
 | `route_llm_pick` | LLM picks one schema; None when routing is bypassed |
@@ -107,6 +108,8 @@ false record no presence check can catch.
 | `arms` | the arms served |
 | `oracles` | oracle rungs served |
 | `replicate_of` | the arm re-served to measure the noise floor |
+| `replicate_limit` | questions the REPLICATE arm served, when capped below the scored pool; None = a full replicate. Scope and deliberately NOT a comparability knob: it changes how precisely this run estimated the discordance rate, never what any fair arm served, so two runs that differ only here are still the same experiment. What it costs is recorded per comparison instead — `detectable.floor_n_pairs` / `floor_coverage` / `floor_is_subsampled` |
+| `replicate_sample_seed` | seed for the db-stratified draw that picked the capped replicate's questions; None when there was no cap. Recorded so the draw is reproducible — a cap with an unrecorded seed is a floor nobody can re-measure |
 | `db_ids` | schemas in the pool |
 | `limit` | per-schema question cap |
 | `limit_dbs` | schema cap |

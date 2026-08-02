@@ -581,6 +581,10 @@ def test_every_resume_drift_key_is_actually_checked(tmp_path, key, label):
                 "route_llm_pick": True, "schema_pick_max_columns": 12,
                 "use_embedder": True, "corpus_content_hash": "c0",
                 "llm_temperature": 0.0, "question_pool_hash": "pool0",
+                # An explicit --questions probe set. A real value rather than None
+                # for the same reason as the note knobs below: this test flips each
+                # key in turn, and the flip has to be typeable.
+                "question_subset": "131 ids @ 7f3a2b1c9d0e4f56",
                 # Note governance (ADR 0003). Present with real values rather than
                 # None, because this test flips each key in turn and a None start
                 # would make the flip untypeable for the int knobs.
@@ -1012,6 +1016,7 @@ def test_oracle_only_empty_arms_records_no_model_via_build_manifest():
         use_embedder=False,
         serve_workers=1,
         question_pool_hash="pool0000",
+        question_subset=None,
         arms=(),
         oracles=("oracle_sql",),
         **_NOTES,
@@ -1040,6 +1045,7 @@ def test_oracle_only_empty_arms_records_no_model_via_build_manifest():
             use_embedder=False,
             serve_workers=1,
             question_pool_hash="pool0000",
+            question_subset=None,
             arms=("baseline",),
             oracles=(),
             **_NOTES,

@@ -334,6 +334,7 @@ def test_manifest_records_limit_caps_and_scope_hash():
         use_embedder=True,
         serve_workers=1,
         question_pool_hash="pool0000",
+        question_subset=None,
         always_note_global_max=8,
         always_note_char_max=2000,
         pin_triggers_enabled=False,

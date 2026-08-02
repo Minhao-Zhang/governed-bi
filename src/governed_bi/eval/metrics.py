@@ -130,6 +130,17 @@ class Metric:
 #: comparability gate. ``llm_temperature`` one line above got exactly this treatment
 #: at AUDIT E5 and the rule was not carried to its neighbours.
 #:
+#: ``4`` adds ``question_subset``: the identity of an explicit question-id list served
+#: instead of the whole (capped) split, which ``--questions`` introduced. A subset run
+#: is a real measurement of the questions it served and a biased sample of everything
+#: else — the motivating case picks the 131 questions an intervention could plausibly
+#: move — so its headline is not the split's headline and the two must not be quoted in
+#: one sentence. ``question_pool_hash`` already moves when the pool does and would have
+#: refused the pair on its own; this knob is what makes the refusal READABLE, turning
+#: ``question pool: 'a1b2…' vs '9f8e…'`` (two digests, no story) into ``question subset:
+#: None vs '131 ids @ 7f3a…'``. A knob rather than scope, because scope is only checked
+#: within one directory on resume and this difference matters between runs.
+#:
 #: An integer rather than a date, because the only question anyone asks of it is
 #: "is this at least version N" and a date invites string comparison.
 #:
@@ -138,7 +149,7 @@ class Metric:
 #: ``MANIFEST_KNOBS`` name set must equal ``_SNAPSHOTS[MANIFEST_SCHEMA_VERSION]``.
 #: Changing a knob without bumping (or without registering a new snapshot)
 #: fails closed for every version, not only v1→v2.
-MANIFEST_SCHEMA_VERSION = 3
+MANIFEST_SCHEMA_VERSION = 4
 
 #: The version stamp itself. Not a knob and not operational: it says how much the
 #: other fields can be trusted.
@@ -190,6 +201,14 @@ MANIFEST_KNOBS: tuple[Metric, ...] = (
         "digest of the graded questions AND the gold each is graded against, so a "
         "refiltered dataset stops comparing as the same experiment",
     ),
+    Metric(
+        "question_subset",
+        "identity of an explicit --questions id list ('<n> ids @ <digest>'), None when "
+        "the run served the whole split under its caps. A knob and not scope: a subset "
+        "is chosen for a REASON — the 131 questions an intervention could move — so its "
+        "EX is a biased sample of the split's and the two are different quantities. "
+        "question_pool_hash refuses the pair on its own; this says why in words",
+    ),
     Metric("git_sha", "the commit that produced the run"),
     Metric("route_top_k", "schema shortlist size; None when routing is bypassed"),
     Metric("route_llm_pick", "LLM picks one schema; None when routing is bypassed"),
@@ -235,6 +254,21 @@ MANIFEST_SCOPE: tuple[Metric, ...] = (
     Metric("arms", "the arms served"),
     Metric("oracles", "oracle rungs served"),
     Metric("replicate_of", "the arm re-served to measure the noise floor"),
+    Metric(
+        "replicate_limit",
+        "questions the REPLICATE arm served, when capped below the scored pool; None "
+        "= a full replicate. Scope and deliberately NOT a comparability knob: it "
+        "changes how precisely this run estimated the discordance rate, never what any "
+        "fair arm served, so two runs that differ only here are still the same "
+        "experiment. What it costs is recorded per comparison instead — "
+        "`detectable.floor_n_pairs` / `floor_coverage` / `floor_is_subsampled`",
+    ),
+    Metric(
+        "replicate_sample_seed",
+        "seed for the db-stratified draw that picked the capped replicate's questions; "
+        "None when there was no cap. Recorded so the draw is reproducible — a cap with "
+        "an unrecorded seed is a floor nobody can re-measure",
+    ),
     Metric("db_ids", "schemas in the pool"),
     Metric("limit", "per-schema question cap"),
     Metric("limit_dbs", "schema cap"),
@@ -428,6 +462,14 @@ def build_manifest(
     # (rows whose gold SQL contradicts their ``evidence`` are dropped), so the pool moves
     # without any knob in this repo changing, and nothing else in the manifest notices.
     question_pool_hash: str | None,
+    # The identity of an explicit ``--questions`` id list, or ``None`` for "the whole
+    # split under whatever caps were set". Required for the reason every other gate key
+    # is: a default of ``None`` here would record "no subset" for a run that served 131
+    # hand-picked questions, and ``comparable()`` reads ``None`` on both sides as
+    # agreement — so a probe set and a full ladder would compare as one experiment on
+    # this key. (``question_pool_hash`` would still catch them; a gate that only works
+    # because its neighbour does is not a gate.)
+    question_subset: str | None,
     # Note governance (ADR 0003), as ``Settings`` had it at serve time. Required, not
     # defaulted, for the reason the whole register is: ``pin_triggers_enabled`` reached
     # eval as a dataclass default that nothing could change, and the manifest carried
@@ -464,6 +506,12 @@ def build_manifest(
     arms: tuple[str, ...],
     oracles: tuple[str, ...],
     replicate_of: str | None,
+    # The replicate's own cap and the seed that drew it. Required keywords like the
+    # rest of scope: a defaulted ``None`` would record "full replicate" for a run whose
+    # floor came from 300 questions, and the floor's coverage is the one thing a reader
+    # needs in order to weigh the resolution verdict it produced.
+    replicate_limit: int | None,
+    replicate_sample_seed: int | None,
     db_ids: list[str] | None,
     limit: int | None,
     limit_dbs: int | None,
@@ -509,6 +557,14 @@ def build_manifest(
         "arms": list(arms),
         "oracles": list(oracles),
         "replicate_of": replicate_of,
+        # ``None`` for both when no cap was asked for. The seed is recorded only
+        # alongside a cap it actually drew: a seed with no cap describes a draw that
+        # never happened, which is the "records a value the run did not use" failure the
+        # required-keyword rule above exists to prevent, one field over.
+        "replicate_limit": replicate_limit if replicate_of else None,
+        "replicate_sample_seed": (
+            replicate_sample_seed if (replicate_of and replicate_limit) else None
+        ),
         "db_ids": list(db_ids) if db_ids is not None else None,
         "limit": limit,
         "limit_dbs": limit_dbs,
@@ -525,6 +581,7 @@ def build_manifest(
         "prompt_set_hash": prompt_set_hash(prompt_variants),
         "corpus_content_hash": None,
         "question_pool_hash": question_pool_hash,
+        "question_subset": question_subset,
         "git_sha": corpus_release_hash(),
         "route_top_k": route_top_k,
         "route_llm_pick": route_llm_pick,
