@@ -1,0 +1,370 @@
+/* Experiment inspector — restrained, desktop-first, accessible.
+   One neutral surface, one accent, verdict colours that pass WCAG AA on their
+   backgrounds. No framework; every colour is a token so the whole thing is one edit
+   away from a dark variant if it is ever wanted. */
+
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f0f2f5;
+  --border: #d8dce3;
+  --border-strong: #b9c0cc;
+  --text: #1b1f27;
+  --text-dim: #59616e;
+  --text-faint: #868e9c;
+  --accent: #2f5fd0;
+  --accent-dim: #e5ecfb;
+  --pass: #1a7f47;
+  --pass-bg: #e5f4ec;
+  --fail: #b3261e;
+  --fail-bg: #fbe9e8;
+  --warn: #8a5a00;
+  --warn-bg: #fbf0d9;
+  --neutral: #495260;
+  --neutral-bg: #eceef2;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", "Consolas", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --radius: 8px;
+  --radius-sm: 5px;
+  --shadow: 0 1px 2px rgba(20, 26, 40, 0.06), 0 2px 8px rgba(20, 26, 40, 0.05);
+}
+
+* { box-sizing: border-box; }
+
+html { height: 100%; }
+
+/* A fixed-height, two-pane app: the top bar / overview / filters are chrome and the
+   results workspace fills the rest and scrolls INTERNALLY (its table and detail have
+   their own scrollbars, sticky headers stay put). Below the stacking breakpoint this
+   switches to a normally scrolling document — see the media queries at the end. */
+body {
+  margin: 0;
+  height: 100vh;
+  overflow: hidden;
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+
+h1, h2, h3, h4 { margin: 0; font-weight: 600; }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+.skip-link {
+  position: absolute; left: -9999px; top: 0; z-index: 300;
+  background: var(--accent); color: #fff; padding: 9px 14px; border-radius: var(--radius-sm);
+  font-weight: 600; box-shadow: 0 4px 14px rgba(20, 26, 40, 0.35);
+}
+/* When focused it becomes an in-flow banner at the very top of the page, so it takes
+   its own space and pushes the top bar down rather than covering the page title. */
+.skip-link:focus {
+  position: static; left: auto;
+  display: inline-block; margin: 10px 0 0 14px; align-self: flex-start;
+}
+
+/* --- focus visibility (accessibility) --- */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* --- top bar --- */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 24px;
+  padding: 12px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.brand { display: flex; align-items: center; gap: 12px; }
+.brand-mark { font-size: 22px; color: var(--accent); }
+.brand h1 { font-size: 16px; letter-spacing: -0.01em; }
+.brand-sub {
+  margin: 2px 0 0; font-family: var(--mono); font-size: 11.5px; color: var(--text-faint);
+  max-width: 52ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.topbar-controls { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.cap-badges { display: flex; gap: 6px; }
+
+/* --- fields --- */
+.field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.field-grow { flex: 1 1 220px; }
+.field-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-faint);
+}
+select, input[type="search"] {
+  font: inherit; color: var(--text); background: var(--surface);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  padding: 6px 9px; min-height: 34px; max-width: 100%;
+}
+select:hover, input[type="search"]:hover { border-color: var(--accent); }
+
+/* --- filter bar --- */
+/* A single compact row on desktop (wrapping only when it genuinely runs out of
+   width), so it never eats the vertical space the results need. */
+.filters {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px;
+  padding: 10px 20px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.filters .field { flex: 0 0 auto; }
+.filters .field select { min-width: 130px; }
+.filters .field-grow { flex: 1 1 240px; min-width: 180px; }
+.filters #filter-reset { flex: 0 0 auto; }
+
+button { font: inherit; cursor: pointer; }
+.btn-secondary {
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  padding: 6px 12px; min-height: 34px;
+}
+.btn-secondary:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.btn-secondary:disabled { opacity: 0.5; cursor: default; }
+.link-btn {
+  background: none; border: none; color: var(--accent); padding: 4px 6px;
+  font-weight: 600; border-radius: var(--radius-sm);
+}
+.link-btn:hover { text-decoration: underline; }
+
+/* --- badges --- */
+.badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 20px;
+  background: var(--neutral-bg); color: var(--neutral); white-space: nowrap;
+}
+.badge.ok { background: var(--pass-bg); color: var(--pass); }
+.badge.off { background: var(--fail-bg); color: var(--fail); }
+.badge.pass { background: var(--pass-bg); color: var(--pass); }
+.badge.fail { background: var(--fail-bg); color: var(--fail); }
+.badge.warn { background: var(--warn-bg); color: var(--warn); }
+.badge.dot::before { content: "●"; font-size: 8px; }
+
+/* --- overview --- */
+.overview { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 20px; }
+.overview-head { display: flex; align-items: center; justify-content: space-between; }
+.overview-head h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); }
+/* Cap the overview so, in the fixed-height desktop layout, the chrome can never crowd
+   the results out of the viewport on a short window; it scrolls internally instead. */
+.overview-body { margin-top: 10px; max-height: 40vh; overflow: auto; }
+.run-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-bottom: 10px; }
+.run-meta .kv { font-size: 12.5px; color: var(--text-dim); }
+.run-meta .kv b { color: var(--text); font-weight: 600; }
+.run-notes { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.run-notes .note {
+  font-size: 12px; color: var(--warn); background: var(--warn-bg);
+  padding: 4px 10px; border-radius: var(--radius-sm); border-left: 3px solid var(--warn);
+}
+
+/* --- tables --- */
+.table-wrap { overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+table { border-collapse: collapse; width: 100%; }
+.metric-table th, .metric-table td { padding: 7px 12px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.metric-table thead th { background: var(--surface-2); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-dim); position: sticky; top: 0; }
+.metric-table td.num, .metric-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.metric-table tbody tr:last-child td { border-bottom: none; }
+.metric-table .arm-name { font-weight: 600; }
+.ex-cell { font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* --- workspace split --- */
+/* flex:1 fills the leftover viewport height; min-height:0 lets it shrink under a short
+   window instead of overflowing; grid-template-rows: minmax(0,1fr) is what bounds the
+   panes so their inner scroll regions size to the workspace rather than growing to
+   content (that missing row track was the collapse bug). */
+.workspace {
+  flex: 1 1 auto; min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(360px, 1fr) minmax(400px, 1.15fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: 14px; padding: 14px 20px 20px;
+}
+.list-pane, .detail-pane {
+  display: flex; flex-direction: column; min-height: 0; min-width: 0;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.list-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+}
+.list-count { font-size: 12.5px; color: var(--text-dim); font-weight: 600; }
+.pager { display: flex; align-items: center; gap: 8px; }
+.page-info { font-size: 12px; color: var(--text-faint); font-variant-numeric: tabular-nums; min-width: 9ch; text-align: center; }
+.list-scroll { flex: 1; border: none; border-radius: 0; }
+
+/* --- turn table --- */
+.turn-table { font-size: 13px; }
+.turn-table th, .turn-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.turn-table thead th {
+  background: var(--surface-2); position: sticky; top: 0; z-index: 1;
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-dim);
+  text-align: left; user-select: none;
+}
+.turn-table th.sortable { cursor: pointer; }
+.turn-table th.sortable:hover { color: var(--accent); }
+.turn-table th .sort-arrow { color: var(--accent); font-size: 10px; margin-left: 3px; }
+.turn-table td.num, .turn-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.turn-table tbody tr { cursor: pointer; }
+.turn-table tbody tr:hover { background: var(--accent-dim); }
+.turn-table tbody tr.selected { background: var(--accent-dim); box-shadow: inset 3px 0 0 var(--accent); }
+.turn-table tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.qid-cell { font-family: var(--mono); font-size: 12px; }
+.verdict-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; }
+.verdict-dot.pass { background: var(--pass); }
+.verdict-dot.fail { background: var(--fail); }
+.verdict-dot.ungraded { background: var(--border-strong); }
+
+/* On ordinary laptop-width screens the split-pane list should remain scannable without
+   forcing analysts to hunt for a horizontal scrollbar beneath 100 rows. Keep the fields
+   used to locate failures; timing/token/cost and routing diagnostics remain in detail. */
+@media (min-width: 901px) and (max-width: 1400px) {
+  .workspace { grid-template-columns: minmax(560px, 1.2fr) minmax(400px, 1fr); }
+  .turn-table th:nth-child(7), .turn-table td:nth-child(7),
+  .turn-table th:nth-child(8), .turn-table td:nth-child(8),
+  .turn-table th:nth-child(9), .turn-table td:nth-child(9),
+  .turn-table th:nth-child(11), .turn-table td:nth-child(11),
+  .turn-table th:nth-child(12), .turn-table td:nth-child(12) { display: none; }
+}
+
+/* --- pane statuses --- */
+.pane-status { padding: 28px 20px; text-align: center; color: var(--text-faint); font-size: 13px; }
+.pane-status.error { color: var(--fail); }
+.detail-empty { margin: auto; }
+.spinner {
+  display: inline-block; width: 18px; height: 18px; margin-right: 8px; vertical-align: -4px;
+  border: 2px solid var(--border-strong); border-top-color: var(--accent); border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+
+/* --- detail --- */
+#detail-body { flex: 1; min-height: 0; overflow: auto; padding: 16px 18px; }
+.detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.detail-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.detail-title .qid { font-family: var(--mono); font-size: 15px; font-weight: 700; }
+.detail-title .db { color: var(--text-dim); font-size: 13px; }
+.sibling-arms { display: flex; gap: 6px; flex-wrap: wrap; }
+.sibling-arm {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 3px 9px;
+  border-radius: 20px; border: 1px solid var(--border-strong); background: var(--surface);
+  color: var(--text-dim); cursor: pointer;
+}
+.sibling-arm:hover { border-color: var(--accent); color: var(--accent); }
+.sibling-arm.current { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+.meta-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 14px; margin: 12px 0 6px; }
+.meta-cell { display: flex; flex-direction: column; gap: 1px; }
+.meta-cell .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-faint); }
+.meta-cell .v { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.meta-cell .v.dim { color: var(--text-faint); font-weight: 400; }
+
+.detail-section { margin-top: 18px; }
+.detail-section > h3 {
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim);
+  margin-bottom: 6px; display: flex; align-items: center; gap: 8px;
+}
+.detail-section > h3 .count { color: var(--text-faint); font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+.code-block {
+  margin: 0; font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px 12px; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
+  max-height: 320px; overflow: auto; color: var(--text);
+}
+.code-block.empty { color: var(--text-faint); font-style: italic; font-family: var(--sans); }
+.prose { font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+.evidence { color: var(--text-dim); font-size: 12.5px; margin-top: 6px; white-space: pre-wrap; }
+
+/* --- trajectory (governance ledger) --- */
+.trajectory { display: flex; flex-direction: column; gap: 8px; }
+.traj-step { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); overflow: hidden; }
+.traj-step-head {
+  display: flex; align-items: center; gap: 10px; padding: 7px 11px; background: var(--surface-2);
+  border-bottom: 1px solid var(--border); flex-wrap: wrap;
+}
+.traj-step-head .idx { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+.traj-step-head .action { font-weight: 600; font-size: 13px; }
+.traj-step-head .meta { margin-left: auto; font-size: 11.5px; color: var(--text-dim); display: flex; gap: 10px; }
+.traj-step .code-block { border: none; border-radius: 0; max-height: 220px; }
+.traj-detail { padding: 8px 11px; font-size: 12px; color: var(--text-dim); }
+
+/* --- rail timeline --- */
+.timeline { display: flex; flex-direction: column; gap: 2px; }
+.tl-row { display: grid; grid-template-columns: 2ch 1fr auto auto; gap: 10px; align-items: center; padding: 4px 8px; border-radius: var(--radius-sm); }
+.tl-row:hover { background: var(--surface-2); }
+.tl-row .seq { font-family: var(--mono); font-size: 11px; color: var(--text-faint); text-align: right; }
+.tl-row .stage { font-weight: 600; font-size: 12.5px; }
+.tl-row .status { font-size: 11.5px; }
+.tl-row .ms { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--text-dim); text-align: right; }
+.tl-bar-wrap { grid-column: 1 / -1; height: 4px; background: var(--surface-2); border-radius: 2px; overflow: hidden; }
+.tl-bar { height: 100%; background: var(--accent); opacity: 0.55; }
+.tl-detail { grid-column: 2 / -1; font-family: var(--mono); font-size: 11px; color: var(--text-faint); word-break: break-word; }
+
+/* --- tool histogram --- */
+.tool-hist { display: flex; flex-direction: column; gap: 5px; }
+.tool-row { display: grid; grid-template-columns: 130px 1fr 3ch; gap: 10px; align-items: center; font-size: 12.5px; }
+.tool-row .name { font-family: var(--mono); font-size: 12px; }
+.tool-bar-track { height: 12px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+.tool-bar { height: 100%; background: var(--accent); opacity: 0.7; }
+.tool-row .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-dim); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.chip { font-family: var(--mono); font-size: 11.5px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 20px; padding: 2px 9px; color: var(--text-dim); }
+
+details.raw { margin-top: 18px; }
+details.raw > summary { cursor: pointer; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); font-weight: 600; }
+details.raw[open] > summary { margin-bottom: 8px; }
+
+.global-status {
+  position: fixed; bottom: 16px; right: 16px; z-index: 50;
+  background: var(--text); color: #fff; padding: 8px 14px; border-radius: var(--radius);
+  font-size: 12.5px; box-shadow: var(--shadow); max-width: 60ch;
+}
+.global-status.error { background: var(--fail); }
+
+/* --- responsive: stack narrow --- */
+/* Below 900px the two panes stack. The fixed-height app model is dropped for a
+   normally scrolling document (there is not enough height to fit both panes at once),
+   and each pane gets its own tall min-height so the page scrolls between them while
+   each keeps an internally scrollable region — nothing is clipped away. */
+@media (max-width: 900px) {
+  body { height: auto; min-height: 100vh; overflow: visible; }
+  .workspace {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto;
+    min-height: 0;
+  }
+  .list-pane { min-height: 55vh; }
+  .detail-pane { min-height: 70vh; }
+}
+
+@media (max-width: 560px) {
+  .filters { padding: 10px 14px; }
+  .filters .field, .filters .field select, .filters .field-grow { flex-basis: 100%; width: 100%; }
+  .topbar, .overview, .filters { padding-left: 14px; padding-right: 14px; }
+  .workspace { padding: 12px 14px 16px; }
+  /* Prioritize the headline comparison; diagnostics remain in turn detail. */
+  .metric-table th:nth-child(n+7), .metric-table td:nth-child(n+7) { display: none; }
+}
+
+/* Short viewport (a split window, a small laptop): the fixed-height model cannot fit
+   chrome + a usable results area, so fall back to a scrolling document. The two scroll
+   regions keep a bounded internal height so the table still scrolls in place and the
+   page scrolls to reach the detail — nothing is clipped out of reach. */
+@media (max-height: 600px) and (min-width: 901px) {
+  body { height: auto; min-height: 100vh; overflow: visible; }
+  .overview-body { max-height: none; }
+  .workspace { grid-template-rows: auto; min-height: 0; }
+  .list-pane, .detail-pane { min-height: 0; }
+  .list-scroll { max-height: 62vh; }
+  #detail-body { max-height: 80vh; }
+}

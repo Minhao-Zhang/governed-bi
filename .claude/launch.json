@@ -1,0 +1,21 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "inspector",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": [
+        "run",
+        "python",
+        "scripts/inspect_run.py",
+        "--run-dir",
+        "runs/datalake/toolhistory/20260802T140108Z",
+        "--rebuild",
+        "--no-browser",
+        "--port",
+        "8765"
+      ],
+      "port": 8765
+    }
+  ]
+}

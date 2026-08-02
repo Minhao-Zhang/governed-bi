@@ -228,6 +228,16 @@ Append-only JSONL is contention-free, and its durability is not hypothetical: du
 alone was enough to reconstruct the full crash diagnosis. SQLite is the **export**
 format, not the runtime format.
 
+Loader: [`scripts/load_run_db.py`](../../scripts/load_run_db.py) (exists). For the
+experiment inspector, the conventional export is a **per-run** file:
+
+```bash
+uv run python scripts/load_run_db.py <run_dir> --db <run_dir>/run.sqlite
+```
+
+A shared `runs/runs.db` via `--discover` remains fine for ad-hoc SQL; the inspector
+accepts either (`--sqlite`).
+
 A wide-table schema is enough:
 
 ```sql
@@ -241,30 +251,48 @@ With that, "do failing questions call `inspect_schema` less often" is one query.
 
 ---
 
-## C. The experiment-inspection UI **[open — decision needed]**
+## C. The experiment-inspection UI **[abandoned 2026-08-02 — local HTML]**
 
 [docs/viz.md](../viz.md) states plainly: **"This repo ships no bundled UI."** The repo
 ships `presenter` view models and the HTTP API; the interactive UI lives in
 `../governed-bi-ui`.
 
-What is wanted here is a different artifact from that one. `../governed-bi-ui` is a
-**chat frontend** consuming a live stream. This is an **experiment inspector**: after
-1351 questions have run, open one of them and read the whole tool trajectory — what the
-agent had available at each step, what it called, what came back. Offline, read-only,
-single-machine.
+What is wanted here is still an **experiment inspector** (offline trajectory reading),
+not the chat frontend. Option **A** (local single-file HTML under `scripts/`) was tried
+and rejected on UX — the script and generated reports were deleted.
 
 | | approach | cost |
 |---|---|---|
-| **A** *(recommended)* | local tool under `scripts/`, reads `run.sqlite`, single-file HTML or streamlit | breaks the letter of no-bundled-UI, but it is a dev tool, not a product surface |
-| **B** | extend `../governed-bi-ui` with an experiments page | keeps the rule; cross-repo, needs an API, much slower |
-| **C** | no UI — ship `run.sqlite` plus query scripts | fastest, but drops the "visualise the toolset" goal |
+| A | local `scripts/` single-file HTML | tried; UX rejected; removed |
+| B | extend `../governed-bi-ui` with an experiments page | cross-repo, needs an API |
+| **C** *(current default)* | no UI — `run.sqlite` + query scripts | keep seeing data via SQL |
 
-Argument for A: viz.md itself calls the audit surface's *reading* engine-adjacent — a
-dev/audit tool over the corpus. An offline experiment inspector sits on that side. Going
-cross-repo turns this from a day into a week, and the current bottleneck is *not being
-able to see the data*, not the absence of a frontend.
+**Current default: C.** Use [`scripts/load_run_db.py`](../../scripts/load_run_db.py)
+and query `run.sqlite`. Revisit B only if SQL is not enough for trajectory reading.
 
-**Not yet decided.**
+```bash
+uv run python scripts/load_run_db.py runs/datalake/<...>/<ts> --db runs/datalake/<...>/<ts>/run.sqlite
+```
+
+### Update 2026-08-02 — a served inspector shipped (option A, re-done)
+
+The blocker on A was UX, not location: the abandoned attempt was a *single-file HTML*
+that either inlined a whole ladder or dropped the trajectory. A served read-only tool
+over the `run.sqlite` C already produces avoids both — the browser fetches only the one
+question opened. [`scripts/inspect_run.py`](../../scripts/inspect_run.py) (stdlib only,
+no new dependency) serves [`scripts/inspector/`](../../scripts/inspector/); see
+[docs/inspect-run.md](../inspect-run.md).
+
+```bash
+uv run python scripts/inspect_run.py --run-dir runs/datalake/<...>/<ts>
+```
+
+It reads the same `run.sqlite`, so C is unchanged as the substrate — this is a view over
+it, not a replacement. Overview + per-arm EX, filter/search/sort over turns, and a
+per-turn detail (question, gold vs generated SQL, the governance-ledger trajectory, the
+rail timeline, tokens/cost). Read-only (`mode=ro`), localhost-only, parameterised SQL,
+`textContent`-rendered; degrades honestly on runs missing stage events or gold. Tested
+in [`tests/test_inspect_run.py`](../../tests/test_inspect_run.py).
 
 ---
 
@@ -321,13 +349,26 @@ should sample smaller: it is that **the expensive run is not buying the answer.*
 Recomputed from `token_sum` at current prices (the `cost_est_usd` on luna/Opus rows is
 stale — it was written under a price table that has since been corrected):
 
-| model | baseline | seeded | curated | curated_sme | **ladder** |
-|---|---|---|---|---|---|
-| Claude-Opus-4.8 | $557 | $543 | $806 | $875 | **$2,782** |
-| gpt-5.6-luna | $13 | $14 | $16 | — | **$42** |
-| deepseek-v4-flash | — | $2 | $4 | — | **$5** (2 arms) |
+| model | baseline | seeded | curated | curated_sme | serve | **+ build** | **total** |
+|---|---|---|---|---|---|---|---|
+| Claude-Opus-4.8 | $557 | $543 | $806 | $875 | $2,782 | $1,283 | **$4,065** |
+| gpt-5.6-luna | $13 | $14 | $16 | — | $42 | $18 | **$60** |
+| deepseek-v4-flash | — | $2 | $4 | — | $5 | $11 | **$16** |
 
-A 66× spread between the cheapest and dearest arm for the *same* measurement.
+**Corrected 2026-08-02.** The first version of this table was serve-only and understated
+the Opus ladder by 46%. Curator token spend is not recorded in `run_manifest.json` — it
+holds `tool_calls` and budgets but no tokens — so the build phase was unpriceable from
+the artifacts and simply got left out. The figures above come from the server-side trace
+for the Opus-4.8/high run: Phase A curator 58.1M in / 2.37M out over 198 turns across 57
+schemas (96.1% input), Phase B SME 14.0M / 0.32M. Priced through `_PRICE_PER_1M`; no
+cache-read data, so they are upper bounds.
+
+**That gap should be closed in code**: `run_manifest.json` must record the curator's
+token usage, or the dominant cost of every experiment stays invisible to everything that
+reads a run directory. Filed in the open items below.
+
+A **250× spread** between the cheapest and dearest ladder for the *same* measurement —
+and both resolve the same 3.2pp.
 
 ### What a ladder can resolve
 
@@ -428,6 +469,44 @@ measure the discordance rate — which is a *property of the pipeline* and trave
 be evaluated at the comparison's population, which is what that function already does
 correctly.
 
+### E8. Full experiments do not run locally any more **[decided 2026-08-02]**
+
+The corpus build is rate-limit-bound on this machine and it is not close.
+
+Measured: the curator averages **~293k tokens per turn** (58.1M input over 198 turns,
+57 schemas). The local `gpt-5.6-luna` quota is **~500k TPM**. So **one curator turn is
+~60% of the entire per-minute allowance**, and the build rate-limits even at
+`build_workers = 1`. Raising that knob makes it worse, not better.
+
+Observed on the abandoned oracle-ladder attempt
+(`runs/datalake/oracle-ladder/20260802T014756Z`): schema 1 of 57 took **23 minutes** with
+**110 SDK retries** and zero errors — healthy, just throttled. Extrapolated, the build
+alone is **~22 hours**, plus roughly 9 hours of serve at 8 workers. About **30 hours** for
+one three-pass ladder. For comparison the 2026-08-01 luna ladder took 14.5 hours end to
+end, so conditions are not even stable run to run.
+
+Retries on a 429 are not billed, so this costs time rather than money — but it makes the
+machine unusable for anything else, and the wall-clock is not something a knob fixes.
+
+**Decision: anything that calls a model at experiment scale runs on the server.** The
+local checkout stays the place to write and verify the code, and to run everything that
+needs no model:
+
+| still local | why it works |
+|---|---|
+| `--oracle-only` (`oracle_sql`) | no model at all; 1351 questions in ~4 min |
+| `eval/retrieval_eval.py` (tables + columns + width curve) | offline, deterministic |
+| `eval/error_taxonomy.py`, `eval/oracle.py` analysis | reads finished runs |
+| `scripts/load_run_db.py`, `scripts/routing_ablation.py` and the other probes | offline |
+| the full test suite | no model |
+
+That covers essentially everything built on 2026-08-02. The only thing that has to move is
+the paid ladder itself.
+
+**Consequence for E5.** `--questions` was justified as saving curator passes. On a
+db-stratified sample it does **not** — all 57 schemas still get built, so only serve
+shrinks. Its real value is the fixed, committable probe set and the comparability stamp.
+
 ### What is already efficient (do not "fix")
 
 - **Resume works.** `--resume-from` replays questions already in
@@ -447,13 +526,13 @@ entire CLI surface was unreadable. One character (`%` → `%%`).
 
 ## Proposed order
 
-1. **A1 `oracle_sql`** — free, no code, may re-scale everything below
+1. **A1 `oracle_sql`** — free, no code, may re-scale everything below  **[DONE]**
 2. **A3 tool-call persistence** — so runs from here on keep the record
 3. **A2 column recall** — the largest error class, and it makes an existing knob decidable
-4. **B loader** — `run.sqlite`
-5. **C UI** — after the decision, and after there is data to point it at
-
-UI before persistence would be backwards.
+4. **B loader** — `run.sqlite` via `scripts/load_run_db.py` (script exists; habit is to
+   export per run as `<run>/run.sqlite`)
+5. **C UI** — **abandoned A** (local HTML deleted); default is **C** (SQL over
+   `run.sqlite`). No HTML inspector in-repo for now.
 
 E1–E4 are discipline, not code, and apply from the next experiment onward. E5/E6 are
 small and should land before any run that would otherwise serve 1351 questions to learn
@@ -463,10 +542,13 @@ something about 131 of them.
 
 ## Open decisions
 
-- [ ] **C**: which UI route — A (local tool here), B (cross-repo), or C (no UI)?
+- [x] **C**: local HTML (**A**) tried and abandoned 2026-08-02 on UX; default **C**
+      (`run.sqlite` + SQL). B (governed-bi-ui) only if needed later.
 - [ ] **E1**: accept that EX is not the readout for sub-3pp interventions, and report
       the deterministic proxy plus a stated conversion factor instead?
 - [ ] **E3**: is the ladder settled — do future experiments default to two arms?
+- [ ] **E7**: record curator/SME token usage in `run_manifest.json` — the build phase
+      is the dominant cost of a ladder and no artifact prices it.
 
 ---
 
