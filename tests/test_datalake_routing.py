@@ -707,6 +707,7 @@ def test_the_manifest_records_the_resolved_value_not_the_flag(tmp_path):
         schema_pick_max_columns=resolved.pick_max_columns,
         use_embedder=True,
         question_pool_hash="h",
+        question_subset=None,
         always_note_global_max=3,
         always_note_char_max=400,
         pin_triggers_enabled=False,

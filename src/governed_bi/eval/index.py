@@ -142,6 +142,10 @@ _KNOB_LABELS: dict[str, str] = {
     # reader is least likely to suspect: the dataset is filtered in a sibling repo, so
     # the pool moves with no knob in this repo changing.
     "question_pool_hash": "question pool",
+    # The refusal a reader is most likely to meet and least likely to understand from
+    # two digests. ``question pool`` above already refuses a subset-vs-full pair; this
+    # one is what makes the diff say WHICH side was the subset and how big it was.
+    "question_subset": "question subset",
 }
 
 #: Knobs that must match before two runs may be compared. Each is (record key,
