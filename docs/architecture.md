@@ -71,7 +71,7 @@ Fork only the harness, but share the substrate. Sharing has three directions, an
 
 Markdown-first. The graph earns its place only for joins and lineage. A heavy LLM knowledge graph is deferred. Rationale: curation and structure beat representation sophistication. Anthropic's null result showed raw-corpus grep moved accuracy <1pt. See the *Data Agent Memory Design Overview*.
 
-*Built today:* retrieval runs the pure-Python **BM25** lexical channel plus deterministic grounding over the corpus relationships, and a **vector / semantic channel** (embeddings, fused with BM25 via Reciprocal Rank Fusion) behind an injected `Embedder` seam, off unless an embedder is passed. The FK graph is the in-memory `networkx` projection that drives Steiner join planning; Neo4j stays the enterprise-scale projection. Model choices (the OpenAI `gpt-5.6-luna` LLM and `text-embedding-3-small` embedder, both swappable) live in a project config file (`governed_bi.toml`, parsed by `config.load_settings`); the API key is read from the environment, never stored. The clients live in `governed_bi.llm` behind `ChatClient` / `Embedder` protocols, each with a deterministic offline default so the pipeline runs with no model or network. (The no-model *serve* mode is gone: per [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) P2, the agentic core requires a real key (serve fails closed at startup without one), and CI determinism comes from a `FakeListChatModel` agent harness rather than an offline serve default.)
+*Built today:* retrieval runs the pure-Python **BM25** lexical channel plus deterministic grounding over the corpus relationships, and a **vector / semantic channel** (embeddings, fused with BM25 via Reciprocal Rank Fusion) behind an injected `Embedder` seam, off unless an embedder is passed. The FK graph is the in-memory `networkx` projection that drives Steiner join planning; Neo4j stays the enterprise-scale projection. Model choices (the OpenAI `gpt-5.6-luna` LLM and `text-embedding-3-large` embedder, both swappable) live in a project config file (`governed_bi.toml`, parsed by `config.load_settings` — the TOML overrides the dataclass default of `text-embedding-3-small` in `config.py`); the API key is read from the environment, never stored. The clients live in `governed_bi.llm` behind `ChatClient` / `Embedder` protocols, each with a deterministic offline default so the pipeline runs with no model or network. (The no-model *serve* mode is gone: per [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) P2, the agentic core requires a real key (serve fails closed at startup without one), and CI determinism comes from a `FakeListChatModel` agent harness rather than an offline serve default.)
 
 > **Corpus contract = Git+YAML typed assets, curator-authored / human-audited (D9)**
 >
@@ -92,9 +92,10 @@ licensed table scope) → agent_core (tool loop; every run_query re-guardrailed
 by wrap_tool_call) → narrate → answer + provenance
 ```
 
-Five nodes, compiled in `analyst.agent.build_serve_rails`. SQL generation is not
-a node: it happens inside `agent_core`'s tool loop (ADR 0002). Any node can end
-the turn with a refusal.
+Five graph nodes, compiled in `analyst.agent.build_serve_rails`. The first node is
+named `ingest` in the graph; the live event / `Stage` name for that step is
+`route` (`events.rail("route")`). SQL generation is not a node: it happens inside
+`agent_core`'s tool loop (ADR 0002). Any node can end the turn with a refusal.
 
 The full stage-by-stage design is in [Analyst](analyst.md), along with the three points where the curator's inference drives serve behavior.
 
@@ -172,18 +173,20 @@ Guardrails, in order (fail-closed on any, all five enforced): syntax → policy 
 - Episodic and correction: off by default. Adopted per-domain only when eval earns it, with value-aware retrieval when used.
 - Durable memory is PR-gated exactly like the corpus → the memory/corpus distinction collapses. Correction memory ≈ correction-harvesting→PR-to-reference-doc. Promoted episodic ≈ gated few-shots. Only working/ephemeral memory is outside the gate.
 
-> **Reusable numbers** (starting point; tune against BIRD-Obfuscation eval before adopting)
+> **Reusable numbers** (design targets from the book; **not** knobs on `Settings`
+> today — only Working memory is built; see `memory/__init__.py` and
+> [glossary](glossary.md))
 >
-> | Parameter | Value |
-> |---|---|
-> | Working memory | session-scoped, cleared at session end |
-> | Profile TTL | 365 days |
-> | Episodic TTL | 90 days + 0.02/day decay |
-> | Correction TTL | 180 days |
-> | SQL cache TTL | 15 min |
-> | Cache-hit gate | cosine ≥ 0.92 (see §6) |
-> | Few-shot recall gate | cosine ≥ 0.95, confidence ≥ 0.9, fail_count ≤ 3 |
-> | Few-shot promotion gate | `pending_review` → human `approve` → retrieval-time threshold check |
+> | Parameter | Value | Status |
+> |---|---|---|
+> | Working memory | session-scoped, cleared at session end | Built |
+> | Profile TTL | 365 days | Design-only — not in Settings |
+> | Episodic TTL | 90 days + 0.02/day decay | Design-only — not in Settings |
+> | Correction TTL | 180 days | Design-only — not in Settings |
+> | SQL cache TTL | 15 min | Design-only — no SQL cache in code |
+> | Cache-hit gate | cosine ≥ 0.92 (see §6) | Design-only |
+> | Few-shot recall gate | cosine ≥ 0.95, confidence ≥ 0.9, fail_count ≤ 3 | Design-only |
+> | Few-shot promotion gate | `pending_review` → human `approve` → retrieval-time threshold check | Design-only |
 >
 > Source: the book's directly-reusable blueprint. See the *Data Agent Memory Design Overview* §5.
 

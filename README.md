@@ -148,7 +148,12 @@ corpus/             the semantic layer (Git = source of truth); worked example u
 data/bird/          beer_factory.sqlite: offline test/CI fixture (BIRD, CC BY-SA 4.0; see NOTICE)
 src/governed_bi/
   config.py         environment toggles, models, datasource shape (load_settings)
+  stages.py         shared Outcome / Stage vocabulary (serve + eval)
+  provenance.py     serve-config / corpus hashes, release fingerprint
+  obs.py            tracing callbacks (Langfuse / LangSmith)
+  logging_setup.py  process logging bootstrap
   llm/              ChatClient / Embedder seams (OpenAI + LangChain + offline defaults)
+  prompts/          prompt registry / variants hashed into serve_config
   corpus/           schemas, IDs, CI validator, loader, serializer, CLI
   gateway/          connectors (SQLite / Postgres / Redshift), read-only gateway, five-layer guardrails
   curator/          Facts profiling, deepagents batch curator (proposes Inference assets), adversary review, SME round-trip, corpus write
@@ -156,6 +161,7 @@ src/governed_bi/
   retrieval/        BM25 + grounding + vector channel (RRF fusion)
   memory/           working memory (session-scoped)
   analyst/          the ADR-0002 governed agentic core (sole serve path): agent, tools, middleware, governance, stamp
+  api/              FastAPI app, LangGraph serve graph, OpenAPI schemas
   eval/             execution accuracy, arm harness, refuse-gate
   viz/              audit surface (UI-agnostic presenter view models; API write gated by allow_edit)
 tests/              unit + end-to-end suites

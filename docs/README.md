@@ -70,7 +70,7 @@ quotable — every number produced before 2026-07-26 is discarded.**
 
 - [Experiment runbook](plans/experiment-runbook.md): what to run, in what order, and what must be true before a number is worth quoting. **The entry point for any eval work.**
 - [Data-lake run](plans/datalake-run.md): the pooled multi-schema run (D15) — runbook and status.
-- [Serve transparency](plans/serve-transparency.md) and its [handoff](plans/serve-transparency-handoff.md): making the agent's *inputs* visible in the UI. Two of four changes have landed.
+- [Serve transparency handoff](plans/serve-transparency-handoff.md): making the agent's *inputs* visible in the UI. The earlier design note [`serve-transparency.md`](plans/serve-transparency.md) is marked **SAFE TO DELETE** (no unique content; live event contract is [analyst.md](analyst.md)). Contract publication continues under [rebuild-checklist.md](plans/rebuild-checklist.md) §5.3.
 - [SME channel repair](plans/sme-channel-repair.md): why the `curated_sme` arm moved nothing, and the fixes in order.
 - [Eval rebuild](plans/eval-rebuild.md): why every pre-2026-07-26 number is discarded, and the four fixes that follow.
 - **[Near-term plan](plans/near-term-plan.md) (Simplified Chinese): the seventeen items being implemented now, cut out of the checklist below on two tests — delegable, and machine-checkable. Five milestones ending in one quotable run. Says what a reviewer will reject on, and lists what is deliberately *not* in this batch. The entry point for anyone picking up work today.**

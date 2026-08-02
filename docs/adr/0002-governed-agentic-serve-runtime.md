@@ -349,6 +349,9 @@ path pushes three event kinds through the existing `on_event` callback (consumed
 by the frontend on `stream_mode="custom"`):
 
 - `rail` — each deterministic outer step (`route`, `refuse_gate`, `cache`, `assemble`);
+  *(Reader note, 2026-08: live rails are `route` / `schema_route` / `refuse_gate` /
+  `assemble` — the `cache` rail was deleted 2026-07-28. See [analyst.md](../analyst.md).
+  Historical Amendment text left unchanged.)*
 - `tool` — each governed action inside the agent loop (`search_corpus` /
   `inspect_schema` / `sample_rows` / `run_query`), as a `start` then an
   `ok` / `blocked` / `error` / `cap` / `miss` resolve, paired by tool-call id;

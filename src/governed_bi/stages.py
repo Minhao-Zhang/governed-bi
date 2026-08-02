@@ -42,10 +42,11 @@ __all__ = [
 class Stage(str, Enum):
     """A position in the serve pipeline, named as the live event stream names it.
 
-    The first seven are the graph's own rails, so these strings match what
-    ``GovEventStream.rail`` already emits and what
-    ``tests/test_agent_step_events.py`` already pins — reusing them rather than
-    inventing parallel names is the whole point of this module.
+    The first six are the graph's outer rails, so these strings match what
+    ``GovEventStream.rail`` already emits (and ``events.final`` for
+    ``finalize``) and what ``tests/test_agent_step_events.py`` already pins —
+    reusing them rather than inventing parallel names is the whole point of
+    this module. (Graph node ``ingest`` is the event/``Stage`` named ``route``.)
 
     The rest are sub-stages inside ``assemble`` and ``agent_core``, where the
     interesting failures actually live: a schema-pick miss and a guardrail block

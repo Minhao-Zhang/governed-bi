@@ -7,8 +7,8 @@ curator drafts later. Written by `governed_bi.corpus.write_corpus(...)`.
 
 This is a staging area, not the source of truth. It is gitignored because it is
 rebuildable from the database (`profile_database` is deterministic). The curated,
-human-audited corpus that a person accepts lives in `corpus/<db>/` (D15: the
-`<db>` corpus namespace is renamed `<schema>`; decided, not yet built) and is
+human-audited corpus that a person accepts lives in `corpus/<schema>/` (D15
+renamed the on-disk namespace from `<db>` → `<schema>`; shipped) and is
 committed there (D9).
 
 Typical layout after profiling a DB:
@@ -28,5 +28,9 @@ from governed_bi.curator.profile import profile_database
 from governed_bi.corpus import write_corpus
 
 conn = SqliteConnector("data/bird/beer_factory.sqlite")
-write_corpus("data/generated", "beer_factory", profile_database(conn, "beer_factory"))
+write_corpus(
+    "data/generated",
+    "beer_factory",
+    profile_database(conn, schema="beer_factory"),
+)
 ```

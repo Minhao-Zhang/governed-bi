@@ -219,7 +219,9 @@ matches.
 > - Namespace field is **`schema`** on `TableResponse`, `TableSummary`, and
 >   graph nodes. Filters use **`?schema=` only**, no `?db=` alias (hard cut).
 > - `GET /schema/summary`, `GET /schema/{table_id}`, `can_scope` / `can_search`.
-> - Postgres/Redshift default to multi-schema; SQLite stays single-schema (BIRD).
+> - Postgres/Redshift span schemas by default; SQLite uses the same
+>   schema-qualified convention via `ATTACH` under `corpus_pin` (D15 supersession
+>   2026-07-17 — it does **not** stay bare/single-schema).
 > - Cross-schema missing curated join → refuse (`refused_by: "missing_edge"`) with
 >   a D12 `clarification_hint`.
 > - **`GET /graph` / `GET /knowledge-graph`** accept `?schema=` / `focus` /
@@ -400,35 +402,42 @@ free once present (provenance is an open `Record`; add to the drawer's
 Design target (§5.1): retrieval shortlists ~3 schemas → an **LLM node picks one** →
 downstream uses only that schema; the UI shows which schema answered.
 
-- **Built.** This section said "not built yet" for all three pieces; all three
-  shipped. `shortlist_schemas` ranks candidates (embedding-first, BM25 fallback),
+- **Built.** `shortlist_schemas` ranks candidates (embedding-first, BM25 fallback),
   `pick_schema` is the LLM pick behind `schema_route_llm_pick`, and the chosen schema
   reaches `provenance` alongside `routed_schemas`. `provenance.schema_route_channel`
   names which ranking channel ran (`embedding` / `bm25_fallback` / `none`) — worth
   surfacing in the drawer, because a silent fallback roughly halves routing recall.
-- **No `schema_route` stream event exists.** The rail emits `route` / `refuse_gate` /
-  `cache` / `assemble`; routing detail rides on the `assemble` step's `detail`. A
-  `graded_delivery` stream event does not exist either — graded delivery is visible on
-  the `final` event's stamp and provenance. Both were promised here as live events.
-- **UI now (interim):** you may show `provenance.routed_schemas` as "schemas
-  considered", and add a **"Selecting schema"** step to the stage stepper (one
-  `STAGE_ALIASES` entry mapping the existing `schema_route` event — no component
-  change).
-- **UI later (after backend adds the LLM-pick + `selected_schema`):** a small chip
-  on the answer card — "answered using schema `X`" — and the candidate list in the
-  drawer. Single-schema DBs (SQLite/BIRD) never show this.
+- **Live stream events.** The rail emits `route` / `refuse_gate` / `schema_route` /
+  `assemble` (and later `final` for the stamp). There is **no `cache` rail step**.
+  `analyst.agent` emits `events.rail("schema_route", …)` with `n_total`, `channel`,
+  `degraded`, `candidates`, `picked`, `fallback`, `truncated` — see the event contract
+  in [analyst.md](analyst.md#the-event-contract-per-step) (and
+  [rebuild-checklist.md](plans/rebuild-checklist.md) §5.3 for the publication track).
+  A `graded_delivery` stream event does not exist — graded delivery is visible on
+  the `final` event's stamp and provenance.
+- **UI now:** map `schema_route` into the stage stepper (`STAGE_ALIASES` or equivalent),
+  show `provenance.routed_schemas` / event `candidates` as "schemas considered", and
+  surface `picked` when present.
+- **UI later:** a small chip on the answer card — "answered using schema `X`" — and
+  the candidate list in the drawer. Single-schema corpora may still omit the chip.
 
-### 13.7 Corpus version indicator (gated on backend)
+### 13.7 Corpus version indicator (gated on UI)
 
-Design (§1): production inference reads a **pinned corpus git hash**, never the live
-working copy. For reproducibility/trust the answer should show which corpus version
-produced it.
+Design (§1): production inference reads a **pinned corpus** identity, never an
+untracked working copy. For reproducibility/trust the answer should show which
+version produced it.
 
-- **Nothing exists today** — no corpus hash/version field anywhere in the contract.
-  Needs backend wiring (corpus loader → `provenance.corpus_version` → presenter)
-  before any UI.
-- **UI (once present):** a quiet "corpus @ `abc1234`" indicator in the provenance
-  drawer or chat header. Low priority; trivial once the field ships.
+- **Backend layers (exist today):** `corpus_release_hash` is computed in
+  `provenance.py`, stamped onto durable run-log / eval-manifest rows, and listed
+  in `METADATA_PROVENANCE_KEYS`. That is the engine's deploy fingerprint (code-repo
+  HEAD), not a dedicated corpus-content pin — see also `corpus_content_hash` for
+  tree digests.
+- **Chat / UI exposure:** `AnswerResponse.provenance` is an open dict; whether
+  `corpus_release_hash` reaches the anonymous chat client depends on presenter
+  redaction / product policy — do not assume a first-class `provenance.corpus_version`
+  field on the answer card until the UI reads and displays it.
+- **UI (once surfaced):** a quiet "corpus @ `abc1234`" indicator in the provenance
+  drawer or chat header. Low priority once the field is confirmed on the wire.
 
 ### 13.8 SME clarification surface (scope decision — may be out of scope here)
 
@@ -450,8 +459,9 @@ clarification questions**, folded back via `accept_answer`.
    13.4) — pure UI against the live contract; the highest-value change. Reuses the
    existing `ReliabilityStamp` and open `provenance`.
 2. Request the **`delivery`** field (13.5#1); switch the branch to it when it lands.
-3. Add the **"Selecting schema"** stepper alias and interim `routed_schemas` display
-   (13.6); the answer-time chip waits on the backend LLM-pick.
+3. Add the **"Selecting schema"** stepper from the live `schema_route` rail event
+   and show `routed_schemas` / candidates (13.6); the answer-time chip can use
+   `picked` already on the wire.
 4. Corpus-version indicator (13.7) and SME surface (13.8) — gated / decision-pending.
 
 ---

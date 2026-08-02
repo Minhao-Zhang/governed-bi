@@ -15,9 +15,10 @@ fixture**.
 ## What's here
 
 `bird/beer_factory.sqlite`: the `beer_factory` database from the BIRD benchmark
-(0.95 MB, 7 tables). Included **unmodified** under CC BY-SA 4.0; attribution and
-license in [`bird/NOTICE`](bird/NOTICE). It is **not** covered by the repo's MIT
-license.
+(0.95 MB, **7 physical tables** in the SQLite file). The worked example corpus
+under `corpus/beer_factory/` covers a **subset** of those tables (not a 1:1
+mirror). Included **unmodified** under CC BY-SA 4.0; attribution and license in
+[`bird/NOTICE`](bird/NOTICE). It is **not** covered by the repo's MIT license.
 
 Intentionally excluded: BIRD's `database_description/` CSVs (human-written column
 descriptions) and every other BIRD database. The descriptions are left out on
@@ -43,8 +44,8 @@ Profiling a DB (and, later, running the curator) writes corpus YAML into
 [`generated/`](generated/) by convention, for example
 `data/generated/beer_factory/tables/*.yaml`. That directory is a rebuildable
 staging area and is gitignored; the curated, human-audited corpus lives in
-`corpus/<db>/` (D15: the `<db>` corpus namespace is renamed `<schema>`; decided,
-not yet built). See [`generated/README.md`](generated/README.md).
+`corpus/<schema>/` (D15 renamed the on-disk namespace from `<db>` → `<schema>`;
+shipped). See [`generated/README.md`](generated/README.md).
 
 ## Using it
 
@@ -53,7 +54,7 @@ from governed_bi.gateway import SqliteConnector, Gateway, Identity
 from governed_bi.curator.profile import profile_database
 
 conn = SqliteConnector("data/bird/beer_factory.sqlite")   # opens read-only
-facts = profile_database(conn, db="beer_factory")          # Facts-tier table assets
+facts = profile_database(conn, schema="beer_factory")     # Facts-tier table assets
 gw = Gateway(conn)
 rows = gw.execute("SELECT COUNT(*) FROM customers", Identity(user="dev", all_access=True))
 ```

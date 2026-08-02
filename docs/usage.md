@@ -2,7 +2,8 @@
 
 _[English](usage.md) · [简体中文](usage.zh.md)_
 
-> tour. This page is the reference quickstart.
+> New here? Start with the [README](../README.md) for a guided "clone → first
+> question" tour. This page is the reference quickstart.
 
 The full question -> answer pipeline runs end to end today over the committed
 `beer_factory` database. Corpus validation, the gateway, and retrieval need no
@@ -23,7 +24,8 @@ the [design docs](README.md).
 | Memory (working) + eval (EX, ladder, refuse-gate) + viz presenter (audit view models) | runnable | `src/governed_bi/{memory,eval,viz}/` |
 | Model clients (raw OpenAI / LangChain) | runnable (installed by a plain `uv sync`, no extra) | `src/governed_bi/llm/` |
 | Agent harnesses (LangGraph governed serve core, deepagents curator) | runnable (installed by a plain `uv sync`, no extra) | `analyst/agent.py`, `curator/deep_agent.py` |
-| Postgres / Redshift connectors | implemented (psycopg-backed, plain `uv sync`); offline-tested, not run live | `src/governed_bi/gateway/connectors/` |
+| Postgres connector | implemented (psycopg-backed, plain `uv sync`); exercised live via `eval/run_datalake.py` | `src/governed_bi/gateway/connectors/` |
+| Redshift connector | implemented (reuses the Postgres path); offline-tested only, not run against a live cluster | `src/governed_bi/gateway/connectors/` |
 
 ## Prerequisites
 
@@ -164,7 +166,13 @@ ans = answer_question_agent(
     session_id="s",
     model=chat.model,  # the raw LangChain model the agent core drives
 )
-print(ans.tier, ans.sql, ans.text)  # -> ReliabilityTier.governed  SELECT ...  total_revenue = ...
+print(
+    ans.safety_clearance,
+    ans.semantic_assurance,
+    ans.sql,
+    ans.text,
+)  # -> True  unflagged  SELECT ...  total_revenue = ...
+# ans.tier is the display-only projection of the two axes (governed / lineage / …)
 ```
 
 This needs a real key and the client injected as shown above — the agent

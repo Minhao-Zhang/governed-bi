@@ -13,9 +13,11 @@ semantic certification. The autonomous self-eval repair loop is still a seam;
 a per-asset LLM refutation was designed but never reached a caller and was
 deleted. You still author assets by hand: to seed a corpus, to build test
 fixtures, or to correct what the curator produced. Either way the rule is
-the same. The Git-tracked YAML and Markdown files **are** the source of truth;
-editing them is editing the semantic layer. The graph, vector, and BM25 stores
-are rebuildable projections and are never edited directly.
+the same. The Git-tracked YAML assets (including `NoteAsset` notes under
+`notes/`) **are** the source of truth; Markdown may still appear as authored
+prose inside a note `body`, but notes are typed YAML, not a separate Markdown
+SoT. Editing the YAML is editing the semantic layer. The graph, vector, and BM25
+stores are rebuildable projections and are never edited directly.
 
 Work against the bundled example as you read: [`corpus/beer_factory/`](../corpus/beer_factory).
 
