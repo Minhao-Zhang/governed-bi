@@ -4210,7 +4210,10 @@ def main(argv: list[str] | None = None) -> int:
             "Serve every question even after the crash rate says the run is lost. Off "
             "by default: the build phase has refused to spend on a doomed pool since "
             "--assert-build-coverage, and serve is where the money goes — the "
-            "2026-07-31 incident ran an arm to 48% crashed over two hours before "
+            # `%%`: argparse interpolates help strings, and a bare `%` here made
+            # `--help` raise `TypeError: %c requires int or char` — the driver's
+            # entire CLI surface was unreadable.
+            "2026-07-31 incident ran an arm to 48%% crashed over two hours before "
             "crash_rate > 0 disqualified it from summary.json. Pass this when "
             "finishing a crashed arm is the point (reproducing a provider fault). See "
             "governed_bi.eval.serve_breaker for what trips it and how often."
