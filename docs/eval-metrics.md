@@ -19,7 +19,7 @@ documented subset of `summary.json`, so "declared but absent" is expected there.
 | `manifest.json` | 49 (44 in every run) | `index.COMPARABILITY_KEYS`, `index.RESUME_DRIFT_KEYS` |
 | `generations.<arm>.jsonl` | 79 per (question, arm) | `_summarise_rows`, `analysis`, `power`, `error_taxonomy` |
 | `summary.json` | 100 | `index.quotable` |
-| `stage_events.jsonl` | 9 per (question, arm, stage) | read by hand; per-stage latency attribution |
+| `stage_events.jsonl` | 10 per (question, arm, stage) | read by hand; per-stage latency attribution |
 | `split_gap.json` | 6 | read by hand; `--split both` only |
 
 `stage_events.jsonl` is written by the pooled driver only, and `split_gap.json` only
@@ -257,7 +257,7 @@ reported without its excluded count reads as full coverage.
 `stage_events` provenance. A separate file rather than row fields because a turn
 emits many of these and the row is already the widest artifact.
 
-**fields** — `question_id`, `arm`, `db_id`, `run_id`, `turn_id`, `stage`, `status`, `ms`, `detail`
+**fields** — `question_id`, `arm`, `db_id`, `run_id`, `turn_id`, `seq`, `stage`, `status`, `ms`, `detail`
 
 ## 5. Split gap — `train - test` per arm
 

@@ -1090,6 +1090,11 @@ def _stage_event_rows(
                 # Same ids Langfuse / run.log use — join key for N12a three-sink accept.
                 "run_id": meta.get("run_id"),
                 "turn_id": meta.get("turn_id"),
+                # Per-turn order, from the producer. Rows from concurrent workers
+                # interleave in this one file, so file order is not turn order and a
+                # reader reconstructing a trajectory has to sort by (turn_id, seq).
+                # ``None`` for a record written before the producer stamped it.
+                "seq": event.get("seq"),
                 "stage": event.get("stage"),
                 "status": event.get("status"),
                 "ms": event.get("ms"),

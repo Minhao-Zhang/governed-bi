@@ -96,6 +96,8 @@ The wire format between this repo and the UI. Emit sites are all in `analyst/age
 | tool | `inspect_schema` | start / ok | `table_id`, `columns`, `licensed` |
 | tool | `sample_rows` | start / ok / blocked | `table_id`, `rows`, `reason` |
 | tool | `run_query` | start / ok / blocked / error / cap | `attempt`, `sql`, `verdict`, `layer`, `reason`, `allowed`, `rows` |
+| tool | `read_notes` | start / ok | *nothing on start* (no branch in `_tool_start_detail`); on resolve `note_id`, `found`, `withheld`, `chars` |
+| tool | `grep_notes` | start / ok | *nothing on start*; on resolve `pattern`, `hits`, `pattern_error`, `capped`, `chars` |
 | tool | `ask_user` | start / ok | `question`, `why` on start; **nothing on resolve** — it falls through to the generic `events.tool(step, "ok")`. See the clarification section |
 | final | `finalize` | ok / refused | the two-axis stamp plus the whole `provenance` dict |
 
@@ -106,6 +108,19 @@ Three properties a consumer has to know:
 - **`seq` is monotonic per turn**, reset by `GovEventStream.reset()`. Order by it, not by arrival.
 
 `run_query` is the event to copy when adding another: `attempt` + `verdict` + `layer` carry *identity*, not just arithmetic, which is what makes a repair loop legible ("attempt 1 blocked by term_semantics, attempt 2 ran").
+
+### The same detail, durably
+
+This stream is **ephemeral**: `_emit_event` opens with `if self._on_event is None: return`, and no eval arm passes an `on_event`. So `_resolve_tool` also writes each tool call to the turn's `StageRecorder` (`analyst.governance`), the stream's durable counterpart — which lands on `Answer.provenance.stage_events` and, in a pooled run, as rows in `stage_events.jsonl`. Before that, an entire run's tool trajectory survived only as the per-question histogram `n_tool_calls`: counts, with no ordering, no arguments and no results.
+
+- **One record per call for the exploration tools** — `search_corpus`, `inspect_schema`, `read_notes`, `grep_notes` — under the `Stage` member of the same name, carrying the detail in the table above minus `items` (a display payload).
+- **No record for `run_query`, and none for a `sample_rows` that reached the guardrail.** `GovernanceMiddleware.wrap_tool_call` already writes a `guardrail` + `execute` pair for those, each stamped `detail["action"]`; a third row would double-count an action the ledger and every rate derived from it already agree on.
+- **One exception:** a `sample_rows` refused by the licensing check returns *before* `check()` runs, so it writes neither of that pair. It gets a `sample_rows` record with `denied: true` — otherwise the call leaves no durable trace at all.
+- `status` on a stage record describes the *stage's* execution, not the turn's verdict, so it stays `ok`/`error`/`skipped`; an unlicensed inspect is `ok` with `licensed: false`. The stream's richer `miss`/`blocked` vocabulary is for the UI.
+- Every record carries a per-turn monotonic **`seq`** — the same concept as the stream's, its own counter (the stream's stalls at 0 when nothing is listening). Rows from concurrent eval workers interleave in one `stage_events.jsonl`, so reconstruct a trajectory by sorting on `(turn_id, seq)`, never on line number.
+- `ms` on a tool record is measured across `agent.stream` (start event → `ToolMessage`), so it includes tools-node dispatch, not just the tool body. `None` means the start was never seen, never that the call was instant.
+
+**Where the detail may go.** `stage_events` detail is free-form and now includes the model's own search strings (`search_corpus.query`, `grep_notes.pattern`), which can echo the question. `run_log.strip_stage_events_for_log` drops every non-numeric detail value, so the portable run log stays metadata-only without having to know those keys exist; the eval artifacts and the live stream keep the full detail, and both are surfaces where the question is already present.
 
 Terminal states a renderer has to keep distinct: a negative-example refusal stops at `refuse_gate/refused` with no further rows; a missing governed join is `assemble` then refusal; a repair is stacked `run_query` attempt rows ending in success; an exhausted budget is failed attempts then `finalize/refused` or a graded `unverified` row.
 

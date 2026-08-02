@@ -402,6 +402,22 @@ def _ledger_for_artifact(ledger: list | None) -> list | None:
     Keep per-action layer/verdict fields needed to prove graded-delivery recheck
     after the fact. Drop ``result`` (full row payloads — up to ``max_rows`` and
     non-JSON types like ``Decimal`` / ``bytes``) and every other key.
+
+    ``reason`` is kept, and that is a *deliberate divergence* from
+    ``viz.presenter._redact_provenance_for_client``, which nulls it (AUDIT S7). The
+    two surfaces are not the same threat model and the difference should be a
+    decision, not an accident. The presenter feeds an HTTP response reachable
+    anonymously, where a ``verdict="error"`` reason — raw ``str(err)``, and libpq
+    embeds the offending statement — hands a stranger question literals and
+    possibly PII. This function feeds ``generations.<arm>.jsonl``, a local file on
+    the machine that ran the eval, whose every row *already* carries the question
+    and the generated SQL verbatim (``sql`` two keys to the left of this comment).
+    A libpq echo of a statement already printed on the same row leaks nothing new,
+    while its absence is why "which layer blocked" was answerable and "why" was
+    nowhere on disk: 0 non-null reasons across 1351 baseline rows.
+
+    The rule, if this is ever copied: keep ``reason`` only where the SQL is already
+    kept and the sink is local. Never on a client surface.
     """
     if ledger is None:
         return None
@@ -409,7 +425,10 @@ def _ledger_for_artifact(ledger: list | None) -> list | None:
     for entry in ledger:
         if not isinstance(entry, dict):
             continue
-        row = {k: entry.get(k) for k in ("action", "verdict", "layer", "sql", "allowed")}
+        row = {
+            k: entry.get(k)
+            for k in ("action", "verdict", "layer", "reason", "sql", "allowed")
+        }
         result = entry.get("result")
         if isinstance(result, dict) and "row_count" in result:
             row["row_count"] = result["row_count"]

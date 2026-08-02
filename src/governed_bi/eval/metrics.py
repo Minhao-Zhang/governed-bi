@@ -968,9 +968,13 @@ SUMMARY_FIELDS: tuple[str, ...] = (
 #: it was absent from the register entirely — including from the doc's list of what a
 #: run writes, so a reader looking for latency attribution had no reason to know it
 #: existed.
+#: ``seq`` is the producer's per-turn order. The file has no other ordering
+#: guarantee — concurrent workers append to it — so a reader reconstructing one
+#: turn's trajectory (which the agent's tool calls now make possible) sorts by
+#: ``(turn_id, seq)``, never by line number.
 STAGE_EVENT_FIELDS: tuple[str, ...] = (
     "question_id", "arm", "db_id", "run_id", "turn_id",
-    "stage", "status", "ms", "detail",
+    "seq", "stage", "status", "ms", "detail",
 )
 
 

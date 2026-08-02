@@ -218,6 +218,9 @@ def test_stage_events_are_written_one_record_per_stage(tmp_path):
         "db_id": "db_a",
         "run_id": None,
         "turn_id": None,
+        # These fixture events predate ``seq``; a producer that did not stamp it
+        # relays as None rather than a fabricated 0.
+        "seq": None,
         "stage": "route",
         "status": "ok",
         "ms": 1.5,

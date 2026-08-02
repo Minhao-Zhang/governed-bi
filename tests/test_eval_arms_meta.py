@@ -81,6 +81,7 @@ def test_stage_diagnostics_are_relayed_verbatim(solve_with):
             "action": "run_query",
             "verdict": None,
             "layer": None,
+            "reason": None,
             "sql": None,
             "allowed": None,
         },
@@ -88,6 +89,7 @@ def test_stage_diagnostics_are_relayed_verbatim(solve_with):
             "action": "sample_rows",
             "verdict": None,
             "layer": None,
+            "reason": None,
             "sql": None,
             "allowed": None,
         },
@@ -135,6 +137,7 @@ def test_ledger_result_payload_is_projected_away(solve_with):
             "action": "run_query",
             "verdict": "pass",
             "layer": None,
+            "reason": None,
             "sql": "SELECT 1",
             "allowed": ["beer_factory.transaction"],
             "row_count": 2,
@@ -143,6 +146,28 @@ def test_ledger_result_payload_is_projected_away(solve_with):
     assert "result" not in projected[0]
     assert "licensed_ids" not in projected[0]
     json.dumps({"governance_ledger": projected}, ensure_ascii=False)
+
+
+def test_the_blocking_reason_survives_into_the_artifact():
+    """"Which layer blocked" was answerable and "why" was nowhere on disk — zero
+    non-null reasons across 1351 baseline rows, because the projection dropped the
+    key. A local eval artifact already carries the question and the SQL verbatim, so
+    keeping the reason beside them exposes nothing the row does not already say; the
+    client surface (``viz.presenter``) still redacts it (AUDIT S7)."""
+    from governed_bi.eval.arms import _ledger_for_artifact
+
+    (row,) = _ledger_for_artifact(
+        [
+            {
+                "action": "run_query",
+                "verdict": "block",
+                "layer": "ast_column_allowlist",
+                "reason": "column beer_factory.customers.ssn is not allowlisted",
+                "sql": "SELECT ssn FROM customers",
+            }
+        ]
+    )
+    assert row["reason"] == "column beer_factory.customers.ssn is not allowlisted"
 
 
 def test_projected_ledger_from_real_gateway_is_json_serializable():

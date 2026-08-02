@@ -1105,13 +1105,75 @@ def _tool_start_detail(step: str, args: dict) -> dict:
     return {}
 
 
-def _resolve_tool(rt: ServeRuntime, step, args, entry, tcid, licensed_delta, attempt):
-    """Emit one tool-resolve event; return the updated run_query attempt count.
+def _notes_detail(step: str, args: dict, content: str) -> dict:
+    """Durable + live detail for one ``read_notes`` / ``grep_notes`` call.
+
+    Both tools return a rendered string and stash nothing, so what they *did* has
+    to be read back off the ``ToolMessage``. The sentinels matched below are the
+    tools' own contract (``analyst.tools``); anything else is a real hit. Read back
+    rather than stashed through a side channel (as ``search_corpus`` does) because
+    these tools touch no state — there is nothing to stash, and a side channel for
+    two string checks would be the more fragile of the two couplings.
+    """
+    if step == "read_notes":
+        return {
+            "note_id": args.get("note_id"),
+            "found": not content.endswith(": not available"),
+            "withheld": content.endswith("(names excluded identifiers)"),
+            "chars": len(content),
+        }
+    # "(no matching notes)" is one line and zero hits; an "error:" line is a bad
+    # pattern, not a miss, and the two must not read alike.
+    bad_pattern = content.startswith("error:")
+    empty = bad_pattern or content in ("(no matching notes)", "")
+    lines = [ln for ln in content.splitlines() if ln and not ln.startswith("…")]
+    return {
+        "pattern": args.get("pattern"),
+        "hits": 0 if empty else len(lines),
+        "pattern_error": bad_pattern,
+        "capped": "…(output capped)" in content or "…(hit cap)" in content,
+        "chars": len(content),
+    }
+
+
+def _resolve_tool(
+    rt: ServeRuntime,
+    step,
+    args,
+    entry,
+    tcid,
+    licensed_delta,
+    attempt,
+    *,
+    ms: float | None = None,
+    content: str = "",
+):
+    """Emit one tool-resolve event + its durable stage record; return the updated
+    ``run_query`` attempt count.
 
     For governed tools the ledger ``entry`` is the source of truth (verdict /
     layer / reason / sql / rows), so the live event and the final
     ``governance_ledger`` never drift (Inv #10). Exploration tools have no
     ledger entry — their detail is reconstructed from args + the licensed delta.
+
+    Two sinks, deliberately: :class:`GovEventStream` is the *ephemeral* one and
+    goes nowhere at all when no ``on_event`` callback is attached, which is every
+    eval run — so the same detail is also written to the turn's
+    :class:`StageRecorder`, which lands on provenance and in
+    ``stage_events.jsonl``. Before that, a run's entire tool trajectory survived
+    only as a per-question histogram (``n_tool_calls``): counts, no ordering, no
+    arguments, no results.
+
+    What does **not** get a record: a ``run_query``, and a ``sample_rows`` that
+    reached the guardrail. ``GovernanceMiddleware.wrap_tool_call`` already writes
+    ``guardrail`` + ``execute`` for those (both stamped ``detail["action"]``), and
+    a third row would double-count an action the ledger and every rate derived
+    from it already agree on. The asymmetry is the ``sample_rows`` licensing
+    denial: it returns *before* ``check()`` runs, so it leaves neither of that
+    pair, and without the record below it leaves no durable trace at all.
+
+    ``ms`` is measured across ``agent.stream`` (start event → ToolMessage), so it
+    includes tools-node dispatch, not just the tool body.
     """
     entry = entry or {}
     if step == "run_query":
@@ -1133,23 +1195,43 @@ def _resolve_tool(rt: ServeRuntime, step, args, entry, tcid, licensed_delta, att
     elif step == "sample_rows":
         verdict = entry.get("verdict")
         result = entry.get("result") or {}
+        table_id = args.get("table_id") or entry.get("table_id")
         rt.events.tool(
             "sample_rows",
             _LEDGER_STATUS.get(verdict, "error"),
             step_id=tcid,
-            table_id=args.get("table_id") or entry.get("table_id"),
+            table_id=table_id,
             rows=result.get("row_count"),
             reason=entry.get("reason"),
         )
+        if verdict == "deny":
+            # The pre-guardrail licensing denial (see the docstring). ``status`` stays
+            # "ok" — the tool ran exactly as designed; the refusal is the detail.
+            rt.stages.record(
+                Stage.sample_rows,
+                ms=ms,
+                action="sample_rows",
+                table_id=table_id,
+                denied=True,
+                reason=entry.get("reason"),
+            )
     elif step == "inspect_schema":
         table_id = args.get("table_id")
         licensed = bool(licensed_delta)
+        columns = _column_count_for(rt.corpus, table_id) if licensed else 0
         rt.events.tool(
             "inspect_schema",
             "ok" if licensed else "miss",
             step_id=tcid,
             table_id=table_id,
-            columns=_column_count_for(rt.corpus, table_id) if licensed else 0,
+            columns=columns,
+            licensed=licensed,
+        )
+        rt.stages.record(
+            Stage.inspect_schema,
+            ms=ms,
+            table_id=table_id,
+            columns=columns,
             licensed=licensed,
         )
     elif step == "search_corpus":
@@ -1166,6 +1248,23 @@ def _resolve_tool(rt: ServeRuntime, step, args, entry, tcid, licensed_delta, att
             terms=hit.get("terms"),
             items=hit.get("items"),
         )
+        # ``items`` (the per-hit ids and names) is deliberately NOT recorded: it is a
+        # display payload for the live timeline, and the durable record wants the
+        # query and the shape of what came back, not a second copy of the corpus.
+        rt.stages.record(
+            Stage.search_corpus,
+            ms=ms,
+            query=args.get("query"),
+            tables=hit.get("tables"),
+            few_shots=hit.get("few_shots"),
+            metrics=hit.get("metrics"),
+            notes=hit.get("notes"),
+            terms=hit.get("terms"),
+        )
+    elif step in ("read_notes", "grep_notes"):
+        detail = _notes_detail(step, args, content)
+        rt.events.tool(step, "ok", step_id=tcid, **detail)
+        rt.stages.record(Stage(step), ms=ms, **detail)
     else:
         rt.events.tool(step, "ok", step_id=tcid)
     return attempt
@@ -1208,7 +1307,15 @@ def _stream_agent(rt: ServeRuntime, agent, init: dict, config: dict) -> dict:
                             tcid = tc.get("id")
                             step = tc.get("name") or "tool"
                             args = tc.get("args") or {}
-                            pending[tcid] = {"step": step, "args": args}
+                            # ``t0`` is the only clock this tool call gets: the
+                            # tools node is inside ``create_agent``, so nothing on
+                            # our side wraps the call itself. Measured here, the
+                            # span is start-event → ToolMessage.
+                            pending[tcid] = {
+                                "step": step,
+                                "args": args,
+                                "t0": time.perf_counter(),
+                            }
                             rt.events.tool(
                                 step, "start", step_id=tcid, **_tool_start_detail(step, args)
                             )
@@ -1217,8 +1324,24 @@ def _stream_agent(rt: ServeRuntime, agent, init: dict, config: dict) -> dict:
                         info = pending.pop(tcid, None) or {}
                         step = info.get("step") or "tool"
                         args = info.get("args") or {}
+                        t0 = info.get("t0")
+                        # None, not 0.0, when the start was never seen (a resumed
+                        # HITL turn replays the ToolMessage alone): unmeasured must
+                        # not read as instantaneous.
+                        ms = None if t0 is None else round((time.perf_counter() - t0) * 1000.0, 3)
+                        raw = getattr(msg, "content", "")
                         entry = next(ledger_iter, None) if step in ("run_query", "sample_rows") else None
-                        attempt = _resolve_tool(rt, step, args, entry, tcid, licensed_delta, attempt)
+                        attempt = _resolve_tool(
+                            rt,
+                            step,
+                            args,
+                            entry,
+                            tcid,
+                            licensed_delta,
+                            attempt,
+                            ms=ms,
+                            content=raw if isinstance(raw, str) else "",
+                        )
     except GovernanceHardStop as e:
         # Pair the L2 block with its pending run_query start so the row resolves
         # instead of hanging (the exception raised inside wrap_tool_call before

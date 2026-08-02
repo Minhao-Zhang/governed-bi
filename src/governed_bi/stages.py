@@ -53,17 +53,23 @@ class Stage(str, Enum):
     apart is the difference between fixing retrieval and fixing generation.
 
     Producers differ by stage and that is fine. ``schema_pick``, ``guardrail`` and
-    ``execute`` are stamped live by the serve path. ``shortlist``, ``table_select``
-    and ``sql_generate`` are attributed *after* the fact by
-    :mod:`governed_bi.eval.error_taxonomy`, which diffs the generated SQL against
-    gold — they describe a turn that answered *wrongly*, which the live path cannot
-    know because it has no gold to compare against. ``license``, ``search_corpus``,
-    ``inspect_schema``, ``sample_rows`` and ``repair`` are declared but nothing
-    emits them yet. They are kept because the vocabulary is the point — a stage name
-    that only appears once someone instruments it is better than a second,
-    competing name invented at that moment, which is how the nine vocabularies
-    this module replaced came about. Anything reading ``by_failed_stage`` should
-    treat an absent key as "not observed", never as zero.
+    ``execute`` are stamped live by the serve path, as are the agent's own tool
+    calls — ``search_corpus``, ``inspect_schema``, ``read_notes``, ``grep_notes``
+    and (only on the licensing denial that returns before the guardrail runs)
+    ``sample_rows``, all written from ``analyst.agent._resolve_tool``. A passing
+    ``run_query`` / ``sample_rows`` deliberately has **no** record of its own: the
+    middleware already writes the ``guardrail`` + ``execute`` pair for it, and a
+    third record would double-count an action the ledger and every rate already
+    agree on. ``shortlist``, ``table_select`` and ``sql_generate`` are attributed
+    *after* the fact by :mod:`governed_bi.eval.error_taxonomy`, which diffs the
+    generated SQL against gold — they describe a turn that answered *wrongly*,
+    which the live path cannot know because it has no gold to compare against.
+    ``license`` and ``repair`` are declared but nothing emits them yet. They are
+    kept because the vocabulary is the point — a stage name that only appears once
+    someone instruments it is better than a second, competing name invented at that
+    moment, which is how the nine vocabularies this module replaced came about.
+    Anything reading ``by_failed_stage`` should treat an absent key as "not
+    observed", never as zero.
     """
 
     # Graph rails, in execution order.
@@ -84,6 +90,13 @@ class Stage(str, Enum):
     search_corpus = "search_corpus"
     inspect_schema = "inspect_schema"
     sample_rows = "sample_rows"
+    # The two note tools. Named separately rather than folded into
+    # ``search_corpus`` because they are a different retrieval surface (prose the
+    # curator wrote, not assets) and collapsing them would make "how often does the
+    # agent read notes?" unanswerable — the question the notes redesign exists to
+    # answer.
+    read_notes = "read_notes"
+    grep_notes = "grep_notes"
     table_select = "table_select"
     sql_generate = "sql_generate"
     guardrail = "guardrail"

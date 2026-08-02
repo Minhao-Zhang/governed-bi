@@ -219,6 +219,7 @@ def test_an_observer_that_raises_cannot_change_the_verdict():
 def test_strip_stage_events_keeps_numbers_and_drops_every_string():
     events = [
         {
+            "seq": 4,
             "stage": "guardrail",
             "status": "ok",
             "ms": 1.25,
@@ -227,6 +228,7 @@ def test_strip_stage_events_keeps_numbers_and_drops_every_string():
     ]
     assert strip_stage_events_for_log(events) == [
         {
+            "seq": 4,
             "stage": "guardrail",
             "status": "ok",
             "ms": 1.25,
@@ -255,6 +257,7 @@ def test_a_content_carrying_detail_never_reaches_the_metadata_record(tmp_path):
         provenance={
             "stage_events": [
                 {
+                    "seq": 0,
                     "stage": "search_corpus",
                     "status": "ok",
                     "ms": 4.0,
@@ -269,7 +272,13 @@ def test_a_content_carrying_detail_never_reaches_the_metadata_record(tmp_path):
 
     assert "secret revenue" not in str(rec)
     assert rec["stage_events"] == [
-        {"stage": "search_corpus", "status": "ok", "ms": 4.0, "detail": {"n_hits": 2}}
+        {
+            "seq": 0,
+            "stage": "search_corpus",
+            "status": "ok",
+            "ms": 4.0,
+            "detail": {"n_hits": 2},
+        }
     ]
 
 
