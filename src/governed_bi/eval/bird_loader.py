@@ -26,6 +26,20 @@ logger = logging.getLogger("governed_bi.eval")
 _SPLITS = ("test", "train")
 _DEFAULT_GOLD_SQL_FIELD = "sql_sqlite"
 
+#: Sidecar artifact that rewrites the handful of gold statements containing a
+#: ``SELECT *`` projection into an explicit column list.
+_STAR_EXPANDED_FILE = "gold_star_expanded.jsonl"
+
+#: ``gold_sql_field -> the field in gold_star_expanded.jsonl that supersedes it``.
+#:
+#: Only the two Postgres fields are listed. ``sql_sqlite`` runs against the
+#: un-obfuscated vendored database, which carries no decoy columns, so expanding
+#: its star would be a no-op with a chance of being wrong.
+_STAR_EXPANDED_FIELD = {
+    "sql_base": "sql_base_expanded",
+    "sql_rename": "sql_rename_expanded",
+}
+
 
 def _rows_path(dataset_dir: Path | str, split: str) -> Path:
     """Resolve ``<dataset_dir>/<split>_final.jsonl``, validating ``split``."""
@@ -66,11 +80,15 @@ def _parse_rows(path: Path) -> list[dict]:
 #: pattern; rows with no ``db_id`` are dropped, which every caller already did.
 _ROWS_CACHE: dict[tuple[str, int, int], dict[str, list[dict]]] = {}
 
+#: Same keying discipline as ``_ROWS_CACHE``, for the star-expansion sidecar.
+_STAR_CACHE: dict[tuple[str, int, int], dict[str, dict]] = {}
+
 
 def clear_split_cache() -> None:
     """Drop the parsed-split cache. For tests that rewrite a fixture in place within
     the same mtime granularity; production invalidates on (mtime, size)."""
     _ROWS_CACHE.clear()
+    _STAR_CACHE.clear()
 
 
 def _rows_by_db(dataset_dir: Path | str, split: str) -> dict[str, list[dict]]:
@@ -99,6 +117,32 @@ def _iter_rows(dataset_dir: Path | str, split: str):
         yield from rows
 
 
+def load_star_expanded_gold(dataset_dir: Path | str) -> dict[str, dict]:
+    """``{question_id: row}`` from ``gold_star_expanded.jsonl``, or ``{}`` if absent.
+
+    Keyed on ``question_id`` alone, which the artifact itself is: it carries no
+    ``db_id``, and question ids are unique across the whole split pool (6,743 ids,
+    no duplicates, none spanning two dbs), so the id identifies a question.
+    """
+    path = Path(dataset_dir) / _STAR_EXPANDED_FILE
+    if not path.exists():
+        # Absent is normal: test fixtures ship splits without the sidecar, and a
+        # dataset whose gold contains no star projection needs no such file.
+        return {}
+    stat = path.stat()
+    key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+    cached = _STAR_CACHE.get(key)
+    if cached is None:
+        cached = {}
+        for row in _parse_rows(path):
+            qid = row.get("question_id")
+            if qid is None:
+                continue
+            cached[str(qid)] = row
+        _STAR_CACHE[key] = cached
+    return cached
+
+
 def load_bird_items(
     dataset_dir: Path | str,
     db_id: str,
@@ -113,10 +157,25 @@ def load_bird_items(
     :class:`EvalItem`. Also preserves ``question_id``, ``difficulty``, and
     ``evidence`` when present.
 
+    **A ``SELECT *`` gold statement is replaced by its star-expanded twin** from
+    ``gold_star_expanded.jsonl`` when the sidecar has one for that question and the
+    requested field is ``sql_base`` / ``sql_rename``. This is not a convenience: the
+    precomputed ``gold_result_hashes_*.jsonl`` were computed from the *expanded*
+    statement, and their ``sql_sha256`` proves it — over the 6,743 gold rows,
+    ``sql_sha256`` equals ``sha256(sql_rename)`` for 6,740 and ``sha256`` of the
+    expanded twin for the remaining 3, with nothing else unexplained. On the
+    ``rename_decoy`` databases the two are *not* the same query: ``SELECT *`` also
+    returns the injected decoy columns, so submitting the unexpanded gold produces
+    a result the gold hash cannot match and the grader marks the answer key wrong
+    against itself (``mondial_geo`` / ``train_8505``: 16 rows either way, 7 columns
+    submitted vs. the 4 gold was hashed from).
+
     Raises ``ValueError`` for an unknown ``split``, ``FileNotFoundError`` if the
     split file is missing, and ``ValueError`` (naming the ``question_id``) if a
     matching row lacks ``question`` or the chosen gold SQL field.
     """
+    expanded_field = _STAR_EXPANDED_FIELD.get(gold_sql_field)
+    expanded = load_star_expanded_gold(dataset_dir) if expanded_field else {}
     items: list[EvalItem] = []
     for row in _rows_by_db(dataset_dir, split).get(str(db_id), ()):
         qid = row.get("question_id", "<unknown>")
@@ -127,6 +186,16 @@ def load_bird_items(
             raise ValueError(
                 f"BIRD row question_id={qid} (db_id={db_id}) is missing {exc.args[0]!r}"
             ) from exc
+        if expanded_field:
+            override = (expanded.get(str(qid)) or {}).get(expanded_field)
+            if override:
+                logger.debug(
+                    "question_id=%s: using %s (star-expanded gold) instead of %s",
+                    qid,
+                    expanded_field,
+                    gold_sql_field,
+                )
+                sql = override
         items.append(
             EvalItem(
                 question=question,
