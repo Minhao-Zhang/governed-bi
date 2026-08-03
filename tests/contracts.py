@@ -38,6 +38,12 @@ PARCELS: dict[str, tuple[str, str]] = {
     "E": ("retrieve", "section 6"),
     "F": ("serve", "section 7"),
     "G": ("eval", "section 8"),
+    # Added 2026-08-03 with the embedder adapters. A package absent from this table is
+    # invisible to all three states -- :func:`built_but_unaccepted` iterates it, so
+    # `model/` would have existed, unaccepted, and unreported. That is the failure this
+    # register exists to prevent, one level up: not an unaccepted parcel, but a parcel
+    # nothing knows to ask about.
+    "I": ("model", "section 9"),
 }
 
 
