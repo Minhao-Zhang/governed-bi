@@ -137,17 +137,24 @@ def test_b2_whole_row_aggregates_are_blocked(check, sql) -> None:
     assert check(sql, licensed=frozenset({"customers"}))["passed"] is False, BLOCKED
 
 
-def test_b4_a_missing_allowlist_refuses_rather_than_falling_through(check) -> None:
+def test_b4_a_missing_allowlist_raises_rather_than_falling_through(check) -> None:
     """B4. v1 wrapped the pre-execute recheck in ``if allowlist is not None``, so a
     missing argument fell through to ``gateway.execute`` — the guard added to make the
     path defence-in-depth had removed the only authorization on it.
 
-    Absent must mean refuse, never permit. Whether that is an exception or a failed
-    verdict is the implementer's call; silently passing is not.
+    **It must raise, not return a blocked verdict**, and an earlier version of this
+    docstring said either was acceptable. That was wrong, and the test below never
+    permitted it: ``pytest.raises`` fails when no exception is raised, so a False
+    verdict would have failed anyway — the prose and the assertion disagreed.
+
+    Raising is the correct half. ``licensed=None`` is a **caller** error, not a fact
+    about the SQL. A verdict reading "blocked at the TABLES layer" would be recorded as
+    *this query was unsafe* when the truth is *the authorization argument was never
+    wired up* — two different incidents, and collapsing them is B10's shape: two
+    meanings for one signal, drifting.
     """
     with pytest.raises(Exception):
-        result = check("SELECT id FROM customers", licensed=None)
-        assert result["passed"] is False, BLOCKED
+        check("SELECT id FROM customers", licensed=None)
 
 
 def test_b4_sibling_an_empty_licensed_set_is_not_a_wildcard(check) -> None:
