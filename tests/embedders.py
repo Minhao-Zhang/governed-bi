@@ -37,10 +37,22 @@ SMALL_BATCH = 4
 
 
 def openai_available() -> bool:
-    """Whether the OpenAI adapter can run. Reads presence only, never the value."""
-    import os
+    """Whether the OpenAI adapter can run. Reads presence only, never the value.
 
-    return bool(os.environ.get(OPENAI_API_KEY_VAR))
+    Goes through ``tools/credentials.py`` rather than ``os.environ`` directly, and the
+    difference is not cosmetic: this function read only the process environment while the
+    DSN fixture next door also read ``.env``, so **this contract skipped its OpenAI half
+    over a key that was present in ``.env`` the whole time** — and said in capitals that it
+    had exercised one adapter of two, which was a true statement about a false situation.
+    Two readers of one concept, differing where nobody looked until it cost coverage.
+    """
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+    from credentials import have
+
+    return have(OPENAI_API_KEY_VAR)
 
 
 def make_embedder(adapter: str, **kwargs: Any) -> Any:

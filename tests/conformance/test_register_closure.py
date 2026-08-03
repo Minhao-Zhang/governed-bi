@@ -351,7 +351,8 @@ def test_the_adr_and_the_gate_declare_the_same_file_length_tiers() -> None:
     """
     import re
 
-    adr = (Path(__file__).resolve().parent.parent.parent / "docs" / "adr" / "0005-v2-memory-layer-and-faceted-retrieval.md").read_text(encoding="utf-8")
+    adrs = Path(__file__).resolve().parent.parent.parent / "docs" / "adr"
+    adr = (adrs / "0005-v2-memory-layer-and-faceted-retrieval.md").read_text(encoding="utf-8")
     match = re.search(r"soft \*\*(\d+)\*\*, hard \*\*(\d+)\*\*", adr)
     assert match, "ADR 0005 §6 no longer states the file-length tiers in a parseable form"
     assert (int(match.group(1)), int(match.group(2))) == _declared_limits(), (
