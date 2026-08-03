@@ -553,7 +553,7 @@ hole: a channel that silently stops being configured reports `not_configured`
 and would otherwise be excused by the very gate meant to catch it.
 
 **v1's incident was exactly this class and there was no field for it at all** —
-schema-pick accuracy of 69.9% published under a rate-limited embedder,
+schema-pick accuracy of 69.9% published under a rate-limited embedder, <!-- [retired] -->
 re-measured at 91.0% with quota free.
 
 **This is a quotability input, not a diagnostic.** A run where extraction failed
@@ -1098,10 +1098,34 @@ makes facet calls uncacheable), default TTL 5 minutes.
 [Anthropic prompt caching docs, retrieved 2026-08-02.]
 
 **The prefix worth caching is the accumulated tool returns, not the context
-block.** Median input is 30,923 tokens against 4,450 of context — draft 2 did
-its arithmetic on the small number and concluded "modest". On a turn with
-`n_tool_calls + 1` model calls, everything before the last call is cacheable
-prefix, and that grows with each tool return.
+block.** On a turn with `n_tool_calls + 1` model calls, everything before the
+last call is cacheable prefix, and that grows with each tool return. Draft 2 did
+its arithmetic on the context block alone and concluded "modest".
+
+**Both figures earlier drafts quoted here were one arm's, stated as if they were
+the system's.** Measured per arm on the `opus48-high-ladder` run, n = 1,351 each:
+
+| arm | median input tokens | median context chars | context ≈ share of input |
+|---|---|---|---|
+| `baseline` | 17,115 | 2,154 | 3.1% |
+| `seeded` | 17,892 | 4,498 | 6.3% |
+| `curated` | **30,923** | **17,782** | 14.4% |
+| `curated_sme` | 32,572 | 19,936 | 15.3% |
+
+30,923 and 17,782 (≈ 4,450 tokens) are the `curated` row — not medians of
+anything. Pooled across all 19,095 turns the median context is 6,007 chars, and
+the arms span 8x. Quoting either number unqualified is the R3 violation
+(`lessons-from-v1.md`), and it happened in this ADR.
+
+**Two consequences for the criterion below.** First, **context reduction cannot
+reach 30%**: at ~14% of input on the richest arm, deleting the context block
+entirely would not get there, so the target has to come from caching. Second,
+**caching was measurably off in every run the target was set from** —
+`cache_read_tokens` is 0 across all three ladders (nonzero only in a later
+47-question run, where it reached 43% of `curated` input). The headroom is real
+but unexercised, which is what makes the gate falsifiable rather than
+self-fulfilling. Share is computed at 4 chars/token and is an estimate; the
+gate reads provider-reported `usage`, never an estimate.
 
 **Acceptance criterion — a cost measurement with numbers in it:**
 
@@ -1204,13 +1228,43 @@ left `sample_rows` out — and real database values are the single largest sourc
 of arm-to-arm variation in what the model actually sees. I4 says *everything*
 delivered, and the type has to mean it.
 
-**A total context budget is a knob, and I3 survives its eviction order.** The
-per-type budgets bound what is *ranked*, not what is *rendered*: `resolve` pulls
-in every column of every table in the set and pulled-in assets do not consume
-budget, so with 8 tables plus join endpoints plus up to 5 Steiner points, and
-v1's measured 42–275 columns per schema, structural column volume is an order of
-magnitude above the column budget of 30. Without a ceiling, §3.4's "≥30% cost
-reduction" gate has nothing to be 30% of. Eviction order, most-evictable first:
+**A total context budget is a knob, it is counted in characters, and it is a
+backstop rather than a cost lever.** The per-type budgets bound what is *ranked*,
+not what is *rendered*: `resolve` pulls in every column of every table in the set
+and pulled-in assets do not consume budget, so with 8 tables plus join endpoints
+plus up to 5 Steiner points, and v1's measured 42–275 columns per schema,
+structural column volume is an order of magnitude above the column budget of 30.
+A ceiling has to exist.
+
+`context_budget_chars = 80_000`. **Characters, not tokens**, because a token
+count needs a tokeniser per provider and has to be correct at delivery time in
+production, where characters are free and exact.
+
+**The value sits above the largest context v1 ever delivered** — 76,354 chars,
+max over 19,095 turns — so it provably never fires on observed traffic. That is
+the point, and the reason is a measurement, not caution. Fire rate by arm:
+
+| arm | n | >24k | >40k | >60k | >80k |
+|---|---|---|---|---|---|
+| `baseline` | 5,481 | 0.0% | 0.0% | 0.0% | 0.0% |
+| `seeded` | 5,461 | 0.0% | 0.0% | 0.0% | 0.0% |
+| `curated` | 5,451 | **23.5%** | 5.3% | 1.9% | 0.0% |
+| `curated_sme` | 2,702 | **27.4%** | 5.5% | 1.6% | 0.0% |
+
+Every binding threshold truncates **only the treated arms**. A 24,000 cap would
+cut the treatment on a quarter of `curated` turns and on none of `baseline`'s —
+weakening the treatment in exactly the arms whose treatment the ladder exists to
+measure, and reporting it as delivered. So: the cap is a bound against a
+pathological corpus or query, **not** the instrument for §3.4, and when it fires
+that must be recorded (I4, and the R2 rule in `lessons-from-v1.md`).
+
+*An earlier draft of this section said the cost gate "has nothing to be 30% of"
+without a ceiling. That was wrong twice over: §3.4 is denominated in dollars via
+a dated price table, not in this budget — and the context block is only ~14% of
+input tokens on the `curated` arm, so deleting it entirely would not reach 30%.
+See §3.4.*
+
+Eviction order, most-evictable first:
 
 ```
 1. body of pulled-in assets        (already excluded by the hit/pulled-in rule)
@@ -1263,10 +1317,34 @@ which is the only side that holds gold, so it is not a serve-recorded field · `
 per-facet `ChannelState` for extraction / lexical / semantic (§2.3) · `usage` including
 cache read and write tokens · `failure` · the resolved knob set (§5).
 
+**Required is not the same as always-written, and conflating them breaks a gate.**
+Eight of those fields — `facet_hits`, `facet_channels`, `pulled_in`, `crossings`,
+`tool_delivered`, `negative`, `licensed`, `schemas` — are owned by stages a
+**refusal path never reaches**. A guard-blocked turn arrives at `stamp` without
+having run the fan-out. Declaring them unconditionally required leaves two
+choices, and both are defects:
+
+1. The presence check fails on **every** guard-blocked turn, so the check gets
+   disabled or its failures get ignored.
+2. The producer writes an empty collection to satisfy it — **and then the
+   degradation gate reads an empty `facet_channels` as "no channel differed from
+   its expectation", i.e. as clean, on a turn where no channel ran at all.**
+
+Absence reading as agreement, in the field added to stop absence reading as
+agreement. So they are declared **stage-conditional**: `Absence.not_applicable`,
+absent only on paths whose owning stage did not run
+(`register/record.py`), and the gate is worded to distinguish the two cases:
+
+> on turns where the fan-out ran, no channel state differs from its declared
+> expectation; **the observed count is published beside the rate**, so "five
+> facets ran and none degraded" cannot be confused with "no facet ran".
+
 **Quotability preconditions** (refuse the comparison, do not warn):
 
 ```
-facet_degradation_rate      == 0      over the arm
+facet_degradation_rate      == 0      over the arm, AND the count of turns
+                                      where the fan-out ran is published with it
+                                      (a rate of 0 over 0 turns is not a pass)
 negative error_failed_open  == 0
 guardrail_errors            == 0      ADR 0006 §12
 crash_rate                  == 0
@@ -1409,7 +1487,8 @@ configuration no deployment could run).
 | `max_crossings` | 2 | exceed ⇒ decline |
 | `expand_hops` | 0 | off until measured |
 | `negative_tau` | **unset** | **gate ships disabled** |
-| `cache_cost_reduction_target` | 30% over N=200 | §3.4 acceptance |
+| `cache_cost_reduction_target` | 30% over N=200 | §3.4 acceptance; comes from **caching**, not from context reduction — context is only ~14% of input |
+| `context_budget_chars` | 80,000 | **chars, not tokens**; a backstop above v1's observed max of 76,354. Any binding value truncates only the treated arms (§3.6) |
 | facet / rewrite model | small (Haiku-class) | concurrent; latency counts once |
 | `read_body_max_tokens` | ~20k | below the middleware eviction threshold |
 

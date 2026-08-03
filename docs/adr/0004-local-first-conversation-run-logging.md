@@ -1,5 +1,15 @@
 # 0004: Local-first conversation + run logging
 
+> **Superseded (2026-08-03).** The implementation this ADR describes was deleted
+> in commit `2347ae3`. Its premise survives — logging is local-first and durable,
+> written at existing middleware seams rather than through a new sink — but the
+> field-by-field design is replaced by a **declared register**: 
+> [ADR 0005](0005-v2-memory-layer-and-faceted-retrieval.md) §4 and
+> `src/governed_bi/register/record.py`, where every logged field names its
+> producing stage and states whether absence is an error. The reason for the change
+> is in [`lessons-from-v1.md`](../lessons-from-v1.md): a hand-maintained field list
+> let a degradation counter reach the summary that no gate ever read.
+
 - **Status:** Accepted (2026-07-22). M2 metadata track + durable conversation
   checkpointer shipped; M5 gated full-content + deep-agent logging in progress.
 - **Deciders:** project owner + design session

@@ -28,7 +28,7 @@
 > *Routing probe conditions* → `docs/adr/0003`:89 inline. That ADR is **Accepted**, so per the
 > checklist's X.5.8 policy its pointers get relocated one by one, not covered by a header note.
 
-_Implements [D15](../design-decisions.md#d15-multi-schema-serving-one-database-many-schemas)
+_Implements [D15](../../design-decisions.md#d15-multi-schema-serving-one-database-many-schemas)
 (one database, many schemas). Companion to
 the single-DB arm/method record in git history (
 terminology) and the operator checklist in

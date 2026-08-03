@@ -1,5 +1,12 @@
 # 用法（快速上手）
 
+> **本文档描述的是 v1,已在 commit `2347ae3` 中删除。** 保留在原路径是因为它是仓库的入口之一,
+> 目前正依据 [ADR 0005](adr/0005-v2-memory-layer-and-faceted-retrieval.md) 与
+> [ADR 0006](adr/0006-execution-time-governance.md) 重写。在重写完成之前,
+> 请把本文中所有具体的说法 —— 模块名、文件路径、工具名、实测数字 —— 都当作历史记录,
+> 而不是对当前系统的描述。v1 的其余文档在 [`docs/v1/`](v1/),
+> 哪些实测结论经复核后仍然成立、哪些已作废,记在 [`lessons-from-v1.md`](lessons-from-v1.md)。
+
 _[English](usage.md) · [简体中文](usage.zh.md)_
 
 > 新手？[演练](usage.zh.md)是一份引导式的“克隆 → 第一个问题”教程；本页是参考性的快速上手。
@@ -195,7 +202,7 @@ curl -s localhost:8000/chat -H 'content-type: application/json' \
 标志）。本机覆盖写在 git-ignored 的 `governed_bi.local.toml`。由于展示逻辑位于与
 UI 无关的 `governed_bi.viz.presenter` 中（不依赖任何 UI 框架），一个独立的前端可以
 消费同样的视图模型——交互式 UI 是一个独立项目，参见
-[docs/ui-frontend-handoff.md](ui-frontend-handoff.md)。
+[docs/ui-frontend-handoff.md](v1/ui-frontend-handoff.md)。
 
 ## 运行测试
 
@@ -205,6 +212,6 @@ uv run pytest -q
 
 ## 接下来
 
-- 如需编写或编辑 corpus 资产，请参见 [Corpus authoring](corpus-authoring.md)。
-- 如需查看逐字段的资产规格，请参见 [Asset schemas](asset-schemas.md)。
+- 如需编写或编辑 corpus 资产，请参见 [Corpus authoring](v1/corpus-authoring.md)。
+- 如需查看逐字段的资产规格，请参见 [Asset schemas](v1/asset-schemas.md)。
 - 如需了解这一切背后的设计，请从 [docs/README.md](README.zh.md) 开始阅读。

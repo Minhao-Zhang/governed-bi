@@ -1,6 +1,6 @@
 # 近期计划：第一批实现
 
-> **2026-08-02：Langfuse 已整体移除，LangSmith 是唯一 tracer**（[design-decisions.md](../design-decisions.md) D20）。
+> **2026-08-02：Langfuse 已整体移除，LangSmith 是唯一 tracer**（[design-decisions.md](../../design-decisions.md) D20）。
 > 下文 N12 一节里「同时喂两个 tracer」「Langfuse 读 `langfuse_session_id` / `langfuse_user_id` /
 > `langfuse_tags`」按历史读 —— 那三个键已删。**「一个 `run_id` 在三个 sink 里都查得到」这条
 > 验收判据仍然成立**，第三个 sink 换成 LangSmith trace。

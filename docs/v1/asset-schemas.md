@@ -1,9 +1,9 @@
 # Agentic BI Asset Schemas
 
-The per-asset YAML field spec for the [Agentic BI System](architecture.md)
-corpus. Concretizes **D9** in [Design decisions](design-decisions.md) (Git+YAML
+The per-asset YAML field spec for the [Agentic BI System](../architecture.md)
+corpus. Concretizes **D9** in [Design decisions](../design-decisions.md) (Git+YAML
 typed assets, curator-authored / human-audited); storage rationale in
-[Architecture](architecture.md) §5; term definitions in [Glossary](glossary.md).
+[Architecture](../architecture.md) §5; term definitions in [Glossary](../glossary.md).
 Adapted from *《从数据到智能》* Ch.3, with the authoring model inverted.
 
 > This is the canonical field spec. The Pydantic implementation lives in
@@ -67,7 +67,7 @@ Escalation path: curator flags `suspect` → human reviews (D6) → leaves it, o
 
 ## Clarifications (an Audit-tier block, D12)
 
-A curator that cannot resolve a question from Facts + the batch **records it instead of guessing**, as a `clarification` block on the asset's **Audit tier**. Because it is Audit-tier, it is **never injected into the Analyst's context** (per the consumption contract above) — an open question cannot leak into SQL-gen or retrieval. While a question is open the asset still serves a best-effort answer from its Inference tier (low `confidence` + a `suspect` caveat); a **Responder** (a human **SME** in prod, a **Simulated SME** in eval) answers it, and `accept_answer` flips it to `answered`, re-stamping provenance. See [D12](design-decisions.md#d12-clarification-protocol).
+A curator that cannot resolve a question from Facts + the batch **records it instead of guessing**, as a `clarification` block on the asset's **Audit tier**. Because it is Audit-tier, it is **never injected into the Analyst's context** (per the consumption contract above) — an open question cannot leak into SQL-gen or retrieval. While a question is open the asset still serves a best-effort answer from its Inference tier (low `confidence` + a `suspect` caveat); a **Responder** (a human **SME** in prod, a **Simulated SME** in eval) answers it, and `accept_answer` flips it to `answered`, re-stamping provenance. See [D12](../design-decisions.md#d12-clarification-protocol).
 
 ```yaml
 # on any asset, under its audit block

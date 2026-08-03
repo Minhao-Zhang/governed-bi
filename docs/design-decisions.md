@@ -1,5 +1,14 @@
 # Agentic BI Design Decisions
 
+> **This document describes v1, which was deleted in commit `2347ae3`.** It is kept at this path
+> because it is an entry point to the repository, and it is being rewritten against
+> [ADR 0005](adr/0005-v2-memory-layer-and-faceted-retrieval.md) and
+> [ADR 0006](adr/0006-execution-time-governance.md). Until that rewrite lands,
+> treat every specific claim below — module names, file paths, tool names, measured
+> numbers — as historical rather than current. The rest of the v1 documentation is
+> in [`docs/v1/`](v1/), and [`lessons-from-v1.md`](lessons-from-v1.md) records which of its
+> measurements survived re-examination and which were retired.
+
 _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 
 Settled decisions D1–D19 for the [Agentic BI System](architecture.md), with
@@ -115,7 +124,7 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 > CI behind every corpus change. Certification (blessing a *definition*) stays
 > distinct from high-stakes answer sign-off (blessing an *answer*).
 
-- **Built (scope):** this repo ships an **audit surface** — the `viz.presenter` view models plus the optional `governed_bi.api` HTTP API (browse/chat; corpus write gated by `allow_edit`, not an unqualified read-only API) — with the interactive UI as a separate project; interactive corpus editing and save-to-PR are **out of scope here** (generic git/PR + CI in dev, the enterprise app in prod). The repo owns the write *primitives* a downstream editor reuses: the asset schema, `corpus.serialize.write_corpus`, and `corpus.validate` + CLI (the CI gate). See [Viz](viz.md).
+- **Built (scope):** this repo ships an **audit surface** — the `viz.presenter` view models plus the optional `governed_bi.api` HTTP API (browse/chat; corpus write gated by `allow_edit`, not an unqualified read-only API) — with the interactive UI as a separate project; interactive corpus editing and save-to-PR are **out of scope here** (generic git/PR + CI in dev, the enterprise app in prod). The repo owns the write *primitives* a downstream editor reuses: the asset schema, `corpus.serialize.write_corpus`, and `corpus.validate` + CLI (the CI gate). See [Viz](v1/viz.md).
 - **Extended by D12:** the **clarification protocol** adds curator-emitted questions and an `accept_answer` primitive on top of this gate, and keeps the interactive round-trip downstream.
 
 ## D7: Identity
@@ -185,7 +194,7 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 - **Graph is a projection (in-memory built; Neo4j deferred).** `join` (+ `term_relationship`, + metric/column lineage) project into a property graph. BIRD uses an **in-memory graph** (networkx) for Steiner-tree planning; **that projection and the Steiner join planner are built** (the planner cost model is a tunable heuristic). **Neo4j is an optional derived projection** for enterprise scale (and a stated learning goal), rebuilt from YAML by a loader, and stays deferred.
 - **Alternatives:** custom DB-backed schema (loses git diff/PR/audit; authoring-in-DB breaks the source-of-truth invariant); typed decoy flag (not transferable to an enterprise deployment).
 - **Namespace field renamed `db` → `schema` (D15, 2026-07-11).** The per-asset namespace historically named `db` always denoted a *schema* (one YAML subtree per namespace); it is renamed `schema` everywhere. IDs are unchanged — they already embed the namespace (`tbl_<schema>_<name>`) — so the rename is a projection fix, not an identity change. See **D15**.
-- Concretizes the **Markdown-first Storage** ADR; detail in [Architecture](architecture.md) §5, per-asset field spec in [Asset schemas](asset-schemas.md).
+- Concretizes the **Markdown-first Storage** ADR; detail in [Architecture](architecture.md) §5, per-asset field spec in [Asset schemas](v1/asset-schemas.md).
 
 ## D10: Curator = Proposer + Adversary
 
@@ -196,11 +205,11 @@ Fit: the obfuscation dimensions *are* our target failure modes. Decoy = concept�
 > **refute** each before it is committed (`proposed → draft`). **Facts** (dtypes,
 > uniqueness, samples) are generated **programmatically** and never checked. The
 > adversary boundary *is* the Facts/Inference boundary. Full loop in
-> [Curator](curator.md).
+> [Curator](v1/curator.md).
 
 - **Alternative:** a single-agent curator (cheaper, but self-review is weak: a model rarely refutes its own plausible inference, and that's where owner-less layers silently rot).
 - **Consequence:** dev = adversary is the only reviewer (auto-accept on pass); prod = automated first-line reviewer before human certification (D6). Proposer claim + adversary verdict both land in the asset `audit` block → the viz/audit surface.
-- **Built:** the deterministic scaffold (programmatic Facts profiling, naming-convention FK candidates, and an adversary `review` wrapping the CI validator) plus the **deepagents build harness** (`curator/deep_agent.py`: a deep agent over Facts-profiling + read-only-probe tools; construction verified offline, the autonomous run model-gated). The adversary is structural only — reference integrity, id conventions, join-ON column membership, note budgets — so a corpus that clears it is not semantically certified; the per-asset LLM `refute` designed for that role never reached a caller and was deleted (R6). Still seams: LLM authoring of joins / terms / metrics / notes, and the self-eval train-EX loop (`rule` / `skill` are retired names — D17); those are what make `curated` beat `baseline`. See [Curator](curator.md).
+- **Built:** the deterministic scaffold (programmatic Facts profiling, naming-convention FK candidates, and an adversary `review` wrapping the CI validator) plus the **deepagents build harness** (`curator/deep_agent.py`: a deep agent over Facts-profiling + read-only-probe tools; construction verified offline, the autonomous run model-gated). The adversary is structural only — reference integrity, id conventions, join-ON column membership, note budgets — so a corpus that clears it is not semantically certified; the per-asset LLM `refute` designed for that role never reached a caller and was deleted (R6). Still seams: LLM authoring of joins / terms / metrics / notes, and the self-eval train-EX loop (`rule` / `skill` are retired names — D17); those are what make `curated` beat `baseline`. See [Curator](v1/curator.md).
 
 ## D11: External review (2026-07-09)
 
@@ -577,7 +586,7 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
   respecting the "RRF-of-weak-lexical hurts" finding (recall@3 0.535 < embedding
   0.70 — a *retired* measurement, cited here for the design rationale it produced,
   not as a current number; see the retirement note in
-  [datalake-run.md](plans/datalake-run.md#status)). (3) *Agent-fetch*: new read-only, non-licensing `read_notes` /
+  [datalake-run.md](v1/plans/datalake-run.md#status)). (3) *Agent-fetch*: new read-only, non-licensing `read_notes` /
   `grep_notes` tools, safe by topology.
 - **Governance upgrade.** As an `Asset`-union member, `NoteAsset` inherits the
   three field tiers, the `for_analyst` audit-strip, `Provenance`, `validate_corpus`,
@@ -703,7 +712,7 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
   correction policy; only `summary.json` answers "could this run have resolved it".
   Adjacency itself is defined once, in `eval.arms` (`ARM_ORDER`, `ladder_steps`,
   `skipped_rungs`), because two spellings of the ladder drift. See
-  [Prompt-variant experiments](prompt-experiments.md) for the full runbook,
+  [Prompt-variant experiments](v1/prompt-experiments.md) for the full runbook,
   including the decision table for which variant a specific measured failure calls
   for.
 
@@ -742,7 +751,7 @@ Raised by an independent project review (2026-07-09). Recorded here so each item
   message, so there is nothing for a trace mask to do. A production deployment
   would need a masking layer at this seam; there is none here, on purpose. This
   supersedes AUDIT S7 and the headline finding of
-  [framework-and-logging-audit.md](plans/framework-and-logging-audit.md), both of
+  [framework-and-logging-audit.md](v1/plans/framework-and-logging-audit.md), both of
   which were about a mask that did not mask.
   `viz.presenter._redact_provenance_for_client` is unrelated and unchanged — it
   guards an HTTP response body served to a caller, not a trace export.

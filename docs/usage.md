@@ -1,5 +1,14 @@
 # Usage (Quickstart)
 
+> **This document describes v1, which was deleted in commit `2347ae3`.** It is kept at this path
+> because it is an entry point to the repository, and it is being rewritten against
+> [ADR 0005](adr/0005-v2-memory-layer-and-faceted-retrieval.md) and
+> [ADR 0006](adr/0006-execution-time-governance.md). Until that rewrite lands,
+> treat every specific claim below — module names, file paths, tool names, measured
+> numbers — as historical rather than current. The rest of the v1 documentation is
+> in [`docs/v1/`](v1/), and [`lessons-from-v1.md`](lessons-from-v1.md) records which of its
+> measurements survived re-examination and which were retired.
+
 _[English](usage.md) · [简体中文](usage.zh.md)_
 
 > New here? Start with the [README](../README.md) for a guided "clone → first
@@ -211,7 +220,7 @@ datasource, serve flags). Local overrides go in git-ignored
 `governed_bi.local.toml`. Because the display logic lives in the UI-agnostic
 `governed_bi.viz.presenter` (no UI dependency), a separate frontend can consume
 the same view models — the interactive UI is a separate project, see
-[docs/ui-frontend-handoff.md](ui-frontend-handoff.md).
+[docs/ui-frontend-handoff.md](v1/ui-frontend-handoff.md).
 
 ## Run the tests
 
@@ -221,6 +230,6 @@ uv run pytest -q
 
 ## Next
 
-- To write or edit corpus assets, see [Corpus authoring](corpus-authoring.md).
-- For the field-by-field asset spec, see [Asset schemas](asset-schemas.md).
+- To write or edit corpus assets, see [Corpus authoring](v1/corpus-authoring.md).
+- For the field-by-field asset spec, see [Asset schemas](v1/asset-schemas.md).
 - For the design behind all of this, start at [docs/README.md](README.md).

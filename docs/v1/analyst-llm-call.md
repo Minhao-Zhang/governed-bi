@@ -227,7 +227,7 @@ default to `always` + `advisory`; `routing`/`gotchas`/`pattern` default to
 `on_match` + `advisory` (triggered by retrieval match or a keyword regex, when
 `pin_triggers_enabled`). An `always` note injects only its `summary`; an `on_match`
 note that fires injects `summary` **and** `body` (progressive disclosure — see D17 in
-[Design decisions](design-decisions.md)). A note the agent needs but that never fired
+[Design decisions](../design-decisions.md)). A note the agent needs but that never fired
 can still be reached mid-turn via the `read_notes` / `grep_notes` tools below.
 
 ### First human message
@@ -405,7 +405,7 @@ sequenceDiagram
 ```
 
 **See also:** [Analyst](analyst.md) for the full rails/guardrail design;
-[ADR 0002](adr/0002-governed-agentic-serve-runtime.md) for why the agentic core exists;
+[ADR 0002](../adr/0002-governed-agentic-serve-runtime.md) for why the agentic core exists;
 [Prompt-variant experiments](prompt-experiments.md) for the registry, how a run selects
 a variant, and how that selection is attributed end to end;
 [Asset schemas](asset-schemas.md) for what a `TableAsset`/`JoinAsset`/`NoteAsset` looks

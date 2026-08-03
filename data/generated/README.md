@@ -1,5 +1,14 @@
 # data/generated/
 
+> **This document describes v1, which was deleted in commit `2347ae3`.** It is kept at this path
+> because it is an entry point to the repository, and it is being rewritten against
+> [ADR 0005](../../docs/adr/0005-v2-memory-layer-and-faceted-retrieval.md) and
+> [ADR 0006](../../docs/adr/0006-execution-time-governance.md). Until that rewrite lands,
+> treat every specific claim below — module names, file paths, tool names, measured
+> numbers — as historical rather than current. The rest of the v1 documentation is
+> in [`docs/v1/`](../../docs/v1/), and [`lessons-from-v1.md`](../../docs/lessons-from-v1.md) records which of its
+> measurements survived re-examination and which were retired.
+
 _[English](README.md) · [简体中文](README.zh.md)_
 
 Default target for machine-generated corpus output: profiled Facts assets today,

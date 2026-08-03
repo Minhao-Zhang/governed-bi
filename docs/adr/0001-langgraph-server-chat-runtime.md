@@ -1,8 +1,15 @@
 # 0001: Chat serves via LangGraph Server + `useStream`
 
+> **Superseded (2026-08-03).** The implementation this ADR describes was deleted
+> in commit `2347ae3`. The *transport* decision it records — LangGraph Server plus
+> `useStream`, rather than a bespoke SSE endpoint — is carried forward and still
+> holds; everything it says about graph shape does not.
+> [ADR 0005](0005-v2-memory-layer-and-faceted-retrieval.md) §3 is the current
+> serve graph.
+
 - **Status:** Accepted (2026-07-10); superseded in part by [ADR 0002](0002-governed-agentic-serve-runtime.md) (2026-07-14) — the runtime choice (LangGraph Server + `useStream`) still stands; the single-node `answer_question` framing was replaced.
 - **Deciders:** project owner + design session
-- **Related:** [ui-frontend-handoff.md](../ui-frontend-handoff.md)
+- **Related:** [ui-frontend-handoff.md](../v1/ui-frontend-handoff.md)
 
 ## Context
 

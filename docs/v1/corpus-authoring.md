@@ -260,5 +260,5 @@ train split (needs the eval split). Both belong to the eval harness.
 ## Next
 
 - [Asset schemas](asset-schemas.md) for the full field spec and every asset type.
-- [Usage](usage.md) for the programmatic loader/validator API.
-- [Design decisions](design-decisions.md) D9/D10 for why the corpus is authored this way.
+- [Usage](../usage.md) for the programmatic loader/validator API.
+- [Design decisions](../design-decisions.md) D9/D10 for why the corpus is authored this way.

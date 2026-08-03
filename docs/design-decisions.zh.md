@@ -1,5 +1,12 @@
 # Agentic BI 设计决策
 
+> **本文档描述的是 v1,已在 commit `2347ae3` 中删除。** 保留在原路径是因为它是仓库的入口之一,
+> 目前正依据 [ADR 0005](adr/0005-v2-memory-layer-and-faceted-retrieval.md) 与
+> [ADR 0006](adr/0006-execution-time-governance.md) 重写。在重写完成之前,
+> 请把本文中所有具体的说法 —— 模块名、文件路径、工具名、实测数字 —— 都当作历史记录,
+> 而不是对当前系统的描述。v1 的其余文档在 [`docs/v1/`](v1/),
+> 哪些实测结论经复核后仍然成立、哪些已作废,记在 [`lessons-from-v1.md`](lessons-from-v1.md)。
+
 _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 
 面向[Agentic BI 系统](architecture.zh.md)的已决策事项 D1-D18，并附上已考虑过的
@@ -148,7 +155,7 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   则是一个独立项目；交互式的 corpus 编辑与保存为 PR **不在本仓库范围内**
   （开发环境下用通用的 git/PR + CI，生产环境下由企业应用承担）。本仓库拥有
   下游编辑器会复用的写入*原语*：资产 schema、`corpus.serialize.write_corpus`，
-  以及 `corpus.validate` + CLI（即 CI 关卡）。参见[Viz](viz.md)。
+  以及 `corpus.validate` + CLI（即 CI 关卡）。参见[Viz](v1/viz.md)。
 - **由 D12 扩展：** 澄清协议在这道关卡之上增加了由 curator 提出的问题和一个
   `accept_answer` 原语，并把交互式的往返循环留在下游。
 
@@ -266,7 +273,7 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   现已在各处更名为 `schema`。ID 保持不变——它们本就已嵌入命名空间
   （`tbl_<schema>_<name>`）——因此这是一次投影修正，而非身份变更。参见 **D15**。
 - 是对**Markdown 优先存储** ADR 的具体化；详见[Architecture](architecture.zh.md)
-  §5，逐资产的字段规格参见[Asset schemas](asset-schemas.md)。
+  §5，逐资产的字段规格参见[Asset schemas](v1/asset-schemas.md)。
 
 ## D10：Curator = Proposer + Adversary
 
@@ -276,7 +283,7 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
 > proposer 负责假设 Inference 层的资产与 skills；adversary 会在每一项被
 > 提交前尝试**反驳（refute）**它（`proposed → draft`）。**Facts**（dtype、
 > 唯一性、样本）是**以程序化方式**生成的，从不被检查。adversary 的边界
-> *就是* Facts/Inference 的边界。完整流程见[Curator](curator.md)。
+> *就是* Facts/Inference 的边界。完整流程见[Curator](v1/curator.md)。
 
 - **备选方案：** 单一 agent 充当 curator（成本更低，但自我审查很弱：模型
   很少会去反驳自己看起来合理的推断，而这恰恰是无人负责的层悄悄腐化的
@@ -294,7 +301,7 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   已被认证；为此设计的逐资产 LLM `refute` 从未接入任何调用方，已被删除
   （R6）。仍是接缝的有：join/term/metric/note 的 LLM 撰写，以及自评估的
   train-EX 循环（`rule`/`skill` 是已退役的旧名——D17）；正是这些让 `curated`
-  能够胜过 `baseline`。参见[Curator](curator.md)。
+  能够胜过 `baseline`。参见[Curator](v1/curator.md)。
 
 ## D11：开放决策（外部评审，2026-07-09）
 
@@ -601,7 +608,7 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   只 PIN，绝不 blend：触发即硬性纳入目标，任何词法分数都不进 RRF，这是在尊重
   “弱词法混入强 embedding 会拉低召回”这一发现（recall@3 0.535 低于 embedding
   的 0.70——这是一个**已退役**的测量，此处只作为它当初得出的设计理由被引用，
-  而非当前数字；退役说明见 [datalake-run.md](plans/datalake-run.md#status)）。
+  而非当前数字；退役说明见 [datalake-run.md](v1/plans/datalake-run.md#status)）。
   （3）*Agent 直读*：新增只读、无需授权的 `read_notes` / `grep_notes` 工具，靠拓扑
   保证安全。
 - **治理升级。** 作为 `Asset` 联合类型成员，`NoteAsset` 继承三段字段分层、
@@ -719,4 +726,4 @@ _[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
   `eval.arms`（`ARM_ORDER`、`ladder_steps`、`skipped_rungs`）里定义一次，
   因为阶梯的两种拼法会渐渐走样。完整的运行手册，包括“一个已测出的具体
   失败到底该换哪个变体”的判断表，见
-  [提示词变体实验](prompt-experiments.md)。
+  [提示词变体实验](v1/prompt-experiments.md)。

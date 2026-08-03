@@ -31,24 +31,32 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CITATIONS = ROOT / "src" / "governed_bi" / "register" / "citations.py"
 
-#: Roots where a hit is **fatal**: live code, and the tools that check it.
-STRICT_ROOTS: tuple[str, ...] = ("src", "tools")
+#: Roots where a hit is **fatal**: live code, the tools that check it, and the
+#: live documentation.
+#:
+#: ``docs`` graduated to fatal on 2026-08-03. Before that it held 16 hits across 12
+#: files, which were not all the same kind of problem — and the fix was structural,
+#: not 16 inline markers. 52 v1 documents moved to ``docs/v1/`` (see
+#: :data:`ARCHIVE_ROOTS`); the 2 hits left in live docs are genuine *discussions* of
+#: a retired figure and carry a per-line marker. A subtree is skipped before its
+#: children are scanned, so ``docs/v1`` does not inherit this.
+STRICT_ROOTS: tuple[str, ...] = ("src", "tools", "docs")
 
-#: Roots where a hit is **reported but not fatal**, for now.
+#: Roots that are **archives**: scanned and counted, never fatal.
 #:
-#: ``docs/`` currently holds 16 hits across 12 files, and they are not all the same
-#: kind of problem. An experiment record that says "we measured 0.35" is a true
-#: statement about what was measured on that date — the record should stay and be
-#: annotated, not edited. A *plan* document that reasons *from* 0.35 toward a design
-#: decision is stale in a way annotation cannot fix, and most of those plans
-#: describe code that no longer exists.
+#: The distinction that earns this tier: a v1 experiment record stating "we measured
+#: 0.35 on this date" is a **true statement**, and the whole point of keeping the
+#: archive is that such records stay unedited. Requiring ~14 inline markers in files
+#: nobody will edit again would be noise, and editing the records to agree with
+#: later measurements would destroy the evidence that the earlier instrumentation
+#: was wrong.
 #:
-#: Sorting one from the other is a documentation pass, not a lint fix, so it is a
-#: tracked item in ``docs/plans/v2-implementation-decisions.md`` rather than
-#: something to paper over with 16 inline markers. **Reported on every run so the
-#: number cannot quietly grow**, and promoted to fatal by ``--strict-docs`` once the
-#: pass is done.
-ADVISORY_ROOTS: tuple[str, ...] = ("docs",)
+#: This is deliberately **not** the same as exempting the paths outright. The count
+#: prints on every run, so an archive that starts *growing* is visible — a new file
+#: appearing under ``docs/v1/`` is somebody adding to history, which is worth
+#: noticing. ``GREP_EXEMPT_PATHS`` remains for the files that must quote every
+#: retired figure in order to retire it.
+ARCHIVE_ROOTS: tuple[str, ...] = ("docs/v1",)
 
 SEARCH_SUFFIXES: frozenset[str] = frozenset({".py", ".md", ".toml", ".json"})
 
@@ -132,9 +140,14 @@ def main() -> int:
             print(f"unusable pattern {pattern!r}: {err}", file=sys.stderr)
             return 1
 
-    strict_docs = "--strict-docs" in sys.argv
+    def scan(root_name: str, skip_subtrees: tuple[str, ...] = ()) -> tuple[list[str], int]:
+        """Hits under ``root_name``, and how many files were read.
 
-    def scan(root_name: str) -> tuple[list[str], int]:
+        ``skip_subtrees`` is checked **before** a file is counted, so scanning
+        ``docs`` does not silently include ``docs/v1``. Without that, an archive
+        nested inside a strict root would be scanned twice and judged by the
+        stricter of the two tiers — the archive tier would exist and do nothing.
+        """
         found: list[str] = []
         n = 0
         root = ROOT / root_name
@@ -144,7 +157,7 @@ def main() -> int:
             if not path.is_file() or path.suffix not in SEARCH_SUFFIXES:
                 continue
             rel = path.relative_to(ROOT).as_posix()
-            if rel in exempt:
+            if rel in exempt or any(rel.startswith(s + "/") for s in skip_subtrees):
                 continue
             n += 1
             text = path.read_text(encoding="utf-8", errors="replace")
@@ -157,29 +170,17 @@ def main() -> int:
         return found, n
 
     fatal: list[str] = []
-    advisory: list[str] = []
+    archived: list[str] = []
     scanned = 0
+    archive_files = 0
     for name in STRICT_ROOTS:
-        found, n = scan(name)
+        found, n = scan(name, skip_subtrees=ARCHIVE_ROOTS)
         fatal.extend(found)
         scanned += n
-    for name in ADVISORY_ROOTS:
+    for name in ARCHIVE_ROOTS:
         found, n = scan(name)
-        (fatal if strict_docs else advisory).extend(found)
-        scanned += n
-
-    if advisory:
-        print(f"{len(advisory)} retired claim(s) in documentation (advisory):\n")
-        for h in advisory:
-            print(f"  {h}")
-        print(
-            "\nThese are v1 records and v1 plans. An experiment record stating what "
-            "was measured on a date is true and should be annotated, not edited; a "
-            "plan reasoning from a falsified figure is stale in a way annotation "
-            "cannot fix. Sorting them is tracked in "
-            "docs/plans/v2-implementation-decisions.md. Run with --strict-docs to "
-            "make these fatal.\n"
-        )
+        archived.extend(found)
+        archive_files += n
 
     if fatal:
         print(f"{len(fatal)} retired claim(s) in live code:\n", file=sys.stderr)
@@ -196,8 +197,11 @@ def main() -> int:
 
     print(
         f"no retired claims in live code across {scanned} file(s) scanned; "
-        f"{len(compiled)} pattern(s), {len(exempt)} exempt path(s), "
-        f"{len(advisory)} advisory"
+        f"{len(compiled)} pattern(s), {len(exempt)} exempt path(s)"
+    )
+    print(
+        f"archive: {len(archived)} retired claim(s) across {archive_files} file(s) in "
+        f"{', '.join(ARCHIVE_ROOTS)} — expected, and left unedited on purpose"
     )
     return 0
 

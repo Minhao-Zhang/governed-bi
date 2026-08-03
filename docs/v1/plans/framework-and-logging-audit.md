@@ -2,7 +2,7 @@
 
 > **EVERY LANGFUSE FINDING BELOW IS HISTORY AS OF 2026-08-02.** Langfuse was
 > removed — dependency, handler, client mask, `langfuse_*` metadata keys — and
-> LangSmith is the only tracer (**D20** in [design-decisions.md](../design-decisions.md)).
+> LangSmith is the only tracer (**D20** in [design-decisions.md](../../design-decisions.md)).
 > The findings were correct when written and are kept as written, because what
 > they record is how a mask that masked nothing survived in the codebase for
 > months while `obs.py` claimed otherwise. What is no longer true is the
@@ -58,7 +58,7 @@ deletion and re-wiring rather than additive compatibility.
 `langfuse.com/docs` as of 2026-07-30 and cited. Every claim about our code carries a
 `file:line` verified at `2187ead`.
 
-**Supersedes nothing.** This extends [ADR 0004](../adr/0004-local-first-conversation-run-logging.md)
+**Supersedes nothing.** This extends [ADR 0004](../../adr/0004-local-first-conversation-run-logging.md)
 (Accepted; M5 in progress), whose scope was the *local-first* sink. The external
 tracers were explicitly out of that ADR's scope and are where most of §2 lands.
 

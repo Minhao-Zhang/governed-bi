@@ -1,6 +1,6 @@
 # 第四批工作单 · M4 看得见与对得上（N11–N14）
 
-> **2026-08-02：Langfuse 已整体移除，LangSmith 是唯一 tracer**（[design-decisions.md](../design-decisions.md) D20）。
+> **2026-08-02：Langfuse 已整体移除，LangSmith 是唯一 tracer**（[design-decisions.md](../../design-decisions.md) D20）。
 > 这份工作单里 N12 的做法有一半已经不成立，作历史记录读：`tracing_config` 不再产
 > `langfuse_session_id` / `langfuse_user_id` / `langfuse_tags` 三个键（LangSmith 不读它们，
 > 在它的 UI 里只是噪声）；`tracing_callbacks` 改名 `usage_callbacks`，只剩那个

@@ -243,18 +243,67 @@ def test_layering_gate_fires_on_a_third_party_import_in_register(tmp_path: Path)
         probe.unlink()
 
 
+RETIRED_LITERAL = "# recall drops 0.70 -> 0.35\n"
+
+
+def _citation_gate() -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(ROOT / "tools" / "check_citations.py")],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    )
+
+
 def test_citation_gate_fires_on_a_retired_literal_in_live_code() -> None:
     probe = ROOT / "src" / "governed_bi" / "register" / "_conformance_probe.py"
-    probe.write_text("# recall drops 0.70 -> 0.35\n", encoding="utf-8")
+    probe.write_text(RETIRED_LITERAL, encoding="utf-8")
     try:
-        result = subprocess.run(
-            [sys.executable, str(ROOT / "tools" / "check_citations.py")],
-            capture_output=True,
-            text=True,
-            cwd=ROOT,
-        )
+        result = _citation_gate()
         assert result.returncode == 1
         assert "_conformance_probe" in result.stderr
+    finally:
+        probe.unlink()
+
+
+def test_citation_gate_fires_in_live_documentation() -> None:
+    """``docs`` graduated from advisory to fatal once the v1 archive moved out.
+
+    Tested separately from the ``src/`` case because it is a different code path —
+    ``docs`` is scanned with a subtree exclusion — and because "advisory" and
+    "fatal" produce the same output when there happens to be nothing to report.
+    """
+    probe = ROOT / "docs" / "_conformance_probe.md"
+    probe.write_text(RETIRED_LITERAL, encoding="utf-8")
+    try:
+        result = _citation_gate()
+        assert result.returncode == 1, "docs/ is a strict root and must fail the run"
+        assert "_conformance_probe" in result.stderr
+    finally:
+        probe.unlink()
+
+
+def test_citation_gate_tolerates_the_archive_but_counts_it() -> None:
+    """The complement, and the reason the archive is a *tier* and not an exemption.
+
+    A v1 experiment record stating what was measured on a date is a true statement
+    and must stay unedited, so a hit there cannot be fatal. But an exemption that
+    printed nothing would make a growing archive invisible, so the count is
+    published — and this asserts the count moved, not merely that the run passed.
+    """
+    before = _citation_gate()
+    assert before.returncode == 0
+    baseline = before.stdout
+
+    probe = ROOT / "docs" / "v1" / "_conformance_probe.md"
+    probe.write_text(RETIRED_LITERAL, encoding="utf-8")
+    try:
+        result = _citation_gate()
+        assert result.returncode == 0, "an archived record must not fail the run"
+        assert result.stdout != baseline, (
+            "the archive count did not change, so this tier is a silent exemption "
+            "rather than a reported one"
+        )
     finally:
         probe.unlink()
 

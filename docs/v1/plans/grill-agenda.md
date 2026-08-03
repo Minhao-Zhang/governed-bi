@@ -1,6 +1,6 @@
 # 模拟 grill：八个议题，以及每个议题上我准备被问倒的地方
 
-> **2026-08-02：Langfuse 已整体移除，LangSmith 是唯一 tracer**（[design-decisions.md](../design-decisions.md) D20）。
+> **2026-08-02：Langfuse 已整体移除，LangSmith 是唯一 tracer**（[design-decisions.md](../../design-decisions.md) D20）。
 > 下文 T6 里关于 Langfuse mask 覆盖不到第三方 instrumentation 的那条，以及「Langfuse
 > scores」那条（T6.Q3），都按历史记录读。前者不再需要修 —— trace 现在按决定全量上报
 > （本仓非生产，敏感列在数据源层就被过滤掉了）；后者随 Langfuse 一起作废，而 T6.Q3

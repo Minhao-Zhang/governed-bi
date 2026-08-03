@@ -1,19 +1,19 @@
 # Frontend handoff: governed-bi UI
 
 The build brief + contract for the **governed-bi** frontend. Pair with the
-architecture rationale in [ADR 0001](adr/0001-langgraph-server-chat-runtime.md) and the
-runtime decision in [ADR 0001](adr/0001-langgraph-server-chat-runtime.md).
+architecture rationale in [ADR 0001](../adr/0001-langgraph-server-chat-runtime.md) and the
+runtime decision in [ADR 0001](../adr/0001-langgraph-server-chat-runtime.md).
 
 > **Status: the backend rework has landed; this contract is live.** Chat is served
 > by a **LangGraph Server** (graph id `serve`) consumed by the **`useStream`** SDK,
 > with corpus/schema/audit as **custom routes** on that same server, a dev **edit**
 > endpoint, and a **full knowledge graph**. Boot it with `langgraph dev` (§2) and
 > build against it directly. Runtime rationale is in
-> [ADR 0001](adr/0001-langgraph-server-chat-runtime.md) and
-> [ADR 0002](adr/0002-governed-agentic-serve-runtime.md).
+> [ADR 0001](../adr/0001-langgraph-server-chat-runtime.md) and
+> [ADR 0002](../adr/0002-governed-agentic-serve-runtime.md).
 >
 > **Incoming design change — read §13 before touching the answer card.** The new
-> [D5](design-decisions.md) reworks how low-confidence answers
+> [D5](../design-decisions.md) reworks how low-confidence answers
 > are delivered: most refusals become **delivered-but-graded** answers the UI must
 > render with a reliability treatment, not hide. Some of that contract is already
 > live (the two-axis stamp, `graded_delivery`); some is gated on backend work. §13
@@ -116,7 +116,7 @@ requires a live model and returns `503` without one.)
 
 `fetch` these from `NEXT_PUBLIC_LANGGRAPH_URL`. Shapes mirror
 `governed_bi.viz.presenter`. The machine-readable schema is
-[openapi.json](openapi.json), generated from the app by
+[openapi.json](../openapi.json), generated from the app by
 `uv run python scripts/export_openapi.py`; CI runs the same script with
 `--check`, so a route change that is not re-exported fails the build. Generate
 your client from that file, not from this table.
@@ -179,7 +179,7 @@ path is the same.
   `get_stream_writer()`; custom routes mounted (`http.app`); `GET /knowledge-graph`
   (full graph) alongside `GET /graph` (ER); `POST /corpus/edit` (dev); LangSmith
   tracing (opt-in; Langfuse was also wired at the time and was removed
-  2026-08-02); [openapi.json](openapi.json) exported by
+  2026-08-02); [openapi.json](../openapi.json) exported by
   `scripts/export_openapi.py` and drift-checked in CI. Plus the
   earlier `presenter` view models, REST reads, `stack` factory, and the
   non-streaming `/chat` REST endpoint (also requires a live model).
@@ -212,9 +212,9 @@ Everything above is live behind `langgraph dev`; build against it now.
 ## 10. Multi-schema serving (D15 — wire rename + graph scoping shipped)
 
 The engine connects to **one database holding many schemas** with **executable
-cross-schema joins** ([design-decisions.md](design-decisions.md) D15). Multi-schema
+cross-schema joins** ([design-decisions.md](../design-decisions.md) D15). Multi-schema
 serve (qualified SQL + guardrails + missing-edge refusal), the **API wire
-rename**, and **server-side graph scoping** are shipped; [openapi.json](openapi.json)
+rename**, and **server-side graph scoping** are shipped; [openapi.json](../openapi.json)
 matches.
 
 > **Shipped (wire + serve + graph scope):**
@@ -274,7 +274,7 @@ The backend owner's answers to the eight questions in the frontend's
 
 **Live now — build against this:**
 
-- Wire namespace is **`schema` only** (§4 / [openapi.json](openapi.json)). UI
+- Wire namespace is **`schema` only** (§4 / [openapi.json](../openapi.json)). UI
   sends `?schema=`; zod requires `schema` (no `db` dual-accept).
 - `/schema`, `/schema/summary`, `/schema/{id}` filter/page correctly.
 - Graph endpoints accept scope params and return `boundary` / `meta` (§10).
@@ -291,7 +291,7 @@ The backend owner's answers to the eight questions in the frontend's
 
 ## 13. Reliability & deliver-and-grade (new design)
 
-Source: [D5 (two-axis stamp + graded delivery)](design-decisions.md#d5-refusal--best-effort);
+Source: [D5 (two-axis stamp + graded delivery)](../design-decisions.md#d5-refusal--best-effort);
 pinned-corpus context in [curator.md](curator.md). Motivation:
 the reliability treatment is the product surface for the engine's
 **deliver-and-grade** decision — a coverage / L3–L5 / execution failure delivers
@@ -448,7 +448,7 @@ clarification questions**, folded back via `accept_answer`.
 
 - **Nothing exists** in the UI (the corpus "Edit" button is a `toast()` stub, though
   `POST /corpus/edit` + `EditResponse` plumbing is real).
-- **Open decision, do not assume:** per [scope boundaries](design-decisions.md)
+- **Open decision, do not assume:** per [scope boundaries](../design-decisions.md)
   corpus-edit + save-to-PR is owned by the enterprise app / git+CI, **not** this
   repo. So the SME-answering UI may belong elsewhere. If it *is* in scope for
   `governed-bi-ui`, it is the largest net-new surface: a list of open clarifications
@@ -478,7 +478,7 @@ This endpoint surfaces the column grain **without** disturbing that graph.
 
 > **Status: live.** `GET /columns/{column_id}/related` is implemented
 > (`presenter.related_to_column`, `ColumnRelatedResponse`) and in
-> [openapi.json](openapi.json). **Phase 1 of the UI still needs nothing from the
+> [openapi.json](../openapi.json). **Phase 1 of the UI still needs nothing from the
 > backend** — FK in/out is already on `ColumnResponse.references`, and joins can be
 > shown at table grain from `/schema` + `/graph`. The **rich per-column view**
 > (terms, rules, rule scope, precise join-touches-this-column) uses this endpoint.
@@ -577,7 +577,7 @@ leaves the graph invariant intact. (If a graph rendering is ever wanted, prefer
    `ColumnResponse.references` + joins at table grain from `/graph`. Ship now.
 2. **Phase 2 (this endpoint — live):** wire `GET /columns/{column_id}/related`; render
    terms, rules, server-resolved joins, and table-grain metrics. `zod`-validate the
-   response against `ColumnRelatedResponse` in [openapi.json](openapi.json).
+   response against `ColumnRelatedResponse` in [openapi.json](../openapi.json).
 
 ---
 

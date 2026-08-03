@@ -1,5 +1,14 @@
 # Agentic BI Architecture
 
+> **This document describes v1, which was deleted in commit `2347ae3`.** It is kept at this path
+> because it is an entry point to the repository, and it is being rewritten against
+> [ADR 0005](adr/0005-v2-memory-layer-and-faceted-retrieval.md) and
+> [ADR 0006](adr/0006-execution-time-governance.md). Until that rewrite lands,
+> treat every specific claim below — module names, file paths, tool names, measured
+> numbers — as historical rather than current. The rest of the v1 documentation is
+> in [`docs/v1/`](v1/), and [`lessons-from-v1.md`](lessons-from-v1.md) records which of its
+> measurements survived re-examination and which were retired.
+
 _[English](architecture.md) · [简体中文](architecture.zh.md)_
 
 Full design for the Agentic BI System. Terms are in the
@@ -24,14 +33,14 @@ Curator and Analyst have opposite risk profiles. They use different harnesses bu
 | Autonomy | maximum (explore) | minimum (fail-closed) |
 | Harness | `deepagents` | `LangGraph` + middleware |
 
-*Built:* both harnesses are installed by a plain `uv sync` (no extra), over LangChain-backed model clients. The Analyst is the [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) governed agentic core, `analyst.agent` (thin outer deterministic rails wrapping a `create_agent` reasoning loop governed by middleware; the module was `server/`, renamed `analyst/` post-cutover — "server" now names infra only: `LangGraph Server`, the HTTP/ASGI process). It has been the sole serve path since the P2 cutover; the earlier deterministic flow (`server.flow::answer_question`) and the stale, unused `server.graph` DAG were deleted under the old module name, before that rename. No live model is fail-closed: `build_stack()` still builds offline for the audit API (browse/chat; corpus write gated by `allow_edit`), but the serve process raises at startup and `/chat` returns 503 until a model is configured. The first live A/B against the (now-removed) deterministic flow motivated [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) Amendment 1. **No eval number before 2026-07-26 is quotable.** For a quotable run, follow the [experiment runbook](plans/experiment-runbook.md). Curator = `curator.deep_agent` (a deepagents agent over Facts-profiling + read-only-probe tools, construction verified offline, live run model-gated).
+*Built:* both harnesses are installed by a plain `uv sync` (no extra), over LangChain-backed model clients. The Analyst is the [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) governed agentic core, `analyst.agent` (thin outer deterministic rails wrapping a `create_agent` reasoning loop governed by middleware; the module was `server/`, renamed `analyst/` post-cutover — "server" now names infra only: `LangGraph Server`, the HTTP/ASGI process). It has been the sole serve path since the P2 cutover; the earlier deterministic flow (`server.flow::answer_question`) and the stale, unused `server.graph` DAG were deleted under the old module name, before that rename. No live model is fail-closed: `build_stack()` still builds offline for the audit API (browse/chat; corpus write gated by `allow_edit`), but the serve process raises at startup and `/chat` returns 503 until a model is configured. The first live A/B against the (now-removed) deterministic flow motivated [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) Amendment 1. **No eval number before 2026-07-26 is quotable.** For a quotable run, follow the [experiment runbook](v1/plans/experiment-runbook.md). Curator = `curator.deep_agent` (a deepagents agent over Facts-profiling + read-only-probe tools, construction verified offline, live run model-gated).
 
 > **Curator = permanent maintainer**
 >
 > Not a one-time bootstrapper. Cold-start is its first job, but drift-repair is
 > ongoing. Untended corpora rot (~95%→65% in a month per *How Anthropic enables
 > self-service data analytics with Claude*). Full loop (proposer and adversary):
-> [Curator](curator.md).
+> [Curator](v1/curator.md).
 
 ## 3. Kernel Primitives (Survive model improvement)
 
@@ -97,11 +106,11 @@ named `ingest` in the graph; the live event / `Stage` name for that step is
 `route` (`events.rail("route")`). SQL generation is not a node: it happens inside
 `agent_core`'s tool loop (ADR 0002). Any node can end the turn with a refusal.
 
-The full stage-by-stage design is in [Analyst](analyst.md), along with the three points where the curator's inference drives serve behavior.
+The full stage-by-stage design is in [Analyst](v1/analyst.md), along with the three points where the curator's inference drives serve behavior.
 
 Per D15, on the multi-schema Postgres / Redshift path a join-aware schema router precedes RVGD retrieval, so retrieval spans schemas; the single-schema path skips it. **Shipped** (`retrieval.schema_router`; wired in `analyst.agent`).
 
-Guardrails, in order (fail-closed on any, all five enforced): syntax → policy blacklist → AST column allowlist → term-semantics → cost. The AST allowlist is scope-aware (resolves each column against its own query scope and blocks star projections); term-semantics licenses the retrieved tables plus their FK join-neighborhood, the join plan's Steiner points (not just the exact retrieved set, so it is decoupled from retrieval recall), and any curated cross-schema join targets, and blocks any table name outside that licensed scope. The cost layer is a structural cross-join guard for now; numeric EXPLAIN-based cost (Postgres / Redshift) is future per-dialect work. Stage-by-stage detail is in [Analyst](analyst.md) step 8.
+Guardrails, in order (fail-closed on any, all five enforced): syntax → policy blacklist → AST column allowlist → term-semantics → cost. The AST allowlist is scope-aware (resolves each column against its own query scope and blocks star projections); term-semantics licenses the retrieved tables plus their FK join-neighborhood, the join plan's Steiner points (not just the exact retrieved set, so it is decoupled from retrieval recall), and any curated cross-schema join targets, and blocks any table name outside that licensed scope. The cost layer is a structural cross-join guard for now; numeric EXPLAIN-based cost (Postgres / Redshift) is future per-dialect work. Stage-by-stage detail is in [Analyst](v1/analyst.md) step 8.
 
 > **D15: L4 scope is schema-qualified and spans schemas.** Cross-schema names are licensed only via a curated join — with none, the engine refuses rather than guessing. The single-schema / SQLite / BIRD path is **also** schema-qualified: the SQLite connector `ATTACH`es its file under the `corpus_pin` alias, so `beer_factory.customers` executes natively (this line said "stays bare/unqualified", which the 2026-07-17 supersession made false). Guardrail + serve wiring + missing-edge refusal + join-aware schema router are shipped.
 
@@ -141,7 +150,7 @@ Guardrails, in order (fail-closed on any, all five enforced): syntax → policy 
 > typed step event (`rail` / `tool` / `final`), so the UI renders a per-attempt
 > live audit of the loop. The `run_query` event detail is the ledger entry itself,
 > so the live stream and the stored ledger cannot drift. Contract:
-> [`docs/analyst.md`](analyst.md#the-event-contract-per-step).
+> [`docs/analyst.md`](v1/analyst.md#the-event-contract-per-step).
 >
 > Since Amendment 3, observability also collapses to **one trace per turn**: the
 > outer `graph.invoke` opens the root run and everything below it nests inside,
@@ -205,9 +214,9 @@ Guardrails, in order (fail-closed on any, all five enforced): syntax → policy 
   - `curated` — plus the curator LLM agent pass over that seed (including few-shots).
   - `curated_sme` — the same round with those CSVs in the SME's brief.
 
-  The last pair exists because the SME reads human-authored column documentation the curator never sees, so a `curated → curated_sme` delta is as consistent with "a new knowledge source arrived" as with "the clarification protocol works". Splitting it costs a full SME round per database, so it is opt-in — and when omitted, the resulting compound step labels itself in the artifact rather than passing as single-variable. A **test-aware SME oracle** remains the dashed *`ceiling`*, designed but not built; the de-obfuscation "gold" oracle is **retired** (it was never a true ceiling — curator notes can exceed it). **Moat = the share of the obfuscation-induced accuracy drop the curator recovers.** How to run it: [experiment runbook](plans/experiment-runbook.md).
+  The last pair exists because the SME reads human-authored column documentation the curator never sees, so a `curated → curated_sme` delta is as consistent with "a new knowledge source arrived" as with "the clarification protocol works". Splitting it costs a full SME round per database, so it is opt-in — and when omitted, the resulting compound step labels itself in the artifact rather than passing as single-variable. A **test-aware SME oracle** remains the dashed *`ceiling`*, designed but not built; the de-obfuscation "gold" oracle is **retired** (it was never a true ceiling — curator notes can exceed it). **Moat = the share of the obfuscation-induced accuracy drop the curator recovers.** How to run it: [experiment runbook](v1/plans/experiment-runbook.md).
 - Free behavioral signals from the manifest and logs: decoy-touch rate, governed-path adherence. Cost and efficiency (wall-clock, tokens, rows; BIRD's VES is reusable) are logged, not headline.
-- **Outcome/stage taxonomy.** `governed_bi.stages` gives the serve path and the eval harness one shared vocabulary for how a turn ended (`Outcome`: answered / refused / clarification / capped / crashed) and where (`Stage`), so a serve-path crash degraded to a fail-closed refusal is never scored as the model declining. Per-turn stage timings, tool-call counts, and guardrail-layer decisions are recorded once (`analyst.governance.StageRecorder`) and reach both the per-question eval artifacts (`generations.<arm>.jsonl`, `stage_events.jsonl`) and the durable run log (ADR 0004), so a deployment not running the eval harness still has this record. A run ledger (`runs/index.jsonl`, `governed_bi.eval.index`) then computes, per run, whether its own numbers are quotable and which other runs it may be compared to. Field-by-field detail and a symptom-to-file table are in [Measurement](measurement.md).
+- **Outcome/stage taxonomy.** `governed_bi.stages` gives the serve path and the eval harness one shared vocabulary for how a turn ended (`Outcome`: answered / refused / clarification / capped / crashed) and where (`Stage`), so a serve-path crash degraded to a fail-closed refusal is never scored as the model declining. Per-turn stage timings, tool-call counts, and guardrail-layer decisions are recorded once (`analyst.governance.StageRecorder`) and reach both the per-question eval artifacts (`generations.<arm>.jsonl`, `stage_events.jsonl`) and the durable run log (ADR 0004), so a deployment not running the eval harness still has this record. A run ledger (`runs/index.jsonl`, `governed_bi.eval.index`) then computes, per run, whether its own numbers are quotable and which other runs it may be compared to. Field-by-field detail and a symptom-to-file table are in [Measurement](v1/measurement.md).
 - **Refuse-gate eval:** a held-out **unanswerable** set, built from cross-DB and removed-coverage cases (auto-generated) plus a small hand-built out-of-scope set. The cross-DB cases are unanswerable here only because BIRD supplies no curated cross-schema joins; per D15 cross-schema *is* answerable with a curated join, though cross-schema serving is un-graded by BIRD. Scored on **refusal accuracy** (refuses the unanswerable) *and* **false-refusal rate** (on the answerable test set). This is the precision and recall of refusal.
 - **Repo boundary:** BIRD-Obfuscation produces validated data and manifests, and explicitly scopes out "the downstream agent that exercises the traps". That downstream agent is *this* system.
 - Later: retrieval-at-scale eval on an enterprise-scale deployment (Recall@K / MRR / nDCG, % answered via semantic layer).

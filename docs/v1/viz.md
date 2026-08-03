@@ -1,6 +1,6 @@
 # Agentic BI Viz
 
-The **audit surface** for the [Agentic BI System](architecture.md) corpus —
+The **audit surface** for the [Agentic BI System](../architecture.md) corpus —
 **read-only by default**. This repo ships **no bundled UI**; instead it ships the
 pieces a UI reads from — the `presenter` view models (UI-agnostic) and the
 `governed_bi.api` HTTP/JSON API — so you can browse and audit the AI-built layer,
@@ -104,6 +104,6 @@ A read-only surface computed from the corpus: UI-agnostic view models
 swappable and carries no logic of its own. No SaaS, no multi-tenant, no in-repo
 editing or PR orchestration.
 
-Links: [Design decisions](design-decisions.md) (D6 ownership, D9 corpus contract,
+Links: [Design decisions](../design-decisions.md) (D6 ownership, D9 corpus contract,
 D10 curator), [Asset schemas](asset-schemas.md), [Curator](curator.md),
 [Analyst](analyst.md).

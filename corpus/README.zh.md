@@ -1,5 +1,12 @@
 # corpus/
 
+> **本文档描述的是 v1,已在 commit `2347ae3` 中删除。** 保留在原路径是因为它是仓库的入口之一,
+> 目前正依据 [ADR 0005](../docs/adr/0005-v2-memory-layer-and-faceted-retrieval.md) 与
+> [ADR 0006](../docs/adr/0006-execution-time-governance.md) 重写。在重写完成之前,
+> 请把本文中所有具体的说法 —— 模块名、文件路径、工具名、实测数字 —— 都当作历史记录,
+> 而不是对当前系统的描述。v1 的其余文档在 [`docs/v1/`](../docs/v1/),
+> 哪些实测结论经复核后仍然成立、哪些已作废,记在 [`lessons-from-v1.md`](../docs/lessons-from-v1.md)。
+
 _[English](README.md) · [简体中文](README.zh.md)_
 
 **语义层（semantic layer）**是护城河。基于 Git 追踪的纯 Markdown + YAML 类型化
@@ -7,7 +14,7 @@ _[English](README.md) · [简体中文](README.zh.md)_
 （内存图、向量、BM25、Postgres）都是 `_generated/` 目录下的派生、可重建投影，
 绝不直接编写。
 
-完整规范参见[`docs/asset-schemas.md`](../docs/asset-schemas.md)。
+完整规范参见[`docs/asset-schemas.md`](../docs/v1/asset-schemas.md)。
 
 ## 目录结构
 

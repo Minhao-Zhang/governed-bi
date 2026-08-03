@@ -36,7 +36,7 @@ Separate the two mechanisms anyway (they matter on future runs):
 |------|----------------|
 | **This page** | The decision and the test/EX reasoning (source of truth for N4). |
 | [`gateway/guardrails.py`](../../src/governed_bi/gateway/guardrails.py) `column_allowlist` + L4 docstrings | Runtime asymmetry (“pooled L3 does not narrow to routed schemas”) — **already written by N2**; do not restate as a new code change. |
-| [`docs/glossary.md`](../glossary.md) | Under a future `column_allowlist` / L3 entry (N5’s glossary pass is the right vehicle): “lake-wide under pooled corpus; table scope is L4.” |
+| [`docs/glossary.md`](../../glossary.md) | Under a future `column_allowlist` / L3 entry (N5’s glossary pass is the right vehicle): “lake-wide under pooled corpus; table scope is L4.” |
 | [`docs/plans/rebuild-decisions.md`](rebuild-decisions.md) | Promote this spike to a numbered decision on the next decisions pass (“L3 stays lake-wide; L4 is the table gate”). Do not invent a parallel decision here. |
 
 **Do not** fold this into ADR 0002 as an amendment unless the serve runtime contract itself changes — the asymmetry is an allowlist construction detail, not a new autonomy/authority spine.

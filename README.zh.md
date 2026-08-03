@@ -1,5 +1,12 @@
 # governed-bi
 
+> **本文档描述的是 v1,已在 commit `2347ae3` 中删除。** 保留在原路径是因为它是仓库的入口之一,
+> 目前正依据 [ADR 0005](docs/adr/0005-v2-memory-layer-and-faceted-retrieval.md) 与
+> [ADR 0006](docs/adr/0006-execution-time-governance.md) 重写。在重写完成之前,
+> 请把本文中所有具体的说法 —— 模块名、文件路径、工具名、实测数字 —— 都当作历史记录,
+> 而不是对当前系统的描述。v1 的其余文档在 [`docs/v1/`](docs/v1/),
+> 哪些实测结论经复核后仍然成立、哪些已作废,记在 [`lessons-from-v1.md`](docs/lessons-from-v1.md)。
+
 _[English](README.md) · [简体中文](README.zh.md)_
 
 一个 agentic BI 系统：针对关系型数据库回答自然语言问题，给出**接地（grounded）、受治理（governed）、可审计（auditable）**的 SQL。把它指向一个实时的 **Postgres** 数据库，给它一个模型 key，然后提问。它会从经过策展的语义层中检索相关切片，生成 SQL，过五层护栏，只读执行，并返回带审计轨迹的答案。
@@ -45,7 +52,7 @@ PG_DSN=host=... port=5432 dbname=... user=... password=...
 uv run langgraph dev          # starts the `serve` graph; POST questions to /chat
 ```
 
-[演练](docs/usage.zh.md)是一份引导式的「第一个问题」教程，[快速上手](docs/usage.zh.md)是完整参考。要直接用 Python 驱动 agent 核心，见 [`docs/analyst.md`](docs/analyst.md)。
+[演练](docs/usage.zh.md)是一份引导式的「第一个问题」教程，[快速上手](docs/usage.zh.md)是完整参考。要直接用 Python 驱动 agent 核心，见 [`docs/analyst.md`](docs/v1/analyst.md)。
 
 ## 配置
 
@@ -88,7 +95,7 @@ uv run python scripts/live_smoke.py       # end-to-end over a real model (needs 
 当前的里程碑是**规模化运行**——把全部 69 个 BIRD 库作为 Postgres schema 加载（8,134 训练 /
 2,030 测试）——用大规模留出测试集作为证据单位（见
 [审计处置](docs/design-decisions.md#audit-dispositions-2026-07-15)与
-[实验操作手册](docs/plans/experiment-runbook.md)）。
+[实验操作手册](docs/v1/plans/experiment-runbook.md)）。
 
 仅设计、尚未构建：`CorpusRelease`（不可变、按内容哈希锁定的服务发布）。已接入预留接口（seam）但
 默认关闭（属于企业分支范围）：身份 → 查询范围（RLS / 租户隔离）、人工审批闸门、按范围限定的
@@ -104,8 +111,8 @@ uv run python scripts/live_smoke.py       # end-to-end over a real model (needs 
 
 从 [`docs/README.md`](docs/README.zh.md) 开始阅读。核心文档：
 [架构](docs/architecture.zh.md) · [设计决策](docs/design-decisions.zh.md) ·
-[资产模式](docs/asset-schemas.md) · [curator](docs/curator.md) ·
-[analyst](docs/analyst.md) · [viz](docs/viz.md) · [术语表](docs/glossary.zh.md)。
+[资产模式](docs/v1/asset-schemas.md) · [curator](docs/v1/curator.md) ·
+[analyst](docs/v1/analyst.md) · [viz](docs/v1/viz.md) · [术语表](docs/glossary.zh.md)。
 
 ## 仓库结构
 

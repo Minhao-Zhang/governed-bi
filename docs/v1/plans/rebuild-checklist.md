@@ -1,6 +1,6 @@
 # 执行清单
 
-> **2026-08-02：Langfuse 已整体移除，LangSmith 是唯一 tracer**（[design-decisions.md](../design-decisions.md) D20）。
+> **2026-08-02：Langfuse 已整体移除，LangSmith 是唯一 tracer**（[design-decisions.md](../../design-decisions.md) D20）。
 > 下文凡写「同时喂两个 tracer」「Langfuse 读那三个 `langfuse_*` 键」的地方按历史读；
 > 三个 sink 的联合验收判据不变，第三个 sink 换成 LangSmith trace。
 

@@ -172,12 +172,18 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "construction, and an uncalibrated refusal gate is worse than none"),
 
     # ── context and delivery ────────────────────────────────────────────────
-    _k("context_budget_tokens", 24_000, Role.comparability,
-       "the total rendered budget. Per-type budgets bound what is RANKED, not what "
-       "is rendered: resolve pulls in every column of every table in the set and "
-       "pulled-in assets consume no budget, so structural volume runs an order of "
-       "magnitude above the column budget. Without a ceiling the cost criterion "
-       "has nothing to be a percentage of"),
+    _k("context_budget_chars", 80_000, Role.comparability,
+       "the total rendered budget, a BACKSTOP and not a cost lever. Counted in "
+       "CHARACTERS because a token count needs a tokeniser per provider and must "
+       "be right at delivery time in production, where chars are free and exact. "
+       "80_000 sits above the largest context v1 ever delivered (76,354 chars, "
+       "max over 19,095 turns), so it provably never fires on observed traffic. "
+       "That is deliberate: measured per arm, any BINDING threshold truncates only "
+       "the treated arms -- at 24,000 it fires on 23.5% of `curated` and 27.4% of "
+       "`curated_sme` turns and 0.0% of `baseline` and `seeded` -- which weakens "
+       "the treatment in exactly the arms whose treatment is being measured. Per "
+       "the R2 rule, truncation MUST be recorded when it fires; a cap that "
+       "silently trims context is an undelivered treatment reported as delivered"),
     _k("read_body_max_tokens", 20_000, Role.comparability,
        "below the deep-agent middleware eviction threshold. Past roughly 80 KB a "
        "tool result is evicted to a file and replaced by a preview, so one read "

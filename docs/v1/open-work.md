@@ -4,8 +4,8 @@ The single tracker for work that is **open**. It replaces four dated trackers
 (`engineering-gaps-2026-07-16`, `eval-audit-backlog-2026-07-22`,
 `clarification-sme-benchmark-build-plan`, `implementation-plan-notes-and-run-logging`),
 whose closed items now live only in git history. Nothing here is a design
-record — decisions belong in [design-decisions.md](design-decisions.md) and
-[adr/](adr/).
+record — decisions belong in [design-decisions.md](../design-decisions.md) and
+[adr/](../adr/).
 
 **This file is the inventory; [plans/rebuild-checklist.md](plans/rebuild-checklist.md)
 is the order.** Five analyses on 2026-07-29/30 (module depth, reference-book fidelity,
@@ -276,7 +276,7 @@ plan doc is deleted and the contract now lives in
   `gateway.execute` under an `all_access` identity with no guardrail at all —
   defensible, since the curator is what *builds* the allowlist, but L1/L2 need no
   allowlist and would still catch `pg_read_file` / `dblink`. Either run those two
-  layers on probes or carve the exception out of [architecture](architecture.md)
+  layers on probes or carve the exception out of [architecture](../architecture.md)
   §1's "executes only guardrail-passed SQL".
 - A simulated SME's answer defaults to `status=certified` (`corpus/clarify.py`),
   and `pin_require_certified` gates note pinning on that status — the top trust

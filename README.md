@@ -1,5 +1,14 @@
 # governed-bi
 
+> **This document describes v1, which was deleted in commit `2347ae3`.** It is kept at this path
+> because it is an entry point to the repository, and it is being rewritten against
+> [ADR 0005](docs/adr/0005-v2-memory-layer-and-faceted-retrieval.md) and
+> [ADR 0006](docs/adr/0006-execution-time-governance.md). Until that rewrite lands,
+> treat every specific claim below — module names, file paths, tool names, measured
+> numbers — as historical rather than current. The rest of the v1 documentation is
+> in [`docs/v1/`](docs/v1/), and [`lessons-from-v1.md`](docs/lessons-from-v1.md) records which of its
+> measurements survived re-examination and which were retired.
+
 _[English](README.md) · [简体中文](README.zh.md)_
 
 An agentic BI system: it answers natural-language questions over a relational
@@ -69,7 +78,7 @@ uv run langgraph dev          # starts the `serve` graph; POST questions to /cha
 
 See [usage](docs/usage.md) for a guided first-question tour and
 [usage](docs/usage.md) for the full reference. To drive the agent core directly
-from Python, see [`docs/analyst.md`](docs/analyst.md).
+from Python, see [`docs/analyst.md`](docs/v1/analyst.md).
 
 ## Configuration
 
@@ -119,7 +128,7 @@ method survive; **do not quote its numbers**). The current milestone is the
 **scale run** — all 69 BIRD DBs loaded as Postgres schemas (8,134 train /
 2,030 test) — where a large held-out test set is the unit of evidence (see
 [audit dispositions](docs/design-decisions.md#audit-dispositions-2026-07-15) and
-the [experiment runbook](docs/plans/experiment-runbook.md)).
+the [experiment runbook](docs/v1/plans/experiment-runbook.md)).
 
 Designed but not yet built: `CorpusRelease` (immutable, hash-pinned serving
 release). Seamed but toggled off (enterprise-fork scope): identity → query scope
@@ -137,8 +146,8 @@ its current build status, see that repo — it is not tracked here.
 
 Start at [`docs/README.md`](docs/README.md). Key docs:
 [architecture](docs/architecture.md) · [design decisions](docs/design-decisions.md) ·
-[asset schemas](docs/asset-schemas.md) · [curator](docs/curator.md) ·
-[analyst](docs/analyst.md) · [viz](docs/viz.md) · [glossary](docs/glossary.md).
+[asset schemas](docs/v1/asset-schemas.md) · [curator](docs/v1/curator.md) ·
+[analyst](docs/v1/analyst.md) · [viz](docs/v1/viz.md) · [glossary](docs/glossary.md).
 
 ## Repo layout
 

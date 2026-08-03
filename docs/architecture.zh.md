@@ -1,5 +1,12 @@
 # Agentic BI 架构
 
+> **本文档描述的是 v1,已在 commit `2347ae3` 中删除。** 保留在原路径是因为它是仓库的入口之一,
+> 目前正依据 [ADR 0005](adr/0005-v2-memory-layer-and-faceted-retrieval.md) 与
+> [ADR 0006](adr/0006-execution-time-governance.md) 重写。在重写完成之前,
+> 请把本文中所有具体的说法 —— 模块名、文件路径、工具名、实测数字 —— 都当作历史记录,
+> 而不是对当前系统的描述。v1 的其余文档在 [`docs/v1/`](v1/),
+> 哪些实测结论经复核后仍然成立、哪些已作废,记在 [`lessons-from-v1.md`](lessons-from-v1.md)。
+
 _[English](architecture.md) · [简体中文](architecture.zh.md)_
 
 [Agentic BI 系统](architecture.zh.md)的完整设计。术语见[术语表](glossary.zh.md)。
@@ -23,14 +30,14 @@ Curator 与 Analyst 的风险特征相反。二者使用不同的 harness，但�
 | 自主度 | 最大（探索） | 最小（失败即拒） |
 | Harness | `deepagents` | `LangGraph` + 中间件 |
 
-*已实现：* 两套 harness 都由一次普通的 `uv sync` 安装（不需要任何 extra），构建在基于 LangChain 的模型客户端之上。Analyst 就是 [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) 所定义的受治理 agentic 内核 `analyst.agent`（薄薄的外层确定性轨道，包裹起一个由中间件治理的 `create_agent` 推理循环；该模块原为 `server/`，在 P2 切换之后改名为 `analyst/`——如今"server"只用来指代基础设施：`LangGraph Server`、HTTP/ASGI 进程）——自 P2 切换以来它是唯一的服务路径；早先的确定性流程（`server.flow::answer_question`）与那个陈旧、未被使用的 `server.graph` DAG，在改名之前、以旧模块名均已删除。没有实时模型时会失败即拒：`build_stack()` 仍可离线构建以支撑审计 API（浏览/对话；corpus 写操作由 `allow_edit` 门控），但服务进程会在启动时报错，`/chat` 返回 503，直到配置好模型为止。相对于（现已移除的）确定性流程的首次线上 A/B 促成了 [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) 的 Amendment 1。**2026-07-26 之前的任何评测数字都不可引用。**要拿到可引用的运行结果，请按[实验操作手册](plans/experiment-runbook.md)执行。curator = `curator.deep_agent`（一个运行在 Facts 画像（profiling）与只读探测（probe）工具之上的 deepagents agent，其构造已离线验证，实际运行则受模型门控）。
+*已实现：* 两套 harness 都由一次普通的 `uv sync` 安装（不需要任何 extra），构建在基于 LangChain 的模型客户端之上。Analyst 就是 [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) 所定义的受治理 agentic 内核 `analyst.agent`（薄薄的外层确定性轨道，包裹起一个由中间件治理的 `create_agent` 推理循环；该模块原为 `server/`，在 P2 切换之后改名为 `analyst/`——如今"server"只用来指代基础设施：`LangGraph Server`、HTTP/ASGI 进程）——自 P2 切换以来它是唯一的服务路径；早先的确定性流程（`server.flow::answer_question`）与那个陈旧、未被使用的 `server.graph` DAG，在改名之前、以旧模块名均已删除。没有实时模型时会失败即拒：`build_stack()` 仍可离线构建以支撑审计 API（浏览/对话；corpus 写操作由 `allow_edit` 门控），但服务进程会在启动时报错，`/chat` 返回 503，直到配置好模型为止。相对于（现已移除的）确定性流程的首次线上 A/B 促成了 [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) 的 Amendment 1。**2026-07-26 之前的任何评测数字都不可引用。**要拿到可引用的运行结果，请按[实验操作手册](v1/plans/experiment-runbook.md)执行。curator = `curator.deep_agent`（一个运行在 Facts 画像（profiling）与只读探测（probe）工具之上的 deepagents agent，其构造已离线验证，实际运行则受模型门控）。
 
 > **Curator = 永久维护者**
 >
 > 它不是一次性的引导程序（bootstrapper）。冷启动（cold-start）是它的第一项工作，但漂移
 > 修复（drift-repair）是持续进行的。疏于维护的 corpus 会腐化（据 *How Anthropic
 > enables self-service data analytics with Claude*，约以 95%→65%/月的速度）。完整
-> 循环（proposer 与 adversary）见[Curator](curator.md)。
+> 循环（proposer 与 adversary）见[Curator](v1/curator.md)。
 
 ## 3. 内核原语（经受模型升级而存续）
 
@@ -89,11 +96,11 @@ RVGD retrieval → Steiner-tree join plan → SQL gen → five-layer guardrails 
 execute (as-user) → narrate → answer + provenance
 ```
 
-完整的分阶段设计见[Analyst](analyst.md)，以及 curator 推断驱动 Analyst 行为的三个关键点。
+完整的分阶段设计见[Analyst](v1/analyst.md)，以及 curator 推断驱动 Analyst 行为的三个关键点。
 
 按 D15，在多 schema 的 Postgres / Redshift 路径上，一个连接感知（join-aware）的 schema 路由器会先于 RVGD 检索运行，因此检索会跨越多个 schema；单 schema 路径则跳过它。**已落地**（`retrieval.schema_router`；已接入 `analyst.agent`）。
 
-护栏按顺序排列（任一触发即失败即拒，五层全部强制执行）：语法 → 策略黑名单 → AST 列许可清单 → term 语义 → 成本。AST 许可清单具备 scope 感知能力（针对每一列自身所在的查询 scope 进行解析，并拦截星号投影）；term 语义会为检索到的表，以及它们的 FK 连接邻域、连接规划所桥接经过的 Steiner 点（而不是精确的检索命中集合，因此它与检索召回率相解耦），以及任何经策展的跨 schema 连接目标授权，并拦截该授权范围之外的任何表名。成本层目前是一道结构性的交叉连接防护；基于数值化 EXPLAIN 的成本（Postgres / Redshift）是未来按方言展开的工作。逐阶段细节见[Analyst](analyst.md)第 8 步。
+护栏按顺序排列（任一触发即失败即拒，五层全部强制执行）：语法 → 策略黑名单 → AST 列许可清单 → term 语义 → 成本。AST 许可清单具备 scope 感知能力（针对每一列自身所在的查询 scope 进行解析，并拦截星号投影）；term 语义会为检索到的表，以及它们的 FK 连接邻域、连接规划所桥接经过的 Steiner 点（而不是精确的检索命中集合，因此它与检索召回率相解耦），以及任何经策展的跨 schema 连接目标授权，并拦截该授权范围之外的任何表名。成本层目前是一道结构性的交叉连接防护；基于数值化 EXPLAIN 的成本（Postgres / Redshift）是未来按方言展开的工作。逐阶段细节见[Analyst](v1/analyst.md)第 8 步。
 
 > **D15：L4 授权范围按 schema 限定，并跨越多个 schema。** 跨 schema 的表名只有经过策展的连接（curated join）才被授权——若不存在这样的连接，引擎宁可拒答也不猜测。单 schema / SQLite / BIRD 路径**同样**加了 schema 限定：SQLite 连接器会把它的文件 `ATTACH` 到 `corpus_pin` 别名下，因此 `beer_factory.customers` 能原生执行（本行原先写的是"保持裸写（不加限定）"，2026-07-17 那次取代之后这句话已经不成立）。护栏 + serve 接入 + 缺失边拒答 + 连接感知 schema 路由器均已落地。
 
@@ -127,7 +134,7 @@ execute (as-user) → narrate → answer + provenance
 > 并通过 `on_event` 把每个受治理动作重新发出为一条有类型的步骤事件（`rail` / `tool`
 > / `final`），于是 UI 能对整个循环渲染出逐次尝试的实时审计。`run_query` 事件的
 > detail 就是账本条目本身，因此实时流与已存账本不会漂移。契约见
-> [`docs/analyst.md`](analyst.md#the-event-contract-per-step)（英文）。
+> [`docs/analyst.md`](v1/analyst.md#the-event-contract-per-step)（英文）。
 >
 > 自 Amendment 3 起，可观测性（observability）也收敛为**每轮只有一个被继承的追踪
 > handler**：Langfuse 只在外层 `graph.invoke` 处附加一次，并被其下的一切继承，
@@ -183,9 +190,9 @@ execute (as-user) → narrate → answer + provenance
   - `curated`——在同一份种子之上，加上 curator LLM agent 的一趟处理（含 few-shot）。
   - `curated_sme`——同一轮澄清，但 SME 的任务简报里带上了这些 CSV。
 
-  最后这一对之所以存在，是因为 SME 会读到 curator 从未见过的人工撰写列文档，所以 `curated → curated_sme` 这一步的差值，既可以解释成"来了一个新的知识来源"，也可以解释成"澄清协议本身生效了"，两种说法一样自洽。把它拆开需要每个数据库多花一整轮 SME 的成本，所以是可选项——被省略时，产生的那个复合步骤会在产物里如实标注自己是复合的，而不是冒充成单变量的一步。一个**测试感知 SME 预言机**仍然是虚线*`ceiling`*，已设计但尚未构建；去混淆"gold"预言机已**退役**（它从来不是真正的上限——curator 的笔记（notes）就能超过它）。**护城河（moat）= curator 挽回的那部分因混淆导致的准确率下降。**如何运行：[实验运行手册](plans/experiment-runbook.md)。
+  最后这一对之所以存在，是因为 SME 会读到 curator 从未见过的人工撰写列文档，所以 `curated → curated_sme` 这一步的差值，既可以解释成"来了一个新的知识来源"，也可以解释成"澄清协议本身生效了"，两种说法一样自洽。把它拆开需要每个数据库多花一整轮 SME 的成本，所以是可选项——被省略时，产生的那个复合步骤会在产物里如实标注自己是复合的，而不是冒充成单变量的一步。一个**测试感知 SME 预言机**仍然是虚线*`ceiling`*，已设计但尚未构建；去混淆"gold"预言机已**退役**（它从来不是真正的上限——curator 的笔记（notes）就能超过它）。**护城河（moat）= curator 挽回的那部分因混淆导致的准确率下降。**如何运行：[实验运行手册](v1/plans/experiment-runbook.md)。
 - 来自 manifest 与日志的免费行为信号：诱饵触碰率、治理路径遵循率。成本与效率（耗时、token 数、行数；BIRD 的 VES 可复用）会被记录，但不作为核心指标。
-- **结果/阶段分类体系。** `governed_bi.stages` 给 serve 路径和 eval harness 提供了同一套词汇表，用来描述一轮是怎么结束的（`Outcome`：answered / refused / clarification / capped / crashed）以及在哪里结束的（`Stage`），这样一次 serve 路径崩溃后降级成的失败即拒式拒答，就永远不会被算成模型主动拒绝。逐轮的阶段耗时、工具调用计数、护栏层裁决只被记录一次（`analyst.governance.StageRecorder`），同时进入按问题的 eval 产物（`generations.<arm>.jsonl`、`stage_events.jsonl`）和可移植的持久运行日志（ADR 0004），所以一个没有跑 eval harness 的部署环境，依然留有这份记录。一份运行台账（`runs/index.jsonl`、`governed_bi.eval.index`）随后会为每次运行计算：它自己的数字能不能引用，以及它可以和哪些其他运行放在一起比较。逐字段的细节，以及一张"症状对应文件"的速查表，见[测量](measurement.md)。
+- **结果/阶段分类体系。** `governed_bi.stages` 给 serve 路径和 eval harness 提供了同一套词汇表，用来描述一轮是怎么结束的（`Outcome`：answered / refused / clarification / capped / crashed）以及在哪里结束的（`Stage`），这样一次 serve 路径崩溃后降级成的失败即拒式拒答，就永远不会被算成模型主动拒绝。逐轮的阶段耗时、工具调用计数、护栏层裁决只被记录一次（`analyst.governance.StageRecorder`），同时进入按问题的 eval 产物（`generations.<arm>.jsonl`、`stage_events.jsonl`）和可移植的持久运行日志（ADR 0004），所以一个没有跑 eval harness 的部署环境，依然留有这份记录。一份运行台账（`runs/index.jsonl`、`governed_bi.eval.index`）随后会为每次运行计算：它自己的数字能不能引用，以及它可以和哪些其他运行放在一起比较。逐字段的细节，以及一张"症状对应文件"的速查表，见[测量](v1/measurement.md)。
 - **拒答关（Refuse-gate）评测：** 一个留出的**不可回答**集合，由跨数据库（cross-DB）与覆盖被移除（removed-coverage）的情形构成（自动生成），外加一个小规模、人工构建的超出范围（out-of-scope）集合。这里的 cross-DB 情形之所以不可回答，只是因为 BIRD 未提供经策展的跨 schema 连接；按 D15，跨 schema 借助一个经策展的连接是*可以*回答的，只是跨 schema 服务未被 BIRD 评分。评分维度为**拒答准确率**（能否拒答不可回答的问题）*以及* **误拒率**（false-refusal rate）（在可回答的测试集上）。这正是拒答的精确率与召回率。
 - **仓库边界：** BIRD-Obfuscation 产出经过验证的数据与 manifest，并明确将“利用这些陷阱（trap）的下游 agent”排除在自身范围之外。而这个下游 agent 正是*本*系统。
 - 之后：在企业级部署上开展规模化检索（retrieval-at-scale）评测（Recall@K / MRR / nDCG，经语义层回答的问题占比）。

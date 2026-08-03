@@ -558,8 +558,28 @@ to prevent.
 | `run_query_attempt_cap` | 3 |
 | `max_rows` | as today |
 | `guard_rules_enabled` | per `rule_id` |
-| `g_length_max_chars` | TBD from the question distribution |
-| `cost_budget` | TBD |
+| `g_length_max_chars` | **8,000** — measured, see below |
+| `cost_budget` | **unset**; ships disabled rather than guessed |
+
+**`g_length_max_chars` is now measured, not TBD.** Across all 10,962 BIRD dev +
+train questions:
+
+| | min | p50 | p95 | p99 | p99.9 | max |
+|---|---|---|---|---|---|---|
+| question | 23 | 75 | 135 | 180 | 255 | **325** |
+| question + evidence | 32 | 163 | 329 | 440 | 609 | **906** |
+
+Both fields matter because both reach the prompt. 8,000 sits **8.8x above the
+longest input the corpus contains**, so the false-refusal rate on 10,962
+questions is exactly 0.
+
+State plainly what this does and does not establish. Any value ≥ 1,000 gives the
+same zero on this corpus, so the measurement does not choose 8,000 over 2,000 —
+it only rules out anything near the distribution. The guard's purpose is to stop
+a paste-bomb or an injection payload, and how long a *legitimate* non-BIRD
+question can be (a pasted table, a long business description) is a question BIRD
+cannot answer. 8,000 is headroom against that unknown, and the number to revisit
+is the observed max on real traffic, not this table.
 
 **`Stage` members this ADR owns**, for 0005 §4.3's enum diff: `guard`,
 `check`, `execute`, `graded_delivery`, `sample_rows`, `cap`. The first draft

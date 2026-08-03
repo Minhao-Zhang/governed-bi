@@ -196,7 +196,7 @@ wrong_filter_column    76  (30%)   ← 过滤在错的列上
 
 ### 0.9 Langfuse:**Opus 那两次跑的 trace 不在里面**
 
-> **2026-08-02:Langfuse 已整体移除,LangSmith 是唯一 tracer**([design-decisions.md](../design-decisions.md) D20)。
+> **2026-08-02:Langfuse 已整体移除,LangSmith 是唯一 tracer**([design-decisions.md](../../design-decisions.md) D20)。
 > 本节的实测数字与结论作历史读。本节末尾列的三个缺陷里,**第一个已修**(`arm` 现在进
 > `RunContext`,并且额外补了 `corpus_content_hash`);后两个仍在。
 

@@ -1,6 +1,6 @@
 # Agentic BI Curator
 
-The build-side agent for the [Agentic BI System](architecture.md). It is the
+The build-side agent for the [Agentic BI System](../architecture.md). It is the
 offline agent that *produces* the corpus (two-harness split; `deepagents`). Runs
 **per-DB, independently**. Writes the corpus defined in
 [Asset schemas](asset-schemas.md); the serve-side counterpart is the
@@ -213,4 +213,4 @@ The curator *selects and distills*; it never dumps. That is the memory doc's cen
 
 Cold-start is the first job; drift-repair is ongoing. Serve-side signals (corrections, failures) are harvested back into proposer input. A correction ≈ a PR to a note/reference doc, so the memory/corpus distinction collapses (D8).
 
-Links: [Design decisions](design-decisions.md) · [Asset schemas](asset-schemas.md) · [Architecture](architecture.md) §2 · *Data Agent Memory Design Overview*.
+Links: [Design decisions](../design-decisions.md) · [Asset schemas](asset-schemas.md) · [Architecture](../architecture.md) §2 · *Data Agent Memory Design Overview*.

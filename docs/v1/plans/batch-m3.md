@@ -1,6 +1,6 @@
 # 第三批工作单 · M3 删双轨（N9 / N10 / N10a）
 
-> **2026-08-02：Langfuse 已整体移除，LangSmith 是唯一 tracer**（[design-decisions.md](../design-decisions.md) D20）。
+> **2026-08-02：Langfuse 已整体移除，LangSmith 是唯一 tracer**（[design-decisions.md](../../design-decisions.md) D20）。
 > 文末提到「N12 要写 Langfuse」的那句按历史读。
 
 2026-07-31 立。分支从 `impl/rebuild-first-batch` 起。上游是 [near-term-plan.md](near-term-plan.md) 的 M3 一节 —— **那一节只给了目标，这一份给做法**。同 [batch-m2.md](batch-m2.md) 的体例。

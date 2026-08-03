@@ -105,8 +105,8 @@ commit.
 
 The only tracked stale numbers are the schema-routing recall table at
 [`datalake-run.md:126`](datalake-run.md) and its two citations, at
-[`adr/0003-governed-notes-tri-modal-retrieval.md:90`](../adr/0003-governed-notes-tri-modal-retrieval.md)
-and [`design-decisions.md:566`](../design-decisions.md). All three are derived from
+[`adr/0003-governed-notes-tri-modal-retrieval.md:90`](../../adr/0003-governed-notes-tri-modal-retrieval.md)
+and [`design-decisions.md:566`](../../design-decisions.md). All three are derived from
 the question pool, so the new dataset invalidates them.
 
 Retire the numbers, keep the reasoning. The conclusion they support (embedding-only

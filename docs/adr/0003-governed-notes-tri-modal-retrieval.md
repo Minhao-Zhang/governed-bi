@@ -1,5 +1,22 @@
 # 0003: Governed notes (`NoteAsset`) and tri-modal retrieval
 
+> **Superseded in full (2026-08-03)** by
+> [ADR 0005](0005-v2-memory-layer-and-faceted-retrieval.md). Both of this ADR's
+> load-bearing decisions were reversed:
+>
+> - **`NoteAsset` is deleted, not generalised.** Its design — that a note carries a
+>   short indexed line and an unbounded body — was correct and was pushed *down
+>   into every asset type* as the `summary` / `body` split, which is 0005's I1 and
+>   I2. A separate type for "notes about things" turned out to be the same idea
+>   wearing a second name.
+> - **"Tri-modal" (BLEND / PIN / agent-read) is replaced** by two scoring channels,
+>   `lexical` (BM25) and `semantic` (embedding cosine), fused into `hybrid` by
+>   weighted sum. Regex-triggered pinning is gone.
+>
+> **Do not quote this ADR's retrieval numbers.** Its routing-recall figure was
+> later re-measured and was wrong by 2.4x; `register/citations.py` carries the
+> corrected values with the pattern that detects the old one's reappearance.
+
 - **Status:** Accepted (design; 2026-07-22). Design agreed in a multi-agent
   design review (4 independent proposals, 3 diverse judges, and an
   adversarial red-team; all three judges independently ranked "generalize
@@ -14,8 +31,8 @@
   pipeline-design.md (removed; see git history);
   [design-decisions.md](../design-decisions.md) (D6 human gate, D9 corpus
   file-structure, D10 proposer+adversary, D15 multi-schema, D16 agentic core);
-  [asset-schemas.md](../asset-schemas.md);
-  [plans/datalake-run.md](../plans/datalake-run.md) (the routing numbers)
+  [asset-schemas.md](../v1/asset-schemas.md);
+  [plans/datalake-run.md](../v1/plans/datalake-run.md) (the routing numbers)
 - **Supersedes:** the `skill` asset concept entirely: `SkillFrontmatter` /
   `SkillKind` (`schemas.py:388-396,130-134`), the `corpus/<schema>/skills/*.md`
   markdown surface, and the (never-true) framing that a `kind=routing` skill
@@ -87,7 +104,7 @@ embedding-cosine channel (`embedding.py`), fused via Reciprocal Rank Fusion
 (`embedding.py:53-79`). There is no regex/pattern retrieval mode and no agent
 tool to fetch a note's text directly. The routing probe
 (`docs/plans/datalake-run.md`) measured, over the 2030-question pool,
-embedding-only recall@3 = 0.70, BM25 0.35, and RRF 0.535
+embedding-only recall@3 = 0.70, BM25 0.35, and RRF 0.535 <!-- [retired]: BM25 re-measured at 0.844@3, beating embedding at rank 1 (0.736 vs 0.694); see register/citations.py -->
 (`schema_router.py:143-145`): fusing the weak lexical channel with the strong
 embedding channel *drags recall down*. And a single per-schema document built
 by concatenating every asset's text (`schema_documents`,
@@ -219,7 +236,7 @@ injected per turn AND at most 2000 chars of total injected notes text
 > turned out to cap nothing: every note a producer actually wrote was
 > `schema:`-scoped, so all of them cleared the count and only the char budget
 > bound. Corrected 2026-07-29 to count every injected always note. See
-> [../plans/eval-rebuild.md](../plans/eval-rebuild.md).
+> [../plans/eval-rebuild.md](../v1/plans/eval-rebuild.md).
 
 **Precedence for overflow or
 conflict**, applied in order: (1) `publication_status` certified before

@@ -10,6 +10,15 @@ Status legend:
 - **Filled a gap** — the ADR said TBD or was silent; this is a starting value that must be calibrated.
 - **Recorded** — a judgement with no ADR consequence.
 
+**A heading in this file must be cleared when the work is done.** #6 and #7 both
+carried "ADR needs updating" after the ADR had already been updated, and both
+reached the maintainer on 2026-08-03 as decisions to make. A tracker that reports
+finished work as outstanding spends the attention it exists to direct — so a stale
+status here is a defect in this file, not a formatting detail.
+
+As of 2026-08-03 there are **no open items**. §29 and the five review items are
+closed; #30–#33 record what the maintainer decided.
+
 ---
 
 ## 1. No `ChatModel` port · *Recorded*
@@ -68,7 +77,7 @@ that lost half its assets" into "a corpus that merely looks small", and this
 project has already published a result on top of that. So problems are returned
 and the caller is expected to report them loudly.
 
-## 6. `ColumnAsset.identifier_fields` is the bare `physical_name` · **ADR needs updating**
+## 6. `ColumnAsset.identifier_fields` is the bare `physical_name` · *Recorded — the label below was wrong*
 
 ADR 0005 §1.1's table says `ColumnAsset`'s identifier is
 `{table.physical_name}.{physical_name}` — qualified. The implementation requires
@@ -89,9 +98,14 @@ The seed template still writes the qualified form (`table.column (text)`),
 because at seed time there is no better information — and the curator rewriting it
 to something shorter must not fail validation for dropping a qualifier.
 
-**Action:** ADR 0005 §1.1's identifier table should say bare `physical_name`.
+**Action: none.** ADR 0005 §1.1's identifier table *already* says bare
+`physical_name`, with this reasoning in the cell. It was fixed in the ADR's third
+draft and this entry's "ADR needs updating" heading was never cleared — so the
+heading sent a real decision to the maintainer that had already been made. Left
+visible rather than quietly deleted: a tracking table that reports stale work as
+outstanding wastes exactly the attention it is meant to direct.
 
-## 7. Per-type budgets live in `register/assets.py`, not `register/knobs.py` · **ADR needs updating**
+## 7. Per-type budgets live in `register/assets.py`, not `register/knobs.py` · *Recorded — the label below was wrong*
 
 ADR 0005 §5 lists the budgets in the knob table. They are implemented as a column
 of the asset policy row instead, and the knob register references them through a
@@ -106,8 +120,9 @@ unreachable.
 The knob reference preserves what §5 actually needs: a budget change moves the
 serve config hash.
 
-**Action:** ADR 0005 §5 should point at `register.assets` for the budgets rather
-than restating them.
+**Action: none**, for the same reason as #6 — ADR 0005 §5's knob table already
+reads "declared in `register.assets` beside the types they belong to" and lists
+them there. Verified 2026-08-03.
 
 ## 8. `verbatim_fields`, not `sanitized_fields` · *Recorded*
 
@@ -156,18 +171,50 @@ A `TBD` that resolves to a number is a fabricated measurement, and a gate readin
 it is worse than no gate. `UNSET` forces the caller to handle the case, which for
 `negative_tau` means the gate ships disabled — as ADR 0006 §2 requires.
 
-## 12. `context_budget_tokens = 24_000` · *Filled a gap*
+## 12. `context_budget_chars = 80_000` · **Rewritten 2026-08-03; the first version was an R3 violation**
 
 ADR 0005 §3.6 requires a total context budget and does not give a number.
 
-Derived from v1's measurements: median context was 17,782 chars ≈ 4,450 tokens,
-and median per-turn input was 30,923 tokens once accumulated tool returns are
-included. 24,000 leaves room above the observed context while putting a ceiling
-where none existed.
+**What the first version of this entry said, and why it was wrong.** It read:
+"median context was 17,782 chars ≈ 4,450 tokens, and median per-turn input was
+30,923 tokens". Both figures are real, and **both are the `curated` arm of one
+run**, quoted as though they described the system. Measured across all 19,095 v1
+turns the median context is **6,007** chars, and the arms span 8x:
 
-**This needs calibration**, and it is the number ADR 0005 §3.4's "input cost falls
-by ≥30%" gate is a percentage *of* — so it must be set before that gate can be
-evaluated at all.
+| arm | n | median context chars | median input tokens |
+|---|---|---|---|
+| `baseline` | 5,481 | 2,154 | 17,115 |
+| `seeded` | 5,461 | 4,498 | 17,892 |
+| `curated` | 5,451 | 17,782 | 30,923 |
+| `curated_sme` | 2,702 | 19,936 | 32,572 |
+
+That is **R3 — one population per metric** — committed in the document that
+records R3, and then used to derive a cap that would be applied to all four arms.
+
+**The value, and the measurement that chooses it.** `80_000`, in characters. Fire
+rate by arm at candidate thresholds:
+
+| arm | >24k | >40k | >60k | >80k |
+|---|---|---|---|---|
+| `baseline` | 0.0% | 0.0% | 0.0% | 0.0% |
+| `seeded` | 0.0% | 0.0% | 0.0% | 0.0% |
+| `curated` | **23.5%** | 5.3% | 1.9% | 0.0% |
+| `curated_sme` | **27.4%** | 5.5% | 1.6% | 0.0% |
+
+**Every binding threshold truncates only the treated arms.** The 24,000 in the
+first version of this entry would have cut the treatment on roughly a quarter of
+`curated` turns and on none of `baseline`'s — weakening the treatment in exactly
+the arms whose treatment the ladder exists to measure, and then reporting it as
+delivered. That is R2. 80,000 sits above the largest context v1 ever delivered
+(76,354 chars), so it provably never fires on observed traffic, which is what a
+backstop should do.
+
+**Units and the cost gate:** see #30. Characters because a token count needs a
+per-provider tokeniser and must be exact at delivery time; and the ≥30% cost gate
+moved off this budget entirely, because context is only ~14% of input tokens.
+
+**When it fires, that must be recorded.** A cap that silently trims context is an
+undelivered treatment reported as delivered.
 
 ## 13. `max_rows = 200_000` · *Filled a gap*
 
@@ -175,12 +222,32 @@ Inferred from v1 behaviour rather than stated in an ADR: three of the four
 grader-ceiling misses were `retails` questions exceeding a 200k-row harness cap,
 which pins the value v1 actually used.
 
-## 14. `g_length_max_chars = 8_000` · *Filled a gap*
+## 14. `g_length_max_chars = 8_000` · **Measured 2026-08-03; kept**
 
-ADR 0006 §13 says "TBD from the question distribution". 8,000 chars is roughly
-two orders of magnitude above a normal BI question and well below anything that
-would exhaust a context window, so it blocks a paste-bomb without touching real
-traffic. **Needs measuring against the actual distribution.**
+ADR 0006 §13 said "TBD from the question distribution". The first version of this
+entry guessed 8,000 as "roughly two orders of magnitude above a normal BI
+question" and admitted it needed measuring. It has now been measured, across all
+10,962 BIRD dev + train questions:
+
+| | min | p50 | p95 | p99 | p99.9 | max |
+|---|---|---|---|---|---|---|
+| question | 23 | 75 | 135 | 180 | 255 | **325** |
+| question + evidence | 32 | 163 | 329 | 440 | 609 | **906** |
+
+Both fields, because both reach the prompt. 8,000 is **8.8x the longest input the
+corpus contains**, so the false-refusal rate over 10,962 questions is exactly 0.
+
+**What this does and does not establish.** Any value ≥ 1,000 gives the same zero,
+so the measurement does not pick 8,000 over 2,000 — it only rules out anything
+near the distribution. The guard exists to stop a paste-bomb or an injection
+payload, and how long a *legitimate* non-BIRD question can run (a pasted table, a
+long business description) is a question this corpus cannot answer. 8,000 is
+headroom against that unknown, and the number to revisit is the observed max on
+real traffic.
+
+The guess happened to be fine. Recorded anyway, because "the guess was right" and
+"the guess was checked" are different states and only one of them is a reason to
+trust the next guess.
 
 ## 15. `Outcome` has no `graded` member · *Recorded*
 
@@ -219,7 +286,7 @@ Now a `never` field that is null counts as missing. The other two absence classe
 are not checked, because null is a legal value there and the register is what tells
 a reader which is which. That asymmetry is the register earning its place.
 
-## 18. Eight fields moved from `never` to `not_applicable` · **ADR needs updating**
+## 18. Eight fields moved from `never` to `not_applicable` · *Accepted; ADR updated 2026-08-03*
 
 `facet_hits`, `facet_channels`, `pulled_in`, `crossings`, `tool_delivered`,
 `negative`, `licensed`, `schemas` are owned by stages a refusal path never reaches.
@@ -232,8 +299,11 @@ The gate condition changed with it: *"on turns where the fan-out ran, no channel
 state differs from its declared expectation; the observed count is published beside
 the rate."*
 
-**Action:** ADR 0005 §4.1's field list should mark which fields are
-stage-conditional.
+**Action: done** (2026-08-03). ADR 0005 §4.1 now names the eight fields, states
+both defects that unconditional declaration produces, and the quotability block
+carries the count requirement: `facet_degradation_rate == 0` is only a pass when
+the number of turns the fan-out ran on is published with it — a rate of 0 over 0
+turns is not a pass.
 
 ## 19. `Anomaly` separates degradation from configuration drift · *Recorded*
 
@@ -340,7 +410,7 @@ v1's exact defect in the tool built to prevent it.
 line after it. Three of my first four markers were on the following line because the
 prose wrapped. The gate now says so in its failure message.
 
-## 29. The citations gate is two-tier, and `docs/` is advisory for now · **Open item**
+## 29. The citations gate is two-tier, and `docs/` is advisory for now · **Closed 2026-08-03 — see #31**
 
 `src/` and `tools/` are fatal. `docs/` reports 16 hits across 12 files and does not
 fail, with `--strict-docs` to promote it once sorted.
@@ -367,15 +437,97 @@ measurement most. **Reported on every run so the number cannot quietly grow.**
 
 ---
 
-## Open items for review
+## Open items — closed 2026-08-03
 
-| # | item | why it needs you |
+All five went to the maintainer on 2026-08-03. None is open.
+
+| # | item | outcome |
 |---|---|---|
-| 6 | column identifier is bare, not qualified | changes what a validator rejects |
-| 7 | budgets live with asset types | changes where §5 points |
-| 12 | `context_budget_tokens = 24_000` | it is the denominator of the cost gate |
-| 14 | `g_length_max_chars = 8_000` | a false-positive rate nobody has measured |
-| 18 | eight fields are stage-conditional | changes what a refusal path must write |
+| 6 | column identifier is bare, not qualified | **no action** — ADR 0005 §1.1 already said bare; the "ADR needs updating" label above was stale, see the correction under #6 |
+| 7 | budgets live with asset types | **no action** — ADR 0005 §5 already pointed at `register.assets`; same stale label |
+| 12 | the total context budget | **decided: characters, `80_000`** — see the rewritten #12 |
+| 14 | `g_length_max_chars = 8_000` | **measured, kept** — 0/10,962 false refusals, see the rewritten #14 |
+| 18 | eight fields are stage-conditional | **accepted; ADR 0005 §4.1 updated** with the two-defects argument and the reworded gate |
 
-Everything else is recorded for the record and needs no decision unless you
-disagree.
+The maintainer's instruction on the surrounding documentation was *"ADR如果过时了，
+就改ADR。docs里面除了我们新的其他都可以deprecate吧"* — if the ADR is out of date,
+change the ADR; everything in `docs/` other than the current work can be
+deprecated. Decisions #30–#33 record how that was carried out.
+
+---
+
+## 30. `context_budget` is counted in characters, and the cost gate moved off it
+
+**The maintainer's reason for characters:** a token count is genuinely hard to get
+right in production — it needs a tokeniser per provider, kept in step with model
+changes, and it has to be correct at *delivery* time, before the call. Characters
+are free and exact.
+
+That choice has a consequence worth stating, because it removes a claim the ADR
+was making. §3.4's "input cost falls by ≥30%" **cannot be denominated in this
+budget**: cost is billed in tokens, and an earlier draft of §3.6 said that without
+a ceiling the gate "has nothing to be 30% of". That was wrong twice —
+
+1. §3.4 is denominated in **dollars via a dated price table**, not in the budget.
+2. Measured per arm, the context block is **~14% of input tokens** on the richest
+   arm. Deleting it entirely would not reach 30%.
+
+So the two were separated: the budget is a pure **delivery backstop** enforced in
+characters, and the cost gate reads **provider-reported `usage`**, where the
+headroom actually is. `cache_read_tokens` is 0 across all three v1 ladders — the
+caching mechanism the 30% depends on was never switched on during the runs the
+target was set from, which is what makes the gate falsifiable rather than
+self-fulfilling.
+
+## 31. `docs/v1/` is an archive tier in the citations gate, not an exemption
+
+52 v1 documents moved under `docs/v1/`, so `docs/` graduated from advisory to
+**fatal** in `tools/check_citations.py`. Two hits remain in live docs (ADR 0003's
+own falsified recall figure, and ADR 0005 discussing the rate-limited-embedder
+incident); both are genuine discussions and carry a per-line marker.
+
+The archive is deliberately **not** in `GREP_EXEMPT_PATHS`. A v1 experiment record
+stating "we measured 0.35 on this date" is a **true statement**, and the point of
+keeping the archive is that such records stay unedited — editing them to agree
+with later measurements would destroy the evidence that the earlier
+instrumentation was wrong. But an exemption prints nothing, so a growing archive
+would be invisible. The tier scans, counts, and reports (currently 14 claims
+across 59 files) while never failing the run.
+
+Both directions are tested, because the tier is new logic and "advisory" and
+"fatal" produce identical output when there is nothing to report: one test asserts
+a retired literal in `docs/` **fails** the run, another asserts one in `docs/v1/`
+**passes** *and that the printed count changed* — a pass alone would also be what
+a silent exemption looks like.
+
+## 32. The front-door docs get a banner, in both languages
+
+Nine documents plus their Chinese twins stay at their paths — `AGENTS.md` names
+them as the maintained bilingual set and they are how someone enters the
+repository — but every one describes deleted code, and after the move their links
+resolve into an archive while their prose still presents it as the current system.
+Each now carries a banner after its H1.
+
+**The banner went into the `.zh.md` twins too**, which departs from `AGENTS.md`'s
+"while the work is in progress, edit the English docs only". That rule exists so
+translation does not have to track churn; it is not a reason to leave a
+Chinese-reading maintainer without the warning that the document describes deleted
+code. A stale translation is a cost; a translation that silently claims to
+describe the live system is a trap.
+
+## 33. ADRs 0001–0004 are marked superseded in place, not moved
+
+ADRs are append-only by convention: a superseded one keeps its number and gains a
+pointer. Each of the four now states which of its decisions **survived** the
+rewrite and which did not, because "superseded" alone throws away the reason the
+ADR is still worth reading:
+
+| ADR | survives | replaced |
+|---|---|---|
+| 0001 | LangGraph Server + `useStream` as the transport | everything about graph shape |
+| 0002 | **governance is topology, not trust** | tools, ledger shape, stage names |
+| 0003 | the `summary`/`body` split (pushed down into *every* asset type as I1/I2) | `NoteAsset` as a type; "tri-modal" retrieval; its recall figures |
+| 0004 | logging is local-first, written at existing seams | the hand-maintained field list, replaced by the declared register |
+
+0003 is the one to read: its central design was right and its packaging was wrong,
+which is why the type was deleted and the idea kept.
