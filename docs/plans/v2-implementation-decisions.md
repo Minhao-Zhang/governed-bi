@@ -884,3 +884,74 @@ holder describing the fixture wrong, and only execution catches that.
 **Process note.** The body-writer was told not to touch `src/` and did not, listing seven
 places it wanted to. It also stopped at the hard cap rather than deleting failure messages
 to fit — the correct call, and the reason this decision exists.
+
+## 43. The five wiring hooks are one missing layer, not one missing derivation · *2026-08-03*
+
+**ADR needs updating — done: ADR 0005 §2.8.1 and §2.8.2 added.**
+
+Chasing the `join_edges` defect from #42 found that it is not one hook. `serve/state.py`
+declares five inputs that `resolve` and `connect` read — `join_edges`, `references`,
+`asset_types`, `table_schemas`, `schema_tags` — under the comment *"F1 test / wiring hooks
+(optional)"*, and **not one of them is written anywhere in the repository.** Not in `src/`,
+not in `tests/`, not by the eval harness. Only `facet_route_hits` has a producer.
+
+So the projection of the corpus that retrieval runs on has never existed. Consequences,
+each verified rather than inferred:
+
+- `connect` has run on `set()` on every turn ever served, and `_connect_decline_reason`
+  returns `missing_join_path` for any turn with ≥2 terminals. One terminal returns
+  `declined=False` at `connect.py:45`, which is the entire reason this was invisible.
+- `resolve` has run on `{}` references, so **no closure row in §2.8 has ever fired** — not
+  `column → table`, not `few-shot → its tables`. Context has been whatever the facets hit.
+- The word "optional" in that comment is the defect in one word. Five fields that
+  `resolve` and `connect` cannot function without were labelled optional because the only
+  thing that had ever supplied them was a test.
+
+### Three decisions
+
+**1. One module, built beside the index, returning `(structure, problems)`.** The five are
+one projection, pure in the asset set, carrying no per-turn information. §2.2 already
+settled the identical question for schema tags — *"computed at build, not query time"* —
+and the argument is not cost: a per-turn derivation is a place where two turns can disagree
+about the shape of the corpus, and a run whose turns disagree is not comparable to
+anything. `(structure, problems)` follows #5: a corpus that lost half its edges must not be
+indistinguishable from a corpus that is small. `connect_node` gains a `config` parameter —
+it has none today, which is *why* a state hook was reached for.
+
+**2. Endpoint reconciliation may not guess.** `connect`'s nodes are asset ids
+(`{schema}.{physical}`); `JoinAsset.left_table` is a physical name, bare or qualified, and
+`validate.py:208` explicitly declines to settle which. Two candidates is routine in a
+pooled lake, and first-match there is not a lost edge but a **licensing leak**: a Steiner
+point in the wrong schema, licensed, with `crossings` charged to the wrong pair. So
+ambiguous or unresolvable endpoints drop the edge **and record a problem** — dropping alone
+fails closed but silently, and the silence resurfaces as `missing_join_path` on a turn that
+looks ordinary. `table_id` must also become a declared function beside `derive_column_id`
+and `join_id`; it is a bare f-string at `seed.py:39`, and this reconciliation is the one
+place a second copy of that convention would mis-license a table.
+
+**3. Join completion moves out of `resolve` to after `connect`.** §2.8's load-bearing last
+row — *both* tables present pulls in the join — is **conjunctive**, and `resolve` is a
+fixpoint over `Mapping[id, set[id]]`, where every edge is **disjunctive**. Encoding it as
+`table → joins touching it` lets one endpoint pull the join and the join pull its other
+endpoint: FK-neighbourhood expansion by one hop from every hit table, which is exactly what
+§2.9 turned off (`expand_hops = 0`, v1's 1 recorded as wrong). And placing it before
+`connect` misses the keys it exists to supply, because a Steiner point's whole purpose is to
+sit on a join path. Endpoint closure stays in `resolve` (it expands the terminal set
+`connect` must connect); completion runs once afterwards over the final `licensed` set,
+still total and idempotent.
+
+### Contract first, this time
+
+`tests/retrieve/test_structure_contract.py` — eight specifications, written **before the
+module**, which is the opposite ordering from F and the reason this one can prevent rather
+than convict. Each ambiguity spec is paired with the assertion that catches its tempting
+fix: "ambiguous endpoints are dropped" is satisfiable by dropping the *second* match and
+keeping the first, so the second spec asserts neither candidate binds, by name rather than
+by count.
+
+**A limitation worth stating.** This lands in `retrieve/`, which is parcel E, and E is in
+`ACCEPTED`. E's sign-off was given against scoring, fusion, routing and closure; it did not
+cover a module that did not exist. `tests/contracts.py` tracks acceptance per *package*, so
+it cannot express "E accepted, this module not" — the contract is a separate strictly-marked
+file so the distinction survives that gap instead of being absorbed by it. Fixing the grain
+of `ACCEPTED` is not worth doing on one instance; a second instance would change that.

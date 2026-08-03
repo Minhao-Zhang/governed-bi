@@ -819,7 +819,7 @@ Complete every hit's references until fixpoint. Deterministic, no parameters,
 | `MetricAsset` hit | its `base_table` |
 | `FewShotAsset` hit | the tables its SQL references |
 | `JoinAsset` hit | both endpoint tables |
-| **two tables in the set** | **every `JoinAsset` whose both endpoints are in the set** |
+| **two tables in the set** | **every `JoinAsset` whose both endpoints are in the set** — *but see 2.8.1: this row does not run here* |
 
 **The last row is load-bearing and was missing from draft 2.** In v1 joins
 reached context through a render-time rule — every `JoinAsset` with both
@@ -836,6 +836,94 @@ is a *choice among paths*.
 `FewShotAsset` closure needs a SQL parser (sqlglot, datasource dialect). A parse
 failure resolves nothing for that few-shot and is **recorded**, never silently
 dropped.
+
+##### 2.8.1 Join completion runs *after* `connect`, not inside `resolve`
+
+*Amendment, 2026-08-03. The rule above is unchanged; only its position moves.*
+
+Two reasons, and the first is mechanical.
+
+**`resolve`'s closure cannot express it.** `resolve(ids, references)` is a fixpoint
+over `Mapping[id, set[id]]`, so every edge is **disjunctive**: any one id present
+pulls in all of its references. The last row of the table above is
+**conjunctive** — *both* endpoints present pulls in the join. Encoding it as
+`table → joins touching it` would pull a join in from **one** endpoint, and that
+join would then pull in its other endpoint: FK-neighbourhood expansion by one hop
+from every hit table. §2.9 sets `expand_hops = 0` and records that v1's default of
+1 was wrong, so the naive encoding silently switches on the thing §2.9 switched
+off. That is not a refactor away — the closure is the wrong shape for a
+conjunctive rule, and giving it a second parameter to carry hyperedges would make
+a total function parameterised, which is the one property §2.8 has that §2.9 does
+not.
+
+**Placing it before `connect` provably misses the keys it exists to supply.**
+`connect` adds Steiner points, and a Steiner point's whole purpose is to sit on a
+join path — so the table pairs that most need their `on` clause in the prompt are
+exactly the ones created *after* `resolve` has run. Completing joins before
+`connect` reproduces the draft-2 failure the row was written against, one step
+later in the pipeline: a multi-hop question reaching the model with none of the
+keys for the hops `connect` chose.
+
+So: **endpoint closure (`join → its two tables`) stays in `resolve`**, because it
+expands the terminal set that `connect` then has to connect. **Join completion
+(`both tables → the join`) runs once after `connect`, over the final `licensed`
+set.** It remains total, idempotent, and a function of a set — it just runs over
+a later set. Joins added this way are `pulled_in` and exempt from the join budget,
+exactly as above.
+
+#### 2.8.2 The corpus structure projection
+
+*Added 2026-08-03, because none of the above was reachable.*
+
+`resolve` and `connect` are both total functions of data neither of them has.
+`serve/state.py` declares five inputs for them — `join_edges`, `references`,
+`asset_types`, `table_schemas`, `schema_tags` — under the comment *"F1 test /
+wiring hooks (optional)"*, and **all five are read and none is ever written**, by
+`src/`, by `tests/`, or by the eval harness. So `connect` runs on an empty edge
+set on every turn that has ever executed, and declines `missing_join_path`
+whenever a turn licenses more than one table. Single-table turns answer, which is
+why a green suite and a live eval both missed it.
+
+These five are not five hooks. They are **one projection of the asset set**, they
+are pure functions of it, and they hold no per-turn information. So:
+
+- **One module builds all five**, beside the index and at the same time. §2.2
+  already establishes that precedent for schema tags — *"computed at build, not
+  query time — this is what lets `route` precede `resolve`"* — and the argument is
+  the same one: recomputing per turn is not merely waste, it is a place where two
+  turns can disagree about the shape of the corpus.
+- **It is carried on `configurable` next to `index`**, and `connect_node` gains a
+  `config` parameter. It has none today (`wrap.py` forwards `RunnableConfig` only
+  to nodes that declare it), which is *why* the hook shape was reached for.
+- **It returns `(structure, problems)`**, per the loader's rule: a corpus that
+  lost half its edges must not be indistinguishable from a corpus that is small.
+
+**Node identity is the whole difficulty, and guessing is prohibited.** `connect`'s
+nodes must be the identifiers in `licensed` — asset ids, `{schema}.{physical}`.
+`JoinAsset` carries `left_table` / `right_table` as **physical names, bare or
+qualified**, and `corpus/validate.py` explicitly declines to settle which
+(`_bare()` accepts both). Reconciling them is therefore a lookup, and it has three
+outcomes:
+
+| the endpoint resolves to | then |
+|---|---|
+| exactly one table asset | bind the edge |
+| **more than one** | **drop the edge and record a problem** |
+| none | drop the edge and record a problem |
+
+The ambiguous case is routine, not hypothetical: one physical name in two schemas
+is the normal shape of a pooled lake, and it is the case where a guess is not a
+lost edge but a **licensing leak** — a Steiner point in the wrong schema, licensed,
+and `crossings` accounted against the wrong pair. Left-most or first-match
+resolution fails *open*. Dropping fails closed but silently, hence the recorded
+problem: an unresolvable endpoint is a curation defect, and it must surface where
+the corpus is built rather than as a decline three layers away.
+
+**`table_id` must become a declared function.** `derive_column_id` and `join_id`
+are singletons in `corpus/identity.py`; the table id is a bare f-string at
+`corpus/seed.py`. The reconciliation above depends on that convention, so a second
+hand-written copy of it is the two-`LOW_CONFIDENCE_JOIN`-constants defect in the
+one place that would silently mis-license a table.
 
 #### 2.9 `connect` — Steiner connectivity
 
