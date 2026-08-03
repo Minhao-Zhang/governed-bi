@@ -329,13 +329,50 @@ def test_citation_gate_tolerates_the_archive_but_counts_it() -> None:
 # ── file length: the hard cap fails, the soft cap is published ────────────────
 
 
+def _declared_limits() -> tuple[int, int]:
+    """The soft and hard tiers as ``tools/check_file_length.py`` defines them."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "tools"))
+    from check_file_length import HARD_LIMIT, SOFT_LIMIT
+
+    return SOFT_LIMIT, HARD_LIMIT
+
+
+def test_the_adr_and_the_gate_declare_the_same_file_length_tiers() -> None:
+    """A limit in a table that no process reads is a preference, not a limit — the
+    argument ``check_file_length.py``'s own docstring rests on, turned back on the ADR
+    that declares the number.
+
+    This is the assertion that was missing when the hard tier moved 800 -> 1000 on
+    2026-08-03: the constant, the gate's prose, a conformance test's probe size, two plan
+    documents and this ADR row all carried the number by hand, and the only thing that
+    noticed the change was a test failing for an unrelated reason. Divergence between a
+    declared limit and an enforced one is how v1's caller contract came to be documented
+    and breached at the same time.
+    """
+    import re
+
+    adr = (Path(__file__).resolve().parent.parent.parent / "docs" / "adr" / "0005-v2-memory-layer-and-faceted-retrieval.md").read_text(encoding="utf-8")
+    match = re.search(r"soft \*\*(\d+)\*\*, hard \*\*(\d+)\*\*", adr)
+    assert match, "ADR 0005 §6 no longer states the file-length tiers in a parseable form"
+    assert (int(match.group(1)), int(match.group(2))) == _declared_limits(), (
+        f"ADR 0005 §6 declares soft/hard {match.group(1)}/{match.group(2)}; "
+        f"tools/check_file_length.py enforces {_declared_limits()}. One of them is lying "
+        "to a reader, and the enforced one wins silently."
+    )
+
+
 def test_file_length_gate_fires_over_the_hard_cap() -> None:
-    """ADR 0005 §6 declared soft 400 / hard 800 "CI-enforced" and for a while
+    """ADR 0005 §6 declared soft 400 / hard 1000 "CI-enforced" and for a while
     nothing enforced it, which is the same defect as v1's caller contract that was
     documented and breached. v1 reached 17 files over 1,000 lines, one at 5,085, and
-    30% of its code lived in them — every one of those passed through 800 first.
+    30% of its code lived in them.
+
+    The probe size is **derived** from the gate's own constant. It was hand-written as
+    ``801`` until the hard tier moved to 1000, at which point this test failed while
+    saying nothing about the actual change — a stale duplicate of a number, which is the
+    defect class §6 forbids two rows below the one it was enforcing.
     """
-    PROBE.write_text("x = 0\n" * 801, encoding="utf-8")
+    PROBE.write_text("x = 0\n" * (_declared_limits()[1] + 1), encoding="utf-8")
     try:
         result = _gate("check_file_length.py")
         assert result.returncode == 1

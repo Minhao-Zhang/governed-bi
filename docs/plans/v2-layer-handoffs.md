@@ -167,8 +167,9 @@ object passed to both makes the divergence unrepresentable.
 **The two CI gates parcel A must build**, because every other parcel needs them
 and none of them can add them for itself:
 
-- **file length**: soft 400 (warn), hard 800 (fail). ADR 0005 §6 declares it
-  CI-enforced; nothing enforces it. v1 reached 17 files over 1,000 lines.
+- **file length**: soft 400 (warn), hard 1000 (fail), and `tools/check_file_length.py`
+  now enforces both. v1 reached 17 files over 1,000 lines, so the hard tier fires at that
+  shape rather than before it — the soft tier's printed count is the early warning.
 - **duplicate concept**: one implementation per concept, one import name. v1 had
   two McNemars (`eval/analysis.py:572`, `eval/power.py:338`) and two
   `LOW_CONFIDENCE_JOIN` constants **with different comparison operators**. With

@@ -368,7 +368,8 @@ the answer key.
 
 ## 27. `record.py` is 497 lines, over the 400 soft cap · *Recorded*
 
-Under the 800 hard cap. The natural split is declaration from derivation, and the
+Under the hard cap (800 when this was recorded, 1000 since — see #42). The natural
+split is declaration from derivation, and the
 split line is where drift happens (`Absence` semantics away from
 `missing_required`), so it stays whole until something forces the issue. Flagged so
 that when it splits it is a decision with this note attached.
@@ -833,3 +834,53 @@ its first item, ahead of the grader fix: pointing the harness at Postgres is wha
 `ACCEPTED` and said so. That is the three-state model working as designed — code with a
 green contract and no sign-off is a *reportable state*, and leaving the judgement to a
 different person is the whole reason it was made unrepresentable-by-`mkdir` in #38.
+
+## 42. F's seven contract bodies exist; the hard cap moves 800 → 1000 · *2026-08-03*
+
+**Decision: hard file-length cap is 1000 lines, soft stays 400.** The maintainer's reason
+was that Python at this repository's prose density does not fit a coherent unit of work
+into 800 lines. The forcing case supports it: F's contract came back at 855 lines, and the
+55 over were failure messages and preconditions — the evidence the file exists to produce.
+Compacting further would have deleted the artifact, which is the trade the cap is meant to
+prevent, not cause.
+
+**What the new number costs, stated where it can be read.** 800's argument was that every
+one of v1's worst files passed through it on the way to 1,000, so it caught them early. At
+1000 the cap fires *at* the shape v1 normalised (17 files over 1,000 lines) rather than
+before it. So the soft tier's printed overrun count is now the early warning rather than a
+courtesy, and that is recorded in `tools/check_file_length.py`'s docstring and ADR 0005 §6.
+
+**The number was hand-carried in six places** — the constant, the gate's prose, a
+conformance probe's `801`, two plan docs and the ADR row. Changing it broke a test that
+said nothing about the change. So `test_the_adr_and_the_gate_declare_the_same_file_length_tiers`
+now parses §6's row and asserts it equals the enforced constant, and the probe size derives
+from `HARD_LIMIT`. A limit in a table no process reads is a preference — the gate's own
+argument, applied to the ADR that declares it.
+
+### The bodies, and what writing them found
+
+All seven `@UNWRITTEN` specifications now have bodies, verified to fail on **their own
+assertions** — ten of ten `AssertionError`, none on an import, no XPASS. Three findings the
+fixture-shape notes got wrong, all discovered by execution:
+
+1. **`answered` is unreachable for any turn licensing more than one table.** A question
+   needing both tables of a two-table schema with a declared foreign key declines with
+   `missing_join_path`: `connect_node` reads join edges from `state["join_edges"]`, a *test
+   hook*, and nothing in `serve/` derives them from the `JoinAsset` that both the seeded
+   corpus and the index carry. This is a **sixth** F defect, not one of the five, and it is
+   larger than any of them. Single-table turns answer, which is why it was invisible.
+2. **`facet_degraded` has no `RECORD_REGISTER` row**, so `project()` structurally cannot
+   write it. F-3's fix needs a register row first, not just a computation — the docstring
+   said the latter.
+3. **`tools.py:86`'s `or 3` coerces an attempt cap of 0 back to 3**, so F-1's documented
+   trap ("a capped turn carries zero attempts") is unreachable. The body uses `cap=1` with
+   two calls and keeps the non-empty-ledger precondition the trap exists to guard.
+
+That is twice in one day that a fixture-shape note I wrote was falsified by running it (the
+other was reading `facet_channels` off a node that returns `facets[stage]["channels"]`).
+Contract-first stops an implementer grading themselves; it does nothing about the design
+holder describing the fixture wrong, and only execution catches that.
+
+**Process note.** The body-writer was told not to touch `src/` and did not, listing seven
+places it wanted to. It also stopped at the hard cap rather than deleting failure messages
+to fit — the correct call, and the reason this decision exists.
