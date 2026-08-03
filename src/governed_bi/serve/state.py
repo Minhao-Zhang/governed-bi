@@ -167,14 +167,19 @@ class ServeState(TypedDict, total=False):
     generated_sql: str | None
     n_re_served: int
 
-    # F1 test / wiring hooks (optional)
+    # F1 test hooks and per-turn knobs.
+    #
+    #: Five more fields lived here until 2026-08-03 -- ``references``, ``join_edges``,
+    #: ``schema_tags``, ``asset_types``, ``table_schemas`` -- labelled *optional*, read
+    #: by ``resolve`` and ``connect``, and **written by nothing in the repository**. The
+    #: word "optional" was the defect in one word: two functions that cannot work
+    #: without their inputs were declared not to need them, so ``connect`` ran on an
+    #: empty edge set on every turn ever served. They are not five per-turn hooks but
+    #: one projection of the corpus, so they now live in
+    #: :class:`~governed_bi.retrieve.structure.CorpusStructure` on ``configurable``
+    #: (ADR 0005 §2.8.2), where the thing that builds them is the thing that has them.
     facet_route_hits: list[tuple[Any, Any, float]]
     retrieve_hooks: dict[str, Any]
-    references: dict[str, Any]
-    join_edges: set[tuple[Any, Any]]
-    schema_tags: dict[str, str]
-    asset_types: dict[str, str]
-    table_schemas: dict[str, str]
     route_top_n: int
     max_steiner_points: int
     max_crossings: int

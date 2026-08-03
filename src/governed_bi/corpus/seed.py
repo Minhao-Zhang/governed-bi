@@ -7,6 +7,7 @@ before a curator exists. Does not author ``reliability`` from absence.
 from __future__ import annotations
 
 from .identity import derive_column_id, join_id
+from .identity import table_id as table_id_for
 from .introspect import Introspection
 from .schema import (
     Asset,
@@ -36,7 +37,10 @@ def seed(introspection: Introspection, schema: str) -> tuple[list[Asset], list[P
     )
 
     for table in tables:
-        table_id = f"{schema}.{table.physical_name}"
+        # The convention is declared once, in identity.py: the endpoint reconciliation
+        # in retrieve/structure.py keys on it, and a second spelling there would bind
+        # an edge to the wrong table rather than merely losing it (ADR 0005 §2.8.2).
+        table_id = table_id_for(schema, table.physical_name)
         col_names = [c.physical_name for c in table.columns]
         col_list = ", ".join(col_names)
         summary = (

@@ -4,6 +4,15 @@ F2: ``route_node`` runs ADR 0005 §2.5 two-pass retrieval when a
 ``UnifiedIndex`` is on ``config["configurable"]["index"]``. Without an index,
 F1-compatible behaviour remains (schema selection from facet / injector hits;
 filter-or-empty ``retrieved``).
+
+**All three nodes declare ``config``, and that is load-bearing** (ADR 0005 §2.8.2).
+``wrap.py`` forwards ``RunnableConfig`` only to nodes whose signature asks for it, so
+until 2026-08-03 ``resolve_node`` and ``connect_node`` had no way to reach the corpus
+and read their inputs off ``state`` instead -- five fields that nothing anywhere ever
+wrote. ``connect`` therefore ran on an empty edge set on every turn ever served and
+declined ``missing_join_path`` whenever a turn licensed more than one table, while
+``resolve`` ran on an empty reference map so **no closure row in §2.8 had ever fired**.
+Single-table turns answered, which is what made it invisible.
 """
 
 from __future__ import annotations
@@ -18,8 +27,14 @@ from governed_bi.retrieve.connect import connect
 from governed_bi.retrieve.fuse import fuse
 from governed_bi.retrieve.resolve import resolve
 from governed_bi.retrieve.route import route as route_scores
+from governed_bi.retrieve.structure import CorpusStructure, complete_joins
 from governed_bi.serve.nodes.pass_two import pass_two_retrieve
-from governed_bi.serve.runtime import FUSE_WEIGHTS, configurable as runtime_config, facet_hits
+from governed_bi.serve.runtime import (
+    FUSE_WEIGHTS,
+    configurable as runtime_config,
+    corpus_structure,
+    facet_hits,
+)
 from governed_bi.serve.state import TERMINAL_PATH_KINDS
 
 __all__ = [
@@ -50,7 +65,8 @@ def empty_retrieved(
 
 def route_node(state: dict, config: RunnableConfig) -> dict:
     """Pass-one evidence → top-N schemas → pass-two re-search (or F1 fallback)."""
-    hits = _route_hit_triples(state)
+    structure = corpus_structure(config)
+    hits = _route_hit_triples(state, structure)
     ranking = sorted(
         route_scores(hits),
         key=lambda pair: (-float(pair[1]), str(pair[0])),
@@ -82,7 +98,7 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
         )
     else:
         # No index: F1-compatible — filter pass-one hits (empty when only injector).
-        retrieved = _retrieved_for_schemas(state, schemas, ranking)
+        retrieved = _retrieved_for_schemas(state, schemas, ranking, structure)
 
     out: dict[str, Any] = {
         "schemas": schemas,
@@ -96,15 +112,21 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
     return out
 
 
-def resolve_node(state: dict) -> dict:
-    """Reference closure over hit ids; additions land in ``pulled_in`` / ``licensed``."""
+def resolve_node(state: dict, config: RunnableConfig) -> dict:
+    """Reference closure over hit ids; additions land in ``pulled_in`` / ``licensed``.
+
+    The closure rows are §2.8's, **minus** its last one: join completion needs both
+    endpoints, which a disjunctive fixpoint cannot express, and it runs after
+    ``connect`` (§2.8.1). Everything here is ``join -> its two tables``, never the
+    reverse.
+    """
     if state.get("path_kind") in TERMINAL_PATH_KINDS:
         return {}
 
+    structure = corpus_structure(config)
     retrieved = _copy_retrieved(state.get("retrieved"))
     hit_ids = _hit_ids(retrieved)
-    references = state.get("references") or {}
-    closure = resolve(hit_ids, references=references)
+    closure = resolve(hit_ids, references=structure.references)
     added = closure - hit_ids
 
     pulled_in = dict(retrieved.get("pulled_in") or {})
@@ -112,7 +134,7 @@ def resolve_node(state: dict) -> dict:
         pulled_in.setdefault(str(asset_id), "resolve")
     retrieved["pulled_in"] = pulled_in
 
-    asset_types = state.get("asset_types") or {}
+    asset_types = structure.asset_types
     licensed = set(state.get("licensed") or ())
     licensed.update(_table_ids_from_retrieved(retrieved, asset_types))
     for asset_id in added:
@@ -125,18 +147,24 @@ def resolve_node(state: dict) -> dict:
     }
 
 
-def connect_node(state: dict) -> dict:
-    """Bounded Steiner join over licensed tables; decline when disconnected / over caps."""
+def connect_node(state: dict, config: RunnableConfig) -> dict:
+    """Bounded Steiner join over licensed tables; decline when disconnected / over caps.
+
+    Then **join completion** (§2.8.1): every join whose both endpoints are in the final
+    licensed set is pulled in. It runs here rather than in ``resolve`` because a Steiner
+    point's whole purpose is to sit on a join path, so the pairs that most need their
+    ``on`` clause in the prompt are the ones this node has just created.
+    """
     if state.get("path_kind") in TERMINAL_PATH_KINDS:
         return {}
 
+    structure = corpus_structure(config)
     retrieved = _copy_retrieved(state.get("retrieved"))
-    asset_types = state.get("asset_types") or {}
     terminals = set(state.get("licensed") or ())
     if not terminals:
-        terminals = _table_ids_from_retrieved(retrieved, asset_types)
+        terminals = _table_ids_from_retrieved(retrieved, structure.asset_types)
 
-    edges = state.get("join_edges") or set()
+    edges = structure.join_edges
     max_points = int(state.get("max_steiner_points", _DEFAULT_MAX_STEINER))
     result = connect(terminals, edges=edges, max_points=max_points)
 
@@ -150,13 +178,19 @@ def connect_node(state: dict) -> dict:
             "licensed": sorted(str(x) for x in terminals),
         }
 
+    licensed = frozenset(terminals | set(result.added))
+
     pulled_in = dict(retrieved.get("pulled_in") or {})
     for asset_id in result.added:
         pulled_in[str(asset_id)] = "connect"
+    # §2.8's last row, over the final set. Joins are `pulled_in` and never enter
+    # `licensed`: that field is govern's table allowlist (bounds.py), and a join id in
+    # it would be a table key naming no table.
+    for join_asset_id in complete_joins(licensed, structure):
+        pulled_in.setdefault(str(join_asset_id), "connect")
     retrieved["pulled_in"] = pulled_in
 
-    licensed = frozenset(terminals | set(result.added))
-    table_schemas = state.get("table_schemas") or {}
+    table_schemas = structure.table_schemas
     selected_schemas = set(state.get("schemas") or ())
     crossings = _crossings(result.added, table_schemas, selected_schemas)
 
@@ -180,9 +214,11 @@ def connect_node(state: dict) -> dict:
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 
-def _route_hit_triples(state: Mapping[str, Any]) -> list[tuple[Any, Any, float]]:
+def _route_hit_triples(
+    state: Mapping[str, Any], structure: CorpusStructure
+) -> list[tuple[Any, Any, float]]:
     """Pass-one evidence for ``route``. Prefer facet hits; injector is escape hatch."""
-    triples = _triples_from_facets(state)
+    triples = _triples_from_facets(state, structure)
     if triples:
         return triples
 
@@ -195,8 +231,10 @@ def _route_hit_triples(state: Mapping[str, Any]) -> list[tuple[Any, Any, float]]
     return []
 
 
-def _triples_from_facets(state: Mapping[str, Any]) -> list[tuple[Any, Any, float]]:
-    schema_tags = state.get("schema_tags") or {}
+def _triples_from_facets(
+    state: Mapping[str, Any], structure: CorpusStructure
+) -> list[tuple[Any, Any, float]]:
+    schema_tags = structure.schema_tags
     triples: list[tuple[Any, Any, float]] = []
     for facet_name, facet_result in (state.get("facets") or {}).items():
         hits = facet_hits(facet_result)
@@ -280,10 +318,11 @@ def _retrieved_for_schemas(
     state: Mapping[str, Any],
     schemas: list[Any],
     ranking: list[tuple[Any, float]],
+    structure: CorpusStructure,
 ) -> dict[str, Any]:
     """F1 fallback: RetrievalResult from facet hits in the selected schemas."""
     schema_set = {str(s) for s in schemas}
-    schema_tags = state.get("schema_tags") or {}
+    schema_tags = structure.schema_tags
     ranked: list[tuple[str, str, float]] = []
     attributions: dict[str, list[dict[str, Any]]] = {}
     selected: dict[str, dict[str, Any]] = {}

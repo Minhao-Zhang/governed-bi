@@ -35,6 +35,7 @@ __all__ = [
     "SHARED_NAMESPACE",
     "validate_path_component",
     "validate_asset_id",
+    "table_id",
     "derive_column_id",
     "on_digest",
     "join_id",
@@ -100,6 +101,25 @@ def validate_asset_id(value: object) -> str:
             "must match [A-Za-z0-9_][A-Za-z0-9_.:-]* and contain no '..'."
         )
     return value
+
+
+def table_id(schema: str, physical_name: str) -> str:
+    """The id of a table living in ``schema`` (ADR 0005 §2.8.2).
+
+    Declared here beside :func:`derive_column_id` and :func:`join_id`, and for the
+    same reason. Until 2026-08-03 this convention was a bare f-string inside
+    :func:`~governed_bi.corpus.seed.seed`, and the *only* consumer was the seed
+    itself -- so a second hand-written copy cost nothing and nobody wrote one.
+
+    §2.8.2 changed that. Reconciling a ``JoinAsset`` endpoint (a physical name,
+    bare or qualified) against the identifiers in ``licensed`` is a lookup keyed on
+    exactly this convention, and a second spelling of it there would not lose an
+    edge -- it would bind one to the wrong table, license a table in the wrong
+    schema and charge ``crossings`` to the wrong pair. That is the two
+    ``LOW_CONFIDENCE_JOIN`` constants in the one place where the two halves fail
+    *open* rather than merely disagreeing.
+    """
+    return f"{schema}.{physical_name}"
 
 
 def derive_column_id(table_id: str, physical_name: str) -> str:

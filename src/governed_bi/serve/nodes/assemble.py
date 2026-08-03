@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 
 from governed_bi.serve.context import render_context
-from governed_bi.serve.runtime import DEFAULT_CONTEXT_BUDGET, configurable as runtime_config
+from governed_bi.serve.runtime import (
+    DEFAULT_CONTEXT_BUDGET,
+    assets_by_id as resolve_assets_by_id,
+    configurable as runtime_config,
+)
 from governed_bi.serve.state import TERMINAL_PATH_KINDS
 
 __all__ = ["assemble_node"]
@@ -24,7 +28,7 @@ def assemble_node(state: dict, config: RunnableConfig) -> dict:
         return {}
 
     cfg = runtime_config(config)
-    assets_by_id = _assets_by_id(cfg)
+    assets_by_id = resolve_assets_by_id(cfg)
     retrieved = state.get("retrieved") or {}
     schemas = list(state.get("schemas") or ())
     budget = _budget_chars(state, cfg)
@@ -59,56 +63,3 @@ def _budget_chars(state: Mapping[str, Any], cfg: Mapping[str, Any]) -> int:
     return DEFAULT_CONTEXT_BUDGET
 
 
-def _assets_by_id(cfg: Mapping[str, Any]) -> dict[str, Any]:
-    """Resolve ``assets_by_id`` or build from ``corpus`` (list / dict / AnalystCorpus)."""
-    direct = cfg.get("assets_by_id")
-    if isinstance(direct, Mapping) and direct:
-        return {str(k): v for k, v in direct.items()}
-
-    corpus = cfg.get("corpus")
-    if corpus is None:
-        return {}
-
-    by_id = getattr(corpus, "by_id", None)
-    if isinstance(by_id, Mapping):
-        return {str(k): v for k, v in by_id.items()}
-
-    if isinstance(corpus, Mapping):
-        # id → asset
-        values = list(corpus.values())
-        if values and _looks_like_asset(values[0]):
-            return {str(k): v for k, v in corpus.items()}
-        # type → sequence of assets
-        out: dict[str, Any] = {}
-        for value in values:
-            _ingest_assets(out, value)
-        return out
-
-    if isinstance(corpus, Sequence) and not isinstance(corpus, (str, bytes)):
-        out = {}
-        _ingest_assets(out, corpus)
-        return out
-
-    return {}
-
-
-def _ingest_assets(out: dict[str, Any], value: Any) -> None:
-    if isinstance(value, Mapping) and _looks_like_asset(value):
-        aid = value.get("id")
-        if aid is not None:
-            out[str(aid)] = value
-        return
-    if hasattr(value, "id") and hasattr(value, "asset_type"):
-        out[str(value.id)] = value
-        return
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        for item in value:
-            _ingest_assets(out, item)
-
-
-def _looks_like_asset(obj: Any) -> bool:
-    if isinstance(obj, Mapping):
-        return "id" in obj and ("asset_type" in obj or "summary" in obj)
-    return hasattr(obj, "id") and (
-        hasattr(obj, "asset_type") or hasattr(obj, "summary")
-    )

@@ -505,7 +505,13 @@ def test_an_absent_corpus_raises_rather_than_defaulting_to_an_empty_one() -> Non
 # ── the end-to-end assertion, and it must not use the stub ────────────────────
 
 
-@CONVICTS
+# `@CONVICTS` removed 2026-08-03: this now passes. The defect it convicted was the five
+# unwritten wiring hooks — ADR 0005 §2.8.2, decision #43 — so `connect_node` ran on an empty
+# edge set and the `answered` path was unreachable for any turn licensing two tables. The
+# projection is now built from the corpus (`retrieve/structure.py`) and carried on
+# `configurable`. Under `strict=True` the marker itself is what went red, which is the
+# designed signal; the parcel's acceptance letter is not changed by this, and F stays out of
+# `ACCEPTED`.
 def test_a_real_turn_writes_every_required_field_on_every_terminal_path(
     probe,  # noqa: F811 -- the pytest fixture imported above, requested by name
 ) -> None:

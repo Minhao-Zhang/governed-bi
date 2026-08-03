@@ -11,6 +11,8 @@ from collections.abc import Iterable, Mapping, Set
 from dataclasses import dataclass
 from typing import Hashable
 
+__all__ = ["ConnectResult", "canon_edge", "connect"]
+
 
 @dataclass(frozen=True)
 class ConnectResult:
@@ -65,7 +67,7 @@ def connect(
             return ConnectResult(path=(), added=frozenset(), declined=True)
         for i in range(len(path) - 1):
             a, b = path[i], path[i + 1]
-            tree_edges.append(_canon_edge(a, b))
+            tree_edges.append(canon_edge(a, b))
             tree_nodes.add(b)
         remaining -= set(path)
 
@@ -94,7 +96,16 @@ def _adjacency(
     return adj
 
 
-def _canon_edge(a: Hashable, b: Hashable) -> tuple[Hashable, Hashable]:
+def canon_edge(a: Hashable, b: Hashable) -> tuple[Hashable, Hashable]:
+    """One undirected edge, in a canonical order. **Exported, not private.**
+
+    :mod:`~governed_bi.retrieve.structure` builds the edge set this module searches,
+    so both halves must agree on which of ``(a, b)`` and ``(b, a)`` an edge *is*.
+    Two spellings of that would not raise anywhere: the builder would emit one
+    orientation, ``connect`` would look for the other, and every multi-table turn
+    would decline ``missing_join_path`` -- which is the defect §2.8.2 was written
+    about, reproduced one layer up.
+    """
     return (a, b) if str(a) <= str(b) else (b, a)
 
 

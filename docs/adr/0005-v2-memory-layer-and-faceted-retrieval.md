@@ -925,6 +925,57 @@ are singletons in `corpus/identity.py`; the table id is a bare f-string at
 hand-written copy of it is the two-`LOW_CONFIDENCE_JOIN`-constants defect in the
 one place that would silently mis-license a table.
 
+##### 2.8.2.1 Three rules the build had to settle, added after implementing it
+
+*2026-08-03. None of these was specified above; all three are now behaviour.*
+
+**A bare reference from an asset that declares a schema resolves inside that schema
+first.** `ColumnAsset.parent_table` and a `FewShotAsset`'s SQL carry bare names, but
+those assets have a `schema` field — so `sales_a` + `customers` is a *fully
+qualified statement the corpus made*, and resolving it globally would report an
+ambiguity its author did not have. In a pooled lake that is one false ambiguity per
+column of every repeated table name, which would bury the join problems that
+matter. `JoinAsset` has no `schema` field, deliberately (§1.2), so it gets no scope
+and its bare endpoints are genuinely ambiguous — the asymmetry is a consequence of
+§1.2, not an exception to it.
+
+**Completed joins go in `pulled_in`, not `licensed`.** §2.8 and §2.8.1 say a
+completed join reaches context; neither says through which field. It cannot be
+`licensed`: that is governance's table allowlist, every entry is normalised as a
+table key, and a join id there is a table key naming no table. `pulled_in` is
+already what the render and the delivery record read.
+
+**Self-joins are excluded from the edge set and kept in the join index.** A loop
+makes a terminal look adjacent to itself, and `connect` decides disconnection by
+asking whether a terminal appears in the adjacency map — so a self-join would hide
+an isolated table behind a false edge and turn a refusal into a wrong path. Its ON
+clause is still needed in the prompt, so it stays indexed for completion.
+
+##### 2.8.2.2 Open: nothing in `src/` produces either the index or the structure
+
+The declared wiring above says the projection is built beside the index and passed
+on `configurable`. **That key has no in-repo writer, because `index` has none
+either** — the only asset→`IndexEntry` mapping in the repository is in
+`tests/serve/`, which parcel F's contract already records. So `serve/` derives the
+projection from the assets on `configurable` when the declared key is absent, and
+that path is the one every in-repo caller takes today.
+
+Two costs, both real:
+
+- **The fallback's `problems` have no reader.** An unresolvable join endpoint is
+  recorded and then discarded, which contradicts this section's own requirement
+  that it surface where the corpus is built.
+- **The fallback memoises on the identity of the asset container.** It holds the
+  container beside the value so a recycled `id()` cannot return another corpus's
+  projection, but a container **mutated in place** between turns is invisible to
+  it. Narrow — the eval driver builds fresh per run — and not worth paying a
+  content hash for, because the correct fix is upstream.
+
+The fix is a `src/`-side builder that takes an asset set and returns index and
+structure together, which is where `problems` would finally have a caller who can
+fail loudly. That is a decision about where the corpus enters the process, not a
+gap to close inside `retrieve/`, so it is recorded here rather than improvised.
+
 #### 2.9 `connect` — Steiner connectivity
 
 After `resolve`, selected tables may not be mutually reachable, and executable

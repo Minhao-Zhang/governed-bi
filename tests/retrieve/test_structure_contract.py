@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -38,10 +39,56 @@ UNWRITTEN = pytest.mark.xfail(strict=True, reason="contract specified, body not 
 pytestmark = [needs("E")]
 
 
+# ── the fixture builders the specifications name ───────────────────────────────
+#
+# Three constructors rather than per-test literals: every specification below names a
+# corpus of schemas, tables and joins, and the *only* fields any of them turns on are
+# the ones passed here. Written for this file rather than imported from
+# ``tests/serve/conftest.py``, whose two-schema corpus has no joins at all.
+
+
+def _schema(name: str) -> Any:
+    from governed_bi.corpus.schema import SchemaAsset
+
+    return SchemaAsset(id=name, name=name, summary=f"{name} schema for the projection")
+
+
+def _table(schema: str, physical: str, *, columns: tuple[str, ...] = ()) -> Any:
+    from governed_bi.corpus.identity import table_id
+    from governed_bi.corpus.schema import TableAsset
+
+    return TableAsset(
+        id=table_id(schema, physical),
+        schema=schema,
+        physical_name=physical,
+        summary=f"{physical} table in {schema}",
+        columns=columns,
+    )
+
+
+def _join(schema: str, left: str, right: str, on: str) -> Any:
+    """A ``JoinAsset`` whose id is minted by ``join_id``, never hand-written.
+
+    So that an edge dropped for being *ambiguous* cannot be confused with one dropped
+    for being invalid — the summary carries both bare endpoint names, which is what
+    ``problems_with`` checks.
+    """
+    from governed_bi.corpus.identity import join_id
+    from governed_bi.corpus.schema import JoinAsset
+
+    bare = (left.rsplit(".", 1)[-1], right.rsplit(".", 1)[-1])
+    return JoinAsset(
+        id=join_id(schema, left, right, on),
+        left_table=left,
+        right_table=right,
+        on=on,
+        summary=f"{bare[0]} joins {bare[1]} on {on}",
+    )
+
+
 # ── node identity: the reconciliation, and it must never guess ─────────────────
 
 
-@UNWRITTEN
 def test_an_ambiguous_endpoint_is_dropped_and_recorded() -> None:
     """The case where a guess fails **open**, which is why guessing is prohibited.
 
@@ -70,10 +117,31 @@ def test_an_ambiguous_endpoint_is_dropped_and_recorded() -> None:
     name that join's id. Asserting only the first is satisfied by a projection that drops
     every edge.
     """
-    pytest.fail("not implemented: see docstring")
+    from governed_bi.retrieve.structure import build_structure
+
+    assets = [
+        _schema("sales_a"),
+        _schema("ops_b"),
+        _table("sales_a", "customers"),
+        _table("ops_b", "customers"),
+        _table("sales_a", "orders"),
+        # `customers` names a table in both schemas; `orders` names one in exactly one.
+        _join("sales_a", "customers", "orders", "customers.id = orders.cid"),
+    ]
+    ambiguous = assets[-1]
+    structure, problems = build_structure(assets)
+
+    assert structure.join_edges == frozenset(), (
+        "the only join has an ambiguous endpoint, so the projection must hold no edge: "
+        f"got {sorted(structure.join_edges)}"
+    )
+    assert any(ambiguous.id in f"{p.where} {p.reason}" for p in problems), (
+        f"the dropped edge is not recorded against {ambiguous.id!r}: {[str(p) for p in problems]}. "
+        "Dropping alone fails closed but silently, and the silence resurfaces as "
+        "missing_join_path on a turn that looks ordinary"
+    )
 
 
-@UNWRITTEN
 def test_an_ambiguous_endpoint_does_not_bind_to_either_candidate() -> None:
     """The previous test's assertion stated in the form that catches the tempting fix.
 
@@ -84,11 +152,49 @@ def test_an_ambiguous_endpoint_does_not_bind_to_either_candidate() -> None:
     So assert the absence of **both** candidate edges by name, not the count of edges: no
     edge incident to `sales_a.customers`, and none incident to `ops_b.customers`, from that
     join. A count assertion passes if one edge was dropped and a different one invented.
+
+    *Amended after review:* the body earns more than that, and the docstring should say so
+    or someone will simplify it back. It asserts the refusal on **three surfaces** —
+    `join_edges`, `references`, and `joins_by_edge` — because a bound endpoint leaks into
+    `licensed` by two routes, the Steiner edge and the reference closure, and only the first
+    is what "an edge was dropped" naturally describes. Verified non-vacuous by mutation:
+    binding an ambiguous endpoint to the lowest-sorted candidate fails this test and the one
+    above, and no others.
     """
-    pytest.fail("not implemented: see docstring")
+    from governed_bi.retrieve.structure import build_structure
+
+    join = _join("sales_a", "customers", "orders", "customers.id = orders.cid")
+    structure, _problems = build_structure(
+        [
+            _schema("sales_a"),
+            _schema("ops_b"),
+            _table("sales_a", "customers"),
+            _table("ops_b", "customers"),
+            _table("sales_a", "orders"),
+            join,
+        ]
+    )
+    candidates = {"sales_a.customers", "ops_b.customers"}
+
+    bound = {node for edge in structure.join_edges for node in edge} & candidates
+    assert bound == set(), (
+        f"an ambiguous endpoint bound to {sorted(bound)}. Dropping the second match and keeping "
+        "the first is the fail-open behaviour with a log line: a Steiner point in the wrong "
+        "schema, licensed, with crossings charged to the wrong pair"
+    )
+    # The same statement about the closure, which is the other half of `licensed`: the join
+    # must not pull in either candidate as an endpoint either.
+    closed = set(structure.references.get(join.id, frozenset())) & candidates
+    assert closed == set(), (
+        f"the dropped join still closes onto {sorted(closed)} by reference, which licenses the "
+        "table the edge was refused for"
+    )
+    assert structure.joins_by_edge == {}, (
+        f"the join is indexed on an edge it was refused: {structure.joins_by_edge}. "
+        "complete_joins would then license it from the two tables it never bound"
+    )
 
 
-@UNWRITTEN
 def test_a_bare_and_a_qualified_endpoint_produce_the_same_edge() -> None:
     """The control, and without it every test above is satisfied by dropping everything.
 
@@ -104,10 +210,40 @@ def test_a_bare_and_a_qualified_endpoint_produce_the_same_edge() -> None:
     so they must mint the same `join_id`, and the projection must not report a problem for
     the duplicate.
     """
-    pytest.fail("not implemented: see docstring")
+    from governed_bi.retrieve.connect import canon_edge
+    from governed_bi.retrieve.structure import build_structure
+
+    bare = _join("sales_a", "customers", "orders", "customers.id = orders.cid")
+    qualified = _join("sales_a", "sales_a.customers", "orders", "orders.cid = customers.id")
+    assert bare.id == qualified.id, (
+        "two joins that differ only in the qualification of an endpoint are the same "
+        f"relationship, so join_id must digest them alike: {bare.id} vs {qualified.id}"
+    )
+
+    structure, problems = build_structure(
+        [
+            _schema("sales_a"),
+            _table("sales_a", "customers"),
+            _table("sales_a", "orders"),
+            bare,
+            qualified,
+        ]
+    )
+
+    edge = canon_edge("sales_a.customers", "sales_a.orders")
+    assert structure.join_edges == frozenset({edge}), (
+        "a bare and a qualified spelling of one endpoint must produce one edge with asset-id "
+        f"endpoints: got {sorted(structure.join_edges)}"
+    )
+    assert structure.joins_by_edge == {edge: (bare.id,)}, (
+        f"the relationship is indexed as {structure.joins_by_edge}, not once on its edge"
+    )
+    assert problems == [], (
+        "a corpus carrying both accepted spellings is valid — `validate.py`'s `_bare()` accepts "
+        f"either — so nothing here is a defect to report: {[str(p) for p in problems]}"
+    )
 
 
-@UNWRITTEN
 def test_the_edge_endpoints_are_asset_ids_and_not_physical_names() -> None:
     """The namespace assertion, stated on its own because nothing else in the system does.
 
@@ -122,13 +258,38 @@ def test_the_edge_endpoints_are_asset_ids_and_not_physical_names() -> None:
     `join_id`, because this reconciliation is the one place a second hand-written copy of the
     convention would silently mis-license a table.
     """
-    pytest.fail("not implemented: see docstring")
+    from governed_bi.corpus.identity import table_id
+    from governed_bi.retrieve.connect import canon_edge
+    from governed_bi.retrieve.structure import build_structure
+
+    structure, problems = build_structure(
+        [
+            _schema("sales_a"),
+            _table("sales_a", "customers"),
+            _table("sales_a", "orders"),
+            _join("sales_a", "customers", "orders", "customers.id = orders.cid"),
+        ]
+    )
+    assert problems == [], [str(p) for p in problems]
+
+    expected = canon_edge(
+        table_id("sales_a", "customers"), table_id("sales_a", "orders")
+    )
+    assert structure.join_edges == frozenset({expected}), (
+        f"edge endpoints are {sorted(structure.join_edges)}, not the asset ids "
+        f"{expected}. `connect` compares endpoints against terminals drawn from "
+        "`licensed`, so physical names there make every terminal look missing and the "
+        "turn declines — and nothing raises, because the two namespaces never meet"
+    )
+    physical = {"customers", "orders"}
+    assert {node for e in structure.join_edges for node in e} & physical == set(), (
+        "a bare physical name reached the edge set"
+    )
 
 
 # ── the projection is a function of the corpus, not of a turn ─────────────────
 
 
-@UNWRITTEN
 def test_the_projection_depends_on_nothing_but_the_asset_set() -> None:
     """Why this is built once beside the index rather than per turn.
 
@@ -143,10 +304,48 @@ def test_the_projection_depends_on_nothing_but_the_asset_set() -> None:
     a question, a config or a clock to build one, that is the design changing and it should
     fail here first.
     """
-    pytest.fail("not implemented: see docstring")
+    import inspect
+
+    from governed_bi.retrieve.structure import build_structure
+
+    assets = [
+        _schema("sales_a"),
+        _table("sales_a", "customers", columns=("sales_a.customers.id",)),
+        _table("sales_a", "orders"),
+        _table("sales_a", "invoices"),
+        _join("sales_a", "customers", "orders", "customers.id = orders.cid"),
+        _join("sales_a", "orders", "invoices", "orders.id = invoices.oid"),
+    ]
+    from governed_bi.corpus.schema import ColumnAsset
+
+    assets.append(
+        ColumnAsset(
+            id="sales_a.customers.id",
+            schema="sales_a",
+            parent_table="customers",
+            physical_name="id",
+            summary="customers.id (integer)",
+        )
+    )
+
+    first, first_problems = build_structure(assets)
+    again, again_problems = build_structure(assets)
+    shuffled, shuffled_problems = build_structure(list(reversed(assets)))
+
+    assert first == again, "building twice over one asset set produced two structures"
+    assert first == shuffled, (
+        "the same assets in a different order produced a different structure, so two turns "
+        "reading the corpus in two orders would disagree about its shape"
+    )
+    assert first_problems == again_problems == shuffled_problems == []
+
+    params = list(inspect.signature(build_structure).parameters)
+    assert params == ["assets"], (
+        f"build_structure takes {params}. It is a projection of the asset set: a question, a "
+        "config or a clock in this signature is the design changing"
+    )
 
 
-@UNWRITTEN
 def test_a_corpus_that_lost_edges_is_distinguishable_from_a_small_corpus() -> None:
     """Decision #5's rule, applied to the projection: `(structure, problems)`, never a bare
     structure.
@@ -160,13 +359,32 @@ def test_a_corpus_that_lost_edges_is_distinguishable_from_a_small_corpus() -> No
     with no joins at all returns **none** — the second half is what stops "always report a
     problem" from passing.
     """
-    pytest.fail("not implemented: see docstring")
+    from governed_bi.retrieve.structure import build_structure
+
+    tables = [_schema("sales_a"), _table("sales_a", "customers"), _table("sales_a", "orders")]
+
+    lost = _join("sales_a", "customers", "nowhere", "customers.id = nowhere.cid")
+    lossy, lossy_problems = build_structure([*tables, lost])
+    assert lossy.join_edges == frozenset(), "an endpoint naming nothing must not bind"
+    assert lossy_problems, (
+        "a corpus that lost its only edge is indistinguishable from a corpus with no edges. "
+        "Both are L-R1: absence rendered as a value"
+    )
+    assert any(lost.id in f"{p.where} {p.reason}" for p in lossy_problems), (
+        f"the problem does not name the join that lost the edge: {[str(p) for p in lossy_problems]}"
+    )
+
+    small, small_problems = build_structure(tables)
+    assert small.join_edges == frozenset()
+    assert small_problems == [], (
+        "a corpus with no joins is small, not broken. Reporting a problem for it would make "
+        f"the list unreadable and the distinction useless: {[str(p) for p in small_problems]}"
+    )
 
 
 # ── join completion, and its position in the pipeline ─────────────────────────
 
 
-@UNWRITTEN
 def test_a_join_reaching_context_requires_both_endpoints_not_either() -> None:
     """ADR 0005 §2.8's load-bearing row, and the reason §2.8.1 had to move it.
 
@@ -181,10 +399,45 @@ def test_a_join_reaching_context_requires_both_endpoints_not_either() -> None:
     Assert the conjunction directly: a set holding **one** endpoint of a join does not gain
     the join, and does not gain the other endpoint. Then assert a set holding both gains it.
     """
-    pytest.fail("not implemented: see docstring")
+    from governed_bi.retrieve.resolve import resolve
+    from governed_bi.retrieve.structure import build_structure, complete_joins
+
+    join = _join("sales_a", "customers", "orders", "customers.id = orders.cid")
+    structure, problems = build_structure(
+        [
+            _schema("sales_a"),
+            _table("sales_a", "customers"),
+            _table("sales_a", "orders"),
+            join,
+        ]
+    )
+    assert problems == [], [str(p) for p in problems]
+    left, right = "sales_a.customers", "sales_a.orders"
+
+    # One endpoint. Neither the join nor the far side may arrive — by the closure, which is
+    # where the disjunctive encoding would have leaked, or by completion.
+    closure = resolve({left}, references=structure.references)
+    assert join.id not in closure, (
+        "one endpoint pulled in the join through the reference closure. Every edge in a "
+        "fixpoint over Mapping[id, set[id]] is disjunctive, so `table -> joins touching it` "
+        "expands the FK neighbourhood by one hop from every hit table — which is what §2.9 "
+        "turned off (expand_hops = 0, v1's 1 recorded as wrong)"
+    )
+    assert right not in closure, f"one endpoint reached the other: {sorted(closure)}"
+    assert complete_joins({left}, structure) == frozenset(), (
+        "the rule is conjunctive: one endpoint present is not both endpoints present"
+    )
+
+    # Both endpoints.
+    assert complete_joins({left, right}, structure) == frozenset({join.id}), (
+        "a set holding both endpoints must gain the join. Without this row a four-table "
+        "question reaches the model with none of its join keys"
+    )
+    assert complete_joins({left, right}, structure) == complete_joins(
+        {left, right} | complete_joins({left, right}, structure), structure
+    ), "completion is idempotent — it is a total function of a set"
 
 
-@UNWRITTEN
 def test_a_steiner_points_join_keys_reach_the_licensed_set() -> None:
     """Why completion runs after `connect` and not inside `resolve`.
 
@@ -200,4 +453,64 @@ def test_a_steiner_points_join_keys_reach_the_licensed_set() -> None:
     `resolve`'s output — an assertion on `resolve` passes for the wrong reason here, since at
     that point `b` is not in the set at all and neither join is expected.
     """
-    pytest.fail("not implemented: see docstring")
+    from governed_bi.register.assets import AssetType
+    from governed_bi.retrieve.budget import apply_budgets, budget_for
+    from governed_bi.retrieve.connect import connect
+    from governed_bi.retrieve.structure import build_structure, complete_joins
+    from governed_bi.serve.nodes.route_retrieve import connect_node
+
+    a, b, c = "sales_a.a", "sales_a.b", "sales_a.c"
+    ab = _join("sales_a", "a", "b", "a.id = b.aid")
+    bc = _join("sales_a", "b", "c", "b.id = c.bid")
+    structure, problems = build_structure(
+        [
+            _schema("sales_a"),
+            _table("sales_a", "a"),
+            _table("sales_a", "b"),
+            _table("sales_a", "c"),
+            ab,
+            bc,
+        ]
+    )
+    assert problems == [], [str(p) for p in problems]
+
+    terminals = {a, c}
+    result = connect(terminals, edges=structure.join_edges, max_points=5)
+    assert not result.declined, "a—b—c with terminals {a, c} is connected through one point"
+    assert result.added == frozenset({b}), f"b is the Steiner point; got {sorted(result.added)}"
+
+    licensed = terminals | set(result.added)
+    completed = complete_joins(licensed, structure)
+    assert completed == frozenset({ab.id, bc.id}), (
+        "both hops' keys must reach the final set. A Steiner point exists to sit on a join "
+        "path, so completing joins before `connect` misses exactly the keys the rule is for — "
+        f"got {sorted(completed)}"
+    )
+
+    # Marked `pulled_in`, against the node that assembles the final set rather than against a
+    # reconstruction of it: `configurable["structure"]` is the declared wiring (§2.8.2), and
+    # `connect_node` now declares `config` so `wrap.py` forwards it.
+    out = connect_node(
+        {"licensed": sorted(licensed), "schemas": ["sales_a"]},
+        {"configurable": {"structure": structure}},
+    )
+    pulled_in = out["retrieved"]["pulled_in"]
+    assert {ab.id, bc.id} <= set(pulled_in), (
+        f"the completed joins are not in pulled_in: {pulled_in}"
+    )
+    assert pulled_in[ab.id] == "connect" and pulled_in[bc.id] == "connect"
+    assert ab.id not in out["licensed"] and bc.id not in out["licensed"], (
+        "`licensed` is govern's table allowlist (bounds.py); a join id there is a table key "
+        "naming no table"
+    )
+
+    # Exempt from the join budget: `apply_budgets` caps ranked hits per type and returns
+    # `pulled_in` unchanged. Asserted with the cap exhausted, so the exemption is not vacuous.
+    cap = budget_for(AssetType.join)
+    assert isinstance(cap, int), "the join budget is a count, so it can be exhausted"
+    ranked = [(f"join_rank_{i}", AssetType.join, 1.0) for i in range(cap + 2)]
+    budgeted = apply_budgets(ranked, pulled_in=[(j, AssetType.join) for j in sorted(completed)])
+    assert len(budgeted.hits) == cap, "ranked joins are capped"
+    assert {j for j, _ in budgeted.pulled_in} == completed, (
+        "a completed join was budgeted out. These are structural additions, not ranked hits"
+    )

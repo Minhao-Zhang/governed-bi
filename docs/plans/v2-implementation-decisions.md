@@ -955,3 +955,64 @@ cover a module that did not exist. `tests/contracts.py` tracks acceptance per *p
 it cannot express "E accepted, this module not" — the contract is a separate strictly-marked
 file so the distinction survives that gap instead of being absorbed by it. Fixing the grain
 of `ACCEPTED` is not worth doing on one instance; a second instance would change that.
+
+## 44. The structure projection is built; the end-to-end turn answers · *2026-08-03*
+
+`src/governed_bi/retrieve/structure.py` implements #43. `table_id` is a declared function
+beside `derive_column_id` and `join_id`, and `seed.py` calls it. `route_node`,
+`resolve_node` and `connect_node` all declare `config` now; the five "optional" state
+fields are **deleted** rather than kept as an override, because leaving them is two answers
+to where the projection comes from.
+
+**The signal fired as designed.** `test_a_real_turn_writes_every_required_field_on_every_terminal_path`
+was `@CONVICTS` with `strict=True`; the fix made it pass, so the suite went red on
+`XPASS(strict)` and stayed red until that one marker came off. Verified with `-rs` that it
+**passes rather than skips** — Postgres was reachable and the fixture built a real probe
+schema. That is the first turn in v2 that licenses two tables and answers.
+
+337 passed / 19 xfailed, from 328 / 28. Nine xfails became passes: eight structure specs
+plus the end-to-end. Five gates green. `ACCEPTED` untouched — still `{B, C, D, E}`.
+
+**I checked the two ambiguity specs are not vacuous myself**, by mutation rather than by
+reading: patching the binder to take the lowest-sorted candidate on ambiguity — the fail-open
+fix — fails exactly those two tests and no others. The implementer reported doing the same
+check; reproducing it is cheaper than trusting it, and this is the property the whole design
+rests on.
+
+**One spec of mine was slightly wrong about its own value.** The second ambiguity test
+justifies itself as "by name, not by count", but with a single-join fixture the first test's
+set-equality is already maximal, so that is not what it earns. What it actually earns is the
+refusal asserted on **three surfaces** — `join_edges`, `references`, `joins_by_edge` —
+because a bound endpoint reaches `licensed` by two routes and only the Steiner edge is the
+one "an edge was dropped" describes. The body was better than my docstring; the docstring is
+now amended to match, so nobody simplifies the body back down to the claim.
+
+### Three rules the implementation had to settle, now in ADR §2.8.2.1
+
+Bare references from assets that declare a schema resolve inside it (else a pooled lake
+reports one false ambiguity per column of every repeated table name, burying the real join
+problems); completed joins go in `pulled_in`, since `licensed` is govern's table allowlist
+and a join id there is a table key naming no table; self-joins are excluded from the edge
+set but kept in the join index, because a loop makes an isolated terminal look adjacent and
+would turn a refusal into a wrong path.
+
+### One open decision, in ADR §2.8.2.2
+
+**Nothing in `src/` produces the index or the structure.** The only asset→`IndexEntry`
+mapping in the repository is in `tests/serve/`. So the declared `configurable["structure"]`
+has no in-repo writer and `serve/` derives the projection from the assets on `configurable`
+instead — which every in-repo caller takes today. Two costs: the fallback's `problems` are
+recorded then discarded, contradicting §2.8.2's own requirement that they surface where the
+corpus is built; and it memoises on container identity, so a container mutated in place
+between turns is invisible (it does hold the container beside the value, so a recycled
+`id()` cannot leak another corpus's projection). The fix is a `src/`-side builder returning
+index and structure together, which is where `problems` finally get a caller who can fail
+loudly. That is a decision about where the corpus enters the process, so it is recorded
+rather than improvised.
+
+**Also worth recording:** my control spec asserts `problems == []` for two joins that differ
+only in endpoint qualification, and those mint the same `join_id` by construction — so the
+projection is now required to be *silent* about a repeated asset id. Only `build_index`
+refuses one. That was a consequence of how I wrote the spec, not a decision I made
+deliberately, and it is the right behaviour for the reason §1.2 gives (one id per
+relationship) — but it means duplicate-id detection has exactly one home.
