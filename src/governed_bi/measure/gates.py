@@ -30,12 +30,13 @@ that took hours to produce is a warning that gets read as a formality.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Callable, Mapping, Sequence
 
 from ..register.quantity import Measured
 from ..register.record import GATE_CONDITIONS
+from .degradation import channel_anomalies
 from .population import Population
 
 __all__ = ["Verdict", "GateResult", "GATE_IMPLEMENTATIONS", "evaluate", "quotable"]
@@ -153,7 +154,42 @@ def _facet_channels_gate(arm: Population) -> GateResult:
             arm,
             "a degradation rate of 0 over 0 turns is not a pass",
         )
-    return _zero_count_gate("facet_channels", "facet_degraded")(ran)
+    result = _zero_count_gate("facet_channels", "facet_degraded")(ran)
+    if result.verdict is not Verdict.failed:
+        return result
+    return replace(result, detail=f"{result.detail}; {_drift(ran)}")
+
+
+def _drift(arm: Population) -> str:
+    """Which facet's which channel differed, for a gate that has already failed.
+
+    The verdict comes from the stamped ``facet_degraded`` counter, not from here: this only
+    names the drift, so that a refused run does not send its reader to the code. The
+    judgement is ``register.facets.channel_anomaly`` through
+    :func:`~.degradation.channel_anomalies` — the same function ``serve.stamp`` decides the
+    counter with, because a second comparison here could disagree with the record it is
+    reporting on. ``extra_channel`` is included: it is drift, it did not refuse this run,
+    and a reader looking at a failure wants to see it anyway.
+    """
+    seen: dict[str, int] = {}
+    unjudgeable = 0
+    why = ""
+    for row in arm.rows:
+        try:
+            anomalies = channel_anomalies(row.get("facet_channels"))
+        except ValueError as err:
+            unjudgeable += 1
+            why = why or str(err)
+            continue
+        for key, anomaly in anomalies.items():
+            seen[f"{key}={anomaly}"] = seen.get(f"{key}={anomaly}", 0) + 1
+    parts = [f"{key} on {count} turn(s)" for key, count in sorted(seen.items())]
+    if unjudgeable:
+        parts.append(
+            f"{unjudgeable} turn(s) whose facet_channels could not be judged against the "
+            f"register, so their drift is not named here: {why}"
+        )
+    return "; ".join(parts) if parts else "no channel state differs from its declaration"
 
 
 def _context_hash_gate(arm: Population) -> GateResult:

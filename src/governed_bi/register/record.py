@@ -280,6 +280,17 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "run — which the gate must not read as clean",
        gate="on turns where the fan-out ran, no channel state differs from its "
             "declared expectation; the observed count is published beside the rate"),
+    _f("facet_degraded", Tier.decision, Absence.not_applicable, _ID, Stage.route,
+       "true when some facet ran on fewer channels than FACET_CHANNELS declares — "
+       "`register.facets.is_degraded` over the field above, computed once and stamped, "
+       "not re-derived by each reader. It had no row here at all, so `project()` could "
+       "not write it, `harness.py` read it as `bool(... or False)`, and the degradation "
+       "gate published `[pass] facet_channels 0.0000` on an arm with no index. Null when "
+       "the fan-out did not run, for the same reason `facet_channels` is. Tier is "
+       "`decision` and not `health` deliberately: the quotability condition reading this "
+       "is declared on `facet_channels`, one gate over one comparison, and a second gate "
+       "declared here would be two verdicts on the same evidence",
+       reconstructable=True),
     _f("schema_ranking", Tier.decision, Absence.not_applicable, _REF, Stage.route,
        "ALL scored schemas pre-truncation. Without it, 'the gold schema was not a "
        "candidate' and 'it ranked 4th' are the same observation — v1's collapse "

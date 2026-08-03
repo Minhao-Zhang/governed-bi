@@ -1016,3 +1016,99 @@ projection is now required to be *silent* about a repeated asset id. Only `build
 refuses one. That was a consequence of how I wrote the spec, not a decision I made
 deliberately, and it is the right behaviour for the reason §1.2 gives (one id per
 relationship) — but it means duplicate-id detection has exactly one home.
+
+## 45. F's six defects are fixed; three escalated calls, decided · *2026-08-03*
+
+346 passed / 10 xfailed, from 337 / 19. Nine of F's ten red test ids now pass; five gates
+green; `ACCEPTED` still `{B, C, D, E}`. Seven markers came off in the implementer's change
+(diff: **7 deletions, 0 insertions** in the contract file — I checked), two more after I
+fixed a fixture of mine, and one specification is deliberately still red pending decision
+(a) below.
+
+**Terminal now derives from the ledger**: no attempts → `no_sql`, any passing → `answered`,
+a cap row → `capped`, else `refused`. `stamp._execution` no longer maps `path_kind` to a
+terminal — that was a second implementation disagreeing with the ledger the same way the
+first did. `ledger.py`'s declared-but-never-written `"capped"` is now written, and the cap
+path appends the ledger row it used to return without.
+
+### My fixture was wrong, and the precondition is what caught it
+
+The two refused/capped cases failed on `assert probe.schema + ".orders" not in licensed` —
+a **precondition**, not the property. My fixture note claimed `orders` was unlicensed; the
+seeded probe corpus mints `join_..._orders_customers` whose summary reads *"orders joins
+customers on cid"*, so the question hits the **join** lexically and `resolve`'s closure
+licenses both endpoints — which ADR 0006 §8 requires. No change to `serve/` could have made
+it pass without breaking join licensing.
+
+Fixed by adding an `audit_log` table to the probe that no join reaches. **The fix was
+correct before the test could see it.** That is the fourth fixture note of mine falsified by
+execution, and the count is the point: writing the contract stops an implementer grading
+themselves and does nothing about the design holder describing the fixture wrong. What
+saved it here was insisting each body assert its own preconditions — the test refused to
+assert a property whose setup was invalid rather than passing for the wrong reason.
+
+### (a) The stub path: a gate condition on `usage`, and a missing knob
+
+The implementer stopped and reported rather than adding a record field, as instructed. Both
+its options were right, and there is a third.
+
+**Decision: give `usage` a gate condition; do not add a field.** The distinguishing fact is
+*already recorded* — `_stub` writes `model: "stub"`. Nothing reads it. Adding a field would
+record the same fact twice, and two fields that must agree is the shape of half the defects
+in this document.
+
+The gate: **every usage row's model must equal the model the run's resolved knobs declare.**
+It catches the stub, and it also catches an arm that silently fell back to a different model
+— the v1 reasoning-effort incident, where two ladders differed only in a live config field
+recorded nowhere and effort moved the baseline **+2.5pp against a 2.3pp threshold**. It does
+not special-case the stub arm: `eval/arms.py:54` pops `agent_model`, so that arm declares no
+model and "usage says stub, knobs say none" agrees.
+
+**This needs `llm_model` as a knob first, and it does not exist.** `knobs.py` declares
+`llm_temperature`, `llm_reasoning_effort` and `embedding_model` as `Role.comparability` —
+and its own docstring condemns exactly this: *"Model identity was not a knob."* The
+embedding model was fixed and **the chat model was not**. So two runs on different chat
+models compare as one experiment today, which is the retired failure with the variable
+changed.
+
+### (b) `facet_degraded` stays `Tier.health`, sharing one gate name
+
+The implementer put it in `Tier.decision` to avoid declaring a second gate over one
+comparison, and offered the call for overrule. The reasoning was right; the conclusion is
+not, because `Tier` is semantic and a health field labelled `decision` misreports what the
+field is to every future reader.
+
+**Decision: `Tier.health`, carrying the same gate string as `facet_channels`.**
+`GATE_CONDITIONS` maps *field → gate*, so two fields may name one gate; the gate set is
+unchanged, `GATE_IMPLEMENTATIONS` closure still holds, and there is exactly one
+implementation and therefore one verdict. That is what "two verdicts over one comparison"
+was rightly refusing, without bending the tier to get it.
+
+### (c) `Measured` in a checkpoint: register the types with the serde
+
+LangGraph warns that deserialising a `Measured` *"will be blocked in a future version"*. It
+round-trips today and HITL resume passes, but a future block breaks resume on any turn that
+recorded an unmeasured token count.
+
+**Decision: register the three `register/quantity.py` types with LangGraph's serde.** The
+alternative — a `None` plus a `_why` string in the state row, reconstructed at `stamp` — is a
+hand-rolled second `Measured`, which `tools/check_one_implementation.py` exists to forbid,
+and it puts absence-as-a-plain-value back at precisely the boundary where it has always died.
+
+### The consequence to schedule around
+
+**`facet_degraded` is now `True` on every turn whose fan-out ran, so the eval degradation
+gate will fail every run until parcel I lands.** `semantic` reports `failed` on every turn
+because nothing in `src/` embeds, and `extraction` reports `failed` for the three extracting
+facets because no extraction model is wired (`facets.py` calls it a stub in a comment).
+
+That signal is **true**, and the implementer was explicitly offered the escape — reporting
+`not_configured` would have made the gate pass — and refused it. Two of three retrieval
+channels have no implementation, so **no run is quotable yet**, and that is the machinery
+working rather than failing. Parcel I closes `semantic`. Extraction is a separate gap and
+does not yet have a parcel.
+
+Also corrected: two ADR pointers in my handoff brief were wrong (the `terminal` vocabulary
+is ADR 0006 **§12**, not §8; three-valued `ChannelState` is ADR 0005 **§2.3**, not §2.2),
+and the `ruff` baseline is **13**, not the 11 I quoted — I had misread `[*] 11 fixable` as
+the total.

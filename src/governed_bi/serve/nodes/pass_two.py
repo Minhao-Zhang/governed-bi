@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any, Mapping, Sequence
 
 from governed_bi.register.assets import AssetType
-from governed_bi.register.facets import FACET_TARGETS
+from governed_bi.register.facets import FACET_CHANNELS, FACET_TARGETS, Channel
 from governed_bi.register.stages import Stage
 from governed_bi.retrieve.budget import apply_budgets
 from governed_bi.retrieve.fuse import fuse
@@ -43,7 +43,7 @@ def pass_two_retrieve(
         candidate_ids = _candidate_ids(index, schema_set, targets)
 
         merged: dict[str, dict[str, Any]] = {}
-        if candidate_ids and queries:
+        if candidate_ids and queries and _scores_lexical(name):
             restricted = index.lexical.restrict_to(candidate_ids)
             for query in queries:
                 if not query:
@@ -87,6 +87,26 @@ def pass_two_retrieve(
             hits_by_facet[name] = list(merged.values())
 
     return _build_retrieved(hits_by_facet, ranking, state)
+
+
+def _scores_lexical(facet_name: str) -> bool:
+    """Whether this facet declares a lexical channel — read from ``FACET_CHANNELS``.
+
+    Pass two had no such guard, so it scored ``facet_example`` on ``lexical`` and a
+    few-shot outranked an entity hit on a channel the same turn's record declared
+    ``not_configured``. That is ``Anomaly.extra_channel``, and it went undetected because
+    nothing compared observation to declaration. ADR 0005 §2 is explicit that
+    ``register/facets.py`` decides which channels a facet uses and ``retrieve/`` must never
+    decide it locally; ``nodes/facets.py`` already asks the same question of the same table.
+
+    An unrecognised facet name has no declaration to consult, so it is not scored on a
+    channel nobody declared for it.
+    """
+    try:
+        stage = Stage(facet_name)
+    except ValueError:
+        return False
+    return Channel.lexical in FACET_CHANNELS.get(stage, frozenset())
 
 
 def _facet_targets(facet_name: str) -> frozenset[AssetType] | None:

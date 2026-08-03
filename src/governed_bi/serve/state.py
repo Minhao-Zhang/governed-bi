@@ -15,6 +15,7 @@ from langgraph.graph.message import add_messages
 
 from governed_bi.govern.guard import GuardVerdict
 from governed_bi.govern.ledger import ExecutionRecord
+from governed_bi.register.quantity import Measured
 
 __all__ = [
     "RewriteResult",
@@ -90,14 +91,23 @@ class Delivery(TypedDict):
 
 
 class UsageRecord(TypedDict):
-    """One model-call cost row. ``turn_index`` is required for multi-turn projection."""
+    """One model-call cost row. ``turn_index`` is required for multi-turn projection.
+
+    **The token counts are ``int | Measured[int]``, and the union is the point.** They
+    were ``NotRequired[int]``, so the only value a turn could record when the provider
+    reported nothing was ``0`` — a measured zero that ``measure/price.py`` prices as free.
+    An ``int`` is what a provider reported; a :class:`~governed_bi.register.quantity.Measured`
+    in the unmeasured state is the turn saying it was not told, with the reason attached.
+    Absent is the third legal shape and means the same as unmeasured for the two cache
+    fields, whose absence ``price.py`` reads as nothing cached from the artifacts.
+    """
 
     turn_index: int
     model: NotRequired[str]
-    input_tokens: NotRequired[int]
-    output_tokens: NotRequired[int]
-    cache_read_tokens: NotRequired[int]
-    cache_write_tokens: NotRequired[int]
+    input_tokens: NotRequired[int | Measured[int]]
+    output_tokens: NotRequired[int | Measured[int]]
+    cache_read_tokens: NotRequired[int | Measured[int]]
+    cache_write_tokens: NotRequired[int | Measured[int]]
 
 
 class Answer(TypedDict):

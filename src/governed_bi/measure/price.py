@@ -283,6 +283,12 @@ def _count(usage: Usage, field: str, *, required: bool) -> Measured[int]:
             return Measured.unmeasured(f"the usage record has no {field!r}")
         return Measured.of(0)
     raw = usage[field]
+    if isinstance(raw, Measured):
+        # The producer already said there was no count, with a reason. Carrying that reason
+        # through is the whole contract of the type: re-deriving one here would replace
+        # "the provider returned no usage_metadata" with "not an integer", and the second
+        # sentence sends the reader to the wrong system.
+        return raw if raw.is_measured else Measured.unmeasured(raw.why)
     if isinstance(raw, bool) or not isinstance(raw, int):
         return Measured.unmeasured(
             f"{field!r} is {type(raw).__name__} {raw!r}, not an integer token count"

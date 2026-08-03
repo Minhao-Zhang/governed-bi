@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 
+from governed_bi.register.quantity import Measured
 from governed_bi.serve.delivery import DeliveryTracker
 from governed_bi.serve.runtime import configurable
 from governed_bi.serve.state import TERMINAL_PATH_KINDS
@@ -19,9 +21,14 @@ from governed_bi.serve.tools import (
     execution_from_attempts,
 )
 
-__all__ = ["agent_core_node", "STUB_ANSWER"]
+__all__ = ["agent_core_node", "STUB_ANSWER", "NO_TOKEN_USAGE"]
 
 STUB_ANSWER = "STUB_ANSWER"
+
+#: Why a usage row carries no token count. :meth:`Measured.unmeasured` requires a reason,
+#: and this one has to reach the artifact: "not measured" with no explanation is
+#: indistinguishable from a forgotten assignment.
+NO_TOKEN_USAGE = "the provider returned no usage_metadata carrying both token counts"
 
 
 def agent_core_node(
@@ -67,14 +74,7 @@ def agent_core_node(
     attempts = attempts_from_tools(tools)
     generated_sql = _last_run_query_sql(out_messages)
     delivery = tracker.merge_into(state.get("delivery"))
-    usage = [
-        {
-            "turn_index": state.get("turn_index", 1),
-            "model": getattr(model, "_llm_type", None) or type(model).__name__,
-            "input_tokens": 0,
-            "output_tokens": 0,
-        }
-    ]
+    usage = [_usage_row(model, out_messages[len(messages) :], state.get("turn_index", 1))]
 
     update: dict[str, Any] = {
         "path_kind": "answered",
@@ -82,13 +82,76 @@ def agent_core_node(
         "usage": usage,
         "delivery": delivery,
         "clarification_requested": False,
-        "execution": execution_from_attempts(attempts, has_sql=bool(generated_sql)),
+        "execution": execution_from_attempts(attempts),
     }
     if clarifications:
         update["clarifications"] = clarifications
     if generated_sql:
         update["generated_sql"] = generated_sql
     return update
+
+
+def _reported_tokens(messages: list[Any]) -> dict[str, int] | None:
+    """This turn's provider-reported token counts, or ``None`` if none were reported.
+
+    LangChain puts them on ``AIMessage.usage_metadata``; the agent loop can make several
+    calls, so the row is the turn's total. A payload that does not carry **both** counts
+    as integers is not a measurement, and reporting the part it did carry beside a zero
+    for the rest would be the defect this function exists to remove.
+
+    Cache counts are included only when the provider reported them: ``measure/price.py``
+    reads an absent ``cache_read_tokens`` as nothing cached, which its docstring justifies
+    from the artifacts, while a zero written here would be this code's claim rather than
+    the provider's.
+    """
+    total = {"input_tokens": 0, "output_tokens": 0}
+    cache = {"cache_read_tokens": 0, "cache_write_tokens": 0}
+    seen = False
+    reported_cache = False
+    for message in messages:
+        usage = getattr(message, "usage_metadata", None)
+        if not isinstance(usage, Mapping):
+            continue
+        counts = {key: usage.get(key) for key in total}
+        if not all(isinstance(v, int) and not isinstance(v, bool) for v in counts.values()):
+            return None
+        seen = True
+        for key, value in counts.items():
+            total[key] += int(value)  # type: ignore[arg-type]
+        details = usage.get("input_token_details")
+        if isinstance(details, Mapping):
+            for key, source in (("cache_read_tokens", "cache_read"),
+                                ("cache_write_tokens", "cache_creation")):
+                value = details.get(source)
+                if isinstance(value, int) and not isinstance(value, bool):
+                    reported_cache = True
+                    cache[key] += value
+    if not seen:
+        return None
+    return {**total, **(cache if reported_cache else {})}
+
+
+def _usage_row(model: Any, messages: list[Any], turn_index: Any) -> dict[str, Any]:
+    """One cost row for this turn's model calls, with the counts the provider reported.
+
+    The literal ``input_tokens: 0`` this replaces was on the **real-model** path, beside a
+    computed ``model`` field that made the two zeros read as observations —
+    ``measure/price.py`` prices that shape as free, which is v1's two ladders that
+    produced no USD while reporting successfully. A provider that reports nothing gets
+    :meth:`Measured.unmeasured`, which the presence test and the price table both know how
+    to refuse.
+    """
+    reported = _reported_tokens(messages)
+    if reported is None:
+        unmeasured: Measured[int] = Measured.unmeasured(NO_TOKEN_USAGE)
+        counts: dict[str, Any] = {"input_tokens": unmeasured, "output_tokens": unmeasured}
+    else:
+        counts = dict(reported)
+    return {
+        "turn_index": turn_index,
+        "model": getattr(model, "_llm_type", None) or type(model).__name__,
+        **counts,
+    }
 
 
 def _stub(state: dict) -> dict:

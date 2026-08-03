@@ -76,7 +76,10 @@ CONVICTS = pytest.mark.xfail(strict=True, reason="body written; convicts a defec
 # ── the outcome must not contradict the ledger ────────────────────────────────
 
 
-@CONVICTS
+# `@CONVICTS` removed 2026-08-03: terminal now derives from the ledger, so both cases pass.
+# The defect fix was correct before this test could see it -- the fixture named `orders` as
+# the unlicensed table and a join licensed it, so the precondition fired for six hours on a
+# fault that was mine, not the implementation's.
 @pytest.mark.parametrize("case,attempt_cap,run_query_calls",
                          [("refused", None, 1), ("capped", 1, 2)], ids=["refused", "capped"])
 def test_a_turn_whose_every_sql_attempt_was_refused_is_not_answered(
@@ -134,10 +137,13 @@ def test_a_turn_whose_every_sql_attempt_was_refused_is_not_answered(
     from governed_bi.serve.graph import compile_graph
     from governed_bi.serve.nodes.agent_core import STUB_ANSWER
 
-    # `customers` scores for one table only, so the turn licenses one and `orders` is the unlicensed
-    # table the model asks for. Preconditions first: each names a way this turn could be unanswered
-    # for a reason that is not governance, which is this test passing for the wrong reason.
-    unlicensed_sql = f"SELECT count(*) FROM {probe.schema}.orders"
+    # `audit_log` is the unlicensed table, and it has to be a table **no join reaches**.
+    # Corrected 2026-08-03: this comment used to name `orders`, and execution falsified it --
+    # the seeded corpus's `join_..._orders_customers` is hit lexically by the question, so
+    # `resolve` licenses both endpoints, as ADR 0006 §8 requires. The precondition below is
+    # what caught it: it refused to assert the property once its own setup was invalid,
+    # rather than passing for the wrong reason.
+    unlicensed_sql = f"SELECT count(*) FROM {probe.schema}.audit_log"
     conf: dict[str, Any] = {
         "thread_id": f"t-refused-{case}", "policy": _policy(attempt_cap=attempt_cap),
         "index": probe.index, "assets_by_id": probe.assets_by_id, "corpus": probe.corpus,
@@ -153,7 +159,7 @@ def test_a_turn_whose_every_sql_attempt_was_refused_is_not_answered(
     licensed = set(out.get("licensed") or ())
 
     assert licensed, f"precondition: the turn licensed something ({out.get('path_kind')!r})"
-    assert f"{probe.schema}.orders" not in licensed, "precondition: the queried table is unlicensed"
+    assert f"{probe.schema}.audit_log" not in licensed, "precondition: the queried table is unlicensed"
     assert record.get("generated_sql"), "precondition: the model emitted SQL — the agent path, not a decline"
     assert STUB_ANSWER not in " ".join(_texts(out)), "precondition: not the stub path"
     attempts = list(execution.get("attempts") or ())
@@ -168,7 +174,6 @@ def test_a_turn_whose_every_sql_attempt_was_refused_is_not_answered(
     )
 
 
-@CONVICTS
 def test_execution_terminal_agrees_with_the_attempts_it_carries(
     two_schema_index, two_schema_assets
 ) -> None:
@@ -246,7 +251,6 @@ def test_execution_terminal_agrees_with_the_attempts_it_carries(
 # ── channel state must be observed, not declared ──────────────────────────────
 
 
-@CONVICTS
 def test_a_facet_with_no_index_reports_its_channel_as_failed() -> None:
     """The degradation gate's entire input, and it was inert.
 
@@ -286,7 +290,6 @@ def test_a_facet_with_no_index_reports_its_channel_as_failed() -> None:
     )
 
 
-@CONVICTS
 def test_a_degraded_channel_writes_facet_degraded() -> None:
     """`channel_anomaly` and `is_degraded` had **zero call sites outside tests**, and
     nothing anywhere wrote `facet_degraded` — so `measure/gates.py` passed vacuously:
@@ -334,7 +337,6 @@ def test_a_degraded_channel_writes_facet_degraded() -> None:
         )
 
 
-@CONVICTS
 def test_pass_two_does_not_score_a_facet_on_a_channel_it_does_not_declare() -> None:
     """`pass_two_retrieve` lacked the `Channel.lexical in FACET_CHANNELS[stage]` guard
     that `facets.py` has, so a few-shot outranked an entity hit on `lexical` — while the
@@ -363,7 +365,6 @@ def test_pass_two_does_not_score_a_facet_on_a_channel_it_does_not_declare() -> N
 # ── absence must not be invented into a value ─────────────────────────────────
 
 
-@CONVICTS
 def test_an_absent_guard_is_not_recorded_as_error_failed_open() -> None:
     """`stamp.py` substituted `{"outcome": "error_failed_open"}` for a missing `guard`.
 
@@ -416,7 +417,6 @@ def test_an_absent_guard_is_not_recorded_as_error_failed_open() -> None:
     )
 
 
-@CONVICTS
 def test_a_real_model_call_does_not_record_zero_tokens() -> None:
     """Observed: `usage: [{'model': 'scripted', 'input_tokens': 0, 'output_tokens': 0}]`
     from a turn that really called a model.
@@ -476,7 +476,6 @@ def test_a_real_model_call_does_not_record_zero_tokens() -> None:
     )
 
 
-@CONVICTS
 def test_an_absent_corpus_raises_rather_than_defaulting_to_an_empty_one() -> None:
     """G1 — *absence refuses* — in the one place production breached it.
 

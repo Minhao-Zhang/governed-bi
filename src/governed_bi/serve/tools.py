@@ -3,7 +3,10 @@
 Factory ``build_tools(state, config, tracker)`` closes over frozen
 :class:`~governed_bi.govern.bounds.ToolBounds`. Out-of-scope and missing
 identifiers share :data:`~governed_bi.govern.bounds.OUT_OF_SCOPE_MESSAGE`.
-Tool exceptions become error strings — never refuse/decline.
+Tool exceptions become error strings — never refuse/decline. The one exception is
+:class:`~governed_bi.govern.check.GovernanceUsageError`, which says the *caller* wired
+the turn wrongly; it propagates, because a wiring failure recorded as a refusal is
+indistinguishable from governance declining a statement.
 """
 
 from __future__ import annotations
@@ -16,13 +19,15 @@ from typing import Any
 from langchain_core.tools import tool
 from langgraph.types import interrupt
 
-from governed_bi.corpus.analyst import AnalystCorpus, analyst_corpus_from_keys
+from governed_bi.corpus.analyst import AnalystCorpus
 from governed_bi.corpus.schema import ColumnAsset, TableAsset
 from governed_bi.govern.bounds import OUT_OF_SCOPE_MESSAGE, ToolBounds
+from governed_bi.govern.check import GovernanceUsageError
 from governed_bi.govern.layers import refuse
-from governed_bi.govern.ledger import attempt_record, execution_record
+from governed_bi.govern.ledger import AttemptRecord, attempt_record, execution_record
 from governed_bi.govern.pipeline import prepare
 from governed_bi.govern.policy import GovernancePolicy
+from governed_bi.register.stages import ATTEMPT_CAP_REFUSED_BY
 from governed_bi.serve.delivery import DeliveryTracker, tool_bounds_from_state
 from governed_bi.serve.runtime import configurable
 
@@ -32,6 +37,7 @@ __all__ = [
     "resolve_assets",
     "clarifications_from_tools",
     "attempts_from_tools",
+    "attempt_field",
     "execution_from_attempts",
     "tool_bounds_from_state",
 ]
@@ -77,13 +83,18 @@ def build_tools(
     if not isinstance(policy, GovernancePolicy):
         policy = GovernancePolicy()
     connector = cfg.get("connector")
+    # Passed through as whatever is on ``configurable``. A wrong-typed or absent corpus
+    # is a wiring failure and ``_run_query`` raises on it; coercing it to ``None`` here
+    # is what let the default below stand in for it (G1).
     corpus = cfg.get("corpus")
-    if not isinstance(corpus, AnalystCorpus):
-        corpus = None
     read_cap = _read_body_cap(state, cfg)
     attempts_box: dict[str, Any] = {
         "attempts": list((state.get("execution") or {}).get("attempts") or ()),
-        "cap": int(getattr(policy, "run_query_attempt_cap", 3) or 3),
+        # No ``or 3``: the field is a declared knob with a declared default, so an
+        # explicit cap of 0 is a configuration and coercing it back to 3 is the same
+        # absence-becomes-a-value defect one layer down.
+        "cap": int(policy.run_query_attempt_cap),
+        "capped": False,
     }
     turn_id = str(state.get("turn_id") or "")
     clar_box: list[dict[str, Any]] = []
@@ -145,6 +156,13 @@ def build_tools(
                 policy=policy,
                 attempts_box=attempts_box,
             )
+        except GovernanceUsageError:
+            # The one exception this surface does not turn into a string. It means the
+            # caller wired the turn wrongly, and an error string here would reach the
+            # record as a refusal with ``guardrail_errors: 0`` — indistinguishable from
+            # governance declining a statement. A wiring failure is a crash, so it
+            # propagates to ``wrap.py``, which stamps ``crashed`` + ``agent_core``.
+            raise
         except Exception as exc:  # noqa: BLE001
             return f"run_query error: {type(exc).__name__}: {exc}"
 
@@ -177,9 +195,55 @@ def attempts_from_tools(tools: Sequence[Any]) -> list[Any]:
     return []
 
 
-def execution_from_attempts(attempts: Sequence[Any], *, has_sql: bool) -> dict[str, Any]:
-    terminal: str = "answered" if has_sql else "no_sql"
-    return execution_record(list(attempts), terminal)  # type: ignore[arg-type]
+def attempt_field(attempt: Any, name: str) -> Any:
+    """One field of a ledger row, whether it arrived as a mapping or an object."""
+    if isinstance(attempt, Mapping):
+        return attempt.get(name)
+    return getattr(attempt, name, None)
+
+
+def execution_from_attempts(attempts: Sequence[Any]) -> dict[str, Any]:
+    """The turn's :class:`ExecutionRecord`, with ``terminal`` read off the **ledger**.
+
+    Not from whether a SQL string exists. ``has_sql`` came from the tool-call
+    *arguments*, so producing a string counted as producing an answer: a turn whose
+    every attempt was refused recorded ``terminal: "answered"`` beside
+    ``passed: false``, which is the crash-counted-as-refusal inversion that retired the
+    pre-2026-07-25 numbers, pointing the other way.
+
+    The vocabulary is ``govern.ledger.ExecutionRecord``'s. ``"graded"`` belongs to the
+    graded-delivery path and is not written here.
+    """
+    rows = list(attempts)
+    if not rows:
+        return execution_record(rows, "no_sql")
+    if any(attempt_field(a, "passed") is True for a in rows):
+        return execution_record(rows, "answered")
+    if any(attempt_field(a, "reason_code") == ATTEMPT_CAP_REFUSED_BY for a in rows):
+        return execution_record(rows, "capped")
+    return execution_record(rows, "refused")
+
+
+def _cap_attempt() -> AttemptRecord:
+    """The ledger row for a turn the attempt cap ended.
+
+    ``_run_query`` returned on the cap *before* appending, so a capped turn carried an
+    **empty** ledger while ``generated_sql`` was still read out of the tool arguments —
+    and "no attempt passed" then held vacuously. ``ExecutionRecord`` declared
+    ``"capped"`` and nothing ever wrote it.
+
+    Built directly rather than through :func:`~governed_bi.govern.layers.refuse`: the cap
+    is not a layer verdict (ADR 0006 §5 keeps ``capped`` distinct from ``refused``), and
+    a rule id would attribute it to a governance layer that never ran. The reason code is
+    :data:`~governed_bi.register.stages.ATTEMPT_CAP_REFUSED_BY`, which is the declared
+    value ``classify_outcome`` reads to return ``Outcome.capped``.
+    """
+    return AttemptRecord(
+        verdict_layer=None,
+        passed=False,
+        reason_code=ATTEMPT_CAP_REFUSED_BY,
+        path="agent",
+    )
 
 
 def _read_body_cap(state: Mapping[str, Any], cfg: Mapping[str, Any]) -> int:
@@ -329,7 +393,7 @@ def _run_query(
     sql: str,
     *,
     bounds: ToolBounds,
-    corpus: AnalystCorpus | None,
+    corpus: Any,
     connector: Any,
     policy: GovernancePolicy,
     attempts_box: dict[str, Any],
@@ -337,6 +401,11 @@ def _run_query(
     attempts: list[Any] = attempts_box["attempts"]
     cap = int(attempts_box["cap"])
     if len(attempts) >= cap:
+        # One row, not one per post-cap call: the cap is a terminal state, and a row per
+        # call would inflate the attempt count with calls where nothing was attempted.
+        if not attempts_box["capped"]:
+            attempts_box["capped"] = True
+            attempts.append(_cap_attempt())
         return f"run_query capped: attempt limit {cap} reached"
 
     if connector is None:
@@ -348,8 +417,18 @@ def _run_query(
         )
         return "run_query error: no connector configured"
 
-    if corpus is None:
-        corpus = analyst_corpus_from_keys(allowed=())
+    if not isinstance(corpus, AnalystCorpus):
+        # G1: absence refuses. An empty corpus here fails closed, so nothing leaks — but
+        # it records "the corpus was never wired up" as ``r_column_not_allowed`` with
+        # ``guardrail_errors: 0``, indistinguishable from "the model asked for a column it
+        # may not see". ``check()`` raises this for the same input; ``serve/`` must not
+        # catch it and substitute a default.
+        raise GovernanceUsageError(
+            "run_query has no AnalystCorpus: configurable['corpus'] is "
+            f"{type(corpus).__name__}. Every tool reads through AnalystCorpus as a type, "
+            "not a convention (ADR 0006 §8), and a turn served without one cannot tell a "
+            "governance refusal from its own wiring failure."
+        )
 
     prepared = prepare(
         sql,
