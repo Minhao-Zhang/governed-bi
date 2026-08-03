@@ -36,12 +36,30 @@ from contracts import needs  # noqa: E402
 #:
 #: These are NOT for an implementer to strip. Filling one in means writing the assertion
 #: the docstring specifies, then deleting that one marker.
-pytestmark = [needs("F"), pytest.mark.xfail(strict=True, reason="contract specified, body not yet written")]
+#:
+#: The marker is **per test**, deliberately, and this is not a style choice. Held at module
+#: level it was one line whose deletion disarmed all ten tripwires simultaneously -- and
+#: deleting it is what a fix *forces*, because the moment a real fix lands, ``strict=True``
+#: turns the newly-passing test red and the module-level marker is the only thing in reach.
+#: A tripwire whose removal is the documented next step is not a tripwire.
+pytestmark = [needs("F")]
+
+#: A specification with no body. The assertion has not been written yet.
+UNWRITTEN = pytest.mark.xfail(strict=True, reason="contract specified, body not yet written")
+
+#: A body that has been written and **convicts a live defect**. Delete this marker in the
+#: same commit as the fix, never before and never separately.
+#:
+#: The two states must not share a reason string. Under ``-q`` an unwritten spec and a
+#: written test convicting a real defect are both a bare ``x``, and this repository's
+#: whole history of silent passes is that shape.
+CONVICTS = pytest.mark.xfail(strict=True, reason="body written; convicts a defect not yet fixed")
 
 
 # ── the outcome must not contradict the ledger ────────────────────────────────
 
 
+@UNWRITTEN
 def test_a_turn_whose_every_sql_attempt_was_refused_is_not_answered() -> None:
     """The finding that invalidates every number `serve/` can produce.
 
@@ -91,6 +109,7 @@ def test_a_turn_whose_every_sql_attempt_was_refused_is_not_answered() -> None:
     pytest.fail("not implemented: see docstring")
 
 
+@UNWRITTEN
 def test_execution_terminal_agrees_with_the_attempts_it_carries() -> None:
     """`terminal: "answered"` beside `passed: false` is a record that disagrees with
     itself. Whichever field a reader trusts, the other one is lying, and nothing in the
@@ -115,6 +134,7 @@ def test_execution_terminal_agrees_with_the_attempts_it_carries() -> None:
 # ── channel state must be observed, not declared ──────────────────────────────
 
 
+@CONVICTS
 def test_a_facet_with_no_index_reports_its_channel_as_failed() -> None:
     """The degradation gate's entire input, and it was inert.
 
@@ -154,6 +174,7 @@ def test_a_facet_with_no_index_reports_its_channel_as_failed() -> None:
     )
 
 
+@UNWRITTEN
 def test_a_degraded_channel_writes_facet_degraded() -> None:
     """`channel_anomaly` and `is_degraded` had **zero call sites outside tests**, and
     nothing anywhere wrote `facet_degraded` — so `measure/gates.py` passed vacuously:
@@ -179,6 +200,7 @@ def test_a_degraded_channel_writes_facet_degraded() -> None:
     pytest.fail("not implemented: see docstring")
 
 
+@CONVICTS
 def test_pass_two_does_not_score_a_facet_on_a_channel_it_does_not_declare() -> None:
     """`pass_two_retrieve` lacked the `Channel.lexical in FACET_CHANNELS[stage]` guard
     that `facets.py` has, so a few-shot outranked an entity hit on `lexical` — while the
@@ -207,6 +229,7 @@ def test_pass_two_does_not_score_a_facet_on_a_channel_it_does_not_declare() -> N
 # ── absence must not be invented into a value ─────────────────────────────────
 
 
+@UNWRITTEN
 def test_an_absent_guard_is_not_recorded_as_error_failed_open() -> None:
     """`stamp.py` substituted `{"outcome": "error_failed_open"}` for a missing `guard`.
 
@@ -232,6 +255,7 @@ def test_an_absent_guard_is_not_recorded_as_error_failed_open() -> None:
     pytest.fail("not implemented: see docstring")
 
 
+@UNWRITTEN
 def test_a_real_model_call_does_not_record_zero_tokens() -> None:
     """Observed: `usage: [{'model': 'scripted', 'input_tokens': 0, 'output_tokens': 0}]`
     from a turn that really called a model.
@@ -264,6 +288,7 @@ def test_a_real_model_call_does_not_record_zero_tokens() -> None:
     pytest.fail("not implemented: see docstring")
 
 
+@CONVICTS
 def test_an_absent_corpus_raises_rather_than_defaulting_to_an_empty_one() -> None:
     """G1 — *absence refuses* — in the one place production breached it.
 
@@ -292,6 +317,7 @@ def test_an_absent_corpus_raises_rather_than_defaulting_to_an_empty_one() -> Non
 # ── the end-to-end assertion, and it must not use the stub ────────────────────
 
 
+@UNWRITTEN
 def test_a_real_turn_writes_every_required_field_on_every_terminal_path() -> None:
     """The assertion this parcel exists for. Its predecessor was `xfail(strict=True)`;
     the replacement passes through `_stub()`.
@@ -342,6 +368,7 @@ def test_a_real_turn_writes_every_required_field_on_every_terminal_path() -> Non
     pytest.fail("not implemented: see docstring")
 
 
+@UNWRITTEN
 def test_the_stub_path_is_unreachable_when_a_model_is_configured() -> None:
     """The complement, and the reason the test above can be trusted.
 
