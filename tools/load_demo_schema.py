@@ -147,7 +147,8 @@ def _rows(rng: random.Random) -> dict[str, list[tuple]]:
         employees.append((i, f"Employee {i:02d}", role, region, manager, f"20{18 + i % 7}-0{1 + i % 9}-1{i % 9}"))
 
     customers = [
-        (i, f"Customer {i:03d}", f"customer{i:03d}@example.test", 1 + (i - 1) % len(REGIONS), f"202{i % 5}-0{1 + i % 9}-0{1 + i % 8}")
+        (i, f"Customer {i:03d}", f"customer{i:03d}@example.test",
+         1 + (i - 1) % len(REGIONS), f"202{i % 5}-0{1 + i % 9}-0{1 + i % 8}")
         for i in range(1, 61)
     ]
     products = [
@@ -165,7 +166,8 @@ def _rows(rng: random.Random) -> dict[str, list[tuple]]:
             product = 1 + rng.randrange(len(products))
             items.append((len(items) + 1, order_id, product, 1 + rng.randrange(20), products[product - 1][3]))
     audit = [
-        (i, f"Employee {1 + i % 12:02d}", ("login", "export", "edit")[i % 3], f"2026-0{1 + i % 9}-1{i % 9} 09:{i % 60:02d}:00")
+        (i, f"Employee {1 + i % 12:02d}", ("login", "export", "edit")[i % 3],
+         f"2026-0{1 + i % 9}-1{i % 9} 09:{i % 60:02d}:00")
         for i in range(1, 41)
     ]
     return {

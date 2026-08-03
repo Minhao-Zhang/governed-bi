@@ -63,6 +63,13 @@ KNOWN_DUPLICATES: dict[str, str] = {
     #: The module export protocol. Required to recur by construction — one per
     #: module is the correct number, and its contents are checked by nothing here.
     "__all__": "Python's per-module export list; recurrence is the language, not a concept",
+    #: The ``python -m`` entry-point protocol. `eval/__main__.py` and `serve/__main__.py` are
+    #: two *programs*, not two implementations of one concept, and the name is fixed by the
+    #: runtime rather than chosen. Narrowly true: this exempts the name `main`, and both
+    #: definition sites are `__main__.py` modules whose bodies share nothing. If `main` ever
+    #: appears in a module that is not an entry point, that is a different situation and this
+    #: entry should not be what permits it.
+    "main": "the `python -m` entry-point protocol; one per program, name fixed by the runtime",
 }
 
 

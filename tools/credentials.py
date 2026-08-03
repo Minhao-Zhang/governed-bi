@@ -90,6 +90,26 @@ def have(*names: str) -> bool:
     return bool(secret(*names))
 
 
+def load_into_environ() -> int:
+    """Fill **unset** environment variables from ``.env``. Returns how many were filled.
+
+    For process entry points, and it is the only thing that actually works. Third-party
+    libraries read `os.environ` directly and are right to — `langchain_openai` and the
+    `openai` client both raise on a missing `OPENAI_API_KEY` no matter what this module
+    knows — so a per-reader bridge cannot help them. Twice on 2026-08-03 a caller used
+    :func:`have` to decide a key was present and then handed control to a library that
+    could not see it.
+
+    **Existing environment always wins**, so `OPENAI_API_KEY=... python -m ...` overrides
+    the file for one run. Nothing is printed: a loader that echoes what it found puts
+    credentials in every log that runs it.
+    """
+    for key, value in _dotenv().items():
+        if value and not os.environ.get(key):
+            os.environ[key] = value
+    return sum(1 for k, v in _dotenv().items() if v and os.environ.get(k) == v)
+
+
 #: The Postgres DSN's names, in precedence order. Declared here rather than repeated at each
 #: call site: an alias list is exactly the kind of thing that grows in one copy and not the
 #: other, which is the bug this module exists for.

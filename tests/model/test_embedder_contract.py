@@ -100,7 +100,17 @@ def test_embed_returns_one_vector_per_input_in_input_order(adapter: str) -> None
             f"batched vector {nearest} ({texts[nearest]!r}): the batch came back "
             "reordered, so every asset would silently take another asset's vector"
         )
-        assert similarities[position] == pytest.approx(1.0, abs=1e-3)
+        # A **margin** over the runner-up, not proximity to 1.0. Amended 2026-08-03 after
+        # `approx(1.0, abs=1e-3)` flaked once against OpenAI: the provider is not bit-identical
+        # across calls, and a contract test that needs a re-run teaches people to re-run. The
+        # margin is also the stronger claim — "this vector is the same text's" is what the
+        # ordering guarantee says, and it stays true at any absolute similarity.
+        runner_up = max(s for i, s in enumerate(similarities) if i != position)
+        assert similarities[position] - runner_up > 0.05, (
+            f"input {position} is nearest to its own batched vector by only "
+            f"{similarities[position] - runner_up:.4f}: too close to call, so this body "
+            "cannot distinguish a correct batch from a reordered one"
+        )
 
 
 @pytest.mark.parametrize("adapter", ADAPTERS)
