@@ -951,7 +951,72 @@ asking whether a terminal appears in the adjacency map — so a self-join would 
 an isolated table behind a false edge and turn a refusal into a wrong path. Its ON
 clause is still needed in the prompt, so it stays indexed for completion.
 
-##### 2.8.2.2 Open: nothing in `src/` produces either the index or the structure
+##### 2.8.2.2 Resolved: the session is where the corpus enters the process
+
+*Opened 2026-08-03 as the text below; resolved the same day. The original statement of
+the gap is kept because it is the evidence for the seam chosen here.*
+
+**The seam is run-constant versus per-turn, and that is the distinction the five hooks got
+wrong.** `index`, `structure`, `assets_by_id`, the analyst corpus, the connector, the
+policy, the model, the resolved knobs, `corpus_content_hash` and `prompt_set_hash` are all
+constant for every turn of a run. Putting any of them in per-turn state — which is what
+`state.py`'s "optional wiring hooks" did — creates a place where two turns of one run can
+disagree, and every retired number in this project came from exactly that.
+
+So one object holds the run constants, and it is built once:
+
+```
+Session          index, structure, assets_by_id, corpus, connector,
+(frozen)         policy, agent_model, knobs_resolved, corpus_content_hash,
+                 prompt_set_hash, problems
+   .configurable()   -> the mapping the graph's nodes read
+   .turn(question)   -> a turn dict with every required record field present
+```
+
+Small interface, and everything a caller currently assembles by hand disappears behind it.
+The two methods are the only ways in, so a node cannot be handed a half-wired config.
+
+**Index entries and structure are built from one resolution, not two.** An index entry's
+`schema_tag` for a `JoinAsset` is *`left_table`'s schema* (§2.2), and `left_table` is a
+physical name that must be reconciled to a table asset — the same lookup, with the same
+three outcomes, that §2.8.2 specifies for edge endpoints. Two independent resolutions would
+let a join's `schema_tag` disagree with its edge's endpoints, and nothing would raise: the
+join would vote for one schema while connecting two tables in another. So the builder
+resolves once and returns both, and `retrieve/`'s asset→`IndexEntry` mapping stops living
+only in `tests/`.
+
+**Two corpus sources, because one adapter is a hypothetical seam.**
+
+| source | for |
+|---|---|
+| `store.load(root)` | the curated corpus — YAML on disk |
+| `seed(connector.introspect(schema), schema)` | a live schema, no curation |
+
+`Session` takes assets and does not know which it got. That is what keeps its interface
+small, and having both from the start is what makes the seam real rather than declared.
+
+**`problems` finally have a caller who can fail loudly.** Both sources return them, the
+builder returns them, and `Session` carries them. **The entry point refuses to serve when
+any problem is fatal, and prints all of them either way** — this is the requirement §2.8.2
+stated and could not satisfy, because until now nothing downstream of a corpus load was in
+a position to exit non-zero.
+
+**The entry point's job is to make the record checkable, not to be a server.**
+`python -m governed_bi.serve` serves one question and prints the answer and the record.
+It **exits non-zero when `missing_required(record)` is non-empty.** That is the whole
+point of it: 346 green tests and nine fixed defects are still evidence from contract tests
+and a scripted model, and one real turn through a real model against a real database is a
+different kind of evidence. A skeleton that printed an answer and said nothing about the
+record would produce the reassurance without the evidence.
+
+**`llm_model` becomes a knob here.** `knobs.py` declares `llm_temperature`,
+`llm_reasoning_effort` and `embedding_model` as `Role.comparability` and its own docstring
+condemns model identity going unrecorded — yet the chat model is not a knob, so two runs on
+different models compare as one experiment. The session is where the model is chosen, so it
+is where the knob is resolved. This is also what unblocks the `usage` gate condition in
+decision #45(a).
+
+##### 2.8.2.2.1 The original statement of the gap
 
 The declared wiring above says the projection is built beside the index and passed
 on `configurable`. **That key has no in-repo writer, because `index` has none
