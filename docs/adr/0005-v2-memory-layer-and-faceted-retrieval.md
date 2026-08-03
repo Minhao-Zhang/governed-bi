@@ -134,7 +134,7 @@ type declares one explicitly:
 |---|---|
 | `SchemaAsset` | `name` |
 | `TableAsset` | `physical_name` |
-| `ColumnAsset` | `{table.physical_name}.{physical_name}` |
+| `ColumnAsset` | `physical_name` (bare — qualification would spend the 250-char budget on text the tag rule already establishes) |
 | `JoinAsset` | `{left_table}` and `{right_table}` (both) |
 | `MetricAsset` | `None` — business concept |
 | `TermAsset` | `None` — business phrase |
@@ -535,13 +535,26 @@ into the same hybrid index, never into a lookup — if the model extracts
 "customer churn rate" and the corpus says "churn", exact matching fails. That is
 the failure mode of the reference book's ILIKE-only term channel.
 
-**Degradation is per channel, not per facet.** `FacetResult` records
-`extraction_ran`, `lexical_ran`, `semantic_ran` as explicit booleans, never
-inferred from scores. If extraction returns nothing, the facet falls back to the
-raw question and `extraction_ran=False`. If the embedder is rate-limited,
-`semantic_ran=False` — **v1's incident was exactly this and there was no field
-for it at all** (schema-pick accuracy of 69.9% published under a rate-limited
-embedder, re-measured at 91.0%).
+**Degradation is per channel, and three-valued.** `FacetResult` records each
+channel's `ChannelState` — `ran` / `not_configured` / `failed` — never inferred
+from scores. Only `failed` is degradation.
+
+A boolean cannot carry this, and the reason is concrete: **`example` has no
+`lexical` channel by design**, so `lexical_ran=False` there is *correct*, while
+the same `False` on `entity` means the BM25 index died and that arm is now
+running on one channel. Under a boolean the gate
+`facet_degradation_rate == 0` either fails on every run or acquires a special
+case exempting `example` — and that special case is where the next silent
+degradation hides.
+
+`not_configured` is asserted against a **declared** channel table
+(`FACET_CHANNELS`), never taken on the producer's word. That closes a second
+hole: a channel that silently stops being configured reports `not_configured`
+and would otherwise be excused by the very gate meant to catch it.
+
+**v1's incident was exactly this class and there was no field for it at all** —
+schema-pick accuracy of 69.9% published under a rate-limited embedder,
+re-measured at 91.0% with quota free.
 
 **This is a quotability input, not a diagnostic.** A run where extraction failed
 on every turn completes normally, grades normally, and *is* v1's single-pass
@@ -901,11 +914,24 @@ embeds their question. Namespacing is a mitigation, not authentication.
 
 - Fan-out is five static edges; `Send` is unnecessary for a fixed facet set.
 - Fan-in is implicit — five nodes pointing at `route`.
-- **Facet results go to a per-facet channel, not one accumulating list.** An
-  `Annotated[list, operator.add]` fixes the fan-out overwrite and creates a
-  multi-turn bug: with a checkpointer, turn 2 starts with turn 1's five results
-  still in the channel and `route` aggregates both. `facets: dict[str,
-  FacetResult]` keyed by facet name is overwrite-per-turn and still concurrent-safe.
+- **Facet results need a reducer, and a bare `dict` is not one.** Five nodes write
+  the same channel in one super-step, so without a reducer LangGraph raises
+  `InvalidUpdateError` ("can receive only one value per step") — a plain
+  `dict[str, FacetResult]` does not merge, it collides. But
+  `Annotated[list, operator.add]` has the opposite bug: with a checkpointer, turn 2
+  starts holding turn 1's five results and `route` aggregates both.
+
+  The shape that has neither: `Annotated[dict[str, FacetResult], merge_facets]`
+  where `merge_facets` replaces by key. Concurrent-safe within a super-step
+  (five disjoint keys), and overwrite-per-turn across turns (turn 2 writes the same
+  five keys).
+
+- **`usage` has the same multi-turn bug and needs the same care.**
+  `Annotated[list[UsageRecord], operator.add]` accumulates across turns under a
+  checkpointer, so the per-turn `usage` record and every cost number derived from
+  it double-count from turn 2 onward. Either stamp each record with the turn index
+  and filter at projection, or reset the channel at the head of each turn — but not
+  "it is a list, `add` is obviously right", which is how this lands.
 - Latency is `max(branches)`, cost is `sum(branches)`. Fan-out buys latency, not
   money. Extraction is classification — small model.
 - A module LangGraph loads by file path must **not** use `from __future__ import
@@ -924,7 +950,7 @@ class ServeState(TypedDict):
     rewrite: RewriteResult | None   # None = node did not run (first turn)
     negative: NegativeVerdict       # total; written on every turn
 
-    facets: dict[str, FacetResult]  # keyed by facet name; overwritten per turn
+    facets: Annotated[dict[str, FacetResult], merge_facets]   # see below
 
     schemas: list[str]
     retrieved: RetrievalResult
@@ -974,12 +1000,12 @@ class RewriteResult(TypedDict):
     outcome: Literal["rewritten", "unchanged", "failed"]
 
 class FacetResult(TypedDict):
-    facet: Literal["schema", "term", "metric", "entity", "example"]
+    facet: Stage                    # one of FACET_STAGES
     queries: list[str]              # ≤ max_queries_per_facet
     hits: list[Hit]                 # deduped within the facet
-    extraction_ran: bool
-    lexical_ran: bool
-    semantic_ran: bool
+    channels: dict[str, ChannelState]   # extraction / lexical / semantic
+                                        # degradation = differs from
+                                        # expected_channel_state(facet, channel)
 
 class SchemaCrossing(TypedDict):
     from_schema: str
@@ -1135,7 +1161,10 @@ bad spec discarding a whole batch is pure token churn); **tool exceptions must
 not be laundered into refusals** (a `NameError` in a helper spent a long time
 looking like an intermittent model hiccup).
 
-**Every tool call emits a stage record.** v1 computed the whole
+**Every tool call that has no other trace emits a stage record.** `run_query` is
+the exception and has no `Stage` member of its own: it already emits the
+`check` + `execute` pair, and a third record would double-count an action the
+ledger and every rate already agree on. v1 computed the whole
 search/inspect/sample detail and dropped it, because the sink was optional and
 no eval arm passed a callback — **zero such rows exist on disk**. The successor
 question ("was `read_body` worth it?") is unanswerable by the same mechanism
@@ -1226,11 +1255,12 @@ a real record. v1's allow-list relay swallowed two fields **for a year**.
 
 Fields the register must include, because they cannot be reconstructed later:
 
-`delivery_hash`, `context_hash`, `body_delivered` · per-facet `hits` with
+`delivery_hash`, `context_hash`, `tool_delivered` · per-facet `hits` with
 `facet`, `asset_type`, `queries`, `lexical`, `semantic` · `schema_ranking`
-(full, pre-truncation) and the gold schema's rank · `pulled_in` · `crossings` ·
+(full, pre-truncation) — the gold schema's *rank* is derived from it by eval,
+which is the only side that holds gold, so it is not a serve-recorded field · `pulled_in` · `crossings` ·
 `lexical_coverage` · `guard`, `negative`, `rewrite` (all total records) ·
-`extraction_ran`/`lexical_ran`/`semantic_ran` per facet · `usage` including
+per-facet `ChannelState` for extraction / lexical / semantic (§2.3) · `usage` including
 cache read and write tokens · `failure` · the resolved knob set (§5).
 
 **Quotability preconditions** (refuse the comparison, do not warn):
@@ -1374,7 +1404,7 @@ configuration no deployment could run).
 | facet weights | all 1.0 | `schema` arguably deserves more; no data |
 | `w_lex` / `w_sem` | 0.5 / 0.5 | renormalised by active channels |
 | `lexical_saturation_k` | **unset** | fit once against the corpus BM25 distribution, then **frozen across arms** — a per-arm fit would make `lexical` incomparable |
-| per-type budgets | schema all · table 8 · column 30 · join 5 · metric 5 · term 5 · few_shot 3 | after pass two |
+| per-type budgets | declared in `register.assets` beside the types they belong to (schema all · table 8 · column 30 · join 5 · metric 5 · term 5 · few_shot 3 · negative n/a); referenced here as one content-hashed knob so a budget change moves the config hash | after pass two |
 | `max_steiner_points` | 5 | exceed ⇒ decline |
 | `max_crossings` | 2 | exceed ⇒ decline |
 | `expand_hops` | 0 | off until measured |
@@ -1483,44 +1513,59 @@ design** (§4.1).
 
 ## Implementation order
 
-1. **Write the four boundary contracts** (§4) as executable type stubs: the
-   `eval ↔ serve` record register, the frontend delta, the `Stage` enum diff,
-   and **ADR 0006**. Nothing is deleted until these exist.
-2. **Build the row-scoring byte-golden** (§4.1) against existing run data.
-3. `git checkout -b v2`.
-4. **Commit 1: delete `src/`, `tests/`, `scripts/`.** Keep `docs/`, `runs/`
-   (evidence — archived, not loadable), config, git history.
-5. **Asset schema + validation + CI** (§1): per-type `identifier_field`, the
-   join ON digest, `governance` on every asset, the phase-boundary provenance
-   guard, sanitization, the file-length gate.
-6. **Seed** (§1.7) — deterministic summaries for every asset including
+**Delete first.** An earlier draft put the boundary contracts before the
+deletion, reasoning that a contract protects what is *outside* the boundary. That
+reasoning died when `eval/` joined the rewrite: with nothing outside left to
+protect, a contract written beside 87k lines of the thing it replaces is not a
+guardrail — it is new code with the old implementation in its peripheral vision,
+and two files of the same name in the same tree. Written on an empty floor it is
+what it actually is: the first module of the new system.
+
+1. **Write ADR 0006 and the frontend delta** (§4.2, §4.4) — the two contracts
+   that describe things the deletion does *not* touch.
+2. `git checkout -b v2`.
+3. **Commit 1: delete `src/`, `tests/`, `scripts/` — 87,812 lines.** Keep
+   `docs/`, `runs/` (evidence — archived, not loadable under the new schema),
+   configuration, git history. Also delete anything that names a deleted module:
+   a config pointing at code that no longer exists reads as wired up, which is
+   worse than absent.
+4. **The boundary contracts, as the first code on the empty floor** (§4.1, §4.3)
+   — `Stage`/`Outcome`, the record register, and a package `__init__` that does
+   nothing on import (v1's auto-loaded `.env` leaked a real API key into every
+   test process). Import-time invariants: a gate may only read a declared field;
+   every `health`-tier field is read by a gate; every `refused_by` maps to a real
+   `Stage`.
+5. **Build the row-scoring byte-golden** (§4.1) against archived run data, using
+   the **current** scorer — not the run artifact, which predates `b6b7ee5`.
+6. **Asset schema + validation + CI** (§1): per-type `identifier_field`, the join
+   ON digest, `governance` on every asset, the phase-boundary provenance guard,
+   sanitization, the file-length gate.
+7. **Seed** (§1.7) — deterministic summaries for every asset including
    `SchemaAsset`, deterministic `sample_values`. This is what makes the next
    three steps model-free.
-7. **Unified index + lexical/semantic/hybrid** (§2.2, §2.4). Offline.
-8. **Two-pass retrieval, `route`, `resolve`, `connect`** (§2.5–2.9), producing
+8. **Unified index + lexical/semantic/hybrid** (§2.2, §2.4). Offline.
+9. **Two-pass retrieval, `route`, `resolve`, `connect`** (§2.5–2.9), producing
    `licensed`. Offline. **Gate: route recall@3 by schema-size decile** (§2.6).
-9. **ADR 0006 §§1–5** — `Layer`, `check()`, the function allowlist, binding, the
-   connection contract, path validation. **Model-free, and a hard prerequisite
-   of step 10.** Putting the whole of 0006 after the serve graph would leave the
-   repository with no `check()` between the deletion at step 4 and step 11 — so
-   step 10's cost gate would run either with `run_query` disabled (not measuring
-   what it argues about) or with an unguarded agent against Postgres.
-10. **The serve graph** (§3) including message placement, cache breakpoints, the
-    node-exception wrapper, `ExecutionRecord`, and the `Stage` diff (both ADRs'
-    members). **Gate: §3.4's cost criterion.**
-11. **ADR 0006 §§6–11** — `guard` and its red-team corpus, tool bounds, graded
+10. **ADR 0006 §§1–5** — `Layer`, `check()`, the function allowlist, binding, the
+    connection contract, path validation. **Model-free, and a hard prerequisite
+    of step 11**: without it there is no `check()` in the repository, so step 11's
+    cost gate would run either with `run_query` disabled (not measuring what it
+    argues about) or with an unguarded agent against Postgres.
+11. **The serve graph** (§3) including message placement, cache breakpoints, the
+    node-exception wrapper, and `ExecutionRecord`. **Gate: §3.4's cost criterion.**
+12. **ADR 0006 §§6–11** — `guard` and its red-team corpus, tool bounds, graded
     delivery, the ledger. **Gate: one test per bypass B1–B10 in ADR 0006's
-    Context section** — that list is canonical for both ADRs.
-12. **Facets** (§2.3) with per-channel degradation tracking.
-13. **Frontend deltas** (§4.2).
-14. **Eval rewrite**, against the golden from step 2. **Run the free grader
+    Context section**, which is canonical for both ADRs.
+13. **Facets** (§2.3) with per-channel degradation tracking.
+14. **Frontend deltas** (§4.2).
+15. **Eval rewrite**, against the golden from step 5. **Run the free grader
     ceiling first** (`--oracle-only`, no model, ~4 minutes) — it re-scales every
     downstream conclusion, and v1 spent a long time reading 56.3% against an
     unknown ceiling that turned out to be 99.70%.
-15. Curator redesign — separate ADR.
-16. `negative_gate` — blocked on a negative corpus existing.
+16. Curator redesign — separate ADR.
+17. `negative_gate` — blocked on a negative corpus existing.
 
-Steps 5–9 have no model in them.
+Steps 4–10 have no model in them.
 
 **A standing rule from L-R5:** the paid ladder is confirmation, never screening.
 MDE is 2.64–3.23pp and the interventions move 1–2pp, so every intervention gets
