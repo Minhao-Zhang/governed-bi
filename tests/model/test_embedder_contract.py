@@ -47,7 +47,6 @@ ADAPTERS = ("deterministic", "openai")
 # ── the interface, on every adapter ───────────────────────────────────────────
 
 
-@UNWRITTEN
 @pytest.mark.parametrize("adapter", ADAPTERS)
 def test_embed_returns_one_vector_per_input_in_input_order(adapter: str) -> None:
     """`ports.py:113` — *"A shorter or reordered result is a bug in the adapter, never
@@ -69,10 +68,41 @@ def test_embed_returns_one_vector_per_input_in_input_order(adapter: str) -> None
     batched vector** rather than an exact match. A tolerance loose enough to pass a
     reordering is worse than no test.
     """
-    pytest.fail("not implemented: see docstring")
+    from embedders import NARROW_DIMENSIONS, SMALL_BATCH, make_embedder
+    from governed_bi.retrieve.semantic import cosine
+
+    embedder = make_embedder(adapter, dimensions=NARROW_DIMENSIONS, batch_size=SMALL_BATCH)
+
+    # Seven inputs over a batch size of four, so the batches are [0:4] and [4:7] and the
+    # boundary is crossed. Seven unrelated topics, because the assertion below is an
+    # argmax and two near-synonyms would make it a coin toss rather than a check.
+    texts = [
+        "customers registered in the sales schema",
+        "brewing capacity per factory site",
+        "geographic coordinates of each location",
+        "invoice totals by billing month",
+        "employee shift rota for the packaging line",
+        "supplier contracts and their renewal dates",
+        "returned bottles counted at the depot",
+    ]
+    assert len(texts) > embedder.batch_size, "fixture no longer crosses a batch boundary"
+
+    batched = embedder.embed(texts)
+    assert len(batched) == len(texts)
+
+    individual = [embedder.embed([text])[0] for text in texts]
+
+    for position, own in enumerate(individual):
+        similarities = [cosine(own, candidate) for candidate in batched]
+        nearest = max(range(len(similarities)), key=similarities.__getitem__)
+        assert nearest == position, (
+            f"input {position} ({texts[position]!r}) embedded alone is nearest to "
+            f"batched vector {nearest} ({texts[nearest]!r}): the batch came back "
+            "reordered, so every asset would silently take another asset's vector"
+        )
+        assert similarities[position] == pytest.approx(1.0, abs=1e-3)
 
 
-@UNWRITTEN
 @pytest.mark.parametrize("adapter", ADAPTERS)
 def test_every_vector_has_exactly_the_declared_width(adapter: str) -> None:
     """`dimensions` is a property of the port, and `text-embedding-3-large` can be asked
@@ -83,10 +113,26 @@ def test_every_vector_has_exactly_the_declared_width(adapter: str) -> None:
     adapter accepts a `dimensions` argument, assert it for a shortened width too, because a
     request the API ignored would otherwise pass unnoticed.
     """
-    pytest.fail("not implemented: see docstring")
+    from embedders import NARROW_DIMENSIONS, make_embedder
+
+    probe = ["a customers table", "a brewing capacity metric"]
+
+    native = make_embedder(adapter)
+    vectors = native.embed(probe)
+    assert [len(v) for v in vectors] == [native.dimensions, native.dimensions]
+
+    # The shortened width, which is the half that can pass unnoticed: the adapter
+    # declares 64 and the provider is free to hand back its native width instead.
+    shortened = make_embedder(adapter, dimensions=NARROW_DIMENSIONS)
+    assert shortened.dimensions == NARROW_DIMENSIONS
+    assert shortened.dimensions != native.dimensions, (
+        "the shortened width equals the native one, so this body would pass for an "
+        "adapter that ignored `dimensions` entirely"
+    )
+    short_vectors = shortened.embed(probe)
+    assert [len(v) for v in short_vectors] == [NARROW_DIMENSIONS, NARROW_DIMENSIONS]
 
 
-@UNWRITTEN
 @pytest.mark.parametrize("adapter", ADAPTERS)
 def test_an_empty_or_whitespace_input_refuses(adapter: str) -> None:
     """`ports.py:118` states the hazard and the reason it cannot be papered over: *OpenAI
@@ -100,13 +146,32 @@ def test_an_empty_or_whitespace_input_refuses(adapter: str) -> None:
     a zero vector: a zero vector is "not measured" rendered as "scores nothing", and
     `cosine` cannot distinguish it from a real vector that happens to be orthogonal.
     """
-    pytest.fail("not implemented: see docstring")
+    from embedders import NARROW_DIMENSIONS, make_embedder
+
+    embedder = make_embedder(adapter, dimensions=NARROW_DIMENSIONS)
+
+    for blank in ("", "   ", "\t\n "):
+        with pytest.raises(ValueError):
+            embedder.embed([blank])
+        # Alongside a real summary: a batch is where a blank rides in unnoticed, and an
+        # adapter that validated only single-element input would pass the line above.
+        with pytest.raises(ValueError):
+            embedder.embed(["a customers table", blank])
+        with pytest.raises(ValueError):
+            embedder.embed([blank, "a customers table"])
+
+    # Nothing came back in place of a vector -- no zero vector, no shortened list. The
+    # control is the same call with real text, which an adapter that raises on
+    # everything would fail.
+    good = embedder.embed(["a customers table"])
+    assert len(good) == 1
+    assert len(good[0]) == NARROW_DIMENSIONS
+    assert any(component != 0.0 for component in good[0])
 
 
 # ── the cache key, which is where v1 actually died ────────────────────────────
 
 
-@UNWRITTEN
 def test_two_models_of_the_same_width_do_not_share_a_cache_entry() -> None:
     """**The most important test in this file, and the one the existing fix does not
     cover.**
@@ -130,10 +195,94 @@ def test_two_models_of_the_same_width_do_not_share_a_cache_entry() -> None:
     correct only when the caller remembers to keep one dict per model is the convention this
     port exists to replace.
     """
-    pytest.fail("not implemented: see docstring")
+    from typing import Any, Sequence
+
+    from governed_bi.model import DeterministicEmbedder
+    from governed_bi.ports import Vector
+    from governed_bi.register.assets import AssetType
+    from governed_bi.retrieve.index import IndexEntry, build_index
+    from governed_bi.retrieve.semantic import cache_key, cosine
+
+    class Counting(DeterministicEmbedder):
+        """Records the texts it was actually asked to embed.
+
+        A cache hit and a cache miss produce the same ``UnifiedIndex``, so "was this
+        reused" cannot be read off the result. Without this, a cache that **never** hits
+        satisfies every non-reuse assertion below.
+        """
+
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+            self.embedded: list[str] = []
+
+        def _embed_batch(self, texts: Sequence[str]) -> list[Vector]:
+            self.embedded.extend(texts)
+            return super()._embed_batch(texts)
+
+    width = 64
+    summary = "customers registered in the sales schema"
+
+    def entries() -> list[IndexEntry]:
+        return [
+            IndexEntry(
+                id="t1",
+                summary=summary,
+                asset_type=AssetType.table,
+                schema_tag="sales",
+            )
+        ]
+
+    # The pair the one existing backstop cannot separate: same width, different model.
+    # `semantic.py:18` raises when widths differ and these agree, so nothing downstream
+    # can tell a cross-model hit from a legitimate one.
+    large = Counting(dimensions=width, salt="stands-in-for-3-large")
+    small = Counting(dimensions=width, salt="stands-in-for-3-small")
+    assert large.dimensions == small.dimensions == width
+    assert large.model != small.model
+
+    cache: dict[str, Vector] = {}
+
+    first = build_index(entries(), embedder=large, vector_cache=cache)
+    assert large.embedded == [summary]
+    assert cache_key(summary, model=large.model, dimensions=width) in cache
+
+    # Same text, same width, different model -> a MISS.
+    second = build_index(entries(), embedder=small, vector_cache=cache)
+    assert small.embedded == [summary], (
+        "the second model was handed the first model's vector: the cache key is not "
+        "carrying the model, which is v1's defect exactly"
+    )
+    assert len(cache) == 2
+    assert cache_key(summary, model=small.model, dimensions=width) in cache
+
+    # ...and the two vectors really are unrelated, so a shared entry would have been
+    # wrong rather than merely untidy -- while cosine stays silent, because the widths
+    # agree and that is the only thing it checks.
+    assert cosine(first.vectors[summary], second.vectors[summary]) < 0.99
+    assert len(first.vectors[summary]) == len(second.vectors[summary])
+
+    # The other direction. A cache that misses on everything would pass all of the
+    # above, and would also be no cache at all.
+    large.embedded.clear()
+    third = build_index(entries(), embedder=large, vector_cache=cache)
+    assert large.embedded == [], "the same embedder missed its own cache entry"
+    assert list(third.vectors[summary]) == list(first.vectors[summary])
+    assert len(cache) == 2
+
+    # `dimensions` is in the key too, and it has to be: `text-embedding-3-large` at two
+    # widths is one model name over two incompatible vector spaces.
+    narrow = Counting(dimensions=32, salt="stands-in-for-3-large")
+    assert narrow.model == large.model
+    build_index(entries(), embedder=narrow, vector_cache=cache)
+    assert narrow.embedded == [summary]
+    assert len(cache) == 3
+
+    # A cache with no embedder cannot form a key at all, so it is refused rather than
+    # read under a guessed identity.
+    with pytest.raises(ValueError):
+        build_index(entries(), vector_cache=cache)
 
 
-@UNWRITTEN
 @pytest.mark.parametrize("adapter", ADAPTERS)
 def test_the_adapter_reports_the_model_the_provider_actually_used(adapter: str) -> None:
     """The house rule, in the one place it applies to a third party: **the record must
@@ -152,10 +301,61 @@ def test_the_adapter_reports_the_model_the_provider_actually_used(adapter: str) 
     algorithm changes — a fake whose identity never moves makes every cached vector from
     every past version look current.
     """
-    pytest.fail("not implemented: see docstring")
+    from embedders import NARROW_DIMENSIONS, make_embedder
+
+    embedder = make_embedder(adapter, dimensions=NARROW_DIMENSIONS)
+
+    if adapter == "deterministic":
+        from governed_bi.model import DeterministicEmbedder
+
+        # There is no model argument to hand it, so there is nothing for it to echo:
+        # the identity is derived from the algorithm rather than requested.
+        with pytest.raises(TypeError):
+            DeterministicEmbedder(model="text-embedding-3-large")  # type: ignore[call-arg]
+
+        assert embedder.model.startswith("deterministic:hashed-bow-sha256:")
+
+        # Stable across objects, and independent of width -- width is already its own
+        # component of every cache key, so folding it in here would double-count it.
+        assert embedder.model == DeterministicEmbedder(dimensions=NARROW_DIMENSIONS).model
+        assert embedder.model == DeterministicEmbedder(dimensions=NARROW_DIMENSIONS * 4).model
+
+        # ...and it MOVES when the algorithm's behaviour moves.
+        assert (
+            embedder.model
+            != DeterministicEmbedder(dimensions=NARROW_DIMENSIONS, salt="v2").model
+        )
+
+        # Pinned, and this is the assertion that makes the sentence above enforceable
+        # rather than aspirational: the identity is a digest of the adapter's own output
+        # on a fixed probe, so editing the tokeniser, the bucket function, the sign bit
+        # or the normalisation turns this line red. A hand-maintained version string is
+        # the thing that gets forgotten, and then every cached vector from every past
+        # version looks current.
+        assert embedder.model == "deterministic:hashed-bow-sha256:daef773fc3d2"
+        return
+
+    from openai import OpenAI
+
+    # The requested name is available immediately; the reported one is not. That gap is
+    # the observable difference between an adapter that reads the response and one that
+    # echoes the request, and it is the only difference visible at all while the
+    # provider happens to serve the name it was asked for.
+    assert embedder.requested_model == "text-embedding-3-large"
+    assert embedder.served_model is None
+
+    observed = OpenAI().embeddings.create(
+        model="text-embedding-3-large",
+        input=["a customers table"],
+        dimensions=NARROW_DIMENSIONS,
+    )
+
+    # Independently observed, from a response this adapter never saw.
+    assert embedder.model == f"openai:{observed.model}"
+    assert embedder.served_model == observed.model
+    assert embedder.served_model is not None
 
 
-@UNWRITTEN
 def test_the_embedding_knobs_reach_knobs_resolved() -> None:
     """`embedding_model` and `embedding_dimensions` are declared knobs with
     `Role.comparability` (`register/knobs.py:208-212`), and today nothing supplies either,
@@ -166,13 +366,51 @@ def test_the_embedding_knobs_reach_knobs_resolved() -> None:
     compare as one experiment — which is precisely what the knob was declared to prevent,
     and the declaration alone has never stopped anything in this repository.
     """
-    pytest.fail("not implemented: see docstring")
+    from governed_bi.model import DeterministicEmbedder, embedding_knobs
+    from governed_bi.register.knobs import (
+        comparability_keys,
+        config_hash_keys,
+        knob_names,
+    )
+
+    embedder = DeterministicEmbedder(dimensions=64)
+    knobs = embedding_knobs(embedder)
+
+    assert set(knobs) == {"embedding_model", "embedding_dimensions"}
+    assert knobs["embedding_model"] == embedder.model
+    assert knobs["embedding_dimensions"] == 64
+
+    # Declared, and declared as `comparability` -- so they are IN the config hash rather
+    # than recorded beside it. A threshold outside the comparability hash is v1's
+    # `serve_config_hash` defect, and a knob name no register backs is the same hole.
+    assert set(knobs) <= knob_names()
+    assert set(knobs) <= comparability_keys()
+    assert set(knobs) <= config_hash_keys()
+
+    base = {"route_top_n": 3, "candidate_depth": 50}
+    resolved = {**base, **knobs}
+    assert resolved["embedding_model"] == embedder.model
+    assert resolved["embedding_dimensions"] == 64
+
+    # Two runs differing ONLY in embedder no longer resolve to the same knob set --
+    # neither in the model nor in the width, and the width is the one `cosine` cannot
+    # catch when the two models were asked for the same one.
+    other_model = {
+        **base,
+        **embedding_knobs(DeterministicEmbedder(dimensions=64, salt="other")),
+    }
+    other_width = {**base, **embedding_knobs(DeterministicEmbedder(dimensions=128))}
+    assert resolved != other_model
+    assert resolved != other_width
+
+    # ...and identical configuration still resolves identically, or the two lines above
+    # would also pass for a resolver that simply never repeats itself.
+    assert resolved == {**base, **embedding_knobs(DeterministicEmbedder(dimensions=64))}
 
 
 # ── the deterministic adapter is an adapter, not a fake ───────────────────────
 
 
-@UNWRITTEN
 def test_the_deterministic_adapter_is_stable_across_processes() -> None:
     """`ports.py:108` — it *"is what makes ADR 0005's implementation steps 6–9 model-free,
     and it is a third adapter, not a courtesy fake."*
@@ -185,10 +423,64 @@ def test_the_deterministic_adapter_is_stable_across_processes() -> None:
     Assert the same text yields the same vector in a **subprocess** with a different
     `PYTHONHASHSEED`, and that two different texts do not collide.
     """
-    pytest.fail("not implemented: see docstring")
+    import json
+    import os
+    import subprocess
+    import sys
+    import textwrap
+
+    from governed_bi.model import DeterministicEmbedder
+
+    texts = ["customers registered in 2019", "brewing capacity per site"]
+    local = DeterministicEmbedder(dimensions=64)
+    expected = [list(v) for v in local.embed(texts)]
+
+    program = textwrap.dedent(
+        """
+        import json
+        from governed_bi.model import DeterministicEmbedder
+
+        texts = ["customers registered in 2019", "brewing capacity per site"]
+        embedder = DeterministicEmbedder(dimensions=64)
+        print(json.dumps({
+            "model": embedder.model,
+            "vectors": [list(v) for v in embedder.embed(texts)],
+            "builtin_hash": hash(texts[0]),
+        }))
+        """
+    )
+
+    root = Path(__file__).resolve().parent.parent.parent
+    runs = []
+    for seed in ("0", "12345"):
+        completed = subprocess.run(
+            [sys.executable, "-c", program],
+            env={**os.environ, "PYTHONHASHSEED": seed},
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        runs.append(json.loads(completed.stdout))
+
+    # The control, and it is what stops this body from being a tautology: the two
+    # subprocesses really did get different string-hash salts. Without this line, a
+    # subprocess mechanism that silently failed to vary the seed would make the
+    # agreement below say nothing at all -- which is exactly the state a hash()-seeded
+    # fake would be in.
+    assert runs[0]["builtin_hash"] != runs[1]["builtin_hash"], (
+        "PYTHONHASHSEED did not change the interpreter's string hashing, so this "
+        "test cannot distinguish a digest-seeded adapter from a hash()-seeded one"
+    )
+
+    for run in runs:
+        assert run["vectors"] == expected
+        assert run["model"] == local.model
+
+    # Two different texts do not collide.
+    assert expected[0] != expected[1]
 
 
-@UNWRITTEN
 def test_the_semantic_channel_scores_a_facet_that_declares_it() -> None:
     """The end-to-end reason this parcel exists, and it is **not** schema routing.
 
@@ -209,4 +501,71 @@ def test_the_semantic_channel_scores_a_facet_that_declares_it() -> None:
     buys a facet that could not run, and fusion (0.871@3); it does not buy routing lift, and
     a test asserting otherwise would fail for a true reason.
     """
-    pytest.fail("not implemented: see docstring")
+    from governed_bi.model import DeterministicEmbedder
+    from governed_bi.register.assets import AssetType
+    from governed_bi.register.facets import (
+        FACET_CHANNELS,
+        FACET_TARGETS,
+        Channel,
+        ChannelState,
+        expected_channel_state,
+    )
+    from governed_bi.register.stages import Stage
+    from governed_bi.retrieve.index import IndexEntry, build_index
+    from governed_bi.retrieve.semantic import semantic_search
+
+    # The declaration this body is about. One channel, and it is the semantic one, so a
+    # few-shot has to be *findable* by cosine rather than merely scored by it once
+    # something else has found it.
+    assert FACET_CHANNELS[Stage.facet_example] == frozenset({Channel.semantic})
+    assert Channel.lexical not in FACET_CHANNELS[Stage.facet_example]
+    assert expected_channel_state(Stage.facet_example, Channel.semantic) is ChannelState.ran
+    assert FACET_TARGETS[Stage.facet_example] == frozenset({AssetType.few_shot})
+
+    question = "how many customers registered in 2019"
+
+    # Deliberately NOT the question verbatim. An identical summary would let a plain dict
+    # lookup pass this body, and what the channel has to do is rank by overlap.
+    wanted = IndexEntry(
+        id="fs_customers_2019",
+        summary="count of customers who registered during 2019",
+        asset_type=AssetType.few_shot,
+        schema_tag="sales",
+    )
+    distractor = IndexEntry(
+        id="fs_capacity",
+        summary="average brewing capacity across factory sites",
+        asset_type=AssetType.few_shot,
+        schema_tag="sales",
+    )
+    table = IndexEntry(
+        id="sales.kunden",
+        summary="kunden (customer records)",
+        asset_type=AssetType.table,
+        schema_tag="sales",
+    )
+
+    embedder = DeterministicEmbedder(dimensions=256)
+    index = build_index([wanted, distractor, table], embedder=embedder, vector_cache={})
+    query_vector = embedder.embed([question])[0]
+
+    few_shots = {wanted.id, distractor.id}
+    hits, state = semantic_search(index, query_vector, candidates=few_shots)
+
+    assert state is ChannelState.ran
+    assert [asset_id for asset_id, _ in hits] == [wanted.id, distractor.id]
+    assert 0.0 < hits[0][1] < 1.0, (
+        "the top score is 0 or an exact match: either the channel found nothing, or the "
+        "fixture is matching verbatim and would pass without an embedder at all"
+    )
+    assert hits[0][1] > hits[1][1]
+
+    # Without an embedder the same call reports `not_configured` -- which is the state
+    # this facet has been in for the whole life of the repository, and what made the
+    # few-shot structurally unreachable rather than merely unlucky. A channel that
+    # reported `ran` here would make "found nothing" and "never wired up" one
+    # observation, which is the shape half this repo's retired numbers have.
+    bare = build_index([wanted, distractor, table])
+    bare_hits, bare_state = semantic_search(bare, query_vector, candidates=few_shots)
+    assert bare_state is ChannelState.not_configured
+    assert bare_hits == []

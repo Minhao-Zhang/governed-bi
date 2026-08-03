@@ -17,7 +17,7 @@ from .index import IndexEntry, UnifiedIndex, build_index, schema_tag_for
 from .lexical import BM25
 from .resolve import resolve
 from .result import Hit
-from .semantic import cache_key, cosine
+from .semantic import cache_key, cosine, semantic_search
 from .structure import CorpusStructure, build_structure, complete_joins
 
 __all__ = [
@@ -41,4 +41,5 @@ __all__ = [
     "resolve",
     "route",
     "schema_tag_for",
+    "semantic_search",
 ]
