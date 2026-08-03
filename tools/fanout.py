@@ -24,6 +24,23 @@ worktree. An agent that runs ``cat ../../Code/governed-bi/.env`` gets the keys, 
 that runs ``git push`` pushes. So the worktree bounds *accidents*, not intent. Nothing
 here should be pointed at a prompt from an untrusted source.
 
+**``-w NAME`` REUSES an existing worktree of that name, and does not reliably rebase
+it onto current HEAD.** Found 2026-08-03 the first time this launched real work: three
+parcels went out, and one landed in a worktree left over from an earlier smoke test,
+**two commits behind**. That agent's tree contained no ``measure/``, no lint gates, and
+no acceptance-test file — it was asked to satisfy a contract that did not exist in the
+only tree it could see.
+
+Index-derived names (``fanout-0``, ``fanout-1``, ...) collide across runs *by
+construction*, so this was guaranteed rather than unlucky. Two defences, because the
+first is a convention and the second is a check:
+
+* Names carry a per-run token, so a name is never reused.
+* :func:`_verify_base` reads each worktree's ``HEAD`` after launch and **fails the
+  agent's result** if it is not the commit that was expected. "Commit before fanning
+  out" was the mitigation this file previously documented, and it is not sufficient on
+  its own: committing does nothing if the agent is looking at a different commit.
+
 **A worktree is based on HEAD, so uncommitted work is invisible to the agent** — and
 this is the trap that matters, because it fails *silently and plausibly*. The first
 real fan-out asked two agents factual questions about this repo. One was right. The
@@ -58,12 +75,13 @@ delegating is safe at all, so skipping them removes the whole basis for it.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 #: Resolved rather than assumed on PATH: the installer does not add it, and a
@@ -75,6 +93,39 @@ DEFAULT_MODEL = "cursor-grok-4.5-high"
 #: Cursor's own guidance is that concurrency past this stops paying: merge-conflict
 #: cost scales worse than linearly with agent count. Not a technical limit.
 SANE_MAX = 4
+
+
+def _head() -> str:
+    """The commit the agents are expected to see."""
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+def _verify_base(worktree: Path, expected: str) -> str | None:
+    """``None`` when ``worktree`` sits on ``expected``, else a description of the drift.
+
+    Checked rather than trusted: ``-w`` reuses a worktree of the same name, so a
+    leftover from an earlier run silently supplies an older commit. An agent working
+    from the wrong commit produces confident, plausible, useless output -- the first
+    real fan-out lost a third of its work this way.
+    """
+    if not worktree.exists():
+        return f"worktree {worktree} was never created"
+    got = subprocess.run(
+        ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    if got.returncode != 0:
+        return f"cannot read HEAD in {worktree}"
+    actual = got.stdout.strip()
+    if actual != expected:
+        return (
+            f"worktree is at {actual[:8]}, expected {expected[:8]} -- the agent could "
+            "not see the contract it was asked to satisfy"
+        )
+    return None
 
 
 def _dirty_paths() -> list[str]:
@@ -99,13 +150,15 @@ def run_one(
     index: int,
     prompt: str,
     *,
+    run_token: str,
+    expect_head: str,
     model: str,
     write: bool,
     worktree: bool,
     timeout: int,
 ) -> dict[str, object]:
     """One agent. Returns a result row; never raises for a failed agent."""
-    name = f"fanout-{index}"
+    name = f"fanout-{run_token}-{index}"
     cmd: list[str] = [
         str(CLI),
         "-p",
@@ -131,9 +184,21 @@ def run_one(
     except FileNotFoundError:
         status, out, err = 127, "", f"no cursor-agent at {CLI}"
 
+    drift = (
+        _verify_base(Path.home() / ".cursor" / "worktrees" / "governed-bi" / name, expect_head)
+        if worktree
+        else None
+    )
+    if drift and status == 0:
+        # Exit 0 from an agent that could not see its contract is the worst case: it
+        # reports success and the result is unusable. Overwrite the status.
+        status = 125
+        err = (err + "\nBASE MISMATCH: " + drift).strip()
+
     return {
         "index": index,
         "name": name,
+        "base_ok": drift is None,
         "prompt": prompt[:120],
         "exit": status,
         "seconds": round(time.time() - started, 1),
@@ -213,30 +278,59 @@ def main() -> int:
             file=sys.stderr,
         )
 
-    mode = "WRITE + shell (--force)" if args.write else "read-only (--plan)"
-    print(f"{len(prompts)} agent(s), model={args.model}, {mode}\n", file=sys.stderr)
+    head = _head()
+    # A per-run token so a worktree name is never reused. Derived from the base commit
+    # plus the prompt set, so re-running the same fan-out against the same commit reuses
+    # its own worktrees (resumable) while a different run cannot collide with it.
+    run_token = hashlib.sha256((head + "\x00".join(prompts)).encode()).hexdigest()[:8]
 
+    mode = "WRITE + shell (--force)" if args.write else "read-only (--plan)"
+    print(
+        f"{len(prompts)} agent(s), model={args.model}, {mode}\n"
+        f"base {head[:8]}, worktrees fanout-{run_token}-N",
+        file=sys.stderr,
+    )
+
+    # as_completed, NOT pool.map. map() is a barrier: it yields nothing until every
+    # agent has finished, so a caller cannot tell "one done, two running" from "all
+    # three hung" -- and on the first real fan-out that is exactly the question that
+    # mattered, because one agent had silently landed on the wrong commit. Progress that
+    # only arrives at the end is not progress reporting.
+    results: list[dict[str, object]] = []
     with ThreadPoolExecutor(max_workers=min(len(prompts), SANE_MAX)) as pool:
-        results = list(
-            pool.map(
-                lambda item: run_one(
-                    item[0],
-                    item[1],
-                    model=args.model,
-                    write=args.write,
-                    worktree=not args.no_worktree,
-                    timeout=args.timeout,
-                ),
-                enumerate(prompts),
+        futures = {
+            pool.submit(
+                run_one,
+                i,
+                prompt,
+                run_token=run_token,
+                expect_head=head,
+                model=args.model,
+                write=args.write,
+                worktree=not args.no_worktree,
+                timeout=args.timeout,
+            ): i
+            for i, prompt in enumerate(prompts)
+        }
+        for done in as_completed(futures):
+            row = done.result()
+            results.append(row)
+            state = "ok" if row["exit"] == 0 else f"exit {row['exit']}"
+            print(
+                f"[{len(results)}/{len(prompts)}] {row['name']} finished: {state} "
+                f"in {row['seconds']}s",
+                file=sys.stderr,
+                flush=True,
             )
-        )
+    results.sort(key=lambda r: r["index"])
 
     if args.json:
         print(json.dumps(results, indent=2))
     else:
         for r in results:
-            head = "ok " if r["exit"] == 0 else f"EXIT {r['exit']}"
-            print(f"-- [{head}] {r['name']}  {r['seconds']}s  {r['worktree']}")
+            tag = "ok " if r["exit"] == 0 else f"EXIT {r['exit']}"
+            base = "" if r.get("base_ok", True) else "  !! WRONG BASE COMMIT"
+            print(f"-- [{tag}] {r['name']}  {r['seconds']}s  {r['worktree']}{base}")
             print(f"   {r['prompt']}")
             if r["output"]:
                 print("   " + str(r["output"]).replace("\n", "\n   "))
