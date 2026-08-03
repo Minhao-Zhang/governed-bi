@@ -374,9 +374,13 @@ The graph topology, the channel reducers, `ask_user` identity binding, and
 — real seed, real BM25 index, route, resolve, connect, assemble, `create_agent`, stamp —
 and `missing_required` came back clean with a real `context_hash`. That part works.
 
-Three runtime `pytest.xfail("waiting on Agent B")` escape hatches in
-`tests/serve/test_pass_two_and_context.py` must go. None is currently taken, which is
-exactly why they are dangerous: they will silently absorb a regression.
+Three runtime `pytest.xfail(...)` escape hatches in
+`tests/serve/test_pass_two_and_context.py` must go — lines 260, 267 and 331. None is
+currently taken, which is exactly why they are dangerous: they will silently absorb a
+regression. Two of them swallow a route decline (`"route declined — cannot assemble
+context"`, `"route declined — budget check blocked on Agent A"`) and one an unbuilt
+assemble (`"assemble still F1 stub — waiting on Agent B"`); an earlier draft of this plan
+quoted the third reason for all three, so grep the line numbers rather than the string.
 
 ### The dependency, and it is hard
 

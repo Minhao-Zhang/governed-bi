@@ -57,6 +57,36 @@ def test_a_turn_whose_every_sql_attempt_was_refused_is_not_answered() -> None:
 
     Build a turn where the model emits SQL the corpus does not license. Assert the
     outcome is a refusal or a decline, and that no attempt in the ledger says `passed`.
+
+    **Fixture shape.** `compile_graph()` (`serve/graph.py:156`), then
+    `.invoke(turn, {"configurable": conf})`.
+
+    * `turn` — copy `_base_turn()` from `test_pass_two_and_context.py:54`. Its 14 keys are
+      not decoration: `missing_required` requires 15 fields and `stamp` supplies only 7,
+      so a thin turn fails on absence rather than on the property under test.
+    * `conf["policy"]` — mandatory. `nodes/guard.py:21` subscripts it unguarded.
+    * `conf["agent_model"]` — `ScriptedChatModel(responses=[...])`
+      (`serve/scripted_model.py:14`). Copy the two-message `run_query` construction from
+      `eval/arms.py:89-101` verbatim; put an unlicensed table in `args["sql"]`.
+    * `conf["corpus"]` — a **real** `for_analyst([...])` (`corpus/analyst.py:78`) that does
+      not license that table, plus `conf["assets_by_id"]` (`tools.py:51`). Omitting the
+      corpus makes `tools.py:80` substitute an empty one, so the refusal would come from
+      F-5c's defect and not from governance.
+    * `conf["connector"]` — a real `PostgresConnector(dsn)`; reuse the `dsn` fixture and
+      its skip from `tests/datasource/test_seed_contract.py:71-104`. **This is the reason
+      the test had to wait for parcel C.** With `connector=None`, `tools.py:343` appends
+      `r_not_a_read`/"no connector configured" and the turn is unanswered for a reason
+      that has nothing to do with licensing.
+
+    Assert on `out["answer"]`: `outcome != "answered"`, and no attempt in
+    `record["execution"]["attempts"]` has `passed is True`.
+
+    Then assert the ledger is **non-empty**, and write the cap case as a second
+    parametrisation. `tools.py:339` returns on the attempt cap *before* appending, so a
+    capped turn carries zero attempts while `generated_sql` is still read out of the tool
+    args (`agent_core.py:133`) — `has_sql` stays true and `execution_from_attempts`
+    (`tools.py:180`) stamps `terminal: "answered"`. An empty ledger satisfies "no attempt
+    passed" vacuously, which is this test passing for the wrong reason.
     """
     pytest.fail("not implemented: see docstring")
 
@@ -64,7 +94,21 @@ def test_a_turn_whose_every_sql_attempt_was_refused_is_not_answered() -> None:
 def test_execution_terminal_agrees_with_the_attempts_it_carries() -> None:
     """`terminal: "answered"` beside `passed: false` is a record that disagrees with
     itself. Whichever field a reader trusts, the other one is lying, and nothing in the
-    artifact says which."""
+    artifact says which.
+
+    **Fixture shape.** Assert this as a property of a record, over **at least two** turns —
+    the refused one from the test above and an answered one with licensed SQL. One turn
+    lets a fix satisfy the invariant by hard-coding whichever terminal that turn produces.
+
+    The property: `terminal == "answered"` implies some attempt has `passed is True`. Read
+    the vocabulary from `govern/ledger.py:97` rather than restating it — plain strings,
+    `"answered" | "graded" | "refused" | "capped" | "no_sql"`.
+
+    Two of those five are declared and never written by `serve/`: `"graded"` belongs to the
+    eval path, and nothing reaches `"capped"` at all (see the cap note above). Do **not**
+    assert that all five are reachable; assert that whichever one appears agrees with the
+    attempts beside it.
+    """
     pytest.fail("not implemented: see docstring")
 
 
@@ -87,14 +131,21 @@ def test_a_facet_with_no_index_reports_its_channel_as_failed() -> None:
     from governed_bi.register.facets import Channel, ChannelState, Stage
     from governed_bi.serve.nodes.facets import facet_entity_node
 
-    # No index and no model in the config: nothing could have consulted anything.
-    # INCOMPLETE: with this thin a state the node returns before reporting channels, so
-    # the precondition below fires rather than the assertion that matters. The review
-    # observed {'lexical': 'ran', 'semantic': 'ran'} from a fuller state -- reaching that
-    # path needs a real question, a real index in the config, and an embedder. Left
-    # convicting on the precondition rather than deleted, so the gap is visible.
-    out = facet_entity_node({"question": "how many customers", "facet_hits": []}, {"configurable": {}})
-    channels = out.get("facet_channels", {}).get(Stage.facet_entity.value, {})
+    # Fixture shape: `{"question": <non-empty str>}` is the whole minimum state --
+    # `facets.py:50` does `str(state["question"])` and every other read is `.get`-guarded.
+    # An empty `configurable` leaves `index=None` (`facets.py:83`), which is the condition
+    # under test: nothing could have consulted anything.
+    #
+    # Note the key. The node returns `{"facets": {stage: {..., "channels": {...}}}}`
+    # (`facets.py:173`); `facet_channels` is a *record* field that `stamp.py:153` projects
+    # from `state["facets"][key]["channels"]`. An earlier draft of this test read
+    # `facet_channels` off the node and so convicted on the wrong thing -- if you assert
+    # this end-to-end instead, read `answer["record"]["facet_channels"]`.
+    #
+    # `FACET_CHANNELS[Stage.facet_entity]` is `{lexical, semantic}` (facets.py:114), so
+    # `expected_channel_state` is `ran` and `_channels_for` reports it verbatim.
+    out = facet_entity_node({"question": "how many customers"}, {"configurable": {}})
+    channels = out.get("facets", {}).get(Stage.facet_entity.value, {}).get("channels", {})
     assert channels, "the facet must report its channel states"
     assert channels.get(Channel.lexical.value) == ChannelState.failed.value, (
         f"no index was available, so the lexical channel did not run; reported "
@@ -110,6 +161,20 @@ def test_a_degraded_channel_writes_facet_degraded() -> None:
 
     A gate whose input nobody produces is worse than an absent gate, because the summary
     says the run was checked.
+
+    **Fixture shape.** Two assertions, and both are needed.
+
+    *Behavioural.* Drive the same no-index config as the facet test above through
+    `compile_graph()` and read `answer["record"]["facet_degraded"]`. `harness.py:176` reads
+    it off the record, so that is where it has to appear — it is not a state key. With no
+    index every facet's lexical channel failed, so a truthful record says degraded.
+
+    *Structural.* `is_degraded` (`register/facets.py:184`) and `channel_anomaly`
+    (`facets.py:166`) must have at least one call site in `src/`. Today they have none, and
+    a behavioural fix that computes degradation inline would pass the first assertion while
+    leaving the two functions that own the comparison unreachable — a second, divergent
+    implementation of the observed-vs-declared check, which ADR 0005 §6 forbids by name.
+    Assert over `inspect.getsource` of the writing module, the way F-4 below does.
     """
     pytest.fail("not implemented: see docstring")
 
@@ -150,6 +215,19 @@ def test_an_absent_guard_is_not_recorded_as_error_failed_open() -> None:
     a security event, and the quotability gate then refuses a run for a reason that did
     not happen. L-R1 with the sign flipped: absence became a specific, alarming value
     rather than zero.
+
+    **Fixture shape.** No graph. `stamp` (`serve/nodes/stamp.py:172`) takes state only —
+    `def stamp(state)`, no `config`, because `wrap.py:42` invokes it state-only. So call it
+    directly with a `_base_turn()`-shaped mapping that **omits** `guard`, and read
+    `answer["record"]["guard"]`.
+
+    The substitution is `stamp.py:193-195`, three lines sitting under a comment that states
+    the invariant they break (`# Absence.never: guard must be a real value on every path`).
+
+    Either outcome is acceptable and the test must accept both: `stamp` raises, or the
+    record's `guard` stays absent and `missing_required(record)` names `"guard"`. What must
+    not survive is a `guard` whose `outcome` is `"error_failed_open"` on a turn where no
+    guard ran, so assert against that sentinel specifically rather than against absence.
     """
     pytest.fail("not implemented: see docstring")
 
@@ -162,6 +240,26 @@ def test_a_real_model_call_does_not_record_zero_tokens() -> None:
     which is precisely the v1 failure of two ladders that produced no USD while reporting
     successfully. If the provider reports no usage, the field is
     `Measured.unmeasured(why)`; `register/quantity.py` exists for this.
+
+    **Fixture shape.** No graph — call `agent_core_node(state, config)`
+    (`serve/nodes/agent_core.py:27`) with `conf["agent_model"]` set to a
+    `ScriptedChatModel`, and read `out["usage"][0]`.
+
+    The literal is `agent_core.py:70-77`, and note *which* branch it is in: that is the
+    **real-model** path, not `_stub`. The `model` field beside it is computed
+    (`getattr(model, "_llm_type", None)`, so `"scripted"`), which is what makes the two
+    zeros beside it read as measurements.
+
+    The state needs `turn_index`, because `_usage_for_turn` (`stamp.py:16-20`) keeps only
+    rows whose `turn_index` matches and a mismatched row vanishes before any assertion.
+
+    Assert `input_tokens` is not the integer `0`. It should be a `Measured` in the
+    unmeasured state, or absent — `ScriptedChatModel` reports no usage, so unmeasured is
+    the truthful answer here and a real provider's count is the other case.
+
+    Expect the fix to reach `state.py:92`'s `UsageRecord`, which types both token fields
+    `NotRequired[int]`. A `Measured` cannot be stored under that annotation, so a fix that
+    leaves the TypedDict alone is a fix that lied to the type checker.
     """
     pytest.fail("not implemented: see docstring")
 
@@ -212,6 +310,34 @@ def test_a_real_turn_writes_every_required_field_on_every_terminal_path() -> Non
     model that emits a tool call, a real index built from a real seeded corpus, a real
     connector, and **no** `facet_route_hits` in the config. Then
     `missing_required(record) == frozenset()` on each of refuse / decline / answered.
+
+    **Fixture shape.** F-1's config plus a real index, and the preconditions asserted
+    *first*, in the test body, not left to a reviewer:
+
+    * `conf["agent_model"] is not None` — otherwise `agent_core.py:39` takes `_stub`.
+    * `conf["index"] is not None` — `build_two_schema_corpus()` at
+      `tests/serve/conftest.py:27` returns `(UnifiedIndex, assets_by_id)` with a real BM25
+      over 20 assets. That is the only working asset→`IndexEntry` mapping in the repo;
+      there is no helper in `src/`.
+    * `conf["connector"] is not None`.
+    * `"facet_route_hits" not in turn` — `harness.py:57-59` injects route hits when the
+      index is missing, which bypasses retrieval entirely. The predecessor test did this.
+    * `STUB_ANSWER not in answer["text"]`.
+
+    The semantic channel needs a hand-written `Embedder` (`ports.py:96`: a `model`
+    property, a `dimensions` property, `embed(texts)`) passed to
+    `build_index(entries, embedder=...)`. `src/governed_bi/model/` does not exist, so there
+    is nothing to import. A lexical-only index is enough for this test; say so in the body
+    rather than leaving the semantic channel silently unexercised.
+
+    Three terminal paths, each its own parametrisation: **refuse** (a `policy` whose guard
+    rule fires on the question), **decline** (route finds nothing), **answered** (licensed
+    SQL against the probe schema). Assert `missing_required(record) == frozenset()` on each.
+
+    For the answered case, assert `path_kind != "decline"` rather than skipping. The two
+    `pytest.xfail` guards at `test_pass_two_and_context.py:260` and `:331` exist because an
+    accidental decline is easy to hit here — and an accidental decline that the suite
+    tolerates is exactly how this parcel's original end-to-end assertion stopped asserting.
     """
     pytest.fail("not implemented: see docstring")
 
@@ -222,5 +348,20 @@ def test_the_stub_path_is_unreachable_when_a_model_is_configured() -> None:
     `STUB_ANSWER` reaching an artifact means the graph silently degraded to a path with
     no model. It must be impossible to produce it while a model is configured, and it
     must never appear in a record that any gate reads as `answered`.
+
+    **Fixture shape.** `monkeypatch.setattr(agent_core, "_stub", _raise)` around a graph
+    invocation whose `conf["agent_model"]` is set. If `_stub` runs, the test fails with the
+    reason attached — which is stronger than asserting on the output string, since a future
+    stub with different text would slip past that.
+
+    The stub must stay **reachable on purpose**: `eval/arms.py:54` pops `agent_model` to
+    build the no-model arm, so this test is not asking for `_stub`'s deletion. It asks that
+    the stub cannot be reached *silently* — reached while a model was configured, or reached
+    and then recorded as an ordinary answer.
+
+    So add the second half: a stub-path record must be distinguishable from a real one
+    without string-matching `STUB_ANSWER`. Today it is not — `agent_core.py:94` returns
+    `path_kind: "answered"` and a `usage` row whose only tell is `model: "stub"`, and no
+    gate reads that. Assert that some field a gate already reads separates them.
     """
     pytest.fail("not implemented: see docstring")

@@ -669,9 +669,9 @@ G1-clean: `corpus` is keyword-only with no default and the type check precedes t
 6. **`tests/eval/test_eval_contract.py` is untracked and self-authored**, its header
    claiming to be written "against the plan, not the impl" — unverifiable, and precisely
    the authorship pattern `tests/contracts.py` exists to prevent. Three runtime
-   `pytest.xfail("waiting on Agent B")` escape hatches sit in
-   `tests/serve/test_pass_two_and_context.py`; none is currently taken, so they will
-   silently absorb a regression.
+   `pytest.xfail(...)` escape hatches sit in `tests/serve/test_pass_two_and_context.py`
+   at lines 260, 267 and 331 — two swallowing a route decline, one an unbuilt assemble;
+   none is currently taken, so they will silently absorb a regression.
 
 **Actions.** `F` and `G` return to `UNBUILT` until they have contracts written by someone
 other than their implementer — that is the rule from §9 of the handoff doc, and F and G
