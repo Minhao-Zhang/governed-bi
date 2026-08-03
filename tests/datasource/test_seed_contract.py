@@ -55,15 +55,7 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from contracts import needs  # noqa: E402
 
-#: Strict xfail while ``PostgresConnector`` is a stub -- five of its six methods raise
-#: ``ConnectionError("not exercised in this tranche")``, so every test below fails for the
-#: right reason. The marker records *why*, and ``strict=True`` means the suite goes red the
-#: moment the connector is implemented and these start passing, which is when someone must
-#: come back and remove it. A red suite gets ignored; this cannot be.
-pytestmark = [
-    needs("C"),
-    pytest.mark.xfail(strict=True, reason="PostgresConnector is a stub; decision #40"),
-]
+pytestmark = [needs("C")]
 
 #: SQLSTATEs that must classify as a **query fault**, with the statement that produces
 #: each. Every one of these was misclassified as infrastructure by the predecessor.

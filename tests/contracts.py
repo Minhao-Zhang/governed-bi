@@ -86,7 +86,7 @@ def unbuilt() -> frozenset[str]:
 #: is 69 lines with five stub raises. The contract measured the wrong thing, which is a
 #: design-holder error rather than an implementer one, and worth leaving visible: a
 #: contract can be honest, thorough, passed cleanly, and still be about the wrong subject.
-ACCEPTED: frozenset[str] = frozenset({"B", "D", "E"})
+ACCEPTED: frozenset[str] = frozenset({"B", "C", "D", "E"})
 
 
 def accepted_but_absent() -> frozenset[str]:

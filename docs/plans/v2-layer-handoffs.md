@@ -9,12 +9,14 @@ same defect class as the ones the register layer exists to prevent — a contrac
 prose that nothing can import and nobody can check — so it is written down before
 any of it is parcelled out.
 
-**Status: in progress.** `ACCEPTED = {B, D, E}` in `tests/contracts.py`; `C`, `F` and `G`
-carry code that no design holder has signed off. §7 and §8 are **rework** plans as of
-2026-08-03 — both parcels were built and self-graded before they had contracts, and both
-came back with a defect a contract would have caught. Every parcel that had one came back
-sound. The critical path is now **C**: with no working connector, no governed query can
-execute anywhere, so F's and G's contract tests cannot be written honestly.
+**Status: in progress.** `ACCEPTED = {B, D, E}` in `tests/contracts.py`; `C`'s
+Postgres contract is green (2026-08-03) but not yet in `ACCEPTED` — that remains a
+human judgement. `F` and `G` carry code that no design holder has signed off. §7 and
+§8 are **rework** plans as of 2026-08-03 — both parcels were built and self-graded
+before they had contracts, and both came back with a defect a contract would have
+caught. Every parcel that had one came back sound. With a working
+`PostgresConnector`, F's and G's contract tests can be written honestly; next is F
+contract bodies, then F/G rework.
 
 ---
 
@@ -88,7 +90,7 @@ ports ── register ── measure
 |---|---|---|---|---|
 | **A** | `measure/` + the two missing CI gates | **now** | — | pure computation over declared tables; no DB, no model, no network |
 | **B** | `govern/` | **now** | — | ADR 0006 is a complete spec including the bypass list it must close; testable with a SQL string and nothing else |
-| **C** | `datasource/` + `corpus/seed.py` | **now, and it is the critical path** | a reachable Postgres (have one) | **Postgres only** (#40). `PostgresConnector` is 69 lines with five stub raises, so nothing in the tree can execute a governed query — F and G both wait on it |
+| **C** | `datasource/` + `corpus/seed.py` | **contract green** (pending `ACCEPTED`) | — | **Postgres only** (#40). `PostgresConnector` executes, classifies on SQLSTATE, introspects by schema; seed is model-free |
 | **D** | `corpus/` (schema, store, hash, identity) | **now** | — | the asset types and their validation; file I/O and dataclasses |
 | **E** | `retrieve/` | after **D** | corpus asset types | the largest self-contained algorithmic piece |
 | **F** | `serve/` | **rework** — see §7 | **C**, for an honest end-to-end test | code exists, not accepted; five localised defects, sound topology |
@@ -224,6 +226,9 @@ bool cannot feed it.
 ---
 
 ## 4. Parcel C — `datasource/` + `corpus/seed.py`
+
+**Status: contract green** against `tests/datasource/test_seed_contract.py` (2026-08-03).
+Not in `ACCEPTED` until a design holder signs off.
 
 | file | what it holds |
 |---|---|
@@ -455,11 +460,18 @@ any of the above — a single precondition that makes the whole class visible, a
 execution count must be *recorded* so the refusal is checkable rather than inferred. It is
 in G's contract as `test_an_arm_with_zero_successful_executions_is_not_quotable`.
 
-### Order
+### Order, and the first item is not the grader
 
-After C (a connector) and after F-1 (a truthful terminal state), because grading a turn
-requires the turn's outcome to mean something. G's own rework is small; its dependencies
-are not.
+**G-0, before anything else: point the harness at Postgres.** `eval/__main__.py` still
+imports `SqliteConnector`, so G's entry point runs on the database decision #40 put out of
+scope — and specifically on the one whose namespace incompatibility made governed execution
+impossible. Every number that CLI has produced came from a connector that cannot run a
+governed query. Fixing `project_turn` first would leave the fix untestable, because there
+would still be no turn whose SQL could have succeeded. `sqlite.py` (138 lines) deletes with
+it.
+
+Then the grader fix, then the coercions. After **C** (done) and after **F-1**, because
+grading a turn requires the turn's outcome to mean something.
 
 ---
 

@@ -798,3 +798,38 @@ error-taxonomy tests keyed on SQLSTATE rather than message text. Delete `sqlite.
 Implement `PostgresConnector` for real. Pin the `sqlglot` dialect to `postgres`
 unambiguously in ADR 0006 §13 — which also settles that B1's XML-export family is
 in scope rather than hypothetical. `psycopg 3.3.4` is already a dependency.
+
+## 41. Parcel C accepted; `eval/`'s entry point is on the wrong connector · *2026-08-03*
+
+`C` is in `ACCEPTED`. Verified independently rather than taken on report, since two earlier
+"it's done" claims in the same session did not hold:
+
+* `git diff` on the acceptance contract shows **exactly** the authorised change — the
+  `strict=True` xfail marker removed, nothing else. No assertion moved, no `parametrize`
+  shortened, no fixture redirected.
+* 16/16 against a live Postgres 18.4. Both cases the SQLite classifier had inverted —
+  `42883 undefined_function` and `42883` from a bad arity, the commonest generation errors
+  on obfuscated schemas — now classify as **query faults**.
+* `test_a_class_08_sqlstate_is_infrastructure` passes, and it is the one strengthened after
+  it XPASSED against a stub: it requires the error to carry a class-08 SQLSTATE, which a
+  connector raising `ConnectionError` unconditionally cannot produce.
+* **#39a is closed.** `test_a_statement_govern_permits_is_one_the_connector_executes`
+  passes: a statement `govern` licenses as `{schema}.{table}` is one the connector runs.
+  That intersection was empty for a day and nothing noticed.
+
+**Two leftovers, neither in C's contract scope, both belonging to G.**
+
+`sqlite.py` is still on disk (138 lines) and **`eval/__main__.py` imports
+`SqliteConnector`**. So parcel G's entry point runs on the database decision #40 put out of
+scope — and specifically on the one whose namespace incompatibility made governed execution
+impossible. Every number that CLI has produced came from the connector that cannot run a
+governed query, which is the mechanical half of #39b.
+
+This is not a new defect; it is the old one still wired up. It moves onto G's rework list as
+its first item, ahead of the grader fix: pointing the harness at Postgres is what makes the
+`project_turn` fix testable at all. `sqlite.py` deletes with it.
+
+**Worth noting about the process.** The implementer stopped short of adding `C` to
+`ACCEPTED` and said so. That is the three-state model working as designed — code with a
+green contract and no sign-off is a *reportable state*, and leaving the judgement to a
+different person is the whole reason it was made unrepresentable-by-`mkdir` in #38.
