@@ -18,8 +18,8 @@ to be three-valued, and a boolean cannot carry it:
 Under a boolean, a gate reading "did any channel not run" either fails on every
 run or acquires a special case exempting ``example`` — and **that special case is
 where the next silent degradation hides.** v1's version of this incident had no
-field at all: a rate-limited embedder published schema-pick accuracy of 69.9%,
-re-measured at 91.0% with quota free.
+field at all: a rate-limited embedder published a schema-pick accuracy
+that re-measured 21 points higher once quota was free. [retired]
 
 And ``not_configured`` is judged **against this table**, never taken on the
 producer's word. :func:`channel_anomaly` is the single place that judgement is

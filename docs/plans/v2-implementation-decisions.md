@@ -313,21 +313,57 @@ that when it splits it is a decision with this note attached.
 
 ---
 
-## Still pending, and currently claimed by docstrings that are not yet true
+## 28. The enforcement the docstrings claimed now exists · *Recorded*
 
-Five docstrings name enforcement that does not exist in the tree:
-`tools/check_imports.py`, `tools/check_citations.py`, and three `tests/conformance`
-assertions. **Every cross-table closure the register cannot self-check is therefore
-unchecked right now** — in the layer whose thesis is that a documented caller
-contract is not a boundary.
+Five docstrings named `tools/check_imports.py`, `tools/check_citations.py` and
+`tests/conformance` before any of them existed. All three now do, and **both gates
+were verified to fire on an injected violation** — a gate that only leaves a trace
+when it fires cannot afterwards be told from a gate that was never wired up, which
+is L§7's rule and half of v1's second-largest defect class.
 
-These land next, before any module consumes the register:
+`tests/conformance/test_register_closure.py` is 22 passing tests plus one
+`xfail(strict=True)`: the assertion that a **real turn on every terminal path**
+writes every required field. That needs the graph. Strict xfail so it fails the
+suite the moment it starts passing — a non-strict xfail would XPASS in silence and
+nobody would learn the thing started working.
 
-| what | asserts |
-|---|---|
-| `tools/check_imports.py` | the layering in `__init__.py`; `register/` and `ports.py` import only stdlib |
-| `tools/check_citations.py` | no retired pattern in `src/` or `docs/` outside `GREP_EXEMPT_PATHS`; no un-sourced world-describing number |
-| `tests/conformance/test_register_closure.py` | every register key non-absent on a **real turn, on every terminal path**; every emitted key declared |
+Two things the tools taught while being written:
+
+**`check_citations.py` initially found nothing**, because the declarations carry
+type annotations and an annotated assignment is `ast.AnnAssign`, not `ast.Assign`.
+It reported zero patterns — and then *refused to treat zero as success*. That
+refusal is the only reason this was caught instead of shipping as a permanently
+green gate. Written the other way (`if not patterns: return 0`) it would have been
+v1's exact defect in the tool built to prevent it.
+
+**The inline exemption marker must sit on the line the pattern matches**, not the
+line after it. Three of my first four markers were on the following line because the
+prose wrapped. The gate now says so in its failure message.
+
+## 29. The citations gate is two-tier, and `docs/` is advisory for now · **Open item**
+
+`src/` and `tools/` are fatal. `docs/` reports 16 hits across 12 files and does not
+fail, with `--strict-docs` to promote it once sorted.
+
+The hits are not one problem:
+
+* An **experiment record** saying "we measured 0.35" is a true statement about what
+  was measured on that date. The record should stay and be annotated, not edited.
+  (`docs/experiments/e1-shortlist-ablation.md`, `20260801-three-model-ladder.md`)
+* A **plan** reasoning *from* 0.35 toward a design decision is stale in a way
+  annotation cannot fix — and most of those plans describe code that no longer
+  exists. (`docs/plans/routing-redesign.md`, `serve-transparency*.md`,
+  `grill-agenda.md`, `adversarial-review-2026-07-31.md`, `docs/measurement.md`,
+  `docs/oracle-ladder.md`, `docs/ui-frontend-handoff.md`)
+* **ADR 0003** is superseded in full by 0005 and quotes the figure as its stated
+  reason for a decision. An ADR is a historical record and should not be edited —
+  but it should carry a superseded banner pointing at the correction.
+
+Sorting these is a documentation pass, not a lint fix. Papering over it with 16
+inline markers would make the gate useless in exactly the files that discuss
+measurement most. **Reported on every run so the number cannot quietly grow.**
+
+**Action:** decide per file — annotate, delete, or mark superseded. 12 files.
 
 ---
 

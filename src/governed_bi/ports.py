@@ -127,8 +127,8 @@ class Embedder(Protocol):
     Error modes: a rate limit or a dead endpoint **raises**. The caller
     (``retrieve.facets``) converts that into ``ChannelState.failed`` and records
     it — it must never be silently absorbed into a low score, which is how a
-    rate-limited embedder published 69.9% schema-pick accuracy that re-measured
-    at 91.0%.
+    rate-limited embedder published a schema-pick accuracy that re-measured 21
+    points higher once quota was free.
 
     Performance: one call is one round trip for OpenAI and *one request per
     document* for Bedrock. Batching and caching are the caller's job;
