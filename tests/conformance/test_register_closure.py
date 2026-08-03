@@ -214,7 +214,16 @@ def test_every_citation_has_an_artifact_and_a_date() -> None:
 # ── the lint gates must run, and must fail on a violation ─────────────────────
 
 
-@pytest.mark.parametrize("tool", ["check_imports.py", "check_citations.py"])
+@pytest.mark.parametrize(
+    "tool",
+    [
+        "check_imports.py",
+        "check_citations.py",
+        "check_file_length.py",
+        "check_one_implementation.py",
+        "check_measurement_locality.py",
+    ],
+)
 def test_lint_gate_passes_on_a_clean_tree(tool: str) -> None:
     result = subprocess.run(
         [sys.executable, str(ROOT / "tools" / tool)],
@@ -223,6 +232,20 @@ def test_lint_gate_passes_on_a_clean_tree(tool: str) -> None:
         cwd=ROOT,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _gate(tool: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(ROOT / "tools" / tool)],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    )
+
+
+#: Every negative test writes here. One path, so a crashed test leaves at most one
+#: file behind and every gate's probe is findable by the same name.
+PROBE = ROOT / "src" / "governed_bi" / "register" / "_conformance_probe.py"
 
 
 def test_layering_gate_fires_on_a_third_party_import_in_register(tmp_path: Path) -> None:
@@ -247,12 +270,7 @@ RETIRED_LITERAL = "# recall drops 0.70 -> 0.35\n"
 
 
 def _citation_gate() -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, str(ROOT / "tools" / "check_citations.py")],
-        capture_output=True,
-        text=True,
-        cwd=ROOT,
-    )
+    return _gate("check_citations.py")
 
 
 def test_citation_gate_fires_on_a_retired_literal_in_live_code() -> None:
@@ -306,6 +324,162 @@ def test_citation_gate_tolerates_the_archive_but_counts_it() -> None:
         )
     finally:
         probe.unlink()
+
+
+# ── file length: the hard cap fails, the soft cap is published ────────────────
+
+
+def test_file_length_gate_fires_over_the_hard_cap() -> None:
+    """ADR 0005 §6 declared soft 400 / hard 800 "CI-enforced" and for a while
+    nothing enforced it, which is the same defect as v1's caller contract that was
+    documented and breached. v1 reached 17 files over 1,000 lines, one at 5,085, and
+    30% of its code lived in them — every one of those passed through 800 first.
+    """
+    PROBE.write_text("x = 0\n" * 801, encoding="utf-8")
+    try:
+        result = _gate("check_file_length.py")
+        assert result.returncode == 1
+        assert "_conformance_probe" in result.stderr
+    finally:
+        PROBE.unlink()
+
+
+def test_file_length_gate_publishes_a_soft_overrun_without_failing() -> None:
+    """The soft tier is a *tier*, not a warning nobody prints.
+
+    A soft cap that says nothing when it is exceeded cannot be told from a soft cap
+    that was never wired up — the same argument the archive tier in
+    ``check_citations.py`` rests on. So this asserts the printed output *moved*, not
+    merely that the run passed: one accepted overrun exists today
+    (``register/record.py``, a recorded decision), and the count is what makes a
+    second one visible.
+    """
+    before = _gate("check_file_length.py")
+    assert before.returncode == 0
+    baseline = before.stdout
+
+    PROBE.write_text("x = 0\n" * 500, encoding="utf-8")
+    try:
+        result = _gate("check_file_length.py")
+        assert result.returncode == 0, "the soft cap must never fail the run"
+        assert "_conformance_probe" in result.stdout
+        assert result.stdout != baseline, (
+            "the soft-cap count did not change, so this tier is a silent allowance "
+            "rather than a published one"
+        )
+    finally:
+        PROBE.unlink()
+
+
+# ── one implementation per concept ────────────────────────────────────────────
+
+
+def test_duplicate_concept_gate_fires_on_a_duplicate_top_level_name() -> None:
+    """v1 had two McNemars, two EX definitions, two temp-then-replace helpers (and
+    **none** of the three was durable, which is how the run ledger lost 16 of 17
+    records), and two ``LOW_CONFIDENCE_JOIN`` constants with different comparison
+    operators. With the layers parcelled to parallel agents, none of which can
+    import a module its neighbour has not written yet, a second implementation is
+    the default outcome rather than a slip — so the gate defaults to deny and this
+    asserts the deny actually fires.
+    """
+    PROBE.write_text("def gate_keys() -> None:\n    ...\n", encoding="utf-8")
+    try:
+        result = _gate("check_one_implementation.py")
+        assert result.returncode == 1
+        assert "_conformance_probe" in result.stderr
+        assert "gate_keys" in result.stderr
+    finally:
+        PROBE.unlink()
+
+
+def test_duplicate_concept_gate_fires_when_a_singleton_is_absent_from_its_home() -> None:
+    """The complement of the pending tier below, and the reason pending is safe.
+
+    Pending means "the module does not exist yet". Once it exists, the declared name
+    must be in it — otherwise a concept could be built somewhere else entirely while
+    the gate went on reporting it as scheduled work, which is a green tick over the
+    exact drift the table exists to prevent.
+    """
+    home = ROOT / "src" / "governed_bi" / "corpus" / "hash.py"
+    home.parent.mkdir(parents=True, exist_ok=True)
+    home.write_text("def something_else() -> None:\n    ...\n", encoding="utf-8")
+    try:
+        result = _gate("check_one_implementation.py")
+        assert result.returncode == 1
+        assert "corpus_content_hash" in result.stderr
+    finally:
+        home.unlink()
+        home.parent.rmdir()
+
+
+def test_duplicate_concept_gate_reports_a_pending_singleton_without_failing() -> None:
+    """A gate whose targets are unbuilt must not read as passing.
+
+    Most v2 layers do not exist yet, so most declared singletons are unenforceable
+    today. Failing on them would train people to disable the gate; skipping them
+    silently is worse, because **a pass and a silent skip print the same green
+    tick** — the argument that earns ``check_citations.py`` its archive count. So
+    this asserts both halves: the pending run passes *and* says how many concepts
+    are unenforced, and resolving one changes what is printed.
+    """
+    before = _gate("check_one_implementation.py")
+    assert before.returncode == 0, before.stdout + before.stderr
+    assert "PENDING" in before.stdout, (
+        "the run reports no pending singletons, so either every declared concept "
+        "has a home now or the tier prints nothing and is a silent skip"
+    )
+    baseline = before.stdout
+
+    home = ROOT / "src" / "governed_bi" / "corpus" / "hash.py"
+    home.parent.mkdir(parents=True, exist_ok=True)
+    home.write_text("def corpus_content_hash() -> None:\n    ...\n", encoding="utf-8")
+    try:
+        result = _gate("check_one_implementation.py")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.stdout != baseline, (
+            "resolving a pending singleton did not change the output, so the "
+            "pending count is not published and 'unenforced' is indistinguishable "
+            "from 'enforced and clean'"
+        )
+    finally:
+        home.unlink()
+        home.parent.rmdir()
+
+
+# ── measurement locality ──────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "rate = round(0.5, 2)\n",
+        'text = f"{0.5:.2f}"\n',
+        'text = "{:.1%}".format(0.5)\n',
+        'text = "%.3f" % 0.5\n',
+    ],
+    ids=["round", "fstring_spec", "str_format", "percent_format"],
+)
+def test_measurement_locality_gate_fires_on_formatting_outside_quantity(source: str) -> None:
+    """v1's rounding helpers turned an unmeasured quantity into ``0.0`` on the way
+    to a report: the value was honest right up to the last function that touched it.
+    The sibling incident from the same family is a ``:.3f`` on a ``None`` rate that
+    raised after the whole serve loop and before ``summary.json`` was written,
+    discarding hours of paid model calls to print a progress line.
+
+    Parametrised over all four detected constructs because they are four different
+    code paths in the checker, and a single case passing would leave three that
+    might never have been wired up. ``round(`` is checked as an AST call, not by
+    grep, precisely so that ``register/record.py`` and ``register/quantity.py`` can
+    go on quoting ``round(x or 0.0, n)`` in prose while explaining the rule.
+    """
+    PROBE.write_text(source, encoding="utf-8")
+    try:
+        result = _gate("check_measurement_locality.py")
+        assert result.returncode == 1
+        assert "_conformance_probe" in result.stderr
+    finally:
+        PROBE.unlink()
 
 
 # ── pending: needs the graph ───────────────────────────────────────────────────

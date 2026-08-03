@@ -235,6 +235,25 @@ class RetiredClaim:
 
 RETIRED_CLAIMS: tuple[RetiredClaim, ...] = (
     RetiredClaim(
+        pattern=r"15\.0{1,2}\s*[,/]\s*75\.0{1,2}",
+        observed='"Claude-Opus-4.8": (15.0, 75.0, 1.50)',
+        why="v1's Opus 4.8 price, 3x the published 5.00/25.00/0.50 "
+            "(platform.claude.com, read 2026-08-03). The reason it is here rather "
+            "than filed with the other stale prices: it was left wrong BY THE COMMIT "
+            "THAT FIXED THE ADJACENT ROW. 4567eeb, 'fix(cost): price the cached input "
+            "share, and use real prices', corrected gpt-5.6-luna from (2.0, 8.0) to "
+            "(0.20, 1.20, 0.02) and in the same hunk changed Opus 4.8 from "
+            "(15.0, 75.0) to (15.0, 75.0, 1.50) -- it added the cache rate and did "
+            "not check the other two. So this is a stronger instance than "
+            "check_imports' 'the fix never reached the adjacent copies': the fix "
+            "*edited* the adjacent copy and still left it 3x over, under a commit "
+            "message asserting real prices. Found 2026-08-03 while sourcing the v2 "
+            "price table, by an agent that went looking for the incident behind the "
+            "rule it was implementing.",
+        replaced_by="measure/price.py's PRICE_TABLE, where every row carries the date "
+                    "it was observed and the URL it was read from",
+    ),
+    RetiredClaim(
         pattern=r"0\.70.{0,40}0\.35|0\.35.{0,40}0\.70",
         observed="recall@3 0.70 vs BM25 0.35",
         why="routing recall@3 for embedding vs BM25. Wrong by 2.4x, and it was the "

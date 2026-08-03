@@ -16,23 +16,38 @@ any of it is parcelled out.
 
 ## 0. Two corrections this document forced
 
-### 0.1 `Measured[T]` belongs in `register/`, not `measure/`
+### 0.1 `Measured[T]` belongs in `register/`, not `measure/` · **done; the first argument for it was wrong**
 
 The plan had `Measured[T]` — the three-valued *measured / not_measured /
 not_applicable* wrapper that L-R1 requires everywhere — in `measure/quantity.py`,
-layer 3.
+layer 3. It now lives in `register/quantity.py`, layer 2.
 
-**It cannot live there.** `register/record.py` is layer 2 and declares the fields
-that must be three-valued. Layer 2 cannot import layer 3, so **the register cannot
-name the type of the thing it is declaring.** The field register would say "this
-field exists and absence is an error" while being structurally unable to say "and
-absence is representable in its value". That is precisely the gap that produced
-R1's 25 recurrences: a value whose absence had no representation, so `0` was used.
+**The reason I first gave was too strong, and it is worth recording as wrong**, since
+it is the kind of argument that sounds structural and is not. I wrote that layer 2
+"cannot name the type of the thing it is declaring". But `register/record.py` already
+had an `Absence` column with a `not_measured` member — it *could* declare
+three-valuedness, and did. So that argument does not carry the decision.
 
-`Measured[T]` is a *declaration of how absence is represented*. It is a generic
-dataclass with no dependencies. It goes in `register/quantity.py`, and
-`register/record.py` can then declare a field's three-valuedness in the same row
-as everything else about it.
+**The real reason, found by implementing it.** `missing_required()` is the presence
+test, and it checked `value is None`. `Measured.unmeasured("provider reported no
+token count")` is not `None` — so a required field carrying an **explicit
+non-measurement passed the presence test**. Introducing `Measured` reopened the exact
+hole the previous fix had closed, and the fix requires `record.py` to recognise the
+type, which requires importing it, which requires it to be in this layer or below.
+
+That makes three appearances of one shape:
+
+1. v1's `corpus_content_hash == "unknown"` comparing equal to itself, so two runs
+   with no recorded treatment passed comparability.
+2. `missing_required` checking key-presence only, while `project` writes every key.
+3. This one — created by the type introduced to prevent the class.
+
+Each fix was correct and each left the next instance reachable, because the defect is
+not any particular sentinel: **a check for absence has to know every way absence can
+be spelled.** Reducing that to one spelling, in one importable type, is the actual
+argument. `tests/conformance/test_quantity_presence.py` holds all three cases
+including the complement — a *measured* zero must still count as a value, or the fix
+gets reverted for being too strict.
 
 What stays in `measure/`: `population.py`, `stats.py`, `price.py`, `gates.py` —
 things that *compute*, not things that *declare*.
@@ -149,9 +164,19 @@ and none of them can add them for itself:
 - **file length**: soft 400 (warn), hard 800 (fail). ADR 0005 §6 declares it
   CI-enforced; nothing enforces it. v1 reached 17 files over 1,000 lines.
 - **duplicate concept**: one implementation per concept, one import name. v1 had
-  two McNemars, two EX definitions, and two `LOW_CONFIDENCE_JOIN` constants **with
-  different comparison operators**. With parcels running in parallel, two McNemars
-  is the *default* outcome, not a slip.
+  two McNemars (`eval/analysis.py:572`, `eval/power.py:338`) and two
+  `LOW_CONFIDENCE_JOIN` constants **with different comparison operators**. With
+  parcels running in parallel, two McNemars is the *default* outcome, not a slip —
+  and the gate proved it by catching a real collision within a day of being written:
+  `ports.Row` (`tuple[Any, ...]`, a database row) against `measure.Row`
+  (`Mapping[str, object]`, a recorded turn), two different types under one import
+  name. Renamed to `TurnRow`.
+
+  A third claim carried here from ADR 0005 §6 — "two EX definitions" — **could not be
+  sourced** and has been struck from both documents: v1 had one `execution_match` in
+  `eval/ex.py`, imported everywhere. It was found by an agent that went looking for
+  the incident behind a rule it was asked to enforce, which is the check the rest of
+  this section is asking for.
 
 ---
 

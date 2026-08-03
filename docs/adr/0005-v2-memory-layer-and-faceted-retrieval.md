@@ -1500,7 +1500,7 @@ files over 1,000 lines**.
 | constraint | value |
 |---|---|
 | file length | soft **400**, hard **800**, CI-enforced |
-| one implementation per concept | one import name. v1 had two McNemars, two EX definitions, two temp-then-replace helpers, and two `LOW_CONFIDENCE_JOIN` constants **with different comparison operators** |
+| one implementation per concept | one import name. v1 had two McNemars (`eval/analysis.py:572` and `eval/power.py:338`, both present at deletion), two temp-then-replace helpers, and two `LOW_CONFIDENCE_JOIN` constants **with different comparison operators** (source: the constant's own comment at `analyst/answer.py:33-48` in `2347ae3^` — `governance.py` used `<`, `viz/presenter.py` declared its own copy and used `<=`). Enforced by `tools/check_one_implementation.py`. *An earlier draft of this row also claimed "two EX definitions"; that could not be sourced — v1 had one `execution_match` in `eval/ex.py`, imported everywhere — and it has been removed.* |
 | no hand-maintained field lists | derive from one declared register (§4.1, §5) |
 | no knob reachable only from an eval CLI | |
 | no world-describing literal without a source | artifact path and date, in code and docs |

@@ -31,6 +31,15 @@ field declared :attr:`Absence.never`. The register is what makes this legible: f
 a ``never`` field ``None`` is a bug, and for the other two it is a value whose
 meaning is declared. That is the whole point of having the column.
 
+**And an unmeasured** :class:`~.quantity.Measured` **counts as absent as well.**
+Introducing that type reopened the same hole a third time:
+``Measured.unmeasured("provider reported no token count")`` is not ``None``, so a
+null check alone passed a required field that was carrying an explicit
+non-measurement. The value was honest; the gate reading it was not. This module
+imports :class:`~.quantity.Measured` to recognise that, which is the concrete reason
+that type lives in this layer — a presence test cannot check a type it cannot
+import.
+
 **What this register is not.** Not the *knob* register (:mod:`.knobs`).
 
 .. code-block:: text
@@ -45,6 +54,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Mapping
 
+from .quantity import Measured
 from .stages import FACET_STAGES, Stage
 
 __all__ = [
@@ -416,6 +426,18 @@ def missing_required(record: Mapping[str, Any]) -> frozenset[str]:
     are **not** checked: null is a legal value there, and the register is how a
     reader knows which is which.
 
+    **An unmeasured** :class:`~.quantity.Measured` **counts as missing too**, and that
+    clause is the third appearance of this same rubber-stamp shape in this project.
+    ``Measured.unmeasured("provider returned no token count")`` is not ``None``, so a
+    null check alone lets a required field pass while carrying an explicit
+    non-measurement — the value is honest and the gate reading it is not. The first
+    instance was v1's ``corpus_content_hash == "unknown"`` comparing equal to itself;
+    the second was this function checking key-presence only; this one was introduced
+    by adding :class:`~.quantity.Measured` and would have shipped with it.
+
+    That import is also the concrete reason :mod:`.quantity` is in this layer rather
+    than one above: a presence test cannot recognise a type it cannot import.
+
     ``tests/conformance`` asserts this returns empty **for a record produced by a
     real turn on every terminal path** — not for a fixture. That is the half v1
     skipped, and a refusal path is exactly where the eight stage-conditional fields
@@ -425,7 +447,13 @@ def missing_required(record: Mapping[str, Any]) -> frozenset[str]:
     for f in RECORD_REGISTER:
         if f.absence is not Absence.never:
             continue
-        if f.name not in record or record[f.name] is None:
+        if f.name not in record:
+            out.add(f.name)
+            continue
+        value = record[f.name]
+        if value is None:
+            out.add(f.name)
+        elif isinstance(value, Measured) and not value.is_measured:
             out.add(f.name)
     return frozenset(out)
 

@@ -233,3 +233,7 @@ tmp_agent_run/
 # from BIRD-Data-Obfuscation, and run to thousands of files — git is the source of
 # truth for the authored demo corpus, not for these.
 corpora/
+
+# Firecrawl CLI scrape cache. The CLI writes it into the repo root, and AGENTS.md
+# says the top level holds only README.md and configuration files.
+.firecrawl/

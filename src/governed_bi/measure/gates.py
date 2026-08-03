@@ -1,0 +1,239 @@
+"""Quotability: whether a comparison may be quoted, decided by executable gates.
+
+Every gate here is keyed on a **field name declared in**
+:data:`~governed_bi.register.record.GATE_CONDITIONS`, and
+:func:`_assert_every_declared_gate_is_implemented` fails the import if the two sets
+diverge in either direction. That closure is the whole point.
+
+v1's version of this had eight dead gates. Its comparability keys derived correctly
+from the knob list while the ledger *record* was built from a hand-written subset, so
+eight conditions were evaluated against fields that never arrived — and because this
+system's own rule reads absence as agreement, **every one of them passed**. A gate
+that cannot fail is worse than no gate, because the summary says the run was checked.
+
+Two structural choices follow from that:
+
+* **A gate returns three verdicts, not two.** ``pass`` / ``fail`` /
+  ``cannot_evaluate``. The third exists because "the field is missing" must not
+  collapse into either of the others: as a pass it is v1's incident, and as a fail it
+  makes every partial run unquotable and the gate gets switched off.
+  :class:`~governed_bi.register.quantity.Measured` carries the same distinction for the
+  same reason.
+* **A gate reports the population it ran over.** A rate of 0 over 0 turns is not a
+  pass — ADR 0005 §4.1 requires the count beside the rate, and
+  :class:`~.population.Population` carries it, so the verdict cannot be read without
+  it.
+
+**Refuse the comparison; do not warn.** ADR 0005 §4.1 is explicit. A warning on a run
+that took hours to produce is a warning that gets read as a formality.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+from typing import Callable, Mapping, Sequence
+
+from ..register.quantity import Measured
+from ..register.record import GATE_CONDITIONS
+from .population import Population
+
+__all__ = ["Verdict", "GateResult", "GATE_IMPLEMENTATIONS", "evaluate", "quotable"]
+
+
+class Verdict(str, Enum):
+    """Three-valued on purpose; see the module docstring."""
+
+    #: The condition held over a population large enough to have failed.
+    passed = "pass"
+    #: The condition was violated.
+    failed = "fail"
+    #: The inputs were not there. **Not a pass.** A comparison with a
+    #: ``cannot_evaluate`` gate is not quotable, because the check did not happen.
+    cannot_evaluate = "cannot_evaluate"
+
+
+@dataclass(frozen=True)
+class GateResult:
+    """One gate's outcome, with everything needed to audit it."""
+
+    field: str
+    condition: str
+    verdict: Verdict
+    observed: Measured[float]
+    population: str
+    detail: str = ""
+
+    def render(self) -> str:
+        return (
+            f"[{self.verdict.value:16s}] {self.field:22s} {self.observed.render(4)} "
+            f"over {self.population}"
+            + (f" -- {self.detail}" if self.detail else "")
+        )
+
+
+#: A gate takes the arm's turn records and returns its result.
+GateFn = Callable[[Population], GateResult]
+
+
+def _result(
+    field: str,
+    verdict: Verdict,
+    observed: Measured[float],
+    population: Population,
+    detail: str = "",
+) -> GateResult:
+    return GateResult(
+        field=field,
+        condition=GATE_CONDITIONS[field],
+        verdict=verdict,
+        observed=observed,
+        population=population.describe(),
+        detail=detail,
+    )
+
+
+def _zero_count_gate(field: str, counter: str) -> GateFn:
+    """A gate of the form "``counter`` is zero across the arm".
+
+    Factored because four of the six gates have this shape, and four hand-written
+    copies is four chances to invert a comparison — v1 shipped two
+    ``LOW_CONFIDENCE_JOIN`` constants whose operators disagreed.
+    """
+
+    def gate(arm: Population) -> GateResult:
+        counted = arm.count(counter)
+        if not counted.is_measured:
+            return _result(
+                field,
+                Verdict.cannot_evaluate,
+                Measured.unmeasured(counted.why),
+                arm,
+                f"{counter!r} was not recorded on every turn, so this gate did not run",
+            )
+        rate = arm.rate(counter)
+        if counted.value > 0:
+            return _result(
+                field, Verdict.failed, rate, arm, f"{counted.value} turn(s) with {counter!r}"
+            )
+        return _result(field, Verdict.passed, rate, arm)
+
+    return gate
+
+
+def _outcome_gate(arm: Population) -> GateResult:
+    """No turn classified ``crashed``.
+
+    The single most expensive v1 defect: a crash counted as a refusal contaminated
+    every arm-to-arm delta by a *different* amount, because arms do not crash at the
+    same rate. So this gate is on the classification, not on an error string.
+    """
+    return _zero_count_gate("outcome", "crashed")(arm)
+
+
+def _facet_channels_gate(arm: Population) -> GateResult:
+    """No channel state differs from its declared expectation — on turns that ran.
+
+    The wording matters and is the reason this is not a ``_zero_count_gate``. Eight
+    record fields are stage-conditional, and ``facet_channels`` is one: a
+    guard-blocked turn never runs the fan-out. Under a naive rate an **empty**
+    ``facet_channels`` reads as "no channel differed", i.e. as clean, on a turn where
+    no channel ran at all — absence reading as agreement, in the field added to stop
+    absence reading as agreement.
+
+    So the denominator is turns where the fan-out ran, and that count is published.
+    Zero such turns is :attr:`Verdict.cannot_evaluate`, never a pass.
+    """
+    ran = arm.restrict(lambda r: r.get("facet_channels") not in (None, [], {}), "fan-out ran")
+    if ran.n == 0:
+        return _result(
+            "facet_channels",
+            Verdict.cannot_evaluate,
+            Measured.unmeasured(f"no turn in {arm.describe()} ran the fan-out"),
+            arm,
+            "a degradation rate of 0 over 0 turns is not a pass",
+        )
+    return _zero_count_gate("facet_channels", "facet_degraded")(ran)
+
+
+def _context_hash_gate(arm: Population) -> GateResult:
+    """The delivery gate: the treatment actually differed between arms.
+
+    L-R2. v1 ran a ladder in which two arms received byte-identical context and
+    reported the difference between them as an effect. This gate is on
+    ``context_hash`` and not ``delivery_hash`` because the latter depends on which
+    tool calls the model chose to make, so a gate on it would conflate "the treatment
+    differs" with "the model behaved differently".
+
+    Evaluated per arm here — the cross-arm 95% comparison needs both arms and lives
+    in the caller that holds them, which is why this returns
+    :attr:`Verdict.cannot_evaluate` rather than inventing a single-arm proxy. A
+    single-arm approximation of a two-arm condition is how a gate ends up measuring
+    something adjacent to what it claims.
+    """
+    coverage = arm.coverage("context_hash")
+    if not coverage.is_measured or coverage.value < 1.0:
+        return _result(
+            "context_hash",
+            Verdict.cannot_evaluate,
+            coverage,
+            arm,
+            "context_hash is missing on some turns, so cross-arm distinctness cannot "
+            "be established",
+        )
+    return _result(
+        "context_hash",
+        Verdict.cannot_evaluate,
+        coverage,
+        arm,
+        "single-arm evaluation only: the >= 95% distinctness condition is a two-arm "
+        "comparison and must be evaluated by the caller holding both arms",
+    )
+
+
+GATE_IMPLEMENTATIONS: Mapping[str, GateFn] = {
+    "outcome": _outcome_gate,
+    "facet_channels": _facet_channels_gate,
+    "context_hash": _context_hash_gate,
+    "guardrail_errors": _zero_count_gate("guardrail_errors", "guardrail_error"),
+    "n_re_served": _zero_count_gate("n_re_served", "re_served"),
+    "negative": _zero_count_gate("negative", "negative_failed_open"),
+}
+
+
+def evaluate(arm: Population) -> tuple[GateResult, ...]:
+    """Run every declared gate over one arm, in declaration order."""
+    return tuple(GATE_IMPLEMENTATIONS[field](arm) for field in sorted(GATE_CONDITIONS))
+
+
+def quotable(arm: Population) -> tuple[bool, tuple[GateResult, ...]]:
+    """Whether this arm's numbers may be quoted, and every gate's result.
+
+    Both are returned because a bare ``False`` sends the reader to the code to find
+    out which gate refused, and a bare ``True`` hides that four gates could not run.
+    **``cannot_evaluate`` blocks quotation**: a check that did not happen is not a
+    check that passed.
+    """
+    results = evaluate(arm)
+    return all(r.verdict is Verdict.passed for r in results), results
+
+
+def _assert_every_declared_gate_is_implemented() -> None:
+    """Import-time closure across two layers, and the reason this module is testable.
+
+    Declared-but-unimplemented is v1's eight dead gates. Implemented-but-undeclared is
+    subtler and just as bad: a gate nothing declares is a check whose condition is not
+    in the register, so no reader of the register learns that it exists, and the field
+    it reads is not protected from removal.
+    """
+    declared, implemented = set(GATE_CONDITIONS), set(GATE_IMPLEMENTATIONS)
+    if declared != implemented:  # pragma: no cover - import-time guard
+        raise AssertionError(
+            "quotability gates out of closure: declared-not-implemented "
+            f"{sorted(declared - implemented)}, implemented-not-declared "
+            f"{sorted(implemented - declared)}. v1 shipped eight of the former and "
+            "every one of them passed."
+        )
+
+
+_assert_every_declared_gate_is_implemented()
