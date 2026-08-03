@@ -60,7 +60,7 @@ def unbuilt() -> frozenset[str]:
 #:
 #: Kept in sync by a conformance test rather than by hand-checking, because a
 #: declaration nothing verifies is the shape that let v1 carry two fields for a year.
-UNBUILT: frozenset[str] = frozenset({"B", "C", "D", "E", "F", "G"})
+UNBUILT: frozenset[str] = frozenset({"C", "E", "F", "G"})
 
 
 def needs(parcel: str) -> pytest.MarkDecorator:

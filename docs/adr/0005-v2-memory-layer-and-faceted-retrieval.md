@@ -355,23 +355,56 @@ on all eight types. Therefore: **a phase-boundary code guard strips and
 re-stamps every model-authored `governance` and `audit` block**, on all eight
 types, before any write reaches the corpus. Not a prompt instruction. Code.
 
-#### 1.6 Sanitization
+#### 1.6 The trust boundary — and why there is no corpus sanitization
 
-The word does not appear anywhere in draft 2, and v2 makes it more urgent, not
-less: it redistributes note content onto `summary`/`body` of **every** asset —
-the surfaces v1 never sanitized — and keeps `POST /corpus/edit`. v1's finding
-(L§4): *only notes were sanitized, so a column description was the cheaper
-poisoning vector.*
+**Superseded 2026-08-03.** Earlier drafts specified a default-deny sanitizer over
+every prose field. It was built, and then deleted. The reasoning that produced it
+was inherited rather than derived: v1's finding was that *only notes were
+sanitized, so a column description was the cheaper poisoning vector*, and each
+draft widened the coverage without ever asking whether the control belonged in this
+layer at all.
 
-| field class | policy |
+**The boundary, stated once, because several other decisions depend on it:**
+
+> **The corpus is trusted. The incoming question is not.**
+>
+> Corpus content is authored by this team's data engineers — directly, or by a
+> curator whose output they review before it is pinned. Internal artifacts are not
+> treated as an attack surface. Injection is checked **once**, at the analyst's
+> input, by ADR 0006's `guard`, and a poisoned question is **rejected** rather than
+> edited. Its blast radius is that one conversation; it cannot alter the corpus,
+> the index, or another caller's turn.
+
+Three consequences, each replacing a piece of what the sanitizer was doing:
+
+| what the sanitizer was for | where it actually belongs |
 |---|---|
-| `summary`, `body`, `rules`, `reliability.note` | **sanitized** — drop lines that open like instructions to the model, neutralise fence/heading markers, join surviving lines with a space (a newline inside a field escapes its indentation and lets curator prose open a top-level prompt section) |
-| `expression`, `on`, `sql` | **exempt, verbatim** — the generator copies these character for character; sanitizing mangles quoting that must round-trip |
-| conversation history | **exempt** — those are the user's own words and the engine's own answers; the guardrails, not the prompt, stop a self-injected turn |
+| prose that reads like an instruction to the model | **nowhere.** Governance is topology (ADR 0002): a fully persuaded analyst still reaches the database only through `check()`, so the worst case is a wrong answer, not an exfiltration. A bounded phrase list cannot beat a paraphrase anyway |
+| PII or secrets in corpus text | a different layer already: `register/record.py`'s `Redaction` column for the durable sink, and the routing index's exclusion of governance-excluded columns (ADR 0006 B10) |
+| a newline escaping a field's indentation and opening a top-level prompt section | **render time**, in `serve/context.py`, as **lossless escaping** — done where the prompt format is known and reversible, not as a lossy edit in the store |
 
-Field position decides, the same way it decides `rules` vs `body`. `rules` is
-the sharpest case: free text, model-authorable, rendered under a heading that
-literally instructs the model to honour it.
+**What is kept, with its reason corrected.** Identifier fields that become path
+components or filenames are validated against a character class — `\A[A-Za-z0-9_]+\Z`,
+per ADR 0006 §9. That is **not** an anti-poisoning measure and should not be
+described as one. It is accident prevention on a value that names a directory:
+`POST /corpus/edit` writes corpus content without a PR, so a mistyped field or a
+UI bug concatenating paths reaches the filesystem from a *trusted* author. A
+validator that refuses is cheap and cannot silently change meaning; a sanitizer
+that edits an identifier produces a name the database does not have, which is a
+**wrong answer** rather than a blocked one.
+
+**The specific defect the sanitizer introduced**, recorded because it is the shape
+this project keeps meeting: sanitization ran on `load`, so it altered what reached
+the model while `corpus_content_hash` — computed over the files on disk — did not
+move, and the phrase list was not a knob. **Editing that list would have changed
+every arm's delivered context while two runs continued to compare as the same
+treatment.** An identity that fails to identify, which is L-R2 and the
+`corpus_content_hash == "unknown"` defect in a new costume.
+
+**If the trust boundary ever changes** — a corpus fed by an external source, a
+tenant-authored corpus, an unreviewed automated writer — this section is void and
+the sanitizer question reopens. That is the trigger to watch for, and it is why the
+assumption is written here rather than left implicit.
 
 #### 1.7 What the seed must produce
 
@@ -1200,11 +1233,11 @@ unless the sink is mandatory.
 
 | block | source | rendered |
 |---|---|---|
-| `## Must honour` | `rules` of selected schemas + tables in context | verbatim, sanitized |
+| `## Must honour` | `rules` of selected schemas + tables in context | verbatim (corpus is trusted — §1.6) |
 | Schema context | every asset in `RetrievalResult` | **structural line always** (I3); **`body` if the asset was hit; nothing further if it was `pulled_in`** |
 | Reliability caveats | `reliability.suspect` | always, never budget-evicted |
 | Few-shots | `by_type["few_shot"]` | `body` (question + SQL) |
-| Conversation history | prior turns | verbatim, unsanitized |
+| Conversation history | prior turns | verbatim |
 
 Draft 2 never stated this, which left `read_body`'s purpose dangling and I2
 ambiguous. The rule is the one decided for §2: **hit ⇒ full; pulled in ⇒
@@ -1618,7 +1651,7 @@ what it actually is: the first module of the new system.
    the **current** scorer — not the run artifact, which predates `b6b7ee5`.
 6. **Asset schema + validation + CI** (§1): per-type `identifier_field`, the join
    ON digest, `governance` on every asset, the phase-boundary provenance guard,
-   sanitization, the file-length gate.
+   path-component validation (§1.6 / ADR 0006 §9), the file-length gate.
 7. **Seed** (§1.7) — deterministic summaries for every asset including
    `SchemaAsset`, deterministic `sample_values`. This is what makes the next
    three steps model-free.

@@ -16,8 +16,10 @@ reached the maintainer on 2026-08-03 as decisions to make. A tracker that report
 finished work as outstanding spends the attention it exists to direct — so a stale
 status here is a defect in this file, not a formatting detail.
 
-As of 2026-08-03 there are **no open items**. §29 and the five review items are
-closed; #30–#33 record what the maintainer decided.
+As of 2026-08-03 the open item is #36 (`join_id` needs a declared home before
+parcel C goes out). #8, #23, #34 and #35 are **void** — superseded by #37, which
+deleted corpus sanitization. #29 and the five earlier review items are closed;
+#30–#33 record what the maintainer decided.
 
 ---
 
@@ -124,16 +126,10 @@ serve config hash.
 reads "declared in `register.assets` beside the types they belong to" and lists
 them there. Verified 2026-08-03.
 
-## 8. `verbatim_fields`, not `sanitized_fields` · *Recorded*
+## 8. ~~`verbatim_fields`, not `sanitized_fields`~~ · **Superseded by #37 — deleted**
 
-ADR 0005 §1.6 describes the policy as a table of field classes. Implemented as
-**default-deny**: every string field is sanitized, and the exemptions are listed
-per type.
-
-v1 sanitized note text only, so a column *description* was the cheaper poisoning
-vector. Listing what is *exempt* means a new prose field is protected the moment
-it exists; listing what is *sanitized* means a new field is unprotected until
-someone remembers.
+The column and the sanitizer it served are gone. Corpus prose is trusted
+(ADR 0005 §1.6); there is no field-class exemption table.
 
 ## 9. `Channel.extraction` is a `Channel` member · *Recorded*
 
@@ -343,13 +339,11 @@ allowlist that defines what may execute as *empty*, and `None` contributes `None
 to the config hash. `UNSET` raises on truth-testing, so config resolution must
 supply them.
 
-## 23. `sample_values` is verbatim, not sanitized · *Recorded*
+## 23. ~~`sample_values` is verbatim, not sanitized~~ · **Superseded by #37 — deleted**
 
-Under default-deny it would have been sanitized — silently altering a code table,
-and moving `context_hash` for a reason unrelated to the corpus. Exempted, with the
-cost stated in the code: these values reach the model unfiltered, which is ADR
-0006 §6's recorded data-boundary gap. Sanitizing here would corrupt the data
-without closing the gap.
+There is no corpus sanitizer, so there is nothing to exempt. `sample_values`
+reach the model as authored; the data-boundary gap is ADR 0006 §6's, not a
+store-time edit.
 
 ## 24. `run_query` has no `Stage` member · **ADR needs updating**
 
@@ -531,3 +525,92 @@ ADR is still worth reading:
 
 0003 is the one to read: its central design was right and its packaging was wrong,
 which is why the type was deleted and the idea kept.
+
+---
+
+## 34. ~~Structural identifier fields must be `verbatim`, not sanitized~~ · **Superseded by #37**
+
+Wrong premise: it tuned exemptions for a sanitizer that should not exist.
+Path-component validation (accident prevention) stays; see #37. The missing
+`physical_name` character-class check noted under #37 remains open.
+
+## 35. ~~ADR 0005 §1.6's redaction rule is too narrow~~ · **Superseded by #37**
+
+Widening a phrase list for a control that was deleted. ADR 0005 §1.6 now states
+the trust boundary; there is no redaction rule to widen.
+
+## 36. `on_digest` / `join_id` needs a declared home before parcel C is handed out
+
+ADR 0005 §1.2 specifies the join identifier precisely and no parcel owns it. It is
+producer-side, so whichever of C (seed) or H (curator) needs it first will invent it —
+and then there are two, which for a *join identity* means two relationships between one
+table pair. That is the shape that cost v1 an edge in 33 of 57 schemas before the
+curator ran.
+
+**Action:** declare `corpus/identity.py` as its home and add a `SINGLETON_CONCEPTS` entry
+in `tools/check_one_implementation.py` **before** parcel C goes out. The pending tier
+exists exactly for this: a concept declared with a home and no implementation is
+reported, counted, and not fatal.
+
+---
+
+## 37. The trust boundary, and the deletion of corpus sanitization · *Maintainer decision, 2026-08-03*
+
+**Supersedes #34 and #35.** Both were answering corners of a question neither asked:
+*why sanitize at all?* The maintainer asked it, and the answer deleted a module.
+
+> **The corpus is trusted. The incoming question is not.**
+>
+> Corpus content is authored by this team's data engineers — directly, or by a curator
+> whose output they review before it is pinned. Internal artifacts are not an attack
+> surface. Injection is checked **once**, at the analyst's input, by ADR 0006's
+> `guard`, and a poisoned question is **rejected** rather than edited. Its blast radius
+> is that one conversation: it cannot alter the corpus, the index, or another caller's
+> turn.
+
+**How the requirement survived three drafts without being examined.** v1's finding was
+*only notes were sanitized, so a column description was the cheaper poisoning vector*.
+Every draft since widened the **coverage** and none questioned the **control**. I then
+spent two turns tuning it further — first proposing that structural fields be exempted
+(#34), then that the rule be widened from line-start to phrase-level (#35). Both were
+adjustments to a rule that should not have existed. Worth recording as a pattern:
+**inheriting a requirement and improving it is how a design keeps a decision nobody
+ever made.**
+
+**The three things the sanitizer was standing in for, and where each belongs**
+
+| purpose | actual home |
+|---|---|
+| prose that reads like an instruction | **nowhere.** Governance is topology (ADR 0002): a fully persuaded analyst still reaches the database only through `check()`, so the worst case is a wrong answer, not exfiltration. A bounded phrase list loses to a paraphrase regardless |
+| PII or secrets in corpus text | already elsewhere: `register/record.py`'s `Redaction` column for the durable sink, and ADR 0006 B10's exclusion from the routing index |
+| a newline escaping a field's indentation into a top-level prompt section | **render time**, `serve/context.py`, as **lossless escaping** where the format is known |
+
+**The defect it had actually introduced**, found while measuring the blast radius of
+deleting it: sanitization ran on `load`, so it altered what reached the model, while
+`corpus_content_hash` is computed over the **files on disk** and did not move — and the
+phrase list was not a knob (`grep -c sanitiz register/knobs.py` → 0). **Editing that
+list would have changed every arm's delivered context while two runs continued to
+compare as the same treatment.** L-R2, and the `corpus_content_hash == "unknown"`
+defect in a new costume. Deleting the sanitizer closes it; keeping it would have
+required making the phrase list a comparability knob.
+
+**What is kept, with its justification corrected rather than its code changed.**
+Identifier fields that become path components are validated against
+`\A[A-Za-z0-9_]+\Z` (ADR 0006 §9). That is **accident prevention, not an attack
+defence**, and B8 has been recategorised to say so: `POST /corpus/edit` writes without a
+PR, so a mistyped field or a UI bug concatenating paths reaches the filesystem from a
+*trusted* author. A validator that refuses cannot silently change meaning; a sanitizer
+that edits an identifier produces a name the database does not have — a wrong answer
+rather than a blocked one.
+
+**#34's original recommendation was wrong and is recorded as such.** It argued that
+`physical_name` should be `verbatim` because identifiers "already have a stronger
+protection". Verification showed `physical_name` has **no validation at all** — only
+`schema` and `id` do — so exempting it would have removed the only thing touching it.
+Under #37 the sanitizer goes away entirely, so the exemption is moot, but the missing
+validation is real and remains to be added.
+
+**The trigger to watch.** If the corpus is ever fed by an external source, authored by a
+tenant, or written by an unreviewed automated process, this decision is void and the
+sanitizer question reopens. That is why the assumption is written down instead of left
+implicit — it was implicit, and two turns of design were spent on the wrong premise.

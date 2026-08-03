@@ -1,0 +1,109 @@
+{
+  "_provenance": {
+    "artifact": "BIRD-Data-Obfuscation/eval_dataset/{train,test}_final.jsonl, field `sql_base`",
+    "commit_note": "sibling repository ../BIRD-Data-Obfuscation, read 2026-08-03",
+    "measured_on": "2026-08-03",
+    "extractor": "sqlglot 30.12.0, dialect=postgres, govern.functions.canonical_function_name",
+    "why": "ADR 0006 section 2 requires a not-too-narrow CI assertion against the gold SQL corpus. The corpus lives in a sibling repository, so the inventory is committed here with its provenance rather than read at test time -- a gate that silently skips when a sibling checkout is absent is a gate that does not exist."
+  },
+  "statements": 6743,
+  "unparsed": 0,
+  "star_projections": 1,
+  "natural_or_using_joins": 9,
+  "function_calls_by_canonical_name": {
+    "cast": 57441,
+    "and": 2783,
+    "count": 2167,
+    "if": 828,
+    "sum": 791,
+    "case": 740,
+    "nullif": 462,
+    "time_to_str": 230,
+    "max": 150,
+    "avg": 142,
+    "substring": 95,
+    "min": 68,
+    "or": 64,
+    "str_position": 32,
+    "extract": 26,
+    "round": 24,
+    "length": 18,
+    "replace": 16,
+    "trim": 16,
+    "lower": 9,
+    "current_timestamp": 8,
+    "date": 7,
+    "regexp_like": 7,
+    "row_number": 4,
+    "array_agg": 3,
+    "coalesce": 3,
+    "exists": 3,
+    "rank": 2,
+    "abs": 1,
+    "current_date": 1,
+    "group_concat": 1,
+    "dense_rank": 1
+  },
+  "covering_sample": [
+    {
+      "question_id": "1015",
+      "sql": "WITH \"fastest_lap_times\" AS (SELECT \"T1\".\"raceId\", \"T1\".\"fastestLapTime\", (CAST(SUBSTRING(\"T1\".\"fastestLapTime\" FROM 1 FOR POSITION(':' IN \"T1\".\"fastestLapTime\") - 1) AS DOUBLE PRECISION) * 60) + (CAST(SUBSTRING(\"T1\".\"fastestLapTime\" FROM POSITION(':' IN \"T1\".\"fastestLapTime\") + 1 FOR POSITION('.' IN \"T1\".\"fastestLapTime\") - POSITION(':' IN \"T1\".\"fastestLapTime\") - 1) AS DOUBLE PRECISION)) + (CAST(SUBSTRING(\"T1\".\"fastestLapTime\" FROM POSITION('.' IN \"T1\".\"fastestLapTime\") + 1) AS DOUBLE PRECISION) / NULLIF(1000, 0)) AS \"time_in_seconds\" FROM \"formula_1\".\"results\" AS \"T1\" WHERE NOT \"T1\".\"fastestLapTime\" IS NULL) SELECT \"T2\".\"name\" FROM \"formula_1\".\"races\" AS \"T2\" INNER JOIN \"formula_1\".\"circuits\" AS \"T3\" ON \"T2\".\"circuitId\" = \"T3\".\"circuitId\" INNER JOIN \"formula_1\".\"results\" AS \"T1\" ON \"T2\".\"raceId\" = \"T1\".\"raceId\" INNER JOIN (SELECT MIN(\"fastest_lap_times\".\"time_in_seconds\") AS \"min_time_in_seconds\" FROM \"fastest_lap_times\" INNER JOIN \"formula_1\".\"races\" AS \"T2\" ON \"fastest_lap_times\".\"raceId\" = \"T2\".\"raceId\" INNER JOIN \"formula_1\".\"circuits\" AS \"T3\" ON \"T2\".\"circuitId\" = \"T3\".\"circuitId\" WHERE \"T2\".\"name\" = 'Austrian Grand Prix') AS \"T4\" ON (CAST(SUBSTRING(\"T1\".\"fastestLapTime\" FROM 1 FOR POSITION(':' IN \"T1\".\"fastestLapTime\") - 1) AS DOUBLE PRECISION) * 60) + (CAST(SUBSTRING(\"T1\".\"fastestLapTime\" FROM POSITION(':' IN \"T1\".\"fastestLapTime\") + 1 FOR POSITION('.' IN \"T1\".\"fastestLapTime\") - POSITION(':' IN \"T1\".\"fastestLapTime\") - 1) AS DOUBLE PRECISION)) + (CAST(SUBSTRING(\"T1\".\"fastestLapTime\" FROM POSITION('.' IN \"T1\".\"fastestLapTime\") + 1) AS DOUBLE PRECISION) / NULLIF(1000, 0)) = \"T4\".\"min_time_in_seconds\" WHERE \"T2\".\"name\" = 'Austrian Grand Prix'"
+    },
+    {
+      "question_id": "1031",
+      "sql": "SELECT DISTINCT CAST(EXTRACT(YEAR FROM CURRENT_TIMESTAMP) AS INT) - CAST(EXTRACT(YEAR FROM CAST(\"t2\".\"birthday\" AS TIMESTAMP)) AS INT) AS \"age\" FROM \"european_football_2\".\"Player_Attributes\" AS \"t1\" INNER JOIN \"european_football_2\".\"Player\" AS \"t2\" ON \"t1\".\"player_api_id\" = \"t2\".\"player_api_id\" WHERE TO_CHAR(CAST(\"t1\".\"date\" AS TIMESTAMP), 'YYYY') >= '2013' AND TO_CHAR(CAST(\"t1\".\"date\" AS TIMESTAMP), 'YYYY') <= '2015' AND \"t1\".\"sprint_speed\" >= 97"
+    },
+    {
+      "question_id": "1116",
+      "sql": "SELECT \"player_name\" FROM (SELECT \"player_name\", \"height\", DENSE_RANK() OVER (ORDER BY \"height\" DESC NULLS LAST) AS \"rank\" FROM \"european_football_2\".\"Player\") WHERE \"rank\" = 1"
+    },
+    {
+      "question_id": "1118",
+      "sql": "SELECT \"player_name\" FROM \"european_football_2\".\"Player\" WHERE CAST((CURRENT_DATE - CAST(\"birthday\" AS DATE)) AS DOUBLE PRECISION) / 365 >= 35"
+    },
+    {
+      "question_id": "728",
+      "sql": "SELECT \"colour\".\"colour\" AS \"EyeColor\", COUNT(\"superhero\".\"id\") AS \"Count\", RANK() OVER (ORDER BY COUNT(\"superhero\".\"id\") DESC NULLS LAST) AS \"PopularityRank\" FROM \"superhero\".\"superhero\" INNER JOIN \"superhero\".\"colour\" ON \"superhero\".\"eye_colour_id\" = \"colour\".\"id\" INNER JOIN \"superhero\".\"publisher\" ON \"superhero\".\"publisher_id\" = \"publisher\".\"id\" WHERE \"publisher\".\"publisher_name\" = 'Marvel Comics' GROUP BY \"colour\".\"colour\""
+    },
+    {
+      "question_id": "730",
+      "sql": "SELECT \"superhero_name\" FROM \"superhero\".\"superhero\" AS \"T1\" WHERE EXISTS(SELECT 1 FROM \"superhero\".\"hero_power\" AS \"T2\" INNER JOIN \"superhero\".\"superpower\" AS \"T3\" ON \"T2\".\"power_id\" = \"T3\".\"id\" WHERE \"T3\".\"power_name\" = 'Super Strength' AND \"T1\".\"id\" = \"T2\".\"hero_id\") AND EXISTS(SELECT 1 FROM \"superhero\".\"publisher\" AS \"T4\" WHERE \"T4\".\"publisher_name\" = 'Marvel Comics' AND \"T1\".\"publisher_id\" = \"T4\".\"id\")"
+    },
+    {
+      "question_id": "train_1563",
+      "sql": "SELECT SUM(ROUND(CAST(\"T2\".\"quantityOrdered\" AS DECIMAL) * CAST(\"T2\".\"priceEach\" AS DECIMAL), 2)) / COUNT(\"T3\".\"orderNumber\") FROM \"car_retails\".\"products\" AS \"T1\" INNER JOIN \"car_retails\".\"orderdetails\" AS \"T2\" ON \"T1\".\"productCode\" = \"T2\".\"productCode\" INNER JOIN \"car_retails\".\"orders\" AS \"T3\" ON \"T2\".\"orderNumber\" = \"T3\".\"orderNumber\" WHERE \"T1\".\"productVendor\" = 'Exoto Designs' AND TO_CHAR(CAST(\"T3\".\"orderDate\" AS TIMESTAMP), 'YYYY') = '2005'"
+    },
+    {
+      "question_id": "train_3081",
+      "sql": "SELECT LOWER(\"T3\".\"country\") FROM \"cars\".\"price\" AS \"T1\" INNER JOIN \"cars\".\"production\" AS \"T2\" ON \"T1\".\"ID\" = \"T2\".\"ID\" INNER JOIN \"cars\".\"country\" AS \"T3\" ON \"T3\".\"origin\" = \"T2\".\"country\" WHERE ABS(\"T1\".\"price\" - 44274.40748) < 0.002"
+    },
+    {
+      "question_id": "train_3654",
+      "sql": "SELECT CAST(SUM(CASE WHEN \"T1\".\"Keyword\" = 'cancer' THEN 1 ELSE 0 END) AS REAL) / COUNT(\"T1\".\"Id\"), (ARRAY_AGG(\"T2\".\"Name\" ORDER BY \"T2\".\"PaperId\", \"T2\".\"AuthorId\"))[1], (ARRAY_AGG(\"T2\".\"Affiliation\" ORDER BY \"T2\".\"PaperId\", \"T2\".\"AuthorId\"))[1] FROM \"authors\".\"Paper\" AS \"T1\" INNER JOIN \"authors\".\"PaperAuthor\" AS \"T2\" ON \"T1\".\"Id\" = \"T2\".\"PaperId\""
+    },
+    {
+      "question_id": "train_4735",
+      "sql": "SELECT CAST(COUNT(CASE WHEN CAST(REPLACE(TRIM('$' FROM \"T1\".\"total_gross\"), ',', '') AS REAL) > 100000000 THEN \"T1\".\"movie_title\" ELSE NULL END) AS REAL) * 100 / NULLIF(COUNT(\"T1\".\"movie_title\"), 0) FROM \"disney\".\"movies_total_gross\" AS \"T1\" INNER JOIN \"disney\".\"director\" AS \"T2\" ON \"T1\".\"movie_title\" = \"T2\".\"name\" WHERE \"T2\".\"director\" = 'Gary Trousdale'"
+    },
+    {
+      "question_id": "train_5993",
+      "sql": "SELECT SUBSTRING(\"email\" FROM POSITION('@' IN \"email\") + 1 FOR LENGTH(\"email\") - POSITION('@' IN \"email\")) AS \"ym\" FROM \"books\".\"customer\" GROUP BY SUBSTRING(\"email\" FROM POSITION('@' IN \"email\") + 1 FOR LENGTH(\"email\") - POSITION('@' IN \"email\")) ORDER BY COUNT(*) DESC NULLS LAST LIMIT 1"
+    },
+    {
+      "question_id": "train_8408",
+      "sql": "SELECT \"River\", STRING_AGG(\"Province\", ',' ORDER BY \"Province\") FROM \"mondial_geo\".\"geo_river\" GROUP BY \"River\" HAVING COUNT(DISTINCT \"Country\") > 1"
+    },
+    {
+      "question_id": "train_870",
+      "sql": "SELECT CAST(SUM(COALESCE(CASE WHEN \"T3\".\"gpa\" IS NULL OR TRIM(CAST(\"T3\".\"gpa\" AS TEXT)) IN ('', 'NULL', 'null') THEN 0 WHEN CAST(\"T3\".\"gpa\" AS TEXT) ~ '^[+-]?[0-9]*\\.?[0-9]+([eE][+-]?[0-9]+)?$' THEN CAST(\"T3\".\"gpa\" AS DOUBLE PRECISION) ELSE 0 END, 0)) / NULLIF(COUNT(\"T1\".\"student_id\"), 0) AS REAL) FROM \"cs_semester\".\"RA\" AS \"T1\" INNER JOIN \"cs_semester\".\"prof\" AS \"T2\" ON \"T1\".\"prof_id\" = \"T2\".\"prof_id\" INNER JOIN \"cs_semester\".\"student\" AS \"T3\" ON \"T1\".\"student_id\" = \"T3\".\"student_id\" WHERE \"T2\".\"first_name\" = 'Ogdon' AND \"T2\".\"last_name\" = 'Zywicki'"
+    },
+    {
+      "question_id": "train_906",
+      "sql": "SELECT CAST(AVG(COALESCE(CASE WHEN \"T2\".\"gpa\" IS NULL OR TRIM(CAST(\"T2\".\"gpa\" AS TEXT)) IN ('', 'NULL', 'null') THEN 0 WHEN CAST(\"T2\".\"gpa\" AS TEXT) ~ '^[+-]?[0-9]*\\.?[0-9]+([eE][+-]?[0-9]+)?$' THEN CAST(\"T2\".\"gpa\" AS DOUBLE PRECISION) ELSE 0 END, 0)) AS REAL), MAX(\"T2\".\"f_name\"), MAX(\"T2\".\"l_name\") FROM \"cs_semester\".\"RA\" AS \"T1\" INNER JOIN \"cs_semester\".\"student\" AS \"T2\" ON \"T1\".\"student_id\" = \"T2\".\"student_id\" WHERE \"T1\".\"salary\" = 'high' AND \"T1\".\"capability\" = 5 GROUP BY \"T2\".\"student_id\""
+    },
+    {
+      "question_id": "train_9183",
+      "sql": "SELECT \"T1\".\"first_name\", \"T1\".\"last_name\" FROM \"movie_3\".\"customer\" AS \"T1\" INNER JOIN (SELECT \"customer_id\", COUNT(*) AS \"num_days\" FROM (SELECT *, CAST((CAST(\"days\" AS DATE) - CAST((\"rn\" || ' days') AS INTERVAL)) AS DATE) AS \"results\" FROM (SELECT \"customer_id\", \"days\", ROW_NUMBER() OVER (PARTITION BY \"customer_id\" ORDER BY \"days\") AS \"rn\" FROM (SELECT DISTINCT \"customer_id\", DATE(\"rental_date\") AS \"days\" FROM \"movie_3\".\"rental\")) AS \"sub1\") AS \"sub2\" GROUP BY \"customer_id\", \"results\" HAVING COUNT(*) = 7) AS \"A\" ON \"T1\".\"customer_id\" = \"A\".\"customer_id\""
+    }
+  ]
+}

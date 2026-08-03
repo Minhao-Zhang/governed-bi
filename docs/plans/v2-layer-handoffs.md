@@ -85,7 +85,7 @@ ports ── register ── measure
 | **A** | `measure/` + the two missing CI gates | **now** | — | pure computation over declared tables; no DB, no model, no network |
 | **B** | `govern/` | **now** | — | ADR 0006 is a complete spec including the bypass list it must close; testable with a SQL string and nothing else |
 | **C** | `datasource/` + `corpus/seed.py` | **now** | needs Postgres access | produces the seeded corpus everything downstream consumes; measurable with zero model calls |
-| **D** | `corpus/` (schema, store, hash, sanitize) | **now** | — | the asset types and their validation; file I/O and dataclasses |
+| **D** | `corpus/` (schema, store, hash, identity) | **now** | — | the asset types and their validation; file I/O and dataclasses |
 | **E** | `retrieve/` | after **D** | corpus asset types | the largest self-contained algorithmic piece |
 | **F** | `serve/` | after A–E | everything | **do not parcel** — see §7 |
 | **G** | `eval/` | after **F** | a working serve path | |
@@ -259,11 +259,14 @@ def seed(introspection: Introspection, schema: str) -> tuple[list[Asset], list[P
 
 | file | what it holds |
 |---|---|
+| `corpus/identity.py` | path-component validation (`\A...\Z`); column id derivation |
 | `corpus/schema.py` | the eight asset dataclasses: `summary`, `body`, `rules`, tags |
 | `corpus/validate.py` | summary ≤ 250 chars; identifier present; tag rule satisfied |
 | `corpus/store.py` | `CorpusStore` adapter over YAML; per-item error isolation |
 | `corpus/hash.py` | `corpus_content_hash` — **one** implementation |
-| `corpus/sanitize.py` | default-deny redaction driven by `register/assets.py` |
+
+There is **no** corpus sanitizer. ADR 0005 §1.6 / decision #37: the corpus is
+trusted; injection is checked once on the incoming question by `govern.guard`.
 
 **Traps**
 
@@ -273,14 +276,13 @@ def seed(introspection: Introspection, schema: str) -> tuple[list[Asset], list[P
   clue why**. The opposite failure is equally real: a silent skip turns "a corpus
   that lost half its assets" into "a corpus that merely looks small", and this
   project has already published a result on top of that.
-- **Sanitisation is default-deny.** Every string field is sanitized; the exemptions
-  are `verbatim_fields` in `register/assets.py`. v1 sanitized note text only, so a
-  column *description* was the cheaper poisoning vector.
 - **`corpus_content_hash` must never have an "unknown" sentinel.** v1's compared
   equal to itself, so two runs with no recorded treatment passed comparability.
 - **Summary is the only indexed field (I1) and body is what the system uses on hit
   (I2).** A validator that lets a 4,000-character summary through has broken the
   index; one that requires a body has broken the seed.
+- **Path-component validation is accident prevention, not anti-poisoning** (B8 /
+  ADR 0006 §9). Identifier fields that become directories are refused, never edited.
 
 ---
 

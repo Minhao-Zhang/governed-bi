@@ -52,7 +52,7 @@ sets. One test per item, each demonstrating the v1 chain and its refusal.
 | **B5** | **Case folding.** Postgres folds unquoted identifiers, so `customerid` clears a `CustomerID` allowlist — and quoting the model's spelling then sends the engine a column that does not exist |
 | **B6** | **Reference shapes.** Three-part `schema.table.column` slipped past the column layer (the key *is* in the lake-wide allowlist) and the table layer (which inspects only FROM sources). Siblings: star projections, `NATURAL JOIN`, bare columns in a mixed base+derived scope, and a bare name matching a `suspect` column in **any** in-scope base (leftmost-table resolution binds it to the decoy) |
 | **B7** | **The agent grew its own authorisation set.** `inspect_schema` wrote straight into the licensed set, so inspecting anything authorised it — reaching into unrelated schemas in a pooled corpus |
-| **B8** | **`asset.schema` escaped the corpus root.** The write directory is derived from it while `is_valid_id` guards only the asset id. The regex must be `\A...\Z`: Python's `$` also matches before a trailing newline, so `"beer_factory\n"` passes a `^...$` validator that then names a directory. **v2 makes this worse** — `SchemaAsset.name` is a first-class field, `POST /corpus/edit` is retained, and 0005 §1.5 acknowledges the corpus is partly model-authored |
+| **B8** | **`asset.schema` escaped the corpus root.** The write directory is derived from it while `is_valid_id` guards only the asset id. The regex must be `\A...\Z`: Python's `$` also matches before a trailing newline, so `"beer_factory\n"` passes a `^...$` validator that then names a directory. **Recategorised 2026-08-03: this is accident prevention, not an attack defence.** 0005 §1.6 fixes the trust boundary — the corpus is trusted, the incoming question is not — so the threat here is not a hostile author. It is that `POST /corpus/edit` writes without a PR, so a mistyped field or a UI bug concatenating paths reaches the filesystem from a *trusted* author. The validator is kept because it is cheap and refuses rather than edits; only its justification changed. `SchemaAsset.name` being first-class and the corpus being partly model-authored are reasons the *path* is reachable, not reasons to distrust the author |
 | **B9** | **A guessable `thread_id` was a handle on another caller's paused clarification**, which embeds their question. Namespacing is a mitigation, not authentication |
 | **B10** | **The routing index embedded governance-excluded PII columns** while the picker summary filtered them — two definitions of "excluded" that drifted, because the caller contract was documentation rather than a type |
 
@@ -620,11 +620,12 @@ above the statement — 0005 owns retrieval and the graph.
    rescues; if the answer is small, hard-refusing everything is simpler and
    strictly safer.
 5. **Does the corpus itself pass the gate?** `FewShotAsset.sql`,
-   `MetricAsset.expression` and `JoinAsset.on` are sanitization-exempt and
-   copied verbatim, and few-shot bodies are exemplars the model imitates. If
-   gold-derived SQL contains `SELECT *` or `NATURAL JOIN`, the corpus teaches
-   statements §4 refuses. Run every corpus SQL field through PARSE / FUNCTIONS /
-   BINDING at corpus-validation time and report the conflict rate.
+   `MetricAsset.expression` and `JoinAsset.on` are copied into the prompt as
+   authored (the corpus is trusted — ADR 0005 §1.6), and few-shot bodies are
+   exemplars the model imitates. If gold-derived SQL contains `SELECT *` or
+   `NATURAL JOIN`, the corpus teaches statements §4 refuses. Run every corpus SQL
+   field through PARSE / FUNCTIONS / BINDING at corpus-validation time and report
+   the conflict rate.
 
 ---
 

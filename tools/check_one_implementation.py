@@ -157,13 +157,28 @@ def top_level_names(tree: ast.Module) -> list[tuple[str, int]]:
 
 
 def main() -> int:
-    if not PKG.exists():
-        print(f"no package at {PKG}", file=sys.stderr)
+    # ``--root DIR`` scans a different tree, and it exists so this gate can be tested
+    # without writing into ``src/``.
+    #
+    # Not a test hook bolted on: the two tests that previously covered the singleton
+    # tiers used ``src/governed_bi/corpus/hash.py`` as a scratch file, chosen because
+    # that path was expected to stay absent. Parcel D built it, and from then on the
+    # suite **overwrote and then deleted real source code** — the ``rmdir`` in their
+    # ``finally`` also raised, because ``corpus/`` was no longer empty. A test that
+    # writes to a production path is a test that will eventually overwrite production
+    # code; the only durable fix is for the tool to be pointable at a tree the test owns.
+    argv = sys.argv[1:]
+    pkg = PKG
+    if "--root" in argv:
+        pkg = Path(argv[argv.index("--root") + 1]).resolve() / "src" / "governed_bi"
+
+    if not pkg.exists():
+        print(f"no package at {pkg}", file=sys.stderr)
         return 1
 
-    files = [p for p in sorted(PKG.rglob("*.py")) if not SKIP_DIRS & set(p.parts)]
+    files = [p for p in sorted(pkg.rglob("*.py")) if not SKIP_DIRS & set(p.parts)]
     if not files:
-        print(f"no modules under {PKG} — refusing to pass vacuously", file=sys.stderr)
+        print(f"no modules under {pkg} — refusing to pass vacuously", file=sys.stderr)
         return 1
 
     #: name -> [(module relative to the package, line)]
@@ -171,7 +186,7 @@ def main() -> int:
     problems: list[str] = []
 
     for path in files:
-        rel = path.relative_to(PKG).as_posix()
+        rel = path.relative_to(pkg).as_posix()
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         except SyntaxError as err:
@@ -205,7 +220,7 @@ def main() -> int:
     for concept in SINGLETON_CONCEPTS:
         sites = where.get(concept.name, [])
         elsewhere = sorted({m for m, _ in sites if m != concept.module})
-        if not (PKG / concept.module).exists():
+        if not (pkg / concept.module).exists():
             if elsewhere:
                 problems.append(
                     f"src/governed_bi/{elsewhere[0]}: {concept.name!r} is declared to "

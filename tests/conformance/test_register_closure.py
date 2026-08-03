@@ -234,9 +234,9 @@ def test_lint_gate_passes_on_a_clean_tree(tool: str) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def _gate(tool: str) -> subprocess.CompletedProcess[str]:
+def _gate(tool: str, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(ROOT / "tools" / tool)],
+        [sys.executable, str(ROOT / "tools" / tool), *args],
         capture_output=True,
         text=True,
         cwd=ROOT,
@@ -393,58 +393,120 @@ def test_duplicate_concept_gate_fires_on_a_duplicate_top_level_name() -> None:
         PROBE.unlink()
 
 
-def test_duplicate_concept_gate_fires_when_a_singleton_is_absent_from_its_home() -> None:
-    """The complement of the pending tier below, and the reason pending is safe.
+def _singleton_concepts() -> tuple[object, ...]:
+    """The gate's own ``SINGLETON_CONCEPTS``, imported rather than restated.
 
-    Pending means "the module does not exist yet". Once it exists, the declared name
-    must be in it — otherwise a concept could be built somewhere else entirely while
-    the gate went on reporting it as scheduled work, which is a green tick over the
-    exact drift the table exists to prevent.
+    Importing the tool is safe: its module level is declarations only and ``main()`` is
+    behind ``__name__``. Restating the table here would be the very defect the gate
+    exists to catch — two tables that must agree — and it would show up as these tests
+    passing against a set that no longer matches the tool's.
     """
-    home = ROOT / "src" / "governed_bi" / "corpus" / "hash.py"
-    home.parent.mkdir(parents=True, exist_ok=True)
-    home.write_text("def something_else() -> None:\n    ...\n", encoding="utf-8")
-    try:
-        result = _gate("check_one_implementation.py")
-        assert result.returncode == 1
-        assert "corpus_content_hash" in result.stderr
-    finally:
-        home.unlink()
-        home.parent.rmdir()
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "_check_one_impl", ROOT / "tools" / "check_one_implementation.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return tuple(module.SINGLETON_CONCEPTS)
 
 
-def test_duplicate_concept_gate_reports_a_pending_singleton_without_failing() -> None:
+#: A minimal tree in which every declared singleton resolves.
+#:
+#: One-line bodies, because the gate is AST-only and does not care what a definition
+#: contains. Built from the tool's table so adding a concept cannot leave these tests
+#: asserting against a stale set.
+_SINGLETON_HOMES: dict[str, str] = {}
+for _s in _singleton_concepts():
+    _name, _module = _s.name, _s.module  # type: ignore[attr-defined]
+    _body = (
+        f"class {_name}: ..."
+        if _name[:1].isupper()
+        else f"def {_name}() -> None: ..."
+    )
+    # Append rather than assign: two concepts declared in one module must both appear,
+    # or this fixture would silently drop one and the "absent from its home" test would
+    # pass for the wrong reason.
+    _SINGLETON_HOMES[_module] = (_SINGLETON_HOMES.get(_module, "") + _body + "\n").lstrip("\n")
+
+
+def _synthetic_tree(tmp: Path, modules: dict[str, str]) -> Path:
+    """A throwaway ``src/governed_bi/`` tree for pointing a gate at.
+
+    **No test writes into the real ``src/`` to exercise a gate.** The two tests below
+    used to, with ``corpus/hash.py`` as a scratch file — chosen because that path was
+    expected to stay absent. Parcel D built it, and from then on the suite
+    ``write_text``-ed over real source and then ``unlink``-ed it; the ``rmdir`` in the
+    ``finally`` raised as well, because ``corpus/`` was no longer empty. Five
+    downstream tests failed with ``ModuleNotFoundError``, and because
+    ``pytest-randomly`` shuffles order, *which* five varied per run.
+
+    The lesson is general enough to be worth stating: **a test that writes to a
+    production path is a test that will eventually overwrite production code.** An
+    assumption that a path stays absent is an assumption about the future, and this
+    one expired. So the gate takes ``--root`` and the test owns the tree.
+    """
+    pkg = tmp / "src" / "governed_bi"
+    for rel, body in modules.items():
+        path = pkg / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    return tmp
+
+
+def test_duplicate_concept_gate_fires_when_a_singleton_is_absent_from_its_home(
+    tmp_path: Path,
+) -> None:
+    """A declared concept whose module exists but does not define it is fatal.
+
+    Distinct from the pending tier: pending means "not built yet", which is scheduled
+    work. This means "built somewhere else", which is the drift the table exists to
+    catch — and reporting it as pending would be a green tick over exactly that.
+    """
+    homes = dict(_SINGLETON_HOMES)
+    homes["measure/stats.py"] = "def something_else() -> None: ..."  # mcnemar is missing
+    root = _synthetic_tree(tmp_path, homes)
+    result = _gate("check_one_implementation.py", "--root", str(root))
+    assert result.returncode == 1
+    assert "mcnemar" in result.stderr
+
+
+def test_duplicate_concept_gate_reports_a_pending_singleton_without_failing(
+    tmp_path: Path,
+) -> None:
     """A gate whose targets are unbuilt must not read as passing.
 
-    Most v2 layers do not exist yet, so most declared singletons are unenforceable
-    today. Failing on them would train people to disable the gate; skipping them
-    silently is worse, because **a pass and a silent skip print the same green
-    tick** — the argument that earns ``check_citations.py`` its archive count. So
-    this asserts both halves: the pending run passes *and* says how many concepts
-    are unenforced, and resolving one changes what is printed.
-    """
-    before = _gate("check_one_implementation.py")
-    assert before.returncode == 0, before.stdout + before.stderr
-    assert "PENDING" in before.stdout, (
-        "the run reports no pending singletons, so either every declared concept "
-        "has a home now or the tier prints nothing and is a silent skip"
-    )
-    baseline = before.stdout
+    Asserts the count *moves*, not merely that the run is green: a silent skip and a
+    clean pass produce the same exit code, and half this repo's retired numbers have
+    that shape. Same argument as the archive tier in ``check_citations.py``.
 
-    home = ROOT / "src" / "governed_bi" / "corpus" / "hash.py"
-    home.parent.mkdir(parents=True, exist_ok=True)
-    home.write_text("def corpus_content_hash() -> None:\n    ...\n", encoding="utf-8")
-    try:
-        result = _gate("check_one_implementation.py")
-        assert result.returncode == 0, result.stdout + result.stderr
-        assert result.stdout != baseline, (
-            "resolving a pending singleton did not change the output, so the "
-            "pending count is not published and 'unenforced' is indistinguishable "
-            "from 'enforced and clean'"
-        )
-    finally:
-        home.unlink()
-        home.parent.rmdir()
+    This used to run against the real tree, where ``corpus_content_hash`` was the last
+    unbuilt singleton. Parcel D built it, so the real tree now reports ``0 pending``
+    and the premise died — which is itself the argument for a synthetic tree: a test
+    whose premise is a transient property of the repository expires without warning.
+    """
+    built = dict(_SINGLETON_HOMES)
+    everything = _gate(
+        "check_one_implementation.py", "--root", str(_synthetic_tree(tmp_path / "all", built))
+    )
+    assert everything.returncode == 0, everything.stdout + everything.stderr
+    assert "0 pending" in everything.stdout
+
+    missing = dict(built)
+    del missing["corpus/hash.py"]
+    partial = _gate(
+        "check_one_implementation.py", "--root", str(_synthetic_tree(tmp_path / "partial", missing))
+    )
+    assert partial.returncode == 0, (
+        "pending is not fatal; failing the build for scheduled work trains people to "
+        "disable the gate"
+    )
+    assert "PENDING" in partial.stdout
+    assert partial.stdout != everything.stdout, (
+        "the pending count did not change, so the tier is a silent skip rather than a "
+        "reported one"
+    )
 
 
 # ── measurement locality ──────────────────────────────────────────────────────

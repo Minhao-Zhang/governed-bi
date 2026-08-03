@@ -19,8 +19,17 @@ dependencies = [
     "pyyaml>=6.0",
     # In-memory property graph + Steiner-tree join planning (BIRD scale).
     "networkx>=3.3",
-    # SQL parsing for the AST column-allowlist guardrail (analyst L3).
-    "sqlglot>=25.0",
+    # SQL parsing for every layer of the governance stack (ADR 0006).
+    # Upper bound pins the generation, and it is a security pin, not hygiene: the
+    # function allowlist in `govern/functions.py` is keyed on sqlglot expression
+    # CLASSES and matched on their canonical names, both of which move across
+    # majors — `json_agg` parses to `exp.JSONArrayAgg`, whose canonical name is
+    # `J_S_O_N_ARRAY_AGG`, and `exp.And`/`exp.Or`/`exp.Exists` are `exp.Func`
+    # subclasses in 30.x. A silent major upgrade would change what the allowlist
+    # matches with no test failing on the way past. `sqlglot_version` is also a
+    # comparability knob (ADR 0006 §13), and `govern.functions` raises at import if
+    # the installed major is not the one the list was enumerated against.
+    "sqlglot>=30.12,<31",
     # --- DB connectors (Postgres + Redshift both ride psycopg; drivers lazy-imported) ---
     "psycopg[binary]>=3.1",
     # --- HTTP JSON API (governed_bi.api) the frontend consumes ---

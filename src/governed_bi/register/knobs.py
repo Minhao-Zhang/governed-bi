@@ -51,6 +51,7 @@ __all__ = [
     "KNOB_REGISTER",
     "knob_names",
     "defaults",
+    "knob_default",
     "comparability_keys",
     "resume_drift_keys",
     "config_hash_keys",
@@ -301,6 +302,32 @@ def defaults() -> Mapping[str, Any]:
     """Every knob at its declared default. ``UNSET`` values are included as
     ``UNSET`` — a caller that reads one must handle it, not default it."""
     return {k.name: k.default for k in KNOB_REGISTER}
+
+
+def knob_default(name: str) -> Any:
+    """One knob's declared default, by name. ``KeyError`` for an undeclared knob.
+
+    **Here rather than in each consumer**, because "look up the declared default of
+    one knob" was independently written twice within a day — once in ``corpus/``
+    and once in ``govern/`` — which is precisely the outcome
+    ``tools/check_one_implementation.py`` predicts when layers are parcelled to
+    agents who cannot import each other's unwritten modules. The consumer that
+    needs a *bound* still owns the comparison; what it must not own is a second
+    answer to what the knob says.
+
+    The raise is the useful half. A typo'd name in a consumer would otherwise ship a
+    plausible literal that no knob backs, so the config hash would not move when the
+    real knob did — and a threshold outside the comparability hash is v1's
+    ``serve_config_hash`` defect.
+
+    ``UNSET`` is returned as ``UNSET``, never resolved to a number. A knob that
+    ships uncalibrated must be handled at the call site: ``Unset.__bool__`` raises
+    so it cannot be defaulted through a truth test.
+    """
+    for knob in KNOB_REGISTER:
+        if knob.name == name:
+            return knob.default
+    raise KeyError(f"{name!r} is not a declared knob")
 
 
 def comparability_keys() -> frozenset[str]:

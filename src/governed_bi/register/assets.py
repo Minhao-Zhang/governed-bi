@@ -1,10 +1,9 @@
 """The eight asset types, and one row of policy each.
 
-Four tables that were four separate documents in v1 are columns of one row here:
-which field must appear in ``summary``, how the index derives an asset's schema
-tag, its per-type retrieval budget, and which of its fields are exempt from
-sanitization. They were separate, they drifted, and two of the drifts were
-incidents:
+Tables that were separate documents in v1 are columns of one row here: which field
+must appear in ``summary``, how the index derives an asset's schema tag, and its
+per-type retrieval budget. They were separate, they drifted, and two of the drifts
+were incidents:
 
 * ``budgets.get(cls, 0)`` silently dropped any type nobody remembered to
   budget — which is why ``NegativeExampleAsset`` was structurally unreachable
@@ -123,18 +122,6 @@ class AssetPolicy:
     #: asset ids ranked by hybrid score.
     budget: Budget
 
-    #: Fields exempt from sanitization, rendered verbatim.
-    #:
-    #: **Default-deny:** every other string field is sanitized. v1 sanitized note
-    #: text only, so a column *description* was the cheaper poisoning vector — the
-    #: corpus is writable through an HTTP route and partly model-authored, and the
-    #: prompt tells the model this content is authoritative.
-    #:
-    #: The exemptions are SQL the generator copies character for character.
-    #: Sanitizing them mangles quoting that must round-trip, and v1 has a recorded
-    #: instance of ``COUNT("Air Carriers"."Code")`` breaking that way.
-    verbatim_fields: tuple[str, ...]
-
     #: Whether this type carries ``rules: list[str]`` — binding prose injected
     #: under ``## Must honour``.
     #:
@@ -151,7 +138,6 @@ def _p(
     identifier_fields: tuple[str, ...],
     tag_rule: TagRule,
     budget: Budget,
-    verbatim_fields: tuple[str, ...] = (),
     bears_rules: bool = False,
 ) -> AssetPolicy:
     return AssetPolicy(
@@ -159,7 +145,6 @@ def _p(
         identifier_fields=identifier_fields,
         tag_rule=tag_rule,
         budget=budget,
-        verbatim_fields=verbatim_fields,
         bears_rules=bears_rules,
     )
 
@@ -185,31 +170,18 @@ ASSET_REGISTER: Mapping[AssetType, AssetPolicy] = {
         identifier_fields=("physical_name",),
         tag_rule=TagRule.parent_table,
         budget=30,
-        # sample_values is database-derived, not curator prose. Sanitizing it would
-        # silently alter a code table — and, because sampled values render into
-        # context, would move context_hash for a reason unrelated to the corpus.
-        #
-        # The cost of the exemption is stated rather than hidden: these values pass
-        # to the model unfiltered, so a value containing instruction-shaped text is
-        # an indirect-injection surface. That is ADR 0006 §6's recorded gap (data
-        # returned by the database bypasses the input guard), and it is closed at
-        # the data boundary or not at all. Sanitizing here would corrupt the data
-        # without closing it.
-        verbatim_fields=("sample_values",),
     ),
     AssetType.join: _p(
         AssetType.join,
         identifier_fields=("left_table", "right_table"),
         tag_rule=TagRule.left_table,
         budget=5,
-        verbatim_fields=("on",),
     ),
     AssetType.metric: _p(
         AssetType.metric,
         identifier_fields=(),
         tag_rule=TagRule.base_table,
         budget=5,
-        verbatim_fields=("expression",),
     ),
     AssetType.term: _p(
         AssetType.term,
@@ -222,7 +194,6 @@ ASSET_REGISTER: Mapping[AssetType, AssetPolicy] = {
         identifier_fields=(),
         tag_rule=TagRule.own_schema,
         budget=3,
-        verbatim_fields=("sql",),
     ),
     AssetType.negative_example: _p(
         AssetType.negative_example,
