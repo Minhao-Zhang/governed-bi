@@ -9,8 +9,12 @@ same defect class as the ones the register layer exists to prevent — a contrac
 prose that nothing can import and nobody can check — so it is written down before
 any of it is parcelled out.
 
-**Status: proposed.** Two corrections in §0 must be settled before the skeleton
-`.py` files are generated, because both move code between layers.
+**Status: in progress.** `ACCEPTED = {B, D, E}` in `tests/contracts.py`; `C`, `F` and `G`
+carry code that no design holder has signed off. §7 and §8 are **rework** plans as of
+2026-08-03 — both parcels were built and self-graded before they had contracts, and both
+came back with a defect a contract would have caught. Every parcel that had one came back
+sound. The critical path is now **C**: with no working connector, no governed query can
+execute anywhere, so F's and G's contract tests cannot be written honestly.
 
 ---
 
@@ -84,11 +88,11 @@ ports ── register ── measure
 |---|---|---|---|---|
 | **A** | `measure/` + the two missing CI gates | **now** | — | pure computation over declared tables; no DB, no model, no network |
 | **B** | `govern/` | **now** | — | ADR 0006 is a complete spec including the bypass list it must close; testable with a SQL string and nothing else |
-| **C** | `datasource/` + `corpus/seed.py` | **now** | needs Postgres access | produces the seeded corpus everything downstream consumes; measurable with zero model calls |
+| **C** | `datasource/` + `corpus/seed.py` | **now, and it is the critical path** | a reachable Postgres (have one) | **Postgres only** (#40). `PostgresConnector` is 69 lines with five stub raises, so nothing in the tree can execute a governed query — F and G both wait on it |
 | **D** | `corpus/` (schema, store, hash, identity) | **now** | — | the asset types and their validation; file I/O and dataclasses |
 | **E** | `retrieve/` | after **D** | corpus asset types | the largest self-contained algorithmic piece |
-| **F** | `serve/` | after A–E | everything | **do not parcel** — see §7 |
-| **G** | `eval/` | after **F** | a working serve path | |
+| **F** | `serve/` | **rework** — see §7 | **C**, for an honest end-to-end test | code exists, not accepted; five localised defects, sound topology |
+| **G** | `eval/` | **rework** — see §8 | **C** and **F-1** | code exists, not accepted; the grader executes outside governance |
 | **H** | `curate/` | after **D** | corpus asset types | its own project, not a layer |
 
 **Four parcels can start immediately; one engineer per parcel; A/B/C/D are
@@ -325,60 +329,145 @@ Nine files, the largest algorithmic parcel.
 
 ---
 
-## 7. Parcel F — `serve/`: do not hand this out
+## 7. Parcel F — `serve/`
 
-**Status: F3 built** (``agent_core`` + tools + identity-bound ``ask_user`` HITL;
-clarifications land in ``ServeState.clarifications`` + messages). G1 eval has
-cleared ``UNBUILT`` (see §8).
+**Status: code exists and is not accepted.** 21 files, 2,876 lines, written without a
+design-holder contract and graded by its own implementer. `tests/serve/test_turn_contract.py`
+now exists — 12 specifications, strict xfail, bodies unwritten. `ACCEPTED` does not
+contain `F`.
 
-`serve/` is where every other parcel's assumptions meet. Handing it to a seventh
-engineer means the integration is done by the person with the least context on all
-six inputs.
+**This is a rework plan, not a build plan**, and the distinction matters for who does it.
+An adversarial review with independent reproduction found the graph wiring, the reducers,
+the HITL interrupt path and the record projection **sound**. What is wrong is five
+localised judgement calls, all of one kind. So this is not a rewrite, and whoever picks it
+up should be told that plainly — a rework brief that reads like a condemnation gets
+answered with a rewrite, and the good parts get thrown away with the bad.
 
-Its own traps are LangGraph-specific and are the reason a skill read is mandatory
-before touching it:
+### The one rule all five violations share
 
-- **Five facets writing one state key in one super-step raises
-  `InvalidUpdateError`** — it does not overwrite. Concurrently-written channels
-  need a declared reducer. ADR 0005's first draft asserted this shape was
-  "concurrency safe"; it is not, and a review agent found it only by reading the
-  LangGraph skill.
-- **No `from __future__ import annotations`** in modules loaded by file path.
-- Fan-out buys **latency, not cost**: `max(branches)` wall-clock,
-  `sum(branches)` spend. That is why the two facets calling no model are the cheap
-  ones.
+> **The record must describe what happened, not what was supposed to happen.**
 
-| file | what it holds |
-|---|---|
-| `serve/state.py` | the state schema **and its reducers** |
-| `serve/graph.py` | node registration and the fan-out edges |
-| `serve/nodes/` | `gate`, `facets`, `route`, `agent`, `stamp` |
-| `serve/tools.py` | `read_body`, `inspect_schema`, `sample_rows`, `run_query`, `ask_user` |
-| `serve/context.py` | rendering, the eviction order, `context_budget_chars` |
+Every v1 number this project retired died of that: a field reporting the *configuration*
+rather than the *observation*, so a broken run and a clean run produced identical
+artifacts. `serve/` reintroduced it five times, and in three of those the field had been
+added specifically to prevent it.
 
-`tests/conformance/test_register_closure.py` already carries the acceptance test
-for this parcel as `xfail(strict=True)`: **a real turn on every terminal path
-writes every required field.** Strict, so it fails the suite the moment it starts
-passing and someone has to turn it into a real test.
+### The five
+
+| # | what it does now | why it is wrong | the fix |
+|---|---|---|---|
+| **F-1** | `outcome: answered` on a turn where **every** SQL attempt was refused; `execution.terminal: "answered"` beside `passed: false` | `has_sql` is derived from the tool-call *arguments*, so producing a string counts as producing an answer. A governed refusal recorded as an answer is the crash-counted-as-refusal inversion that retired the pre-2026-07-25 numbers, pointing the other way | terminal state derives from the **ledger**, not from whether a string exists. A turn with no passing attempt is a refusal or a decline |
+| **F-2** | `_channels_for` returns `expected_channel_state(...)` verbatim, so a facet with **no index and no model** reports `{'lexical': 'ran', 'semantic': 'ran'}` | this is the field's entire purpose inverted. `register/facets.py` is three-valued (`ran` / `not_configured` / `failed`) *precisely* so "should have run and did not" is expressible | observe, then compare to the declaration. A facet that could not consult an index has a **failed** channel |
+| **F-3** | nothing writes `facet_degraded`; `channel_anomaly` and `is_degraded` have **zero call sites outside tests** | so `measure/gates.py` passes vacuously — `[pass] facet_channels 0.0000 over 'stub' n=3 (fan-out ran)` on an arm with no index. A gate whose input nobody produces is worse than an absent gate, because the summary says the run was checked | call `is_degraded` per facet per channel and write the result |
+| **F-4** | `pass_two_retrieve` scores `facet_example` on `lexical`, which the same record declares `not_configured` | ADR 0005 §2 is explicit that `register/facets.py` decides a facet's channels and `retrieve/` must never decide locally. `facets.py` has the `Channel.lexical in FACET_CHANNELS[stage]` guard; `pass_two` does not | add the guard. It is one condition, and its absence let a few-shot outrank an entity hit on a channel that never ran |
+| **F-5** | `stamp.py` substitutes `{"outcome": "error_failed_open"}` for an **absent** `guard`; `agent_core.py` writes literal `input_tokens: 0` for a real model call; `tools.py` defaults an absent corpus to `analyst_corpus_from_keys(allowed=())` | three flavours of L-R1. The first **fabricates a security event** — that sentinel means the guard ran, errored, and let the question through, and `register/record.py` gates on it. The second is a measured zero that `measure/price.py` will bill as free, which is v1's two-ladders-with-no-USD failure. The third records "the corpus was never wired up" as `r_column_not_allowed` with `guardrail_errors: 0` | `Measured.unmeasured(why)` for the token count; absent guard stays absent; the corpus default **raises** — production `check()` already does, and `serve/` must not catch it and substitute |
+
+### What must not be touched
+
+The graph topology, the channel reducers, `ask_user` identity binding, and
+`register/record.py`'s projection. The review drove a real turn through the whole path
+— real seed, real BM25 index, route, resolve, connect, assemble, `create_agent`, stamp —
+and `missing_required` came back clean with a real `context_hash`. That part works.
+
+Three runtime `pytest.xfail("waiting on Agent B")` escape hatches in
+`tests/serve/test_pass_two_and_context.py` must go. None is currently taken, which is
+exactly why they are dangerous: they will silently absorb a regression.
+
+### The dependency, and it is hard
+
+**F-1's contract test cannot be honest until `PostgresConnector` exists.** A test asserting
+"a turn whose SQL was refused is not `answered`" needs a turn whose SQL could otherwise
+have *succeeded*; with no working connector there is no such turn, and the test would pass
+for the wrong reason. Same for the end-to-end test, whose predecessor was satisfied by
+`STUB_ANSWER` precisely because nothing real was reachable.
+
+So: **implement `PostgresConnector` first** (parcel C), then write F's contract bodies,
+then fix F. Doing F before C produces a green suite that proves nothing, which is the state
+this parcel is already in.
 
 ---
 
-## 8. Parcels G and H
+## 8. Parcel G — `eval/`
 
-**G — `eval/`** (`harness`, `arms`, `grade`, `report`, `oracle`).
+**Status: code exists and is not accepted.** 7 files, 876 lines. `ACCEPTED` does not
+contain `G`. `tests/eval/test_grading_contract.py` now exists — 7 specifications, strict
+xfail, bodies unwritten. The pre-existing `tests/eval/test_eval_contract.py` is
+**implementer-authored** and claims in its header to be written "against the plan, not the
+impl"; that claim is unverifiable and it is the authorship pattern `tests/contracts.py`
+exists to prevent. It may stay as internal tests; it is not an acceptance criterion.
 
-**Status: G1 built** (CI harness calling ``compile_graph``; oracle ceiling;
-cross-arm ``context_hash`` ≥95% gate in ``report``; ``UNBUILT`` is empty). G2
-(BIRD multi-arm ladder on ``../BIRD-Data-Obfuscation``) remains.
+### The blocking defect
 
-Needs a working serve path. Its trap list is the whole of `lessons-from-v1.md`
-§1–§5; the single most expensive one: **a crash counted as a refusal**, which
-contaminated every arm-to-arm delta by a different amount, because arms do not
-crash at the same rate.
+`harness.py` calls `connector.execute(str(generated_sql))` **with no `govern.prepare`**.
+So the grader re-runs a statement governance refused, grades it against gold, and reports:
 
-**H — `curate/`** (see §0.2). The largest piece and the origin of this rewrite. Not
-specified here; it needs its own ADR before it is parcelled, because "ask better
-and more detailed questions" is a design question, not an implementation one.
+```
+[tool] run_query refused: r_table_not_licensed
+outcome: answered   generated_sql: SELECT count(*) FROM customers
+-> project_turn -> {"correct": true, "grade_detail": "match"}
+```
+
+Two separate things are wrong and both must be fixed.
+
+**The grader must not be able to execute at all.** A component that reaches the database on
+a path `check()` does not guard is the topology breach ADR 0002's surviving principle
+forbids — *governance is topology, not trust*. Fixing the one call site leaves the next one
+reachable; the defect is that `eval/` **can** execute. That is why G's contract asserts it
+structurally, not just behaviourally.
+
+**A refused turn has no result to grade.** It is not an incorrect answer and not a correct
+one. It is a refusal, and it belongs in its own stratum — which `register/stages.py`
+already provides.
+
+This is also **why #39a hid for a day**: the out-of-band re-execution meant the numbers
+looked fine while the intersection of "govern permits" and "the connector executes" was
+empty. The `scripted` arm's `ex=1.00` was produced with **zero** successful in-turn
+executions. Every EX this harness has ever reported is void.
+
+### The absence coercions
+
+Four lines, each turning "we did not record this" into "this did not happen", feeding
+exactly the fields the quotability gates read:
+
+| line | now | must be |
+|---|---|---|
+| `harness.py:107` | `str(... or ... or "crashed")` — a missing outcome **counts as a crash** | `not_measured`; a population containing one is not quotable |
+| `harness.py:160` | `int(record.get("guardrail_errors") or 0)` | absent ≠ zero |
+| `harness.py:161` | `int(state.get("n_re_served") or ... or 0)` | absent ≠ zero |
+| `harness.py:176` | `bool(record.get("facet_degraded") or False)` | absent ≠ clean — and nothing writes it (F-3), so this made the degradation gate vacuous on every run |
+
+`measure/gates.py` already distinguishes `cannot_evaluate` from `pass`. The harness must
+hand it the distinction rather than resolving it, because resolving it is the resolution
+the gate exists to refuse.
+
+### What is sound
+
+The harness/arms/oracle/report scaffolding, and `report.py`'s `Measured` discipline —
+every quantity goes through it, `unmeasured` on all four cannot-evaluate branches. It had
+exactly one bypass, an f-string `.4f` on the line that prints the gate's own verdict, and
+that is fixed. The cross-arm `context_hash` ≥95% distinctness gate works and correctly
+refused a 3-question probe run.
+
+### The property that would have caught all of it at once
+
+**An arm with zero successful in-turn executions must not publish an EX.** Not a patch on
+any of the above — a single precondition that makes the whole class visible, and the
+execution count must be *recorded* so the refusal is checkable rather than inferred. It is
+in G's contract as `test_an_arm_with_zero_successful_executions_is_not_quotable`.
+
+### Order
+
+After C (a connector) and after F-1 (a truthful terminal state), because grading a turn
+requires the turn's outcome to mean something. G's own rework is small; its dependencies
+are not.
+
+---
+
+## 8b. Parcel H — `curate/`
+
+See §0.2. The largest piece and the origin of this rewrite. Not specified here: it needs
+its own ADR first, because *"ask better and more detailed questions"* is a design question,
+not an implementation one.
 
 ---
 
