@@ -746,3 +746,55 @@ renormalisation by active channels, IDF global by *structure* since `restrict_to
 `_idf` by reference), and `corpus/seed.py` (model-free under a socket-raiser,
 deterministic across runs, validator-clean). 682 lines is genuinely enough for the former
 because the register carries the tables.
+
+## 40. Postgres only · *Maintainer decision, 2026-08-03*
+
+SQLite is out of scope. This settles #39a, and it settles it by removing the conflict
+rather than adapting around it.
+
+**Why it resolves the namespace collision outright.** `govern` licenses
+`{schema}.{physical_name}` (ADR 0006 §4, deliberately — a pooled corpus repeats table
+names across schemas). SQLite has no schema namespace and rejects the qualified form, so
+the intersection of "govern permits" and "the connector executes" was empty. Postgres
+*has* schemas. The licensing key is native to it, and neither of the two options I was
+about to put up — a qualification adapter in the connector, or licensing resolved against
+`connector.dialect` — is needed. Both were ways of maintaining a translation between two
+namespaces; there is now one namespace.
+
+**The second win is bigger than the first, and it retires a defect class.** The review
+found `sqlite.py`'s error taxonomy inverted in *both* directions: a 4-marker positive
+regex over exception **message text**, defaulting to `ConnectionError`, so
+`no such function` and a bad arity — the commonest generation errors on obfuscated
+schemas — landed in the crash stratum, while a corrupt database file landed in the
+wrong-answer stratum. That was not sloppiness; it is what SQLite forces, because it
+reports faults as prose.
+
+Postgres reports them as **SQLSTATE**. `42xxx` is syntax error or access-rule violation
+(a query fault), `08xxx` is a connection exception, `53xxx` insufficient resources,
+`57xxx` operator intervention. So the distinction that decides whether a turn lands in the
+crash stratum or the wrong-answer stratum — the distinction whose miscoding retired the
+pre-2026-07-25 numbers — becomes a **lookup on a structured code** instead of a regex over
+English. String-matching an error message can always be wrong in both directions; a
+SQLSTATE class cannot.
+
+**What this costs, stated because it is not free.** There is now **no working connector at
+all**: `sqlite.py` was the only one that executed a query, and `postgres.py` is 69 lines
+with five stub raises. Every test that needs a database now needs a live Postgres. The
+obfuscated BIRD databases are Postgres-only anyway (`pg_rename_decoy:5435`), so this is
+the direction the eval data already forced; but a developer without a server will see
+skips, and those skips must print their reason rather than vanish — the same rule as every
+other tier in this repo.
+
+**Parcel C rolls back to unaccepted, and that is my error rather than the
+implementer's.** I wrote C's acceptance contract against `SqliteConnector`; it references
+SQLite six times. It passed cleanly and it was measuring a connector that is now out of
+scope. Worth recording as its own lesson: **a contract can be honest, thorough, passed,
+and still be about the wrong subject.** Authoring it before the implementation protects
+against the implementer grading themselves; it does not protect against the design holder
+scoping it wrong. `ACCEPTED` is now `{B, D, E}`.
+
+**Actions.** Rewrite `tests/datasource/test_seed_contract.py` against Postgres, with the
+error-taxonomy tests keyed on SQLSTATE rather than message text. Delete `sqlite.py`.
+Implement `PostgresConnector` for real. Pin the `sqlglot` dialect to `postgres`
+unambiguously in ADR 0006 §13 — which also settles that B1's XML-export family is
+in scope rather than hypothetical. `psycopg 3.3.4` is already a dependency.

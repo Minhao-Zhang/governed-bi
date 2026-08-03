@@ -79,7 +79,14 @@ def unbuilt() -> frozenset[str]:
 #: Adding a package cannot silently move a parcel into ``ACCEPTED``. Only editing
 #: this line can, which is the point: acceptance is a person's judgement, and it
 #: should cost a deliberate edit.
-ACCEPTED: frozenset[str] = frozenset({"B", "C", "D", "E"})
+#: ``C`` was accepted on 2026-08-03 and rolled back the same day. Not for a defect in
+#: its code: the maintainer scoped the project to **Postgres only**, and C's acceptance
+#: contract was written by the design holder against ``SqliteConnector``. So it exercised
+#: a connector that is now out of scope, while the only in-scope one — ``postgres.py`` —
+#: is 69 lines with five stub raises. The contract measured the wrong thing, which is a
+#: design-holder error rather than an implementer one, and worth leaving visible: a
+#: contract can be honest, thorough, passed cleanly, and still be about the wrong subject.
+ACCEPTED: frozenset[str] = frozenset({"B", "D", "E"})
 
 
 def accepted_but_absent() -> frozenset[str]:
