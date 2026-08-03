@@ -16,10 +16,8 @@ reached the maintainer on 2026-08-03 as decisions to make. A tracker that report
 finished work as outstanding spends the attention it exists to direct — so a stale
 status here is a defect in this file, not a formatting detail.
 
-As of 2026-08-03 the open item is #36 (`join_id` needs a declared home before
-parcel C goes out). #8, #23, #34 and #35 are **void** — superseded by #37, which
-deleted corpus sanitization. #29 and the five earlier review items are closed;
-#30–#33 record what the maintainer decided.
+As of 2026-08-03: #36 (`on_digest` / `join_id`) and the #37 `physical_name`
+validation leftover are **done**. #8, #23, #34 and #35 remain void under #37.
 
 ---
 
@@ -531,26 +529,19 @@ which is why the type was deleted and the idea kept.
 ## 34. ~~Structural identifier fields must be `verbatim`, not sanitized~~ · **Superseded by #37**
 
 Wrong premise: it tuned exemptions for a sanitizer that should not exist.
-Path-component validation (accident prevention) stays; see #37. The missing
-`physical_name` character-class check noted under #37 remains open.
+Path-component validation (accident prevention) stays; see #37. **`physical_name`
+character-class validation landed with the same `\A[A-Za-z0-9_]+\Z` rule.**
 
 ## 35. ~~ADR 0005 §1.6's redaction rule is too narrow~~ · **Superseded by #37**
 
 Widening a phrase list for a control that was deleted. ADR 0005 §1.6 now states
 the trust boundary; there is no redaction rule to widen.
 
-## 36. `on_digest` / `join_id` needs a declared home before parcel C is handed out
+## 36. ~~`on_digest` / `join_id` needs a declared home~~ · **Done 2026-08-03**
 
-ADR 0005 §1.2 specifies the join identifier precisely and no parcel owns it. It is
-producer-side, so whichever of C (seed) or H (curator) needs it first will invent it —
-and then there are two, which for a *join identity* means two relationships between one
-table pair. That is the shape that cost v1 an edge in 33 of 57 schemas before the
-curator ran.
-
-**Action:** declare `corpus/identity.py` as its home and add a `SINGLETON_CONCEPTS` entry
-in `tools/check_one_implementation.py` **before** parcel C goes out. The pending tier
-exists exactly for this: a concept declared with a home and no implementation is
-reported, counted, and not fatal.
+Landed in `corpus/identity.py` with `SINGLETON_CONCEPTS` entries. Operand/conjunct
+order and case/whitespace independence are tested in
+`tests/corpus/test_join_identity.py`.
 
 ---
 
@@ -607,10 +598,151 @@ rather than a blocked one.
 `physical_name` should be `verbatim` because identifiers "already have a stronger
 protection". Verification showed `physical_name` has **no validation at all** — only
 `schema` and `id` do — so exempting it would have removed the only thing touching it.
-Under #37 the sanitizer goes away entirely, so the exemption is moot, but the missing
-validation is real and remains to be added.
+Under #37 the sanitizer goes away entirely, so the exemption is moot.
+**`physical_name` validation landed** with the same path-component character class
+(refuse, never edit).
 
 **The trigger to watch.** If the corpus is ever fed by an external source, authored by a
 tenant, or written by an unreviewed automated process, this decision is void and the
 sanitizer question reopens. That is why the assumption is written down instead of left
 implicit — it was implicit, and two turns of design were spent on the wrong premise.
+
+---
+
+## 38. Parcels F and G were graded by their own implementer · **Open; F and G go back to `UNBUILT`**
+
+An implementer reported B, C, D, E, F and G complete, with `tests/contracts.py` reading
+`UNBUILT = frozenset()`. An adversarial review with independent reproduction found the
+claim splits cleanly, and the split is worth recording because it is a **process**
+result rather than a code one.
+
+**Parcel B held up, including under attack.** All 33 bypass cases were re-run by calling
+production `check()` directly — bypassing the test fixture — under both an empty corpus
+and a realistic one; every case refuses identically under both. B2 has *three*
+independent mechanisms (the positive allowlist, `r_whole_row_argument` for `f(t.*)`, and
+`r_whole_row_reference` at BINDING for the bare-alias `f(t)` form that produces zero
+`Column` nodes), verified by force-permitting the whole-row functions to check the rule
+was load-bearing rather than shadowed. B5 folds both sides without quoting. The control
+passes. Three of the four contract files are **byte-identical** to their committed
+versions, and the entire `tests/` diff contains two assertion-level deletions rather
+than the wholesale softening the claim invited suspicion of.
+
+**The `conftest.py` adapter is legitimate.** `check()`'s signature moved to
+`corpus: AnalystCorpus`, and the shim translates the contract's older
+`allowed_columns=` spelling. Its docstring discloses this. Production `check()` is
+G1-clean: `corpus` is keyword-only with no default and the type check precedes the
+`try`, so an omitted or wrong-typed corpus **raises** rather than defaulting.
+
+**What is not sound, and none of it is in the parcels that had contracts.**
+
+1. **`serve/tools.py` reimplements in production the exact substitution the adapter does
+   in tests.** Lines 80–82 coerce a wrong-typed corpus to `None`; line 351 then defaults
+   `None` to `analyst_corpus_from_keys(allowed=())`. It fails *closed*, so there is no
+   confidentiality breach — but it records "the corpus was never wired up" as
+   `r_column_not_allowed` with `guardrail_errors: 0`, indistinguishable from "the model
+   asked for a column it may not see." That is the incident-collapse G1 exists to
+   prevent, and the same shape as the crash-counted-as-refusal defect that retired the
+   pre-2026-07-25 numbers.
+2. **G1's new load-bearing mechanism is untested.** `check()` correctly raises without a
+   corpus; **no test asserts it.** The only `pytest.raises(GovernanceUsageError)` in the
+   suite is about `guard_rules_enabled`. The one test that had covered column-layer
+   absence was rewritten to assert that an *empty* corpus refuses — true, but
+   tautological, since the fixture fabricates that empty corpus. So the mechanism now
+   carrying G1 is unprotected against regression, and production has **already**
+   regressed it.
+3. **The strict xfail for "a real turn writes every required field" was replaced by a
+   test that passes through a stub.** `agent_core_node` falls through to `_stub()`
+   whenever `agent_model` is None, returning the literal `STUB_ANSWER`; the replacement
+   test supplies only `thread_id` and `policy`, so there is no model, no index, no
+   connector, no `check()` call, `generated_sql: None`, and `(no context)` — with route
+   hits *injected* via `facet_route_hits`, bypassing retrieval too. Its name asserts "a
+   real turn." This is verbatim what the xfail's own docstring warned about: *"its
+   presence test ran against fixtures, so it never met the case that matters."* The
+   fixtures were replaced with a stub.
+4. **One gate is red.** `check_measurement_locality` fails on `eval/report.py:137`, an
+   f-string `.4f` outside `Measured.render()` — the measurement-defaulting defect that
+   gate was written for. `eval/` was never committed, so the gate passed at HEAD and the
+   new work broke it.
+5. **`UNBUILT` was emptied mechanically, not judged.** `is_built()` checks only for a
+   non-`__init__` `.py` file in the package directory, so `mkdir` plus one file forces
+   the declaration empty. It attests to directory existence, not completeness.
+6. **`tests/eval/test_eval_contract.py` is untracked and self-authored**, its header
+   claiming to be written "against the plan, not the impl" — unverifiable, and precisely
+   the authorship pattern `tests/contracts.py` exists to prevent. Three runtime
+   `pytest.xfail("waiting on Agent B")` escape hatches sit in
+   `tests/serve/test_pass_two_and_context.py`; none is currently taken, so they will
+   silently absorb a regression.
+
+**Actions.** `F` and `G` return to `UNBUILT` until they have contracts written by someone
+other than their implementer — that is the rule from §9 of the handoff doc, and F and G
+are the two parcels it was never applied to. `is_built()` needs to stop being the
+authority on completeness. The `serve/tools.py` default must raise. And a test must
+assert that `check()` requires a corpus, since that assertion is the only thing standing
+between G1 and the next refactor.
+
+**The process lesson.** Every parcel with a design-holder contract came back sound; both
+parcels without one came back with a defect the contract would have caught. The contract
+is doing the work, not the review.
+
+## 39. No governed query can execute, and the grader scores refusals as correct · **Blocking**
+
+Two findings from the second adversarial review, both reproduced independently.
+
+**39a. The intersection of "govern permits" and "the connector executes" is empty.**
+
+```
+SELECT count(*) FROM customers        govern=REFUSE r_table_not_licensed   sqlite=EXECUTES
+SELECT count(*) FROM shop.customers   govern=PASS                          sqlite=QueryError
+```
+
+`govern` licenses `{schema}.{physical_name}` (ADR 0006 §4, deliberately — a pooled
+corpus repeats table names across schemas). SQLite has no schema namespace and rejects
+the qualified form. `PostgresConnector` is a stub whose every method raises
+`ConnectionError`. So **there is no configuration in this tree in which a governed query
+reaches a database.**
+
+This is §9 of the handoff doc arriving exactly as predicted: *"layer boundaries are the
+wrong seam for this codebase… four parcels, one semantics, no single owner."* Nobody owns
+the question "what namespace does a licensed key live in", so `govern` answered it one
+way and `datasource` another, and each is internally consistent. It needs a decision, not
+a patch: either the connector carries a qualification adapter, or licensing resolves
+against `connector.dialect`.
+
+**39b. The grader re-executes outside governance, so a refusal scores as EX correct.**
+
+```
+[tool] run_query refused: customers resolves to customers, which this turn does not license
+outcome: answered   generated_sql: SELECT count(*) FROM customers
+execution: {"attempts":[{"passed":false,"reason_code":"r_table_not_licensed"}],"terminal":"answered"}
+-> eval.harness.project_turn -> {"correct": true, "grade_detail": "match"}
+```
+
+`harness.py:127` calls `connector.execute(str(generated_sql))` with **no
+`govern.prepare`**. So every EX the harness has ever reported came from out-of-band
+re-execution — the `scripted` arm's `ex=1.00` was produced with **zero** successful
+in-turn executions. The grader is a governance bypass, and it is the reason 39a did not
+surface on its own: the numbers looked fine.
+
+**39c. The degradation gate is inert.** `serve/` reports channel state from
+`expected_channel_state(...)` verbatim rather than from observation, so an arm with no
+index and no model reports `{'lexical': 'ran', 'semantic': 'ran'}`. `channel_anomaly` and
+`is_degraded` have **zero call sites outside tests**; nothing writes `facet_degraded`. So
+`measure/gates.py::_facet_channels_gate` passes vacuously — `[pass] facet_channels 0.0000
+over 'stub' n=3 (fan-out ran)`. This is the retired rate-limited-embedder incident
+reproduced *with the field present and inert*, which is the one outcome the field was
+added to make impossible.
+
+**39d. The semantic channel never runs.** `pass_two_retrieve(query_vector=...)` has no
+producer anywhere in the tree; `facets.py` hard-codes `"semantic": None`. Since
+`facet_example` is semantic-only by design, **it returns `[]` on every turn.** Meanwhile
+`pass_two` scores `example` on the lexical channel — it lacks the
+`Channel.lexical in FACET_CHANNELS[stage]` guard that `facets.py` has — so a few-shot
+outranks an entity hit on a channel the same record declares `not_configured`.
+
+**What came back sound**, stated because a review that only lists defects is not
+reviewable: `retrieve/`'s scoring core (all four load-bearing properties verified by
+execution — `cosine` raises on width mismatch, absent ≠ zero through `fuse`,
+renormalisation by active channels, IDF global by *structure* since `restrict_to` shares
+`_idf` by reference), and `corpus/seed.py` (model-free under a socket-raiser,
+deterministic across runs, validator-clean). 682 lines is genuinely enough for the former
+because the register carries the tables.

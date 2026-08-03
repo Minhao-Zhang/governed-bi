@@ -184,6 +184,19 @@ def problems_with(asset: object) -> list[str]:
             "feedback loop will want is to write a hit rate here"
         )
 
+    physical = getattr(asset, "physical_name", None)
+    if physical is not None:
+        from .identity import UnsafeName, validate_path_component
+
+        try:
+            validate_path_component(physical, what="physical_name")
+        except UnsafeName as err:
+            out.append(
+                f"{where}: {err}. physical_name uses the same character class as a "
+                "path component (accident prevention, not anti-poisoning — ADR 0005 "
+                "§1.6 / decision #37)"
+            )
+
     return out
 
 

@@ -7,9 +7,9 @@ each one is a disagreement between *our* spelling of a name and *somebody else's
 name while ``is_valid_id`` guarded only the asset id. Python's ``$`` also matches
 before a trailing newline, so ``"beer_factory\\n"`` clears a ``^...$`` validator
 labelled *security* and then names a directory. v2 makes the surface **wider**, not
-narrower: ``SchemaAsset.name`` is a first-class field, ``POST /corpus/edit`` is
-retained, and ADR 0005 §1.5 acknowledges the corpus is partly model-authored, so
-this string is reachable from model output.
+narrower: ``SchemaAsset.name`` is a first-class field, and ADR 0005 §1.5
+acknowledges the corpus is partly model-authored. **v2 has no HTTP corpus write**;
+CLI / ``CorpusStore.write`` still derive directories from these strings.
 
 **B5 — fold both sides, do not quote to compensate.** Postgres folds unquoted
 identifiers, so ``customerid`` clears a ``CustomerID`` allowlist; v1's fix was to

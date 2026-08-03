@@ -79,7 +79,7 @@ def test_not_too_narrow_every_gold_function_is_permitted_or_recorded(govern) -> 
         assert len(reason) > 40, f"{name}'s reason is too short to be a reason"
 
 
-def test_the_covering_sample_clears_the_first_three_layers(govern) -> None:
+def test_the_covering_sample_clears_the_first_three_layers(govern, check) -> None:
     """Narrowness as an **effect**: real gold statements clear PARSE/NO_WRITE/FUNCTIONS.
 
     Each sample statement drives the real ``check()``. They are expected to fail
@@ -93,7 +93,7 @@ def test_the_covering_sample_clears_the_first_three_layers(govern) -> None:
     too_narrow: list[tuple[str, str, str]] = []
     chosen: list[str] = []
     for case in GOLD["covering_sample"]:
-        verdict = govern.check(case["sql"], licensed=frozenset(), default_schema=None)
+        verdict = check(case["sql"], licensed=frozenset(), default_schema=None)
         layer = verdict["failed_layer"]
         if layer is None or layer > Layer.FUNCTIONS:
             continue
@@ -143,12 +143,12 @@ def test_the_canonical_name_of_a_whole_row_emitter_is_not_its_spelling(govern, s
     assert canonical not in govern.PERMITTED_FUNCTIONS
 
 
-def test_every_adversarial_spelling_is_actually_refused_by_check(govern) -> None:
+def test_every_adversarial_spelling_is_actually_refused_by_check(govern, check) -> None:
     """The effect, not the set. A name absent from a set it is never compared against
     is not a refusal."""
     survivors = []
     for spelling in govern.ADVERSARIAL_SET:
-        verdict = govern.check(
+        verdict = check(
             f"SELECT {spelling}('x') FROM customers",
             licensed=frozenset({"customers"}),
             allowed_columns=frozenset({"customers.id"}),
@@ -177,25 +177,25 @@ def test_the_digest_moves_when_the_allowlist_moves(govern) -> None:
     assert functions.permitted_functions_digest() == before
 
 
-def test_the_allowlist_is_positive_an_unknown_function_is_refused(govern) -> None:
+def test_the_allowlist_is_positive_an_unknown_function_is_refused(govern, check) -> None:
     """``exp.Anonymous`` is the whole B1 family, and gold contains none of it.
 
     Measured, not assumed: zero of the 6,743 gold statements contain a function that
     parses as ``Anonymous``, which is what makes refusing the shape affordable.
     """
     assert _canonical(govern, "totally_invented_function") not in govern.PERMITTED_FUNCTIONS
-    verdict = govern.check(
+    verdict = check(
         "SELECT totally_invented_function(1) FROM customers",
         licensed=frozenset({"customers"}),
     )
     assert verdict["reason_code"] == "r_function_not_permitted"
 
 
-def test_schema_qualification_is_stripped_before_matching(govern) -> None:
+def test_schema_qualification_is_stripped_before_matching(govern, check) -> None:
     """``pg_catalog.setval`` and ``setval`` are one function; only one of them would be
     on a list somebody wrote by hand."""
     assert _canonical(govern, "pg_catalog.setval") == "setval"
-    verdict = govern.check(
+    verdict = check(
         "SELECT pg_catalog.setval('s', 1) FROM customers", licensed=frozenset({"customers"})
     )
     assert verdict["passed"] is False

@@ -1,9 +1,9 @@
 """Execution-time governance: everything between "the agent produced a string" and
 "the database saw a statement" (ADR 0006).
 
-Layer 6. May import ``ports`` and ``register``; imports nothing later, and imports no
-model, no connector and no corpus — which is what makes the whole layer testable with
-a SQL string and nothing else.
+Layer 6. May import ``ports``, ``register`` and ``corpus``; imports nothing later,
+and imports no model and no connector — which is what makes most of the layer
+testable with a SQL string plus an :class:`~governed_bi.corpus.analyst.AnalystCorpus`.
 
 The four invariants, because every module here is shaped by one of them:
 

@@ -70,6 +70,35 @@ def test_a_plain_identifier_is_accepted() -> None:
     assert validate_path_component("beer_factory", what="schema") == "beer_factory"
 
 
+@pytest.mark.parametrize("bad", ["cust/omers", "customers\n", "..", "cust omers", ""])
+def test_physical_name_rejects_path_unsafe_spellings(bad: str) -> None:
+    """Same character class as path components (#37 leftover). Refuse, never edit."""
+    from governed_bi.corpus.schema import TableAsset
+    from governed_bi.corpus.validate import problems_with
+
+    asset = TableAsset(
+        id="beer_factory.customers",
+        schema="beer_factory",
+        physical_name=bad,
+        summary=f"{bad} - one row per buyer" if bad.strip() else "customers - one row",
+    )
+    reasons = problems_with(asset)
+    assert any("physical_name" in r for r in reasons), reasons
+
+
+def test_physical_name_accepts_a_bare_identifier() -> None:
+    from governed_bi.corpus.schema import TableAsset
+    from governed_bi.corpus.validate import problems_with
+
+    asset = TableAsset(
+        id="beer_factory.customers",
+        schema="beer_factory",
+        physical_name="customers",
+        summary="customers - one row per registered buyer",
+    )
+    assert not any("physical_name" in r for r in problems_with(asset))
+
+
 # ── the YAML 1.1 `on:` trap ──────────────────────────────────────────────────
 
 

@@ -1,0 +1,159 @@
+"""Serve graph wiring (ADR 0005 §3.1).
+
+LangGraph entry surface. This module deliberately avoids
+``from __future__ import annotations`` because a graph loaded by file path
+must keep raw parameter annotations inspectable.
+"""
+
+from typing import Any, Literal
+
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import END, START, StateGraph
+
+from governed_bi.serve.nodes.agent_core import agent_core_node
+from governed_bi.serve.nodes.assemble import assemble_node
+from governed_bi.serve.nodes.facets import (
+    facet_entity_node,
+    facet_example_node,
+    facet_metric_node,
+    facet_schema_node,
+    facet_term_node,
+)
+from governed_bi.serve.nodes.guard import guard_node
+from governed_bi.serve.nodes.negative import negative_node
+from governed_bi.serve.nodes.rewrite import rewrite_node
+from governed_bi.serve.nodes.route_retrieve import connect_node, resolve_node, route_node
+from governed_bi.serve.nodes.stamp import stamp
+from governed_bi.serve.nodes.terminal import decline_node, refuse_node
+from governed_bi.serve.state import ServeState
+from governed_bi.serve.wrap import wrap_node
+
+__all__ = ["build_graph", "compile_graph"]
+
+_FACET_NODES = (
+    ("facet_schema", facet_schema_node),
+    ("facet_term", facet_term_node),
+    ("facet_metric", facet_metric_node),
+    ("facet_entity", facet_entity_node),
+    ("facet_example", facet_example_node),
+)
+
+
+def _after_guard(state: ServeState) -> Literal["refuse", "rewrite", "stamp"]:
+    if state.get("path_kind") == "crashed":
+        return "stamp"
+    guard = state.get("guard") or {}
+    if guard.get("outcome") == "blocked":
+        return "refuse"
+    return "rewrite"
+
+
+def _after_negative(state: ServeState) -> Literal["decline", "fanout", "stamp"]:
+    if state.get("path_kind") == "crashed":
+        return "stamp"
+    negative = state.get("negative") or {}
+    if negative.get("outcome") == "hit":
+        return "decline"
+    return "fanout"
+
+
+def _after_route(state: ServeState) -> Literal["decline", "resolve", "stamp"]:
+    if state.get("path_kind") == "crashed":
+        return "stamp"
+    if state.get("path_kind") == "decline":
+        return "decline"
+    return "resolve"
+
+
+def _after_connect(state: ServeState) -> Literal["decline", "assemble", "stamp"]:
+    if state.get("path_kind") == "crashed":
+        return "stamp"
+    if state.get("path_kind") == "decline":
+        return "decline"
+    return "assemble"
+
+
+def _skip_if_terminal(state: ServeState) -> Literal["stamp", "continue"]:
+    if state.get("path_kind") in ("refuse", "decline", "crashed"):
+        return "stamp"
+    return "continue"
+
+
+def build_graph(*, agent_checkpointer: Any = None) -> StateGraph:
+    """Construct the uncompiled serve graph.
+
+    ``agent_checkpointer`` is shared with the nested ``create_agent`` so
+    ``ask_user`` interrupts resume correctly under the same ``thread_id``.
+    """
+
+    def _agent(state: dict, config: Any) -> dict:
+        return agent_core_node(state, config, checkpointer=agent_checkpointer)
+
+    graph = StateGraph(ServeState)
+
+    graph.add_node("guard", wrap_node("guard", guard_node))
+    graph.add_node("rewrite", wrap_node("rewrite", rewrite_node))
+    graph.add_node("negative_gate", wrap_node("negative_gate", negative_node))
+    for name, fn in _FACET_NODES:
+        graph.add_node(name, wrap_node(name, fn))
+    graph.add_node("route", wrap_node("route", route_node))
+    graph.add_node("resolve", wrap_node("resolve", resolve_node))
+    graph.add_node("connect", wrap_node("connect", connect_node))
+    graph.add_node("assemble", wrap_node("assemble", assemble_node))
+    graph.add_node("agent_core", wrap_node("agent_core", _agent))
+    graph.add_node("refuse", wrap_node("refuse", refuse_node))
+    graph.add_node("decline", wrap_node("decline", decline_node))
+    graph.add_node("stamp", wrap_node("stamp", stamp))
+
+    def _fanout_passthrough(state: ServeState) -> dict[str, Any]:
+        return {}
+
+    graph.add_node("fanout", wrap_node("facet_schema", _fanout_passthrough))
+
+    graph.add_edge(START, "guard")
+    graph.add_conditional_edges(
+        "guard",
+        _after_guard,
+        {"refuse": "refuse", "rewrite": "rewrite", "stamp": "stamp"},
+    )
+    graph.add_edge("rewrite", "negative_gate")
+    graph.add_conditional_edges(
+        "negative_gate",
+        _after_negative,
+        {"decline": "decline", "fanout": "fanout", "stamp": "stamp"},
+    )
+    for name, _ in _FACET_NODES:
+        graph.add_edge("fanout", name)
+        graph.add_edge(name, "route")
+
+    graph.add_conditional_edges(
+        "route",
+        _after_route,
+        {"decline": "decline", "resolve": "resolve", "stamp": "stamp"},
+    )
+    graph.add_conditional_edges(
+        "resolve",
+        _skip_if_terminal,
+        {"stamp": "stamp", "continue": "connect"},
+    )
+    graph.add_conditional_edges(
+        "connect",
+        _after_connect,
+        {"decline": "decline", "assemble": "assemble", "stamp": "stamp"},
+    )
+    graph.add_conditional_edges(
+        "assemble",
+        _skip_if_terminal,
+        {"stamp": "stamp", "continue": "agent_core"},
+    )
+    graph.add_edge("agent_core", "stamp")
+    graph.add_edge("refuse", "stamp")
+    graph.add_edge("decline", "stamp")
+    graph.add_edge("stamp", END)
+    return graph
+
+
+def compile_graph(*, checkpointer: Any | None = None):
+    """Compile with an in-memory checkpointer by default (interrupt-ready)."""
+    saver = InMemorySaver() if checkpointer is None else checkpointer
+    return build_graph(agent_checkpointer=saver).compile(checkpointer=saver)

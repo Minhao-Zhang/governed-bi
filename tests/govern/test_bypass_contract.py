@@ -51,13 +51,6 @@ BLOCKED = "must be blocked, and by a named layer"
 
 
 @pytest.fixture
-def check():
-    from governed_bi.govern.check import check  # type: ignore[import-not-found]
-
-    return check
-
-
-@pytest.fixture
 def layer():
     from governed_bi.govern.layers import Layer  # type: ignore[import-not-found]
 

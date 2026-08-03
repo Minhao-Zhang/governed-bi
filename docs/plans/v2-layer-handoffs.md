@@ -225,7 +225,7 @@ bool cannot feed it.
 |---|---|
 | `datasource/postgres.py` | `Connector` adapter; the obfuscated BIRD DBs are Postgres-only |
 | `datasource/sqlite.py` | `Connector` adapter for the unobfuscated dev path |
-| `datasource/introspect.py` | tables, columns, physical types, declared FKs |
+| `corpus/introspect.py` | tables, columns, physical types, declared FKs (shapes live under `corpus/` so the seed does not import upward into `datasource/`) |
 | `corpus/seed.py` | introspection → a valid asset for every table and column, **zero model calls** |
 
 **Why the seed is in this parcel and not `corpus/`.** It is the thing that makes
@@ -288,6 +288,8 @@ trusted; injection is checked once on the incoming question by `govern.guard`.
 
 ## 6. Parcel E — `retrieve/` (after D)
 
+**Status: built** (scoring contract green; `UNBUILT` is `{"F", "G"}`).
+
 Nine files, the largest algorithmic parcel.
 
 | file | what it holds |
@@ -325,6 +327,10 @@ Nine files, the largest algorithmic parcel.
 
 ## 7. Parcel F — `serve/`: do not hand this out
 
+**Status: F3 built** (``agent_core`` + tools + identity-bound ``ask_user`` HITL;
+clarifications land in ``ServeState.clarifications`` + messages). G1 eval has
+cleared ``UNBUILT`` (see §8).
+
 `serve/` is where every other parcel's assumptions meet. Handing it to a seventh
 engineer means the integration is done by the person with the least context on all
 six inputs.
@@ -359,10 +365,16 @@ passing and someone has to turn it into a real test.
 
 ## 8. Parcels G and H
 
-**G — `eval/`** (`harness`, `arms`, `grade`, `report`). Needs a working serve path.
-Its trap list is the whole of `lessons-from-v1.md` §1–§5; the single most expensive
-one: **a crash counted as a refusal**, which contaminated every arm-to-arm delta by
-a different amount, because arms do not crash at the same rate.
+**G — `eval/`** (`harness`, `arms`, `grade`, `report`, `oracle`).
+
+**Status: G1 built** (CI harness calling ``compile_graph``; oracle ceiling;
+cross-arm ``context_hash`` ≥95% gate in ``report``; ``UNBUILT`` is empty). G2
+(BIRD multi-arm ladder on ``../BIRD-Data-Obfuscation``) remains.
+
+Needs a working serve path. Its trap list is the whole of `lessons-from-v1.md`
+§1–§5; the single most expensive one: **a crash counted as a refusal**, which
+contaminated every arm-to-arm delta by a different amount, because arms do not
+crash at the same rate.
 
 **H — `curate/`** (see §0.2). The largest piece and the origin of this rewrite. Not
 specified here; it needs its own ADR before it is parcelled, because "ask better

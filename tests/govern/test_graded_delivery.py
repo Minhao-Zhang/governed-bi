@@ -28,13 +28,6 @@ CUSTOMERS = frozenset({"customers"})
 
 
 @pytest.fixture
-def check():
-    from governed_bi.govern.check import check
-
-    return check
-
-
-@pytest.fixture
 def layer():
     from governed_bi.govern.layers import Layer
 

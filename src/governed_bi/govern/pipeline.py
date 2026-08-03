@@ -38,7 +38,7 @@ import sqlglot
 from sqlglot import expressions as exp
 from sqlglot.errors import SqlglotError
 
-from ..register.knobs import UNSET, Unset
+from ..corpus.analyst import AnalystCorpus
 from .check import check
 from .guard import has_control_characters
 from .identifiers import fold
@@ -165,9 +165,7 @@ def prepare(
     sql: str,
     *,
     licensed: frozenset[str] | None,
-    allowed_columns: frozenset[str] | Unset = UNSET,
-    excluded_columns: frozenset[str] = frozenset(),
-    suspect_columns: frozenset[str] = frozenset(),
+    corpus: AnalystCorpus | None,
     spellings: Mapping[str, str] | None = None,
     ambiguous_folds: frozenset[str] = frozenset(),
     default_schema: str | None = None,
@@ -199,9 +197,7 @@ def prepare(
     verdict = check(
         canonical,
         licensed=licensed,
-        allowed_columns=allowed_columns,
-        excluded_columns=excluded_columns,
-        suspect_columns=suspect_columns,
+        corpus=corpus,
         default_schema=default_schema,
         dialect=dialect,
         policy=policy,

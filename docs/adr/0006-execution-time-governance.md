@@ -1,10 +1,8 @@
 # 0006: Execution-time governance
 
-- **Status:** Proposed (design; 2026-08-02, second draft — the first was
-  reviewed and had four holes of the same class it was written to close). No
-  code written. A hard dependency of
-  [ADR 0005](0005-v2-memory-layer-and-faceted-retrieval.md) and a precondition
-  of the `v2` branch's first (deleting) commit.
+- **Status:** Accepted in part (2026-08-03). `govern/` is on the `v2` branch;
+  executors, red-team corpus and enabled `guard` rules are not. A hard dependency
+  of [ADR 0005](0005-v2-memory-layer-and-faceted-retrieval.md).
 - **Deciders:** project owner + design session (2026-08-02)
 - **Scope:** everything between "the agent produced a string" and "the database
   saw a statement" — the layer stack, the function allowlist, identifier
@@ -52,7 +50,7 @@ sets. One test per item, each demonstrating the v1 chain and its refusal.
 | **B5** | **Case folding.** Postgres folds unquoted identifiers, so `customerid` clears a `CustomerID` allowlist — and quoting the model's spelling then sends the engine a column that does not exist |
 | **B6** | **Reference shapes.** Three-part `schema.table.column` slipped past the column layer (the key *is* in the lake-wide allowlist) and the table layer (which inspects only FROM sources). Siblings: star projections, `NATURAL JOIN`, bare columns in a mixed base+derived scope, and a bare name matching a `suspect` column in **any** in-scope base (leftmost-table resolution binds it to the decoy) |
 | **B7** | **The agent grew its own authorisation set.** `inspect_schema` wrote straight into the licensed set, so inspecting anything authorised it — reaching into unrelated schemas in a pooled corpus |
-| **B8** | **`asset.schema` escaped the corpus root.** The write directory is derived from it while `is_valid_id` guards only the asset id. The regex must be `\A...\Z`: Python's `$` also matches before a trailing newline, so `"beer_factory\n"` passes a `^...$` validator that then names a directory. **Recategorised 2026-08-03: this is accident prevention, not an attack defence.** 0005 §1.6 fixes the trust boundary — the corpus is trusted, the incoming question is not — so the threat here is not a hostile author. It is that `POST /corpus/edit` writes without a PR, so a mistyped field or a UI bug concatenating paths reaches the filesystem from a *trusted* author. The validator is kept because it is cheap and refuses rather than edits; only its justification changed. `SchemaAsset.name` being first-class and the corpus being partly model-authored are reasons the *path* is reachable, not reasons to distrust the author |
+| **B8** | **`asset.schema` escaped the corpus root.** The write directory is derived from it while `is_valid_id` guards only the asset id. The regex must be `\A...\Z`: Python's `$` also matches before a trailing newline, so `"beer_factory\n"` passes a `^...$` validator that then names a directory. **Recategorised 2026-08-03: accident prevention, not an attack defence.** 0005 §1.6 fixes the trust boundary — the corpus is trusted, the incoming question is not. **v2 has no HTTP corpus write**; path validation still guards CLI / `CorpusStore.write` against mistyped fields from trusted authors. The validator refuses rather than edits; only its justification changed |
 | **B9** | **A guessable `thread_id` was a handle on another caller's paused clarification**, which embeds their question. Namespacing is a mitigation, not authentication |
 | **B10** | **The routing index embedded governance-excluded PII columns** while the picker summary filtered them — two definitions of "excluded" that drifted, because the caller contract was documentation rather than a type |
 

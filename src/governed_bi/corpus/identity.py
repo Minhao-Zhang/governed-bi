@@ -21,9 +21,14 @@ project's most expensive shape.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 from typing import Iterable, Sequence
+
+import sqlglot
+from sqlglot import expressions as exp
+from sqlglot.errors import SqlglotError
 
 __all__ = [
     "UnsafeName",
@@ -31,6 +36,8 @@ __all__ = [
     "validate_path_component",
     "validate_asset_id",
     "derive_column_id",
+    "on_digest",
+    "join_id",
     "namespace_of",
     "corpus_files",
 ]
@@ -104,6 +111,48 @@ def derive_column_id(table_id: str, physical_name: str) -> str:
     key on it.
     """
     return f"{table_id}.{physical_name}"
+
+
+def _qualified_operand(node: exp.Expression) -> str:
+    """Lowercased SQL spelling of one side of an equality. Order-insensitive later."""
+    return node.sql(dialect="postgres").casefold()
+
+
+def on_digest(on: str) -> str:
+    """Canonical digest of a join ON clause (ADR 0005 §1.2).
+
+    Equality operands are unordered within a predicate; conjuncts are unordered
+    within the clause; case and whitespace are ignored. The digest identifies the
+    **relationship**, not the text — without it, two edges between the same table
+    pair collapse and the last write wins.
+    """
+    if not isinstance(on, str) or not on.strip():
+        raise ValueError("on_digest requires a non-empty ON clause")
+    try:
+        tree = sqlglot.parse_one(
+            f"SELECT 1 FROM _left AS _l JOIN _right AS _r ON {on}",
+            dialect="postgres",
+        )
+    except SqlglotError as err:
+        raise ValueError(f"on_digest could not parse ON clause: {err}") from err
+    join = tree.find(exp.Join)
+    if join is None or join.args.get("on") is None:
+        raise ValueError("on_digest could not find an ON expression")
+    predicates = frozenset(
+        frozenset({_qualified_operand(eq.left), _qualified_operand(eq.right)})
+        for eq in join.args["on"].find_all(exp.EQ)
+    )
+    if not predicates:
+        raise ValueError("on_digest found no equality predicates in the ON clause")
+    canonical = repr(sorted(tuple(sorted(pred)) for pred in predicates))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def join_id(schema: str, left: str, right: str, on: str) -> str:
+    """``join_{schema}_{left}_{right}_{digest[:8]}`` — one id per relationship."""
+    left_name = left.rsplit(".", 1)[-1]
+    right_name = right.rsplit(".", 1)[-1]
+    return f"join_{schema}_{left_name}_{right_name}_{on_digest(on)[:8]}"
 
 
 def namespace_of(root: Path, path: Path) -> str:

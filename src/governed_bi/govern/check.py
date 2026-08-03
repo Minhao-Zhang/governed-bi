@@ -15,10 +15,10 @@ restriction".
 truth is *the authorization argument was never wired up* — two different incidents,
 and collapsing them is B10's shape.
 
-**Absence of column authorization refuses at the column layer.** Not silently
-passes: ``allowed_columns`` left ``UNSET`` means the layer cannot evaluate its own
-precondition, and G1's answer to that is ``blocked``. This is the sibling defect of
-the one above, and it is the direction that ships quietly.
+**Column authorization comes from an** ``AnalystCorpus`` **(ADR 0005 §1.5).**
+Passing parallel column sets beside an unfiltered corpus was B10. A missing
+``corpus`` raises :class:`GovernanceUsageError` — a caller error, not a statement
+fault.
 
 **Any exception is ``passed=False`` — and is counted.** ``RecursionError`` from
 pathological nesting and tokenizer errors from unterminated literals both escaped
@@ -43,7 +43,8 @@ import sqlglot
 from sqlglot import expressions as exp
 from sqlglot.errors import SqlglotError
 
-from ..register.knobs import UNSET, Unset
+from ..corpus.analyst import AnalystCorpus
+from ..register.knobs import Unset
 from .binding import Bindings, LayerRefusal, bind
 from .functions import canonical_function_name
 from .identifiers import normalise_column_key, normalise_table_key
@@ -84,21 +85,15 @@ def check(
     sql: str,
     *,
     licensed: frozenset[str] | None,
-    allowed_columns: frozenset[str] | Unset = UNSET,
-    excluded_columns: frozenset[str] = frozenset(),
-    suspect_columns: frozenset[str] = frozenset(),
+    corpus: AnalystCorpus | None,
     default_schema: str | None = None,
     dialect: str = DEFAULT_DIALECT,
     policy: GovernancePolicy | None = None,
 ) -> CheckVerdict:
     """Run the layer stack against ``sql``. Returns on the first failure.
 
-    ``licensed`` is table keys; ``allowed_columns``, ``excluded_columns`` and
-    ``suspect_columns`` are column keys. All four are normalised through the same
-    functions the statement's own references go through
-    (:mod:`.identifiers`), which is what makes a two-part
-    ``customers.CustomerID`` in an allowlist comparable with a three-part reference
-    in a query — and what closes B5 without quoting anything.
+    ``licensed`` is table keys. Column authorization is derived from ``corpus``
+    (ADR 0005 §1.5 / ADR 0006 §1) — never from a parallel set that can drift.
     """
     if licensed is None or isinstance(licensed, (str, bytes)):
         raise GovernanceUsageError(
@@ -107,17 +102,25 @@ def check(
             "gateway.execute, and a blocked verdict here would record 'this query was "
             "unsafe' for what is really 'the authorization argument was never wired up'."
         )
+    if corpus is None or not isinstance(corpus, AnalystCorpus):
+        raise GovernanceUsageError(
+            "corpus must be an AnalystCorpus. Passing column sets beside an unfiltered "
+            "corpus was B10: two definitions of 'excluded' that drifted. "
+            "corpus.for_analyst(...) is the single boundary."
+        )
     policy = policy or GovernancePolicy()
 
     # Normalised OUTSIDE the wrapper: a malformed key is a caller error, and turning
     # it into a blocked verdict would hide a broken caller as an unsafe query.
     licensed_keys = frozenset(normalise_table_key(key, default_schema) for key in licensed)
-    excluded_keys = frozenset(normalise_column_key(key, default_schema) for key in excluded_columns)
-    suspect_keys = frozenset(normalise_column_key(key, default_schema) for key in suspect_columns)
-    allowed_keys: frozenset[str] | Unset = (
-        allowed_columns
-        if isinstance(allowed_columns, Unset)
-        else frozenset(normalise_column_key(key, default_schema) for key in allowed_columns)
+    excluded_keys = frozenset(
+        normalise_column_key(key, default_schema) for key in corpus.excluded_columns
+    )
+    suspect_keys = frozenset(
+        normalise_column_key(key, default_schema) for key in corpus.suspect_columns
+    )
+    allowed_keys = frozenset(
+        normalise_column_key(key, default_schema) for key in corpus.allowed_columns
     )
 
     evaluated: list[Layer] = []
@@ -148,9 +151,7 @@ def check(
         # it to decide *which* source a bare name belongs to and authorises nothing
         # with it — an excluded column must still bind, or the column layer never gets
         # to refuse it and the statement fails as "ambiguous" instead of "excluded".
-        declared = excluded_keys | suspect_keys
-        if not isinstance(allowed_keys, Unset):
-            declared = declared | allowed_keys
+        declared = excluded_keys | suspect_keys | allowed_keys
         bound = bind(views, default_schema=default_schema, known_columns=declared)
         if isinstance(bound, LayerRefusal):
             return refuse(bound.rule_id, bound.detail, evaluated=evaluated)
@@ -300,19 +301,12 @@ def _functions(
 
 def _columns(
     bound: Bindings,
-    allowed: frozenset[str] | Unset,
+    allowed: frozenset[str],
     excluded: frozenset[str],
     suspect: frozenset[str],
     policy: GovernancePolicy,
     evaluated: list[Layer],
 ) -> CheckVerdict | None:
-    if isinstance(allowed, Unset):
-        return refuse(
-            "r_column_authorization_unavailable",
-            "no column authorization was supplied, so this layer cannot evaluate its "
-            "own precondition. G1: absence refuses",
-            evaluated=evaluated,
-        )
     for binding in bound.columns:
         if binding.column_key in excluded:
             return refuse(

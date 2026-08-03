@@ -181,12 +181,10 @@ def test_a_parse_failure_at_the_limit_step_refuses_rather_than_passing_the_strin
     assert isinstance(result, dict) and result["passed"] is False
 
 
-def test_prepare_returns_no_string_when_the_verdict_blocks() -> None:
+def test_prepare_returns_no_string_when_the_verdict_blocks(prepare) -> None:
     """The pipeline's only output that can be executed is ``Prepared.sql``, and a
     blocked statement must not produce one — there is nothing for a caller to
     accidentally use."""
-    from governed_bi.govern.pipeline import prepare
-
     blocked = prepare("DROP TABLE customers", licensed=CUSTOMERS)
     assert blocked.sql is None and blocked.verdict["passed"] is False
 
@@ -196,11 +194,9 @@ def test_prepare_returns_no_string_when_the_verdict_blocks() -> None:
     assert allowed.sql is not None and allowed.verdict["passed"] is True
 
 
-def test_canonicalisation_precedes_the_check_so_the_verdict_is_about_what_runs() -> None:
+def test_canonicalisation_precedes_the_check_so_the_verdict_is_about_what_runs(prepare) -> None:
     """The corpus declares ``CustomerID``; the model wrote ``customerid``. The executed
     string carries the declared spelling, and nothing is quoted to compensate."""
-    from governed_bi.govern.pipeline import prepare
-
     prepared = prepare(
         "SELECT customerid FROM customers",
         licensed=CUSTOMERS,
@@ -212,13 +208,11 @@ def test_canonicalisation_precedes_the_check_so_the_verdict_is_about_what_runs()
     assert '"' not in (prepared.sql or ""), "canonicalise, do not quote"
 
 
-def test_an_ambiguous_fold_refuses() -> None:
+def test_an_ambiguous_fold_refuses(prepare) -> None:
     """Two declared identifiers differing only by case. Unrewritten, the engine folds
     the reference to one of them — possibly the decoy — so the column layer approves one
     binding and the engine reads another. The pair: the same statement passes when the
     fold is not ambiguous."""
-    from governed_bi.govern.pipeline import prepare
-
     refused = prepare(
         "SELECT alias FROM customers",
         licensed=CUSTOMERS,
@@ -237,7 +231,7 @@ def test_an_ambiguous_fold_refuses() -> None:
     assert fine.verdict["passed"] is True, fine.verdict
 
 
-def test_the_encoding_check_runs_on_the_raw_statement_not_the_normalised_one() -> None:
+def test_the_encoding_check_runs_on_the_raw_statement_not_the_normalised_one(prepare) -> None:
     """§3 step 1's ordering, asserted as an effect on the pipeline.
 
     Note what is *not* claimed: NFKC does not strip these characters, so normalising
@@ -245,7 +239,7 @@ def test_the_encoding_check_runs_on_the_raw_statement_not_the_normalised_one() -
     is rewrite (``ＳＥＬＥＣＴ`` → ``SELECT``), which is why a check after it inspects a
     string the caller never sent, and why the order is kept.
     """
-    from governed_bi.govern.pipeline import normalise, prepare
+    from governed_bi.govern.pipeline import normalise
 
     refused = prepare("SELECT id" + BIDI_OVERRIDE + " FROM customers", licensed=CUSTOMERS)
     assert refused.verdict["reason_code"] == "r_control_characters"
@@ -256,11 +250,10 @@ def test_the_encoding_check_runs_on_the_raw_statement_not_the_normalised_one() -
 # ── the ledger ────────────────────────────────────────────────────────────────
 
 
-def test_the_entry_hashes_the_executed_string_and_elides_its_literals() -> None:
+def test_the_entry_hashes_the_executed_string_and_elides_its_literals(prepare) -> None:
     """G4 and §11 together: the record attests to what ran, and the fingerprint shows
     the shape without echoing the literals libpq would have quoted back."""
     from governed_bi.govern.ledger import ledger_entry, statement_sha256
-    from governed_bi.govern.pipeline import prepare
 
     prepared = prepare(
         "SELECT c.id FROM customers c WHERE c.id = 424242",
@@ -274,11 +267,10 @@ def test_the_entry_hashes_the_executed_string_and_elides_its_literals() -> None:
     assert entry["executed"] is True
 
 
-def test_a_blocked_entry_says_nothing_ran_and_drops_the_detail() -> None:
+def test_a_blocked_entry_says_nothing_ran_and_drops_the_detail(check) -> None:
     """``detail`` is the one field guaranteed to contain a fragment of the statement,
     and on a driver error the statement itself. The negative half of the test above:
     ``executed`` is a recorded ``False``, not an absent key."""
-    from governed_bi.govern.check import check
     from governed_bi.govern.ledger import ledger_entry
 
     verdict = check("SELECT pg_read_file('/etc/passwd')", licensed=CUSTOMERS)

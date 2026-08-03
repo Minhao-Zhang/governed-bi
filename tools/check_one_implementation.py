@@ -108,6 +108,18 @@ SINGLETON_CONCEPTS: tuple[Singleton, ...] = (
         "independently. One object passed to both is the fix, and it only works if "
         "there is one object.",
     ),
+    Singleton(
+        "on_digest", "corpus/identity.py",
+        "ADR 0005 §1.2: join identity is the relationship, not the table pair. "
+        "Two on_digest implementations means two relationships between one pair "
+        "and the last write wins — 33 of 57 schemas lost an edge before the "
+        "curator ran (decision #36).",
+    ),
+    Singleton(
+        "join_id", "corpus/identity.py",
+        "Paired with on_digest: the id format is join_{schema}_{left}_{right}_"
+        "{digest[:8]}. A second home invents a second identity for the same edge.",
+    ),
 )
 
 #: Assignments whose value is one of these calls bind scaffolding, not a concept.

@@ -1,9 +1,8 @@
 # 0005: The v2 memory layer and faceted retrieval
 
-- **Status:** Proposed (design; 2026-08-02, third draft — revised after three
-  review passes and a six-reader knowledge extraction). No code written. To be
-  built on a `v2` branch whose first commit deletes `src/`, `tests/`,
-  `scripts/`.
+- **Status:** Accepted in part (2026-08-03). `register/`, `corpus/`, and
+  `measure/` are on the `v2` branch; retrieval, serve, eval and curator are not.
+  The deleting first commit has landed.
 - **Deciders:** project owner + design session (2026-08-02)
 - **Scope:** the memory layer (asset schema, corpus) and the retrieval + serve
   graph. **Execution-time governance — the guardrail layers, the function
@@ -384,14 +383,13 @@ Three consequences, each replacing a piece of what the sanitizer was doing:
 | a newline escaping a field's indentation and opening a top-level prompt section | **render time**, in `serve/context.py`, as **lossless escaping** — done where the prompt format is known and reversible, not as a lossy edit in the store |
 
 **What is kept, with its reason corrected.** Identifier fields that become path
-components or filenames are validated against a character class — `\A[A-Za-z0-9_]+\Z`,
-per ADR 0006 §9. That is **not** an anti-poisoning measure and should not be
-described as one. It is accident prevention on a value that names a directory:
-`POST /corpus/edit` writes corpus content without a PR, so a mistyped field or a
-UI bug concatenating paths reaches the filesystem from a *trusted* author. A
-validator that refuses is cheap and cannot silently change meaning; a sanitizer
-that edits an identifier produces a name the database does not have, which is a
-**wrong answer** rather than a blocked one.
+components or filenames — and `physical_name` on tables/columns — are validated
+against `\A[A-Za-z0-9_]+\Z` (ADR 0006 §9). That is **not** an anti-poisoning
+measure. It is accident prevention on values that name directories or that a
+trusted writer might mistype. **v2 has no HTTP corpus write** (`POST /corpus/edit`
+is not a deliverable): corpus writes go through `CorpusStore` / CLI / the curator
+after review. A validator that refuses is cheap and cannot silently change
+meaning; editing an identifier would produce a name the database does not have.
 
 **The specific defect the sanitizer introduced**, recorded because it is the shape
 this project keeps meeting: sanitization ran on `load`, so it altered what reached

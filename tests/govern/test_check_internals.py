@@ -28,13 +28,6 @@ CUSTOMERS = frozenset({"customers"})
 
 
 @pytest.fixture
-def check():
-    from governed_bi.govern.check import check
-
-    return check
-
-
-@pytest.fixture
 def layer():
     from governed_bi.govern.layers import Layer
 
@@ -311,14 +304,14 @@ def test_hard_block_suspect_is_a_knob_with_both_settings_live(check) -> None:
 def test_absent_column_authorization_refuses_and_present_authorization_passes(check, layer) -> None:
     """G1 at the column layer, with the negative half.
 
-    Left ``UNSET``, the layer cannot evaluate its own precondition and blocks. The
-    second assertion is what stops that from being read as "this statement is bad": the
-    identical statement passes once the authorization exists.
+    An empty analyst corpus authorises no columns, so a reference is refused. The
+    second assertion is what stops that from being read as "this statement is bad":
+    the identical statement passes once the authorization exists.
     """
     sql = "SELECT c.id FROM customers c"
     absent = check(sql, licensed=CUSTOMERS)
     assert absent["failed_layer"] is layer.COLUMNS
-    assert absent["reason_code"] == "r_column_authorization_unavailable"
+    assert absent["reason_code"] == "r_column_not_allowed"
 
     present = check(sql, licensed=CUSTOMERS, allowed_columns=frozenset({"customers.id"}))
     assert present["passed"] is True
