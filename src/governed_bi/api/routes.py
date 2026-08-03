@@ -1,0 +1,176 @@
+"""The custom REST routes the frontend consumes, mounted by ``langgraph.json``'s ``http.app``.
+
+ADR 0007 §7. `docs/openapi.json` is v1's spec and remains the spec-of-record for the **route
+shapes**; it is not the spec for the answer, which changed with the rewrite.
+
+**Every value here is an observation.** `/capabilities` is the UI's first request, so a
+hard-coded `true` in it is the stub-path defect one layer out: the interface would promise a
+model that will never answer, and the user would read the silence as a bug in their question.
+`can_edit` is false because the curator is out of scope; `can_scope` and `can_search` are false
+because those four routes are not built, and the UI degrades to the flat `/schema` dump and a
+client-side index. Reporting false is the cheapest honest path to a working page.
+
+**No route needs a model.** All five ungated routes are projections of the session's assets, so
+the corpus is browsable before anyone pays for a token.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import FastAPI
+
+from ..register.assets import ASSET_REGISTER
+from .graph_app import session_from_environment
+
+__all__ = ["app"]
+
+app = FastAPI(title="governed-bi", version="2")
+
+
+def _session() -> Any:
+    return session_from_environment()
+
+
+@app.get("/livez")
+def livez() -> dict[str, Any]:
+    """Liveness only. Deliberately does **not** touch the session: a liveness probe that
+    builds a corpus reports "dead" for a slow seed, and something that restarts the process on
+    that answer turns a slow start into a loop."""
+    return {"ok": True}
+
+
+@app.get("/capabilities")
+def capabilities() -> dict[str, Any]:
+    """What this server can actually do. The UI blocks on this response."""
+    session = _session()
+    return {
+        "environment": "local",
+        "dialect": getattr(session.connector, "dialect", "postgres"),
+        # The curator is out of scope, so an edit button would front a route that does not
+        # exist. False here is a promise kept, not a feature missing.
+        "can_edit": False,
+        "edit_mode": "none",
+        "can_stream": True,
+        # Observed, never assumed: a session with no model serves the stub path, and saying
+        # otherwise would make the interface blame the question for the silence.
+        "has_live_model": session.agent_model is not None,
+        "model": session.knobs_resolved.get("llm_model"),
+        # The four scope/search routes are not built. The UI falls back to the flat /schema
+        # dump plus a client-side index, which works.
+        "can_scope": False,
+        "can_search": False,
+        # The `ask_user` tool is bound whenever a model is, so a clarification is reachable
+        # exactly when something can ask for one.
+        "can_clarify": session.agent_model is not None,
+    }
+
+
+@app.get("/health")
+def health() -> dict[str, Any]:
+    """Corpus health as counts plus findings.
+
+    ``findings`` carries the session's problems verbatim. That is the point of the route: ADR
+    0005 §2.8.2 requires an unresolvable join endpoint to surface where the corpus is built,
+    and until there was somewhere to show it, "reported" meant "returned to a caller who
+    dropped it".
+    """
+    session = _session()
+    counts: dict[str, int] = {}
+    for asset in session.assets_by_id.values():
+        key = asset.asset_type.value
+        counts[key] = counts.get(key, 0) + 1
+    return {
+        "counts": counts,
+        # Suspect/excluded/low-confidence are corpus-curation concepts the curator produces,
+        # and the curator is out of scope. Zero here is a **true** count over an uncurated
+        # corpus, not a placeholder: nothing has marked anything, so nothing is marked.
+        "n_suspect_columns": 0,
+        "n_excluded": 0,
+        "n_low_confidence_joins": 0,
+        "ci_green": not session.problems,
+        "findings": [str(p) for p in session.problems],
+    }
+
+
+@app.get("/schema")
+def schema(schema: str | None = None) -> list[dict[str, Any]]:
+    """Every table as the UI's `TableView`, with its columns."""
+    session = _session()
+    tables = [
+        a for a in session.assets_by_id.values()
+        if a.asset_type.value == "table" and (schema is None or getattr(a, "schema", None) == schema)
+    ]
+    out: list[dict[str, Any]] = []
+    for table in sorted(tables, key=lambda a: a.id):
+        columns = [
+            {
+                "id": c.id,
+                "name": getattr(c, "physical_name", c.id.rsplit(".", 1)[-1]),
+                "summary": c.summary,
+                "type": getattr(c, "data_type", None),
+            }
+            for c in session.assets_by_id.values()
+            if c.asset_type.value == "column" and c.id.startswith(f"{table.id}.")
+        ]
+        out.append({
+            "id": table.id,
+            "name": getattr(table, "physical_name", table.id),
+            "schema": getattr(table, "schema", None),
+            "summary": table.summary,
+            "columns": sorted(columns, key=lambda c: c["id"]),
+        })
+    return out
+
+
+@app.get("/corpus/assets")
+def corpus_assets(type: str | None = None) -> list[dict[str, Any]]:
+    """Assets of one type, as rows. ``type`` is validated against the **register**, not a
+    hand-written list, so a new asset type is reachable here the moment it is declared."""
+    session = _session()
+    known = {t.value for t in ASSET_REGISTER}
+    if type is not None and type not in known:
+        return []
+    return [
+        {"id": a.id, "asset_type": a.asset_type.value, "summary": a.summary,
+         "schema": getattr(a, "schema", None)}
+        for a in sorted(session.assets_by_id.values(), key=lambda a: a.id)
+        if type is None or a.asset_type.value == type
+    ]
+
+
+def _graph_payload() -> dict[str, Any]:
+    """Tables as nodes, join edges as edges. **From the structure**, not from a second walk
+    over the assets: `CorpusStructure` is the one resolution of physical names to asset ids
+    (ADR 0005 §2.8.2), and a graph drawn from a different one could show an edge the router
+    does not have."""
+    session = _session()
+    edges = [
+        {"source": left, "target": right, "kind": "join",
+         "join_ids": list(session.structure.joins_by_edge.get((left, right), ()))}
+        for left, right in sorted(session.structure.join_edges)
+    ]
+    nodes = [
+        {"id": a.id, "label": getattr(a, "physical_name", a.id), "kind": a.asset_type.value,
+         "schema": session.structure.schema_tags.get(a.id)}
+        for a in sorted(session.assets_by_id.values(), key=lambda a: a.id)
+        if a.asset_type.value == "table"
+    ]
+    return {"nodes": nodes, "edges": edges, "meta": {"n_nodes": len(nodes), "n_edges": len(edges)}}
+
+
+@app.get("/graph")
+def er_graph() -> dict[str, Any]:
+    return _graph_payload()
+
+
+@app.get("/knowledge-graph")
+def knowledge_graph() -> dict[str, Any]:
+    """Same payload as `/graph` for now, and saying so is better than two drifting walks.
+
+    v1 distinguished an ER graph from a knowledge graph by the note and term assets layered
+    over it, and this corpus is uncurated, so the two are genuinely the same graph today. When
+    notes exist, this is where they are added — and the difference will be a real one rather
+    than a name.
+    """
+    return _graph_payload()

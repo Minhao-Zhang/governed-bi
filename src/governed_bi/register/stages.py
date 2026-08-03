@@ -68,6 +68,15 @@ class Stage(str, Enum):
     """
 
     # ── Graph nodes, in execution order (ADR 0005 §3.1) ──
+    #: Derives a turn from the conversation, for a caller that sends only a message.
+    #: Server-side only, and optional: `START -> accept -> guard` when a server mounts the
+    #: graph, `START -> guard` when the caller built its own turn.
+    #:
+    #: Declared rather than left unnamed because it is a **failure site**, not plumbing. It
+    #: mints every id in the record, and per ADR 0007 §2 it must, since a client that could
+    #: set `corpus_content_hash` could make two corpora report as one. A step that can fail
+    #: and has no stage name reports its failure against someone else's.
+    accept = "accept"
     #: Rule-based input gate. ADR 0006 §6 owns the rules; this owns the name.
     guard = "guard"
     #: Follow-up question rewritten into a self-contained one. Fires only when the

@@ -79,11 +79,22 @@ def _skip_if_terminal(state: ServeState) -> Literal["stamp", "continue"]:
     return "continue"
 
 
-def build_graph(*, agent_checkpointer: Any = None) -> StateGraph:
+def build_graph(*, agent_checkpointer: Any = None, accept: Any = None) -> StateGraph:
     """Construct the uncompiled serve graph.
 
     ``agent_checkpointer`` is shared with the nested ``create_agent`` so
     ``ask_user`` interrupts resume correctly under the same ``thread_id``.
+
+    ``accept`` is an optional node placed **before** ``guard``, so ``START -> accept ->
+    guard``. It exists for one caller: a server whose client sends only a message. The
+    record requires fifteen fields and ``guard`` subscripts ``state["question"]``, so
+    something has to derive a turn from the conversation — and per ADR 0007 §2 that
+    something must be **server-side**, because ``run_id``, ``corpus_content_hash`` and
+    ``knobs_resolved`` are the run's own claims about itself and every quotability gate
+    reads them. A client that could set them could make two corpora report as one.
+
+    Passing nothing keeps ``START -> guard``, which is what a caller who builds its own
+    turn (``eval/harness.py``, ``python -m governed_bi.serve``) already does correctly.
     """
 
     def _agent(state: dict, config: Any) -> dict:
@@ -110,7 +121,12 @@ def build_graph(*, agent_checkpointer: Any = None) -> StateGraph:
 
     graph.add_node("fanout", wrap_node("facet_schema", _fanout_passthrough))
 
-    graph.add_edge(START, "guard")
+    if accept is not None:
+        graph.add_node("accept", wrap_node("accept", accept))
+        graph.add_edge(START, "accept")
+        graph.add_edge("accept", "guard")
+    else:
+        graph.add_edge(START, "guard")
     graph.add_conditional_edges(
         "guard",
         _after_guard,
