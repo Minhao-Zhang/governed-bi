@@ -44,6 +44,9 @@ PARCELS: dict[str, tuple[str, str]] = {
     # register exists to prevent, one level up: not an unaccepted parcel, but a parcel
     # nothing knows to ask about.
     "I": ("model", "section 9"),
+    # Added 2026-08-03 with ADR 0007. `tools/check_imports.py` has declared an `api` layer
+    # since before v1 was deleted; this is the parcel that finally puts something in it.
+    "J": ("api", "ADR 0007"),
 }
 
 
