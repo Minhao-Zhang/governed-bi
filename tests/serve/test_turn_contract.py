@@ -84,7 +84,23 @@ def test_a_facet_with_no_index_reports_its_channel_as_failed() -> None:
     channel, and saying `ran` is the rate-limited-embedder incident reproduced with the
     field in place.
     """
-    pytest.fail("not implemented: see docstring")
+    from governed_bi.register.facets import Channel, ChannelState, Stage
+    from governed_bi.serve.nodes.facets import facet_entity_node
+
+    # No index and no model in the config: nothing could have consulted anything.
+    # INCOMPLETE: with this thin a state the node returns before reporting channels, so
+    # the precondition below fires rather than the assertion that matters. The review
+    # observed {'lexical': 'ran', 'semantic': 'ran'} from a fuller state -- reaching that
+    # path needs a real question, a real index in the config, and an embedder. Left
+    # convicting on the precondition rather than deleted, so the gap is visible.
+    out = facet_entity_node({"question": "how many customers", "facet_hits": []}, {"configurable": {}})
+    channels = out.get("facet_channels", {}).get(Stage.facet_entity.value, {})
+    assert channels, "the facet must report its channel states"
+    assert channels.get(Channel.lexical.value) == ChannelState.failed.value, (
+        f"no index was available, so the lexical channel did not run; reported "
+        f"{channels.get(Channel.lexical.value)!r}. Reporting `ran` here is what made "
+        "the degradation gate inert."
+    )
 
 
 def test_a_degraded_channel_writes_facet_degraded() -> None:
@@ -107,7 +123,20 @@ def test_pass_two_does_not_score_a_facet_on_a_channel_it_does_not_declare() -> N
     uses and `retrieve/` must never decide it locally. This is `Anomaly.extra_channel`,
     and it went undetected because nothing compares observation to declaration.
     """
-    pytest.fail("not implemented: see docstring")
+    import inspect
+
+    from governed_bi.register.facets import FACET_CHANNELS, Channel, Stage
+    from governed_bi.serve.nodes import pass_two
+
+    assert Channel.lexical not in FACET_CHANNELS[Stage.facet_example], (
+        "this test's premise: the example facet declares no lexical channel"
+    )
+    source = inspect.getsource(pass_two)
+    assert "FACET_CHANNELS" in source, (
+        "pass_two scores every facet on every channel: it never consults "
+        "FACET_CHANNELS, so it cannot know that facet_example has no lexical channel. "
+        "facets.py has this guard; pass_two needs the same one."
+    )
 
 
 # ── absence must not be invented into a value ─────────────────────────────────
@@ -149,7 +178,17 @@ def test_an_absent_corpus_raises_rather_than_defaulting_to_an_empty_one() -> Non
     Production `check()` already raises `GovernanceUsageError` here. `serve/` must not
     catch that and substitute a default; a wiring failure is a crash, not a refusal.
     """
-    pytest.fail("not implemented: see docstring")
+    import inspect
+
+    from governed_bi.serve import tools
+
+    source = inspect.getsource(tools)
+    assert "analyst_corpus_from_keys(allowed=())" not in source.replace(" ", ""), (
+        "tools.py defaults an absent corpus to an empty one. It fails closed, so nothing "
+        "leaks -- but it records 'the corpus was never wired up' as r_column_not_allowed "
+        "with guardrail_errors: 0, indistinguishable from 'the model asked for a column "
+        "it may not see'. G1 says absence refuses; a wiring failure is a crash."
+    )
 
 
 # ── the end-to-end assertion, and it must not use the stub ────────────────────
