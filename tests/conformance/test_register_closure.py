@@ -496,3 +496,25 @@ def test_a_real_turn_writes_every_required_field_on_every_terminal_path() -> Non
     thing.
     """
     raise NotImplementedError("no graph yet")
+
+
+# ── the unbuilt parcels must stay declared, in both directions ─────────────────
+
+
+def test_unbuilt_parcels_match_the_declaration() -> None:
+    """A skipped acceptance suite and a passing one look identical under ``pytest -q``.
+
+    Half this repo's retired numbers have that shape, so the set of unbuilt parcels is
+    **declared** in ``tests/contracts.py`` and checked against the truth on disk here.
+    It fails in both directions on purpose: building ``govern/`` breaks the suite until
+    someone deletes its entry, which is the only forcing function that survives an
+    implementer who is not reading this file.
+    """
+    sys.path.insert(0, str(ROOT / "tests"))
+    import contracts
+
+    assert contracts.unbuilt() == contracts.UNBUILT, (
+        f"declared unbuilt {sorted(contracts.UNBUILT)} but found "
+        f"{sorted(contracts.unbuilt())} on disk. If you just built a parcel, remove it "
+        "from UNBUILT in tests/contracts.py — its acceptance tests are now live."
+    )
