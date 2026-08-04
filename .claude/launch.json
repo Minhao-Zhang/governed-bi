@@ -2,6 +2,12 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "ui",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "../governed-bi-ui", "run", "dev"],
+      "port": 3000
+    },
+    {
       "name": "inspector",
       "runtimeExecutable": "uv",
       "runtimeArgs": [
