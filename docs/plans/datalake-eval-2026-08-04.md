@@ -37,10 +37,16 @@ questions in 69 s.
 | gold schema never scored at all | 33 / 1 351 |
 | median rank when scored | 2 |
 
-**Routing is the dominant bottleneck and it is a ranking problem, not a coverage problem.**
+> **Superseded — see [`retrieval-ceiling-2026-08-04.md`](retrieval-ceiling-2026-08-04.md).**
+> This section concluded that schema routing is the dominant bottleneck. The numbers below
+> are right and they measure the wrong stage. Licensing **every** schema
+> (`route_top_n = 57`) moves the gold-table-coverage ceiling only from 0.444 to 0.561, so
+> perfect routing is worth ≤12 pp. The binding constraint is *table-level* retrieval: a
+> table whose summary shares no token with the question is not a candidate at any budget or
+> candidate depth, and adding an embedder lifts the ceiling 6–9 pp for about a cent.
+
 The gold schema is scored somewhere 97.6% of the time and first only 44.2%. The index here
-is lexical only (BM25, no embedder), so the obvious next measurement is the embedder's
-lift on this table — it is cheap and it moves the ceiling for everything downstream.
+is lexical only (BM25, no embedder).
 
 Worst schemas at the shortlist (n ≥ 15): `car_retails` 0.16, `world_development_indicators`
 0.33, `movie_platform` 0.35, `works_cycles` 0.35 (n=77), `student_club` 0.43,

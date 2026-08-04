@@ -82,6 +82,7 @@ quotable — every number produced before 2026-07-26 is discarded.**
 
 *Live (v2):*
 
+- **[Where the EX ceiling actually is, 2026-08-04](plans/retrieval-ceiling-2026-08-04.md): a chain of free measurements locating the binding constraint on accuracy. Not schema routing (licensing all 57 schemas moves the ceiling 0.444 → 0.561), not the table budget (flat 8→60), not the candidate pool (flat 50→800) — it is the retrieval channel: an embedder lifts gold-table coverage 6–9 pp for about a cent. Corrects the routing conclusion in the doc below.**
 - **[Data-lake eval, 2026-08-04](plans/datalake-eval-2026-08-04.md): what was measured on the pooled 57-schema lake, what it cost, and which numbers are not yet trustworthy. Routing is the bottleneck (`recall@1` 0.442 against `recall@3` 0.609); EX is 0.070 and is a floor rather than a verdict, and the engine asks for clarification on 0/100 reachable turns against 33/71 unreachable ones. Also records the five measurement defects found before any of it could be trusted. The entry point for eval work on v2.**
 - [v2 implementation decisions](plans/v2-implementation-decisions.md): the numbered judgements, newest last. Read the tail for current state.
 
