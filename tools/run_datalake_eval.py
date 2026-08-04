@@ -70,6 +70,15 @@ def main(argv: list[str] | None = None) -> int:
         "docs/plans/retrieval-ceiling-2026-08-04.md. Off by default so the lexical arm stays "
         "the reproducible baseline.",
     )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=240.0,
+        help="per-request timeout in seconds. Without one a worker can block forever: a "
+        "4-worker run stalled completely for 6+ minutes with 44 live threads and no rows, "
+        "because every worker was inside a request that never returned or a backoff that "
+        "never ended. A timeout turns that into a retry.",
+    )
     parser.add_argument("--per-schema", type=int, default=None, help="cap questions per schema")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--out", type=pathlib.Path, default=None)
@@ -104,6 +113,8 @@ def main(argv: list[str] | None = None) -> int:
         "model_provider": "openai",
         "use_responses_api": True,
         "max_retries": max(0, int(args.max_retries)),
+        # Bounded, because unbounded is how a run stalls rather than fails. See --timeout.
+        "timeout": float(args.timeout),
     }
     if args.effort:
         kwargs["reasoning_effort"] = args.effort
