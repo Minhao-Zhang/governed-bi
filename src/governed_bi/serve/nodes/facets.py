@@ -29,6 +29,7 @@ from governed_bi.register.facets import (
 from governed_bi.register.stages import Stage
 from governed_bi.retrieve.index import UnifiedIndex
 from governed_bi.serve.runtime import candidate_depth
+from governed_bi.serve.runtime import configurable as runtime_config
 
 __all__ = [
     "facet_schema_node",
@@ -97,12 +98,12 @@ def _hits_from_hook(state: Mapping[str, Any], stage: Stage, question: str) -> li
 
 
 def _index_from_config(config: RunnableConfig | None) -> UnifiedIndex | None:
-    if not config:
-        return None
-    configurable = config.get("configurable") or {}
-    if not isinstance(configurable, Mapping):
-        return None
-    index = configurable.get("index")
+    """The index, through the shared reader — never by subscripting ``config`` here.
+
+    A second reader of ``config["configurable"]`` is a second answer to "may a request name
+    this key", and ``runtime.configurable`` is where that question is answered once.
+    """
+    index = runtime_config(config).get("index")
     return index if isinstance(index, UnifiedIndex) else None
 
 

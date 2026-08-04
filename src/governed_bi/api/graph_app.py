@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from governed_bi.serve.graph import build_graph
+from governed_bi.serve.runtime import trust
 from governed_bi.serve.session import Session
 
 __all__ = ["make_graph", "session_from_environment", "SCHEMA_VAR", "CORPUS_DIR_VAR", "MODEL_VAR"]
@@ -222,9 +223,20 @@ def make_graph() -> Any:
     So no checkpointer is passed at all, and that is what lets the server supply its own —
     which is what makes ``/threads`` work. ``compile_graph``'s in-memory default exists for the
     CLI and would shadow it.
+
+    **The constants are also declared trusted, and that is a security fix, not tidiness.**
+    ``with_config`` binds them as *defaults* and LangGraph merges caller config **over** a
+    default — which is precisely why ``thread_id`` is excluded, and precisely what made the six
+    keys beside it client-settable. A request to ``/threads/{id}/runs`` carrying
+    ``config.configurable.policy`` replaced the ``GovernancePolicy`` for that run; one carrying
+    ``assets_by_id`` replaced the corpus every tool licenses against. Reproduced.
+    :func:`~governed_bi.serve.runtime.trust` makes the shared config reader force them back
+    over anything a request names, which is the same rule ``accept`` applies to the record's
+    provenance fields one layer in.
     """
     _warm_imports()
     conf = dict(session_from_environment().configurable()["configurable"])
+    trust(conf)
     return build_graph(accept=_accept_node).compile().with_config({"configurable": conf})
 
 

@@ -12,7 +12,7 @@ from langchain_core.runnables import RunnableConfig
 from governed_bi.register.quantity import Measured
 from governed_bi.serve.agent_state import GovernedAgentState
 from governed_bi.serve.delivery import DeliveryTracker
-from governed_bi.serve.runtime import configurable
+from governed_bi.serve.runtime import configurable, model_id
 from governed_bi.serve.state import TERMINAL_PATH_KINDS
 from governed_bi.serve.tools import (
     SYSTEM_PROMPT,
@@ -179,7 +179,11 @@ def _usage_row(model: Any, messages: list[Any], turn_index: Any) -> dict[str, An
         counts = dict(reported)
     return {
         "turn_index": turn_index,
-        "model": getattr(model, "_llm_type", None) or type(model).__name__,
+        # `model_id` first, `_llm_type` only as the fallback. It was the other way round, so
+        # every OpenAI turn recorded `model: "openai-chat"` — a LangChain class label — while
+        # `knobs_resolved["llm_model"]` beside it held the real id. One turn, two answers, on
+        # a comparability field.
+        "model": model_id(model) or getattr(model, "_llm_type", None) or type(model).__name__,
         **counts,
     }
 

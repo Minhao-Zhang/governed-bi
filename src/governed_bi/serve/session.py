@@ -48,6 +48,7 @@ from ..ports import Embedder
 from ..register.knobs import defaults as knob_defaults
 from ..retrieve.index import UnifiedIndex, build_index
 from ..retrieve.structure import CorpusStructure, build_structure
+from .runtime import model_id
 from .state import PER_TURN_RESET
 from .tools import SYSTEM_PROMPT
 
@@ -124,7 +125,14 @@ class Session:
             conf["query_vector"] = self.embedder.embed([question])[0]
         return {"configurable": conf}
 
-    def turn(self, question: str, *, turn_index: int = 1, thread_id: str | None = None) -> dict[str, Any]:
+    def turn(
+        self,
+        question: str,
+        *,
+        turn_index: int = 1,
+        thread_id: str | None = None,
+        identity: Any = None,
+    ) -> dict[str, Any]:
         """A turn dict with every field ``register.record.required_keys`` needs from a caller.
 
         **Every id is minted here and a caller cannot supply one.** ``run_id``, ``turn_id``,
@@ -173,6 +181,14 @@ class Session:
             "n_re_served": 0,
             "messages": [],
             "usage": [],
+            # Checkpointed, and read back by ``resume.resume_clarification`` to decide whether
+            # the caller answering an ``ask_user`` question is the caller who was asked. Absent
+            # unless a caller supplies one, and absence **fails closed** —
+            # ``resume_authorised`` refuses two ``None``s deliberately, because
+            # ``None == None`` is the comparison that let v1 quote
+            # ``corpus_content_hash == "unknown"``. Nothing in this repository was passing one,
+            # so every clarification on the server path was unanswerable.
+            **({"identity": identity} if identity is not None else {}),
         }
 
     # ── what the caller must look at before serving ───────────────────────────
@@ -275,9 +291,13 @@ def from_assets(
         knobs["embedding_model"] = embedder.model
         knobs["embedding_dimensions"] = embedder.dimensions
     if agent_model is not None:
-        knobs["llm_model"] = getattr(agent_model, "model_name", None) or getattr(
-            agent_model, "_llm_type", None
-        ) or type(agent_model).__name__
+        # `runtime.model_id` rather than a second local walk over the same attributes: this
+        # knob and every `usage[].model` row are compared, and they disagreed — the usage row
+        # asked `_llm_type` first and recorded "openai-chat".
+        knobs["llm_model"] = (
+            model_id(agent_model) or getattr(agent_model, "_llm_type", None)
+            or type(agent_model).__name__
+        )
         # Recorded **only when the model carries one**, never defaulted. `knobs.py` declares
         # this a comparability knob because two v1 ladders differed only in it, unrecorded,
         # and it moved a baseline arm +2.5pp against a 2.3pp threshold. Writing a default here

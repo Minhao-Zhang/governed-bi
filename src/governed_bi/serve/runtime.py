@@ -20,6 +20,9 @@ __all__ = [
     "configurable",
     "corpus_structure",
     "facet_hits",
+    "model_id",
+    "trust",
+    "trusted",
 ]
 
 DEFAULT_CANDIDATE_DEPTH = 50
@@ -34,12 +37,70 @@ _STRUCTURE_CACHE: dict[int | None, tuple[Any, "CorpusStructure"]] = {}
 _STRUCTURE_CACHE_MAX = 8
 
 
+#: Run constants no request may name. Empty in-process by default; registered once by
+#: ``api/graph_app.make_graph`` at server start. See :func:`trust`.
+_TRUSTED: dict[str, Any] = {}
+
+
+def trust(constants: Mapping[str, Any] | None = None) -> None:
+    """Declare the run constants a request must not be able to override.
+
+    **This closes a hole that let a client replace the governance policy.**
+    ``make_graph`` binds the session's constants with ``with_config``, and LangGraph merges
+    caller config **over** bound defaults — correct for ``thread_id``, which is exactly why
+    the binding is used, and catastrophic for the six keys beside it. A request to
+    ``/threads/{id}/runs`` carrying ``config.configurable.policy`` replaced the
+    ``GovernancePolicy`` for that run; carrying ``assets_by_id`` replaced the corpus every
+    tool licenses against. Reproduced: ``policy=CLIENT_POLICY assets={'pwned': 1}``.
+
+    This is the same rule as ADR 0007 §2's "provenance fields are ignored, not merged" and
+    ADR 0006's "no tool writes to ``licensed``", one layer out: the run's own claims about
+    itself are not negotiable by the party being served. ``accept`` already applies it to the
+    fifteen state fields; ``configurable`` is where the other seven live.
+
+    Registered once per process because the session **is** the run constants — a second set
+    would mean two requests of one run disagreeing about what they served.
+
+    Call with nothing to clear (tests, and a process that serves more than one session).
+    """
+    _TRUSTED.clear()
+    _TRUSTED.update(constants or {})
+
+
+def trusted() -> Mapping[str, Any]:
+    """What :func:`trust` registered, for a caller that needs to check."""
+    return dict(_TRUSTED)
+
+
 def configurable(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
-    """``config[\"configurable\"]`` when present; else empty mapping."""
+    """``config["configurable"]``, with any :func:`trust`-ed constants forced **over** it.
+
+    Every node reads its wiring here and nowhere else, which is what makes one merge enough.
+    Two nodes used to subscript ``config["configurable"]`` directly — ``guard`` for the
+    policy of all things — and each was a way around this.
+    """
     if not config:
-        return {}
+        return dict(_TRUSTED)
     raw = config.get("configurable") if isinstance(config, Mapping) else None
-    return raw if isinstance(raw, Mapping) else {}
+    if not isinstance(raw, Mapping):
+        return dict(_TRUSTED)
+    return {**raw, **_TRUSTED} if _TRUSTED else raw
+
+
+def model_id(model: Any) -> str | None:
+    """The provider's model id, or ``None`` when the object does not carry one.
+
+    One implementation for two readers — ``knobs_resolved["llm_model"]`` and every
+    ``usage`` row — because those two are compared. The usage row read ``_llm_type`` first
+    and therefore recorded ``"openai-chat"`` for every OpenAI model ever served, while the
+    knob beside it held ``gpt-5.6-luna``: one turn reporting two different models, on a
+    ``Role.comparability`` field. ``_llm_type`` is a LangChain *class* label, not a model.
+    """
+    for attr in ("model_name", "model", "deployment_name"):
+        value = getattr(model, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
 def candidate_depth(state: Mapping[str, Any]) -> int:

@@ -100,7 +100,12 @@ def capabilities() -> dict[str, Any]:
         "can_scope": False,
         "can_search": False,
         # The `ask_user` tool is bound whenever a model is, so a clarification is reachable
-        # exactly when something can ask for one.
+        # exactly when something can ask for one — **and now answerable**, which is the half
+        # this field was previously lying about. `POST /chat` dropped `__interrupt__` and
+        # replied 200 with a null answer while the graph stayed paused, and `resume_clarification`
+        # refused every caller because no turn carried an `identity`. Reporting `true` over that
+        # was worse than reporting `false`: it made the interface offer a question it could not
+        # accept an answer to.
         "can_clarify": session.agent_model is not None,
     }
 
@@ -229,25 +234,161 @@ def chat(body: dict[str, Any]) -> dict[str, Any]:
     session = _session()
     question = str(body.get("question") or "").strip()
     if not question:
-        return {"outcome": "crashed", "text": "no question", "failed_stage": "accept",
-                "error_type": "ValueError", "refused_by": None, "record": {}, "answer_text": None}
+        return _error("no question")
 
     thread_id = str(body.get("session_id") or "") or uuid.uuid4().hex[:16]
     turn_index = 1 + sum(1 for h in body.get("history") or [] if (h or {}).get("role") == "user")
-    turn = session.turn(question, turn_index=turn_index, thread_id=thread_id)
-    config = session.configurable(question=question)
-    # The thread goes on the **config**, because that is what LangGraph checkpoints on. An
-    # earlier version put it only in the turn state and claimed in this docstring that a
-    # conversation would resume; it could not. See `_graph()` for the other half.
+    turn = session.turn(
+        question,
+        turn_index=turn_index,
+        thread_id=thread_id,
+        identity=_identity(body, thread_id),
+    )
+    config = _config(session, question, thread_id)
+    return _shape(_graph().invoke(turn, config))
+
+
+@app.post("/chat/resume")
+def chat_resume(body: dict[str, Any]) -> dict[str, Any]:
+    """Answer a clarification. The other half of ``POST /chat``'s interrupt.
+
+    **This route did not exist, and its absence was a deadlock on the transport the UI uses.**
+    ``/chat`` called ``graph.invoke`` and returned ``out["answer"]``; when ``ask_user``
+    interrupted, no node had written ``answer``, so the route replied **HTTP 200** with
+    ``{"answer_text": null}`` and dropped ``__interrupt__`` on the floor. The client saw a
+    successful empty answer, the graph stayed paused forever, and nothing on screen was wrong —
+    which ``serve/tools.py`` already calls "the worst failure shape available here" about the
+    payload version of the same bug. Meanwhile ``/capabilities`` reported
+    ``can_clarify: true``.
+
+    Request: ``{session_id, clarification_id?, answer | choice_id | declined, identity?}``.
+
+    ``clarification_id`` is checked against the pending question when supplied, because an
+    answer attributed to the wrong question is worse than a refused one.
+    """
+    session = _session()
+    thread_id = str(body.get("session_id") or "")
+    if not thread_id:
+        return _error("no session_id: a resume needs the thread its question is paused on")
+
+    config = _config(session, None, thread_id)
+    pending = _pending_on_thread(config)
+    if pending is None:
+        return _error(f"no clarification is pending on session {thread_id!r}")
+
+    wanted = str(body.get("clarification_id") or "")
+    if wanted and wanted != pending.get("clarification_id"):
+        return _error(
+            f"clarification_id {wanted!r} does not match the pending question "
+            f"{pending.get('clarification_id')!r}"
+        )
+
+    from governed_bi.serve.resume import ResumeRejected, resume_clarification
+
+    reply = {k: v for k, v in body.items() if k in ("answer", "choice_id", "declined")}
+    try:
+        out = resume_clarification(
+            _graph(),
+            config=config,
+            identity=_identity(body, thread_id),
+            answer=reply or str(body.get("answer") or ""),
+        )
+    except ResumeRejected:
+        return _error(
+            "resume identity mismatch: the caller answering is not the caller that was asked"
+        )
+    return _shape(out)
+
+
+def _config(session: Any, question: str | None, thread_id: str) -> dict[str, Any]:
+    """This request's config. The thread goes on the **config**, not in the turn state.
+
+    That is what LangGraph checkpoints on. An earlier version put it only in the turn and
+    asserted in a docstring that a conversation would resume; it could not.
+    """
+    config = session.configurable(question=question) if question else session.configurable()
     config["configurable"]["thread_id"] = thread_id
-    out = _graph().invoke(turn, config)
+    return config
+
+
+def _identity(body: dict[str, Any], thread_id: str) -> dict[str, str]:
+    """Who is asking, for ``resume_authorised``.
+
+    **On this deployment the thread id is the only credential there is, and saying so is the
+    point.** ``resume_authorised`` refuses two ``None``s on purpose — an unauthenticated
+    deployment must not get cross-caller resume for free — and nothing in this repository
+    supplied an identity, so *every* clarification was unanswerable: ``ResumeRejected`` for
+    every caller, including the right one.
+
+    Falling back to the thread id grants no authority that posting to ``/chat`` on the same
+    thread does not already grant, because there is no authentication in front of either. It is
+    a **same-thread** check, not a same-caller one, and a deployment with real auth must send a
+    real ``identity`` — which this accepts and prefers.
+    """
+    supplied = body.get("identity")
+    if isinstance(supplied, str) and supplied:
+        return {"token": supplied}
+    if isinstance(supplied, dict):
+        token = next((str(v) for v in supplied.values() if v), "")
+        if token:
+            return {"token": token}
+    return {"token": thread_id}
+
+
+def _clarification(interrupts: Any) -> dict[str, Any] | None:
+    """The ``ask_user`` payload (ADR 0007 §6) among some interrupts, or ``None``.
+
+    Pure, and takes the interrupts rather than a state, because the two callers have different
+    ones: a completed ``invoke`` returns ``__interrupt__`` on the state, while a fresh
+    ``/chat/resume`` request has no returned state and must read the checkpoint's pending tasks.
+    Filtered on ``kind == "clarification"`` so a future interrupt of another kind is not
+    answered by the clarification route.
+    """
+    for item in interrupts or ():
+        value = getattr(item, "value", item)
+        if isinstance(value, dict) and value.get("kind") == "clarification":
+            return value
+    return None
+
+
+def _pending_on_thread(config: dict[str, Any]) -> dict[str, Any] | None:
+    """The clarification paused on this thread, from the checkpoint."""
+    tasks = getattr(_graph().get_state(config), "tasks", ()) or ()
+    return _clarification(
+        [i for task in tasks for i in (getattr(task, "interrupts", ()) or ())]
+    )
+
+
+def _shape(out: dict[str, Any]) -> dict[str, Any]:
+    """One response shape for both chat routes, including the paused one.
+
+    Response: **v2's answer, verbatim** — ``{outcome, text, failed_stage, error_type,
+    refused_by, record}`` — plus ``answer_text`` and, when the turn is paused, ``clarification``.
+    Not projected into v1's ``AnswerView``: ADR 0007 §3 forbids synthesizing ``tier``,
+    ``safety_clearance`` or ``semantic_assurance``, none of which exists in this engine.
+    """
+    pending = _clarification(out.get("__interrupt__"))
+    if pending is not None:
+        # `outcome: "clarification"` is a **declared** `register.stages.Outcome` member, not a
+        # string invented here for the transport.
+        return {"outcome": "clarification", "text": pending.get("question"),
+                "failed_stage": None, "error_type": None, "refused_by": None,
+                "record": {}, "answer_text": None, "clarification": pending}
     answer = dict(out.get("answer") or {})
     # The model's text lives in `messages`, not in `answer["text"]` — ADR 0007 §4: `text` is
     # *system* copy and is null on the answered path. A REST caller has no message channel to
     # read, so the one thing it cannot reconstruct is supplied here, under a different name so
     # the two are never confused for one field.
     answer["answer_text"] = _last_ai_text(out)
+    answer.setdefault("clarification", None)
     return answer
+
+
+def _error(detail: str) -> dict[str, Any]:
+    """A refusal a client can read, in the same shape as every other reply."""
+    return {"outcome": "crashed", "text": detail, "failed_stage": "resume",
+            "error_type": "ValueError", "refused_by": None, "record": {},
+            "answer_text": None, "clarification": None}
 
 
 def _last_ai_text(state: dict[str, Any]) -> str | None:
