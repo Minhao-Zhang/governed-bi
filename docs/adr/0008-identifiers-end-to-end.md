@@ -1,6 +1,9 @@
 # 0008: Identifiers, end to end
 
-- **Status:** Proposed (2026-08-04). No code. Amends
+- **Status:** Accepted in part (2026-08-04). **Phase 0 is built** — canonicalisation
+  wired and quoting on, transitive schema tags, the three comparability knobs
+  reachable. Phases 1 and 2 (the key/name split, build-time SQL binding, the
+  round-trip check) are not. Amends
   [ADR 0005](0005-v2-memory-layer-and-faceted-retrieval.md) §1.2/§2.8.2 and
   [ADR 0006](0006-execution-time-governance.md) §3/§4.
 - **Deciders:** project owner + design session (2026-08-04)
@@ -408,13 +411,21 @@ without ever guessing a schema for a multi-schema turn.
 
 ## Build order, and the measurement that says each step worked
 
-**Phase 0 — the three cheap ones, none of which needs D1.**
+**Phase 0 — the three cheap ones, none of which needs D1. Done 2026-08-04.**
 
-| change | closes | measurement |
+| change | closes | measured outcome |
 | --- | --- | --- |
-| wire `spellings` + `ambiguous_folds` into `tools.py`; quote on rewrite; make them required | P1 | a query against `address.CBSA` answers; 81 tables + 610 columns reachable |
-| transitive schema tag for metric-bound terms | P5.3 | 136 untagged terms → 0; a `beer_factory` question licenses no `shakespeare` asset |
-| the three route knobs read `knobs_resolved` | D7 | setting `route_top_n=1` changes routing *and* the record |
+| `spellings_for` wired into `tools.py`; quote on rewrite; `spellings` made a required parameter | P1 | ✅ identical passing verdict, `spellings={}` → `relation "address.cbsa" does not exist`, `spellings_for` → `SELECT COUNT(*) FROM "address"."CBSA"` → 465. 5/5 live cases, including the leading-digit column |
+| transitive schema tag for metric-bound terms | P5.3 | ✅ 136 untagged terms → 27, and the 27 carry no `binding` at all, which 0005 makes a legitimate state. A pooled `beer_factory` question licenses no table outside its routed schemas |
+| the three route knobs read `knobs_resolved`, defaulting from the register | D7 | ✅ `knobs_resolved["route_top_n"]=1` now reaches routing. On the pooled lake, three questions go `decline missing_join_path` → `answered` |
+
+**The pooled lake answers, at `route_top_n = 1`.** At the register default of 3 it still
+declines, and that is cause 1 rather than a leak: the three top-scoring schemas of 57 are
+unrelated, pass two licenses tables from all of them, and no cross-schema join edge
+exists — so the terminal set is disconnected *by construction*. Every licensed table now
+belongs to a routed schema, which is what the tag fix was for. Whether pass two should
+license across every routed schema, or `connect` should run per schema and the answer come
+from one, is a retrieval design question and not an identifier one.
 
 Phase 0 is what stands between the pooled lake and its first answer. It is also
 the whole of P1, which is the only defect here that produces a wrong-looking

@@ -514,3 +514,102 @@ def test_a_steiner_points_join_keys_reach_the_licensed_set() -> None:
     assert {j for j, _ in budgeted.pulled_in} == completed, (
         "a completed join was budgeted out. These are structural additions, not ranked hits"
     )
+
+
+# ── the schema tag a metric-bound term gets, which is the pooled lake's leak ────
+
+
+def test_a_term_bound_to_a_metric_inherits_the_metrics_schema() -> None:
+    """ADR 0008 Phase 0. **This is the pooled data lake's licensing leak.**
+
+    ``TagRule.binding_target`` reads the target's own ``schema`` field, and three of the
+    eight types have none: a metric's namespace is its ``base_table``'s. So a term bound
+    to a metric came out **untagged** — and untagged is not inert. Pass two carries an
+    untagged asset forward *unconditionally*, because it cannot restrict what it cannot
+    place, so one lexical hit bridged schemas: a Shakespeare term pulled its metric,
+    which pulled ``shakespeare.parrafos`` and four of its columns into ``licensed`` on a
+    ``beer_factory`` question, and ``connect`` cannot join Shakespeare to a brewery. It
+    declined ``missing_join_path`` even at ``route_top_n = 1``.
+
+    Measured at 136 untagged terms on the gold-semantic-layer corpus before the fix, 0
+    after — the 27 that remain untagged carry no ``binding`` at all, which ADR 0005 makes
+    a legitimate state rather than a defect.
+    """
+    from governed_bi.corpus.schema import Binding, MetricAsset, TermAsset
+    from governed_bi.register.assets import AssetType
+    from governed_bi.retrieve.structure import build_structure
+
+    metric = MetricAsset(
+        id="metric_line_yield",
+        name="line yield",
+        base_table="beer_factory.batches",
+        expression="AVG(litres)",
+        summary="line yield: AVG(litres) per batch",
+    )
+    # A term bound to the *metric*, not to a column. This is the 109-asset shape in the
+    # corpus, and the whole point is that `binding.target_id` is a perfectly valid asset
+    # id -- the reference resolves, and only the *tag* was missing.
+    term = TermAsset(
+        id="term_yield",
+        name="yield",
+        summary="yield, output, litres per batch",
+        binding=Binding(target_type=AssetType.metric, target_id=metric.id),
+    )
+    chained = TermAsset(
+        id="term_output",
+        name="output",
+        summary="output — a synonym for yield",
+        binding=Binding(target_type=AssetType.term, target_id=term.id),
+    )
+    assets = [
+        _schema("beer_factory"),
+        _table("beer_factory", "batches"),
+        metric,
+        term,
+        chained,
+    ]
+
+    structure, problems = build_structure(assets)
+
+    assert not problems, problems
+    assert structure.schema_tags.get(metric.id) == "beer_factory", (
+        "the metric itself is tagged through its base_table; if this fails the term "
+        "cannot inherit anything and the rest of the assertion is vacuous"
+    )
+    assert structure.schema_tags.get(term.id) == "beer_factory", (
+        f"a term bound to a metric is untagged: {structure.schema_tags.get(term.id)!r}. "
+        "Pass two carries untagged assets forward unconditionally, so this term votes "
+        "for no schema and is licensed against every one of them"
+    )
+    assert structure.schema_tags.get(chained.id) == "beer_factory", (
+        "term -> term -> metric is a legitimate chain and it must resolve too, or the "
+        "fix is one hop deep and the leak survives behind a synonym"
+    )
+
+
+def test_a_binding_cycle_does_not_hang_the_projection() -> None:
+    """The tag chain is a fixpoint over a graph the corpus authors, so it may contain a
+    cycle. Two terms bound to each other must simply stay untagged — the loop makes no
+    progress and stops — rather than recursing until the stack ends the turn."""
+    from governed_bi.corpus.schema import Binding, TermAsset
+    from governed_bi.register.assets import AssetType
+    from governed_bi.retrieve.structure import build_structure
+
+    left = TermAsset(
+        id="term_a",
+        name="a",
+        summary="a, the first term",
+        binding=Binding(target_type=AssetType.term, target_id="term_b"),
+    )
+    right = TermAsset(
+        id="term_b",
+        name="b",
+        summary="b, the second term",
+        binding=Binding(target_type=AssetType.term, target_id="term_a"),
+    )
+
+    structure, _ = build_structure([left, right])
+
+    assert left.id not in structure.schema_tags and right.id not in structure.schema_tags, (
+        "a cycle resolved to a tag, which means something outside the corpus decided it"
+    )

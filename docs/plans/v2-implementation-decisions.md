@@ -1473,3 +1473,87 @@ problems and 0 validation problems; 712 of 715 dimensions are asset ids; join ed
 **None of this makes the pooled lake answer.** The two causes that block it are untouched here
 and are ADR 0008's Phase 0: the unwired canonicalisation (P1) and the untagged metric-bound
 terms.
+
+## 49. ADR 0008 Phase 0: the pooled lake answers · *2026-08-04*
+
+Three changes, each closing a defect that a green suite could not see.
+
+### P1 — a statement passed every layer and the engine could not run it
+
+`prepare()` declared `spellings` optional; the only production caller omitted it; `fold_map`,
+which produces it, had **no caller in `src/` at all**. So canonicalisation — ADR 0006 §3 step 2,
+the thing that exists to stop this — never ran, and `check()`'s folded comparison made the wrong
+spelling match. The counterfactual, same statement, same passing verdict:
+
+```
+spellings={}         -> SELECT COUNT(*) FROM address.cbsa LIMIT 200001
+                        QueryError: relation "address.cbsa" does not exist
+spellings_for(...)   -> SELECT COUNT(*) FROM "address"."CBSA" LIMIT 200001
+                        465
+```
+
+Two halves were needed, and only one of them was in the ADR's first draft. Rewriting the
+spelling is not enough: `identifier.set("this", "CBSA")` emits `address.CBSA` **unquoted**, and
+Postgres folds that straight back to the spelling the rewrite just corrected. So a known
+identifier is now always quoted, including one the model already spelled correctly.
+
+**`spellings` is scoped to the licensed tables, and the scope is the whole design.** Over the
+whole corpus, 30 folded names carry two declared spellings — `name`, `id`, `city`, `code`,
+`type`, `title` — so `r_ambiguous_fold` would refuse nearly every query written. Scoped to a
+turn's licensed tables the collisions are 2 in 57 schemas (`address.District`/`district`,
+`card_games.multiverseId`/`multiverseid`), and refusing there is correct: the engine folds to one
+of them and under obfuscation that can be the decoy.
+
+Verified live, 5/5, including `address.zip_data."1st_quarter_payroll"` — a column sqlglot
+silently reads as `1 AS st_quarter_payroll` when unquoted (P7) and Postgres 18 rejects outright.
+
+One test had to be **inverted**: `test_canonicalisation_precedes_the_check...` asserted
+`'"' not in prepared.sql` under the comment *"canonicalise, do not quote"*. That assertion was
+the defect wearing the costume of the guard. B5's lesson is that you must not quote **the
+model's** spelling to paper over a mismatch, because that sends the engine a column which does
+not exist; quoting the **corpus's declared** spelling is the opposite operation.
+
+### P5.3 — the leak: a term bound to a metric had no schema
+
+`TagRule.binding_target` reads the target's own `schema` field and a metric has none — its
+namespace is its `base_table`'s. Untagged assets are carried into pass two unconditionally,
+because it cannot restrict what it cannot place, so one lexical hit bridged schemas.
+
+`_tag_through_bindings` is a **fixpoint**, not a recursive read: `term → term → metric` is a
+legitimate chain, and a corpus-authored cycle must simply fail to resolve rather than end the
+turn. It adds no new rule — it propagates whatever the declared `TagRule` table produced for the
+target, so there is still one answer to "which schema does this asset vote for".
+
+136 untagged terms → 27, and those 27 carry no `binding` at all, which ADR 0005 makes a state
+rather than a defect.
+
+### D7 — three comparability knobs nothing could set
+
+`route_top_n`, `max_steiner_points` and `max_crossings` read per-turn `state` only, with a local
+constant for the default. No production entry point writes those keys. The record published
+`route_top_n: 3` and routing used 3 **only because the constant happened to equal the
+register's**.
+
+`int_knob(state, name)` reads state, then `knobs_resolved`, then the register — and the local
+constants are deleted, so there is no second copy of the default to drift. It **raises** rather
+than substituting a value: a knob shipping `UNSET`, a non-integer value, and a typo'd knob name
+all fail loudly. `candidate_depth` used to swallow the middle one and return its constant.
+
+### The result
+
+**The pooled 57-schema lake answers**, at `route_top_n = 1`. Three questions that declined
+`missing_join_path` now answer, and every licensed table belongs to a routed schema.
+
+At the register default of 3 it still declines, and that is **cause 1, not a leak**: the three
+top-scoring schemas of 57 are unrelated, pass two licenses tables from all of them, and no
+cross-schema join edge exists — so the terminal set is disconnected by construction. Whether
+pass two should license across every routed schema, or `connect` should run per schema and the
+answer come from one, is a retrieval design question and the next one to decide.
+
+Two things this surfaced and did not fix. Schema routing picks the **wrong** schema for
+"which CBSA metro areas are in the address data?" (`shipping`), which is the known BM25 recall
+problem and not an identifier one. And `session.fatal_problems` is 27 on the pooled corpus, so
+`python -m governed_bi.serve` still refuses a corpus `make_graph()` serves — ADR 0008 D9's
+`fatal` / `degradation` split is what settles it.
+
+395 passed / 27 xfailed, ruff clean, five gates.

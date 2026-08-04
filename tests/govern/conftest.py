@@ -59,6 +59,11 @@ def prepare():
                 excluded=excluded_columns,
                 suspect=suspect_columns,
             )
+        # `spellings` has no default in `prepare` on purpose (ADR 0008 D7), and these
+        # tests are about the layer stack rather than about spelling. Declaring the empty
+        # map here is the explicit "this call declares none" the signature asks for; a
+        # test that cares passes its own.
+        kwargs.setdefault("spellings", {})
         return real_prepare(sql, licensed=licensed, corpus=corpus, **kwargs)
 
     return _prepare

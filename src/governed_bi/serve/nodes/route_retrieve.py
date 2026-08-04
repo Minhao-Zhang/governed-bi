@@ -33,6 +33,7 @@ from governed_bi.serve.runtime import (
     FUSE_WEIGHTS,
     corpus_structure,
     facet_hits,
+    int_knob,
 )
 from governed_bi.serve.runtime import (
     configurable as runtime_config,
@@ -46,9 +47,12 @@ __all__ = [
     "connect_node",
 ]
 
-_DEFAULT_TOP_N = 3
-_DEFAULT_MAX_STEINER = 5
-_DEFAULT_MAX_CROSSINGS = 2
+# No local defaults for `route_top_n`, `max_steiner_points` or `max_crossings`. All three
+# used to be `state.get(name, <constant here>)`, and no production entry point writes those
+# state keys -- so they were comparability knobs nothing could set, and the record agreed
+# with routing only because the constants happened to equal the register's defaults.
+# `int_knob` reads state, then `knobs_resolved`, then the register, which is the one place
+# the value is declared. ADR 0008 D7.
 
 
 def empty_retrieved(
@@ -85,7 +89,7 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
         route_scores(hits),
         key=lambda pair: (-float(pair[1]), str(pair[0])),
     )
-    top_n = int(state.get("route_top_n", _DEFAULT_TOP_N))
+    top_n = int_knob(state, "route_top_n")
     eligible = [(schema, score) for schema, score in ranking if float(score) > 0]
     schemas = [schema for schema, _ in eligible[:top_n]]
 
@@ -178,7 +182,7 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
         terminals = _table_ids_from_retrieved(retrieved, structure.asset_types)
 
     edges = structure.join_edges
-    max_points = int(state.get("max_steiner_points", _DEFAULT_MAX_STEINER))
+    max_points = int_knob(state, "max_steiner_points")
     result = connect(terminals, edges=edges, max_points=max_points)
 
     if result.declined:
@@ -207,7 +211,7 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
     selected_schemas = set(state.get("schemas") or ())
     crossings = _crossings(result.added, table_schemas, selected_schemas)
 
-    max_crossings = int(state.get("max_crossings", _DEFAULT_MAX_CROSSINGS))
+    max_crossings = int_knob(state, "max_crossings")
     if len(crossings) > max_crossings:
         return {
             "path_kind": "decline",

@@ -440,6 +440,7 @@ def _schema_tags(
     cross-schema join vote for".
     """
     out: dict[str, str] = {}
+    bound_to: dict[str, str] = {}
     for aid, asset in by_id.items():
         kind = types.get(aid)
         if kind is None:
@@ -452,7 +453,10 @@ def _schema_tags(
         base, _ = _bind(_attr(asset, "base_table"), lookup)
         left, _ = _bind(_attr(asset, "left_table"), lookup)
         binding = _attr(asset, "binding")
-        target = by_id.get(str(_attr(binding, "target_id"))) if binding is not None else None
+        target_id = str(_attr(binding, "target_id")) if binding is not None else ""
+        target = by_id.get(target_id)
+        if target is not None:
+            bound_to[aid] = target_id
         tag = schema_tag_for(
             asset_type,
             name=_str_or_none(_attr(asset, "name")),
@@ -464,16 +468,53 @@ def _schema_tags(
         )
         if tag:
             out[aid] = str(tag)
+    _tag_through_bindings(out, bound_to)
     return out
 
 
-def _own_schema(asset: Any) -> str | None:
-    """A binding target's schema, one level only.
+def _tag_through_bindings(out: dict[str, str], bound_to: Mapping[str, str]) -> None:
+    """Give a still-untagged bound asset the tag of what it is bound to.
 
-    ``SchemaAsset`` answers with its ``name``; everything else with its ``schema``
-    field where it has one. Deliberately not recursive: a term bound to a term is not
-    a shape ADR 0005 gives a tag rule for, and an untagged term is a **state** --
-    it does not vote in ``route`` but is carried into pass two unconditionally.
+    **This is the pooled data lake's licensing leak.** ``TagRule.binding_target`` reads
+    the target's own ``schema`` field, and a metric has none — its namespace is its
+    ``base_table``'s. So a term bound to a metric got no tag, and an untagged asset is
+    carried into pass two *unconditionally*, because pass two cannot restrict what it
+    cannot place. One lexical hit then bridges schemas:
+    ``term_shakespeare_character_count`` → its metric → ``shakespeare.parrafos`` and four
+    of its columns entered ``licensed`` on a ``beer_factory`` question, and ``connect``
+    cannot join Shakespeare to a brewery. Measured at 136 untagged terms on the
+    gold-semantic-layer corpus, and it declined even at ``route_top_n = 1``.
+
+    A fixpoint rather than recursion with a depth cap, because ``term → term → metric``
+    is a legitimate chain and a cycle must simply not resolve rather than raise: the
+    loop makes no progress and stops. Bounded by ``len(bound_to)`` iterations, so it
+    terminates on any graph.
+
+    It adds no new rule. The tag it propagates is whatever the declared
+    :class:`~governed_bi.register.assets.TagRule` table produced for the target, so
+    there is still exactly one answer to "which schema does this asset vote for".
+    """
+    for _ in range(len(bound_to)):
+        progressed = False
+        for aid, target_id in bound_to.items():
+            if aid in out:
+                continue
+            tag = out.get(target_id)
+            if tag:
+                out[aid] = tag
+                progressed = True
+        if not progressed:
+            return
+
+
+def _own_schema(asset: Any) -> str | None:
+    """A binding target's *own* schema field, one level only.
+
+    ``SchemaAsset`` answers with its ``name``; everything else with its ``schema`` field
+    where it has one. Three types have none — ``join``, ``metric`` and ``term`` — so this
+    returns ``None`` for them, and :func:`_tag_through_bindings` is what then carries the
+    target's *derived* tag across. Kept one level deep on purpose: mixing "read a field"
+    and "follow a chain" into one function is how the chain became invisible.
     """
     if asset is None:
         return None

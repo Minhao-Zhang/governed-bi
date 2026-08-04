@@ -196,7 +196,16 @@ def test_prepare_returns_no_string_when_the_verdict_blocks(prepare) -> None:
 
 def test_canonicalisation_precedes_the_check_so_the_verdict_is_about_what_runs(prepare) -> None:
     """The corpus declares ``CustomerID``; the model wrote ``customerid``. The executed
-    string carries the declared spelling, and nothing is quoted to compensate."""
+    string carries the declared spelling **and quotes it**.
+
+    This test used to assert ``'"' not in prepared.sql`` — *"canonicalise, do not
+    quote"* — and that assertion was the defect, not the guard. B5's lesson is that you
+    must not quote **the model's** spelling to paper over a mismatch, because that sends
+    the engine a column which does not exist. Quoting the **corpus's declared** spelling
+    is the opposite operation: it sends the engine the identifier that does exist, and
+    without it Postgres folds the unquoted name straight back to the spelling the
+    rewrite just corrected. ADR 0008 D2.
+    """
     prepared = prepare(
         "SELECT customerid FROM customers",
         licensed=CUSTOMERS,
@@ -204,8 +213,37 @@ def test_canonicalisation_precedes_the_check_so_the_verdict_is_about_what_runs(p
         spellings={"customerid": "CustomerID", "customers": "customers"},
     )
     assert prepared.verdict["passed"] is True, prepared.verdict
-    assert "CustomerID" in (prepared.sql or "")
-    assert '"' not in (prepared.sql or ""), "canonicalise, do not quote"
+    assert '"CustomerID"' in (prepared.sql or ""), (
+        f"the declared spelling must reach the engine quoted, or Postgres folds it back: "
+        f"{prepared.sql!r}"
+    )
+
+
+def test_a_mixed_case_table_survives_the_round_trip_to_the_engine(prepare) -> None:
+    """ADR 0008 P1, reduced to one statement. **This is the regression test.**
+
+    ``check()`` compares folded keys, so ``FROM address.cbsa`` matched the licensed
+    ``address.CBSA`` and passed every layer; nothing then rewrote the spelling, so
+    Postgres received the folded name and answered ``relation "address.cbsa" does not
+    exist``. 81 of 738 tables and 610 of 6,909 columns in the obfuscated lake are
+    mixed-case, and each of them failed *after* a passing verdict — which in the ledger
+    is indistinguishable from a flaky database.
+
+    Verified against Postgres 18 on 2026-08-04: ``SELECT 1 FROM address.cbsa`` fails and
+    ``SELECT 1 FROM "address"."CBSA"`` succeeds.
+    """
+    prepared = prepare(
+        "SELECT cbsa_name FROM address.cbsa",
+        licensed=frozenset({"address.CBSA"}),
+        allowed_columns=frozenset({"address.CBSA.CBSA_name"}),
+        spellings={"cbsa": "CBSA", "cbsa_name": "CBSA_name", "address": "address"},
+    )
+    assert prepared.verdict["passed"] is True, prepared.verdict
+    sql = prepared.sql or ""
+    assert '"CBSA"' in sql and '"CBSA_name"' in sql, (
+        f"a passing verdict on a statement the engine cannot resolve is the whole defect: {sql!r}"
+    )
+    assert "address.cbsa" not in sql, f"the folded spelling still reaches the engine: {sql!r}"
 
 
 def test_an_ambiguous_fold_refuses(prepare) -> None:

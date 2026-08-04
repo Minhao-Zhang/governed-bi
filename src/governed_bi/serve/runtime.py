@@ -9,10 +9,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Mapping
 
+from governed_bi.register.knobs import Unset, knob_default
 from governed_bi.retrieve.structure import CorpusStructure, build_structure
 
 __all__ = [
-    "DEFAULT_CANDIDATE_DEPTH",
     "DEFAULT_CONTEXT_BUDGET",
     "FUSE_WEIGHTS",
     "assets_by_id",
@@ -20,12 +20,12 @@ __all__ = [
     "configurable",
     "corpus_structure",
     "facet_hits",
+    "int_knob",
     "model_id",
     "trust",
     "trusted",
 ]
 
-DEFAULT_CANDIDATE_DEPTH = 50
 DEFAULT_CONTEXT_BUDGET = 80_000
 FUSE_WEIGHTS: Mapping[str, float] = {"lexical": 0.5, "semantic": 0.5}
 
@@ -103,17 +103,49 @@ def model_id(model: Any) -> str | None:
     return None
 
 
-def candidate_depth(state: Mapping[str, Any]) -> int:
-    """Pass-one / pass-two candidate pool size (state, then knobs, else default)."""
-    raw = state.get("candidate_depth")
+def int_knob(state: Mapping[str, Any], name: str) -> int:
+    """This turn's value for an integer knob: ``state``, then ``knobs_resolved``, then the
+    register — and nowhere else.
+
+    **One reader, because the alternative shipped.** ``route_top_n``,
+    ``max_steiner_points`` and ``max_crossings`` each read ``state`` *only*, with a
+    module-level constant beside them supplying the default. No production entry point
+    writes those state keys — only ``eval/harness.py`` and test fixtures do — so all
+    three were ``Role.comparability`` knobs that nothing in production could set. The
+    record still published ``route_top_n: 3`` and routing genuinely used 3, but only
+    because the local constant happened to equal the register's default. Move either one
+    and the record reports a value routing did not use. ADR 0008 D7.
+
+    So the default comes from the knob register and there is no second copy of it. A
+    knob that ships ``UNSET`` raises rather than becoming a threshold nobody chose, and
+    a knob carrying a non-integer raises rather than being silently replaced by the
+    default — substituting a value here is the same comparability lie in a smaller
+    costume.
+    """
+    raw = state.get(name)
     if raw is None:
         knobs = state.get("knobs_resolved") or {}
         if isinstance(knobs, Mapping):
-            raw = knobs.get("candidate_depth")
+            raw = knobs.get(name)
+    if raw is None:
+        raw = knob_default(name)
+    if isinstance(raw, Unset):
+        raise ValueError(
+            f"knob {name!r} ships UNSET, so there is no value to run with. A guessed "
+            "one here would be a fabricated measurement."
+        )
     try:
-        return int(raw) if raw is not None else DEFAULT_CANDIDATE_DEPTH
-    except (TypeError, ValueError):
-        return DEFAULT_CANDIDATE_DEPTH
+        return int(raw)
+    except (TypeError, ValueError) as err:
+        raise ValueError(
+            f"knob {name!r} is {raw!r}, which is not an integer. Falling back to the "
+            "register default would make the record report a value this turn did not use."
+        ) from err
+
+
+def candidate_depth(state: Mapping[str, Any]) -> int:
+    """Pass-one / pass-two candidate pool size. One knob, read through :func:`int_knob`."""
+    return int_knob(state, "candidate_depth")
 
 
 def facet_hits(facet_result: Any) -> list[Any]:

@@ -33,7 +33,7 @@ from governed_bi.govern.bounds import OUT_OF_SCOPE_MESSAGE, ToolBounds
 from governed_bi.govern.check import GovernanceUsageError
 from governed_bi.govern.layers import refuse
 from governed_bi.govern.ledger import AttemptRecord, attempt_record, execution_record
-from governed_bi.govern.pipeline import prepare
+from governed_bi.govern.pipeline import prepare, spellings_for
 from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.register.stages import ATTEMPT_CAP_REFUSED_BY
 from governed_bi.serve.agent_state import AttemptBook
@@ -482,10 +482,20 @@ def _run_query(
             "governance refusal from its own wiring failure."
         )
 
+    # ADR 0008 D2/D7. Without these two the model's spelling reaches the engine
+    # unchanged: `check()` compares folded keys, so `FROM address.cbsa` matches the
+    # licensed `address.CBSA` and passes every layer, and Postgres then folds the
+    # unquoted name and reports that the relation does not exist. 81 tables and 610
+    # columns in the obfuscated lake failed that way, each *after* a passing verdict.
+    # Scoped to `bounds.licensed`, because a corpus-wide map makes `name`, `id` and
+    # `city` ambiguous and would refuse nearly every query.
+    spellings, ambiguous = spellings_for(corpus, bounds.licensed)
     prepared = prepare(
         sql,
         licensed=bounds.licensed,
         corpus=corpus,
+        spellings=spellings,
+        ambiguous_folds=ambiguous,
         dialect=getattr(connector, "dialect", None) or "sqlite",
         policy=policy,
     )
