@@ -139,7 +139,7 @@ def build_structure(
         elif kind == AssetType.term.value:
             _link_term(aid, asset, by_id, references, problems)
         elif kind == AssetType.metric.value:
-            _link_metric(aid, asset, lookup, references, problems)
+            _link_metric(aid, asset, by_id, lookup, references, problems)
         elif kind == AssetType.few_shot.value:
             _link_few_shot(aid, asset, lookup, references, problems)
         elif kind == AssetType.join.value:
@@ -313,16 +313,47 @@ def _link_term(
 def _link_metric(
     aid: str,
     asset: Any,
+    by_id: Mapping[str, Any],
     lookup: Mapping[str, frozenset[str]],
     references: dict[str, set[str]],
     problems: list[Problem],
 ) -> None:
-    """``MetricAsset`` hit pulls in its ``base_table``."""
+    """``MetricAsset`` hit pulls in its ``base_table`` **and its ``dimensions``**.
+
+    ADR 0008 D4. ``dimensions`` held 715 bare column names read by nothing: not
+    resolved, not validated, not even rendered. So a metric hit reached the model with
+    its formula and its base table and none of the columns the formula groups by --
+    and a dimension naming a column that does not exist was unreportable, because no
+    code looked. Both halves are one omission: a reference nobody resolves is a
+    reference nobody can check.
+
+    A dimension is a **column** id, so it may name a column of a table other than
+    ``base_table`` (a metric grouped by country is grouped by a column of the joined
+    country table). It is therefore looked up in ``by_id`` rather than bound through
+    ``lookup``, which answers for tables only.
+    """
     bound, why = _bind(_attr(asset, "base_table"), lookup)
     if bound is None:
         problems.append(Problem(where=aid, reason=f"base_table {why}"))
         return
     references.setdefault(aid, set()).add(bound)
+
+    for dimension in _attr(asset, "dimensions") or ():
+        did = str(dimension)
+        if did in by_id:
+            references[aid].add(did)
+        else:
+            problems.append(
+                Problem(
+                    where=aid,
+                    reason=(
+                        f"dimension {did!r} is not an asset id. A bare column name is "
+                        "not one either: it is unambiguous inside a table and this "
+                        "field is not scoped to one, so the reference cannot be "
+                        "resolved and the column never reaches the prompt"
+                    ),
+                )
+            )
 
 
 def _link_few_shot(

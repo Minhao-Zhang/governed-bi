@@ -135,19 +135,24 @@ asset at all. Three exist:
 
 | engine identifier | why rejected | what the corpus lost |
 | --- | --- | --- |
-| `airline."Air Carriers"` | space | no table asset; 24 few-shots cite it |
-| `app_store.playstore."Content Rating"` | space | **the whole table** — 13 columns, no asset |
-| `soccer_2016.saison."orange_trophée"` | non-ASCII | **the whole table** — 8 columns, no asset |
+| `airline."Air Carriers"` | space | **no table asset** — 4 columns; and 24 few-shots cite it |
+| `soccer_2016.saison."orange_trophée"` | non-ASCII | **no column asset** — the table is carried, this column is not |
+| `app_store.playstore."Content Rating"` | space | nothing *here*: the whole `app_store` schema is uncurated |
 
-The curator's response to an unrepresentable column was to drop its table. Two
-tables and 21 columns are absent from a corpus that reports 0 problems for them,
-and the only record is a `skipped_identifiers.json` beside the generator that
-nothing reads.
+Reconciled against the live catalogue on 2026-08-04, and the loss inside the 57
+schemas the corpus covers is exactly that: **1 table of 656 and 1 column of 5 943**.
+Small, and the size is not the point — the mechanism is, because it has no upper
+bound and no record. The only trace is a `skipped_identifiers.json` beside the
+generator that nothing reads.
 
-At serve time this is unobservable. A question about app ratings routes, licenses
-whatever else matched, and either declines `missing_join_path` or answers from the
-wrong table. There is no value anywhere meaning *the corpus cannot spell this
-table*.
+*(Separately and much larger: the corpus covers 57 of the database's 70 schemas.
+That is a curation coverage gap, not an identifier one, and it is not this ADR's
+business.)*
+
+At serve time this is unobservable. An airline question routes into `airline`,
+licenses the six tables that *are* carried, and either declines
+`missing_join_path` or answers from the wrong one. There is no value anywhere
+meaning *the corpus cannot spell this table*.
 
 The corpus **does** carry `address.zip_data.1st_quarter_payroll` — the charset
 permits a leading digit — and that column can never be queried successfully; see P7.
@@ -320,8 +325,10 @@ unnoticed, and it goes away.
 
 Consequences, by field:
 
-- `parent_table` → the table's id (5 942 rewrites; the `scope=` mechanism in `_bind`
-  is then dead code and is deleted).
+- `parent_table` → the table's id (5 942, and `_bind`'s `scope=` is then unnecessary
+  *for columns*. It is **not** dead: `_link_few_shot` still needs it, because a bare
+  table name inside a SQL fragment is legitimate — `FROM customers` is unambiguous
+  within its schema. Scope survives for SQL, not for reference fields.)
 - `dimensions` → column ids, **and they enter `references`**, so a metric hit pulls
   in the columns it names (P5.2).
 - `binding.target_id` → already an id; the **tag** becomes transitive — resolve the
@@ -362,10 +369,10 @@ siblings use, or it is not a knob.
 
 ### D8 — Unrepresentable is a value, not a silence
 
-Under D1 the three known cases become representable, so the skip set should be
-empty. The mechanism still matters for what remains (identifiers over 63 bytes,
-future scripts), so: a table the corpus cannot carry is recorded **in the corpus**,
-and `route` can answer *"unanswerable: `app_store.playstore` is not carried"*
+Under D1 both known cases become representable, so the skip set should be empty.
+The mechanism still matters for what remains (identifiers over 63 bytes, future
+scripts), so: an identifier the corpus cannot carry is recorded **in the corpus**,
+and `route` can answer *"unanswerable: `airline.Air Carriers` is not carried"*
 instead of declining for an unrelated reason. `skipped_identifiers.json` beside a
 generator is the shape D8 exists to forbid.
 
@@ -414,9 +421,10 @@ the whole of P1, which is the only defect here that produces a wrong-looking
 *database* rather than a wrong-looking corpus.
 
 **Phase 1 — the key/name split.** D1, D4, D9. A corpus migration plus a generator
-change; `_table_lookup` and `_bind`'s `scope=` are deleted, not adapted.
-Measurement: `airline.Air_Carriers_*` exists, the 24 few-shot problems go to 0,
-`app_store` and `soccer_2016` gain their tables, and `problems_with_corpus` reports
+change; `_table_lookup`'s bare-name spelling is deleted rather than adapted, and
+`_bind`'s `scope=` narrows to SQL fragments.
+Measurement: `airline.Air_Carriers_*` and `soccer_2016.saison.orange_troph_e_*`
+exist, the 24 few-shot problems go to 0, and `problems_with_corpus` reports
 `fatal: 0`.
 
 **Phase 2 — the two verification passes.** D5, D6, D8. Measurement: the count of

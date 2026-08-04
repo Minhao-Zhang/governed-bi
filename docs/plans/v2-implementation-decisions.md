@@ -1386,3 +1386,90 @@ fixtures do. Three sibling knobs in the same register (`candidate_depth`,
 record publishes `route_top_n: 3` and routing genuinely used 3 — but only because the
 hard-coded default happens to equal the register's. Change the knob and the record reports the
 new value while routing keeps the old one, which is a comparability field that lies.
+
+## 48. Every reference field now names an asset, and what the corpus cannot spell is written down · *2026-08-04*
+
+[ADR 0008](../adr/0008-identifiers-end-to-end.md) D4 and D8, applied to
+`corpora/gold-semantic-layer-20260804`. Recorded because the tree is git-ignored, because a
+regeneration undoes it, and because two of the three defects it fixes were mine.
+
+### D4 — `metric.dimensions`
+
+715 bare column names, **read by nothing**: not resolved, not validated, not even rendered. So a
+metric hit reached the model with its formula and its base table and none of the columns the
+formula groups by — and a dimension naming a column that does not exist was unreportable,
+because no code looked. Those are one omission, not two: a reference nobody resolves is a
+reference nobody can check.
+
+Resolution is two-tier, and the second tier is `_bind`'s own rule rather than a new one:
+
+| | |
+| --- | --- |
+| a column of the metric's own `base_table` | 708 |
+| exactly one column of that name in the schema — a dimension reached through a join | 4 |
+| **ambiguous, left alone and reported** | 3 |
+
+The three are `metric_cars_{average,max,min}_price` grouping by `guo_jia`, which is a column of
+both `cars.guo_jia` and `cars.sheng_chan`. First-match across a schema is the shape that
+licenses a decoy under obfuscation, so they stay bare and `build_structure` now reports them:
+structure problems **24 → 27**, and the three new ones are real defects that were previously
+invisible.
+
+`_link_metric` links dimensions into `references`, which is what makes the migration do
+anything. It looks them up in `by_id` rather than through `lookup`, because a dimension is a
+*column* id and `lookup` answers for tables.
+
+### D4 — `parent_table`
+
+The last bare table reference in the asset set, and it was **derived by the loader**
+(`store.py`) rather than authored, so this is a one-line change and no corpus edit:
+`beer_factory.customers` instead of `customers`. It survived because `_bind` is handed the
+column's own `schema` as a scope — the mechanism that exists for this one field.
+
+`scope=` is **not** now dead, and the ADR was corrected on this point: `_link_few_shot` still
+needs it, because a bare table name inside a SQL fragment is legitimate (`FROM customers` is
+unambiguous within its schema). Scope survives for SQL, not for reference fields.
+
+### D8 — one table and one column the corpus cannot spell
+
+Reconciled against the live catalogue. Inside the 57 schemas the corpus covers, the charset
+costs exactly **1 table of 656 and 1 column of 5 943**: `airline."Air Carriers"` (a space) and
+`soccer_2016.saison."orange_trophée"` (non-ASCII). Both are now recorded as a `rules` entry on
+their `SchemaAsset`, so the fact reaches the model as an obligation — *say it is unanswerable
+rather than substituting another table* — instead of sitting in a `skipped_identifiers.json`
+beside the generator that nothing reads.
+
+**This corrected two claims in ADR 0008 as first written.** I had reported `app_store.playstore`
+and `soccer_2016.saison` as whole tables dropped by the curator over one bad column. Neither is
+true: `app_store` is one of 13 schemas the corpus does not cover at all, and `saison` *is*
+carried — only its one column is missing. The error was mine: I keyed a lookup on `parent_table`
+expecting the qualified spelling when it was bare, read "no table asset", and inferred a
+curator decision from it. The mechanism claim stands and the blast radius was overstated by
+about twentyfold.
+
+### Two self-inflicted YAML defects, both from hand-assembling instead of dumping
+
+Worth recording because they are the same mistake twice and the second one made the corpus
+unloadable:
+
+1. The `rules:` block end was found with `startswith("- ")`, which stops at the **continuation
+   line** of a folded YAML item. The new rule landed *inside* an existing one, truncating it and
+   gluing its tail onto the new rule.
+2. The rule text contains `: `, which is not a legal unquoted scalar. `airline.yaml` stopped
+   parsing.
+
+Both were caught by comparing against the pristine copy in `~/Downloads` and by re-parsing
+before keeping the write — which is now what the repair does, and is the check that should have
+been there for the first write. A migration that verifies its *references* and not its *syntax*
+is half a migration.
+
+### Verified
+
+389 passed / 27 xfailed, ruff clean, all five gates. Corpus loads 13 975 assets with 0 load
+problems and 0 validation problems; 712 of 715 dimensions are asset ids; join edges unchanged at
+556; pooled equals standalone for `beer_factory` 11/11, `hockey` 14/14, `mondial_geo` 46/46,
+`car_retails` 7/7, `airline` 1/1, `cars` 4/4. Idempotent on a second run.
+
+**None of this makes the pooled lake answer.** The two causes that block it are untouched here
+and are ADR 0008's Phase 0: the unwired canonicalisation (P1) and the untagged metric-bound
+terms.

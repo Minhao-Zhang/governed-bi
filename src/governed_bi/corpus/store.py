@@ -259,7 +259,13 @@ def _split_inline_columns(
             "asset_type": "column",
             "id": derive_column_id(table_id, name),
             "schema": schema,
-            "parent_table": physical,
+            # The table's **id**, not its bare physical name. ADR 0008 D4: a reference
+            # field names an asset, exactly, and a bare physical name is only
+            # unambiguous inside one schema -- which is the defect that cost 25% of the
+            # corpus's joins when 57 schemas were pooled (decision #47). This was the
+            # last bare table reference in the asset set, and it survived only because
+            # `_bind` is handed the column's own `schema` as a scope.
+            "parent_table": table_id,
         }
         clashes = sorted(k for k, v in derived.items() if k in column and column[k] != v)
         if clashes:

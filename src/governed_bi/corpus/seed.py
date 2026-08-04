@@ -64,7 +64,7 @@ def seed(introspection: Introspection, schema: str) -> tuple[list[Asset], list[P
                 ColumnAsset(
                     id=derive_column_id(table_id, column.physical_name),
                     schema=schema,
-                    parent_table=table.physical_name,
+                    parent_table=table_id,  # the table's id, not its bare name (0008 D4)
                     physical_name=column.physical_name,
                     summary=f"{table.physical_name}.{column.physical_name} ({ctype})"[:250],
                     physical_type=column.physical_type,

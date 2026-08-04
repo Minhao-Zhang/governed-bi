@@ -149,7 +149,10 @@ def test_inline_columns_become_their_own_assets_with_derived_ids(tmp_path) -> No
     }
     table = by_id["beer_factory.customers"]
     assert set(table.columns) == {"beer_factory.customers.email", "beer_factory.customers.id"}
-    assert by_id["beer_factory.customers.email"].parent_table == "customers"
+    # The table's id, not its bare physical name. ADR 0008 D4: a reference field names
+    # an asset exactly, so `parent_table` is resolvable without being handed the
+    # column's own schema as a scope -- which is how the bare spelling survived.
+    assert by_id["beer_factory.customers.email"].parent_table == "beer_factory.customers"
 
 
 def test_an_inline_column_that_states_a_conflicting_parent_is_a_problem(tmp_path) -> None:
