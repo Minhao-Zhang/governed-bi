@@ -40,9 +40,11 @@ def _session() -> Any:
 #: and no way for an `ask_user` interrupt to be answered, while this module's docstring
 #: claimed otherwise. Compiling once is what makes the thread id mean something.
 #:
-#: The same saver goes to the nested `create_agent` (`agent_checkpointer`), because that is
-#: where `ask_user` interrupts from: two savers means the interrupt is written to one and
-#: looked for in the other, which fails as a turn that hangs rather than as an error.
+#: The nested `create_agent` needs no saver of its own, and the sentence that used to be here
+#: claiming otherwise — "two savers means the interrupt is written to one and looked for in the
+#: other" — described a mechanism that does not exist. LangGraph propagates the checkpointer
+#: through `config` into a graph invoked inside a node: measured, the agent's own saver ends a
+#: run with zero checkpoints while this one has three.
 _GRAPH: Any = None
 
 
@@ -53,8 +55,7 @@ def _graph() -> Any:
 
         from governed_bi.serve.graph import build_graph
 
-        saver = InMemorySaver()
-        _GRAPH = build_graph(agent_checkpointer=saver).compile(checkpointer=saver)
+        _GRAPH = build_graph().compile(checkpointer=InMemorySaver())
     return _GRAPH
 
 

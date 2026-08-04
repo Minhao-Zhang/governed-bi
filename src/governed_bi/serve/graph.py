@@ -79,11 +79,17 @@ def _skip_if_terminal(state: ServeState) -> Literal["stamp", "continue"]:
     return "continue"
 
 
-def build_graph(*, agent_checkpointer: Any = None, accept: Any = None) -> StateGraph:
+def build_graph(*, accept: Any = None) -> StateGraph:
     """Construct the uncompiled serve graph.
 
-    ``agent_checkpointer`` is shared with the nested ``create_agent`` so
-    ``ask_user`` interrupts resume correctly under the same ``thread_id``.
+    **``agent_checkpointer`` is gone, and it never did anything.** It was passed to the nested
+    ``create_agent``, and three files carried comments explaining that HITL needed it and that
+    "two savers is worse than none: the interrupt is written to one and looked for in the
+    other". A probe falsifies all of it — inside a node, ``CONFIG_KEY_CHECKPOINTER`` is the
+    *outer* saver, the agent's own saver ends with zero checkpoints, and the outer one has
+    three. LangGraph propagates the checkpointer through ``config`` into a graph invoked inside
+    a node, under its own namespace. The nested agent was always checkpointed by the graph's
+    saver; the parameter was dead code documented as load-bearing, which is worse than either.
 
     ``accept`` is an optional node placed **before** ``guard``, so ``START -> accept ->
     guard``. It exists for one caller: a server whose client sends only a message. The
@@ -97,9 +103,6 @@ def build_graph(*, agent_checkpointer: Any = None, accept: Any = None) -> StateG
     turn (``eval/harness.py``, ``python -m governed_bi.serve``) already does correctly.
     """
 
-    def _agent(state: dict, config: Any) -> dict:
-        return agent_core_node(state, config, checkpointer=agent_checkpointer)
-
     graph = StateGraph(ServeState)
 
     graph.add_node("guard", wrap_node("guard", guard_node))
@@ -111,7 +114,7 @@ def build_graph(*, agent_checkpointer: Any = None, accept: Any = None) -> StateG
     graph.add_node("resolve", wrap_node("resolve", resolve_node))
     graph.add_node("connect", wrap_node("connect", connect_node))
     graph.add_node("assemble", wrap_node("assemble", assemble_node))
-    graph.add_node("agent_core", wrap_node("agent_core", _agent))
+    graph.add_node("agent_core", wrap_node("agent_core", agent_core_node))
     graph.add_node("refuse", wrap_node("refuse", refuse_node))
     graph.add_node("decline", wrap_node("decline", decline_node))
     # **``stamp`` is the one node that must not be wrapped.** ``wrap_node`` turns an
@@ -177,6 +180,10 @@ def build_graph(*, agent_checkpointer: Any = None, accept: Any = None) -> StateG
 
 
 def compile_graph(*, checkpointer: Any | None = None):
-    """Compile with an in-memory checkpointer by default (interrupt-ready)."""
+    """Compile with an in-memory checkpointer by default (interrupt-ready).
+
+    One saver, and it reaches the nested agent through ``config`` rather than through a
+    constructor argument. See :func:`build_graph` for the probe that established that.
+    """
     saver = InMemorySaver() if checkpointer is None else checkpointer
-    return build_graph(agent_checkpointer=saver).compile(checkpointer=saver)
+    return build_graph().compile(checkpointer=saver)

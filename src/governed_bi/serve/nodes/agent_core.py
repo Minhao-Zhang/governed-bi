@@ -10,14 +10,13 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 
 from governed_bi.register.quantity import Measured
+from governed_bi.serve.agent_state import GovernedAgentState
 from governed_bi.serve.delivery import DeliveryTracker
 from governed_bi.serve.runtime import configurable
 from governed_bi.serve.state import TERMINAL_PATH_KINDS
 from governed_bi.serve.tools import (
     SYSTEM_PROMPT,
-    attempts_from_tools,
     build_tools,
-    clarifications_from_tools,
     execution_from_attempts,
 )
 
@@ -31,13 +30,19 @@ STUB_ANSWER = "STUB_ANSWER"
 NO_TOKEN_USAGE = "the provider returned no usage_metadata carrying both token counts"
 
 
-def agent_core_node(
-    state: dict,
-    config: RunnableConfig,
-    *,
-    checkpointer: Any = None,
-) -> dict:
-    """Run the main model + tools, or the F1 stub when no ``agent_model`` is set."""
+def agent_core_node(state: dict, config: RunnableConfig) -> dict:
+    """Run the main model + tools, or the F1 stub when no ``agent_model`` is set.
+
+    **No ``checkpointer`` parameter.** There was one, passed down from ``build_graph`` and
+    into ``create_agent``, under comments in three files claiming the nested agent needed a
+    saver of its own and that "two savers is worse than none". All three were wrong, and a
+    probe settles it: inside a node, ``CONFIG_KEY_CHECKPOINTER`` is the **outer** saver, the
+    agent's own saver ends the run with **zero** checkpoints, and the outer one has three.
+    LangGraph propagates the checkpointer through ``config`` to a graph invoked inside a node
+    and namespaces it, so the nested agent has always been checkpointed — by the graph's
+    saver, which is why ``ask_user`` resume worked at all. The parameter was dead code
+    documented as load-bearing.
+    """
     if state.get("path_kind") in TERMINAL_PATH_KINDS:
         return {}
 
@@ -46,39 +51,45 @@ def agent_core_node(
     if model is None:
         return _stub(state)
 
-    tracker = DeliveryTracker((state.get("delivery") or {}).get("tool_delivered"))
-    tools = build_tools(state, config, tracker)
+    tools = build_tools(state, config)
     agent = create_agent(
         model=model,
         tools=tools,
         system_prompt=SYSTEM_PROMPT,
-        checkpointer=checkpointer,
+        # The ledger channels the tools write. Without the schema LangGraph drops updates
+        # naming keys the graph does not declare, silently — see ``serve/agent_state.py``.
+        state_schema=GovernedAgentState,
     )
 
-    messages = list(state.get("messages") or [])
-    result = agent.invoke({"messages": messages}, config)
+    # The delivered context is passed **into** the agent and never persisted to the
+    # conversation. ``assemble`` used to append it to ``messages`` as a human turn, and that
+    # one line cost three things: the whole context block of every prior turn was re-sent to
+    # the provider on every later turn; the human-message count came out at 2n-1, so
+    # ``turn_index`` was wrong for turn 2 onward on both the server and REST paths; and
+    # ``messages`` stopped being the conversation and became the conversation plus its
+    # scaffolding. The block is already recorded, hashed, in ``delivery``.
+    history = list(state.get("messages") or [])
+    context = _context_message(state, history)
+    inbound = history + ([context] if context is not None else [])
+
+    result = agent.invoke({"messages": inbound}, config)
     out_messages = list(result.get("messages") or [])
+    fresh = out_messages[len(inbound) :]
 
-    clarifications = clarifications_from_tools(tools)
-    # Also recover from message pairs if the tool box was rebuilt empty on resume.
-    if not clarifications:
-        clarifications = _clarifications_from_messages(
-            out_messages, turn_id=str(state.get("turn_id") or "")
-        )
+    # The ledger, read from the agent's own checkpointed channels rather than from closures
+    # on the tool objects. Ordered by insertion, which is chronological (``merge_by_call``
+    # keeps the accumulated map first).
+    attempts = list((result.get("attempts_by_call") or {}).values())
+    clarifications = list((result.get("clarifications_by_call") or {}).values())
+    delivered = dict(result.get("tool_delivered") or {})
 
-    human_msgs = [
-        HumanMessage(content=f"[clarification] {c['question']}\nAnswer: {c['answer']}")
-        for c in clarifications
-    ]
-
-    attempts = attempts_from_tools(tools)
     generated_sql = _last_run_query_sql(out_messages)
-    delivery = tracker.merge_into(state.get("delivery"))
-    usage = [_usage_row(model, out_messages[len(messages) :], state.get("turn_index", 1))]
+    delivery = DeliveryTracker(delivered).merge_into(state.get("delivery"))
+    usage = [_usage_row(model, fresh, state.get("turn_index", 1))]
 
     update: dict[str, Any] = {
         "path_kind": "answered",
-        "messages": out_messages[len(messages) :] + human_msgs,
+        "messages": fresh,
         "usage": usage,
         "delivery": delivery,
         "clarification_requested": False,
@@ -89,6 +100,25 @@ def agent_core_node(
     if generated_sql:
         update["generated_sql"] = generated_sql
     return update
+
+
+def _context_message(state: dict, history: list[Any]) -> HumanMessage | None:
+    """The turn's delivered context, as one ephemeral message.
+
+    The question is appended only when the history does not already carry it. On the server
+    path the client's own human message *is* the question, so restating it inside the context
+    block would send it twice; on the CLI path ``turn()`` starts with an empty ``messages``,
+    so this message is the only place the question appears at all.
+    """
+    block = str((state.get("delivery") or {}).get("context_block") or "")
+    question = str(state.get("question") or "").strip()
+    asked = any(
+        str(getattr(m, "type", "")) == "human"
+        and str(getattr(m, "content", "")).strip() == question
+        for m in history
+    )
+    parts = [p for p in (block, "" if asked or not question else f"Question: {question}") if p]
+    return HumanMessage(content="\n\n".join(parts)) if parts else None
 
 
 def _reported_tokens(messages: list[Any]) -> dict[str, int] | None:
@@ -168,29 +198,6 @@ def _stub(state: dict) -> dict:
         ],
         "clarification_requested": False,
     }
-
-
-def _clarifications_from_messages(messages: list[Any], *, turn_id: str) -> list[dict]:
-    pending: str | None = None
-    out: list[dict] = []
-    for m in messages:
-        tool_calls = getattr(m, "tool_calls", None) or ()
-        for tc in tool_calls:
-            name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
-            if name == "ask_user":
-                args = tc.get("args") if isinstance(tc, dict) else getattr(tc, "args", {})
-                pending = str((args or {}).get("question") or "")
-        if getattr(m, "type", None) == "tool" or m.__class__.__name__ == "ToolMessage":
-            if pending is not None:
-                out.append(
-                    {
-                        "question": pending,
-                        "answer": str(getattr(m, "content", "")),
-                        "turn_id": turn_id,
-                    }
-                )
-                pending = None
-    return out
 
 
 def _last_run_query_sql(messages: list[Any]) -> str | None:

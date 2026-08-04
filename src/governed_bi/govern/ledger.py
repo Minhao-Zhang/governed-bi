@@ -50,7 +50,7 @@ import sqlglot
 from sqlglot import expressions as exp
 from sqlglot.errors import SqlglotError
 
-from .layers import GUARDRAIL_ERROR, CheckVerdict, Layer
+from .layers import GUARDRAIL_ERROR, CheckVerdict
 from .policy import DEFAULT_DIALECT
 
 __all__ = [
@@ -77,9 +77,19 @@ EXECUTOR_PATHS: tuple[ExecutorPath, ...] = ("agent", "graded", "sample", "profil
 
 
 class AttemptRecord(TypedDict):
-    """One statement's trip through the stack. ADR 0006 §12."""
+    """One statement's trip through the stack. ADR 0006 §12.
 
-    verdict_layer: Layer | None
+    ``verdict_layer`` is the layer's **name**, not the :class:`Layer` member. It was the
+    member, and since 2026-08-04 these rows are checkpointed — the ledger moved into the
+    nested agent's state so it survives an ``ask_user`` interrupt — where LangGraph's msgpack
+    serde reported it: *"Deserializing unregistered type governed_bi.govern.layers.Layer from
+    checkpoint. This will be blocked in a future version."* A row that a future LangGraph
+    refuses to load is a ledger that stops existing on the resume path, which is the path it
+    was just moved there to protect. The name is also what ``trace()``'s ``layer`` field has
+    always written, so this makes two projections of one fact agree instead of differ.
+    """
+
+    verdict_layer: str | None
     passed: bool
     reason_code: str
     path: ExecutorPath
@@ -170,8 +180,9 @@ def ledger_entry(
 
 def attempt_record(verdict: CheckVerdict, path: ExecutorPath) -> AttemptRecord:
     """Project a verdict into the measurement layer's per-attempt row."""
+    failed = verdict["failed_layer"]
     return AttemptRecord(
-        verdict_layer=verdict["failed_layer"],
+        verdict_layer=failed.name if failed is not None else None,
         passed=verdict["passed"],
         reason_code=verdict["reason_code"],
         path=path,

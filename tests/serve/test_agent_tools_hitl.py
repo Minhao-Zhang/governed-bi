@@ -13,7 +13,7 @@ from governed_bi.corpus.analyst import for_analyst
 from governed_bi.corpus.schema import ColumnAsset, TableAsset
 from governed_bi.govern.bounds import OUT_OF_SCOPE_MESSAGE
 from governed_bi.govern.policy import GovernancePolicy
-from governed_bi.serve.delivery import DeliveryTracker, delivery_hash_for, payload_digest
+from governed_bi.serve.delivery import delivery_hash_for, payload_digest
 from governed_bi.serve.graph import compile_graph
 from governed_bi.serve.resume import ResumeRejected, resume_clarification
 from governed_bi.serve.scripted_model import ScriptedChatModel
@@ -93,36 +93,92 @@ def _config(**extra: Any) -> dict[str, Any]:
     return {"configurable": conf}
 
 
+def _tools(state: dict[str, Any] | None = None, config: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {t.name: t for t in build_tools(state or _state(), config or _config())}
+
+
+def _runtime(call_id: str, committed: dict[str, Any] | None = None) -> Any:
+    """A ``ToolRuntime`` built by hand, because a tool that takes one cannot be invoked alone.
+
+    ``ToolRuntime`` is injected by the agent's tool node, not by ``langchain_core``'s
+    ``StructuredTool``: ``runtime`` is a **required** field of the generated args schema, so
+    ``tool.invoke({"args": ...})`` fails validation on it before the body runs. Supplying one
+    here is what keeps these tests direct unit tests of the tool bodies rather than agent
+    round-trips — the agent path is covered end to end by
+    ``test_ask_user_interrupt_and_identity_resume`` and the F turn contracts.
+    """
+    from langchain.tools import ToolRuntime
+
+    return ToolRuntime(
+        state={"attempts_by_call": dict(committed or {})},
+        context=None,
+        config={"configurable": {}},
+        stream_writer=lambda _chunk: None,
+        tool_call_id=call_id,
+        store=None,
+    )
+
+
+def _call(
+    tool: Any, call_id: str = "call-1", committed: dict[str, Any] | None = None, **args: Any
+) -> tuple[str, dict[str, Any]]:
+    """Run a tool's body and split its ``Command`` in two.
+
+    Every tool now returns a ``Command`` carrying its own ``ToolMessage``; the tool call id is
+    what keys the durable ledger, so passing one is the point rather than ceremony.
+    ``committed`` is the ledger the *checkpoint* already holds, which is how the attempt cap's
+    resume behaviour is exercised.
+
+    Returns ``(text the model sees, everything the call recorded)``.
+    """
+    command = tool.func(runtime=_runtime(call_id, committed), **args)
+    update = dict(getattr(command, "update", None) or {})
+    messages = list(update.pop("messages", []) or [])
+    return (str(getattr(messages[0], "content", "")) if messages else ""), update
+
+
 def test_out_of_scope_tools_share_identical_message() -> None:
-    tracker = DeliveryTracker()
-    tools = {t.name: t for t in build_tools(_state(), _config(), tracker)}
-    assert tools["read_body"].invoke({"asset_ids": ["nope"]}) == OUT_OF_SCOPE_MESSAGE
+    tools = _tools()
+    assert _call(tools["read_body"], asset_ids=["nope"])[0] == OUT_OF_SCOPE_MESSAGE
+    assert _call(tools["inspect_schema"], table_id="other.table")[0] == OUT_OF_SCOPE_MESSAGE
     assert (
-        tools["inspect_schema"].invoke({"table_id": "other.table"})
+        _call(tools["sample_rows"], column_id="other.table.col", limit=3)[0]
         == OUT_OF_SCOPE_MESSAGE
     )
-    assert (
-        tools["sample_rows"].invoke({"column_id": "other.table.col", "limit": 3})
-        == OUT_OF_SCOPE_MESSAGE
-    )
+
+
+def test_an_out_of_scope_refusal_is_not_recorded_as_a_delivery() -> None:
+    """The model receives the message; the corpus delivered nothing.
+
+    ``delivery_hash`` audits what the corpus handed over, so a refusal counted as a delivery
+    would put a digest of ``OUT_OF_SCOPE_MESSAGE`` in the record and make three refused reads
+    hash-distinct from three refused reads of something else. The old code encoded this by
+    *skipping* the tracker call on an early return — correct, and invisible to any caller.
+    """
+    for tool_name, args in (
+        ("read_body", {"asset_ids": ["nope"]}),
+        ("inspect_schema", {"table_id": "other.table"}),
+        ("sample_rows", {"column_id": "other.table.col"}),
+    ):
+        text, update = _call(_tools()[tool_name], **args)
+        assert text == OUT_OF_SCOPE_MESSAGE
+        assert "tool_delivered" not in update, f"{tool_name} recorded a refusal as a delivery"
 
 
 def test_inspect_schema_licensed_succeeds() -> None:
-    tracker = DeliveryTracker()
-    tools = {t.name: t for t in build_tools(_state(), _config(), tracker)}
-    payload = tools["inspect_schema"].invoke({"table_id": "sales.customers"})
+    payload, update = _call(_tools()["inspect_schema"], table_id="sales.customers")
     assert "sales.customers" in payload
     assert "physical_type" in payload
-    assert tracker.tool_delivered
-    digest = next(iter(tracker.tool_delivered.values()))
-    assert digest == payload_digest(payload)
+    delivered = update["tool_delivered"]
+    assert delivered == {"call-1": payload_digest(payload)}, (
+        "the delivery must be keyed by the tool call id. It was a fresh uuid4(), so a digest "
+        "in the record named nothing and could not be traced to the call that produced it."
+    )
 
 
 def test_read_body_records_delivery_and_hash_changes_with_payload() -> None:
-    tracker = DeliveryTracker()
-    tools = {t.name: t for t in build_tools(_state(), _config(), tracker)}
-    p1 = tools["read_body"].invoke({"asset_ids": ["sales.customers"]})
-    d1 = dict(tracker.tool_delivered)
+    p1, u1 = _call(_tools()["read_body"], asset_ids=["sales.customers"])
+    d1 = dict(u1["tool_delivered"])
     h1 = delivery_hash_for("a" * 64, d1)
 
     assets = _assets()
@@ -136,18 +192,12 @@ def test_read_body_records_delivery_and_hash_changes_with_payload() -> None:
         body="DIFFERENT BODY",
         columns=("sales.customers.id",),
     )
-    tracker2 = DeliveryTracker()
-    tools2 = {
-        t.name: t
-        for t in build_tools(
-            _state(),
-            _config(assets_by_id=assets, corpus=for_analyst(list(assets.values()))),
-            tracker2,
-        )
-    }
-    p2 = tools2["read_body"].invoke({"asset_ids": ["sales.customers"]})
+    tools2 = _tools(
+        _state(), _config(assets_by_id=assets, corpus=for_analyst(list(assets.values())))
+    )
+    p2, u2 = _call(tools2["read_body"], asset_ids=["sales.customers"])
     assert p1 != p2
-    h2 = delivery_hash_for("a" * 64, tracker2.tool_delivered)
+    h2 = delivery_hash_for("a" * 64, u2["tool_delivered"])
     assert h1 != h2
     assert delivery_hash_for("a" * 64, d1) == h1
 
@@ -164,14 +214,12 @@ def test_run_query_blocks_unlicensed_table(tmp_path: Path) -> None:
 
     connector = SqliteConnector(db)
     connector._connect()  # noqa: SLF001 — open for tool use
-    tracker = DeliveryTracker()
-    state = _state(licensed=["sales.other"])
-    tools = {
-        t.name: t
-        for t in build_tools(state, _config(connector=connector), tracker)
-    }
-    out = tools["run_query"].invoke({"sql": "SELECT id FROM customers"})
+    tools = _tools(_state(licensed=["sales.other"]), _config(connector=connector))
+    out, update = _call(tools["run_query"], sql="SELECT id FROM customers")
     assert "refused" in out.lower() or "not" in out.lower()
+    assert list(update["attempts_by_call"]) == ["call-1"], (
+        "a governed statement must leave exactly one ledger row, keyed by its call id"
+    )
 
 
 def test_run_query_attempt_cap(tmp_path: Path) -> None:
@@ -185,20 +233,57 @@ def test_run_query_attempt_cap(tmp_path: Path) -> None:
     connector = SqliteConnector(db)
     connector._connect()  # noqa: SLF001
     policy = GovernancePolicy(guard_rules_enabled={}, run_query_attempt_cap=2)
-    tracker = DeliveryTracker()
-    tools = {
-        t.name: t
-        for t in build_tools(
-            _state(licensed=["main.customers", "customers"]),
-            _config(connector=connector, policy=policy),
-            tracker,
-        )
-    }
-    # Force failures that still count as attempts
-    for _ in range(2):
-        tools["run_query"].invoke({"sql": "SELECT * FROM nope"})
-    capped = tools["run_query"].invoke({"sql": "SELECT * FROM nope"})
+    tools = _tools(
+        _state(licensed=["main.customers", "customers"]),
+        _config(connector=connector, policy=policy),
+    )
+    # Force failures that still count as attempts. Distinct call ids, because the cap is now
+    # counted over ids rather than over a list length — which is what makes it idempotent
+    # under a replay instead of resetting on one.
+    rows: dict[str, Any] = {}
+    for i in range(2):
+        _, update = _call(tools["run_query"], call_id=f"rq-{i}", sql="SELECT * FROM nope")
+        rows.update(update.get("attempts_by_call") or {})
+    assert list(rows) == ["rq-0", "rq-1"], rows
+
+    capped, update = _call(tools["run_query"], call_id="rq-2", sql="SELECT * FROM nope")
     assert "capped" in capped.lower()
+    assert list(update.get("attempts_by_call") or {}) == ["cap:rq-2"], (
+        "the cap must write its own ledger row. `_run_query` used to return on the cap "
+        "*before* appending, so a capped turn carried an empty ledger while `generated_sql` "
+        "was still read out of the tool arguments -- ExecutionRecord declared 'capped' and "
+        "nothing ever wrote it."
+    )
+
+
+def test_a_replayed_run_query_does_not_consume_a_second_attempt_slot() -> None:
+    """The cap counts governed statements, not tool invocations.
+
+    This is the property that makes the ledger survive a resume. Attempts are keyed by tool
+    call id, so the same call arriving twice — which is what a replay is — is one statement.
+    Under the previous list-append accounting it was two, and under the previous *closure*
+    accounting a resume reset the count to zero instead.
+    """
+    from governed_bi.serve.agent_state import AttemptBook
+
+    committed = {"rq-0": {"passed": False}}
+
+    book = AttemptBook(1)
+    assert book.admit(committed, "rq-0") is True, "a replay of a counted call may run"
+    assert book.admit(committed, "rq-1") is False, "a new call at the cap must be refused"
+
+    # A fresh book over the same committed ledger agrees, which is the resume case: the count
+    # comes from the checkpoint, not from how many times the node has executed.
+    assert AttemptBook(1).admit(committed, "rq-2") is False
+
+    # And within one super-step, where nothing has committed yet, the in-flight set is what
+    # stops two parallel calls both reading a count of zero.
+    parallel = AttemptBook(1)
+    assert parallel.admit(None, "rq-a") is True
+    assert parallel.admit(None, "rq-b") is False, (
+        "two run_query calls in one AI message both read committed=0 and both proceeded: "
+        "a cap of 1 admitting 2 governed statements"
+    )
 
 
 def test_tool_exception_is_not_refuse() -> None:
@@ -211,13 +296,14 @@ def test_tool_exception_is_not_refuse() -> None:
         def sample_values(self, *a, **k):
             raise RuntimeError("boom")
 
-    tracker = DeliveryTracker()
-    tools = {
-        t.name: t for t in build_tools(_state(), _config(connector=Boom()), tracker)
-    }
-    out = tools["run_query"].invoke({"sql": "SELECT 1"})
+    tools = _tools(_state(), _config(connector=Boom()))
+    out, update = _call(tools["run_query"], sql="SELECT 1")
     assert out.startswith("run_query") or "refused" in out.lower() or "error" in out.lower()
     assert "refused_by" not in out
+    # The statement passed governance and was sent to the driver, so the ledger owes it a row
+    # even though the driver raised. Returning only the error string would make a driver
+    # failure indistinguishable from a turn that attempted nothing.
+    assert list(update.get("attempts_by_call") or {}) == ["call-1"], update
 
 
 def test_ask_user_interrupt_and_identity_resume() -> None:
@@ -282,6 +368,81 @@ def test_ask_user_interrupt_and_identity_resume() -> None:
     clars = done.get("clarifications") or []
     assert any(c.get("answer") == "2020" for c in clars)
     assert done["answer"]["outcome"] in {"answered", "clarification"}
+
+
+def test_the_ledger_survives_the_interrupt() -> None:
+    """A governed statement made **before** ``ask_user`` must still be in the record after.
+
+    This is the property the whole ``Command``-into-agent-state move exists for, and it is the
+    one the closures could not have. ``interrupt()`` aborts the outer node without committing
+    its update, so on resume the node re-executes, ``build_tools`` builds fresh boxes, and the
+    nested agent restores its *messages* from its own checkpoint rather than re-invoking the
+    tools. Every ToolMessage was therefore present while every box that recorded what those
+    calls did was empty — the turn reported ``terminal: "no_sql"`` with ``attempts: []``
+    beside a populated ``generated_sql``, one row of the artifact contradicting itself.
+
+    Order: ``run_query`` (a governed statement, recorded), then ``ask_user`` (the interrupt),
+    then the answer. The assertion is on what the record says *after* the resume.
+    """
+    call = {"name": "run_query", "args": {"sql": "SELECT id FROM customers"}, "type": "tool_call"}
+    model = ScriptedChatModel(
+        responses=[
+            AIMessage(content="", tool_calls=[{**call, "id": "rq-1"}]),
+            AIMessage(content="", tool_calls=[
+                {"name": "ask_user", "args": {"question": "which year?"}, "id": "c1",
+                 "type": "tool_call"},
+            ]),
+            AIMessage(content="ok: 2020"),
+        ]
+    )
+    graph = compile_graph()
+    token = "identity-ledger"
+    config = {"configurable": {
+        "thread_id": "t-ledger", "policy": GovernancePolicy(guard_rules_enabled={}),
+        "agent_model": model, "assets_by_id": _assets(),
+        "corpus": for_analyst(list(_assets().values())),
+    }}
+    turn = {
+        "question": "revenue?", "thread_id": "t-ledger", "turn_index": 1,
+        "turn_id": "turn-ledger", "run_id": "r", "question_id": "q", "db_id": "sales",
+        "attempt_id": "a", "corpus_content_hash": "c", "prompt_set_hash": "p",
+        "knobs_resolved": {}, "n_re_served": 0, "licensed": ["sales.customers"],
+        "facet_route_hits": [("facet_schema", "sales", 1.0)],
+        "messages": [], "usage": [], "identity": {"token": token},
+    }
+
+    paused = graph.invoke(turn, config)
+    assert paused.get("__interrupt__"), "precondition: ask_user paused the turn"
+
+    done = resume_clarification(graph, config=config, identity={"token": token}, answer="2020")
+    execution = done["answer"]["record"]["execution"]
+    attempts = list(execution.get("attempts") or ())
+
+    assert attempts, (
+        "the resumed turn records no attempt, though run_query was called before the "
+        f"interrupt. terminal={execution.get('terminal')!r}, "
+        f"generated_sql={done['answer']['record'].get('generated_sql')!r} -- a ledger that "
+        "disagrees with the SQL field beside it."
+    )
+    assert execution.get("terminal") != "no_sql", (
+        f"terminal={execution.get('terminal')!r} on a turn that attempted a statement"
+    )
+    # The ledger is checkpointed now, so its rows have to be serialisable *without* a
+    # `default=str` escape hatch. They were not: `verdict_layer` held a `Layer` enum, and
+    # LangGraph's serde said so out loud -- "Deserializing unregistered type
+    # governed_bi.govern.layers.Layer from checkpoint. This will be blocked in a future
+    # version." A row a future LangGraph refuses to load is a ledger that stops existing on
+    # the resume path, which is the path it was moved into state to protect.
+    import json
+
+    json.dumps(attempts)  # raises TypeError on any non-JSON-native value
+
+    clars = done.get("clarifications") or []
+    assert [c.get("answer") for c in clars] == ["2020"], (
+        f"the clarification is missing or duplicated: {clars}. It used to be recovered from "
+        "the message pairs *and* re-injected as a human message, so one answer became two "
+        "rows -- and the recovered one carried the current turn_id rather than its own."
+    )
 
 
 def test_delivery_hash_stable_for_same_tool_payload() -> None:

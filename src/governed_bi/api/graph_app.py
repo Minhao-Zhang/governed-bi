@@ -210,29 +210,22 @@ def make_graph() -> Any:
     conversation into one thread, and the checkpointer would make that look like memory
     working rather than failing.
 
-    No checkpointer is passed: the server supplies its own, and that is what makes ``/threads``
-    and the ``ask_user`` interrupt resume work. ``compile_graph`` defaults to an in-memory
-    saver for the CLI's benefit, which would shadow it.
+    **One checkpointer, and the nested agent gets it through ``config``.** An earlier version
+    of this function built an ``InMemorySaver`` here and passed it to *both* the outer graph
+    and the nested ``create_agent``, under a comment reading "two savers is worse than none:
+    the interrupt is written to one and looked for in the other". That comment described a
+    mechanism that does not exist. A probe: inside a node, ``CONFIG_KEY_CHECKPOINTER`` is the
+    **outer** saver; the agent's own saver ends the run with **zero** checkpoints; the outer
+    one has three. LangGraph propagates the checkpointer into a graph invoked inside a node and
+    namespaces it, so ``ask_user`` has always resumed from the graph's saver.
+
+    So no checkpointer is passed at all, and that is what lets the server supply its own —
+    which is what makes ``/threads`` work. ``compile_graph``'s in-memory default exists for the
+    CLI and would shadow it.
     """
     _warm_imports()
     conf = dict(session_from_environment().configurable()["configurable"])
-
-    # **The nested agent needs a checkpointer of its own, and it must be the same one.**
-    # `ask_user` interrupts from inside `create_agent`, which runs *within* a node rather than
-    # as a compiled subgraph. Leaving `agent_checkpointer=None` here meant HITL was proven only
-    # on the CLI path, where `compile_graph` hands one saver to both. Two savers is worse than
-    # none: the interrupt is written to one and looked for in the other, and the symptom is a
-    # turn that hangs rather than an error anyone can read.
-    #
-    # The outer graph is compiled with it too. LangGraph Server supplies its own persistence
-    # for the outer graph and will use that; this saver is what the *inner* agent resumes from,
-    # and compiling the outer with the same object keeps a single answer to "where is this
-    # thread's state" on the CLI-equivalent path.
-    from langgraph.checkpoint.memory import InMemorySaver
-
-    saver = InMemorySaver()
-    graph = build_graph(accept=_accept_node, agent_checkpointer=saver).compile(checkpointer=saver)
-    return graph.with_config({"configurable": conf})
+    return build_graph(accept=_accept_node).compile().with_config({"configurable": conf})
 
 
 def _warm_imports() -> None:

@@ -23,7 +23,24 @@ __all__ = ["assemble_node"]
 
 
 def assemble_node(state: dict, config: RunnableConfig) -> dict:
-    """Render retrieval context into ``delivery`` and a USER message.
+    """Render retrieval context into ``delivery``. **Not into ``messages``.**
+
+    It used to append the whole block to ``messages`` as a human turn, and that one line cost
+    three separate things:
+
+    * **Every prior turn's context was re-sent.** ``messages`` is checkpointed and
+      ``add_messages``-reduced, so turn 3 handed the provider turn 1's and turn 2's context
+      blocks again — paid for, and describing a retrieval that is no longer the current one.
+    * **``turn_index`` came out at 2n-1.** Both ``api/graph_app.py`` and ``POST /chat`` number
+      the turn by counting human messages, and this added a second one per turn. Every
+      multi-turn record after the first was misnumbered, which is what ``usage``'s per-turn
+      projection filters on.
+    * ``messages`` stopped being the conversation and became the conversation plus its
+      scaffolding, so no reader could tell the two apart.
+
+    ``agent_core`` now passes the block into the agent as an ephemeral message that is never
+    written back. The block itself is not lost: it is in ``delivery``, hashed, and the record
+    publishes ``context_hash`` — which is where an audit was always meant to read it.
 
     Declares ``config`` so :func:`~governed_bi.serve.wrap.wrap_node` forwards
     ``RunnableConfig`` (corpus / assets live under ``configurable``).
@@ -43,9 +60,6 @@ def assemble_node(state: dict, config: RunnableConfig) -> dict:
         schemas=schemas,
         budget_chars=budget,
     )
-    question = state.get("question") or ""
-    content = f"{block}\n\nQuestion: {question}"
-
     return {
         "delivery": {
             "context_block": block,
@@ -53,7 +67,6 @@ def assemble_node(state: dict, config: RunnableConfig) -> dict:
             "tool_delivered": {},
             "delivery_hash": None,
         },
-        "messages": [{"role": "user", "content": content}],
     }
 
 
