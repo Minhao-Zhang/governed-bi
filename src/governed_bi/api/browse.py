@@ -84,15 +84,20 @@ _BLOCK_FIELDS = frozenset({"governance", "audit", "reliability", "provenance"})
 def _kind_of(field: dataclasses.Field) -> FieldKind:
     if field.name in _BLOCK_FIELDS:
         return FieldKind.block
+    annotation = str(field.type)
+    # **Sequence before reference**, and the order is the bug it fixes. `columns`,
+    # `dimensions`, `bound_terms` and `related_terms` are *lists of* references, and
+    # classifying them as `ref` gave them a scalar's operators — so `dimensions:len_gte:3`
+    # came back in `unknown_where` on a field where "how many does it have" is the obvious
+    # question. Measured: it was silently unapplicable for all 399 metrics.
+    if "tuple" in annotation or "list" in annotation or "Sequence" in annotation:
+        return FieldKind.list
     if field.name in _REF_FIELDS:
         return FieldKind.ref
-    annotation = str(field.type)
     if "bool" in annotation:
         return FieldKind.boolean
     if "int" in annotation or "float" in annotation:
         return FieldKind.number
-    if "tuple" in annotation or "list" in annotation:
-        return FieldKind.list
     # An Enum-typed field is a closed vocabulary and deserves `one_of`, which is the whole
     # reason `kind` exists rather than "string or not".
     for name in ("LogicalType", "ColumnRole", "Cardinality", "Complexity",

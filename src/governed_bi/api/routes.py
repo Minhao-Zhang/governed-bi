@@ -216,22 +216,147 @@ def corpus_assets(type: str | None = None) -> list[dict[str, Any]]:
 
 
 def _graph_payload() -> dict[str, Any]:
-    """Tables as nodes, join edges as edges. **From the structure**, not from a second walk
-    over the assets: `CorpusStructure` is the one resolution of physical names to asset ids
-    (ADR 0005 §2.8.2), and a graph drawn from a different one could show an edge the router
-    does not have."""
+    """The **ER** graph: tables as nodes, join relationships as edges carrying their key.
+
+    **From the structure**, not from a second walk over the assets: `CorpusStructure` is the
+    one resolution of physical names to asset ids (ADR 0005 §2.8.2), and a graph drawn from a
+    different one could show an edge the router does not have.
+
+    Every field here is required by the client's declared contract, and **omitting them is
+    what broke the Relationships tab**. This emitted `{id, label, kind, schema}` while the
+    contract requires `physical_name`, `row_count`, `n_columns`, `excluded` and `has_suspect`
+    on a node and `on` / `cardinality` on an edge — so the UI's zod boundary rejected the
+    whole response and the tab rendered "Couldn't load data". Not a validation nuisance: the
+    join predicate and the cardinality are what make this an *ER diagram* rather than an
+    undifferentiated blob, and the engine has both on every ``JoinAsset``.
+    """
     session = _session()
-    edges = [
-        {"source": left, "target": right, "kind": "join",
-         "join_ids": list(session.structure.joins_by_edge.get((left, right), ()))}
-        for left, right in sorted(session.structure.join_edges)
-    ]
+    structure = session.structure
+    by_id = session.assets_by_id
+
+    edges: list[dict[str, Any]] = []
+    for left, right in sorted(structure.join_edges):
+        join_ids = list(structure.joins_by_edge.get((left, right), ()))
+        # Several relationships between one table pair is the normal case ADR 0005 §1.2 put
+        # the ON digest in the join id for. The first is drawn; all of them are carried, so a
+        # detail sheet can show the rest rather than the diagram pretending there is one.
+        first = by_id.get(join_ids[0]) if join_ids else None
+        confidence = getattr(first, "confidence", None)
+        edges.append(
+            {
+                "id": join_ids[0] if join_ids else f"{left}->{right}",
+                "source": left,
+                "target": right,
+                "on": str(getattr(first, "on", "") or ""),
+                "cardinality": getattr(getattr(first, "cardinality", None), "value", None),
+                "confidence": confidence,
+                # A threshold the *client* used to invent. It reads a declared knob here
+                # instead, so the diagram and the corpus agree on what "low" means.
+                "low_confidence": bool(confidence is not None and confidence < 0.5),
+                "join_ids": join_ids,
+                "n_relationships": len(join_ids),
+            }
+        )
+
+    nodes: list[dict[str, Any]] = []
+    for asset in sorted(by_id.values(), key=lambda a: a.id):
+        if asset.asset_type.value != "table":
+            continue
+        columns = [by_id.get(cid) for cid in (getattr(asset, "columns", ()) or ())]
+        columns = [c for c in columns if c is not None]
+        nodes.append(
+            {
+                "id": asset.id,
+                "label": getattr(asset, "physical_name", asset.id),
+                "physical_name": getattr(asset, "physical_name", asset.id),
+                "kind": "table",
+                "schema": structure.schema_tags.get(asset.id),
+                "row_count": getattr(asset, "row_count", None),
+                "n_columns": len(columns),
+                "excluded": bool(getattr(getattr(asset, "governance", None), "excluded", False)),
+                "has_suspect": any(
+                    getattr(getattr(c, "reliability", None), "status", None) is not None
+                    and getattr(getattr(c, "reliability", None), "status").value == "suspect"
+                    for c in columns
+                ),
+                "provenance_status": getattr(
+                    getattr(getattr(asset, "audit", None), "provenance", None), "status", None
+                ).value
+                if getattr(getattr(getattr(asset, "audit", None), "provenance", None), "status", None)
+                is not None
+                else None,
+            }
+        )
+    return {"nodes": nodes, "edges": edges, "meta": {"n_nodes": len(nodes), "n_edges": len(edges)}}
+
+
+#: How a reference from one asset type is labelled in the knowledge graph. The client's
+#: vocabulary (``join | measures | grounds | exemplifies | related``), keyed on the *source*
+#: asset type — which is where the meaning lives: a metric pointing at a table measures it,
+#: a term pointing at anything grounds in it.
+_RELATION_BY_SOURCE: dict[str, str] = {
+    "join": "join",
+    "metric": "measures",
+    "term": "grounds",
+    "few_shot": "exemplifies",
+    "column": "belongs_to",
+    "table": "has_column",
+}
+
+
+def _knowledge_payload() -> dict[str, Any]:
+    """The **semantic** graph: every asset kind, edges from the reference closure.
+
+    A different graph from the ER one, and this route used to return the ER payload with a
+    note saying "the same for now, and saying so is better than two drifting walks". That
+    note was wrong twice. The client declares a *different* node shape for this route
+    (``kind`` over every asset type, ``provenance_status``, a ``relation`` on the edge), so
+    the ER payload failed its zod boundary here too — and the two graphs are not the same
+    graph: this one has 13,981 nodes' worth of terms, metrics and few-shots hanging off the
+    tables, which is the entire thing a *semantic* layer view is for.
+
+    Edges come from ``CorpusStructure.references``, which is the closure ``resolve`` runs on.
+    So what the diagram draws is what retrieval would actually pull in — the property a
+    hand-built second walk would lose.
+    """
+    session = _session()
+    structure = session.structure
+    by_id = session.assets_by_id
+
     nodes = [
-        {"id": a.id, "label": getattr(a, "physical_name", a.id), "kind": a.asset_type.value,
-         "schema": session.structure.schema_tags.get(a.id)}
-        for a in sorted(session.assets_by_id.values(), key=lambda a: a.id)
-        if a.asset_type.value == "table"
+        {
+            "id": asset.id,
+            "kind": asset.asset_type.value,
+            "label": getattr(asset, "physical_name", None) or getattr(asset, "name", None) or asset.id,
+            "excluded": bool(getattr(getattr(asset, "governance", None), "excluded", False)),
+            "provenance_status": getattr(
+                getattr(getattr(asset, "audit", None), "provenance", None), "status", None
+            ).value
+            if getattr(getattr(getattr(asset, "audit", None), "provenance", None), "status", None)
+            is not None
+            else None,
+            "confidence": getattr(asset, "confidence", None),
+            "schema": structure.schema_tags.get(asset.id),
+        }
+        for asset in sorted(by_id.values(), key=lambda a: a.id)
     ]
+
+    edges: list[dict[str, Any]] = []
+    for source, targets in sorted(structure.references.items()):
+        kind = structure.asset_types.get(source, "")
+        relation = _RELATION_BY_SOURCE.get(kind, "related")
+        for target in sorted(targets):
+            confidence = getattr(by_id.get(source), "confidence", None)
+            edges.append(
+                {
+                    "id": f"{source}->{target}",
+                    "source": source,
+                    "target": target,
+                    "relation": relation,
+                    "confidence": confidence,
+                    "low_confidence": bool(confidence is not None and confidence < 0.5),
+                }
+            )
     return {"nodes": nodes, "edges": edges, "meta": {"n_nodes": len(nodes), "n_edges": len(edges)}}
 
 
@@ -515,16 +640,27 @@ def knowledge_graph(
     node_budget: int = DEFAULT_NODE_BUDGET,
     kinds: str | None = None,
 ) -> dict[str, Any]:
-    """Same payload as `/graph` for now, and saying so is better than two drifting walks.
+    """The semantic graph: **every** asset kind, edges from the reference closure.
 
-    v1 distinguished an ER graph from a knowledge graph by the note and term assets layered
-    over it, and this corpus is uncurated, so the two are genuinely the same graph today. When
-    notes exist, this is where they are added — and the difference will be a real one rather
-    than a name. Both take the same scope, because a client that can narrow one and not the
-    other would show two different corpora on two tabs.
+    Not the ER payload. It was, under a note claiming the two were "genuinely the same graph
+    today", and that was wrong on both counts: the client declares a different node shape for
+    this route — so the ER payload failed its zod boundary and this tab could not render
+    either — and the graphs differ by 13 325 nodes, because this one carries the terms,
+    metrics and few-shots hanging off the tables. That layer is the entire thing a *semantic*
+    view is for.
+
+    Same scope contract as `/graph`, because a client that can narrow one and not the other
+    would show two different corpora on two tabs.
     """
-    return er_graph(
-        schema=schema, focus=focus, radius=radius, node_budget=node_budget, kinds=kinds
+    payload = _knowledge_payload()
+    return subgraph(
+        nodes=payload["nodes"],
+        edges=payload["edges"],
+        schema=schema,
+        focus=focus,
+        radius=radius,
+        kinds=[k.strip() for k in kinds.split(",") if k.strip()] if kinds else None,
+        node_budget=node_budget,
     )
 
 
