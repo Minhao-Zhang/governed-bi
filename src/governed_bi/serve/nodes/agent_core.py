@@ -135,9 +135,13 @@ def _reported_tokens(messages: list[Any]) -> dict[str, int] | None:
     the provider's.
     """
     total = {"input_tokens": 0, "output_tokens": 0}
-    cache = {"cache_read_tokens": 0, "cache_write_tokens": 0}
+    #: Only the cache keys a provider actually reported. It was a two-key dict initialised to
+    #: zero and emitted whole as soon as **either** key appeared, so a provider reporting a
+    #: cache read also produced ``cache_write_tokens: 0`` — this code's claim wearing the
+    #: provider's clothes. ``price.py`` reads an *absent* key as nothing cached, which its
+    #: docstring justifies from the artifacts; a written zero is a measurement.
+    cache: dict[str, int] = {}
     seen = False
-    reported_cache = False
     for message in messages:
         usage = getattr(message, "usage_metadata", None)
         if not isinstance(usage, Mapping):
@@ -154,11 +158,10 @@ def _reported_tokens(messages: list[Any]) -> dict[str, int] | None:
                                 ("cache_write_tokens", "cache_creation")):
                 value = details.get(source)
                 if isinstance(value, int) and not isinstance(value, bool):
-                    reported_cache = True
-                    cache[key] += value
+                    cache[key] = cache.get(key, 0) + value
     if not seen:
         return None
-    return {**total, **(cache if reported_cache else {})}
+    return {**total, **cache}
 
 
 def _usage_row(model: Any, messages: list[Any], turn_index: Any) -> dict[str, Any]:

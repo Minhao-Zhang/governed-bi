@@ -8,17 +8,23 @@ license = { text = "MIT" }
 authors = [{ name = "Minhao Zhang" }]
 # Core + agent deps live here (no extra): a plain `uv sync` installs everything the
 # default OpenAI-backed stack needs, so dev never hits a "feature silently off
-# because its extra wasn't installed" bug. The one extra is
-# `bedrock` (AWS Bedrock provider) — an alternate LLM/embedding backend that pulls a
-# heavy boto3 tree most runs don't need. See [project.optional-dependencies].
+# because its extra wasn't installed" bug. There are **no extras**: the `bedrock`
+# one was removed on 2026-08-04 because it fronted `model/bedrock_embedder.py`, a
+# module `model/__init__.py` says in its own docstring is deliberately absent. An
+# extra that installs a provider tree for an adapter that does not exist is a
+# capability the packaging claims and the code does not have.
+#
+# Every entry below is imported by something under `src/` or `tests/`, checked by
+# grep on the same date. Four were not and are gone; see the git log for the reasoning
+# on `deepagents` in particular, which is retired rather than deferred.
 dependencies = [
     # --- Core engine (deterministic) ---
-    # Corpus asset schemas (Facts / Inference / Audit tiers) and validation.
+    # Corpus asset schemas (Facts / Inference / Audit tiers) and validation; also
+    # `serve/scripted_model.py`'s recording fields, which are pydantic fields because
+    # `BaseChatModel` is a pydantic model.
     "pydantic>=2.7",
     # YAML typed assets are the source of truth (D9).
     "pyyaml>=6.0",
-    # In-memory property graph + Steiner-tree join planning (BIRD scale).
-    "networkx>=3.3",
     # SQL parsing for every layer of the governance stack (ADR 0006).
     # Upper bound pins the generation, and it is a security pin, not hygiene: the
     # function allowlist in `govern/functions.py` is keyed on sqlglot expression
@@ -35,31 +41,38 @@ dependencies = [
     # --- HTTP JSON API (governed_bi.api) the frontend consumes ---
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
-    # --- LLM + embedding seams (governed_bi.llm), OpenAI-backed ---
+    # --- LLM + embedding seams, OpenAI-backed ---
+    # Nothing imports `openai` directly — `langchain-openai` does. Declared anyway, and
+    # only for the floor: `use_responses_api` needs a client recent enough to have the
+    # Responses API, and that requirement belongs where a reader can see it.
     "openai>=1.40",
-    # --- Agent harnesses: LangGraph server DAG + deepagents curator + LangChain clients ---
+    # --- Agent harness: LangGraph server + LangChain clients ---
     # Upper bounds pin the wire-protocol generation this repo was built against
     # (see docs/architecture.md §9). Transitive langgraph-api / langgraph-sdk are
     # constrained under [tool.uv] rather than declared as direct deps.
     "langgraph>=1.0,<2",
     "langgraph-cli[inmem]>=0.4,<0.5",
-    "langgraph-checkpoint-sqlite>=2.0",
-    "langgraph-checkpoint-postgres>=2.0",
     "langchain>=1.0",
     "langchain-openai>=1.0",
-    "deepagents>=0.6",
+    # No `langgraph-checkpoint-sqlite` / `-postgres`: zero importers. `InMemorySaver` is
+    # the only saver in the tree and LangGraph Server brings its own persistence. ADR
+    # 0004 proposes durable run logging and will need one of these — it is Proposed with
+    # no code, and declaring a dependency for a design is how a package ends up
+    # advertising a capability nobody built.
+    #
+    # No `deepagents`: zero importers, and **retired rather than deferred.**
+    # `FilesystemMiddleware` contributes `write_file` / `edit_file` and they are not
+    # removable, which is exactly the generic write channel that let v1 forge
+    # `source=human, status=certified` on curated assets. This repository's rule is that
+    # the governance boundary is enforced by the *absence* of a tool (ADR 0006), so a
+    # harness that mandates one is not a harness we can adopt. Its
+    # `TodoListMiddleware` also costs three super-steps per sequential tool call, which
+    # is what silently dropped 30 of 57 schemas from a paid curator run. A LangGraph
+    # `StateGraph` with one `create_agent` node is the alternative, and `serve/` is
+    # already built that way.
     # --- Tracing: none. LangSmith is the only tracer and it is env-native — it
     # rides langchain-core's own `langsmith` dependency and needs no declaration
     # here. Langfuse (a `langfuse>=3.0` direct dep) was removed on 2026-08-02.
-]
-
-[project.optional-dependencies]
-# AWS Bedrock LLM + embedding provider. Opt in with `uv sync --extra bedrock`
-# (or `pip install 'governed-bi[bedrock]'`), then set provider = "bedrock" in the
-# [models] table. langchain-aws pulls boto3, hence keeping it out of the default
-# install. Credentials come from boto3's standard chain (env / profile / role).
-bedrock = [
-    "langchain-aws>=1.0",
 ]
 
 [dependency-groups]
@@ -71,12 +84,12 @@ dev = [
     "pytest-randomly>=3.15",
     # Optional local/CI coverage runs (`uv run pytest --cov=governed_bi`); not gated.
     "pytest-cov>=5.0",
-    # Starlette's TestClient (used by the API tests) needs httpx.
-    "httpx>=0.27",
-    # LangChain's DeterministicFakeEmbedding (used by the LangChainEmbedder tests)
-    # imports numpy; it is not a hard langchain-core dependency, so pin it here for
-    # the test environment (previously satisfied transitively via streamlit).
-    "numpy>=1.26",
+    # No `httpx` and no `numpy`. Both were declared for a named consumer that does not
+    # exist: `TestClient` appears nowhere in `tests/` (the API is tested through its
+    # shaping functions, because the routes build a Postgres connector), and
+    # `DeterministicFakeEmbedding` appears nowhere either — `model/deterministic_embedder.py`
+    # is ours and imports no numpy. A dependency justified by a comment naming a caller
+    # is only as true as the caller.
     "ruff>=0.16.0",
     "mypy>=2.3.0",
 ]

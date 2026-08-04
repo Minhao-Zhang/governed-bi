@@ -150,6 +150,22 @@ def main(argv: list[str] | None = None) -> int:
     config = session.configurable(question=args.question)
     config["configurable"]["thread_id"] = session.run_id
     out = graph.invoke(session.turn(args.question), config)
+
+    # A paused turn is not a failed one, and it must not be reported as either. `ask_user`
+    # interrupts, no node writes `answer`, and the code below would have printed
+    # `outcome: None` / `answer: (no text)` and exited 1 on an incomplete record -- naming
+    # fifteen absent fields for a turn that is waiting rather than broken. Exit 4 says which.
+    pending = _pending_clarification(out)
+    if pending:
+        print(f"\nThe turn is paused on a clarification: {pending.get('question')}", file=sys.stderr)
+        print(f"why: {pending.get('why')}", file=sys.stderr)
+        print(
+            "This entry point serves one turn and has nowhere to send an answer. Use "
+            "POST /chat + POST /chat/resume, or LangGraph Server's own resume.",
+            file=sys.stderr,
+        )
+        return 4
+
     answer = out.get("answer") or {}
     record = answer.get("record") or {}
 
@@ -178,6 +194,15 @@ def main(argv: list[str] | None = None) -> int:
     if not args.json:
         print("record   : complete (every required field present)")
     return 0
+
+
+def _pending_clarification(state: dict[str, Any]) -> dict[str, Any] | None:
+    """The ``ask_user`` payload if the graph paused. ADR 0007 §6's ``kind`` decides."""
+    for item in state.get("__interrupt__") or ():
+        value = getattr(item, "value", item)
+        if isinstance(value, dict) and value.get("kind") == "clarification":
+            return value
+    return None
 
 
 def _answer_text(state: dict[str, Any], answer: dict[str, Any]) -> str:
