@@ -6,7 +6,8 @@ one session's runs; every figure here is reproducible from
 
 ## Setup
 
-- **Engine:** the `v2` branch at `4c03455`. One Postgres (`pg_rename_decoy`), 57 curated
+- **Engine:** the `v2` branch at `fb9e0bf` (the 57-question run predates the component fix
+  and is marked as such below). One Postgres (`pg_rename_decoy`), 57 curated
   schemas pooled, no schema pin.
 - **Questions:** `BIRD-Data-Obfuscation/eval_dataset/test_final.jsonl`, 1 351 of whose
   `db_id` the corpus carries. The other 13 schemas are uncurated and are **excluded**: a
@@ -84,7 +85,54 @@ raising the default on this table alone would be a guess.
 
 ## Stage B — end to end, paid
 
-57 questions (1 per covered schema), `route_top_n=3`.
+Two runs. The second is the one to read: it is three questions per schema and it ran after
+the component fix above, so it is the current engine.
+
+### 171 questions (≤3 per covered schema), `route_top_n=3`
+
+| | value |
+| --- | --- |
+| EX | 12 / 171 = **0.070** |
+| EX over attempted (excluding clarifications) | 12 / 138 = 0.087 |
+| gold schema reachable | 100 / 171 = **0.585** |
+| EX among reachable | 12 / 100 = **0.120** |
+| answered / clarification / capped / refused / crashed | 131 / 33 / 6 / 1 / **0** |
+| mean licensed schemas | 2.41 |
+| tokens | 3 031 175 in / 69 803 out (17 726 in per question) |
+
+**The result worth pulling out: the engine asks instead of guessing, and it does so
+exactly when it should.**
+
+| | clarification rate |
+| --- | --- |
+| gold schema **was** reachable | **0 / 100** |
+| gold schema was **not** reachable | **33 / 71** |
+
+Not one of the 100 turns that had the right schema asked for a clarification, and 46% of
+the 71 that did not asked for one. That separation is not a tuned threshold — nothing in
+the engine knows what the gold schema is. It is what a governed context does when the
+tables it needs are absent: the model has nothing to write SQL against and says so. The
+same property is why EX is a floor here rather than a verdict.
+
+The funnel, in order:
+
+```
+171 questions
+ → 100 gold schema reachable        (routing: recall@3)
+ →  94 answered                     (5 hit the attempt cap, 1 refused)
+ →  88 wrote SQL                    (6 answered without a query)
+ →  12 correct                      (75 result_mismatch, 1 missing prediction)
+```
+
+So **75 of the 88 SQL-writing reachable turns produced the wrong result set** — that is
+where the remaining loss is, and quantifying how much of it is BIRD-EX strictness rather
+than wrong SQL is the highest-value unmeasured thing on this page.
+
+Cost of the component fix: 17.7 k input tokens per question against 12.9 k at 1× before it,
+and ≈17 s per question against 6.5 s. Licensing every connected component buys +19 pp of
+reachability for roughly 1.4× the context and 2.6× the wall clock. Crashes went from 1 to 0.
+
+### 57 questions (1 per covered schema), `route_top_n=3` — before the component fix
 
 | | value |
 | --- | --- |
@@ -99,18 +147,18 @@ raising the default on this table alone would be a guess.
 | observed spend | ≥ $0.04 · 736 128 input / 13 346 output tokens |
 | wall clock | 371 s (6.5 s/question) |
 
-**Cost is not the constraint.** ~$0.04 per 57 questions extrapolates to roughly **$1 for
-the full 1 351**, at about 2.4 hours. Any decision here can be made against a real run
-rather than a sample.
+**Cost is not the constraint.** ~$0.04 per 57 questions; the 171-question run spent 3.0 M
+input tokens. The full 1 351 is on the order of **$1–3 and three to six hours**. Any
+decision here can be made against a real run rather than a sample.
 
-EX of 0.053 is a floor, not a verdict, for three reasons that are separable and are not
-separated yet:
+EX is a floor, not a verdict, for three reasons that are separable and are only partly
+separated:
 
-1. **Reachability caps it at 0.579** on this sample. Fixing routing is worth more than
-   anything else on this list.
-2. **13 of 45 answered turns wrote no SQL** — the model said it had no licensed table for
-   the question. That is the engine behaving correctly on a wrong-schema context, and it
-   is a routing symptom.
+1. **Reachability caps it at 0.585.** Fixing routing is worth more than anything else on
+   this list.
+2. **Turns without the gold schema ask rather than answer** — 33 of 71 above. That is the
+   engine behaving correctly on a wrong-schema context, and it is a routing symptom
+   counted as an EX miss.
 3. **BIRD's EX is strict in ways this engine loses on.** Sampled by hand: a prediction
    returning `Description, COUNT(*)` against a gold of bare `COUNT(*)` (over-answering);
    a gold applying `TO_CHAR(date, 'YYYY-MM-DD HH24:MI:SS') || '.0'` where the prediction
@@ -118,7 +166,7 @@ separated yet:
    name. These are documented BIRD characteristics, not engine defects, and the share is
    **not yet quantified** — doing so needs a hand audit of a labelled subsample.
 
-**So: do not quote 0.053 as this engine's accuracy.** It is the accuracy of this engine
+**So: do not quote 0.070 as this engine's accuracy.** It is the accuracy of this engine
 plus this router plus this grader on this sample, and the router is the term that dominates.
 
 ## Four measurement defects found before any of the above could be trusted
@@ -159,8 +207,9 @@ state by hand is a second answer to how a turn runs.
 2. **Decide `route_top_n` against Stage B, not Stage A.** Reachability says 5 or 10;
    whether the model uses a wider context or drowns in it is unmeasured, and the context
    overflow already seen at 3 says the trade is real.
-3. **Quantify the BIRD-EX artifact share** on a hand-labelled subsample. Without it, EX
-   cannot separate "wrong answer" from "differently-shaped right answer", and every
-   intervention will be measured against a moving floor.
+3. **Quantify the BIRD-EX artifact share** on a hand-labelled subsample — specifically on
+   the 75 `result_mismatch` rows among reachable turns, which is where the loss now is.
+   Without it EX cannot separate "wrong answer" from "differently-shaped right answer",
+   and every intervention will be measured against a moving floor.
 4. **Then** run the full 1 351 for a quotable baseline. It is ~$1 and ~2.4 hours; doing it
    before 1–3 buys a precise number about a configuration nobody will keep.
