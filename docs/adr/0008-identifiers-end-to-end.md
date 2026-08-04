@@ -1,9 +1,11 @@
 # 0008: Identifiers, end to end
 
-- **Status:** Accepted in part (2026-08-04). **Phase 0 is built** — canonicalisation
-  wired and quoting on, transitive schema tags, the three comparability knobs
-  reachable. Phases 1 and 2 (the key/name split, build-time SQL binding, the
-  round-trip check) are not. Amends
+- **Status:** Accepted in part (2026-08-04). **Phases 0 and 1 are built** —
+  canonicalisation wired and quoting on, transitive schema tags, the three
+  comparability knobs reachable, the key/name split (`slug`), reference
+  normalisation, and the `fatal` / `degradation` split. Phase 2 (build-time SQL
+  binding for `on` and `expression`, the emitted-statement round-trip check) is not.
+  Amends
   [ADR 0005](0005-v2-memory-layer-and-faceted-retrieval.md) §1.2/§2.8.2 and
   [ADR 0006](0006-execution-time-governance.md) §3/§4.
 - **Deciders:** project owner + design session (2026-08-04)

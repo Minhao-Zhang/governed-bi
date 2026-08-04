@@ -1571,25 +1571,29 @@ usually unrelated, so the terminal set was disconnected *by construction* and th
 nothing about the question. Six questions measured: all six declined `missing_join_path` at the
 register default of 3, all six answered at 1.
 
-`connect_node` now partitions terminals with `retrieve.connect.components` and keeps **one**
-component. Partitioning by component rather than by schema is the point: two schemas with a
-declared cross-schema join are one component and stay together — the case §2.8.2 charges
-`crossings` for — while two unrelated schemas are two components and the loser is dropped. A
-decline now means what it says.
+`connect_node` now partitions terminals with `retrieve.connect.components`. Partitioning by
+component rather than by schema is the point: two schemas with a declared cross-schema join are
+one component and stay together — the case §2.8.2 charges `crossings` for — while two unrelated
+schemas are two components. A decline now means what it says.
 
-Which component: **the one holding a table of the highest-ranked routed schema**, because
-routing's ranking is the only evidence about what the question is about. "Largest group" first
-would let a wide schema that shares one word outvote the router. Ties break on size then on
-lexicographic id, so the pick is reproducible.
+> **Superseded within the day, by measurement — see decision #52.** This first version *kept
+> one* component, chosen as the one holding a table of the highest-ranked routed schema. The
+> eval showed that caps reachability at the router's `recall@1`: over 1 351 BIRD test questions
+> it discarded 226 of the 823 shortlist hits, every one ranked 2nd or 3rd. Scoring components by
+> pass-two relevance instead was worse. `connect_node` now connects **each** component and
+> licenses every one that connects. The paragraph below about removing the losing component's
+> assets from `retrieved` still applies, but only to a component that cannot be connected
+> internally.
 
-The drop is not licensing-only — the losing component's assets are removed from `retrieved` too,
-so the prompt cannot show the analyst a table the turn may not query. `schemas` keeps its
+The drop is not licensing-only — the dropped component's assets are removed from `retrieved`
+too, so the prompt cannot show the analyst a table the turn may not query. `schemas` keeps its
 declared meaning (route's selected top-N) and `schema_ranking` keeps every candidate, so
 shortlisted / survived / reachable are three readable facts.
 
 **Alternative rejected:** an LLM schema-pick, which the pipeline-design notes had sketched. It
-costs a model call per turn and is not reproducible across runs, and the component structure
-already carries the answer deterministically.
+costs a model call per turn and is not reproducible across runs. Worth revisiting only if
+licensing every component turns out to overload the context — which is the open Stage B
+question in [`datalake-eval-2026-08-04.md`](datalake-eval-2026-08-04.md).
 
 ### D1 — a key is not a name
 
@@ -1659,3 +1663,103 @@ lexical-only here; measuring the embedder's lift on routing is the next thing wo
 is what the eval should establish first.
 
 396 passed / 27 xfailed, ruff clean, five gates.
+
+## 51. The audit surface: a served turn can be read twice · *2026-08-04*
+
+`stamp` builds a full record for every turn and `POST /chat` returns it inline — so the only
+caller who could ever see it was the caller who asked, once. There was no way to list what a
+server had served and no way to fetch a past turn, so the governance ledger, the layer verdicts,
+the licensed set and the retrieval attributions were produced, published to one HTTP response,
+and dropped.
+
+Four routes, all under `/audit`. **The namespace is not cosmetic:** `GET /runs` returns **405**
+on this server because LangGraph Server owns `POST /runs`, so a route named for what it holds
+would have collided with the platform's own.
+
+```
+GET /audit/turns              every served turn, newest first
+GET /audit/turns/{id}         the full record + what the register says is absent
+GET /audit/turns/{id}/trace   the record grouped by the stage that produced it
+GET /audit/corpus             corpus shape + problems, fatal vs degradation
+```
+
+**The trace is derived from `RECORD_REGISTER`.** Every `RecordField` already declares its
+`owner` stage, so the grouping is a `groupby` over a table that exists: a field added to the
+register appears in the trace with no edit to the route, and a section cannot claim a stage the
+register does not assign. A structural test locks it, scoped to the grouping block — the
+envelope legitimately names three fields (`turn_id` is the route's parameter, `execution` holds
+the ledger, `outcome` goes in the header) and forbidding those would be a rule about something
+else. Behavioural coverage cannot catch a hand-written map, which passes on the day it is written.
+
+Turns persist as JSONL under `runs/serve/`, read and written, **with no in-memory index beside
+it**: a process cache would be a second answer to "what did this server serve", one that
+disagrees after a restart and whose disagreement is invisible. The write is best-effort but the
+failure is *reported* as `audit_logged: false`, because "no turns are listed" and "no turns were
+served" must not be the same observation.
+
+Two defects found by writing the tests:
+
+- **`terminal_reason` was never a record field.** It lived in graph state only, so
+  `missing_join_path`, `no_schema_matched`, `over_connect_bounds` and `no_sql` — four different
+  engineering problems — were the same recorded row, and a declined turn was unattributable
+  afterwards. Now declared (`Absence.not_applicable`, so an answered turn reports no gap) and
+  stamped.
+- **`/health`'s `ci_green` read `not session.problems`**, so three unresolvable metric dimensions
+  painted the page red on a corpus that answers questions correctly — which trains a reader to
+  ignore the light. Green now means *servable*: no **fatal** problem (D9), with `n_fatal` and
+  `n_degradations` beside it. The UI's banner adds degradations to its flagged sum, because it
+  was reading "Nothing is flagged for review" over three listed findings.
+
+UI: a new `/audit` page (three panels — corpus, turns, one turn's trace) in the sibling repo at
+`885c1b8`. Field names mirror the register rather than being renamed for display, and values
+render as JSON rather than through per-field renderers: a shape the engine owns is not the UI's
+to have an opinion about. Mocks are deliberately **empty** rather than plausible — a mock turn
+list with rows would make the page look like it had found real traffic with no backend attached.
+
+Also: `.claude/launch.json` still pointed `inspector` at `scripts/inspect_run.py`, deleted with
+v1.
+
+## 52. `route_top_n` is a shortlist, and licensing must not pick from it · *2026-08-04*
+
+Supersedes the component-pick half of #50, on measurement. Full write-up in
+[`datalake-eval-2026-08-04.md`](datalake-eval-2026-08-04.md).
+
+Decision #50 made `connect_node` keep **one** connected component. Over the 1 351 BIRD test
+questions the corpus covers:
+
+| component rule | `reached_gold` |
+| --- | --- |
+| keep the component holding the top-ranked routed schema | 0.442 |
+| keep the highest pass-two-scoring component | 0.417 |
+| **connect each component, license every one that connects** | **0.608** |
+
+The router's own `recall@1` is 0.442 and `recall@3` is 0.609. So the first rule's `reached_gold`
+was *exactly* `recall@1` — the signature of a rule that only ever keeps the router's first
+guess — and it discarded **226 of the 823 shortlist hits, every one ranked 2nd or 3rd**.
+Re-ranking components by pass-two relevance was **worse**, and that is the useful half of the
+result: picking is the thing that throws the candidates away, so no pick rule fixes it.
+
+**Licensing every connected component is sound rather than lax.** `licensed` is govern's table
+allowlist; a statement can only reach a table it names and `check()` refuses any it does not.
+What `connect` guarantees is a *retrieval* property — that the prompt carries a join path for
+the tables it offers — and that holds per component. Each component is connected on its own, its
+Steiner points are added, `complete_joins` supplies every ON clause, and a component that cannot
+be joined internally is dropped from **both** licensing and context. The turn declines only when
+no component connects, which is now what `missing_join_path` means.
+
+An empty terminal set needed its own guard: zero terminals is not a failure to connect — there
+is nothing to join, and `connect(set())` has always said so. Without the guard every such turn
+declined `over_connect_bounds`, including the conformance suite's answered path, which licenses
+no table by design.
+
+`route_top_n` is a real dial for the first time. Stratified, ≤6 per schema, n=342:
+
+| `route_top_n` | 1 | 3 | 5 | 10 |
+| --- | --- | --- | --- | --- |
+| `reached_gold` | 0.447 | 0.637 | 0.716 | 0.845 |
+| mean licensed schemas | 1.00 | 2.98 | 4.84 | 7.93 |
+
+**The default stays 3.** Reachability argues for 5 or 10 and reachability is not the outcome:
+whether the model uses a wider context or drowns in it is unmeasured, and a live batch at 3
+already produced one `OpenAIContextOverflowError`. Raising it on Stage A evidence alone would be
+the kind of guess this repository keeps retiring numbers over.

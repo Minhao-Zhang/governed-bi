@@ -64,7 +64,7 @@ intentional history.
 | [0005 The v2 memory layer and faceted retrieval](adr/0005-v2-memory-layer-and-faceted-retrieval.md) | Accepted in part 2026-08-03 — the live v2 spec |
 | [0006 Execution-time governance](adr/0006-execution-time-governance.md) | Accepted in part 2026-08-03; `govern/` built, executors and `guard` rules are not |
 | [0007 The HTTP surface and the UI contract](adr/0007-http-surface-and-the-ui-contract.md) | Accepted 2026-08-03; supersedes the runtime half of 0001 |
-| [0008 Identifiers, end to end](adr/0008-identifiers-end-to-end.md) | **Proposed 2026-08-04** — no code. Amends 0005 §1.2/§2.8.2 and 0006 §3/§4 |
+| [0008 Identifiers, end to end](adr/0008-identifiers-end-to-end.md) | Accepted in part 2026-08-04; Phases 0 and 1 built. Amends 0005 §1.2/§2.8.2 and 0006 §3/§4 |
 
 > **The falsifier.** The one result that would make us conclude the corpus does not
 > help — arm pair, metric, stratum, effect size, number of curator draws — is written
@@ -79,7 +79,12 @@ Dated working docs, not canonical design. Where one disagrees with the docs
 above, the docs above win. **No eval number anywhere in this repo is currently
 quotable — every number produced before 2026-07-26 is discarded.**
 
-*Live:*
+*Live (v2):*
+
+- **[Data-lake eval, 2026-08-04](plans/datalake-eval-2026-08-04.md): what was measured on the pooled 57-schema lake, what it cost, and which numbers are not yet trustworthy. Routing is the bottleneck (`recall@1` 0.442 against `recall@3` 0.609); EX is 0.053 and is a floor rather than a verdict. Also records the five measurement defects found before any of it could be trusted. The entry point for eval work on v2.**
+- [v2 implementation decisions](plans/v2-implementation-decisions.md): the numbered judgements, newest last. Read the tail for current state.
+
+*Live (v1, historical):*
 
 - [Experiment runbook](v1/plans/experiment-runbook.md): what to run, in what order, and what must be true before a number is worth quoting. **The entry point for any eval work.**
 - [Data-lake run](v1/plans/datalake-run.md): the pooled multi-schema run (D15) — runbook and status.
