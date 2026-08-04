@@ -104,7 +104,12 @@ class Session:
         model-free path never has to pay for tokens.
         """
         conf: dict[str, Any] = {
-            "thread_id": self.run_id,
+            # **No `thread_id`.** It was here and that was the same category error this whole
+            # seam exists to prevent: a thread is *per conversation*, not a run constant, so
+            # defaulting it to `run_id` silently collapsed every conversation of a run into
+            # one — and because LangGraph checkpoints on the **config's** `thread_id`, a
+            # caller passing one in the turn state was ignored while believing it had been
+            # honoured. The caller supplies it; there is no default to fall back to wrongly.
             "policy": self.policy,
             "index": self.index,
             "structure": self.structure,

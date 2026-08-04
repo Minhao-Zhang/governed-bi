@@ -57,7 +57,7 @@ def _credentials() -> Any:
     return credentials
 
 
-def _model(name: str, creds: Any) -> Any:
+def _model(name: str, creds: Any, effort: str | None = None) -> Any:
     """A real chat model, constructed **here** rather than behind a port.
 
     Decision #1: LangChain's ``BaseChatModel`` already *is* that port, and v1's three layers
@@ -71,7 +71,14 @@ def _model(name: str, creds: Any) -> Any:
         )
     from langchain.chat_models import init_chat_model
 
-    return init_chat_model(name, model_provider="openai", temperature=0)
+    # Same two LangChain fields the server passes, and for the same reason: this agent binds
+    # tools, and the provider refuses tools alongside `reasoning_effort` on chat completions.
+    # Kept identical to `api/graph_app.py` deliberately — two entry points that construct a
+    # model differently are two answers to "what did this run use", on a comparability knob.
+    kwargs: dict[str, Any] = {"model_provider": "openai", "use_responses_api": True}
+    if effort:
+        kwargs["reasoning_effort"] = effort
+    return init_chat_model(name, **kwargs)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -82,6 +89,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", default="gpt-4o-mini")
     parser.add_argument("--no-model", action="store_true", help="serve without a model (stub answer path)")
     parser.add_argument("--embed", action="store_true", help="build the index with an embedder (costs tokens)")
+    parser.add_argument("--effort", help="reasoning effort for models that take one (none/low/medium/high/xhigh)")
     parser.add_argument("--json", action="store_true", help="print the record as JSON and nothing else")
     args = parser.parse_args(argv)
 
@@ -109,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
         from ..model import OpenAIEmbedder
 
         embedder = OpenAIEmbedder()
-    model = None if args.no_model else _model(args.model, creds)
+    model = None if args.no_model else _model(args.model, creds, args.effort)
 
     kwargs: dict[str, Any] = {
         "connector": connector,
@@ -135,7 +143,13 @@ def main(argv: list[str] | None = None) -> int:
         return 3
 
     graph = compile_graph()
-    out = graph.invoke(session.turn(args.question), session.configurable(question=args.question))
+    # One question, one thread. `configurable()` no longer supplies a `thread_id` -- a thread is
+    # per conversation, not a run constant, and defaulting it collapsed conversations together
+    # -- so the caller names it. Here that caller serves a single turn, so the run id is the
+    # honest answer rather than a default hiding somewhere deeper.
+    config = session.configurable(question=args.question)
+    config["configurable"]["thread_id"] = session.run_id
+    out = graph.invoke(session.turn(args.question), config)
     answer = out.get("answer") or {}
     record = answer.get("record") or {}
 

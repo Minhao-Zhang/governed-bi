@@ -16,6 +16,7 @@ the corpus is browsable before anyone pays for a token.
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from fastapi import FastAPI
@@ -30,6 +31,31 @@ app = FastAPI(title="governed-bi", version="2")
 
 def _session() -> Any:
     return session_from_environment()
+
+
+#: One compiled graph, one checkpointer, for the whole process.
+#:
+#: `compile_graph()` builds a **fresh** `InMemorySaver` on every call, so calling it per
+#: request meant every turn started from an empty checkpoint — no resume, no thread memory,
+#: and no way for an `ask_user` interrupt to be answered, while this module's docstring
+#: claimed otherwise. Compiling once is what makes the thread id mean something.
+#:
+#: The same saver goes to the nested `create_agent` (`agent_checkpointer`), because that is
+#: where `ask_user` interrupts from: two savers means the interrupt is written to one and
+#: looked for in the other, which fails as a turn that hangs rather than as an error.
+_GRAPH: Any = None
+
+
+def _graph() -> Any:
+    global _GRAPH
+    if _GRAPH is None:
+        from langgraph.checkpoint.memory import InMemorySaver
+
+        from governed_bi.serve.graph import build_graph
+
+        saver = InMemorySaver()
+        _GRAPH = build_graph(agent_checkpointer=saver).compile(checkpointer=saver)
+    return _GRAPH
 
 
 @app.get("/livez")
@@ -183,9 +209,16 @@ def chat(body: dict[str, Any]) -> dict[str, Any]:
     this engine, because a reliability badge with nothing behind it is the defect class the
     rewrite removed. ``answer_text`` is added beside them for one reason given below.
 
-    ``session_id`` becomes the ``thread_id``, so a conversation resumes under one checkpoint
-    and ``ask_user`` can interrupt and resume. A caller that sends none gets a fresh thread,
-    which is correct: an absent conversation id is a new conversation, not a shared one.
+    ``session_id`` becomes the ``thread_id`` **on the config**, which is what LangGraph
+    checkpoints on, so a conversation genuinely resumes under one checkpoint and an
+    ``ask_user`` interrupt can be answered. An earlier version of this route put the thread id
+    only in the turn state and asserted the same sentence; it was false, because
+    ``compile_graph()`` also built a fresh saver per request. Both halves are fixed.
+
+    ``history`` is **not injected into the conversation** and is not a second memory. The
+    thread is the memory. It is read for exactly one thing -- numbering the turn -- and if it
+    disagrees with the thread, the thread is right. Accepting it and also replaying it would
+    be two sources for one fact, which is the failure this file keeps arguing against.
 
     Defined ``def`` rather than ``async def`` deliberately. FastAPI runs a sync handler in a
     threadpool, so the synchronous connector and model calls do not occupy the event loop —
@@ -198,12 +231,15 @@ def chat(body: dict[str, Any]) -> dict[str, Any]:
         return {"outcome": "crashed", "text": "no question", "failed_stage": "accept",
                 "error_type": "ValueError", "refused_by": None, "record": {}, "answer_text": None}
 
-    from governed_bi.serve.graph import compile_graph
-
-    thread_id = str(body.get("session_id") or "") or None
+    thread_id = str(body.get("session_id") or "") or uuid.uuid4().hex[:16]
     turn_index = 1 + sum(1 for h in body.get("history") or [] if (h or {}).get("role") == "user")
     turn = session.turn(question, turn_index=turn_index, thread_id=thread_id)
-    out = compile_graph().invoke(turn, session.configurable(question=question))
+    config = session.configurable(question=question)
+    # The thread goes on the **config**, because that is what LangGraph checkpoints on. An
+    # earlier version put it only in the turn state and claimed in this docstring that a
+    # conversation would resume; it could not. See `_graph()` for the other half.
+    config["configurable"]["thread_id"] = thread_id
+    out = _graph().invoke(turn, config)
     answer = dict(out.get("answer") or {})
     # The model's text lives in `messages`, not in `answer["text"]` — ADR 0007 §4: `text` is
     # *system* copy and is null on the answered path. A REST caller has no message channel to

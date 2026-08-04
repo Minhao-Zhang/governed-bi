@@ -167,16 +167,70 @@ def build_tools(
             return f"run_query error: {type(exc).__name__}: {exc}"
 
     @tool
-    def ask_user(question: str) -> str:
-        """Pause and ask the human a clarifying question (HITL interrupt)."""
-        answer = interrupt({"type": "ask_user", "question": question})
-        text = str(answer)
-        clar_box.append({"question": question, "answer": text, "turn_id": turn_id})
+    def ask_user(question: str, why: str = "") -> str:
+        """Pause and ask the human a clarifying question (HITL interrupt).
+
+        ``why`` is what makes the question answerable: *which* ambiguity it resolves. A
+        clarification with no stated reason asks the human to guess what the model is unsure
+        about, which is the same problem one step out.
+        """
+        # ADR 0007 §6. The payload was `{"type": "ask_user", "question": ...}` and the client
+        # requires `kind: "clarification"` as a literal, plus an id and a reason — so it
+        # **dropped the interrupt**, the prompt never mounted, and the turn deadlocked while
+        # the interface looked idle: the graph waiting, `isLoading` false, and nothing on
+        # screen wrong. That is the worst failure shape available here, and it is why the id
+        # and the reason are part of the payload rather than nice-to-have.
+        #
+        # `clarification_id` is what makes an answer attributable to *this* question rather
+        # than to whatever happens to be pending. Derived from the turn and the question text,
+        # so a resumed interrupt keeps its identity across a checkpoint reload.
+        clarification_id = f"clar-{turn_id}-{abs(hash(question)) % 10**8:08d}"
+        answer = interrupt(
+            {
+                "kind": "clarification",
+                "clarification_id": clarification_id,
+                "question": question,
+                "why": why or "The question is ambiguous and the answer depends on which reading is meant.",
+            }
+        )
+        # The client may answer with a bare string, or with the structured reply its own
+        # contract sends: `{clarification_id, answer | choice_id | declined}`. Both are read
+        # rather than one assumed, because a resume that arrives in the unexpected shape would
+        # otherwise be stringified into the transcript as a Python dict repr.
+        text = _clarification_answer(answer)
+        clar_box.append(
+            {
+                "clarification_id": clarification_id,
+                "question": question,
+                "why": why,
+                "answer": text,
+                "turn_id": turn_id,
+            }
+        )
         return text
 
     run_query._governed_attempts_box = attempts_box  # type: ignore[attr-defined]
     ask_user._governed_clar_box = clar_box  # type: ignore[attr-defined]
     return [read_body, inspect_schema, sample_rows, run_query, ask_user]
+
+
+def _clarification_answer(resume: Any) -> str:
+    """The human's answer, from a bare string or the client's structured reply.
+
+    The client's own union is ``{clarification_id, answer}`` / ``{..., choice_id}`` /
+    ``{..., declined: true}``. A decline is **not** an empty answer: it means the human
+    refused to disambiguate, and the model needs to know that rather than receive `""` and
+    treat it as a blank reply.
+    """
+    if isinstance(resume, Mapping):
+        if resume.get("declined"):
+            return "The user declined to answer this clarification."
+        for key in ("answer", "choice_id", "text"):
+            value = resume.get(key)
+            if value:
+                return str(value)
+        return ""
+    return str(resume)
 
 
 def clarifications_from_tools(tools: Sequence[Any]) -> list[dict[str, Any]]:

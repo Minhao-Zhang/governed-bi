@@ -216,8 +216,23 @@ def make_graph() -> Any:
     """
     _warm_imports()
     conf = dict(session_from_environment().configurable()["configurable"])
-    conf.pop("thread_id", None)
-    return build_graph(accept=_accept_node).compile().with_config({"configurable": conf})
+
+    # **The nested agent needs a checkpointer of its own, and it must be the same one.**
+    # `ask_user` interrupts from inside `create_agent`, which runs *within* a node rather than
+    # as a compiled subgraph. Leaving `agent_checkpointer=None` here meant HITL was proven only
+    # on the CLI path, where `compile_graph` hands one saver to both. Two savers is worse than
+    # none: the interrupt is written to one and looked for in the other, and the symptom is a
+    # turn that hangs rather than an error anyone can read.
+    #
+    # The outer graph is compiled with it too. LangGraph Server supplies its own persistence
+    # for the outer graph and will use that; this saver is what the *inner* agent resumes from,
+    # and compiling the outer with the same object keeps a single answer to "where is this
+    # thread's state" on the CLI-equivalent path.
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    saver = InMemorySaver()
+    graph = build_graph(accept=_accept_node, agent_checkpointer=saver).compile(checkpointer=saver)
+    return graph.with_config({"configurable": conf})
 
 
 def _warm_imports() -> None:
