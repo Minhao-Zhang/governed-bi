@@ -1112,3 +1112,188 @@ Also corrected: two ADR pointers in my handoff brief were wrong (the `terminal` 
 is ADR 0006 **§12**, not §8; three-valued `ChannelState` is ADR 0005 **§2.3**, not §2.2),
 and the `ruff` baseline is **13**, not the 11 I quoted — I had misread `[*] 11 fixable` as
 the total.
+
+## 46. Framework conformance: eleven defects, four of them in state I designed · *2026-08-04*
+
+Four read-only assessment agents reviewed the tree against LangGraph, LangChain, DeepAgents
+and LangGraph-persistence practice. Every load-bearing claim below was re-verified by
+execution before it was acted on, and the two largest were re-verified *after* being fixed by
+reverting the fix and watching the new tests fail. What follows is the disposition, ordered by
+whether the defect lost data.
+
+### The four that lost a turn's record
+
+**S1 — `failure` and `path_kind` were un-reduced channels.** Five facet nodes run in one
+super-step and `wrap.py` turns any exception into `{"failure": ..., "path_kind": "crashed"}`,
+so two facets failing is two writes to one `LastValue`: `InvalidUpdateError: At key 'failure':
+Can receive only one value per step`. It is raised **by the channel**, after both nodes have
+returned successfully, where `wrap_node` is no longer on the stack. `stamp` never runs and the
+turn produces no record of any kind — the single failure mode the whole `wrap_node` design
+exists to prevent, reached *through* `wrap_node` working correctly.
+
+**S2 — `route_node` erased the crash it was told about.** It is the fan-in of the five facets,
+so it runs whenever any of them ran, and it had no terminal guard though every node downstream
+of it has one. It also wrote `"path_kind": None` unconditionally. A facet crash therefore
+bought routing, reference closure, join connection, context assembly and a full billed model
+call before `stamp` recorded a failure that had already happened.
+
+**Nothing cleared a per-turn channel** — found while fixing S1, not reported by any review. A
+channel outlives its turn under a checkpointer, and `_after_guard` reads `path_kind` to decide
+whether to skip to `stamp`, so a crashed turn 1 made **every later turn of that conversation**
+unservable. The quieter half is the same shape: a turn refused at `guard` never reaches
+`negative_gate`, so it stamped the *previous* turn's `negative` verdict into its own record as
+though the gate had run.
+
+`PER_TURN_RESET` now lives beside the channel declarations, `turn()` applies it, and a contract
+test fails until every declared channel is classified as per-turn, accumulating, turn identity,
+or a test hook. The reducers honour a `RESET` sentinel rather than `None`, and that choice is
+the interesting one: `None`-clears would mean every node must remember not to mention a field,
+which is exactly how `route_node` erased a crash. One caller must remember a sentinel instead,
+and it is tested.
+
+**The ledger lived in Python closures.** `interrupt()` aborts the outer node *without
+committing its update*, so on resume the node re-executes, `build_tools` builds fresh
+`attempts_box` / `clar_box`, and the nested agent restores its **messages** from its own
+checkpoint rather than re-invoking the tools. Every ToolMessage was present while every box
+recording what those calls did was empty: `terminal: "no_sql"` with `attempts: []` beside a
+populated `generated_sql` — one row of the artifact contradicting itself — plus
+`tool_delivered: {}` under a `delivery_hash` computed over nothing, and an attempt cap that
+reset with the box, so a cap of 1 admitted a second governed statement.
+
+Fixed by moving the ledger into the nested agent's own state (`serve/agent_state.py`), written
+by tools returning `Command(update=...)` and keyed by **tool call id** — which buys idempotence
+under replay, an exact count for the cap, and the attribution `tool_delivered`'s `uuid4()` keys
+never had. `AttemptBook` counts the cap over committed **∪** in-flight ids, because each alone
+has already been wrong here: committed-only is blind to siblings inside one `ToolNode`
+super-step, in-flight-only is what reset on resume.
+
+Verified by probe rather than argued: **2 model calls before the interrupt, 3 after.** The
+nested agent restores rather than replays, `run_query` is not re-invoked, and the attempt row
+comes from the checkpoint.
+
+### The security one
+
+**A request could replace the `GovernancePolicy`.** `make_graph` binds the run constants with
+`with_config`, and LangGraph merges caller config **over** a bound default — deliberate and
+load-bearing for `thread_id`, which is why the binding exists, and identical for the six keys
+beside it. `config.configurable.policy` on a `/threads/{id}/runs` request replaced governance
+for that run; `assets_by_id` replaced the corpus every tool licenses against.
+
+`runtime.trust()` plus the shared reader forcing the constants back over anything a request
+names is the same rule `accept` applies to the record's provenance fields, one layer out. It
+only works because there is **one** reader, and there were three: `facets` and `guard`
+subscripted `config["configurable"]` directly — `guard` for the policy, of all keys. A
+structural test now keeps it at one.
+
+### The one the interface was lying about
+
+`POST /chat` returned `out["answer"]`, and on an `ask_user` interrupt no node has written
+`answer` — so it replied **HTTP 200** with `{"answer_text": null}`, dropped `__interrupt__`, and
+left the graph paused forever. The client saw a successful empty answer and nothing on screen
+was wrong. There was no route to answer on. `/capabilities` reported `can_clarify: true` over
+all of it.
+
+The second half was total: `resume_clarification` compares the caller's identity to the one
+checkpointed with the turn, `resume_authorised` refuses two `None`s **on purpose**, and nothing
+in this repository ever supplied one — so every clarification was unanswerable,
+`ResumeRejected` for every caller including the right one. The fix keeps the fail-closed rule
+and supplies an identity at the transport, where the honest statement can be made: on a
+localhost deployment the thread id is the only credential there is, so this is a *same-thread*
+check rather than a same-caller one, and a deployment with real auth must send a real one.
+
+### The falsifiability one, and the trap inside its fix
+
+`ScriptedChatModel` discarded both of its inputs — `bind_tools` returned `self` without looking
+at the tools, `_generate` used `messages` only to count `AIMessage`s. Measured consequence:
+`SYSTEM_PROMPT = ""` left the suite at **358 passed / 27 xfailed, byte-identical to baseline**,
+and so did dropping `ask_user` from `build_tools`. Decision #1 recorded this exact v1 failure
+and named `prompts_seen` / `tools_seen` as the remedy; they were never built. A broad class of
+green results was therefore evidence about the graph's plumbing and none about the model's
+instructions.
+
+**The first version of the fix had the same hole.** The prompt test asserted only
+`seen == SYSTEM_PROMPT` and passed with `SYSTEM_PROMPT` set to `""` — both sides came from the
+same module, so gutting the constant gutted the expectation. Recorded in the test's own
+docstring rather than quietly corrected, because the lesson is that "compare against the
+declaration" is not a substitute for "assert a property".
+
+### Where I was the source
+
+Three comments I wrote a day earlier were **factually wrong**, and they described a mechanism
+that does not exist: that the nested `create_agent` needs a checkpointer of its own, and that
+"two savers is worse than none: the interrupt is written to one and looked for in the other". A
+probe settles it — inside a node `CONFIG_KEY_CHECKPOINTER` is the **outer** saver, the agent's
+own saver ends the run with **zero** checkpoints, the outer one has three. LangGraph propagates
+the checkpointer into a graph invoked inside a node and namespaces it. The `agent_checkpointer`
+parameter was dead code documented as load-bearing, which is worse than either alone. Deleted
+from three files along with the comments.
+
+Also mine: the CI job rewritten in `86faf4b` would have **failed at its own Lint step** —
+`ruff check .` had 13 pre-existing errors in `eval/`, `measure/` and two tests. I rewrote the
+workflow and did not run it. And a draft of `/chat`'s `_shape` consulted the checkpoint when no
+interrupt was present, putting a session build on the answered path of every request; caught by
+writing the test, not by a failure.
+
+### Smaller, same pass
+
+* `usage[].model` read `_llm_type` first, so every OpenAI turn recorded `"openai-chat"` — a
+  LangChain *class* label — while `knobs_resolved["llm_model"]` beside it held the real id. One
+  turn, two answers, on a `Role.comparability` field. One `runtime.model_id` now.
+* `clarification_id` was `abs(hash(question))`, and `hash` on a `str` is salted per process — so
+  the id a client was told was not the id a restarted server would compute, under a comment
+  claiming it "keeps its identity across a checkpoint reload".
+* `AttemptRecord.verdict_layer` held a `Layer` enum. Checkpointing the ledger surfaced
+  LangGraph's own warning that deserializing it "will be blocked in a future version"; a row a
+  future LangGraph refuses to load is a ledger that stops existing on the resume path — the path
+  it was just moved there to protect. Clean under `LANGGRAPH_STRICT_MSGPACK=true`.
+* `assemble` appended the whole context block to `messages` as a human turn. Three costs: every
+  prior turn's context re-sent to the provider, `turn_index` coming out at **2n−1** on both the
+  server and REST paths, and `messages` holding the conversation plus its scaffolding.
+* `_reported_tokens` emitted a two-key cache dict as soon as **either** key appeared, so a
+  reported cache read produced `cache_write_tokens: 0` — this code's claim wearing the
+  provider's clothes.
+* `route_node` returned a top-level `schema_ranking` that `ServeState` does not declare, so
+  LangGraph dropped it while `stamp` read the same field out of `retrieved`.
+* `stamp` was wrapped by `wrap_node`, which converts an exception into state for the *next* node
+  to record — and there is nothing after `stamp`.
+* `python -m governed_bi.serve` printed `outcome: None` and exited 1 naming fifteen absent
+  required fields when a turn paused on a clarification. A paused turn is not a failed one; it
+  now prints the question and exits 4.
+
+### Disposition: DeepAgents is retired, not deferred
+
+Argued against on our own post-mortem rather than on preference. `FilesystemMiddleware`
+contributes `write_file` / `edit_file` and they are **not removable**; that generic write
+channel is what let v1 forge `source=human, status=certified` on curated assets, and this
+repository's rule is that the governance boundary is enforced by the *absence* of a tool.
+`TodoListMiddleware` additionally spends three super-steps per sequential tool call, which is
+what silently dropped 30 of 57 schemas from a paid curator run. The replacement is a LangGraph
+`StateGraph` with one `create_agent` node, which is how `serve/` is already built. Six
+dependencies removed in total; the lock loses **24** packages, including the `anthropic`,
+`google-genai` and `boto3` trees that came in behind `deepagents` alone.
+
+### Confirmed idiomatic — not changed, and worth not re-litigating
+
+`merge_facets`; the conditional-edge helpers with `Literal` returns and path maps; `Send` not
+being needed for a fixed five-way fan-out; `with_config` returning a real `CompiledStateGraph`;
+`get_stream_writer` as the right API when stage events arrive; `policy` on `configurable`
+rather than in state (the checkpointer cannot msgpack the dataclass); `Session.configurable()`
+omitting `thread_id`; `system_prompt=SYSTEM_PROMPT`; no `response_format`; `init_chat_model`
+with no wrapper of ours; the `@tool` style; `Measured.unmeasured` over a zero; the
+`GovernanceUsageError` carve-out from the tool-errors-become-strings rule; `wrap_node`
+re-raising `GraphInterrupt`.
+
+**`RetryPolicy` is absent, not inert.** It was reported as inert; grep across `src/` returns
+zero hits, and the only occurrences in the tree are v1 audit documents saying the same thing.
+Left absent, with the reason now recorded: a retry on `agent_core` re-runs a node that bills a
+model call, and until the ledger was durable a retry would have re-attempted governed
+statements without counting them. That precondition now holds, so this is a live candidate
+rather than a defect.
+
+### What this round did not fix
+
+`can_stream: false` stays false — nothing emits a stage event, and a streamed timeline with no
+steps in it is worse than not offering the mode. `add_node(error_handler=...)` does exist in the
+installed LangGraph (verified) and `wrap_node` predates it; the two do the same job, so swapping
+is a refactor with no defect behind it. Parcels `{F, G, I, J}` remain built but unaccepted —
+acceptance is the maintainer's signature, not a test result.
