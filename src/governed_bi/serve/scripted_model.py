@@ -77,6 +77,18 @@ class ScriptedChatModel(BaseChatModel):
             out.append("\n".join(texts))
         return out
 
+    def calls_with_system(self, text: str) -> list[int]:
+        """Indices of the calls whose system prompt is exactly ``text``.
+
+        **One model now serves several callers**, and a test that meant "the analyst call" used
+        to be able to say ``0``. Since the guard's scope gate and the five facet query rewriters
+        also invoke a model — sharing this one whenever no separate utility model is configured —
+        call 0 is whichever of them happened to run first, and an assertion about the analyst
+        that reads it silently changed subject. Selecting by system prompt is the discriminator
+        that stays true as more callers appear.
+        """
+        return [i for i, seen in enumerate(self.system_prompts()) if seen == text]
+
     def prompt_text(self, call: int = 0) -> str:
         """Every message of one call concatenated — for "did the context reach the model"."""
         if call >= len(self.prompts_seen):

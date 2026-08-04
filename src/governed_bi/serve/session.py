@@ -84,6 +84,20 @@ class Session:
     db_id: str
     run_id: str
     agent_model: Any | None = None
+    #: The model for the turn's *small* jobs — classification and query rewriting.
+    #:
+    #: **Named for its role, not its size.** "weak model" is a relative capability claim that
+    #: ages badly — this year's weak model is next year's default — and a name that says "worse"
+    #: invites the reader to ask why we do not just use the good one everywhere. The answer is
+    #: not that these jobs deserve less: it is that a one-word classification and a one-line
+    #: rewrite are *utility* work, five of them run concurrently on the critical path before any
+    #: retrieval, and latency there is the whole user experience.
+    #:
+    #: Falls back to :attr:`agent_model` when unset, so a one-model deployment keeps working and
+    #: nothing silently skips. The fallback is the reason ``knobs["llm_utility_model"]`` is
+    #: always written when a model exists at all: two runs, one with a separate utility model and
+    #: one without, must not report as comparable.
+    utility_model: Any | None = None
     embedder: Embedder | None = None
     problems: tuple[Any, ...] = ()
     corpus_root: Path | None = None
@@ -122,6 +136,17 @@ class Session:
         }
         if self.agent_model is not None:
             conf["agent_model"] = self.agent_model
+        # Resolved **here**, once, rather than at each call site: five facet nodes and the guard
+        # all need "the utility model, or the agent model if there is no separate one", and five
+        # copies of that `or` is five places for the fallback to be written differently.
+        utility = self.utility_model or self.agent_model
+        if utility is not None:
+            conf["utility_model"] = utility
+        # The facets rewrite the question per channel and then have to *embed the rewrite* — a
+        # rewrite that only reaches the lexical channel is half the point. So the embedder itself
+        # rides the config, not just the raw question's vector.
+        if self.embedder is not None:
+            conf["embedder"] = self.embedder
         if question and self.embedder is not None:
             conf["query_vector"] = self.embedder.embed([question])[0]
         return {"configurable": conf}
@@ -308,6 +333,7 @@ def from_assets(
     db_id: str,
     corpus_content_hash_: str,
     agent_model: Any | None = None,
+    utility_model: Any | None = None,
     embedder: Embedder | None = None,
     vector_cache: MutableMapping[str, Any] | None = None,
     problems: Sequence[Any] = (),
@@ -343,6 +369,17 @@ def from_assets(
         effort = getattr(agent_model, "reasoning_effort", None)
         if effort:
             knobs["llm_reasoning_effort"] = str(effort)
+        # **Written whether or not a separate utility model was configured**, resolving the
+        # fallback rather than recording its absence. A run that shares one model and a run that
+        # splits them differ in what the guard and the five rewriters were *asked of*, and if the
+        # shared case wrote nothing the two would agree on every hashed field — which is the
+        # `llm_reasoning_effort` failure exactly: unrecorded treatment, comparability clears the
+        # pair, and the +2.5pp came from the field nobody wrote down.
+        resolved_utility = utility_model or agent_model
+        knobs["llm_utility_model"] = (
+            model_id(resolved_utility) or getattr(resolved_utility, "_llm_type", None)
+            or type(resolved_utility).__name__
+        )
     return Session(
         index=index,
         structure=structure,
@@ -360,6 +397,7 @@ def from_assets(
         db_id=db_id,
         run_id=run_id or uuid.uuid4().hex[:16],
         agent_model=agent_model,
+        utility_model=utility_model,
         embedder=embedder,
         problems=(*problems, *structure_problems),
         corpus_root=corpus_root,

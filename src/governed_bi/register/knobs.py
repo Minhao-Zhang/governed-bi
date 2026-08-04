@@ -205,6 +205,13 @@ KNOB_REGISTER: tuple[Knob, ...] = (
     _k("llm_reasoning_effort", None, Role.comparability,
        "two v1 ladders differed ONLY in this and compared as one experiment; it "
        "moved the baseline arm +2.5pp against a 2.3pp detection threshold"),
+    _k("llm_utility_model", None, Role.comparability,
+       "the model behind the guard's scope gate and the five facet query rewriters. "
+       "Separate from llm_model because it is separately choosable and it decides what "
+       "gets retrieved at all: a cheaper rewriter that phrases the schema query worse "
+       "moves routing recall, which moves everything downstream. Written even when it "
+       "falls back to llm_model, because 'shared one model' and 'split them' are two "
+       "treatments and a blank would make them compare as one"),
     _k("embedding_model", None, Role.comparability,
        "part of every vector cache key. cosine returns 0.0 on a width mismatch "
        "rather than raising, so a cross-model cache hit degrades routing to "
@@ -385,6 +392,7 @@ _PLACEMENT_INVARIANTS: Mapping[str, Role] = {
     # reasoning effort compared as one experiment — and effort moved the baseline
     # arm +2.5pp against a 2.3pp detection threshold.
     "llm_reasoning_effort": Role.comparability,
+    "llm_utility_model": Role.comparability,
     "embedding_model": Role.comparability,
 }
 

@@ -52,7 +52,10 @@ def _run(question: str, *, rules: dict[str, bool] | None = None, model: Any = No
     policy = GovernancePolicy(guard_rules_enabled=rules if rules is not None else SCOPE_ONLY)
     conf: dict[str, Any] = {"policy": policy}
     if model is not None:
-        conf["agent_model"] = model
+        # `utility_model`, because that is the key the node reads. `Session.configurable` resolves
+        # the fallback to `agent_model` once, in one place, so a hand-built config states what it
+        # means rather than relying on a second copy of the rule inside the node.
+        conf["utility_model"] = model
     return guard_node({"question": question}, {"configurable": conf})["guard"]
 
 
@@ -104,7 +107,7 @@ def test_enabled_with_no_model_is_error_failed_open_not_clear() -> None:
     verdict = _run("how many customers?", model=None)
     assert verdict["outcome"] == "error_failed_open"
     assert verdict["rule_id"] == BI_SCOPE_RULE_ID
-    assert "no agent_model" in (verdict["detail"] or "")
+    assert "no utility_model" in (verdict["detail"] or "")
 
 
 def test_a_model_error_fails_open_and_records_the_type() -> None:

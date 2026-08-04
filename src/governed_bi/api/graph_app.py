@@ -50,6 +50,26 @@ CORPUS_DIR_VAR = "GOVERNED_BI_CORPUS_DIR"
 #: `has_live_model: false` rather than promising a model that will never answer.
 MODEL_VAR = "GOVERNED_BI_MODEL"
 
+#: The model for the turn's small jobs: the guard's scope gate and the five facet query
+#: rewriters. Unset means "use :data:`MODEL_VAR`", so a one-model deployment is unchanged.
+#:
+#: **Named for the role, not the tier.** These are six short calls — one word out of the gate,
+#: one line out of each rewriter — and five of them run concurrently on the critical path before
+#: any retrieval, so latency there is the whole perceived speed of the product. That is an
+#: argument for a fast model, not for a bad one, and ``GOVERNED_BI_WEAK_MODEL`` would have
+#: encoded a relative capability claim that stops being true when the models move.
+#:
+#: It is a **comparability knob** (``llm_utility_model``) and it is recorded even when it falls
+#: back, because what these calls produce is *what gets retrieved at all*: a cheaper rewriter that
+#: phrases the schema query worse moves routing recall, and routing recall moves everything after
+#: it. Two runs that differ only here differ in their answers.
+UTILITY_MODEL_VAR = "GOVERNED_BI_UTILITY_MODEL"
+
+#: Reasoning effort for the utility model, separately from the agent's. Usually you want this
+#: low or unset even when the agent's is high — a yes/no classification does not need a budget,
+#: and the point of the split is speed.
+UTILITY_MODEL_EFFORT_VAR = "GOVERNED_BI_UTILITY_MODEL_EFFORT"
+
 #: The embedding model id, and setting it is what turns the **semantic channel on**.
 #:
 #: **Absent, every facet reported a failed channel on every turn, and nothing said so until the
@@ -168,6 +188,8 @@ def session_from_environment() -> Session:
             kwargs_model["reasoning_effort"] = effort
         model = init_chat_model(model_id, **kwargs_model)
 
+    utility = _utility_model(credentials)
+
     from governed_bi.govern.guard import BI_SCOPE_RULE_ID
 
     kwargs: dict[str, Any] = {
@@ -184,6 +206,9 @@ def session_from_environment() -> Session:
         # connect and a full agent loop before producing nothing anyone wanted.
         "policy": GovernancePolicy(guard_rules_enabled={BI_SCOPE_RULE_ID: True}),
         "agent_model": model,
+        # `None` when unset; `Session.configurable` resolves the fallback to `agent_model` once,
+        # rather than leaving six call sites to each write their own `or`.
+        "utility_model": utility,
     }
 
     cache = _embedder_into(kwargs, credentials)
@@ -207,6 +232,32 @@ def session_from_environment() -> Session:
         state = "unchanged" if not wrote else ("NOT SAVED: " + error if error else "saved")
         print(f"vector cache: {cache.hits} hit / {len(cache)} total, {state} — {cache.path.as_posix()}")
     return _SESSION
+
+
+def _utility_model(credentials: Any) -> Any:
+    """The small-jobs model, or ``None`` to share the agent's.
+
+    ``use_responses_api`` is **not** set here, and that is the one real difference from the agent
+    model's construction. It is set there because the agent binds tools and the provider refuses
+    tools alongside ``reasoning_effort`` on chat completions. Nothing this model does binds a
+    tool — it answers one word, or writes one line of search text — so asking for the heavier
+    endpoint would be carrying a constraint from a caller that does not exist here.
+    """
+    model_id = os.environ.get(UTILITY_MODEL_VAR)
+    if not model_id:
+        return None
+    if not credentials.have(*credentials.OPENAI_KEY_NAMES):
+        raise RuntimeError(
+            f"{UTILITY_MODEL_VAR} is set to {model_id!r} but no model credential is available "
+            f"({' / '.join(credentials.OPENAI_KEY_NAMES)}). Unset it to share the agent's model."
+        )
+    from langchain.chat_models import init_chat_model
+
+    kwargs: dict[str, Any] = {"model_provider": "openai"}
+    effort = os.environ.get(UTILITY_MODEL_EFFORT_VAR)
+    if effort:
+        kwargs["reasoning_effort"] = effort
+    return init_chat_model(model_id, **kwargs)
 
 
 def _embedder_into(kwargs: dict[str, Any], credentials: Any) -> Any:

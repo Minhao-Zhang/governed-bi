@@ -116,12 +116,34 @@ FACET_CHANNELS: Mapping[Stage, frozenset[Channel]] = {
     Stage.facet_example: frozenset({Channel.semantic}),
 }
 
-#: Facets whose queries come from model extraction. The others use the raw question.
+#: Facets whose queries come from model extraction — **now all five** (ADR 0011).
 #:
-#: That the two non-extracting facets are also the cheapest is what lets the
-#: pre-fan-out gates cost about 10ms instead of a model call.
+#: It was three, on the reasoning that "the two non-extracting facets are also the cheapest is
+#: what lets the pre-fan-out gates cost about 10ms instead of a model call". That trade stopped
+#: being available the moment those two facets started rewriting anyway, and the first live run
+#: after the rewriters landed is what showed it: ``facet_schema`` searched with *"authors corpus
+#: table schema author metadata document collection"* and ``facet_example`` with *"count authors
+#: corpus single query sql aggregate count distinct authors grouped no joins"* — plainly
+#: rewrites — while their channel state reported ``not_configured``, because the declaration
+#: still said they used the raw question.
+#:
+#: **The work was being done and the record denied it**, which is the declaration-versus-
+#: observation mismatch this module exists to make impossible, pointing the other way for once.
+#: Both are now declared, so ``_channels_for`` reports ``ran`` when a rewrite came back and
+#: ``failed`` when it did not.
+#:
+#: These two have the most to gain, which is the other half of the argument. ``facet_schema``
+#: searches table and schema summaries written in catalogue vocabulary that a user's question
+#: never uses, and ``facet_example`` searches for past queries whose *shape* matches — neither is
+#: well served by the raw wording.
 FACET_EXTRACTS: frozenset[Stage] = frozenset(
-    {Stage.facet_term, Stage.facet_metric, Stage.facet_entity}
+    {
+        Stage.facet_schema,
+        Stage.facet_term,
+        Stage.facet_metric,
+        Stage.facet_entity,
+        Stage.facet_example,
+    }
 )
 
 #: Which asset types each facet retrieves over.

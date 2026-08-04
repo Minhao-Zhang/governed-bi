@@ -41,6 +41,7 @@ from typing import Mapping
 __all__ = [
     "Prompt",
     "PROMPT_REGISTRY",
+    "FACET_QUERY_PROMPTS",
     "DEFAULT_VARIANTS",
     "prompt_text",
     "prompt_set_hash",
@@ -156,12 +157,138 @@ BI_SCOPE = Prompt(
 )
 
 
+#: The five facet query rewriters — one prompt each, on purpose.
+#:
+#: **What they are for.** A user asks *"what is the average star rating for restaurants in this
+#: area"*; a schema summary reads *"stores basic information about restaurants"*. Those two
+#: strings are not close, lexically or semantically, and the facet is searching with the raw
+#: question. The rewrite turns the question into something shaped like the thing being searched
+#: for — *"which tables and schemas hold restaurant records and their ratings"* — which is the
+#: maintainer's own framing: *"a deterministic way of aggregating different strings together to
+#: make them more semantically close to the thing we are trying to search."*
+#:
+#: **Five prompts and not one parameterised prompt.** Each facet searches a different kind of
+#: object and each will be tuned against a different number; the registry exists so a variant of
+#: one can be compared without moving the others, and a single prompt with the facet interpolated
+#: would make that impossible. It costs four more entries and buys independent versioning.
+#:
+#: **Each asks for search text, never for an answer.** The output is fed to BM25 and to an
+#: embedder, so a sentence of reasoning would pollute both; the instruction is to emit only the
+#: query. Empty or refused output falls back to the raw question, and the ``extraction`` channel
+#: is then marked failed rather than ran — a fallback that reported as a run is exactly how, per
+#: ADR 0005 §2.3, an arm quietly becomes v1's single-pass retrieval.
+_REWRITE_TAIL = (
+    "\n\nReply with the search text only — no preamble, no explanation, no quotes. "
+    "Keep it under 30 words. If the question gives you nothing to work with, reply with "
+    "the question unchanged."
+)
+
+FACET_SCHEMA_QUERY = Prompt(
+    name="facet_schema_query",
+    stage="facet_schema",
+    why="Turns the question into a description of the tables and schemas that would answer it.",
+    variants={
+        "v1": (
+            "You rewrite a business question into search text for finding database TABLES and "
+            "SCHEMAS.\n\nDescribe the kind of tables and schemas that would be needed to answer "
+            "the question — the entities they store, not the calculation asked for. Use the "
+            "vocabulary a data catalogue would use." + _REWRITE_TAIL
+        ),
+    },
+)
+
+FACET_TERM_QUERY = Prompt(
+    name="facet_term_query",
+    stage="facet_term",
+    why="Turns the question into search text for business-term and definition assets.",
+    variants={
+        "v1": (
+            "You rewrite a business question into search text for finding BUSINESS TERM "
+            "definitions in a semantic layer.\n\nName the domain terms, jargon and entity names "
+            "the question depends on — the words whose meaning has to be pinned down before the "
+            "question can be answered." + _REWRITE_TAIL
+        ),
+    },
+)
+
+FACET_METRIC_QUERY = Prompt(
+    name="facet_metric_query",
+    stage="facet_metric",
+    why="Turns the question into search text for metric definitions.",
+    variants={
+        "v1": (
+            "You rewrite a business question into search text for finding METRIC definitions in "
+            "a semantic layer.\n\nName the measures, aggregations and calculations the question "
+            "asks for — averages, counts, totals, rates, ratios — and what they are computed "
+            "over." + _REWRITE_TAIL
+        ),
+    },
+)
+
+FACET_ENTITY_QUERY = Prompt(
+    name="facet_entity_query",
+    stage="facet_entity",
+    why="Turns the question into search text for the concrete entities and column values it names.",
+    variants={
+        "v1": (
+            "You rewrite a business question into search text for finding the specific ENTITIES "
+            "it refers to — named people, places, products, categories, statuses or codes that "
+            "would appear as values in a column.\n\nList them plainly. If the question names no "
+            "specific entity, describe the kind of entity it is about." + _REWRITE_TAIL
+        ),
+    },
+)
+
+FACET_EXAMPLE_QUERY = Prompt(
+    name="facet_example_query",
+    stage="facet_example",
+    why=(
+        "Turns the question into search text for past question/SQL example pairs. The facet the "
+        "maintainer singled out: past SQL examples help a lot, and an embedder retrieves them "
+        "better than BM25 — which is why this facet declares only the semantic channel."
+    ),
+    variants={
+        "v1": (
+            "You rewrite a business question into search text for finding PAST QUESTION AND SQL "
+            "EXAMPLES that would be useful precedents.\n\nDescribe the shape of the query the "
+            "question needs — what is being counted or aggregated, over what, grouped or "
+            "filtered by what, and how many tables have to be joined. A useful precedent has the "
+            "same shape, not the same subject." + _REWRITE_TAIL
+        ),
+    },
+)
+
+#: ``Stage`` value → the prompt that rewrites the question for it. Read by ``serve/nodes/facets``.
+#:
+#: A mapping rather than a naming convention (``f"{stage}_query"``): a convention silently returns
+#: nothing for a stage nobody wrote a prompt for, and this raises at import via the registry's own
+#: coherence check instead.
+FACET_QUERY_PROMPTS: Mapping[str, str] = {
+    "facet_schema": "facet_schema_query",
+    "facet_term": "facet_term_query",
+    "facet_metric": "facet_metric_query",
+    "facet_entity": "facet_entity_query",
+    "facet_example": "facet_example_query",
+}
+
+
 #: The registry. Name → prompt.
 #:
 #: One dict rather than module-level constants, because :func:`prompt_set_hash` has to be able
 #: to enumerate *every* prompt — and a constant somebody forgot to add to a list is precisely
 #: the "fixed field list" failure this module exists to end.
-PROMPT_REGISTRY: Mapping[str, Prompt] = {p.name: p for p in (ANALYST, BI_SCOPE)}
+PROMPT_REGISTRY: Mapping[str, Prompt] = {
+    p.name: p
+    for p in (
+        ANALYST,
+        BI_SCOPE,
+        FACET_SCHEMA_QUERY,
+        FACET_TERM_QUERY,
+        FACET_METRIC_QUERY,
+        FACET_ENTITY_QUERY,
+        FACET_EXAMPLE_QUERY,
+    )
+}
 
 #: Every prompt at its declared default. What a run uses unless an experiment says otherwise.
 DEFAULT_VARIANTS: Mapping[str, str] = {n: p.default for n, p in PROMPT_REGISTRY.items()}

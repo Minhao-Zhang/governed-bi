@@ -55,7 +55,17 @@ def guard_node(state: dict, config: RunnableConfig) -> dict:
         return {"guard": verdict}
     if not policy.guard_rule_enabled(BI_SCOPE_RULE_ID):
         return {"guard": verdict}
-    return {"guard": _bi_scope(state["question"], cfg.get("agent_model"))}
+    # **The utility model, not the agent's.** This is a one-word classification standing in front
+    # of every turn, so its latency is the delay before anything at all appears — the clearest
+    # case in the graph for a fast model.
+    #
+    # Read without an `or agent_model` beside it, deliberately. `Session.configurable` resolves
+    # that fallback once; writing it again here would be a second copy of a rule, and the whole
+    # argument for resolving it in the session is that six call sites cannot each be trusted to
+    # spell it the same way. A caller that hand-builds a config and sets only `agent_model` gets
+    # `error_failed_open` — the rule was enabled and could not run — which is the honest answer
+    # and is exactly what that sentinel is for.
+    return {"guard": _bi_scope(state["question"], cfg.get("utility_model"))}
 
 
 def _bi_scope(question: str, model: Any) -> Any:
@@ -81,7 +91,11 @@ def _bi_scope(question: str, model: Any) -> Any:
         return GuardVerdict(
             outcome="error_failed_open",
             rule_id=BI_SCOPE_RULE_ID,
-            detail="the BI-scope rule is enabled but no agent_model is configured",
+            detail=(
+                "the BI-scope rule is enabled but no utility_model is configured "
+                "(Session.configurable falls this back to agent_model, so a session with "
+                "either would have one)"
+            ),
         )
 
     try:

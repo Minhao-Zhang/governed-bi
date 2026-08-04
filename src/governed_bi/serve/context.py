@@ -1,13 +1,35 @@
 """Render retrieval context for the USER message (ADR 0005 §3.6).
 
-Hit ⇒ structural line + body. Pulled-in ⇒ structure only. ``summary`` never
-enters the prompt. Field newlines are escaped losslessly (``\\n``).
+Hit ⇒ full structural line + body. Pulled-in ⇒ **identifier and type**, and only
+the further facts an asset is unusable without. ``summary`` never enters the
+prompt. Field newlines are escaped losslessly (``\\n``).
+
+**Why the pulled-in side got narrower.** §3.6 said "structural line always; body
+if the asset was hit; nothing further if it was ``pulled_in``", and that is what
+this rendered — so the body split was already in place while the *line* was
+identical for both. Measured on the gold semantic layer (5 schemas, 923 assets,
+``route_top_n = 1``), a turn hit 8 assets and the closure dragged in 77, and the
+70 pulled-in **columns** were 4 179 of the block's 7 973 characters: 52 % of the
+prompt was the fully-qualified name of a column nobody asked about, written out
+once per column. Reference closure is the right rule for *correctness* — a column
+whose table is absent is unusable — but it is not a relevance rule, and the two
+sets are the only relevance signal the pipeline already computes.
+
+So a pulled-in column is now written under the table that carries it, spelling
+its schema and table once for the group instead of once per column, and the
+descriptive extras that I3 does not require (table ``grain`` / ``row_count``,
+join ``cardinality``, term ``synonyms``) are dropped from pulled-in assets. What
+stays is everything I3 names — physical name, logical type, ``role``,
+``reliability.suspect`` — plus the one fact per type that makes the asset
+spellable at all: a join's ON clause (``complete_joins`` exists to put exactly
+those in the prompt, §2.8.1), a metric's expression, a term's binding. §3.6:
+*"or the prompt shows a join the model cannot spell"*.
 """
 
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, Sequence, Set
 from typing import Any
 
 from governed_bi.serve.runtime import DEFAULT_CONTEXT_BUDGET
@@ -83,15 +105,31 @@ def _build_pieces(
         at = _asset_type(asset)
         if at not in _STRUCTURAL:
             continue
-        is_hit = aid not in pulled_ids and (aid in hit_ids or aid in by_type_ids)
+        # **A hit that is also in ``pulled_in`` is a hit.** ``pulled_in`` used to win, and
+        # it is not merely the tie-break that reads better: ``connect_node`` finishes with
+        # ``pulled_in.setdefault(join_id, "connect")`` over ``complete_joins``, so **every
+        # join the question actually hit** is added to ``pulled_in`` after the fact and lost
+        # its body. Measured on the gold layer: 2 of 2 and 3 of 3 join hits on two turns.
+        # ``pulled_in`` records where an asset *entered* the set; it is not a claim that the
+        # question missed it.
+        is_hit = aid in hit_ids or aid in by_type_ids
         rows.append((aid, asset, is_hit, _score_for(aid, selected, retrieved)))
     rows.sort(key=lambda r: (_STRUCTURAL.index(_asset_type(r[1])), r[0]))
+
+    roster, folded = _fold_pulled_in_columns(rows)
 
     if rows:
         pieces.append(_piece("context_header", "## Context"))
     for aid, asset, is_hit, score in rows:
+        if aid in folded:
+            continue
         at = _asset_type(asset)
-        line = _structural_line(asset)
+        line = _structural_line(asset, terse=not is_hit)
+        # The table's own columns follow it, so ``struct_text`` — what survives when the
+        # budget drops a body — carries them too. Dropping a body must not silently drop
+        # the roster: I3's point is that a column the model is never shown does not exist
+        # to it, and the eviction ladder is not allowed to reintroduce that.
+        tail = "\n" + "\n".join(roster[aid]) if aid in roster else ""
         body = _field(asset, "body") if is_hit else None
         if body:
             pieces.append(
@@ -101,8 +139,8 @@ def _build_pieces(
                     "asset_type": at,
                     "evictable": False,
                     "score": score,
-                    "text": f"{line}\nbody: {escape_field(str(body))}",
-                    "struct_text": line,
+                    "text": f"{line}\nbody: {escape_field(str(body))}{tail}",
+                    "struct_text": f"{line}{tail}",
                     "body_droppable": True,
                 }
             )
@@ -114,7 +152,7 @@ def _build_pieces(
                     "asset_type": at,
                     "evictable": (not is_hit) and at == "table" and aid in pulled_ids,
                     "score": score,
-                    "text": line,
+                    "text": f"{line}{tail}",
                 }
             )
 
@@ -147,6 +185,65 @@ def _piece(kind: str, text: str) -> dict[str, Any]:
     return {"kind": kind, "evictable": False, "score": 1.0, "text": text}
 
 
+def _fold_pulled_in_columns(
+    rows: Sequence[tuple[str, Any, bool, float]],
+) -> tuple[dict[str, list[str]], set[str]]:
+    """``(table id -> roster lines, the column ids those lines replace)``.
+
+    A pulled-in column is in the prompt because its table is, and its table is on the
+    line above — so spelling ``schema.table.`` again in front of every one of its columns
+    buys the reader nothing. On the measured turns that prefix was the single largest
+    thing in the block. The roster keeps everything I3 requires (physical name, logical
+    type, ``role``, ``reliability.suspect``) and drops only the repetition.
+
+    **A hit column is never folded.** It keeps its own line and its body, because that is
+    the whole distinction this render is built on.
+
+    A column whose parent table is *not* among the rendered rows keeps its own line too.
+    Reference closure should make that impossible, and if the closure ever fails to hold
+    the column must stay independently namable rather than disappear into a table that is
+    not there.
+    """
+    table_ids = {aid for aid, asset, _, _ in rows if _asset_type(asset) == "table"}
+    roster: dict[str, list[str]] = {}
+    folded: set[str] = set()
+    for aid, asset, is_hit, _score in rows:
+        if is_hit or _asset_type(asset) != "column":
+            continue
+        parent = _parent_table_id(asset, table_ids)
+        if parent is None:
+            continue
+        roster.setdefault(parent, []).append(_roster_entry(asset))
+        folded.add(aid)
+    return roster, folded
+
+
+def _roster_entry(asset: Any) -> str:
+    """One pulled-in column, named relative to the table line it sits under."""
+    parts = [f"- {escape_field(str(_field(asset, 'physical_name') or _field(asset, 'id') or ''))}"]
+    parts.extend(_column_facts(asset))
+    return " ".join(parts)
+
+
+def _parent_table_id(asset: Any, table_ids: Set[str]) -> str | None:
+    """The rendered table this column belongs to, or ``None``.
+
+    ``parent_table`` is a physical name that a corpus may spell bare (``customers``) or
+    schema-qualified (``address.country``) — ``retrieve/structure.py`` says so and declines
+    to settle which. Both spellings are tried against the tables actually being rendered,
+    and nothing is guessed: an unmatched parent returns ``None`` and the column keeps its
+    own line.
+    """
+    parent = _field(asset, "parent_table")
+    if not parent:
+        return None
+    if str(parent) in table_ids:
+        return str(parent)
+    schema = _field(asset, "schema")
+    qualified = f"{schema}.{parent}" if schema else ""
+    return qualified if qualified in table_ids else None
+
+
 def _collect_rules(
     ids: Sequence[str],
     assets_by_id: Mapping[str, Any],
@@ -173,6 +270,13 @@ def _collect_rules(
 
 
 def _collect_caveats(ids: Sequence[str], assets_by_id: Mapping[str, Any]) -> list[str]:
+    """Suspect columns, named the way the context block names them.
+
+    This keyed the prohibition on the **asset id** while the context block composed a
+    qualified name, so a corpus whose two spellings differ published "do NOT use X" about
+    a column it had shown as Y. :func:`_column_qualifier` is now the single answer for
+    both, which is the only way the two halves can be checked against each other.
+    """
     lines: list[str] = []
     for aid in sorted(ids):
         asset = assets_by_id.get(aid)
@@ -186,7 +290,7 @@ def _collect_caveats(ids: Sequence[str], assets_by_id: Mapping[str, Any]) -> lis
             continue
         note = _field(rel, "note")
         note_text = escape_field(str(note)) if note else "UNRELIABLE. DO NOT USE"
-        lines.append(f"- {aid}: suspect - {note_text}")
+        lines.append(f"- {escape_field(_column_qualifier(asset))}: suspect - {note_text}")
     return lines
 
 
@@ -254,51 +358,48 @@ def _join(pieces) -> str:
     return "\n\n".join(sections)
 
 
-def _structural_line(asset: Any) -> str:
+def _structural_line(asset: Any, *, terse: bool = False) -> str:
+    """One asset as a line. ``terse`` is the pulled-in form: identifier and type.
+
+    One function rather than two, because the identifier of an asset must have exactly
+    one spelling — a second renderer here would be a second answer to "what is this
+    column called", and the ``## Reliability caveats`` block below already names the same
+    columns by id. ``terse`` therefore omits fields; it never re-words one.
+
+    What ``terse`` omits, and why each is safe to omit for an asset the question did not
+    hit: a table's ``grain`` and ``row_count`` describe a table nobody asked about; a
+    join's ``cardinality`` does not change how the join is *written*; a term's
+    ``synonyms`` exist so the term can be **retrieved**, and by the time this renders
+    retrieval has already happened.
+
+    What ``terse`` keeps is not a judgement call: I3 requires physical name, logical
+    type, ``role`` and ``reliability.suspect`` on every asset in context, and §3.6
+    requires whatever makes the asset spellable — the join's ON clause, the metric's
+    expression, the term's binding target.
+    """
     at = _asset_type(asset)
     if at == "schema":
         return f"schema {escape_field(str(_field(asset, 'name') or _field(asset, 'id') or ''))}"
     if at == "table":
         schema, phys = _field(asset, "schema") or "", _field(asset, "physical_name") or _field(asset, "id") or ""
         parts = [f"table {escape_field(f'{schema}.{phys}' if schema else str(phys))}"]
-        if _field(asset, "grain"):
-            parts.append(f"grain={escape_field(str(_field(asset, 'grain')))}")
-        if _field(asset, "row_count") is not None:
-            parts.append(f"rows={_field(asset, 'row_count')}")
+        if not terse:
+            if _field(asset, "grain"):
+                parts.append(f"grain={escape_field(str(_field(asset, 'grain')))}")
+            if _field(asset, "row_count") is not None:
+                parts.append(f"rows={_field(asset, 'row_count')}")
         return " ".join(parts)
     if at == "column":
-        schema, parent, phys = (
-            _field(asset, "schema") or "",
-            _field(asset, "parent_table") or "",
-            _field(asset, "physical_name") or "",
+        return " ".join(
+            [f"column {escape_field(_column_qualifier(asset))}", *_column_facts(asset)]
         )
-        if schema and parent:
-            qual = f"{schema}.{parent}.{phys}"
-        elif parent:
-            qual = f"{parent}.{phys}"
-        else:
-            qual = str(_field(asset, "id") or phys)
-        parts = [f"column {escape_field(qual)}"]
-        logical, physical = _field(asset, "logical_type"), _field(asset, "physical_type")
-        type_val = getattr(logical, "value", logical) if logical is not None else physical
-        if type_val is not None:
-            parts.append(f"type={escape_field(str(type_val))}")
-        role = _field(asset, "role")
-        if role is not None:
-            parts.append(f"role={escape_field(str(getattr(role, 'value', role)))}")
-        rel = _field(asset, "reliability")
-        if rel is not None and not isinstance(rel, str):
-            status = getattr(_field(rel, "status"), "value", _field(rel, "status"))
-            if str(status) == "suspect":
-                parts.append("suspect=true")
-        return " ".join(parts)
     if at == "join":
         left = _field(asset, "left_table") or ""
         right = _field(asset, "right_table") or ""
         on = _field(asset, "on") or ""
         parts = [f"join {escape_field(str(left))} >< {escape_field(str(right))} on {escape_field(str(on))}"]
         card = _field(asset, "cardinality")
-        if card is not None:
+        if card is not None and not terse:
             parts.append(f"cardinality={escape_field(str(getattr(card, 'value', card)))}")
         return " ".join(parts)
     if at == "metric":
@@ -310,7 +411,7 @@ def _structural_line(asset: Any) -> str:
     if at == "term":
         parts = [f"term {escape_field(str(_field(asset, 'name') or _field(asset, 'id') or ''))}"]
         syns = _field(asset, "synonyms") or ()
-        if syns:
+        if syns and not terse:
             parts.append("synonyms=" + ",".join(escape_field(str(s)) for s in syns))
         binding = _field(asset, "binding")
         if binding is not None:
@@ -319,6 +420,52 @@ def _structural_line(asset: Any) -> str:
                 parts.append(f"binding={escape_field(str(tid))}")
         return " ".join(parts)
     return f"{at} {escape_field(str(_field(asset, 'id') or ''))}"
+
+
+def _column_qualifier(asset: Any) -> str:
+    """How the model must spell this column, and how the caveats block already spells it.
+
+    ``parent_table`` may be bare or schema-qualified (``retrieve/structure.py`` binds both
+    and declines to settle which). This prefixed ``schema`` unconditionally, so the gold
+    semantic layer — whose ``parent_table`` is qualified — rendered
+    ``column address.address.CBSA.metro_id`` while ``## Reliability caveats`` two blocks
+    later said ``address.CBSA.metro_id: suspect - DECOY column ... Do NOT use it``. One
+    turn, two names for one column, and the half carrying the prohibition used the other
+    one. The prefix is now added only when it is not already there.
+    """
+    schema = _field(asset, "schema") or ""
+    parent = _field(asset, "parent_table") or ""
+    phys = _field(asset, "physical_name") or ""
+    if not parent:
+        return str(_field(asset, "id") or phys)
+    base = str(parent)
+    if schema and not base.startswith(f"{schema}."):
+        base = f"{schema}.{base}"
+    return f"{base}.{phys}"
+
+
+def _column_facts(asset: Any) -> list[str]:
+    """The I3 fields of a column: logical type, ``role``, ``reliability.suspect``.
+
+    **No ``terse`` parameter**, and its absence is the point: I3 names all three as
+    always-render, so there is no pulled-in form of a column's facts to select between.
+    Shared by the full line and the roster entry so a folded column cannot come to say
+    something different about itself from an unfolded one.
+    """
+    parts: list[str] = []
+    logical, physical = _field(asset, "logical_type"), _field(asset, "physical_type")
+    type_val = getattr(logical, "value", logical) if logical is not None else physical
+    if type_val is not None:
+        parts.append(f"type={escape_field(str(type_val))}")
+    role = _field(asset, "role")
+    if role is not None:
+        parts.append(f"role={escape_field(str(getattr(role, 'value', role)))}")
+    rel = _field(asset, "reliability")
+    if rel is not None and not isinstance(rel, str):
+        status = getattr(_field(rel, "status"), "value", _field(rel, "status"))
+        if str(status) == "suspect":
+            parts.append("suspect=true")
+    return parts
 
 
 def _field(obj: Any, name: str, default: Any = None) -> Any:

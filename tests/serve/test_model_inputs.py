@@ -20,7 +20,7 @@ from langchain_core.messages import AIMessage
 from governed_bi.retrieve.structure import build_structure
 from governed_bi.serve.graph import compile_graph
 from governed_bi.serve.scripted_model import ScriptedChatModel
-from governed_bi.serve.session import Session, _digest
+from governed_bi.serve.session import Session
 from governed_bi.serve.tools import SYSTEM_PROMPT
 
 #: The five tools ADR 0005 §3.5 declares. Named here rather than derived from ``build_tools``
@@ -30,12 +30,21 @@ ADR_TOOLS = {"read_body", "inspect_schema", "sample_rows", "run_query", "ask_use
 
 
 def _session(index: Any, assets: dict[str, Any], policy: Any, model: Any) -> Session:
-    """A real ``Session``, so ``prompt_set_hash`` is the one the record publishes."""
+    """A real ``Session``, so ``prompt_set_hash`` is the one the record publishes.
+
+    The hash comes from ``register/prompts.py``, the same way ``session.from_assets`` computes
+    it. It used to be ``_digest(SYSTEM_PROMPT)`` here — a hand-built copy of the derivation
+    production used at the time — and a fixture that recomputes a value instead of asking for it
+    is a fixture that keeps passing after production stops agreeing with it. It did: the engine
+    moved to hashing the whole registry and this line went on digesting one prompt.
+    """
+    from governed_bi.register.prompts import prompt_set_hash
+
     structure, _problems = build_structure(list(assets.values()))
     return Session(
         index=index, structure=structure, assets_by_id=assets, corpus=None, connector=None,
         policy=policy, corpus_content_hash="corpus-hash",
-        prompt_set_hash=_digest(SYSTEM_PROMPT),
+        prompt_set_hash=prompt_set_hash(),
         knobs_resolved={}, db_id="ops_b", run_id="run-model-inputs", agent_model=model,
     )
 
@@ -79,24 +88,44 @@ def test_the_system_prompt_reaches_the_model(two_schema_index, two_schema_assets
     conditional — prefer ``run_query``, call ``ask_user`` only when blocked — catches a rewrite
     that keeps a prompt but drops the discipline, which is what makes a turn answer from
     delivered context alone and still record ``answered``.
+
+    **"Every call" stopped meaning "the analyst".** The guard's scope gate and the five facet
+    query rewriters now invoke a model too, sharing this one because no separate utility model is
+    configured here, so the loop that asserted ``SYSTEM_PROMPT`` on every call was asserting it
+    of a rewriter. The upper bound is kept and made stronger instead: every system prompt the
+    model was given must be one ``register/prompts.py`` declares. That catches a prompt invented
+    at a call site, which is exactly what the registry exists to prevent and is a wider net than
+    the old loop ever cast.
     """
+    from governed_bi.register.prompts import PROMPT_REGISTRY
+
     model, _ = _served(two_schema_index, two_schema_assets, guard_off_policy)
     prompts = model.system_prompts()
     assert prompts, "no call recorded a system message list"
-    for i, seen in enumerate(prompts):
-        assert seen.strip(), (
-            f"call {i} carried an empty system prompt. The agent ran with no instructions, and "
-            "every other assertion about SYSTEM_PROMPT is vacuous."
+
+    analyst_calls = model.calls_with_system(SYSTEM_PROMPT)
+    assert analyst_calls, (
+        "no call carried SYSTEM_PROMPT verbatim, so the analyst either never ran or was "
+        f"prompted with something else. Seen: {[p[:60] for p in prompts]}"
+    )
+    seen = prompts[analyst_calls[0]]
+    assert seen.strip(), (
+        "the analyst call carried an empty system prompt. It ran with no instructions, and "
+        "every other assertion about SYSTEM_PROMPT is vacuous."
+    )
+    for governed in ("run_query", "ask_user"):
+        assert governed in seen, (
+            f"the system prompt does not mention {governed!r}, so nothing tells the model "
+            f"when to use it. seen={seen!r}"
         )
-        assert seen == SYSTEM_PROMPT, (
-            f"call {i} carried a system prompt of {len(seen)} chars, not the {len(SYSTEM_PROMPT)}"
-            f"-char SYSTEM_PROMPT. Got {seen!r}"
+
+    declared = {p.text(v) for p in PROMPT_REGISTRY.values() for v in p.variants}
+    for i, text in enumerate(prompts):
+        assert text.strip(), f"call {i} carried an empty system prompt"
+        assert text in declared, (
+            f"call {i} carried a system prompt no registered prompt declares, so "
+            f"prompt_set_hash does not cover it. Got {text[:120]!r}"
         )
-        for governed in ("run_query", "ask_user"):
-            assert governed in seen, (
-                f"the system prompt does not mention {governed!r}, so nothing tells the model "
-                f"when to use it. seen={seen!r}"
-            )
 
 
 def test_all_five_declared_tools_are_bound(two_schema_index, two_schema_assets, guard_off_policy):
@@ -123,17 +152,32 @@ def test_prompt_set_hash_digests_the_prompt_the_model_was_given(
 
     ``prompt_set_hash`` is a ``Role.comparability`` field: two runs agreeing on it are treated
     as having asked the model the same way, and a quotability gate reads it. It is computed by
-    ``Session`` from the constant, which is one step removed from what ``create_agent`` handed
-    the provider — and one step is where a v1 ladder's ``llm_reasoning_effort`` went missing
-    and cleared a pair it should have separated. This closes the loop against the observation.
+    ``Session``, which is one step removed from what ``create_agent`` handed the provider — and
+    one step is where a v1 ladder's ``llm_reasoning_effort`` went missing and cleared a pair it
+    should have separated. This closes the loop against the observation.
+
+    **The hash is now over the registry, not over one prompt**, so the loop closes in two
+    places: the analyst text the model was handed must be the registered analyst text, and the
+    record's hash must be the registry's. Digesting the delivered prompt directly, as this used
+    to, would now be asserting that a six-prompt engine hashes like a one-prompt one — the exact
+    thing ``register/prompts.py`` was built to stop.
     """
+    from governed_bi.register.prompts import prompt_set_hash, prompt_text
+
     model, out = _served(two_schema_index, two_schema_assets, guard_off_policy)
-    delivered = model.system_prompts()[0]
+    analyst_calls = model.calls_with_system(SYSTEM_PROMPT)
+    assert analyst_calls, "the analyst was never called with the registered prompt"
+
+    delivered = model.system_prompts()[analyst_calls[0]]
+    assert delivered == prompt_text("analyst"), (
+        "the analyst received a prompt the registry does not produce, so the hash describes "
+        f"something else. Got {delivered[:120]!r}"
+    )
     claimed = out["answer"]["record"]["prompt_set_hash"]
-    assert claimed == _digest(delivered), (
-        f"the record claims prompt_set_hash={claimed}, but the prompt the model actually "
-        f"received digests to {_digest(delivered)}. Two runs could agree on the field while "
-        "having been prompted differently."
+    assert claimed == prompt_set_hash(), (
+        f"the record claims prompt_set_hash={claimed}, but the registry's active set digests to "
+        f"{prompt_set_hash()}. Two runs could agree on the field while having been prompted "
+        "differently."
     )
 
 
@@ -150,7 +194,12 @@ def test_the_delivered_context_reaches_the_model(
     model, out = _served(two_schema_index, two_schema_assets, guard_off_policy)
     block = (out.get("delivery") or {}).get("context_block") or ""
     assert block, "precondition: assemble rendered a context block"
-    assert block in model.prompt_text(0), (
+    # The **analyst** call, not call 0. The facet rewriters and the guard gate share this model
+    # when no utility model is configured, and they are called first — so `prompt_text(0)` is a
+    # rewriter's messages, which of course never carried the context block.
+    analyst_calls = model.calls_with_system(SYSTEM_PROMPT)
+    assert analyst_calls, "the analyst was never called, so nothing below means anything"
+    assert block in model.prompt_text(analyst_calls[0]), (
         "the rendered context block is not in the messages the model was called with, though "
         f"the record publishes its hash. block={block[:120]!r}..."
     )

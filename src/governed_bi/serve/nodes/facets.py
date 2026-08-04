@@ -20,7 +20,6 @@ from langchain_core.runnables import RunnableConfig
 
 from governed_bi.register.facets import (
     FACET_CHANNELS,
-    FACET_EXTRACTS,
     FACET_TARGETS,
     Channel,
     ChannelState,
@@ -86,6 +85,17 @@ def _channels_for(stage: Stage, ran: frozenset[Channel]) -> dict[str, str]:
 def _hook_name(stage: Stage) -> str:
     """``facet_schema`` → ``schema`` for ``retrieve_hooks`` lookup."""
     return stage.value.removeprefix("facet_")
+
+
+def _hooked(state: Mapping[str, Any], stage: Stage) -> bool:
+    """Whether a test hook is supplied for this facet.
+
+    Separate from :func:`_hits_from_hook` because the caller has to *branch* on it: "a hook
+    returned nothing" and "there is no hook" are different states, and only the second should
+    fall through to the empty-handed path.
+    """
+    hooks = state.get("retrieve_hooks") or {}
+    return isinstance(hooks, Mapping) and hooks.get(_hook_name(stage)) is not None
 
 
 def _hits_from_hook(state: Mapping[str, Any], stage: Stage, question: str) -> list[Any]:
@@ -229,8 +239,62 @@ def _facet_result(
     }
 
 
-def _query_vector(state: Mapping[str, Any], config: RunnableConfig) -> Sequence[float] | None:
-    """This turn's question vector — from **state** first, then config.
+def _rewritten_query(
+    question: str, stage: Stage, config: RunnableConfig, *, ran: set[Channel]
+) -> str:
+    """The question, restated as search text for this facet. Falls back to the question.
+
+    **Why every facet searches with different words now.** A user asks *"what is the average star
+    rating for restaurants in this area"* and a schema summary reads *"stores basic information
+    about restaurants"* — neither BM25 nor an embedder finds much between those two, and until
+    now every facet searched with the raw question. Each facet is looking for a different kind of
+    object, so each gets its own restatement.
+
+    ``Channel.extraction`` is added to ``ran`` **only when a rewrite actually came back**. A model
+    that errors, or returns nothing, falls back to the raw question and the channel reports
+    ``failed`` — because a fallback that reports as a run is precisely how, per ADR 0005 §2.3, an
+    arm quietly becomes v1's single-pass retrieval while every channel claims to be working.
+
+    Every failure returns the question rather than raising: retrieval on the original wording is
+    the behaviour this replaced, so the worst case is what we had yesterday, not a dead turn.
+    """
+    from governed_bi.register.prompts import FACET_QUERY_PROMPTS, prompt_text
+
+    prompt_name = FACET_QUERY_PROMPTS.get(stage.value)
+    model = runtime_config(config).get("utility_model")
+    if not question or prompt_name is None or model is None:
+        return question
+
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    try:
+        reply = model.invoke([SystemMessage(prompt_text(prompt_name)), HumanMessage(question)])
+        rewritten = str(getattr(reply, "text", "") or "").strip()
+    except Exception:  # noqa: BLE001 — a rewriter is an improvement, never a dependency
+        return question
+    if not rewritten:
+        return question
+    ran.add(Channel.extraction)
+    return rewritten
+
+
+def _query_vector(
+    state: Mapping[str, Any],
+    config: RunnableConfig,
+    *,
+    query: str | None = None,
+    question: str | None = None,
+) -> Sequence[float] | None:
+    """The vector to score against — **of the rewritten query when there is one**.
+
+    The cached ``query_vector`` is the *raw question's*, computed once per turn by ``accept``. It
+    is the right thing to score with when no rewrite happened, and the wrong thing the moment one
+    did: a facet that restates the question and then searches with the original question's vector
+    has paid for the rewrite and thrown away the half that motivated it.
+
+    So a rewrite is embedded here, per facet. That is five extra embedding calls on a turn, which
+    is the cheap half of the cost — they are small, they run concurrently with the other facets,
+    and the rewrite that produced them cost a model call already.
 
     **State first, and that ordering is the fix.** ``Session.configurable(question=...)`` puts a
     ``query_vector`` on the config, and that works for a caller who builds one config per
@@ -245,11 +309,18 @@ def _query_vector(state: Mapping[str, Any], config: RunnableConfig) -> Sequence[
     and reading state first means a per-turn value always wins over a run-constant one, which is
     the direction that cannot be wrong.
     """
+    cfg = runtime_config(config)
+    if query and question is not None and query != question:
+        embedder = cfg.get("embedder")
+        if embedder is not None:
+            try:
+                return list(embedder.embed([query])[0])
+            except Exception:  # noqa: BLE001 — fall back to the question's vector below
+                pass
     vector = state.get("query_vector")
     if vector:
         return vector
-    from_config = runtime_config(config).get("query_vector")
-    return from_config or None
+    return cfg.get("query_vector") or None
 
 
 def _run_facet(
@@ -260,28 +331,42 @@ def _run_facet(
     question = _effective_question(state)
     index = _index_from_config(config)
     ran: set[Channel] = set()
+    # `queries` is what the record publishes as "what this facet searched for", so it has to be
+    # the text that actually went to the index. It stays the raw question on every path where no
+    # rewrite happened, which is what makes the two cases distinguishable in a trace.
+    query = question
 
     if index is not None:
+        # The rewrite happens first, and both channels then search with it — a rewrite that
+        # reached only BM25 would miss the point, since the whole reason to restate the question
+        # in the vocabulary of the thing being searched is to move it *semantically* closer.
+        query = _rewritten_query(question, stage, config, ran=ran)
         hits: list[Any] = _pass_one_hits(
             index,
             stage,
-            question,
+            query,
             depth=candidate_depth(state),
             ran=ran,
-            query_vector=_query_vector(state, config),
+            query_vector=_query_vector(state, config, query=query, question=question),
         )
-    elif stage in FACET_EXTRACTS:
-        # No index and no extraction model: the queries fall back to the raw question,
-        # which is precisely the "the arm quietly IS v1's single-pass retrieval" case
-        # ADR 0005 §2.3 describes. `ran` stays empty, so every channel this facet
-        # declares reports `failed` rather than the fallback passing for a run.
-        hits = []
-    else:
+    elif _hooked(state, stage):
+        # **Checked before the extraction branch, and that ordering is a repair.** This used to
+        # be the `else`, reachable only for the two facets outside `FACET_EXTRACTS` — and ADR
+        # 0011 put all five inside it, which made the branch unreachable and `retrieve_hooks`
+        # dead without a single test failing, because nothing outside this module uses it. A
+        # declared hook that no input can reach is the shape this repository keeps finding; an
+        # explicit "is one supplied for this facet" restores it for every facet instead.
         hits = _hits_from_hook(state, stage, question)
+    else:
+        # No index, no hook: the queries would fall back to the raw question, which is precisely
+        # the "the arm quietly IS v1's single-pass retrieval" case ADR 0005 §2.3 describes. `ran`
+        # stays empty, so every channel this facet declares reports `failed` rather than the
+        # fallback passing for a run.
+        hits = []
 
     return {
         "facets": {
-            stage.value: _facet_result(stage, question, hits=hits, ran=frozenset(ran))
+            stage.value: _facet_result(stage, query, hits=hits, ran=frozenset(ran))
         }
     }
 
