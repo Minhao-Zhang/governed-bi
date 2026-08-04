@@ -1763,3 +1763,83 @@ no table by design.
 whether the model uses a wider context or drowns in it is unmeasured, and a live batch at 3
 already produced one `OpenAIContextOverflowError`. Raising it on Stage A evidence alone would be
 the kind of guess this repository keeps retiring numbers over.
+
+## 53. Four API shapes were wrong, and each one took a page down silently · *2026-08-04*
+
+[ADR 0009](../adr/0009-browsing-and-filtering-api.md) is the design; this is what building it
+found. The UI parses every response with zod at the boundary and **throws** on a mismatch, so
+a missing required field is not a cosmetic problem — it is a blank page with a generic error,
+and nothing in the engine logs anything at all.
+
+| route | what it emitted | what the contract declares | what broke |
+| --- | --- | --- | --- |
+| `/graph` | `{id,label,kind,schema}` | + `physical_name`, `row_count`, `n_columns`, `excluded`, `has_suspect`; edges + `on`, `cardinality` | Relationships tab |
+| `/knowledge-graph` | the ER payload | a different node shape (`kind` over 8 types, `provenance_status`, edge `relation`) | Semantic graph tab |
+| `/schema` | `{id,name,schema,summary,columns:[{id,name,summary,type}]}` | full `TableView` + `ColumnView` | Tables tab **and** the namespace rail, which uses it as the fallback catalog |
+| `graphMetaSchema` (UI) | expected `total_nodes`/`returned_nodes` | engine emits `n_nodes`/`n_edges` | truncation could never be shown |
+
+The last one is the instructive one: the *client* was wrong, using field names from v1's
+deleted `governed_bi.api.schemas`. `z.object` strips unknown keys, so it silently discarded
+every field and defaulted `truncated` to `false` — the UI could not have rendered a truncated
+graph even after the server started bounding them. Aligned to the engine, because ADR 0009 is
+now the spec for that route and the old names describe a module that no longer exists.
+
+**`/knowledge-graph` returned the ER payload under a note I had written claiming the two were
+"genuinely the same graph today, and saying so is better than two drifting walks".** That was
+wrong twice over: the shapes differ, and the graphs differ by 13 325 nodes — the semantic one
+carries the terms, metrics and few-shots hanging off the tables, which is the entire thing a
+semantic-layer view is for. Its edges now come from `CorpusStructure.references`, the same
+closure `resolve` runs on, so the diagram draws what retrieval would actually pull in.
+
+### What the wrong shapes were hiding: the payload sizes
+
+Measured live before the fix, and the reason `can_scope: false` looked harmless — the UI has a
+documented fallback to the flat dumps, so the fallback was what we were measuring:
+
+| | before | after |
+| --- | --- | --- |
+| table catalog | `/schema` 936 637 B, 1.7 s | `/schema/summary?schema=airline` **5 261 B** |
+| asset browse | `/corpus/assets` 2 253 297 B | `/corpus/rows?type=table&limit=50` **43 284 B** |
+| relationships | `/graph` 656 nodes, laid out by dagre in the browser | 120 nodes bounded, `dropped: 536` declared |
+
+### Filtering: the columns are derived, and an unapplied filter is reported
+
+`GET /corpus/fields?type=…` reads the asset dataclass plus `ASSET_REGISTER`, so the UI's filter
+row is generated. A field added to `corpus/schema.py` becomes filterable with no change to the
+API and none in TypeScript. `GET /corpus/rows` takes repeated `where=field:op:value` rather
+than a parameter per field — the parameter set must not grow with the field set, which is three
+places to forget instead of none.
+
+A predicate naming an unknown field or an unsupported operator comes back in `unknown_where`
+and is **not applied**, and the UI renders it as a warning. Silently ignoring it would show a
+filtered-looking list that is not filtered, which is the same defect class as a gate that never
+fires. `total` is the count *after* filtering, because an unfiltered total beside a filtered
+page is how a reader concludes their filter did nothing.
+
+**One classification bug found by exercising it:** a list *of references* (`columns`,
+`dimensions`, `bound_terms`, `related_terms`) was typed as a scalar ref, so it offered no
+`len_gte`/`len_lte` — `dimensions:len_gte:3` came back unapplicable for all 399 metrics.
+Sequence is now checked before reference.
+
+### Two other things this turned up
+
+`/schema` resolved a table's columns by scanning all 13 981 assets and matching an id **prefix**
+— O(tables × assets), and wrong besides: `sales.order` is a prefix of `sales.order_line`'s
+column ids. The table's own `columns` field holds them, which is the declared reference.
+
+`api/routes.py` crossed the 1 000-line hard cap, so the browsing routes moved to
+`api/browse_routes.py` — beside `api/browse.py`, which already held their pure logic. The split
+follows that seam rather than a line number. `check_one_implementation` then refused the two
+`_session` definitions the split created, and was right: two readers of "the session for this
+request" is two places to change when the session stops being process-global.
+
+### Verification, and its limit
+
+15 payloads validated against the **real** zod schemas from the UI repo, including both graph
+routes and `/schema`, all of which failed before. `tsc` and `eslint` clean for every file
+touched; all five pages return 200 with no error overlay.
+
+**Not verified: the rendered result.** The browser preview tool will not attach to an
+already-running dev server and the instruction was to use the one already on :3000 rather than
+start a second. So the interaction — typing in a filter, dragging the diagram — is unverified
+by me, and the contract-level checks above are what stands in for it.
