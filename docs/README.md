@@ -80,10 +80,18 @@ Dated working docs, not canonical design. Where one disagrees with the docs
 above, the docs above win. **No eval number anywhere in this repo is currently
 quotable — every number produced before 2026-07-26 is discarded.**
 
+> **2026-08-04:** the artifacts under `runs/eval/` that the two eval documents below cite by
+> filename were **deleted**, pending a re-run on the server. Their figures are therefore not
+> just unquotable but unbacked — nothing on disk reproduces them. Treat both documents as a
+> record of *method and defects found*, which is the part that survives, and none of their
+> numbers as evidence until the re-run lands.
+
 *Live (v2):*
 
 - **[Where the EX ceiling actually is, 2026-08-04](plans/retrieval-ceiling-2026-08-04.md): a chain of free measurements locating the binding constraint on accuracy. Not schema routing (licensing all 57 schemas moves the ceiling 0.444 → 0.561), not the table budget (flat 8→60), not the candidate pool (flat 50→800) — it is the retrieval channel: an embedder lifts gold-table coverage 6–9 pp for about a cent. Corrects the routing conclusion in the doc below.**
 - **[Data-lake eval, 2026-08-04](plans/datalake-eval-2026-08-04.md): what was measured on the pooled 57-schema lake, what it cost, and which numbers are not yet trustworthy. Routing is the bottleneck (`recall@1` 0.442 against `recall@3` 0.609); EX is 0.070 and is a floor rather than a verdict, and the engine asks for clarification on 0/100 reachable turns against 33/71 unreachable ones. Also records the five measurement defects found before any of it could be trusted. The entry point for eval work on v2.**
+- **[API design review, 2026-08-04](plans/api-design-review-2026-08-04.md): a critique of the read surface *after* ADR 0009 Amendment 1 shipped — not whether the frontend can get what it needs (that is the audit below) but whether the result is coherent. Nine findings; the highest was fixed while writing it. The recurring shape: three duplicated projections of a table, four conventions for "not found", three response envelopes — and every defect found that day lived in one of those seams.**
+- [API sufficiency audit, 2026-08-04](plans/api-sufficiency-audit-2026-08-04.md): every client method cross-referenced against every route, field by field in both directions. Zero field-level breaks; the insufficiency was truncation that read as completeness, one absent route, and a capability flag describing the server rather than the mounted client.
 - [v2 implementation decisions](plans/v2-implementation-decisions.md): the numbered judgements, newest last. Read the tail for current state.
 
 *Live (v1, historical):*
