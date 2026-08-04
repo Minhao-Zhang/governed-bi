@@ -159,6 +159,19 @@ def _reported_tokens(messages: list[Any]) -> dict[str, int] | None:
                 value = details.get(source)
                 if isinstance(value, int) and not isinstance(value, bool):
                     cache[key] = cache.get(key, 0) + value
+        # **Reasoning tokens, when the provider reports them.** A *subset* of
+        # ``output_tokens``, not an addition — so the bill was never understated, and the
+        # missing thing was attribution: at ``xhigh`` on this model 200 of 252 output tokens
+        # were reasoning, and without the split "the effort knob changed the cost" and "the
+        # answer got longer" are the same observation. That comparison is the whole reason
+        # to record an effort setting at all. Same rule as the cache keys: present only when
+        # reported, because a written zero would be this code's claim wearing the
+        # provider's clothes.
+        out_details = usage.get("output_token_details")
+        if isinstance(out_details, Mapping):
+            value = out_details.get("reasoning")
+            if isinstance(value, int) and not isinstance(value, bool):
+                cache["reasoning_tokens"] = cache.get("reasoning_tokens", 0) + value
     if not seen:
         return None
     return {**total, **cache}
