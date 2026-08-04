@@ -62,6 +62,14 @@ def main(argv: list[str] | None = None) -> int:
         help="provider retries per call; 429s are retryable and the SDK default of 2 is not "
         "enough at any concurrency",
     )
+    parser.add_argument(
+        "--embed",
+        action="store_true",
+        help="build the index with an embedder. Costs ~420k embedding tokens (about $0.01) "
+        "and raises the gold-table-coverage ceiling 6-9pp -- see "
+        "docs/plans/retrieval-ceiling-2026-08-04.md. Off by default so the lexical arm stays "
+        "the reproducible baseline.",
+    )
     parser.add_argument("--per-schema", type=int, default=None, help="cap questions per schema")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--out", type=pathlib.Path, default=None)
@@ -101,13 +109,19 @@ def main(argv: list[str] | None = None) -> int:
         kwargs["reasoning_effort"] = args.effort
     model = init_chat_model(args.model, **kwargs)
 
+    embedder = None
+    if args.embed:
+        from governed_bi.model import OpenAIEmbedder
+
+        embedder = OpenAIEmbedder()
+
     # One connector for the session and the graph; each worker gets its own below.
     session = session_mod.from_corpus_dir(
         args.corpus_dir,
         connector=PostgresConnector(dsn),
         policy=GovernancePolicy(guard_rules_enabled={}),
         agent_model=model,
-        embedder=None,
+        embedder=embedder,
     )
     if session.fatal_problems:
         print(f"corpus has {len(session.fatal_problems)} fatal problem(s); refusing", file=sys.stderr)
@@ -125,7 +139,13 @@ def main(argv: list[str] | None = None) -> int:
     if questions:
         questions[0].pop("_skipped_uncovered", None)
 
-    tag = f"{args.model}_{args.effort or 'default'}_top{args.top_n or 'default'}"
+    # The retrieval channel is in the tag, because it is an arm and not a detail: the lexical
+    # and embedded runs have different ceilings (0.444 vs 0.503 at top_n=3) and must never
+    # land in one artifact.
+    tag = (
+        f"{args.model}_{args.effort or 'default'}_top{args.top_n or 'default'}"
+        f"_{'embed' if args.embed else 'lexical'}"
+    )
     out_path = args.out or pathlib.Path("runs/eval") / f"live_full_{tag}.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
