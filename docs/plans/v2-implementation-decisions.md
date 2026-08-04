@@ -1557,3 +1557,105 @@ problem and not an identifier one. And `session.fatal_problems` is 27 on the poo
 `fatal` / `degradation` split is what settles it.
 
 395 passed / 27 xfailed, ruff clean, five gates.
+
+## 50. ADR 0008 Phase 1 + the shortlist decision: the pooled lake serves · *2026-08-04*
+
+Four changes. The first is a design call I made without asking, and it is recorded here
+because it changes what a decline means.
+
+### `route_top_n` is a shortlist, not a conjunction
+
+Routing shortlists the top N schemas of 57; pass two licenses tables from **all** of them; and
+`connect` then requires every licensed table to be joinable. On a pooled lake the top three are
+usually unrelated, so the terminal set was disconnected *by construction* and the decline said
+nothing about the question. Six questions measured: all six declined `missing_join_path` at the
+register default of 3, all six answered at 1.
+
+`connect_node` now partitions terminals with `retrieve.connect.components` and keeps **one**
+component. Partitioning by component rather than by schema is the point: two schemas with a
+declared cross-schema join are one component and stay together — the case §2.8.2 charges
+`crossings` for — while two unrelated schemas are two components and the loser is dropped. A
+decline now means what it says.
+
+Which component: **the one holding a table of the highest-ranked routed schema**, because
+routing's ranking is the only evidence about what the question is about. "Largest group" first
+would let a wide schema that shares one word outvote the router. Ties break on size then on
+lexicographic id, so the pick is reproducible.
+
+The drop is not licensing-only — the losing component's assets are removed from `retrieved` too,
+so the prompt cannot show the analyst a table the turn may not query. `schemas` keeps its
+declared meaning (route's selected top-N) and `schema_ranking` keeps every candidate, so
+shortlisted / survived / reachable are three readable facts.
+
+**Alternative rejected:** an LLM schema-pick, which the pipeline-design notes had sketched. It
+costs a model call per turn and is not reproducible across runs, and the component structure
+already carries the answer deterministically.
+
+### D1 — a key is not a name
+
+`slug(physical_name)` is the id component; `physical_name` keeps the engine's spelling verbatim.
+`slug` is the identity for a bare identifier — so **655 of 655 tables and 5 942 of 5 942 columns
+are unchanged** — and otherwise sanitises to `_` and appends six hex of sha256 of the exact
+name. The digest is what makes it injective rather than tidy: `a b` and `a_b` sanitise alike and
+are different tables.
+
+Four places had to agree, and finding the fourth is the whole risk of this change:
+`corpus/identity.table_id`/`derive_column_id`, `corpus/validate` (validate the **slug**, not the
+name), `govern/identifiers.table_key`/`column_key` (slug, so a statement's `"Air Carriers"`
+reaches the licence key `air_carriers_66c534`), and `corpus/analyst.column_key_for`. `slug` lives
+in `corpus/identity` because `corpus` sits below `govern` and both halves must reach it.
+
+`_table_lookup` gains a fourth spelling, `{schema}.{physical_name}` — not a fourth tolerance but
+the physical→id map D1 implies, since a SQL fragment carries the engine's spelling and an asset
+id carries the slug.
+
+**The security property moved from rejection to construction, and got stronger.** A test asserted
+that `..`, `cust/omers` and a trailing-newline name were *refused* as `physical_name`. That rule
+is what made `airline."Air Carriers"` unrepresentable. Now the name is carried and the slug must
+be path-safe, which holds for every string rather than for the ones somebody listed.
+
+Carried into the corpus: `airline."Air Carriers"` (a real 4-column table that had **no asset**
+while 24 few-shots cited it) and `soccer_2016.saison."orange_trophée"`. The D8 "not carried"
+rules added the day before were deleted, because they are no longer true. Structure problems
+**27 → 3**.
+
+### D9 — fatal vs degradation
+
+`Problem.fatal`, defaulting to `True` so an unclassified site stops the serve rather than becoming
+a warning nobody reads. Degradations are the three advisory sites: a few-shot whose SQL does not
+parse, a few-shot naming a table that does not resolve, a metric dimension that is not an asset
+id. Everything structural — a dangling `parent_table`, `base_table`, binding target, declared
+column or join endpoint — stays fatal, because retrieval keys on ids and the corpus would not be
+what it claims.
+
+`session.degradations` is a sibling property rather than something a caller infers, so "this
+corpus is smaller than the lake" is a number a run can publish. The CLI prints them and serves.
+That closes the divergence where `python -m governed_bi.serve` exited 3 on a corpus
+`make_graph()` served without checking.
+
+### D10 — the prompt states the two naming rules
+
+`SYSTEM_PROMPT` now says schema-qualify every table and quote any identifier with a space,
+punctuation or leading digit. The first stops `r_table_not_licensed` from naming the wrong cause
+(no `default_schema` is passed, so `FROM customers` keys as `customers`). The second is needed
+even though `canonicalise` adds quotes itself, because it cannot fix a statement that does not
+parse — an unquoted two-word table name is a syntax error before any of this runs.
+
+### Verified live, pooled 57-schema corpus, gpt-5.6-luna
+
+```
+how many root beer brands are there?   answered  24     SELECT COUNT(*) FROM beer_factory.wurzelbiermarke
+how many air carriers are listed?      answered  1,656  SELECT COUNT(*) FROM airline."Air Carriers"
+```
+
+Both records complete, exit 0. The second is the one that matters: engine spelling in the SQL,
+slug in `licensed` (`airline.Air_Carriers_66c534`), a table that had no asset at all the day
+before.
+
+**The dominant remaining problem is schema-routing recall, not identifiers.** Two of five probe
+questions routed to the wrong schema (`shipping` for a CBSA question, `sales` for a beer_factory
+one) and the turn correctly asked for clarification instead of answering. The index is
+lexical-only here; measuring the embedder's lift on routing is the next thing worth doing, and it
+is what the eval should establish first.
+
+396 passed / 27 xfailed, ruff clean, five gates.

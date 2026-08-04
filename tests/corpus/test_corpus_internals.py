@@ -70,20 +70,54 @@ def test_a_plain_identifier_is_accepted() -> None:
     assert validate_path_component("beer_factory", what="schema") == "beer_factory"
 
 
-@pytest.mark.parametrize("bad", ["cust/omers", "customers\n", "..", "cust omers", ""])
-def test_physical_name_rejects_path_unsafe_spellings(bad: str) -> None:
-    """Same character class as path components (#37 leftover). Refuse, never edit."""
+@pytest.mark.parametrize(
+    "hostile", ["cust/omers", "customers\n", "..", "../../etc/passwd", "cust omers"]
+)
+def test_a_path_unsafe_physical_name_is_carried_but_cannot_name_a_path(hostile: str) -> None:
+    """ADR 0008 D1. **The security property moved from rejection to construction.**
+
+    This used to assert that such a ``physical_name`` was *refused* — same character class
+    as a path component, "refuse, never edit". That rule is what made
+    ``airline."Air Carriers"`` unrepresentable: the charset rejected it, ``table_id``
+    derived the id *from* it, and a real four-column table had no asset at all while 24
+    few-shots cited it.
+
+    The name is now carried verbatim and the **slug** is what must be path-safe. That is
+    strictly stronger than the old rule, because it holds for every string rather than for
+    the ones somebody remembered to list — ``..`` included, which the slug turns into an
+    ordinary component. So the assertion is on the derived id, not on a refusal.
+    """
+    from governed_bi.corpus.identity import (
+        slug,
+        table_id,
+        validate_asset_id,
+        validate_path_component,
+    )
+
+    component = slug(hostile)
+    assert validate_path_component(component, what="slug") == component
+    assert ".." not in component and "/" not in component and "\\" not in component
+    assert validate_asset_id(table_id("beer_factory", hostile))
+    # Injective where sanitising alone is not: `a b` and `a_b` are two different tables,
+    # and a slug that collapsed them would license one and query the other.
+    assert slug("a b") != slug("a_b")
+
+
+def test_an_empty_physical_name_is_still_a_problem() -> None:
+    """The one case that is not a spelling but an absence: there is nothing to slug."""
+    from governed_bi.corpus.identity import UnsafeName, slug
     from governed_bi.corpus.schema import TableAsset
     from governed_bi.corpus.validate import problems_with
 
+    with pytest.raises(UnsafeName):
+        slug("")
     asset = TableAsset(
         id="beer_factory.customers",
         schema="beer_factory",
-        physical_name=bad,
-        summary=f"{bad} - one row per buyer" if bad.strip() else "customers - one row",
+        physical_name="",
+        summary="customers - one row per registered buyer",
     )
-    reasons = problems_with(asset)
-    assert any("physical_name" in r for r in reasons), reasons
+    assert any("physical_name" in r for r in problems_with(asset)), problems_with(asset)
 
 
 def test_physical_name_accepts_a_bare_identifier() -> None:

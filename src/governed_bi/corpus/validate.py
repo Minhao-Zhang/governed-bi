@@ -63,10 +63,28 @@ class Problem:
     has already published a result on top of that. A problem a reader cannot act on
     is a silent skip with extra steps, so ``where`` names the file and ``reason``
     names the asset and the rule.
+
+    ``fatal`` is ADR 0008 D9, and it exists because the CLI and the server disagreed:
+    ``python -m governed_bi.serve`` exited 3 on **any** problem while ``make_graph()``
+    checked nothing, so the CLI refused a corpus the server was happily serving. One
+    predicate now decides, and it distinguishes two genuinely different states:
+
+    ``fatal=True``
+        An id is not a key. A duplicate id, an asset that did not load, an asset
+        reference naming nothing. Retrieval keys on ids, so the corpus is not what it
+        claims to be and serving it produces numbers about something else.
+    ``fatal=False``
+        A **degradation**: recorded, servable, and counted. A few-shot that cannot be
+        used, a dimension nobody can resolve, an identifier the corpus cannot carry.
+        The corpus is smaller than the lake, and that is a measurement, not a stop.
+
+    Default ``True``, so a new problem site is fatal until somebody decides otherwise.
+    Defaulting the other way is how a real defect becomes a warning nobody reads.
     """
 
     where: str
     reason: str
+    fatal: bool = True
 
     def __str__(self) -> str:
         return f"{self.where}: {self.reason}"
@@ -186,15 +204,21 @@ def problems_with(asset: object) -> list[str]:
 
     physical = getattr(asset, "physical_name", None)
     if physical is not None:
-        from .identity import UnsafeName, validate_path_component
+        # The **slug** is what becomes a path component, not the physical name. ADR 0008
+        # D1: a key is not a name. Validating the raw identifier here is what made
+        # `airline."Air Carriers"` unrepresentable -- the charset rejected it, `table_id`
+        # derived the id from it, and the table simply had no asset while 24 few-shots
+        # cited it. `physical_name` now carries the engine's spelling verbatim and the
+        # rule moves to the string that actually names a file.
+        from .identity import UnsafeName, slug, validate_path_component
 
         try:
-            validate_path_component(physical, what="physical_name")
+            validate_path_component(slug(physical), what="slug(physical_name)")
         except UnsafeName as err:
             out.append(
-                f"{where}: {err}. physical_name uses the same character class as a "
-                "path component (accident prevention, not anti-poisoning — ADR 0005 "
-                "§1.6 / decision #37)"
+                f"{where}: {err}. The slug derived from physical_name={physical!r} is "
+                "what names a file and keys the index, so it must be a bare identifier "
+                "(ADR 0008 D1); the physical name itself may be anything the engine has"
             )
 
     return out

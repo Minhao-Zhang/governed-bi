@@ -58,12 +58,15 @@ def test_a_knob_that_cannot_be_read_raises_rather_than_substituting_a_value() ->
 def test_route_top_n_from_knobs_resolved_changes_the_turn(
     two_schema_assets, guard_off_policy
 ) -> None:
-    """The reachability claim, asserted as an outcome rather than as a read.
+    """The reachability claim, asserted on what the knob controls: how many schemas are
+    shortlisted.
 
-    The question matches both schemas, and the two schemas share no join edge, so at the
-    register default of 3 the terminal set is disconnected by construction and the turn
-    **declines**. Narrowed to one schema it **answers**. That is the pooled data lake's
-    shape in miniature, and it is the knob that controls it.
+    This test first asserted the *outcome* — the question matches both schemas, the two
+    share no join edge, so at the default of 3 ``connect`` declined and at 1 it answered.
+    That stopped being true the same day, because ``connect_node`` now keeps one
+    :func:`~governed_bi.retrieve.connect.components` group and both settings answer. The
+    surviving assertion is the honest one: the knob decides the shortlist, and a shortlist
+    of two is observable in ``schemas`` whether or not it changes the verdict.
     """
     from langchain_core.messages import AIMessage
 
@@ -89,9 +92,16 @@ def test_route_top_n_from_knobs_resolved_changes_the_turn(
         return compile_graph().invoke(state, config)
 
     wide = run()
-    assert len(wide.get("schemas") or []) == 2 and wide.get("path_kind") == "decline", (
-        f"the test is vacuous unless the default selects both schemas and declines: "
-        f"schemas={wide.get('schemas')} path_kind={wide.get('path_kind')}"
+    assert len(wide.get("schemas") or []) == 2, (
+        f"the test is vacuous unless the register default shortlists both schemas: "
+        f"schemas={wide.get('schemas')}"
+    )
+    assert wide.get("path_kind") == "answered", (
+        f"two disconnected schemas must no longer decline -- one component is kept: "
+        f"path_kind={wide.get('path_kind')} reason={wide.get('terminal_reason')!r}"
+    )
+    assert all(t.startswith("ops_b.") for t in wide.get("licensed") or []), (
+        f"the losing component's tables are still licensed: {wide.get('licensed')}"
     )
 
     # The knob set the way `Session` publishes it, and *not* in `state` -- which is the

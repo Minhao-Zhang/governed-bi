@@ -23,7 +23,7 @@ from langchain_core.runnables import RunnableConfig
 
 from governed_bi.register.assets import AssetType
 from governed_bi.retrieve.budget import apply_budgets
-from governed_bi.retrieve.connect import connect
+from governed_bi.retrieve.connect import components, connect
 from governed_bi.retrieve.fuse import fuse
 from governed_bi.retrieve.resolve import resolve
 from governed_bi.retrieve.route import route as route_scores
@@ -167,6 +167,26 @@ def resolve_node(state: dict, config: RunnableConfig) -> dict:
 def connect_node(state: dict, config: RunnableConfig) -> dict:
     """Bounded Steiner join over licensed tables; decline when disconnected / over caps.
 
+    **``route_top_n`` is a shortlist, not a conjunction.** Routing selects the top N
+    schemas of 57 and pass two licenses tables from every one of them, so on a pooled lake
+    the terminal set spans schemas that share no join edge and ``connect`` declined
+    ``missing_join_path`` — a decline that says nothing about the question, because the
+    terminals were disconnected *by construction*. Measured 2026-08-04: three questions
+    that answered at ``route_top_n = 1`` all declined at the register default of 3.
+
+    So the terminals are partitioned into :func:`~governed_bi.retrieve.connect.components`
+    first and **one component is kept**. Partitioning by component rather than by schema is
+    deliberate: two schemas with a declared cross-schema join are one component and stay
+    together, which is the case ADR 0005 §2.8.2 charges ``crossings`` for, while two
+    unrelated schemas are two components and the loser is dropped. A decline then means
+    what it says — the tables the turn kept cannot be joined.
+
+    The drop is **not silent** and it is not only a licensing change: the losing component's
+    assets are removed from ``retrieved`` as well, so the prompt cannot show the analyst a
+    table the turn may not query. ``schemas`` keeps its declared meaning (route's selected
+    top-N) and ``schema_ranking`` still holds every candidate, so what was shortlisted, what
+    survived and what the turn could reach are three readable facts rather than one.
+
     Then **join completion** (§2.8.1): every join whose both endpoints are in the final
     licensed set is pulled in. It runs here rather than in ``resolve`` because a Steiner
     point's whole purpose is to sit on a join path, so the pairs that most need their
@@ -183,6 +203,13 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
 
     edges = structure.join_edges
     max_points = int_knob(state, "max_steiner_points")
+
+    groups = components(terminals, edges=edges)
+    if len(groups) > 1:
+        kept = _pick_component(groups, state, structure)
+        retrieved = _restrict_to_component(retrieved, kept, structure)
+        terminals = set(kept)
+
     result = connect(terminals, edges=edges, max_points=max_points)
 
     if result.declined:
@@ -480,3 +507,65 @@ def _crossings(
             }
         )
     return crossings
+
+
+def _pick_component(
+    groups: tuple[frozenset[str], ...],
+    state: Mapping[str, Any],
+    structure: CorpusStructure,
+) -> frozenset[str]:
+    """Which disconnected group of terminals the turn keeps.
+
+    **Routing's own ranking decides**, because it is the only evidence available about
+    which schema the question is about: the group holding a table of the highest-ranked
+    routed schema wins. Falling back to "the biggest group" first would let a wide schema
+    that merely shares a word outvote the schema the router put first.
+
+    Ties break on size and then on the lexicographically first table id, so the choice is
+    reproducible — a run that picked differently on a re-run would make every downstream
+    number incomparable.
+    """
+    table_schemas = structure.table_schemas
+    for schema in state.get("schemas") or ():
+        wanted = str(schema)
+        for group in groups:
+            if any(table_schemas.get(str(t)) == wanted for t in group):
+                return group
+    return max(groups, key=lambda g: (len(g), sorted((str(t) for t in g), reverse=True)[:1]))
+
+
+def _restrict_to_component(
+    retrieved: dict[str, Any],
+    kept: frozenset[str],
+    structure: CorpusStructure,
+) -> dict[str, Any]:
+    """Drop assets belonging to schemas no kept table belongs to.
+
+    Licensing and context must agree. Narrowing ``licensed`` alone would leave the losing
+    schema's tables and columns rendered in the prompt while being unqueryable, so the
+    model would be shown a table and then refused for using it — which reads to the
+    analyst as a governance fault rather than as a routing decision.
+
+    **Untagged assets are kept.** An unbound term has no schema to be outside of (ADR 0005
+    makes untagged a value, not a defect), and dropping it here would delete a pass-one hit
+    with no record — the failure ``retrieve/structure.py`` was written about.
+    """
+    keep_schemas = {structure.table_schemas.get(str(t), "") for t in kept}
+    keep_schemas.discard("")
+    tags = structure.schema_tags
+
+    def inside(asset_id: str) -> bool:
+        tag = tags.get(str(asset_id))
+        return tag is None or str(tag) in keep_schemas
+
+    out = dict(retrieved)
+    out["selected"] = {k: v for k, v in (retrieved.get("selected") or {}).items() if inside(k)}
+    out["attributions"] = {
+        k: v for k, v in (retrieved.get("attributions") or {}).items() if inside(k)
+    }
+    out["pulled_in"] = {k: v for k, v in (retrieved.get("pulled_in") or {}).items() if inside(k)}
+    out["by_type"] = {
+        kind: [a for a in (ids or ()) if inside(a)]
+        for kind, ids in (retrieved.get("by_type") or {}).items()
+    }
+    return out

@@ -130,13 +130,28 @@ def main(argv: list[str] | None = None) -> int:
         if not args.json:
             print(f"seeded {len(session.assets_by_id)} assets from {args.schema!r} into {root}")
 
-    # Problems first, and they stop the serve. A warning printed beside an answer is the
-    # silent-skip shape: it satisfies "we reported it" and changes no outcome.
+    # Problems first, and the fatal ones stop the serve. A warning printed beside an answer
+    # is the silent-skip shape: it satisfies "we reported it" and changes no outcome. But
+    # refusing on *every* problem was the opposite failure — this exited 3 on a corpus the
+    # server served without checking anything, so the two readers of one list disagreed
+    # (ADR 0008 D9). `Problem.fatal` decides; degradations are counted and named.
     if session.fatal_problems:
-        print(f"corpus has {len(session.fatal_problems)} problem(s); refusing to serve:", file=sys.stderr)
+        print(
+            f"corpus has {len(session.fatal_problems)} fatal problem(s); refusing to serve:",
+            file=sys.stderr,
+        )
         for problem in session.fatal_problems:
             print(f"  {problem}", file=sys.stderr)
         return 3
+    if session.degradations and not args.json:
+        # Printed, counted, and *not* a stop. The corpus is smaller than the lake and a run
+        # over it is not comparable to a run over a clean one, so the number goes next to
+        # the answer rather than into a log nobody reads.
+        print(f"corpus has {len(session.degradations)} degradation(s) (serving anyway):")
+        for problem in session.degradations[:10]:
+            print(f"  {problem}")
+        if len(session.degradations) > 10:
+            print(f"  ... and {len(session.degradations) - 10} more")
 
     graph = compile_graph()
     # One question, one thread. `configurable()` no longer supplies a `thread_id` -- a thread is

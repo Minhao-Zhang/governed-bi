@@ -202,8 +202,29 @@ class Session:
         unresolvable join endpoint is a licensing question — ADR 0005 §2.8.2 requires both to
         surface where the corpus is built rather than three layers away as a decline on a turn
         that looked ordinary.
+
+        **``Problem.fatal`` decides, not "there is a problem".** ADR 0008 D9: this returned
+        *every* problem, so ``python -m governed_bi.serve`` exited 3 on a corpus that
+        ``make_graph()`` served without checking anything — the CLI and the server disagreed
+        about what is servable, and the CLI was the stricter of two readers of the same list.
+        A few-shot that cannot be used and a dimension nobody can place are degradations:
+        recorded, counted, and not a reason to refuse a 13 981-asset corpus. A dangling
+        structural reference still is.
+
+        Anything that predates the flag is fatal by default, so a problem site nobody has
+        classified stops the serve rather than becoming a warning nobody reads.
         """
-        return tuple(self.problems)
+        return tuple(p for p in self.problems if getattr(p, "fatal", True))
+
+    @property
+    def degradations(self) -> tuple[Any, ...]:
+        """Problems that are recorded and counted but do not stop a serve.
+
+        Separate from :attr:`fatal_problems` rather than inferred by a caller, so "this
+        corpus is smaller than the lake" is a number a run can publish next to its score
+        instead of something a reader has to reconstruct from a printed list.
+        """
+        return tuple(p for p in self.problems if not getattr(p, "fatal", True))
 
 
 # ── construction ──────────────────────────────────────────────────────────────

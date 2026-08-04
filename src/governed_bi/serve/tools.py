@@ -49,10 +49,27 @@ __all__ = [
     "tool_bounds_from_state",
 ]
 
+#: The agent's standing instructions.
+#:
+#: The two naming rules are here because omitting them produced refusals that named the
+#: wrong cause (ADR 0008 P8/D10). ``check()`` is given no ``default_schema``, so an
+#: unqualified ``FROM customers`` keys as ``customers`` while ``licensed`` holds
+#: ``beer_factory.customers`` and the table layer refuses ``r_table_not_licensed`` — *"the
+#: model asked for a table it may not see"* — for what is really *"the model omitted a
+#: schema nobody told it to write"*.
+#:
+#: Quoting is asked for even though ``canonicalise`` now fixes the spelling and adds the
+#: quotes itself, because it cannot fix a statement that does not parse:
+#: ``FROM airline.Air Carriers`` is a syntax error before any of this runs, and that table
+#: is real.
 SYSTEM_PROMPT = (
     "You are a governed BI analyst. Use only the context and tools provided. "
     "Prefer run_query for factual answers. Call ask_user only when a missing "
-    "fact blocks a correct SQL answer."
+    "fact blocks a correct SQL answer.\n"
+    "Write every table reference as schema.table — an unqualified name is refused. "
+    "Spell identifiers exactly as the context gives them, and wrap any identifier "
+    'containing a space, punctuation or a leading digit in double quotes, e.g. '
+    'airline."Air Carriers".'
 )
 
 _DEFAULT_READ_BODY_MAX_CHARS = 80_000

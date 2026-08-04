@@ -35,6 +35,7 @@ __all__ = [
     "SHARED_NAMESPACE",
     "validate_path_component",
     "validate_asset_id",
+    "slug",
     "table_id",
     "derive_column_id",
     "on_digest",
@@ -103,8 +104,46 @@ def validate_asset_id(value: object) -> str:
     return value
 
 
+def slug(physical_name: str) -> str:
+    """The id component for an engine identifier. **A key is not a name** (ADR 0008 D1).
+
+    ``table_id`` used to be ``f"{schema}.{physical_name}"``, which made the corpus key a
+    function of the engine's spelling — so an identifier the key charset rejects had **no
+    asset at all**. ``airline."Air Carriers"`` is a real table with four columns, and it
+    had no ``TableAsset`` while 24 few-shots cited it; ``app_store.playstore."Content
+    Rating"`` and ``soccer_2016.saison."orange_trophée"`` are the same shape. An id becomes
+    a filename, so widening the charset is not the fix: ``"Air Carriers".yaml`` is illegal
+    on Windows, and the id would become a second spelling of ``physical_name``.
+
+    So the three jobs are three fields. ``physical_name`` holds the engine's identifier
+    **verbatim** — any character, any case, any script — and is the only string that may
+    reach Postgres. This is the derived component that names a file and keys an index.
+
+    ``physical`` when it is already a bare identifier, so nothing in an existing corpus
+    moves — 655 of 655 tables and 5 942 of 5 942 columns are unchanged. Otherwise the
+    unsafe characters become ``_`` and a six-hex digest of the *exact* name is appended:
+
+        ``CBSA``          → ``CBSA``
+        ``Air Carriers``  → ``Air_Carriers_66c534``
+        ``orange_trophée``→ ``orange_troph_e_1fadf1``
+
+    The digest is what makes it injective rather than merely tidy: ``a b`` and ``a_b``
+    sanitise to the same string and must not collide, and it is order-independent, so two
+    builds of the same corpus agree without needing to see each other. Deliberately **not**
+    lowercased — Postgres distinguishes ``"CBSA"`` from ``"cbsa"`` when quoted, and a corpus
+    that cannot is a corpus that cannot describe the lake it is pointed at.
+    """
+    if not isinstance(physical_name, str) or not physical_name:
+        raise UnsafeName(f"physical_name={physical_name!r} is not a non-empty string")
+    if _COMPONENT_RE.match(physical_name):
+        return physical_name
+    sanitised = "".join(ch if ch.isascii() and (ch.isalnum() or ch == "_") else "_" for ch in physical_name)
+    digest = hashlib.sha256(physical_name.encode("utf-8")).hexdigest()[:6]
+    return f"{sanitised}_{digest}"
+
+
 def table_id(schema: str, physical_name: str) -> str:
-    """The id of a table living in ``schema`` (ADR 0005 §2.8.2).
+    """The id of a table living in ``schema`` (ADR 0005 §2.8.2, ADR 0008 D1).
 
     Declared here beside :func:`derive_column_id` and :func:`join_id`, and for the
     same reason. Until 2026-08-03 this convention was a bare f-string inside
@@ -119,7 +158,7 @@ def table_id(schema: str, physical_name: str) -> str:
     ``LOW_CONFIDENCE_JOIN`` constants in the one place where the two halves fail
     *open* rather than merely disagreeing.
     """
-    return f"{schema}.{physical_name}"
+    return f"{schema}.{slug(physical_name)}"
 
 
 def derive_column_id(table_id: str, physical_name: str) -> str:
@@ -130,7 +169,7 @@ def derive_column_id(table_id: str, physical_name: str) -> str:
     column -- and the retrieval index, ``resolve``'s closure and the budget all
     key on it.
     """
-    return f"{table_id}.{physical_name}"
+    return f"{table_id}.{slug(physical_name)}"
 
 
 def _qualified_operand(node: exp.Expression) -> str:

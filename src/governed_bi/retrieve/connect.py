@@ -11,7 +11,7 @@ from collections.abc import Iterable, Mapping, Set
 from dataclasses import dataclass
 from typing import Hashable
 
-__all__ = ["ConnectResult", "canon_edge", "connect"]
+__all__ = ["ConnectResult", "canon_edge", "components", "connect"]
 
 
 @dataclass(frozen=True)
@@ -84,6 +84,44 @@ def connect(
             unique.append(edge)
 
     return ConnectResult(path=tuple(unique), added=added, declined=False)
+
+
+def components(
+    nodes: Set[Hashable], *, edges: Set[tuple[Hashable, Hashable]]
+) -> tuple[frozenset[Hashable], ...]:
+    """Partition ``nodes`` by which connected component of ``edges`` each one sits in.
+
+    :func:`connect` answers *"can these be joined"* with a yes or a no, and the no is the
+    same value whether the terminals span two schemas that were never meant to be joined
+    or genuinely need a path the graph does not have. That single value is why a pooled
+    turn declined ``missing_join_path``: routing shortlists three schemas, pass two
+    licenses tables from all three, and unrelated schemas share no edge — so the terminal
+    set is disconnected *by construction* and the decline says nothing about the question.
+
+    This is the same graph walk, reported as a partition instead of a verdict, so a caller
+    can decide which component to keep. A node with no incident edge is its own component,
+    which is what makes a single-table turn a component of one rather than a missing key.
+
+    Deterministic: components are ordered by their lexicographically first member, so two
+    runs over the same corpus partition identically.
+    """
+    adj = _adjacency(edges)
+    remaining = set(nodes)
+    out: list[frozenset[Hashable]] = []
+    while remaining:
+        seed = min(remaining, key=str)
+        seen = {seed}
+        queue: deque[Hashable] = deque([seed])
+        while queue:
+            node = queue.popleft()
+            for neighbour in adj.get(node, ()):
+                if neighbour not in seen:
+                    seen.add(neighbour)
+                    queue.append(neighbour)
+        group = frozenset(seen & remaining)
+        remaining -= seen
+        out.append(group)
+    return tuple(sorted(out, key=lambda g: min((str(n) for n in g), default="")))
 
 
 def _adjacency(

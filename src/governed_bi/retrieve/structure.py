@@ -184,12 +184,21 @@ def complete_joins(licensed: Set[Any], structure: CorpusStructure) -> frozenset[
 def _table_lookup(tables: Mapping[str, Any]) -> Mapping[str, frozenset[str]]:
     """Every spelling a table endpoint may use -> the table ids that answer to it.
 
-    Three keys per table, all of them spellings a valid corpus is allowed to carry:
-    the asset id, ``table_id(schema, physical_name)`` (the declared convention, from
-    :mod:`governed_bi.corpus.identity` rather than a second f-string), and the bare
-    ``physical_name``. The value is a **set**, which is the whole mechanism: a bare
-    name present in two schemas answers with two ids, and that is not a lost edge to
-    be patched up but the case where a guess fails open.
+    Four keys per table, all of them spellings a valid corpus is allowed to carry: the
+    asset id, ``table_id(schema, physical_name)`` (the declared convention, from
+    :mod:`governed_bi.corpus.identity` rather than a second f-string), the bare
+    ``physical_name``, and the **engine spelling** ``{schema}.{physical_name}``.
+
+    That last one is not a fourth tolerance, it is the physical→id map ADR 0008 D1 implies.
+    An asset id carries the *slug* (``airline.Air_Carriers_66c534``) while a SQL fragment
+    carries the engine's spelling (``FROM airline."Air Carriers"``), and ``_link_few_shot``
+    resolves the second against the first. Without it, every few-shot citing a table whose
+    name needed slugging reports "matches no table asset" — which is the 24 problems this
+    corpus had, one layer along.
+
+    The value is a **set**, which is the whole mechanism: a bare name present in two
+    schemas answers with two ids, and that is not a lost edge to be patched up but the case
+    where a guess fails open.
     """
     out: dict[str, set[str]] = {}
     for aid, asset in tables.items():
@@ -200,6 +209,7 @@ def _table_lookup(tables: Mapping[str, Any]) -> Mapping[str, frozenset[str]]:
             keys.add(str(physical))
             if schema:
                 keys.add(table_id_of(str(schema), str(physical)))
+                keys.add(f"{schema}.{physical}")
         for key in keys:
             out.setdefault(key, set()).add(aid)
     return {key: frozenset(ids) for key, ids in out.items()}
@@ -352,6 +362,10 @@ def _link_metric(
                         "field is not scoped to one, so the reference cannot be "
                         "resolved and the column never reaches the prompt"
                     ),
+                    # A degradation, not a stop (ADR 0008 D9): the metric still renders and
+                    # still resolves its base table. One dimension nobody can place costs
+                    # recall, not correctness.
+                    fatal=False,
                 )
             )
 
@@ -373,13 +387,19 @@ def _link_few_shot(
         return
     names, parse_error = _sql_table_names(str(sql))
     if parse_error is not None:
-        problems.append(Problem(where=aid, reason=f"sql did not parse: {parse_error}"))
+        # Advisory content. A few-shot that cannot be used costs recall; it cannot
+        # mis-license anything, because nothing downstream keys on it (ADR 0008 D9).
+        problems.append(
+            Problem(where=aid, reason=f"sql did not parse: {parse_error}", fatal=False)
+        )
         return
     scope = _attr(asset, "schema")
     for name in names:
         bound, why = _bind(name, lookup, scope=scope)
         if bound is None:
-            problems.append(Problem(where=aid, reason=f"sql references a table that {why}"))
+            problems.append(
+                Problem(where=aid, reason=f"sql references a table that {why}", fatal=False)
+            )
             continue
         references.setdefault(aid, set()).add(bound)
 

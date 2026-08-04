@@ -33,6 +33,8 @@ from __future__ import annotations
 import re
 from typing import Iterable, Mapping
 
+from ..corpus.identity import slug
+
 __all__ = [
     "SCHEMA_ID_PATTERN",
     "MAX_IDENTIFIER_BYTES",
@@ -83,13 +85,24 @@ def fold(name: str) -> str:
 
 
 def table_key(schema: str | None, name: str) -> str:
-    """``{schema}.{physical_name}``, folded. Unqualified when there is no schema."""
-    return f"{fold(schema)}.{fold(name)}" if schema else fold(name)
+    """``{schema}.{slug(physical_name)}``, folded. Unqualified when there is no schema.
+
+    **Slugged, because the allowlist it is compared against is keyed on asset ids** and an
+    asset id carries the slug (ADR 0008 D1). A statement writes the engine's spelling —
+    ``FROM airline."Air Carriers"`` — and ``licensed`` holds ``airline.Air_Carriers_66c534``;
+    without the slug here the two never compare equal and a licensed table refuses.
+
+    Idempotent on an already-slugged name, which is what lets
+    :func:`normalise_table_key` push a caller-supplied *key* through the same function as a
+    statement's *reference*. That single path is the only reason a two-part allowlist entry
+    and a three-part query reference can be compared at all.
+    """
+    return f"{fold(schema)}.{fold(slug(name))}" if schema else fold(slug(name))
 
 
 def column_key(schema: str | None, table: str, column: str) -> str:
-    """``{schema}.{table}.{column}``, folded."""
-    return f"{table_key(schema, table)}.{fold(column)}"
+    """``{schema}.{slug(table)}.{slug(column)}``, folded."""
+    return f"{table_key(schema, table)}.{fold(slug(column))}"
 
 
 def normalise_table_key(raw: str, default_schema: str | None) -> str:

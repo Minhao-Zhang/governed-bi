@@ -17,6 +17,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
+from .identity import slug
 from .schema import Asset, ColumnAsset, Governance, Reliability, ReliabilityStatus
 from .validate import _bare
 
@@ -32,10 +33,15 @@ def column_key_for(asset: ColumnAsset) -> str:
     """``{schema}.{table}.{column}`` folded, or ``{table}.{column}`` when schema is empty.
 
     Must match :func:`governed_bi.govern.identifiers.column_key` /
-    :func:`~governed_bi.govern.identifiers.normalise_column_key`.
+    :func:`~governed_bi.govern.identifiers.normalise_column_key`, including the **slug**
+    (ADR 0008 D1): the table half comes from ``parent_table``, which is already an asset id
+    and therefore already slugged, while the column half is a raw ``physical_name`` and is
+    slugged here. A conformance test locks the two shapes together, and this module cannot
+    import ``govern`` -- ``corpus`` sits below it -- which is why ``slug`` lives in
+    ``corpus.identity`` where both halves can reach it.
     """
     table = _bare(asset.parent_table).lower()
-    column = asset.physical_name.lower()
+    column = slug(asset.physical_name).lower()
     schema = (asset.schema or "").strip().lower()
     if schema:
         return f"{schema}.{table}.{column}"
