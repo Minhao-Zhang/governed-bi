@@ -125,10 +125,19 @@ def test_trust_is_registered_by_the_server_factory():
         Path(__file__).resolve().parent.parent.parent
         / "src" / "governed_bi" / "api" / "graph_app.py"
     ).read_text(encoding="utf-8")
-    body = source.split("def make_graph()", 1)[1]
-    assert "trust(conf)" in body, (
-        "make_graph binds the session's constants with with_config but does not declare them "
-        "trusted, so a request can merge over every one of them."
+    # Code only, not the docstring: `make_graph`'s prose explains at length *why* the
+    # `with_config` binding was removed, and a naive substring check reads its own explanation
+    # as the defect. Caught by this test failing on the commit that fixed the thing it tests.
+    after_def = source.split("def make_graph()", 1)[1]
+    body = after_def.split('"""', 2)[2]
+    assert "trust(" in body, (
+        "make_graph does not declare the session's constants trusted, so a request can name "
+        "any of them and the shared reader has nothing to force back."
+    )
+    assert "with_config" not in body, (
+        "make_graph binds the live constants onto config again. They are not JSON, so the "
+        "server 500s serialising the assistant config for /assistants/{id}/schemas -- and a "
+        "caller's config merges *over* a bound default, which is the override this fixes."
     )
 
 

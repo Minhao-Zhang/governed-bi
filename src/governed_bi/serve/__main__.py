@@ -34,11 +34,7 @@ import sys
 import tempfile
 from typing import Any
 
-#: Repository root, so ``tools/credentials.py`` is importable. `src/` must not read ``.env``
-#: itself — a library that decides its own configuration behind its caller's back is the
-#: layering ``tools/check_imports.py`` exists to keep — so the bridge lives at this entry
-#: point, which is the process that actually wants the file.
-_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent.parent
+from ..paths import TOOLS_DIR
 
 
 def _credentials() -> Any:
@@ -50,7 +46,7 @@ def _credentials() -> Any:
     see the value fails with the library's message, three frames deep, naming an environment
     variable that *is* set in the file the caller was looking at.
     """
-    sys.path.insert(0, str(_ROOT / "tools"))
+    sys.path.insert(0, str(TOOLS_DIR))
     import credentials
 
     credentials.load_into_environ()

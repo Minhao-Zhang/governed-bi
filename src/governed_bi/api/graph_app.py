@@ -29,6 +29,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from governed_bi.paths import REPO_ROOT, TOOLS_DIR
 from governed_bi.serve.graph import build_graph
 from governed_bi.serve.runtime import trust
 from governed_bi.serve.session import Session
@@ -67,6 +68,7 @@ SEED_DIR_VAR = "GOVERNED_BI_SEED_DIR"
 #: for these.
 CORPORA_DIR = "corpora"
 
+
 _SESSION: Session | None = None
 
 
@@ -81,10 +83,10 @@ def session_from_environment() -> Session:
     if _SESSION is not None:
         return _SESSION
 
-    root = Path(__file__).resolve().parent.parent.parent.parent
+    root = REPO_ROOT
     import sys
 
-    sys.path.insert(0, str(root / "tools"))
+    sys.path.insert(0, str(TOOLS_DIR))
     import credentials
 
     credentials.load_into_environ()
@@ -236,18 +238,25 @@ def _thread_id(config: Any) -> str | None:
 def make_graph() -> Any:
     """What ``langgraph.json``'s ``graphs.serve`` points at.
 
-    The live constants are **bound as config defaults**, which is what closes the gap ADR
-    0007 §1 describes: the server can only send JSON, and every node reads ``policy``,
-    ``index``, ``structure``, ``corpus``, ``connector`` and ``assets_by_id`` off
-    ``configurable``. Without the binding, the first real request dies on ``guard``'s
-    unguarded ``config["configurable"]["policy"]`` — verified, and it is a `KeyError` three
-    frames into a node rather than anything a client could read.
+    The live constants reach the nodes through :func:`~governed_bi.serve.runtime.trust`, and
+    **not** through ``with_config``. They were bound as config defaults, and that was the wrong
+    shape twice over.
 
-    ``with_config`` returns a ``CompiledStateGraph``, not a wrapper, so the server treats it as
-    an ordinary graph. Caller config merges **over** these defaults, which is why
-    ``thread_id`` is deliberately excluded: a bound default would silently collapse every
-    conversation into one thread, and the checkpointer would make that look like memory
-    working rather than failing.
+    It was wrong on ADR 0007 §1's own terms: the section says the constants *cannot ride the
+    wire*, and binding a ``GovernancePolicy``, a ``UnifiedIndex`` and a live ``psycopg``
+    connector into ``config.configurable`` puts them on the wire's data structure anyway. The
+    server then serialises an assistant's config to answer ``/assistants/{id}/schemas`` and
+    ``/assistants/{id}/subgraphs``, so both returned **HTTP 500** —
+    ``TypeError: Object of type GovernancePolicy is not JSON serializable`` — which is how
+    LangGraph Studio failed to open against a server whose own REST routes worked.
+
+    And it was wrong on security: caller config merges **over** bound defaults, which is
+    load-bearing for ``thread_id`` and catastrophic for the six keys beside it, since a request
+    naming ``policy`` replaced governance for that run. ``trust`` was added to force them back;
+    once it exists, the binding it was defending has nothing left to do.
+
+    So the config stays JSON-clean and empty, the nodes read the constants from the shared
+    reader, and ``thread_id`` still comes from the caller — the one key that must.
 
     **One checkpointer, and the nested agent gets it through ``config``.** An earlier version
     of this function built an ``InMemorySaver`` here and passed it to *both* the outer graph
@@ -273,9 +282,8 @@ def make_graph() -> Any:
     provenance fields one layer in.
     """
     _warm_imports()
-    conf = dict(session_from_environment().configurable()["configurable"])
-    trust(conf)
-    return build_graph(accept=_accept_node).compile().with_config({"configurable": conf})
+    trust(dict(session_from_environment().configurable()["configurable"]))
+    return build_graph(accept=_accept_node).compile()
 
 
 def _warm_imports() -> None:
@@ -301,3 +309,30 @@ def _warm_imports() -> None:
         from langchain.chat_models import init_chat_model  # noqa: F401
     except ImportError:
         pass
+
+
+#: Build the session **at import time when this module is being loaded by the server.**
+#:
+#: `langgraph dev` installs `blockbuster`, which raises on blocking I/O reached from the event
+#: loop — and `langgraph_api` calls this module's factory *synchronously from inside an async
+#: handler*. The build is blocking by declaration: it resolves paths, reads `.env`, scans and
+#: parses 8035 YAML files, digests that tree and opens a synchronous `psycopg` connection. There
+#: is no ordering that satisfies the detector, only a sequence of tripwires — `os.getcwd`, then
+#: `ScandirIterator.__next__`, then file reads. Offloading to a thread does not help either: the
+#: factory is synchronous, so the loop must wait on the join, and blockbuster arms
+#: `lock.acquire` too.
+#:
+#: So the work moves to before the loop exists, which is what LangGraph does for the identical
+#: problem in its own code — `langgraph_api/graph.py` eagerly initialises ddtrace at import
+#: "so its blocking os.getcwd() call runs synchronously before the event loop starts, not
+#: lazily on the first request (which would trigger a blockbuster BlockingError)".
+#:
+#: Gated on `LANGSERVE_GRAPHS` because that variable exists only inside the server process
+#: (`langgraph_api/cli.py` patches it in). Importing this module from a test or from
+#: `python -m governed_bi.serve` must stay free of Postgres and of a 30-second corpus load.
+#:
+#: A failure here crashes the server at startup instead of on the first request, which is the
+#: better of the two: a misconfigured corpus should not present as a 500 on someone's question.
+if os.environ.get("LANGSERVE_GRAPHS"):
+    _warm_imports()
+    session_from_environment()
