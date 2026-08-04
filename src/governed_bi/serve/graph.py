@@ -79,7 +79,7 @@ def _skip_if_terminal(state: ServeState) -> Literal["stamp", "continue"]:
     return "continue"
 
 
-def build_graph(*, accept: Any = None) -> StateGraph:
+def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     """Construct the uncompiled serve graph.
 
     **``agent_checkpointer`` is gone, and it never did anything.** It was passed to the nested
@@ -101,6 +101,19 @@ def build_graph(*, accept: Any = None) -> StateGraph:
 
     Passing nothing keeps ``START -> guard``, which is what a caller who builds its own
     turn (``eval/harness.py``, ``python -m governed_bi.serve``) already does correctly.
+
+    ``record`` is the symmetric seam on the other end: an optional node placed **after**
+    ``stamp``, so ``stamp -> record -> END``. It exists for the same one caller and for a reason
+    ADR 0010 uncovered — the audit log was written by ``POST /chat``, and once the UI streams,
+    that route serves almost nothing, so ``/audit/turns`` went dark for every real turn while
+    still listing the old REST ones. "No turns are listed" and "no turns were served" became the
+    same observation, which is the failure ``routes.py``'s own ``audit_logged`` field exists to
+    prevent one layer out.
+
+    It cannot live in ``stamp``: ``tools/check_imports.py`` orders ``serve`` before ``api``, and
+    the log is ``api/trace_store.py``. So the server injects the recorder exactly as it injects
+    ``accept`` — the layer that owns the HTTP surface owns its log — and a caller that streams
+    nowhere passes nothing and writes nothing.
     """
 
     graph = StateGraph(ServeState)
@@ -129,7 +142,11 @@ def build_graph(*, accept: Any = None) -> StateGraph:
     def _fanout_passthrough(state: ServeState) -> dict[str, Any]:
         return {}
 
-    graph.add_node("fanout", wrap_node("facet_schema", _fanout_passthrough))
+    # ``stream=False``: this node is registered under ``facet_schema`` so a crash in it is
+    # attributed to a real stage, but it is a passthrough, and emitting for it put a phantom
+    # ``facet_schema`` row in the live timeline immediately before the real facet's — two rows
+    # for one stage, which reads as the facet having run twice.
+    graph.add_node("fanout", wrap_node("facet_schema", _fanout_passthrough, stream=False))
 
     if accept is not None:
         graph.add_node("accept", wrap_node("accept", accept))
@@ -175,7 +192,16 @@ def build_graph(*, accept: Any = None) -> StateGraph:
     graph.add_edge("agent_core", "stamp")
     graph.add_edge("refuse", "stamp")
     graph.add_edge("decline", "stamp")
-    graph.add_edge("stamp", END)
+    if record is not None:
+        # Unwrapped, like ``stamp`` and for the same reason inverted: there is nothing after it
+        # to receive a ``crashed`` stamp, so ``wrap_node`` here would convert "the logger failed"
+        # into a turn whose answer the client already has but whose run reports an error. The
+        # node swallows its own failures instead — see ``graph_app._record_node``.
+        graph.add_node("record", record)
+        graph.add_edge("stamp", "record")
+        graph.add_edge("record", END)
+    else:
+        graph.add_edge("stamp", END)
     return graph
 
 

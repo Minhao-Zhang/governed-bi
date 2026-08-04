@@ -69,6 +69,12 @@ class GovernedAgentState(AgentState):
     #: ``tool_call_id -> clarification``. One row per answered ``ask_user``.
     clarifications_by_call: Annotated[dict[str, Any], merge_by_call]
 
+    #: The last successful query's result table. Declared here for the reason in this class's
+    #: docstring and no other: ``run_query`` returns it in a ``Command`` update, and a channel the
+    #: agent does not declare is **dropped silently**. Last write wins, matching the outer
+    #: channel — a turn's answer is about its last successful query.
+    result_table: dict[str, Any] | None
+
 
 class AttemptBook:
     """The attempt cap, counted over committed **∪** in-flight tool call ids.

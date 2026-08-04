@@ -99,6 +99,12 @@ def agent_core_node(state: dict, config: RunnableConfig) -> dict:
         update["clarifications"] = clarifications
     if generated_sql:
         update["generated_sql"] = generated_sql
+    # Lifted out of the nested agent's channel, like the ledger above it. The table is what the
+    # answer was missing: the agent narrates on its own, but its rows only ever existed inside a
+    # `ToolMessage`'s JSON, so a client could show the explanation and not the data.
+    result_table = result.get("result_table")
+    if result_table:
+        update["result_table"] = result_table
     return update
 
 

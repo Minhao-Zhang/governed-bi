@@ -215,6 +215,31 @@ curl -s localhost:8000/chat -H 'content-type: application/json' \
   -d '{"question":"What is the total revenue?"}'
 ```
 
+### Watch a turn while it runs
+
+`POST /chat` blocks for the whole turn — 30 to 120 seconds with nothing on the wire. Under
+`uv run langgraph dev` the same graph is also served streamed, and that is the surface a client
+should use:
+
+```bash
+curl -N localhost:2024/threads/$THREAD/runs/stream \
+  -H 'content-type: application/json' \
+  -d '{"assistant_id":"serve",
+       "input":{"messages":[{"type":"human","content":"What is the total revenue?"}]},
+       "stream_mode":["values","messages","custom"],
+       "stream_subgraphs":true}'
+```
+
+`messages` gives the answer token by token; `custom` gives one event per stage as it happens —
+every retrieval rail, each tool call, and each governance verdict (`check` then `execute`, with
+the executed SQL and the digest the audit ledger stores). The contract is
+[ADR 0010](adr/0010-live-stage-events.md).
+
+**`stream_subgraphs: true` is required, not a tuning flag.** The model and every tool run inside a
+nested agent, so without it there are no custom events and no tokens at all. The server accepts
+the misspelling `subgraphs` with HTTP 200 and ignores it silently, which is a quiet way to see
+nothing.
+
 Policy comes from [`governed_bi.toml`](../governed_bi.toml) (corpus path,
 datasource, serve flags). Local overrides go in git-ignored
 `governed_bi.local.toml`. Because the display logic lives in the UI-agnostic

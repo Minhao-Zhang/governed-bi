@@ -54,6 +54,7 @@ __all__ = [
     "GuardVerdict",
     "GUARD_RULES",
     "GUARD_PUBLIC_MESSAGE",
+    "BI_SCOPE_RULE_ID",
     "guard",
     "has_control_characters",
 ]
@@ -187,6 +188,26 @@ GUARD_RULES: Mapping[str, Callable[[str, GovernancePolicy], str | None]] = {
     "g_role_injection": _rule_role_injection,
     "g_tool_forgery": _rule_tool_forgery,
 }
+
+#: The one guard rule that is **not** in :data:`GUARD_RULES`, and the reason is a layer boundary.
+#:
+#: It asks a model whether the question is a business-intelligence task at all, and refuses the
+#: turn if not. Every rule above is a pure ``(str, GovernancePolicy) -> str | None`` predicate,
+#: because ``govern/`` must stay importable with no model, no settings and no I/O — the same
+#: constraint ``register/stages.py`` states. So the *check* runs in ``serve/nodes/guard.py``,
+#: which already reads ``agent_model`` off the runnable config, and only the **id** lives here.
+#:
+#: The id lives here anyway, rather than being a bare string at the call site, because it is part
+#: of a closed vocabulary three other things read: ``guard_rules_enabled`` gates it exactly like
+#: the other five, ``GuardVerdict.rule_id`` publishes it, and the record retains it. A rule id
+#: invented at its call site is a sixth vocabulary of the kind ``register/stages.py`` exists to
+#: prevent.
+#:
+#: **Enabled with no model configured is ``error_failed_open``, not ``clear``.** The rule was
+#: switched on and could not run; reporting that as a pass would be a gate that "leaves a trace
+#: only when it fires", which ``register/record.py`` says cannot afterwards be told from a gate
+#: that was never wired up.
+BI_SCOPE_RULE_ID = "g_bi_scope"
 
 _WARNED: set[str] = set()
 

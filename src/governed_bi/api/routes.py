@@ -30,6 +30,7 @@ from governed_bi.api.trace_store import (
     TURN_LOG_DIR,
     append_turn,
     get_turn,
+    last_ai_text,
     list_turns,
 )
 from governed_bi.register.assets import ASSET_REGISTER
@@ -87,7 +88,7 @@ def capabilities() -> dict[str, Any]:
     session = _session()
     #: Whether the streaming transport is offered. Bound to a name because `can_clarify`
     #: depends on it and two copies of one literal is how the two answers drift apart.
-    can_stream = False
+    can_stream = True
     return {
         "environment": "local",
         "dialect": getattr(session.connector, "dialect", "postgres"),
@@ -95,18 +96,24 @@ def capabilities() -> dict[str, Any]:
         # exist. False here is a promise kept, not a feature missing.
         "can_edit": False,
         "edit_mode": "none",
-        # **False, and this is the honest answer rather than a limitation.** ADR 0007 §5
-        # specifies custom stream events and nothing in v2 emits one yet, so the streamed
-        # timeline would render empty — the UI would show a live-looking run with no steps in
-        # it, which is worse than not offering the mode. The UI's own `canStream(caps)` gate
-        # then selects `<RestChat/>` and `POST /chat` below, which is a path it already has.
+        # **True since ADR 0010 built the events behind it.** It was false while nothing
+        # emitted a custom event, because a streamed run would have rendered a live-looking
+        # timeline with no steps in it — worse than not offering the mode. `serve/events.py`,
+        # `serve/wrap.py` and `serve/tools.py` now emit every rail, every tool and every
+        # governance verdict, so the flag is flipped by building the thing it names.
         #
-        # There is a second reason and it is worth recording: `langgraph dev` installs
-        # `blockbuster`, which raises on blocking I/O in an async function and keeps
-        # `os.getcwd` armed. This engine is deliberately synchronous — a sync `psycopg`
-        # connector is the declared port — so a streamed run trips it inside the server's own
-        # worker, with no frame of ours in the traceback. Flip this to true when stage events
-        # exist *and* the run path is async or thread-offloaded, not before.
+        # The second reason recorded here is **retired, and measured retired** (ADR 0010 M4).
+        # It said a synchronous engine would trip `blockbuster` inside the server's worker.
+        # `blockbuster` is armed only in the in-mem run queue, LangGraph runs sync nodes in an
+        # executor thread where it does not fire, and a full streamed run against live
+        # Postgres completed — 321 token deltas, 12 subgraph updates, no BlockingError. No
+        # `--allow-blocking` is needed.
+        #
+        # What the *client* must send is the part worth guarding, and it is not visible from
+        # here: `stream_subgraphs: true`. The model and every tool run inside a nested
+        # `create_agent` graph, so without that flag a correct emitter still produces an empty
+        # timeline and no streamed text. The server accepts the wrong spelling (`subgraphs`)
+        # with HTTP 200 and ignores it silently.
         "can_stream": can_stream,
         # Observed, never assumed: a session with no model serves the stub path, and saying
         # otherwise would make the interface blame the question for the silence.
@@ -132,10 +139,11 @@ def capabilities() -> dict[str, Any]:
         # call anywhere in it, so `true` offered a question that could be asked, displayed
         # nowhere, and answered by nobody — the graph simply stayed paused.
         #
-        # So this is false today because of the *client's* missing half, not the server's, and
-        # it flips by giving `useRestChat` a clarification pair or by turning streaming on —
-        # never by editing this line. Reporting a capability the mounted transport lacks is the
-        # same defect as a reliability badge with nothing behind it.
+        # It was false because of the *client's* missing half, not the server's. The expression
+        # is unchanged and that is the point: it flipped by turning streaming on, which mounts
+        # `<StreamChat/>` — the transport that does have a clarification pair — and never by
+        # editing this line. Reporting a capability the mounted transport lacks is the same
+        # defect as a reliability badge with nothing behind it.
         "can_clarify": can_stream and session.agent_model is not None,
     }
 
@@ -404,7 +412,25 @@ def _knowledge_payload() -> dict[str, Any]:
 
 @app.post("/chat")
 def chat(body: dict[str, Any]) -> dict[str, Any]:
-    """Serve one turn. The UI's REST transport, selected when ``can_stream`` is false.
+    """Serve one turn, blocking. **The degradation path, not the transport.**
+
+    It was the transport while ``can_stream`` was false. Since ADR 0010 the UI mounts
+    ``<StreamChat/>`` against the LangGraph runtime and reaches this route only when a streamed
+    run errors — so what matters about it now is what it *cannot* carry, and the answer is
+    stated here rather than left to be discovered:
+
+    **This route and the streamed one do not share a memory.** ``_GRAPH`` below is compiled with
+    its own ``InMemorySaver``; the graph the server streams is compiled by
+    ``graph_app.make_graph`` with **no** saver precisely so the server can supply its own, which
+    is what makes ``/threads`` work. Two savers in one process means a ``session_id`` names two
+    unrelated checkpoints, so a mid-conversation fallback lands on an empty thread: the turn is
+    served correctly and in isolation, and the conversation before it is gone. A clarification
+    paused on the streamed thread is likewise not answerable here.
+
+    That is a real limitation and it is not fixed by this route, because the fix is one graph and
+    one saver — either this route becoming a client of the runtime, or the runtime's saver being
+    reachable from here. Both are larger than a fallback deserves, and neither should be
+    improvised while turning streaming on. Recorded in ADR 0010's consequences.
 
     Request: ``{question, session_id, history: [{role, text}]}``.
 
@@ -584,7 +610,7 @@ def _shape(out: dict[str, Any]) -> dict[str, Any]:
     # *system* copy and is null on the answered path. A REST caller has no message channel to
     # read, so the one thing it cannot reconstruct is supplied here, under a different name so
     # the two are never confused for one field.
-    answer["answer_text"] = _last_ai_text(out)
+    answer["answer_text"] = last_ai_text(out)
     answer.setdefault("clarification", None)
     return answer
 
@@ -627,24 +653,6 @@ def _error(detail: str) -> dict[str, Any]:
         "answer_text": None,
         "clarification": None,
     }
-
-
-def _last_ai_text(state: dict[str, Any]) -> str | None:
-    """The model's answer, via LangChain's own ``AIMessage.text``.
-
-    Not hand-flattened. The Responses API returns content as blocks
-    (``[{"type": "text", ...}, {"type": "reasoning", ...}]``), and an earlier draft of this
-    walked them itself — which is re-implementing something `langchain-core` owns, and
-    decision #1 records that v1's three layers over `BaseChatModel` were a mistake for
-    exactly this reason. ``.text`` already concatenates the text blocks and ignores the rest.
-    """
-    for message in reversed(state.get("messages") or []):
-        if str(getattr(message, "type", "")) in ("human", "tool"):
-            continue
-        text = getattr(message, "text", None)
-        if text:
-            return str(text)
-    return None
 
 
 @app.get("/graph")

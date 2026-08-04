@@ -291,6 +291,31 @@ class ServeState(TypedDict, total=False):
     terminal_reason: str | None
     path_kind: Annotated[PathKind | None, settle_path_kind]
     generated_sql: str | None
+    #: The last successful query's result, as ``{columns, rows, row_count, truncated}``.
+    #:
+    #: **The answer already carries prose and did not carry the table**, which is the inverse of
+    #: how it looked from outside. Measured on a live turn: the agent's final message reads *"The
+    #: largest queryable table is `authors.PaperAuthor`, with 2,315,574 rows"* — narration the
+    #: model produces for free — while the rows themselves existed only inside a ``ToolMessage``'s
+    #: JSON string, reachable by a client only by parsing the transcript. So this channel is the
+    #: table, not a second narration.
+    #:
+    #: Overwritten rather than accumulated: a turn's answer is about its last successful query,
+    #: and a list would make "which one is the answer" a question the client has to re-decide.
+    #:
+    #: **Not a record field, deliberately.** ADR 0006 §11 puts result rows in the class the
+    #: durable projection *drops*. This rides the live ``answer`` — which the audit log does not
+    #: persist — so the client can render a table without the rows entering the ledger.
+    result_table: dict[str, Any] | None
+    #: This turn's question, embedded. **Per-turn, which is why it cannot live on the config.**
+    #:
+    #: ``Session.configurable(question=...)`` adds a ``query_vector`` and that serves the callers
+    #: who build one config per question (``eval/harness.py``, ``POST /chat``). The streamed path
+    #: cannot use it: ``graph_app.make_graph`` binds the run constants once at load time with no
+    #: question, so the key was never present and the semantic channel reported ``failed`` no
+    #: matter how many vectors the index held. ``accept`` writes this; the facets read state
+    #: first and config second.
+    query_vector: list[float] | None
     n_re_served: int
 
     # F1 test hooks and per-turn knobs.
@@ -331,6 +356,8 @@ PER_TURN_RESET: dict[str, Any] = {
     "execution": None,
     "answer": None,
     "generated_sql": None,
+    "result_table": None,
+    "query_vector": None,
     "schemas": [],
     "crossings": [],
     "licensed": [],

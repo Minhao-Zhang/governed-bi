@@ -34,10 +34,12 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from governed_bi.register.prompts import prompt_set_hash
 
 from ..corpus.analyst import for_analyst
 from ..corpus.hash import corpus_content_hash
@@ -50,7 +52,6 @@ from ..retrieve.index import UnifiedIndex, build_index
 from ..retrieve.structure import CorpusStructure, build_structure
 from .runtime import model_id
 from .state import PER_TURN_RESET
-from .tools import SYSTEM_PROMPT
 
 __all__ = ["Session", "from_corpus_dir", "from_live_schema"]
 
@@ -308,14 +309,21 @@ def from_assets(
     corpus_content_hash_: str,
     agent_model: Any | None = None,
     embedder: Embedder | None = None,
+    vector_cache: MutableMapping[str, Any] | None = None,
     problems: Sequence[Any] = (),
     run_id: str | None = None,
     corpus_root: Path | None = None,
 ) -> Session:
-    """A session over an in-memory asset set. The other two constructors funnel here."""
+    """A session over an in-memory asset set. The other two constructors funnel here.
+
+    ``vector_cache`` is passed straight through to ``build_index``, which owns the key format
+    (``model|dimensions|text``) and the write-back. It exists on this signature so a server can
+    survive a restart without re-embedding the corpus — 8035 summaries in the gold layer — and it
+    stays ``None`` for callers that build one index and exit, where a cache is pure overhead.
+    """
     structure, structure_problems = build_structure(assets)
     entries = _index_entries(assets, structure)
-    index = build_index(entries, embedder=embedder)
+    index = build_index(entries, embedder=embedder, vector_cache=vector_cache)
     knobs = _resolved_knobs(policy)
     if embedder is not None:
         knobs["embedding_model"] = embedder.model
@@ -343,7 +351,11 @@ def from_assets(
         connector=connector,
         policy=policy,
         corpus_content_hash=corpus_content_hash_,
-        prompt_set_hash=_digest(SYSTEM_PROMPT),
+        # **Over the whole registry, not over one prompt.** This was `_digest(SYSTEM_PROMPT)`,
+        # which was true while there was one prompt and would have become a false comparability
+        # key the moment there were two: `register/prompts.py` records why, and `knobs.py`
+        # records the ladder that was already invalidated once by an unrecorded treatment.
+        prompt_set_hash=prompt_set_hash(),
         knobs_resolved=knobs,
         db_id=db_id,
         run_id=run_id or uuid.uuid4().hex[:16],

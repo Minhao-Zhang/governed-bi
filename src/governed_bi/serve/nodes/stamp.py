@@ -11,6 +11,7 @@ from governed_bi.govern.ledger import ExecutionRecord
 from governed_bi.measure.degradation import facets_degraded
 from governed_bi.register.record import project
 from governed_bi.register.stages import ATTEMPT_CAP_REFUSED_BY, Outcome, classify_outcome
+from governed_bi.serve.events import emit, rail_event_id
 from governed_bi.serve.state import cleared
 from governed_bi.serve.tools import attempt_field, execution_from_attempts
 
@@ -284,5 +285,45 @@ def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
         "error_type": error_type,
         "refused_by": refused_by,
         "record": record,
+        # **The table, beside the explanation the model already wrote.** The maintainer asked for
+        # "the table alongside an explanation"; measured on a live turn, the explanation was the
+        # half that already existed — the agent's final message narrates the number — and the rows
+        # were reachable only by parsing a `ToolMessage`. `None` on every path that ran no query,
+        # which is most of them, and `None` is a different fact from an empty table.
+        #
+        # On the `answer` and deliberately **not** in `record`: ADR 0006 §11 puts result rows in
+        # the class the durable projection drops, and the audit log persists the record only.
+        "result_table": state.get("result_table"),
     }
+    # The turn's one ``final`` event (ADR 0010 §1). Emitted here rather than from ``wrap.py``
+    # because ``stamp`` is the one node deliberately left unwrapped — wrapping the recorder
+    # turned "the recorder crashed" into a turn with no answer and no reason — so the wrapper's
+    # emitter never sees it. Emitted after ``answer`` is built, from ``answer``, so the row and
+    # the record cannot disagree about how the turn ended.
+    emit(
+        kind="final",
+        step="stamp",
+        status=_final_status(path_kind, outcome),
+        event_id=rail_event_id("stamp", state),
+        detail={"outcome": outcome.value, "failed_stage": failed_stage},
+    )
     return {"answer": answer}
+
+
+def _final_status(path_kind: Any, outcome: Outcome) -> str:
+    """The ``stamp`` row's status.
+
+    ``path_kind`` is consulted first for exactly one distinction: :class:`Outcome` has no
+    ``declined`` member — a decline classifies as ``refused``, which is right for measurement
+    and wrong for a timeline, where "no schema matched" and "the guard blocked this" are not the
+    same event to a person reading it.
+    """
+    if path_kind == "decline":
+        return "declined"
+    return {
+        Outcome.answered: "ok",
+        Outcome.clarification: "ok",
+        Outcome.refused: "refused",
+        Outcome.capped: "cap",
+        Outcome.crashed: "error",
+    }.get(outcome, "ok")

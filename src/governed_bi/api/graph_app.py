@@ -26,6 +26,7 @@ in a provenance field is **ignored, not merged**.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,32 @@ CORPUS_DIR_VAR = "GOVERNED_BI_CORPUS_DIR"
 #: graph still runs, retrieval and governance are real, and `/capabilities` reports
 #: `has_live_model: false` rather than promising a model that will never answer.
 MODEL_VAR = "GOVERNED_BI_MODEL"
+
+#: The embedding model id, and setting it is what turns the **semantic channel on**.
+#:
+#: **Absent, every facet reported a failed channel on every turn, and nothing said so until the
+#: live stage stream did.** The semantic half of retrieval has been fully built the whole time —
+#: `Embedder` port, an OpenAI adapter, `UnifiedIndex.vectors`, `build_index(embedder=...)`,
+#: `Session.configurable` adding `query_vector` — and this module simply never passed an embedder.
+#: So `_channels_for` marked every facet's declared `semantic` channel `failed`, `facet_degraded`
+#: was true for every turn, and the interface called it clean until ADR 0010 made channel states
+#: visible. Retrieval was lexical-only in production while the corpus thesis is about meaning.
+#:
+#: Absent is still a supported configuration rather than a broken one — `DeterministicEmbedder`
+#: exists so the model-free path never pays for tokens — but it is now a configuration somebody
+#: chose rather than one nobody noticed.
+EMBEDDING_MODEL_VAR = "GOVERNED_BI_EMBEDDING_MODEL"
+
+#: Where embedded vectors are kept between restarts.
+#:
+#: Without it, a server start embeds every summary in the corpus — 8035 files in the gold
+#: layer — before it can serve, on every restart, and `langgraph dev` restarts on file save.
+#: `build_index` already takes a `vector_cache` keyed by `(model, dimensions, text)`, so
+#: persistence is a matter of handing it a mapping that outlives the process rather than new
+#: machinery. The key includes the model identity deliberately: `index.py` records that a
+#: text-only key hands a 1536-wide `3-small` vector to `3-large`, which is width-identical and
+#: semantically unrelated, with nothing anywhere disagreeing.
+VECTOR_CACHE_VAR = "GOVERNED_BI_VECTOR_CACHE"
 
 #: Reasoning effort, for models that take one. ``register/knobs.py`` has declared
 #: ``llm_reasoning_effort`` as ``Role.comparability`` all along, with the reason attached: two
@@ -141,18 +168,83 @@ def session_from_environment() -> Session:
             kwargs_model["reasoning_effort"] = effort
         model = init_chat_model(model_id, **kwargs_model)
 
+    from governed_bi.govern.guard import BI_SCOPE_RULE_ID
+
     kwargs: dict[str, Any] = {
         "connector": PostgresConnector(dsn),
-        "policy": GovernancePolicy(guard_rules_enabled={}),
+        # **The five injection rules stay off; the scope gate is on.** They are off for the
+        # reason ADR 0006 OQ3 gives — no rule ships enabled without red-team recall *and* a
+        # benign firing rate, and neither number exists — and that argument does not reach
+        # `g_bi_scope`, which is not an injection defence. It answers "is this a BI question at
+        # all", the maintainer asked for it explicitly, and its failure mode is a refusal the
+        # user can see and rephrase rather than a silent block on a legitimate question.
+        #
+        # It costs one model call per turn, before any retrieval, which is the cheapest place to
+        # spend it: an out-of-scope question otherwise pays for five facets, a route, a Steiner
+        # connect and a full agent loop before producing nothing anyone wanted.
+        "policy": GovernancePolicy(guard_rules_enabled={BI_SCOPE_RULE_ID: True}),
         "agent_model": model,
     }
+
+    cache = _embedder_into(kwargs, credentials)
     if corpus_dir:
         _SESSION = session_mod.from_corpus_dir(corpus_dir, schemas=[schema] if schema else None, **kwargs)
     else:
         seed_dir = Path(os.environ.get(SEED_DIR_VAR) or (root / "runs" / "seeded-corpus" / str(schema)))
         seed_dir.mkdir(parents=True, exist_ok=True)
         _SESSION = session_mod.from_live_schema(str(schema), corpus_root=seed_dir, **kwargs)
+    if cache is not None:
+        # After the index is built, because that is when the misses have been written back. A
+        # flush failure is announced and not raised: the corpus is indexed either way, and a
+        # server that refuses to start because it could not *cache* would be trading the thing
+        # for the optimisation.
+        #
+        # `flush` is a no-op on an unchanged cache, and that is what keeps `langgraph dev` from
+        # looping: the file lives under `runs/` inside the watched tree, so writing it on every
+        # start made the server restart, re-import, write again and never become ready.
+        wrote = cache.dirty
+        error = cache.flush()
+        state = "unchanged" if not wrote else ("NOT SAVED: " + error if error else "saved")
+        print(f"vector cache: {cache.hits} hit / {len(cache)} total, {state} — {cache.path.as_posix()}")
     return _SESSION
+
+
+def _embedder_into(kwargs: dict[str, Any], credentials: Any) -> Any:
+    """Add ``embedder`` and ``vector_cache`` to ``kwargs`` when configured. Returns the cache.
+
+    **Switching this on is what makes the semantic channel exist.** Every piece of it was already
+    built — the ``Embedder`` port, the OpenAI adapter, ``UnifiedIndex.vectors``,
+    ``build_index(embedder=...)``, ``Session.configurable`` adding ``query_vector`` — and nothing
+    passed an embedder, so ``_channels_for`` marked every facet's declared ``semantic`` channel
+    ``failed`` on every turn and ``facet_degraded`` was true for the whole deployment. ADR 0010's
+    stage stream is what made that visible; before it, retrieval was lexical-only in production
+    while the corpus thesis is about meaning.
+
+    Absent stays a **supported** configuration and not a broken one: ``DeterministicEmbedder``
+    exists so the model-free path never pays for tokens, and the facets will say so honestly.
+    What changes is that it is now a choice somebody makes rather than one nobody noticed.
+    """
+    model_id = os.environ.get(EMBEDDING_MODEL_VAR)
+    if not model_id:
+        return None
+    if not credentials.have(*credentials.OPENAI_KEY_NAMES):
+        raise RuntimeError(
+            f"{EMBEDDING_MODEL_VAR} is set to {model_id!r} but no embedding credential is "
+            f"available ({' / '.join(credentials.OPENAI_KEY_NAMES)}). Unset it to serve with "
+            "lexical retrieval only, rather than starting a server whose semantic channel "
+            "reports failed on every turn."
+        )
+    from governed_bi.api.vector_cache import vector_cache_from_environment
+    from governed_bi.model.openai_embedder import OpenAIEmbedder
+
+    embedder = OpenAIEmbedder(model=model_id)
+    # Named for the model, so two models cannot share a file. The key inside already carries the
+    # identity, so this is defence in depth rather than the mechanism — but a file whose name
+    # says what is in it is one a human can delete correctly.
+    cache = vector_cache_from_environment(VECTOR_CACHE_VAR, f"{model_id}.json")
+    kwargs["embedder"] = embedder
+    kwargs["vector_cache"] = cache
+    return cache
 
 
 def _dropped_in_corpus(root: Path) -> str | None:
@@ -206,11 +298,70 @@ def _accept_node(state: dict, config: Any) -> dict:
         }
     prior = sum(1 for m in state.get("messages") or [] if _kind(m) == "human")
     turn = session.turn(question, turn_index=max(1, prior), thread_id=_thread_id(config))
+    # **The question's vector, computed here because here is the only per-turn server-side node.**
+    # `Session.configurable(question=...)` supplies one to callers who build a config per
+    # question; `make_graph` binds the config once at load time with no question, so on the
+    # streamed path the key was never present and the facets' semantic channel reported `failed`
+    # however many vectors the index held. Embedding failure is non-fatal and unrecorded here on
+    # purpose: the facets observe the absence and `_channels_for` reports `failed`, which is the
+    # honest outcome and the one the degradation gate already reads.
+    if session.embedder is not None:
+        try:
+            turn["query_vector"] = list(session.embedder.embed([question])[0])
+        except Exception:  # noqa: BLE001 — a dead embedder must not cost the turn its answer
+            pass
     # `messages` is `add_messages`-reduced and the client's human message is already in the
     # channel; returning the empty list from `turn()` would be a no-op, but dropping the key
     # makes that explicit rather than relying on the reducer's behaviour.
     turn.pop("messages", None)
     return turn
+
+
+def _record_node(state: dict) -> dict:
+    """Append the finished turn to the audit log. Placed after ``stamp``; never raises.
+
+    **Why this exists at all.** The log was written by ``POST /chat``'s ``_logged``, and once
+    ADR 0010 turned streaming on, that route stopped serving real traffic — so ``/audit/turns``
+    listed only stale REST turns and nothing anyone actually asked. Measured: three streamed
+    turns, zero rows. "No turns are listed" and "no turns were served" must not be the same
+    observation, which is the exact rule ``_logged``'s ``audit_logged`` field states.
+
+    **Why here and not in ``stamp``.** ``stamp`` is the natural home — sole writer of ``answer``,
+    every path funnels through it — but ``tools/check_imports.py`` orders ``serve`` before
+    ``api``, and the log lives in ``api/trace_store.py``. Injecting the recorder from the module
+    that mounts the graph keeps that order and mirrors ``accept`` at the other end of the graph.
+
+    **Why it swallows.** A turn that answered is not a turn that failed. The client already has
+    the answer over the ``values`` stream by the time this runs, so raising here would report an
+    error for a turn that succeeded. ``append_turn`` already never raises on ``OSError`` and
+    returns the error instead; this catches the rest for the same reason.
+
+    A paused turn never reaches this node — the interrupt suspends inside ``agent_core`` — so the
+    "do not log a turn with no record" rule ``_logged`` documents is satisfied by the topology
+    rather than by a check. The ``turn_id`` guard stays anyway, because a record without one
+    cannot be looked up and would be a row nobody can open.
+    """
+    from governed_bi.api.trace_store import append_turn, last_ai_text
+
+    try:
+        answer = state.get("answer") or {}
+        record = answer.get("record") or {}
+        if not isinstance(record, Mapping) or not record.get("turn_id"):
+            return {}
+        append_turn(
+            record,
+            question=str(state.get("question") or "") or None,
+            # The model's text lives in ``messages``; ``answer["text"]`` is *system* copy and is
+            # null on the answered path (ADR 0007 §4). Imported rather than reimplemented — the
+            # first draft copied it here and ``tools/check_one_implementation.py`` refused, which
+            # is the gate working: two readers of "what did the model say" is how the audit list
+            # and the REST response drift.
+            answer_text=last_ai_text(state),
+            outcome=answer.get("outcome"),
+        )
+    except Exception:  # noqa: BLE001 — see the docstring: logging must not fail a served turn
+        return {}
+    return {}
 
 
 def _kind(message: Any) -> str:
@@ -283,7 +434,7 @@ def make_graph() -> Any:
     """
     _warm_imports()
     trust(dict(session_from_environment().configurable()["configurable"]))
-    return build_graph(accept=_accept_node).compile()
+    return build_graph(accept=_accept_node, record=_record_node).compile()
 
 
 def _warm_imports() -> None:
@@ -301,6 +452,7 @@ def _warm_imports() -> None:
     change that; it front-loads them for the one caller that runs inside an event loop, where
     the first request would otherwise pay for them.
     """
+    from governed_bi.api.trace_store import append_turn  # noqa: F401
     from governed_bi.govern import guard as _guard  # noqa: F401
     from governed_bi.register.record import missing_required  # noqa: F401
     from governed_bi.retrieve.index import IndexEntry  # noqa: F401

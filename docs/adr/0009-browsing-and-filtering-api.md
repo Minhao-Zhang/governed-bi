@@ -230,6 +230,11 @@ question could be asked, displayed nowhere, and answered by nobody while the gra
 It is now `can_stream and agent_model is not None`, and it flips by building the client's half --
 never by editing the line.
 
+**It has since flipped, exactly that way.** [ADR 0010](0010-live-stage-events.md) built the stage
+events, `can_stream` became true, the UI mounts `<StreamChat/>` -- which does have a clarification
+pair -- and `can_clarify` came true as a consequence. The expression is unchanged, which is the
+whole claim of this decision surviving contact with the thing it was waiting for.
+
 ### The sufficient set: 12 read routes
 
 `GET /capabilities` | `GET /livez` | `GET /health` | `GET /schema/summary` |

@@ -66,6 +66,7 @@ intentional history.
 | [0007 The HTTP surface and the UI contract](adr/0007-http-surface-and-the-ui-contract.md) | Accepted 2026-08-03; supersedes the runtime half of 0001 |
 | [0008 Identifiers, end to end](adr/0008-identifiers-end-to-end.md) | Accepted in part 2026-08-04; Phases 0 and 1 built. Amends 0005 §1.2/§2.8.2 and 0006 §3/§4 |
 | [0009 The browsing, filtering and relationship API](adr/0009-browsing-and-filtering-api.md) | Accepted 2026-08-04; built — `api/browse.py` + `api/browse_routes.py`, `can_scope` true |
+| [0010 Live stage events](adr/0010-live-stage-events.md) | Accepted 2026-08-04; built — `serve/events.py`, `can_stream` and `can_clarify` true. Supersedes 0007 §5, whose three claims about the transport measured wrong |
 
 > **The falsifier.** The one result that would make us conclude the corpus does not
 > help — arm pair, metric, stratum, effect size, number of curator draws — is written

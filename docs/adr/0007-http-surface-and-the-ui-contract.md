@@ -80,6 +80,15 @@ Duplicating the model's text into `answer.text` would create two fields that mus
 
 ### 5. Stream events: v2's stage vocabulary in the UI's envelope, emitted from one place
 
+> **Superseded by [ADR 0010](0010-live-stage-events.md), which built this.** The decisions below
+> are the ones 0010 implements — the envelope, `stages.py` as the authority, observed status —
+> and they held. What did *not* hold is three factual claims about the transport, each measured
+> wrong: the wire flag that makes any of it arrive is `stream_subgraphs` and not `subgraphs`;
+> without it a correct emitter yields an empty timeline *and* no streamed tokens, because the
+> model and every tool run inside `agent_core`'s nested graph; and "emit from `wrap.py`, not from
+> the nodes" is right for the rails but cannot reach the tools or `stamp`, so the emitter
+> boundary is three places, not one. Read 0010 for the contract.
+
 The UI's `GovEvent` envelope is good — `{seq, id, kind, step, status, label?, detail?}`,
 validated on `typeof kind === "string" && typeof seq === "number"` and dropped silently
 otherwise. Keep it. **Nothing in v2 emits any custom event**: no `get_stream_writer`, no

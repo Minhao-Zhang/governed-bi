@@ -73,8 +73,18 @@ PG_DSN=host=... port=5432 dbname=... user=... password=...
 **fails closed without a key**:
 
 ```bash
-uv run langgraph dev          # starts the `serve` graph; POST questions to /chat
+uv run langgraph dev          # starts the `serve` graph
 ```
+
+A turn takes 30–120 seconds, so the interesting surface is the **streamed** one: `POST
+/threads/{id}/runs/stream` with `stream_mode: ["values", "messages", "custom"]` and
+`stream_subgraphs: true`. That gives you the answer token by token plus a live event per stage —
+every retrieval rail, every tool call, and every governance verdict as it is decided
+([ADR 0010](docs/adr/0010-live-stage-events.md)). `stream_subgraphs` is not optional: the model
+and all tools run inside a nested agent, so without it you get an empty timeline and no tokens,
+and the server ignores the misspelling `subgraphs` without complaint.
+
+`POST /chat` still serves one turn blocking, as a fallback.
 
 See [usage](docs/usage.md) for a guided first-question tour and
 [usage](docs/usage.md) for the full reference. To drive the agent core directly

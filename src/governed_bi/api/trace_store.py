@@ -28,7 +28,46 @@ from typing import Any, Iterator, Mapping
 
 from ..paths import REPO_ROOT
 
-__all__ = ["TURN_LOG_DIR", "append_turn", "list_turns", "get_turn", "SUMMARY_FIELDS"]
+__all__ = [
+    "TURN_LOG_DIR",
+    "append_turn",
+    "list_turns",
+    "get_turn",
+    "SUMMARY_FIELDS",
+    "last_ai_text",
+]
+
+
+def last_ai_text(state: Mapping[str, Any]) -> str | None:
+    """The model's answer, via LangChain's own ``AIMessage.text``.
+
+    Lives here because this module owns the ``answer_text`` concept — it is
+    :func:`append_turn`'s parameter — and because it has **two** callers that must not disagree:
+    ``routes._shape``, which supplies it to a REST caller that has no message channel to read,
+    and ``graph_app._record_node``, which supplies it to the log. It was copied into the second
+    one, and ``tools/check_one_implementation.py`` refused that — correctly. Two readers of
+    "what did the model say" is how the audit list and the response drift.
+
+    Not hand-flattened. The Responses API returns content as blocks (``[{"type": "text", ...},
+    {"type": "reasoning", ...}]``), and an earlier draft walked them itself — which is
+    re-implementing something ``langchain-core`` owns, and decision #1 records that v1's three
+    layers over ``BaseChatModel`` were a mistake for exactly this reason. ``.text`` already
+    concatenates the text blocks and ignores the rest.
+
+    ``human`` and ``tool`` messages are skipped rather than filtered on ``type == "ai"``: a
+    provider message type this code has not seen is more likely to be the answer than to be a
+    turn of someone else's, and reading it is recoverable where skipping it is silent.
+    """
+    for message in reversed(state.get("messages") or []):
+        kind = str(getattr(message, "type", "") or "")
+        if not kind and isinstance(message, Mapping):
+            kind = str(message.get("type") or "")
+        if kind in ("human", "tool"):
+            continue
+        text = getattr(message, "text", None)
+        if text:
+            return str(text)
+    return None
 
 #: Where turns land. Overridable so a test never writes into the repository's own log.
 TURN_LOG_DIR = Path(os.environ.get("GOVERNED_BI_TURN_LOG_DIR") or (REPO_ROOT / "runs" / "serve"))

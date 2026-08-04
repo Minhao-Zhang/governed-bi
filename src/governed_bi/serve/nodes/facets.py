@@ -14,7 +14,7 @@ and reporting ``ran`` there is what made the degradation gate inert (ADR 0005 §
 
 from __future__ import annotations
 
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 from langchain_core.runnables import RunnableConfig
 
@@ -28,6 +28,7 @@ from governed_bi.register.facets import (
 )
 from governed_bi.register.stages import Stage
 from governed_bi.retrieve.index import UnifiedIndex
+from governed_bi.retrieve.semantic import semantic_search
 from governed_bi.serve.runtime import candidate_depth
 from governed_bi.serve.runtime import configurable as runtime_config
 
@@ -114,17 +115,34 @@ def _pass_one_hits(
     *,
     depth: int,
     ran: set[Channel],
+    query_vector: Sequence[float] | None = None,
 ) -> list[dict[str, Any]]:
-    """Lexical top-``depth`` within this facet's target types (global IDF).
+    """Top-``depth`` over this facet's target types, on every channel it declares.
 
-    ``ran`` is an out-parameter: every channel this function actually consults adds
-    itself, at the line where the consultation happens. Nothing adds
-    :attr:`Channel.semantic` — no vector is scored here and there is no
-    :class:`~governed_bi.ports.Embedder` adapter in ``src/`` to produce one — so that
-    channel reports ``failed``, which is the truth and is what the degradation gate is
-    for.
+    ``ran`` is an out-parameter: every channel this function actually consults adds itself, at
+    the line where the consultation happens. That is the whole reason ``_channels_for`` can
+    report the truth rather than the configuration.
+
+    **The semantic channel used to be unreachable here, and the comment that said so has been
+    wrong twice.** It read *"no vector is scored here and there is no ``Embedder`` adapter in
+    ``src/`` to produce one"* — the adapter exists (``model/openai_embedder.py``), and the deeper
+    problem was that pass one had no vector-scoring code at all, only pass two did. So four
+    facets ran at half strength and, more seriously, ``facet_example`` declares **only** the
+    semantic channel, which means the past-SQL-example facet retrieved *nothing, ever*. That is
+    the facet the maintainer singled out: *"providing past SQL example to answer the more current
+    question is very helpful, and in this case the embedding model would be able to retrieve
+    those much better than BM25."* It could not retrieve them at all.
+
+    **The two channels are combined by ``max``, not by a weighted sum.** A weight is a knob, a
+    knob is a comparability field, and there is no measurement yet that would set one — so a
+    tuned blend here would be a number invented at the call site, which is what
+    ``register/knobs.py`` exists to prevent. ``max`` also has the property the fan-in needs: a
+    facet whose channels disagree keeps the *stronger* evidence rather than diluting it, and an
+    asset found by one channel is not penalised for being missed by the other. When a weight is
+    warranted it becomes a declared knob and this line is where it lands.
     """
-    if not question or Channel.lexical not in FACET_CHANNELS[stage]:
+    declared = FACET_CHANNELS[stage]
+    if not question:
         return []
 
     targets = FACET_TARGETS[stage]
@@ -133,37 +151,63 @@ def _pass_one_hits(
         for entry_id, entry in index.entries.items()
         if entry.asset_type in targets
     }
-    # The index has been consulted for this facet's types. An empty candidate set is a
-    # measurement ("nothing of these types is indexed"), not a channel failure.
-    ran.add(Channel.lexical)
+
+    lexical_scores: dict[str, float] = {}
+    if Channel.lexical in declared:
+        # The index has been consulted for this facet's types. An empty candidate set is a
+        # measurement ("nothing of these types is indexed"), not a channel failure.
+        ran.add(Channel.lexical)
+        if candidate_ids:
+            for asset_id, score in index.lexical.restrict_to(candidate_ids).search(question):
+                if float(score) > 0.0:
+                    lexical_scores[str(asset_id)] = float(score)
+
+    semantic_scores: dict[str, float] = {}
+    if Channel.semantic in declared:
+        # `semantic_search` reports its own observed state — it returns `failed` when the index
+        # holds no vectors or the query has none — so the channel is marked `ran` from *its*
+        # verdict rather than from the fact that this branch was entered. A branch that ran and
+        # found nothing to score has not consulted the channel.
+        ranked, state = semantic_search(index, query_vector, candidates=candidate_ids or None)
+        if state is ChannelState.ran:
+            ran.add(Channel.semantic)
+            for asset_id, score in ranked:
+                if float(score) > 0.0:
+                    semantic_scores[str(asset_id)] = float(score)
+
     if not candidate_ids:
         return []
 
-    scored = index.lexical.restrict_to(candidate_ids).search(question)
-    scored.sort(key=lambda pair: (-float(pair[1]), str(pair[0])))
+    merged = sorted(
+        set(lexical_scores) | set(semantic_scores),
+        # Ties broken by id so two runs over one index cannot disagree — the same rule
+        # `semantic_search` follows for the same reason.
+        key=lambda aid: (-max(lexical_scores.get(aid, 0.0), semantic_scores.get(aid, 0.0)), aid),
+    )
 
     queries = [question]
     hits: list[dict[str, Any]] = []
-    for asset_id, lexical in scored:
-        if float(lexical) <= 0.0:
-            continue
+    for asset_id in merged[:depth]:
         entry = index.entries[asset_id]
         asset_type = entry.asset_type
+        lexical = lexical_scores.get(asset_id)
+        semantic = semantic_scores.get(asset_id)
         hits.append(
             {
                 "asset_id": asset_id,
                 "asset_type": (
                     asset_type.value if hasattr(asset_type, "value") else str(asset_type)
                 ),
-                "lexical": float(lexical),
-                "semantic": None,
-                "score": float(lexical),
+                # `None` where a channel did not score this asset, and a float where it did.
+                # Absence and zero are different facts: one means "not found by this channel",
+                # the other means "found and scored zero", and the record reads both.
+                "lexical": lexical,
+                "semantic": semantic,
+                "score": max(lexical or 0.0, semantic or 0.0),
                 "schema_tag": entry.schema_tag,
                 "queries": list(queries),
             }
         )
-        if len(hits) >= depth:
-            break
     return hits
 
 
@@ -185,6 +229,29 @@ def _facet_result(
     }
 
 
+def _query_vector(state: Mapping[str, Any], config: RunnableConfig) -> Sequence[float] | None:
+    """This turn's question vector — from **state** first, then config.
+
+    **State first, and that ordering is the fix.** ``Session.configurable(question=...)`` puts a
+    ``query_vector`` on the config, and that works for a caller who builds one config per
+    question — ``eval/harness.py`` and ``POST /chat``. It cannot work on the streamed path, which
+    is now the only real one: ``graph_app.make_graph`` binds the run constants **once at load
+    time**, with no question, because a query vector is per-turn and the config there is a run
+    constant. So on the server path the key was simply never present, and the semantic channel
+    would have reported ``failed`` however many vectors the index held.
+
+    ``accept`` is the per-turn server-side node, so it computes the vector into state and this
+    reads it. Config remains the fallback so the two existing callers keep working unchanged —
+    and reading state first means a per-turn value always wins over a run-constant one, which is
+    the direction that cannot be wrong.
+    """
+    vector = state.get("query_vector")
+    if vector:
+        return vector
+    from_config = runtime_config(config).get("query_vector")
+    return from_config or None
+
+
 def _run_facet(
     state: Mapping[str, Any],
     config: RunnableConfig,
@@ -201,6 +268,7 @@ def _run_facet(
             question,
             depth=candidate_depth(state),
             ran=ran,
+            query_vector=_query_vector(state, config),
         )
     elif stage in FACET_EXTRACTS:
         # No index and no extraction model: the queries fall back to the raw question,
