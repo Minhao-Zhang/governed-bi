@@ -83,6 +83,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--out", type=pathlib.Path, default=None)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--force-fresh",
+        action="store_true",
+        help="start over even though --resume found no artifact but sibling artifacts exist. "
+        "Without it that situation aborts, because it is almost always a changed --tag input "
+        "rather than a genuine first run.",
+    )
     args = parser.parse_args(argv)
 
     import credentials
@@ -167,6 +174,31 @@ def main(argv: list[str] | None = None) -> int:
     # times the run was resumed, and the final EX would be computed over a denominator that
     # silently included them. So the file is rewritten with the crashed rows dropped, and
     # those question ids go back into the queue.
+    # **A resume that finds nothing is usually a renamed artifact, not a first run.** Adding
+    # the retrieval channel to the tag silently orphaned a 515-row artifact and started a
+    # 1 351-question run from scratch; the rows were recoverable only because the process was
+    # noticed early. Refusing here costs one flag and saves a multi-hour run.
+    if args.resume and not out_path.exists():
+        siblings = sorted(
+            path
+            for path in out_path.parent.glob(f"live_full_{args.model}_*.jsonl")
+            if path != out_path
+        )
+        if siblings and not args.force_fresh:
+            print(
+                f"--resume found no artifact at {out_path}, but these exist:",
+                file=sys.stderr,
+            )
+            for path in siblings:
+                n_rows = sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+                print(f"    {path}  ({n_rows} rows)", file=sys.stderr)
+            print(
+                "A changed tag input (--effort, --top-n, --embed) renames the artifact. Rename "
+                "or merge the one you meant, or pass --force-fresh to start over.",
+                file=sys.stderr,
+            )
+            return 4
+
     done: set[str] = set()
     retrying = 0
     if args.resume and out_path.exists():
