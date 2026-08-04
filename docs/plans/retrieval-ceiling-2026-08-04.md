@@ -74,6 +74,14 @@ Found by diagnosing the 9.7% of turns that hit the attempt cap: 23 of 24 had the
 reachable, their executed SQL referenced tables that were *not* licensed, and one had exactly
 8 licensed tables — the declared table budget.
 
+> **The in-flight artifact is mixed-grader and must be re-graded before it is quoted.**
+> `runs/eval/live_full_gpt-5.6-luna_xhigh_topdefault_lexical.jsonl` carries 506 rows scored
+> with the old name-sensitive grader and the remainder with the fixed one, so its `correct`
+> column is not internally comparable. Run
+> `uv run --frozen python tools/regrade.py <artifact>` when the arm finishes — it re-executes
+> both statements against the database, costs no model call, and reports flips in both
+> directions. Every headline number for that arm should come from the `.regraded.jsonl`.
+
 ## Four candidates, eliminated in order
 
 ### 1. Schema routing — **not** the constraint
