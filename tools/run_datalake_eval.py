@@ -83,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from governed_bi.datasource.postgres import PostgresConnector
     from governed_bi.eval.arms import live_arm
-    from governed_bi.eval.datalake import load_questions, observed_spend
+    from governed_bi.eval.datalake import load_questions, observed_spend, table_coverage
     from governed_bi.eval.harness import run_arm
     from governed_bi.govern.policy import GovernancePolicy
     from governed_bi.serve import session as session_mod
@@ -215,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         handle.close()
 
-    _report(rows, out_path, args, observed_spend)
+    _report(rows, out_path, args, observed_spend, table_coverage)
     return 0
 
 
@@ -227,7 +227,7 @@ def _order_sensitive(dataset: pathlib.Path) -> set[str]:
     return set(raw if isinstance(raw, list) else raw.get("question_ids") or [])
 
 
-def _report(rows: list[dict], out_path: pathlib.Path, args, observed_spend) -> None:
+def _report(rows: list[dict], out_path: pathlib.Path, args, observed_spend, table_coverage) -> None:
     """Print the whole file, not just this process's rows — a resumed run is one run."""
     every = [json.loads(line) for line in out_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     n = len(every) or 1
@@ -243,6 +243,16 @@ def _report(rows: list[dict], out_path: pathlib.Path, args, observed_spend) -> N
     crashed = [r for r in every if r.get("outcome") == "crashed"]
     if crashed:
         print("crashes:", dict(collections.Counter(str(r.get("error_type")) for r in crashed)))
+
+    # The EX **ceiling** first, because it decides how to read everything below it: a
+    # question whose gold tables were never licensed could not have been answered by any
+    # model, and averaging those into EX hides which half of the pipeline to work on.
+    cov = table_coverage(every, _gold_sql_by_qid(args.dataset))
+    print(
+        f"all gold tables licensed = {cov['all_gold_tables_licensed']:.3f}  "
+        f"(some {cov['some_licensed']:.3f}, none {cov['none_licensed']:.3f}, "
+        f"unparsed gold {cov['gold_sql_unparsed']})"
+    )
 
     gold = _gold_db_by_qid(args.dataset)
     reach = [
@@ -261,6 +271,19 @@ def _report(rows: list[dict], out_path: pathlib.Path, args, observed_spend) -> N
     )
     spend = observed_spend(every, model=args.model, asof=datetime.now(timezone.utc).date())
     print("spend:", json.dumps(spend, indent=2, default=str))
+
+
+def _gold_sql_by_qid(dataset: pathlib.Path) -> dict[str, str]:
+    """``question_id -> sql_rename``. The statement written against the obfuscated schemas,
+    which is what this database is; ``sql_base`` and ``sql_sqlite`` do not execute here."""
+    out: dict[str, str] = {}
+    for line in (dataset / "test_final.jsonl").read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            row = json.loads(line)
+            if row.get("sql_rename"):
+                out[str(row["question_id"])] = str(row["sql_rename"])
+    return out
 
 
 def _gold_db_by_qid(dataset: pathlib.Path) -> dict[str, str]:

@@ -35,6 +35,8 @@ __all__ = [
     "run_live",
     "observed_spend",
     "summarise_routing",
+    "gold_tables",
+    "table_coverage",
 ]
 
 
@@ -226,6 +228,79 @@ def run_live(
         run_id=run_id,
         session=session,
     )
+
+
+def gold_tables(sql: str) -> set[str] | None:
+    """The tables a gold statement reads, qualified. ``None`` when it does not parse.
+
+    CTE names are excluded: a CTE is a name the statement *defines*, so counting it as a
+    required table would make every gold query with a ``WITH`` clause look unsatisfiable.
+    """
+    import sqlglot
+    from sqlglot import expressions as exp
+
+    try:
+        tree = sqlglot.parse_one(sql, dialect="postgres")
+    except Exception:  # noqa: BLE001 — an unparseable gold statement is a data fact
+        return None
+    if tree is None:
+        return None
+    defined = {str(c.alias_or_name).lower() for c in tree.find_all(exp.CTE) if c.alias_or_name}
+    out: set[str] = set()
+    for table in tree.find_all(exp.Table):
+        name = str(table.name or "")
+        if not name or name.lower() in defined:
+            continue
+        out.add(f"{table.db}.{name}" if table.db else name)
+    return out
+
+
+def table_coverage(
+    rows: Sequence[Mapping[str, Any]], gold_sql_by_qid: Mapping[str, str]
+) -> dict[str, Any]:
+    """**The EX ceiling.** How often every table the gold statement reads was licensed.
+
+    Sharper than schema reachability, and it is the number a run should lead with. A turn can
+    route to the right schema and still be unable to answer, because the per-type retrieval
+    budget licenses at most ``ASSET_REGISTER[table].budget`` ranked tables — so a question
+    needing a table outside that set cannot succeed however good the model is. Measured on the
+    xhigh arm at 344 rows: **51.2%** of questions had all their gold tables, against a
+    *schema* reachability of 62.5%. EX was 0.049.
+
+    That splits the problem in two, which one EX number cannot: whether a question was
+    *answerable at all* under this retrieval, and whether the model converted it when it was.
+
+    Compared case-insensitively. Licensed ids carry the slug (ADR 0008 D1) and a gold
+    statement carries the engine's spelling; those agree for every identifier whose slug is
+    its own name, which is 655 of 656 tables here. The exception (``Air Carriers``) is
+    reported as uncovered rather than silently matched, because a comparison that guessed
+    would be the fail-open shape ``structure.py`` exists to refuse.
+    """
+    full = partial = none = unparsed = 0
+    for row in rows:
+        sql = gold_sql_by_qid.get(str(row.get("question_id")))
+        if not sql:
+            continue
+        needed = gold_tables(sql)
+        if needed is None:
+            unparsed += 1
+            continue
+        licensed = {str(t).lower() for t in (row.get("licensed") or ())}
+        hits = sum(1 for table in needed if table.lower() in licensed)
+        if needed and hits == len(needed):
+            full += 1
+        elif hits:
+            partial += 1
+        else:
+            none += 1
+    total = full + partial + none or 1
+    return {
+        "n": full + partial + none,
+        "all_gold_tables_licensed": full / total,
+        "some_licensed": partial / total,
+        "none_licensed": none / total,
+        "gold_sql_unparsed": unparsed,
+    }
 
 
 def observed_spend(
