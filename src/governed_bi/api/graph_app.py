@@ -47,6 +47,14 @@ CORPUS_DIR_VAR = "GOVERNED_BI_CORPUS_DIR"
 #: `has_live_model: false` rather than promising a model that will never answer.
 MODEL_VAR = "GOVERNED_BI_MODEL"
 
+#: Reasoning effort, for models that take one. ``register/knobs.py`` has declared
+#: ``llm_reasoning_effort`` as ``Role.comparability`` all along, with the reason attached: two
+#: v1 ladders differed **only** in this field, it was recorded nowhere, so comparability cleared
+#: the pair the second run existed to isolate — and effort moved the baseline arm **+2.5pp
+#: against a 2.3pp detection threshold**. So this is not a convenience flag; it is a knob whose
+#: absence has already invalidated an experiment once.
+MODEL_EFFORT_VAR = "GOVERNED_BI_MODEL_EFFORT"
+
 #: Where a seeded corpus is written when no curated one is given. Written rather than held in
 #: memory because ``corpus_content_hash`` digests a tree, and because a corpus you cannot read
 #: is one nobody can correct.
@@ -101,7 +109,25 @@ def session_from_environment() -> Session:
             )
         from langchain.chat_models import init_chat_model
 
-        model = init_chat_model(model_id, model_provider="openai", temperature=0)
+        # Two LangChain fields, passed straight through. No provider branching here: an
+        # earlier draft chose between `reasoning_effort` and `temperature` and toggled the
+        # Responses API itself, which is re-deciding what `langchain-openai` already decides.
+        # Decision #1 records why that is wrong — v1 wrapped `BaseChatModel` in three layers
+        # and the wrapper became the thing that broke.
+        #
+        # `use_responses_api` is unconditional because it is the API this agent needs, not a
+        # tuning choice: it binds tools, and the provider refuses tools alongside
+        # `reasoning_effort` on chat completions, saying so in its own words — *"To use
+        # function tools, use /v1/responses."* Setting a LangChain field to reach the endpoint
+        # that supports the feature is configuration; encoding the rule was not.
+        #
+        # `temperature` is simply not set. Asserting a default we do not need is what forced
+        # the branch in the first place.
+        kwargs_model: dict[str, Any] = {"model_provider": "openai", "use_responses_api": True}
+        effort = os.environ.get(MODEL_EFFORT_VAR)
+        if effort:
+            kwargs_model["reasoning_effort"] = effort
+        model = init_chat_model(model_id, **kwargs_model)
 
     kwargs: dict[str, Any] = {
         "connector": PostgresConnector(dsn),

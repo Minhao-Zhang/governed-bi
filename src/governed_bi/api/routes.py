@@ -214,9 +214,20 @@ def chat(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _last_ai_text(state: dict[str, Any]) -> str | None:
+    """The model's answer, via LangChain's own ``AIMessage.text``.
+
+    Not hand-flattened. The Responses API returns content as blocks
+    (``[{"type": "text", ...}, {"type": "reasoning", ...}]``), and an earlier draft of this
+    walked them itself — which is re-implementing something `langchain-core` owns, and
+    decision #1 records that v1's three layers over `BaseChatModel` were a mistake for
+    exactly this reason. ``.text`` already concatenates the text blocks and ignores the rest.
+    """
     for message in reversed(state.get("messages") or []):
-        if str(getattr(message, "type", "")) not in ("human", "tool") and getattr(message, "content", None):
-            return str(message.content)
+        if str(getattr(message, "type", "")) in ("human", "tool"):
+            continue
+        text = getattr(message, "text", None)
+        if text:
+            return str(text)
     return None
 
 

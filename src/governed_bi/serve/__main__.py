@@ -176,9 +176,12 @@ def _answer_text(state: dict[str, Any], answer: dict[str, Any]) -> str:
     if answer.get("text"):
         return str(answer["text"])
     for message in reversed(state.get("messages") or []):
-        content = getattr(message, "content", None)
-        if content and getattr(message, "type", "") != "human":
-            return str(content)
+        # `.text` rather than `str(content)`: `langchain-core` already concatenates content
+        # blocks, and the Responses API returns blocks. `str()` on that prints a Python repr
+        # of a list of dicts and calls it the answer.
+        text = getattr(message, "text", None)
+        if text and getattr(message, "type", "") != "human":
+            return str(text)
     return "(no text)"
 
 

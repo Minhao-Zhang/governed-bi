@@ -258,6 +258,13 @@ def from_assets(
         knobs["llm_model"] = getattr(agent_model, "model_name", None) or getattr(
             agent_model, "_llm_type", None
         ) or type(agent_model).__name__
+        # Recorded **only when the model carries one**, never defaulted. `knobs.py` declares
+        # this a comparability knob because two v1 ladders differed only in it, unrecorded,
+        # and it moved a baseline arm +2.5pp against a 2.3pp threshold. Writing a default here
+        # would recreate that: two runs at different efforts would agree on every hashed field.
+        effort = getattr(agent_model, "reasoning_effort", None)
+        if effort:
+            knobs["llm_reasoning_effort"] = str(effort)
     return Session(
         index=index,
         structure=structure,
