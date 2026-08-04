@@ -61,6 +61,10 @@ intentional history.
 | [0002 Governed agentic serve runtime](adr/0002-governed-agentic-serve-runtime.md) | Accepted / implemented (`d2fdd6a`) — the sole serve path |
 | [0003 Governed notes, tri-modal retrieval](adr/0003-governed-notes-tri-modal-retrieval.md) | Accepted 2026-07-22 (D17); built — `NoteAsset`, `note_inject.py`, `retrieval/triggers.py`, `read_notes` / `grep_notes`, `[notes]` config |
 | [0004 Local-first conversation + run logging](adr/0004-local-first-conversation-run-logging.md) | Accepted 2026-07-22 (D18); built — `run_log.py`, `[logging]` config, `prune_full_content` retention |
+| [0005 The v2 memory layer and faceted retrieval](adr/0005-v2-memory-layer-and-faceted-retrieval.md) | Accepted in part 2026-08-03 — the live v2 spec |
+| [0006 Execution-time governance](adr/0006-execution-time-governance.md) | Accepted in part 2026-08-03; `govern/` built, executors and `guard` rules are not |
+| [0007 The HTTP surface and the UI contract](adr/0007-http-surface-and-the-ui-contract.md) | Accepted 2026-08-03; supersedes the runtime half of 0001 |
+| [0008 Identifiers, end to end](adr/0008-identifiers-end-to-end.md) | **Proposed 2026-08-04** — no code. Amends 0005 §1.2/§2.8.2 and 0006 §3/§4 |
 
 > **The falsifier.** The one result that would make us conclude the corpus does not
 > help — arm pair, metric, stratum, effect size, number of curator draws — is written
