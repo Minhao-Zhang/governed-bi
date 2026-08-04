@@ -193,3 +193,42 @@ def test_a_real_model_answers_a_real_question_over_a_real_database(probe) -> Non
     usage plumbing is reading the wrong place.
     """
     pytest.fail("not implemented: see docstring")
+
+
+def test_two_threads_asking_one_question_are_two_turns(two_schema_assets, guard_off_policy):
+    """``turn_id`` must separate conversations, or the audit log loses one of them.
+
+    It digested ``(run_id, turn_index, question)`` and not the thread, so two conversations
+    asking the same question in one run minted the **same** id. The turn log keys on it, so
+    ``trace_store.get_turn`` returned the first and the second turn was simply unreachable in
+    the trace view — and React refused to render the list at all, because two rows carried one
+    key. Observed live: "how many air carriers are listed?" at 04:39 and again at 05:52.
+
+    The pair matters as much as the difference: a *resumed* turn has to keep its identity, so
+    the id is still a digest and not a random value. Same thread, same index, same question →
+    same id.
+    """
+    from governed_bi.serve.session import from_assets
+
+    session = from_assets(
+        list(two_schema_assets.values()),
+        connector=None,
+        policy=guard_off_policy,
+        db_id="ops_b",
+        corpus_content_hash_="c",
+        agent_model=None,
+    )
+    question = "how many air carriers are listed?"
+    a = session.turn(question, thread_id="thread-a")
+    b = session.turn(question, thread_id="thread-b")
+    assert a["turn_id"] != b["turn_id"], (
+        "two conversations asking one question produced one turn_id; the audit log keys on it"
+    )
+    again = session.turn(question, thread_id="thread-a")
+    assert again["turn_id"] == a["turn_id"], (
+        "the id must stay a digest of the thread and the turn -- a resumed turn keeps its "
+        "identity, which is why this is not simply randomised"
+    )
+    # `question_id` is deliberately the opposite: it digests the question *text* so the same
+    # question is recognisable across threads, which is what makes a re-serve visible.
+    assert a["question_id"] == b["question_id"]

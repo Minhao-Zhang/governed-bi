@@ -163,13 +163,22 @@ class Session:
         """
         if not question or not question.strip():
             raise ValueError("a turn needs a question; an empty one has no answer to record")
-        turn_id = _digest(self.run_id, turn_index, question)
+        # **The thread is part of the turn's identity.** It was not, so two conversations
+        # asking the same question in one run minted the *same* ``turn_id`` — and the audit
+        # log keys on it, so ``get_turn`` returned the first and the second turn was
+        # unreachable in the trace view. Observed on 2026-08-04: "how many air carriers are
+        # listed?" asked at 04:39 and again at 05:52 on different threads, one id.
+        #
+        # It still digests rather than randomises, which is what "a resumed turn keeps its
+        # identity" requires: same thread, same index, same question → same id.
+        thread = thread_id or self.run_id
+        turn_id = _digest(self.run_id, thread, turn_index, question)
         self._turns.append(turn_id)
         return {
             **PER_TURN_RESET,
             "question": question,
             "turn_index": turn_index,
-            "thread_id": thread_id or self.run_id,
+            "thread_id": thread,
             "run_id": self.run_id,
             "turn_id": turn_id,
             "question_id": _digest(question),
