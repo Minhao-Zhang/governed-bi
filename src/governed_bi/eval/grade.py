@@ -141,11 +141,28 @@ def _normalise(
     *,
     order_sensitive: bool,
 ) -> dict[str, Any]:
-    cols = [str(c) for c in columns]
+    """Values only. **Column names are deliberately not part of the fingerprint.**
+
+    They were, and it made this grader stricter than the benchmark it implements. BIRD's own
+    EX compares result *values* — a prediction is correct when its rows match the gold's,
+    whatever the projection happens to be called. Including the names meant
+    ``SELECT COUNT(*) AS paper_count`` graded **wrong** against a gold of ``SELECT COUNT(*)``
+    with both returning ``100``, and the penalty correlated with how verbose the model was
+    about aliasing rather than with whether it was right. Measured on the xhigh arm: 5% of
+    answerable-but-wrong turns were exactly this, identical values under a different name.
+
+    ``columns`` stays in the signature because the caller has it and the *count* still
+    matters implicitly — a prediction with an extra column produces longer row tuples and so
+    a different fingerprint, which is correct and is how over-answering is caught.
+
+    Element order **within** a row is still significant, matching BIRD: ``(url, 2028)`` and
+    ``(2028, url)`` are different answers to different questions. Only row order is relaxed,
+    and only when the question is not order-sensitive.
+    """
     body = [[_cell(v) for v in row] for row in rows]
     if not order_sensitive:
         body = sorted(body, key=lambda r: json.dumps(r, separators=(",", ":")))
-    return {"columns": cols, "rows": body}
+    return {"rows": body}
 
 
 def _cell(value: Any) -> Any:

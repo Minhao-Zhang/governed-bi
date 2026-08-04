@@ -187,3 +187,48 @@ def test_summarise_pair_runs(tmp_path: Path) -> None:
     summary = summarise(arms, pair=("oracle", "stub"))
     assert "arms" in summary and "oracle" in summary["arms"]
     assert summary["comparison"]["pair"] == ("oracle", "stub")
+
+
+def test_a_different_column_alias_is_not_a_wrong_answer() -> None:
+    """EX compares **values**, as BIRD's own evaluation does.
+
+    The fingerprint included column names, so ``SELECT COUNT(*) AS paper_count`` graded wrong
+    against a gold of ``SELECT COUNT(*)`` with both returning 100 — and the penalty tracked
+    how verbose the model was about aliasing rather than whether it was right. Measured on the
+    xhigh arm: 5% of answerable-but-wrong turns were exactly this.
+    """
+    from governed_bi.eval.grade import grade_results, result_fingerprint
+
+    assert result_fingerprint(["paper_count"], [[100]]) == result_fingerprint(["count"], [[100]])
+    verdict = grade_results(
+        pred_columns=["paper_count"],
+        pred_rows=[[100]],
+        gold_columns=["count"],
+        gold_rows=[[100]],
+    )
+    assert verdict["correct"] is True
+
+
+def test_the_relaxation_stops_at_names() -> None:
+    """The paired negatives. Loosening the comparison must not make a wrong answer pass.
+
+    Over-answering is still wrong: an extra column makes a longer row tuple, which is how
+    BIRD catches it. And element order **within** a row still matters — ``(url, 2028)`` and
+    ``(2028, url)`` answer different questions, and this exact pair appeared in the arm.
+    """
+    from governed_bi.eval.grade import result_fingerprint
+
+    assert result_fingerprint(["a"], [[1]]) != result_fingerprint(["a", "b"], [[1, 2]]), (
+        "an extra column must not compare equal -- that is over-answering"
+    )
+    assert result_fingerprint(["a", "b"], [["url", 2028]]) != result_fingerprint(
+        ["b", "a"], [[2028, "url"]]
+    ), "swapping the values within a row is a different answer"
+    assert result_fingerprint(["a"], [[1]]) != result_fingerprint(["a"], [[2]]), (
+        "different values must not compare equal"
+    )
+    # Row order is the one thing relaxed, and only when the question allows it.
+    assert result_fingerprint(["a"], [[1], [2]]) == result_fingerprint(["a"], [[2], [1]])
+    assert result_fingerprint(["a"], [[1], [2]], order_sensitive=True) != result_fingerprint(
+        ["a"], [[2], [1]], order_sensitive=True
+    )
