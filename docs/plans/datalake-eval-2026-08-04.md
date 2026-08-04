@@ -89,6 +89,16 @@ Reachability tracks the shortlist at every setting. Whether the *model* converts
 shortlist into more correct answers is a Stage B question and is **not** answered here —
 raising the default on this table alone would be a guess.
 
+> **Every EX number below is understated by roughly 2.4x.** The grader put column *names* in
+> the result fingerprint, so `SELECT COUNT(*) AS paper_count` graded wrong against a gold of
+> `SELECT COUNT(*)` with both returning 100. Fixed the same day; re-scoring 514 rows of the
+> `xhigh` arm with `tools/regrade.py` moved EX from 0.053 to **0.126** (38 rows flipped
+> wrong→correct, none the other way) and conversion among answerable questions from 0.102 to
+> **0.244**. The runs below were graded before the fix and have **not** been re-scored, so
+> read their EX as a lower bound and see
+> [`retrieval-ceiling-2026-08-04.md`](retrieval-ceiling-2026-08-04.md) for the corrected
+> decomposition.
+
 ## Stage B — end to end, paid
 
 Two runs. The second is the one to read: it is three questions per schema and it ran after

@@ -14,19 +14,47 @@ Every figure below is over the same stratified sample: 171 questions, ≤3 per s
 EX is bounded by something decided **before the model is called**: whether every table the
 gold statement reads was licensed. `eval/datalake.table_coverage` measures it.
 
-On the live `xhigh` arm at 344 rows:
+On the live `xhigh` arm at 514 rows, **after** the grader fix below:
 
 | | |
 | --- | --- |
-| all gold tables licensed | **0.512** ← the ceiling |
-| some but not all | 0.081 |
-| none | 0.407 |
+| all gold tables licensed | **0.518** ← the ceiling |
 | *schema* reachability | 0.625 ← overstates it by 11 pp |
-| EX | 0.049 |
+| EX | **0.126** |
+| conversion among answerable | **0.244** |
 
-So roughly half the questions were **unanswerable under this retrieval**, and of the half
-that were answerable we converted about a tenth. A single EX number cannot say that, which is
-why it should not be quoted alone.
+So roughly half the questions were **unanswerable under this retrieval**, and of the half that
+were answerable the engine converted about one in four. A single EX number cannot say that,
+which is why it should not be quoted alone.
+
+### The grader was understating all of it by 2.4x
+
+`eval/grade._normalise` put column **names** in the result fingerprint, so
+`SELECT COUNT(*) AS paper_count` graded wrong against a gold of `SELECT COUNT(*)` with both
+returning `100`. BIRD's own EX compares values; ours was stricter than the benchmark it
+implements, and the penalty tracked how verbose the model was about aliasing rather than
+whether it was right.
+
+Found by classifying the 234 answerable-but-wrong turns (re-executing both statements, no
+model), on a sample of 80:
+
+| | share | reading |
+| --- | --- | --- |
+| extra columns, **gold values all present** | 33.8% | a human would accept it; BIRD does not |
+| extra columns, gold values absent | 22.5% | answered a different question |
+| same columns, different row count | 13.8% | genuine miss |
+| prediction does not re-execute | 12.5% | see below |
+| single cell, different value | 7.5% | genuine miss |
+| same shape, values in a different order | 5.0% | `(url, 2028)` vs `(2028, url)` |
+| single cell, **identical value** | 5.0% | pure grader artifact |
+
+Re-scoring 514 rows with `tools/regrade.py`: **27 → 65 correct, 38 flips, none in the other
+direction.** The fix is replayable at all because EX grades executed result sets rather than
+SQL text — a grader change costs a database sweep, not a re-run.
+
+The relaxation stops at names. An extra column still fails, because it makes a longer row
+tuple, which is how BIRD catches over-answering; values swapped within a row still fail. Both
+are pinned by tests.
 
 Found by diagnosing the 9.7% of turns that hit the attempt cap: 23 of 24 had the gold schema
 reachable, their executed SQL referenced tables that were *not* licensed, and one had exactly
@@ -110,11 +138,13 @@ Cost: about **420 k embedding tokens** for 13 981 summaries, roughly **$0.01**.
 ## What is still not measured
 
 - **EX with embeddings.** Everything above is the *ceiling*, not the score. Raising the
-  ceiling is necessary, not sufficient — the current arm converts ~10% of answerable
+  ceiling is necessary, not sufficient — the current arm converts 24% of answerable
   questions, and nothing here says an embedder changes that conversion rate.
+- **The 12.5% of predictions that do not re-execute.** Found while classifying mismatches:
+  the recorded `executed_sql` fails on replay. That is the statement the engine says it sent,
+  so either it is not, or the failure is non-deterministic (a timeout, a cap). Unresolved, and
+  it is the one item on this list that could indicate a defect rather than a limitation.
 - **Whether the remaining ~39% is reachable at all.** At `top_n = 10` with embeddings, 24% of
   questions have *no* gold table licensed. Whether those are curation gaps (a summary that
   describes nothing), genuinely hard questions, or a ranking failure is unknown.
-- **The BIRD-EX artifact share.** Unchanged from the earlier document: a prediction that
-  over-answers or formats a date differently is scored wrong, and how much of the ~90%
-  non-conversion that accounts for is unquantified.
+
