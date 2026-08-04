@@ -23,6 +23,7 @@ from governed_bi.api.browse import (
     apply_where,
     columns_for,
     parse_where,
+    predicate_columns,
     row_for,
     sort_rows,
 )
@@ -51,28 +52,21 @@ def _request_session() -> Any:
     return _session()
 
 
-@router.get("/schema")
-def schema(schema: str | None = None) -> list[dict[str, Any]]:
-    """Every table as the client's declared ``TableView``, with its columns.
-
-    Built by the **same** :func:`_table_view` as ``/schema/{id}``, so the flat dump and the
-    detail fetch cannot disagree. It had its own inline projection emitting
-    ``{id, name, schema, summary, columns:[...]}``, which the contract rejects -- and this
-    route is also the fallback catalog source, so the failure took the namespace rail with it.
-
-    It also resolved columns by scanning all 13 981 assets per table and matching an id
-    prefix: O(tables x assets), and wrong besides -- ``sales.order`` is a prefix of
-    ``sales.order_line``. The table's own ``columns`` field holds the ids, which is the
-    declared reference (ADR 0005 §1.2).
-    """
-    session = _request_session()
-    tables = [
-        a
-        for a in session.assets_by_id.values()
-        if a.asset_type.value == "table"
-        and (schema is None or getattr(a, "schema", None) == schema)
-    ]
-    return [_table_view(session, table) for table in sorted(tables, key=lambda a: a.id)]
+# ``GET /schema`` -- the flat dump of every table with every column inlined -- was **deleted**
+# here, and its absence is the design rather than an omission.
+#
+# It measured 936 637 bytes on the pooled lake and was two projections of one thing: the same
+# tables that ``/schema/summary`` returns lean. Two projections of a table can disagree, and
+# this pair already had: the dump shipped a shape the client rejected, and because it was also
+# the fallback catalog source, one wrong field emptied the namespace rail as well as the page.
+#
+# Its only remaining consumer was the ER diagram, which needed exactly two fields the lean
+# column lacked -- ``nullable`` and ``is_unique``. Those are now on ``_table_summary``'s lean
+# column, so the diagram reads the catalog it was already fetching. Full per-column prose is
+# still available for the **one** table someone opens, from ``GET /schema/{table_id}``.
+#
+# What replaces it, then, is not a route: it is the rule that a catalog is lean, a detail is
+# per-item, and no route inlines a corpus.
 
 
 # ── browsing: filtering, the lean catalog, and bounded relationships ──────────
@@ -131,8 +125,15 @@ def corpus_rows(
     """
     known_types = {t.value: t for t in ASSET_REGISTER}
     if type not in known_types:
-        return {"rows": [], "total": 0, "offset": 0, "limit": limit, "columns": [],
-                "unknown_where": [], "detail": f"unknown asset type {type!r}"}
+        return {
+            "rows": [],
+            "total": 0,
+            "offset": 0,
+            "limit": limit,
+            "columns": [],
+            "unknown_where": [],
+            "detail": f"unknown asset type {type!r}",
+        }
 
     session = _request_session()
     columns = columns_for(known_types[type], class_for(type))
@@ -155,30 +156,43 @@ def corpus_rows(
     }
 
 
+#: Page ceiling for ``/schema/summary``, and its default. The corpus has 656 tables, so one
+#: request covers the whole catalog — which is what the consumers need: the namespace rail, the
+#: table browser and the client-side search index all read the *entire* list, and none of them
+#: pages. The old default of 200 therefore did not bound a page, it **hid 456 tables**: the rail
+#: showed the alphabetically-first namespaces and the search index could not match a table it
+#: had never been sent, while ``can_search: false`` pointed at that index as the honest
+#: fallback. A default that silently truncates the only fetch anybody makes is the ADR 0009 D2
+#: defect wearing a parameter's clothes.
+SUMMARY_PAGE_LIMIT = 1000
+
+
 @router.get("/schema/summary")
-def schema_summary(
-    schema: str | None = None, limit: int = 200, offset: int = 0
-) -> dict[str, Any]:
+def schema_summary(schema: str | None = None, limit: int = SUMMARY_PAGE_LIMIT, offset: int = 0) -> dict[str, Any]:
     """The lean table catalog: enough for a browser row and a badge, no prose.
 
     This is what removes the 937 KB. ``/schema`` inlines every column's ``summary`` and
     ``body``; a catalog row needs a physical name, a type, a role and two flags, and the
     prose is fetched for the one table someone opens.
+
+    ``offset`` and ``limit`` are **echoed** as applied, after clamping. A caller cannot
+    otherwise tell a short page from the end of the list: ``total: 656`` with 200 items is
+    ambiguous between "you asked for 200" and "we decided 200", and only one of those is the
+    caller's to fix.
     """
     session = _request_session()
     tables = sorted(
         (
             a
             for a in session.assets_by_id.values()
-            if a.asset_type.value == "table"
-            and (schema is None or getattr(a, "schema", None) == schema)
+            if a.asset_type.value == "table" and (schema is None or getattr(a, "schema", None) == schema)
         ),
         key=lambda a: a.id,
     )
     start = max(0, int(offset))
-    end = start + max(1, min(1000, int(limit)))
-    items = [_table_summary(session, table) for table in tables[start:end]]
-    return {"total": len(tables), "items": items}
+    applied_limit = max(1, min(SUMMARY_PAGE_LIMIT, int(limit)))
+    items = [_table_summary(session, table) for table in tables[start : start + applied_limit]]
+    return {"total": len(tables), "offset": start, "limit": applied_limit, "items": items}
 
 
 @router.get("/schema/{table_id}")
@@ -201,6 +215,7 @@ def _table_summary(session: Any, table: Any) -> dict[str, Any]:
     columns = [c for c in columns if c is not None]
     lean = [
         {
+            "id": c.id,  # the asset id; callers must never derive one (ADR 0008 D4)
             "physical_name": getattr(c, "physical_name", ""),
             "physical_type": getattr(c, "physical_type", None) or "",
             "role": getattr(getattr(c, "role", None), "value", None),
@@ -208,6 +223,12 @@ def _table_summary(session: Any, table: Any) -> dict[str, Any]:
             if getattr(getattr(c, "reliability", None), "status", None) is not None
             else "ok",
             "excluded": bool(getattr(getattr(c, "governance", None), "excluded", False)),
+            # The two remaining fields an ER card renders, and the reason it could not be built
+            # from this route: without them the diagram had to fetch the 937 KB flat dump for
+            # nullability and uniqueness alone. Both stay tri-state — `None` is "not observed",
+            # which is a different claim from "nullable: false" (ADR 0005 §6).
+            "nullable": getattr(c, "nullable", None),
+            "is_unique": getattr(c, "is_unique", None),
         }
         for c in columns
     ]
@@ -279,6 +300,13 @@ def _column_view(column: Any) -> dict[str, Any]:
     reliability = getattr(column, "reliability", None)
     provenance = getattr(getattr(column, "audit", None), "provenance", None)
     return {
+        # The **asset id**, sent so no caller has to derive one. The client had its own
+        # `deriveColumnId` producing v1's `col_<table>_<physical>`, which ADR 0008 D1 replaced
+        # with `{table_id}.{slug(physical_name)}` — a scheme that hashes any name needing
+        # sanitisation and so cannot be reimplemented in a second language without becoming a
+        # second answer to what identifies a column. D4 says references are asset ids; this is
+        # the route that supplies them.
+        "id": column.id,
         "physical_name": getattr(column, "physical_name", ""),
         "physical_type": getattr(column, "physical_type", None) or "",
         "logical_type": getattr(getattr(column, "logical_type", None), "value", None) or "",
@@ -295,4 +323,158 @@ def _column_view(column: Any) -> dict[str, Any]:
         "excluded_reason": getattr(governance, "reason", None),
         "provenance_status": getattr(getattr(provenance, "status", None), "value", None),
         "evidence": getattr(getattr(column, "audit", None), "evidence", None),
+    }
+
+
+def _column_ref(session: Any, column_id: str) -> dict[str, Any] | None:
+    """A column as the client's ``columnRefSchema``, or ``None`` if the id names nothing."""
+    column = session.assets_by_id.get(column_id)
+    if column is None or column.asset_type.value != "column":
+        return None
+    return {
+        "column_id": column.id,
+        "table_id": getattr(column, "parent_table", "") or "",
+        "physical_name": getattr(column, "physical_name", "") or "",
+    }
+
+
+@router.get("/columns/{column_id}/related")
+def column_related(column_id: str) -> dict[str, Any]:
+    """Every semantic-layer item touching one physical column.
+
+    The route the column detail sheet opens on. It did not exist, and the client's query
+    declares ``retry: false``, so opening a column went straight to an error state -- the one
+    genuinely absent route in this surface rather than a shape mismatch.
+
+    **An unknown id answers 200 with ``column_resolvable: false``, not 404.** The client
+    declares that flag and renders it as a sentence; a 404 renders as a broken panel. The two
+    cases are different facts: "this corpus holds no such column" is an answer, and the sheet
+    is reached by clicking a column name, so an id that does not resolve means the id scheme
+    drifted -- exactly the thing worth saying out loud. (It had: the client derived
+    ``col_<table>_<physical>`` while ADR 0008 D1 mints ``{table_id}.{slug(physical_name)}``.
+    Column ids are now sent on every column projection so nobody derives one.)
+
+    Joins are matched by **parsing** the ON clause, not by scanning it for the column's name:
+    the panel's claim is that a relationship uses this column, and ``id`` occurs inside
+    ``customer_id``.
+    """
+    session = _request_session()
+    by_id = session.assets_by_id
+    column = by_id.get(column_id)
+    if column is None or column.asset_type.value != "column":
+        return {
+            "column": {
+                "id": column_id,
+                "table_id": "",
+                "table_physical_name": "",
+                "schema": None,
+                "physical_name": "",
+            },
+            "terms": [],
+            "rules": [],
+            "fk_out": None,
+            "fk_in": [],
+            "joins": [],
+            "metrics": [],
+            "meta": {"column_resolvable": False},
+        }
+
+    table_id = getattr(column, "parent_table", "") or ""
+    table = by_id.get(table_id)
+    table_physical = getattr(table, "physical_name", "") or ""
+    physical_name = getattr(column, "physical_name", "") or ""
+
+    terms = [
+        {
+            "id": asset.id,
+            "name": getattr(asset, "name", asset.id),
+            "synonyms": list(getattr(asset, "synonyms", ()) or ()),
+            "confidence": getattr(asset, "confidence", None),
+            "provenance_status": getattr(
+                getattr(getattr(asset, "audit", None), "provenance", None), "status", None
+            ).value
+            if getattr(getattr(getattr(asset, "audit", None), "provenance", None), "status", None) is not None
+            else None,
+        }
+        for asset in sorted(by_id.values(), key=lambda a: a.id)
+        if asset.asset_type.value == "term" and getattr(getattr(asset, "binding", None), "target_id", None) == column_id
+    ]
+
+    # v2 has no rule asset -- the note/rule IR is designed and unbuilt -- so the normative text
+    # reaching a column is its table's `rules`, which nothing in `src/` reads and no route has
+    # ever emitted. The id is **positional**, and says so: these are strings in a tuple, not
+    # assets, and minting an asset-looking id for one would invent an identity the corpus does
+    # not carry. `kind: "table"` records the scope the statement actually has.
+    rules = [
+        {
+            "id": f"{table_id}#rule-{index}",
+            "kind": "table",
+            "statement": str(statement),
+            "confidence": None,
+            "provenance_status": None,
+        }
+        for index, statement in enumerate(getattr(table, "rules", ()) or ())
+    ]
+
+    fk_out = _column_ref(session, getattr(column, "references", None) or "")
+    fk_in = [
+        ref
+        for ref in (
+            _column_ref(session, other.id)
+            for other in sorted(by_id.values(), key=lambda a: a.id)
+            if other.asset_type.value == "column" and getattr(other, "references", None) == column_id
+        )
+        if ref is not None
+    ]
+
+    wanted = physical_name.casefold()
+    table_key = table_physical.casefold()
+    joins = []
+    for asset in sorted(by_id.values(), key=lambda a: a.id):
+        if asset.asset_type.value != "join":
+            continue
+        named = predicate_columns(getattr(asset, "on", "") or "")
+        # Qualified match on this column's own table, or a bare `col = col` predicate. A
+        # qualified reference to another table's same-named column is not this column.
+        if (table_key, wanted) not in named and ("", wanted) not in named:
+            continue
+        left, right = getattr(asset, "left_table", ""), getattr(asset, "right_table", "")
+        other = right if left == table_id else left
+        confidence = getattr(asset, "confidence", None)
+        joins.append(
+            {
+                "id": asset.id,
+                "left_table": left,
+                "right_table": right,
+                "other_table_id": other,
+                "on": getattr(asset, "on", "") or "",
+                "cardinality": getattr(getattr(asset, "cardinality", None), "value", None),
+                "confidence": confidence,
+                "low_confidence": bool(confidence is not None and confidence < 0.5),
+            }
+        )
+
+    # Metrics are table-grain: a metric is an aggregate over its base table, so it relates to
+    # every column of that table and to none of them more than the others.
+    metrics = [
+        {"id": asset.id, "name": getattr(asset, "name", asset.id), "granularity": "table"}
+        for asset in sorted(by_id.values(), key=lambda a: a.id)
+        if asset.asset_type.value == "metric" and getattr(asset, "base_table", None) == table_id
+    ]
+
+    return {
+        "column": {
+            "id": column.id,
+            "table_id": table_id,
+            "table_physical_name": table_physical,
+            "schema": getattr(column, "schema", None),
+            "physical_name": physical_name,
+        },
+        "terms": terms,
+        "rules": rules,
+        "fk_out": fk_out,
+        "fk_in": fk_in,
+        "joins": joins,
+        "metrics": metrics,
+        "meta": {"column_resolvable": True},
     }

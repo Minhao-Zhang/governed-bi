@@ -85,6 +85,9 @@ def livez() -> dict[str, Any]:
 def capabilities() -> dict[str, Any]:
     """What this server can actually do. The UI blocks on this response."""
     session = _session()
+    #: Whether the streaming transport is offered. Bound to a name because `can_clarify`
+    #: depends on it and two copies of one literal is how the two answers drift apart.
+    can_stream = False
     return {
         "environment": "local",
         "dialect": getattr(session.connector, "dialect", "postgres"),
@@ -104,7 +107,7 @@ def capabilities() -> dict[str, Any]:
         # connector is the declared port — so a streamed run trips it inside the server's own
         # worker, with no frame of ours in the traceback. Flip this to true when stage events
         # exist *and* the run path is async or thread-offloaded, not before.
-        "can_stream": False,
+        "can_stream": can_stream,
         # Observed, never assumed: a session with no model serves the stub path, and saying
         # otherwise would make the interface blame the question for the silence.
         "has_live_model": session.agent_model is not None,
@@ -120,14 +123,20 @@ def capabilities() -> dict[str, Any]:
         # make the omnibox blame the corpus for an empty result. The UI's client-side Fuse
         # index is the honest fallback and it works.
         "can_search": False,
-        # The `ask_user` tool is bound whenever a model is, so a clarification is reachable
-        # exactly when something can ask for one — **and now answerable**, which is the half
-        # this field was previously lying about. `POST /chat` dropped `__interrupt__` and
-        # replied 200 with a null answer while the graph stayed paused, and `resume_clarification`
-        # refused every caller because no turn carried an `identity`. Reporting `true` over that
-        # was worse than reporting `false`: it made the interface offer a question it could not
-        # accept an answer to.
-        "can_clarify": session.agent_model is not None,
+        # **Gated on `can_stream`, and that is the correction.** The server half is genuinely
+        # built: `ask_user` is bound whenever a model is, `POST /chat` surfaces `__interrupt__`,
+        # and `POST /chat/resume` accepts the answer. But this flag does not describe the
+        # server — the client contract makes it the switch that mounts the interrupt prompt, and
+        # the transport it would mount into depends on `can_stream`. With streaming off the UI
+        # mounts `<RestChat/>`, whose `useRestChat` has no clarification state and no resume
+        # call anywhere in it, so `true` offered a question that could be asked, displayed
+        # nowhere, and answered by nobody — the graph simply stayed paused.
+        #
+        # So this is false today because of the *client's* missing half, not the server's, and
+        # it flips by giving `useRestChat` a clarification pair or by turning streaming on —
+        # never by editing this line. Reporting a capability the mounted transport lacks is the
+        # same defect as a reliability badge with nothing behind it.
+        "can_clarify": can_stream and session.agent_model is not None,
     }
 
 
@@ -165,17 +174,45 @@ def health() -> dict[str, Any]:
     }
 
 
+def _provenance_status(asset: Any) -> str | None:
+    """``asset.audit.provenance.status``, or ``None`` when any link is absent.
+
+    Absent is a distinct value here, not a default: ADR 0005 §6 requires "not measured" to be
+    distinguishable everywhere, and an asset with no audit trail is a different claim from one
+    audited and found clean. Every step is optional on the dataclasses, which is why this is a
+    named function rather than a fourfold `getattr` chain repeated at each call site.
+    """
+    provenance = getattr(getattr(asset, "audit", None), "provenance", None)
+    status = getattr(provenance, "status", None)
+    return status.value if status is not None else None
+
+
 @app.get("/corpus/assets")
 def corpus_assets(type: str | None = None) -> list[dict[str, Any]]:
     """Assets of one type, as rows. ``type`` is validated against the **register**, not a
-    hand-written list, so a new asset type is reachable here the moment it is declared."""
+    hand-written list, so a new asset type is reachable here the moment it is declared.
+
+    ``provenance_status`` and ``excluded`` are **required** by the client's `assetRowSchema`,
+    and leaving them out took three live components down at once — the chat conversation, the
+    corpus asset browser and the column-related sheet all call this and all `safeParse` it, so
+    two absent keys became three thrown `ApiError`s rather than three rows missing a badge.
+    Both are governance observations the engine already holds on every asset; `excluded` in
+    particular is what the "Hide excluded" control filters on, so without it the control would
+    be a toggle over nothing.
+    """
     session = _session()
     known = {t.value for t in ASSET_REGISTER}
     if type is not None and type not in known:
         return []
     return [
-        {"id": a.id, "asset_type": a.asset_type.value, "summary": a.summary,
-         "schema": getattr(a, "schema", None)}
+        {
+            "id": a.id,
+            "asset_type": a.asset_type.value,
+            "summary": a.summary,
+            "schema": getattr(a, "schema", None),
+            "provenance_status": _provenance_status(a),
+            "excluded": bool(getattr(getattr(a, "governance", None), "excluded", False)),
+        }
         for a in sorted(session.assets_by_id.values(), key=lambda a: a.id)
         if type is None or a.asset_type.value == type
     ]
@@ -206,6 +243,14 @@ def _graph_payload() -> dict[str, Any]:
         # Several relationships between one table pair is the normal case ADR 0005 §1.2 put
         # the ON digest in the join id for. The first is drawn; all of them are carried, so a
         # detail sheet can show the rest rather than the diagram pretending there is one.
+        #
+        # But `len(join_ids)` is **not** that count. A relationship declared from both ends is
+        # two join assets over one predicate — `join_a_b_<digest>` and `join_b_a_<digest>` —
+        # and the ON digest is identical precisely so the pair is recognisable. Measured over
+        # the pooled lake: 83 table pairs carry more than one join asset, and 71 of them are a
+        # single relationship counted twice. So the count is over **distinct predicates**, and
+        # `join_ids` stays complete because it is the audit trail, not the number.
+        distinct_relationships = len({str(j).rsplit("_", 1)[-1] for j in join_ids})
         first = by_id.get(join_ids[0]) if join_ids else None
         confidence = getattr(first, "confidence", None)
         edges.append(
@@ -220,7 +265,7 @@ def _graph_payload() -> dict[str, Any]:
                 # instead, so the diagram and the corpus agree on what "low" means.
                 "low_confidence": bool(confidence is not None and confidence < 0.5),
                 "join_ids": join_ids,
-                "n_relationships": len(join_ids),
+                "n_relationships": distinct_relationships,
             }
         )
 
@@ -245,12 +290,7 @@ def _graph_payload() -> dict[str, Any]:
                     and getattr(getattr(c, "reliability", None), "status").value == "suspect"
                     for c in columns
                 ),
-                "provenance_status": getattr(
-                    getattr(getattr(asset, "audit", None), "provenance", None), "status", None
-                ).value
-                if getattr(getattr(getattr(asset, "audit", None), "provenance", None), "status", None)
-                is not None
-                else None,
+                "provenance_status": _provenance_status(asset),
             }
         )
     return {"nodes": nodes, "edges": edges, "meta": {"n_nodes": len(nodes), "n_edges": len(edges)}}
@@ -260,6 +300,13 @@ def _graph_payload() -> dict[str, Any]:
 #: vocabulary (``join | measures | grounds | exemplifies | related``), keyed on the *source*
 #: asset type — which is where the meaning lives: a metric pointing at a table measures it,
 #: a term pointing at anything grounds in it.
+# The node kinds the semantic graph draws — the client's `graphNodeKindSchema`, which is the
+# contract this has to satisfy exactly: a kind outside this set fails the zod boundary and
+# takes the *whole* response down, not just its own node.
+_SEMANTIC_NODE_KINDS: frozenset[str] = frozenset(
+    {"table", "join", "metric", "term", "note", "few_shot", "negative_example"}
+)
+
 _RELATION_BY_SOURCE: dict[str, str] = {
     "join": "join",
     "metric": "measures",
@@ -284,10 +331,30 @@ def _knowledge_payload() -> dict[str, Any]:
     Edges come from ``CorpusStructure.references``, which is the closure ``resolve`` runs on.
     So what the diagram draws is what retrieval would actually pull in — the property a
     hand-built second walk would lose.
+
+    **Columns and schemas are not nodes here.** Two reasons, and they agree. The client's
+    node vocabulary is the seven semantic kinds (``graphNodeKindSchema``), so emitting
+    ``kind: "column"`` failed the zod boundary and the tab rendered nothing at all. And the
+    shape was wrong even where it parsed: a one-schema scope came to 107 columns out of a
+    120-node budget, so the columns crowded out the terms and metrics that are the reason to
+    look at a *semantic* graph. Column endpoints are **re-pointed to the owning table**
+    rather than dropped, which keeps a term bound to ``lineitem.l_quantity`` attached to
+    ``lineitem`` instead of stranding it as an isolated node. Per-column detail is a
+    different question, answered by ``GET /schema/{table_id}``.
     """
     session = _session()
     structure = session.structure
     by_id = session.assets_by_id
+
+    def _semantic_id(asset_id: str) -> str | None:
+        """The node this id draws as: itself, its table, or nothing."""
+        kind = structure.asset_types.get(asset_id, "")
+        if kind in _SEMANTIC_NODE_KINDS:
+            return asset_id
+        if kind == "column":
+            parent = getattr(by_id.get(asset_id), "parent_table", None)
+            return parent if parent in by_id else None
+        return None
 
     nodes = [
         {
@@ -295,29 +362,38 @@ def _knowledge_payload() -> dict[str, Any]:
             "kind": asset.asset_type.value,
             "label": getattr(asset, "physical_name", None) or getattr(asset, "name", None) or asset.id,
             "excluded": bool(getattr(getattr(asset, "governance", None), "excluded", False)),
-            "provenance_status": getattr(
-                getattr(getattr(asset, "audit", None), "provenance", None), "status", None
-            ).value
-            if getattr(getattr(getattr(asset, "audit", None), "provenance", None), "status", None)
-            is not None
-            else None,
+            "provenance_status": _provenance_status(asset),
             "confidence": getattr(asset, "confidence", None),
             "schema": structure.schema_tags.get(asset.id),
         }
         for asset in sorted(by_id.values(), key=lambda a: a.id)
+        if asset.asset_type.value in _SEMANTIC_NODE_KINDS
     ]
 
     edges: list[dict[str, Any]] = []
+    seen_edges: set[tuple[str, str]] = set()
     for source, targets in sorted(structure.references.items()):
         kind = structure.asset_types.get(source, "")
         relation = _RELATION_BY_SOURCE.get(kind, "related")
+        drawn_source = _semantic_id(source)
+        if drawn_source is None:
+            continue
         for target in sorted(targets):
+            drawn_target = _semantic_id(target)
+            # A column->its-own-table reference collapses to a self-loop once both ends are
+            # re-pointed; so does one term binding two columns of the same table. Neither is
+            # worth drawing, and the dedupe keeps the node budget for real relationships.
+            if drawn_target is None or drawn_target == drawn_source:
+                continue
+            if (drawn_source, drawn_target) in seen_edges:
+                continue
+            seen_edges.add((drawn_source, drawn_target))
             confidence = getattr(by_id.get(source), "confidence", None)
             edges.append(
                 {
-                    "id": f"{source}->{target}",
-                    "source": source,
-                    "target": target,
+                    "id": f"{drawn_source}->{drawn_target}",
+                    "source": drawn_source,
+                    "target": drawn_target,
                     "relation": relation,
                     "confidence": confidence,
                     "low_confidence": bool(confidence is not None and confidence < 0.5),
@@ -402,8 +478,7 @@ def chat_resume(body: dict[str, Any]) -> dict[str, Any]:
     wanted = str(body.get("clarification_id") or "")
     if wanted and wanted != pending.get("clarification_id"):
         return _error(
-            f"clarification_id {wanted!r} does not match the pending question "
-            f"{pending.get('clarification_id')!r}"
+            f"clarification_id {wanted!r} does not match the pending question {pending.get('clarification_id')!r}"
         )
 
     from governed_bi.serve.resume import ResumeRejected, resume_clarification
@@ -417,9 +492,7 @@ def chat_resume(body: dict[str, Any]) -> dict[str, Any]:
             answer=reply or str(body.get("answer") or ""),
         )
     except ResumeRejected:
-        return _error(
-            "resume identity mismatch: the caller answering is not the caller that was asked"
-        )
+        return _error("resume identity mismatch: the caller answering is not the caller that was asked")
     # Logged here too, and with the *clarification* as the question. A resumed turn is the
     # one that produces the record, so leaving it out would make every clarified
     # conversation invisible to the audit surface — which is the half of the traffic most
@@ -481,9 +554,7 @@ def _clarification(interrupts: Any) -> dict[str, Any] | None:
 def _pending_on_thread(config: dict[str, Any]) -> dict[str, Any] | None:
     """The clarification paused on this thread, from the checkpoint."""
     tasks = getattr(_graph().get_state(config), "tasks", ()) or ()
-    return _clarification(
-        [i for task in tasks for i in (getattr(task, "interrupts", ()) or ())]
-    )
+    return _clarification([i for task in tasks for i in (getattr(task, "interrupts", ()) or ())])
 
 
 def _shape(out: dict[str, Any]) -> dict[str, Any]:
@@ -498,9 +569,16 @@ def _shape(out: dict[str, Any]) -> dict[str, Any]:
     if pending is not None:
         # `outcome: "clarification"` is a **declared** `register.stages.Outcome` member, not a
         # string invented here for the transport.
-        return {"outcome": "clarification", "text": pending.get("question"),
-                "failed_stage": None, "error_type": None, "refused_by": None,
-                "record": {}, "answer_text": None, "clarification": pending}
+        return {
+            "outcome": "clarification",
+            "text": pending.get("question"),
+            "failed_stage": None,
+            "error_type": None,
+            "refused_by": None,
+            "record": {},
+            "answer_text": None,
+            "clarification": pending,
+        }
     answer = dict(out.get("answer") or {})
     # The model's text lives in `messages`, not in `answer["text"]` — ADR 0007 §4: `text` is
     # *system* copy and is null on the answered path. A REST caller has no message channel to
@@ -539,9 +617,16 @@ def _logged(shaped: dict[str, Any], question: str) -> dict[str, Any]:
 
 def _error(detail: str) -> dict[str, Any]:
     """A refusal a client can read, in the same shape as every other reply."""
-    return {"outcome": "crashed", "text": detail, "failed_stage": "resume",
-            "error_type": "ValueError", "refused_by": None, "record": {},
-            "answer_text": None, "clarification": None}
+    return {
+        "outcome": "crashed",
+        "text": detail,
+        "failed_stage": "resume",
+        "error_type": "ValueError",
+        "refused_by": None,
+        "record": {},
+        "answer_text": None,
+        "clarification": None,
+    }
 
 
 def _last_ai_text(state: dict[str, Any]) -> str | None:
@@ -658,33 +743,15 @@ def audit_turns(limit: int = 50) -> dict[str, Any]:
     }
 
 
-@app.get("/audit/turns/{turn_id}")
-def audit_turn(turn_id: str) -> dict[str, Any]:
-    """One turn's full record, plus what the register says is missing from it.
-
-    ``missing_required`` and ``undeclared_keys`` are returned beside the record rather than
-    left for the client, because both are questions only the register can answer and a UI
-    that re-derived them would be a second copy of the declaration. A turn whose record is
-    incomplete is not a turn that worked, and the surface says so rather than rendering a
-    plausible page over it.
-    """
-    from governed_bi.register.record import missing_required, undeclared_keys
-
-    entry = get_turn(turn_id)
-    if entry is None:
-        return {"found": False, "turn_id": turn_id}
-    record = entry.get("record") or {}
-    return {
-        "found": True,
-        "turn_id": turn_id,
-        "asked_at": entry.get("asked_at"),
-        "question": entry.get("question"),
-        "answer_text": entry.get("answer_text"),
-        "outcome": entry.get("outcome"),
-        "record": record,
-        "missing_required": sorted(missing_required(record)),
-        "undeclared_keys": sorted(undeclared_keys(record)),
-    }
+# ``GET /audit/turns/{turn_id}`` was **deleted**. No client ever called it, and everything it
+# returned about a turn either duplicated the summary in ``/audit/turns`` or is now on the
+# ``/trace`` route below — which the UI fetches at the same moment, for the same turn, from the
+# same click. Two routes over one turn is two shapes to keep in step for no second caller.
+#
+# Its two unique fields moved rather than went: ``record`` (the raw record, so the drawer can
+# show a field the register has not yet been taught) and ``undeclared_keys`` (the only signal
+# that a producer is writing a field **nobody declared** — which is how a register stops being
+# the description of what actually happens).
 
 
 @app.get("/audit/turns/{turn_id}/trace")
@@ -701,7 +768,7 @@ def audit_trace(turn_id: str) -> dict[str, Any]:
     Stage order follows ``Stage``'s declaration order, which is pipeline order, so the
     sections read top to bottom as the turn ran.
     """
-    from governed_bi.register.record import RECORD_REGISTER, missing_required
+    from governed_bi.register.record import RECORD_REGISTER, missing_required, undeclared_keys
     from governed_bi.register.stages import Stage
 
     entry = get_turn(turn_id)
@@ -739,6 +806,13 @@ def audit_trace(turn_id: str) -> dict[str, Any]:
         "ledger": (record.get("execution") or {}).get("attempts") or [],
         "terminal": (record.get("execution") or {}).get("terminal"),
         "missing_required": sorted(absent),
+        # Folded in from the deleted `/audit/turns/{turn_id}`. `stages` is the register's view
+        # of the record and therefore shows only fields the register knows about; `record` is
+        # the record itself, and `undeclared_keys` names what is in it that nothing declared.
+        # That difference is the point: a stage list can look complete while a producer writes
+        # a field no one has declared, and only this key says so.
+        "record": record,
+        "undeclared_keys": sorted(undeclared_keys(record)),
     }
 
 
@@ -778,5 +852,3 @@ def audit_corpus() -> dict[str, Any]:
         },
         "servable": not session.fatal_problems,
     }
-
-

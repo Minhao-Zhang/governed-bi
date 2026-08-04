@@ -54,9 +54,7 @@ def _record(turn_id: str = "t-1", **extra: Any) -> dict[str, Any]:
 
 def test_a_logged_turn_round_trips(turn_log) -> None:
     """What went in comes out, and the summary is a projection rather than a rewrite."""
-    turn_id, error = turn_log.append_turn(
-        _record(), question="how many air carriers are listed?", answer_text="1,656."
-    )
+    turn_id, error = turn_log.append_turn(_record(), question="how many air carriers are listed?", answer_text="1,656.")
     assert error is None, error
     assert turn_id == "t-1"
 
@@ -134,10 +132,9 @@ def test_the_trace_stage_grouping_is_derived_from_the_register() -> None:
 
     from governed_bi.register.record import RECORD_REGISTER
 
-    source = (
-        Path(__file__).resolve().parent.parent.parent
-        / "src" / "governed_bi" / "api" / "routes.py"
-    ).read_text(encoding="utf-8")
+    source = (Path(__file__).resolve().parent.parent.parent / "src" / "governed_bi" / "api" / "routes.py").read_text(
+        encoding="utf-8"
+    )
     body = source.split("def audit_trace(", 1)[1].split("\ndef ", 1)[0]
 
     assert "for field in RECORD_REGISTER" in body and "field.owner" in body, (
@@ -190,13 +187,45 @@ def test_every_registered_field_reaches_a_trace_stage(turn_log) -> None:
     assert trace["ledger"] and trace["ledger"][0]["passed"] is True
 
 
+def test_the_trace_names_keys_the_register_does_not_declare(turn_log) -> None:
+    """The half ``stages`` structurally cannot show, folded in from the deleted per-turn route.
+
+    ``stages`` is built **from** ``RECORD_REGISTER``, so it shows declared fields and only
+    those — a producer that starts writing an undeclared field is invisible in it, and the
+    trace looks complete. That is the moment the register stops describing the engine, so it
+    needs its own key rather than an inference. The raw ``record`` rides along for the same
+    reason: it is the only place an undeclared value can actually be read.
+    """
+    from governed_bi.api import routes
+
+    turn_log.append_turn(_record(invented_by_nobody="surprise"), question="q")
+    trace = routes.audit_trace("t-1")
+
+    assert trace["undeclared_keys"] == ["invented_by_nobody"]
+    assert trace["record"]["invented_by_nobody"] == "surprise", (
+        "the raw record must carry the value, or the key names something unreadable"
+    )
+    traced = {f["name"] for stage in trace["stages"] for f in stage["fields"]}
+    assert "invented_by_nobody" not in traced, (
+        "the stage list is derived from the register, so it cannot show this — which is "
+        "precisely why `undeclared_keys` has to exist"
+    )
+
+
 def test_a_missing_turn_says_so_rather_than_rendering_an_empty_one(turn_log) -> None:
     """``found: false`` is a value. Returning an empty record shape instead would let a
-    client render a plausible page over a turn that does not exist."""
+    client render a plausible page over a turn that does not exist.
+
+    Asserted on the trace alone now: ``audit_turn`` — a second route over the same turn that
+    no client called — was deleted, and its two unique fields moved onto the trace.
+    """
     from governed_bi.api import routes
 
     assert routes.audit_trace("nope")["found"] is False
-    assert routes.audit_turn("nope")["found"] is False
+    assert not hasattr(routes, "audit_turn"), (
+        "the per-turn route was deleted so there is one shape per turn; a re-added second one "
+        "is a shape to keep in step with this one, for a caller that does not exist"
+    )
 
 
 def test_a_write_failure_is_reported_rather_than_raised(turn_log, monkeypatch) -> None:

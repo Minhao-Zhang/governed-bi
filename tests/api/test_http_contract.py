@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -101,9 +102,67 @@ def test_capabilities_reports_what_is_true_not_what_is_configured() -> None:
     pytest.fail("not implemented: see docstring")
 
 
-@UNWRITTEN
-def test_the_pages_that_do_not_need_a_model_work_without_one() -> None:
-    """`/health`, `/schema`, `/corpus/assets`, `/graph` and `/knowledge-graph` are
+def _tiny_session() -> Any:
+    """One table, one column, one term bound to that column. No model, no connector.
+
+    Small on purpose: every assertion below is about a *shape*, and a shape is easier to
+    read wrong in a large fixture than in a small one.
+    """
+    from governed_bi.corpus.schema import AssetType, Binding, ColumnAsset, TableAsset, TermAsset
+    from governed_bi.govern.policy import GovernancePolicy
+    from governed_bi.retrieve.structure import CorpusStructure
+    from governed_bi.serve.session import Session
+
+    table = TableAsset(id="beer.brands", schema="beer", physical_name="brands", summary="Brands.")
+    column = ColumnAsset(
+        id="beer.brands.name",
+        schema="beer",
+        parent_table="beer.brands",
+        physical_name="name",
+        summary="Brand name.",
+    )
+    term = TermAsset(
+        id="term.root_beer",
+        name="root beer",
+        summary="root beer, sarsaparilla",
+        binding=Binding(target_type=AssetType.column, target_id="beer.brands.name"),
+    )
+    by_id = {a.id: a for a in (table, column, term)}
+    structure = CorpusStructure(
+        join_edges=frozenset(),
+        references={
+            "beer.brands": frozenset({"beer.brands.name"}),
+            "beer.brands.name": frozenset({"beer.brands"}),
+            "term.root_beer": frozenset({"beer.brands.name"}),
+        },
+        asset_types={a.id: a.asset_type.value for a in (table, column, term)},
+        table_schemas={"beer.brands": "beer"},
+        schema_tags={"beer.brands": "beer", "beer.brands.name": "beer", "term.root_beer": "beer"},
+        joins_by_edge={},
+    )
+    return Session(
+        index=None,
+        structure=structure,
+        assets_by_id=by_id,
+        corpus=None,
+        connector=None,
+        policy=GovernancePolicy(guard_rules_enabled={}),
+        corpus_content_hash="c",
+        prompt_set_hash="p",
+        knobs_resolved={},
+        db_id="beer",
+        run_id="r",
+    )
+
+
+#: The client's `graphNodeKindSchema` (governed-bi-ui `lib/schemas.ts`), duplicated here
+#: because the UI is a sibling repository a test may not assume is checked out. Duplicated
+#: **with a test**, which is the difference between a mirror and a drift.
+CLIENT_GRAPH_NODE_KINDS = frozenset({"table", "join", "metric", "term", "note", "few_shot", "negative_example"})
+
+
+def test_the_pages_that_do_not_need_a_model_work_without_one(monkeypatch) -> None:
+    """`/health`, `/schema/summary`, `/corpus/assets`, `/graph` and `/knowledge-graph` are
     **ungated** in the UI — nothing checks a capability before calling them, so a 500 from
     any of them is a broken page rather than a degraded one.
 
@@ -113,8 +172,59 @@ def test_the_pages_that_do_not_need_a_model_work_without_one() -> None:
 
     Assert they answer on a session built with **no** `agent_model`. This is what makes the
     corpus browsable before anyone has paid for a single token.
+
+    (`/schema` — the flat dump — was on this list and is **deleted**, so the list names
+    `/schema/summary` instead. That is the same page: the dump was a second projection of
+    these tables, and the catalog is the one that survived. The route is asserted absent
+    below, because a deleted route that quietly comes back is two shapes again.)
+
+    **And that answering is not enough.** Every one of these five is `safeParse`d by the
+    client, which throws on a mismatch — so a 200 carrying an undeclared `kind` is the same
+    broken page as a 500, reached by a route no server-side test was watching. That is not
+    hypothetical: `/knowledge-graph` returned 200 with 107 `kind: "column"` nodes and the
+    Semantic graph tab rendered `0 of 0 shown`. So the node vocabulary is asserted too.
     """
-    pytest.fail("not implemented: see docstring")
+    from fastapi.testclient import TestClient
+
+    from governed_bi.api import browse_routes, routes
+
+    session = _tiny_session()
+    monkeypatch.setattr(routes, "_session", lambda: session)
+    monkeypatch.setattr(browse_routes, "_request_session", lambda: session)
+    client = TestClient(routes.app)
+
+    for path in ("/health", "/schema/summary", "/corpus/assets", "/graph", "/knowledge-graph"):
+        response = client.get(path)
+        assert response.status_code == 200, f"{path} -> {response.status_code} with no model"
+
+    # The flat dump stays gone. Asserted on the app's own route table rather than by fetching
+    # it: `/schema/{table_id}` would answer `GET /schema` with a 404 either way, so a status
+    # check cannot tell "deleted" from "a table happens not to be named that".
+    declared = {getattr(route, "path", None) for route in routes.app.routes}
+    assert "/schema" not in declared, (
+        "GET /schema is deleted: it was 936 KB inlining every column of every table, and a "
+        "second projection of what /schema/summary returns lean"
+    )
+
+    graph = client.get("/knowledge-graph").json()
+    kinds = {node["kind"] for node in graph["nodes"]}
+    assert kinds, "the semantic graph drew nothing at all"
+    assert kinds <= CLIENT_GRAPH_NODE_KINDS, (
+        f"{sorted(kinds - CLIENT_GRAPH_NODE_KINDS)} is outside the client's node vocabulary; "
+        "the client rejects the whole response, so this is a blank tab, not a missing node"
+    )
+
+    # Every endpoint must be a node that exists. Columns are re-pointed to their table, and a
+    # re-point that lands nowhere is a dangling edge the client renders as an invisible line.
+    ids = {node["id"] for node in graph["nodes"]}
+    dangling = [e["id"] for e in graph["edges"] if e["source"] not in ids or e["target"] not in ids]
+    assert not dangling, f"edges with no node at one end: {dangling}"
+
+    # The term is bound to a *column*; re-pointing must keep it attached to the column's table
+    # rather than stranding it, which is the whole reason columns are re-pointed and not dropped.
+    assert ("term.root_beer", "beer.brands") in {(e["source"], e["target"]) for e in graph["edges"]}, (
+        "a term bound to a column lost its edge when the column stopped being a node"
+    )
 
 
 # ── nothing is invented at the boundary ──────────────────────────────────────

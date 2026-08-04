@@ -21,9 +21,14 @@ the database is.
 from __future__ import annotations
 
 import dataclasses
+from collections import deque
 from collections.abc import Iterable, Mapping, Sequence
 from enum import Enum
 from typing import Any
+
+import sqlglot
+from sqlglot import exp
+from sqlglot.errors import SqlglotError
 
 from ..register.assets import ASSET_REGISTER, AssetType
 
@@ -36,6 +41,7 @@ __all__ = [
     "apply_where",
     "sort_rows",
     "row_for",
+    "predicate_columns",
     "subgraph",
 ]
 
@@ -74,8 +80,18 @@ DEFAULT_NODE_BUDGET = 120
 #: cannot tell a reference from any other string, and treating one as free text would offer
 #: ``contains`` on an id where ``eq`` is what a caller wants.
 _REF_FIELDS = frozenset(
-    {"parent_table", "base_table", "left_table", "right_table", "columns", "bound_terms",
-     "dimensions", "related_terms", "references", "binding"}
+    {
+        "parent_table",
+        "base_table",
+        "left_table",
+        "right_table",
+        "columns",
+        "bound_terms",
+        "dimensions",
+        "related_terms",
+        "references",
+        "binding",
+    }
 )
 
 _BLOCK_FIELDS = frozenset({"governance", "audit", "reliability", "provenance"})
@@ -100,8 +116,7 @@ def _kind_of(field: dataclasses.Field) -> FieldKind:
         return FieldKind.number
     # An Enum-typed field is a closed vocabulary and deserves `one_of`, which is the whole
     # reason `kind` exists rather than "string or not".
-    for name in ("LogicalType", "ColumnRole", "Cardinality", "Complexity",
-                 "ReliabilityStatus", "TermRelation"):
+    for name in ("LogicalType", "ColumnRole", "Cardinality", "Complexity", "ReliabilityStatus", "TermRelation"):
         if name in annotation:
             return FieldKind.enum
     return FieldKind.string
@@ -214,11 +229,7 @@ def apply_where(
             unknown.append(f"{field}:{op}:{wanted}")
             continue
         usable.append((field, op, wanted))
-    rows = [
-        asset
-        for asset in assets
-        if all(_matches(asset, field, op, wanted) for field, op, wanted in usable)
-    ]
+    rows = [asset for asset in assets if all(_matches(asset, field, op, wanted) for field, op, wanted in usable)]
     return rows, unknown
 
 
@@ -262,6 +273,105 @@ def row_for(asset: Any, columns: Sequence[str] | None = None) -> dict[str, Any]:
             out[field.name] = value
     out["asset_type"] = getattr(getattr(asset, "asset_type", None), "value", None)
     return out
+
+
+def predicate_columns(on: str) -> set[tuple[str, str]]:
+    """``(qualifier, column)`` pairs an ON clause names, casefolded. ``("", col)`` if bare.
+
+    Parsed, not scanned. A substring test for the column's name would match ``id`` inside
+    ``customer_id`` and match a table alias that happens to spell a column — and this decides
+    which joins a column's detail panel claims to be part of, so a false positive is an
+    assertion that a relationship exists.
+
+    Returns an empty set for an unparseable clause rather than raising: the corpus is already
+    loaded and one malformed predicate must not take a detail panel down. Mirrors
+    :func:`~governed_bi.corpus.identity.on_digest`'s wrapping trick, which is the one place
+    that knows how to get sqlglot to parse a bare ON clause.
+    """
+    if not isinstance(on, str) or not on.strip():
+        return set()
+    try:
+        tree = sqlglot.parse_one(f"SELECT 1 FROM _left AS _l JOIN _right AS _r ON {on}", dialect="postgres")
+    except SqlglotError:
+        return set()
+    join = tree.find(exp.Join)
+    if join is None or join.args.get("on") is None:
+        return set()
+    return {
+        (str(col.table or "").casefold(), str(col.name or "").casefold())
+        for col in join.args["on"].find_all(exp.Column)
+    }
+
+
+def _boundary(
+    *,
+    nodes: Sequence[Mapping[str, Any]],
+    edges: Sequence[Mapping[str, Any]],
+    kept_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Curated joins leaving the scope for **another namespace**, as navigable stubs.
+
+    A cross-schema join executes (ADR 0005), so the far end of one is a place to go, not a
+    warning — which is why this is a list of destinations and carries no severity.
+
+    The scoped view has to say something about them or it misrepresents the corpus: a table
+    whose only join crosses a namespace draws as isolated, and "isolated" is a claim about the
+    schema rather than about the window. The client used to synthesise these itself from the
+    full graph; it can no longer do so once it trusts the engine's own scoping, and losing
+    them silently would trade one wrong picture for another.
+
+    A qualifying edge has exactly one endpoint in scope and is a **join** — it carries an ``on``
+    predicate, or its relation says so. Semantic references (a term grounding a column) are
+    excluded: they are not somewhere you can navigate to and back.
+    """
+    by_id = {str(node["id"]): node for node in nodes}
+
+    def label_of(node: Mapping[str, Any] | None) -> str:
+        if node is None:
+            return ""
+        return str(node.get("label") or node.get("physical_name") or node.get("id") or "")
+
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    for edge in edges:
+        left, right = str(edge.get("source")), str(edge.get("target"))
+        inside_left = left in kept_ids
+        if inside_left == (right in kept_ids):  # both in, or both out — not a crossing
+            continue
+        inside_id, outside_id = (left, right) if inside_left else (right, left)
+        inside, outside = by_id.get(inside_id), by_id.get(outside_id)
+        if outside is None:
+            continue
+        other_schema = outside.get("schema")
+        if not other_schema or other_schema == (inside or {}).get("schema"):
+            continue  # same namespace, or the far end has none to compare
+        predicate = str(edge.get("on") or "")
+        if not predicate:
+            if str(edge.get("relation") or "") != "join":
+                continue
+            # The semantic graph puts the ON clause in the join asset's label, so a join-kind
+            # endpoint is where the predicate is when the edge itself has no `on`.
+            for candidate in (outside, inside):
+                if candidate is not None and str(candidate.get("kind") or "") == "join":
+                    predicate = label_of(candidate)
+                    break
+        confidence = edge.get("confidence")
+        # One stub per (in-scope table, far table): several joins between the same pair is the
+        # normal case, and it is one destination.
+        out.setdefault(
+            (inside_id, outside_id),
+            {
+                "id": f"boundary_{inside_id}__{outside_id}",
+                "in_scope_table": inside_id,
+                "other_schema": str(other_schema),
+                "other_table_id": outside_id,
+                "other_label": label_of(outside),
+                "on": predicate,
+                "cardinality": edge.get("cardinality"),
+                "confidence": confidence,
+                "low_confidence": bool(confidence is not None and float(confidence) < 0.5),
+            },
+        )
+    return [out[key] for key in sorted(out)]
 
 
 def subgraph(
@@ -328,20 +438,45 @@ def subgraph(
             frontier = nxt
         ordered.sort(key=lambda n: (distance.get(str(n["id"]), 10**6), str(n["id"])))
     else:
-        ordered = sorted(keep, key=lambda n: str(n["id"]))
+        # No focus means no natural centre — but ordering by id spends the entire budget on an
+        # alphabetical prefix, and an alphabetical prefix rarely contains *both* ends of any
+        # edge. Measured on the pooled lake: 150 of 7,977 nodes and **zero** edges, which the
+        # client drew as a single 18,000px column of unrelated cards. A relationship view that
+        # shows no relationships is worse than a truncated one, and it reads as "this corpus
+        # has none".
+        #
+        # So grow neighbourhoods instead: seed at the best-connected node, take its component
+        # breadth-first, then move to the next unvisited seed, until the budget runs out. The
+        # budget then buys a connected picture. Isolated nodes have degree 0 and so sort last,
+        # which makes an edgeless corpus degrade to the old id order rather than to nothing.
+        by_id = {str(n["id"]): n for n in keep}
+        degree = {node_id: len(adjacency.get(node_id, ())) for node_id in by_id}
+        rank = sorted(by_id, key=lambda i: (-degree[i], i))
+        ordered = []
+        seen: set[str] = set()
+        for seed in rank:
+            if seed in seen:
+                continue
+            seen.add(seed)
+            queue = deque([seed])
+            while queue:
+                node_id = queue.popleft()
+                ordered.append(by_id[node_id])
+                neighbours = sorted(adjacency.get(node_id, ()), key=lambda i: (-degree.get(i, 0), i))
+                for neighbour in neighbours:
+                    if neighbour not in seen:
+                        seen.add(neighbour)
+                        queue.append(neighbour)
 
     budget = max(1, int(node_budget or DEFAULT_NODE_BUDGET))
     kept = ordered[:budget]
     dropped = len(ordered) - len(kept)
     kept_ids = {str(node["id"]) for node in kept}
-    kept_edges = [
-        edge
-        for edge in edges
-        if str(edge.get("source")) in kept_ids and str(edge.get("target")) in kept_ids
-    ]
+    kept_edges = [edge for edge in edges if str(edge.get("source")) in kept_ids and str(edge.get("target")) in kept_ids]
     return {
         "nodes": list(kept),
         "edges": kept_edges,
+        "boundary": _boundary(nodes=nodes, edges=edges, kept_ids=kept_ids),
         "meta": {
             "n_nodes": len(kept),
             "n_edges": len(kept_edges),
@@ -350,11 +485,20 @@ def subgraph(
             "truncated": dropped > 0,
             "dropped": dropped,
             "node_budget": budget,
+            # The scope **as applied**, and it must be complete, because the client compares it
+            # field-for-field against what it asked for and re-scopes the payload itself when
+            # they differ. `node_budget` was missing from here while sitting one level up in
+            # `meta`, so that comparison could never succeed: the client re-truncated every
+            # response and then rebuilt `meta` from its own pass, overwriting
+            # `truncated: True, dropped: 7827` with `false`/`0`. The budget's own honesty
+            # depends on this key — ADR 0009 D2 exists to stop a bounded view reading as a
+            # complete one, and a `dropped` the client discards is exactly that.
             "scope": {
                 "schema": schema,
                 "focus": focus,
                 "radius": int(radius),
                 "kinds": sorted(wanted_kinds) if wanted_kinds else None,
+                "node_budget": budget,
             },
         },
     }
