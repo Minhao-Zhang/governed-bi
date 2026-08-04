@@ -160,6 +160,11 @@ def _extract_factory(
             "negative",
             "crossings",
             "licensed",
+            # Why a decline declined. `outcome: "declined"` is one value for four
+            # different engineering problems, and this lived in graph state only -- so
+            # "routing found nothing" and "the join graph is disconnected" were the same
+            # recorded row.
+            "terminal_reason",
             "cache_read_tokens",
             "cache_write_tokens",
             "cost_est_usd",

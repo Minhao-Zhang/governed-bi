@@ -8,20 +8,10 @@
       "port": 3000
     },
     {
-      "name": "inspector",
+      "name": "api",
       "runtimeExecutable": "uv",
-      "runtimeArgs": [
-        "run",
-        "python",
-        "scripts/inspect_run.py",
-        "--run-dir",
-        "runs/datalake/toolhistory/20260802T140108Z",
-        "--rebuild",
-        "--no-browser",
-        "--port",
-        "8765"
-      ],
-      "port": 8765
+      "runtimeArgs": ["run", "--frozen", "langgraph", "dev", "--no-browser", "--port", "2024"],
+      "port": 2024
     }
   ]
 }

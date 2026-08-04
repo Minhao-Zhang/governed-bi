@@ -22,6 +22,13 @@ from typing import Any
 from fastapi import FastAPI
 
 from governed_bi.api.graph_app import session_from_environment
+from governed_bi.api.trace_store import (
+    SUMMARY_FIELDS,
+    TURN_LOG_DIR,
+    append_turn,
+    get_turn,
+    list_turns,
+)
 from governed_bi.register.assets import ASSET_REGISTER
 
 __all__ = ["app"]
@@ -132,7 +139,14 @@ def health() -> dict[str, Any]:
         "n_suspect_columns": 0,
         "n_excluded": 0,
         "n_low_confidence_joins": 0,
-        "ci_green": not session.problems,
+        # Green means **servable**, i.e. no fatal problem — ADR 0008 D9. It read
+        # `not session.problems`, so three unresolvable metric dimensions painted the health
+        # page red on a corpus that answers questions correctly, which trains a reader to
+        # ignore the light. The degradations are still counted and still listed; they are a
+        # different fact and now have their own number.
+        "ci_green": not session.fatal_problems,
+        "n_fatal": len(session.fatal_problems),
+        "n_degradations": len(session.degradations),
         "findings": [str(p) for p in session.problems],
     }
 
@@ -245,7 +259,7 @@ def chat(body: dict[str, Any]) -> dict[str, Any]:
         identity=_identity(body, thread_id),
     )
     config = _config(session, question, thread_id)
-    return _shape(_graph().invoke(turn, config))
+    return _logged(_shape(_graph().invoke(turn, config)), question)
 
 
 @app.post("/chat/resume")
@@ -297,7 +311,11 @@ def chat_resume(body: dict[str, Any]) -> dict[str, Any]:
         return _error(
             "resume identity mismatch: the caller answering is not the caller that was asked"
         )
-    return _shape(out)
+    # Logged here too, and with the *clarification* as the question. A resumed turn is the
+    # one that produces the record, so leaving it out would make every clarified
+    # conversation invisible to the audit surface — which is the half of the traffic most
+    # worth auditing.
+    return _logged(_shape(out), str(pending.get("question") or ""))
 
 
 def _config(session: Any, question: str | None, thread_id: str) -> dict[str, Any]:
@@ -384,6 +402,32 @@ def _shape(out: dict[str, Any]) -> dict[str, Any]:
     return answer
 
 
+def _logged(shaped: dict[str, Any], question: str) -> dict[str, Any]:
+    """Append the turn to the audit log and say whether that worked.
+
+    A paused turn is **not** logged: it has no record yet, and writing an empty one would
+    put a row in the audit list that reports fifteen absent required fields for a turn that
+    is waiting rather than broken — the same mistake ``python -m governed_bi.serve`` exit 4
+    exists to avoid.
+
+    ``audit_logged`` rides on the response instead of being silently dropped, because "no
+    turns are listed" and "no turns were served" must not be the same observation.
+    """
+    record = shaped.get("record") or {}
+    if not record.get("turn_id"):
+        return shaped
+    _turn_id, error = append_turn(
+        record,
+        question=question,
+        answer_text=shaped.get("answer_text"),
+        outcome=shaped.get("outcome"),
+    )
+    shaped["audit_logged"] = error is None
+    if error is not None:
+        shaped["audit_error"] = error
+    return shaped
+
+
 def _error(detail: str) -> dict[str, Any]:
     """A refusal a client can read, in the same shape as every other reply."""
     return {"outcome": "crashed", "text": detail, "failed_stage": "resume",
@@ -424,3 +468,153 @@ def knowledge_graph() -> dict[str, Any]:
     than a name.
     """
     return _graph_payload()
+
+
+# ── the audit surface ─────────────────────────────────────────────────────────
+#
+# Everything lives under `/audit`, and the namespace is not cosmetic: `GET /runs` returns
+# **405** on this server because LangGraph Server owns `POST /runs`, so a route named for
+# what it holds would have collided with the platform's own. One prefix that cannot
+# collide, four routes.
+
+
+@app.get("/audit/turns")
+def audit_turns(limit: int = 50) -> dict[str, Any]:
+    """Every turn this installation has served, newest first.
+
+    ``incomplete_fields`` is computed against **today's** register rather than stored, so a
+    turn logged before a field was declared is judged by the declaration in force now — the
+    question the column answers is "is this turn quotable", and that is a question about the
+    current register.
+    """
+    turns = list_turns(limit=limit)
+    return {
+        "turns": turns,
+        "meta": {
+            "n": len(turns),
+            "log_dir": str(TURN_LOG_DIR),
+            "columns": list(SUMMARY_FIELDS),
+        },
+    }
+
+
+@app.get("/audit/turns/{turn_id}")
+def audit_turn(turn_id: str) -> dict[str, Any]:
+    """One turn's full record, plus what the register says is missing from it.
+
+    ``missing_required`` and ``undeclared_keys`` are returned beside the record rather than
+    left for the client, because both are questions only the register can answer and a UI
+    that re-derived them would be a second copy of the declaration. A turn whose record is
+    incomplete is not a turn that worked, and the surface says so rather than rendering a
+    plausible page over it.
+    """
+    from governed_bi.register.record import missing_required, undeclared_keys
+
+    entry = get_turn(turn_id)
+    if entry is None:
+        return {"found": False, "turn_id": turn_id}
+    record = entry.get("record") or {}
+    return {
+        "found": True,
+        "turn_id": turn_id,
+        "asked_at": entry.get("asked_at"),
+        "question": entry.get("question"),
+        "answer_text": entry.get("answer_text"),
+        "outcome": entry.get("outcome"),
+        "record": record,
+        "missing_required": sorted(missing_required(record)),
+        "undeclared_keys": sorted(undeclared_keys(record)),
+    }
+
+
+@app.get("/audit/turns/{turn_id}/trace")
+def audit_trace(turn_id: str) -> dict[str, Any]:
+    """The turn, grouped by the pipeline stage that produced each field.
+
+    **Derived from ``RECORD_REGISTER``, never from a list written here.** Every
+    ``RecordField`` already declares its ``owner`` stage, so the trace is a ``groupby`` over
+    a table that exists — which means a field added to the register appears in the trace
+    with no edit to this route, and a trace section can never claim a stage the register
+    does not assign. A hand-written stage→fields map would be exactly the drift
+    ``register/`` was built to end.
+
+    Stage order follows ``Stage``'s declaration order, which is pipeline order, so the
+    sections read top to bottom as the turn ran.
+    """
+    from governed_bi.register.record import RECORD_REGISTER, missing_required
+    from governed_bi.register.stages import Stage
+
+    entry = get_turn(turn_id)
+    if entry is None:
+        return {"found": False, "turn_id": turn_id}
+    record = entry.get("record") or {}
+    absent = missing_required(record)
+
+    by_stage: dict[str, list[dict[str, Any]]] = {}
+    for field in RECORD_REGISTER:
+        by_stage.setdefault(field.owner.value, []).append(
+            {
+                "name": field.name,
+                "tier": field.tier.value,
+                "value": record.get(field.name),
+                "present": field.name in record and record.get(field.name) is not None,
+                "required_and_absent": field.name in absent,
+                "why": field.why,
+            }
+        )
+
+    order = [stage.value for stage in Stage]
+    stages = [
+        {"stage": name, "fields": by_stage[name]}
+        for name in sorted(by_stage, key=lambda n: (order.index(n) if n in order else len(order), n))
+    ]
+    return {
+        "found": True,
+        "turn_id": turn_id,
+        "question": entry.get("question"),
+        "answer_text": entry.get("answer_text"),
+        "outcome": entry.get("outcome"),
+        "asked_at": entry.get("asked_at"),
+        "stages": stages,
+        "ledger": (record.get("execution") or {}).get("attempts") or [],
+        "terminal": (record.get("execution") or {}).get("terminal"),
+        "missing_required": sorted(absent),
+    }
+
+
+@app.get("/audit/corpus")
+def audit_corpus() -> dict[str, Any]:
+    """What the corpus is, and what is wrong with it — the two halves in one response.
+
+    ``fatal`` and ``degradations`` are separate lists rather than one with a flag, because
+    ADR 0008 D9 makes them different states: a fatal problem means an id is not a key and
+    the corpus is not what it claims, while a degradation means the corpus is smaller than
+    the lake. The CLI refuses on the first and serves past the second, and a surface that
+    blurred them would put this server and that one back into disagreement.
+    """
+    session = _session()
+    counts: dict[str, int] = {}
+    for asset in session.assets_by_id.values():
+        counts[asset.asset_type.value] = counts.get(asset.asset_type.value, 0) + 1
+    structure = session.structure
+    return {
+        "corpus_content_hash": session.corpus_content_hash,
+        "assets": {"total": len(session.assets_by_id), "by_type": dict(sorted(counts.items()))},
+        "schemas": sorted(
+            {s for s in structure.table_schemas.values() if s},
+        ),
+        "structure": {
+            "join_edges": len(structure.join_edges),
+            "references": len(structure.references),
+            "schema_tags": len(structure.schema_tags),
+            "untagged_assets": len(session.assets_by_id) - len(structure.schema_tags),
+            "table_pairs_with_joins": len(structure.joins_by_edge),
+        },
+        "problems": {
+            "fatal": [str(p) for p in session.fatal_problems],
+            "degradations": [str(p) for p in session.degradations],
+            "n_fatal": len(session.fatal_problems),
+            "n_degradations": len(session.degradations),
+        },
+        "servable": not session.fatal_problems,
+    }

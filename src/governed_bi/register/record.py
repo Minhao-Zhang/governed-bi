@@ -339,6 +339,12 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "stamped at the source; classify_row prefers it over re-derivation so a row "
        "scored under a newer classifier is not re-derived under an older one",
        gate="no turn classified crashed"),
+    _f("terminal_reason", Tier.outcome, Absence.not_applicable, _ID, Stage.stamp,
+       "WHY a turn declined: missing_join_path / no_schema_matched / over_connect_bounds "
+       "/ no_sql are four different engineering problems and `outcome: declined` is one "
+       "value for all of them. It lived in graph state only, so the reason never reached "
+       "the record and a declined turn was unattributable after the fact -- which made "
+       "'routing found nothing' and 'the join graph is disconnected' the same row"),
     _f("failed_stage", Tier.outcome, Absence.not_applicable, _ID, Stage.stamp,
        "null when the turn did not fail"),
     _f("error_type", Tier.outcome, Absence.not_applicable, _ID, Stage.stamp,
