@@ -29,8 +29,8 @@ import os
 from pathlib import Path
 from typing import Any
 
-from ..serve.graph import build_graph
-from ..serve.session import Session
+from governed_bi.serve.graph import build_graph
+from governed_bi.serve.session import Session
 
 __all__ = ["make_graph", "session_from_environment", "SCHEMA_VAR", "CORPUS_DIR_VAR", "MODEL_VAR"]
 
@@ -81,9 +81,9 @@ def session_from_environment() -> Session:
             "serves a corpus over a live connector; there is no offline mode."
         )
 
-    from ..datasource.postgres import PostgresConnector
-    from ..govern.policy import GovernancePolicy
-    from ..serve import session as session_mod
+    from governed_bi.datasource.postgres import PostgresConnector
+    from governed_bi.govern.policy import GovernancePolicy
+    from governed_bi.serve import session as session_mod
 
     schema = os.environ.get(SCHEMA_VAR)
     corpus_dir = os.environ.get(CORPUS_DIR_VAR)
@@ -188,6 +188,32 @@ def make_graph() -> Any:
     and the ``ask_user`` interrupt resume work. ``compile_graph`` defaults to an in-memory
     saver for the CLI's benefit, which would shadow it.
     """
+    _warm_imports()
     conf = dict(session_from_environment().configurable()["configurable"])
     conf.pop("thread_id", None)
     return build_graph(accept=_accept_node).compile().with_config({"configurable": conf})
+
+
+def _warm_imports() -> None:
+    """Import everything the request path imports lazily, **here**, at load time.
+
+    Not a micro-optimisation. ``langgraph dev`` installs `blockbuster`, which raises on
+    blocking I/O inside an async function, and it deliberately keeps ``os.getcwd`` armed while
+    disabling ``os.path.*`` and file reads. Python's **import machinery** calls
+    ``ntpath.realpath`` — hence ``os.getcwd`` — so *any* function-level import in a node turns
+    the first request into `BlockingError: Blocking call to os.getcwd`, with no frame of ours in
+    the traceback. That cost an hour to find, which is the argument for doing it here.
+
+    Function-level imports exist throughout ``serve/`` on purpose — they keep import-time
+    cycles impossible and let a model-free path avoid loading a provider SDK. This does not
+    change that; it front-loads them for the one caller that runs inside an event loop, where
+    the first request would otherwise pay for them.
+    """
+    from governed_bi.govern import guard as _guard  # noqa: F401
+    from governed_bi.register.record import missing_required  # noqa: F401
+    from governed_bi.retrieve.index import IndexEntry  # noqa: F401
+
+    try:  # pragma: no cover - only present when a model is configured
+        from langchain.chat_models import init_chat_model  # noqa: F401
+    except ImportError:
+        pass

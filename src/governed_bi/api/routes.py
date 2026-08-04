@@ -20,8 +20,8 @@ from typing import Any
 
 from fastapi import FastAPI
 
-from ..register.assets import ASSET_REGISTER
-from .graph_app import session_from_environment
+from governed_bi.api.graph_app import session_from_environment
+from governed_bi.register.assets import ASSET_REGISTER
 
 __all__ = ["app"]
 
@@ -51,7 +51,19 @@ def capabilities() -> dict[str, Any]:
         # exist. False here is a promise kept, not a feature missing.
         "can_edit": False,
         "edit_mode": "none",
-        "can_stream": True,
+        # **False, and this is the honest answer rather than a limitation.** ADR 0007 §5
+        # specifies custom stream events and nothing in v2 emits one yet, so the streamed
+        # timeline would render empty — the UI would show a live-looking run with no steps in
+        # it, which is worse than not offering the mode. The UI's own `canStream(caps)` gate
+        # then selects `<RestChat/>` and `POST /chat` below, which is a path it already has.
+        #
+        # There is a second reason and it is worth recording: `langgraph dev` installs
+        # `blockbuster`, which raises on blocking I/O in an async function and keeps
+        # `os.getcwd` armed. This engine is deliberately synchronous — a sync `psycopg`
+        # connector is the declared port — so a streamed run trips it inside the server's own
+        # worker, with no frame of ours in the traceback. Flip this to true when stage events
+        # exist *and* the run path is async or thread-offloaded, not before.
+        "can_stream": False,
         # Observed, never assumed: a session with no model serves the stub path, and saying
         # otherwise would make the interface blame the question for the silence.
         "has_live_model": session.agent_model is not None,
@@ -157,6 +169,55 @@ def _graph_payload() -> dict[str, Any]:
         if a.asset_type.value == "table"
     ]
     return {"nodes": nodes, "edges": edges, "meta": {"n_nodes": len(nodes), "n_edges": len(edges)}}
+
+
+@app.post("/chat")
+def chat(body: dict[str, Any]) -> dict[str, Any]:
+    """Serve one turn. The UI's REST transport, selected when ``can_stream`` is false.
+
+    Request: ``{question, session_id, history: [{role, text}]}``.
+
+    Response: **v2's answer, verbatim** — ``{outcome, text, failed_stage, error_type,
+    refused_by, record}``. Not projected into v1's `AnswerView`: ADR 0007 §3 forbids
+    synthesizing `tier`, `safety_clearance` or `semantic_assurance`, none of which exists in
+    this engine, because a reliability badge with nothing behind it is the defect class the
+    rewrite removed. ``answer_text`` is added beside them for one reason given below.
+
+    ``session_id`` becomes the ``thread_id``, so a conversation resumes under one checkpoint
+    and ``ask_user`` can interrupt and resume. A caller that sends none gets a fresh thread,
+    which is correct: an absent conversation id is a new conversation, not a shared one.
+
+    Defined ``def`` rather than ``async def`` deliberately. FastAPI runs a sync handler in a
+    threadpool, so the synchronous connector and model calls do not occupy the event loop —
+    which is the same property `blockbuster` was complaining about, obtained rather than
+    suppressed.
+    """
+    session = _session()
+    question = str(body.get("question") or "").strip()
+    if not question:
+        return {"outcome": "crashed", "text": "no question", "failed_stage": "accept",
+                "error_type": "ValueError", "refused_by": None, "record": {}, "answer_text": None}
+
+    from governed_bi.serve.graph import compile_graph
+
+    thread_id = str(body.get("session_id") or "") or None
+    turn_index = 1 + sum(1 for h in body.get("history") or [] if (h or {}).get("role") == "user")
+    turn = session.turn(question, turn_index=turn_index, thread_id=thread_id)
+    out = compile_graph().invoke(turn, session.configurable(question=question))
+    answer = dict(out.get("answer") or {})
+    # The model's text lives in `messages`, not in `answer["text"]` — ADR 0007 §4: `text` is
+    # *system* copy and is null on the answered path. A REST caller has no message channel to
+    # read, so the one thing it cannot reconstruct is supplied here, under a different name so
+    # the two are never confused for one field.
+    answer["answer_text"] = _last_ai_text(out)
+    return answer
+
+
+def _last_ai_text(state: dict[str, Any]) -> str | None:
+    for message in reversed(state.get("messages") or []):
+        if str(getattr(message, "type", "")) not in ("human", "tool") and getattr(message, "content", None):
+            return str(message.content)
+    return None
 
 
 @app.get("/graph")
