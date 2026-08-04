@@ -43,7 +43,7 @@ model), on a sample of 80:
 | extra columns, **gold values all present** | 33.8% | a human would accept it; BIRD does not |
 | extra columns, gold values absent | 22.5% | answered a different question |
 | same columns, different row count | 13.8% | genuine miss |
-| prediction does not re-execute | 12.5% | see below |
+| prediction does not re-execute | 12.5% | **my classifier's bug** — see below |
 | single cell, different value | 7.5% | genuine miss |
 | same shape, values in a different order | 5.0% | `(url, 2028)` vs `(2028, url)` |
 | single cell, **identical value** | 5.0% | pure grader artifact |
@@ -55,6 +55,20 @@ SQL text — a grader change costs a database sweep, not a re-run.
 The relaxation stops at names. An extra column still fails, because it makes a longer row
 tuple, which is how BIRD catches over-answering; values swapped within a row still fail. Both
 are pinned by tests.
+
+**The 12.5% "prediction does not re-execute" row was my classifier's bug, not the engine's,
+and it is worth writing down because it looked exactly like a defect.** All 14 were `capped`
+turns. `generated_sql` means two things by design: on an *answered* turn it is the statement
+the engine sent — canonicalised, quoted, row-limited — and on a refused or capped turn nothing
+was sent, so it falls back to the last statement the model *proposed*. Those proposals are
+unquoted mixed-case (`FROM authors.Paper`), which is precisely why they were refused. Replaying
+them fails, correctly. `project_turn` already gates grading on `outcome == "answered"`, so no
+score was ever affected; only my ad-hoc classifier ignored the gate. The register row for
+`generated_sql` now states the dual meaning so the next reader does not repeat it.
+
+That also explains the `capped` bucket: a capped turn is one where **all three attempts were
+refused**, and the model was asking for tables it had not been licensed — the same
+gold-table-coverage failure, seen from the governance side rather than the retrieval side.
 
 Found by diagnosing the 9.7% of turns that hit the attempt cap: 23 of 24 had the gold schema
 reachable, their executed SQL referenced tables that were *not* licensed, and one had exactly
@@ -140,10 +154,6 @@ Cost: about **420 k embedding tokens** for 13 981 summaries, roughly **$0.01**.
 - **EX with embeddings.** Everything above is the *ceiling*, not the score. Raising the
   ceiling is necessary, not sufficient — the current arm converts 24% of answerable
   questions, and nothing here says an embedder changes that conversion rate.
-- **The 12.5% of predictions that do not re-execute.** Found while classifying mismatches:
-  the recorded `executed_sql` fails on replay. That is the statement the engine says it sent,
-  so either it is not, or the failure is non-deterministic (a timeout, a cap). Unresolved, and
-  it is the one item on this list that could indicate a defect rather than a limitation.
 - **Whether the remaining ~39% is reachable at all.** At `top_n = 10` with embeddings, 24% of
   questions have *no* gold table licensed. Whether those are curation gaps (a summary that
   describes nothing), genuinely hard questions, or a ranking failure is unknown.
