@@ -11,6 +11,7 @@ from governed_bi.govern.ledger import ExecutionRecord
 from governed_bi.measure.degradation import facets_degraded
 from governed_bi.register.record import project
 from governed_bi.register.stages import ATTEMPT_CAP_REFUSED_BY, Outcome, classify_outcome
+from governed_bi.serve.state import cleared
 from governed_bi.serve.tools import attempt_field, execution_from_attempts
 
 __all__ = ["stamp"]
@@ -210,7 +211,23 @@ def _extract_factory(
 
 
 def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
-    """Build the turn ``Answer`` and the register projection. Sole writer of ``answer``."""
+    """Build the turn ``Answer`` and the register projection. Sole writer of ``answer``.
+
+    **The three reset-bearing channels are normalised first, and that is not defensive
+    programming.** ``Session.turn`` writes :data:`~governed_bi.serve.state.RESET` to
+    ``path_kind``, ``failure`` and ``facets``, and LangGraph assigns a channel's **first** value
+    without calling its reducer — so on a turn where nothing else writes one, the bare sentinel
+    reaches this function. ``failure`` is the common case, because a turn that succeeds never
+    writes it: ``state.get("failure") is not None`` was then true for **every** successful turn,
+    and this function stamped ``outcome: "crashed"`` on all of them. ``facets`` was a latent
+    crash of the same shape — a guard-refused turn never runs the fan-out, and
+    ``"reset".items()`` raises here, in the one node that is deliberately unwrapped.
+
+    Normalised in ``stamp`` rather than in each reader because this is the only node that
+    *interprets* these channels. Every other reader compares them against known values, where
+    an unrecognised string already behaves as "not terminal", which is correct for a fresh turn.
+    """
+    state = {**state, **{k: cleared(state.get(k)) for k in ("path_kind", "failure", "facets")}}
     path_kind = state.get("path_kind")
     refused_by, failed_stage, error_type, text, has_sql = _path_signals(state)
 

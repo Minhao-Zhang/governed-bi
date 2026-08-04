@@ -35,6 +35,7 @@ __all__ = [
     "ACCUMULATING",
     "TURN_IDENTITY",
     "TEST_HOOKS",
+    "cleared",
     "merge_facets",
     "settle_path_kind",
     "settle_failure",
@@ -46,9 +47,36 @@ PathKind = Literal["refuse", "decline", "answered", "crashed"]
 #: Path kinds that short-circuit remaining retrieval / agent nodes.
 TERMINAL_PATH_KINDS: frozenset[str] = frozenset({"refuse", "decline", "crashed"})
 
-#: Written to ``path_kind`` / ``failure`` to clear them for a new turn. See
-#: :func:`settle_path_kind` for why a sentinel and not ``None``.
+#: Written to ``path_kind`` / ``failure`` / ``facets`` to clear them for a new turn. See
+#: :func:`settle_path_kind` for why a sentinel and not ``None``, and :func:`cleared` for the
+#: LangGraph behaviour every reducer here has to survive.
 RESET = "reset"
+
+
+def cleared(left: Any) -> Any:
+    """``None`` if ``left`` is the reset sentinel, else ``left``.
+
+    **Every reducer in this module must call this on its left operand, and the reason is a
+    LangGraph channel detail that cost a working entry point.** ``BinaryOperatorAggregate``
+    assigns the **first** value a channel ever receives *without calling the reducer* — it
+    reduces only from the second write onward. ``Session.turn`` writes :data:`RESET` as part of
+    the graph's input, which is the first write, so the sentinel lands in the channel as a bare
+    string that no reducer ever got the chance to interpret.
+
+    What that did, measured on the real CLI path rather than reasoned about: ``path_kind``
+    became ``"reset"``, ``settle_path_kind("reset", "answered")`` kept ``"reset"`` under
+    first-wins, ``stamp`` saw an unmarked path with no SQL, and **every turn reported
+    ``outcome: "crashed"``** — while 387 tests stayed green, because their fixtures hand-build
+    turn dicts and never call ``Session.turn``. ``settle_failure`` and ``merge_facets`` were
+    worse: ``"reset".get(...)`` and ``dict("reset")`` raise, inside the channel, where nothing
+    catches them.
+
+    So the sentinel has to be inert wherever it lands, not merely honoured where it is
+    expected. It is still a sentinel rather than ``None`` for the reason
+    :func:`settle_path_kind` gives: ``None`` cannot both mean "clear this" and "I have nothing
+    to say", and turn 2 needs the first while every partial node update means the second.
+    """
+    return None if isinstance(left, str) and left == RESET else left
 
 
 class RewriteResult(TypedDict):
@@ -155,7 +183,7 @@ def merge_facets(
     """
     if right == RESET:
         return {}
-    merged = dict(left)
+    merged = dict(cleared(left) or {})
     merged.update(right)
     return merged
 
@@ -190,6 +218,7 @@ def settle_path_kind(left: Any, right: Any) -> Any:
     every terminal straight to ``stamp``, so a *second* different terminal is a bug, and the
     first one is the causal one.
     """
+    left = cleared(left)
     if right == RESET:
         return None
     if right is None:
@@ -208,6 +237,7 @@ def settle_failure(left: Any, right: Any) -> Any:
     the reportable-state-treated-as-nothing shape, so the dropped stage is appended to
     ``detail``, which is free text that already reaches the record.
     """
+    left = cleared(left)
     if right == RESET:
         return None
     if right is None:

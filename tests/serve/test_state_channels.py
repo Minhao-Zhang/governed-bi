@@ -258,6 +258,52 @@ def test_every_declared_channel_is_classified_as_per_turn_or_not():
     assert not invented, f"{sorted(invented)} are classified but not declared on ServeState"
 
 
+def test_a_turn_built_by_the_session_seam_actually_answers(
+    two_schema_index, two_schema_assets, guard_off_policy
+):
+    """The turn every real caller builds, through the graph, end to end.
+
+    **This is the test whose absence let a working entry point break.** Every other fixture in
+    this suite hand-builds a turn dict, so ``Session.turn`` — the only way in for
+    ``python -m governed_bi.serve``, ``POST /chat`` and the LangGraph Server node — was never
+    the thing under test. When ``turn()`` started writing the ``RESET`` sentinel, that sentinel
+    became the **first** write to each reduced channel, and
+    :func:`~governed_bi.serve.state._cleared` records what LangGraph does with a first write.
+    Result: ``outcome: "crashed"`` on every turn, and 387 green tests.
+
+    Asserted at the level a user sees, deliberately: not "the reducer normalises the sentinel"
+    but "a question asked the way the CLI asks it is not reported as a crash".
+    """
+    from governed_bi.serve.session import from_assets
+
+    session = from_assets(
+        list(two_schema_assets.values()), connector=None, policy=guard_off_policy,
+        db_id="ops_b", corpus_content_hash_="corpus-hash",
+    )
+    config = session.configurable()
+    config["configurable"]["thread_id"] = "t-seam"
+    out = graph_mod.compile_graph().invoke(
+        {**session.turn("sensors voltage reading per device"), "route_top_n": 1}, config
+    )
+
+    assert out["answer"]["outcome"] != "crashed", (
+        f"a turn built by Session.turn reports a crash. failed_stage="
+        f"{out['answer']['record'].get('failed_stage')!r} error_type="
+        f"{out['answer']['record'].get('error_type')!r} path_kind={out.get('path_kind')!r}"
+    )
+    assert out.get("path_kind") != RESET, (
+        f"path_kind is the literal sentinel {out.get('path_kind')!r}. LangGraph assigns a "
+        "channel's first value without calling the reducer, so the sentinel has to be inert "
+        "wherever it lands rather than only where a reducer expects it."
+    )
+    assert out.get("failure") in (None, RESET) or isinstance(out.get("failure"), dict), (
+        f"failure holds {out.get('failure')!r}"
+    )
+    # `facets` and `failure` are the two that raise rather than mis-report: `dict("reset")` and
+    # `"reset".get(...)`. Reaching this line at all means neither did.
+    assert isinstance(out.get("facets"), dict) and out["facets"], "the fan-out produced nothing"
+
+
 def test_session_turn_writes_the_reset(guard_off_policy):
     """The seam that mints a turn is the seam that clears the last one."""
     from governed_bi.serve.session import Session
