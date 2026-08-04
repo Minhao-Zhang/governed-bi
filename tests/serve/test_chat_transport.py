@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from governed_bi.api import routes
 from governed_bi.register.stages import Outcome
 
@@ -135,3 +137,28 @@ def test_the_resume_route_exists_and_the_turn_can_carry_an_identity() -> None:
     )
     assert "identity" not in session.turn("q"), "an absent identity must stay absent"
     assert session.turn("q", identity={"token": "u"})["identity"] == {"token": "u"}
+
+
+def test_a_dropped_in_corpus_is_found_but_ambiguity_is_refused(tmp_path, monkeypatch) -> None:
+    """``uv run langgraph dev`` with no environment, and the one case it must not guess.
+
+    A curated corpus is dropped into ``corpora/`` and the server should find it, because
+    typing three env vars before a dev command is how a wrong corpus gets served by accident.
+    But *two* directories is a question only the operator can settle: picking one would make
+    ``corpus_content_hash`` — the field every quotability gate reads — depend on directory
+    ordering. So one is an answer and two is an error naming both.
+    """
+    from governed_bi.api import graph_app
+
+    assert graph_app._dropped_in_corpus(tmp_path) is None, "no corpora/ at all is not an error"
+
+    base = tmp_path / graph_app.CORPORA_DIR
+    (base / "_build").mkdir(parents=True)       # underscore dirs are build output, not corpora
+    assert graph_app._dropped_in_corpus(tmp_path) is None
+
+    (base / "gold-20260804").mkdir()
+    assert graph_app._dropped_in_corpus(tmp_path) == str(base / "gold-20260804")
+
+    (base / "curated_sme_20260730").mkdir()
+    with pytest.raises(RuntimeError, match="holds 2 corpora"):
+        graph_app._dropped_in_corpus(tmp_path)

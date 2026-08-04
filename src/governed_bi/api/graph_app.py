@@ -61,6 +61,12 @@ MODEL_EFFORT_VAR = "GOVERNED_BI_MODEL_EFFORT"
 #: is one nobody can correct.
 SEED_DIR_VAR = "GOVERNED_BI_SEED_DIR"
 
+#: Where a curated corpus is dropped in for local serving. ``.gitignore`` excludes it: these
+#: trees run to thousands of files (the gold semantic layer is 8035 files / 41 MB) and are the
+#: output of a curator run, so git is the source of truth for the authored demo corpus and not
+#: for these.
+CORPORA_DIR = "corpora"
+
 _SESSION: Session | None = None
 
 
@@ -95,9 +101,12 @@ def session_from_environment() -> Session:
     from governed_bi.serve import session as session_mod
 
     schema = os.environ.get(SCHEMA_VAR)
-    corpus_dir = os.environ.get(CORPUS_DIR_VAR)
+    corpus_dir = os.environ.get(CORPUS_DIR_VAR) or _dropped_in_corpus(root)
     if not schema and not corpus_dir:
-        raise RuntimeError(f"set {SCHEMA_VAR} (seed from a live schema) or {CORPUS_DIR_VAR}")
+        raise RuntimeError(
+            f"nothing to serve: set {CORPUS_DIR_VAR} (a curated corpus), or drop one into "
+            f"{CORPORA_DIR}/, or set {SCHEMA_VAR} to seed from a live schema"
+        )
 
     model = None
     model_id = os.environ.get(MODEL_VAR)
@@ -142,6 +151,35 @@ def session_from_environment() -> Session:
         seed_dir.mkdir(parents=True, exist_ok=True)
         _SESSION = session_mod.from_live_schema(str(schema), corpus_root=seed_dir, **kwargs)
     return _SESSION
+
+
+def _dropped_in_corpus(root: Path) -> str | None:
+    """The one curated corpus under ``corpora/``, or ``None``. Ambiguity raises.
+
+    **This exists so ``uv run langgraph dev`` needs no environment at all**, which is the shape
+    a developer actually types. What it is *not* is a default that guesses: a single directory
+    is an unambiguous answer to "which corpus does this checkout serve", and two is a question
+    only the operator can settle — a server that picked one would make ``corpus_content_hash``,
+    the field every quotability gate reads, depend on directory ordering.
+
+    So: none → the caller's error naming both env vars. One → that one, announced on stdout,
+    because a run whose corpus was chosen for it must still say which. More than one → raise and
+    name them.
+    """
+    base = root / CORPORA_DIR
+    if not base.is_dir():
+        return None
+    found = sorted(p for p in base.iterdir() if p.is_dir() and not p.name.startswith("_"))
+    if not found:
+        return None
+    if len(found) > 1:
+        raise RuntimeError(
+            f"{CORPORA_DIR}/ holds {len(found)} corpora ({', '.join(p.name for p in found)}); "
+            f"set {CORPUS_DIR_VAR} to the one to serve. Choosing for you would make "
+            "corpus_content_hash depend on directory order."
+        )
+    print(f"serving the corpus in {found[0].as_posix()} (no {CORPUS_DIR_VAR} set)")
+    return str(found[0])
 
 
 def _accept_node(state: dict, config: Any) -> dict:
