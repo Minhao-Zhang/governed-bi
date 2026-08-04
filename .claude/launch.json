@@ -4,14 +4,46 @@
     {
       "name": "ui",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "../governed-bi-ui", "run", "dev"],
+      "runtimeArgs": [
+        "--prefix",
+        "../governed-bi-ui",
+        "run",
+        "dev"
+      ],
       "port": 3000
+    },
+    {
+      "name": "ui-verify",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "../governed-bi-ui",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "3100"
+      ],
+      "port": 3100,
+      "env": {
+        "NEXT_DIST_DIR": ".next-verify"
+      }
     },
     {
       "name": "api",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "--frozen", "langgraph", "dev", "--no-browser", "--port", "2024"],
+      "runtimeArgs": [
+        "run",
+        "--frozen",
+        "langgraph",
+        "dev",
+        "--no-browser",
+        "--no-reload",
+        "--port",
+        "2024"
+      ],
       "port": 2024
     }
-  ]
+  ],
+  "_why_no_reload": "langgraph dev watches the project directory. An eval run appends to runs/, which watchfiles reads as a source change, so the server restarts every few seconds and never finishes seeding the corpus -- measured: '4 changes detected' on a 10s loop and port 2024 never bound. --no-reload also removes the opposite trap, where the reloader claims to have picked up a src/ change and has not, so a fix gets verified against old code. Restart the server deliberately instead."
 }
