@@ -351,7 +351,13 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "exception CLASS only. Tracebacks echo SQL and row values"),
     _f("generated_sql", Tier.outcome, Absence.not_applicable, Redaction.statement,
        Stage.stamp,
-       "null when no SQL was produced, which is not the same as empty"),
+       "null when no SQL was produced, which is not the same as empty. **On an answered turn "
+       "this is the statement the engine SENT** — canonicalised, quoted and row-limited, read "
+       "from the ledger's `executed_sql`. On a refused or capped turn nothing was sent, so it "
+       "falls back to the last statement the model *proposed*, which may not execute at all: a "
+       "consumer that re-runs this field must gate on `outcome == 'answered'`, or it reports a "
+       "refusal as a broken statement — which is how 14 capped turns looked like an engine "
+       "defect on 2026-08-04"),
     _f("final_sql_source", Tier.outcome, Absence.not_applicable, _ID, Stage.stamp,
        "which rule selected it. v1 took the last passing query, so a turn that ran "
        "a sanity check after its real answer delivered the count while the correct "
