@@ -1297,3 +1297,92 @@ steps in it is worse than not offering the mode. `add_node(error_handler=...)` d
 installed LangGraph (verified) and `wrap_node` predates it; the two do the same job, so swapping
 is a refactor with no defect behind it. Parcels `{F, G, I, J}` remain built but unaccepted —
 acceptance is the maintainer's signature, not a test result.
+
+## 47. A quarter of the corpus's joins were unusable when pooled · *2026-08-04*
+
+Not a code change. A one-time migration of `corpora/gold-semantic-layer-20260804`, recorded
+because the numbers matter, because the tree is git-ignored and a regeneration undoes it, and
+because it exposed a leak nobody could see while it was masked.
+
+### What was wrong
+
+A `JoinAsset` names its endpoints, and a `MetricAsset` its `base_table`, by **physical name**.
+That is unambiguous inside one schema and ambiguous the moment 57 are pooled: `standort`,
+`kunden`, `spieler`, `guo_jia` and 17 other names exist in more than one.
+`retrieve/structure.py` refuses an ambiguous endpoint rather than guessing (ADR 0005 §2.8.2) —
+left-most resolution there fails **open**, licensing a table in the wrong schema and charging
+crossings to the wrong pair — so the edge is dropped and recorded.
+
+**232 of 928 join assets (25%) had an unresolvable endpoint.** Pooling cost `beer_factory` 5 of
+its 11 edges, including `kunden ↔ transaktion` — customers to transactions. A question needing
+that join declined `missing_join_path` in the pooled lake and answered when the same schema was
+served alone, which reads as a routing problem and is not one.
+
+### The migration
+
+Rewrite each bare reference as `<schema>.<table>`, where the schema comes from the file's own
+directory. `_table_lookup` already registers `table_id(schema, physical)` as a resolvable
+spelling, so no code changed.
+
+It **verifies rather than assumes**: a qualified id is written only when it matches a real
+`TableAsset` id, and anything unverifiable is left alone and reported. A wrong-but-resolvable
+endpoint is worse than a dropped edge, because it licenses the wrong table in silence — which is
+the failure `structure.py` exists to refuse. 1856 join endpoints + 399 `base_table`s rewritten,
+**zero** unverifiable.
+
+| | before | after |
+| --- | --- | --- |
+| structure problems | 267 | 24 |
+| ambiguous endpoints | 243 | **0** |
+| resolved join edges | 437 | 556 |
+
+`beer_factory` 11/11, `hockey` 14/14, `mondial_geo` 46/46, `car_retails` 7/7 — pooled now equals
+standalone for every schema checked. The 24 survivors are all `airline.Air Carriers`, which is
+the identifier-charset question and not this one.
+
+Tested both directions before trusting it: idempotent on the qualified tree, and correct on a
+de-qualified copy with surrounding lines intact.
+
+**The durable fix is upstream.** These files are generated (`_build/backbone.py` in the gold-layer
+bundle), so a regeneration reintroduces bare endpoints. The generator should emit qualified
+references; the script is a scratchpad artifact deliberately **not** kept in `tools/`, because a
+one-shot migration parked next to the lint gates reads as supported tooling.
+
+### The leak it exposed rather than caused
+
+Fixing this did **not** make the pooled turn answer, and chasing that found a third cause.
+
+136 term assets carry no schema tag. A term's tag is derived from its binding, and these bind to
+a **metric** rather than a column, so `schema_tag_for` has no schema to read. Untagged assets are
+carried forward unconditionally by pass-two — it cannot restrict what it cannot place — so a
+single lexical hit bridges schemas: `term_shakespeare_character_count` → its metric →
+`base_table` → `shakespeare.parrafos` and four of its columns enter `licensed` on a
+`beer_factory` question, and `connect` cannot join Shakespeare to a brewery.
+
+Before this migration that metric's `base_table` was ambiguous and the reference closure could
+not traverse it. **The defect was masking the leak.** Worth stating for its own sake: removing a
+failure can uncover another that was never reachable, so "problems went from 267 to 24" is not
+the same claim as "the turn works".
+
+Not fixed. A term bound to a metric should inherit the metric's schema — a transitive derivation
+`structure.py` can already make, since it resolves metric `base_table`s.
+
+### Where the pooled turn stands
+
+Three causes, in the order they bite:
+
+1. **Cross-schema licensing.** `route_top_n` is 3, so the top three schemas of 57 are unrelated
+   and the terminal set is disconnected by construction. No cross-schema join edges exist,
+   correctly, because none are declared.
+2. **Untagged metric-bound terms** bridge into a foreign schema even at `route_top_n=1`.
+3. ~~Ambiguous endpoints~~ — fixed here.
+
+And a fourth thing found while measuring: `route_top_n`, `max_steiner_points` and
+`max_crossings` are declared `Role.comparability` knobs that **nothing in production can set**.
+All three are read from per-turn `state` only (`route_retrieve.py:88`, `:181`, `:210`), and
+neither `Session.turn` nor `accept` writes those keys — only `eval/harness.py` and test
+fixtures do. Three sibling knobs in the same register (`candidate_depth`,
+`context_budget_chars`, `read_body_max_tokens`) correctly fall back to `knobs_resolved`. So the
+record publishes `route_top_n: 3` and routing genuinely used 3 — but only because the
+hard-coded default happens to equal the register's. Change the knob and the record reports the
+new value while routing keeps the old one, which is a comparability field that lies.
