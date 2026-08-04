@@ -1,6 +1,6 @@
 """Run the pooled data-lake eval end to end. Crash-safe, resumable, bounded concurrency.
 
-    uv run --frozen python tools/run_datalake_eval.py --workers 3 --effort xhigh
+    uv run --frozen python tools/run_datalake_eval.py --workers 2 --effort xhigh --resume
 
 **Why this is in ``tools/`` and not the scratchpad.** The 1 351-question arm takes hours,
 so it will be interrupted, resumed, and re-read by someone who did not start it. A one-shot
@@ -11,12 +11,15 @@ Three properties the earlier scratchpad driver lacked, each of which cost a run:
 * **Rows are appended as they complete.** A driver that writes at the end is one
   interruption away from having measured nothing. The 3-per-schema run took 50 minutes and
   its process was still holding a database connection long after the artifact was written.
-* **``--resume`` skips question ids already in the output.** So an interrupted run continues
-  instead of restarting, and re-running is cheap rather than a decision.
+* **``--resume`` keeps what was measured and *retries what crashed*.** A crashed row is not
+  a measurement, so skipping it would bake a permanent hole into the artifact and compute the
+  final score over a denominator that silently included it.
 * **Concurrency is bounded and declared.** ``--workers`` maps to
   ``harness.run_arm(workers=...)``, which gives each thread its own graph and its own
-  connector; the default is 3, which at ~18 k input tokens per question sits far under a
-  500 k TPM ceiling.
+  connector. The default is **2**: three workers at ``xhigh`` lost 30 of the first 194
+  questions to ``RateLimitError`` against a 500 k TPM ceiling — a 429 raised inside a node is
+  caught by the graph wrapper and the turn is marked ``crashed``, so a rate limit is a lost
+  measurement rather than a slow one. ``--max-retries`` (default 8) is the other half.
 
 Never prints the DSN or the API key.
 """
@@ -51,7 +54,14 @@ def main(argv: list[str] | None = None) -> int:
         help="reasoning effort (none/low/medium/high/xhigh); omit with --effort ''",
     )
     parser.add_argument("--top-n", type=int, default=None, help="override route_top_n")
-    parser.add_argument("--workers", type=int, default=3)
+    parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=8,
+        help="provider retries per call; 429s are retryable and the SDK default of 2 is not "
+        "enough at any concurrency",
+    )
     parser.add_argument("--per-schema", type=int, default=None, help="cap questions per schema")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--out", type=pathlib.Path, default=None)
@@ -78,7 +88,15 @@ def main(argv: list[str] | None = None) -> int:
     from governed_bi.govern.policy import GovernancePolicy
     from governed_bi.serve import session as session_mod
 
-    kwargs = {"model_provider": "openai", "use_responses_api": True}
+    # `max_retries` is not a nicety. A 429 raised inside a node is caught by the graph's
+    # wrapper and the turn is marked `crashed`, so a rate limit becomes a *lost measurement*
+    # rather than a slow one: a 3-worker run over this corpus lost 30 of its first 194
+    # questions that way (15%). The SDK default is 2.
+    kwargs = {
+        "model_provider": "openai",
+        "use_responses_api": True,
+        "max_retries": max(0, int(args.max_retries)),
+    }
     if args.effort:
         kwargs["reasoning_effort"] = args.effort
     model = init_chat_model(args.model, **kwargs)
@@ -111,16 +129,33 @@ def main(argv: list[str] | None = None) -> int:
     out_path = args.out or pathlib.Path("runs/eval") / f"live_full_{tag}.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # ── resume: keep what was *measured*, retry what crashed ──────────────────────
+    #
+    # A crashed row is not a measurement. Skipping it on resume would bake a permanent hole
+    # into the artifact — 30 rate-limited questions would stay unanswered no matter how many
+    # times the run was resumed, and the final EX would be computed over a denominator that
+    # silently included them. So the file is rewritten with the crashed rows dropped, and
+    # those question ids go back into the queue.
     done: set[str] = set()
+    retrying = 0
     if args.resume and out_path.exists():
+        kept_lines: list[str] = []
         for line in out_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line:
                 continue
             try:
-                done.add(str(json.loads(line)["question_id"]))
+                row = json.loads(line)
             except Exception:  # noqa: BLE001 — a truncated tail is one lost row, not a stop
                 continue
+            if str(row.get("outcome")) == "crashed":
+                retrying += 1
+                continue
+            kept_lines.append(line)
+            done.add(str(row.get("question_id")))
+        if retrying:
+            body = "".join(f"{line}\n" for line in kept_lines)
+            out_path.write_text(body, encoding="utf-8")
         questions = [q for q in questions if q["question_id"] not in done]
 
     order_sensitive = _order_sensitive(args.dataset)
@@ -137,7 +172,10 @@ def main(argv: list[str] | None = None) -> int:
         f"top_n={args.top_n or '(register default)'}\n"
         f"corpus={args.corpus_dir} ({len(session.assets_by_id)} assets, {len(schemas)} schemas, "
         f"{len(session.degradations)} degradations)\n"
-        f"questions={total}" + (f" (resumed, {len(done)} already done)" if done else ""),
+        f"questions={total}"
+        + (f" (resumed, {len(done)} measured" if done else "")
+        + (f", {retrying} crashed rows requeued" if retrying else "")
+        + (")" if done else ""),
         flush=True,
     )
     if not total:
