@@ -204,15 +204,41 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
     edges = structure.join_edges
     max_points = int_knob(state, "max_steiner_points")
 
+    # **Connect each component; license every one that connects.** Do not pick.
+    #
+    # Picking one was measured and it caps reachability at ``recall@1``. Over 1 351 BIRD
+    # test questions the router shortlisted the gold schema 823 times (``recall@3`` 0.609)
+    # and a single-component pick reached it only 0.442 of the time — every one of the 226
+    # losses ranked 2nd or 3rd. Ranking by pass-two score instead of by routing rank was
+    # worse (0.417), which is the useful part of the result: no *pick* rule can beat
+    # ``recall@1``, because picking is the thing that throws the other candidates away.
+    #
+    # Licensing all of them is sound rather than lax. ``licensed`` is govern's table
+    # allowlist, and a statement can only reach a table it names; ``check()`` refuses any
+    # it does not. What ``connect`` guarantees is a *retrieval* property — that the prompt
+    # carries a join path for the tables it offers — and that holds per component. So each
+    # component is connected on its own, its Steiner points are added, and
+    # ``complete_joins`` supplies every ON clause. The turn declines only when **no**
+    # component connects, which is now what ``missing_join_path`` means.
     groups = components(terminals, edges=edges)
-    if len(groups) > 1:
-        kept = _pick_component(groups, state, structure)
-        retrieved = _restrict_to_component(retrieved, kept, structure)
-        terminals = set(kept)
+    connected: set[str] = set()
+    added: set[str] = set()
+    unconnectable: list[frozenset[str]] = []
+    for group in groups:
+        result = connect(set(group), edges=edges, max_points=max_points)
+        if result.declined:
+            unconnectable.append(group)
+            continue
+        connected.update(str(t) for t in group)
+        added.update(str(a) for a in result.added)
 
-    result = connect(terminals, edges=edges, max_points=max_points)
-
-    if result.declined:
+    # ``terminals`` guards the decline, and its absence is not a connect failure. Zero
+    # terminals means retrieval licensed no table at all — there is nothing to join, and
+    # ``connect(set())`` has always returned "not declined" for exactly that reason. Without
+    # the guard this declined every such turn as ``over_connect_bounds``, which is both the
+    # wrong reason and the wrong outcome: the conformance suite's answered path licenses no
+    # table and is supposed to reach the agent.
+    if terminals and not connected:
         reason = _connect_decline_reason(terminals, edges, max_points)
         return {
             "path_kind": "decline",
@@ -222,10 +248,19 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
             "licensed": sorted(str(x) for x in terminals),
         }
 
-    licensed = frozenset(terminals | set(result.added))
+    if unconnectable:
+        # A component that cannot be joined internally is dropped from *both* licensing and
+        # context, so the prompt never shows a table the turn could not write a join for.
+        dropped = frozenset().union(*unconnectable)
+        retrieved = _restrict_to_component(
+            retrieved, frozenset(connected), structure, dropped=dropped
+        )
+
+    terminals = set(connected)
+    licensed = frozenset(connected | added)
 
     pulled_in = dict(retrieved.get("pulled_in") or {})
-    for asset_id in result.added:
+    for asset_id in added:
         pulled_in[str(asset_id)] = "connect"
     # §2.8's last row, over the final set. Joins are `pulled_in` and never enter
     # `licensed`: that field is govern's table allowlist (bounds.py), and a join id in
@@ -236,7 +271,7 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
 
     table_schemas = structure.table_schemas
     selected_schemas = set(state.get("schemas") or ())
-    crossings = _crossings(result.added, table_schemas, selected_schemas)
+    crossings = _crossings(added, table_schemas, selected_schemas)
 
     max_crossings = int_knob(state, "max_crossings")
     if len(crossings) > max_crossings:
@@ -509,37 +544,19 @@ def _crossings(
     return crossings
 
 
-def _pick_component(
-    groups: tuple[frozenset[str], ...],
-    state: Mapping[str, Any],
-    structure: CorpusStructure,
-) -> frozenset[str]:
-    """Which disconnected group of terminals the turn keeps.
-
-    **Routing's own ranking decides**, because it is the only evidence available about
-    which schema the question is about: the group holding a table of the highest-ranked
-    routed schema wins. Falling back to "the biggest group" first would let a wide schema
-    that merely shares a word outvote the schema the router put first.
-
-    Ties break on size and then on the lexicographically first table id, so the choice is
-    reproducible — a run that picked differently on a re-run would make every downstream
-    number incomparable.
-    """
-    table_schemas = structure.table_schemas
-    for schema in state.get("schemas") or ():
-        wanted = str(schema)
-        for group in groups:
-            if any(table_schemas.get(str(t)) == wanted for t in group):
-                return group
-    return max(groups, key=lambda g: (len(g), sorted((str(t) for t in g), reverse=True)[:1]))
-
-
 def _restrict_to_component(
     retrieved: dict[str, Any],
     kept: frozenset[str],
     structure: CorpusStructure,
+    *,
+    dropped: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Drop assets belonging to schemas no kept table belongs to.
+
+    ``dropped`` names the tables whose component could not be connected. Their schemas are
+    excluded **only when no kept table shares the schema** -- two components inside one
+    schema are possible, and dropping the whole schema for one of them would delete the
+    half that works.
 
     Licensing and context must agree. Narrowing ``licensed`` alone would leave the losing
     schema's tables and columns rendered in the prompt while being unqueryable, so the
@@ -552,9 +569,17 @@ def _restrict_to_component(
     """
     keep_schemas = {structure.table_schemas.get(str(t), "") for t in kept}
     keep_schemas.discard("")
+    if dropped:
+        # Tables named explicitly, so a schema that survives in another component keeps
+        # its assets. Only the unreachable *tables* go.
+        gone = {str(t) for t in dropped} - {str(t) for t in kept}
+    else:
+        gone = set()
     tags = structure.schema_tags
 
     def inside(asset_id: str) -> bool:
+        if str(asset_id) in gone:
+            return False
         tag = tags.get(str(asset_id))
         return tag is None or str(tag) in keep_schemas
 

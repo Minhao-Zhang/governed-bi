@@ -664,7 +664,11 @@ def test_a_real_turn_writes_every_required_field_on_every_terminal_path() -> Non
         ),
         _config("t-answered", off),
     )
-    assert answered["answer"]["outcome"] == "answered"
+    assert answered["answer"]["outcome"] == "answered", (
+        f"refused_by={answered['answer'].get('refused_by')!r} "
+        f"terminal_reason={answered.get('terminal_reason')!r} "
+        f"licensed={answered.get('licensed')!r} schemas={answered.get('schemas')!r}"
+    )
     assert not missing_required(answered["answer"]["record"])
 
 

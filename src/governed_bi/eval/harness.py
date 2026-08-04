@@ -9,6 +9,7 @@ from uuid import uuid4
 from governed_bi.eval.arms import ArmSpec, model_for_question
 from governed_bi.eval.grade import grade_turn
 from governed_bi.eval.oracle import oracle_grade
+from governed_bi.register.stages import Outcome
 from governed_bi.serve.graph import compile_graph
 
 __all__ = ["run_arm", "run_comparison", "project_turn"]
@@ -21,8 +22,16 @@ def run_arm(
     order_sensitive_qids: frozenset[str] | None = None,
     graph: Any | None = None,
     run_id: str | None = None,
+    session: Any | None = None,
 ) -> list[dict[str, Any]]:
-    """Run every question under one arm; return graded turn rows."""
+    """Run every question under one arm; return graded turn rows.
+
+    ``session`` is how a **quotable** run is produced. Without it each turn comes from
+    :func:`_base_turn`, which fabricates ``corpus_content_hash`` as ``f"corpus-{arm}"`` —
+    fine for a fixture, forged for a real corpus, because two runs over two different
+    corpora then compare equal. With a session, every id and every run constant is minted
+    by ``Session.turn``, which is the one place allowed to mint them.
+    """
     order_sensitive_qids = order_sensitive_qids or frozenset()
     run_id = run_id or f"run-{uuid4().hex[:12]}"
     base_cfg = arm.build_configurable()
@@ -52,7 +61,20 @@ def run_arm(
         thread_id = f"{run_id}-{arm.name}-{qid}"
         conf["thread_id"] = thread_id
 
-        turn = _base_turn(q, run_id=run_id, arm=arm.name)
+        if session is not None:
+            # The session mints the ids and the run constants; the eval's own
+            # ``question_id`` stays in the measurement row, where `project_turn` reads it.
+            # It deliberately cannot enter the turn: `Session.turn` digests the question
+            # text for `question_id` so a re-serve is recognisable, and letting a caller
+            # set it would break that.
+            turn = session.turn(
+                str(q.get("question") or q.get("utterance") or qid),
+                turn_index=1,
+                thread_id=thread_id,
+                identity={"token": f"eval-{run_id}"},
+            )
+        else:
+            turn = _base_turn(q, run_id=run_id, arm=arm.name)
         # Inject route hits when no index so answered path can reach agent.
         if conf.get("index") is None and "facet_route_hits" not in turn:
             db = str(q.get("db_id") or "fixture")
@@ -104,7 +126,16 @@ def project_turn(
     record = answer.get("record") if isinstance(answer, Mapping) else None
     if not isinstance(record, Mapping):
         record = {}
-    outcome = str(answer.get("outcome") or record.get("outcome") or "crashed")
+    # **A paused turn is not a crashed one.** `ask_user` interrupts, no node writes
+    # `answer`, and this defaulted to "crashed" — so 7 of 57 questions in a live batch were
+    # reported as engine crashes with no stage and no exception class, while every one of
+    # them had simply asked the analyst a question. `python -m governed_bi.serve` has exit
+    # code 4 for exactly this distinction; the harness had none.
+    interrupted = bool(state.get("__interrupt__")) and not answer
+    if interrupted:
+        outcome = Outcome.clarification.value
+    else:
+        outcome = str(answer.get("outcome") or record.get("outcome") or "crashed")
     crashed = outcome == "crashed"
 
     delivery = state.get("delivery") or {}
@@ -174,6 +205,23 @@ def project_turn(
         "context_hash": context_hash,
         "facet_channels": facet_channels,
         "facet_degraded": bool(record.get("facet_degraded") or False),
+        # **Retrieval attribution, and the reason it is here.** A row could say EX=0 and
+        # not say *why*: a miss because the gold schema was never licensed is a routing
+        # problem, and a miss with the right tables in hand is a generation problem. Without
+        # these two, a live run over 57 questions reported `reached_gold 0/57` on a corpus
+        # measured at 0.608 — the number was absent, not zero, and absent read as zero.
+        # Crash attribution. `outcome: "crashed"` with no stage and no exception class is
+        # unactionable, and a run where 16% of turns crash needs to say where.
+        "error_type": record.get("error_type") or state.get("failure", {}).get("error_type")
+        if isinstance(state.get("failure"), Mapping)
+        else record.get("error_type"),
+        "licensed": list(record.get("licensed") or ()),
+        "schemas": list(record.get("schemas") or ()),
+        "terminal_reason": record.get("terminal_reason"),
+        # Carried so the run can be **priced**. `observed_spend` reads it; without it
+        # `estimate_run_cost` sees no usage records and correctly refuses to price a run,
+        # which is honest and useless.
+        "usage": list(record.get("usage") or ()),
         "guardrail_error": guardrail_errors > 0,
         "re_served": n_re_served > 0,
         "negative_failed_open": bool(negative_failed_open),

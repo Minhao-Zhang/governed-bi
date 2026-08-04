@@ -97,11 +97,17 @@ def test_route_top_n_from_knobs_resolved_changes_the_turn(
         f"schemas={wide.get('schemas')}"
     )
     assert wide.get("path_kind") == "answered", (
-        f"two disconnected schemas must no longer decline -- one component is kept: "
-        f"path_kind={wide.get('path_kind')} reason={wide.get('terminal_reason')!r}"
+        f"two schemas sharing no join edge must not decline -- each component is connected "
+        f"on its own: path_kind={wide.get('path_kind')} reason={wide.get('terminal_reason')!r}"
     )
-    assert all(t.startswith("ops_b.") for t in wide.get("licensed") or []), (
-        f"the losing component's tables are still licensed: {wide.get('licensed')}"
+    # **Both** components stay licensed, and that is the design rather than laxity.
+    # `connect_node` used to keep one, which was measured to cap reachability at the
+    # router's `recall@1` (0.442 on BIRD, against `recall@3` = 0.609) because picking is
+    # what throws the other candidates away. `licensed` is a table allowlist; a statement
+    # can only reach a table it names, and `connect` guarantees a join path *per component*.
+    licensed_schemas = {t.split(".", 1)[0] for t in wide.get("licensed") or []}
+    assert licensed_schemas == {"sales_a", "ops_b"}, (
+        f"a shortlisted schema was dropped from licensing: {sorted(licensed_schemas)}"
     )
 
     # The knob set the way `Session` publishes it, and *not* in `state` -- which is the

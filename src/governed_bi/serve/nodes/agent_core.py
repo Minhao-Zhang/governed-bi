@@ -83,7 +83,7 @@ def agent_core_node(state: dict, config: RunnableConfig) -> dict:
     clarifications = list((result.get("clarifications_by_call") or {}).values())
     delivered = dict(result.get("tool_delivered") or {})
 
-    generated_sql = _last_run_query_sql(out_messages)
+    generated_sql = _last_executed_sql(attempts) or _last_run_query_sql(out_messages)
     delivery = DeliveryTracker(delivered).merge_into(state.get("delivery"))
     usage = [_usage_row(model, fresh, state.get("turn_index", 1))]
 
@@ -205,6 +205,30 @@ def _stub(state: dict) -> dict:
         ],
         "clarification_requested": False,
     }
+
+
+def _last_executed_sql(attempts: Any) -> str | None:
+    """The last statement the engine actually **sent**, from the ledger.
+
+    Preferred over the model's ``run_query`` argument, which is what ``generated_sql`` used
+    to hold — so a turn that succeeded reported a statement the database never saw.
+    ``canonicalise`` rewrites identifiers to the corpus's declared spelling and quotes them
+    (ADR 0008 D2) and ``apply_row_limit`` appends the cap, so the two strings differ on
+    every mixed-case identifier in the lake. The ledger hashed the executed one, so the
+    record carried the hash of one statement beside the text of another — and an eval that
+    re-executes ``generated_sql`` fails on exactly those, understating EX.
+
+    Falls back to the tool argument when nothing executed: a refused attempt still produced
+    SQL, and "the model wrote this and it was refused" is worth recording.
+    """
+    last: str | None = None
+    for attempt in attempts or ():
+        if not isinstance(attempt, Mapping):
+            continue
+        sql = attempt.get("executed_sql")
+        if sql:
+            last = str(sql)
+    return last
 
 
 def _last_run_query_sql(messages: list[Any]) -> str | None:

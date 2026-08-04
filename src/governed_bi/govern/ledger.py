@@ -93,6 +93,17 @@ class AttemptRecord(TypedDict):
     passed: bool
     reason_code: str
     path: ExecutorPath
+    #: **The statement that was sent**, after canonicalisation and the row limit — not the
+    #: string the model wrote. ``None`` when nothing ran.
+    #:
+    #: The record's ``generated_sql`` used to be the model's raw tool argument, so a turn
+    #: that succeeded reported a statement the database had never seen: canonicalisation
+    #: rewrites an identifier to the corpus's declared spelling and quotes it (ADR 0008
+    #: D2), and ``apply_row_limit`` appends the cap. The ledger already hashed the executed
+    #: string, so one row carried the hash of one statement and the text of another — and
+    #: an eval that re-executes ``generated_sql`` then fails on every mixed-case identifier
+    #: the model happened to write unquoted, understating EX for 11% of the lake.
+    executed_sql: str | None
 
 
 class ExecutionRecord(TypedDict):
@@ -178,14 +189,22 @@ def ledger_entry(
     }
 
 
-def attempt_record(verdict: CheckVerdict, path: ExecutorPath) -> AttemptRecord:
-    """Project a verdict into the measurement layer's per-attempt row."""
+def attempt_record(
+    verdict: CheckVerdict, path: ExecutorPath, *, executed_sql: str | None = None
+) -> AttemptRecord:
+    """Project a verdict into the measurement layer's per-attempt row.
+
+    ``executed_sql`` is what :func:`~governed_bi.govern.pipeline.prepare` produced, so the
+    row says what the engine sent rather than what the model asked for. It defaults to
+    ``None`` because a refused attempt sent nothing, which is a value and not a gap.
+    """
     failed = verdict["failed_layer"]
     return AttemptRecord(
         verdict_layer=failed.name if failed is not None else None,
         passed=verdict["passed"],
         reason_code=verdict["reason_code"],
         path=path,
+        executed_sql=executed_sql,
     )
 
 

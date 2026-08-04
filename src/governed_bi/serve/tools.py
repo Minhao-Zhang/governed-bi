@@ -483,7 +483,9 @@ def _run_query(
     if connector is None:
         return (
             "run_query error: no connector configured",
-            attempt_record(refuse("r_not_a_read", "no connector configured"), "agent"),
+            attempt_record(
+                refuse("r_not_a_read", "no connector configured"), "agent", executed_sql=None
+            ),
         )
 
     if not isinstance(corpus, AnalystCorpus):
@@ -516,7 +518,9 @@ def _run_query(
         dialect=getattr(connector, "dialect", None) or "sqlite",
         policy=policy,
     )
-    attempt = attempt_record(verdict=prepared.verdict, path="agent")
+    attempt = attempt_record(
+        verdict=prepared.verdict, path="agent", executed_sql=prepared.sql
+    )
     if prepared.sql is None:
         detail = prepared.verdict.get("detail") or prepared.verdict.get("reason_code")
         return f"run_query refused: {detail}", attempt

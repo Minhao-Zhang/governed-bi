@@ -14,7 +14,7 @@ from langchain_core.messages import AIMessage
 from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.serve.scripted_model import ScriptedChatModel
 
-__all__ = ["ArmSpec", "oracle_arm", "stub_arm", "scripted_arm"]
+__all__ = ["ArmSpec", "oracle_arm", "stub_arm", "scripted_arm", "live_arm"]
 
 BuildConfigurable = Callable[[], dict[str, Any]]
 
@@ -41,6 +41,28 @@ def oracle_arm(*, connector: Any, **extra: Any) -> ArmSpec:
         }
 
     return ArmSpec(name="oracle", build_configurable=build, oracle_only=True)
+
+
+def live_arm(session: Any, *, name: str = "live", **extra: Any) -> ArmSpec:
+    """A real model over a real corpus — the arm that costs money.
+
+    Built from a :class:`~governed_bi.serve.session.Session` rather than from loose
+    keyword arguments, and that is the point: the session is what mints
+    ``corpus_content_hash``, ``prompt_set_hash`` and ``knobs_resolved``, and those are the
+    fields every quotability gate reads. ``_base_turn`` in the harness fabricated
+    ``corpus_content_hash`` as ``f"corpus-{arm}"`` — so two runs over two *different*
+    corpora compared equal, which is a forged comparison rather than a wrong one, and is
+    v1's ``corpus_content_hash == "unknown"`` defect with a friendlier spelling.
+
+    Pass the returned arm to ``run_arm(..., session=session)``; the harness then takes
+    each turn from ``Session.turn`` instead of building one.
+    """
+    def build() -> dict[str, Any]:
+        cfg = dict(session.configurable()["configurable"])
+        cfg.update(extra)
+        return cfg
+
+    return ArmSpec(name=name, build_configurable=build, extra={"session": session})
 
 
 def stub_arm(**extra: Any) -> ArmSpec:
