@@ -403,3 +403,51 @@ def test_fold_map_reports_ambiguity_rather_than_choosing() -> None:
     spellings, ambiguous = fold_map(["CustomerID", "customerid", "City"])
     assert ambiguous == frozenset({"customerid"})
     assert spellings["city"] == "City"
+
+
+def test_the_ledger_records_the_statement_that_ran_not_the_one_that_was_asked_for() -> None:
+    """ADR 0008. ``generated_sql`` was the model's ``run_query`` argument.
+
+    Canonicalisation rewrites identifiers to the corpus's declared spelling and quotes
+    them, and ``apply_row_limit`` appends the cap — so on a mixed-case identifier the two
+    strings differ. The ledger already hashed the *executed* one, which left one row
+    carrying the hash of one statement beside the text of another, and made an eval that
+    re-executes ``generated_sql`` fail on every such identifier while the turn itself had
+    succeeded.
+    """
+    from governed_bi.govern.layers import allow, refuse
+    from governed_bi.govern.ledger import attempt_record
+    from governed_bi.serve.tools import execution_from_attempts
+
+    executed = 'SELECT COUNT(*) FROM "address"."CBSA" LIMIT 200001'
+    row = attempt_record(allow(evaluated=[], bound={}), "agent", executed_sql=executed)
+    assert row["executed_sql"] == executed
+
+    # Survives the projection into the record, which is where it has to arrive.
+    attempts = execution_from_attempts([row])["attempts"]
+    assert attempts[0]["executed_sql"] == executed
+
+    # A refused attempt sent nothing, and that is a value rather than a gap: the key is
+    # present and null, so a reader never has to tell "absent" from "did not run".
+    refused = attempt_record(refuse("r_table_not_licensed", "nope"), "agent")
+    assert "executed_sql" in refused and refused["executed_sql"] is None
+
+    from governed_bi.serve.tools import _cap_attempt
+
+    assert "executed_sql" in _cap_attempt()
+
+
+def test_agent_core_prefers_the_executed_statement_over_the_tool_argument() -> None:
+    """The selection rule, in isolation: ledger first, tool argument as the fallback.
+
+    The fallback is not a leftover — a refused attempt still produced SQL, and "the model
+    wrote this and it was refused" is worth recording.
+    """
+    from governed_bi.serve.nodes.agent_core import _last_executed_sql
+
+    assert _last_executed_sql([]) is None
+    assert _last_executed_sql([{"executed_sql": None}]) is None
+    assert _last_executed_sql([{"executed_sql": "A"}, {"executed_sql": "B"}]) == "B"
+    # The *last* one that ran, not the last row: a refused retry after a passing query
+    # must not blank the statement that answered.
+    assert _last_executed_sql([{"executed_sql": "A"}, {"executed_sql": None}]) == "A"

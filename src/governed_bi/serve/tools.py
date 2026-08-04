@@ -322,6 +322,10 @@ def _cap_attempt() -> AttemptRecord:
         passed=False,
         reason_code=ATTEMPT_CAP_REFUSED_BY,
         path="agent",
+        # Stated, not omitted. A ``TypedDict`` tolerates a missing key at runtime, so a row
+        # built without this one forces every consumer to ``.get()`` defensively -- and a
+        # capped attempt sent nothing, which is a value.
+        executed_sql=None,
     )
 
 
