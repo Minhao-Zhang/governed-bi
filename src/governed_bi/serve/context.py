@@ -293,7 +293,9 @@ def _structural_line(asset: Any) -> str:
                 parts.append("suspect=true")
         return " ".join(parts)
     if at == "join":
-        left, right, on = _field(asset, "left_table") or "", _field(asset, "right_table") or "", _field(asset, "on") or ""
+        left = _field(asset, "left_table") or ""
+        right = _field(asset, "right_table") or ""
+        on = _field(asset, "on") or ""
         parts = [f"join {escape_field(str(left))} >< {escape_field(str(right))} on {escape_field(str(on))}"]
         card = _field(asset, "cardinality")
         if card is not None:

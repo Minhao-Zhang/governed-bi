@@ -31,9 +31,11 @@ from governed_bi.retrieve.structure import CorpusStructure, complete_joins
 from governed_bi.serve.nodes.pass_two import pass_two_retrieve
 from governed_bi.serve.runtime import (
     FUSE_WEIGHTS,
-    configurable as runtime_config,
     corpus_structure,
     facet_hits,
+)
+from governed_bi.serve.runtime import (
+    configurable as runtime_config,
 )
 from governed_bi.serve.state import TERMINAL_PATH_KINDS
 
@@ -64,7 +66,19 @@ def empty_retrieved(
 
 
 def route_node(state: dict, config: RunnableConfig) -> dict:
-    """Pass-one evidence → top-N schemas → pass-two re-search (or F1 fallback)."""
+    """Pass-one evidence → top-N schemas → pass-two re-search (or F1 fallback).
+
+    **The terminal guard is not boilerplate here; it is the one place it was missing.**
+    ``route`` is the fan-in of five facet nodes, so it runs whenever *any* of them ran —
+    including when one crashed and ``wrap.py`` marked the turn ``crashed``. Every other node
+    downstream guards, and this one did not, so a facet crash proceeded through routing,
+    retrieval, assembly and a full billed model call before ``stamp`` recorded the crash that
+    had already happened. It also wrote ``"path_kind": None`` unconditionally, which erased
+    that mark outright — the reason ``settle_path_kind`` now treats ``None`` as a no-op.
+    """
+    if state.get("path_kind") in TERMINAL_PATH_KINDS:
+        return {}
+
     structure = corpus_structure(config)
     hits = _route_hit_triples(state, structure)
     ranking = sorted(
@@ -76,13 +90,15 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
     schemas = [schema for schema, _ in eligible[:top_n]]
 
     if not schemas:
-        retrieved = empty_retrieved(ranking)
+        # ``schema_ranking`` is **not** returned as a top-level key. It was, and
+        # ``ServeState`` declares no such channel, so LangGraph dropped it — while ``stamp``
+        # read the field it publishes out of ``retrieved``, where ``empty_retrieved`` had
+        # already put it. One write reached the record and the other went nowhere.
         return {
             "schemas": [],
             "path_kind": "decline",
             "terminal_reason": "no_schema_matched",
-            "retrieved": retrieved,
-            "schema_ranking": ranking,
+            "retrieved": empty_retrieved(ranking),
         }
 
     cfg = runtime_config(config)
@@ -100,12 +116,9 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
         # No index: F1-compatible — filter pass-one hits (empty when only injector).
         retrieved = _retrieved_for_schemas(state, schemas, ranking, structure)
 
-    out: dict[str, Any] = {
-        "schemas": schemas,
-        "schema_ranking": ranking,
-        "retrieved": retrieved,
-        "path_kind": None,
-    }
+    # No ``path_kind`` key at all. Routing succeeding is not a path kind, and the node has
+    # nothing to say about one — saying ``None`` was how a crash got erased.
+    out: dict[str, Any] = {"schemas": schemas, "retrieved": retrieved}
     licensed = list((retrieved.get("by_type") or {}).get("table") or ())
     if licensed:
         out["licensed"] = sorted(str(x) for x in licensed)

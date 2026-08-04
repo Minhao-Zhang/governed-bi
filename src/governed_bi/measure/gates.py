@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Mapping
 
 from ..register.quantity import Measured
 from ..register.record import GATE_CONDITIONS

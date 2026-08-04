@@ -48,6 +48,7 @@ from ..ports import Embedder
 from ..register.knobs import defaults as knob_defaults
 from ..retrieve.index import UnifiedIndex, build_index
 from ..retrieve.structure import CorpusStructure, build_structure
+from .state import PER_TURN_RESET
 from .tools import SYSTEM_PROMPT
 
 __all__ = ["Session", "from_corpus_dir", "from_live_schema"]
@@ -137,12 +138,27 @@ class Session:
         Ids are digests of the run and the turn rather than random, so a resumed turn keeps
         its identity. ``question_id`` digests the question text, so the same question asked
         twice in one run is recognisably the same question — which is what a re-serve is.
+
+        **It also clears every per-turn channel, and that is not tidiness.** Under a
+        checkpointer a channel outlives its turn, and nothing here cleared one — so a turn
+        that crashed left ``path_kind="crashed"`` in the thread, ``_after_guard`` sent the
+        **next** turn straight to ``stamp``, and that conversation could never be served
+        again. The quieter half is the same shape: a turn refused at ``guard`` never reaches
+        ``negative_gate``, so it inherited the *previous* turn's ``negative`` verdict and
+        stamped it into its own record as if the gate had run.
+
+        Which fields to clear lives in :data:`~governed_bi.serve.state.PER_TURN_RESET`, beside
+        the channel declarations it has to track, and
+        ``tests/serve/test_turn_contract.py`` fails until every declared channel is classified
+        as per-turn, accumulating, turn identity or a test hook. A new channel is therefore
+        cleared by being declared, rather than by someone remembering this method exists.
         """
         if not question or not question.strip():
             raise ValueError("a turn needs a question; an empty one has no answer to record")
         turn_id = _digest(self.run_id, turn_index, question)
         self._turns.append(turn_id)
         return {
+            **PER_TURN_RESET,
             "question": question,
             "turn_index": turn_index,
             "thread_id": thread_id or self.run_id,
@@ -157,7 +173,6 @@ class Session:
             "n_re_served": 0,
             "messages": [],
             "usage": [],
-            "clarifications": [],
         }
 
     # ── what the caller must look at before serving ───────────────────────────

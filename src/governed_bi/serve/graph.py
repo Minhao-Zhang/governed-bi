@@ -114,7 +114,14 @@ def build_graph(*, agent_checkpointer: Any = None, accept: Any = None) -> StateG
     graph.add_node("agent_core", wrap_node("agent_core", _agent))
     graph.add_node("refuse", wrap_node("refuse", refuse_node))
     graph.add_node("decline", wrap_node("decline", decline_node))
-    graph.add_node("stamp", wrap_node("stamp", stamp))
+    # **``stamp`` is the one node that must not be wrapped.** ``wrap_node`` turns an
+    # exception into ``{"failure": ..., "path_kind": "crashed"}`` so the turn is *recorded* by
+    # the next node — and for every other node that next node is ``stamp``. There is nothing
+    # after ``stamp``, so wrapping it converted "the recorder crashed" into a run that
+    # reported no ``answer`` at all and no reason: ``graph.invoke`` returned a state with the
+    # key absent, and a caller reading ``out["answer"]["record"]`` got a ``KeyError`` several
+    # frames from the cause. Unwrapped, the traceback names the line.
+    graph.add_node("stamp", stamp)
 
     def _fanout_passthrough(state: ServeState) -> dict[str, Any]:
         return {}

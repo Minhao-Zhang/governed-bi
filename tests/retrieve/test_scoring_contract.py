@@ -268,8 +268,8 @@ def test_budgets_come_from_the_register() -> None:
     ``NegativeExampleAsset`` was embedded, indexed and structurally unretrievable. The
     budget is a column of the asset policy row in ``register/assets.py``.
     """
-    from governed_bi.retrieve import budget as module  # type: ignore[import-not-found]
     from governed_bi.register import assets
+    from governed_bi.retrieve import budget as module  # type: ignore[import-not-found]
 
     for asset_type in assets.AssetType:
         assert module.budget_for(asset_type) is not None, (
@@ -285,8 +285,8 @@ def test_pulled_in_assets_do_not_consume_budget_and_stay_distinguishable() -> No
     structural neighbours, and merging them into the hit list would make attribution
     claim retrieval found something it did not.
     """
-    from governed_bi.retrieve.budget import apply_budgets  # type: ignore[import-not-found]
     from governed_bi.register import assets
+    from governed_bi.retrieve.budget import apply_budgets  # type: ignore[import-not-found]
 
     cap = assets.ASSET_REGISTER[assets.AssetType.table].budget
     assert isinstance(cap, int), "this test assumes table has a numeric budget"

@@ -16,7 +16,8 @@ from governed_bi.retrieve.budget import apply_budgets
 from governed_bi.retrieve.fuse import fuse
 from governed_bi.retrieve.index import UnifiedIndex
 from governed_bi.retrieve.semantic import cosine
-from governed_bi.serve.runtime import FUSE_WEIGHTS, candidate_depth, facet_hits as hits_of
+from governed_bi.serve.runtime import FUSE_WEIGHTS, candidate_depth
+from governed_bi.serve.runtime import facet_hits as hits_of
 
 __all__ = ["pass_two_retrieve"]
 

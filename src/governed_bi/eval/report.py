@@ -15,7 +15,6 @@ from governed_bi.measure.stats import McNemarResult, mcnemar
 from governed_bi.register.quantity import Measured
 from governed_bi.register.record import GATE_CONDITIONS as _GATE_TEXT
 
-
 __all__ = [
     "CONTEXT_HASH_THRESHOLD",
     "arm_population",

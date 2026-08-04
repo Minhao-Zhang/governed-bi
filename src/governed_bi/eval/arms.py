@@ -5,7 +5,7 @@ Knobs match serve defaults. No eval-only permissive overrides.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
