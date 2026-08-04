@@ -20,17 +20,10 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI
 
-from governed_bi.api.browse import (
-    DEFAULT_NODE_BUDGET,
-    apply_where,
-    columns_for,
-    parse_where,
-    row_for,
-    sort_rows,
-    subgraph,
-)
+from governed_bi.api.browse import DEFAULT_NODE_BUDGET, subgraph
+from governed_bi.api.browse_routes import router as browse_router
 from governed_bi.api.graph_app import session_from_environment
 from governed_bi.api.trace_store import (
     SUMMARY_FIELDS,
@@ -39,12 +32,15 @@ from governed_bi.api.trace_store import (
     get_turn,
     list_turns,
 )
-from governed_bi.corpus.schema import class_for
 from governed_bi.register.assets import ASSET_REGISTER
 
 __all__ = ["app"]
 
 app = FastAPI(title="governed-bi", version="2")
+
+# The browsing routes live beside their logic (`api/browse.py`), included rather than
+# re-declared so there is one definition of `/schema` and one of `/corpus/rows`.
+app.include_router(browse_router)
 
 
 def _session() -> Any:
@@ -167,36 +163,6 @@ def health() -> dict[str, Any]:
         "n_degradations": len(session.degradations),
         "findings": [str(p) for p in session.problems],
     }
-
-
-@app.get("/schema")
-def schema(schema: str | None = None) -> list[dict[str, Any]]:
-    """Every table as the UI's `TableView`, with its columns."""
-    session = _session()
-    tables = [
-        a for a in session.assets_by_id.values()
-        if a.asset_type.value == "table" and (schema is None or getattr(a, "schema", None) == schema)
-    ]
-    out: list[dict[str, Any]] = []
-    for table in sorted(tables, key=lambda a: a.id):
-        columns = [
-            {
-                "id": c.id,
-                "name": getattr(c, "physical_name", c.id.rsplit(".", 1)[-1]),
-                "summary": c.summary,
-                "type": getattr(c, "data_type", None),
-            }
-            for c in session.assets_by_id.values()
-            if c.asset_type.value == "column" and c.id.startswith(f"{table.id}.")
-        ]
-        out.append({
-            "id": table.id,
-            "name": getattr(table, "physical_name", table.id),
-            "schema": getattr(table, "schema", None),
-            "summary": table.summary,
-            "columns": sorted(columns, key=lambda c: c["id"]),
-        })
-    return out
 
 
 @app.get("/corpus/assets")
@@ -814,170 +780,3 @@ def audit_corpus() -> dict[str, Any]:
     }
 
 
-# ── browsing: filtering, the lean catalog, and bounded relationships ──────────
-#
-# ADR 0009. The four routes below are the ones `capabilities.can_scope` gates, and the UI
-# was already written against them — they returned 404, so the UI fell back to the flat
-# `/schema` + `/corpus/assets` dumps (937 KB and 2.25 MB measured on the live lake).
-
-
-@app.get("/corpus/fields")
-def corpus_fields(type: str | None = None) -> dict[str, Any]:
-    """The filterable columns of one asset type, **derived from its dataclass**.
-
-    The UI renders its filter row from this, so a field added to ``corpus/schema.py`` becomes
-    filterable with no change here and none in TypeScript. A column list written in this
-    route would be the drift ``register/`` exists to end — and it would drift silently,
-    because a missing column is indistinguishable from one somebody chose not to expose.
-    """
-    known = {t.value: t for t in ASSET_REGISTER}
-    if type is None or type not in known:
-        return {
-            "type": None,
-            "columns": [],
-            "types": sorted(known),
-            "detail": None if type is None else f"unknown asset type {type!r}",
-        }
-    asset_type = known[type]
-    return {
-        "type": type,
-        "columns": columns_for(asset_type, class_for(type)),
-        "types": sorted(known),
-    }
-
-
-@app.get("/corpus/rows")
-def corpus_rows(
-    type: str,
-    where: list[str] | None = Query(default=None),
-    sort: str | None = None,
-    order: str = "asc",
-    offset: int = 0,
-    limit: int = 50,
-) -> dict[str, Any]:
-    """Filtered, sorted, paginated assets of one type. ADR 0009 D1.
-
-    ``where`` repeats as ``field:op:value``. One opaque triple rather than a query parameter
-    per field, because the parameter set must not grow with the field set — that is three
-    places to forget a field instead of none.
-
-    A predicate naming an unknown field or an unsupported operator comes back in
-    ``unknown_where`` and is **not applied**. Ignoring it would render a filtered-looking
-    list that is not filtered, which is the same defect class as a gate that never fires.
-
-    ``total`` is the count **after** filtering: returning the unfiltered total beside a
-    filtered page is how a reader concludes their filter did nothing.
-    """
-    known_types = {t.value: t for t in ASSET_REGISTER}
-    if type not in known_types:
-        return {"rows": [], "total": 0, "offset": 0, "limit": limit, "columns": [],
-                "unknown_where": [], "detail": f"unknown asset type {type!r}"}
-
-    session = _session()
-    columns = columns_for(known_types[type], class_for(type))
-    ops_by_field = {column["name"]: column["ops"] for column in columns}
-
-    predicates, malformed = parse_where(where or ())
-    assets = [a for a in session.assets_by_id.values() if a.asset_type.value == type]
-    matched, unknown = apply_where(assets, predicates, ops_by_field)
-    ordered = sort_rows(matched, sort, order)
-
-    start = max(0, int(offset))
-    end = start + max(1, min(500, int(limit)))
-    return {
-        "rows": [row_for(asset) for asset in ordered[start:end]],
-        "total": len(ordered),
-        "offset": start,
-        "limit": end - start,
-        "columns": columns,
-        "unknown_where": [*unknown, *malformed],
-    }
-
-
-@app.get("/schema/summary")
-def schema_summary(
-    schema: str | None = None, limit: int = 200, offset: int = 0
-) -> dict[str, Any]:
-    """The lean table catalog: enough for a browser row and a badge, no prose.
-
-    This is what removes the 937 KB. ``/schema`` inlines every column's ``summary`` and
-    ``body``; a catalog row needs a physical name, a type, a role and two flags, and the
-    prose is fetched for the one table someone opens.
-    """
-    session = _session()
-    tables = sorted(
-        (
-            a
-            for a in session.assets_by_id.values()
-            if a.asset_type.value == "table"
-            and (schema is None or getattr(a, "schema", None) == schema)
-        ),
-        key=lambda a: a.id,
-    )
-    start = max(0, int(offset))
-    end = start + max(1, min(1000, int(limit)))
-    items = [_table_summary(session, table) for table in tables[start:end]]
-    return {"total": len(tables), "items": items}
-
-
-@app.get("/schema/{table_id}")
-def schema_detail(table_id: str) -> dict[str, Any]:
-    """One table's full detail, for a detail sheet. Declared **after** ``/schema/summary``
-    so the literal path wins the route match — FastAPI resolves in declaration order, and a
-    path parameter declared first would swallow ``summary`` as a table id."""
-    session = _session()
-    table = session.assets_by_id.get(table_id)
-    if table is None or table.asset_type.value != "table":
-        return {"id": table_id, "found": False, "columns": []}
-    return _table_view(session, table)
-
-
-def _table_summary(session: Any, table: Any) -> dict[str, Any]:
-    columns = [session.assets_by_id.get(cid) for cid in (getattr(table, "columns", ()) or ())]
-    columns = [c for c in columns if c is not None]
-    lean = [
-        {
-            "physical_name": getattr(c, "physical_name", ""),
-            "physical_type": getattr(c, "physical_type", None) or "",
-            "role": getattr(getattr(c, "role", None), "value", None),
-            "reliability": getattr(getattr(c, "reliability", None), "status", None).value
-            if getattr(getattr(c, "reliability", None), "status", None) is not None
-            else "ok",
-            "excluded": bool(getattr(getattr(c, "governance", None), "excluded", False)),
-        }
-        for c in columns
-    ]
-    provenance = getattr(getattr(table, "audit", None), "provenance", None)
-    return {
-        "id": table.id,
-        "physical_name": getattr(table, "physical_name", table.id),
-        "schema": getattr(table, "schema", "") or "",
-        "row_count": getattr(table, "row_count", None),
-        "n_columns": len(lean),
-        "excluded": bool(getattr(getattr(table, "governance", None), "excluded", False)),
-        "has_suspect": any(c["reliability"] == "suspect" for c in lean),
-        "provenance_status": getattr(getattr(provenance, "status", None), "value", None),
-        "columns": lean,
-    }
-
-
-def _table_view(session: Any, table: Any) -> dict[str, Any]:
-    """The same shape ``/schema`` emits for one table, so both feed one client type."""
-    columns = [
-        {
-            "id": c.id,
-            "name": getattr(c, "physical_name", c.id.rsplit(".", 1)[-1]),
-            "summary": c.summary,
-            "type": getattr(c, "physical_type", None),
-        }
-        for cid in (getattr(table, "columns", ()) or ())
-        if (c := session.assets_by_id.get(cid)) is not None
-    ]
-    return {
-        "id": table.id,
-        "found": True,
-        "name": getattr(table, "physical_name", table.id),
-        "schema": getattr(table, "schema", None),
-        "summary": table.summary,
-        "columns": columns,
-    }
