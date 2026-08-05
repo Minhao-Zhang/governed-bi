@@ -52,10 +52,19 @@ from governed_bi.register.knobs import knob_default  # noqa: E402
 #: it also drops the catalogue vocabulary every one of the 57 schemas shares (``database``,
 #: ``table``, ``record``), which is the half that matters here: a term fitting twenty schemas
 #: cannot separate them, and BM25 charges for it anyway.
+#: Extended by **measuring** which extracted words appear in the most schemas, not by taste. Over
+#: the 57 gold bodies only four words reached 6 or more: ``tracks`` (15), ``catalog`` (11),
+#: ``reference`` (7), ``sales`` (6). Only ``tracks`` is added -- it is a verb of the same class as
+#: ``holds`` and ``carries``, which were already here. The other three are nouns that carry real
+#: meaning (a catalog is not a transaction log, and ``sales`` names a domain four schemas are
+#: about), and stopping nouns is where a stopword list starts eroding the signal it exists to
+#: concentrate. The function words below were simply missing.
 STOP = frozenset(
     "a an the of and or in on for to with by is are was were be been from as at that this it its "
     "which who whom what when where how many much per each all any not no one row rows table "
-    "tables database holds record records carries plus their its also every".split()
+    "tables database holds record records carries plus their its also every tracks "
+    "about into over such they them these those other both via within across along whose "
+    "including includes contain contains containing store stores stored".split()
 )
 
 
@@ -79,22 +88,84 @@ def content_words(text: str, *, limit: int) -> list[str]:
     return out
 
 
-def dense_schema(doc: dict, cap: int) -> str:
+#: Truncation markers inherited from the source corpus. Gold's own producer (``corpus/seed.py``)
+#: builds an identifier list and cuts it with ``[:250]``, so 3 schema and 26 table summaries
+#: arrive already truncated — one of them mid-identifier.
+_ELLIPSIS = ("…", "...")
+
+
+def _untruncated(text: str) -> str:
+    """The source summary with an inherited truncation marker and its partial term removed.
+
+    ``corpus/validate.py`` calls truncation "the treatment" and forbids it, and this tool used to
+    carry gold's markers straight through: the 26 table summaries that arrived at the cap kept
+    their trailing ellipsis, and the partial identifier in front of it. A wasted character in the
+    one field the index reads, and a token that names nothing.
+    """
+    out = text.rstrip()
+    for marker in _ELLIPSIS:
+        if out.endswith(marker):
+            out = out[: -len(marker)].rstrip()
+            # The term before the marker is itself a fragment — gold's `Goali…` is not an
+            # identifier. Drop back to the last complete comma-separated entry.
+            if "," in out:
+                out = out.rsplit(",", 1)[0]
+            break
+    return out.rstrip(" ,;-")
+
+
+def _fit(prefix: str, added: str, tail: str, cap: int, *, joiner: str) -> tuple[str, bool]:
+    """``prefix + added + joiner + tail``, shortened by dropping whole tail entries.
+
+    Returns ``(text, trimmed)``. **The added vocabulary is what must survive, and the tail is
+    what gives way** — that ordering is the fix for this tool's worst defect. It composed with
+    ``f"...{nouns}"[:cap]``, so for a summary already at the cap the slice discarded the nouns
+    entirely and the tool made **no change at all** to those 26 tables while reporting a count
+    that quietly excluded them. Those are the widest tables in the corpus, so the intervention
+    was skipping exactly the rows with the most columns to disambiguate.
+
+    Entries are dropped whole. A mid-word cut would put a fragment in the index, which is the
+    thing being removed here, not the thing being introduced.
+    """
+    entries = [e.strip() for e in tail.split(",") if e.strip()]
+    trimmed = False
+    while True:
+        candidate = f"{prefix}{added}"
+        if entries:
+            candidate = f"{candidate}{joiner}{', '.join(entries)}"
+        if len(candidate) <= cap or not entries:
+            return candidate.rstrip(" ,;-"), trimmed
+        entries.pop()
+        trimmed = True
+
+
+def dense_schema(doc: dict, cap: int) -> tuple[str, bool]:
     """``{name}: <domain terms>. <the table-meaning list that was already there>``."""
     body = str(doc.get("body") or "").strip()
+    summary = str(doc["summary"])
     if not body:
-        return str(doc["summary"])
-    tail = str(doc["summary"]).split(": ", 1)[-1]
-    return f"{doc['name']}: {' '.join(content_words(body, limit=14))}. {tail}"[:cap]
+        return summary, False
+    tail = _untruncated(summary).split(": ", 1)[-1]
+    return _fit(f"{doc['name']}: ", " ".join(content_words(body, limit=14)), tail, cap, joiner=". ")
 
 
-def dense_table(doc: dict, cap: int) -> str:
+def dense_table(doc: dict, cap: int) -> tuple[str, bool]:
     """The existing summary, then the domain terms. The column-meaning list leads because it is
-    the more discriminating half — these are English glosses of obfuscated identifiers."""
+    the more discriminating half — these are English glosses of obfuscated identifiers.
+
+    Composed head-first so the identifier ``physical_name`` cannot be trimmed away:
+    ``corpus/validate.py`` requires it in ``summary``, and it lives in the head.
+    """
     body = str(doc.get("body") or "").strip()
+    summary = _untruncated(str(doc["summary"]))
     if not body:
-        return str(doc["summary"])
-    return f"{doc['summary']} — {' '.join(content_words(body, limit=10))}"[:cap]
+        return summary, False
+    head, _, columns = summary.partition(": ")
+    nouns = " ".join(content_words(body, limit=10))
+    if not columns:
+        return f"{summary} — {nouns}"[:cap].rstrip(" ,;-"), False
+    # The nouns go before the column list so the list is what gives way under the cap.
+    return _fit(f"{head}: {nouns}", "", columns, cap, joiner=" — ")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -127,18 +198,25 @@ def main(argv: list[str] | None = None) -> int:
     # shape while claiming to change only its text.
     shutil.copytree(source, dest)
     changed = 0
+    unchanged: list[str] = []
+    trimmed_tails = 0
     for path in sorted(dest.rglob("*.yaml")):
         doc = yaml.load(path.read_text(encoding="utf-8-sig"), Loader=_LOADER)
         if not isinstance(doc, dict) or "summary" not in doc:
             continue
         kind = doc.get("asset_type")
         if kind == "schema":
-            new = dense_schema(doc, cap)
+            new, trimmed = dense_schema(doc, cap)
         elif kind == "table":
-            new = dense_table(doc, cap)
+            new, trimmed = dense_table(doc, cap)
         else:
             continue
+        trimmed_tails += 1 if trimmed else 0
         if new == doc["summary"]:
+            # **Reported, not skipped.** 26 tables previously landed here in silence because the
+            # composition was truncated back to the original, so the count said 687 rewritten and
+            # nothing said 26 were not.
+            unchanged.append(str(path.relative_to(dest).as_posix()))
             continue
         doc["summary"] = new
         path.write_text(
@@ -151,10 +229,21 @@ def main(argv: list[str] | None = None) -> int:
     # project published a wrong number before.
     assets, problems = load(dest)
     print(f"rewrote {changed} summaries into {dest.relative_to(REPO)}")
+    print(f"  {trimmed_tails} needed the identifier tail trimmed to fit the {cap}-char cap")
+    print(f"  {len(unchanged)} schema/table summaries were left as they were")
+    for where in unchanged[:5]:
+        print(f"    {where}")
+    ellipsis = [
+        a.id
+        for a in assets
+        if getattr(a, "summary", "").rstrip().endswith(("…", "..."))
+        and a.asset_type.value in {"schema", "table"}
+    ]
+    print(f"  {len(ellipsis)} schema/table summaries still end in an ellipsis")
     print(f"loads: {len(assets)} assets, {len(problems)} problems")
     for problem in problems[:5]:
         print(f"  {problem}")
-    return 1 if problems else 0
+    return 1 if problems or ellipsis else 0
 
 
 if __name__ == "__main__":
