@@ -1,6 +1,6 @@
-"""Cost rows for every model call the turn makes — one builder, used by every caller.
+"""Token rows for every model call the turn makes — one builder, used by every caller.
 
-**The turn was under-reporting its own cost by six calls.** ``usage`` was written by exactly
+**The turn was under-reporting its own token spend by six calls.** ``usage`` was written by exactly
 one node, ``agent_core``, so the guard's BI-scope gate and the five facet query rewriters spent
 tokens that no record ever mentioned. On an answered turn those six hid behind the agent's
 several thousand; on a **refused** turn they were the only calls that happened, and the record
@@ -9,13 +9,12 @@ said this:
 .. code-block:: text
 
     Q: 'hello'
-      guard        = blocked, g_bi_scope, "model judged the question out of scope: 'no'"
-      usage        = []
-      cost_est_usd = None
+      guard   = blocked, g_bi_scope, "model judged the question out of scope: 'no'"
+      usage   = []
 
 The gate really ran, really called a model and really cost 136 tokens — LangSmith has the
-trace. The engine's own ledger priced the turn as free. ``measure/price.py`` reads ``usage``,
-so every ``cost_est_usd`` in the repository was low and refusals read as costless.
+trace. The engine's own ledger reported the turn as having spent nothing, so every token total
+in the repository was low and refusals read as costless.
 
 **Rows carry ``stage``, which the agent-only version had no need for.** With one producer the
 question "where did this go" had one answer. With seven it is the interesting question — the
@@ -50,9 +49,9 @@ def reported_tokens(messages: Any) -> dict[str, int] | None:
     **both** counts as integers is not a measurement, and reporting the part it did carry
     beside a zero for the rest would be the defect this function exists to remove.
 
-    Cache counts are included only when the provider reported them: ``measure/price.py`` reads
-    an absent ``cache_read_tokens`` as nothing cached, which its docstring justifies from the
-    artifacts, while a zero written here would be this code's claim rather than the provider's.
+    Cache counts are included only when the provider reported them. An absent
+    ``cache_read_tokens`` means nothing was cached as far as this turn was told; a zero written
+    here would be this code's claim rather than the provider's.
     """
     if isinstance(messages, Mapping) or not isinstance(messages, (list, tuple)):
         messages = [messages]
@@ -96,9 +95,9 @@ def usage_row(*, stage: str, model: Any, messages: Any, turn_index: Any) -> dict
     """One cost row, with the counts the provider reported and the stage that spent them.
 
     A provider that reports nothing gets :meth:`Measured.unmeasured`, which the presence test
-    and the price table both know how to refuse. The literal ``input_tokens: 0`` this replaced
-    was on the **real-model** path, and ``measure/price.py`` prices that shape as free — which
-    is v1's two ladders that produced no USD while reporting successfully.
+    knows how to refuse and which no total can silently absorb. The literal ``input_tokens: 0`` this replaced
+    was on the **real-model** path, and any consumer totalling these rows reads that shape as
+    free — which is v1's two ladders that reported successfully having measured nothing.
 
     ``model_id(model)`` first and ``_llm_type`` only as the fallback. It was the other way
     round, so every OpenAI turn recorded ``model: "openai-chat"`` — a LangChain *class* label —

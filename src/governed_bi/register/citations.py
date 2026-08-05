@@ -250,7 +250,9 @@ RETIRED_CLAIMS: tuple[RetiredClaim, ...] = (
             "message asserting real prices. Found 2026-08-03 while sourcing the v2 "
             "price table, by an agent that went looking for the incident behind the "
             "rule it was implementing.",
-        replaced_by="measure/price.py's PRICE_TABLE, where every row carries the date "
+        replaced_by="nothing in this tree -- measure/price.py and its PRICE_TABLE are "
+        "deleted, because a price list kept here has to track a provider's by hand. The "
+        "original note read: every row carries the date "
                     "it was observed and the URL it was read from",
     ),
     RetiredClaim(

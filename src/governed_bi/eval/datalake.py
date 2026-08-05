@@ -17,9 +17,11 @@ Postgres schemas, and grading executes both and compares fingerprints
 (:mod:`governed_bi.eval.grade`). Comparing SQL text would mark a correct answer wrong for
 choosing a different join order.
 
-Costs are **measured, not estimated**: :func:`observed_spend` reads the usage rows the
-record already carries and prices them through :mod:`governed_bi.measure.price`, so a
-decision to scale a run up is made against observed spend on a small batch.
+Token volume is **measured**: :func:`observed_tokens` sums the usage rows the record already
+carries, per stage, so a decision to scale a run up is made against observed volume on a small
+batch. It stops there and does not convert to money -- ``measure/price.py`` did and is deleted,
+because a hand-maintained price table has to track a provider's list by hand and the one stale
+row it picked up overstated a measured run nine-fold.
 """
 
 from __future__ import annotations
@@ -33,7 +35,7 @@ __all__ = [
     "load_questions",
     "routing_recall",
     "run_live",
-    "observed_spend",
+    "observed_tokens",
     "summarise_routing",
     "gold_tables",
     "table_coverage",
@@ -303,43 +305,63 @@ def table_coverage(
     }
 
 
-def observed_spend(
-    rows: Sequence[Mapping[str, Any]], *, model: str, asof: Any
-) -> dict[str, Any]:
-    """What this batch cost, as a :class:`~governed_bi.register.quantity.Measured`.
+def observed_tokens(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """What this batch spent, in tokens. **Not in money.**
 
-    Delegates the arithmetic to :func:`~governed_bi.measure.price.estimate_run_cost` — one
-    implementation of "what did these calls cost", which is also why this is not called
-    ``estimate_cost``: that name is taken by the per-call function next door, and two
-    functions with one name is what ``tools/check_one_implementation.py`` refuses.
+    This was ``observed_spend`` and priced the rows through ``measure/price.py``, which is
+    deleted along with the ``cost_est_usd`` record field. Two reasons, and the second decided it:
+    nothing on the serve path ever priced a turn — ``estimate_run_cost``'s only caller was this
+    function — so every *served* turn recorded a null cost while the eval got a real one; and a
+    price table maintained by hand has to track a provider's list by hand, which that module's own
+    docstring opened by naming — *"a stale price entry overstated a measured run nine-fold."*
 
-    The total stays ``Measured`` and is **not** rounded here. A rounding helper in ``src/``
-    is how v1 turned an unmeasured quantity into ``0.0`` on the way to a report, so
-    formatting lives only in ``Measured.render()`` and a caller that wants a string asks
-    for one. One unpriced model makes the whole batch unpriceable, which is
-    ``Measured.combine``'s behaviour and the behaviour wanted: a total that silently
-    excludes the model it could not price is a total of something else.
+    Tokens are what this repository can observe. What they cost is the provider's number, and
+    LangSmith already reports it per trace without a price list living here.
+
+    ``calls`` counts usage **rows**, which is one per model call now that every calling stage
+    writes its own. It went from 1 to 7 per turn when the guard and the rewriters started
+    billing, so a batch compared against an older one shows a jump — that is the older batch
+    under-reporting six calls, not this one inflating.
     """
-    from governed_bi.measure.price import estimate_run_cost
-
-    usages: list[Mapping[str, Any]] = []
+    per_stage: dict[str, dict[str, int]] = {}
+    calls = 0
     tokens_in = 0
     tokens_out = 0
+
+    def _count(value: Any) -> int:
+        """An int, or 0 for anything else — including a ``Measured`` in the unmeasured state.
+
+        Safe *here* and nowhere near the record: a total is allowed to be a lower bound, and the
+        row it came from still says it was never measured. Writing the same 0 into a field would
+        be the absence-becomes-a-value defect the register spends its ``Absence`` enum on.
+        """
+        return int(value) if isinstance(value, int) and not isinstance(value, bool) else 0
+
     for row in rows:
         record = row.get("record") or {}
         for entry in row.get("usage") or record.get("usage") or ():
             if not isinstance(entry, Mapping):
                 continue
-            usages.append(entry)
-            tokens_in += int(entry.get("input_tokens") or 0)
-            tokens_out += int(entry.get("output_tokens") or 0)
+            got_in = _count(entry.get("input_tokens"))
+            got_out = _count(entry.get("output_tokens"))
+            calls += 1
+            tokens_in += got_in
+            tokens_out += got_out
+            stage = str(entry.get("stage") or "unattributed")
+            bucket = per_stage.setdefault(
+                stage, {"calls": 0, "input_tokens": 0, "output_tokens": 0}
+            )
+            bucket["calls"] += 1
+            bucket["input_tokens"] += got_in
+            bucket["output_tokens"] += got_out
 
-    total = estimate_run_cost(model, usages, asof=asof)
     return {
         "rows": len(rows),
-        "calls_priced": len(usages),
-        "usd_total": total.render() if hasattr(total, "render") else str(total),
-        "usd_measured": bool(getattr(total, "is_measured", False)),
+        "calls": calls,
         "input_tokens": tokens_in,
         "output_tokens": tokens_out,
+        # Per stage, because that is the question the agent/utility split raises and one total
+        # cannot answer: ``llm_utility_model`` is a comparability knob justified by cost and
+        # latency, and "which stage spent it" is the only way to argue either.
+        "by_stage": dict(sorted(per_stage.items())),
     }

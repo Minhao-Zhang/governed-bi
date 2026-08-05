@@ -60,7 +60,6 @@ SUMMARY_FIELDS: tuple[str, ...] = (
     "terminal_reason",
     "schemas",
     "generated_sql",
-    "cost_est_usd",
     "latency_sec",
 )
 

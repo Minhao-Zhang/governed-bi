@@ -363,8 +363,10 @@ def project_turn(
         "licensed": list(record.get("licensed") or ()),
         "schemas": list(record.get("schemas") or ()),
         "terminal_reason": record.get("terminal_reason"),
-        # Carried so the run can be **priced**. `observed_spend` reads it; without it
-        # `estimate_run_cost` sees no usage records and correctly refuses to price a run,
+        # Carried so the run can be counted. `observed_tokens` reads it; without it a batch
+        # reports no calls at all, which reads as a free run rather than an unmeasured one.
+        # It used to say **priced** -- `measure/price.py` is deleted, and tokens are as far
+        # as this repository goes now: what they cost is the provider's number.
         # which is honest and useless.
         "usage": list(record.get("usage") or ()),
         "guardrail_error": guardrail_errors > 0,

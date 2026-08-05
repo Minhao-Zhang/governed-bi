@@ -168,7 +168,6 @@ def _extract_factory(
             "terminal_reason",
             "cache_read_tokens",
             "cache_write_tokens",
-            "cost_est_usd",
             "latency_sec",
         ):
             return state.get(name)

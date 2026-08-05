@@ -372,9 +372,14 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "null means the provider did not report it, NOT zero"),
     _f("cache_write_tokens", Tier.cost, Absence.not_measured, _N, Stage.stamp,
        "billed at 1.25x and not modelled in v1 at all"),
-    _f("cost_est_usd", Tier.cost, Absence.not_measured, _N, Stage.stamp,
-       "null for an unknown model, never 0. A usage payload of all zeros is truthy, "
-       "so v1's guard missed it and real two-call turns recorded as free"),
+    # `cost_est_usd` was here and is **deleted with the price table it read**. Nothing on the
+    # serve path ever computed it — `estimate_run_cost`'s only caller was the eval driver — so
+    # every served turn recorded `None`, and the field's own note above described a v1 defect
+    # rather than a v2 measurement. Keeping a hand-maintained price table means a stale row
+    # silently misprices a run: `measure/price.py`'s own docstring opened with one that
+    # **overstated a measured run nine-fold**. Token counts stay (`usage`, the cache and
+    # reasoning fields above); what a provider charges for them is the provider's number, and
+    # LangSmith already reports it per trace without this repository tracking a price list.
     _f("latency_sec", Tier.cost, Absence.not_measured, _N, Stage.stamp, "wall clock"),
 
     # ── health ──────────────────────────────────────────────────────────────

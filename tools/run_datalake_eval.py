@@ -33,7 +33,6 @@ import pathlib
 import sys
 import threading
 import time
-from datetime import datetime, timezone
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "tools"))
@@ -107,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from governed_bi.datasource.postgres import PostgresConnector
     from governed_bi.eval.arms import live_arm
-    from governed_bi.eval.datalake import load_questions, observed_spend, table_coverage
+    from governed_bi.eval.datalake import load_questions, observed_tokens, table_coverage
     from governed_bi.eval.harness import run_arm
     from governed_bi.govern.policy import GovernancePolicy
     from governed_bi.serve import session as session_mod
@@ -284,7 +283,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         handle.close()
 
-    _report(rows, out_path, args, observed_spend, table_coverage)
+    _report(rows, out_path, args, observed_tokens, table_coverage)
     return 0
 
 
@@ -296,7 +295,7 @@ def _order_sensitive(dataset: pathlib.Path) -> set[str]:
     return set(raw if isinstance(raw, list) else raw.get("question_ids") or [])
 
 
-def _report(rows: list[dict], out_path: pathlib.Path, args, observed_spend, table_coverage) -> None:
+def _report(rows: list[dict], out_path: pathlib.Path, args, observed_tokens, table_coverage) -> None:
     """Print the whole file, not just this process's rows — a resumed run is one run."""
     every = [json.loads(line) for line in out_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     n = len(every) or 1
@@ -338,8 +337,7 @@ def _report(rows: list[dict], out_path: pathlib.Path, args, observed_spend, tabl
         f"clarification: {clar_reach}/{len(reach)} when reachable, "
         f"{sum(1 for r in unreach if r.get('outcome') == 'clarification')}/{len(unreach)} when not"
     )
-    spend = observed_spend(every, model=args.model, asof=datetime.now(timezone.utc).date())
-    print("spend:", json.dumps(spend, indent=2, default=str))
+    print("tokens:", json.dumps(observed_tokens(every), indent=2, default=str))
 
 
 def _gold_sql_by_qid(dataset: pathlib.Path) -> dict[str, str]:

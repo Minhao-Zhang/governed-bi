@@ -47,7 +47,7 @@ __all__ = ["OPENAI_API_KEY_VAR", "OPENAI_EMBEDDING_MODEL", "OpenAIEmbedder"]
 #: The environment variable, by **name**. Never log, print or record its value.
 OPENAI_API_KEY_VAR = "OPENAI_API_KEY"
 
-#: ``measure/price.py`` prices exactly this model, and its note says "every ladder embeds
+#: Embedding volume is negligible beside chat volume: "every ladder embeds
 #: through this model, so omitting it understates every run". Changing the default here
 #: without adding a ``Price`` row makes every USD figure a floor of unknown depth.
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-large"
