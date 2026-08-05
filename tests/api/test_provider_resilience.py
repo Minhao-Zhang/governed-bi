@@ -86,18 +86,26 @@ def test_the_settings_reach_the_openai_client_on_every_surface(monkeypatch) -> N
     assert client.timeout == 7.0
 
 
-def test_an_unconfigured_embedder_keeps_the_sdk_defaults() -> None:
+def test_an_unconfigured_embedder_keeps_the_sdk_defaults(monkeypatch) -> None:
     """`None` must mean "not configured", never "zero".
 
     Passing `max_retries=None` straight to the SDK sets it to `None` rather than leaving the
     default, which would turn an unconfigured embedder into one that never retries — the
     opposite of this change's intent, and the same absence-becomes-a-value shape the register
     spends its whole `Absence` enum on.
+
+    **The key is set here, and it is a placeholder.** ``_openai_client`` refuses to build without
+    one, so this failed in CI while passing locally — ``tests/conftest.py`` loads ``.env`` into the
+    environment, so a developer machine supplies a real key and a runner does not. Nothing here
+    reaches the network: the assertions are about how the *client object* was constructed. A test
+    of default values that depends on a credential is a test that skips or fails for a reason
+    unrelated to what it checks.
     """
     import openai
 
     from governed_bi.model.openai_embedder import OpenAIEmbedder
 
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-a-real-key")
     client = OpenAIEmbedder(model="text-embedding-3-large")._openai_client()
     assert client.max_retries == openai._constants.DEFAULT_MAX_RETRIES
     assert client.timeout == openai._constants.DEFAULT_TIMEOUT
