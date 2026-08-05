@@ -232,3 +232,50 @@ def test_the_relaxation_stops_at_names() -> None:
     assert result_fingerprint(["a"], [[1], [2]], order_sensitive=True) != result_fingerprint(
         ["a"], [[2], [1]], order_sensitive=True
     )
+
+
+def test_table_coverage_refuses_rows_that_do_not_carry_licensed() -> None:
+    """The EX ceiling must not read 0.000 because the producer named the field differently.
+
+    ``routing_recall`` published ``licensed_schemas`` and not ``licensed``, and
+    ``table_coverage`` reads exactly ``licensed`` — so the free harness fed to the function
+    this module documents as *"the EX ceiling"* reported ``all_gold_tables_licensed: 0.0`` for
+    two arms whose schema recall was 0.851 and 0.877, with ``reached_gold`` in the very same
+    rows proving the tables had been licensed. A zero is a publishable number; a ``KeyError``
+    is not, and that asymmetry is the whole point.
+
+    Absent and empty stay different facts: a row that carries ``licensed: []`` licensed
+    nothing, which is a measurement this counts.
+    """
+    from governed_bi.eval.datalake import table_coverage
+
+    gold = {"q1": "SELECT * FROM restaurant.generalinfo"}
+
+    with pytest.raises(KeyError, match="licensed"):
+        table_coverage([{"question_id": "q1", "licensed_schemas": ["restaurant"]}], gold)
+
+    empty = table_coverage([{"question_id": "q1", "licensed": []}], gold)
+    assert empty["all_gold_tables_licensed"] == 0.0, "licensed nothing is a real zero"
+    assert empty["n"] == 1
+
+    covered = table_coverage(
+        [{"question_id": "q1", "licensed": ["restaurant.generalinfo"]}], gold
+    )
+    assert covered["all_gold_tables_licensed"] == 1.0
+
+
+def test_routing_recall_rows_carry_what_table_coverage_reads() -> None:
+    """The two functions' shapes are locked together, not merely documented as compatible.
+
+    Asserted over the *keys*, because the defect above was a spelling mismatch between one
+    module's producer and its consumer — the kind a comment cannot hold shut.
+    """
+    import inspect
+
+    from governed_bi.eval import datalake
+
+    source = inspect.getsource(datalake.routing_recall)
+    assert '"licensed": licensed' in source, (
+        "routing_recall must publish the table ids under `licensed`; table_coverage reads "
+        "that key and nothing else"
+    )

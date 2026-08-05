@@ -159,6 +159,15 @@ def routing_recall(
                 # different failure from ranking it low.
                 "rank": (ranking.index(gold) + 1) if gold in ranking else None,
                 "n_scored": len(ranking),
+                # The table ids themselves, **not only their schemas.** This key was absent
+                # and `table_coverage` reads exactly it, so feeding these rows to the
+                # function this module documents as "the EX ceiling" reported
+                # ``all_gold_tables_licensed: 0.0`` for every arm -- a plausible-looking
+                # number rather than an error, over rows whose `reached_gold` in the same
+                # dict proved the tables were there. Two functions in one module, one
+                # producing rows the other cannot read, failing as a zero: the shape
+                # `register/assets.py` opens by naming.
+                "licensed": licensed,
                 # What survived `connect`'s component pick. `hit` says the router
                 # shortlisted the gold schema; this says the turn could still reach it,
                 # which are two different failures.
@@ -287,6 +296,18 @@ def table_coverage(
         if needed is None:
             unparsed += 1
             continue
+        # **A row with no ``licensed`` key at all is a caller error, not a coverage of zero.**
+        # ``routing_recall`` published only ``licensed_schemas``, so this scored every one of
+        # its rows as "no gold table licensed" and reported the ceiling as 0.000 for two arms
+        # whose routing recall was 0.851 and 0.877. Absent and empty are different facts:
+        # empty means the turn licensed nothing, which is a measurement this counts, and
+        # absent means the rows came from a producer that does not carry the field.
+        if "licensed" not in row:
+            raise KeyError(
+                "table_coverage needs `licensed` (the table ids) on every row and this one "
+                f"carries {sorted(row)}. Scoring it as zero coverage would publish a ceiling "
+                "of 0.000 for a run that licensed tables on every turn."
+            )
         licensed = {str(t).lower() for t in (row.get("licensed") or ())}
         hits = sum(1 for table in needed if table.lower() in licensed)
         if needed and hits == len(needed):

@@ -71,7 +71,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     from governed_bi.datasource.postgres import PostgresConnector
-    from governed_bi.eval.datalake import load_questions, routing_recall, summarise_routing
+    from governed_bi.eval.datalake import (
+        load_questions,
+        routing_recall,
+        summarise_routing,
+        table_coverage,
+    )
     from governed_bi.govern.policy import GovernancePolicy
     from governed_bi.serve import session as session_mod
 
@@ -128,8 +133,17 @@ def main(argv: list[str] | None = None) -> int:
     took = time.time() - started
     summary = summarise_routing(rows)
 
-    print(json.dumps(summary, indent=2, default=str))
-    print(f"\n{took:.0f}s for {len(rows)} questions")
+    # **Table coverage is the number to lead with, and this tool did not report it.**
+    # `docs/plans/retrieval-ceiling-2026-08-04.md` corrects an earlier document for concluding
+    # from schema `recall@k`: "those numbers are right; they measure the wrong stage". A turn can
+    # route to the right schema and still be unable to answer, because the per-type budget
+    # licenses at most 8 ranked tables -- so coverage bounds EX and recall does not.
+    coverage = table_coverage(rows, {str(q["question_id"]): str(q["gold_sql"]) for q in questions})
+    mean_licensed = sum(len(r.get("licensed") or ()) for r in rows) / max(len(rows), 1)
+
+    print(json.dumps({"routing": summary, "coverage": coverage}, indent=2, default=str))
+    print(f"\nmean tables licensed: {mean_licensed:.1f}")
+    print(f"{took:.0f}s for {len(rows)} questions")
 
     missed = [r for r in rows if not r["hit"]]
     print(f"\n{len(missed)} misses; the gold schema's rank where it was scored at all:")
@@ -145,10 +159,13 @@ def main(argv: list[str] | None = None) -> int:
             json.dumps(
                 {
                     "arm": "rewrite" if args.rewrite else "no_rewrite",
+                    "corpus_dir": args.corpus_dir,
                     "top_n": args.top_n,
                     "embed": args.embed,
                     "n_questions": len(rows),
                     "summary": summary,
+                    "coverage": coverage,
+                    "mean_licensed": round(mean_licensed, 1),
                     "rows": rows,
                 },
                 indent=2,

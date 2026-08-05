@@ -1,0 +1,371 @@
+# Rewriting the corpus summaries — brief for the agent doing it
+
+**Date:** 2026-08-05 · **Corpus under test:** `corpora/gold-semantic-layer-20260804` (57 schemas,
+13 981 assets) · **Sample:** 114 questions, 2 per schema, from `test_final.jsonl`
+
+This is a work order, not a proposal. The hypothesis behind it was tested first, **found to be
+half wrong**, and corrected; what follows is the corrected version with a measured floor the work
+has to beat.
+
+Read [Hard constraints](#hard-constraints-do-not-break-these) before writing anything. One of
+them — the train/test split — cannot be repaired after the fact.
+
+---
+
+## The one-paragraph version
+
+Only `summary` is indexed ([ADR 0005](../adr/0005-v2-memory-layer-and-faceted-retrieval.md) I1;
+`retrieve/index.py:41`). Every schema and table already carries good domain prose in `body`, and
+**the index has never seen a word of it.** Moving that vocabulary into `summary` — mechanically,
+with a regex, no model calls — raises gold-table coverage from **0.632 to 0.693** at
+`route_top_n=3` and **0.509 to 0.588** at `route_top_n=1`, while licensing *fewer* tables. That
+is the floor. The job is to beat it by writing the vocabulary deliberately instead of extracting
+it with a stopword list.
+
+---
+
+## 1. What the summaries actually are
+
+Sampled with a census over all 13 981 assets. `summary` is the only indexed text; `body` is what
+renders on a hit.
+
+| type | n | `summary` median chars | function-word ratio | has `body` | `body` median |
+| --- | --- | --- | --- | --- | --- |
+| schema | 57 | 94 | 0.00 | 57 | 260 |
+| table | 656 | 61 | 0.00 | 656 | 139 |
+| column | 5 947 | 38 | 0.00 | 5 942 | 66 |
+| join | 928 | 68 | 0.13 | **0** | — |
+| metric | 399 | 71 | 0.14 | 242 | 108 |
+| term | 994 | 88 | 0.22 | **16** | 107 |
+| few_shot | 5 000 | 73 | 0.43 | 5 000 | 312 |
+
+A function-word ratio of 0.00 across the four structural types is the shape the maintainer called
+keyword soup, and the census agrees that is what it is:
+
+```text
+schema  hockey      "hockey: 22 tables — abbrev, AwardsMisc, AwardsPlayers, AwardsCoaches,
+                     CombinedShutouts, TeamVsTeam, TeamsHalf, TeamsPost, TeamsSC, TeamSplits,
+                     Teams, SeriesPost, HOF, Master, Scoring, ScoringSC, ScoringShootout,
+                     ScoringSup, Goalies, GoaliesSC, Goali…"        <- truncated at the cap
+table   titres      "titles (titres): title_id, title, type, pub_id, price, advance, royalty,
+                     ytd_sales, notes, pubdate"
+column  bewertung   "review — allgemeine_informationen.bewertung"
+join                "region_sales ⋈ game_platform: ventes_region joins jeu_plateforme on
+                     game_platform_id=id"
+```
+
+And here is the prose that exists **one field away, invisible to both retrieval channels**:
+
+```text
+hockey.body    "Historical ice-hockey statistics database. It holds a master record of players
+                and coaches with their biographical and career profile, per-season scoring and
+                goaltending performance, team season standings and splits, playoff and Stanley
+                Cup records, awards, and Hall of Fame inductions."
+```
+
+Three schema summaries are truncated mid-identifier and end in a literal `…`. The seed
+(`corpus/seed.py:36`) truncates with `[:250]` too, which is the same defect at the source —
+`corpus/validate.py:164` explicitly forbids truncation ("Rewrite it; do not truncate — the
+indexed text is the treatment") and the producer does it anyway.
+
+## 2. The hypothesis, and how it was wrong
+
+> *"Our summaries are largely keyword soup, and that is hurting retrieval."*
+
+Right about the diagnosis, **wrong about the treatment.** The obvious fix — replace the
+identifier list with the prose — was measured and it *loses*:
+
+| arm (BM25 only, no rewriting) | recall@1 | recall@3 | recall@10 |
+| --- | --- | --- | --- |
+| A as-is | 0.465 | **0.640** | 0.895 |
+| B `schema.summary` ← prose | 0.377 | 0.632 | 0.825 |
+| C `schema`+`table` ← prose | 0.447 | 0.570 | 0.860 |
+
+And with the semantic channel on, where prose is *supposed* to win, full prose still loses at the
+width production ships:
+
+| arm (lexical + semantic, no rewriting) | recall@1 | recall@3 | recall@5 |
+| --- | --- | --- | --- |
+| A as-is | 0.640 | **0.851** | 0.904 |
+| H full prose + table list | 0.693 | 0.825 | 0.886 |
+| **E domain nouns added, dense** | **0.711** | **0.877** | **0.921** |
+
+**The mechanism.** Those identifier lists are not noise — they are the *English meanings* of the
+tables and columns (`generalinfo, geographic, location`), and under obfuscation they are the only
+English in a routing document. Replacing them deletes the discriminating tokens. Meanwhile the
+function words that prose brings dilute BM25's term frequencies and add nothing an embedder needs.
+
+**Raising the cap is not the answer either.** Arm G — full body *plus* full identifier list at a
+600-character cap — scored 0.667 at recall@3, worse than arm E's 0.746 at 250. Density beats
+length. `summary_max_chars` (250, `register/knobs.py:132`) **stays where it is.**
+
+So the target is not prose *instead of* keywords, and not prose *added to* keywords. It is:
+
+> **Dense, discriminating, domain vocabulary — and the identifiers — inside 250 characters, with
+> the function words left out.**
+
+Which reads like a keyword list, deliberately. The difference from today is *which* keywords.
+
+## 3. The floor you have to beat
+
+Arm E is a **mechanical** rewrite: take `body`, drop stopwords and duplicates, keep the first 14
+content words, prepend them to the existing identifier list. No model, no judgement, ~40 lines. It
+is reproducible from `docs/plans/`-adjacent scratch work and materialised as
+`corpora/_variant-dense-20260805` (687 files rewritten, loads with 0 problems).
+
+Measured through the **real compiled graph** (`eval.datalake.routing_recall`, `agent_model=None`,
+embedder on, rewriters off) — not a replica:
+
+| | baseline | dense (arm E) | delta |
+| --- | --- | --- | --- |
+| **`route_top_n=3`** | | | |
+| all gold tables licensed | 0.632 | **0.693** | **+6.1 pp** |
+| schema recall@1 | 0.632 | 0.693 | +6.1 pp |
+| schema recall@3 | 0.851 | 0.877 | +2.6 pp |
+| mean tables licensed | 13.7 | 13.1 | **−0.6** |
+| **`route_top_n=1`** | | | |
+| all gold tables licensed | 0.509 | **0.588** | **+7.9 pp** |
+
+Artifacts: `runs/ablation/summary-density-top3.json`, `runs/ablation/summary-density-top1.json`,
+`runs/ablation/dense-tool-top3.json`.
+
+> **Both `corpora/` and `runs/` are gitignored.** The corpus is a build output of a curator run
+> and the artifacts are measurements, so neither is in git and neither will be on a fresh clone.
+> You need `../BIRD-Data-Obfuscation` for the questions and the `pg_rename_decoy` Postgres on
+> `:5435` for the connector, and you rebuild the floor arm with the command in
+> [§6](#6-how-to-run-the-gate). Every number in this brief is reproducible from those three
+> inputs; none of them can be read out of the repository.
+
+Two things to take from this. **Coverage went up while the net got smaller** — better targeting,
+not more licensing, the same property [`retrieval-ceiling-2026-08-04.md`](retrieval-ceiling-2026-08-04.md)
+found for the embedder. And a stopword regex bought +6.1 pp, so **a model-authored rewrite that
+does not beat +6.1 pp is not worth its tokens.** That is the acceptance bar, not a target.
+
+## 4. Where the corpus is actually empty
+
+Counted, not estimated. This is the scope of "rewrite the entire corpus".
+
+| finding | count | why it matters |
+| --- | --- | --- |
+| `column.body` is the tautology `Means 'X' (obfuscated to 'Y')` | **2 452** / 5 947 | restates the summary; zero information on hit |
+| `column.sample_values` populated | **0** / 5 947 | declared field, nothing writes it; value-level questions have no anchor |
+| `column.role` populated | **0** / 5 947 | same |
+| `table.grain` populated | **0** / 656 | the field exists and the *prose* says "Grain: one row per…" instead |
+| `table.rules` populated | **0** / 656 | the `## Must honour` channel; only `schema` uses it |
+| `join.body` populated | **0** / 928 | on a hit a join renders nothing but its ON clause |
+| `term.body` populated | **16** / 994 | |
+| `term.related_terms` populated | **0** / 994 | |
+| `term.binding` **absent** | **27** / 994 | `TagRule.binding_target` → untagged → **these do not vote in `route` at all** |
+| `metric.body` populated | 242 / 399 | |
+| `few_shot.bound_terms` populated | **0** / 5 000 | |
+| `negative_example` assets | **0** | empty by construction on BIRD; leave it |
+| `confidence` populated | 0 for schema/table/column/join | populated for term/metric/few_shot |
+
+The 27 unbound terms are the one item here with a *known* retrieval consequence rather than a
+suspected one.
+
+## 5. The work, in order
+
+Each item states its own acceptance gate. **Do not batch them.** The whole reason the numbers
+above exist is that the plausible version of this work was measured and lost.
+
+### Item 1 — `schema` and `table` summaries (57 + 656 assets) — **do this first**
+
+The only item with measured leverage. Everything else is a hypothesis.
+
+**Per schema, write the `summary` as:**
+
+```
+{name}: <8–16 dense domain terms: what this schema is about, in the nouns a business user
+would use> . <the existing English table-meaning list, as much as fits>
+```
+
+**Per table:**
+
+```
+{english_meaning} ({physical_name}): <English column meanings> — <6–12 dense domain terms:
+the grain, the entity, and what a user would ask this table for>
+```
+
+Rules for the vocabulary you add:
+
+- **No function words.** No `the`, `of`, `a`, `is`, `contains`, `records`, `holds`, `database`,
+  `table`. They cost characters and dilute BM25.
+- **Nouns a user would type**, not catalogue vocabulary. `restaurant cuisine rating city county`
+  beats `entity attributes classification geography`.
+- **Discriminating over generic.** `root beer brand brewery` earns its place; `data records id`
+  does not. If a term would fit twenty of the 57 schemas, drop it.
+- **No synonym padding.** Two words for one concept is one concept and one wasted slot.
+- **Keep the identifiers.** They are the only English in an obfuscated schema. Never trade them
+  away for prose.
+- **≤250 characters, and never truncate to get there.** Cut a term, not a word.
+
+Also, while you are in these files:
+
+- Move the grain out of `table.body` prose and into the `table.grain` field. It is a declared
+  field with 0/656 populated and the prose is doing its job badly.
+- Fix the 3 schema summaries that end in `…`.
+
+#### 1a. The remaining misses are mostly sibling confusions — write against that
+
+This is the most actionable instruction in the brief, and it comes from the miss list of the
+floor arm itself (`runs/ablation/dense-tool-top3.json`, 14 misses of 114):
+
+```text
+  beer_factory         rank=10   beaten by  public_review_platform, retail_complains, video_games
+  european_football_2   rank=4   beaten by  hockey, ice_hockey_draft, professional_basketball
+  food_inspection       rank=7   beaten by  restaurant, food_inspection_2, airline
+  ice_hockey_draft      rank=4   beaten by  professional_basketball, soccer_2016, hockey
+  movie_platform        rank=4   beaten by  movielens, movies_4, disney
+  movies_4              rank=8   beaten by  movielens, movie_platform, card_games
+```
+
+**6 of 14 were beaten by a schema in the same domain family**, and 4 of 14 sat at rank 4 — one
+place outside the shortlist. The lake holds three hockey schemas, four film schemas, two food
+inspection schemas and four sales schemas. Generic domain vocabulary is *precisely* what cannot
+separate those: every word that makes `movie_platform` look like a film database makes
+`movielens` and `movies_4` look like one too, and they then take the shortlist between them.
+
+So for any schema with a near-twin, spend part of the budget on **what distinguishes it**:
+
+- `movie_platform` vs `movielens` vs `movies_4` — whose ratings, whose lists, which population,
+  which era.
+- `food_inspection` vs `food_inspection_2` — what the second one has that the first does not.
+- `ice_hockey_draft` vs `hockey` — draft selections and prospects, against career season stats.
+
+Identify the families first (there are about six), then write each member's summary *against* its
+siblings rather than in isolation. A summary written alone will use the family vocabulary; that is
+exactly the failure above.
+
+**Gate:** `table_coverage` ≥ **0.693** at `route_top_n=3` *and* ≥ **0.588** at
+`route_top_n=1`, on the 114-question sample, with mean licensed tables not above 13.7. Below
+either, the mechanical version wins and yours is discarded.
+
+### Item 2 — `column.body` for the 2 452 tautologies
+
+Not the summary — the summary is already dense and 5 947 of them dominate the index, so changing
+them is the highest-variance edit available and it gets its own measurement or nothing.
+
+Replace `Means 'X' (obfuscated to 'Y')` with what the column *is*: the business meaning, its
+unit or format, and **example values** where the train gold SQL shows them being filtered on.
+The 347 columns that already do this are the model to copy:
+
+```yaml
+summary: review — allgemeine_informationen.bewertung
+body: 'Review rating as a real number (e.g. 1.7, 2, 2.7, 4); higher is more popular.
+  Filters seen: < 3, = 2, > 4; aggregations MIN/MAX/AVG.'
+```
+
+Populate `sample_values` and `role` while you are there — both are 0/5 947 and both are declared.
+
+**Gate:** this changes `body`, not `summary`, so it cannot move routing and **must not be
+measured by it.** It changes what the model reads on a hit, so the gate is EX on a live arm, which
+is a paid run — flag it for the maintainer rather than running it. Do not claim a retrieval
+improvement from this item.
+
+### Item 3 — the 27 unbound terms
+
+Bind each one, or delete it. An unbound term is untagged, and untagged does not vote in `route`
+(`register/assets.py:72`). This is 27 assets and a mechanical fix.
+
+**Gate:** `term` count unchanged or reduced; 0 unbound remaining; Item 1's gate does not regress.
+
+### Item 4 — `join.body` (928) and `term.body` (978)
+
+For a join: when to use *this* edge rather than the other one between the same pair of tables.
+The corpus contains pairs with two distinct relationships and the summaries alone cannot tell them
+apart.
+
+For a term: what the phrase means to the business, and what it is *not*.
+
+**Gate:** same as Item 2 — this is context quality, not retrieval. Do not measure it with
+`recall@k`.
+
+### Item 5 — `metric.body` (157) and `few_shot.bound_terms` (5 000)
+
+Lowest leverage. Do it last or not at all.
+
+## 6. How to run the gate
+
+The obfuscated Postgres must be up (`127.0.0.1:5435`, verified 2026-08-05). No model calls: with
+`agent_model=None` the stub answer path serves while facets, routing, retrieval, resolve and
+connect all run for real. Embeddings for changed summaries cost about **$0.01** for the whole
+corpus; unchanged summaries are vector-cache hits.
+
+Rebuild the floor arm (regenerable, so it is not checked in — 41 MB of derived text):
+
+```bash
+uv run --frozen python tools/densify_summaries.py --force
+```
+
+Then measure any arm, yours or the floor, with the same command:
+
+```bash
+uv run --frozen python tools/routing_recall.py --corpus-dir corpora/<your-variant> --top-n 3 --out runs/ablation/<name>-top3.json
+```
+
+Materialise your corpus as a **sibling directory**, never in place.
+
+`routing_recall.py` reports schema recall. **`table_coverage` is the number to lead with** —
+[`retrieval-ceiling-2026-08-04.md`](retrieval-ceiling-2026-08-04.md) corrects an earlier document
+for concluding from schema `recall@k`: *"those numbers are right; they measure the wrong stage."*
+`routing_recall` rows now carry `licensed`, so `eval.datalake.table_coverage` reads them directly.
+
+> **A defect fixed on 2026-08-05 while writing this brief.** `routing_recall` published only
+> `licensed_schemas` and `table_coverage` reads `licensed`, so the free harness fed to the
+> function documented as *"the EX ceiling"* reported `all_gold_tables_licensed: 0.000` for two
+> arms whose schema recall was 0.851 and 0.877 — a publishable-looking number rather than an
+> error. `table_coverage` now raises on a row with no `licensed` key, and two tests in
+> `tests/eval/test_eval_contract.py` hold the producer and the consumer together. **If your gate
+> reports 0.000 coverage, read that test before believing it.**
+
+Always run **both arms in the same process**, against the same question sample, with the same
+embedder. A number compared against one from another session is not a comparison.
+
+## Hard constraints — do not break these
+
+1. **The corpus is TRAIN ONLY. `test_final.jsonl` is held out.** `GOLD_LAYER_MANIFEST.json`
+   records this as the reason the benchmark is fair. **You may read train questions and their gold
+   SQL to author summaries. You may not read `test_final.jsonl`, ever, for any purpose.** The
+   measurement harness reads it; the authoring must not. A summary written with a test question in
+   context leaks the answer into the index and there is no way to detect it afterwards or undo it
+   — it invalidates every number this repository has published since.
+2. **`summary` ≤ 250 characters and non-empty**, enforced by `corpus/validate.py`. Rewrite to fit;
+   never truncate. Do not change `summary_max_chars` — arm G measured the longer cap and it lost.
+3. **The identifier must appear in `summary`**, per `ASSET_REGISTER[...].identifier_fields`:
+   `schema`→`name`, `table`/`column`→`physical_name`, `join`→both endpoints. Only the last
+   dot-separated segment has to match (`corpus/validate.py:_bare`).
+4. **Never touch `governance`.** `excluded=True` is human-only and there is no tool that writes
+   it. Excluded assets are invisible to the analyst and must stay that way.
+5. **Never soften a decoy.** 2 282 columns carry `reliability.status: suspect` with an
+   evidence-based note. They are adversarial by construction — a decoy that reads as usable is
+   worse than no warning at all.
+6. **Physical names are the live obfuscated identifiers.** SQL emits these. English meaning lives
+   in `summary` and `body`. Do not "correct" a physical name.
+7. **`load()` must report 0 problems** after your edits. Run it before measuring anything —
+   `store.load()` never raises for a bad item, so a broken file makes the corpus *smaller*, not
+   loud, and a silently smaller corpus is how this project has published a wrong number before.
+8. **Write to a new corpus directory.** Do not edit `corpora/gold-semantic-layer-20260804` in
+   place. The baseline has to survive for the comparison to mean anything.
+9. **Report what you did not do.** If you cover 40 of 57 schemas, say so with the list. A partial
+   pass reported as complete is the one failure mode that corrupts the measurement rather than
+   just limiting it.
+
+## What is not measured, and must not be claimed
+
+- **EX.** Everything here is the *ceiling* — whether the question was answerable under this
+  retrieval. Nothing in this brief says the model converts a newly-reachable question. The live
+  arm at the time of writing converted about one answerable question in four.
+- **Whether the lift survives the facet rewriters.** All arms above ran with rewriting **off**.
+  Production runs four rewriters on the utility model and `facet_schema` on the raw question
+  (`register/facets.py:178`), whose best measured recall@3 was 0.877 — the same figure arm E
+  reaches with no rewriting at all. Whether the two stack, cancel, or overlap is **unknown** and
+  is a ~$0.30 run, not a free one.
+- **The 114-question sample.** Two questions per schema. Its 95% interval is roughly ±9 pp, so
+  the +2.6 pp at recall@3 is inside the noise and only the +6.1/+7.9 pp coverage figures are
+  worth arguing from. A result that hangs on 2–3 pp needs the full 1 351.
+- **Items 2, 4 and 5 have no measurement at all.** They change what the model reads, not what
+  retrieval finds. Do not report a `recall@k` or a coverage number as evidence for them.
+- **The baseline coverage figures here (0.632 / 0.509) are not comparable to the 0.503 in
+  `retrieval-ceiling-2026-08-04.md`** — that used 171 questions at 3 per schema. Same metric,
+  different sample.
