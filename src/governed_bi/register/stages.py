@@ -136,6 +136,17 @@ class Stage(str, Enum):
     #: that retired a set of numbers.
     cap = "cap"
 
+    #: Turns the turn into a sentence a person can read. The last thing that runs before the
+    #: record is stamped, and the reason it is a *stage* rather than a formatting call is that
+    #: it is a failure site with its own model call: it can be slow, it can raise, and a turn
+    #: whose narration failed is a different fact from a turn that produced no answer.
+    #:
+    #: It is usually free. The agent's closing message already narrates — measured on a live
+    #: turn, *"There are **9,590 restaurants** in total."* — so this stage normally *adopts*
+    #: that text and calls no model at all. It generates only when the loop ended without
+    #: prose, which is the case the interface could not previously survive.
+    narrate = "narrate"
+
     # ── Terminals ──
     refuse = "refuse"
     decline = "decline"

@@ -78,6 +78,33 @@ last `AIMessage` in `messages`.
 Duplicating the model's text into `answer.text` would create two fields that must agree, and
 `useStream`'s `messagesKey: "messages"` already renders it. One source each.
 
+> **Amendment 2 (2026-08-05): the answer also rides `answer.answer_text`, written by a
+> `narrate` stage.** The half of this decision that held is `text` — it is still system copy and
+> still null on the answered path. The half that did not is *"`messagesKey` already renders it"*.
+> It does not. `mapStreamToChatMessages` turns the last AI frame into an answer **card** once a
+> channel answer exists and drops its text as chatter, so the model's sentence reached the
+> client and was never displayed. Measured on a live turn: the agent wrote *"There are **9,590
+> restaurants** in total."*, the ledger showed one passing attempt, and the interface rendered
+> SQL, a ledger and a provenance drawer **with no answer on it**.
+>
+> It had already been fixed once, in the wrong place. `routes._shape` set `answer_text` from
+> `last_ai_text` at the REST boundary — so `POST /chat` had an answer and the streamed path,
+> which is the one the UI uses, did not. A boundary patch that fixes one of two transports is
+> how a defect hides behind a route that passes.
+>
+> So the field is produced by a **node**, after `agent_core`, where every answering path funnels.
+> That is a stronger single source than this decision's original one, not a second copy of it:
+> the answer is no longer "whatever the loop's last message happened to be" but a declared stage
+> with a registered prompt (`prompt_set_hash` covers it) and an observed stage event.
+>
+> It **usually costs nothing** — the agent narrates for free, so the stage adopts that text and
+> calls no model. It generates only when the loop ended on a tool call or on reasoning blocks
+> with no prose, which is the case that had nothing to fall back to.
+>
+> `answer_text` is on the `answer` and **not** in the record, exactly like `result_table` and for
+> the same reason: *"There are 9,590 restaurants"* is the result set spelled out, and ADR 0006
+> §11 puts result rows in the class the durable projection drops.
+
 **And `messages` is the conversation at *every* namespace, because the client cannot tell them
 apart.** `messagesKey` names a key, not a graph level. LangGraph streams a nested graph's whole
 state under `values|<node>:<task_id>`, and the SDK applies the values of any namespace it does

@@ -213,6 +213,7 @@ twice, and a seq-derived id would have shown the same step twice.
 | `execute` | tool | ok, error | `sql`, `sql_sha256`, `row_count`, `truncated`, `n_columns` |
 | `cap` | tool | cap | `cap` |
 | `ask_user` | tool | start, ok, declined | `clarification_id` |
+| `narrate` | rail | start, ok, error | `source` (`narrated` / `none` / `skipped`), `n_chars` |
 | `refuse` | rail | start, refused, error | `terminal_reason` |
 | `decline` | rail | start, declined, error | `terminal_reason` |
 | `stamp` | final | ok, refused, declined, error, cap | `outcome`, `failed_stage` |

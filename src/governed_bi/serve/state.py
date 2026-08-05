@@ -307,6 +307,17 @@ class ServeState(TypedDict, total=False):
     #: durable projection *drops*. This rides the live ``answer`` — which the audit log does not
     #: persist — so the client can render a table without the rows entering the ledger.
     result_table: dict[str, Any] | None
+    #: The turn's answer in prose, written by ``narrate`` and read by the answer card.
+    #:
+    #: **Not a record field, for the same reason as ``result_table`` above.** It quotes the
+    #: rows — *"There are 9,590 restaurants"* is the result set spelled out — so ADR 0006 §11
+    #: puts it in the class the durable projection drops. It rides the live ``answer``, which
+    #: the audit log does not persist, and the log carries its own copy beside the record.
+    #:
+    #: Distinct from ``answer["text"]``, which is *system* copy: refusal and decline wording
+    #: this repository writes. On a refusal ``text`` is set and this is null; on an answered
+    #: turn it is the other way round. That asymmetry is the signal the client renders on.
+    answer_text: str | None
     #: This turn's question, embedded. **Per-turn, which is why it cannot live on the config.**
     #:
     #: ``Session.configurable(question=...)`` adds a ``query_vector`` and that serves the callers
@@ -357,6 +368,7 @@ PER_TURN_RESET: dict[str, Any] = {
     "answer": None,
     "generated_sql": None,
     "result_table": None,
+    "answer_text": None,
     "query_vector": None,
     "schemas": [],
     "crossings": [],

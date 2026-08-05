@@ -379,7 +379,8 @@ def _record_node(state: dict) -> dict:
     rather than by a check. The ``turn_id`` guard stays anyway, because a record without one
     cannot be looked up and would be a row nobody can open.
     """
-    from governed_bi.api.trace_store import append_turn, last_ai_text
+    from governed_bi.api.trace_store import append_turn
+    from governed_bi.serve.messages import last_ai_text
 
     try:
         answer = state.get("answer") or {}
@@ -389,12 +390,12 @@ def _record_node(state: dict) -> dict:
         append_turn(
             record,
             question=str(state.get("question") or "") or None,
-            # The model's text lives in ``messages``; ``answer["text"]`` is *system* copy and is
-            # null on the answered path (ADR 0007 §4). Imported rather than reimplemented — the
-            # first draft copied it here and ``tools/check_one_implementation.py`` refused, which
-            # is the gate working: two readers of "what did the model say" is how the audit list
-            # and the REST response drift.
-            answer_text=last_ai_text(state),
+            # ``narrate``'s sentence when there is one, and the raw last message otherwise.
+            # ``answer["text"]`` is *system* copy and null on the answered path (ADR 0007 §4), so
+            # it is not the field to log. Preferring the stage's output rather than recomputing
+            # keeps the log saying what the client was shown; the fallback covers a turn logged
+            # from a graph built without the node.
+            answer_text=(answer.get("answer_text") or last_ai_text(state)),
             outcome=answer.get("outcome"),
         )
     except Exception:  # noqa: BLE001 — see the docstring: logging must not fail a served turn

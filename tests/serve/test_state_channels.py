@@ -218,6 +218,7 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
         # A stale result table is the loudest possible carry-over: the next turn's answer would
         # render the previous turn's rows beside its own explanation.
         "result_table": {"columns": ["n"], "rows": [[1]], "row_count": 1, "truncated": False},
+        "answer_text": "There are 9,590 restaurants in total.",
         # A carried-over query vector would score the *previous* question's semantics against
         # this turn's candidates — a wrong ranking with nothing anywhere disagreeing.
         "query_vector": [0.1, 0.2, 0.3],

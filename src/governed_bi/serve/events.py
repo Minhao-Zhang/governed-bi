@@ -392,6 +392,30 @@ def _agent_core(update: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
     return "ok", ({"n_attempts": len(attempts)} if isinstance(attempts, (list, tuple)) else {})
 
 
+def _narrate(update: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    """``source`` — whether the turn ends with a sentence, observed from the update.
+
+    ``skipped`` is *not* inferred from an empty update by accident: a terminal turn returns
+    ``{}`` with no key at all, and a failed generation returns the key set to ``None``. The
+    first is "this stage declined to run", the second is "it ran and produced nothing", and
+    collapsing them would hide a dead narrator behind a legitimate refusal.
+
+    **It does not report whether the sentence was adopted or generated**, which is the more
+    interesting fact — it is the difference between a free stage and a paid one. That
+    distinction is not in the update: both paths return ``{"answer_text": "..."}``, so the only
+    way to emit it would be to reach for something the node did not return. ``_assemble`` above
+    records why that is refused for exactly one cosmetic number, and the reason holds here:
+    "status and detail are observed from the update" is what makes every other row trustworthy.
+    If the split turns out to be worth reporting, the node declares it and this reads it.
+    """
+    if "answer_text" not in update:
+        return "ok", {"source": "skipped"}
+    text = update.get("answer_text")
+    if not text:
+        return "ok", {"source": "none"}
+    return "ok", {"source": "narrated", "n_chars": len(str(text))}
+
+
 #: Per-stage detail readers. Absent stage → ``("ok", {})``, which is the right answer for a
 #: node whose only interesting outcome is *that it finished*.
 _DETAIL_BY_STAGE: dict[str, Any] = {
@@ -409,4 +433,5 @@ _DETAIL_BY_STAGE: dict[str, Any] = {
     "connect": _connect,
     "assemble": _assemble,
     "agent_core": _agent_core,
+    "narrate": _narrate,
 }

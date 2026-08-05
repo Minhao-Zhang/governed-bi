@@ -20,6 +20,7 @@ from governed_bi.serve.nodes.facets import (
     facet_term_node,
 )
 from governed_bi.serve.nodes.guard import guard_node
+from governed_bi.serve.nodes.narrate import narrate_node
 from governed_bi.serve.nodes.negative import negative_node
 from governed_bi.serve.nodes.rewrite import rewrite_node
 from governed_bi.serve.nodes.route_retrieve import connect_node, resolve_node, route_node
@@ -128,6 +129,7 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     graph.add_node("connect", wrap_node("connect", connect_node))
     graph.add_node("assemble", wrap_node("assemble", assemble_node))
     graph.add_node("agent_core", wrap_node("agent_core", agent_core_node))
+    graph.add_node("narrate", wrap_node("narrate", narrate_node))
     graph.add_node("refuse", wrap_node("refuse", refuse_node))
     graph.add_node("decline", wrap_node("decline", decline_node))
     # **``stamp`` is the one node that must not be wrapped.** ``wrap_node`` turns an
@@ -189,7 +191,13 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
         _skip_if_terminal,
         {"stamp": "stamp", "continue": "agent_core"},
     )
-    graph.add_edge("agent_core", "stamp")
+    # ``agent_core -> narrate -> stamp``, and ``narrate`` is on this edge only. The terminals go
+    # straight to ``stamp`` because their wording is *system* copy — `refuse` and `decline` write
+    # `answer["text"]` themselves, and a generated sentence over a governance decision would be
+    # the interface paraphrasing a refusal. The node re-checks `path_kind` anyway, because a turn
+    # can be marked terminal *inside* `agent_core` and still arrive here.
+    graph.add_edge("agent_core", "narrate")
+    graph.add_edge("narrate", "stamp")
     graph.add_edge("refuse", "stamp")
     graph.add_edge("decline", "stamp")
     if record is not None:

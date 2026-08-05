@@ -30,10 +30,10 @@ from governed_bi.api.trace_store import (
     TURN_LOG_DIR,
     append_turn,
     get_turn,
-    last_ai_text,
     list_turns,
 )
 from governed_bi.register.assets import ASSET_REGISTER
+from governed_bi.serve.messages import last_ai_text
 
 __all__ = ["app"]
 
@@ -593,11 +593,14 @@ def _shape(out: dict[str, Any]) -> dict[str, Any]:
             "clarification": pending,
         }
     answer = dict(out.get("answer") or {})
-    # The model's text lives in `messages`, not in `answer["text"]` — ADR 0007 §4: `text` is
-    # *system* copy and is null on the answered path. A REST caller has no message channel to
-    # read, so the one thing it cannot reconstruct is supplied here, under a different name so
-    # the two are never confused for one field.
-    answer["answer_text"] = last_ai_text(out)
+    # `answer_text` is now written by the `narrate` node for **every** transport, so this only
+    # fills a gap the graph left. Which is the whole reason `narrate` exists: this line was here,
+    # it worked, and it worked *only for REST* — so `POST /chat` returned an answer the streamed
+    # path could not show, and the streamed path is the one the UI uses. A boundary patch that
+    # fixes one of two callers is how a defect hides behind a passing route.
+    answer.setdefault("answer_text", None)
+    if answer.get("answer_text") is None:
+        answer["answer_text"] = last_ai_text(out)
     answer.setdefault("clarification", None)
     return answer
 

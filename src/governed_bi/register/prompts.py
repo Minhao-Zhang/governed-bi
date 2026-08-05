@@ -263,6 +263,41 @@ FACET_EXAMPLE_QUERY = Prompt(
 #: A mapping rather than a naming convention (``f"{stage}_query"``): a convention silently returns
 #: nothing for a stage nobody wrote a prompt for, and this raises at import via the registry's own
 #: coherence check instead.
+#: The closing sentence, when the agent did not write one.
+#:
+#: **Deliberately narrow, because the wide version of this job is already done.** The agent's
+#: last message normally narrates the result for free, and ``serve/nodes/narrate.py`` adopts it
+#: when it exists. This prompt runs on the remainder: a loop that ended on a tool call, or on
+#: reasoning blocks with no text. So it is given the question, the statement and the rows, and
+#: nothing else — it is not re-deciding anything, it is reading a table out loud.
+#:
+#: The instruction not to add caveats is load-bearing rather than stylistic. A model handed a
+#: bare result set reaches for "this may not reflect…", and a hedge invented here would be a
+#: reliability claim with no measurement behind it, on the most-read line in the interface —
+#: the same defect ADR 0007 §3 refuses for the tier badge.
+NARRATE = Prompt(
+    name="narrate",
+    stage="narrate",
+    why=(
+        "Guarantees the turn ends in a sentence. The answer card reads `answer_text`, and a "
+        "turn whose agent finished on a tool call rendered SQL, a ledger and no answer."
+    ),
+    variants={
+        "v1": (
+            "State the answer to the question in one or two sentences, using the query result "
+            "below.\n\n"
+            "Rules:\n"
+            "- Lead with the number or the name that answers the question.\n"
+            "- Use the result exactly as given. Do not round, re-derive or estimate.\n"
+            "- If the result is empty, say that no rows matched.\n"
+            "- Do not add caveats about accuracy, data quality or your own confidence. "
+            "Reliability is reported separately and is not yours to assert.\n"
+            "- No preamble, no restating of the question, no description of the SQL."
+        ),
+    },
+)
+
+
 FACET_QUERY_PROMPTS: Mapping[str, str] = {
     "facet_schema": "facet_schema_query",
     "facet_term": "facet_term_query",
@@ -282,6 +317,7 @@ PROMPT_REGISTRY: Mapping[str, Prompt] = {
     for p in (
         ANALYST,
         BI_SCOPE,
+        NARRATE,
         FACET_SCHEMA_QUERY,
         FACET_TERM_QUERY,
         FACET_METRIC_QUERY,

@@ -294,6 +294,16 @@ def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
         # On the `answer` and deliberately **not** in `record`: ADR 0006 §11 puts result rows in
         # the class the durable projection drops, and the audit log persists the record only.
         "result_table": state.get("result_table"),
+        # **The sentence, from ``narrate``.** Same class as `result_table` and for the same
+        # reason — *"There are 9,590 restaurants"* is the result set spelled out, so it rides
+        # the live answer and stays out of the durable record.
+        #
+        # Distinct from `text` above, which is *system* copy. On an answered turn `text` is null
+        # and this is set; on a refusal it is the other way round, and the client renders on that
+        # asymmetry. Read from state rather than recomputed here: `narrate` is the one stage that
+        # decides what the turn says, and a second derivation in the recorder is how the audit
+        # list and the answer card came to disagree about `answer_text` in the first place.
+        "answer_text": state.get("answer_text"),
     }
     # The turn's one ``final`` event (ADR 0010 §1). Emitted here rather than from ``wrap.py``
     # because ``stamp`` is the one node deliberately left unwrapped — wrapping the recorder
