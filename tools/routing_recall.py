@@ -42,13 +42,26 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="routing_recall", description=__doc__)
     parser.add_argument("--corpus-dir", default=DEFAULT_CORPUS)
     parser.add_argument("--dataset", type=pathlib.Path, default=DEFAULT_DATASET)
+    parser.add_argument(
+        "--baseline",
+        default=None,
+        help="a second corpus to measure in the SAME process, with the same embedder and the "
+        "same questions, reporting the delta. A number compared against one from another "
+        "session is not a comparison -- the embedder, the question sample and the vector "
+        "cache all have to be held fixed, and only one process can promise that.",
+    )
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument(
         "--per-schema",
         type=int,
-        default=2,
-        help="questions per schema. A flat --limit is weighted by whichever schema BIRD "
-        "happened to ask most about, so a per-schema effect reads as an overall one.",
+        default=None,
+        help="questions per schema. Default is ALL of them: every one of the 1 351 test "
+        "questions falls inside the 57 covered schemas, and this run costs no model call, so "
+        "the full set takes ~12 min and $0. It defaulted to 2, which is 114 questions and a "
+        "95%% interval near +/-9 pp -- wide enough to hide every effect this tool is used to "
+        "detect, for no saving. Pass a small value for a smoke test, not for a result. A flat "
+        "--limit is weighted by whichever schema BIRD asked most about, so a per-schema "
+        "effect reads as an overall one.",
     )
     parser.add_argument("--top-n", type=int, default=3, help="shortlist size under test")
     parser.add_argument(
@@ -105,18 +118,25 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print("rewriters OFF: facets search the raw question")
 
-    # `agent_model=None` on purpose — `routing_recall` documents that the stub answer path costs
-    # nothing while facets, routing, retrieval, resolve and connect all run for real.
-    session = session_mod.from_corpus_dir(
-        args.corpus_dir,
-        connector=PostgresConnector(dsn),
-        policy=GovernancePolicy(guard_rules_enabled={}),
-        agent_model=None,
-        utility_model=utility,
-        embedder=embedder,
-        vector_cache=vector_cache,
-    )
-    schemas = sorted({s for s in session.structure.table_schemas.values() if s})
+    def build(corpus_dir: str):
+        # `agent_model=None` on purpose — `routing_recall` documents that the stub answer path
+        # costs nothing while facets, routing, retrieval, resolve and connect all run for real.
+        return session_mod.from_corpus_dir(
+            corpus_dir,
+            connector=PostgresConnector(dsn),
+            policy=GovernancePolicy(guard_rules_enabled={}),
+            agent_model=None,
+            utility_model=utility,
+            embedder=embedder,
+            vector_cache=vector_cache,
+        )
+
+    # The **first** corpus decides the question set, and both arms then answer the same
+    # questions. Letting each arm derive its own would compare two scores over two populations
+    # the moment one variant covered a schema the other did not — which is the shape
+    # `measure/population.py` exists to refuse.
+    primary = build(args.corpus_dir)
+    schemas = sorted({s for s in primary.structure.table_schemas.values() if s})
     questions = load_questions(
         # `--dataset` is the *directory*, as `run_datalake_eval.py` takes it; the question
         # file inside it is `test_final.jsonl`. Passing the directory raised PermissionError,
@@ -126,32 +146,67 @@ def main(argv: list[str] | None = None) -> int:
         limit=args.limit,
         per_schema=args.per_schema,
     )
+    gold_sql = {str(q["question_id"]): str(q["gold_sql"]) for q in questions}
     print(f"{len(questions)} questions over {len(schemas)} schemas, top_n={args.top_n}\n")
 
-    started = time.time()
-    rows = routing_recall(questions, session=session, top_n=args.top_n)
-    took = time.time() - started
-    summary = summarise_routing(rows)
+    def measure(label: str, session) -> dict:
+        started = time.time()
+        rows = routing_recall(questions, session=session, top_n=args.top_n)
+        took = time.time() - started
+        # **Table coverage is the number to lead with, and this tool did not report it.**
+        # `docs/plans/retrieval-ceiling-2026-08-04.md` corrects an earlier document for
+        # concluding from schema `recall@k`: "those numbers are right; they measure the wrong
+        # stage". A turn can route to the right schema and still be unable to answer, because
+        # the per-type budget licenses at most 8 ranked tables — so coverage bounds EX and
+        # recall does not.
+        out = {
+            # **The corpus's content digest, not its directory name.** A variant iterated in
+            # place keeps its path and changes its meaning, so two artifacts would claim the
+            # same treatment while describing different corpora — `corpus/hash.py` opens by
+            # naming that as v1's `corpus_content_hash == "unknown"` defect, and a directory
+            # name is the same failure with a friendlier spelling.
+            "corpus_dir": str(session.corpus_root),
+            "corpus_content_hash": session.corpus_content_hash,
+            "n_questions": len(rows),
+            "routing": summarise_routing(rows),
+            "coverage": table_coverage(rows, gold_sql),
+            "mean_licensed": round(
+                sum(len(r.get("licensed") or ()) for r in rows) / max(len(rows), 1), 1
+            ),
+            "wall_s": round(took),
+            "rows": rows,
+        }
+        print(f"=== {label}  {out['corpus_content_hash'][:12]}  ({out['wall_s']}s)")
+        print(json.dumps({k: v for k, v in out.items() if k != "rows"}, indent=2, default=str))
+        return out
 
-    # **Table coverage is the number to lead with, and this tool did not report it.**
-    # `docs/plans/retrieval-ceiling-2026-08-04.md` corrects an earlier document for concluding
-    # from schema `recall@k`: "those numbers are right; they measure the wrong stage". A turn can
-    # route to the right schema and still be unable to answer, because the per-type budget
-    # licenses at most 8 ranked tables -- so coverage bounds EX and recall does not.
-    coverage = table_coverage(rows, {str(q["question_id"]): str(q["gold_sql"]) for q in questions})
-    mean_licensed = sum(len(r.get("licensed") or ()) for r in rows) / max(len(rows), 1)
+    arms = {"treatment": measure("treatment", primary)}
+    if args.baseline:
+        arms["baseline"] = measure("baseline", build(args.baseline))
+        if arms["baseline"]["corpus_content_hash"] == arms["treatment"]["corpus_content_hash"]:
+            print(
+                "\n!! both arms digest to the same corpus: this is one arm measured twice, "
+                "and any delta below is noise in the router's tie-breaking, not an effect",
+                file=sys.stderr,
+            )
+        t, b = arms["treatment"], arms["baseline"]
+        print("\n--- delta (treatment - baseline) ---")
+        for key in ("recall@1", "recall@3", "recall@5", "recall@10", "reached_gold"):
+            print(f"  {key:<16} {t['routing'][key] - b['routing'][key]:+.4f}")
+        gap = (
+            t["coverage"]["all_gold_tables_licensed"] - b["coverage"]["all_gold_tables_licensed"]
+        )
+        print(
+            f"  {'coverage':<16} {gap:+.4f}   "
+            f"({b['coverage']['all_gold_tables_licensed']:.3f} -> "
+            f"{t['coverage']['all_gold_tables_licensed']:.3f})   <- the number that bounds EX"
+        )
+        print(f"  {'mean_licensed':<16} {t['mean_licensed'] - b['mean_licensed']:+.1f}")
 
-    print(json.dumps({"routing": summary, "coverage": coverage}, indent=2, default=str))
-    print(f"\nmean tables licensed: {mean_licensed:.1f}")
-    print(f"{took:.0f}s for {len(rows)} questions")
-
-    missed = [r for r in rows if not r["hit"]]
+    missed = [r for r in arms["treatment"]["rows"] if not r["hit"]]
     print(f"\n{len(missed)} misses; the gold schema's rank where it was scored at all:")
     for row in missed[:15]:
-        print(
-            f"  {row['db_id']:<24} rank={row['rank']!s:<6} "
-            f"selected={row['selected']}"
-        )
+        print(f"  {row['db_id']:<24} rank={row['rank']!s:<6} selected={row['selected']}")
 
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -159,14 +214,10 @@ def main(argv: list[str] | None = None) -> int:
             json.dumps(
                 {
                     "arm": "rewrite" if args.rewrite else "no_rewrite",
-                    "corpus_dir": args.corpus_dir,
                     "top_n": args.top_n,
                     "embed": args.embed,
-                    "n_questions": len(rows),
-                    "summary": summary,
-                    "coverage": coverage,
-                    "mean_licensed": round(mean_licensed, 1),
-                    "rows": rows,
+                    "per_schema": args.per_schema,
+                    "arms": arms,
                 },
                 indent=2,
                 default=str,

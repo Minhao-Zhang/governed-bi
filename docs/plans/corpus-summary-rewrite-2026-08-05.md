@@ -298,11 +298,21 @@ Rebuild the floor arm (regenerable, so it is not checked in — 41 MB of derived
 uv run --frozen python tools/densify_summaries.py --force
 ```
 
-Then measure any arm, yours or the floor, with the same command:
+Then measure **both arms in one process**, which is the only way the embedder, the question
+sample and the vector cache are held fixed:
 
 ```bash
-uv run --frozen python tools/routing_recall.py --corpus-dir corpora/<your-variant> --top-n 3 --out runs/ablation/<name>-top3.json
+uv run --frozen python tools/routing_recall.py --corpus-dir corpora/<your-variant> --baseline corpora/gold-semantic-layer-20260804 --top-n 3 --out runs/ablation/<name>-top3.json
 ```
+
+It prints the delta, leads with `coverage`, and stamps each arm with its
+`corpus_content_hash` — a directory name is not an identity, and a variant iterated in place keeps
+its path while changing its meaning. **If both arms report the same hash you measured one corpus
+twice**; the tool says so on stderr.
+
+Defaults worth knowing: `--per-schema` is now **all 1 351 questions** (~12 min, $0 in model
+calls). It used to be 2 per schema — 114 questions, a 95% interval near ±9 pp, wide enough to hide
+every effect this tool is used to detect. Pass a small value for a smoke test, never for a result.
 
 Materialise your corpus as a **sibling directory**, never in place.
 
@@ -328,8 +338,20 @@ embedder. A number compared against one from another session is not a comparison
    records this as the reason the benchmark is fair. **You may read train questions and their gold
    SQL to author summaries. You may not read `test_final.jsonl`, ever, for any purpose.** The
    measurement harness reads it; the authoring must not. A summary written with a test question in
-   context leaks the answer into the index and there is no way to detect it afterwards or undo it
-   — it invalidates every number this repository has published since.
+   context leaks the answer into the index and invalidates every number this repository has
+   published since.
+
+   **This is now checked, and the check must pass before you report anything:**
+
+   ```bash
+   uv run --frozen python tools/check_train_only.py corpora/<your-variant>
+   ```
+
+   It looks for a held-out `question_id` or `test_final.jsonl` cited in any `audit` block, a
+   held-out question's wording inside any authored field, and a collision rate materially above
+   the train-only control. It catches **copy-paste, not paraphrase** — a pass is the absence of
+   the cheap failure, not a certificate. An earlier version of this brief said contamination
+   "cannot be detected afterwards"; that is true of a reworded leak and was too strong.
 2. **`summary` ≤ 250 characters and non-empty**, enforced by `corpus/validate.py`. Rewrite to fit;
    never truncate. Do not change `summary_max_chars` — arm G measured the longer cap and it lost.
 3. **The identifier must appear in `summary`**, per `ASSET_REGISTER[...].identifier_fields`:
@@ -363,7 +385,10 @@ embedder. A number compared against one from another session is not a comparison
   is a ~$0.30 run, not a free one.
 - **The 114-question sample.** Two questions per schema. Its 95% interval is roughly ±9 pp, so
   the +2.6 pp at recall@3 is inside the noise and only the +6.1/+7.9 pp coverage figures are
-  worth arguing from. A result that hangs on 2–3 pp needs the full 1 351.
+  worth arguing from. **This sample was a mistake and the tool no longer defaults to it** — all
+  1 351 test questions fall inside the 57 covered schemas and the run costs no model call, so
+  there was never a reason to sample. **Re-measure the floor on the full set before comparing
+  your numbers to the ones in §3**, which are the 114-question figures.
 - **Items 2, 4 and 5 have no measurement at all.** They change what the model reads, not what
   retrieval finds. Do not report a `recall@k` or a coverage number as evidence for them.
 - **The baseline coverage figures here (0.632 / 0.509) are not comparable to the 0.503 in
