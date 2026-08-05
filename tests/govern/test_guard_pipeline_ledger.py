@@ -417,7 +417,7 @@ def test_the_ledger_records_the_statement_that_ran_not_the_one_that_was_asked_fo
     """
     from governed_bi.govern.layers import allow, refuse
     from governed_bi.govern.ledger import attempt_record
-    from governed_bi.serve.tools import execution_from_attempts
+    from governed_bi.serve.ledger import execution_from_attempts
 
     executed = 'SELECT COUNT(*) FROM "address"."CBSA" LIMIT 200001'
     row = attempt_record(allow(evaluated=[], bound={}), "agent", executed_sql=executed)
@@ -432,9 +432,9 @@ def test_the_ledger_records_the_statement_that_ran_not_the_one_that_was_asked_fo
     refused = attempt_record(refuse("r_table_not_licensed", "nope"), "agent")
     assert "executed_sql" in refused and refused["executed_sql"] is None
 
-    from governed_bi.serve.tools import _cap_attempt
+    from governed_bi.serve.ledger import cap_attempt
 
-    assert "executed_sql" in _cap_attempt()
+    assert "executed_sql" in cap_attempt()
 
 
 def test_agent_core_prefers_the_executed_statement_over_the_tool_argument() -> None:

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from langchain.tools import ToolRuntime
@@ -27,24 +27,18 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
 from langgraph.types import Command, interrupt
 
-from governed_bi.corpus.analyst import AnalystCorpus
-from governed_bi.corpus.schema import ColumnAsset, TableAsset
 from governed_bi.govern.bounds import OUT_OF_SCOPE_MESSAGE, ToolBounds
 from governed_bi.govern.check import GovernanceUsageError
-from governed_bi.govern.layers import refuse
 from governed_bi.govern.ledger import (
-    AttemptRecord,
-    attempt_record,
-    execution_record,
     statement_sha256,
 )
-from governed_bi.govern.pipeline import prepare, spellings_for
 from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.register.prompts import prompt_text
-from governed_bi.register.stages import ATTEMPT_CAP_REFUSED_BY
+from governed_bi.serve import fetch
 from governed_bi.serve.agent_state import AttemptBook
 from governed_bi.serve.delivery import payload_digest, tool_bounds_from_state
 from governed_bi.serve.events import emit, tool_event_id
+from governed_bi.serve.ledger import attempt_field, cap_attempt, execution_from_attempts
 from governed_bi.serve.runtime import configurable
 
 __all__ = [
@@ -78,9 +72,6 @@ __all__ = [
 #: Read through the registry rather than copied, so there is one text. A second copy here is how
 #: the hash and the sent prompt drift, which is the failure the registry exists to end.
 SYSTEM_PROMPT = prompt_text("analyst")
-
-_DEFAULT_READ_BODY_MAX_CHARS = 80_000
-
 
 def resolve_assets(config: Mapping[str, Any] | None) -> dict[str, Any]:
     """``assets_by_id`` or ``corpus.by_id`` from configurable."""
@@ -303,7 +294,7 @@ def build_tools(
     # is a wiring failure and ``_run_query`` raises on it; coercing it to ``None`` here
     # is what let the default below stand in for it (G1).
     corpus = cfg.get("corpus")
-    read_cap = _read_body_cap(state, cfg)
+    read_cap = fetch.read_body_cap(state, cfg)
     book = AttemptBook(policy.run_query_attempt_cap)
     turn_id = str(state.get("turn_id") or "")
 
@@ -314,7 +305,7 @@ def build_tools(
             "read_body",
             runtime,
             {"n_asset_ids": len(asset_ids or ())},
-            lambda: _read_body(asset_ids, bounds=bounds, assets=assets, max_chars=read_cap),
+            lambda: fetch.read_body(asset_ids, bounds=bounds, assets=assets, max_chars=read_cap),
         )
 
     @tool
@@ -324,7 +315,7 @@ def build_tools(
             "inspect_schema",
             runtime,
             {"table_id": table_id},
-            lambda: _inspect_schema(table_id, bounds=bounds, assets=assets),
+            lambda: fetch.inspect_schema(table_id, bounds=bounds, assets=assets),
         )
 
     @tool
@@ -334,7 +325,7 @@ def build_tools(
             "sample_rows",
             runtime,
             {"column_id": column_id, "limit": limit},
-            lambda: _sample_rows(
+            lambda: fetch.sample_rows(
                 column_id, limit=limit, bounds=bounds, assets=assets, connector=connector
             ),
         )
@@ -348,7 +339,7 @@ def build_tools(
             update: dict[str, Any] = {}
             if not book.cap_recorded:
                 book.cap_recorded = True
-                update["attempts_by_call"] = {f"cap:{call_id}": _cap_attempt()}
+                update["attempts_by_call"] = {f"cap:{call_id}": cap_attempt()}
                 # **Inside the guard, with the ledger row, and that is a fix.** Emitted outside
                 # it, this fired once per post-cap call — measured: a cap of 1 against three
                 # calls produced one ledger row and *two* timeline rows. `AttemptBook` already
@@ -377,7 +368,7 @@ def build_tools(
             detail={"attempt": attempt_number},
         )
         try:
-            payload, attempt = _run_query(
+            payload, attempt = fetch.run_query(
                 sql, bounds=bounds, corpus=corpus, connector=connector, policy=policy
             )
         except GovernanceUsageError:
@@ -514,281 +505,3 @@ def _clarification_answer(resume: Any) -> str:
                 return str(value)
         return ""
     return str(resume)
-
-
-def attempt_field(attempt: Any, name: str) -> Any:
-    """One field of a ledger row, whether it arrived as a mapping or an object."""
-    if isinstance(attempt, Mapping):
-        return attempt.get(name)
-    return getattr(attempt, name, None)
-
-
-def execution_from_attempts(attempts: Sequence[Any]) -> dict[str, Any]:
-    """The turn's :class:`ExecutionRecord`, with ``terminal`` read off the **ledger**.
-
-    Not from whether a SQL string exists. ``has_sql`` came from the tool-call
-    *arguments*, so producing a string counted as producing an answer: a turn whose
-    every attempt was refused recorded ``terminal: "answered"`` beside
-    ``passed: false``, which is the crash-counted-as-refusal inversion that retired the
-    pre-2026-07-25 numbers, pointing the other way.
-
-    The vocabulary is ``govern.ledger.ExecutionRecord``'s. ``"graded"`` belongs to the
-    graded-delivery path and is not written here.
-    """
-    rows = list(attempts)
-    if not rows:
-        return execution_record(rows, "no_sql")
-    if any(attempt_field(a, "passed") is True for a in rows):
-        return execution_record(rows, "answered")
-    if any(attempt_field(a, "reason_code") == ATTEMPT_CAP_REFUSED_BY for a in rows):
-        return execution_record(rows, "capped")
-    return execution_record(rows, "refused")
-
-
-def _cap_attempt() -> AttemptRecord:
-    """The ledger row for a turn the attempt cap ended.
-
-    ``_run_query`` returned on the cap *before* appending, so a capped turn carried an
-    **empty** ledger while ``generated_sql`` was still read out of the tool arguments —
-    and "no attempt passed" then held vacuously. ``ExecutionRecord`` declared
-    ``"capped"`` and nothing ever wrote it.
-
-    Built directly rather than through :func:`~governed_bi.govern.layers.refuse`: the cap
-    is not a layer verdict (ADR 0006 §5 keeps ``capped`` distinct from ``refused``), and
-    a rule id would attribute it to a governance layer that never ran. The reason code is
-    :data:`~governed_bi.register.stages.ATTEMPT_CAP_REFUSED_BY`, which is the declared
-    value ``classify_outcome`` reads to return ``Outcome.capped``.
-    """
-    return AttemptRecord(
-        verdict_layer=None,
-        passed=False,
-        reason_code=ATTEMPT_CAP_REFUSED_BY,
-        path="agent",
-        # Stated, not omitted. A ``TypedDict`` tolerates a missing key at runtime, so a row
-        # built without this one forces every consumer to ``.get()`` defensively -- and a
-        # capped attempt sent nothing, which is a value.
-        executed_sql=None,
-    )
-
-
-def _read_body_cap(state: Mapping[str, Any], cfg: Mapping[str, Any]) -> int:
-    for source in (state, state.get("knobs_resolved") or {}, cfg):
-        if not isinstance(source, Mapping):
-            continue
-        raw = source.get("read_body_max_tokens")
-        if raw is not None:
-            return max(256, int(raw) * 4)
-    return _DEFAULT_READ_BODY_MAX_CHARS
-
-
-def _asset_attr(asset: Any, name: str) -> Any:
-    if isinstance(asset, Mapping):
-        return asset.get(name)
-    return getattr(asset, name, None)
-
-
-def _read_body(
-    asset_ids: Sequence[str],
-    *,
-    bounds: ToolBounds,
-    assets: Mapping[str, Any],
-    max_chars: int,
-) -> tuple[str, bool]:
-    """``(payload, delivered)``.
-
-    The flag is the reason this is a tuple rather than a string: an out-of-scope refusal is a
-    payload the model receives but **not** a delivery, and ``delivery_hash`` is an audit of
-    what the corpus handed over. The tracker call used to be skipped by an early ``return``,
-    which encoded the same distinction where a caller could not see it.
-    """
-    parts: list[str] = []
-    used = 0
-    for raw_id in asset_ids:
-        aid = str(raw_id)
-        if not bounds.may_read_body(aid):
-            return OUT_OF_SCOPE_MESSAGE, False
-        asset = assets.get(aid)
-        if asset is None:
-            return OUT_OF_SCOPE_MESSAGE, False
-        body = _asset_attr(asset, "body")
-        text = "" if body is None else str(body)
-        chunk = f"### {aid}\n{text}"
-        if used + len(chunk) > max_chars:
-            remain = max_chars - used
-            if remain <= 0:
-                break
-            chunk = chunk[:remain] + "\n…[truncated]"
-            parts.append(chunk)
-            break
-        parts.append(chunk)
-        used += len(chunk)
-    payload = "\n\n".join(parts) if parts else "(empty)"
-    return payload, True
-
-
-def _inspect_schema(
-    table_id: str,
-    *,
-    bounds: ToolBounds,
-    assets: Mapping[str, Any],
-) -> tuple[str, bool]:
-    tid = str(table_id)
-    if not bounds.may_inspect_schema(tid):
-        return OUT_OF_SCOPE_MESSAGE, False
-    table = assets.get(tid)
-    if table is None or not _asset_is_table(table):
-        return OUT_OF_SCOPE_MESSAGE, False
-    columns: list[dict[str, Any]] = []
-    for col_id in _asset_attr(table, "columns") or ():
-        col = assets.get(str(col_id))
-        if col is None:
-            columns.append({"id": str(col_id)})
-            continue
-        columns.append(
-            {
-                "id": str(_asset_attr(col, "id") or col_id),
-                "physical_name": _asset_attr(col, "physical_name"),
-                "physical_type": _asset_attr(col, "physical_type"),
-                "nullable": _asset_attr(col, "nullable"),
-            }
-        )
-    payload = json.dumps(
-        {
-            "table_id": tid,
-            "physical_name": _asset_attr(table, "physical_name"),
-            "schema": _asset_attr(table, "schema"),
-            "columns": columns,
-        },
-        sort_keys=True,
-        default=str,
-    )
-    return payload, True
-
-
-def _asset_is_table(asset: Any) -> bool:
-    if isinstance(asset, TableAsset):
-        return True
-    at = _asset_attr(asset, "asset_type")
-    return str(getattr(at, "value", at) or "") == "table"
-
-
-def _sample_rows(
-    column_id: str,
-    *,
-    limit: int,
-    bounds: ToolBounds,
-    assets: Mapping[str, Any],
-    connector: Any,
-) -> tuple[str, bool]:
-    cid = str(column_id)
-    if not bounds.may_sample(cid):
-        return OUT_OF_SCOPE_MESSAGE, False
-    col = assets.get(cid)
-    if col is None:
-        return OUT_OF_SCOPE_MESSAGE, False
-    at = _asset_attr(col, "asset_type")
-    is_col = isinstance(col, ColumnAsset) or str(getattr(at, "value", at) or "") == "column"
-    if not is_col:
-        return OUT_OF_SCOPE_MESSAGE, False
-    if connector is None:
-        return "sample_rows error: no connector configured", False
-    table = str(_asset_attr(col, "parent_table") or "")
-    physical = str(_asset_attr(col, "physical_name") or "")
-    schema = str(_asset_attr(col, "schema") or "")
-    table_name = table.split(".")[-1] if table else ""
-    values = list(
-        connector.sample_values(table_name, physical, limit=max(1, int(limit)))
-    )
-    payload = json.dumps(
-        {
-            "column_id": cid,
-            "schema": schema,
-            "table": table,
-            "values": values,
-        },
-        sort_keys=True,
-        default=str,
-    )
-    return payload, True
-
-
-def _run_query(
-    sql: str,
-    *,
-    bounds: ToolBounds,
-    corpus: Any,
-    connector: Any,
-    policy: GovernancePolicy,
-) -> tuple[str, Any]:
-    """``(payload, attempt_row)``. Exactly one ledger row per admitted call.
-
-    The cap is not decided here any more — :class:`~governed_bi.serve.agent_state.AttemptBook`
-    owns it, because counting attempts requires knowing what a *previous node execution*
-    committed and this function only ever saw one closure's list.
-    """
-    if connector is None:
-        return (
-            "run_query error: no connector configured",
-            attempt_record(
-                refuse("r_not_a_read", "no connector configured"), "agent", executed_sql=None
-            ),
-        )
-
-    if not isinstance(corpus, AnalystCorpus):
-        # G1: absence refuses. An empty corpus here fails closed, so nothing leaks — but
-        # it records "the corpus was never wired up" as ``r_column_not_allowed`` with
-        # ``guardrail_errors: 0``, indistinguishable from "the model asked for a column it
-        # may not see". ``check()`` raises this for the same input; ``serve/`` must not
-        # catch it and substitute a default.
-        raise GovernanceUsageError(
-            "run_query has no AnalystCorpus: configurable['corpus'] is "
-            f"{type(corpus).__name__}. Every tool reads through AnalystCorpus as a type, "
-            "not a convention (ADR 0006 §8), and a turn served without one cannot tell a "
-            "governance refusal from its own wiring failure."
-        )
-
-    # ADR 0008 D2/D7. Without these two the model's spelling reaches the engine
-    # unchanged: `check()` compares folded keys, so `FROM address.cbsa` matches the
-    # licensed `address.CBSA` and passes every layer, and Postgres then folds the
-    # unquoted name and reports that the relation does not exist. 81 tables and 610
-    # columns in the obfuscated lake failed that way, each *after* a passing verdict.
-    # Scoped to `bounds.licensed`, because a corpus-wide map makes `name`, `id` and
-    # `city` ambiguous and would refuse nearly every query.
-    spellings, ambiguous = spellings_for(corpus, bounds.licensed)
-    prepared = prepare(
-        sql,
-        licensed=bounds.licensed,
-        corpus=corpus,
-        spellings=spellings,
-        ambiguous_folds=ambiguous,
-        dialect=getattr(connector, "dialect", None) or "sqlite",
-        policy=policy,
-    )
-    attempt = attempt_record(
-        verdict=prepared.verdict, path="agent", executed_sql=prepared.sql
-    )
-    if prepared.sql is None:
-        detail = prepared.verdict.get("detail") or prepared.verdict.get("reason_code")
-        return f"run_query refused: {detail}", attempt
-
-    try:
-        columns, rows, truncated = connector.execute(prepared.sql)
-    except Exception as exc:  # noqa: BLE001 — the row is the point, not the traceback
-        # **The attempt is returned even though the execution failed.** It passed every
-        # governance layer and was sent to the database, so it is a governed statement and the
-        # ledger owes it a row. The old shared-box code kept the row by accident — it appended
-        # before executing and the box outlived the exception — and returning only the error
-        # string here would have made a driver failure look like a turn that never attempted
-        # anything, which is the empty-ledger-holds-vacuously shape.
-        return f"run_query error: {type(exc).__name__}: {exc}", attempt
-    preview = [list(r) for r in list(rows)[:20]]
-    payload = json.dumps(
-        {
-            "columns": list(columns),
-            "rows": preview,
-            "truncated": bool(truncated),
-            "row_count": len(rows),
-        },
-        default=str,
-    )
-    return payload, attempt
