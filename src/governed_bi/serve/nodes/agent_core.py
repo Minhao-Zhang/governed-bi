@@ -80,7 +80,7 @@ def agent_core_node(state: dict, config: RunnableConfig) -> dict:
     question = _question_message(state, history)
     inbound = history + ([question] if question is not None else [])
 
-    result = agent.invoke({"messages": inbound}, config)
+    result, failure = _run(agent, inbound, config)
     out_messages = list(result.get("messages") or [])
     fresh = out_messages[len(inbound) :]
 
@@ -97,13 +97,22 @@ def agent_core_node(state: dict, config: RunnableConfig) -> dict:
                        turn_index=state.get("turn_index", 1))]
 
     update: dict[str, Any] = {
-        "path_kind": "answered",
+        # **``crashed`` when the loop died, and the ledger above is returned anyway.** That is
+        # the whole point of :func:`_run`: the two facts are independent, and until now the
+        # first erased the second.
+        "path_kind": "crashed" if failure is not None else "answered",
         "messages": fresh,
         "usage": usage,
         "delivery": delivery,
         "clarification_requested": False,
         "execution": execution_from_attempts(attempts),
     }
+    if failure is not None:
+        # ``wrap_node`` never sees this exception, so the marker it would have written is
+        # written here in the same shape. ``rail_observation`` reads ``path_kind`` **before**
+        # the per-stage handler, so the timeline row is `error` with the exception class — a
+        # self-handled crash cannot report `ok`.
+        update["failure"] = failure
     if clarifications:
         update["clarifications"] = clarifications
     if generated_sql:
@@ -115,6 +124,53 @@ def agent_core_node(state: dict, config: RunnableConfig) -> dict:
     if result_table:
         update["result_table"] = result_table
     return update
+
+
+def _run(
+    agent: Any, inbound: list[Any], config: RunnableConfig
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Drive the agent, keeping the last committed state. Returns ``(state, failure or None)``.
+
+    **``stream`` rather than ``invoke``, so a crash does not erase work that really happened.**
+    Reproduced: a model call that dies *after* a governed statement executed — an exhausted
+    retry looks exactly like this — left ``wrap_node`` returning ``{failure, path_kind}`` and
+    nothing else. ``execution``, ``usage`` and ``result_table`` were all ``None``, so the audit
+    record showed ``attempts: []`` for a turn whose SQL had reached the database. For a system
+    whose thesis is that the ledger *is* the artifact, that is the wrong direction to fail in.
+
+    The cause is structural, not a bug: LangGraph's own subgraph documentation says *"the parent
+    graph treats the entire subgraph execution as a single step"*, so an exception discards the
+    whole super-step's writes. Two other fixes were tried and measured **not** to work —
+    ``create_agent(checkpointer=True)`` gives the subgraph its own history but the parent still
+    reads ``attempts_by_call == {}``, and there is no pending task state to reach into, because
+    the run ended in an error rather than at an interrupt. Streaming is what remains: each
+    ``values`` frame is a committed snapshot, so the last one before the exception is the last
+    state that was actually true.
+
+    ``stream_mode="values"`` and not ``"updates"``: a snapshot needs no reducers applied by
+    hand, and re-implementing ``merge_by_call`` here to fold updates would be a second
+    implementation of the merge the agent state already declares.
+
+    **``GraphInterrupt`` is re-raised untouched and returns no partial state.** HITL is not a
+    failure: ``interrupt()`` deliberately aborts the node *without committing*, the node
+    re-executes on resume, and `serve/agent_state.py` documents that the ledger lives in the
+    agent's checkpointed channels precisely so the replay finds it. Capturing a partial update
+    here would commit half a paused turn and the resume would then double-count it.
+    """
+    from langgraph.errors import GraphInterrupt
+
+    last: dict[str, Any] = {}
+    try:
+        for frame in agent.stream({"messages": inbound}, config, stream_mode="values"):
+            if isinstance(frame, Mapping):
+                last = dict(frame)
+    except GraphInterrupt:
+        raise
+    except Exception as exc:  # noqa: BLE001 — the ledger is the point, not the traceback
+        # ``type(exc).__name__`` and never ``str(exc)``: ADR 0006 §11 keeps exceptions as their
+        # class because driver error text echoes the statement and its literals.
+        return last, {"stage": "agent_core", "error_type": type(exc).__name__}
+    return last, None
 
 
 def _question_message(state: dict, history: list[Any]) -> HumanMessage | None:
