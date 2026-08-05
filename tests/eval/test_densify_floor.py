@@ -126,3 +126,47 @@ def test_the_stopword_list_does_not_swallow_domain_nouns() -> None:
         assert noun not in tool.STOP, (
             f"{noun!r} is a domain noun and stopping it would delete discriminating signal"
         )
+
+
+def test_a_trailing_hyphen_that_belongs_to_an_identifier_survives() -> None:
+    """``Post+/-`` became ``Post+/`` — a token naming nothing, in the only indexed field.
+
+    The composer strips dangling separators from the end, and the strip set included ``-``. Tail
+    entries are joined with ``", "``, so a trailing hyphen can only have come from an identifier.
+    This is the residue of the same defect the ellipsis fix was about: the tool putting fragments
+    into indexed text while removing someone else's.
+    """
+    tool = _tool()
+    doc = {
+        "asset_type": "table",
+        "physical_name": "statistiken",
+        "summary": "stats (statistiken): GP, G, A, Pts, PIM, Post+/-",
+        "body": "Per-season player scoring. Grain is one player-season.",
+    }
+    out, _ = tool.dense_table(doc, CAP)
+    assert out.endswith("Post+/-"), f"the identifier was mangled: {out[-20:]!r}"
+
+
+def test_no_summary_ends_in_a_fragment_of_an_identifier() -> None:
+    """The defect at corpus scale, asserted over a synthetic table wide enough to force a trim.
+
+    The first version of this tool sliced with ``[:cap]`` and left a mid-word fragment as the
+    final entry in **518 of 713** rewritten summaries -- tokens like ``movi``, ``lan``, ``c`` and
+    ``TeamsP``. The measured +6.1 pp floor was achieved despite that, which is why nothing caught
+    it: the number went up.
+    """
+    tool = _tool()
+    names = [f"column_named_{i:02d}" for i in range(60)]
+    doc = {
+        "asset_type": "table",
+        "physical_name": "wide",
+        "summary": "wide (wide): " + ", ".join(names),
+        "body": "Supply terms per part and supplier with available quantity and cost.",
+    }
+    out, trimmed = tool.dense_table(doc, CAP)
+    assert trimmed and len(out) <= CAP
+    tail = out.split(" — ", 1)[-1]
+    entries = [e.strip() for e in tail.split(",") if e.strip()]
+    assert entries, "the trim must not remove every identifier"
+    for entry in entries:
+        assert entry in names, f"{entry!r} is a fragment, not one of the column names"

@@ -111,7 +111,7 @@ def _untruncated(text: str) -> str:
             if "," in out:
                 out = out.rsplit(",", 1)[0]
             break
-    return out.rstrip(" ,;-")
+    return out.rstrip(" ,;")
 
 
 def _fit(prefix: str, added: str, tail: str, cap: int, *, joiner: str) -> tuple[str, bool]:
@@ -134,7 +134,7 @@ def _fit(prefix: str, added: str, tail: str, cap: int, *, joiner: str) -> tuple[
         if entries:
             candidate = f"{candidate}{joiner}{', '.join(entries)}"
         if len(candidate) <= cap or not entries:
-            return candidate.rstrip(" ,;-"), trimmed
+            return candidate.rstrip(" ,;"), trimmed
         entries.pop()
         trimmed = True
 
@@ -163,7 +163,7 @@ def dense_table(doc: dict, cap: int) -> tuple[str, bool]:
     head, _, columns = summary.partition(": ")
     nouns = " ".join(content_words(body, limit=10))
     if not columns:
-        return f"{summary} — {nouns}"[:cap].rstrip(" ,;-"), False
+        return f"{summary} — {nouns}"[:cap].rstrip(" ,;"), False
     # The nouns go before the column list so the list is what gives way under the cap.
     return _fit(f"{head}: {nouns}", "", columns, cap, joiner=" — ")
 
