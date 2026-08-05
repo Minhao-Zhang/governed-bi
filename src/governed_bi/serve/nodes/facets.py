@@ -240,9 +240,21 @@ def _facet_result(
 
 
 def _rewritten_query(
-    question: str, stage: Stage, config: RunnableConfig, *, ran: set[Channel]
+    question: str,
+    stage: Stage,
+    config: RunnableConfig,
+    *,
+    ran: set[Channel],
+    spent: list[dict],
+    turn_index: Any,
 ) -> str:
     """The question, restated as search text for this facet. Falls back to the question.
+
+    **``spent`` is an out-parameter and carries this call's cost.** These five rewrites are five
+    model calls per turn that the engine's own ledger did not know about: ``usage`` was written
+    only by ``agent_core``, so five of the seven calls a turn makes were priced at nothing. An
+    out-parameter rather than a second return value because ``ran`` already works this way in
+    this function and one convention is better than two.
 
     **Why every facet searches with different words now.** A user asks *"what is the average star
     rating for restaurants in this area"* and a schema summary reads *"stores basic information
@@ -267,11 +279,22 @@ def _rewritten_query(
 
     from langchain_core.messages import HumanMessage, SystemMessage
 
+    from governed_bi.serve.usage import usage_row
+
     try:
-        reply = model.invoke([SystemMessage(prompt_text(prompt_name)), HumanMessage(question)])
+        reply = model.invoke(
+            [SystemMessage(prompt_text(prompt_name)), HumanMessage(question)],
+            # Named after the registered prompt, so the five concurrent rewrites are five
+            # distinguishable rows in LangSmith instead of five `ChatOpenAI`s that started in
+            # the same second. See the same note in `guard._bi_scope`.
+            config={"run_name": prompt_name},
+        )
         rewritten = str(getattr(reply, "text", "") or "").strip()
     except Exception:  # noqa: BLE001 — a rewriter is an improvement, never a dependency
         return question
+    # Recorded before the empty check: a model that answered with nothing still billed for the
+    # attempt, and dropping the row would make a *failing* rewriter look like a free one.
+    spent.append(usage_row(stage=stage.value, model=model, messages=reply, turn_index=turn_index))
     if not rewritten:
         return question
     ran.add(Channel.extraction)
@@ -331,6 +354,9 @@ def _run_facet(
     question = _effective_question(state)
     index = _index_from_config(config)
     ran: set[Channel] = set()
+    # Filled by the rewriter, appended to the `usage` channel below. A list because that is
+    # the channel's shape and `operator.add` merges the five concurrent facets for free.
+    spent: list[dict] = []
     # `queries` is what the record publishes as "what this facet searched for", so it has to be
     # the text that actually went to the index. It stays the raw question on every path where no
     # rewrite happened, which is what makes the two cases distinguishable in a trace.
@@ -340,7 +366,9 @@ def _run_facet(
         # The rewrite happens first, and both channels then search with it — a rewrite that
         # reached only BM25 would miss the point, since the whole reason to restate the question
         # in the vocabulary of the thing being searched is to move it *semantically* closer.
-        query = _rewritten_query(question, stage, config, ran=ran)
+        query = _rewritten_query(
+            question, stage, config, ran=ran, spent=spent, turn_index=state.get("turn_index", 1)
+        )
         hits: list[Any] = _pass_one_hits(
             index,
             stage,
@@ -364,11 +392,17 @@ def _run_facet(
         # fallback passing for a run.
         hits = []
 
-    return {
+    update: dict[str, Any] = {
         "facets": {
             stage.value: _facet_result(stage, query, hits=hits, ran=frozenset(ran))
         }
     }
+    # Omitted when empty rather than written as `[]`: the reducer is `operator.add`, so an empty
+    # list is a no-op either way, and leaving the key out keeps "this facet called no model"
+    # readable in the node's update — which is what `rail_observation` reads.
+    if spent:
+        update["usage"] = spent
+    return update
 
 
 def facet_schema_node(state: dict, config: RunnableConfig) -> dict:

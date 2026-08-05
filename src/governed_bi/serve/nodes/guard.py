@@ -55,6 +55,10 @@ def guard_node(state: dict, config: RunnableConfig) -> dict:
         return {"guard": verdict}
     if not policy.guard_rule_enabled(BI_SCOPE_RULE_ID):
         return {"guard": verdict}
+    # Both branches above return **without** a usage row, and that is right rather than an
+    # omission: neither called a model. An empty `usage` means "nothing was spent here", which
+    # is exactly what happened; the defect this row fixes was the opposite — a gate that *did*
+    # spend and reported nothing.
     # **The utility model, not the agent's.** This is a one-word classification standing in front
     # of every turn, so its latency is the delay before anything at all appears — the clearest
     # case in the graph for a fast model.
@@ -65,11 +69,23 @@ def guard_node(state: dict, config: RunnableConfig) -> dict:
     # spell it the same way. A caller that hand-builds a config and sets only `agent_model` gets
     # `error_failed_open` — the rule was enabled and could not run — which is the honest answer
     # and is exactly what that sentinel is for.
-    return {"guard": _bi_scope(state["question"], cfg.get("utility_model"))}
+    model = cfg.get("utility_model")
+    verdict, usage = _bi_scope(state["question"], model, state.get("turn_index", 1))
+    update: dict = {"guard": verdict}
+    if usage is not None:
+        update["usage"] = [usage]
+    return update
 
 
-def _bi_scope(question: str, model: Any) -> Any:
-    """Ask a model whether the question is in scope. Returns a ``GuardVerdict``.
+def _bi_scope(question: str, model: Any, turn_index: Any) -> tuple[Any, dict | None]:
+    """Ask a model whether the question is in scope. Returns ``(GuardVerdict, usage row)``.
+
+    **The usage row is why this returns a pair.** This call was invisible to the engine's own
+    cost ledger: ``usage`` was written only by ``agent_core``, so a turn the gate refused
+    recorded ``usage: []`` and ``cost_est_usd: None`` while really having spent 136 tokens —
+    measured, in LangSmith, on a turn whose record claimed it was free. The row is ``None``
+    when no model call happened, which keeps "spent nothing" distinct from "spent and did not
+    say".
 
     **Enabled with no model is ``error_failed_open``, not ``clear``.** The rule was switched on
     and could not run, and ``register/record.py`` is explicit that a gate leaving a trace only
@@ -86,37 +102,58 @@ def _bi_scope(question: str, model: Any) -> Any:
 
     from governed_bi.govern.guard import BI_SCOPE_RULE_ID, GuardVerdict
     from governed_bi.register.prompts import prompt_text
+    from governed_bi.serve.usage import usage_row
 
     if model is None:
-        return GuardVerdict(
-            outcome="error_failed_open",
-            rule_id=BI_SCOPE_RULE_ID,
-            detail=(
-                "the BI-scope rule is enabled but no utility_model is configured "
-                "(Session.configurable falls this back to agent_model, so a session with "
-                "either would have one)"
+        return (
+            GuardVerdict(
+                outcome="error_failed_open",
+                rule_id=BI_SCOPE_RULE_ID,
+                detail=(
+                    "the BI-scope rule is enabled but no utility_model is configured "
+                    "(Session.configurable falls this back to agent_model, so a session with "
+                    "either would have one)"
+                ),
             ),
+            None,
         )
 
     try:
-        reply = model.invoke([SystemMessage(prompt_text("bi_scope")), HumanMessage(question)])
+        reply = model.invoke(
+            [SystemMessage(prompt_text("bi_scope")), HumanMessage(question)],
+            # **Named, because eight identical ``ChatOpenAI`` rows is not a trace.** One turn
+            # makes eight model calls and LangChain names every one after the client class, so
+            # finding this one in LangSmith meant opening rows until a system prompt looked
+            # right. ``langgraph_node`` is on the metadata and does distinguish them, but only
+            # once you know to look for it. The name is the *registered prompt's* name, so the
+            # trace and ``register/prompts.py`` cannot drift apart.
+            config={"run_name": "bi_scope"},
+        )
         # ``.text`` rather than walking ``content``: the Responses API returns blocks and
         # ``langchain-core`` already concatenates the text ones. Decision #1 records that v1's
         # three layers over ``BaseChatModel`` were a mistake for exactly this reason.
         answer = str(getattr(reply, "text", "") or "").strip().lower()
     except Exception as err:  # noqa: BLE001 — a provider hiccup must not end a real turn
-        return GuardVerdict(
-            outcome="error_failed_open",
-            rule_id=BI_SCOPE_RULE_ID,
-            detail=f"{type(err).__name__}: {err}",
+        return (
+            GuardVerdict(
+                outcome="error_failed_open",
+                rule_id=BI_SCOPE_RULE_ID,
+                detail=f"{type(err).__name__}: {err}",
+            ),
+            None,
         )
+
+    # Built once, before the branch: the call cost the same whether it cleared or blocked, and
+    # a row attached to only one outcome would make refusals look cheaper than they are —
+    # which is the exact direction the missing row was already wrong in.
+    spent = usage_row(stage="guard", model=model, messages=reply, turn_index=turn_index)
 
     # ``startswith`` rather than equality: a model answering "Yes." or "YES\n" has answered. The
     # *affirmative* is what is matched, so anything else — an apology, a clarifying question, an
     # empty completion — refuses rather than passes.
     if answer.startswith(_IN_SCOPE):
-        return GuardVerdict(outcome="clear", rule_id=None, detail=None)
-    return GuardVerdict(
+        return GuardVerdict(outcome="clear", rule_id=None, detail=None), spent
+    verdict = GuardVerdict(
         outcome="blocked",
         rule_id=BI_SCOPE_RULE_ID,
         # Free text, and therefore ledger-only: ``GuardVerdict.detail`` is marked "Never
@@ -124,3 +161,4 @@ def _bi_scope(question: str, model: Any) -> Any:
         # question. The public refusal stays ``GUARD_PUBLIC_MESSAGE``.
         detail=f"model judged the question out of scope: {answer[:200]!r}",
     )
+    return verdict, spent

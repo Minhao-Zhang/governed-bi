@@ -66,11 +66,23 @@ def narrate_node(state: dict, config: RunnableConfig) -> dict:
         # would be the interface asserting an answer the turn did not produce.
         return {}
 
-    return {"answer_text": _generate(state, config, result)}
+    text, spent = _generate(state, config, result)
+    update: dict = {"answer_text": text}
+    if spent is not None:
+        update["usage"] = [spent]
+    return update
 
 
-def _generate(state: Mapping[str, Any], config: RunnableConfig, result: Mapping[str, Any]) -> str | None:
-    """One utility-model call over (question, statement, rows). ``None`` if it cannot run.
+def _generate(
+    state: Mapping[str, Any], config: RunnableConfig, result: Mapping[str, Any]
+) -> tuple[str | None, dict | None]:
+    """One utility-model call over (question, statement, rows). ``(None, None)`` if it cannot run.
+
+    Returns its cost beside its text for the reason the whole `usage` change exists: a model
+    call the ledger does not know about is a turn priced below what it spent. This one is rare
+    — the stage normally adopts the agent's prose and calls nothing — which makes it *more*
+    important to record, not less: a cost that appears on some turns and not others is exactly
+    the kind that gets averaged into invisibility.
 
     **The utility model, and a failure here does not fail the turn.** The answer, the SQL and
     the ledger are all already computed and correct; losing the sentence costs the reader a
@@ -81,22 +93,28 @@ def _generate(state: Mapping[str, Any], config: RunnableConfig, result: Mapping[
     from langchain_core.messages import HumanMessage, SystemMessage
 
     from governed_bi.register.prompts import prompt_text
+    from governed_bi.serve.usage import usage_row
 
     model = configurable(config).get("utility_model")
     if model is None:
-        return None
+        return None, None
 
     try:
         reply = model.invoke(
             [
                 SystemMessage(prompt_text("narrate")),
                 HumanMessage(_brief(state, result)),
-            ]
+            ],
+            # Named after the registered prompt, like the scope gate and the five rewriters.
+            config={"run_name": "narrate"},
         )
         text = str(getattr(reply, "text", "") or "").strip()
     except Exception:  # noqa: BLE001 — see the docstring: a lost sentence is not a lost turn
-        return None
-    return text or None
+        return None, None
+    spent = usage_row(
+        stage="narrate", model=model, messages=reply, turn_index=state.get("turn_index", 1)
+    )
+    return (text or None), spent
 
 
 def _brief(state: Mapping[str, Any], result: Mapping[str, Any]) -> str:

@@ -39,19 +39,36 @@ class _Rewriter:
         self.text = text
         self.raises = raises
         self.calls: list[Any] = []
+        self.configs: list[Any] = []
 
-    def invoke(self, messages: Any) -> Any:
+    def invoke(self, messages: Any, config: Any = None, **kwargs: Any) -> Any:
+        # ``config=`` is part of ``BaseChatModel.invoke``'s real signature, and this fake
+        # omitted it. When the callers began naming their runs for the trace, the fake
+        # raised ``TypeError`` and the caller's ``except`` reported it as a provider
+        # failure — a fake narrower than the interface turning a code change into a
+        # plausible-looking wrong verdict. It is recorded so a caller cannot pass one
+        # silently, and ignored because nothing here reads it.
+        self.configs.append(config)
         self.calls.append(messages)
         if self.raises is not None:
             raise self.raises
         return type("Reply", (), {"text": self.text})()
 
 
-def _rewrite(question: str, stage: Stage, model: Any) -> tuple[str, set[Channel]]:
+def _rewrite(
+    question: str, stage: Stage, model: Any
+) -> tuple[str, set[Channel], list[dict[str, Any]]]:
     ran: set[Channel] = set()
+    #: The rewriter's cost rows. These five calls were absent from the engine's ledger
+    #: entirely — ``usage`` was written only by ``agent_core`` — so a turn reported the
+    #: agent's tokens and none of retrieval's. Returned here so the tests can say which
+    #: paths spend and which do not.
+    spent: list[dict[str, Any]] = []
     conf: dict[str, Any] = {} if model is None else {"utility_model": model}
-    out = facets_mod._rewritten_query(question, stage, {"configurable": conf}, ran=ran)
-    return out, ran
+    out = facets_mod._rewritten_query(
+        question, stage, {"configurable": conf}, ran=ran, spent=spent, turn_index=1
+    )
+    return out, ran, spent
 
 
 # ── every facet has a prompt, and the registry covers it ──
@@ -87,7 +104,7 @@ def test_the_rewriter_prompts_are_hashed() -> None:
 @pytest.mark.parametrize("stage", list(FACET_STAGES))
 def test_a_rewrite_replaces_the_question_and_marks_extraction(stage: Stage) -> None:
     model = _Rewriter()
-    out, ran = _rewrite("average star rating for restaurants nearby", stage, model)
+    out, ran, spent = _rewrite("average star rating for restaurants nearby", stage, model)
     assert out == "tables holding restaurant records and ratings"
     assert Channel.extraction in ran
     assert len(model.calls) == 1
@@ -113,14 +130,14 @@ def test_a_failed_rewrite_falls_back_and_does_not_claim_the_channel(label: str, 
     ``extraction`` as ``ran`` while doing it is not: that is the arm claiming a treatment it did
     not receive, and the degradation gate reads exactly this field.
     """
-    out, ran = _rewrite("how many customers", Stage.facet_term, model)
+    out, ran, spent = _rewrite("how many customers", Stage.facet_term, model)
     assert out == "how many customers", label
     assert Channel.extraction not in ran, f"{label}: the channel was claimed without a rewrite"
 
 
 def test_an_empty_question_is_not_sent_to_the_model() -> None:
     model = _Rewriter()
-    out, ran = _rewrite("", Stage.facet_metric, model)
+    out, ran, spent = _rewrite("", Stage.facet_metric, model)
     assert out == ""
     assert model.calls == [], "a blank question must not cost a model call"
     assert Channel.extraction not in ran

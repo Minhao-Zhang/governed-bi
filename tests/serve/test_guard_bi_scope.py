@@ -40,8 +40,16 @@ class _Model:
         self.text = text
         self.raises = raises
         self.calls: list[list[Any]] = []
+        self.configs: list[Any] = []
 
-    def invoke(self, messages: list[Any]) -> Any:
+    def invoke(self, messages: list[Any], config: Any = None, **kwargs: Any) -> Any:
+        # ``config=`` is part of ``BaseChatModel.invoke``'s real signature, and this fake
+        # omitted it. When the callers began naming their runs for the trace, the fake
+        # raised ``TypeError`` and the caller's ``except`` reported it as a provider
+        # failure — a fake narrower than the interface turning a code change into a
+        # plausible-looking wrong verdict. It is recorded so a caller cannot pass one
+        # silently, and ignored because nothing here reads it.
+        self.configs.append(config)
         self.calls.append(messages)
         if self.raises is not None:
             raise self.raises

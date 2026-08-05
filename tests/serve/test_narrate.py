@@ -26,9 +26,17 @@ class _Recorder:
 
     def __init__(self, text: str = "There are 9,590 restaurants.") -> None:
         self.calls: list[list[Any]] = []
+        self.configs: list[Any] = []
         self._text = text
 
-    def invoke(self, messages: list[Any]) -> Any:
+    def invoke(self, messages: list[Any], config: Any = None, **kwargs: Any) -> Any:
+        # ``config=`` is part of ``BaseChatModel.invoke``'s real signature, and this fake
+        # omitted it. When the callers began naming their runs for the trace, the fake
+        # raised ``TypeError`` and the caller's ``except`` reported it as a provider
+        # failure — a fake narrower than the interface turning a code change into a
+        # plausible-looking wrong verdict. It is recorded so a caller cannot pass one
+        # silently, and ignored because nothing here reads it.
+        self.configs.append(config)
         self.calls.append(messages)
         return AIMessage(self._text)
 
@@ -84,10 +92,16 @@ def test_a_loop_that_ended_without_prose_gets_a_generated_sentence() -> None:
 
     out = narrate_node(state, _config(model))
 
-    assert out == {"answer_text": "There are 9,590 restaurants."}
+    assert out["answer_text"] == "There are 9,590 restaurants."
     assert len(model.calls) == 1
     brief = model.calls[0][1].content
     assert "9590" in brief and "restaurant_id" in brief, "the narrator needs the rows and the SQL"
+
+    # **The call is billed to this stage.** It is a rare path — the stage normally adopts the
+    # agent's prose and calls nothing — and a cost that appears on some turns and not others is
+    # exactly the kind that gets averaged into invisibility if it is never recorded at all.
+    assert [row["stage"] for row in out["usage"]] == ["narrate"]
+    assert out["usage"][0]["turn_index"] == state.get("turn_index", 1)
 
 
 def test_a_refusal_keeps_the_systems_own_wording() -> None:
@@ -112,7 +126,7 @@ def test_a_dead_narrator_costs_the_sentence_and_not_the_turn() -> None:
     """
 
     class _Dead:
-        def invoke(self, messages: list[Any]) -> Any:
+        def invoke(self, messages: list[Any], config: Any = None, **kwargs: Any) -> Any:
             raise RuntimeError("provider down")
 
     state = {
@@ -121,6 +135,9 @@ def test_a_dead_narrator_costs_the_sentence_and_not_the_turn() -> None:
         "result_table": RESULT,
         "messages": [HumanMessage("q")],
     }
+    # No `usage` key on either: a call that raised and a call that never happened both cost
+    # nothing this code can attest to, and writing a zero row would be the ledger inventing
+    # a measurement — the same defect `Measured.unmeasured` exists to prevent one level in.
     assert narrate_node(state, _config(_Dead())) == {"answer_text": None}
     # And with no utility model configured at all.
     assert narrate_node(state, {"configurable": {}}) == {"answer_text": None}

@@ -15,11 +15,11 @@ from langchain.agents.middleware import (
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 
-from governed_bi.register.quantity import Measured
 from governed_bi.serve.agent_state import GovernedAgentState
 from governed_bi.serve.delivery import DeliveryTracker
-from governed_bi.serve.runtime import configurable, model_id
+from governed_bi.serve.runtime import configurable
 from governed_bi.serve.state import TERMINAL_PATH_KINDS
+from governed_bi.serve.usage import NO_TOKEN_USAGE, usage_row
 from governed_bi.serve.tools import (
     SYSTEM_PROMPT,
     build_tools,
@@ -30,10 +30,9 @@ __all__ = ["agent_core_node", "STUB_ANSWER", "NO_TOKEN_USAGE"]
 
 STUB_ANSWER = "STUB_ANSWER"
 
-#: Why a usage row carries no token count. :meth:`Measured.unmeasured` requires a reason,
-#: and this one has to reach the artifact: "not measured" with no explanation is
-#: indistinguishable from a forgotten assignment.
-NO_TOKEN_USAGE = "the provider returned no usage_metadata carrying both token counts"
+# ``NO_TOKEN_USAGE`` is re-exported from ``serve/usage.py``, where the row builder now lives.
+# Kept on this module's ``__all__`` because it is what tests assert against and this used to be
+# its home; defining it twice would be two strings that must stay equal for no reason.
 
 
 def agent_core_node(state: dict, config: RunnableConfig) -> dict:
@@ -94,7 +93,8 @@ def agent_core_node(state: dict, config: RunnableConfig) -> dict:
 
     generated_sql = _last_executed_sql(attempts) or _last_run_query_sql(out_messages)
     delivery = DeliveryTracker(delivered).merge_into(state.get("delivery"))
-    usage = [_usage_row(model, fresh, state.get("turn_index", 1))]
+    usage = [usage_row(stage="agent_core", model=model, messages=fresh,
+                       turn_index=state.get("turn_index", 1))]
 
     update: dict[str, Any] = {
         "path_kind": "answered",
@@ -190,89 +190,6 @@ def _context_middleware(state: dict) -> list[AgentMiddleware]:
     return [deliver_context]
 
 
-def _reported_tokens(messages: list[Any]) -> dict[str, int] | None:
-    """This turn's provider-reported token counts, or ``None`` if none were reported.
-
-    LangChain puts them on ``AIMessage.usage_metadata``; the agent loop can make several
-    calls, so the row is the turn's total. A payload that does not carry **both** counts
-    as integers is not a measurement, and reporting the part it did carry beside a zero
-    for the rest would be the defect this function exists to remove.
-
-    Cache counts are included only when the provider reported them: ``measure/price.py``
-    reads an absent ``cache_read_tokens`` as nothing cached, which its docstring justifies
-    from the artifacts, while a zero written here would be this code's claim rather than
-    the provider's.
-    """
-    total = {"input_tokens": 0, "output_tokens": 0}
-    #: Only the cache keys a provider actually reported. It was a two-key dict initialised to
-    #: zero and emitted whole as soon as **either** key appeared, so a provider reporting a
-    #: cache read also produced ``cache_write_tokens: 0`` — this code's claim wearing the
-    #: provider's clothes. ``price.py`` reads an *absent* key as nothing cached, which its
-    #: docstring justifies from the artifacts; a written zero is a measurement.
-    cache: dict[str, int] = {}
-    seen = False
-    for message in messages:
-        usage = getattr(message, "usage_metadata", None)
-        if not isinstance(usage, Mapping):
-            continue
-        counts = {key: usage.get(key) for key in total}
-        if not all(isinstance(v, int) and not isinstance(v, bool) for v in counts.values()):
-            return None
-        seen = True
-        for key, value in counts.items():
-            total[key] += int(value)  # type: ignore[arg-type]
-        details = usage.get("input_token_details")
-        if isinstance(details, Mapping):
-            for key, source in (("cache_read_tokens", "cache_read"),
-                                ("cache_write_tokens", "cache_creation")):
-                value = details.get(source)
-                if isinstance(value, int) and not isinstance(value, bool):
-                    cache[key] = cache.get(key, 0) + value
-        # **Reasoning tokens, when the provider reports them.** A *subset* of
-        # ``output_tokens``, not an addition — so the bill was never understated, and the
-        # missing thing was attribution: at ``xhigh`` on this model 200 of 252 output tokens
-        # were reasoning, and without the split "the effort knob changed the cost" and "the
-        # answer got longer" are the same observation. That comparison is the whole reason
-        # to record an effort setting at all. Same rule as the cache keys: present only when
-        # reported, because a written zero would be this code's claim wearing the
-        # provider's clothes.
-        out_details = usage.get("output_token_details")
-        if isinstance(out_details, Mapping):
-            value = out_details.get("reasoning")
-            if isinstance(value, int) and not isinstance(value, bool):
-                cache["reasoning_tokens"] = cache.get("reasoning_tokens", 0) + value
-    if not seen:
-        return None
-    return {**total, **cache}
-
-
-def _usage_row(model: Any, messages: list[Any], turn_index: Any) -> dict[str, Any]:
-    """One cost row for this turn's model calls, with the counts the provider reported.
-
-    The literal ``input_tokens: 0`` this replaces was on the **real-model** path, beside a
-    computed ``model`` field that made the two zeros read as observations —
-    ``measure/price.py`` prices that shape as free, which is v1's two ladders that
-    produced no USD while reporting successfully. A provider that reports nothing gets
-    :meth:`Measured.unmeasured`, which the presence test and the price table both know how
-    to refuse.
-    """
-    reported = _reported_tokens(messages)
-    if reported is None:
-        unmeasured: Measured[int] = Measured.unmeasured(NO_TOKEN_USAGE)
-        counts: dict[str, Any] = {"input_tokens": unmeasured, "output_tokens": unmeasured}
-    else:
-        counts = dict(reported)
-    return {
-        "turn_index": turn_index,
-        # `model_id` first, `_llm_type` only as the fallback. It was the other way round, so
-        # every OpenAI turn recorded `model: "openai-chat"` — a LangChain class label — while
-        # `knobs_resolved["llm_model"]` beside it held the real id. One turn, two answers, on
-        # a comparability field.
-        "model": model_id(model) or getattr(model, "_llm_type", None) or type(model).__name__,
-        **counts,
-    }
-
-
 def _stub(state: dict) -> dict:
     return {
         "path_kind": "answered",
@@ -280,6 +197,7 @@ def _stub(state: dict) -> dict:
         "usage": [
             {
                 "turn_index": state.get("turn_index", 1),
+                "stage": "agent_core",
                 "model": "stub",
                 "input_tokens": 0,
                 "output_tokens": 0,
