@@ -129,6 +129,25 @@ embedder on, rewriters off) — not a replica:
 Artifacts: `runs/ablation/summary-density-top3.json`, `runs/ablation/summary-density-top1.json`,
 `runs/ablation/dense-tool-top3.json`.
 
+> **Every coverage figure in this section is superseded, and the instrument was the reason.**
+> Three defects were found afterwards while checking the first delivery, all of them in the
+> measurement rather than in any corpus:
+>
+> * `table_coverage` scored 13 of the 114 sampled questions as unconditional misses — their gold
+>   is a constant-folded `VALUES` literal that reads no table — so the ceiling was 0.886 and every
+>   figure was deflated by a fixed 11.4%. Corrected, and coverage on the same corpora now reads
+>   ~0.71 rather than ~0.64 with no corpus change whatever.
+> * `connect` built its join tree in process-hash order in three places, so `licensed` — and
+>   therefore coverage — moved by about one question between processes. **Same-process paired
+>   comparison was never affected**, which is why `--baseline` is now the only supported mode.
+> * `densify_summaries.py` itself left a mid-word identifier fragment as the final entry in **518
+>   of the 713** summaries it rewrote. Repairing that turned out **not** to move coverage
+>   (+11/−7 questions, p = 0.48) — worth knowing, and the opposite of what was expected.
+>
+> The current numbers live in `runs/ablation/overfit-split-top3.json`, over all 1 351 questions
+> with a paired McNemar test. **Re-measure the floor before quoting a bar**; do not use the table
+> above as a target.
+
 > **Both `corpora/` and `runs/` are gitignored.** The corpus is a build output of a curator run
 > and the artifacts are measurements, so neither is in git and neither will be on a fresh clone.
 > You need `../BIRD-Data-Obfuscation` for the questions and the `pg_rename_decoy` Postgres on
@@ -206,25 +225,21 @@ Also, while you are in these files:
   field with 0/656 populated and the prose is doing its job badly.
 - Fix the 3 schema summaries that end in `…`.
 
-#### 1a. The remaining misses are mostly sibling confusions — write against that
+#### 1a. Sibling schemas are the hard case — write against that
 
-This is the most actionable instruction in the brief, and it comes from the miss list of the
-floor arm itself (`runs/ablation/dense-tool-top3.json`, 14 misses of 114):
+> **This section previously printed the held-out miss list** — six schema names with the schemas
+> that displaced them, taken from a run scored on `test_final.jsonl` — and then set the acceptance
+> gate on those same 114 questions. The first writer to receive it hardcoded exactly that list as
+> its edit set, which was **compliance, not misconduct**: a brief that hands over per-question
+> test outcomes and then scores the result on the same questions has closed the loop itself. The
+> evidence is removed; the instruction below is derivable from the schema names alone and stands
+> on its own. See [Who runs the gate](#who-runs-the-gate).
 
-```text
-  beer_factory         rank=10   beaten by  public_review_platform, retail_complains, video_games
-  european_football_2   rank=4   beaten by  hockey, ice_hockey_draft, professional_basketball
-  food_inspection       rank=7   beaten by  restaurant, food_inspection_2, airline
-  ice_hockey_draft      rank=4   beaten by  professional_basketball, soccer_2016, hockey
-  movie_platform        rank=4   beaten by  movielens, movies_4, disney
-  movies_4              rank=8   beaten by  movielens, movie_platform, card_games
-```
-
-**6 of 14 were beaten by a schema in the same domain family**, and 4 of 14 sat at rank 4 — one
-place outside the shortlist. The lake holds three hockey schemas, four film schemas, two food
-inspection schemas and four sales schemas. Generic domain vocabulary is *precisely* what cannot
-separate those: every word that makes `movie_platform` look like a film database makes
-`movielens` and `movies_4` look like one too, and they then take the shortlist between them.
+The lake holds sibling schemas: three hockey schemas, four film schemas, two food-inspection
+schemas, four sales schemas. Generic domain vocabulary is *precisely* what cannot separate those —
+every word that makes `movie_platform` look like a film database makes `movielens` and `movies_4`
+look like one too, and they then take the shortlist between them. A schema with a near-twin is
+therefore the case where a summary written in isolation fails.
 
 So for any schema with a near-twin, spend part of the budget on **what distinguishes it**:
 
@@ -233,13 +248,22 @@ So for any schema with a near-twin, spend part of the budget on **what distingui
 - `food_inspection` vs `food_inspection_2` — what the second one has that the first does not.
 - `ice_hockey_draft` vs `hockey` — draft selections and prospects, against career season stats.
 
-Identify the families first (there are about six), then write each member's summary *against* its
-siblings rather than in isolation. A summary written alone will use the family vocabulary; that is
-exactly the failure above.
+Derive the families yourself from the 57 schema names and their `body` text — there are about six —
+then write each member's summary *against* its siblings rather than in isolation.
 
-**Gate:** `table_coverage` ≥ **0.693** at `route_top_n=3` *and* ≥ **0.588** at
-`route_top_n=1`, on the 114-question sample, with mean licensed tables not above 13.7. Below
-either, the mechanical version wins and yours is discarded.
+**Two things that look like discrimination and are not.** Both were tried by the first writer and
+both are measured-null or worse:
+
+- **Repeating a word already in the summary.** "California cuisine directory rating directory
+  California restaurants … cuisine … rating" raises term frequency, not information. 62% of the
+  tokens added that way were already present in the string they were prepended to, and the
+  prefix-only corpus scored **exactly** the floor to four decimals.
+- **Naming the sibling to exclude it** — `"NOT career HOF Stanley"`, `"NEVER football soccer"`.
+  BM25 has no negation: the token is in the document and counts *for* it, so this makes a hockey
+  schema more retrievable by draft questions. Write what the schema *is*, never what it is not.
+
+**Gate:** `table_coverage` at `route_top_n=3` and at `route_top_n=1`, against the current floor,
+paired in one process. **You do not run it and you do not see it** — see below.
 
 ### Item 2 — `column.body` for the 2 452 tautologies
 
@@ -284,6 +308,27 @@ For a term: what the phrase means to the business, and what it is *not*.
 ### Item 5 — `metric.body` (157) and `few_shot.bound_terms` (5 000)
 
 Lowest leverage. Do it last or not at all.
+
+## Who runs the gate
+
+**The writer does not run the gate and does not see per-question scores.** The maintainer runs it.
+
+This is not process for its own sake; it is the one thing that went wrong the first time. The
+writer received six scored runs against the same 114 held-out questions, each with a distinct
+`corpus_content_hash`, coverage climbing `0.667 → 0.684 → 0.684 → 0.693 → 0.702`, and reported the
+last. Each individual step was reasonable. The sequence is hill-climbing on held-out data, and it
+voids out-of-sample status no matter how the edits themselves were chosen.
+
+So:
+
+- The writer gets the corpus, the train questions, the schema list, and this brief.
+- The writer may run `corpus.store.load()`, `tools/check_train_only.py`, and any static check.
+- The writer may **not** run `tools/routing_recall.py` or read `runs/ablation/*`.
+- The maintainer runs the gate **once**, on the delivered corpus, paired against the current floor
+  in one process.
+
+If the writer needs a feedback signal, it must come from something the test set cannot see — a
+held-out slice of the **train** questions is the obvious one, and building it is cheap.
 
 ## 6. How to run the gate
 
