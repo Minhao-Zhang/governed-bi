@@ -279,3 +279,85 @@ def test_routing_recall_rows_carry_what_table_coverage_reads() -> None:
         "routing_recall must publish the table ids under `licensed`; table_coverage reads "
         "that key and nothing else"
     )
+
+
+def test_a_gold_statement_that_reads_no_table_is_not_a_coverage_miss() -> None:
+    """13 of 114 sampled questions have a constant-folded gold statement.
+
+    ``SELECT "v"."c0" FROM (VALUES (121.0)) AS "v"("c0")`` reads nothing. It fell through
+    ``needed and hits == len(needed)`` into the ``none`` bucket, so it counted as "no gold table
+    licensed" on every arm -- an unconditional miss no corpus change could fix, holding the
+    ceiling at 101/114 = 0.886 and deflating every published coverage figure by a fixed 11.4%.
+
+    Excluded from the denominator, the way ``gold_sql_unparsed`` already handles a statement the
+    metric cannot read, and **counted** in its own field, because a silently smaller denominator
+    is the same defect pointing the other way.
+    """
+    from governed_bi.eval.datalake import table_coverage
+
+    folded = 'SELECT "v"."c0" FROM (VALUES (121.0)) AS "v"("c0")'
+    rows = [
+        {"question_id": "folded", "licensed": ["restaurant.generalinfo"]},
+        {"question_id": "real", "licensed": ["restaurant.generalinfo"]},
+    ]
+    out = table_coverage(
+        rows, {"folded": folded, "real": "SELECT * FROM restaurant.generalinfo"}
+    )
+
+    assert out["gold_reads_no_table"] == 1
+    assert out["n"] == 1, "the table-less question must leave the denominator"
+    assert out["all_gold_tables_licensed"] == 1.0, (
+        "the one scorable question was fully covered; the folded one must not drag it to 0.5"
+    )
+    assert out["none_licensed"] == 0.0
+
+
+def test_connect_seeds_its_tree_deterministically() -> None:
+    """``next(iter(set_of_strings))`` made the Steiner tree depend on the process hash seed.
+
+    Python randomises string hashing per process, so the greedy builder started from a different
+    terminal in every run and added different -- equally valid -- Steiner points. Those points
+    enter ``licensed``, which is what ``table_coverage`` reads, so every cross-session coverage
+    comparison carried it as noise: one question of 114 was observed, and a direct probe produced
+    three distinct Steiner sets across five hash seeds.
+
+    Asserted as "the seed is the sorted-first terminal" rather than by re-running under two hash
+    seeds, which a test in one process cannot do.
+    """
+    import random
+
+    from governed_bi.retrieve.connect import connect
+
+    edges = {
+        tuple(sorted(e))
+        for e in {
+            ("a", "h1"), ("h1", "b"), ("b", "h2"), ("h2", "c"), ("c", "h3"), ("h3", "a"),
+            ("a", "h4"), ("h4", "c"), ("d", "h5"), ("h5", "b"), ("d", "h6"), ("h6", "c"),
+        }
+    }
+    terminals = ["a", "b", "c", "d"]
+
+    # Both the terminal order AND the edge order are shuffled. Shuffling only the terminals
+    # exercises the tree seed, and a fix to the seed alone passed that while the probe across
+    # real hash seeds still produced three distinct Steiner sets -- the queue order and the
+    # neighbour order in the BFS are two further places an equal-length tie is broken. Edge order
+    # is what varies the `adj` set insertion order, so it is what reaches those two.
+    results = []
+    for _ in range(12):
+        shuffled_terms = terminals[:]
+        random.shuffle(shuffled_terms)
+        shuffled_edges = list(edges)
+        random.shuffle(shuffled_edges)
+        results.append(
+            tuple(
+                sorted(
+                    connect(set(shuffled_terms), edges=set(shuffled_edges), max_points=10).added
+                )
+            )
+        )
+
+    assert len(set(results)) == 1, (
+        f"connect returned {len(set(results))} different Steiner sets for one terminal set: "
+        f"{sorted(set(results))}. The tree must not depend on set iteration order -- those "
+        "points enter `licensed`, which table_coverage reads."
+    )

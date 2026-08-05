@@ -57,7 +57,22 @@ def connect(
     tree_edges: list[tuple[Hashable, Hashable]] = []
     remaining = set(terms)
 
-    seed = next(iter(remaining))
+    # **Sorted, not ``next(iter(...))``.** ``remaining`` is a set of table-id *strings*, and
+    # Python randomises string hashing per process unless ``PYTHONHASHSEED`` is pinned -- so the
+    # greedy builder started from a different terminal in every process, produced a different
+    # (equally valid, equally minimal) tree, and added different Steiner points. Those points go
+    # into ``licensed``, which is what ``eval.datalake.table_coverage`` reads.
+    #
+    # Measured: the same corpus measured twice **in one process** gives a coverage delta of
+    # exactly 0.0000, and the same corpus measured in two different processes moved by one
+    # question of 114 (0.6316 vs 0.6228). A direct probe over one 4-terminal graph produced three
+    # distinct Steiner sets across five hash seeds. So every cross-session comparison of a
+    # coverage or licensing number carried this as noise, at roughly the size of the effects the
+    # corpus work is trying to detect.
+    #
+    # ``key=str`` because terminals are typed ``Hashable`` and a mixed set has no natural order;
+    # the sort only has to be *stable across processes*, not meaningful.
+    seed = min(remaining, key=str)
     tree_nodes.add(seed)
     remaining.remove(seed)
 
@@ -160,8 +175,15 @@ def _nearest_path(
     if not sources or not goals:
         return None
 
+    # **Sorted at both traversal points, and both were needed.** ``sources``, ``goals`` and every
+    # ``adj`` value are sets of table-id strings, and Python randomises string hashing per
+    # process. Two shortest paths of equal length are both correct, and which one BFS finds
+    # decided which Steiner points landed in ``licensed`` — so the metric moved between runs of
+    # the same corpus. Fixing only the seed in ``connect`` was measured and **did not** fix it:
+    # the probe still produced three distinct Steiner sets across five hash seeds, because the
+    # queue order and the neighbour order are two more places the tie is broken by hash.
     parent: dict[Hashable, Hashable | None] = {s: None for s in sources}
-    queue: deque[Hashable] = deque(sources)
+    queue: deque[Hashable] = deque(sorted(sources, key=str))
 
     found: Hashable | None = None
     while queue:
@@ -170,7 +192,7 @@ def _nearest_path(
             found = node
             break
         # A source that is also a remaining goal (should not happen) — skip.
-        for neighbour in adj.get(node, ()):
+        for neighbour in sorted(adj.get(node, ()), key=str):
             if neighbour in parent:
                 continue
             parent[neighbour] = node

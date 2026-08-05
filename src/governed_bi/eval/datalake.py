@@ -287,7 +287,7 @@ def table_coverage(
     reported as uncovered rather than silently matched, because a comparison that guessed
     would be the fail-open shape ``structure.py`` exists to refuse.
     """
-    full = partial = none = unparsed = 0
+    full = partial = none = unparsed = tableless = 0
     for row in rows:
         sql = gold_sql_by_qid.get(str(row.get("question_id")))
         if not sql:
@@ -295,6 +295,21 @@ def table_coverage(
         needed = gold_tables(sql)
         if needed is None:
             unparsed += 1
+            continue
+        if not needed:
+            # **A gold statement that reads no table is not a coverage failure.** 13 of the 114
+            # questions in the stratified sample are constant-folded ``VALUES`` literals -- the
+            # dataset pre-computed the answer, e.g.
+            # ``SELECT "v"."c0" FROM (VALUES (121.0)) AS "v"("c0")`` -- so they name no table at
+            # all. The ``needed and hits == len(needed)`` test made them falsy, ``elif hits``
+            # falsy, and they landed in ``none``: an unconditional miss no corpus change could
+            # ever fix, holding the achievable ceiling at 101/114 = 0.886 and deflating every
+            # coverage figure by a fixed 11.4% of the sample.
+            #
+            # Excluded from the denominator rather than counted as covered, which is how
+            # ``gold_sql_unparsed`` already treats a statement this metric cannot read. Reported,
+            # because a silently smaller denominator is the other half of the same defect.
+            tableless += 1
             continue
         # **A row with no ``licensed`` key at all is a caller error, not a coverage of zero.**
         # ``routing_recall`` published only ``licensed_schemas``, so this scored every one of
@@ -323,6 +338,10 @@ def table_coverage(
         "some_licensed": partial / total,
         "none_licensed": none / total,
         "gold_sql_unparsed": unparsed,
+        #: Gold statements that read no table (constant-folded ``VALUES`` rows). Excluded from
+        #: ``n``. A run comparing itself against an older number must check this moved the
+        #: denominator: on the 114-question sample it is 13.
+        "gold_reads_no_table": tableless,
     }
 
 
