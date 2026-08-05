@@ -183,16 +183,53 @@ _REWRITE_TAIL = (
     "the question unchanged."
 )
 
+#: **The one rewriter whose output decides which corpus the analyst ever sees.**
+#:
+#: ``v2`` is the default, and ``v1`` is kept because it is the thing v2 has to beat. The switch was
+#: forced by a measured regression, and the mechanism is worth stating because it is not about
+#: model quality:
+#:
+#: ``v1`` says *"Describe the kind of tables and schemas"*. A weak rewriter largely ignored that
+#: and emitted keyword soup — *"restaurant ratings tables review scores star ratings business
+#: listings establishments schemas"* — which routed the question ``restaurant`` **#1**. A stronger
+#: rewriter obeyed it and wrote grammatical prose — *"Restaurant business directory, restaurant
+#: locations, star ratings, customer reviews, rating scores"* — and ``restaurant`` went to **#3**
+#: and then **out of the top-3 entirely**, displaced by ``movie_platform`` and
+#: ``simpson_episodes``. Both of those store ratings. The prose was rating-weighted; only the
+#: keyword version was restaurant-weighted.
+#:
+#: So the prompt had been tuned by accident to one model's tendency to disobey it, and upgrading
+#: the model surfaced the instruction as the defect. ``v2`` asks for what routing actually
+#: consumes — terms, weighted toward what *distinguishes* the right schema — and the model stays.
 FACET_SCHEMA_QUERY = Prompt(
     name="facet_schema_query",
     stage="facet_schema",
-    why="Turns the question into a description of the tables and schemas that would answer it.",
+    why=(
+        "Turns the question into catalogue search terms for the tables and schemas that would "
+        "answer it. This is the rewrite the schema router consumes, so it decides which corpus "
+        "the analyst is shown at all."
+    ),
+    default="v2",
     variants={
         "v1": (
             "You rewrite a business question into search text for finding database TABLES and "
             "SCHEMAS.\n\nDescribe the kind of tables and schemas that would be needed to answer "
             "the question — the entities they store, not the calculation asked for. Use the "
             "vocabulary a data catalogue would use." + _REWRITE_TAIL
+        ),
+        "v2": (
+            "You turn a business question into SEARCH TERMS for a data catalogue of tables and "
+            "schemas.\n\n"
+            "Emit terms, not a sentence.\n\n"
+            "**Lead with the words that tell the right schema apart from every other one.** Many "
+            "schemas store ratings, prices, dates and counts; far fewer store restaurants, "
+            "airlines or hospitals. So put the specific domain nouns of the question first, then "
+            "their synonyms, then the catalogue words for the same thing (table, records, "
+            "directory, master, listing). Name the entities stored, never the calculation asked "
+            "for.\n\n"
+            "Do not join the terms into clauses — no 'and', no 'including', no 'such as'. A "
+            "description reads well and retrieves badly: it spends its weight on the generic "
+            "words every schema shares." + _REWRITE_TAIL
         ),
     },
 )
@@ -298,8 +335,20 @@ NARRATE = Prompt(
 )
 
 
+#: Which stage sends which rewriter. **``facet_schema`` is absent, deliberately**, so
+#: ``_rewritten_query`` finds no prompt for it and the facet searches the user's own words.
+#:
+#: The prompt itself stays declared in :data:`PROMPT_REGISTRY` and is therefore still hashed into
+#: ``prompt_set_hash``. That is not an oversight: ``register/facets.py``'s ``FACET_EXTRACTS`` note
+#: carries the measurement that removed it — the raw question beats every rewrite of it, by 0.65
+#: on one decomposed question and by 1.8pp of recall@3 over 114 — and a prompt deleted outright is
+#: a baseline a future attempt has nothing to beat. Two variants sitting unsent is the cheapest
+#: possible record of a road taken and reversed.
+#:
+#: The mapping is the switch, not the registry, because the registry answers "what prompts does
+#: this build know" and the mapping answers "what does a turn send". Conflating them is how a
+#: disabled stage stops being auditable.
 FACET_QUERY_PROMPTS: Mapping[str, str] = {
-    "facet_schema": "facet_schema_query",
     "facet_term": "facet_term_query",
     "facet_metric": "facet_metric_query",
     "facet_entity": "facet_entity_query",

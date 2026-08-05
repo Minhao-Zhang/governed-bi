@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from governed_bi.register.facets import Channel
+from governed_bi.register.facets import FACET_EXTRACTS, Channel
 from governed_bi.register.prompts import FACET_QUERY_PROMPTS, PROMPT_REGISTRY, prompt_text
 from governed_bi.register.stages import FACET_STAGES, Stage
 from governed_bi.serve.nodes import facets as facets_mod
@@ -74,13 +74,23 @@ def _rewrite(
 # ── every facet has a prompt, and the registry covers it ──
 
 
-def test_every_facet_has_its_own_rewriter_prompt() -> None:
-    """Five prompts, not one parameterised prompt: each facet searches a different kind of
-    object and will be tuned against a different number, and the registry exists so a variant of
-    one can be compared without moving the others."""
-    for stage in FACET_STAGES:
-        assert stage.value in FACET_QUERY_PROMPTS, f"{stage.value} has no rewriter prompt"
+def test_every_extracting_facet_has_its_own_rewriter_prompt() -> None:
+    """One prompt per *extracting* facet, not one parameterised prompt: each searches a different
+    kind of object and will be tuned against a different number, and the registry exists so a
+    variant of one can be compared without moving the others.
+
+    **Keyed on ``FACET_EXTRACTS``, not on ``FACET_STAGES``.** ``facet_schema`` no longer rewrites
+    — measured: the raw question beats every rewrite of it, by 0.65 on one decomposed question and
+    by 1.8pp of recall@3 over 114 — so it has no entry in the mapping and must not be required to.
+    Its prompt stays *registered*, which the test below holds."""
+    for stage in FACET_EXTRACTS:
+        assert stage.value in FACET_QUERY_PROMPTS, f"{stage.value} extracts but has no prompt"
         assert FACET_QUERY_PROMPTS[stage.value] in PROMPT_REGISTRY
+    assert set(FACET_QUERY_PROMPTS) == {s.value for s in FACET_EXTRACTS}, (
+        "the mapping and the extraction declaration must name the same facets, or a facet "
+        "rewrites while its channel state says it does not — or the reverse, which is how "
+        "`facet_schema` came to report `not_configured` while plainly rewriting"
+    )
 
     texts = {prompt_text(n) for n in FACET_QUERY_PROMPTS.values()}
     assert len(texts) == len(FACET_QUERY_PROMPTS), (
@@ -101,7 +111,9 @@ def test_the_rewriter_prompts_are_hashed() -> None:
 # ── the rewrite happens, and is attributed honestly ──
 
 
-@pytest.mark.parametrize("stage", list(FACET_STAGES))
+# The extracting facets only. `facet_schema` is deliberately not one of them any more, and the
+# test below pins that it searches the raw question instead.
+@pytest.mark.parametrize("stage", sorted(FACET_EXTRACTS, key=lambda s: s.value))
 def test_a_rewrite_replaces_the_question_and_marks_extraction(stage: Stage) -> None:
     model = _Rewriter()
     out, ran, spent = _rewrite("average star rating for restaurants nearby", stage, model)
@@ -196,3 +208,29 @@ def test_an_embedder_failure_falls_back_to_the_question_vector() -> None:
         question="original",
     )
     assert vector == [9.0, 9.0], "a dead embedder must degrade, not drop the semantic channel"
+
+
+def test_the_schema_facet_searches_the_users_own_words() -> None:
+    """``facet_schema`` sends no rewrite, and its prompt is still registered.
+
+    Two halves, because dropping either would be a different defect. Sending no rewrite is the
+    measured decision: decomposing one question's route score per facet with the rewriters off,
+    the raw question won ``facet_schema`` outright and the whole shortlist by 0.65, while the
+    rewritten form put the gold schema at #3 and then out of the top-3. Keeping the prompt
+    registered is what leaves a future attempt something to be compared against — and keeps it
+    inside ``prompt_set_hash``, so a build that re-enables it cannot report the same hash.
+    """
+    from governed_bi.register.facets import FACET_EXTRACTS
+    from governed_bi.register.prompts import PROMPT_REGISTRY
+
+    assert Stage.facet_schema not in FACET_EXTRACTS
+    assert "facet_schema" not in FACET_QUERY_PROMPTS
+    assert "facet_schema_query" in PROMPT_REGISTRY
+
+    model = _Rewriter("catalogue words that would replace the question")
+    out, ran, spent = _rewrite("how many restaurants are over 4 stars", Stage.facet_schema, model)
+
+    assert out == "how many restaurants are over 4 stars", "the question must reach the index intact"
+    assert model.calls == [], "no prompt for this facet means no model call, not a wasted one"
+    assert Channel.extraction not in ran, "a facet that did not extract must not claim it did"
+    assert spent == [], "and it bills nothing"

@@ -27,7 +27,8 @@ from langchain_core.messages import AIMessage
 
 from governed_bi.govern.guard import BI_SCOPE_RULE_ID
 from governed_bi.govern.policy import GovernancePolicy
-from governed_bi.register.stages import FACET_STAGES, Stage
+from governed_bi.register.facets import FACET_EXTRACTS
+from governed_bi.register.stages import Stage
 from governed_bi.serve.nodes.facets import _run_facet
 from governed_bi.serve.nodes.guard import guard_node
 
@@ -90,7 +91,11 @@ def test_a_gate_that_never_calls_a_model_bills_nothing() -> None:
 
 
 def test_every_facet_rewriter_bills_its_own_stage() -> None:
-    """Five concurrent rewrites, five rows, each named for the facet that spent it.
+    """One row per *extracting* facet, named for the facet that spent it.
+
+    Keyed on ``FACET_EXTRACTS`` rather than ``FACET_STAGES``: ``facet_schema`` no longer
+    rewrites, so it makes no call and must bill nothing — asserted separately below, because
+    "spent nothing" and "spent and did not say" are the two states this whole file is about.
 
     Attribution is the point rather than the total: the agent/utility split is a comparability
     knob (``llm_utility_model``) whose entire justification is cost and latency, and that cannot
@@ -100,7 +105,7 @@ def test_every_facet_rewriter_bills_its_own_stage() -> None:
 
     index = build_index([])
     seen: list[str] = []
-    for stage in FACET_STAGES:
+    for stage in sorted(FACET_EXTRACTS, key=lambda s: s.value):
         model = _Model("restaurants, dining establishments")
         out = _run_facet(
             {"question": "how many restaurants?", "turn_index": 1},
@@ -112,7 +117,7 @@ def test_every_facet_rewriter_bills_its_own_stage() -> None:
             f"{stage.value} must bill its own rewrite, got {[r.get('stage') for r in rows]}"
         )
         seen.append(stage.value)
-    assert set(seen) == {s.value for s in FACET_STAGES}
+    assert set(seen) == {s.value for s in FACET_EXTRACTS}
 
 
 def test_a_stage_name_in_a_usage_row_is_always_a_declared_stage() -> None:
@@ -128,3 +133,22 @@ def test_a_stage_name_in_a_usage_row_is_always_a_declared_stage() -> None:
     )
     known = {stage.value for stage in Stage}
     assert all(row["stage"] in known for row in out["usage"])
+
+
+def test_the_non_rewriting_facet_bills_nothing() -> None:
+    """``facet_schema`` searches the raw question, so it spends no tokens and writes no row.
+
+    The complement of the test above, and the reason both exist: a zero row here would price a
+    facet that never called a model, and an absent row for a facet that *did* is the defect this
+    file was written for. One facet is now on each side of that line.
+    """
+    from governed_bi.retrieve.index import build_index
+
+    model = _Model("would be a rewrite if anything asked for one")
+    out = _run_facet(
+        {"question": "how many restaurants?", "turn_index": 1},
+        _cfg(model, index=build_index([])),
+        Stage.facet_schema,
+    )
+    assert "usage" not in out
+    assert model.calls == 0

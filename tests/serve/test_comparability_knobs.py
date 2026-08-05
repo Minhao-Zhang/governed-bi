@@ -114,9 +114,19 @@ def test_route_top_n_from_knobs_resolved_changes_the_turn(
     # only path that was ever wired.
     narrow = run(knobs_resolved={**wide["knobs_resolved"], "route_top_n": 1})
 
-    assert narrow.get("schemas") == ["ops_b"], (
+    # **Length, not identity.** This asserted `== ["ops_b"]`, and which of the two wins is not
+    # a property anyone designed: the question ("customer account voltage reading device") is
+    # built to match both, and the winner is decided by scores over a two-asset synthetic
+    # corpus. It flipped to `sales_a` when `facet_schema` stopped rewriting, failing a test
+    # whose own docstring says it gave up asserting the outcome. The claim is that the knob
+    # reaches routing, which is a count.
+    assert len(narrow.get("schemas") or []) == 1, (
         f"knobs_resolved['route_top_n'] did not reach routing: {narrow.get('schemas')}. "
         "The record would still publish 1 while the turn routed on 3."
+    )
+    assert set(narrow.get("schemas") or ()) <= set(wide.get("schemas") or ()), (
+        "the survivor must be one of the schemas the wider run scored, or truncation is not "
+        f"what happened: narrow={narrow.get('schemas')} wide={wide.get('schemas')}"
     )
     assert narrow.get("path_kind") == "answered", (
         f"path_kind={narrow.get('path_kind')} terminal_reason={narrow.get('terminal_reason')!r}"

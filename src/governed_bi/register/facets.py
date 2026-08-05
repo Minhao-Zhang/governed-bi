@@ -132,13 +132,51 @@ FACET_CHANNELS: Mapping[Stage, frozenset[Channel]] = {
 #: Both are now declared, so ``_channels_for`` reports ``ran`` when a rewrite came back and
 #: ``failed`` when it did not.
 #:
-#: These two have the most to gain, which is the other half of the argument. ``facet_schema``
-#: searches table and schema summaries written in catalogue vocabulary that a user's question
-#: never uses, and ``facet_example`` searches for past queries whose *shape* matches — neither is
-#: well served by the raw wording.
+#: ``facet_example`` has the most to gain: it searches for past queries whose *shape* matches,
+#: which the raw wording does not describe.
+#:
+#: **``facet_schema`` is NOT here any more, and that is a measured retreat from the sentence
+#: above it.** The argument was that it "searches table and schema summaries written in catalogue
+#: vocabulary that a user's question never uses". That reads well and the measurement contradicts
+#: it. Decomposing one question's route score per facet, with the rewriters *off* so every facet
+#: searched the user's own words:
+#:
+#: .. code-block:: text
+#:
+#:     schema                  schema   term   metric  entity  example   TOTAL
+#:     restaurant               0.377  0.744   0.748   0.396   0.867     3.132   <- #1 in all five
+#:     public_review_platform   0.300  0.683   0.536   0.351   0.614     2.484
+#:     simpson_episodes         0.165  0.624   0.610   0.547   0.000     1.946
+#:
+#: The raw question wins ``facet_schema`` outright, by 0.65 overall. With the rewriter on, the
+#: same question put ``restaurant`` at #3 and then out of the top-3 entirely, displaced by
+#: schemas that store *ratings* — because the rewrite spends its weight on the vocabulary many
+#: schemas share and drops the one word that discriminates.
+#:
+#: **And this configuration beats both ends, which is why it is not simply a revert.** Four arms
+#: over the same 114 questions (two per schema, 57 schemas, ``top_n=3``, semantic channel on),
+#: reproducible with ``tools/routing_recall.py``:
+#:
+#: .. code-block:: text
+#:
+#:                                  @1      @3      @5     @10    wall
+#:     no rewriting at all       0.632   0.851   0.904   0.939     62s
+#:     all five rewriting        0.640   0.833   0.939   0.991    308s
+#:     four, schema on raw       0.658   0.877   0.930   0.991    ~250s
+#:
+#: Two effects that turn out to be separable and additive. ``facet_schema`` wants the user's own
+#: words — the discriminating noun sits there in natural context, which is what both channels are
+#: good at, and restating it is where it gets lost. The other four want the rewrite: they retrieve
+#: terms, metrics and past examples, and rewriting lifts recall@10 from 0.939 to 0.991.
+#:
+#: Keeping all five rewriting cost **4.4pp at recall@3** against this, at the shortlist width
+#: production ships. ``recall@1`` moving 0.632 -> 0.658 matters separately: it is the ceiling for
+#: any "shortlist one and let the model re-pick" strategy.
+#:
+#: It stays in ``FACET_QUERY_PROMPTS``' registry as a prompt nobody sends: the variant is what a
+#: future attempt is compared against, and deleting it would delete the baseline.
 FACET_EXTRACTS: frozenset[Stage] = frozenset(
     {
-        Stage.facet_schema,
         Stage.facet_term,
         Stage.facet_metric,
         Stage.facet_entity,
