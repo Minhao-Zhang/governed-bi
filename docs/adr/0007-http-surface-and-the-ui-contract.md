@@ -174,6 +174,23 @@ for the other pages not to error: `/health`, `/schema`, `/corpus/assets`, `/grap
 `/knowledge-graph` — all cheap projections of the `Session`'s assets and, now that
 `CorpusStructure` exists, the two graph routes are edges plus assets rather than new work.
 
+> **Amendment 1 (2026-08-04): `/health` is deleted; `/audit/corpus` is the ungated corpus
+> projection.** The two routes answered one question from one set of session fields — counts by
+> type, servable, `n_fatal`, `n_degradations`, the problem strings — and `/audit/corpus` answers
+> it better on the only field they shaped differently: it returns `fatal` and `degradations` as
+> separate lists, which ADR 0008 D9 requires, where `/health` flattened both into `findings`.
+>
+> `/health`'s three remaining fields were hardcoded zeros. Two of them (`n_suspect_columns`,
+> `n_low_confidence_joins`) are true of an uncurated corpus. The third was not:
+> `governance.excluded` is a real per-asset field that `/corpus/assets` reads on every row and
+> the browser's "Hide excluded" control filters on, so a single marked asset would have had this
+> route report `0` beside a page showing the badge.
+>
+> Two surfaces over one fact is two things to keep in step; the reason to keep the pair was
+> three counters, and one of them was a latent disagreement. `/livez` is unaffected — it is the
+> liveness probe, and unlike `/health` it deliberately does not touch the session, so it is the
+> one that was always right for that job.
+
 ## Consequences
 
 - The engine gains `src/governed_bi/api/`, and `tools/check_imports.py`'s already-declared

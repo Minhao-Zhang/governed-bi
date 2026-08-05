@@ -198,8 +198,8 @@ UI-agnostic pieces: the `governed_bi.viz.presenter` view models (corpus health,
 the table/tier view, the relationship/knowledge graph, the asset listing,
 and an answer's two-axis reliability stamp — no UI dependency), and the
 `governed_bi.api` FastAPI HTTP/JSON API that serves those view models plus the
-governed agent core at `POST /chat`. The view-model endpoints (`/health`,
-`/schema`, `/graph`, `/corpus/assets`, …) need no model; `/chat`
+governed agent core at `POST /chat`. The view-model endpoints (`/audit/corpus`,
+`/schema/summary`, `/graph`, `/corpus/assets`, …) need no model; `/chat`
 does, and returns `503` without one. To run the API:
 
 ```bash

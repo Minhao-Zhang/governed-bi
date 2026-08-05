@@ -237,11 +237,16 @@ whole claim of this decision surviving contact with the thing it was waiting for
 
 ### The sufficient set: 12 read routes
 
-`GET /capabilities` | `GET /livez` | `GET /health` | `GET /schema/summary` |
+`GET /capabilities` | `GET /livez` | `GET /schema/summary` |
 `GET /schema/{table_id}` | `GET /corpus/fields` | `GET /corpus/rows` |
 `GET /columns/{column_id}/related` | `GET /graph` | `GET /knowledge-graph` |
 `GET /audit/turns` | `GET /audit/turns/{id}/trace` | `GET /audit/corpus` -- plus the chat pair
 `POST /chat` and `POST /chat/resume` from [0007](0007-http-surface-and-the-ui-contract.md).
+
+`GET /health` was in this list, which is why the list ran to **thirteen** under a heading that
+said twelve. It is deleted ([0007](0007-http-surface-and-the-ui-contract.md) Amendment 1): it and
+`/audit/corpus` projected the same session fields, and the survivor is the one that keeps `fatal`
+apart from `degradations`. The heading is now the count.
 
 `GET /search` is deliberately **not** built: `can_search: false` is the honest answer and the
 client's index over the lean catalog works. `GET /corpus/assets` survives unbounded, on notice:

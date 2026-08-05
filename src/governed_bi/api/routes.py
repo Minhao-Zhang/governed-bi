@@ -148,38 +148,25 @@ def capabilities() -> dict[str, Any]:
     }
 
 
-@app.get("/health")
-def health() -> dict[str, Any]:
-    """Corpus health as counts plus findings.
-
-    ``findings`` carries the session's problems verbatim. That is the point of the route: ADR
-    0005 §2.8.2 requires an unresolvable join endpoint to surface where the corpus is built,
-    and until there was somewhere to show it, "reported" meant "returned to a caller who
-    dropped it".
-    """
-    session = _session()
-    counts: dict[str, int] = {}
-    for asset in session.assets_by_id.values():
-        key = asset.asset_type.value
-        counts[key] = counts.get(key, 0) + 1
-    return {
-        "counts": counts,
-        # Suspect/excluded/low-confidence are corpus-curation concepts the curator produces,
-        # and the curator is out of scope. Zero here is a **true** count over an uncurated
-        # corpus, not a placeholder: nothing has marked anything, so nothing is marked.
-        "n_suspect_columns": 0,
-        "n_excluded": 0,
-        "n_low_confidence_joins": 0,
-        # Green means **servable**, i.e. no fatal problem — ADR 0008 D9. It read
-        # `not session.problems`, so three unresolvable metric dimensions painted the health
-        # page red on a corpus that answers questions correctly, which trains a reader to
-        # ignore the light. The degradations are still counted and still listed; they are a
-        # different fact and now have their own number.
-        "ci_green": not session.fatal_problems,
-        "n_fatal": len(session.fatal_problems),
-        "n_degradations": len(session.degradations),
-        "findings": [str(p) for p in session.problems],
-    }
+# ``GET /health`` was **deleted**, and it is `/audit/corpus` below that replaced it.
+#
+# The two answered the same question from the same session fields — asset counts, whether the
+# corpus is servable, how many fatal problems, how many degradations, the problem strings — and
+# `/audit/corpus` answers it better on the one field they treated differently: it returns `fatal`
+# and `degradations` as **separate lists**, which ADR 0008 D9 requires, where `/health` flattened
+# both into one `findings` array and left the caller to guess which was which.
+#
+# What `/health` had and `/audit/corpus` does not is three counters — `n_suspect_columns`,
+# `n_excluded`, `n_low_confidence_joins` — that were **hardcoded to zero**, under a comment
+# arguing that zero is a true count over an uncurated corpus. That was true of two of them and
+# **false of the third**: `governance.excluded` is a real per-asset field, `/corpus/assets`
+# reads it on every row, and the corpus browser's "Hide excluded" control filters on it. So one
+# marked asset would have made this route report `0` while the page beside it showed the badge —
+# a disagreement that was latent only because nothing has been marked yet.
+#
+# A route whose distinctive content is two structural zeros and one latent lie is not a surface
+# worth keeping in step with another. `/livez` remains the liveness probe, and it is the one that
+# was always correct for that job: it deliberately does not touch the session.
 
 
 def _provenance_status(asset: Any) -> str | None:

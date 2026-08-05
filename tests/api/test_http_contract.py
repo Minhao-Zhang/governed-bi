@@ -162,8 +162,8 @@ CLIENT_GRAPH_NODE_KINDS = frozenset({"table", "join", "metric", "term", "note", 
 
 
 def test_the_pages_that_do_not_need_a_model_work_without_one(monkeypatch) -> None:
-    """`/health`, `/schema/summary`, `/corpus/assets`, `/graph` and `/knowledge-graph` are
-    **ungated** in the UI — nothing checks a capability before calling them, so a 500 from
+    """`/audit/corpus`, `/schema/summary`, `/corpus/assets`, `/graph` and `/knowledge-graph`
+    are **ungated** in the UI — nothing checks a capability before calling them, so a 500 from
     any of them is a broken page rather than a degraded one.
 
     All five are projections of the `Session`'s assets and, now that `CorpusStructure`
@@ -176,7 +176,11 @@ def test_the_pages_that_do_not_need_a_model_work_without_one(monkeypatch) -> Non
     (`/schema` — the flat dump — was on this list and is **deleted**, so the list names
     `/schema/summary` instead. That is the same page: the dump was a second projection of
     these tables, and the catalog is the one that survived. The route is asserted absent
-    below, because a deleted route that quietly comes back is two shapes again.)
+    below, because a deleted route that quietly comes back is two shapes again.
+
+    `/health` was on it too, and is deleted for the same reason one layer up: it and
+    `/audit/corpus` projected the same session fields, and the one that survived is the one
+    that keeps `fatal` and `degradations` apart. It is asserted absent beside `/schema`.)
 
     **And that answering is not enough.** Every one of these five is `safeParse`d by the
     client, which throws on a mismatch — so a 200 carrying an undeclared `kind` is the same
@@ -193,17 +197,22 @@ def test_the_pages_that_do_not_need_a_model_work_without_one(monkeypatch) -> Non
     monkeypatch.setattr(browse_routes, "_request_session", lambda: session)
     client = TestClient(routes.app)
 
-    for path in ("/health", "/schema/summary", "/corpus/assets", "/graph", "/knowledge-graph"):
+    for path in ("/audit/corpus", "/schema/summary", "/corpus/assets", "/graph", "/knowledge-graph"):
         response = client.get(path)
         assert response.status_code == 200, f"{path} -> {response.status_code} with no model"
 
-    # The flat dump stays gone. Asserted on the app's own route table rather than by fetching
-    # it: `/schema/{table_id}` would answer `GET /schema` with a 404 either way, so a status
-    # check cannot tell "deleted" from "a table happens not to be named that".
+    # Both deletions, asserted on the app's own route table rather than by fetching them:
+    # `/schema/{table_id}` would answer `GET /schema` with a 404 either way, so a status check
+    # cannot tell "deleted" from "a table happens not to be named that".
     declared = {getattr(route, "path", None) for route in routes.app.routes}
     assert "/schema" not in declared, (
         "GET /schema is deleted: it was 936 KB inlining every column of every table, and a "
         "second projection of what /schema/summary returns lean"
+    )
+    assert "/health" not in declared, (
+        "GET /health is deleted: /audit/corpus answers the same question from the same session "
+        "fields and keeps fatal apart from degradations, which ADR 0008 D9 requires. /livez is "
+        "the liveness probe and does not touch the session"
     )
 
     graph = client.get("/knowledge-graph").json()

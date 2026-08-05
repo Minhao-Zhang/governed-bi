@@ -23,7 +23,12 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from tests.serve.turn_contract_fixtures import (  # noqa: F401 — `probe` needs `dsn` in scope
+
+# Bare, like `test_turn_contract.py` and `test_session_contract.py` beside it, because `tests/`
+# is not a package. `from tests.serve.…` resolved only under `python -m pytest`, which puts the
+# cwd on `sys.path`; a bare `uv run pytest` failed to *collect* this module — and a collection
+# error takes the whole suite down, so one import style made every other test unrunnable.
+from turn_contract_fixtures import (  # noqa: E402, F401 — `probe` needs `dsn` in scope
     INJECTION_RULES,
     _base_turn,
     _policy,
