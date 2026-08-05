@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage
 
 from governed_bi.govern.guard import BI_SCOPE_RULE_ID
 from governed_bi.govern.policy import GovernancePolicy

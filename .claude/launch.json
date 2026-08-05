@@ -43,7 +43,23 @@
         "2024"
       ],
       "port": 2024
+    },
+    {
+      "name": "api-verify",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": [
+        "run",
+        "--frozen",
+        "langgraph",
+        "dev",
+        "--no-browser",
+        "--no-reload",
+        "--port",
+        "2124"
+      ],
+      "port": 2124
     }
   ],
+  "_why_api_verify": "A second server on its own port, so a wire-protocol change can be verified against a fresh process without evicting whatever is already on 2024. It exists for the same reason as ui-verify: the thing being checked is what a freshly started process does, and --no-reload means an already-running one is still on the packages it imported at boot. Both hold a Postgres connection and pay the ~90s corpus load, so do not leave this one running.",
   "_why_no_reload": "langgraph dev watches the project directory. An eval run appends to runs/, which watchfiles reads as a source change, so the server restarts every few seconds and never finishes seeding the corpus -- measured: '4 changes detected' on a 10s loop and port 2024 never bound. --no-reload also removes the opposite trap, where the reloader claims to have picked up a src/ change and has not, so a fix gets verified against old code. Restart the server deliberately instead."
 }

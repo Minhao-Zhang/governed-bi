@@ -117,9 +117,22 @@ packages = ["src/governed_bi"]
 # transitive deps of langgraph-cli[inmem]. Pin them here so `uv sync -U` cannot
 # silently move /threads, /runs/stream, or stream_subgraphs without a deliberate
 # pyproject change. See docs/architecture.md §9.
+#
+# **Moved 0.11 -> 0.12 on 2026-08-05, which is what this pin is for.** The server
+# announced `langgraph-api 0.11.0 is in Critical support` — a support *tier*, meaning
+# only critical fixes land, and not a published vulnerability: OSV has no advisory for
+# `langgraph-api` at any version, nor for `langgraph` 1.2.8. So this is a lifecycle
+# upgrade, not a patch, and it was taken deliberately rather than by `-U` drifting.
+#
+# The bump was verified against the three behaviours this repository actually depends on
+# and that a wire-protocol minor could break silently, because none of them fails loudly:
+# `stream_subgraphs` carrying custom events *and* tokens (ADR 0010 M2 — without it the
+# timeline is empty and the server still answers 200), the checkpointer reaching the
+# nested `create_agent` through config (which is what makes `ask_user` resumable and
+# `/threads` persist), and `http.app` mounting the custom routes.
 [tool.uv]
 constraint-dependencies = [
-    "langgraph-api>=0.11,<0.12",
+    "langgraph-api>=0.12,<0.13",
     "langgraph-sdk>=0.4.2,<0.5",
 ]
 
