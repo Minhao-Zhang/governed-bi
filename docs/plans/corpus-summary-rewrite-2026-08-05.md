@@ -144,9 +144,25 @@ Artifacts: `runs/ablation/summary-density-top3.json`, `runs/ablation/summary-den
 >   of the 713** summaries it rewrote. Repairing that turned out **not** to move coverage
 >   (+11/−7 questions, p = 0.48) — worth knowing, and the opposite of what was expected.
 >
-> The current numbers live in `runs/ablation/overfit-split-top3.json`, over all 1 351 questions
-> with a paired McNemar test. **Re-measure the floor before quoting a bar**; do not use the table
-> above as a target.
+> **The current numbers, over all 1 351 questions, four arms in one process, paired McNemar on
+> gold-table coverage** (`runs/ablation/salvage-arms-top3.json`):
+>
+> | arm | coverage | recall@1 | recall@3 | vs previous arm |
+> | --- | --- | --- | --- | --- |
+> | `gold` | 0.6430 | 0.6366 | 0.8216 | — |
+> | `floor_fixed` — the mechanical rewrite | **0.7108** | 0.6876 | 0.8460 | **+114 −31, p ≈ 0** |
+> | `salvage` — floor + 27 term bindings + 453 grain | **0.7181** | 0.6899 | 0.8475 | **+9 −0, p = 0.0039** |
+> | `authored` — the first delivery, with its 27 prefixes | 0.7157 | 0.6921 | 0.8505 | +16 −10, p = 0.33 |
+>
+> Three things this settles. **The stopword regex is the dominant effect** — a net 83 questions,
+> more than an order of magnitude larger than anything hand-written on top of it. **The term
+> bindings are real** — 9 questions gained, *zero* lost. And **the 27 hand-written summary prefixes
+> are worse than nothing**: dropping them turns a non-significant result (`authored`, p = 0.33,
+> with 10 regressions) into a significant one (`salvage`, p = 0.0039, with none). `salvage` and
+> `authored` are indistinguishable from each other (p = 0.63), so the prefixes bought churn in both
+> directions and no net movement.
+>
+> **Ship `salvage`.** And do not quote the 114-question table above as a bar.
 
 > **Both `corpora/` and `runs/` are gitignored.** The corpus is a build output of a curator run
 > and the artifacts are measurements, so neither is in git and neither will be on a fresh clone.
