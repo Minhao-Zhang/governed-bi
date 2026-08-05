@@ -85,17 +85,6 @@ UTILITY_MODEL_EFFORT_VAR = "GOVERNED_BI_UTILITY_MODEL_EFFORT"
 #: chose rather than one nobody noticed.
 EMBEDDING_MODEL_VAR = "GOVERNED_BI_EMBEDDING_MODEL"
 
-#: Where embedded vectors are kept between restarts.
-#:
-#: Without it, a server start embeds every summary in the corpus — 8035 files in the gold
-#: layer — before it can serve, on every restart, and `langgraph dev` restarts on file save.
-#: `build_index` already takes a `vector_cache` keyed by `(model, dimensions, text)`, so
-#: persistence is a matter of handing it a mapping that outlives the process rather than new
-#: machinery. The key includes the model identity deliberately: `index.py` records that a
-#: text-only key hands a 1536-wide `3-small` vector to `3-large`, which is width-identical and
-#: semantically unrelated, with nothing anywhere disagreeing.
-VECTOR_CACHE_VAR = "GOVERNED_BI_VECTOR_CACHE"
-
 #: Reasoning effort, for models that take one. ``register/knobs.py`` has declared
 #: ``llm_reasoning_effort`` as ``Role.comparability`` all along, with the reason attached: two
 #: v1 ladders differed **only** in this field, it was recorded nowhere, so comparability cleared
@@ -219,18 +208,17 @@ def session_from_environment() -> Session:
         seed_dir.mkdir(parents=True, exist_ok=True)
         _SESSION = session_mod.from_live_schema(str(schema), corpus_root=seed_dir, **kwargs)
     if cache is not None:
-        # After the index is built, because that is when the misses have been written back. A
-        # flush failure is announced and not raised: the corpus is indexed either way, and a
-        # server that refuses to start because it could not *cache* would be trading the thing
-        # for the optimisation.
+        # After the index is built, because that is when the misses have been written. There is
+        # no flush: `VectorStore.add` writes as it goes, so this line reports rather than acts.
         #
-        # `flush` is a no-op on an unchanged cache, and that is what keeps `langgraph dev` from
-        # looping: the file lives under `runs/` inside the watched tree, so writing it on every
-        # start made the server restart, re-import, write again and never become ready.
-        wrote = cache.dirty
-        error = cache.flush()
-        state = "unchanged" if not wrote else ("NOT SAVED: " + error if error else "saved")
-        print(f"vector cache: {cache.hits} hit / {len(cache)} total, {state} — {cache.path.as_posix()}")
+        # It is still printed, and that is the point the JSON cache's `hits` property was added
+        # for — a cache nobody can measure is one that can silently stop working. `written == 0`
+        # is also the property `langgraph dev` depends on: the store is under `runs/`, inside the
+        # watched tree, and writing on an unchanged corpus made the server restart, re-import,
+        # write again and never become ready. Opening and searching write nothing; only `add`
+        # does, and it is called with the miss set or not at all.
+        state = "unchanged" if cache.written == 0 else f"wrote {cache.written}"
+        print(f"vector cache: {cache.opened_with} hit / {len(cache)} total, {state} — {cache.uri}")
     return _SESSION
 
 
@@ -285,14 +273,13 @@ def _embedder_into(kwargs: dict[str, Any], credentials: Any) -> Any:
             "lexical retrieval only, rather than starting a server whose semantic channel "
             "reports failed on every turn."
         )
-    from governed_bi.api.vector_cache import vector_cache_from_environment
     from governed_bi.model.openai_embedder import OpenAIEmbedder
+    from governed_bi.retrieve.vector_cache import vector_cache_from_environment
 
     embedder = OpenAIEmbedder(model=model_id)
-    # Named for the model, so two models cannot share a file. The key inside already carries the
-    # identity, so this is defence in depth rather than the mechanism — but a file whose name
-    # says what is in it is one a human can delete correctly.
-    cache = vector_cache_from_environment(VECTOR_CACHE_VAR, f"{model_id}.json")
+    # `model_id` and not `embedder.model`: the latter probes the provider to report what it
+    # actually served, and a directory name is not worth a network call at boot.
+    cache = vector_cache_from_environment(model=model_id)
     kwargs["embedder"] = embedder
     kwargs["vector_cache"] = cache
     return cache

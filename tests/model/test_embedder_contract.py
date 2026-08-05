@@ -210,8 +210,22 @@ def test_two_models_of_the_same_width_do_not_share_a_cache_entry() -> None:
     from governed_bi.model import DeterministicEmbedder
     from governed_bi.ports import Vector
     from governed_bi.register.assets import AssetType
-    from governed_bi.retrieve.index import IndexEntry, build_index
+    from governed_bi.retrieve.index import IndexEntry, UnifiedIndex, build_index
     from governed_bi.retrieve.semantic import cache_key, cosine
+    from governed_bi.retrieve.vector_cache import VectorCache
+
+    def stored(index: UnifiedIndex, asset_id: str) -> list[float]:
+        """The vector an index holds for one asset.
+
+        This was `index.vectors[summary]`. `vectors` is a LanceDB table since 2026-08-04 —
+        keyed on asset id, because a candidate restriction keyed on summary text would mean
+        shipping every summary into a SQL predicate — so reading one back is a column read.
+        Only the *instrument* changed here: every assertion below still compares the same
+        two vectors with the same strictness, and `cosine` is still the thing comparing them.
+        """
+        assert index.vectors is not None
+        arrow = index.vectors.to_arrow()
+        return arrow.column("vector")[arrow.column("key").to_pylist().index(asset_id)].as_py()
 
     class Counting(DeterministicEmbedder):
         """Records the texts it was actually asked to embed.
@@ -250,11 +264,13 @@ def test_two_models_of_the_same_width_do_not_share_a_cache_entry() -> None:
     assert large.dimensions == small.dimensions == width
     assert large.model != small.model
 
-    cache: dict[str, Vector] = {}
+    # One store, shared by every embedder below -- which is the point. A cache that is
+    # correct only when the caller keeps one per model is the convention this test refuses.
+    cache = VectorCache()
 
     first = build_index(entries(), embedder=large, vector_cache=cache)
     assert large.embedded == [summary]
-    assert cache_key(summary, model=large.model, dimensions=width) in cache
+    assert cache_key(summary, model=large.model, dimensions=width) in cache.keys()
 
     # Same text, same width, different model -> a MISS.
     second = build_index(entries(), embedder=small, vector_cache=cache)
@@ -263,20 +279,20 @@ def test_two_models_of_the_same_width_do_not_share_a_cache_entry() -> None:
         "carrying the model, which is v1's defect exactly"
     )
     assert len(cache) == 2
-    assert cache_key(summary, model=small.model, dimensions=width) in cache
+    assert cache_key(summary, model=small.model, dimensions=width) in cache.keys()
 
     # ...and the two vectors really are unrelated, so a shared entry would have been
     # wrong rather than merely untidy -- while cosine stays silent, because the widths
     # agree and that is the only thing it checks.
-    assert cosine(first.vectors[summary], second.vectors[summary]) < 0.99
-    assert len(first.vectors[summary]) == len(second.vectors[summary])
+    assert cosine(stored(first, "t1"), stored(second, "t1")) < 0.99
+    assert len(stored(first, "t1")) == len(stored(second, "t1"))
 
     # The other direction. A cache that misses on everything would pass all of the
     # above, and would also be no cache at all.
     large.embedded.clear()
     third = build_index(entries(), embedder=large, vector_cache=cache)
     assert large.embedded == [], "the same embedder missed its own cache entry"
-    assert list(third.vectors[summary]) == list(first.vectors[summary])
+    assert stored(third, "t1") == stored(first, "t1")
     assert len(cache) == 2
 
     # `dimensions` is in the key too, and it has to be: `text-embedding-3-large` at two
@@ -523,6 +539,7 @@ def test_the_semantic_channel_scores_a_facet_that_declares_it() -> None:
     from governed_bi.register.stages import Stage
     from governed_bi.retrieve.index import IndexEntry, build_index
     from governed_bi.retrieve.semantic import semantic_search
+    from governed_bi.retrieve.vector_cache import VectorCache
 
     # The declaration this body is about. One channel, and it is the semantic one, so a
     # few-shot has to be *findable* by cosine rather than merely scored by it once
@@ -556,7 +573,9 @@ def test_the_semantic_channel_scores_a_facet_that_declares_it() -> None:
     )
 
     embedder = DeterministicEmbedder(dimensions=256)
-    index = build_index([wanted, distractor, table], embedder=embedder, vector_cache={})
+    index = build_index(
+        [wanted, distractor, table], embedder=embedder, vector_cache=VectorCache()
+    )
     query_vector = embedder.embed([question])[0]
 
     few_shots = {wanted.id, distractor.id}

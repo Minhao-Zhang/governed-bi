@@ -114,17 +114,22 @@ context block is hashed, not after.
 
 ## Not done, and deliberately
 
-**LanceDB.** Researched against current docs (`lancedb.connect`, `db.create_table(schema=…)`, the
-embedding registry with `openai` / `bedrock-text` providers, `$var:` secret indirection,
-`TextEmbeddingFunction` for a custom adapter, and hybrid search over an inverted index). It is the
-right destination and the seam is already a `MutableMapping` (`build_index(vector_cache=…)`), so
-swapping the store touches one file. But what LanceDB buys over the file-backed cache now in place
-is **approximate nearest-neighbour search at scale**, and the semantic channel does not search a
-vector store — `semantic_search` scores an already-narrowed candidate set by exact cosine over an
-in-memory dict. Introducing a vector database as a key-value cache would be new machinery
-answering a question nobody has asked. The question that *was* asked — why is there no embedding
-model — is answered by wiring the embedder. Revisit when ANN or hybrid retrieval is the
-requirement, or when the corpus outgrows an in-memory vector dict.
+**~~LanceDB.~~ Done on 2026-08-04 — `retrieve/vectors.py`.** This section argued against it, on
+the grounds that what LanceDB buys is **approximate nearest-neighbour search at scale** and the
+semantic channel does not search a vector store: `semantic_search` scores an already-narrowed
+candidate set by exact cosine. *That part was right and still is* — no vector index is built, the
+scoring is still brute-force exact cosine, and an `IvfPq` index was measured returning **one** of
+the brute-force top twenty with no error and no warning.
+
+What the section got wrong was the cost of the thing it was defending. The file-backed cache it
+called sufficient reached **888,884,348 bytes** — 13,968 summaries × 3,072 floats — and every
+server start spent **21.7 s** parsing it into Python objects and **1,685 MB** resident holding
+them, twice, because `build_index` copied the same numbers into a second dict. A CPython
+`list[float]` of width 3,072 costs 122 KB against 12 KB as float32. The same rows as a LanceDB
+table are **172 MB on disk, 7 ms to open, 95 MB resident**, and a warm rebuild of the whole
+index is **0.74 s** that writes nothing. So the argument for the swap is
+columnar storage a process does not have to parse, and not search at all — which is why the
+migration added no ANN, no knob and no approximate anything.
 
 **One schema instead of a shortlist.** *"After all these are done, we need to figure out a schema
 that we want to run the query upon on."* The engine deliberately does not: `connect` partitions

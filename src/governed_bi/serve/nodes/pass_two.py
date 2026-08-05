@@ -15,7 +15,6 @@ from governed_bi.register.stages import Stage
 from governed_bi.retrieve.budget import apply_budgets
 from governed_bi.retrieve.fuse import fuse
 from governed_bi.retrieve.index import UnifiedIndex
-from governed_bi.retrieve.semantic import cosine
 from governed_bi.serve.runtime import FUSE_WEIGHTS, candidate_depth
 from governed_bi.serve.runtime import facet_hits as hits_of
 
@@ -45,6 +44,7 @@ def pass_two_retrieve(
 
         merged: dict[str, dict[str, Any]] = {}
         if candidate_ids and queries and _scores_lexical(name):
+            semantic_scores = _semantic_scores(index, candidate_ids, query_vector)
             restricted = index.lexical.restrict_to(candidate_ids)
             for query in queries:
                 if not query:
@@ -57,7 +57,7 @@ def pass_two_retrieve(
                     if entry is None:
                         continue
                     lexical = float(lex_score)
-                    semantic = _semantic_for(entry.summary, index, query_vector)
+                    semantic = semantic_scores.get(asset_id)
                     score = _hybrid(lexical, semantic)
                     payload = {
                         "facet": name,
@@ -154,17 +154,27 @@ def _raw_schema_tag(hit: Any) -> str | None:
     return str(tag)
 
 
-def _semantic_for(
-    summary: str,
+def _semantic_scores(
     index: UnifiedIndex,
+    candidate_ids: set[str],
     query_vector: Sequence[float] | None,
-) -> float | None:
-    if query_vector is None:
-        return None
-    doc_vec = index.vectors.get(summary)
-    if doc_vec is None:
-        return None
-    return float(cosine(query_vector, doc_vec))
+) -> dict[str, float]:
+    """Every candidate's cosine against the turn's query vector, in one store query.
+
+    This was one point lookup and one :func:`~governed_bi.retrieve.semantic.cosine` **per
+    surviving lexical hit**, inside the per-query loop — up to ``candidate_depth`` × the
+    number of facet queries of them, all against the same query vector. Against a dict that
+    was free; against a store it is a round trip each. The scores do not depend on the
+    query text (``pass_two_retrieve`` takes one ``query_vector`` for the whole call), so
+    they are computed once for the candidate set and read back by id.
+
+    An asset absent from the result keeps its ``None``: **"this channel did not score it"
+    and "it scored zero" are different facts** and the record publishes both.
+    """
+    store = index.vectors
+    if store is None or query_vector is None or not candidate_ids:
+        return {}
+    return dict(store.search(query_vector, keys=candidate_ids))
 
 
 def _hybrid(lexical: float | None, semantic: float | None) -> float | None:

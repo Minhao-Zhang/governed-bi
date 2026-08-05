@@ -3,6 +3,15 @@
 ``cosine`` raises on a width mismatch — returning 0.0 here made a cross-model
 cache hit look like irrelevance. Cache keys carry model and dimensions so two
 embedders cannot share an entry by accident.
+
+Since 2026-08-04 the scoring runs inside LanceDB (``retrieve/vectors.py``) rather
+than over a Python dict. ``cosine`` stays here, pure and exported, as the
+**reference definition** the store is tested against — ``tests/retrieve/
+test_vector_store.py`` fails if LanceDB's ranking or its distance conversion ever
+diverges from it, and ``tests/retrieve/test_scoring_contract.py`` (a sealed file)
+calls it on bare lists with no store anywhere. :func:`check_query_vector` is the
+other half: the two refusals ``cosine`` makes, re-made at the store boundary,
+because LanceDB makes neither.
 """
 
 from __future__ import annotations
@@ -16,7 +25,7 @@ from governed_bi.register.facets import ChannelState
 if TYPE_CHECKING:  # ``index`` imports ``cache_key`` from here, so this stays a hint only.
     from .index import UnifiedIndex
 
-__all__ = ["cosine", "cache_key", "semantic_search"]
+__all__ = ["cosine", "cache_key", "check_query_vector", "semantic_search"]
 
 
 def cosine(a: Sequence[float], b: Sequence[float]) -> float:
@@ -40,6 +49,31 @@ def cosine(a: Sequence[float], b: Sequence[float]) -> float:
     if denom == 0.0:
         raise ValueError("cosine of a zero vector is undefined")
     return dot / denom
+
+
+def check_query_vector(vector: Sequence[float], *, width: int) -> None:
+    """Refuse a query :func:`cosine` would refuse, before a vector store swallows it.
+
+    Both refusals are here because **LanceDB makes neither**, and each failure it
+    substitutes is the absence-reads-as-zero shape this repository retires numbers over:
+
+    * a query of the wrong width raises out of ``search`` only when the vector column is
+      named explicitly — otherwise the error is *"There is no vector column in the data"*,
+      which says nothing about width, and that is the v1 incident wearing a new message;
+    * a **zero** query vector returns ``[]``. Not an error, not a NaN — an empty result
+      indistinguishable from "no candidate matched", where ``cosine`` says *"cosine of a
+      zero vector is undefined"* and ``model/deterministic_embedder.py`` keeps a zero-norm
+      fallback precisely because it says so.
+
+    One definition of "unusable for cosine", stated once, so the store and the pure
+    function cannot drift apart.
+    """
+    if len(vector) != width:
+        raise ValueError(f"cosine width mismatch: {len(vector)} vs {width}")
+    if not vector:
+        raise ValueError("cosine of empty vectors is undefined")
+    if not any(vector):
+        raise ValueError("cosine of a zero vector is undefined")
 
 
 def cache_key(text: str, *, model: str, dimensions: int) -> str:
@@ -81,9 +115,17 @@ def semantic_search(
     built this index, or no query vector — and ``ran`` otherwise. It is never ``failed``:
     a rate limit or a dead endpoint raises out of the embedder (``ports.py:127``) before
     any vector reaches here, and it is the caller holding that ``try`` that knows a
-    failure happened. A width mismatch likewise **raises** out of :func:`cosine` rather
-    than being folded into a state, because returning 0.0 there is the v1 incident this
-    module was rewritten around.
+    failure happened. A width mismatch likewise **raises** — out of
+    :func:`check_query_vector` at the store boundary now that the scoring is LanceDB's —
+    rather than being folded into a state, because returning 0.0 there is the v1 incident
+    this module was rewritten around.
+
+    **Every state is decided here, in Python, before the store is asked anything.** An
+    empty candidate set, a filter that matched nothing, an empty table and a zero query
+    vector all come back from LanceDB as exactly ``[]``; it cannot keep them apart, and
+    invariant 5 says they are four different facts. So "no vectors" and "no query vector"
+    are read off the index, "no candidates" short-circuits, and only "ran and scored
+    something, or ran and scored nothing" reaches the store.
     """
     ids = (
         sorted(str(c) for c in candidates)
@@ -91,19 +133,19 @@ def semantic_search(
         else sorted(index.entries)
     )
 
-    if index.embedder_model is None or not index.vectors or query_vector is None:
+    store = index.vectors
+    if index.embedder_model is None or store is None or len(store) == 0 or query_vector is None:
         return [], ChannelState.not_configured
 
-    scored: list[tuple[str, float]] = []
-    for asset_id in ids:
-        entry = index.entries.get(asset_id)
-        if entry is None:
-            continue
-        doc_vector = index.vectors.get(entry.summary)
-        if doc_vector is None:
-            continue
-        scored.append((asset_id, float(cosine(query_vector, doc_vector))))
+    # A candidate set that is empty **ran** — it is a measurement ("nothing of these types
+    # is a candidate"), not a missing channel — and it must not reach `search`, whose
+    # `limit` is mandatory and where zero is refused outright.
+    if not ids:
+        return [], ChannelState.ran
 
+    scored = store.search(query_vector, keys=ids)
+    # LanceDB orders by distance and breaks ties by insertion order. Re-sorted here so two
+    # indexes built from the same assets in a different order cannot disagree.
     scored.sort(key=lambda pair: (-pair[1], pair[0]))
     if top_n is not None:
         scored = scored[:max(0, int(top_n))]

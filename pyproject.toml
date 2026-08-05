@@ -73,6 +73,18 @@ dependencies = [
     # --- Tracing: none. LangSmith is the only tracer and it is env-native — it
     # rides langchain-core's own `langsmith` dependency and needs no declaration
     # here. Langfuse (a `langfuse>=3.0` direct dep) was removed on 2026-08-02.
+    # --- Vector storage: every cosine in the system runs here ---
+    # `retrieve/vectors.py` replaced an 848 MB JSON cache that cost 21.7 s to parse and
+    # 1.7 GB resident at every server start.
+    "lancedb>=0.36.0",
+    # Declared even though `lancedb` already installs it, because `retrieve/vectors.py`
+    # imports it **directly** — the schema, the `FixedSizeListArray` and the row-index `take`
+    # that moves 13,968 vectors between stores without decoding them into Python floats. An
+    # import whose package is only present as somebody else's transitive dependency is one a
+    # minor release of that dependency can remove.
+    "pyarrow>=25.0",
+    # No `numpy`. It arrives under `lancedb` and nothing in `src/` or `tests/` imports it;
+    # the dev group's note on why it was removed is about declared dependencies and holds.
 ]
 
 [dependency-groups]

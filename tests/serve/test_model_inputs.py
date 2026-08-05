@@ -203,3 +203,66 @@ def test_the_delivered_context_reaches_the_model(
         "the rendered context block is not in the messages the model was called with, though "
         f"the record publishes its hash. block={block[:120]!r}..."
     )
+
+
+def test_the_context_block_never_enters_a_streamed_messages_channel(
+    two_schema_index, two_schema_assets, guard_off_policy
+):
+    """The other half of the test above: delivered to the model, **never** to the transcript.
+
+    Stated at the wire rather than at the node, because the leak was at the wire and the node
+    looked innocent. ``agent_core`` puts the block in the *nested* agent's inbound ``messages``
+    and slices it back out of its update, so the outer channel and the persisted conversation
+    were both clean — and the block still rendered in the live chat as the user's own bubble
+    for the whole of every turn.
+
+    LangGraph streams the nested agent's entire state under ``values|agent_core:<task_id>``,
+    and the JS SDK applies the values of any namespace it does not recognise as a subagent
+    straight onto root state (``@langchain/langgraph-sdk`` ``dist/ui/manager.js:413``, whose
+    test for "subagent" is a ``tools:`` segment that ``agent_core:<task_id>`` does not have).
+    ``stream.messages`` therefore became the nested list, index 1 of which was the 8.6 KB
+    block. Measured in a captured run: 4–10 such frames per turn.
+
+    So the invariant is not "the outer ``messages`` is clean", it is **``messages`` is the
+    conversation at every namespace** — a client cannot tell them apart. Nothing may put
+    scaffolding in a ``messages`` channel anywhere in the graph. ``subgraphs=True`` is what
+    makes this test able to see the namespaced frames at all; without it the leaking frames are
+    invisible and the assertion is vacuous, which is the same trap ADR 0010 M2 records.
+    """
+    model = ScriptedChatModel(responses=[AIMessage(content="one sensor")])
+    session = _session(two_schema_index, two_schema_assets, guard_off_policy, model)
+    config = session.configurable()
+    config["configurable"]["thread_id"] = "t-context-leak"
+    turn = {**session.turn("sensors voltage reading per device"), "route_top_n": 1}
+
+    frames: list[tuple[tuple[str, ...], dict]] = []
+    for chunk in compile_graph().stream(turn, config, stream_mode="values", subgraphs=True):
+        namespace, values = chunk if isinstance(chunk, tuple) else ((), chunk)
+        if isinstance(values, dict):
+            frames.append((tuple(namespace), values))
+
+    assert any(ns for ns, _ in frames), (
+        "no namespaced frame was streamed at all, so this test cannot observe the channel the "
+        f"leak was in. namespaces={sorted({ns for ns, _ in frames})}"
+    )
+    blocks = [
+        b
+        for ns, values in frames
+        if not ns
+        for b in [((values.get("delivery") or {}).get("context_block") or "")]
+        if b
+    ]
+    assert blocks, "precondition: assemble rendered a context block and streamed it"
+    block = blocks[-1]
+
+    leaked = [
+        (ns, i, str(getattr(m, "type", "?")))
+        for ns, values in frames
+        for i, m in enumerate(values.get("messages") or ())
+        if block in str(getattr(m, "content", m))
+    ]
+    assert not leaked, (
+        "the delivered context is inside a streamed `messages` channel, so a client rendering "
+        f"`messages` renders {len(block)} characters of scaffolding as a chat turn. "
+        f"Carriers (namespace, index, role): {leaked}"
+    )

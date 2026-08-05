@@ -34,10 +34,10 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from governed_bi.register.prompts import prompt_set_hash
 
@@ -52,6 +52,11 @@ from ..retrieve.index import UnifiedIndex, build_index
 from ..retrieve.structure import CorpusStructure, build_structure
 from .runtime import model_id
 from .state import PER_TURN_RESET
+
+if TYPE_CHECKING:
+    # Type-only, so importing a session does not pull in ``lancedb`` (~1.1 s) for the
+    # callers that build no vectors at all — which is every test that builds a corpus.
+    from ..retrieve.vector_cache import VectorCache
 
 __all__ = ["Session", "from_corpus_dir", "from_live_schema"]
 
@@ -335,7 +340,7 @@ def from_assets(
     agent_model: Any | None = None,
     utility_model: Any | None = None,
     embedder: Embedder | None = None,
-    vector_cache: MutableMapping[str, Any] | None = None,
+    vector_cache: VectorCache | None = None,
     problems: Sequence[Any] = (),
     run_id: str | None = None,
     corpus_root: Path | None = None,
@@ -345,7 +350,9 @@ def from_assets(
     ``vector_cache`` is passed straight through to ``build_index``, which owns the key format
     (``model|dimensions|text``) and the write-back. It exists on this signature so a server can
     survive a restart without re-embedding the corpus — 8035 summaries in the gold layer — and it
-    stays ``None`` for callers that build one index and exit, where a cache is pure overhead.
+    stays ``None`` for callers that genuinely build one index and exit. It should be ``None`` less
+    often than it is: ``serve/__main__.py`` and ``tools/run_datalake_eval.py`` both passed an
+    embedder and no cache, so every invocation re-embedded all 13,968 summaries.
     """
     structure, structure_problems = build_structure(assets)
     entries = _index_entries(assets, structure)

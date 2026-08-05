@@ -78,6 +78,36 @@ last `AIMessage` in `messages`.
 Duplicating the model's text into `answer.text` would create two fields that must agree, and
 `useStream`'s `messagesKey: "messages"` already renders it. One source each.
 
+**And `messages` is the conversation at *every* namespace, because the client cannot tell them
+apart.** `messagesKey` names a key, not a graph level. LangGraph streams a nested graph's whole
+state under `values|<node>:<task_id>`, and the SDK applies the values of any namespace it does
+not recognise as a subagent — the test is a `tools:` segment, which `agent_core:<task_id>` does
+not have — straight onto *root* state (`@langchain/langgraph-sdk` `dist/ui/manager.js:413`). So
+mid-run, `stream.messages` **is the nested agent's message list**, rendered as the root
+transcript. `agent_core` put the delivered context block in that list as a `HumanMessage`, and
+8.6 KB of scaffolding appeared as the user's own chat bubble for the duration of every turn,
+vanishing only when the next root frame clobbered it back. Nothing in the outer state or the
+persisted conversation was ever wrong, which is why it survived: `fresh =
+out_messages[len(inbound):]` kept the block out of the outer channel and the leak was entirely
+on the wire.
+
+The rule this yields is stronger than "do not put scaffolding in the root `messages`":
+**nothing may put non-conversation content in a `messages` channel anywhere in the graph.**
+Per-turn material a model needs but a reader must not see is injected at model-call time
+instead — `agent_core._context_middleware` does this with `wrap_model_call`. Two engine
+invariants forbid the obvious alternatives: it cannot ride on `system_prompt`, because
+`prompt_set_hash` is a `Role.comparability` field digesting the prompt registry and a per-turn
+suffix would make the published hash describe something never sent; and it cannot be solved by
+tagging the message for the client to filter, because `stream_subgraphs` is load-bearing (ADR
+0010 M2) and a client-side filter would silently mask a re-regression of the engine rule.
+`tests/serve/test_model_inputs.py` pins both halves — the block reaches the model, and no
+streamed frame at any namespace carries it inside `messages`.
+
+The same clobber has a second consequence that is latent rather than visible: mid-run
+`stream.values` is the *nested* state, so `answer`, `delivery` and the rest are absent until the
+run settles. The UI only reads them when `idle`, so nothing renders wrong today — but reading
+`stream.values` mid-run is a trap.
+
 ### 5. Stream events: v2's stage vocabulary in the UI's envelope, emitted from one place
 
 > **Superseded by [ADR 0010](0010-live-stage-events.md), which built this.** The decisions below

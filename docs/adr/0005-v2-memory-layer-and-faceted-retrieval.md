@@ -525,7 +525,14 @@ co-running one. Also required (all L§2):
 - **content-keyed, never id-keyed** across corpus variants — curation rewrites
   summaries in place under the same id, so an id key would score the curated arm
   against the baseline arm's vectors
-- vectors are shared immutable objects (v1 held ~1.7 GB of redundant copies)
+- vectors are shared immutable objects (v1 held ~1.7 GB of redundant copies).
+  **Satisfied since 2026-08-04 by a different mechanism, and the requirement should be
+  read as the property rather than the implementation.** They are not Python objects at
+  all now: `retrieve/vectors.py` holds them in a LanceDB column, so the index and the
+  cache share storage rather than sharing references. The file-backed cache that
+  preceded it satisfied this clause literally — one `list[float]` object referenced from
+  two dicts — and still cost **21.7 s to parse and 1,685 MB resident at every server
+  start**, because "not copied" and "not expensive" are different claims
 - the analyst view is computed **once per corpus** (v1's per-question deep copy
   was 55% of non-model CPU and, being GIL-bound, capped the concurrency knob
   itself)
@@ -609,6 +616,14 @@ class Hit(TypedDict):
 set each; their **union** is scored, and the channel that did not retrieve an
 asset **backfills its true score for it** — the cosine is a dot product already
 held, and BM25 for a known document is cheap.
+
+**This forbids a top-k vector query, and the prohibition is easy to violate by
+accident.** `retrieve/vectors.py::search` takes `limit(len(candidates))` and builds no
+vector index, so every candidate is scored and the backfill is free. `limit(k)` for any
+smaller k would return a plausible ranking in which the unscored tail reads as absent —
+the same defect as draft 2's `lexical: 0.0`, arriving through the storage layer instead
+of the fusion step. LanceDB's `limit` is mandatory and defaults to **10**, so "forgot to
+set it" and "set it to the candidate count" are one line apart.
 
 This is not an optimisation, it is a correctness requirement. In draft 2,
 `lexical: 0.0` meant "did not retrieve", so an asset ranked #1 lexically and

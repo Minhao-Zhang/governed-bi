@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import (
+    AgentMiddleware,
+    ModelRequest,
+    ModelResponse,
+    wrap_model_call,
+)
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 
@@ -59,18 +65,21 @@ def agent_core_node(state: dict, config: RunnableConfig) -> dict:
         # The ledger channels the tools write. Without the schema LangGraph drops updates
         # naming keys the graph does not declare, silently — see ``serve/agent_state.py``.
         state_schema=GovernedAgentState,
+        # The delivered context, injected at model-call time rather than put in ``messages``.
+        # See :func:`_context_middleware` for the leak that forced the move.
+        middleware=_context_middleware(state),
     )
 
-    # The delivered context is passed **into** the agent and never persisted to the
-    # conversation. ``assemble`` used to append it to ``messages`` as a human turn, and that
-    # one line cost three things: the whole context block of every prior turn was re-sent to
-    # the provider on every later turn; the human-message count came out at 2n-1, so
-    # ``turn_index`` was wrong for turn 2 onward on both the server and REST paths; and
-    # ``messages`` stopped being the conversation and became the conversation plus its
-    # scaffolding. The block is already recorded, hashed, in ``delivery``.
+    # ``messages`` is the conversation and nothing else. ``assemble`` used to append the
+    # context block to it as a human turn, and that one line cost three things: the whole
+    # context block of every prior turn was re-sent to the provider on every later turn; the
+    # human-message count came out at 2n-1, so ``turn_index`` was wrong for turn 2 onward on
+    # both the server and REST paths; and ``messages`` stopped being the conversation and
+    # became the conversation plus its scaffolding. The block is already recorded, hashed, in
+    # ``delivery``.
     history = list(state.get("messages") or [])
-    context = _context_message(state, history)
-    inbound = history + ([context] if context is not None else [])
+    question = _question_message(state, history)
+    inbound = history + ([question] if question is not None else [])
 
     result = agent.invoke({"messages": inbound}, config)
     out_messages = list(result.get("messages") or [])
@@ -108,23 +117,77 @@ def agent_core_node(state: dict, config: RunnableConfig) -> dict:
     return update
 
 
-def _context_message(state: dict, history: list[Any]) -> HumanMessage | None:
-    """The turn's delivered context, as one ephemeral message.
+def _question_message(state: dict, history: list[Any]) -> HumanMessage | None:
+    """The turn's question as a human turn, or ``None`` if the history already carries it.
 
-    The question is appended only when the history does not already carry it. On the server
-    path the client's own human message *is* the question, so restating it inside the context
-    block would send it twice; on the CLI path ``turn()`` starts with an empty ``messages``,
-    so this message is the only place the question appears at all.
+    On the server path the client's own human message *is* the question, so restating it would
+    send it twice; on the CLI and eval paths ``Session.turn`` seeds an empty ``messages``, so
+    this is the only place the question appears at all.
+
+    **It used to carry the context block too, concatenated ahead of the question**, which is
+    why the question is now visibly its own message on the CLI and eval paths instead of being
+    buried inside 8 KB of delivered context. The block moved to :func:`_context_middleware`, so
+    on the server path — where this returns ``None`` — the first model call is byte-identical to
+    what it was; :func:`_context_middleware` records how later calls in a turn differ.
     """
-    block = str((state.get("delivery") or {}).get("context_block") or "")
     question = str(state.get("question") or "").strip()
+    if not question:
+        return None
     asked = any(
         str(getattr(m, "type", "")) == "human"
         and str(getattr(m, "content", "")).strip() == question
         for m in history
     )
-    parts = [p for p in (block, "" if asked or not question else f"Question: {question}") if p]
-    return HumanMessage(content="\n\n".join(parts)) if parts else None
+    return None if asked else HumanMessage(content=f"Question: {question}")
+
+
+def _context_middleware(state: dict) -> list[AgentMiddleware]:
+    """Deliver ``delivery.context_block`` on every model call, without it entering ``messages``.
+
+    Empty list when the turn rendered no block, so a turn with nothing to deliver builds
+    exactly the agent it built before.
+
+    **The block used to be a ``HumanMessage`` in the agent's inbound ``messages``, and it
+    rendered in the live chat as the user's own bubble.** LangGraph streams a nested graph's
+    whole state under ``values|agent_core:<task_id>``, and the JS SDK applies the values of any
+    namespace it does not recognise as a subagent straight onto *root* state
+    (``@langchain/langgraph-sdk`` ``dist/ui/manager.js:413``; the test for "subagent" is a
+    ``tools:`` segment, and ``agent_core:<task_id>`` has none). So mid-run ``stream.messages``
+    became the nested agent's list, whose index 1 was this block — 8.6 KB shown as a user
+    message for the duration of every turn, disappearing at the end when the next root frame
+    clobbered it back. Measured in one capture: 4–10 such frames per turn, ~60 KB. No SDK
+    option suppresses it, and ``stream_subgraphs`` cannot be turned off because the timeline
+    and the token stream both depend on it (ADR 0010 M2).
+
+    Injecting per model call removes the class of bug rather than this instance, and it is the
+    only version under which "the context is never persisted to the conversation" is true at
+    *every* level: ``fresh = out_messages[len(inbound):]`` keeps the block out of the outer
+    channel — and still must, since it is what drops the replayed history — but the nested
+    agent's own checkpoint is written by the graph's saver (see :func:`agent_core_node`) and
+    held the block regardless.
+
+    Not appended to ``system_prompt`` instead: ``prompt_set_hash`` is a ``Role.comparability``
+    field digesting the prompt registry, so per-turn text on the analyst's system message would
+    make the published hash describe something that was never sent
+    (``tests/serve/test_model_inputs.py`` asserts the delivered system prompt is exactly
+    ``prompt_text("analyst")``).
+
+    The block lands **last**, after any tool results, rather than at its old position ahead of
+    them. Consecutive user messages are legal on the one provider family this engine talks to
+    (``langchain-openai``; nothing here imports an Anthropic client), and last is where the
+    turn's governing constraints are most likely to be honoured.
+    """
+    block = str((state.get("delivery") or {}).get("context_block") or "")
+    if not block:
+        return []
+
+    @wrap_model_call
+    def deliver_context(
+        request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]
+    ) -> ModelResponse:
+        return handler(request.override(messages=[*request.messages, HumanMessage(block)]))
+
+    return [deliver_context]
 
 
 def _reported_tokens(messages: list[Any]) -> dict[str, int] | None:

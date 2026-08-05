@@ -109,10 +109,18 @@ def main(argv: list[str] | None = None) -> int:
 
     connector = PostgresConnector(dsn)
     embedder = None
+    vector_cache = None
     if args.embed:
         from ..model import OpenAIEmbedder
+        from ..retrieve.vector_cache import vector_cache_from_environment
 
         embedder = OpenAIEmbedder()
+        # The same persisted cache the server uses. Until now this passed `embedder=` and no
+        # cache, so every invocation re-embedded all 13,968 summaries in the pooled corpus
+        # before it could answer one question. Removing that is the largest single cost the
+        # LanceDB migration removed, and it had gone unnoticed because nothing here reports
+        # how many vectors were reused.
+        vector_cache = vector_cache_from_environment(model=embedder.requested_model)
     model = None if args.no_model else _model(args.model, creds, args.effort)
 
     kwargs: dict[str, Any] = {
@@ -120,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
         "policy": GovernancePolicy(guard_rules_enabled={}),
         "agent_model": model,
         "embedder": embedder,
+        "vector_cache": vector_cache,
     }
     if args.corpus_dir:
         schemas = [args.schema] if args.schema else None

@@ -128,10 +128,15 @@ def main(argv: list[str] | None = None) -> int:
     model = init_chat_model(args.model, **kwargs)
 
     embedder = None
+    vector_cache = None
     if args.embed:
         from governed_bi.model import OpenAIEmbedder
+        from governed_bi.retrieve.vector_cache import vector_cache_from_environment
 
         embedder = OpenAIEmbedder()
+        # The persisted store, shared with the server. Without it this driver re-embedded all
+        # 13,968 pooled summaries on every invocation — paid tokens, before the first question.
+        vector_cache = vector_cache_from_environment(model=embedder.requested_model)
 
     # One connector for the session and the graph; each worker gets its own below.
     session = session_mod.from_corpus_dir(
@@ -140,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
         policy=GovernancePolicy(guard_rules_enabled={}),
         agent_model=model,
         embedder=embedder,
+        vector_cache=vector_cache,
     )
     if session.fatal_problems:
         print(f"corpus has {len(session.fatal_problems)} fatal problem(s); refusing", file=sys.stderr)

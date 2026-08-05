@@ -132,9 +132,13 @@ def _hashed_bow(text: str, dimensions: int, salt: str) -> list[float]:
     norm = math.sqrt(sum(x * x for x in buckets))
     if norm == 0.0:
         # No content tokens, or a set whose signed contributions cancelled exactly.
-        # Vanishingly rare and not impossible, and ``cosine`` raises on a zero vector
-        # (semantic.py:35) — so falling through would turn a curiosity into a dead
-        # turn. The fallback is strictly positive, so its norm cannot be zero either.
+        # Vanishingly rare and not impossible, and ``semantic.cosine`` raises on a zero
+        # vector — so falling through would turn a curiosity into a dead turn. The
+        # fallback is strictly positive, so its norm cannot be zero either. Named rather
+        # than cited by line: this said ``semantic.py:35`` and that line has been the
+        # width-mismatch message, not the zero-vector raise, since before the store
+        # landed. ``retrieve/vectors.py`` re-makes the same refusal at write time now,
+        # because LanceDB drops a stored zero vector from a cosine result in silence.
         buckets = _dense_from_digest(text, dimensions, salt)
         norm = math.sqrt(sum(x * x for x in buckets))
     return [x / norm for x in buckets]

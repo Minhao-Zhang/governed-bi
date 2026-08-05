@@ -3,8 +3,8 @@
 One entry per asset; the indexed text is that asset's ``summary``. Schema tags
 are computed at build (or accepted precomputed) so ``route`` can aggregate
 before ``resolve``. Lexical postings come from :class:`.lexical.BM25` — that
-module must exist. Semantic vectors are held by content key when an embedder
-or cache is supplied; this module does not call a provider SDK.
+module must exist. Semantic vectors live in a :class:`~.vectors.VectorStore`
+when an embedder is supplied; this module does not call a provider SDK.
 
 Requires ``retrieve.lexical.BM25``.
 """
@@ -12,13 +12,21 @@ Requires ``retrieve.lexical.BM25``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping, MutableMapping, Sequence
+from typing import TYPE_CHECKING, Mapping, Sequence
 
-from governed_bi.ports import Embedder, Vector
+from governed_bi.ports import Embedder
 from governed_bi.register.assets import ASSET_REGISTER, AssetType, TagRule
 
 from .lexical import BM25
 from .semantic import cache_key
+
+if TYPE_CHECKING:
+    # Imported for real inside ``build_index``, and only when an embedder is passed.
+    # ``import lancedb`` costs ~1.1 s, which every no-embedder caller — 50 of the 55 index
+    # builds in the test suite, and every ``langgraph dev`` reload — would otherwise pay
+    # for a store it never opens.
+    from .vector_cache import VectorCache
+    from .vectors import VectorStore
 
 __all__ = [
     "IndexEntry",
@@ -43,38 +51,36 @@ class IndexEntry:
 class UnifiedIndex:
     """Both channels over the same entry set. IDF is global; vectors are optional.
 
-    **``vectors`` is keyed on summary text, and the cross-model cache key is not.** The
-    two are different scopes and conflating them is what made v1's defect survive: one
-    index is built by exactly one embedder, and :attr:`embedder_model` /
-    :attr:`embedder_dimensions` pin which — so *inside* this object the text alone is an
+    **``vectors`` is keyed on asset id, and the cross-model cache key is not.** The two
+    are different scopes and conflating them is what made v1's defect survive: one index
+    is built by exactly one embedder, and :attr:`embedder_model` /
+    :attr:`embedder_dimensions` pin which — so *inside* this object the id alone is an
     unambiguous key. The dangerous key is the one on a cache that **outlives one build**
     and is handed to the next embedder, which is :func:`build_index`'s ``vector_cache``
     parameter, and that one carries ``(model, dimensions, text)`` via
     :func:`~governed_bi.retrieve.semantic.cache_key`.
+
+    The id keying is also what lets the candidate restriction be a predicate LanceDB can
+    evaluate: keyed on summary text, narrowing to a candidate set would mean shipping
+    every candidate's summary into a SQL ``IN``.
+
+    There is no ``restrict_to`` here. There was one, it kept the shared BM25 postings so
+    global IDF survived a narrowing, and **nothing ever called it** — pass two narrows
+    ``BM25`` directly (``pass_two.py:48``). A declared-but-unwired method is a defect in
+    this repository, and porting one to a new storage layer is how it acquires a second
+    life; it was deleted rather than rewritten.
     """
 
     entries: Mapping[str, IndexEntry]
     lexical: BM25
-    #: This index's vectors, keyed on summary text. Empty until an embedder runs. Read
-    #: it only together with :attr:`embedder_model` — a vector whose embedder identity
-    #: is unknown is the input to a cross-model cosine, and cosine cannot detect one
-    #: when the widths agree.
-    vectors: Mapping[str, Vector]
+    #: This index's vectors, keyed on asset id. ``None`` until an embedder runs — ``None``
+    #: and not an empty store, so "nobody configured an embedder" stays a different fact
+    #: from "an embedder ran and produced nothing". Read it only together with
+    #: :attr:`embedder_model` — a vector whose embedder identity is unknown is the input to
+    #: a cross-model cosine, and cosine cannot detect one when the widths agree.
+    vectors: VectorStore | None
     embedder_model: str | None = None
     embedder_dimensions: int | None = None
-
-    def restrict_to(self, ids: set[str]) -> UnifiedIndex:
-        """Candidate filter that keeps the shared BM25 postings (global IDF)."""
-        subset = {i: e for i, e in self.entries.items() if i in ids}
-        return UnifiedIndex(
-            entries=subset,
-            lexical=self.lexical.restrict_to(ids),
-            vectors={t: v for t, v in self.vectors.items() if any(
-                e.summary == t for e in subset.values()
-            )},
-            embedder_model=self.embedder_model,
-            embedder_dimensions=self.embedder_dimensions,
-        )
 
 
 def schema_tag_for(
@@ -114,7 +120,7 @@ def build_index(
     entries: Sequence[IndexEntry],
     *,
     embedder: Embedder | None = None,
-    vector_cache: MutableMapping[str, Vector] | None = None,
+    vector_cache: VectorCache | None = None,
 ) -> UnifiedIndex:
     """Build the unified index from summary-bearing entries.
 
@@ -125,7 +131,7 @@ def build_index(
     **``vector_cache`` is keyed by :func:`~governed_bi.retrieve.semantic.cache_key`, not
     by summary text.** It was keyed on the text alone until 2026-08-03, which contradicted
     ``register/knobs.py:208`` — *"[embedding_model is] part of every vector cache key"* —
-    in the one shape the existing backstop cannot reach. ``semantic.py:18`` raises when
+    in the one shape the existing backstop cannot reach. ``semantic.cosine`` raises when
     two vectors' widths differ, and that closes the case the widths *differ*;
     ``text-embedding-3-large`` accepts a ``dimensions`` argument, so a 1536-wide 3-large
     and a 1536-wide 3-small are **width-identical and semantically unrelated**, and a
@@ -144,6 +150,15 @@ def build_index(
     with no embedder there is nothing to take them from — reading such a cache would mean
     guessing whose vectors it holds, which is the guess this parameter was reshaped to
     delete. Pass the embedder even when you expect every lookup to hit.
+
+    **The cache is a store and not a mapping, and the index's vectors are copied out of it
+    in Arrow.** It was ``MutableMapping[str, Vector]`` and the only persistent
+    implementation was an 848 MB JSON file that took 21.7 s to parse at every boot and then
+    sat in memory twice, because this function turned it into a second dict of the same
+    Python floats. ``retrieve/vectors.py`` records the measurement. When no cache is
+    supplied an ephemeral one is opened rather than branching, so a build with a cache and
+    a build without run the identical code path — two paths here is how the cached and
+    uncached builds would come to disagree about what is in the index.
     """
     by_id: dict[str, IndexEntry] = {}
     docs: list[tuple[str, str]] = []
@@ -165,40 +180,36 @@ def build_index(
             "(register/knobs.py:208)"
         )
 
-    vectors: dict[str, Vector] = {}
+    vectors: VectorStore | None = None
     model: str | None = None
     dims: int | None = None
     if embedder is not None:
+        from .vector_cache import VectorCache  # see the TYPE_CHECKING note above
+        from .vectors import VectorStore
+
         model, dims = embedder.model, embedder.dimensions
-        cache: MutableMapping[str, Vector] = {} if vector_cache is None else vector_cache
+        # The cache holds one store per width and this build reads exactly one of them. A
+        # wrong-width row cannot reach it: the column type is `fixed_size_list[dims]`, so
+        # the storage layer refuses what the dict cache needed a hand-written check for.
+        cached = (VectorCache() if vector_cache is None else vector_cache).at_width(dims)
 
-        missing: list[str] = []
+        # One cache key per distinct summary — two assets sharing a summary share the
+        # entry, which is the whole reason the cache is content-keyed and not id-keyed:
+        # curation rewrites summaries in place under the same id (ADR 0005 §2.2).
+        keys: dict[str, str] = {}
         for entry in by_id.values():
-            if entry.summary in vectors:
-                continue
-            cached = cache.get(cache_key(entry.summary, model=model, dimensions=dims))
-            if cached is None:
-                if entry.summary not in missing:
-                    missing.append(entry.summary)
-                continue
-            if len(cached) != dims:
-                # The identity in the key says this vector is ``dims`` wide and it is
-                # not. Refusing beats re-embedding: a cache that answers with the wrong
-                # width once has an entry written under a key that does not describe it,
-                # and silently replacing it hides how it got there.
-                raise ValueError(
-                    f"cached vector for {entry.id!r} is {len(cached)} wide but "
-                    f"{model!r} declares {dims}"
-                )
-            vectors[entry.summary] = cached
+            keys.setdefault(entry.summary, cache_key(entry.summary, model=model, dimensions=dims))
 
+        absent = set(cached.missing(list(keys.values())))
+        missing = [text for text, key in keys.items() if key in absent]
         if missing:
             embedded = embedder.embed(missing)
             if len(embedded) != len(missing):
                 raise ValueError("embedder returned the wrong number of vectors")
-            for text, vec in zip(missing, embedded, strict=True):
-                vectors[text] = vec
-                cache[cache_key(text, model=model, dimensions=dims)] = vec
+            cached.add({keys[text]: vec for text, vec in zip(missing, embedded, strict=True)})
+
+        vectors = VectorStore(dims)
+        vectors.load_from(cached, [(keys[e.summary], e.id) for e in by_id.values()])
 
     return UnifiedIndex(
         entries=by_id,

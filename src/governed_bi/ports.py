@@ -69,6 +69,12 @@ __all__ = [
 
 #: A dense embedding. A plain list, not numpy: this type crosses into
 #: ``register``-adjacent code that must import in a bare interpreter.
+#:
+#: Still true after the vector store became LanceDB, and it is a boundary rather than an
+#: accident: ``retrieve/vectors.py`` speaks Arrow *internally* — a 13,968 × 3,072 table moved
+#: as ``list[float]`` is the 1.7 GB that store exists to delete — and converts at its own edge.
+#: Nothing that crosses this port, and nothing that reaches ``ServeState["query_vector"]``,
+#: is a pyarrow or numpy object.
 Vector = Sequence[float]
 
 #: One result row. Values are whatever the driver returned; normalisation for
