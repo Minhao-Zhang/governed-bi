@@ -75,6 +75,8 @@ class OpenAIEmbedder(BaseEmbedder):
         dimensions: int | None = None,
         batch_size: int | None = None,
         client: Any | None = None,
+        max_retries: int | None = None,
+        timeout: float | None = None,
     ) -> None:
         if dimensions is not None and int(dimensions) < 1:
             raise ValueError(f"dimensions must be positive, got {dimensions!r}")
@@ -83,6 +85,13 @@ class OpenAIEmbedder(BaseEmbedder):
         self._served_model: str | None = None
         self._served_width: int | None = None
         self._client = client
+        # **The embedder is the second provider surface, and leaving it out is what would make
+        # "a global retry limit" a false claim.** It is not an LLM call, but its 429 exposure is
+        # identical and it sits on the same critical path — `accept` embeds the question before
+        # any facet runs. `None` keeps the SDK's own defaults, which is what an injected `client`
+        # already implies; `graph_app` passes the knobs.
+        self._max_retries = None if max_retries is None else int(max_retries)
+        self._timeout = None if timeout is None else float(timeout)
         if batch_size is not None:
             self.batch_size = int(batch_size)
 
@@ -139,7 +148,15 @@ class OpenAIEmbedder(BaseEmbedder):
                 )
             from openai import OpenAI
 
-            self._client = OpenAI()
+            # Only what was actually configured. Passing `max_retries=None` to the SDK sets it
+            # to None rather than leaving the default, which would turn "unconfigured" into
+            # "no retries at all" — the opposite of the intent.
+            options: dict[str, Any] = {}
+            if self._max_retries is not None:
+                options["max_retries"] = self._max_retries
+            if self._timeout is not None:
+                options["timeout"] = self._timeout
+            self._client = OpenAI(**options)
         return self._client
 
     def _probe(self) -> None:

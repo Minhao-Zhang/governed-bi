@@ -47,17 +47,24 @@ llm_model = "gpt-5.6-luna"
 llm_reasoning_effort = "low" # none | low | medium | high | xhigh | max
 # llm_max_output_tokens = 4096   # omit for provider default
 
-# Wall-clock bound per model call, and the SDK's retry budget. Both matter more than
-# they look, because this repo has NO rate limiter, NO token bucket and NO 429
-# backoff of its own — the provider SDK's exponential retry is the entire defence,
-# and these two numbers size it.
+# `request_timeout_s` and `max_retries` are **deleted from this table, not moved into it**.
 #
-# 60s was calibrated for effort="low". A high/max-effort call routinely exceeds it,
-# and the failure is not a retry: `APITimeoutError` -> `Outcome.crashed` -> non-zero
-# crash_rate -> the whole run is unquotable. Two retries is likewise thin against a
-# provider rate limit; a burst converts directly into crashed rows.
-request_timeout_s = 900.0
-max_retries = 8
+# They were here with a comment calling them "the entire defence" against provider rate
+# limits — and v2 deleted the reader for this whole file, so nothing had loaded them since
+# the rewrite. Measured on the real objects: `ChatOpenAI.max_retries` was `None` and the
+# `openai` client fell back to its own default of **2**, not the 8 written here, with no
+# timeout at all rather than the 900s. A dead value that reads authoritative is worse than
+# no value, because it answers the question wrongly to anyone who looks.
+#
+# They now live where they are read, as declared knobs (`register/knobs.py`) with
+# environment overrides (`api/graph_app.py`):
+#
+#   llm_max_retries        GOVERNED_BI_LLM_MAX_RETRIES        3     every model surface
+#   llm_timeout_s          GOVERNED_BI_LLM_TIMEOUT_S          300   the agent
+#   llm_utility_timeout_s  GOVERNED_BI_UTILITY_TIMEOUT_S      30    gate, rewriters, embedder
+#
+# Being knobs is the substantive half: retries move `crash_rate`, which the quotability
+# gates read, so two runs differing only in retries must not compare as one.
 
 # Embedding model for the retrieval vector channel.
 #

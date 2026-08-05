@@ -85,6 +85,35 @@ UTILITY_MODEL_EFFORT_VAR = "GOVERNED_BI_UTILITY_MODEL_EFFORT"
 #: chose rather than one nobody noticed.
 EMBEDDING_MODEL_VAR = "GOVERNED_BI_EMBEDDING_MODEL"
 
+#: How many times the provider SDK retries **one** call. Applies to every model surface —
+#: the agent, the utility model and the embedder — which is what makes it global rather than
+#: three settings that drift.
+#:
+#: **This repository believed it had eight and had two.** `governed_bi.toml` carries
+#: `max_retries = 8` under a comment reading *"this repo has NO rate limiter, NO token bucket
+#: and NO 429 backoff of its own — the provider SDK's exponential retry is the entire defence,
+#: and these two numbers size it"*. v2 deleted the reader for that file, so the defence it sized
+#: was never installed: measured on the real objects, `ChatOpenAI.max_retries` is `None` and the
+#: underlying `openai` client falls back to its own default of 2.
+RETRIES_VAR = "GOVERNED_BI_LLM_MAX_RETRIES"
+
+#: Wall clock for one **agent** call, in seconds.
+#:
+#: Separate from the retry count on purpose: timeout answers "how long may a legitimate call
+#: take" and retries answer "how flaky is the provider". They move for different reasons — but
+#: they are not decided apart, because the worst case for a single call is
+#: ``timeout × (retries + 1)``. The SDK's 600s default at three retries is a **40-minute** hang.
+TIMEOUT_VAR = "GOVERNED_BI_LLM_TIMEOUT_S"
+
+#: Wall clock for the small calls: the scope gate, the five facet rewriters, and the embedder.
+#:
+#: **Split from the agent's because the two tiers now run at different efforts.** These are
+#: 1.2–1.5s calls and every one of them happens *before anything appears on screen*, so the
+#: 600s default meant a single hung call stalled the turn for ten minutes — while each of those
+#: call sites already has a graceful degradation written for exactly this case. Failing fast
+#: into a path the code already handles beats waiting for a call that is not coming.
+UTILITY_TIMEOUT_VAR = "GOVERNED_BI_UTILITY_TIMEOUT_S"
+
 #: Reasoning effort, for models that take one. ``register/knobs.py`` has declared
 #: ``llm_reasoning_effort`` as ``Role.comparability`` all along, with the reason attached: two
 #: v1 ladders differed **only** in this field, it was recorded nowhere, so comparability cleared
@@ -171,7 +200,16 @@ def session_from_environment() -> Session:
         #
         # `temperature` is simply not set. Asserting a default we do not need is what forced
         # the branch in the first place.
-        kwargs_model: dict[str, Any] = {"model_provider": "openai", "use_responses_api": True}
+        kwargs_model: dict[str, Any] = {
+            "model_provider": "openai",
+            "use_responses_api": True,
+            # Passed explicitly rather than left to the SDK, which is the whole point: unset,
+            # `ChatOpenAI.max_retries` is `None` and the `openai` client applies its own 2 with
+            # no timeout of its own either. Both are now recorded knobs, so a run cannot change
+            # its own crash rate and still compare.
+            "max_retries": _retries(),
+            "timeout": _timeout(TIMEOUT_VAR, "llm_timeout_s"),
+        }
         effort = os.environ.get(MODEL_EFFORT_VAR)
         if effort:
             kwargs_model["reasoning_effort"] = effort
@@ -241,11 +279,38 @@ def _utility_model(credentials: Any) -> Any:
         )
     from langchain.chat_models import init_chat_model
 
-    kwargs: dict[str, Any] = {"model_provider": "openai"}
+    kwargs: dict[str, Any] = {
+        "model_provider": "openai",
+        "max_retries": _retries(),
+        # The *utility* timeout, which is the split's reason for existing — see
+        # `UTILITY_TIMEOUT_VAR`. These calls are on the critical path before first paint.
+        "timeout": _timeout(UTILITY_TIMEOUT_VAR, "llm_utility_timeout_s"),
+    }
     effort = os.environ.get(UTILITY_MODEL_EFFORT_VAR)
     if effort:
         kwargs["reasoning_effort"] = effort
     return init_chat_model(model_id, **kwargs)
+
+
+def _retries() -> int:
+    """The global retry count, from the environment or the knob's declared default.
+
+    ``int()`` is left to raise on a non-numeric value. A retry budget that silently falls back
+    because someone typed ``three`` is the class of defect the register exists to end: the run
+    would record the default while running something else.
+    """
+    from governed_bi.register.knobs import knob_default
+
+    raw = os.environ.get(RETRIES_VAR)
+    return int(raw) if raw else int(knob_default("llm_max_retries"))
+
+
+def _timeout(var: str, knob: str) -> float:
+    """One tier's wall clock, from the environment or the knob's declared default."""
+    from governed_bi.register.knobs import knob_default
+
+    raw = os.environ.get(var)
+    return float(raw) if raw else float(knob_default(knob))
 
 
 def _embedder_into(kwargs: dict[str, Any], credentials: Any) -> Any:
@@ -276,7 +341,14 @@ def _embedder_into(kwargs: dict[str, Any], credentials: Any) -> Any:
     from governed_bi.model.openai_embedder import OpenAIEmbedder
     from governed_bi.retrieve.vector_cache import vector_cache_from_environment
 
-    embedder = OpenAIEmbedder(model=model_id)
+    # The embedder shares the **utility** timeout, not the agent's: it is the same latency class
+    # on the same critical path — `accept` embeds the question before a single facet runs — and
+    # a fifth knob for one more small call would be a knob nobody would ever set differently.
+    embedder = OpenAIEmbedder(
+        model=model_id,
+        max_retries=_retries(),
+        timeout=_timeout(UTILITY_TIMEOUT_VAR, "llm_utility_timeout_s"),
+    )
     # `model_id` and not `embedder.model`: the latter probes the provider to report what it
     # actually served, and a directory name is not worth a network call at boot.
     cache = vector_cache_from_environment(model=model_id)

@@ -387,6 +387,24 @@ def from_assets(
             model_id(resolved_utility) or getattr(resolved_utility, "_llm_type", None)
             or type(resolved_utility).__name__
         )
+        # **Read off the model objects, not off the environment.** These are what the provider
+        # SDK was actually handed, and reading the env instead would record a caller's intent —
+        # `python -m governed_bi.serve` and `eval/harness.py` build their own models and never
+        # see `GOVERNED_BI_LLM_MAX_RETRIES`. Retries move `crash_rate` and `crash_rate` is what
+        # the quotability gates read, so a run that changed its own crash rate must not be able
+        # to compare as unchanged.
+        #
+        # Absent stays absent, per the rule two blocks up: a model with no `max_retries` set is
+        # on the SDK's default, and writing our default in its place would report a value the
+        # run never used.
+        for knob, attr, cast, source in (
+            ("llm_max_retries", "max_retries", int, agent_model),
+            ("llm_timeout_s", "request_timeout", float, agent_model),
+            ("llm_utility_timeout_s", "request_timeout", float, resolved_utility),
+        ):
+            value = getattr(source, attr, None)
+            if value is not None:
+                knobs[knob] = cast(value)
     return Session(
         index=index,
         structure=structure,

@@ -212,6 +212,30 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "moves routing recall, which moves everything downstream. Written even when it "
        "falls back to llm_model, because 'shared one model' and 'split them' are two "
        "treatments and a blank would make them compare as one"),
+    _k("llm_max_retries", 3, Role.comparability,
+       "how many times the provider SDK retries one call, across EVERY model surface: the "
+       "agent, the utility model and the embedder. It was the SDK's own default of 2 and "
+       "nothing in this repository set it, while governed_bi.toml carried max_retries = 8 "
+       "under a comment calling it 'the entire defence' against 429s -- in a file v2 deleted "
+       "the reader for. It is comparability and not just config because retries move "
+       "crash_rate, and crash_rate is what the quotability gates read: two runs differing "
+       "only here would compare as one, which is precisely what llm_reasoning_effort did"),
+    _k("llm_timeout_s", 300.0, Role.comparability,
+       "wall clock for one AGENT call. Separate from the retry count because the two answer "
+       "different questions -- how long may a legitimate call take, versus how flaky is the "
+       "provider -- and separate from the utility timeout because the two tiers now run at "
+       "different reasoning efforts. The number that matters is the product: worst case for "
+       "one call is timeout x (retries + 1), so the SDK's 600s default at 3 retries is a "
+       "40-minute hang, not a defence. More retries is also the WRONG fix for a slow call, "
+       "which the replaced toml comment conflated: retries defend against 429/5xx, timeouts "
+       "against hangs, and raising one without the other multiplies the ceiling"),
+    _k("llm_utility_timeout_s", 30.0, Role.comparability,
+       "wall clock for the small calls -- the scope gate, the five facet rewriters, and the "
+       "embedder, which shares this because it is the same latency class on the same critical "
+       "path. Measured at 1.2-1.5s each, and they all run BEFORE anything appears on screen, "
+       "so the SDK's 600s default meant one hung call stalled a turn for ten minutes when "
+       "every one of those call sites already degrades gracefully. Failing fast into a "
+       "degradation the code already handles beats waiting for a call that is not coming"),
     _k("embedding_model", None, Role.comparability,
        "part of every vector cache key. cosine returns 0.0 on a width mismatch "
        "rather than raising, so a cross-model cache hit degrades routing to "
