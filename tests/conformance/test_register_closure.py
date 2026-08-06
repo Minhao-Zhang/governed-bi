@@ -218,6 +218,7 @@ def test_every_citation_has_an_artifact_and_a_date() -> None:
         "check_file_length.py",
         "check_one_implementation.py",
         "check_measurement_locality.py",
+        "check_no_benchmark_discriminators.py",
     ],
 )
 def test_lint_gate_passes_on_a_clean_tree(tool: str) -> None:
@@ -228,6 +229,35 @@ def test_lint_gate_passes_on_a_clean_tree(tool: str) -> None:
         cwd=ROOT,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_every_gate_in_tools_is_either_in_ci_or_declared_manual() -> None:
+    """The list of gates and the list of gates that run must be the same list.
+
+    They were not: the register named five and ``.github/workflows/ci.yml`` ran four, with
+    ``check_citations`` — the one that fails when a retired number reappears — outside CI. And
+    ``check_train_only.py`` was in neither list and referenced by nothing in ``tests/`` or
+    ``.github/``, which is how a gate whose control was the corpus under test went unnoticed.
+
+    ADR 0005 §6 calls these CI-enforced. A gate nobody runs is a preference.
+    """
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    gates = sorted(p.name for p in (ROOT / "tools").glob("check_*.py"))
+    #: Gates that cannot run in CI, each with the precondition that stops them. Declared here
+    #: so "not in CI" is a decision with a reason rather than an omission.
+    manual = {
+        "check_train_only.py": (
+            "needs a corpus tree (untracked), the held-out question file (a separate "
+            "repository) and a third corpus certified train-only"
+        ),
+    }
+    missing = [g for g in gates if g not in ci and g not in manual]
+    assert not missing, (
+        f"{missing} exist under tools/ and run in neither CI nor the manual list. Add a CI "
+        "step, or add an entry to `manual` naming what stops it."
+    )
+    stale = sorted(set(manual) - set(gates))
+    assert not stale, f"{stale} are declared manual and no longer exist"
 
 
 def _gate(tool: str, *args: str) -> subprocess.CompletedProcess[str]:

@@ -3,6 +3,22 @@
 Checks: provenance citing test split; verbatim containment (min NGRAM content
 words; few_shots exempt with stricter provenance); n-gram rate vs a train-only
 control. Paraphrase leaks are undetectable — a pass is not cleanliness.
+
+**The control has no default, as of 2026-08-06.** It defaulted to
+``corpora/gold-semantic-layer-20260804`` — the same corpus ``.env`` serves and
+``tools/run_datalake_eval.py`` evaluates. So the default invocation compared the
+shipped corpus **against itself**, printed ``ratio to control: 1.00x (tolerance
+2.0x)``, and the rate arm was *arithmetically incapable of failing* for the one
+corpus it mattered for. The gate ran, reported ok, and had measured nothing.
+
+A control that is not genuinely held out cannot be guessed, so it is now required
+and ``--control`` equal to the corpus under test is refused rather than compared.
+
+**This gate cannot run in CI** and that is a property of the gate, not an
+oversight: it needs a corpus tree (untracked), a held-out question file (a
+separate repository), and a third corpus certified train-only. The CI-able half of
+corpus contamination is ``tools/check_no_benchmark_discriminators.py``, which
+needs no data at all — and which caught a producer this gate had already passed.
 """
 
 
@@ -18,7 +34,6 @@ import sys
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
-DEFAULT_CONTROL = "corpora/gold-semantic-layer-20260804"
 DEFAULT_DATASET = REPO.parent / "BIRD-Data-Obfuscation" / "eval_dataset" / "test_final.jsonl"
 
 #: Content-word window for containment / n-gram checks.
@@ -156,14 +171,30 @@ def scan(root: pathlib.Path, questions: list[dict]) -> dict:
     }
 
 
+def _same_tree(corpus: str, control: str) -> bool:
+    """Whether two corpus arguments name the same directory.
+
+    Resolved rather than string-compared: ``corpora/x`` and ``./corpora/x/`` and a symlink to
+    either are the same self-comparison, and a check that only caught the identical spelling
+    would be satisfied by a trailing slash.
+    """
+    try:
+        return (REPO / corpus).resolve() == (REPO / control).resolve()
+    except OSError:  # pragma: no cover - unresolvable path is not a self-comparison
+        return corpus.strip("./") == control.strip("./")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="check_train_only", description=__doc__)
     parser.add_argument("corpus", help="the corpus under test")
     parser.add_argument(
         "--control",
-        default=DEFAULT_CONTROL,
+        required=True,
         help="a corpus certified train-only, measured alongside as the reference rate. "
-        "Pass '' to skip, which makes the result uninterpretable and is for debugging only.",
+        "REQUIRED, with no default: the default used to be the corpus this repository "
+        "actually serves, so the ordinary invocation compared it against itself and the "
+        "rate arm could not fail. Pass '' to skip, which makes the result uninterpretable "
+        "and is for debugging only.",
     )
     parser.add_argument("--dataset", type=pathlib.Path, default=DEFAULT_DATASET)
     parser.add_argument(
@@ -173,6 +204,19 @@ def main(argv: list[str] | None = None) -> int:
         help="fail when the corpus's collision rate exceeds the control's by this factor",
     )
     args = parser.parse_args(argv)
+
+    # Argument sanity before data availability: a self-comparison is wrong to attempt whether
+    # or not the dataset happens to be present, and checking it second made the refusal
+    # unreachable in any environment without the benchmark repository checked out.
+    if args.control and _same_tree(args.corpus, args.control):
+        print(
+            f"the control and the corpus under test are the same tree ({args.corpus!r}). "
+            "A corpus compared against itself has a collision ratio of exactly 1.00x, so the "
+            "rate arm cannot fail and reports ok having measured nothing. This was the "
+            "shipped default.",
+            file=sys.stderr,
+        )
+        return 2
 
     if not args.dataset.exists():
         print(f"no test set at {args.dataset}", file=sys.stderr)

@@ -1,9 +1,24 @@
 # corpus/
 
-Git-tracked typed YAML assets for the semantic layer. Spec:
+The layout and field tiers for the semantic layer's typed YAML assets. Spec:
 [ADR 0005](../docs/adr/0005-v2-memory-layer-and-faceted-retrieval.md).
-Serve typically loads from `GOVERNED_BI_CORPUS_DIR` or a directory under
-`corpora/` (see [usage](../docs/usage.md)).
+Serve loads from `GOVERNED_BI_CORPUS_DIR` or a directory under `corpora/`
+(see [usage](../docs/usage.md)).
+
+**This directory holds no assets, and nothing in it is under version control.**
+`git ls-files corpus corpora` returns two paths: this file and `.gitignore`. The
+demo assets that used to live here were removed in `a506436` and this document
+went on calling the directory "Git-tracked typed YAML assets" for another week —
+along with `corpus/.gitignore` and the root `.gitignore`, which carved an
+exception to keep tracking a corpus that no longer existed. All three now say
+what is true.
+
+So: **the semantic layer is neither in version control nor reproducible from
+anything committed.** `corpora/` is ignored wholesale, and the root `.gitignore`
+called those trees "reproducible from BIRD-Data-Obfuscation" while there is still
+no curator module in `src/`. That is an open problem, recorded here rather than
+papered over — the corpus is the treatment every experiment in this repository
+compares, and it is currently a local directory nobody else can reconstruct.
 
 ## Layout
 
