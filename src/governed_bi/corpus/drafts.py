@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, Mapping, TypeVar
 
 import yaml
 
@@ -46,15 +46,29 @@ class DraftNotPending(ValueError):
     or was never a model-authored candidate — e.g. a seeded asset with no audit trail)."""
 
 
-def submit_draft(root: Path | str, asset: A, *, namespace: str | None = None, model: str | None = None) -> Path:
+def submit_draft(
+    root: Path | str,
+    asset: A,
+    *,
+    namespace: str | None = None,
+    model: str | None = None,
+    extra: Mapping[str, Any] | None = None,
+) -> Path:
     """Restamp ``asset`` as a ``proposed`` model-authored candidate and write it.
 
     Thin composition, deliberately: :func:`restamp_model_authored` and :func:`write` already
     carry the guarantees this needs, so this function adds none of its own. ``namespace`` is
     forwarded unchanged — required for the asset types that declare no ``schema`` field
     (``JoinAsset``, ``MetricAsset``, ``TermAsset``); see :func:`~governed_bi.corpus.store.write`.
+
+    ``extra`` is merged into ``audit.extra`` **after** restamping — restamp rebuilds ``audit``
+    from scratch, so this is the one hook for a caller (``curator/enhancer.py``'s conflict flag)
+    to attach a reason without it being silently dropped. It is data, not a governance field:
+    it cannot set ``excluded`` or a provenance status, both of which stay code-controlled.
     """
     restamped = restamp_model_authored(asset, model=model)
+    if extra:
+        restamped = replace(restamped, audit=replace(restamped.audit, extra={**restamped.audit.extra, **extra}))
     return write(root, restamped, namespace=namespace)
 
 

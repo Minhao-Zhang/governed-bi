@@ -77,3 +77,18 @@ def test_approve_refuses_an_unknown_id(tmp_path: Path) -> None:
 
     with pytest.raises(DraftNotFound):
         approve_draft(tmp_path, "fs.never-written")
+
+
+def test_submit_extra_survives_restamp_and_is_visible_after_approval(tmp_path: Path) -> None:
+    """The Enhancer conflict-flag hook: restamp_model_authored rebuilds audit from scratch,
+    so `extra` has to be merged back in *after*, or a conflict flag would be silently
+    dropped on write -- the same silent-loss shape this whole feature exists to avoid."""
+    from governed_bi.corpus.drafts import approve_draft, submit_draft
+    from governed_bi.corpus.store import load
+
+    submit_draft(tmp_path, _few_shot("fs.flagged"), extra={"conflict_with": "metric.other"})
+    (written,) = [a for a in load(tmp_path)[0] if a.id == "fs.flagged"]
+    assert written.audit.extra["conflict_with"] == "metric.other"
+
+    certified = approve_draft(tmp_path, "fs.flagged")
+    assert certified.audit.extra["conflict_with"] == "metric.other"  # not clobbered by approval
