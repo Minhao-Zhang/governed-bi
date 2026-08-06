@@ -213,6 +213,43 @@ def corpus_assets(type: str | None = None) -> list[dict[str, Any]]:
     ]
 
 
+@app.post("/corpus/drafts/{asset_id}/approve")
+def approve_draft_route(asset_id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Certify one ``proposed`` draft (UtkuAI mistake-memory / Enhancer, ported onto v2).
+
+    **Not an upstream route.** v2 deletes the HTTP corpus-write surface entirely (ADR 0005
+    §1.6: "the corpus is trusted, the incoming question is not") and has no ``curator/`` layer
+    yet to review a draft through. This is the minimal admin-facing half of
+    ``corpus/drafts.py`` — see ``utku-ai-v2-porting-spec.md`` for why it lives here rather
+    than waiting on upstream.
+
+    Request body: ``{"by": "admin@example.com"}`` (optional — recorded in ``audit.extra``,
+    never required).
+
+    Writes to disk only. ``session.assets_by_id``/the index are run constants (ADR 0005) and
+    do not observe this write until the corpus is reloaded — the same limitation a live
+    ``run_query`` retrieval has for any other out-of-band corpus edit.
+    """
+    from fastapi import HTTPException
+
+    from governed_bi.corpus.drafts import DraftNotFound, DraftNotPending, approve_draft as approve
+
+    session = _session()
+    if session.corpus_root is None:
+        raise HTTPException(status_code=409, detail="this session has no corpus_root to write back to")
+    try:
+        certified = approve(session.corpus_root, asset_id, by=(body or {}).get("by"))
+    except DraftNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DraftNotPending as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "id": certified.id,
+        "asset_type": certified.asset_type.value,
+        "provenance_status": _provenance_status(certified),
+    }
+
+
 def _graph_payload() -> dict[str, Any]:
     """The **ER** graph: tables as nodes, join relationships as edges carrying their key.
 
