@@ -1891,6 +1891,15 @@ what it actually is: the first module of the new system.
     ceiling first** (`--oracle-only`, no model, ~4 minutes) — it re-scales every
     downstream conclusion, and v1 spent a long time reading 56.3% against an
     unknown ceiling that turned out to be 99.70%.
+
+    **Amended 2026-08-06.** The ceiling needs an *independent* gold to compare
+    against — `gold_fingerprint`, or `gold_columns` + `gold_rows` on the question.
+    Nothing in this repository produces those, so for the whole of v2 the arm took
+    a fallback branch that fingerprinted the executed gold **against itself** and
+    returned 1.000 for any statement, `SELECT 'garbage'` included. It now reports
+    *unmeasured* instead. A ceiling of 1.000 that costs nothing to obtain is not a
+    ceiling; this step is not done until the golden from step 5 ships fingerprints,
+    and `pred_fingerprint` on the oracle row is the field to harvest into them.
 16. Curator redesign — separate ADR.
 17. `negative_gate` — blocked on a negative corpus existing.
 

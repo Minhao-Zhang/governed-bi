@@ -22,7 +22,12 @@ def main(argv: list[str] | None = None) -> int:
         "--questions",
         type=Path,
         required=True,
-        help="JSONL with question_id, question, gold_sql",
+        help=(
+            "JSONL with question_id, question, gold_sql. Add gold_fingerprint (or "
+            "gold_columns + gold_rows) for the oracle arm to measure anything: without an "
+            "independent gold its EX is unmeasured, because the only comparison left is the "
+            "executed gold against itself"
+        ),
     )
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--pair", default=None, help="armA,armB for McNemar + context gate")

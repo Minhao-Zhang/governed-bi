@@ -82,20 +82,95 @@ def test_crash_stays_crashed_not_refused() -> None:
     assert grade["detail"] != refused["detail"]
 
 
-def test_oracle_grades_gold_sql_ex_one(tmp_path: Path) -> None:
-    _, connector = _fixture_db(tmp_path)
-    q = _questions()[0]
-    row = oracle_grade(q, connector)
-    assert row["outcome"] == "answered"
-    assert row["correct"] is True
-    assert row["crashed"] is False
+def test_the_oracle_arm_is_unmeasured_without_an_independent_gold(tmp_path: Path) -> None:
+    """Not 1.000, and not 0.000. There is nothing to claim, so it claims nothing.
 
-    arm = oracle_arm(connector=connector)
-    rows = run_arm(_questions(), arm)
-    assert all(r["correct"] for r in rows)
-    pop = arm_population(rows, label="oracle")
-    ex = headline_ex(pop)
-    assert ex.is_measured and ex.value == 1.0
+    The branch this replaces called ``grade_results`` with ``gold_columns=pred[0],
+    gold_rows=pred[1]`` — the executed gold fingerprinted **against itself** — so it returned
+    ``correct=True`` for any statement at all, including ``SELECT 'garbage' AS wrong``. No
+    producer in the repository supplies ``gold_fingerprint`` or ``gold_columns``+``gold_rows``,
+    so this was the branch every run took. The predecessor of this test asserted
+    ``ex.value == 1.0`` and thereby made the construction the contract.
+
+    What it cost: the arm exists to establish that the grader is not the bottleneck, it could
+    establish nothing, and it was cited as having established it — while the grader *was* a
+    bottleneck, comparing every Postgres ``numeric`` cell as a string.
+
+    ``correct=None`` is the representation, because ``Population.count`` already reads an
+    absent outcome as unmeasured rather than as a zero.
+    """
+    _, connector = _fixture_db(tmp_path)
+    row = oracle_grade(_questions()[0], connector)
+    assert row["outcome"] == "answered"
+    assert row["correct"] is None
+    assert row["crashed"] is False
+    assert row["grade_detail"].startswith("no_independent_gold")
+    assert row["pred_fingerprint"], (
+        "the gold statement did execute, and its digest is what a later run needs in order "
+        "to become measurable"
+    )
+
+    rows = run_arm(_questions(), oracle_arm(connector=connector))
+    ex = headline_ex(arm_population(rows, label="oracle"))
+    assert not ex.is_measured, f"an arm with no independent gold reported {ex.value}"
+    assert "correct" in ex.why
+
+
+def test_the_oracle_arm_measures_against_an_independent_gold(tmp_path: Path) -> None:
+    """With a reference fingerprint it is a real measurement, and it can fail.
+
+    This is the arm doing its job: a disagreement here is the grader, the engine or the
+    harness, never the model — there is no model on this path.
+    """
+    from governed_bi.eval.grade import result_fingerprint
+
+    _, connector = _fixture_db(tmp_path)
+    question = dict(_questions()[0])
+
+    columns, rows, _ = connector.execute(question["gold_sql"])
+    truth = result_fingerprint(list(columns), [list(r) for r in rows])
+
+    matching = oracle_grade({**question, "gold_fingerprint": truth}, connector)
+    assert matching["correct"] is True
+    assert matching["grade_detail"] == "match"
+
+    wrong = oracle_grade({**question, "gold_fingerprint": "0" * 64}, connector)
+    assert wrong["correct"] is False, "the arm must be able to fail, or it is not a baseline"
+    assert wrong["grade_detail"] == "result_mismatch"
+
+
+def test_one_unexecutable_gold_statement_does_not_end_the_oracle_arm(tmp_path: Path) -> None:
+    """It did. The arm was one list comprehension, so the exception escaped ``run_arm``.
+
+    Every row already computed went with it — on the 1 351-question dataset that is hours of
+    execution discarded by one bad statement, and the symptom is a shorter output file rather
+    than an error attributable to a question.
+
+    A gold that does not run is ``crashed`` with ``correct=None``, not ``correct=False``: it is
+    a defect in the dataset or the engine, and scoring it as a wrong answer would charge the
+    model for it.
+    """
+    _, connector = _fixture_db(tmp_path)
+    questions = [
+        _questions()[0],
+        {"question_id": "bad", "question": "?", "db_id": "main",
+         "gold_sql": "SELECT * FROM no_such_table_at_all"},
+        _questions()[1],
+    ]
+    streamed: list[str] = []
+    rows = run_arm(
+        questions,
+        oracle_arm(connector=connector),
+        on_row=lambda _i, r: streamed.append(str(r["question_id"])),
+    )
+
+    assert [r["question_id"] for r in rows] == ["q1", "bad", "q2"]
+    assert streamed == ["q1", "bad", "q2"], "on_row was ignored on the oracle path"
+    bad = rows[1]
+    assert bad["crashed"] is True
+    assert bad["correct"] is None
+    assert bad["grade_detail"].startswith("gold_exec_failed:")
+    assert bad["error_type"]
 
 
 def test_context_hash_distinctness_pass_and_fail() -> None:

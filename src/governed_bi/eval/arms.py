@@ -31,7 +31,14 @@ class ArmSpec:
 
 
 def oracle_arm(*, connector: Any, **extra: Any) -> ArmSpec:
-    """Free grader ceiling — gold SQL only, no model."""
+    """Grader ceiling — gold SQL only, no model.
+
+    **Measures nothing unless the questions carry an independent gold** — a
+    ``gold_fingerprint``, or ``gold_columns`` + ``gold_rows``. Without one, every row is
+    ``correct=None`` and the arm's EX is *unmeasured*, with the reason attached. It used to
+    grade the executed gold against itself and return 1.000 for any statement whatsoever; see
+    :mod:`governed_bi.eval.oracle` for what that cost.
+    """
 
     def build() -> dict[str, Any]:
         return {

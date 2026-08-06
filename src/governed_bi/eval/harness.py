@@ -57,13 +57,20 @@ def run_arm(
         connector = base_cfg.get("connector")
         if connector is None:
             raise ValueError("oracle arm requires connector in configurable")
-        rows = [
-            oracle_grade(q, connector, order_sensitive_qids=order_sensitive_qids)
-            for q in questions
-        ]
-        for row in rows:
+        # **Row by row, with ``on_row``, like every other arm.** This was one list
+        # comprehension sitting before the concurrency dispatch, so it ignored ``on_row``
+        # entirely and one gold statement that failed to execute ended the arm and discarded
+        # every row already computed. ``oracle_grade`` now records an execution failure as a
+        # crashed row, and the loop is here so a long oracle pass is crash-safe for the same
+        # reason the paid arms are.
+        rows: list[dict[str, Any]] = []
+        for index, question in enumerate(questions):
+            row = oracle_grade(question, connector, order_sensitive_qids=order_sensitive_qids)
             row["arm"] = arm.name
             row["run_id"] = run_id
+            rows.append(row)
+            if on_row is not None:
+                on_row(index, row)
         return rows
 
     workers = max(1, int(workers))
