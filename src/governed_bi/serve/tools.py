@@ -81,13 +81,30 @@ def _fetch(
     stage: str,
     runtime: Any,
     detail: dict[str, Any],
-    work: Callable[[], tuple[str, bool]],
+    work: Callable[[], tuple[Any, ...]],
 ) -> Command:
-    """Read-only corpus tools with stream events. Status: ok / blocked / error."""
+    """Corpus tools with stream events. Status: ok / blocked / error.
+
+    ``work`` returns ``(payload, delivered)``, or ``(payload, delivered, attempt)`` when the
+    tool is an **executor path** and owes the ledger a row. ``sample_rows`` is that case, and
+    it used to return the two-tuple — which is precisely what "the sample path writes no ledger
+    entry" was: a shape with nowhere to put the fact.
+    """
     event_id = tool_event_id(stage, _call_id(runtime))
     emit(kind="tool", step=stage, status="start", event_id=event_id, detail=detail)
     try:
-        payload, delivered = work()
+        result = work()
+    except GovernanceUsageError:
+        # A security parameter was never wired up (G1). Must not become an error string that
+        # reads like a tool failing on the model's input.
+        emit(
+            kind="tool",
+            step=stage,
+            status="error",
+            event_id=event_id,
+            detail={**detail, "error_type": "GovernanceUsageError"},
+        )
+        raise
     except Exception as exc:  # noqa: BLE001 — tool surface
         emit(
             kind="tool",
@@ -97,14 +114,33 @@ def _fetch(
             detail={**detail, "error_type": type(exc).__name__},
         )
         return _reply(runtime, f"{stage} error: {type(exc).__name__}: {exc}")
+    payload, delivered = result[0], result[1]
+    attempt = result[2] if len(result) > 2 else None
     if delivered:
         status = "ok"
-    elif payload == OUT_OF_SCOPE_MESSAGE:
+    elif payload == OUT_OF_SCOPE_MESSAGE or (attempt is not None and not attempt["passed"]):
         status = "blocked"
     else:
         status = "error"
+    updates: dict[str, Any] = dict(_delivered(runtime, payload)) if delivered else {}
+    if attempt is not None:
+        # The verdict rides **this** step's detail rather than emitting ``check`` / ``execute``
+        # rows. Those two steps are ``run_query``'s attempt numbering, and a sample verdict
+        # appearing among them would read as a SQL attempt the model never made.
+        detail = {
+            **detail,
+            "layer": attempt["verdict_layer"],
+            "reason_code": attempt["reason_code"],
+            "executed": attempt["executed_sql"] is not None,
+        }
+        if attempt["executed_sql"] is not None:
+            detail["sql_sha256"] = statement_sha256(attempt["executed_sql"])
+        # **The ledger row rides the same Command as the payload.** With no ``attempts_by_call``
+        # write on this path, ``guardrail_errors == 0`` and an empty attempt list were true of
+        # every value the tool ever showed the model.
+        updates["attempts_by_call"] = {f"{stage}:{_call_id(runtime)}": attempt}
     emit(kind="tool", step=stage, status=status, event_id=event_id, detail=detail)
-    return _reply(runtime, payload, **(_delivered(runtime, payload) if delivered else {}))
+    return _reply(runtime, payload, **updates)
 
 
 def _emit_attempt(runtime: Any, attempt: Mapping[str, Any], *, number: int, payload: str) -> None:
@@ -227,7 +263,13 @@ def build_tools(
             runtime,
             {"column_id": column_id, "limit": limit},
             lambda: fetch.sample_rows(
-                column_id, limit=limit, bounds=bounds, assets=assets, connector=connector
+                column_id,
+                limit=limit,
+                bounds=bounds,
+                assets=assets,
+                connector=connector,
+                corpus=corpus,
+                policy=policy,
             ),
         )
 

@@ -124,25 +124,12 @@ class SqliteConnector:
                 return table
         raise QueryError(f"no such table: {name}")
 
-    def sample_values(
-        self, table: str, column: str, *, limit: int, schema: str | None = None
-    ) -> Sequence[Any]:
-        """``schema`` is accepted and ignored: SQLite has one table namespace.
-
-        Ignoring it is correct here rather than sloppy. A corpus asset always carries a
-        ``schema`` field because the *corpus* is organised by schema, and that bookkeeping
-        does not imply the engine has one. Raising would make every schema-organised corpus
-        unusable against SQLite, which is what the test fixtures are.
-        """
-        del schema
-        sql = (
-            f"SELECT DISTINCT {_quote(column)} FROM {_quote(table)} "
-            f"WHERE {_quote(column)} IS NOT NULL "
-            f"ORDER BY {_quote(column)} LIMIT {int(limit)}"
-        )
-        _, rows, _ = self.execute(sql, max_rows=limit)
-        return [row[0] for row in rows]
+    # ``sample_values`` was here and is gone; see ``ports.Connector``. This adapter's version
+    # quoted correctly and its Postgres sibling did not, which is the argument against having
+    # the method at all: one port method, two implementations, and the security property held
+    # in only one of them, with no test on either.
 
 
 def _quote(name: str) -> str:
+    """A SQLite identifier, quote-doubled. Only for ``PRAGMA``, which takes no parameters."""
     return '"' + name.replace('"', '""') + '"'

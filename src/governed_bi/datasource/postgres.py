@@ -220,28 +220,12 @@ class PostgresConnector:
             sqlstate="42P01",
         )
 
-    def sample_values(
-        self, table: str, column: str, *, limit: int, schema: str | None = None
-    ) -> Sequence[Any]:
-        """``schema`` wins over anything parsed out of ``table``.
-
-        This used to be ``schema: str = "public"`` — a default no caller could see and none
-        of them passed, so every call on a pooled 57-schema lake became
-        ``FROM "public"."<table>"`` and raised 42P01. The parameter is now on the port and
-        the fallback is only for a caller that qualifies the name itself.
-        """
-        if schema:
-            schema_name, table_name = schema, _split_name(table, default_schema=schema)[1]
-        else:
-            schema_name, table_name = _split_name(table, default_schema="public")
-        sql = (
-            f'SELECT DISTINCT "{column}" FROM "{schema_name}"."{table_name}" '
-            f'WHERE "{column}" IS NOT NULL '
-            f'ORDER BY "{column}" '
-            f"LIMIT {int(limit)}"
-        )
-        _columns, rows, _truncated = self.execute(sql)
-        return [row[0] for row in rows]
+    # ``sample_values`` was here and is gone; see ``ports.Connector``. It hand-built
+    # ``f'SELECT DISTINCT "{column}" FROM "{schema}"."{table}"'`` — Postgres has no
+    # quote-doubling and this adapter did none, so a ``physical_name`` containing a double
+    # quote escaped its intended relation, and ``corpus/validate.py`` validates only
+    # ``slug(physical_name)`` and so raises no objection to such an asset. Its one caller now
+    # builds the statement from ``exp.Identifier`` nodes and runs it through ``govern``.
 
 
 def _split_name(name: str, *, default_schema: str) -> tuple[str, str]:

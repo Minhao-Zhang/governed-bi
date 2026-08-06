@@ -221,9 +221,9 @@ def test_classification_reads_the_code_not_the_message(connector, fixture_schema
 
 
 def test_introspection_classifies_its_own_failures(dsn) -> None:
-    """``introspect`` / ``list_tables`` / ``describe_table`` / ``sample_values`` leaked raw
-    driver exceptions in the predecessor, so they escaped the taxonomy entirely — a
-    failure there is neither a query fault nor infrastructure, it is unclassified."""
+    """``introspect`` / ``list_tables`` / ``describe_table`` leaked raw driver exceptions in
+    the predecessor, so they escaped the taxonomy entirely — a failure there is neither a query
+    fault nor infrastructure, it is unclassified."""
     from governed_bi.datasource import errors  # type: ignore[import-not-found]
     from governed_bi.datasource.postgres import PostgresConnector  # type: ignore[import-not-found]
 

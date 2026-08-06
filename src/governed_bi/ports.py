@@ -110,15 +110,17 @@ class Connector(Protocol):
 
     def describe_table(self, name: str) -> TableInfo: ...
 
-    def sample_values(
-        self, table: str, column: str, *, limit: int, schema: str | None = None
-    ) -> Sequence[Any]:
-        """Sample distinct values. Deterministic: ordered, under ``synchronize_seqscans = off``.
-
-        ``schema`` is part of the port (Postgres needs it on a pooled lake; namespace-free
-        engines ignore it).
-        """
-        ...
+    # **``sample_values`` was removed, not fixed.** It was the one port method that took
+    # identifiers and built SQL from them, so it had to escape them, and only the SQLite
+    # adapter did — Postgres interpolated ``f'... FROM "{schema}"."{table}"'`` into a string
+    # and ``physical_name`` is deliberately unconstrained in content (``corpus/identity.slug``).
+    # Worse, it called ``execute`` itself, which is the method this port reserves for
+    # ``govern.pipeline``, so the tool that used it reached the database through no layer and
+    # wrote no ledger row.
+    #
+    # ``serve/fetch.distinct_values_statement`` builds that statement as a syntax tree and
+    # ``serve/fetch.sample_rows`` runs it through ``prepare()`` like any other governed
+    # statement. There is one path to the database now, and it is ``execute``.
 
 
 @runtime_checkable

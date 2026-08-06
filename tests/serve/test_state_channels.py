@@ -265,6 +265,34 @@ def test_every_declared_channel_is_classified_as_per_turn_or_not():
     assert not invented, f"{sorted(invented)} are classified but not declared on ServeState"
 
 
+def test_every_executor_path_is_classified_as_answering_or_introspecting():
+    """A new executor path must be classified before ``terminal`` can read it.
+
+    ``INTROSPECTION_PATHS`` is stated as the complement of "can answer the question", so a
+    path added to ``EXECUTOR_PATHS`` and forgotten counts as answering. That is the right
+    default — under-recording an answer is this repository's recurring failure mode — but it
+    is only right if forgetting is caught. It is caught here.
+
+    The distinction is load-bearing in three places: ``execution_from_attempts``' ``terminal``,
+    ``stamp``'s outcome, and ``agent_core``'s ``generated_sql``. A ``sample`` row counted as
+    answering makes a turn whose every ``run_query`` was refused record ``answered``, and makes
+    a ``SELECT DISTINCT`` over one column the statement an eval re-executes as the answer.
+    """
+    from governed_bi.govern.ledger import EXECUTOR_PATHS
+    from governed_bi.serve.ledger import INTROSPECTION_PATHS
+
+    #: The judgement, made once. ``agent`` writes the analyst's SQL; ``graded`` is the graded
+    #: delivery retry of the same statement (ADR 0006 §5), so both answer. ``sample`` and
+    #: ``profile`` describe a column to the model and answer nothing.
+    answering = {"agent", "graded"}
+    assert answering | INTROSPECTION_PATHS == set(EXECUTOR_PATHS), (
+        f"unclassified executor path(s): "
+        f"{sorted(set(EXECUTOR_PATHS) - answering - INTROSPECTION_PATHS)}. Decide whether the "
+        "path can answer the question; if it cannot, add it to INTROSPECTION_PATHS."
+    )
+    assert not (answering & INTROSPECTION_PATHS)
+
+
 def test_a_turn_built_by_the_session_seam_actually_answers(
     two_schema_index, two_schema_assets, guard_off_policy
 ):

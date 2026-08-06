@@ -20,7 +20,31 @@ from typing import Any
 from governed_bi.govern.ledger import AttemptRecord, execution_record
 from governed_bi.register.stages import ATTEMPT_CAP_REFUSED_BY
 
-__all__ = ["attempt_field", "execution_from_attempts", "cap_attempt"]
+__all__ = [
+    "attempt_field",
+    "INTROSPECTION_PATHS",
+    "answering_attempts",
+    "execution_from_attempts",
+    "cap_attempt",
+]
+
+#: Executor paths whose statements **introspect** rather than answer.
+#:
+#: ``EXECUTOR_PATHS`` has four members and they are not interchangeable. ``sample`` runs a
+#: ``SELECT DISTINCT`` over one column to show the model what the values look like; ``profile``
+#: is declared for distribution statistics. A turn in which only one of those succeeded has not
+#: answered anything, and recording it as ``answered`` is the crash-counted-as-refusal inversion
+#: arriving through a second executor path.
+#:
+#: **Stated as the complement**, so a path added later counts as answering until someone says
+#: otherwise: under-recording an answer is the failure mode this repository keeps producing, and
+#: an allowlist would make a forgotten path silently drop its statements out of the record.
+#: ``tests/serve/test_state_channels.py`` closes the partition over ``EXECUTOR_PATHS`` so
+#: "someone says otherwise" is a gate rather than a hope.
+#:
+#: ``guardrail_errors`` deliberately does **not** filter: a layer exception on any path is a
+#: run-level fact, and hiding the sample path from that count is what made it vacuous.
+INTROSPECTION_PATHS: frozenset[str] = frozenset({"sample", "profile"})
 
 
 def attempt_field(attempt: Any, name: str) -> Any:
@@ -28,6 +52,17 @@ def attempt_field(attempt: Any, name: str) -> Any:
     if isinstance(attempt, Mapping):
         return attempt.get(name)
     return getattr(attempt, name, None)
+
+
+def answering_attempts(attempts: Sequence[Any]) -> list[Any]:
+    """The ledger rows from a path that can answer the question.
+
+    One function, three readers (``execution_from_attempts``, ``stamp``'s outcome
+    derivation, and ``agent_core``'s ``generated_sql``) — because three copies of "which
+    attempts count" is three answers, and the one that disagrees is the one that reports a
+    turn as answered.
+    """
+    return [a for a in attempts if attempt_field(a, "path") not in INTROSPECTION_PATHS]
 
 
 def execution_from_attempts(attempts: Sequence[Any]) -> dict[str, Any]:
@@ -39,15 +74,20 @@ def execution_from_attempts(attempts: Sequence[Any]) -> dict[str, Any]:
     ``passed: false``, which is the crash-counted-as-refusal inversion that retired the
     pre-2026-07-25 numbers, pointing the other way.
 
+    ``attempts`` keeps every row; ``terminal`` reads only :func:`answering_attempts`. A turn
+    that sampled a column and then answered from context is ``no_sql`` with a non-empty
+    ledger, and both halves of that are true.
+
     The vocabulary is ``govern.ledger.ExecutionRecord``'s. ``"graded"`` belongs to the
     graded-delivery path and is not written here.
     """
     rows = list(attempts)
-    if not rows:
+    answering = answering_attempts(rows)
+    if not answering:
         return execution_record(rows, "no_sql")
-    if any(attempt_field(a, "passed") is True for a in rows):
+    if any(attempt_field(a, "passed") is True for a in answering):
         return execution_record(rows, "answered")
-    if any(attempt_field(a, "reason_code") == ATTEMPT_CAP_REFUSED_BY for a in rows):
+    if any(attempt_field(a, "reason_code") == ATTEMPT_CAP_REFUSED_BY for a in answering):
         return execution_record(rows, "capped")
     return execution_record(rows, "refused")
 

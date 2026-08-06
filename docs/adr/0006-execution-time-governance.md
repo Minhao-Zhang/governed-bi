@@ -392,10 +392,27 @@ sample_rows(column_id: str, limit: int)   # a ColumnAsset id, not a name
 ```
 
 The statement is constructed from the resolved asset, so no model string reaches
-SQL. It still passes `check()` — it is one generated statement and trivially
-checkable — and it still applies the exclusion/suspect filter **in the tool**,
-tested with the outer corpus filter removed (v1's filter had never executed in
-any test because every test passed the already-filtered corpus).
+SQL. It passes `check()`, which is where the exclusion/suspect filter comes from:
+one generated statement is trivially checkable, and the COLUMNS layer already
+refuses an excluded column and — under `hard_block_suspect` — a suspect one.
+
+**Superseded, 2026-08-06.** For most of v2 this section described something that
+did not exist. `sample_rows` called `connector.sample_values`, which called
+`execute` — the method `ports.Connector` reserves for `govern.pipeline` — so the
+path reached Postgres through **no** layer and wrote **no** ledger entry. Two
+things followed. `guardrail_errors == 0` and an empty attempt list held
+*vacuously* for every value the tool ever returned. And because
+`hard_block_suspect` is enforced only inside `check()`, one identical policy made
+`run_query` refuse a suspect column while `sample_rows` handed over its real
+values — no attacker and no unusual configuration required.
+
+There is no "filter in the tool" now, and there never was one. The filter is the
+layer stack, reached the same way `run_query` reaches it:
+`serve/fetch.distinct_values_statement` builds the statement as a syntax tree —
+so an identifier is escaped by sqlglot's generator rather than by an adapter that
+remembered to, which the Postgres one did not — and `serve/fetch.sample_rows`
+runs it through `prepare()` and ledgers the verdict as `path="sample"`.
+`sample_values` is gone from the port and from both adapters.
 
 The profiler runs at seed time, on the same connector base class, with the same
 session settings as §8 — including `synchronize_seqscans = off`, which 0005 §1.7
@@ -432,7 +449,7 @@ lake — the same shape as B7.
 |---|---|
 | `read_body` | asset ids in this turn's `hits ∪ pulled_in` |
 | `inspect_schema` | table ids in `licensed` |
-| `sample_rows` | column ids whose table is in `licensed` |
+| `sample_rows` | column ids whose table is in `licensed`, **and then the layer stack** |
 | `run_query` | the table layer, against `licensed` |
 
 **No tool writes to `licensed`.** A clarification resume continues from the

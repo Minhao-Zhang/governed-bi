@@ -17,7 +17,7 @@ from langchain_core.runnables import RunnableConfig
 
 from governed_bi.serve.agent_state import GovernedAgentState
 from governed_bi.serve.delivery import DeliveryTracker
-from governed_bi.serve.ledger import execution_from_attempts
+from governed_bi.serve.ledger import answering_attempts, execution_from_attempts
 from governed_bi.serve.runtime import configurable
 from governed_bi.serve.state import TERMINAL_PATH_KINDS
 from governed_bi.serve.tools import SYSTEM_PROMPT, build_tools
@@ -271,7 +271,12 @@ def _stub(state: dict) -> dict:
 
 
 def _last_executed_sql(attempts: Any) -> str | None:
-    """The last statement the engine actually **sent**, from the ledger.
+    """The last statement the engine actually **sent** on the answering path, from the ledger.
+
+    Filtered to :data:`~governed_bi.serve.ledger.ANSWERING_PATH`: a ``sample`` row also carries
+    an ``executed_sql``, and a turn that sampled a column after its last ``run_query`` would
+    otherwise record the sample's ``SELECT DISTINCT`` as the turn's ``generated_sql`` — which an
+    eval then re-executes and grades as the answer.
 
     Preferred over the model's ``run_query`` argument, which is what ``generated_sql`` used
     to hold — so a turn that succeeded reported a statement the database never saw.
@@ -285,7 +290,7 @@ def _last_executed_sql(attempts: Any) -> str | None:
     SQL, and "the model wrote this and it was refused" is worth recording.
     """
     last: str | None = None
-    for attempt in attempts or ():
+    for attempt in answering_attempts(list(attempts or ())):
         if not isinstance(attempt, Mapping):
             continue
         sql = attempt.get("executed_sql")

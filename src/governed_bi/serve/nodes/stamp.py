@@ -12,7 +12,7 @@ from governed_bi.measure.degradation import facets_degraded
 from governed_bi.register.record import project
 from governed_bi.register.stages import ATTEMPT_CAP_REFUSED_BY, Outcome, classify_outcome
 from governed_bi.serve.events import emit, rail_event_id
-from governed_bi.serve.ledger import attempt_field, execution_from_attempts
+from governed_bi.serve.ledger import answering_attempts, attempt_field, execution_from_attempts
 from governed_bi.serve.state import cleared
 
 __all__ = ["stamp"]
@@ -58,9 +58,15 @@ def _facet_channels(state: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def _attempts(execution: Mapping[str, Any] | Any) -> list[Any]:
+    """This turn's **answering** ledger rows.
+
+    Filtered, because ``sample`` rows are in the same ledger and a passing sample row would
+    make ``_path_signals`` report a turn as answered whose every ``run_query`` was refused —
+    the crash-counted-as-refusal inversion, re-introduced through a second executor path.
+    """
     if not isinstance(execution, Mapping):
         return []
-    return list(execution.get("attempts") or ())
+    return answering_attempts(list(execution.get("attempts") or ()))
 
 
 def _path_signals(
