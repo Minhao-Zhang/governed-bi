@@ -5,6 +5,21 @@ Session settings required by ADR 0006 §10 are applied on open:
 
 Error taxonomy is SQLSTATE class lookup (parcel C): ``42`` → ``QueryError``;
 ``08`` / ``53`` / ``57`` → ``ConnectionError``. Never message-regex.
+
+**A failed statement discards a dead connection** (audit §9.1). It did not, and
+``_connect`` returned the cached handle unconditionally, so one network blip
+poisoned every remaining question in the run. And because psycopg raises
+``the connection is closed`` with ``sqlstate=None``, the classification fell past
+both SQLSTATE tests and returned ``QueryError`` — an infrastructure fault recorded
+as *the model wrote bad SQL*, for every question after the blip. Reproduced against
+psycopg 3.3.4: one injected ``OperationalError`` yielded ``QueryError`` on three
+consecutive calls with the connector still holding the dead handle.
+
+The no-SQLSTATE case is now decided from **structured driver state** —
+``Connection.closed`` / ``Connection.broken``, and the DB-API's own
+``OperationalError`` / ``ProgrammingError`` split — never from the message text.
+An exception the server classified carries a SQLSTATE; one that does not is a
+client-side or transport failure, which is what ``OperationalError`` means.
 """
 
 from __future__ import annotations
@@ -46,6 +61,23 @@ class PostgresConnector:
             self._conn.close()
             self._conn = None
 
+    def _discard(self) -> None:
+        """Drop the cached handle so the next call reconnects. Never raises.
+
+        Separate from :meth:`close` because it runs on the *failure* path: a handle that is
+        already broken can raise from ``close()``, and letting that escape would replace the
+        classified datasource error with a driver exception from the cleanup. ``_conn`` is
+        cleared first, so it is dropped whether or not the close succeeds — the alternative
+        ordering is how the dead handle survived.
+        """
+        conn, self._conn = self._conn, None
+        if conn is None:
+            return
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001 - cleanup on a handle already known to be bad
+            pass
+
     def __del__(self) -> None:  # pragma: no cover - GC path
         try:
             self.close()
@@ -79,8 +111,41 @@ class PostgresConnector:
         self._conn = conn
         return conn
 
+    def _connection_is_unusable(self, err: BaseException) -> bool:
+        """Whether this failure means the *connection* is gone, from structured state only.
+
+        Two signals, in order of directness:
+
+        * ``Connection.closed`` / ``Connection.broken`` — psycopg's own view of the handle it
+          just failed on. If either is set, the next statement on it cannot succeed.
+        * ``isinstance(err, psycopg.OperationalError)`` — the DB-API split. psycopg raises a
+          *server* error as the subclass its SQLSTATE selects, and every one of those carries a
+          ``sqlstate``; this method is only reached when there is none, so the exception did not
+          come from the server at all. ``OperationalError`` is the DB-API class for exactly that
+          ("an unexpected disconnect occurs, the data source name is not found"), against
+          ``ProgrammingError`` for a fault in the statement.
+
+        The module contract forbids message-regex, and it is right to: the SQLite adapter
+        classifies by prose and misclassifies the two faults its own acceptance test singles
+        out. ``"the connection is closed"`` is a string psycopg may reword in any release.
+        """
+        conn = self._conn
+        if conn is not None and (
+            bool(getattr(conn, "closed", False)) or bool(getattr(conn, "broken", False))
+        ):
+            return True
+        try:
+            import psycopg
+        except ImportError:  # pragma: no cover - _connect raises before reaching here
+            return False
+        return isinstance(err, psycopg.OperationalError)
+
     def _raise_classified(self, err: BaseException, *, connecting: bool = False) -> None:
-        """Map a driver fault to QueryError / ConnectionError by SQLSTATE class."""
+        """Map a driver fault to QueryError / ConnectionError by SQLSTATE class.
+
+        Discards the cached handle on every path that raises :class:`ConnectionError`, so the
+        next call reconnects instead of reusing a socket the driver has given up on.
+        """
         sqlstate = getattr(err, "sqlstate", None)
         if isinstance(sqlstate, bytes):
             sqlstate = sqlstate.decode("ascii", errors="replace")
@@ -94,15 +159,26 @@ class PostgresConnector:
             or sqlstate.startswith("53")
             or sqlstate.startswith("57")
         ):
+            self._discard()
             raise ConnectionError(str(err), sqlstate=sqlstate) from err
         if connecting:
             # Connect-path without a class-08 code (e.g. TCP timeout): still
             # infrastructure. Never invent a class-42 code.
+            self._discard()
             raise ConnectionError(
                 str(err),
                 sqlstate=sqlstate or _FALLBACK_CONNECTION_SQLSTATE,
             ) from err
-        # Statement path: prefer query fault when the class is not infrastructure.
+        # Statement path, no SQLSTATE: the server did not classify this, so it is not a verdict
+        # on the statement. **This branch used to fall straight through to QueryError**, and
+        # that is how one blip made every remaining question in the run read as "the model wrote
+        # bad SQL" — psycopg raises `the connection is closed` with sqlstate=None.
+        if self._connection_is_unusable(err):
+            self._discard()
+            raise ConnectionError(
+                str(err), sqlstate=sqlstate or _FALLBACK_CONNECTION_SQLSTATE
+            ) from err
+        # A client-side fault that is not the connection: a statement problem after all.
         raise QueryError(str(err), sqlstate=sqlstate) from err
 
     def execute(
