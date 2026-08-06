@@ -1,9 +1,8 @@
 """Phase-boundary re-stamp of model-authored governance and audit (ADR 0005 §1.5).
 
-Exclusion and certified human provenance are human-only. A model that owns files
-can mint them by writing YAML; the prompt telling it not to is not a control.
-This function is.
+Exclusion and certified human provenance are human-only; this call strips forgeries.
 """
+
 
 from __future__ import annotations
 

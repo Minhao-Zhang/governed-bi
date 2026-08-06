@@ -1,21 +1,7 @@
-"""Durable local turn log, so a served turn can be audited after the fact.
+"""Durable local turn log for post-serve audit.
 
-**The record already exists; nothing could read it twice.** ``stamp`` builds the full
-record for every turn and ``/chat`` returns it inline — so the one caller who can see it
-is the caller who asked the question, once. There was no way to list what a server has
-served, no way to fetch a past turn, and therefore no audit surface at all: the
-governance ledger, the layer verdicts, the licensed set and the retrieval attributions
-were produced, published to a single HTTP response, and dropped.
-
-**JSONL is read and written, with no in-memory index beside it.** A process-local cache
-would be faster and would be a second answer to "what did this server serve" — one that
-disagrees with the file after a restart, and one whose disagreement is invisible. One
-source, appended under ``runs/serve/``, newest file first.
-
-Append-only and best-effort on the write path: a turn that answered must not be turned
-into a failure because the audit log could not be written. The failure is *reported* to
-the caller as ``logged: false`` rather than swallowed, because "no turns are listed"
-and "no turns were served" must not be the same observation.
+Append-only JSONL under ``runs/serve/``. Write failures are reported, never raised —
+a served turn must not become a failure because the log could not be written.
 """
 
 from __future__ import annotations
@@ -40,12 +26,7 @@ __all__ = [
 #: Where turns land. Overridable so a test never writes into the repository's own log.
 TURN_LOG_DIR = Path(os.environ.get("GOVERNED_BI_TURN_LOG_DIR") or (REPO_ROOT / "runs" / "serve"))
 
-#: The columns a list view needs, in display order.
-#:
-#: Deliberately a **subset of the record's own field names** rather than new ones: the
-#: list and the detail view then cannot disagree about what a column means, and a reader
-#: who looks up ``terminal_reason`` in ``register/record.py`` finds the declaration that
-#: governs both.
+#: List-view columns (subset of record field names), display order.
 SUMMARY_FIELDS: tuple[str, ...] = (
     "turn_id",
     "run_id",
@@ -53,10 +34,6 @@ SUMMARY_FIELDS: tuple[str, ...] = (
     "question_id",
     "db_id",
     "outcome",
-    # Why a decline declined. It was in this list before it was a *record* field, so the
-    # column existed and was always null -- `record.get("terminal_reason")` read a key
-    # nothing wrote, because the value lived in graph state only. Declaring it and
-    # stamping it is what made the column mean something.
     "terminal_reason",
     "schemas",
     "generated_sql",

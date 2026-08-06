@@ -1,29 +1,9 @@
-"""``corpus_content_hash`` -- the treatment identity. One implementation, no sentinel.
+"""``corpus_content_hash`` — treatment identity (one implementation, no sentinel).
 
-The corpus **is** the treatment (``register/record.py``'s ``corpus_content_hash``
-row). ADR 0005's delivery gate reads this digest to prove that two arms received
-different corpora, so every property below is a property of that gate:
-
-* **No in-band value meaning "I do not know."** v1's ``corpus_content_hash ==
-  "unknown"`` compared equal to itself, so two runs **with no recorded treatment at
-  all** passed the comparability gate. Absence is expressed by not having a digest:
-  this function raises for a missing root rather than returning a string that
-  happens to be equal to another run's missing root.
-* **Sensitive to content**, or the gate passes two byte-identical arms.
-* **Stable across calls**, or every comparison is incomparable -- which reads as
-  "the treatment differed" and passes the same gate for the wrong reason. Both
-  directions are asserted in the acceptance contract, because a hash satisfying one
-  and not the other is a plausible implementation.
-* **Paths relative and sorted**, so a staging directory cannot leak into the digest
-  and two checkouts of one corpus agree.
-* **A file that exists and cannot be read is named in the digest without its
-  bytes.** Skipping it silently made an unreadable corpus hash identically to one
-  that was never written.
-
-``tools/check_one_implementation.py`` declares this module as the concept's only
-home. Two hash implementations would reproduce v1's defect from the other side: two
-runs with the same corpus and different digests.
+Raises on a missing root. Sensitive to content, stable, relative sorted paths.
+Unreadable files are named in the digest without their bytes.
 """
+
 
 from __future__ import annotations
 
@@ -35,12 +15,7 @@ from .identity import corpus_files
 
 __all__ = ["corpus_content_hash"]
 
-#: Recorded in place of a file's bytes when the bytes cannot be read.
-#:
-#: This is **not** an "unknown" sentinel for the digest. It names one file inside a
-#: digest that still exists and still differs from every other tree -- the opposite
-#: of a whole-corpus value that compares equal to itself. An unreadable file changes
-#: the hash, which is the behaviour that was missing.
+#: Placeholder for a file that exists but cannot be read (not an unknown digest).
 _UNREADABLE = b"<unreadable>"
 
 

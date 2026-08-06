@@ -8,9 +8,8 @@ hash, still contain every id, and still be under budget. Hence this file.
 
 Measured on the gold semantic layer (5 schemas, 923 assets, ``route_top_n = 1``) the
 split is worth 15–27 % of the delivered characters; the ``## Context`` section alone
-falls 24–40 %. Those numbers are in ``docs/plans/context-engineering-2026-08-04.md``,
-not asserted here: a threshold on them would be a number nobody measured on the corpus
-the test builds.
+falls 24–40 %. Those numbers are not asserted here: a threshold on them would be a
+number nobody measured on the corpus the test builds.
 """
 
 from __future__ import annotations

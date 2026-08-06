@@ -1,253 +1,71 @@
-# Agentic BI Architecture
-
-> **This document describes v1, which was deleted in commit `2347ae3`.** It is kept at this path
-> because it is an entry point to the repository, and it is being rewritten against
-> [ADR 0005](adr/0005-v2-memory-layer-and-faceted-retrieval.md) and
-> [ADR 0006](adr/0006-execution-time-governance.md). Until that rewrite lands,
-> treat every specific claim below — module names, file paths, tool names, measured
-> numbers — as historical rather than current. The rest of the v1 documentation is
-> in [`docs/v1/`](v1/), and [`lessons-from-v1.md`](lessons-from-v1.md) records which of its
-> measurements survived re-examination and which were retired.
+# Architecture
 
 _[English](architecture.md) · [简体中文](architecture.zh.md)_
 
-Full design for the Agentic BI System. Terms are in the
-[Glossary](glossary.md). The reasoning and alternatives behind each choice are
-in [Design decisions](design-decisions.md).
+How a question becomes a stamped answer in this tree. Binding detail lives in
+[ADR 0005](adr/0005-v2-memory-layer-and-faceted-retrieval.md) (retrieval /
+memory) and [ADR 0006](adr/0006-execution-time-governance.md) (governance).
 
-## 1. Design Spine (Non-negotiables)
+## Serve spine
 
-1. **Two planes.** A semantic/control plane holds business meaning as versioned config and markdown, published offline via PR/CI. It stays separate from a data plane that executes only guardrail-passed SQL. Meaning is defined once and owned by humans.
-2. **Serve's *authority* is deterministic; its *reasoning* may be agentic.** The question can be wide, but the SQL must be narrow. Authority (what may execute, what is trusted, what goes recorded) is hard-wired and auditable; the reasoning that finds the answer may run as a bounded agentic loop confined to governed, read-only tools. [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) reverses the earlier "never an autonomous ReAct loop" form of this spine, now implemented as the sole serve path, separating autonomy-in-reasoning from autonomy-in-authority; only the latter stays forbidden.
-3. **Fail-closed under serve defaults.** With `grade_semantic_failures=False` (the serve default), out-of-scope, missing-coverage, or tripped-guardrail returns a refusal or a clarifying question — not a confident wrong number. Graded delivery (on in the eval drivers today) can re-serve some L4/L5 failures as `unverified` rows; that is not the serve default.
+Wired in [`serve/graph.py`](../src/governed_bi/serve/graph.py). Nodes live under
+[`serve/nodes/`](../src/governed_bi/serve/nodes/).
 
-## 2. Two Harnesses over One Shared Substrate
+```
+accept → guard → rewrite → negative_gate
+  → fanout ─┬─ facet_schema
+            ├─ facet_term
+            ├─ facet_metric
+            ├─ facet_entity
+            └─ facet_example
+  → route → resolve → connect → assemble
+  → agent_core → narrate → stamp → record
+```
 
-Curator and Analyst have opposite risk profiles. They use different harnesses but share everything below the loop.
-
-| | Curator (build) | Analyst (serve) |
-|---|---|---|
-| Output | a durable artifact (the corpus) | an answer to a user |
-| Checked by | a human, before it ships | nobody (the user can't verify) |
-| Failure cost | cheap, recoverable | catastrophic (silent wrong answer) |
-| Autonomy | maximum (explore) | minimum (fail-closed) |
-| Harness | `deepagents` | `LangGraph` + middleware |
-
-*Built:* both harnesses are installed by a plain `uv sync` (no extra), over LangChain-backed model clients. The Analyst is the [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) governed agentic core, `analyst.agent` (thin outer deterministic rails wrapping a `create_agent` reasoning loop governed by middleware; the module was `server/`, renamed `analyst/` post-cutover — "server" now names infra only: `LangGraph Server`, the HTTP/ASGI process). It has been the sole serve path since the P2 cutover; the earlier deterministic flow (`server.flow::answer_question`) and the stale, unused `server.graph` DAG were deleted under the old module name, before that rename. No live model is fail-closed: `build_stack()` still builds offline for the audit API (browse/chat; corpus write gated by `allow_edit`), but the serve process raises at startup and `/chat` returns 503 until a model is configured. The first live A/B against the (now-removed) deterministic flow motivated [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) Amendment 1. **No eval number before 2026-07-26 is quotable.** For a quotable run, follow the [experiment runbook](v1/plans/experiment-runbook.md). Curator = `curator.deep_agent` (a deepagents agent over Facts-profiling + read-only-probe tools, construction verified offline, live run model-gated).
-
-> **Curator = permanent maintainer**
->
-> Not a one-time bootstrapper. Cold-start is its first job, but drift-repair is
-> ongoing. Untended corpora rot (~95%→65% in a month per *How Anthropic enables
-> self-service data analytics with Claude*). Full loop (proposer and adversary):
-> [Curator](v1/curator.md).
-
-## 3. Kernel Primitives (Survive model improvement)
-
-- **Governed gateway**: read-only SQL execution, credential-isolated, row-cap + statement timeout, audit/replay. The row cap is `fetchmany(max_rows + 1)` on every dialect, and every dialect also best-effort injects a root `LIMIT` on simple `SELECT`/`UNION` SQL that lacks one (no CTE-breaking subquery wrap). RLS-as-user is a toggled-off seam (D7), not live in this repo. It can access everything, but a context layer routes to governed datasets first. Ideally raw tables are never touched.
-- **Agentic loop**: the permanent control loop.
-- **Tools**: coded functions the model may call. Keep them few and sharp.
-- **Hooks (middleware)**: deterministic code on loop events. `before_model` injects context (working memory, identity/session scope, the semantic-layer router). `wrap_tool_call` gates or vetoes actions (AST allowlist, structural cost/cross-join; PII and RLS are deferred seams, not implemented here). This is where fail-closed lives.
-
-> **Engine vs fuel**
->
-> The kernel is the engine. The **corpus is the fuel** the hooks deliver into
-> the loop. As models improve, you delete tools and shrink hooks. You don't
-> rewrite the kernel.
-
-## 4. Four Shared Services
-
-Fork only the harness, but share the substrate. Sharing has three directions, and they tell you where the contracts live:
-
-- **Curator writes → Analyst reads:** semantic layer, notes, metadata/indexes. Contract: publish/certify (versioned).
-- **Analyst writes → curator reads:** audit log, corrections, episodic signals. Contract: harvest (closes the loop).
-- **Both read one definition:** gateway policy, eval set and ground truth, identity/access model, tool registry, provenance format.
-
-1. **Gateway service**: access, policy enforcement, and audit (one boundary, two permission profiles).
-2. **Corpus service**: semantic layer, notes, metadata, and indexes (publish/read API, versioned).
-3. **Memory service**: working, profile, episodic, and correction memory. Correction is the cross-agent channel.
-4. **Eval / telemetry service**: ground truth and run history, the shared scoreboard.
-
-## 5. Storage: Match Representation to Access Pattern (RVGD)
-
-| Part of the corpus | Representation |
+| Stage | Role |
 |---|---|
-| Notes: routing rules, gotchas, procedural knowledge | YAML typed asset (`NoteAsset`, git); `body` is an optional on-demand long-form field (D17) |
-| Metric / dimension / rule definitions | Compiled config (MetricFlow / MDL / OSI-style) |
-| Schema, joins, FK connectivity, lineage | Graph (FK graph → Neo4j at scale) |
-| "Which doc / table / example is relevant?" | Vector index + BM25 |
-| Memory (working/profile/episodic/correction) | Postgres + pgvector |
+| `guard` | LLM / structured scope gate |
+| `rewrite` | Utility-model rewrite for most facets |
+| `negative_gate` | Negative-example refuse path |
+| `facet_*` | Parallel retrieval channels |
+| `route` / `resolve` / `connect` | Schema pick, budgets, Steiner join |
+| `assemble` | Render retrieval context block |
+| `agent_core` | Nested `create_agent` loop (read-only tools) |
+| `narrate` | Short answer over the result table |
+| `stamp` | `safety_clearance` + `semantic_assurance` |
 
-Markdown-first. The graph earns its place only for joins and lineage. A heavy LLM knowledge graph is deferred. Rationale: curation and structure beat representation sophistication. Anthropic's null result showed raw-corpus grep moved accuracy <1pt. See the *Data Agent Memory Design Overview*.
+`agent_core` tools: `read_body`, `inspect_schema`, `sample_rows`, `run_query`,
+`ask_user`. Governance wraps `run_query` / `sample_rows` ([ADR 0006](adr/0006-execution-time-governance.md)).
+The retrieval context block is injected per model call via middleware; it is not
+appended as an ordinary user message.
 
-*Built today:* retrieval runs the pure-Python **BM25** lexical channel plus deterministic grounding over the corpus relationships, and a **vector / semantic channel** (embeddings, fused with BM25 via Reciprocal Rank Fusion) behind an injected `Embedder` seam, off unless an embedder is passed. The FK graph is the in-memory `networkx` projection that drives Steiner join planning; Neo4j stays the enterprise-scale projection. Model choices (the OpenAI `gpt-5.6-luna` LLM and `text-embedding-3-large` embedder, both swappable) live in a project config file (`governed_bi.toml`, parsed by `config.load_settings` — the TOML overrides the dataclass default of `text-embedding-3-small` in `config.py`); the API key is read from the environment, never stored. The clients live in `governed_bi.llm` behind `ChatClient` / `Embedder` protocols, each with a deterministic offline default so the pipeline runs with no model or network. (The no-model *serve* mode is gone: per [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) P2, the agentic core requires a real key (serve fails closed at startup without one), and CI determinism comes from a `FakeListChatModel` agent harness rather than an offline serve default.)
+Server entry: [`api/graph_app.py:make_graph`](../src/governed_bi/api/graph_app.py)
+(`uv run langgraph dev`). HTTP app: [`api/routes.py:app`](../src/governed_bi/api/routes.py)
+([ADR 0007](adr/0007-http-surface-and-the-ui-contract.md),
+[ADR 0010](adr/0010-live-stage-events.md)).
 
-> **Corpus contract = Git+YAML typed assets, curator-authored / human-audited (D9)**
->
-> The "compiled config" row is realized as *《从数据到智能》*-style typed YAML
-> assets (`table/column/join/few_shot/term/metric/rule`). The curator writes
-> them; a human audits via the viz surface. **Git is the single source of
-> truth. The graph (in-memory for BIRD, Neo4j as a derived projection for
-> enterprise scale), vector, BM25 and Postgres are all rebuildable projections, never
-> authored directly.** Column reliability is AI-inferred *prose* ("UNRELIABLE,
-> DO NOT USE"), not a typed decoy flag, so the mechanism transfers to an enterprise deployment.
-> See D9 in [Design decisions](design-decisions.md).
+## Packages (`src/governed_bi/`)
 
-## 6. Runtime Query Flow (Analyst)
+| Package | Responsibility |
+|---|---|
+| `api` | FastAPI + LangGraph Server wiring |
+| `corpus` | Typed assets, load, validate |
+| `datasource` | Connectors |
+| `eval` | Measurement harness |
+| `govern` | Seven-layer check, ledger, tool bounds |
+| `measure` | Population / stats helpers |
+| `model` | Chat and embedder adapters |
+| `register` | Knobs, prompts, turn records, citations |
+| `retrieve` | BM25, semantic channel, join planner |
+| `serve` | Rails graph + agent loop |
 
-```
-ingest → refuse_gate → assemble (RVGD retrieval + Steiner-tree join plan +
-licensed table scope) → agent_core (tool loop; every run_query re-guardrailed
-by wrap_tool_call) → narrate → answer + provenance
-```
+## Configuration
 
-Five graph nodes, compiled in `analyst.agent.build_serve_rails`. The first node is
-named `ingest` in the graph; the live event / `Stage` name for that step is
-`route` (`events.rail("route")`). SQL generation is not a node: it happens inside
-`agent_core`'s tool loop (ADR 0002). Any node can end the turn with a refusal.
+Live configuration is environment variables (`GOVERNED_BI_*`, secrets in `.env`)
+plus defaults in [`register/knobs.py`](../src/governed_bi/register/knobs.py).
+See [usage](usage.md).
 
-The full stage-by-stage design is in [Analyst](v1/analyst.md), along with the three points where the curator's inference drives serve behavior.
+## Two stamps, not one trust score
 
-Per D15, on the multi-schema Postgres / Redshift path a join-aware schema router precedes RVGD retrieval, so retrieval spans schemas; the single-schema path skips it. **Shipped** (`retrieval.schema_router`; wired in `analyst.agent`).
-
-Guardrails, in order (fail-closed on any, all five enforced): syntax → policy blacklist → AST column allowlist → term-semantics → cost. The AST allowlist is scope-aware (resolves each column against its own query scope and blocks star projections); term-semantics licenses the retrieved tables plus their FK join-neighborhood, the join plan's Steiner points (not just the exact retrieved set, so it is decoupled from retrieval recall), and any curated cross-schema join targets, and blocks any table name outside that licensed scope. The cost layer is a structural cross-join guard for now; numeric EXPLAIN-based cost (Postgres / Redshift) is future per-dialect work. Stage-by-stage detail is in [Analyst](v1/analyst.md) step 8.
-
-> **D15: L4 scope is schema-qualified and spans schemas.** Cross-schema names are licensed only via a curated join — with none, the engine refuses rather than guessing. The single-schema / SQLite / BIRD path is **also** schema-qualified: the SQLite connector `ATTACH`es its file under the `corpus_pin` alias, so `beer_factory.customers` executes natively (this line said "stays bare/unqualified", which the 2026-07-17 supersession made false). Guardrail + serve wiring + missing-edge refusal + join-aware schema router are shipped.
-
-> **Bounded self-repair (agent tool-reflection loop)**
->
-> Generation, guardrails, and execution run as a bounded loop, but not a
-> hand-rolled one: `run_query` is a governed, read-only tool the agent calls
-> and re-calls. A guardrail rejection or an execution error comes back to the
-> agent as a `ToolMessage` to reflect on and retry, rather than refusing
-> outright; every attempt is re-guardrailed, so un-vetted SQL never runs. The
-> per-turn attempt cap (3) is enforced in `wrap_tool_call`, and the outer graph
-> is bounded by a `recursion_limit`; exhaustion fails closed. A repaired answer's
-> `semantic_assurance` drops to `heuristic`, not `unflagged` (in the retired,
-> display-only single-axis tier: `lineage`, not `governed`).
->
-> This is the [ADR 0002](adr/0002-governed-agentic-serve-runtime.md) mechanism.
-> The earlier hand-rolled `while attempts < 3` cycle (generation → guardrails →
-> execution as a hard-coded loop) it replaced is deleted. The guardrail and
-> stamp are unchanged (the same shared governance core runs at the tool
-> boundary), so autonomy widens for *how to find the answer*, never for what
-> may execute.
-
-> **Governance ledger**
->
-> Under [ADR 0002](adr/0002-governed-agentic-serve-runtime.md), enforcement
-> and audit share one interception point: the `wrap_tool_call`
-> middleware that guardrails a call also records it. Each turn accumulates an
-> append-only ledger, one entry per governed action (refuse-gate result, tools
-> offered, each exploration's surfaced / `excluded`-filtered assets, each
-> `run_query`'s normalized SQL + per-layer L1-L5 verdict + licensed tables +
-> result meta, and the stamp derivation). You cannot execute (or refuse) without
-> a record. It lives on `Answer` provenance now; a durable sink is a seam for
-> later.
->
-> Since Amendment 2 the ledger also **streams live**: `agent_core` runs
-> `agent.stream(...)` and re-emits each governed action through `on_event` as a
-> typed step event (`rail` / `tool` / `final`), so the UI renders a per-attempt
-> live audit of the loop. The `run_query` event detail is the ledger entry itself,
-> so the live stream and the stored ledger cannot drift. Contract:
-> [`docs/analyst.md`](v1/analyst.md#the-event-contract-per-step).
->
-> Since Amendment 3, observability also collapses to **one trace per turn**: the
-> outer `graph.invoke` opens the root run and everything below it nests inside,
-> including the `narrate` node's model call (narration is now its own graph step,
-> not a side-call inside finalization) and the inner `agent.stream`. A turn is
-> therefore one LangSmith trace with no doubled model-call cost/tokens. (This was
-> originally about a Langfuse callback handler attached once at the outer invoke;
-> Langfuse was removed on 2026-08-02 and LangSmith, which self-instruments from
-> the environment, inherits the same shape — and bills per root invocation, so
-> "one turn, one trace" is also the billing unit.)
-
-> **Refusal & best-effort (two concurrent gates, not a waterfall)**
->
-> - **Refuse-gate** (curated negative examples): match → canned escalation blob (owner contact). This is the fail-closed path.
-> - **Hard guardrails** (`wrap_tool_call`): can veto any query regardless.
-> - **Best-effort otherwise:** delivered with a **reliability stamp** —
->   `semantic_assurance` (`unflagged` / `heuristic` / `unverified`) plus the
->   uncertainty flags that fired. The legacy single-axis tier (`governed` /
->   `lineage` / `fenced_raw` / `refused`) survives only as a display-only 1:1
->   projection of this axis, never a second vocabulary. The boundaries are
->   uncalibrated governance/uncertainty heuristics, tuned on the eval: `unflagged`
->   means no uncertainty flag fired, **not** verified-correct. The
->   guardrails are a safety/governance gate, not a correctness oracle, so a
->   plausible-but-wrong query (valid, in-allowlist, wrong computation) is caught
->   here and by the fail-closed paths, not at a guardrail. Give the stamp teeth:
->   low-reliability answers get differential handling.
-> - **High-stakes** (leadership/PII): human sign-off or return-SQL-only.
-
-## 7. Memory Policy
-
-- Working memory: always on (session, identity-scoped).
-- Episodic and correction: off by default. Adopted per-domain only when eval earns it, with value-aware retrieval when used.
-- Durable memory is PR-gated exactly like the corpus → the memory/corpus distinction collapses. Correction memory ≈ correction-harvesting→PR-to-reference-doc. Promoted episodic ≈ gated few-shots. Only working/ephemeral memory is outside the gate.
-
-> **Reusable numbers** (design targets from the book; **not** knobs on `Settings`
-> today — only Working memory is built; see `memory/__init__.py` and
-> [glossary](glossary.md))
->
-> | Parameter | Value | Status |
-> |---|---|---|
-> | Working memory | session-scoped, cleared at session end | Built |
-> | Profile TTL | 365 days | Design-only — not in Settings |
-> | Episodic TTL | 90 days + 0.02/day decay | Design-only — not in Settings |
-> | Correction TTL | 180 days | Design-only — not in Settings |
-> | SQL cache TTL | 15 min | Design-only — no SQL cache in code |
-> | Cache-hit gate | cosine ≥ 0.92 (see §6) | Design-only |
-> | Few-shot recall gate | cosine ≥ 0.95, confidence ≥ 0.9, fail_count ≤ 3 | Design-only |
-> | Few-shot promotion gate | `pending_review` → human `approve` → retrieval-time threshold check | Design-only |
->
-> Source: the book's directly-reusable blueprint. See the *Data Agent Memory Design Overview* §5.
-
-## 8. Evaluation
-
-- Near-term: [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) (4 DB versions, ~10k verified Q&A, decoy manifest, rename map) supplies verified ground truth. See *BIRD Bench Obfuscation Methodology*.
-- Headline metric: execution accuracy vs gold. No hand-grading of semantic layers.
-- **Split (adopt BIRD-Obfuscation's):** per-DB **80/20 seeded holdout**: 8,134 train / 2,030 test, all 69 DBs in both. The **curator reads `train_final.jsonl` only** (distilled, not dumped) → grade on held-out `test_final.jsonl`. Leakage is structurally prevented by the disjoint seeded split.
-- **Variant:** the semantic eval runs on the **`rename_decoy`** instance (cryptic names and live decoys, where the layer's value is maximal), with `base` as a sanity reference. The Analyst always executes against the one physical DB. Only the corpus differs across arms.
-- Arms scored on EX, an eval ladder (live naming in [glossary.md](glossary.md), refining the [D14 amendment](design-decisions.md#d14-sme-growth-benchmark-on-bird-obfuscation), 2026-07-15; split into single-variable steps 2026-07-26) ordered so that **each adjacent step changes exactly one thing** — a non-adjacent delta bundles two interventions and cannot say which paid:
-  - `baseline` — deterministic, DB-derivable only (names, types, sample values, FK candidates). No train SQL, no curator LLM.
-  - `seeded` — plus mechanical train-SQL joins and metrics, plus decoy / negative-space marking. Still **no LLM and no few-shots** (few-shots arrive only through the curated agent path). Build cost is zero model calls. It exists because `baseline → curated` used to bundle the free deterministic seed with the LLM pass, and no arm separated them — which decides whether the product needs an LLM curator at all. `baseline → seeded` still changes several mechanisms at once (joins, metrics, FK guesses dropped, train-conditioned column mask); it is not a parsing-only causal estimate.
-  - `curated` — plus the curator LLM agent pass over that seed (including few-shots).
-  - `curated_sme` — the same round with those CSVs in the SME's brief.
-
-  The last pair exists because the SME reads human-authored column documentation the curator never sees, so a `curated → curated_sme` delta is as consistent with "a new knowledge source arrived" as with "the clarification protocol works". Splitting it costs a full SME round per database, so it is opt-in — and when omitted, the resulting compound step labels itself in the artifact rather than passing as single-variable. A **test-aware SME oracle** remains the dashed *`ceiling`*, designed but not built; the de-obfuscation "gold" oracle is **retired** (it was never a true ceiling — curator notes can exceed it). **Moat = the share of the obfuscation-induced accuracy drop the curator recovers.** How to run it: [experiment runbook](v1/plans/experiment-runbook.md).
-- Free behavioral signals from the manifest and logs: decoy-touch rate, governed-path adherence. Cost and efficiency (wall-clock, tokens, rows; BIRD's VES is reusable) are logged, not headline.
-- **Outcome/stage taxonomy.** `governed_bi.stages` gives the serve path and the eval harness one shared vocabulary for how a turn ended (`Outcome`: answered / refused / clarification / capped / crashed) and where (`Stage`), so a serve-path crash degraded to a fail-closed refusal is never scored as the model declining. Per-turn stage timings, tool-call counts, and guardrail-layer decisions are recorded once (`analyst.governance.StageRecorder`) and reach both the per-question eval artifacts (`generations.<arm>.jsonl`, `stage_events.jsonl`) and the durable run log (ADR 0004), so a deployment not running the eval harness still has this record. A run ledger (`runs/index.jsonl`, `governed_bi.eval.index`) then computes, per run, whether its own numbers are quotable and which other runs it may be compared to. Field-by-field detail and a symptom-to-file table are in [Measurement](v1/measurement.md).
-- **Refuse-gate eval:** a held-out **unanswerable** set, built from cross-DB and removed-coverage cases (auto-generated) plus a small hand-built out-of-scope set. The cross-DB cases are unanswerable here only because BIRD supplies no curated cross-schema joins; per D15 cross-schema *is* answerable with a curated join, though cross-schema serving is un-graded by BIRD. Scored on **refusal accuracy** (refuses the unanswerable) *and* **false-refusal rate** (on the answerable test set). This is the precision and recall of refusal.
-- **Repo boundary:** BIRD-Obfuscation produces validated data and manifests, and explicitly scopes out "the downstream agent that exercises the traps". That downstream agent is *this* system.
-- Later: retrieval-at-scale eval on an enterprise-scale deployment (Recall@K / MRR / nDCG, % answered via semantic layer).
-
-> **Eval gaps**
->
-> BIRD is small/clean → does **not** test retrieval-at-scale. BIRD questions are
-> all answerable → does **not** test the refuse-gate (need a held-out
-> unanswerable set). **Stretch arm:** withhold the train split for a few whole
-> DBs to test *zero-seed* cold-start (~69 unfamiliar "companies"). This is
-> deferred, not built first.
-
-## 9. Environments (Toggles, not architecture forks)
-
-| Concern | Dev / test (BIRD) | Prod (enterprise) |
-|---|---|---|
-| Human gate | auto-accept corpus changes | PR + owner + CI on every change |
-| Identity / RLS | single all-access identity | real user, RLS at gateway |
-| Serving | one process + files + SQLite | stateless server fleet; curator as async jobs; gateway/corpus/memory/eval as services; graph DB; caches |
-
-Bake in the abstractions now (identity object, gate, scoped memory/cache) as seams an enterprise fork can adapt — not "prod is a config flip" (see [D1](design-decisions.md#d1-target)).
-
-### Declared LangGraph SDK / wire-protocol ranges
-
-This repo's compatible generation of the LangGraph Server wire protocol is declared in `pyproject.toml`, not only in `uv.lock`:
-
-| Package | Range | How declared |
-|---|---|---|
-| `langgraph` | `>=1.0,<2` | direct dependency |
-| `langgraph-cli` | `>=0.4,<0.5` | direct (`langgraph-cli[inmem]`) |
-| `langgraph-api` | `>=0.11,<0.12` | `[tool.uv] constraint-dependencies` (transitive) |
-| `langgraph-sdk` | `>=0.4.2,<0.5` | `[tool.uv] constraint-dependencies` (transitive) |
-
-`langgraph-api` and `langgraph-sdk` own `/threads`, `/runs/stream`, and `stream_subgraphs`. They are not imported by this package; constraining them without promoting them to direct deps keeps `uv sync -U` from moving the wire protocol while a silent lockfile bump would leave no diff in application code. Widening a bound is a deliberate reviewable change.
+- **`safety_clearance`** — did the delivery path clear the guardrails / authorization surface.
+- **`semantic_assurance`** — whether uncertainty flags fired (`unflagged` / `heuristic` / `unverified`). `unflagged` means no flag fired; it is not “verified correct.”

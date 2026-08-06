@@ -9,11 +9,7 @@ from the top without the top importing the bottom's checker. So closure is prove
 where an upward import is legal: here.
 
 **Every test in this file drives the real function.** None re-implements a check's
-arithmetic. v1's gold-gate tests re-derived ``share > THRESHOLD`` themselves, so
-deleting the gate, flipping the comparison, and reversing the denominator all
-passed — three ways to break a security-relevant gate with a green suite. The
-authoring rules that came out of that are in ``docs/lessons-from-v1.md`` §7 and are
-applied here:
+arithmetic. Authoring rules applied here:
 
 * Assert on the **effect** (does the guard raise?), not on the presence of a
   constant.
@@ -285,12 +281,7 @@ def test_citation_gate_fires_on_a_retired_literal_in_live_code() -> None:
 
 
 def test_citation_gate_fires_in_live_documentation() -> None:
-    """``docs`` graduated from advisory to fatal once the v1 archive moved out.
-
-    Tested separately from the ``src/`` case because it is a different code path —
-    ``docs`` is scanned with a subtree exclusion — and because "advisory" and
-    "fatal" produce the same output when there happens to be nothing to report.
-    """
+    """``docs`` is a strict root (same fatal tier as ``src/`` / ``tools/``)."""
     probe = ROOT / "docs" / "_conformance_probe.md"
     probe.write_text(RETIRED_LITERAL, encoding="utf-8")
     try:
@@ -301,29 +292,17 @@ def test_citation_gate_fires_in_live_documentation() -> None:
         probe.unlink()
 
 
-def test_citation_gate_tolerates_the_archive_but_counts_it() -> None:
-    """The complement, and the reason the archive is a *tier* and not an exemption.
+def test_citation_gate_has_no_archive_tier() -> None:
+    """Historical markdown was deleted from the working tree; no non-fatal archive root."""
+    import importlib.util
 
-    A v1 experiment record stating what was measured on a date is a true statement
-    and must stay unedited, so a hit there cannot be fatal. But an exemption that
-    printed nothing would make a growing archive invisible, so the count is
-    published — and this asserts the count moved, not merely that the run passed.
-    """
-    before = _citation_gate()
-    assert before.returncode == 0
-    baseline = before.stdout
-
-    probe = ROOT / "docs" / "v1" / "_conformance_probe.md"
-    probe.write_text(RETIRED_LITERAL, encoding="utf-8")
-    try:
-        result = _citation_gate()
-        assert result.returncode == 0, "an archived record must not fail the run"
-        assert result.stdout != baseline, (
-            "the archive count did not change, so this tier is a silent exemption "
-            "rather than a reported one"
-        )
-    finally:
-        probe.unlink()
+    spec = importlib.util.spec_from_file_location(
+        "_check_citations", ROOT / "tools" / "check_citations.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.ARCHIVE_ROOTS == ()
 
 
 # ── file length: the hard cap fails, the soft cap is published ────────────────

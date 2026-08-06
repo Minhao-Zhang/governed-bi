@@ -1,40 +1,10 @@
-"""Does this corpus contain text from the held-out test questions?
+"""Detect held-out test question text leaking into a corpus.
 
-``GOLD_LAYER_MANIFEST.json`` records the gold layer's scope as *"TRAIN ONLY (test_final.jsonl
-held out) -- fair benchmark"*, and until now that was an honour system. Every number this
-repository publishes rests on it: a corpus authored with a test question in context has the
-answer in the index, and the resulting score measures the leak rather than the engine.
-
-``docs/plans/corpus-summary-rewrite-2026-08-05.md`` told an outsourced agent that contamination
-"cannot be detected afterwards". That is true of **paraphrase** and false of **copy-paste**, and
-copy-paste is the realistic failure when an agent has a question file open. So this exists.
-
-**Three checks, sharpest first.**
-
-1. **Provenance.** Does any asset's ``audit`` cite ``test_final.jsonl`` or a held-out
-   ``question_id``? Exact, and it needs no control: every few-shot in the gold layer cites
-   ``train_final.jsonl`` and a train qid, so a test citation is the leak naming itself.
-2. **Verbatim containment.** A held-out question's normalised text inside a corpus field.
-   **Both sides must carry at least ``NGRAM`` content words**, and that bound is the whole
-   correctness of the check -- without it the first draft reported **67 containments in the
-   certified train-only gold layer**, every one a coincidence: it tested containment in both
-   directions, so the two-word summary *"How many cancelled flights are there?"* matched any
-   longer question containing "cancelled flights". A leak detector with a 100% false-positive
-   rate is worse than none, because the next reader learns to ignore it.
-3. **N-gram collision rate**, against a control corpus. The weak one, and it is weak by
-   construction: BIRD asks near-identically-worded questions about one database across both
-   splits, and 5 000 few-shot assets are train questions verbatim, so *some* overlap is the
-   corpus doing its job. A bare threshold would flag that on every corpus ever built. The
-   certified train-only gold layer is therefore measured alongside and reported as the
-   reference. **A materially higher rate is the signal; a similar rate is not evidence.**
-
-**What none of them catch:** a leak that was reworded. Do not report a pass as cleanliness.
-
-The splits themselves were checked while writing this and are disjoint -- 0 shared
-``question_id`` and 0 shared verbatim question text between ``train_final.jsonl`` (5 392) and
-``test_final.jsonl`` (1 351). Both files use BIRD's original ``train_*`` id namespace, so a
-``train_`` prefix says nothing about which split a question is in; only membership does.
+Checks: provenance citing test split; verbatim containment (min NGRAM content
+words; few_shots exempt with stricter provenance); n-gram rate vs a train-only
+control. Paraphrase leaks are undetectable — a pass is not cleanliness.
 """
+
 
 from __future__ import annotations
 
@@ -51,32 +21,10 @@ sys.path.insert(0, str(REPO / "src"))
 DEFAULT_CONTROL = "corpora/gold-semantic-layer-20260804"
 DEFAULT_DATASET = REPO.parent / "BIRD-Data-Obfuscation" / "eval_dataset" / "test_final.jsonl"
 
-#: Length of the shared content-word window, and the minimum length of a question eligible for
-#: the containment check. **Chosen by sweeping it, not by taste.** Held-out questions carry a
-#: median of 8 content words and a p10 of 4, so the window doubles as a coverage limit:
-#:
-#: .. code-block:: text
-#:
-#:      N   questions eligible   containments in the train-only control   planted leak caught
-#:      4         95.9%                        12                               yes
-#:      5         88.8%                         4                               yes
-#:      7         67.5%                         2                               yes
-#:      8         52.3%                         0                               no
-#:
-#: At 8 the check is clean and blind — it misses a leak planted verbatim in a table body, because
-#: that question has 7 content words. **There is no N that is both clean and sensitive**, and the
-#: reason is not the threshold: every one of the control's containments is a ``few_shot``, whose
-#: summary *is* a train question by construction, matching a test question BIRD worded similarly.
-#: So the fix is the exclusion below rather than a bigger window, and N can then be small.
+#: Content-word window for containment / n-gram checks.
 NGRAM = 5
 
-#: Asset types excluded from the containment check, with their own stricter check instead.
-#:
-#: ``few_shot`` only. Its summary is a train question verbatim (ADR 0005 §1.2: "``summary`` IS the
-#: question"), so containment there measures BIRD's train/test phrasing overlap and not this
-#: corpus's hygiene — it is the entire false-positive population at every window size. In exchange
-#: these assets must **prove** their provenance: a few-shot whose audit does not cite the train
-#: file is reported, which is a sharper test than any wording comparison.
+#: ``few_shot`` summaries are train questions; exempt from containment, stricter provenance instead.
 CONTAINMENT_EXEMPT = frozenset({"few_shot"})
 
 #: Words dropped before windowing, so "how many of the" does not carry a collision by itself.

@@ -1,18 +1,7 @@
-"""The custom REST routes the frontend consumes, mounted by ``langgraph.json``'s ``http.app``.
+"""Custom REST routes mounted by ``langgraph.json``'s ``http.app`` (ADR 0007 §7).
 
-ADR 0007 §7. `docs/openapi.json` is v1's spec and remains the spec-of-record for the **route
-shapes**; it is not the spec for the answer, which changed with the rewrite.
-
-**Every value here is an observation.** `/capabilities` is the UI's first request, so a
-hard-coded `true` in it is the stub-path defect one layer out: the interface would promise a
-model that will never answer, and the user would read the silence as a bug in their question.
-`can_edit` is false because the curator is out of scope. `can_scope` is **true** since ADR
-0009 built the routes behind it; `can_search` is still false because `/search` is not built,
-and the UI degrades to a client-side index, which works. A capability is flipped by building
-the thing it names.
-
-**No route needs a model.** All five ungated routes are projections of the session's assets, so
-the corpus is browsable before anyone pays for a token.
+Route shapes follow ``docs/openapi.json``. Capabilities report what is actually built.
+No ungated route needs a model — corpus browsing is model-free.
 """
 
 from __future__ import annotations
@@ -39,8 +28,6 @@ __all__ = ["app"]
 
 app = FastAPI(title="governed-bi", version="2")
 
-# The browsing routes live beside their logic (`api/browse.py`), included rather than
-# re-declared so there is one definition of `/schema` and one of `/corpus/rows`.
 app.include_router(browse_router)
 
 
@@ -48,18 +35,8 @@ def _session() -> Any:
     return session_from_environment()
 
 
-#: One compiled graph, one checkpointer, for the whole process.
-#:
-#: `compile_graph()` builds a **fresh** `InMemorySaver` on every call, so calling it per
-#: request meant every turn started from an empty checkpoint — no resume, no thread memory,
-#: and no way for an `ask_user` interrupt to be answered, while this module's docstring
-#: claimed otherwise. Compiling once is what makes the thread id mean something.
-#:
-#: The nested `create_agent` needs no saver of its own, and the sentence that used to be here
-#: claiming otherwise — "two savers means the interrupt is written to one and looked for in the
-#: other" — described a mechanism that does not exist. LangGraph propagates the checkpointer
-#: through `config` into a graph invoked inside a node: measured, the agent's own saver ends a
-#: run with zero checkpoints while this one has three.
+#: Process-wide compiled graph + checkpointer. ``compile_graph()`` builds a fresh saver per
+#: call; compiling once keeps ``thread_id`` meaningful across turns and interrupts.
 _GRAPH: Any = None
 
 
@@ -76,9 +53,7 @@ def _graph() -> Any:
 
 @app.get("/livez")
 def livez() -> dict[str, Any]:
-    """Liveness only. Deliberately does **not** touch the session: a liveness probe that
-    builds a corpus reports "dead" for a slow seed, and something that restarts the process on
-    that answer turns a slow start into a loop."""
+    """Liveness only — does not touch the session."""
     return {"ok": True}
 
 
@@ -86,96 +61,27 @@ def livez() -> dict[str, Any]:
 def capabilities() -> dict[str, Any]:
     """What this server can actually do. The UI blocks on this response."""
     session = _session()
-    #: Whether the streaming transport is offered. Bound to a name because `can_clarify`
-    #: depends on it and two copies of one literal is how the two answers drift apart.
+    #: Bound once so ``can_clarify`` cannot drift from ``can_stream``.
     can_stream = True
     return {
         "environment": "local",
         "dialect": getattr(session.connector, "dialect", "postgres"),
-        # The curator is out of scope, so an edit button would front a route that does not
-        # exist. False here is a promise kept, not a feature missing.
         "can_edit": False,
         "edit_mode": "none",
-        # **True since ADR 0010 built the events behind it.** It was false while nothing
-        # emitted a custom event, because a streamed run would have rendered a live-looking
-        # timeline with no steps in it — worse than not offering the mode. `serve/events.py`,
-        # `serve/wrap.py` and `serve/tools.py` now emit every rail, every tool and every
-        # governance verdict, so the flag is flipped by building the thing it names.
-        #
-        # The second reason recorded here is **retired, and measured retired** (ADR 0010 M4).
-        # It said a synchronous engine would trip `blockbuster` inside the server's worker.
-        # `blockbuster` is armed only in the in-mem run queue, LangGraph runs sync nodes in an
-        # executor thread where it does not fire, and a full streamed run against live
-        # Postgres completed — 321 token deltas, 12 subgraph updates, no BlockingError. No
-        # `--allow-blocking` is needed.
-        #
-        # What the *client* must send is the part worth guarding, and it is not visible from
-        # here: `stream_subgraphs: true`. The model and every tool run inside a nested
-        # `create_agent` graph, so without that flag a correct emitter still produces an empty
-        # timeline and no streamed text. The server accepts the wrong spelling (`subgraphs`)
-        # with HTTP 200 and ignores it silently.
         "can_stream": can_stream,
-        # Observed, never assumed: a session with no model serves the stub path, and saying
-        # otherwise would make the interface blame the question for the silence.
         "has_live_model": session.agent_model is not None,
         "model": session.knobs_resolved.get("llm_model"),
-        # **True now, because the routes exist** — `/schema/summary`, `/schema/{id}`,
-        # `/corpus/fields`, `/corpus/rows` and a scoped `/graph` (ADR 0009). It was false
-        # while they 404'd, which is why nothing looked broken: the UI has a documented
-        # fallback to the flat dumps, and the fallback was the 937 KB `/schema` and the
-        # 2.25 MB `/corpus/assets` we were measuring. The flag is flipped by building the
-        # thing, never to unlock a UI path.
         "can_scope": True,
-        # Still false: `/search` is not built. Reporting a search the server cannot do would
-        # make the omnibox blame the corpus for an empty result. The UI's client-side Fuse
-        # index is the honest fallback and it works.
         "can_search": False,
-        # **Gated on `can_stream`, and that is the correction.** The server half is genuinely
-        # built: `ask_user` is bound whenever a model is, `POST /chat` surfaces `__interrupt__`,
-        # and `POST /chat/resume` accepts the answer. But this flag does not describe the
-        # server — the client contract makes it the switch that mounts the interrupt prompt, and
-        # the transport it would mount into depends on `can_stream`. With streaming off the UI
-        # mounts `<RestChat/>`, whose `useRestChat` has no clarification state and no resume
-        # call anywhere in it, so `true` offered a question that could be asked, displayed
-        # nowhere, and answered by nobody — the graph simply stayed paused.
-        #
-        # It was false because of the *client's* missing half, not the server's. The expression
-        # is unchanged and that is the point: it flipped by turning streaming on, which mounts
-        # `<StreamChat/>` — the transport that does have a clarification pair — and never by
-        # editing this line. Reporting a capability the mounted transport lacks is the same
-        # defect as a reliability badge with nothing behind it.
+        # Clarification UI mounts only on the streaming transport.
         "can_clarify": can_stream and session.agent_model is not None,
     }
-
-
-# ``GET /health`` was **deleted**, and it is `/audit/corpus` below that replaced it.
-#
-# The two answered the same question from the same session fields — asset counts, whether the
-# corpus is servable, how many fatal problems, how many degradations, the problem strings — and
-# `/audit/corpus` answers it better on the one field they treated differently: it returns `fatal`
-# and `degradations` as **separate lists**, which ADR 0008 D9 requires, where `/health` flattened
-# both into one `findings` array and left the caller to guess which was which.
-#
-# What `/health` had and `/audit/corpus` does not is three counters — `n_suspect_columns`,
-# `n_excluded`, `n_low_confidence_joins` — that were **hardcoded to zero**, under a comment
-# arguing that zero is a true count over an uncurated corpus. That was true of two of them and
-# **false of the third**: `governance.excluded` is a real per-asset field, `/corpus/assets`
-# reads it on every row, and the corpus browser's "Hide excluded" control filters on it. So one
-# marked asset would have made this route report `0` while the page beside it showed the badge —
-# a disagreement that was latent only because nothing has been marked yet.
-#
-# A route whose distinctive content is two structural zeros and one latent lie is not a surface
-# worth keeping in step with another. `/livez` remains the liveness probe, and it is the one that
-# was always correct for that job: it deliberately does not touch the session.
 
 
 def _provenance_status(asset: Any) -> str | None:
     """``asset.audit.provenance.status``, or ``None`` when any link is absent.
 
-    Absent is a distinct value here, not a default: ADR 0005 §6 requires "not measured" to be
-    distinguishable everywhere, and an asset with no audit trail is a different claim from one
-    audited and found clean. Every step is optional on the dataclasses, which is why this is a
-    named function rather than a fourfold `getattr` chain repeated at each call site.
+    Absent ≠ clean: ADR 0005 §6 requires "not measured" to stay distinguishable.
     """
     provenance = getattr(getattr(asset, "audit", None), "provenance", None)
     status = getattr(provenance, "status", None)
@@ -184,16 +90,9 @@ def _provenance_status(asset: Any) -> str | None:
 
 @app.get("/corpus/assets")
 def corpus_assets(type: str | None = None) -> list[dict[str, Any]]:
-    """Assets of one type, as rows. ``type`` is validated against the **register**, not a
-    hand-written list, so a new asset type is reachable here the moment it is declared.
+    """Assets of one type as rows. ``type`` is validated against the register.
 
-    ``provenance_status`` and ``excluded`` are **required** by the client's `assetRowSchema`,
-    and leaving them out took three live components down at once — the chat conversation, the
-    corpus asset browser and the column-related sheet all call this and all `safeParse` it, so
-    two absent keys became three thrown `ApiError`s rather than three rows missing a badge.
-    Both are governance observations the engine already holds on every asset; `excluded` in
-    particular is what the "Hide excluded" control filters on, so without it the control would
-    be a toggle over nothing.
+    ``provenance_status`` and ``excluded`` are required by the client's ``assetRowSchema``.
     """
     session = _session()
     known = {t.value for t in ASSET_REGISTER}
@@ -214,19 +113,9 @@ def corpus_assets(type: str | None = None) -> list[dict[str, Any]]:
 
 
 def _graph_payload() -> dict[str, Any]:
-    """The **ER** graph: tables as nodes, join relationships as edges carrying their key.
+    """ER graph: tables as nodes, join relationships as edges.
 
-    **From the structure**, not from a second walk over the assets: `CorpusStructure` is the
-    one resolution of physical names to asset ids (ADR 0005 §2.8.2), and a graph drawn from a
-    different one could show an edge the router does not have.
-
-    Every field here is required by the client's declared contract, and **omitting them is
-    what broke the Relationships tab**. This emitted `{id, label, kind, schema}` while the
-    contract requires `physical_name`, `row_count`, `n_columns`, `excluded` and `has_suspect`
-    on a node and `on` / `cardinality` on an edge — so the UI's zod boundary rejected the
-    whole response and the tab rendered "Couldn't load data". Not a validation nuisance: the
-    join predicate and the cardinality are what make this an *ER diagram* rather than an
-    undifferentiated blob, and the engine has both on every ``JoinAsset``.
+    Drawn from ``CorpusStructure`` (ADR 0005 §2.8.2), not a second asset walk.
     """
     session = _session()
     structure = session.structure
@@ -235,16 +124,7 @@ def _graph_payload() -> dict[str, Any]:
     edges: list[dict[str, Any]] = []
     for left, right in sorted(structure.join_edges):
         join_ids = list(structure.joins_by_edge.get((left, right), ()))
-        # Several relationships between one table pair is the normal case ADR 0005 §1.2 put
-        # the ON digest in the join id for. The first is drawn; all of them are carried, so a
-        # detail sheet can show the rest rather than the diagram pretending there is one.
-        #
-        # But `len(join_ids)` is **not** that count. A relationship declared from both ends is
-        # two join assets over one predicate — `join_a_b_<digest>` and `join_b_a_<digest>` —
-        # and the ON digest is identical precisely so the pair is recognisable. Measured over
-        # the pooled lake: 83 table pairs carry more than one join asset, and 71 of them are a
-        # single relationship counted twice. So the count is over **distinct predicates**, and
-        # `join_ids` stays complete because it is the audit trail, not the number.
+        # Count distinct ON digests: bidirectional declarations yield two join assets.
         distinct_relationships = len({str(j).rsplit("_", 1)[-1] for j in join_ids})
         first = by_id.get(join_ids[0]) if join_ids else None
         confidence = getattr(first, "confidence", None)
@@ -256,8 +136,6 @@ def _graph_payload() -> dict[str, Any]:
                 "on": str(getattr(first, "on", "") or ""),
                 "cardinality": getattr(getattr(first, "cardinality", None), "value", None),
                 "confidence": confidence,
-                # A threshold the *client* used to invent. It reads a declared knob here
-                # instead, so the diagram and the corpus agree on what "low" means.
                 "low_confidence": bool(confidence is not None and confidence < 0.5),
                 "join_ids": join_ids,
                 "n_relationships": distinct_relationships,
@@ -291,13 +169,7 @@ def _graph_payload() -> dict[str, Any]:
     return {"nodes": nodes, "edges": edges, "meta": {"n_nodes": len(nodes), "n_edges": len(edges)}}
 
 
-#: How a reference from one asset type is labelled in the knowledge graph. The client's
-#: vocabulary (``join | measures | grounds | exemplifies | related``), keyed on the *source*
-#: asset type — which is where the meaning lives: a metric pointing at a table measures it,
-#: a term pointing at anything grounds in it.
-# The node kinds the semantic graph draws — the client's `graphNodeKindSchema`, which is the
-# contract this has to satisfy exactly: a kind outside this set fails the zod boundary and
-# takes the *whole* response down, not just its own node.
+#: Edge relation label by source asset type (client vocabulary).
 _SEMANTIC_NODE_KINDS: frozenset[str] = frozenset(
     {"table", "join", "metric", "term", "note", "few_shot", "negative_example"}
 )
@@ -313,29 +185,9 @@ _RELATION_BY_SOURCE: dict[str, str] = {
 
 
 def _knowledge_payload() -> dict[str, Any]:
-    """The **semantic** graph: every asset kind, edges from the reference closure.
+    """Semantic graph: every asset kind, edges from the reference closure.
 
-    A different graph from the ER one, and this route used to return the ER payload with a
-    note saying "the same for now, and saying so is better than two drifting walks". That
-    note was wrong twice. The client declares a *different* node shape for this route
-    (``kind`` over every asset type, ``provenance_status``, a ``relation`` on the edge), so
-    the ER payload failed its zod boundary here too — and the two graphs are not the same
-    graph: this one has 13,981 nodes' worth of terms, metrics and few-shots hanging off the
-    tables, which is the entire thing a *semantic* layer view is for.
-
-    Edges come from ``CorpusStructure.references``, which is the closure ``resolve`` runs on.
-    So what the diagram draws is what retrieval would actually pull in — the property a
-    hand-built second walk would lose.
-
-    **Columns and schemas are not nodes here.** Two reasons, and they agree. The client's
-    node vocabulary is the seven semantic kinds (``graphNodeKindSchema``), so emitting
-    ``kind: "column"`` failed the zod boundary and the tab rendered nothing at all. And the
-    shape was wrong even where it parsed: a one-schema scope came to 107 columns out of a
-    120-node budget, so the columns crowded out the terms and metrics that are the reason to
-    look at a *semantic* graph. Column endpoints are **re-pointed to the owning table**
-    rather than dropped, which keeps a term bound to ``lineitem.l_quantity`` attached to
-    ``lineitem`` instead of stranding it as an isolated node. Per-column detail is a
-    different question, answered by ``GET /schema/{table_id}``.
+    Columns are re-pointed to their owning table (not drawn as nodes).
     """
     session = _session()
     structure = session.structure
@@ -375,9 +227,6 @@ def _knowledge_payload() -> dict[str, Any]:
             continue
         for target in sorted(targets):
             drawn_target = _semantic_id(target)
-            # A column->its-own-table reference collapses to a self-loop once both ends are
-            # re-pointed; so does one term binding two columns of the same table. Neither is
-            # worth drawing, and the dedupe keeps the node budget for real relationships.
             if drawn_target is None or drawn_target == drawn_source:
                 continue
             if (drawn_source, drawn_target) in seen_edges:
@@ -399,49 +248,12 @@ def _knowledge_payload() -> dict[str, Any]:
 
 @app.post("/chat")
 def chat(body: dict[str, Any]) -> dict[str, Any]:
-    """Serve one turn, blocking. **The degradation path, not the transport.**
-
-    It was the transport while ``can_stream`` was false. Since ADR 0010 the UI mounts
-    ``<StreamChat/>`` against the LangGraph runtime and reaches this route only when a streamed
-    run errors — so what matters about it now is what it *cannot* carry, and the answer is
-    stated here rather than left to be discovered:
-
-    **This route and the streamed one do not share a memory.** ``_GRAPH`` below is compiled with
-    its own ``InMemorySaver``; the graph the server streams is compiled by
-    ``graph_app.make_graph`` with **no** saver precisely so the server can supply its own, which
-    is what makes ``/threads`` work. Two savers in one process means a ``session_id`` names two
-    unrelated checkpoints, so a mid-conversation fallback lands on an empty thread: the turn is
-    served correctly and in isolation, and the conversation before it is gone. A clarification
-    paused on the streamed thread is likewise not answerable here.
-
-    That is a real limitation and it is not fixed by this route, because the fix is one graph and
-    one saver — either this route becoming a client of the runtime, or the runtime's saver being
-    reachable from here. Both are larger than a fallback deserves, and neither should be
-    improvised while turning streaming on. Recorded in ADR 0010's consequences.
+    """Serve one turn, blocking. Degradation path — streaming is the primary transport.
 
     Request: ``{question, session_id, history: [{role, text}]}``.
-
-    Response: **v2's answer, verbatim** — ``{outcome, text, failed_stage, error_type,
-    refused_by, record}``. Not projected into v1's `AnswerView`: ADR 0007 §3 forbids
-    synthesizing `tier`, `safety_clearance` or `semantic_assurance`, none of which exists in
-    this engine, because a reliability badge with nothing behind it is the defect class the
-    rewrite removed. ``answer_text`` is added beside them for one reason given below.
-
-    ``session_id`` becomes the ``thread_id`` **on the config**, which is what LangGraph
-    checkpoints on, so a conversation genuinely resumes under one checkpoint and an
-    ``ask_user`` interrupt can be answered. An earlier version of this route put the thread id
-    only in the turn state and asserted the same sentence; it was false, because
-    ``compile_graph()`` also built a fresh saver per request. Both halves are fixed.
-
-    ``history`` is **not injected into the conversation** and is not a second memory. The
-    thread is the memory. It is read for exactly one thing -- numbering the turn -- and if it
-    disagrees with the thread, the thread is right. Accepting it and also replaying it would
-    be two sources for one fact, which is the failure this file keeps arguing against.
-
-    Defined ``def`` rather than ``async def`` deliberately. FastAPI runs a sync handler in a
-    threadpool, so the synchronous connector and model calls do not occupy the event loop —
-    which is the same property `blockbuster` was complaining about, obtained rather than
-    suppressed.
+    Response: v2 answer shape ``{outcome, text, failed_stage, error_type, refused_by, record}``
+    plus ``answer_text``. ``session_id`` becomes ``thread_id`` on the config.
+    Sync handler so connector/model calls run in FastAPI's threadpool.
     """
     session = _session()
     question = str(body.get("question") or "").strip()
@@ -462,21 +274,9 @@ def chat(body: dict[str, Any]) -> dict[str, Any]:
 
 @app.post("/chat/resume")
 def chat_resume(body: dict[str, Any]) -> dict[str, Any]:
-    """Answer a clarification. The other half of ``POST /chat``'s interrupt.
-
-    **This route did not exist, and its absence was a deadlock on the transport the UI uses.**
-    ``/chat`` called ``graph.invoke`` and returned ``out["answer"]``; when ``ask_user``
-    interrupted, no node had written ``answer``, so the route replied **HTTP 200** with
-    ``{"answer_text": null}`` and dropped ``__interrupt__`` on the floor. The client saw a
-    successful empty answer, the graph stayed paused forever, and nothing on screen was wrong —
-    which ``serve/tools.py`` already calls "the worst failure shape available here" about the
-    payload version of the same bug. Meanwhile ``/capabilities`` reported
-    ``can_clarify: true``.
+    """Answer a clarification paused by ``ask_user``.
 
     Request: ``{session_id, clarification_id?, answer | choice_id | declined, identity?}``.
-
-    ``clarification_id`` is checked against the pending question when supplied, because an
-    answer attributed to the wrong question is worse than a refused one.
     """
     session = _session()
     thread_id = str(body.get("session_id") or "")
@@ -506,38 +306,18 @@ def chat_resume(body: dict[str, Any]) -> dict[str, Any]:
         )
     except ResumeRejected:
         return _error("resume identity mismatch: the caller answering is not the caller that was asked")
-    # Logged here too, and with the *clarification* as the question. A resumed turn is the
-    # one that produces the record, so leaving it out would make every clarified
-    # conversation invisible to the audit surface — which is the half of the traffic most
-    # worth auditing.
     return _logged(_shape(out), str(pending.get("question") or ""))
 
 
 def _config(session: Any, question: str | None, thread_id: str) -> dict[str, Any]:
-    """This request's config. The thread goes on the **config**, not in the turn state.
-
-    That is what LangGraph checkpoints on. An earlier version put it only in the turn and
-    asserted in a docstring that a conversation would resume; it could not.
-    """
+    """Request config. ``thread_id`` goes on the config (what LangGraph checkpoints on)."""
     config = session.configurable(question=question) if question else session.configurable()
     config["configurable"]["thread_id"] = thread_id
     return config
 
 
 def _identity(body: dict[str, Any], thread_id: str) -> dict[str, str]:
-    """Who is asking, for ``resume_authorised``.
-
-    **On this deployment the thread id is the only credential there is, and saying so is the
-    point.** ``resume_authorised`` refuses two ``None``s on purpose — an unauthenticated
-    deployment must not get cross-caller resume for free — and nothing in this repository
-    supplied an identity, so *every* clarification was unanswerable: ``ResumeRejected`` for
-    every caller, including the right one.
-
-    Falling back to the thread id grants no authority that posting to ``/chat`` on the same
-    thread does not already grant, because there is no authentication in front of either. It is
-    a **same-thread** check, not a same-caller one, and a deployment with real auth must send a
-    real ``identity`` — which this accepts and prefers.
-    """
+    """Caller identity for ``resume_authorised``. Falls back to thread id when none supplied."""
     supplied = body.get("identity")
     if isinstance(supplied, str) and supplied:
         return {"token": supplied}
@@ -549,14 +329,7 @@ def _identity(body: dict[str, Any], thread_id: str) -> dict[str, str]:
 
 
 def _clarification(interrupts: Any) -> dict[str, Any] | None:
-    """The ``ask_user`` payload (ADR 0007 §6) among some interrupts, or ``None``.
-
-    Pure, and takes the interrupts rather than a state, because the two callers have different
-    ones: a completed ``invoke`` returns ``__interrupt__`` on the state, while a fresh
-    ``/chat/resume`` request has no returned state and must read the checkpoint's pending tasks.
-    Filtered on ``kind == "clarification"`` so a future interrupt of another kind is not
-    answered by the clarification route.
-    """
+    """The ``ask_user`` payload (ADR 0007 §6) among interrupts, or ``None``."""
     for item in interrupts or ():
         value = getattr(item, "value", item)
         if isinstance(value, dict) and value.get("kind") == "clarification":
@@ -571,17 +344,9 @@ def _pending_on_thread(config: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _shape(out: dict[str, Any]) -> dict[str, Any]:
-    """One response shape for both chat routes, including the paused one.
-
-    Response: **v2's answer, verbatim** — ``{outcome, text, failed_stage, error_type,
-    refused_by, record}`` — plus ``answer_text`` and, when the turn is paused, ``clarification``.
-    Not projected into v1's ``AnswerView``: ADR 0007 §3 forbids synthesizing ``tier``,
-    ``safety_clearance`` or ``semantic_assurance``, none of which exists in this engine.
-    """
+    """One response shape for both chat routes, including the paused one."""
     pending = _clarification(out.get("__interrupt__"))
     if pending is not None:
-        # `outcome: "clarification"` is a **declared** `register.stages.Outcome` member, not a
-        # string invented here for the transport.
         return {
             "outcome": "clarification",
             "text": pending.get("question"),
@@ -593,11 +358,6 @@ def _shape(out: dict[str, Any]) -> dict[str, Any]:
             "clarification": pending,
         }
     answer = dict(out.get("answer") or {})
-    # `answer_text` is now written by the `narrate` node for **every** transport, so this only
-    # fills a gap the graph left. Which is the whole reason `narrate` exists: this line was here,
-    # it worked, and it worked *only for REST* — so `POST /chat` returned an answer the streamed
-    # path could not show, and the streamed path is the one the UI uses. A boundary patch that
-    # fixes one of two callers is how a defect hides behind a passing route.
     answer.setdefault("answer_text", None)
     if answer.get("answer_text") is None:
         answer["answer_text"] = last_ai_text(out)
@@ -606,16 +366,7 @@ def _shape(out: dict[str, Any]) -> dict[str, Any]:
 
 
 def _logged(shaped: dict[str, Any], question: str) -> dict[str, Any]:
-    """Append the turn to the audit log and say whether that worked.
-
-    A paused turn is **not** logged: it has no record yet, and writing an empty one would
-    put a row in the audit list that reports fifteen absent required fields for a turn that
-    is waiting rather than broken — the same mistake ``python -m governed_bi.serve`` exit 4
-    exists to avoid.
-
-    ``audit_logged`` rides on the response instead of being silently dropped, because "no
-    turns are listed" and "no turns were served" must not be the same observation.
-    """
+    """Append the turn to the audit log. Paused turns (no record) are skipped."""
     record = shaped.get("record") or {}
     if not record.get("turn_id"):
         return shaped
@@ -653,22 +404,7 @@ def er_graph(
     node_budget: int = DEFAULT_NODE_BUDGET,
     kinds: str | None = None,
 ) -> dict[str, Any]:
-    """A **bounded** relationship view. ADR 0009 D2.
-
-    This returned all 656 tables and 556 edges unconditionally. The payload is only 166 KB,
-    so it looked fine — but the client lays it out with dagre, synchronously, in the browser,
-    and 656 nodes is neither fast nor a diagram anybody can read. The fix is not a smaller
-    payload, it is a *scope*.
-
-    ``schema`` and ``kinds`` narrow the candidate set; ``focus`` + ``radius`` then walks
-    outward over the join graph; ``node_budget`` bounds the result last, breadth-first from
-    the focus so what survives is the near neighbourhood rather than whatever sorted first.
-
-    **``meta.truncated`` and ``meta.dropped`` are part of the contract.** A view that quietly
-    renders 120 of 656 nodes reads as complete coverage, and this repository has published a
-    number on top of that shape. With no scope at all the default budget still applies, so
-    there is no request that returns an unlayoutable graph.
-    """
+    """Bounded ER relationship view (ADR 0009 D2). ``meta.truncated`` / ``meta.dropped`` are required."""
     payload = _graph_payload()
     return subgraph(
         nodes=payload["nodes"],
@@ -689,18 +425,7 @@ def knowledge_graph(
     node_budget: int = DEFAULT_NODE_BUDGET,
     kinds: str | None = None,
 ) -> dict[str, Any]:
-    """The semantic graph: **every** asset kind, edges from the reference closure.
-
-    Not the ER payload. It was, under a note claiming the two were "genuinely the same graph
-    today", and that was wrong on both counts: the client declares a different node shape for
-    this route — so the ER payload failed its zod boundary and this tab could not render
-    either — and the graphs differ by 13 325 nodes, because this one carries the terms,
-    metrics and few-shots hanging off the tables. That layer is the entire thing a *semantic*
-    view is for.
-
-    Same scope contract as `/graph`, because a client that can narrow one and not the other
-    would show two different corpora on two tabs.
-    """
+    """Bounded semantic graph. Same scope contract as ``/graph``."""
     payload = _knowledge_payload()
     return subgraph(
         nodes=payload["nodes"],
@@ -713,23 +438,12 @@ def knowledge_graph(
     )
 
 
-# ── the audit surface ─────────────────────────────────────────────────────────
-#
-# Everything lives under `/audit`, and the namespace is not cosmetic: `GET /runs` returns
-# **405** on this server because LangGraph Server owns `POST /runs`, so a route named for
-# what it holds would have collided with the platform's own. One prefix that cannot
-# collide, four routes.
+# Audit surface under `/audit` (avoids colliding with LangGraph Server's `/runs`).
 
 
 @app.get("/audit/turns")
 def audit_turns(limit: int = 50) -> dict[str, Any]:
-    """Every turn this installation has served, newest first.
-
-    ``incomplete_fields`` is computed against **today's** register rather than stored, so a
-    turn logged before a field was declared is judged by the declaration in force now — the
-    question the column answers is "is this turn quotable", and that is a question about the
-    current register.
-    """
+    """Served turns, newest first. ``incomplete_fields`` is judged against today's register."""
     turns = list_turns(limit=limit)
     return {
         "turns": turns,
@@ -741,31 +455,9 @@ def audit_turns(limit: int = 50) -> dict[str, Any]:
     }
 
 
-# ``GET /audit/turns/{turn_id}`` was **deleted**. No client ever called it, and everything it
-# returned about a turn either duplicated the summary in ``/audit/turns`` or is now on the
-# ``/trace`` route below — which the UI fetches at the same moment, for the same turn, from the
-# same click. Two routes over one turn is two shapes to keep in step for no second caller.
-#
-# Its two unique fields moved rather than went: ``record`` (the raw record, so the drawer can
-# show a field the register has not yet been taught) and ``undeclared_keys`` (the only signal
-# that a producer is writing a field **nobody declared** — which is how a register stops being
-# the description of what actually happens).
-
-
 @app.get("/audit/turns/{turn_id}/trace")
 def audit_trace(turn_id: str) -> dict[str, Any]:
-    """The turn, grouped by the pipeline stage that produced each field.
-
-    **Derived from ``RECORD_REGISTER``, never from a list written here.** Every
-    ``RecordField`` already declares its ``owner`` stage, so the trace is a ``groupby`` over
-    a table that exists — which means a field added to the register appears in the trace
-    with no edit to this route, and a trace section can never claim a stage the register
-    does not assign. A hand-written stage→fields map would be exactly the drift
-    ``register/`` was built to end.
-
-    Stage order follows ``Stage``'s declaration order, which is pipeline order, so the
-    sections read top to bottom as the turn ran.
-    """
+    """Turn fields grouped by owning stage, derived from ``RECORD_REGISTER``."""
     from governed_bi.register.record import RECORD_REGISTER, missing_required, undeclared_keys
     from governed_bi.register.stages import Stage
 
@@ -804,11 +496,6 @@ def audit_trace(turn_id: str) -> dict[str, Any]:
         "ledger": (record.get("execution") or {}).get("attempts") or [],
         "terminal": (record.get("execution") or {}).get("terminal"),
         "missing_required": sorted(absent),
-        # Folded in from the deleted `/audit/turns/{turn_id}`. `stages` is the register's view
-        # of the record and therefore shows only fields the register knows about; `record` is
-        # the record itself, and `undeclared_keys` names what is in it that nothing declared.
-        # That difference is the point: a stage list can look complete while a producer writes
-        # a field no one has declared, and only this key says so.
         "record": record,
         "undeclared_keys": sorted(undeclared_keys(record)),
     }
@@ -816,14 +503,7 @@ def audit_trace(turn_id: str) -> dict[str, Any]:
 
 @app.get("/audit/corpus")
 def audit_corpus() -> dict[str, Any]:
-    """What the corpus is, and what is wrong with it — the two halves in one response.
-
-    ``fatal`` and ``degradations`` are separate lists rather than one with a flag, because
-    ADR 0008 D9 makes them different states: a fatal problem means an id is not a key and
-    the corpus is not what it claims, while a degradation means the corpus is smaller than
-    the lake. The CLI refuses on the first and serves past the second, and a surface that
-    blurred them would put this server and that one back into disagreement.
-    """
+    """Corpus inventory plus problems. ``fatal`` and ``degradations`` stay separate (ADR 0008 D9)."""
     session = _session()
     counts: dict[str, int] = {}
     for asset in session.assets_by_id.values():

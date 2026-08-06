@@ -1,6 +1,6 @@
 """Faceted retrieval: lexical + semantic scoring, route, closure, budgets.
 
-Parcel E. Spec: ADR 0005 §2, ``docs/plans/v2-layer-handoffs.md`` §6.
+Parcel E. Spec: ADR 0005 §2.
 
 ``route`` is intentionally **not** re-exported as a function here — the scoring
 contract imports ``governed_bi.retrieve.route`` as the submodule (to read its

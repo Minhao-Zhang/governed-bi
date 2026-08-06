@@ -1,23 +1,9 @@
-"""Ids and paths: the two places a corpus name becomes a filesystem path.
+"""Ids and paths: where a corpus name becomes a filesystem path.
 
-**Why this is its own module rather than a few helpers inside the store.** v1's
-``asset.schema`` escaped the corpus root: the write directory is derived from that
-field while the only validator in the area guarded the asset *id*. Two names, one
-of them unguarded, and the guard was in a module that had no reason to be looking
-at directories. So the rule this module states is **validate a path component
-where it is used as a path component**, and both functions are here so a reader
-looking for "what may become a directory name" finds one answer.
-
-The subtlety that made v1's version wrong even where it existed: **``\\A...\\Z``, not
-``^...$``.** Python's ``$`` also matches just before a trailing newline, so
-``"beer_factory\\n"`` passes a ``^[A-Za-z0-9_]+$`` validator that names a
-directory. :func:`validate_path_component` is tested against exactly that string.
-
-Column ids are **derived, never authored** (ADR 0005 §1.2): columns are stored
-inline under their table, so a column id in YAML would be a second spelling of a
-fact the file's position already carries -- and two spellings of one fact is this
-project's most expensive shape.
+Validate path components where used as paths (``\A``/``\Z``). Column ids are
+derived, never authored (ADR 0005 §1.2).
 """
+
 
 from __future__ import annotations
 
@@ -143,20 +129,9 @@ def slug(physical_name: str) -> str:
 
 
 def table_id(schema: str, physical_name: str) -> str:
-    """The id of a table living in ``schema`` (ADR 0005 §2.8.2, ADR 0008 D1).
+    """Table id in ``schema`` (ADR 0005 §2.8.2, ADR 0008 D1).
 
-    Declared here beside :func:`derive_column_id` and :func:`join_id`, and for the
-    same reason. Until 2026-08-03 this convention was a bare f-string inside
-    :func:`~governed_bi.corpus.seed.seed`, and the *only* consumer was the seed
-    itself -- so a second hand-written copy cost nothing and nobody wrote one.
-
-    §2.8.2 changed that. Reconciling a ``JoinAsset`` endpoint (a physical name,
-    bare or qualified) against the identifiers in ``licensed`` is a lookup keyed on
-    exactly this convention, and a second spelling of it there would not lose an
-    edge -- it would bind one to the wrong table, license a table in the wrong
-    schema and charge ``crossings`` to the wrong pair. That is the two
-    ``LOW_CONFIDENCE_JOIN`` constants in the one place where the two halves fail
-    *open* rather than merely disagreeing.
+    Single spelling shared by seed, join reconciliation, and licensed lookups.
     """
     return f"{schema}.{slug(physical_name)}"
 

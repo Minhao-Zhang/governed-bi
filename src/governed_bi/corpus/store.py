@@ -1,35 +1,11 @@
-"""The corpus on disk: YAML in, typed assets out, one bad item at a time.
+"""Corpus on disk: YAML in, typed assets out, one bad item at a time.
 
-**The contract that shapes every line of this file:** :func:`load` returns
-``(assets, problems)`` and **never raises for a bad item.** v1's loader raised on
-the first unparseable file, and because the pooled driver loads every schema of
-every arm through one call inside a ``try/finally`` with no ``except``, **one
-truncated YAML discarded a fully paid 69-schema build with no clue why.**
-
-The opposite failure is equally real and this project has already published a result
-on top of it: a *silent* skip turns "a corpus that lost half its assets" into "a
-corpus that merely looks small". So both halves of the tuple are load-bearing, and
-a problem a reader cannot act on is a silent skip with extra steps -- every
-:class:`~.validate.Problem` names the file and the rule.
-
-**One file, at most one problem.** A file that breaks three rules reports one entry
-listing all three, rather than three entries. A caller counting problems is counting
-*items it lost*, and that is the number worth having.
-
-Three environment facts this module exists to absorb, all from
-``docs/lessons-from-v1.md`` Appendix B:
-
-* **YAML 1.1 resolves ``on:`` as boolean ``True``** -- and ``JoinAsset`` has a field
-  named ``on``. The loader below removes the ``y/n/yes/no/on/off`` bool spellings
-  from the resolver, so ``on`` stays a string key. Nothing in the asset schema wants
-  YAML 1.1's bool aliases, and losing them costs nothing.
-* **83 of 597 v1 description CSVs began with a BOM**, which lands inside the first
-  key and silently empties a whole file. Read with ``utf-8-sig``.
-* **``UnicodeDecodeError`` is a ``ValueError``, not an ``OSError``.** A file saved as
-  cp1252 does not raise anything an ``except OSError`` would catch, which is how a
-  non-UTF-8 file took down an import in v1. The per-file guard here catches
-  ``Exception`` for exactly that reason.
+:func:`load` returns ``(assets, problems)`` and never raises for a bad item.
+One file ⇒ at most one problem entry (may list multiple rules). Absorbs YAML 1.1
+``on:`` bool aliasing, ``utf-8-sig``, and treats ``UnicodeDecodeError`` as
+``ValueError``.
 """
+
 
 from __future__ import annotations
 
@@ -64,16 +40,9 @@ _LOOKED_AT: tuple[str, ...] = (SUFFIX, ".yml")
 
 
 def _loader_class() -> type:
-    """A YAML loader with YAML 1.1's bool aliases removed.
+    """YAML loader with YAML 1.1 bool aliases removed so ``on`` stays a string.
 
-    ``on``, ``off``, ``yes``, ``no``, ``y`` and ``n`` stay strings. ``JoinAsset.on``
-    is why: under the default resolver a mapping key ``on:`` arrives as ``True``,
-    the field looks absent, and the ON clause -- which ADR 0005 §1.2 makes part of a
-    join's identity -- vanishes without an error.
-
-    ``CSafeLoader`` when available: it is roughly 7x faster and YAML parsing was
-    measured at ~23% of an offline run's wall clock. It shares the Python resolver,
-    so the fix applies to both.
+    Prefers ``CSafeLoader`` when available.
     """
     try:
         base: type = yaml.CSafeLoader  # type: ignore[attr-defined]
@@ -102,20 +71,8 @@ def load(
 ) -> tuple[list[Asset], list[Problem]]:
     """Every asset under ``root``, plus one problem per item that could not load.
 
-    ``schemas`` is the **manifest**. Given one, only those subtrees (plus
-    ``_shared``) are read and a manifest entry with no directory is reported -- v1's
-    shared corpus root was a cross-run contamination channel, because a schema
-    dropped from one attempt left its YAML behind and then competed as a router
-    candidate for *every other schema's questions*, silently changing the routing
-    problem's difficulty between two runs of the same set.
-
-    ``schemas=None`` means **the tree is the manifest**, which is correct for a
-    single-schema tree and for a test, and is the un-guarded form for a pooled root.
-
-    Returns assets in sorted-path order. An empty directory yields ``([], [])``:
-    zero assets from an empty tree is a correct answer, and it is the manifest --
-    not a per-item problem -- that turns "the corpus lost half its assets" back into
-    something a reader can see.
+    ``schemas`` is the manifest (those subtrees + ``_shared``); missing dirs are
+    reported. ``schemas=None`` means the tree is the manifest.
     """
     base = Path(root)
     problems: list[Problem] = []

@@ -1,59 +1,36 @@
 # corpus/
 
-> **This document describes v1, which was deleted in commit `2347ae3`.** It is kept at this path
-> because it is an entry point to the repository, and it is being rewritten against
-> [ADR 0005](../docs/adr/0005-v2-memory-layer-and-faceted-retrieval.md) and
-> [ADR 0006](../docs/adr/0006-execution-time-governance.md). Until that rewrite lands,
-> treat every specific claim below — module names, file paths, tool names, measured
-> numbers — as historical rather than current. The rest of the v1 documentation is
-> in [`docs/v1/`](../docs/v1/), and [`lessons-from-v1.md`](../docs/lessons-from-v1.md) records which of its
-> measurements survived re-examination and which were retired.
-
 _[English](README.md) · [简体中文](README.zh.md)_
 
-The **semantic layer** is the moat. Git-tracked plain Markdown + YAML typed
-assets, curator-authored / human-audited (D9). **Git is the single source of
-truth.** Every other store (in-memory graph, vector, BM25, Postgres) is a
-derived, rebuildable projection under `_generated/`, never authored directly.
-
-Full spec: [`docs/asset-schemas.md`](../docs/v1/asset-schemas.md).
+Git-tracked typed YAML assets for the semantic layer. Spec:
+[ADR 0005](../docs/adr/0005-v2-memory-layer-and-faceted-retrieval.md).
+Serve typically loads from `GOVERNED_BI_CORPUS_DIR` or a directory under
+`corpora/` (see [usage](../docs/usage.md)).
 
 ## Layout
 
 ```
-corpus/
+corpus/   (or corpora/<name>/)
   <schema>/
-    tables/      tbl_<schema>_<name>.yaml      # columns inline
+    tables/      tbl_<schema>_<name>.yaml
     joins/       join_<left>_<right>.yaml
     few-shots/   fs_<schema>_<n>.yaml
     terms/       term_<name>.yaml
     metrics/     metric_<name>.yaml
-    notes/       note_<name>.yaml            # governed annotations (D17)
+    notes/       note_<name>.yaml
     negatives/   neg_<schema>_<n>.yaml
-  _generated/    # search index, embeddings, compiled graph (gitignored)
 ```
 
-> **D15:** the `<schema>` level is a **schema** namespace, not a database — a run's
-> database (a connection-config constant, not a modeled corpus level) may hold
-> many schemas. On-disk YAML and load/write APIs use the field/param name
-> `schema` (hard cut from `db`). Asset IDs are unchanged.
-
-`beer_factory/` is the **worked example**, authored over the real BIRD
-`beer_factory` database (`data/bird/beer_factory.sqlite`). It exercises every
-asset type and validates against that DB (physical-existence). Use it as the
-reference for authoring your own.
+`<schema>` is a schema namespace, not a database name. A connection may hold many
+schemas. Loader and asset IDs use the field name `schema`.
 
 ## Field tiers
 
-Every asset splits into **Facts** (catalog truth, never inferred), **Inference**
-(the semantic layer the curator writes), and **Audit** (why, never
-injected into the Analyst context). Plus a human-only **Governance** override.
+Assets split into **Facts** (catalog truth), **Inference** (authored semantics),
+and **Audit** (not injected into model context), plus optional **Governance**
+overrides.
 
 ## Validate
 
-```bash
-uv run python -m governed_bi.corpus.cli corpus/beer_factory
-```
-
-A green run (ID conventions + reference integrity) is the curator's
-machine-checkable "done-enough" signal.
+Use the corpus package APIs / tests under `src/governed_bi/corpus/` and
+`tests/corpus/`. There is no `governed_bi.corpus.cli` module in this tree.

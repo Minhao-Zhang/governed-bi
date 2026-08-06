@@ -1,37 +1,13 @@
-"""Binding: one positive rule (ADR 0006 §4). Closes B6 and its siblings.
+"""Binding: one positive rule (ADR 0006 §4).
 
-> Every ``Column`` node, every ``USING``/``NATURAL`` join key, and every ``FROM``
-> source must bind to **exactly one** base source in its own scope, or in a named
-> ancestor scope for correlated references. Binding to zero sources refuses.
-> Binding to more than one refuses.
+Every ``Column`` node, every ``USING``/``NATURAL`` join key, and every ``FROM``
+source must bind to **exactly one** base source in its own scope (or a named
+ancestor for correlated refs). Zero or more than one ⇒ refuse. Allowlist
+membership is not binding.
 
-ADR 0006's first draft listed six fail-closed *shapes* instead — a denylist of
-shapes, in the document that argues denylists are unwinnable, and shapes it missed
-were easy to construct: two-part ``unknown.col``; whole-row references; ``SELECT *``
-inside a derived table consumed by a whole-row function; table-valued functions in
-``FROM``, which produce no ``exp.Table`` and are invisible to the table layer. The
-six shapes are the **test list**; this rule is the specification.
-
-Everything downstream reads the binding: the column layer and the table layer each
-have exactly one input and therefore cannot disagree about what a reference means.
-B6 was precisely that disagreement — ``schema.table.column`` was in the lake-wide
-column allowlist, and the table layer only inspected ``FROM`` sources, so each layer
-thought the other had it covered.
-
-**Matching a string against an allowlist is not binding.** A three-part reference
-whose key is in the allowlist still refuses here, because no source in scope answers
-to it.
-
-Three deliberate strictnesses, each fail-closed where the engine's own resolution
-would be a guess:
-
-* A **bare** name in a scope with more than one base source refuses. v1's
-  leftmost-table resolution bound it to whichever table came first, which in the
-  obfuscated corpus is how it would bind to the **decoy** column.
-* A bare name in a **mixed** base + derived scope refuses, for the same reason.
-* ``USING (col)`` requires the key in **every** base source of its scope. Which side
-  of a multi-way join owns the key is not recoverable from the AST, and refusing is
-  the only answer that cannot approve a column in a table nobody checked.
+Strictnesses: bare name with multiple base sources refuses; bare name in a mixed
+base+derived scope refuses; ``USING (col)`` requires the key in every base source
+of the scope. Downstream layers read this binding as their only input.
 """
 
 from __future__ import annotations

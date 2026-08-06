@@ -1,45 +1,10 @@
-"""The corpus structure projection — ADR 0005 §2.8.2.
+"""Corpus structure projection for ``resolve`` / ``connect`` (ADR 0005 §2.8.2).
 
-``resolve`` and ``connect`` are both total functions of data neither of them has.
-Until 2026-08-03 ``serve/state.py`` declared five inputs for them -- ``join_edges``,
-``references``, ``asset_types``, ``table_schemas``, ``schema_tags`` -- under the
-comment *"F1 test / wiring hooks (optional)"*, and **all five were read and none was
-ever written**, by ``src/``, by ``tests/`` or by the eval harness. So ``connect`` ran
-on an empty edge set on every turn that has ever executed and declined
-``missing_join_path`` the moment a turn licensed two tables; single-table turns
-answered, which is why a green suite and a live eval both missed it.
-
-Those five are not five hooks. They are **one projection of the asset set**, they are
-pure functions of it, and they hold no per-turn information -- so one module builds
-all five, once, beside the index. §2.2 already settled the identical question for
-schema tags (*"computed at build, not query time"*) and the argument is not cost: a
-per-turn derivation is a place where two turns can disagree about the shape of the
-corpus, and a run whose turns disagree is not comparable to anything.
-
-**It returns ``(structure, problems)``**, per decision #5. A corpus that lost half its
-edges must not be indistinguishable from a corpus that is small.
-
-**Endpoint reconciliation may not guess.** ``connect``'s nodes are the identifiers in
-``licensed`` -- asset ids. ``JoinAsset`` carries ``left_table`` / ``right_table`` as
-physical names, **bare or qualified**, and ``corpus/validate.py``'s ``_bare()``
-explicitly declines to settle which. Binding an edge is therefore a lookup with three
-outcomes: exactly one table asset binds it; more than one drops it *and records a
-problem*; none does the same. One physical name in two schemas is the normal shape of
-a pooled lake, and first-match there is not a lost edge but a **licensing leak** -- a
-Steiner point in the wrong schema, licensed, with ``crossings`` charged to the wrong
-pair. Dropping alone fails closed but silently, and the silence resurfaces as
-``missing_join_path`` on a turn that looks ordinary.
-
-**What this module deliberately is not.** There is exactly one graph search in ``src/``
-(:func:`~governed_bi.retrieve.connect.connect`) and exactly one closure
-(:func:`~governed_bi.retrieve.resolve.resolve`). This module builds their inputs and
-adds one thing neither can express: :func:`complete_joins`, the **conjunctive** rule
-from §2.8's last row. ``resolve`` is a fixpoint over ``Mapping[id, set[id]]`` where
-every edge is disjunctive, so encoding "both endpoints pull in the join" as
-``table -> joins touching it`` would let one endpoint pull the join and the join pull
-its other endpoint: FK-neighbourhood expansion by one hop from every hit table, which
-is exactly what §2.9 turned off (``expand_hops = 0``, v1's 1 recorded as wrong).
+Built once at index time. Returns ``(structure, problems)``. Join endpoints bind
+by exact table-asset lookup (no first-match guess). Also hosts
+:func:`complete_joins` (conjunctive rule); graph search stays in ``connect``.
 """
+
 
 from __future__ import annotations
 
@@ -63,14 +28,7 @@ __all__ = ["CorpusStructure", "build_structure", "complete_joins"]
 
 @dataclass(frozen=True, slots=True)
 class CorpusStructure:
-    """The five projections ``resolve`` and ``connect`` run on, plus the join index.
-
-    Every field is keyed on **asset ids**, never on physical names. That is the one
-    property nothing else in the system asserts: an edge carrying
-    ``("customers", "orders")`` is not wrong-looking anywhere -- ``_adjacency`` builds
-    happily, :func:`~governed_bi.retrieve.connect.canon_edge` canonicalises happily,
-    and ``connect`` then reports every terminal missing and declines. The two
-    namespaces never meet, so nothing raises.
+    """Projections ``resolve`` / ``connect`` run on, keyed on asset ids (not physical names).
     """
 
     #: Undirected table-to-table edges, canonicalised by ``canon_edge``. Self-joins

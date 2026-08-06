@@ -1,260 +1,81 @@
-# Usage (Quickstart)
-
-> **This document describes v1, which was deleted in commit `2347ae3`.** It is kept at this path
-> because it is an entry point to the repository, and it is being rewritten against
-> [ADR 0005](adr/0005-v2-memory-layer-and-faceted-retrieval.md) and
-> [ADR 0006](adr/0006-execution-time-governance.md). Until that rewrite lands,
-> treat every specific claim below — module names, file paths, tool names, measured
-> numbers — as historical rather than current. The rest of the v1 documentation is
-> in [`docs/v1/`](v1/), and [`lessons-from-v1.md`](lessons-from-v1.md) records which of its
-> measurements survived re-examination and which were retired.
+# Usage
 
 _[English](usage.md) · [简体中文](usage.zh.md)_
 
-> New here? Start with the [README](../README.md) for a guided "clone → first
-> question" tour. This page is the reference quickstart.
-
-The full question -> answer pipeline runs end to end today over the committed
-`beer_factory` database. Corpus validation, the gateway, and retrieval need no
-model or network (the embedder still falls back to a deterministic hashing
-default); serve is **agent-only** (ADR 0002) and fails closed without a live
-model. This page stays on the runnable surface; for the design behind it, see
-the [design docs](README.md).
-
-| Area | Status | Where |
-|---|---|---|
-| Corpus schemas, IDs, validator, loader, serializer, CLI | runnable | `src/governed_bi/corpus/` |
-| Example corpus (`beer_factory`, real BIRD DB) | runnable | `corpus/beer_factory/` |
-| SQLite connector + gateway (read-only, audit) + five-layer guardrails | runnable | `src/governed_bi/gateway/` |
-| Curator: Facts profiling, deep-agent batch curator, adversary, SME round-trip | runnable, needs a live model for the curated arms | `src/governed_bi/curator/` |
-| Graph projection + Steiner join planning | runnable | `src/governed_bi/graph/` |
-| Retrieval (BM25 + grounding, + embedder-gated vector channel) | runnable | `src/governed_bi/retrieval/` |
-| Serve (agentic core: route, context, governed tools, guardrails, self-repair, stamp) | runnable, needs a live model | `src/governed_bi/analyst/` |
-| Memory (working) + eval (EX, ladder, refuse-gate) + viz presenter (audit view models) | runnable | `src/governed_bi/{memory,eval,viz}/` |
-| Model clients (raw OpenAI / LangChain) | runnable (installed by a plain `uv sync`, no extra) | `src/governed_bi/llm/` |
-| Agent harnesses (LangGraph governed serve core, deepagents curator) | runnable (installed by a plain `uv sync`, no extra) | `analyst/agent.py`, `curator/deep_agent.py` |
-| Postgres connector | implemented (psycopg-backed, plain `uv sync`); exercised live via `eval/run_datalake.py` | `src/governed_bi/gateway/connectors/` |
-| Redshift connector | implemented (reuses the Postgres path); offline-tested only, not run against a live cluster | `src/governed_bi/gateway/connectors/` |
+Install, configure, and run the current tree. Design background:
+[architecture](architecture.md), [ADRs](adr/).
 
 ## Prerequisites
 
 - [uv](https://docs.astral.sh/uv/)
-- Python 3.13 (uv will fetch it if needed; the version is pinned in `.python-version`)
-
-## Install
+- Python 3.13 (pinned in `.python-version`)
 
 ```bash
 uv sync
+uv sync --extra bedrock   # optional
 ```
 
-This creates `.venv`, installs the dependencies, and installs `governed_bi` in
-editable mode. Check it worked:
+## Configuration
+
+There is **no** live `governed_bi.config.load_settings()` path. Runtime config is:
+
+1. Secrets and DSN in `.env` / the process environment.
+2. `GOVERNED_BI_*` variables (see below).
+3. Defaults in [`register/knobs.py`](../src/governed_bi/register/knobs.py).
+
+A `governed_bi.toml` may exist in the repo; it is not loaded by `src/`.
+
+### Environment
+
+| Variable | Role |
+|---|---|
+| `PG_DSN` (or other names accepted by `tools/credentials.py`) | Postgres DSN — required for LangGraph serve |
+| `OPENAI_API_KEY` | Model access (or Bedrock credentials when using that extra) |
+| `GOVERNED_BI_CORPUS_DIR` | Corpus directory (else one dir under `corpora/`, or seed via schema) |
+| `GOVERNED_BI_SCHEMA` | Optional: seed / pin schema from the live database |
+| `GOVERNED_BI_MODEL` | Main chat model; unset → `has_live_model: false` |
+| `GOVERNED_BI_UTILITY_MODEL` | Small model for facet rewrite / scope gate |
+| `GOVERNED_BI_UTILITY_MODEL_EFFORT` | Effort knob for the utility model |
+| `GOVERNED_BI_EMBEDDING_MODEL` | Embedder id |
+| `GOVERNED_BI_LLM_MAX_RETRIES` | Retries |
+| `GOVERNED_BI_LLM_TIMEOUT_S` | Main-model timeout |
+| `GOVERNED_BI_UTILITY_TIMEOUT_S` | Utility-model timeout |
+| `GOVERNED_BI_MODEL_EFFORT` | Main-model effort |
+| `GOVERNED_BI_SEED_DIR` | Seed directory |
+| `GOVERNED_BI_TURN_LOG_DIR` | Optional turn log root |
+
+## Serve (LangGraph Server)
 
 ```bash
-uv run python -c "import governed_bi; print(governed_bi.__version__)"
+uv run langgraph dev
 ```
 
-## Validate a corpus
+`langgraph.json` maps graph `"serve"` to
+`src/governed_bi/api/graph_app.py:make_graph` and HTTP to
+`src/governed_bi/api/routes.py:app`.
 
-The corpus CLI checks ID conventions and reference integrity. A green run is the
-"done-enough" signal for a corpus (D9).
+Streaming (preferred): `POST /threads/{id}/runs/stream` with
+`stream_mode: ["values", "messages", "custom"]` and `stream_subgraphs: true`
+([ADR 0010](adr/0010-live-stage-events.md)). Blocking: `POST /chat`.
+
+Serve expects Postgres. The SQLite file under `data/bird/` is for tests/CI, not
+the default LangGraph serve datasource.
+
+## One-turn CLI
 
 ```bash
-# validate the bundled example (defaults to the corpus/ directory)
-uv run python -m governed_bi.corpus.cli corpus/beer_factory
-
-# validate everything under corpus/
-uv run python -m governed_bi.corpus.cli
-
-# see all options
-uv run python -m governed_bi.corpus.cli --help
+uv run python -m governed_bi.serve --schema <schema> -q "…"
+uv run python -m governed_bi.serve --corpus-dir <path> -q "…"
+uv run python -m governed_bi.serve --schema <schema> -q "…" --no-model
 ```
 
-Output on success:
-
-```
-CI green: 17 assets, 0 findings.
-```
-
-On failure it lists each finding (for example `dangling-ref [metric_revenue]:
-metric.base_table -> 'tbl_missing' does not resolve`) and exits non-zero.
-
-Exit codes: `0` green, `1` findings, `2` bad usage or path not found. That makes
-it usable as a CI gate. The physical-existence check (columns exist in the live
-DB) and the few-shot leakage guard are not run here; they need a database
-connection or the eval split, so they belong to the eval harness.
-
-## Use the corpus from Python
-
-The same loader, schema, and validator are a small public API. Everything is
-parsed into typed Pydantic models, so a malformed asset fails loudly.
-
-```python
-from pathlib import Path
-from governed_bi.corpus import load_corpus, validate_corpus, is_green, parse_asset
-
-# Load a schema's corpus (YAML typed assets) into models.
-corpus = load_corpus(Path("corpus"), schema="beer_factory")
-print(len(corpus.assets), "assets")
-
-# Run the same checks the CLI runs.
-findings = validate_corpus(corpus.assets)
-assert is_green(findings), findings
-
-# The Analyst-visible view: Audit tier stripped, governance.excluded removed.
-analyst_view = corpus.for_analyst()
-
-# Parse a single asset from a dict (raises pydantic.ValidationError if invalid).
-table = parse_asset({
-    "asset_type": "table",
-    "id": "tbl_demo_orders",
-    "schema": "demo",
-    "physical_name": "t_1",
-})
-print(table.id, table.asset_type)
-```
-
-`Corpus.for_analyst()` is the consumption contract in code: it is what the Analyst
-is allowed to see (Facts + Inference, never Audit, and never an excluded asset).
-
-## Connect to a database
-
-The gateway wraps a per-dialect connector. SQLite is proven (read-only, with an
-audit log and a forced row cap); Postgres (`information_schema`) is exercised live
-by the eval driver (`eval/run_datalake.py`, against a local BIRD-Obfuscation
-Postgres) and unit-tested offline; Redshift (`svv_*`) reuses the Postgres path but
-is not yet run against a live cluster (both ride psycopg, installed by a plain `uv
-sync`). Point it at a SQLite
-file and you can introspect the catalog, profile the Facts tier, and run guarded
-queries:
-
-```python
-from governed_bi.gateway import SqliteConnector, Gateway, Identity
-from governed_bi.curator.profile import profile_database
-
-conn = SqliteConnector("data/bird/mydb.sqlite")     # opens read-only
-tables = profile_database(conn, schema="mydb")       # Facts-tier table assets
-gw = Gateway(conn)
-result = gw.execute(
-    "SELECT COUNT(*) FROM some_table",
-    Identity(user="dev", all_access=True),
-)
-print(result.rows, gw.audit_log)
-```
-
-See [`data/README.md`](../data/README.md) for how to vendor a small BIRD SQLite
-file. Once you have one, `validate_corpus(assets, connector=conn)` also runs the
-physical-existence check (every `physical_name` exists in the live catalog).
-
-## Ask a question (serve pipeline)
-
-Serve is agent-only (ADR 0002): `create_agent` + `GovernanceMiddleware` +
-governed read-only tools, wrapped by an outer LangGraph rails graph that
-routes the question, runs the agent core, and
-stamps the answer. There is no deterministic fallback for answering: it needs
-a live model, and fails closed rather than guessing without one:
-
-```python
-from pathlib import Path
-from governed_bi.config import load_settings
-from governed_bi.corpus import load_corpus
-from governed_bi.gateway import SqliteConnector, Gateway, Identity
-from governed_bi.llm import LangChainChatClient
-from governed_bi.analyst.agent import answer_question_agent
-
-settings = load_settings()
-corpus = load_corpus(Path(settings.corpus_root), schema="beer_factory").for_analyst()
-conn = SqliteConnector(settings.datasource.sqlite_path)
-chat = LangChainChatClient.from_config(settings.models)  # needs OPENAI_API_KEY
-ans = answer_question_agent(
-    "What is the total revenue?",
-    Identity(user="dev", all_access=True),
-    corpus=corpus,
-    gateway=Gateway(conn),
-    settings=settings,
-    session_id="s",
-    model=chat.model,  # the raw LangChain model the agent core drives
-)
-print(
-    ans.safety_clearance,
-    ans.semantic_assurance,
-    ans.sql,
-    ans.text,
-)  # -> True  unflagged  SELECT ...  total_revenue = ...
-# ans.tier is the display-only projection of the two axes (governed / lineage / …)
-```
-
-This needs a real key and the client injected as shown above — the agent
-harnesses (curator and serve) are installed by a plain `uv sync`, no extra
-required; see the **Models & configuration** section of the
-[README](../README.md) for the full setup. The API key is read from the env
-var named by `[models].api_key_env` (default `OPENAI_API_KEY`), never stored.
-The deepagents curator needs the same key.
-
-## Audit surface (viz presenter + API)
-
-This repo ships **no bundled UI**. The read-only audit/review surface is two
-UI-agnostic pieces: the `governed_bi.viz.presenter` view models (corpus health,
-the table/tier view, the relationship/knowledge graph, the asset listing,
-and an answer's two-axis reliability stamp — no UI dependency), and the
-`governed_bi.api` FastAPI HTTP/JSON API that serves those view models plus the
-governed agent core at `POST /chat`. The view-model endpoints (`/audit/corpus`,
-`/schema/summary`, `/graph`, `/corpus/assets`, …) need no model; `/chat`
-does, and returns `503` without one. To run the API:
+## Tests
 
 ```bash
-uv run uvicorn --factory governed_bi.api:create_app
+uv run pytest
 ```
 
-Then open the interactive docs at http://localhost:8000/docs, or POST a
-question (needs `OPENAI_API_KEY` set — the agent harness is installed by a
-plain `uv sync`):
+## UI
 
-```bash
-curl -s localhost:8000/chat -H 'content-type: application/json' \
-  -d '{"question":"What is the total revenue?"}'
-```
-
-### Watch a turn while it runs
-
-`POST /chat` blocks for the whole turn — 30 to 120 seconds with nothing on the wire. Under
-`uv run langgraph dev` the same graph is also served streamed, and that is the surface a client
-should use:
-
-```bash
-curl -N localhost:2024/threads/$THREAD/runs/stream \
-  -H 'content-type: application/json' \
-  -d '{"assistant_id":"serve",
-       "input":{"messages":[{"type":"human","content":"What is the total revenue?"}]},
-       "stream_mode":["values","messages","custom"],
-       "stream_subgraphs":true}'
-```
-
-`messages` gives the answer token by token; `custom` gives one event per stage as it happens —
-every retrieval rail, each tool call, and each governance verdict (`check` then `execute`, with
-the executed SQL and the digest the audit ledger stores). The contract is
-[ADR 0010](adr/0010-live-stage-events.md).
-
-**`stream_subgraphs: true` is required, not a tuning flag.** The model and every tool run inside a
-nested agent, so without it there are no custom events and no tokens at all. The server accepts
-the misspelling `subgraphs` with HTTP 200 and ignores it silently, which is a quiet way to see
-nothing.
-
-Policy comes from [`governed_bi.toml`](../governed_bi.toml) (corpus path,
-datasource, serve flags). Local overrides go in git-ignored
-`governed_bi.local.toml`. Because the display logic lives in the UI-agnostic
-`governed_bi.viz.presenter` (no UI dependency), a separate frontend can consume
-the same view models — the interactive UI is a separate project, see
-[docs/ui-frontend-handoff.md](v1/ui-frontend-handoff.md).
-
-## Run the tests
-
-```bash
-uv run pytest -q
-```
-
-## Next
-
-- To write or edit corpus assets, see [Corpus authoring](v1/corpus-authoring.md).
-- For the field-by-field asset spec, see [Asset schemas](v1/asset-schemas.md).
-- For the design behind all of this, start at [docs/README.md](README.md).
+[governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui) — local checkout
+typically at `../governed-bi-ui`.

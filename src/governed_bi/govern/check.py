@@ -1,38 +1,14 @@
-"""``check()``: the seven layers, in order, first failure wins (ADR 0006 §1).
+"""``check()``: seven layers in order, first failure wins (ADR 0006 §1).
 
-Everything about this function's shape is a v1 incident.
+Invariants (G1 / ADR 0006 §12):
 
-**Every security parameter is required (G1).** ``licensed`` has no default and
-``licensed=None`` **raises**. v1 wrapped its pre-execute recheck in
-``if allowlist is not None`` and fell through to ``gateway.execute`` when the
-argument was missing — the guard added to make the path defence-in-depth had removed
-the only authorization on it. And an *empty* set licenses nothing; it is not "no
-restriction".
-
-**A missing argument raises rather than returning a blocked verdict.**
-``licensed=None`` is a caller error, not a fact about the SQL. A verdict reading
-"blocked at the TABLES layer" would be recorded as *this query was unsafe* when the
-truth is *the authorization argument was never wired up* — two different incidents,
-and collapsing them is B10's shape.
-
-**Column authorization comes from an** ``AnalystCorpus`` **(ADR 0005 §1.5).**
-Passing parallel column sets beside an unfiltered corpus was B10. A missing
-``corpus`` raises :class:`GovernanceUsageError` — a caller error, not a statement
-fault.
-
-**Any exception is ``passed=False`` — and is counted.** ``RecursionError`` from
-pathological nesting and tokenizer errors from unterminated literals both escaped
-v1's parse layer. But a swallowed exception that is not *counted* is worse than a
-crash: ADR 0006 §12 records the exact chain, in which a ``NameError`` in the
-function-layer walk turns every turn in an arm into a refusal, ``crash_rate == 0``,
-every register key present, run declared quotable. So the wrapper's verdict carries
-:data:`~governed_bi.govern.layers.GUARDRAIL_ERROR`, and
-``ExecutionRecord.guardrail_errors`` counts it (see :mod:`.ledger`).
-
-**A parse failure is not a guardrail error.** It is a fact about the statement, so
-it refuses at PARSE with a rule id. Conflating the two would make a model that
-writes bad SQL look like a broken governance layer, and hide a broken governance
-layer among models that write bad SQL.
+* Every security parameter is required; ``licensed=None`` / missing ``corpus``
+  raise :class:`GovernanceUsageError` (caller error, not a statement fault).
+* An empty ``licensed`` set licenses nothing.
+* Column authorization is an :class:`~governed_bi.corpus.analyst.AnalystCorpus`.
+* Any exception inside the walk is ``passed=False`` with
+  :data:`~governed_bi.govern.layers.GUARDRAIL_ERROR` (counted by the ledger).
+* A parse failure refuses at PARSE with a rule id — not a guardrail error.
 """
 
 from __future__ import annotations
@@ -237,20 +213,10 @@ def _nearest_function(node: exp.Expr) -> exp.Func | None:
 
 
 def _scope_arguments(func: exp.Func, own: frozenset[int]) -> Iterator[exp.Column | exp.Star]:
-    """Argument nodes of ``func`` **directly**, in its own scope.
+    """Argument nodes of ``func`` in its own scope.
 
-    Two filters, and both were measured rather than reasoned about.
-
-    ``own`` excludes nested scopes: ``exp.Exists`` is a function whose argument is a
-    whole subquery, so an unfiltered ``find_all`` would test an inner scope's column
-    names against an outer scope's table aliases — a false refusal that would look like
-    a governance bug and be "fixed" by loosening the rule.
-
-    :func:`_nearest_function` excludes *nested functions*, and without it the star in
-    ``NULLIF(COUNT(*), 0)`` belongs to ``NULLIF`` as well as to ``COUNT``, so the
-    ``count(*)`` carve-out does not apply on the outer visit and the statement refuses.
-    That shape appears in **60 of the 6,743 gold statements** (measured 2026-08-03), so
-    the bug was a 0.9% false-refusal rate on gold that no unit test would have found.
+    ``own`` excludes nested scopes; :func:`_nearest_function` excludes nested
+    functions (so ``NULLIF(COUNT(*), 0)`` keeps the ``count(*)`` carve-out).
     """
     for node in func.find_all(exp.Column, exp.Star):
         # isinstance rather than trusting find_all's filter: the narrowing is what lets
@@ -342,14 +308,9 @@ def _tables(bound: Bindings, licensed: frozenset[str], evaluated: list[Layer]) -
 
 
 def shape_estimate(tree: exp.Expr) -> int:
-    """A crude, deterministic shape score: base tables + joins + set operations.
+    """Crude shape score: base tables + joins + set operations (not a cost model).
 
-    **Deliberately not a cost model.** ADR 0006 OQ2 asks whether the cost layer earns
-    its place at all — v1's has no recorded instance of blocking something the other
-    layers would have missed — and ``cost_budget`` ships ``UNSET``, so this never runs
-    unless an operator sets a bound. A real estimate needs table statistics, which is
-    a datasource capability, not a string-level one. Naming it *shape* rather than
-    *cost* keeps that honest.
+    ``cost_budget`` ships ``UNSET`` (ADR 0006 OQ2); this runs only when set.
     """
     return (
         len(list(tree.find_all(exp.Table)))
@@ -372,24 +333,10 @@ def _cost(tree: exp.Expr, policy: GovernancePolicy, evaluated: list[Layer]) -> C
 
 
 def graded_delivery_eligible(verdict: CheckVerdict, policy: GovernancePolicy | None = None) -> bool:
-    """Whether this verdict may be executed and delivered marked *unverified* (§5).
+    """Whether graded delivery may retry (ADR 0006 §5).
 
-    **Only ``COST``.** ADR 0006's first draft wrote ``{TABLES, COST}``, copied from
-    v1's *entry* set without noticing that v1's **recheck** forgives ``COST`` only,
-    with the comment *"an L4 failure means unauthorized base tables and must
-    refuse"*. And the redefinition made it worse: v1's table-ish layer was a curated
-    *semantic* check, while v2's ``TABLES`` is pure authorization — so §5's own
-    argument for excluding the column layer ("it is a confidentiality control, not a
-    semantic one") applies verbatim. Under the first draft's rule, a pooled
-    multi-schema deployment would execute SQL against unlicensed tables and show the
-    analyst the rows.
-
-    Reaching ``COST`` is a proof minted by ``check()`` that the six layers below it
-    passed. **Everything else hard-refuses**, including every entry that never earned
-    a verdict — cap, error, exhausted, no-coverage and missing-pass-result all carry
-    ``failed_layer=None``, and treating that as forgivable was B3. So a passing
-    verdict is *not* eligible either: it does not need to be, and a predicate that
-    said yes to ``None`` would be the same function v1 shipped.
+    Requires a positively established non-hard failure; never ``failed_layer=None``.
+    Only ``COST`` failures are eligible.
     """
     policy = policy or GovernancePolicy()
     if not policy.graded_delivery_enabled:

@@ -1,45 +1,10 @@
-"""The rules an asset must satisfy, and the record of one that does not.
+"""Rules an asset must satisfy, and the record of one that does not.
 
-Three rules, and every one of them comes from a table somewhere else:
-
-============================  ==============================================
-rule                          where its values are declared
-============================  ==============================================
-``1 <= len(summary) <= 250``  ``register/knobs.py`` (``summary_min_chars`` /
-                              ``summary_max_chars``)
-identifier appears in         ``register/assets.py`` (``identifier_fields``)
-``summary``
-tag rule satisfiable          ``register/assets.py`` (``tag_rule``) plus the
-                              predicate table below
-============================  ==============================================
-
-**The numbers are read, not written.** 250 is a knob, and the register's own
-docstring says why the value and the comparison are separated: v1 split a threshold
-from its comparison and ended up with two ``LOW_CONFIDENCE_JOIN`` constants **with
-different operators**, one in the scored artifact and one in the UI reading the same
-corpus. A register declares values; the predicate lives once, next to the type it
-tests. This module is that one place.
-
-**Why the summary bound is a correctness rule and not a style rule.** The index is a
-single shared scoring space. BM25's length normalisation and an embedding's
-information density are both relative to the corpus, so one 4,000-character entry
-changes what every other entry's score *means*. Over-length is therefore a
-validation error and never a truncation -- truncating would silently change the
-indexed text, which is the treatment.
-
-**Why there is no rule about ``body``.** Stated as an explicit non-rule because its
-absence is load-bearing: ``body`` is optional and unbounded (I2). The seed produces
-assets with no body at all, and a validator that required one would falsify ADR
-0005's claim that steps 6-9 are measurable with no model -- which is the reason the
-seed exists.
-
-**Why the summary rules do not apply uniformly.** Four of the eight types have no
-physical identifier: a metric and a term are business concepts, a few-shot's summary
-*is* the question, a negative example's *is* the question class. A single blanket
-rule would be per-type-skipped in silence, which is the shape of v1's vacuous tests
-(L§7). So the four that skip are **named in the register** rather than discovered
-here.
+Thresholds and tag rules are read from ``register`` (not restated). Summary
+bounds are correctness (shared scoring space), not style. No ``body`` rule (I2).
+Identifier-in-summary applies only to types the register names.
 """
+
 
 from __future__ import annotations
 
@@ -54,32 +19,10 @@ __all__ = ["Problem", "TAG_RULE_FIELDS", "problems_with"]
 
 @dataclass(frozen=True, slots=True)
 class Problem:
-    """One thing that went wrong with one item, and where.
+    """One problem with one item: ``where`` names the file, ``reason`` the rule.
 
-    Both halves are load-bearing. v1's loader raised on the first unparseable file,
-    so one truncated YAML discarded a fully paid 69-schema build with no clue why --
-    and the opposite failure is equally real: a *silent* skip turns "a corpus that
-    lost half its assets" into "a corpus that merely looks small", and this project
-    has already published a result on top of that. A problem a reader cannot act on
-    is a silent skip with extra steps, so ``where`` names the file and ``reason``
-    names the asset and the rule.
-
-    ``fatal`` is ADR 0008 D9, and it exists because the CLI and the server disagreed:
-    ``python -m governed_bi.serve`` exited 3 on **any** problem while ``make_graph()``
-    checked nothing, so the CLI refused a corpus the server was happily serving. One
-    predicate now decides, and it distinguishes two genuinely different states:
-
-    ``fatal=True``
-        An id is not a key. A duplicate id, an asset that did not load, an asset
-        reference naming nothing. Retrieval keys on ids, so the corpus is not what it
-        claims to be and serving it produces numbers about something else.
-    ``fatal=False``
-        A **degradation**: recorded, servable, and counted. A few-shot that cannot be
-        used, a dimension nobody can resolve, an identifier the corpus cannot carry.
-        The corpus is smaller than the lake, and that is a measurement, not a stop.
-
-    Default ``True``, so a new problem site is fatal until somebody decides otherwise.
-    Defaulting the other way is how a real defect becomes a warning nobody reads.
+    ``fatal=True``: id/key integrity (duplicate, unloadable, dangling ref) — not servable.
+    ``fatal=False``: degradation (recorded, servable, counted). ADR 0008 D9.
     """
 
     where: str

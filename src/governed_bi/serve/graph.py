@@ -1,8 +1,7 @@
 """Serve graph wiring (ADR 0005 §3.1).
 
-LangGraph entry surface. This module deliberately avoids
-``from __future__ import annotations`` because a graph loaded by file path
-must keep raw parameter annotations inspectable.
+LangGraph entry surface. Avoids ``from __future__ import annotations`` so a graph
+loaded by file path keeps raw parameter annotations inspectable.
 """
 
 from typing import Any, Literal
@@ -83,38 +82,9 @@ def _skip_if_terminal(state: ServeState) -> Literal["stamp", "continue"]:
 def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     """Construct the uncompiled serve graph.
 
-    **``agent_checkpointer`` is gone, and it never did anything.** It was passed to the nested
-    ``create_agent``, and three files carried comments explaining that HITL needed it and that
-    "two savers is worse than none: the interrupt is written to one and looked for in the
-    other". A probe falsifies all of it — inside a node, ``CONFIG_KEY_CHECKPOINTER`` is the
-    *outer* saver, the agent's own saver ends with zero checkpoints, and the outer one has
-    three. LangGraph propagates the checkpointer through ``config`` into a graph invoked inside
-    a node, under its own namespace. The nested agent was always checkpointed by the graph's
-    saver; the parameter was dead code documented as load-bearing, which is worse than either.
-
-    ``accept`` is an optional node placed **before** ``guard``, so ``START -> accept ->
-    guard``. It exists for one caller: a server whose client sends only a message. The
-    record requires fifteen fields and ``guard`` subscripts ``state["question"]``, so
-    something has to derive a turn from the conversation — and per ADR 0007 §2 that
-    something must be **server-side**, because ``run_id``, ``corpus_content_hash`` and
-    ``knobs_resolved`` are the run's own claims about itself and every quotability gate
-    reads them. A client that could set them could make two corpora report as one.
-
-    Passing nothing keeps ``START -> guard``, which is what a caller who builds its own
-    turn (``eval/harness.py``, ``python -m governed_bi.serve``) already does correctly.
-
-    ``record`` is the symmetric seam on the other end: an optional node placed **after**
-    ``stamp``, so ``stamp -> record -> END``. It exists for the same one caller and for a reason
-    ADR 0010 uncovered — the audit log was written by ``POST /chat``, and once the UI streams,
-    that route serves almost nothing, so ``/audit/turns`` went dark for every real turn while
-    still listing the old REST ones. "No turns are listed" and "no turns were served" became the
-    same observation, which is the failure ``routes.py``'s own ``audit_logged`` field exists to
-    prevent one layer out.
-
-    It cannot live in ``stamp``: ``tools/check_imports.py`` orders ``serve`` before ``api``, and
-    the log is ``api/trace_store.py``. So the server injects the recorder exactly as it injects
-    ``accept`` — the layer that owns the HTTP surface owns its log — and a caller that streams
-    nowhere passes nothing and writes nothing.
+    Nested agent is checkpointed via the outer graph's saver through ``config``.
+    ``accept`` (optional, before ``guard``) derives a turn from a client message.
+    ``record`` (optional, after ``stamp``) appends to the audit log.
     """
 
     graph = StateGraph(ServeState)
@@ -132,22 +102,13 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     graph.add_node("narrate", wrap_node("narrate", narrate_node))
     graph.add_node("refuse", wrap_node("refuse", refuse_node))
     graph.add_node("decline", wrap_node("decline", decline_node))
-    # **``stamp`` is the one node that must not be wrapped.** ``wrap_node`` turns an
-    # exception into ``{"failure": ..., "path_kind": "crashed"}`` so the turn is *recorded* by
-    # the next node — and for every other node that next node is ``stamp``. There is nothing
-    # after ``stamp``, so wrapping it converted "the recorder crashed" into a run that
-    # reported no ``answer`` at all and no reason: ``graph.invoke`` returned a state with the
-    # key absent, and a caller reading ``out["answer"]["record"]`` got a ``KeyError`` several
-    # frames from the cause. Unwrapped, the traceback names the line.
+    # Unwrapped: nothing after stamp can record a wrap crash.
     graph.add_node("stamp", stamp)
 
     def _fanout_passthrough(state: ServeState) -> dict[str, Any]:
         return {}
 
-    # ``stream=False``: this node is registered under ``facet_schema`` so a crash in it is
-    # attributed to a real stage, but it is a passthrough, and emitting for it put a phantom
-    # ``facet_schema`` row in the live timeline immediately before the real facet's — two rows
-    # for one stage, which reads as the facet having run twice.
+    # stream=False: passthrough must not emit a phantom facet_schema row.
     graph.add_node("fanout", wrap_node("facet_schema", _fanout_passthrough, stream=False))
 
     if accept is not None:
@@ -191,20 +152,12 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
         _skip_if_terminal,
         {"stamp": "stamp", "continue": "agent_core"},
     )
-    # ``agent_core -> narrate -> stamp``, and ``narrate`` is on this edge only. The terminals go
-    # straight to ``stamp`` because their wording is *system* copy — `refuse` and `decline` write
-    # `answer["text"]` themselves, and a generated sentence over a governance decision would be
-    # the interface paraphrasing a refusal. The node re-checks `path_kind` anyway, because a turn
-    # can be marked terminal *inside* `agent_core` and still arrive here.
+    # Terminals skip narrate: refusal/decline wording is system copy.
     graph.add_edge("agent_core", "narrate")
     graph.add_edge("narrate", "stamp")
     graph.add_edge("refuse", "stamp")
     graph.add_edge("decline", "stamp")
     if record is not None:
-        # Unwrapped, like ``stamp`` and for the same reason inverted: there is nothing after it
-        # to receive a ``crashed`` stamp, so ``wrap_node`` here would convert "the logger failed"
-        # into a turn whose answer the client already has but whose run reports an error. The
-        # node swallows its own failures instead — see ``graph_app._record_node``.
         graph.add_node("record", record)
         graph.add_edge("stamp", "record")
         graph.add_edge("record", END)
@@ -214,10 +167,6 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
 
 
 def compile_graph(*, checkpointer: Any | None = None):
-    """Compile with an in-memory checkpointer by default (interrupt-ready).
-
-    One saver, and it reaches the nested agent through ``config`` rather than through a
-    constructor argument. See :func:`build_graph` for the probe that established that.
-    """
+    """Compile with an in-memory checkpointer by default (interrupt-ready)."""
     saver = InMemorySaver() if checkpointer is None else checkpointer
     return build_graph().compile(checkpointer=saver)

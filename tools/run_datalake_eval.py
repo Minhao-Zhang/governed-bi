@@ -65,9 +65,8 @@ def main(argv: list[str] | None = None) -> int:
         "--embed",
         action="store_true",
         help="build the index with an embedder. Costs ~420k embedding tokens (about $0.01) "
-        "and raises the gold-table-coverage ceiling 6-9pp -- see "
-        "docs/plans/retrieval-ceiling-2026-08-04.md. Off by default so the lexical arm stays "
-        "the reproducible baseline.",
+        "and raises the gold-table-coverage ceiling 6-9pp. Off by default so the lexical "
+        "arm stays the reproducible baseline.",
     )
     parser.add_argument(
         "--timeout",

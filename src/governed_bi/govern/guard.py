@@ -1,43 +1,11 @@
-"""``guard``: the deterministic input gate (ADR 0006 §6). No model call, ever.
+"""``guard``: deterministic input gate (ADR 0006 §6). No model call.
 
-ADR 0005 places ``guard`` first in the graph and specifies that it calls no model;
-the rules live here. Five of them, each with a ``rule_id`` that reaches the ledger
-and **never** the caller: returning rule-derived text is a rule-probing oracle, so a
-refusal returns :data:`GUARD_PUBLIC_MESSAGE` and nothing else.
+Rules carry a ``rule_id`` to the ledger only; callers see
+:data:`GUARD_PUBLIC_MESSAGE`. ``g_encoding`` runs before NFKC (pipeline order):
+NFKC is a rewrite, so a post-rewrite rule inspects a string the caller never sent.
 
-**``g_encoding`` runs before NFKC normalisation** (ADR 0006 §6), and
-:mod:`.pipeline` keeps that order.
-
-The ADR's stated reason — *"before NFKC normalisation, or normalisation hides them"* —
-does **not** hold for NFKC as specified: checked against ``unicodedata`` on this
-Python, NFKC leaves every character in :data:`_CONTROL` unchanged, including the bidi
-overrides, the isolates, the zero-width family, ``U+FEFF`` and the C0 controls. The
-order is kept anyway, and it is still the right order for a reason that *is* true:
-NFKC is a rewrite (``ＳＥＬＥＣＴ`` becomes ``SELECT``), and a rule placed after a
-rewrite inspects a string the caller never sent. Recorded here rather than fixed
-silently, because a security control justified by a false mechanism is one someone will
-later reorder on the grounds that the reason does not check out.
-
-**Every rule ships disabled.** ``guard_rules_enabled`` is ``UNSET`` in the knob
-register, and reading it raises: ADR 0006 OQ3 requires **both** numbers per rule —
-recall on a red-team corpus and firing rate on real questions — before it ships
-enabled, and there is no honest default, since "all on" ships uncalibrated rules and
-"all off" ships no guard while claiming one. v1's keyword-and-Jaccard refuse gate is
-the cautionary case: it shipped enabled, was measured against nothing, and fired
-**zero times in 5,404 rows**.
-
-**The red-team corpus is a shipping requirement, not a follow-up, and it must be
-multilingual.** BIRD obfuscation is translation, the traffic is not English-only, and
-the patterns below are English imperatives that will fire at approximately zero on
-translated traffic. That is a known and recorded weakness of *these patterns*, not an
-argument for adding more before there is something to measure them against.
-
-**Out-of-scope detection is deliberately not a rule here** — semantic out-of-scope is
-ADR 0005's ``negative_gate``.
-
-**Known gap, recorded not solved:** conversation history contains the engine's own
-answers, which contain data read from the database, so indirect injection *through
-data* bypasses both guard passes. Closing it needs a defence at the data boundary.
+``guard_rules_enabled`` is ``UNSET`` until ADR 0006 OQ3 (both calibration numbers
+per rule). Out-of-scope is ADR 0005's ``negative_gate``, not a rule here.
 """
 
 from __future__ import annotations

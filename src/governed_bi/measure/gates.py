@@ -1,32 +1,10 @@
-"""Quotability: whether a comparison may be quoted, decided by executable gates.
+"""Quotability gates keyed on ``register.record.GATE_CONDITIONS``.
 
-Every gate here is keyed on a **field name declared in**
-:data:`~governed_bi.register.record.GATE_CONDITIONS`, and
-:func:`_assert_every_declared_gate_is_implemented` fails the import if the two sets
-diverge in either direction. That closure is the whole point.
-
-v1's version of this had eight dead gates. Its comparability keys derived correctly
-from the knob list while the ledger *record* was built from a hand-written subset, so
-eight conditions were evaluated against fields that never arrived — and because this
-system's own rule reads absence as agreement, **every one of them passed**. A gate
-that cannot fail is worse than no gate, because the summary says the run was checked.
-
-Two structural choices follow from that:
-
-* **A gate returns three verdicts, not two.** ``pass`` / ``fail`` /
-  ``cannot_evaluate``. The third exists because "the field is missing" must not
-  collapse into either of the others: as a pass it is v1's incident, and as a fail it
-  makes every partial run unquotable and the gate gets switched off.
-  :class:`~governed_bi.register.quantity.Measured` carries the same distinction for the
-  same reason.
-* **A gate reports the population it ran over.** A rate of 0 over 0 turns is not a
-  pass — ADR 0005 §4.1 requires the count beside the rate, and
-  :class:`~.population.Population` carries it, so the verdict cannot be read without
-  it.
-
-**Refuse the comparison; do not warn.** ADR 0005 §4.1 is explicit. A warning on a run
-that took hours to produce is a warning that gets read as a formality.
+Three verdicts: pass / fail / cannot_evaluate. Missing fields never pass.
+Refuse the comparison; do not warn (ADR 0005 §4.1). Import assert closes the
+declared↔implemented sets.
 """
+
 
 from __future__ import annotations
 
@@ -279,13 +257,7 @@ def quotable(arm: Population) -> tuple[bool, tuple[GateResult, ...]]:
 
 
 def _assert_every_declared_gate_is_implemented() -> None:
-    """Import-time closure across two layers, and the reason this module is testable.
-
-    Declared-but-unimplemented is v1's eight dead gates. Implemented-but-undeclared is
-    subtler and just as bad: a gate nothing declares is a check whose condition is not
-    in the register, so no reader of the register learns that it exists, and the field
-    it reads is not protected from removal.
-    """
+    """Import-time closure: declared GATE_CONDITIONS <-> GATE_IMPLEMENTATIONS."""
     declared, implemented = set(GATE_CONDITIONS), set(GATE_IMPLEMENTATIONS)
     if declared != implemented:  # pragma: no cover - import-time guard
         raise AssertionError(

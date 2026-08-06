@@ -1,8 +1,7 @@
 """Parcel D's internals: the guards the acceptance contract does not reach.
 
 ``tests/corpus/test_store_contract.py`` is the criterion and is not edited. This
-file covers what it leaves untested, under the authoring rules in
-``docs/lessons-from-v1.md`` §7:
+file covers what it leaves untested:
 
 * **Assert on the effect, not on the presence of a constant.** The loader's ``on:``
   handling is tested by loading a join and reading back its ON clause, not by looking

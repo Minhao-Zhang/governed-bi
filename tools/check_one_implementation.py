@@ -1,48 +1,10 @@
 """One implementation per concept, one import name (ADR 0005 §6).
 
-v1 had **two McNemars, two EX definitions, two temp-then-replace helpers, and two
-``LOW_CONFIDENCE_JOIN`` constants with different comparison operators**. The cost is
-in ``docs/lessons-from-v1.md``: three copies of temp-then-replace existed and *none*
-was durable, so the run ledger lost 16 of 17 records under concurrent writers; two
-definitions of "excluded" drifted, and the one that did not filter shipped PII
-column names into the routing index.
-
-**Why this gate matters more than it looks.** The layers of v2 are parcelled to
-agents working in parallel, and a parcel cannot import a module its neighbour has
-not written yet. So each one writes its own McNemar, its own hash, its own
-temp-then-replace — two implementations of one concept is the *default* outcome of
-the process, not a slip in it. Review does not catch it either, because each half
-is locally correct and the defect exists only in the pair.
-
-Two rules, and the second is the one that had to be designed rather than written:
-
-**(a) Default-deny on duplicate top-level names.** Any name defined at module level
-in two or more modules under ``src/`` is fatal unless it is in
-:data:`KNOWN_DUPLICATES` with a stated reason. Deny-by-default because the
-alternative — a list of names that *must* be unique — is a list somebody has to
-remember to extend, and the whole failure mode here is nobody noticing.
-
-**(b) Declared singletons, with a pending tier.** :data:`SINGLETON_CONCEPTS` names
-concepts that must have exactly one definition site and says which module that is.
-Most of those modules do not exist yet. A gate whose targets are unbuilt **must not
-read as passing**, so an absent module is reported as *pending* and the count is
-printed on every run: the output distinguishes "0 violations, 3 pending" from
-"0 violations, nothing pending". Same argument as the archive tier in
-``check_citations.py`` — a silent skip and a pass produce the same green tick, and
-half this repo's defects have that shape. Pending is **not** fatal, because failing
-the build for work that is scheduled and not yet done trains people to disable the
-gate.
-
-A module that exists but does not define its declared name **is** fatal, and so is
-the name turning up in a module other than its declared home — that second case is
-"two McNemars" caught while there is still only one.
-
-AST-only, like the other gates: this script never imports the code it checks, so it
-runs in a bare environment and a broken import-time guard cannot masquerade as a
-duplicate.
-
-Exit code 1 on any violation.
+Default-deny on duplicate top-level names under ``src/`` (except
+:data:`KNOWN_DUPLICATES`). Declared singletons in :data:`SINGLETON_CONCEPTS`
+(pending if module absent). AST-only. Exit 1 on violation.
 """
+
 
 from __future__ import annotations
 
@@ -80,13 +42,11 @@ class Singleton(NamedTuple):
     name: str
     #: Where it must live, relative to ``src/governed_bi/``.
     module: str
-    #: The v1 incident. A constraint whose reason is not written down gets deleted
-    #: by whoever finds it inconvenient.
+    #: Why this must stay unique (ADR pointer).
     why: str
 
 
-#: Seeded from ADR 0005 §6 and the module table in ``docs/plans/v2-layer-handoffs.md``,
-#: which is where these paths are declared. Only concepts with a *named* home go in
+#: Seeded from ADR 0005 §6. Only concepts with a *named* home go in
 #: here — inventing a path would make the gate fail on a module nobody promised.
 SINGLETON_CONCEPTS: tuple[Singleton, ...] = (
     Singleton(

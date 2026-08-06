@@ -153,12 +153,9 @@ def main(argv: list[str] | None = None) -> int:
         started = time.time()
         rows = routing_recall(questions, session=session, top_n=args.top_n)
         took = time.time() - started
-        # **Table coverage is the number to lead with, and this tool did not report it.**
-        # `docs/plans/retrieval-ceiling-2026-08-04.md` corrects an earlier document for
-        # concluding from schema `recall@k`: "those numbers are right; they measure the wrong
-        # stage". A turn can route to the right schema and still be unable to answer, because
-        # the per-type budget licenses at most 8 ranked tables — so coverage bounds EX and
-        # recall does not.
+        # **Table coverage is the number to lead with.** Schema recall@k can look fine
+        # while a turn still cannot answer: the per-type budget licenses at most 8 ranked
+        # tables, so coverage bounds EX and recall does not.
         out = {
             # **The corpus's content digest, not its directory name.** A variant iterated in
             # place keeps its path and changes its meaning, so two artifacts would claim the

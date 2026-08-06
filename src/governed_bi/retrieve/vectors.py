@@ -1,44 +1,9 @@
-"""Every vector in this system, in LanceDB.
+"""Vector storage in LanceDB (columnar, exact cosine over candidates).
 
-**What forced the change.** The vector cache was one JSON file —
-``runs/vectors/text-embedding-3-large.json``, **888,884,348 bytes**, 13,968 summaries ×
-3,072 floats. Every server start read it, parsed it into Python objects and validated it:
-**21.7 s** (0.8 read + 12.1 parse + 8.7 validate), and it then sat in memory **twice**, once
-as the cache dict and once as ``UnifiedIndex.vectors``, because both were
-``dict[str, list[float]]`` over the same numbers. Measured RSS after load: **1,685 MB**,
-peak **2,532 MB**; the two-copy shape extrapolates to ~3.3 GB. A CPython ``list[float]`` of
-width 3,072 costs **122 KB** against 12 KB as float32 — that 10× *is* the 848 MB.
-
-The same 13,968 vectors as a LanceDB table, migrated and re-measured: **172,374,167 bytes**
-on disk, **7 ms** to open, **95 MB** RSS, one copy, off-heap — and a warm ``build_index`` over
-the whole corpus is **0.74 s**, writing nothing.
-
-So this is not "a vector database because vector databases are what one uses" — the file it
-replaced argued against exactly that, because LanceDB's selling point is approximate
-nearest-neighbour search and this system does exact cosine over a narrowed candidate set.
-**That argument was right about ANN and wrong about the cost of the file.** No approximate
-index is built here (see :meth:`VectorStore.search`); what LanceDB is used for is columnar
-storage that a process does not have to parse.
-
-**One table, one width, and that is an invariant rather than a limitation** — the width is
-what makes the column a ``fixed_size_list`` and therefore searchable at all. A store is either
-an index's vectors, keyed by *asset id* so
-:func:`~governed_bi.retrieve.semantic.semantic_search` can restrict to a candidate set without
-shipping summary text into a SQL predicate, or one width of the persistent cache in
-``vector_cache.py``, keyed by :func:`~governed_bi.retrieve.semantic.cache_key`.
-:meth:`VectorStore.load_from` moves rows from the second into the first in Arrow, never
-through Python floats — the step the 848 MB was being spent on.
-
-**Writes happen only when something was missing, and that is what stops a reload loop.**
-The cache lives under ``runs/`` inside the repository and ``langgraph dev`` watches the tree;
-the JSON cache grew a ``_dirty`` flag because flushing an unchanged file made the server
-restart, re-import, flush and restart forever — observed, "13 changes detected" every ten
-seconds with the server never becoming ready. The same discipline ports directly: ``connect``
-and ``open_table`` write **nothing** (verified by file-mtime snapshot), while ``merge_insert``
-writes a fragment, a transaction and a manifest **even when every row is already present and
-identical**. So :meth:`add` is called with the miss set or not at all, and a warm start is
-inert.
+One table, one width. Writes only on misses (warm start is inert under the
+file watcher). Keys: asset id (index) or cache_key (persistent cache).
 """
+
 
 from __future__ import annotations
 
@@ -300,7 +265,7 @@ class VectorStore:
         if count:
             # A **scalar** index on the key column — not a vector one, see `search`. The
             # candidate prefilter is a large `IN` and without this LanceDB scans every row to
-            # evaluate it. Measured on 13,968 x 3,072: 1,000 candidates 191 ms -> 43 ms, 200
+            # evaluate it.
             # candidates 152 ms -> 14 ms. Costs 0.01 s to build there, 2.8 ms on three rows.
             self._table.create_index(_KEY_COLUMN, config=BTree())
 

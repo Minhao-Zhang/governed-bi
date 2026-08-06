@@ -1,44 +1,10 @@
-"""The vector cache that outlives the process, so a restart does not re-embed the corpus.
+"""Persistent vector cache across process restarts.
 
-Was ``api/vector_cache.py`` and one JSON file: **888,884,348 bytes**, 13,968 summaries ×
-3,072 floats, **21.7 s** to read/parse/validate at every server start and **1,685 MB**
-resident once loaded — twice over, because ``build_index`` copied the same Python floats into
-``UnifiedIndex.vectors``. ``vectors.py`` records what replaced it and what that costs
-(172,374,167 bytes, 7 ms to open, 0.74 s to rebuild the whole index warm).
-
-**The old file's own argument against LanceDB was right about the wrong thing.** It said
-LanceDB's selling point is approximate nearest-neighbour search and that this system does
-exact cosine over a narrowed candidate set — both true, and still true: no vector index is
-built. What it got wrong was the cost of the file it was defending.
-
-**One operational consequence, stated because nothing warns about it.** The JSON is not read
-by anything now, so the first start after this change finds an empty store and re-embeds every
-summary — about 420 k embedding tokens for the gold layer, roughly $0.01. The old file is left
-in place rather than deleted: it is 13,968 vectors somebody already paid for.
-
-**Why this moved out of ``api/``.** It worked there only because ``build_index`` took a
-``MutableMapping`` and therefore never had to import it. A typed cache must be importable by
-its consumer, and three entry points in three layers need this one — ``api/graph_app.py``,
-``serve/__main__.py`` and ``tools/run_datalake_eval.py``, of which the last two passed an
-embedder and **no cache at all**, re-embedding 13,968 summaries per invocation.
-``tools/check_imports.py`` puts ``serve`` before ``api``, so the only legal home below all
-three is here.
-
-**One store per width, and that is not generality for its own sake.**
-``text-embedding-3-large`` accepts a ``dimensions`` argument, so one model name is two
-unrelated vector spaces; a ``fixed_size_list`` column holds one width; and ``index.py``
-promises that **one cache is safe to share across every embedder in a pooled run**. A
-single-width cache would break that promise in exactly the case the cache key was widened to
-cover.
-
-**The key carries the embedder identity, and that is load-bearing rather than tidy.**
-``index.py`` records the defect a text-only key produces: a 1536-wide ``3-large`` and a
-1536-wide ``3-small`` are **width-identical and semantically unrelated**, so a text-keyed
-cache hands one model's vector to the other with nothing anywhere disagreeing — v1's
-cross-model cache hit that degraded routing to "nothing scores" with no error. The key is
-built upstream by :func:`~governed_bi.retrieve.semantic.cache_key`; nothing here may
-reconstruct or shorten it.
+One store per vector width; keys carry embedder identity via
+:func:`~governed_bi.retrieve.semantic.cache_key`. Lives in ``retrieve/`` so
+``api``, ``serve``, and eval can share it under the import layering.
 """
+
 
 from __future__ import annotations
 
@@ -51,11 +17,7 @@ from .vectors import MEMORY_URI, VectorStore
 
 __all__ = ["VECTOR_CACHE_VAR", "VectorCache", "vector_cache_from_environment"]
 
-#: Where the persistent cache lives. ``$var`` overrides the location; a default always exists,
-#: because the cost of the cache being absent is paid on every restart and the cost of it
-#: existing is a directory — so "off" is not a configuration worth offering, only "somewhere
-#: else" is. **It now names a directory, not a file**: one JSON file per model became one
-#: LanceDB database per model, holding one table per vector width.
+#: Persistent cache directory (env override). One LanceDB DB per model, table per width.
 VECTOR_CACHE_VAR = "GOVERNED_BI_VECTOR_CACHE"
 
 

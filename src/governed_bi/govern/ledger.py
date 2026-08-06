@@ -1,45 +1,14 @@
-"""The audit ledger (ADR 0006 §11) and what measurement must see (§12).
+"""Audit ledger (ADR 0006 §11) and what measurement must see (§12).
 
-**Every executor writes an entry**, stamped with its ``path`` (G2). v1's
-graded-delivery path bypassed the middleware entirely and produced answers whose
-record showed a query that never happened.
+Every executor writes an entry stamped with its ``path`` (G2). Retention by
+vocabulary class: closed vocabulary and numbers kept; statement kept as
+``sha256`` plus a structural fingerprint (literals elided); ``detail``, driver
+errors, prose, and result rows dropped; column names only as ids.
 
-**Retention is by vocabulary class, not by "drop every string".** ADR 0006's first
-draft said the ledger "keeps numbers and drops every string" and four lines later
-"keeps ``columns`` / ``row_count``" — column names are strings, and dropping every
-string also drops the statement, in a section whose stated purpose is that the record
-must show what ran. So:
-
-===========================  ==================================================
-field class                  durable projection
-===========================  ==================================================
-closed vocabulary            kept — ``layer``, ``passed``, ``reason_code``,
-                             ``path``, ``rule_id``, ``outcome``
-numbers                      kept — ``row_count``, ``truncated``, ``ms``,
-                             ``attempt``
-statement                    kept as ``sha256`` **plus a structural
-                             fingerprint**: the parsed AST with every literal
-                             elided
-``detail``, driver errors,   dropped
-prose, result rows
-column names                 kept only as ids, never as free text
-===========================  ==================================================
-
-The fingerprint is what makes the record auditable — which tables, which shape,
-which functions — without echoing literals. libpq embeds the offending statement in
-its error text (``LINE 1: SELECT ...``), which is why free text goes.
-
-**The hash is of the string that was executed**, not of the string that was checked
-(G4). Three transformations act on a statement — normalisation, checking, row-limit
-injection — and v1 hashed the wrong one, so the record attested to a statement the
-database never saw.
-
-**``guardrail_errors`` is a quotability precondition, not a diagnostic.** §12 records
-the chain it exists to catch: a ``NameError`` in the function-layer walk turns every
-turn in an arm into a refusal, ``crash_rate == 0``, every register key present, run
-declared quotable. :func:`guardrail_errors` counts them from the attempts, so the
-count and the attempts cannot disagree.
+Invariants: hash the executed string, not the checked one (G4);
+:func:`guardrail_errors` is derived from attempts (quotability precondition).
 """
+
 
 from __future__ import annotations
 
@@ -66,10 +35,7 @@ __all__ = [
     "execution_record",
 ]
 
-#: The four executors ADR 0006 §7 enumerates. G2 is "every executor is enumerated,
-#: passes ``check()``, and writes a ledger entry" — not "one choke point", which was
-#: aspirational and which the ADR's own first draft contradicted in its own tool
-#: table by listing ``sample_rows`` beside the "single" one.
+#: The four executors ADR 0006 §7 enumerates (G2).
 ExecutorPath = Literal["agent", "graded", "sample", "profile"]
 
 #: The same four, as data, so a caller can iterate them instead of re-listing them.
@@ -77,42 +43,21 @@ EXECUTOR_PATHS: tuple[ExecutorPath, ...] = ("agent", "graded", "sample", "profil
 
 
 class AttemptRecord(TypedDict):
-    """One statement's trip through the stack. ADR 0006 §12.
+    """One statement's trip through the stack (ADR 0006 §12).
 
-    ``verdict_layer`` is the layer's **name**, not the :class:`Layer` member. It was the
-    member, and since 2026-08-04 these rows are checkpointed — the ledger moved into the
-    nested agent's state so it survives an ``ask_user`` interrupt — where LangGraph's msgpack
-    serde reported it: *"Deserializing unregistered type governed_bi.govern.layers.Layer from
-    checkpoint. This will be blocked in a future version."* A row that a future LangGraph
-    refuses to load is a ledger that stops existing on the resume path, which is the path it
-    was just moved there to protect. The name is also what ``trace()``'s ``layer`` field has
-    always written, so this makes two projections of one fact agree instead of differ.
+    ``verdict_layer`` is the layer's **name** (checkpoint-safe; matches ``trace()``).
     """
 
     verdict_layer: str | None
     passed: bool
     reason_code: str
     path: ExecutorPath
-    #: **The statement that was sent**, after canonicalisation and the row limit — not the
-    #: string the model wrote. ``None`` when nothing ran.
-    #:
-    #: The record's ``generated_sql`` used to be the model's raw tool argument, so a turn
-    #: that succeeded reported a statement the database had never seen: canonicalisation
-    #: rewrites an identifier to the corpus's declared spelling and quotes it (ADR 0008
-    #: D2), and ``apply_row_limit`` appends the cap. The ledger already hashed the executed
-    #: string, so one row carried the hash of one statement and the text of another — and
-    #: an eval that re-executes ``generated_sql`` then fails on every mixed-case identifier
-    #: the model happened to write unquoted, understating EX for 11% of the lake.
+    #: Statement sent after canonicalisation and row limit; ``None`` when nothing ran.
     executed_sql: str | None
 
 
 class ExecutionRecord(TypedDict):
-    """Written **every turn**, including turns with no SQL at all.
-
-    Total, and written unconditionally: a record that appears only when something
-    happened cannot afterwards be told from instrumentation that was never wired up —
-    half this repository's retired numbers have that shape.
-    """
+    """Written every turn, including turns with no SQL."""
 
     attempts: list[AttemptRecord]
     terminal: Literal["answered", "graded", "refused", "capped", "no_sql"]

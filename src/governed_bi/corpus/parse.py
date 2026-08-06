@@ -1,26 +1,10 @@
-"""Untrusted mapping into a typed asset, and back out again.
+"""Untrusted mapping ↔ typed asset.
 
-Split from :mod:`.schema` because the two answer different questions and a reader
-needs one at a time: ``schema.py`` says *what an asset is*, this says *how a string
-somebody wrote becomes one*. The dependency runs one way -- this module reads the
-dataclasses' own annotations and the dataclasses know nothing about parsing -- so
-there is no table here that has to agree with a table there. That is the property
-that makes the split safe; a split whose two halves must agree is the shape this
-package exists to avoid.
-
-Three rules, each with its v1 reason:
-
-* **An unknown key is an error**, which is v1's ``extra="forbid"``. A mistyped field
-  name that parses is a field nobody writes and nothing reads. The single exception
-  is :class:`~.schema.Audit`, whose block was ``extra="allow"`` because evidence
-  prose and human-appended provenance vary.
-* **Nothing is validated here.** :func:`from_mapping` builds whatever it can and
-  :mod:`.validate` judges it, so a constructed-but-wrong asset is representable and
-  ``problems_with`` has something to find. A validating constructor would make every
-  ``problems_with`` call vacuously empty.
-* **Defaults are omitted on the way out**, so a written file shows what was decided
-  rather than the whole schema, and a round trip returns an equal asset.
+Unknown keys error (except :class:`~.schema.Audit`). No validation here —
+:mod:`.validate` judges constructed assets. Defaults omitted on write so round
+trips stay equal.
 """
+
 
 from __future__ import annotations
 

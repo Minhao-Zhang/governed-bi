@@ -4,7 +4,7 @@
 holder before implementation, because an agent writes tests that pass against the code
 it just produced. If a test looks wrong, stop and say so in your report.
 
-Specification: ``docs/plans/v2-layer-handoffs.md`` section 6 and ADR 0005 §2.
+Specification: ADR 0005 §2.
 
 **Why almost nothing here takes an ``Asset``.** Parcel D owns the asset types and is
 being built in parallel, so assertions against its API would be assertions against an

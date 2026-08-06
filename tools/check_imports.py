@@ -1,26 +1,9 @@
-"""Enforce the import layering declared in ``governed_bi/__init__.py``.
+"""Enforce import layering declared in ``governed_bi/__init__.py``.
 
-AST-only: this script **never imports** the code it checks. Two reasons, and the
-second is the one that matters. Importing would need the package's dependencies
-installed, so the check could not run in a bare environment — and it would execute
-every module's import-time guards, which means a broken guard would look like a
-layering violation. A structural check should not depend on the thing it checks
-being runnable.
-
-Two rules:
-
-1. **``ports.py`` and ``register/`` import stdlib only.** Both are imported by the
-   serve path and the eval harness, so either one pulling in pydantic, sqlglot or a
-   provider SDK makes them un-importable from one side. "stdlib only" is what makes
-   a shared vocabulary safe to sit on.
-2. **Nothing imports upward.** The layer order is declared once, below. v1's
-   version of this rule was a docstring — "callers are documented as passing
-   ``for_analyst()``" — and the pooled driver breached it, putting excluded PII
-   column names into the routing index. A contract that is documentation rather
-   than a check is not a boundary.
-
-Exit code 1 on any violation, with the file, the line and the rule.
+AST-only (never imports the package). ``ports``/``register`` are stdlib-only;
+nothing imports upward. Exit 1 on violation.
 """
+
 
 from __future__ import annotations
 

@@ -1,61 +1,10 @@
-"""Number formatting in ``src/`` happens in one method, or not at all.
+"""Number formatting in ``src/`` only via ``Measured.render``.
 
-``register/quantity.py``'s :meth:`Measured.render` is the only place in ``src/``
-permitted to turn a quantity into display text. The rule is not stylistic. v1's
-rounding helpers turned an **unmeasured** quantity into ``0.0`` on the way to a
-report: ``round(x or 0.0, n)`` — the value was honest right up to the last function
-that touched it, and by then nothing downstream could tell a measured zero from a
-missing measurement. The related incident from the same family:
-``docs/lessons-from-v1.md`` — *a ``:.3f`` on a ``None`` rate raised after the whole
-serve loop and before ``summary.json`` was written*, discarding hours of paid model
-calls to print a progress line. Formatting is where a measurement stops being a
-measurement, in both directions.
-
-So there is exactly one formatting site, it takes a ``Measured``, and it renders
-absence as words. Anything in ``src/`` that formats a number is either bypassing
-that site or duplicating it.
-
-**``tools/`` and ``tests/`` are not scanned, deliberately.** Both format their own
-diagnostics — this file prints counts, and a test that asserts ``render()`` produces
-``"0.50"`` must write ``"0.50"`` somewhere. Neither writes a number into a report a
-reader would quote, which is the thing the rule protects, and extending the rule
-there would mean a gate whose only effect is to make its own diagnostics
-unwritable.
-
-**Which mechanism catches what, and why.**
-
-AST does the work wherever a construct has a shape:
-
-* ``round(...)`` — an ``ast.Call``. This is the reason not to use a line regex:
-  ``register/record.py`` and ``register/quantity.py`` both quote ``round(`` in
-  prose, explaining the v1 defect and this rule. A grep fails on both, so the gate
-  would either be permanently red or acquire per-line markers on the two files most
-  entitled to discuss it. The AST sees calls and not prose.
-* f-string precision specs — ``FormattedValue.format_spec``. The spec is
-  reconstructed from its literal parts, with a nested placeholder such as
-  ``{places}`` rendered as ``{}``, so a computed precision is still matched.
-* ``"{:.2f}".format(x)`` — an ``ast.Call`` on an ``Attribute`` named ``format``
-  whose receiver is a string literal. Checked on the literal, so it cannot
-  false-positive on ``obj.format(...)`` for some unrelated ``format``.
-* ``"%.2f" % x`` — a ``BinOp`` with ``Mod`` and a string literal on the left. Only
-  fatal when the literal holds a float/exponent/general conversion: ``"%s of %d" %
-  ...`` loses no precision and is not what the rule is about.
-* ``format(x, ".2f")`` — the two-argument builtin, spec as a literal.
-
-A **regex** is used only for the contents of a matched spec string, because
-"is this a numeric precision spec" is a question about characters, not about shape.
-No line-level regex is used at all.
-
-**Stated gaps, rather than a noisy check.** A precision spec assembled at runtime
-(``spec = "." + str(n) + "f"``), or held in a module constant and ``.format``ed
-through a variable later, is not caught: detecting those needs the value of an
-expression, and the version that guesses would fire on every docstring in
-``quantity.py`` that documents the rule. Also out of scope: ``Decimal.quantize``,
-``numpy.round`` on an array, and thousands separators, which are presentation
-without precision loss.
-
-Exit code 1 on any violation.
+AST catches ``round``, precision format specs, ``.format``, ``%``, and
+``format(x, spec)``. ``tools/`` and ``tests/`` are not scanned. Exit 1 on
+violation.
 """
+
 
 from __future__ import annotations
 
@@ -68,12 +17,6 @@ ROOT = Path(__file__).resolve().parent.parent
 PKG = ROOT / "src" / "governed_bi"
 
 #: The one permitted formatting site, relative to ``src/governed_bi/``.
-#:
-#: **Declared as data the checker reads, not as a branch inside the checker**, for
-#: the same reason ``check_citations.py`` keeps its exemptions in the module it
-#: checks: an exemption in a conditional is invisible in review, and this one is the
-#: single most load-bearing line in the file. Adding a second entry here should feel
-#: like what it is — a second answer to "how does a number reach a reader".
 EXEMPT: tuple[str, ...] = ("register/quantity.py",)
 
 #: A numeric precision spec: a dot, a width (or a nested ``{}`` placeholder for a

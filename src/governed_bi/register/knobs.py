@@ -1,38 +1,7 @@
-"""Every knob, declared once, with what its difference means.
+"""Knob register: declared defaults, roles, and comparability / resume keys.
 
-The union of ADR 0005 §5 and ADR 0006 §13. Three artifacts derive from it: the
-manifest, the comparability keys, and the serve config hash — so a new knob joins
-the gate by default, and **two runs with different security configuration cannot
-hash identically.**
-
-Four v1 incidents are the reason each piece is shaped this way:
-
-* **A hand-curated hash payload.** ``serve_config_hash`` hashed a written-out
-  field list. Three separate omissions were found: five note-governance knobs
-  absent while eight dead cache knobs were hashed, so flipping note pinning
-  produced an identical digest; two knobs that *drop corpus content from the
-  prompt*, so two runs served different context on every question while agreeing
-  on every hashed field; and the prompt-set hash itself.
-* **Model identity was not a knob.** ``llm_reasoning_effort``,
-  ``embedding_model`` and ``embedding_dimensions`` were live config fields
-  recorded nowhere. Two ladders differed **only** in reasoning effort, so
-  comparability cleared the pair the second run existed to isolate — and effort
-  moved the baseline arm **+2.5pp against a 2.3pp detection threshold.**
-* **Comparability and resume-drift are different questions.** Two runs at
-  different commits are the *normal* comparison, so ``git_sha`` in the
-  comparability set would declare nearly every pair incomparable. Inside one
-  directory the same difference is corrupting: v1 checked ``git_sha`` only, so a
-  resume across an **uncommitted** edit blended two harness versions into one
-  arm's score — 1025 rows under one diff digest and 326 under another, averaged,
-  with no gate firing.
-* **Knobs reachable only from an eval CLI.** Three routing knobs had no
-  deployment surface, so the benchmark measured a configuration no deployment
-  could run. Every knob here must be settable by the same mechanism a deployment
-  uses; ``tests/conformance`` asserts it.
-
-**``UNSET`` is not a default.** Two knobs ship uncalibrated on purpose, and a
-number in their place would be a fabricated measurement rather than a starting
-point. Reading one raises.
+Derives the manifest, comparability keys, and serve config hash. ``UNSET`` is
+not a default — reading an uncalibrated knob raises.
 """
 
 from __future__ import annotations
@@ -61,11 +30,7 @@ __all__ = [
 class Unset:
     """A knob deliberately shipped uncalibrated. Distinct from every value.
 
-    Reading one raises rather than substituting a plausible number. ``negative_tau``
-    cannot be calibrated on a benchmark whose questions are all answerable by
-    construction, and ``lexical_saturation_k`` must be fitted against a real BM25
-    score distribution — a guess in either slot is a fabricated measurement, and
-    the gate that reads it would be worse than absent.
+    Reading one raises rather than substituting a plausible number.
     """
 
     __slots__ = ()
@@ -86,18 +51,12 @@ UNSET: Final[Unset] = Unset()
 class Role(str, Enum):
     """What a difference in this knob means for two runs."""
 
-    #: Differing values make two runs incomparable. In the config hash, in the
-    #: manifest, in the comparability set.
+    #: Differing values make two runs incomparable.
     comparability = "comparability"
-    #: Recorded, but a difference does not invalidate a comparison — worker counts,
-    #: commit sha, working-tree state. **Fatal inside one run directory**, normal
-    #: between two, which is why drift and comparability are separate sets.
+    #: Recorded; difference does not invalidate a comparison. Fatal inside one
+    #: run directory (resume drift).
     operational = "operational"
-    #: Scope, not configuration: which arms, which schemas, which questions. Not a
-    #: comparability key, because a capped probe run exists precisely to be
-    #: compared against the full baseline it subsets — but **fatal on resume**,
-    #: because v1's documented resume line omitted the scope flags and silently
-    #: picked up four default arms, costing a paid run two curator passes.
+    #: Scope (arms, schemas, questions). Not a comparability key; fatal on resume.
     scope = "scope"
 
 
@@ -109,9 +68,8 @@ class Knob:
     default: Any
     role: Role
     why: str
-    #: True when the value is a digest of something larger — a committed function
-    #: list, the per-type budget table — so the hash moves when the content does
-    #: rather than when someone remembers to bump a version.
+    #: Digest of something larger (function list, budgets) so the hash moves
+    #: when content does.
     hashed_by_content: bool = False
 
 
@@ -142,14 +100,6 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        hashed_by_content=True),
 
     # ── retrieval ───────────────────────────────────────────────────────────
-    # `max_queries_per_facet` was declared here at 8, with the rationale "extraction is
-    # model-controlled, and an unbounded phrase list is an unbounded network fan-out". There is
-    # no phrase list: `_rewritten_query` returns one string and `_facet_result` builds
-    # `[question]`, so the bounded list is always length <= 1 and the bound has never been
-    # reachable. It is deleted rather than wired because wiring it would give a knob to a
-    # fan-out that does not exist — and it was `Role.comparability`, so every run published a
-    # limit on a feature it did not have. If per-facet multi-query retrieval is built, the knob
-    # comes back with the code that needs it.
     _k("candidate_depth", 50, Role.comparability,
        "top-N per query WITHIN the facet's target types. A global cut then "
        "filtered would give the term facet an empty result on most queries"),
@@ -340,30 +290,14 @@ def knob_names() -> frozenset[str]:
 
 
 def defaults() -> Mapping[str, Any]:
-    """Every knob at its declared default. ``UNSET`` values are included as
-    ``UNSET`` — a caller that reads one must handle it, not default it."""
+    """Every knob at its declared default. ``UNSET`` values remain ``UNSET``."""
     return {k.name: k.default for k in KNOB_REGISTER}
 
 
 def knob_default(name: str) -> Any:
-    """One knob's declared default, by name. ``KeyError`` for an undeclared knob.
+    """One knob's declared default. Raises ``KeyError`` if undeclared.
 
-    **Here rather than in each consumer**, because "look up the declared default of
-    one knob" was independently written twice within a day — once in ``corpus/``
-    and once in ``govern/`` — which is precisely the outcome
-    ``tools/check_one_implementation.py`` predicts when layers are parcelled to
-    agents who cannot import each other's unwritten modules. The consumer that
-    needs a *bound* still owns the comparison; what it must not own is a second
-    answer to what the knob says.
-
-    The raise is the useful half. A typo'd name in a consumer would otherwise ship a
-    plausible literal that no knob backs, so the config hash would not move when the
-    real knob did — and a threshold outside the comparability hash is v1's
-    ``serve_config_hash`` defect.
-
-    ``UNSET`` is returned as ``UNSET``, never resolved to a number. A knob that
-    ships uncalibrated must be handled at the call site: ``Unset.__bool__`` raises
-    so it cannot be defaulted through a truth test.
+    Returns ``UNSET`` as ``UNSET``, never resolved to a number.
     """
     for knob in KNOB_REGISTER:
         if knob.name == name:
@@ -377,11 +311,9 @@ def comparability_keys() -> frozenset[str]:
 
 
 def resume_drift_keys() -> frozenset[str]:
-    """Knobs whose change **within one run directory** is fatal.
+    """Knobs whose change within one run directory is fatal.
 
-    A strict superset of the comparability keys, asserted at import. The extra
-    members are the operational and scope knobs: normal to differ between runs,
-    corrupting to differ inside one.
+    Superset of comparability keys plus operational and scope.
     """
     return comparability_keys() | frozenset(
         k.name for k in KNOB_REGISTER if k.role in (Role.operational, Role.scope)
@@ -389,42 +321,19 @@ def resume_drift_keys() -> frozenset[str]:
 
 
 def config_hash_keys() -> frozenset[str]:
-    """Knobs that enter the serve config hash.
-
-    The comparability set. Content-hashed knobs contribute their digest rather than
-    a version string, so the hash moves when the content moves rather than when
-    someone remembers to bump.
-    """
+    """Knobs that enter the serve config hash (the comparability set)."""
     return comparability_keys()
 
 
-#: Knobs whose placement v1 got wrong, and where each must be.
-#:
-#: Asserted individually at import rather than as a set relation. ``drift ⊇
-#: comparability`` is *definitionally* true here — :func:`resume_drift_keys` is
-#: built as the union of all three roles — so asserting it would be asserting a
-#: module against its own constant, which is the authoring rule L§7 records after
-#: v1 shipped several guards that could not fail. These can fail: change one
-#: ``Role`` and the corresponding line goes red.
+#: Knobs whose role placement must not drift (asserted at import).
 _PLACEMENT_INVARIANTS: Mapping[str, Role] = {
-    # Fatal inside one run directory, normal between two. v1's drift check iterated
-    # the *comparability* list, which does not contain git_sha, so a resume across
-    # an uncommitted edit was not fatal — 1025 rows under one diff digest and 326
-    # under another, averaged into one arm score.
     "git_sha": Role.operational,
     "diff_sha256": Role.operational,
     "working_tree_dirty": Role.operational,
-    # Scope is re-read from argv unless it is pinned, and v1's own documented
-    # resume line omitted these, silently picking up four default arms on a paid
-    # run — two curator passes and three extra serve passes.
     "arms": Role.scope,
     "split": Role.scope,
     "schemas_under_test": Role.scope,
     "question_subset": Role.scope,
-    # Two runs differing in either of these are not the same experiment. v1 hashed
-    # a curated field list that omitted both, so two ladders differing ONLY in
-    # reasoning effort compared as one experiment — and effort moved the baseline
-    # arm +2.5pp against a 2.3pp detection threshold.
     "llm_reasoning_effort": Role.comparability,
     "llm_utility_model": Role.comparability,
     "embedding_model": Role.comparability,
@@ -432,7 +341,7 @@ _PLACEMENT_INVARIANTS: Mapping[str, Role] = {
 
 
 def _assert_knobs_are_coherent() -> None:
-    """Import-time invariants. Two, neither definitional."""
+    """Import-time: unique names; placement invariants hold."""
     names = [k.name for k in KNOB_REGISTER]
     dupes = sorted({n for n in names if names.count(n) > 1})
     if dupes:  # pragma: no cover - import-time guard
@@ -440,8 +349,6 @@ def _assert_knobs_are_coherent() -> None:
 
     by_name = {k.name: k for k in KNOB_REGISTER}
 
-    # A typo'd name here would make the invariant below skip silently — an
-    # assertion that cannot fire, which is the thing this file is trying not to be.
     unknown = sorted(set(_PLACEMENT_INVARIANTS) - set(by_name))
     if unknown:  # pragma: no cover - import-time guard
         raise AssertionError(
@@ -455,7 +362,7 @@ def _assert_knobs_are_coherent() -> None:
     ]
     if wrong:  # pragma: no cover - import-time guard
         raise AssertionError(
-            "knobs whose role placement was a v1 incident are misplaced: " + "; ".join(wrong)
+            "knobs with misplaced roles: " + "; ".join(wrong)
         )
 
 

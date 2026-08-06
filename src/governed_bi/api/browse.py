@@ -101,11 +101,7 @@ def _kind_of(field: dataclasses.Field) -> FieldKind:
     if field.name in _BLOCK_FIELDS:
         return FieldKind.block
     annotation = str(field.type)
-    # **Sequence before reference**, and the order is the bug it fixes. `columns`,
-    # `dimensions`, `bound_terms` and `related_terms` are *lists of* references, and
-    # classifying them as `ref` gave them a scalar's operators — so `dimensions:len_gte:3`
-    # came back in `unknown_where` on a field where "how many does it have" is the obvious
-    # question. Measured: it was silently unapplicable for all 399 metrics.
+    # Sequence before reference: list-of-refs get list ops (e.g. len_gte), not scalar.
     if "tuple" in annotation or "list" in annotation or "Sequence" in annotation:
         return FieldKind.list
     if field.name in _REF_FIELDS:
@@ -114,8 +110,7 @@ def _kind_of(field: dataclasses.Field) -> FieldKind:
         return FieldKind.boolean
     if "int" in annotation or "float" in annotation:
         return FieldKind.number
-    # An Enum-typed field is a closed vocabulary and deserves `one_of`, which is the whole
-    # reason `kind` exists rather than "string or not".
+    # Enum-typed fields get ``one_of``.
     for name in ("LogicalType", "ColumnRole", "Cardinality", "Complexity", "ReliabilityStatus", "TermRelation"):
         if name in annotation:
             return FieldKind.enum
@@ -309,20 +304,9 @@ def _boundary(
     edges: Sequence[Mapping[str, Any]],
     kept_ids: set[str],
 ) -> list[dict[str, Any]]:
-    """Curated joins leaving the scope for **another namespace**, as navigable stubs.
+    """Curated joins leaving the scope for another namespace, as navigable stubs.
 
-    A cross-schema join executes (ADR 0005), so the far end of one is a place to go, not a
-    warning — which is why this is a list of destinations and carries no severity.
-
-    The scoped view has to say something about them or it misrepresents the corpus: a table
-    whose only join crosses a namespace draws as isolated, and "isolated" is a claim about the
-    schema rather than about the window. The client used to synthesise these itself from the
-    full graph; it can no longer do so once it trusts the engine's own scoping, and losing
-    them silently would trade one wrong picture for another.
-
-    A qualifying edge has exactly one endpoint in scope and is a **join** — it carries an ``on``
-    predicate, or its relation says so. Semantic references (a term grounding a column) are
-    excluded: they are not somewhere you can navigate to and back.
+    Qualifying edge: exactly one endpoint in scope, and a join (``on`` or relation).
     """
     by_id = {str(node["id"]): node for node in nodes}
 

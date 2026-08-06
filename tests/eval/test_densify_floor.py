@@ -1,10 +1,10 @@
 """The mechanical floor must actually apply to every summary, including the widest ones.
 
-``tools/densify_summaries.py`` is the acceptance bar in
-``docs/plans/corpus-summary-rewrite-2026-08-05.md``, so a defect in it moves the bar rather than
-breaking a feature -- which is why it gets tests and the scratch variants do not.
+``tools/densify_summaries.py`` is the densify acceptance floor, so a defect in it moves
+the bar rather than breaking a feature — which is why it gets tests and the scratch
+variants do not.
 
-It had two, both found by comparing its output against a hand-edited corpus:
+It had two defects, both found by comparing its output against a hand-edited corpus:
 
 * It composed with ``f"...{nouns}"[:cap]``. For a summary **already at the cap** the slice threw
   the nouns away and the tool made no change at all -- to the 26 widest tables in the corpus, the

@@ -1,10 +1,8 @@
 """Internals the bypass contract does not reach: the rule table, layer order, binding.
 
-Authoring rules applied throughout (``docs/lessons-from-v1.md`` §7):
+Authoring rules applied throughout:
 
-* **Every test drives the real gate.** None re-derives a rule's arithmetic. v1's
-  gold-gate tests re-implemented ``share > THRESHOLD``, so deleting the gate, flipping
-  the comparison and reversing the denominator all passed.
+* **Every test drives the real gate.** None re-derives a rule's arithmetic.
 * **Assert the effect, not the presence of a constant**, and **never assert a module
   against its own constant** — that passes for an empty tuple.
 * **Test the negative case.** A guard that only leaves a trace when it fires cannot

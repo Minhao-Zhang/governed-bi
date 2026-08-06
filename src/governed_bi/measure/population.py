@@ -1,36 +1,10 @@
-"""``Population``: the row set a metric was computed over, carried with the metric.
+"""``Population``: the row set a metric was computed over (L-R3).
 
-**The defect this type exists to make unrepresentable.** L-R3 — *one population per
-metric*. v1 computed a headline rate over one row set and its significance test
-over another, and the divergence was invisible because each call site filtered
-independently: one dropped crashes, the other did not; one restricted to shared
-questions, the other used everything it had. The numbers disagreed and both were
-reported, because nothing in the code could see that they were about different
-things.
-
-Passing two row sets to two functions cannot be made safe by review. So the row set
-becomes an object, the metric is computed **by** that object, and the significance
-test **takes the object** rather than a count — at which point "the headline and the
-test used different populations" stops being expressible.
-
-Three further properties, each from a specific v1 incident:
-
-* **Unit ids must be unique.** A resume that replayed part of a run merged 1025
-  rows and 326 rows into one arm's score, double-weighting whatever overlapped.
-  Duplicate units raise at construction rather than quietly reweighting.
-* **A missing outcome field is not a failed outcome.** v1's rates counted an absent
-  ``correct`` key as ``False``, so an arm whose instrumentation broke scored 0% and
-  was reported as a bad arm rather than a broken one. :meth:`Population.rate`
-  returns :meth:`~governed_bi.register.quantity.Measured.unmeasured` naming how many
-  rows lacked the field, and never silently coerces.
-* **A rate over zero rows is not zero.** It goes through
-  :meth:`~governed_bi.register.quantity.Measured.rate`, which is unmeasured for a
-  zero denominator — the reason ADR 0005 §4.1 requires the count beside the rate.
-
-:meth:`restrict` records every filter applied, so :func:`~.stats.mcnemar` can refuse
-two populations that were filtered differently. The provenance is the mechanism, not
-documentation.
+Metrics and significance tests take the same object. Unit ids unique; missing
+outcome fields are unmeasured, not failed; zero-row rates are unmeasured.
+:meth:`restrict` records filters for comparable populations.
 """
+
 
 from __future__ import annotations
 
@@ -70,13 +44,7 @@ class Population:
         *,
         unit_key: str = "question_id",
     ) -> Population:
-        """Build a population, refusing a malformed one.
-
-        Raises on a missing or duplicated unit id. Both are cheap to detect here and
-        expensive to detect later: a duplicate silently double-weights a unit, and a
-        missing id makes the population unpairable, which surfaces as a confusing
-        error inside the significance test instead of at the point of construction.
-        """
+        """Build a population; raise on missing or duplicated unit id."""
         materialised = tuple(rows)
         missing = [i for i, r in enumerate(materialised) if r.get(unit_key) is None]
         if missing:

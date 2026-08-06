@@ -1,29 +1,10 @@
-"""A recorded ``facet_channels`` judged against the declared channel table.
+"""Walk ``facet_channels`` against the declared channel table.
 
-**This module does not decide anything.** ``register.facets`` owns both judgements —
-:func:`~governed_bi.register.facets.channel_anomaly` for *how* an observation differs from
-its declaration and :func:`~governed_bi.register.facets.is_degraded` for *which* of those
-differences makes an arm unquotable. Both had **zero call sites outside tests**: nothing
-wrote ``facet_degraded``, so ``measure/gates.py`` reported ``[pass] facet_channels 0.0000
-over 'stub' n=3 (fan-out ran)`` on an arm with no index, and a gate whose input nobody
-produces is worse than an absent gate because the summary says the run was checked.
-
-What lives here is the **walk**: turning one record's ``{facet: {channel: state}}`` into
-the triples those two functions take. It lives in ``measure/`` and not in ``serve/``
-because both sides need it — ``serve.stamp`` writes the boolean onto the record and
-``measure.gates`` names the drift when the gate fails — and ``measure/`` is a layer both
-can import. Two walks would be two answers to "which channels did this turn run", which is
-the shape ``tools/check_one_implementation.py`` exists to prevent.
-
-The two entry points are deliberately not one:
-
-* :func:`facets_degraded` is the quotability input, and ``extra_channel`` is **not** in it.
-  A run that retrieved on more channels than it declared is drift, not degradation, and a
-  gate that refused it would punish the wrong thing (ADR 0005 §2.3).
-* :func:`channel_anomalies` is the diagnostic, and ``extra_channel`` **is** in it, because
-  a table and a producer disagreeing is the shape that gave v1 two definitions of
-  "excluded".
+Judgement lives in ``register.facets``; this module produces the triples.
+:func:`facets_degraded` for quotability (no ``extra_channel``);
+:func:`channel_anomalies` for diagnostics (includes ``extra_channel``).
 """
+
 
 from __future__ import annotations
 

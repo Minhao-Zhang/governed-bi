@@ -1,25 +1,9 @@
-"""``GovernancePolicy``: the knobs the layer stack reads, at their declared defaults.
+"""``GovernancePolicy``: typed view of ADR 0006 knobs (defaults from ``register.knobs``).
 
-**Every default here is read out of ``register.knobs``, never restated.** Two tables
-that must agree is the defect that made v1's negative examples structurally
-unreachable — budgeted at zero by a dict default in one table while another declared
-them retrievable — and a security knob with two homes is the same shape with a worse
-blast radius. ``KNOB_REGISTER`` is the register; this is a typed view of the subset
-ADR 0006 owns, and the lookup itself is ``register.knobs.knob_default`` — which exists
-because "read one knob's declared default" was written twice in a day, in this parcel
-and in ``corpus/``, exactly as ``tools/check_one_implementation.py`` predicts for
-parcels built in parallel.
-
-**``UNSET`` is carried, not defaulted.** ``cost_budget`` and
-``guard_rules_enabled`` ship uncalibrated on purpose, and ``Unset.__bool__``
-raises, so ``if policy.cost_budget:`` is a ``TypeError`` at the call site rather
-than a silently disabled layer. Reading one has to be deliberate:
-:meth:`GovernancePolicy.cost_layer_enabled` is the only place that asks.
-
-``hard_block_suspect`` is ``True`` in dev and on the benchmark and ``False`` in
-production, where a suspect column warns instead of refusing. v1 had this knob and
-ADR 0006's first draft dropped it, which would have made the benchmark and
-production the same configuration under a hash that could not tell them apart.
+Defaults are read, never restated. ``UNSET`` knobs (``cost_budget``,
+``guard_rules_enabled``) are carried — ``Unset.__bool__`` raises; use the
+explicit accessors. ``hard_block_suspect`` differs between benchmark and
+production so the config hash can tell them apart.
 """
 
 from __future__ import annotations

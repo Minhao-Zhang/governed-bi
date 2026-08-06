@@ -1,27 +1,8 @@
-"""The eight asset types, and one row of policy each.
+"""Asset-type policies: identifier fields, tag rules, and retrieval budgets.
 
-Tables that were separate documents in v1 are columns of one row here: which field
-must appear in ``summary``, how the index derives an asset's schema tag, and its
-per-type retrieval budget. They were separate, they drifted, and two of the drifts
-were incidents:
-
-* ``budgets.get(cls, 0)`` silently dropped any type nobody remembered to
-  budget — which is why ``NegativeExampleAsset`` was structurally unreachable
-  while the very line that dropped it was cited as the reason budgets exist.
-  **Here every type has an explicit budget, including the literals ``"all"`` and
-  ``"n/a"``, so there is no default to fall through to.** A consumer may iterate
-  this table; it may not ``.get`` from it.
-* The routing index embedded governance-excluded PII columns while the picker
-  summary filtered them — two definitions of "excluded" that drifted because the
-  index and the filter were written in different places against different
-  tables.
-
-**A register declares values; a predicate lives once, next to the type it tests.**
-So this file holds no comparisons. The 250-character cap is a knob in
-:mod:`.knobs`; the validator that enforces it is a method in ``corpus.assets``.
-v1 split a threshold from its comparison and got two ``LOW_CONFIDENCE_JOIN``
-constants **with different operators** — one in the scored artifact, one in the
-UI reading the same corpus.
+Every type has an explicit budget (including ``"all"`` and ``"n/a"``); consumers
+may iterate this table, not ``.get`` with a default. Predicates live beside the
+types they test, not here.
 """
 
 from __future__ import annotations
@@ -55,11 +36,7 @@ class AssetType(str, Enum):
 
 
 class TagRule(str, Enum):
-    """How the index derives the schema an asset votes for in ``route``.
-
-    Derivation is **not** uniform, which is why it is a declared table rather
-    than an attribute read. Three of the eight have no ``schema`` field at all.
-    """
+    """How the index derives the schema an asset votes for in ``route``."""
 
     #: The asset *is* the schema.
     itself = "itself"
@@ -69,28 +46,15 @@ class TagRule(str, Enum):
     parent_table = "parent_table"
     #: The schema of ``base_table``.
     base_table = "base_table"
-    #: The schema of whatever ``binding`` points at. **May be absent** — an unbound
-    #: term is untagged, and untagged is a value: it does not vote in ``route``,
-    #: but it is carried forward into pass two unconditionally and is budgeted like
-    #: anything else. Dropping it would delete a pass-one hit with no record.
+    #: Schema of ``binding`` target; may be absent (untagged, no route vote).
     binding_target = "binding_target"
-    #: The schema of ``left_table``. A cross-schema join votes **once**, for its
-    #: left endpoint, so one edge cannot drag a schema into the top-N twice.
+    #: Schema of ``left_table``. Cross-schema joins vote once (left endpoint).
     left_table = "left_table"
-    #: The asset's own ``schema`` if set, otherwise untagged (system-wide).
+    #: Own ``schema`` if set, otherwise untagged (system-wide).
     own_schema_or_global = "own_schema_or_global"
 
 
-#: A retrieval budget. ``int`` is a count; the two literals are values, not
-#: absences, and exist so that no consumer needs a default.
-#:
-#: ``"all"``
-#:     Never budgeted. Every selected schema's ``SchemaAsset`` renders, along with
-#:     its ``rules``.
-#: ``"n/a"``
-#:     Never enters context at all. Consumed by a gate instead — this is
-#:     ``negative_example``, and saying so explicitly is what stops it from being
-#:     dropped by an implicit zero the way v1's was.
+#: Retrieval budget. ``"all"`` never budgeted; ``"n/a"`` never enters context.
 Budget = int | Literal["all", "n/a"]
 
 
@@ -100,35 +64,16 @@ class AssetPolicy:
 
     asset_type: AssetType
 
-    #: Model fields whose value must appear in the asset's ``summary``.
-    #:
-    #: Empty means this type has **no physical identifier**, which is a per-type
-    #: fact and not a blanket exemption: a term is a business phrase, a few-shot's
-    #: summary *is* the question. v1's vacuous tests are the warning here — a rule
-    #: that must apply to all eight but is only evaluable for four will be
-    #: per-type-skipped in silence, so the four that skip are named rather than
-    #: discovered.
-    #:
-    #: For ``column`` this is the bare ``physical_name``, not a qualified
-    #: ``table.column``. Qualification would spend the 250-character budget on
-    #: text the reader does not need: a column's searchability comes from its own
-    #: index entry, and its table is established by the tag rule, not by prose.
+    #: Model fields that must appear in ``summary``. Empty = no physical id.
     identifier_fields: tuple[str, ...]
 
     #: How the index tags this asset's schema.
     tag_rule: TagRule
 
-    #: Per-type retrieval budget, applied after the second pass over distinct
-    #: asset ids ranked by hybrid score.
+    #: Per-type retrieval budget after the second pass.
     budget: Budget
 
-    #: Whether this type carries ``rules: list[str]`` — binding prose injected
-    #: under ``## Must honour``.
-    #:
-    #: Only ``schema`` and ``table``. The others are already normative: a metric's
-    #: ``expression`` **is** the definition (there is no advisory definition), and
-    #: a term's ``binding`` **is** a mandatory mapping. ``rules`` is only needed
-    #: where one field could hold either description or obligation.
+    #: Whether this type carries ``rules: list[str]`` under ``## Must honour``.
     bears_rules: bool
 
 
@@ -203,26 +148,17 @@ ASSET_REGISTER: Mapping[AssetType, AssetPolicy] = {
     ),
 }
 
-#: Every type enters the unified index. Stated as a derived constant rather than a
-#: policy column because there is no exception and inviting one would be a
-#: mistake: v1's ``JoinAsset`` produced an empty index document, so joins were
-#: invisible to both channels and reached context only through grounding.
+#: Every type enters the unified index.
 INDEXED_TYPES: frozenset[AssetType] = frozenset(ASSET_REGISTER)
 
-#: Types that can reach the prompt. ``negative_example`` cannot — it is consumed
-#: by a gate. Derived from ``budget``, so the two facts cannot disagree.
+#: Types that can reach the prompt (budget != ``"n/a"``).
 CONTEXT_TYPES: frozenset[AssetType] = frozenset(
     t for t, p in ASSET_REGISTER.items() if p.budget != "n/a"
 )
 
 
 def _assert_register_is_total() -> None:
-    """Import-time closure check.
-
-    An ``AssetType`` member with no policy row is the ``budgets.get(cls, 0)``
-    defect in a new costume: the type exists, something iterates the enum, and the
-    missing row becomes a silent zero somewhere downstream.
-    """
+    """Import-time: every AssetType has a policy row keyed to itself."""
     missing = set(AssetType) - set(ASSET_REGISTER)
     if missing:  # pragma: no cover - import-time guard
         raise AssertionError(
