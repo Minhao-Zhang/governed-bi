@@ -127,6 +127,11 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
             schemas=schemas,
             ranking=ranking,
             query_vector=query_vector,
+            # Threaded so pass two can embed each facet's *rewritten* query. Without it the
+            # lexical channel searched the rewrite and the semantic channel scored the raw
+            # question's vector, and the two were then blended — in the pass whose output
+            # becomes the analyst's context.
+            embedder=cfg.get("embedder"),
         )
     else:
         # No index: F1-compatible — filter pass-one hits (empty when only injector).
@@ -371,7 +376,14 @@ def _hit_score(hit: Any) -> float | None:
         scores["semantic"] = float(semantic)
     if not scores:
         return None
-    return float(fuse(scores, FUSE_WEIGHTS))
+    # **``consulted=scores`` here, and only here, because there is nothing better to pass.**
+    # This branch is the fallback for a hit payload carrying components but no ``score`` —
+    # every payload the fan-out and pass two write has one, and it is preferred above. A bare
+    # component payload does not record which channels ran for the query that produced it, so
+    # the components present are the whole of what is known. Stated explicitly rather than
+    # defaulted, because for the two real scoring paths the same assumption is the defect
+    # ``fuse``'s signature exists to prevent.
+    return float(fuse(scores, FUSE_WEIGHTS, consulted=scores.keys()))
 
 
 def _hit_asset_id(hit: Any) -> str | None:

@@ -6,7 +6,7 @@ helpers (ADR 0005 §6 one-implementation gate).
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from typing import Any, Mapping
 
 from governed_bi.register.knobs import Unset, knob_default
@@ -23,6 +23,7 @@ __all__ = [
     "corpus_structure",
     "facet_hits",
     "facet_weights",
+    "vector_for_query",
     "float_knob",
     "int_knob",
     "model_id",
@@ -38,11 +39,23 @@ FUSE_WEIGHTS: Mapping[str, float] = {
     "semantic": float(knob_default("w_semantic")),
 }
 
-def combine_channels(lexical: float | None, semantic: float | None) -> float | None:
+def combine_channels(
+    lexical: float | None,
+    semantic: float | None,
+    *,
+    consulted: Collection[str],
+) -> float | None:
     """Weighted fuse of lexical + semantic scores (shared by pass one and pass two).
 
     Inputs must already be on a shared scale
     (:func:`~governed_bi.retrieve.fuse.scale_within_channel`). ``None`` when neither scored.
+
+    ``consulted`` names the channels that ran for this query, and it is not derivable from the
+    two arguments: ``semantic=None`` means *either* "the semantic channel did not run for this
+    facet" *or* "it ran and did not return this document", and
+    :func:`~governed_bi.retrieve.fuse.fuse` has to tell those apart or additional evidence
+    lowers the score. Passing the two ``None``-or-float scores and letting ``fuse`` infer the
+    rest is exactly what this signature stops.
     """
     scores: dict[str, float] = {}
     if lexical is not None:
@@ -51,7 +64,42 @@ def combine_channels(lexical: float | None, semantic: float | None) -> float | N
         scores["semantic"] = float(semantic)
     if not scores:
         return None
-    return float(fuse(scores, FUSE_WEIGHTS))
+    return float(fuse(scores, FUSE_WEIGHTS, consulted=consulted))
+
+
+def vector_for_query(
+    query: str | None,
+    *,
+    question: str | None,
+    fallback: Sequence[float] | None,
+    embedder: Any | None,
+) -> Sequence[float] | None:
+    """The vector of the text that was **actually searched**, or ``fallback``.
+
+    Shared by both retrieval passes, and the reason it is shared is that only one of them had
+    it. Pass one embedded each facet's rewritten query; pass two took a single call-level
+    vector — the *raw question's*, computed once per turn by ``accept`` — and blended BM25 over
+    the rewrite against cosine over the question. Two different texts, one score.
+
+    ``facets.py``'s own comment says the fix out loud: *"the rewrite happens first, and both
+    channels then search with it — a rewrite that reached only BM25 would miss the point."*
+    That comment sat in the pass that already did it, and pass two is the pass whose output
+    becomes the analyst's context and decides which tables survive the budget.
+
+    A rewrite costs one embedding call. They are small, and the model call that produced the
+    rewrite has already been paid for; scoring it against the wrong vector wastes that call
+    rather than saving anything.
+
+    ``fallback`` is returned when there is no rewrite (``query == question``), when no embedder
+    is wired, or when the embed fails — the raw question's vector is the right thing in the
+    first case and the best available thing in the other two.
+    """
+    if query and question is not None and query != question and embedder is not None:
+        try:
+            return list(embedder.embed([query])[0])
+        except Exception:  # noqa: BLE001 — a degraded channel, not a failed turn
+            pass
+    return fallback or None
 
 
 #: ``id(asset container) -> (that container, its projection)``. Insertion-ordered and

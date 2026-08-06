@@ -21,6 +21,7 @@ from langchain_core.runnables import RunnableConfig
 from governed_bi.register.facets import (
     FACET_CHANNELS,
     FACET_TARGETS,
+    SCORING_CHANNELS,
     Channel,
     ChannelState,
     expected_channel_state,
@@ -29,7 +30,7 @@ from governed_bi.register.stages import Stage
 from governed_bi.retrieve.fuse import scale_within_channel
 from governed_bi.retrieve.index import UnifiedIndex
 from governed_bi.retrieve.semantic import semantic_search
-from governed_bi.serve.runtime import candidate_depth, combine_channels
+from governed_bi.serve.runtime import candidate_depth, combine_channels, vector_for_query
 from governed_bi.serve.runtime import configurable as runtime_config
 
 __all__ = [
@@ -202,8 +203,23 @@ def _pass_one_hits(
     lexical_scaled = scale_within_channel(lexical_scores)
     semantic_scaled = scale_within_channel(semantic_scores)
 
+    # The channels that were actually consulted, from `ran` — which `semantic_search` sets from
+    # its own observed state rather than from the branch having been entered. `fuse` needs this
+    # to tell "this facet has no semantic channel" from "the semantic channel returned nothing
+    # for this asset"; conflating them made an asset found by both channels score below one
+    # found by only one.
+    #
+    # Restricted to `SCORING_CHANNELS`, because `ran` also carries `extraction` — the rewriter
+    # call — and `extraction` has no weight to fuse with.
+    consulted = frozenset(c.value for c in ran if c in SCORING_CHANNELS)
+
     def _combined(aid: str) -> float:
-        return combine_channels(lexical_scaled.get(aid), semantic_scaled.get(aid)) or 0.0
+        return (
+            combine_channels(
+                lexical_scaled.get(aid), semantic_scaled.get(aid), consulted=consulted
+            )
+            or 0.0
+        )
 
     merged = sorted(
         set(lexical_scores) | set(semantic_scores),
@@ -352,19 +368,17 @@ def _query_vector(
     reads it. Config remains the fallback so the two existing callers keep working unchanged —
     and reading state first means a per-turn value always wins over a run-constant one, which is
     the direction that cannot be wrong.
+
+    The embed-the-rewrite half now lives in
+    :func:`~governed_bi.serve.runtime.vector_for_query`, because pass two needed it and did not
+    have it: it blended BM25 over the rewrite against cosine over the raw question. This
+    function is the state/config lookup that produces the fallback.
     """
     cfg = runtime_config(config)
-    if query and question is not None and query != question:
-        embedder = cfg.get("embedder")
-        if embedder is not None:
-            try:
-                return list(embedder.embed([query])[0])
-            except Exception:  # noqa: BLE001 — fall back to the question's vector below
-                pass
-    vector = state.get("query_vector")
-    if vector:
-        return vector
-    return cfg.get("query_vector") or None
+    fallback = state.get("query_vector") or cfg.get("query_vector") or None
+    return vector_for_query(
+        query, question=question, fallback=fallback, embedder=cfg.get("embedder")
+    )
 
 
 def _run_facet(

@@ -22,6 +22,7 @@ __all__ = [
     "FACET_EXTRACTS",
     "FACET_TARGETS",
     "GATE_CONSUMED_TYPES",
+    "SCORING_CHANNELS",
     "expected_channel_state",
     "channel_anomaly",
     "is_degraded",
@@ -42,6 +43,18 @@ class Channel(str, Enum):
     semantic = "semantic"
     #: The model call that turns a question into query phrases.
     extraction = "extraction"
+
+
+#: The members that actually score documents, so ``extraction`` cannot be fused.
+#:
+#: :class:`Channel` deliberately holds one member that is not a scoring channel, and every
+#: reader had to remember that. ``fuse`` now renormalises over the channels a caller says were
+#: consulted, and the caller's nearest source of that is the ``ran`` set — which ``_rewritten_query``
+#: also adds ``extraction`` to. Passing ``ran`` straight through therefore put ``extraction`` in
+#: the denominator, ``FUSE_WEIGHTS`` has no weight for it, and the ``KeyError`` surfaced as a
+#: facet that retrieved nothing. Named here rather than filtered at each call site, because that
+#: is three copies of one judgement.
+SCORING_CHANNELS: frozenset[Channel] = frozenset({Channel.lexical, Channel.semantic})
 
 
 class ChannelState(str, Enum):
