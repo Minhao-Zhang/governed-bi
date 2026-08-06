@@ -34,6 +34,7 @@ from governed_bi.api.trace_store import (
 )
 from governed_bi.register.assets import ASSET_REGISTER
 from governed_bi.serve.messages import last_ai_text
+from governed_bi.serve.runtime import bool_knob
 
 __all__ = ["app"]
 
@@ -145,6 +146,15 @@ def capabilities() -> dict[str, Any]:
         # editing this line. Reporting a capability the mounted transport lacks is the same
         # defect as a reliability badge with nothing behind it.
         "can_clarify": can_stream and session.agent_model is not None,
+        # UtkuAI, ported (utku-ai-v2-porting-spec.md), not upstream. Read the same way every
+        # other knob is: session.knobs_resolved is the flat resolved mapping bool_knob's first
+        # precedence tier already checks, so this is the register's declared value unless a
+        # deployment overrode it -- never a second literal that could drift from what a turn
+        # actually used.
+        "enable_structured_percentage_check": bool_knob(
+            session.knobs_resolved, "enable_structured_percentage_check"
+        ),
+        "enable_clarification_to_draft": bool_knob(session.knobs_resolved, "enable_clarification_to_draft"),
     }
 
 
@@ -566,7 +576,6 @@ def _mine_clarification_draft(
     """
     from governed_bi.corpus.drafts import submit_draft
     from governed_bi.curator.clarification import draft_from_clarification, resolved_answer_text
-    from governed_bi.serve.runtime import bool_knob
 
     if not bool_knob(out, "enable_clarification_to_draft") or session.corpus_root is None:
         return
