@@ -147,9 +147,11 @@ def _run_one(
             thread_id=thread_id,
             identity={"token": f"eval-{run_id}"},
             # Loaded by `eval/datalake.py:load_questions` since the beginning and consumed by
-            # nothing until now, which made every EX a no-evidence number. Passing it is what
-            # makes the figure comparable to published BIRD; an arm that wants the harder
-            # no-hint condition omits the key from the question dict.
+            # nothing until now, which made every EX a no-evidence number. Passing it is one
+            # of the two conditions for the figure being comparable to published BIRD; the
+            # other is the grader, and for the whole of v2 that half was false — see
+            # `eval/grade._coerce_cell`. An arm that wants the harder no-hint condition omits
+            # the key from the question dict.
             evidence=question.get("evidence"),
         )
     else:

@@ -234,6 +234,120 @@ def test_the_relaxation_stops_at_names() -> None:
     )
 
 
+def test_a_numeric_cell_is_compared_as_a_number() -> None:
+    """The six pairs that graded ``result_mismatch`` while being the same answer.
+
+    ``_cell``'s fallback was ``return str(value)`` and the type test above it was
+    ``isinstance(value, (int, float))``. ``Decimal`` is neither, so **every Postgres
+    ``numeric`` cell was compared as a string** — and the artifact recorded
+    ``correct=False`` with ``detail="result_mismatch"``, which is indistinguishable from a
+    genuinely wrong answer.
+
+    Every EX number this repository produced before the fix is therefore an underestimate,
+    and because the size of the underestimate is a function of the schema's numeric-column
+    density, the cross-schema comparisons did not hold either.
+
+    All six are accepted by the comparators shipped with the benchmark being graded
+    (``pipeline/_db.py``'s ``normalise_result``).
+    """
+    from decimal import Decimal
+
+    from governed_bi.eval.grade import grade_results
+
+    pairs = [
+        (Decimal("0.5"), 0.5),
+        (Decimal("100.00"), Decimal("100.0")),
+        (Decimal(100), 100),
+        (1.0, 1),
+        ("abc ", "abc"),  # CHAR padding
+        ("ABC", "abc"),
+    ]
+    for pred, gold in pairs:
+        verdict = grade_results(
+            pred_columns=["c"], pred_rows=[[pred]], gold_columns=["c"], gold_rows=[[gold]]
+        )
+        assert verdict["correct"] is True, f"{pred!r} vs {gold!r}: {verdict['detail']}"
+
+    # The paired negative: loosening the cell comparison must not make a wrong number pass.
+    assert (
+        grade_results(
+            pred_columns=["c"],
+            pred_rows=[[Decimal("100.01")]],
+            gold_columns=["c"],
+            gold_rows=[[Decimal("100.00")]],
+        )["correct"]
+        is False
+    )
+
+
+def test_the_fingerprint_is_the_benchmarks_own_hash() -> None:
+    """Byte-identical to ``hash_normalised_result``, not merely equivalent to it.
+
+    This is what makes ``gold_fingerprint`` a usable field: a fingerprint computed by
+    BIRD-Obfuscation's ``pipeline/_db.py`` can be put in a question row and compared here
+    without re-executing the gold statement. "Aligned with BIRD's own EX" was asserted in a
+    docstring for the whole of v2 and was never checked against BIRD's own code; the
+    predecessor sorted rows by ``json.dumps`` and wrapped them in ``{"rows": ...}``, so it
+    produced a different digest for the same rows and nothing ever noticed.
+
+    ``normalise_result`` is transcribed here rather than imported: the benchmark is a
+    separate repository that is not a dependency of this one, and a test that skips when it
+    is absent is a test that does not run.
+    """
+    import hashlib
+    import json as _json
+    import math as _math
+    from decimal import Decimal
+
+    from governed_bi.eval.grade import result_fingerprint
+
+    def normalise_result(rows):  # pipeline/_db.py, verbatim
+        if rows is None:
+            return []
+
+        def coerce(v):
+            if v is None:
+                return None
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return str(v).strip().lower()
+            if _math.isnan(f):
+                return "\x00nan"
+            if _math.isinf(f):
+                return "\x00inf" if f > 0 else "\x00-inf"
+            return f
+
+        def cell_key(v):
+            if v is None:
+                return (0, 0.0, "")
+            if isinstance(v, float):
+                return (1, v, "")
+            return (2, 0.0, v)
+
+        normalised = [tuple(coerce(c) for c in row) for row in rows]
+        return sorted(normalised, key=lambda row: tuple(cell_key(c) for c in row))
+
+    def hash_normalised_result(rows):
+        payload = _json.dumps(
+            [list(r) for r in normalise_result(rows)], separators=(",", ":"), ensure_ascii=False
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    rowsets = [
+        [],
+        [[1]],
+        [[Decimal("1.50"), "Ada"], [None, "grace "], [2, "ZOE"]],
+        [[float("nan")], [float("inf")], [float("-inf")]],
+        [["x"], [None], [3.0]],
+        [["café"], ["CAFÉ "]],  # ensure_ascii=False and the fold, together
+    ]
+    for rows in rowsets:
+        width = len(rows[0]) if rows else 1
+        ours = result_fingerprint([f"c{i}" for i in range(width)], rows)
+        assert ours == hash_normalised_result(rows), rows
+
+
 def test_table_coverage_refuses_rows_that_do_not_carry_licensed() -> None:
     """The EX ceiling must not read 0.000 because the producer named the field differently.
 

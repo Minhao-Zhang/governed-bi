@@ -317,10 +317,15 @@ def table_coverage(
     budget licenses at most ``ASSET_REGISTER[table].budget`` ranked tables — so a question
     needing a table outside that set cannot succeed however good the model is. Measured on the
     xhigh arm at 344 rows: **51.2%** of questions had all their gold tables, against a
-    *schema* reachability of 62.5%. EX was 0.049.
+    *schema* reachability of 62.5%.
 
     That splits the problem in two, which one EX number cannot: whether a question was
     *answerable at all* under this retrieval, and whether the model converted it when it was.
+
+    The EX figure this docstring used to quote beside those two is retired
+    (``register/citations.RETIRED_CLAIMS``): it was graded by a comparator that read Postgres
+    ``numeric`` cells as strings, so it is an underestimate of unknown size. These two numbers
+    are unaffected — they are measurements of what was *licensed*, and no grader touches them.
 
     Compared case-insensitively. Licensed ids carry the slug (ADR 0008 D1) and a gold
     statement carries the engine's spelling; those agree for every identifier whose slug is

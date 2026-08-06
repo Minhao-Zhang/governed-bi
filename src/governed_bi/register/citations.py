@@ -291,6 +291,25 @@ RETIRED_CLAIMS: tuple[RetiredClaim, ...] = (
             "quota free. The degradation counter existed and no gate read it.",
         replaced_by="91.0%, with facet channel state as a quotability input",
     ),
+    RetiredClaim(
+        pattern=r"EX\s+(was|of|at)\s+0\.049|0\.049\s*EX",
+        observed="EX was 0.049.",
+        why="every absolute EX this repository produced before 2026-08-06 was measured "
+            "through a grader that compared Postgres `numeric` cells as strings. "
+            "`_cell`'s fallback was `return str(value)` and `Decimal` is neither `int` nor "
+            "`float`, so `Decimal('100.00')` and `Decimal('100.0')` -- the same number -- "
+            "graded `result_mismatch`, indistinguishable in the artifact from a wrong "
+            "answer. The figure is an underestimate of unknown size, and the size is a "
+            "function of the schema's numeric-column density, so the cross-schema "
+            "comparisons do not hold either. Retired rather than corrected: the arm "
+            "cannot be regraded without re-executing it, because the artifact kept the "
+            "fingerprint and not the rows.",
+        replaced_by="nothing yet. The grader is now BIRD-Obfuscation's own "
+        "`normalise_result`, transcribed and fingerprint-identical, so the next ladder "
+        "produces the first EX this repository has that is comparable to published BIRD. "
+        "The 51.2% table coverage and 62.5% schema reachability beside it are NOT retired: "
+        "they are licensing measurements and do not touch the grader.",
+    ),
 )
 
 
