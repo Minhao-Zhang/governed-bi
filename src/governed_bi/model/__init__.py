@@ -1,13 +1,13 @@
-"""Model adapters (parcel I). Today: the two :class:`~governed_bi.ports.Embedder` ones.
+"""Model adapters (parcel I). All three :class:`~governed_bi.ports.Embedder` ones.
 
 ``ports.py:107`` names three — ``openai_embedder``, ``bedrock_embedder``,
-``deterministic_embedder``. Two are here. **``bedrock_embedder.py`` is deliberately
-absent**: ``langchain-aws`` is an optional extra that pulls a boto3 tree, nothing in the
-repository selects a Bedrock provider, and an adapter no caller reaches is an adapter
-whose contract nothing checks. ``ports.py`` naming it is a plan, not a debt — the port
-already has the two independent implementations its "every port here has at least two
-adapters" rule asks for, and the empty-string hazard that docstring cites Bedrock for is
-enforced here anyway, in ``embedder.refuse_blank``.
+``deterministic_embedder``. **``bedrock_embedder.py`` was deliberately absent** ("an
+adapter no caller reaches is an adapter whose contract nothing checks") until UtkuAI
+(ported: see ``utku-ai-v2-porting-spec.md``) added the caller — ``langchain-aws`` is now
+a direct dependency for the chat-model side (``ChatBedrockConverse``), so the embedder's
+"optional extra" reason no longer holds either. The empty-string hazard that every other
+docstring here cites Bedrock for was always enforced regardless, in
+``embedder.refuse_blank``.
 
 **Where this package sits.** ``tools/check_imports.py`` puts ``model`` between
 ``datasource`` and ``serve``, so an adapter may import ``ports``, ``register``,
@@ -23,6 +23,11 @@ reach ``DeterministicEmbedder`` without the provider tree.
 
 from __future__ import annotations
 
+from .bedrock_embedder import (
+    BEDROCK_EMBEDDING_DIMENSIONS,
+    BEDROCK_EMBEDDING_MODEL,
+    BedrockEmbedder,
+)
 from .deterministic_embedder import DETERMINISTIC_DIMENSIONS, DeterministicEmbedder
 from .embedder import (
     DEFAULT_BATCH_SIZE,
@@ -37,11 +42,14 @@ from .openai_embedder import (
 )
 
 __all__ = [
+    "BEDROCK_EMBEDDING_DIMENSIONS",
+    "BEDROCK_EMBEDDING_MODEL",
     "DEFAULT_BATCH_SIZE",
     "DETERMINISTIC_DIMENSIONS",
     "OPENAI_API_KEY_VAR",
     "OPENAI_EMBEDDING_MODEL",
     "BaseEmbedder",
+    "BedrockEmbedder",
     "DeterministicEmbedder",
     "OpenAIEmbedder",
     "embedding_knobs",

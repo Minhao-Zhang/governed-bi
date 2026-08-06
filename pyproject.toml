@@ -54,6 +54,13 @@ dependencies = [
     "langgraph-cli[inmem]>=0.4,<0.5",
     "langchain>=1.0",
     "langchain-openai>=1.0",
+    # UtkuAI, ported (utku-ai-v2-porting-spec.md): the only chat provider before this was
+    # OpenAI, hard-coded in `api/graph_app.py` / `serve/__main__.py`. `ChatBedrockConverse`
+    # is the tool-calling-capable Bedrock chat model this repo's agent needs -- `ChatBedrock`
+    # (the older API) does not bind tools the same way. `model/__init__.py` already named
+    # `bedrock_embedder.py` as "deliberately absent" pending a caller; this and
+    # `model/bedrock_embedder.py` are that caller.
+    "langchain-aws>=1.7.0",
     # No `langgraph-checkpoint-sqlite` / `-postgres`: zero importers. `InMemorySaver` is
     # the only saver in the tree and LangGraph Server brings its own persistence. ADR
     # 0004 proposes durable run logging and will need one of these — it is Proposed with

@@ -50,6 +50,16 @@ CORPUS_DIR_VAR = "GOVERNED_BI_CORPUS_DIR"
 #: `has_live_model: false` rather than promising a model that will never answer.
 MODEL_VAR = "GOVERNED_BI_MODEL"
 
+#: UtkuAI, ported (utku-ai-v2-porting-spec.md): which provider :data:`MODEL_VAR` names a
+#: model under. ``"openai"`` (default) or ``"bedrock_converse"``. A separate var rather
+#: than inferring from the model id string, the way ``langchain``'s own
+#: ``init_chat_model`` guesses when no provider is given — that inference is exactly the
+#: kind of "the run's own claim about itself" ``knobs.py``'s docstring warns a config
+#: value must never be, since two ids can collide across providers and a guess that
+#: changes when a provider adds a new naming scheme would move which model a run used
+#: with no line in this file to show it.
+MODEL_PROVIDER_VAR = "GOVERNED_BI_MODEL_PROVIDER"
+
 #: The model for the turn's small jobs: the guard's scope gate and the five facet query
 #: rewriters. Unset means "use :data:`MODEL_VAR`", so a one-model deployment is unchanged.
 #:
@@ -84,6 +94,11 @@ UTILITY_MODEL_EFFORT_VAR = "GOVERNED_BI_UTILITY_MODEL_EFFORT"
 #: exists so the model-free path never pays for tokens — but it is now a configuration somebody
 #: chose rather than one nobody noticed.
 EMBEDDING_MODEL_VAR = "GOVERNED_BI_EMBEDDING_MODEL"
+
+#: UtkuAI, ported: which provider :data:`EMBEDDING_MODEL_VAR` names a model under.
+#: ``"openai"`` (default) or ``"bedrock"``. Independent of :data:`MODEL_PROVIDER_VAR` —
+#: nothing requires the chat model and the embedder to share a provider.
+EMBEDDING_PROVIDER_VAR = "GOVERNED_BI_EMBEDDING_PROVIDER"
 
 #: How many times the provider SDK retries **one** call. Applies to every model surface —
 #: the agent, the utility model and the embedder — which is what makes it global rather than
@@ -175,45 +190,8 @@ def session_from_environment() -> Session:
             f"{CORPORA_DIR}/, or set {SCHEMA_VAR} to seed from a live schema"
         )
 
-    model = None
     model_id = os.environ.get(MODEL_VAR)
-    if model_id:
-        if not credentials.have(*credentials.OPENAI_KEY_NAMES):
-            raise RuntimeError(
-                f"{MODEL_VAR} is set to {model_id!r} but no model credential is available "
-                f"({' / '.join(credentials.OPENAI_KEY_NAMES)}). Unset {MODEL_VAR} to serve "
-                "without a model rather than starting a server that cannot answer."
-            )
-        from langchain.chat_models import init_chat_model
-
-        # Two LangChain fields, passed straight through. No provider branching here: an
-        # earlier draft chose between `reasoning_effort` and `temperature` and toggled the
-        # Responses API itself, which is re-deciding what `langchain-openai` already decides.
-        # Decision #1 records why that is wrong — v1 wrapped `BaseChatModel` in three layers
-        # and the wrapper became the thing that broke.
-        #
-        # `use_responses_api` is unconditional because it is the API this agent needs, not a
-        # tuning choice: it binds tools, and the provider refuses tools alongside
-        # `reasoning_effort` on chat completions, saying so in its own words — *"To use
-        # function tools, use /v1/responses."* Setting a LangChain field to reach the endpoint
-        # that supports the feature is configuration; encoding the rule was not.
-        #
-        # `temperature` is simply not set. Asserting a default we do not need is what forced
-        # the branch in the first place.
-        kwargs_model: dict[str, Any] = {
-            "model_provider": "openai",
-            "use_responses_api": True,
-            # Passed explicitly rather than left to the SDK, which is the whole point: unset,
-            # `ChatOpenAI.max_retries` is `None` and the `openai` client applies its own 2 with
-            # no timeout of its own either. Both are now recorded knobs, so a run cannot change
-            # its own crash rate and still compare.
-            "max_retries": _retries(),
-            "timeout": _timeout(TIMEOUT_VAR, "llm_timeout_s"),
-        }
-        effort = os.environ.get(MODEL_EFFORT_VAR)
-        if effort:
-            kwargs_model["reasoning_effort"] = effort
-        model = init_chat_model(model_id, **kwargs_model)
+    model = _agent_model(model_id, credentials) if model_id else None
 
     utility = _utility_model(credentials)
 
@@ -258,6 +236,66 @@ def session_from_environment() -> Session:
         state = "unchanged" if cache.written == 0 else f"wrote {cache.written}"
         print(f"vector cache: {cache.opened_with} hit / {len(cache)} total, {state} — {cache.uri}")
     return _SESSION
+
+
+def _agent_model(model_id: str, credentials: Any) -> Any:
+    """The turn's main model, on whichever provider :data:`MODEL_PROVIDER_VAR` names.
+
+    Two branches, not one call with a conditional field, because the two providers'
+    tool-calling requirements genuinely differ: OpenAI refuses tools alongside
+    ``reasoning_effort`` on chat completions unless ``use_responses_api`` reaches the
+    Responses endpoint, and Bedrock Converse has no such split — ``ChatBedrockConverse``
+    binds tools the same way regardless of ``reasoning_effort``. Branching here is
+    selecting between two integrations with different constraints, not re-deciding a
+    single provider's own tradeoff the way Decision #1 forbids (that decision was about
+    ``use_responses_api`` vs. ``reasoning_effort`` vs. ``temperature`` *within* OpenAI).
+    """
+    provider = os.environ.get(MODEL_PROVIDER_VAR) or "openai"
+    from langchain.chat_models import init_chat_model
+
+    if provider == "openai":
+        if not credentials.have(*credentials.OPENAI_KEY_NAMES):
+            raise RuntimeError(
+                f"{MODEL_VAR} is set to {model_id!r} but no model credential is available "
+                f"({' / '.join(credentials.OPENAI_KEY_NAMES)}). Unset {MODEL_VAR} to serve "
+                "without a model rather than starting a server that cannot answer."
+            )
+        # `use_responses_api` is unconditional because it is the API this agent needs, not a
+        # tuning choice: it binds tools, and the provider refuses tools alongside
+        # `reasoning_effort` on chat completions, saying so in its own words — *"To use
+        # function tools, use /v1/responses."* `temperature` is simply not set: asserting a
+        # default we do not need is what forced the branch in the first place.
+        kwargs: dict[str, Any] = {
+            "model_provider": "openai",
+            "use_responses_api": True,
+            "max_retries": _retries(),
+            "timeout": _timeout(TIMEOUT_VAR, "llm_timeout_s"),
+        }
+        effort = os.environ.get(MODEL_EFFORT_VAR)
+        if effort:
+            kwargs["reasoning_effort"] = effort
+        return init_chat_model(model_id, **kwargs)
+
+    if provider == "bedrock_converse":
+        # No credential pre-check the way OpenAI's `OPENAI_API_KEY` gets one: AWS resolves
+        # through a chain (env vars, `~/.aws/credentials`, an IAM role) with no single
+        # variable whose presence is the honest yes/no answer `credentials.have` needs, and
+        # a check that only looked at env vars would raise "no credential" against a
+        # deployment authenticated entirely through a role. `region_name=None` is the same
+        # call: boto3's own resolution order, not a second one this module invents.
+        kwargs = {
+            "model_provider": "bedrock_converse",
+            "max_retries": _retries(),
+            "timeout": _timeout(TIMEOUT_VAR, "llm_timeout_s"),
+        }
+        effort = os.environ.get(MODEL_EFFORT_VAR)
+        if effort:
+            kwargs["reasoning_effort"] = effort
+        return init_chat_model(model_id, **kwargs)
+
+    raise RuntimeError(
+        f"{MODEL_PROVIDER_VAR}={provider!r} is not a supported provider (openai, bedrock_converse)"
+    )
 
 
 def _utility_model(credentials: Any) -> Any:
@@ -331,24 +369,37 @@ def _embedder_into(kwargs: dict[str, Any], credentials: Any) -> Any:
     model_id = os.environ.get(EMBEDDING_MODEL_VAR)
     if not model_id:
         return None
-    if not credentials.have(*credentials.OPENAI_KEY_NAMES):
-        raise RuntimeError(
-            f"{EMBEDDING_MODEL_VAR} is set to {model_id!r} but no embedding credential is "
-            f"available ({' / '.join(credentials.OPENAI_KEY_NAMES)}). Unset it to serve with "
-            "lexical retrieval only, rather than starting a server whose semantic channel "
-            "reports failed on every turn."
-        )
-    from governed_bi.model.openai_embedder import OpenAIEmbedder
+    provider = os.environ.get(EMBEDDING_PROVIDER_VAR) or "openai"
     from governed_bi.retrieve.vector_cache import vector_cache_from_environment
 
-    # The embedder shares the **utility** timeout, not the agent's: it is the same latency class
-    # on the same critical path — `accept` embeds the question before a single facet runs — and
-    # a fifth knob for one more small call would be a knob nobody would ever set differently.
-    embedder = OpenAIEmbedder(
-        model=model_id,
-        max_retries=_retries(),
-        timeout=_timeout(UTILITY_TIMEOUT_VAR, "llm_utility_timeout_s"),
-    )
+    if provider == "openai":
+        if not credentials.have(*credentials.OPENAI_KEY_NAMES):
+            raise RuntimeError(
+                f"{EMBEDDING_MODEL_VAR} is set to {model_id!r} but no embedding credential is "
+                f"available ({' / '.join(credentials.OPENAI_KEY_NAMES)}). Unset it to serve with "
+                "lexical retrieval only, rather than starting a server whose semantic channel "
+                "reports failed on every turn."
+            )
+        from governed_bi.model.openai_embedder import OpenAIEmbedder
+
+        # The embedder shares the **utility** timeout, not the agent's: it is the same latency
+        # class on the same critical path — `accept` embeds the question before a single facet
+        # runs — and a fifth knob for one more small call would be a knob nobody would set
+        # differently.
+        embedder: Any = OpenAIEmbedder(
+            model=model_id,
+            max_retries=_retries(),
+            timeout=_timeout(UTILITY_TIMEOUT_VAR, "llm_utility_timeout_s"),
+        )
+    elif provider == "bedrock":
+        # UtkuAI, ported: no credential pre-check, same reasoning as `_agent_model`'s
+        # bedrock_converse branch — AWS resolves through a chain no single env var answers.
+        from governed_bi.model.bedrock_embedder import BedrockEmbedder
+
+        embedder = BedrockEmbedder(model=model_id)
+    else:
+        raise RuntimeError(f"{EMBEDDING_PROVIDER_VAR}={provider!r} is not supported (openai, bedrock)")
+
     # `model_id` and not `embedder.model`: the latter probes the provider to report what it
     # actually served, and a directory name is not worth a network call at boot.
     cache = vector_cache_from_environment(model=model_id)
