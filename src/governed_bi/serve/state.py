@@ -254,6 +254,13 @@ def settle_failure(left: Any, right: Any) -> Any:
 
 class ServeState(TypedDict, total=False):
     question: str
+    #: A caller-supplied hint that travels with the question, empty on every production path.
+    #: BIRD ships one per question and ``eval/datalake.py`` has always loaded it — it carries
+    #: the value vocabulary ("residential areas means ... = 'R'") and the metric formula a
+    #: question refers to but does not state. Nothing consumed it, so every EX this repository
+    #: has produced is silently a *no-evidence* number and is not comparable to any published
+    #: BIRD figure. It is a state channel rather than a config key because it is per-turn.
+    evidence: str
     thread_id: str
     turn_index: int
     #: GovernancePolicy is passed via ``configurable["policy"]``, not state
@@ -384,9 +391,9 @@ ACCUMULATING: frozenset[str] = frozenset({"messages", "usage", "clarifications"}
 
 #: Written by ``turn()`` itself — the turn's identity and the run's claims about itself.
 TURN_IDENTITY: frozenset[str] = frozenset({
-    "question", "turn_index", "thread_id", "identity", "run_id", "turn_id", "question_id",
-    "db_id", "attempt_id", "corpus_content_hash", "prompt_set_hash", "knobs_resolved",
-    "n_re_served",
+    "question", "evidence", "turn_index", "thread_id", "identity", "run_id", "turn_id",
+    "question_id", "db_id", "attempt_id", "corpus_content_hash", "prompt_set_hash",
+    "knobs_resolved", "n_re_served",
 })
 
 #: Per-turn knobs and F1 injection points. A caller sets these *over* ``turn()``'s output, so

@@ -163,6 +163,7 @@ class Session:
         turn_index: int = 1,
         thread_id: str | None = None,
         identity: Any = None,
+        evidence: str | None = None,
     ) -> dict[str, Any]:
         """A turn dict with every field ``register.record.required_keys`` needs from a caller.
 
@@ -219,6 +220,10 @@ class Session:
             "prompt_set_hash": self.prompt_set_hash,
             "knobs_resolved": dict(self.knobs_resolved),
             "n_re_served": 0,
+            # Empty on every production path — only a dataset ships one. Not folded into
+            # ``question_id``: two arms of the same question with and without the hint must
+            # be recognisable as the same question for the paired test to be valid.
+            "evidence": str(evidence or ""),
             "messages": [],
             "usage": [],
             # Checkpointed, and read back by ``resume.resume_clarification`` to decide whether

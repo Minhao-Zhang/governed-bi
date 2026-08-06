@@ -54,20 +54,28 @@ def assemble_node(state: dict, config: RunnableConfig) -> dict:
     schemas = list(state.get("schemas") or ())
     budget = _budget_chars(state, cfg)
 
+    # Out-parameter, filled only when the char budget actually bit. Before this the eviction
+    # ladder dropped asset bodies and whole pulled-in tables with no signal anywhere, so a gold
+    # table that was routed, licensed and then evicted for space was indistinguishable from one
+    # that was rendered — the blind spot sitting exactly between "table selection" and
+    # "generation".
+    evicted: dict[str, Any] = {}
     block, context_hash = render_context(
         retrieved=retrieved,
         assets_by_id=assets_by_id,
         schemas=schemas,
         budget_chars=budget,
+        evicted=evicted,
     )
-    return {
-        "delivery": {
-            "context_block": block,
-            "context_hash": context_hash,
-            "tool_delivered": {},
-            "delivery_hash": None,
-        },
+    delivery: dict[str, Any] = {
+        "context_block": block,
+        "context_hash": context_hash,
+        "tool_delivered": {},
+        "delivery_hash": None,
     }
+    if evicted:
+        delivery["evicted"] = evicted
+    return {"delivery": delivery}
 
 
 def _budget_chars(state: Mapping[str, Any], cfg: Mapping[str, Any]) -> int:

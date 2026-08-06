@@ -51,10 +51,25 @@ def render_context(
     assets_by_id: Mapping[str, Any],
     schemas: Sequence[str],
     budget_chars: int = DEFAULT_CONTEXT_BUDGET,
+    evicted: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
-    """Return ``(context_block, context_hash)`` — sha256 hex of UTF-8 block."""
+    """Return ``(context_block, context_hash)`` — sha256 hex of UTF-8 block.
+
+    ``evicted`` is an **out-parameter**, filled only when the budget actually bit — same shape
+    as ``facets._pass_one_hits``' ``ran`` and ``_rewritten_query``' ``spent``, and for the same
+    reason: the caller needs a fact the return value has no room for.
+
+    **The eviction had no witness at all.** :func:`_assemble_and_evict` drops asset bodies and
+    then whole pulled-in tables, and reported nothing — no return value, no state field, no
+    record field, no test. So a gold table that was routed, retrieved, licensed and then evicted
+    for space is indistinguishable in every artifact from one that was rendered. That blind spot
+    sits exactly between "table selection" and "generation", which are the two stages any
+    attribution of the remaining loss has to tell apart, so every such attribution was
+    unfounded. It also **returns the over-budget text** when the ladder is exhausted
+    (see below), which nothing recorded either.
+    """
     pieces = _build_pieces(retrieved, assets_by_id, schemas)
-    block = _assemble_and_evict(pieces, budget_chars)
+    block = _assemble_and_evict(pieces, budget_chars, evicted=evicted)
     if not block.strip():
         block = EMPTY_CONTEXT
     return block, hashlib.sha256(block.encode("utf-8")).hexdigest()
@@ -294,7 +309,16 @@ def _collect_caveats(ids: Sequence[str], assets_by_id: Mapping[str, Any]) -> lis
     return lines
 
 
-def _assemble_and_evict(pieces: list[dict[str, Any]], budget: int) -> str:
+def _assemble_and_evict(
+    pieces: list[dict[str, Any]], budget: int, *, evicted: dict[str, Any] | None = None
+) -> str:
+    """The two-rung eviction ladder, now with a record of what it dropped.
+
+    ``evicted`` accumulates ``bodies_dropped``, ``tables_dropped``, ``dropped_ids`` and
+    ``over_budget`` — the last because the final ``return text`` hands back an **over-budget**
+    block when both rungs are exhausted, and a caller that believes the budget was honoured is
+    reading a number that is not true.
+    """
     active = [dict(p) for p in pieces]
     text = _join(active)
     if len(text) <= budget:
@@ -303,12 +327,20 @@ def _assemble_and_evict(pieces: list[dict[str, Any]], budget: int) -> str:
     def _key(i: int) -> tuple[float, str]:
         return (float(active[i].get("score") or 0.0), str(active[i].get("asset_id") or ""))
 
+    def _note(field: str, asset_id: Any = None) -> None:
+        if evicted is None:
+            return
+        evicted[field] = int(evicted.get(field, 0)) + 1
+        if asset_id:
+            evicted.setdefault("dropped_ids", []).append(str(asset_id))
+
     for i in sorted(
         (i for i, p in enumerate(active) if p.get("kind") == "struct_with_body" and p.get("body_droppable")),
         key=_key,
     ):
         active[i]["text"] = active[i]["struct_text"]
         active[i]["body_droppable"] = False
+        _note("bodies_dropped")
         text = _join(active)
         if len(text) <= budget:
             return text
@@ -323,9 +355,12 @@ def _assemble_and_evict(pieces: list[dict[str, Any]], budget: int) -> str:
         key=_key,
     ):
         drop.add(i)
+        _note("tables_dropped", active[i].get("asset_id"))
         text = _join(p for j, p in enumerate(active) if j not in drop)
         if len(text) <= budget:
             return text
+    if evicted is not None:
+        evicted["over_budget"] = len(text) - budget
     return text
 
 
@@ -382,7 +417,8 @@ def _structural_line(asset: Any, *, terse: bool = False) -> str:
         return f"schema {escape_field(str(_field(asset, 'name') or _field(asset, 'id') or ''))}"
     if at == "table":
         schema, phys = _field(asset, "schema") or "", _field(asset, "physical_name") or _field(asset, "id") or ""
-        parts = [f"table {escape_field(f'{schema}.{phys}' if schema else str(phys))}"]
+        spelled = f"{schema}.{phys}" if schema else str(phys)
+        parts = [f"table {escape_field(spelled)}", *_tool_key(asset, spelled)]
         if not terse:
             if _field(asset, "grain"):
                 parts.append(f"grain={escape_field(str(_field(asset, 'grain')))}")
@@ -390,8 +426,13 @@ def _structural_line(asset: Any, *, terse: bool = False) -> str:
                 parts.append(f"rows={_field(asset, 'row_count')}")
         return " ".join(parts)
     if at == "column":
+        spelled = _column_qualifier(asset)
         return " ".join(
-            [f"column {escape_field(_column_qualifier(asset))}", *_column_facts(asset)]
+            [
+                f"column {escape_field(spelled)}",
+                *_tool_key(asset, spelled),
+                *_column_facts(asset),
+            ]
         )
     if at == "join":
         left = _field(asset, "left_table") or ""
@@ -420,6 +461,27 @@ def _structural_line(asset: Any, *, terse: bool = False) -> str:
                 parts.append(f"binding={escape_field(str(tid))}")
         return " ".join(parts)
     return f"{at} {escape_field(str(_field(asset, 'id') or ''))}"
+
+
+def _tool_key(asset: Any, spelled: str) -> list[str]:
+    """``id=<asset id>`` when the engine's spelling is not the key the tools accept.
+
+    **A key is not a name** (ADR 0008 D1), and the prompt was only ever given the name. The
+    context renders ``physical_name`` because that is what a ``SELECT`` must say, while
+    ``bounds.may_inspect_schema`` / ``may_sample`` / ``may_read_body`` all test membership of
+    ``licensed`` and ``readable_assets``, which hold **asset ids**. Wherever ``slug()`` fired
+    the two diverge — ``table airline.Air Carriers`` is rendered, ``airline.Air_Carriers_66c534``
+    is licensed — so every tool call on the rendered spelling returned
+    ``OUT_OF_SCOPE_MESSAGE``, deliberately indistinguishable from "not licensed"
+    (``bounds.py``). The table was unreachable and the refusal was unreadable.
+
+    Emitted only on divergence, so the 655 of 656 gold tables whose id and name agree render
+    exactly as before and their ``context_hash`` does not move.
+    """
+    asset_id = str(_field(asset, "id") or "")
+    if not asset_id or asset_id == spelled:
+        return []
+    return [f"id={escape_field(asset_id)}"]
 
 
 def _column_qualifier(asset: Any) -> str:
@@ -460,6 +522,14 @@ def _column_facts(asset: Any) -> list[str]:
     role = _field(asset, "role")
     if role is not None:
         parts.append(f"role={escape_field(str(getattr(role, 'value', role)))}")
+    # **Populated on every seeded column and rendered nowhere.** NULL semantics decide
+    # whether `COUNT(col)` and `COUNT(*)` agree, whether `NOT IN (subquery)` returns the
+    # empty set, and whether an inner join silently drops rows — three of the standard ways a
+    # BIRD answer comes out wrong while the SQL reads correctly. It was reachable only via
+    # `inspect_schema`, a tool the analyst prompt does not mention.
+    nullable = _field(asset, "nullable")
+    if nullable is not None:
+        parts.append(f"nullable={'true' if nullable else 'false'}")
     rel = _field(asset, "reliability")
     if rel is not None and not isinstance(rel, str):
         status = getattr(_field(rel, "status"), "value", _field(rel, "status"))

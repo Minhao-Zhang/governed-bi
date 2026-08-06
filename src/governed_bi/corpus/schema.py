@@ -14,6 +14,26 @@ ADR 0005 §1. Every asset carries the same six common fields --
                 not: belief and outcome have different lifetimes
     audit       who said this, and why
 
+**I1 was measured on 2026-08-05 and it survives on a design argument, not on the numbers.**
+Indexing each asset's own ``body`` prose instead of its ``summary`` identifier list is worth
+**+6.21pp of gold-table coverage** and +1.41pp of schema recall@3 over all 1 351 test questions,
+paired, both deltas above their own detection floor
+(``runs/ablation/summary-form-1351-20260805.json``). So the cheap version of "make the indexed
+text meaningful" is to widen I1 to cover ``body``, and that option is **declined deliberately**:
+
+* I1 is what keeps the two fields' *roles* separate — ``summary`` is the retrieval treatment and
+  ``body`` is what the model reads on a hit. Merging them makes every future retrieval experiment
+  also a context-size experiment, and this repository has just spent two days establishing that a
+  measurement which changes two things at once cannot attribute either.
+* ``body`` averages 1.8-2.4x the length of ``summary``, so admitting it moves the corpus-global
+  ``avgdl`` that every BM25 score is normalised against. That re-scores the whole index and
+  invalidates every number measured before it — including the ones above.
+
+The measurement is therefore read as *"the indexed text should carry meaning"* and answered by
+**rewriting ``summary``**, not by widening what gets indexed. The 250-char cap is not the binding
+constraint either: gold schema summaries average 111 characters and table summaries 81, and an
+arm at a 600-char cap scored **worse** than one at 250. Density, not length, and not the field.
+
 -- and those six are **repeated in all eight classes rather than inherited**,
 because dataclass inheritance orders base fields first and the common set is a mix
 of required and defaulted fields, which makes the split unreadable. Repetition

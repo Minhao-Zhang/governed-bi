@@ -148,33 +148,57 @@ FACET_CHANNELS: Mapping[Stage, frozenset[Channel]] = {
 #:     public_review_platform   0.300  0.683   0.536   0.351   0.614     2.484
 #:     simpson_episodes         0.165  0.624   0.610   0.547   0.000     1.946
 #:
-#: The raw question wins ``facet_schema`` outright, by 0.65 overall. With the rewriter on, the
-#: same question put ``restaurant`` at #3 and then out of the top-3 entirely, displaced by
-#: schemas that store *ratings* — because the rewrite spends its weight on the vocabulary many
-#: schemas share and drops the one word that discriminates.
+#: The raw question wins ``facet_schema`` outright on that decomposition, by 0.65 overall. With
+#: the rewriter on, the same question put ``restaurant`` at #3 and then out of the top-3 entirely,
+#: displaced by schemas that store *ratings*.
 #:
-#: **And this configuration beats both ends, which is why it is not simply a revert.** Four arms
-#: over the same 114 questions (two per schema, 57 schemas, ``top_n=3``, semantic channel on),
-#: reproducible with ``tools/routing_recall.py``:
+#: **RETIRED 2026-08-05, and the retraction is the point.** A four-arm table used to stand here
+#: — ``no rewriting 0.632/0.851/0.904/0.939``, ``all five 0.640/0.833/0.939/0.991``,
+#: ``four with schema on raw 0.658/0.877/0.930/0.991`` — and it was quoted as costing **4.4pp of
+#: recall@3** to rewrite this facet. That number is withdrawn. Every arm in it ran under three
+#: defects since repaired, and it was underpowered besides:
+#:
+#: * ``max(raw lexical, raw semantic)`` in ``nodes/facets.py``. BM25-after-saturation occupies
+#:   ~0.60-0.97 while cosine caps near 0.635, so over 32 244 documents both channels scored the
+#:   semantic one won **0 times**. All three arms were effectively BM25-only — and the mechanism
+#:   claimed above ("the rewrite spends its weight on the vocabulary many schemas share") is a
+#:   *BM25 dilution* argument, which does not automatically survive a normalised vector channel.
+#: * ``_TOKEN = r"\S+"`` in ``retrieve/lexical.py``, which kept attached punctuation. The lexical
+#:   channel scored nothing at all against all 57 schema summaries on **66.7%** of held-out
+#:   questions, so "this facet wants the user's own words, which is what both channels are good
+#:   at" was measured on a channel that mostly returned nothing.
+#: * n=114 against a claimed 4.4pp effect. This repository's own ``measure/stats.mde`` puts the
+#:   detection floor at n=114, d=0.10 at **8.3pp**. The effect was inside the noise.
+#: * Three separate unpaired processes (the 62s / 308s / ~250s wall times), no McNemar, no MDE —
+#:   and cross-process runs then carried the ``connect`` hash-order tremor, about one question in
+#:   114, the same order as the effect.
+#:
+#: **Re-measured after the repairs, and the answer is that it does not matter.** 342 held-out
+#: questions, paired, one process, only this facet's query varying and the other four holding the
+#: raw question as a constant; both readouts, the second through the real
+#: ``pass_two_retrieve`` + ``apply_budgets`` path (``scratchpad/query_x_summary.py``):
 #:
 #: .. code-block:: text
 #:
-#:                                  @1      @3      @5     @10    wall
-#:     no rewriting at all       0.632   0.851   0.904   0.939     62s
-#:     all five rewriting        0.640   0.833   0.939   0.991    308s
-#:     four, schema on raw       0.658   0.877   0.930   0.991    ~250s
+#:                          recall@3           gold-table coverage
+#:     summary form     raw   rewritten        raw   rewritten
+#:     keywords       0.9532    0.9620       0.6367    0.6431
+#:     prose          0.9678    0.9649       0.6977    0.6977
 #:
-#: Two effects that turn out to be separable and additive. ``facet_schema`` wants the user's own
-#: words — the discriminating noun sits there in natural context, which is what both channels are
-#: good at, and restating it is where it gets lost. The other four want the rewrite: they retrieve
-#: terms, metrics and past examples, and rewriting lifts recall@10 from 0.939 to 0.991.
+#:     rewrite | keywords   +5 -2  p=0.45      +7 -5  p=0.77
+#:     rewrite | prose      +1 -2  p=1.00      +4 -4  p=1.00
 #:
-#: Keeping all five rewriting cost **4.4pp at recall@3** against this, at the shortlist width
-#: production ships. ``recall@1`` moving 0.632 -> 0.658 matters separately: it is the ceiling for
-#: any "shortlist one and let the model re-pick" strategy.
+#: Null on every comparison, and the interaction is null too (-1.17pp / -0.64pp), so the
+#: hypothesis that the rewriter's sign flips with the document form is not supported either.
 #:
-#: It stays in ``FACET_QUERY_PROMPTS``' registry as a prompt nobody sends: the variant is what a
-#: future attempt is compared against, and deleting it would delete the baseline.
+#: So ``facet_schema`` stays out of this set — **not** because rewriting costs 4.4pp, but because
+#: it buys nothing measurable and a model call per turn is not free. The decision is unchanged and
+#: its stated reason is now the one the evidence supports. Still underpowered for an effect below
+#: ~4.8pp; if a future rewriter claims one, it needs n≥1351.
+#:
+#: The prompt stays in ``PROMPT_REGISTRY`` as one nobody sends: the variant is what a future
+#: attempt is compared against, and deleting it would delete the baseline. That is exactly what
+#: made this re-measurement possible.
 FACET_EXTRACTS: frozenset[Stage] = frozenset(
     {
         Stage.facet_term,

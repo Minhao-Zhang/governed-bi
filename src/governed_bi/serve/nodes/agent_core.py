@@ -191,7 +191,17 @@ def _question_message(state: dict, history: list[Any]) -> HumanMessage | None:
         and str(getattr(m, "content", "")).strip() == question
         for m in history
     )
-    return None if asked else HumanMessage(content=f"Question: {question}")
+    if asked:
+        return None
+    # **The dataset hint, when a dataset supplied one.** Empty on every production path, so
+    # this line is a no-op there. BIRD's `evidence` names the value vocabulary and the metric
+    # formula a question refers to without stating ("residential areas refers to
+    # type = 'Residential'"), which is exactly what the corpus cannot supply for a column
+    # whose `sample_values` is empty. It was loaded by `eval/datalake.py` and dropped here.
+    evidence = str(state.get("evidence") or "").strip()
+    if evidence:
+        return HumanMessage(content=f"Question: {question}\nEvidence: {evidence}")
+    return HumanMessage(content=f"Question: {question}")
 
 
 def _context_middleware(state: dict) -> list[AgentMiddleware]:

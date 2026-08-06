@@ -106,7 +106,12 @@ def main(argv: list[str] | None = None) -> int:
 
     from governed_bi.datasource.postgres import PostgresConnector
     from governed_bi.eval.arms import live_arm
-    from governed_bi.eval.datalake import load_questions, observed_tokens, table_coverage
+    from governed_bi.eval.datalake import (
+        dataset_qid_lists,
+        load_questions,
+        observed_tokens,
+        table_coverage,
+    )
     from governed_bi.eval.harness import run_arm
     from governed_bi.govern.policy import GovernancePolicy
     from governed_bi.serve import session as session_mod
@@ -226,7 +231,8 @@ def main(argv: list[str] | None = None) -> int:
             out_path.write_text(body, encoding="utf-8")
         questions = [q for q in questions if q["question_id"] not in done]
 
-    order_sensitive = _order_sensitive(args.dataset)
+    qid_lists = dataset_qid_lists(args.dataset)
+    order_sensitive = qid_lists["order_sensitive"]
     if args.top_n is not None:
         for question in questions:
             question["knobs_resolved"] = {
@@ -287,12 +293,6 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _order_sensitive(dataset: pathlib.Path) -> set[str]:
-    path = dataset / "order_sensitive_qids.json"
-    if not path.exists():
-        return set()
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    return set(raw if isinstance(raw, list) else raw.get("question_ids") or [])
 
 
 def _report(rows: list[dict], out_path: pathlib.Path, args, observed_tokens, table_coverage) -> None:
@@ -307,6 +307,30 @@ def _report(rows: list[dict], out_path: pathlib.Path, args, observed_tokens, tab
         f"EX over attempted = {sum(1 for r in attempted if r.get('correct'))}/{len(attempted)} "
         f"= {sum(1 for r in attempted if r.get('correct')) / max(1, len(attempted)):.3f}"
     )
+
+    # **The population, stated rather than quietly changed.** The dataset's own note is
+    # "Exclude both from cross-variant EX": `order_sensitive` golds carry a
+    # LIMIT-without-total-order or a float aggregate and return a different-but-valid
+    # result on the decoy instances, and `exec_failed` golds are pre-existing degenerate
+    # BIRD (>200k rows / 60s timeout) that score `missing_gold` against any engine. Both
+    # lines are printed because dropping the rows would shrink a denominator with nothing
+    # in the artifact saying so, which is the defect this whole pass is repairing.
+    from governed_bi.eval.datalake import dataset_qid_lists
+
+    lists = dataset_qid_lists(args.dataset)
+    unstable = lists["order_sensitive"] | lists["exec_failed"]
+    stable = [r for r in every if str(r.get("question_id")) not in unstable]
+    if len(stable) != len(every):
+        ok_stable = sum(1 for r in stable if r.get("correct"))
+        print(
+            f"EX over stable-gold = {ok_stable}/{len(stable)} = "
+            f"{ok_stable / max(1, len(stable)):.3f}   "
+            f"(excludes {len(every) - len(stable)}: "
+            f"{len(lists['order_sensitive'] & {str(r.get('question_id')) for r in every})} "
+            f"order-sensitive, "
+            f"{len(lists['exec_failed'] & {str(r.get('question_id')) for r in every})} "
+            f"exec-failed gold)"
+        )
     print("outcomes:", dict(collections.Counter(str(r.get("outcome")) for r in every)))
     crashed = [r for r in every if r.get("outcome") == "crashed"]
     if crashed:
@@ -320,6 +344,47 @@ def _report(rows: list[dict], out_path: pathlib.Path, args, observed_tokens, tab
         f"all gold tables licensed = {cov['all_gold_tables_licensed']:.3f}  "
         f"(some {cov['some_licensed']:.3f}, none {cov['none_licensed']:.3f}, "
         f"unparsed gold {cov['gold_sql_unparsed']})"
+    )
+
+    # **The funnel, printed before the flat rates below.** Each stage is conditional on the one
+    # above, so a drop is attributable: `all_gold_tables_licensed` measured over questions that
+    # were *routed correctly* is a table-selection number, and the same count over every
+    # question is a blend of two failures that want opposite work.
+    from governed_bi.eval.datalake import retrieval_funnel
+
+    funnel = retrieval_funnel(every, _gold_sql_by_qid(args.dataset), _gold_db_by_qid(args.dataset))
+
+    def _rate(cell: dict) -> str:
+        """A rate, or the word for its absence. Never ``0.0000`` for an empty population."""
+        return "unmeasured" if cell["rate"] is None else f"{cell['rate']:.4f}"
+
+    print("\nfunnel (each stage given the one above):")
+    for stage, cell in funnel["conditional"].items():
+        print(f"  {stage:<28}{_rate(cell):>12}   {cell['n']}/{cell['of']}")
+    e2e = funnel["end_to_end"]
+    print(f"  {'end to end':<28}{_rate(e2e):>12}   {e2e['n']}/{e2e['of']}")
+    print(f"  counts: {json.dumps(funnel['counts'])}")
+
+    # **The gates, on the path that actually produces numbers.** `measure/` was imported by
+    # `eval/report.py`, whose only caller is `eval/__main__.py` — SQLite-only, and unable to run
+    # the live datalake arm at all. So this driver, `routing_recall.py` and
+    # `query_summary_alignment.py` produced every figure quoted in the last week and none of them
+    # passed a single quotability gate, because none of them could reach one. Printed rather than
+    # enforced: a driver that refused to report a run would lose the run, and the point is that
+    # the reader sees which check did not hold.
+    from governed_bi.eval.report import evaluate_arm
+    from governed_bi.measure.population import Population
+
+    verdicts = evaluate_arm(Population.of(f"live_{args.model}", every))
+    print("\nquotability gates (single-arm; cross-arm distinctness needs a second arm):")
+    for verdict in verdicts:
+        print(f"  {verdict.render()}")
+    blocking = [v for v in verdicts if v.verdict.value != "pass"]
+    print(
+        "  ALL GATES PASS -- these numbers are quotable as a single arm"
+        if not blocking
+        else f"  {len(blocking)} gate(s) did not pass; a check that did not happen is not a "
+        "check that passed"
     )
 
     gold = _gold_db_by_qid(args.dataset)

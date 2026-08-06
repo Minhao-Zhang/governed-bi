@@ -233,3 +233,188 @@ def test_context_and_caveats_spell_a_column_the_same_way() -> None:
     # ``parent_table`` is the bare ``customers`` here and ``shop.orders.id``'s is qualified;
     # neither may produce ``shop.shop.customers.email``.
     assert "shop.shop." not in block
+
+
+def test_a_slugged_table_renders_the_key_the_tools_accept() -> None:
+    """``airline."Air Carriers"`` is what SQL needs; ``airline.Air_Carriers_66c534`` is what
+    every tool needs, and only the first was ever printed.
+
+    ``slug()`` exists because an id becomes a filename and ``"Air Carriers".yaml`` is illegal
+    on Windows (``corpus/identity.py``), so the divergence is deliberate and permanent. What
+    was missing is that the prompt only ever saw one side of it: ``context.py`` renders
+    ``physical_name`` and ``bounds.may_inspect_schema`` tests membership of ``licensed``,
+    which holds ids. Every call on the rendered spelling returned ``OUT_OF_SCOPE_MESSAGE`` —
+    which ``bounds.py`` makes deliberately indistinguishable from "not licensed", so the model
+    could not tell a typo from a permission error and had no way to recover.
+    """
+    from governed_bi.corpus.schema import ColumnAsset, TableAsset
+    from governed_bi.serve.context import render_context
+
+    table = TableAsset(
+        id="airline.Air_Carriers_66c534",
+        schema="airline",
+        physical_name="Air Carriers",
+        summary="air carriers (Air Carriers): Code",
+        columns=("airline.Air_Carriers_66c534.Code",),
+    )
+    column = ColumnAsset(
+        id="airline.Air_Carriers_66c534.Code",
+        schema="airline",
+        parent_table="airline.Air_Carriers_66c534",
+        physical_name="Code",
+        summary="Code — Air_Carriers_66c534.Code",
+        physical_type="TEXT",
+        nullable=False,
+    )
+    retrieved = {
+        "by_type": {"table": [table.id], "column": [column.id]},
+        "selected": {
+            table.id: {"asset_id": table.id, "asset_type": "table", "score": 1.0},
+            column.id: {"asset_id": column.id, "asset_type": "column", "score": 0.9},
+        },
+        "attributions": {},
+        "pulled_in": {},
+        "schema_ranking": [("airline", 1.0)],
+        "lexical_coverage": 1.0,
+    }
+    text, _ = render_context(
+        retrieved=retrieved,
+        assets_by_id={table.id: table, column.id: column},
+        schemas=["airline"],
+    )
+    assert "table airline.Air Carriers" in text, text
+    assert "id=airline.Air_Carriers_66c534" in text, (
+        f"the prompt names a table no tool call can address:\n{text}"
+    )
+    # Nullability decides whether COUNT(col) and COUNT(*) agree and whether
+    # NOT IN (subquery) returns the empty set. Populated on every seeded column, never shown.
+    assert "nullable=false" in text, text
+
+
+def test_a_table_whose_key_is_its_name_renders_exactly_as_before() -> None:
+    """655 of 656 gold tables agree, so their ``context_hash`` must not move."""
+    from governed_bi.corpus.schema import TableAsset
+    from governed_bi.serve.context import render_context
+
+    table = TableAsset(
+        id="sales.customers",
+        schema="sales",
+        physical_name="customers",
+        summary="customers (customers): id",
+        columns=(),
+    )
+    retrieved = {
+        "by_type": {"table": [table.id]},
+        "selected": {table.id: {"asset_id": table.id, "asset_type": "table", "score": 1.0}},
+        "attributions": {},
+        "pulled_in": {},
+        "schema_ranking": [("sales", 1.0)],
+        "lexical_coverage": 1.0,
+    }
+    text, _ = render_context(
+        retrieved=retrieved, assets_by_id={table.id: table}, schemas=["sales"]
+    )
+    assert "table sales.customers" in text
+    assert "id=" not in text, f"noise on the 99.8% case:\n{text}"
+
+
+def test_the_analyst_prompt_names_the_id_convention_and_every_tool() -> None:
+    """The rendered ``id=`` is useless if nothing tells the model what it is for.
+
+    v1 named two of the five bound tools and then said *"Prefer run_query"*, which is advice
+    against calling the three that could have told it a column's value vocabulary — the
+    information the corpus does not carry (0 of 5 947 columns have ``sample_values``).
+    """
+    from governed_bi.register.prompts import PROMPT_REGISTRY, prompt_text
+
+    text = prompt_text("analyst")
+    assert "id=" in text, "the id convention is rendered but never explained"
+    for tool in ("read_body", "inspect_schema", "sample_rows", "run_query", "ask_user"):
+        assert tool in text, f"{tool} is bound on every turn and never mentioned"
+    assert "v1" in PROMPT_REGISTRY["analyst"].variants, (
+        "v1 is the baseline v2 has to beat; deleting it deletes the comparison"
+    )
+
+
+def test_context_eviction_reports_what_it_dropped() -> None:
+    """``_assemble_and_evict`` dropped bodies and whole tables with no signal anywhere.
+
+    No return value, no state field, no record field, no test — so a gold table that was routed,
+    retrieved, licensed and then evicted for space was indistinguishable in every artifact from
+    one that was rendered. That blind spot sits exactly between "table selection" and
+    "generation", the two stages any attribution of the remaining loss has to separate.
+    """
+    from governed_bi.corpus.schema import TableAsset
+    from governed_bi.serve.context import render_context
+
+    hit = TableAsset(
+        id="sales.hit",
+        schema="sales",
+        physical_name="hit",
+        summary="hit table",
+        body="B" * 4000,
+        columns=(),
+    )
+    pulled = [
+        TableAsset(
+            id=f"sales.p{i:02d}",
+            schema="sales",
+            physical_name=f"p{i:02d}",
+            summary=f"pulled {i}",
+            body="C" * 2000,
+            columns=(),
+        )
+        for i in range(6)
+    ]
+    assets = {a.id: a for a in [hit, *pulled]}
+    retrieved = {
+        "by_type": {"table": [hit.id]},
+        "selected": {hit.id: {"asset_id": hit.id, "asset_type": "table", "score": 1.0}},
+        "attributions": {},
+        "pulled_in": {a.id: "connect" for a in pulled},
+        "schema_ranking": [("sales", 1.0)],
+        "lexical_coverage": 1.0,
+    }
+    evicted: dict = {}
+    text, _ = render_context(
+        retrieved=retrieved,
+        assets_by_id=assets,
+        schemas=["sales"],
+        budget_chars=300,
+        evicted=evicted,
+    )
+    assert evicted, "the budget bit and nothing recorded it"
+    assert evicted.get("bodies_dropped") or evicted.get("tables_dropped"), evicted
+    # When both rungs are exhausted the function returns an OVER-BUDGET block. A caller that
+    # believes the budget was honoured is reading something untrue, so the overrun is named.
+    if len(text) > 300:
+        assert evicted["over_budget"] == len(text) - 300
+
+
+def test_a_turn_under_budget_records_no_eviction() -> None:
+    """Otherwise every turn would carry a field saying nothing happened."""
+    from governed_bi.corpus.schema import TableAsset
+    from governed_bi.serve.context import render_context
+
+    table = TableAsset(
+        id="sales.customers",
+        schema="sales",
+        physical_name="customers",
+        summary="customers",
+        columns=(),
+    )
+    evicted: dict = {}
+    render_context(
+        retrieved={
+            "by_type": {"table": [table.id]},
+            "selected": {table.id: {"asset_id": table.id, "asset_type": "table", "score": 1.0}},
+            "attributions": {},
+            "pulled_in": {},
+            "schema_ranking": [("sales", 1.0)],
+            "lexical_coverage": 1.0,
+        },
+        assets_by_id={table.id: table},
+        schemas=["sales"],
+        evicted=evicted,
+    )
+    assert evicted == {}

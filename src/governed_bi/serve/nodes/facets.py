@@ -26,9 +26,10 @@ from governed_bi.register.facets import (
     expected_channel_state,
 )
 from governed_bi.register.stages import Stage
+from governed_bi.retrieve.fuse import scale_within_channel
 from governed_bi.retrieve.index import UnifiedIndex
 from governed_bi.retrieve.semantic import semantic_search
-from governed_bi.serve.runtime import candidate_depth
+from governed_bi.serve.runtime import candidate_depth, combine_channels
 from governed_bi.serve.runtime import configurable as runtime_config
 
 __all__ = [
@@ -38,9 +39,6 @@ __all__ = [
     "facet_entity_node",
     "facet_example_node",
 ]
-
-_MAX_QUERIES = 8
-
 
 def _effective_question(state: Mapping[str, Any]) -> str:
     """``rewrite.after`` when rewriting succeeded, else ``question``."""
@@ -143,13 +141,19 @@ def _pass_one_hits(
     question is very helpful, and in this case the embedding model would be able to retrieve
     those much better than BM25."* It could not retrieve them at all.
 
-    **The two channels are combined by ``max``, not by a weighted sum.** A weight is a knob, a
-    knob is a comparability field, and there is no measurement yet that would set one — so a
-    tuned blend here would be a number invented at the call site, which is what
-    ``register/knobs.py`` exists to prevent. ``max`` also has the property the fan-in needs: a
-    facet whose channels disagree keeps the *stronger* evidence rather than diluting it, and an
-    asset found by one channel is not penalised for being missed by the other. When a weight is
-    warranted it becomes a declared knob and this line is where it lands.
+    **The two channels are scaled, then blended by the declared weights** —
+    :func:`~governed_bi.retrieve.fuse.scale_within_channel` then
+    :func:`~governed_bi.serve.runtime.combine_channels`. This used to read *"combined by ``max``,
+    not by a weighted sum. A weight is a knob, a knob is a comparability field, and there is no
+    measurement yet that would set one."* The reasoning was right and the premise expired: the
+    measurement exists now, and it says the units were deciding rather than the evidence. Over
+    32 244 documents that both channels scored, the semantic channel won **0 times**, because
+    BM25-after-saturation starts roughly where cosine ends. ``max`` was not keeping the stronger
+    evidence; it was keeping BM25. Both functions carry the numbers.
+
+    The property this needed to preserve is preserved: ``fuse`` renormalises by *active* weight,
+    so an asset found by one channel is not penalised for being missed by the other, and a facet
+    declaring one channel does not score structurally below one declaring two.
     """
     declared = FACET_CHANNELS[stage]
     if not question:
@@ -188,11 +192,24 @@ def _pass_one_hits(
     if not candidate_ids:
         return []
 
+    # **One scale, then one combiner — the same one pass two uses.** `scale_within_channel`
+    # carries the measurement that forced the scaling; `combine_channels` is shared with
+    # `nodes/pass_two.py` because an asset that carries two different scores in one turn is a
+    # real defect: the untagged pass-one hits are carried into pass two verbatim and then
+    # compete against pass-two hits in `apply_budgets`' single global sort. This used to be
+    # `max()` here and `fuse()` there, so a table found by both channels scored 0.9 down one
+    # path and 0.7 down the other, and untagged assets were systematically advantaged.
+    lexical_scaled = scale_within_channel(lexical_scores)
+    semantic_scaled = scale_within_channel(semantic_scores)
+
+    def _combined(aid: str) -> float:
+        return combine_channels(lexical_scaled.get(aid), semantic_scaled.get(aid)) or 0.0
+
     merged = sorted(
         set(lexical_scores) | set(semantic_scores),
         # Ties broken by id so two runs over one index cannot disagree — the same rule
         # `semantic_search` follows for the same reason.
-        key=lambda aid: (-max(lexical_scores.get(aid, 0.0), semantic_scores.get(aid, 0.0)), aid),
+        key=lambda aid: (-_combined(aid), aid),
     )
 
     queries = [question]
@@ -211,9 +228,11 @@ def _pass_one_hits(
                 # `None` where a channel did not score this asset, and a float where it did.
                 # Absence and zero are different facts: one means "not found by this channel",
                 # the other means "found and scored zero", and the record reads both.
+                # **Raw, deliberately** — attribution must keep the channel's own number, so
+                # only `score` is rescaled and the record can still say what BM25 said.
                 "lexical": lexical,
                 "semantic": semantic,
-                "score": max(lexical or 0.0, semantic or 0.0),
+                "score": _combined(asset_id),
                 "schema_tag": entry.schema_tag,
                 "queries": list(queries),
             }
@@ -228,9 +247,11 @@ def _facet_result(
     hits: list[Any] | None,
     ran: frozenset[Channel],
 ) -> dict[str, Any]:
+    # One query per facet, always. The `[:_MAX_QUERIES]` truncation that used to sit here
+    # bounded a list built two lines above as `[question]`, so it could never fire, and the
+    # `max_queries_per_facet` knob it duplicated described a per-facet fan-out that does not
+    # exist. Both are gone; a real multi-query facet brings its own bound.
     queries = [question] if question else []
-    if len(queries) > _MAX_QUERIES:
-        queries = queries[:_MAX_QUERIES]
     return {
         "facet": stage.value,
         "queries": queries,

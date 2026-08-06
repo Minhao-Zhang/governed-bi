@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from typing import Any, Mapping
 
 from governed_bi.register.knobs import Unset, knob_default
+from governed_bi.retrieve.fuse import fuse
 from governed_bi.retrieve.structure import CorpusStructure, build_structure
 
 __all__ = [
@@ -17,9 +18,12 @@ __all__ = [
     "FUSE_WEIGHTS",
     "assets_by_id",
     "candidate_depth",
+    "combine_channels",
     "configurable",
     "corpus_structure",
     "facet_hits",
+    "facet_weights",
+    "float_knob",
     "int_knob",
     "model_id",
     "trust",
@@ -27,7 +31,54 @@ __all__ = [
 ]
 
 DEFAULT_CONTEXT_BUDGET = 80_000
-FUSE_WEIGHTS: Mapping[str, float] = {"lexical": 0.5, "semantic": 0.5}
+
+#: Channel weights for :func:`~governed_bi.retrieve.fuse.fuse`, **read from the register**.
+#:
+#: This was the literal ``{"lexical": 0.5, "semantic": 0.5}`` while ``w_lexical`` and
+#: ``w_semantic`` sat in ``register/knobs.py`` as declared ``Role.comparability`` knobs that no
+#: code read. So both entered ``config_hash_keys()`` and ``knobs_resolved`` — a run could
+#: publish ``w_lexical: 0.9``, move its config hash, and behave identically. That is the
+#: inverse of the defect ``knobs.py`` opens by describing, and it is worse than an undeclared
+#: constant: an undeclared constant merely hides: a declared-but-unread one actively lies.
+FUSE_WEIGHTS: Mapping[str, float] = {
+    "lexical": float(knob_default("w_lexical")),
+    "semantic": float(knob_default("w_semantic")),
+}
+
+def combine_channels(lexical: float | None, semantic: float | None) -> float | None:
+    """The **one** channel combiner, shared by pass one and pass two.
+
+    Inputs must already be on a shared scale — see
+    :func:`~governed_bi.retrieve.fuse.scale_within_channel`, which each caller applies over its
+    own facet's scored population. This function only weights and renormalises.
+
+    ``None`` where a channel did not score the asset, and ``None`` returned when neither did.
+    :func:`~governed_bi.retrieve.fuse.fuse` renormalises by *active* weight, so a single-channel
+    asset keeps its own value rather than being halved — a facet declaring one channel must not
+    score structurally below one declaring two.
+
+    **There were two combiners and they competed in the same sort.** Pass one used
+    ``max(lexical or 0.0, semantic or 0.0)``; pass two used ``fuse(scores, FUSE_WEIGHTS)``. Both
+    scores reach ``apply_budgets``' single global ordering, because pass two carries untagged
+    pass-one hits forward verbatim — so one asset could hold 0.9 down one path and 0.7 down the
+    other, and assets that happened to be untagged were advantaged at the 8-table boundary by
+    arithmetic rather than by relevance. Neither number was wrong on its own; having both was.
+
+    Choosing ``fuse`` over ``max`` for the shared rule keeps ``w_lexical`` and ``w_semantic``
+    live and tunable, which is the whole reason they are declared. On measurement the two are
+    within noise on the corpus this ships with (schema recall@3 0.9649 blended against 0.9620
+    for max-of-scaled, 342 questions); ``max`` was marginally more robust on the densified
+    corpus, and that corpus is not the one the routing measurement says to use.
+    """
+    scores: dict[str, float] = {}
+    if lexical is not None:
+        scores["lexical"] = float(lexical)
+    if semantic is not None:
+        scores["semantic"] = float(semantic)
+    if not scores:
+        return None
+    return float(fuse(scores, FUSE_WEIGHTS))
+
 
 #: ``id(asset container) -> (that container, its projection)``. Insertion-ordered and
 #: capped, so a driver that builds a fresh corpus per question cannot grow it without
@@ -141,6 +192,55 @@ def int_knob(state: Mapping[str, Any], name: str) -> int:
             f"knob {name!r} is {raw!r}, which is not an integer. Falling back to the "
             "register default would make the record report a value this turn did not use."
         ) from err
+
+
+def float_knob(state: Mapping[str, Any], name: str) -> float:
+    """:func:`int_knob` for a knob whose value is a weight rather than a count.
+
+    Same precedence and the same two refusals — ``UNSET`` raises rather than becoming a
+    number nobody chose, and an unparseable value raises rather than being silently replaced
+    by the default. Separate function rather than a ``cast=`` parameter because ``int(0.9)``
+    is ``0``: a weight read through the integer reader would be silently floored, which is
+    exactly the class of quiet substitution the register exists to prevent.
+    """
+    raw = state.get(name)
+    if raw is None:
+        knobs = state.get("knobs_resolved") or {}
+        if isinstance(knobs, Mapping):
+            raw = knobs.get(name)
+    if raw is None:
+        raw = knob_default(name)
+    if isinstance(raw, Unset):
+        raise ValueError(
+            f"knob {name!r} ships UNSET, so there is no value to run with. A guessed "
+            "one here would be a fabricated measurement."
+        )
+    try:
+        return float(raw)
+    except (TypeError, ValueError) as err:
+        raise ValueError(
+            f"knob {name!r} is {raw!r}, which is not a number. Falling back to the "
+            "register default would make the record report a value this turn did not use."
+        ) from err
+
+
+def facet_weights(state: Mapping[str, Any]) -> Mapping[str, float]:
+    """Per-facet vote multipliers for :func:`~governed_bi.retrieve.route.route`.
+
+    ``facet_weight_schema`` applies to ``facet_schema`` and ``facet_weight_other`` to every
+    other facet, which is the split the two knobs describe. Both ship 1.0, so this is
+    behaviour-preserving — the point is that moving either one now moves the result, which was
+    not true while ``route`` took no weights at all.
+    """
+    from governed_bi.register.stages import FACET_STAGES, Stage
+
+    other = float_knob(state, "facet_weight_other")
+    return {
+        stage.value: (
+            float_knob(state, "facet_weight_schema") if stage is Stage.facet_schema else other
+        )
+        for stage in FACET_STAGES
+    }
 
 
 def candidate_depth(state: Mapping[str, Any]) -> int:

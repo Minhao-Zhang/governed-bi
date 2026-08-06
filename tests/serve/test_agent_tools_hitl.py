@@ -466,3 +466,100 @@ def test_tool_bounds_from_state_includes_pulled_in() -> None:
     )
     assert bounds.may_read_body("s.t.extra")
     assert bounds.may_inspect_schema("s.t")
+
+
+def test_sample_rows_asks_for_the_engines_spelling_in_the_right_schema() -> None:
+    """The tool that could tell the analyst a column's value vocabulary never returned a row.
+
+    Two independent halves, and it needed both to stay invisible. ``parent_table`` is a
+    corpus **key**, so ``.split(".")[-1]`` yielded the slug ``Air_Carriers_66c534`` for a
+    table whose engine spelling is ``Air Carriers`` (ADR 0008 D1). And the column's
+    ``schema`` was read into a local and then dropped, so ``PostgresConnector`` fell back to
+    its private ``schema="public"`` default. On a pooled 57-schema lake the result is
+    ``FROM "public"."Air_Carriers_66c534"`` — 42P01 every time, surfaced as a tool error
+    that no metric counted.
+    """
+    from governed_bi.serve.fetch import sample_rows
+    from governed_bi.serve.tools import tool_bounds_from_state
+
+    table = TableAsset(
+        id="airline.Air_Carriers_66c534",
+        schema="airline",
+        physical_name="Air Carriers",
+        summary="air carriers (Air Carriers): Code, Description",
+        columns=("airline.Air_Carriers_66c534.Code",),
+    )
+    column = ColumnAsset(
+        id="airline.Air_Carriers_66c534.Code",
+        schema="airline",
+        parent_table="airline.Air_Carriers_66c534",
+        physical_name="Code",
+        summary="Code — Air_Carriers_66c534.Code",
+        physical_type="TEXT",
+    )
+    assets = {a.id: a for a in (table, column)}
+    seen: dict[str, Any] = {}
+
+    class Recorder:
+        dialect = "postgres"
+
+        def sample_values(self, table_name, column_name, *, limit, schema=None):
+            seen.update(table=table_name, column=column_name, limit=limit, schema=schema)
+            return ["AA", "DL"]
+
+    state = _state(licensed=["airline.Air_Carriers_66c534"])
+    state["retrieved"]["by_type"]["table"] = ["airline.Air_Carriers_66c534"]
+    state["retrieved"]["selected"] = {
+        "airline.Air_Carriers_66c534.Code": {
+            "asset_id": "airline.Air_Carriers_66c534.Code",
+            "asset_type": "column",
+            "score": 1.0,
+        }
+    }
+    payload, ok = sample_rows(
+        "airline.Air_Carriers_66c534.Code",
+        limit=5,
+        bounds=tool_bounds_from_state(state),
+        assets=assets,
+        connector=Recorder(),
+    )
+
+    assert ok, payload
+    assert seen["table"] == "Air Carriers", (
+        f"asked the engine for {seen['table']!r}; that is the corpus key, not a relation"
+    )
+    assert seen["schema"] == "airline", (
+        f"schema was {seen['schema']!r}, so the connector falls back to public and raises 42P01"
+    )
+    assert seen["column"] == "Code"
+    assert '"AA"' in payload
+
+
+def test_the_postgres_adapter_uses_the_schema_it_is_given() -> None:
+    """The private ``schema="public"`` default is gone from the signature.
+
+    Kept as a separate test from the call site because the two halves of the defect were
+    independent: a caller that finally passes a schema against an adapter that still
+    ignores it is no better off.
+    """
+    import inspect
+
+    from governed_bi.datasource.postgres import PostgresConnector
+
+    signature = inspect.signature(PostgresConnector.sample_values)
+    assert signature.parameters["schema"].default is None, (
+        "a default schema the caller cannot see is how every call on a 57-schema lake "
+        "became FROM \"public\".\"<table>\""
+    )
+    statements: list[str] = []
+
+    class Fake(PostgresConnector):
+        def __init__(self) -> None:  # no DSN, no connection
+            pass
+
+        def execute(self, sql, **kwargs):
+            statements.append(sql)
+            return (["Code"], [("AA",)], False)
+
+    assert list(Fake().sample_values("Air Carriers", "Code", limit=2, schema="airline")) == ["AA"]
+    assert '"airline"."Air Carriers"' in statements[0], statements

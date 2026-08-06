@@ -95,6 +95,48 @@ tables and columns (`generalinfo, geographic, location`), and under obfuscation 
 English in a routing document. Replacing them deletes the discriminating tokens. Meanwhile the
 function words that prose brings dilute BM25's term frequencies and add nothing an embedder needs.
 
+> ### ⚠ REVERSED 2026-08-05 (later the same day). Prose wins. Read this before §3.
+>
+> **Every arm above ran under two defects since repaired**, and both of them were load-bearing
+> for the conclusion:
+>
+> * `nodes/facets.py` combined the channels with `max(raw lexical, raw semantic)`. BM25-after-
+>   saturation occupies ~0.60–0.97 and cosine caps near 0.635, so over 32 244 documents both
+>   channels scored, **the semantic channel won 0 times**. Every "semantic channel on" arm above
+>   was effectively BM25-only — which is exactly why "prose is *supposed* to win" and didn't.
+> * `retrieve/lexical.py` tokenised on `\S+`, keeping attached punctuation, so the lexical channel
+>   scored nothing at all against all 57 schema summaries on **66.7%** of questions.
+>
+> Re-measured after the repairs, all 1 351 test questions, paired, one process
+> (`runs/ablation/summary-form-1351-20260805.json`):
+>
+> | indexed text | gold-table coverage | schema recall@3 |
+> | --- | --- | --- |
+> | identifier lists (today) | 0.6405 | 0.9511 |
+> | **the asset's own `body` prose** | **0.7026** | **0.9652** |
+> | paired | **+6.21pp, +193 −117, p=1.9e-05, MDE 4.03pp** | +1.41pp, +29 −10, p=0.0034, MDE 1.30pp |
+>
+> Both deltas are **above** their own detection floor, and the 342-question screen's +6.11pp
+> replicated as +6.21pp. Coverage runs the real `pass_two_retrieve` + `apply_budgets` path.
+>
+> **So the mechanism paragraph above is half right and its conclusion is wrong.** The identifier
+> lists *are* the only English in a routing document, and prose's function words *do* dilute BM25 —
+> that part holds. What was wrong is the inference: BM25 was the only channel that counted, so a
+> BM25 cost read as a total cost. With the channels commensurate, the embedder is paid more by the
+> meaning than it is charged by the function words.
+>
+> **What this does not say.** The prose arm indexes the corpus's existing *machine-written* `body`,
+> not summaries authored for retrieval — so +6.21pp is a **lower bound** on deliberate writing, and
+> the target below is still not "paste the body in".
+>
+> **And the cheap version is declined on purpose.** Widening ADR 0005 I1 to index `body` would
+> collect this +6.21pp for zero authoring, and the maintainer's call is not to: I1 is what keeps
+> `summary` (the retrieval treatment) and `body` (what the model reads on a hit) as separate roles,
+> and merging them makes every future retrieval experiment also a context-size experiment. `body`
+> also averages 1.8–2.4× `summary`'s length, which moves the corpus-global `avgdl` every BM25 score
+> is normalised against and would invalidate every number measured before it. Reasoning recorded in
+> `corpus/schema.py`'s module docstring.
+
 **Raising the cap is not the answer either.** Arm G — full body *plus* full identifier list at a
 600-character cap — scored 0.667 at recall@3, worse than arm E's 0.746 at 250. Density beats
 length. `summary_max_chars` (250, `register/knobs.py:132`) **stays where it is.**
@@ -106,7 +148,55 @@ So the target is not prose *instead of* keywords, and not prose *added to* keywo
 
 Which reads like a keyword list, deliberately. The difference from today is *which* keywords.
 
+> ### ⚠ The target above is superseded by the same reversal.
+>
+> "Leave the function words out" was a BM25 instruction, issued when BM25 was the only channel that
+> counted. The revised target keeps everything that argument got right — the identifiers stay,
+> density still beats length, the 250-char cap still holds and was never the binding constraint
+> (gold schema summaries average **111** characters, table summaries **81**, and the 600-char arm
+> scored *worse*) — and drops the one thing that was an artefact:
+>
+> > **A sentence a person would write, inside 250 characters, that states the grain, names the
+> > domain in the words a question would use, and keeps every identifier the current summary
+> > carries.**
+>
+> Concretely, for `restaurant.geografisch`, today versus the target:
+>
+> ```
+> now:    geographic (geografisch): city, county, region
+> target: One row per California city in geografisch (geographic): which county and
+>         which region the city belongs to. Use this to answer which cities are in a
+>         county, or which region a restaurant's city sits in.
+> ```
+>
+> The second one is 233 characters, contains the physical name (so `corpus/validate.py`'s
+> identifier check still passes), keeps `city`/`county`/`region`, and adds the grain and the
+> question-shaped phrasing that the +6.21pp is paying for.
+
 ## 3. The floor you have to beat
+
+> ### ⚠ The floor moved, and so did the metric it is stated in.
+>
+> The numbers in this section were measured under the two defects named in §2, and the density
+> rewrite they describe turns out to have been **BM25 repair**: re-measured with the channels
+> commensurate, densification buys ~0 on schema routing (paired, n=342: +10 −18 under the shipped
+> rule, +0 −2 under semantic-decided, both null). Its +6.1pp was real and it was a lift on the
+> channel that should not have been deciding.
+>
+> **The floor for path A is now the prose arm**, which is the same corpus text with no authoring at
+> all — and the bar to beat is therefore *higher* than the old one and measured on the right thing:
+>
+> | | identifier lists | machine `body` prose | **authored target** |
+> | --- | --- | --- | --- |
+> | gold-table coverage, n=1351 | 0.6405 | **0.7026** | must beat 0.7026 |
+> | schema recall@3, n=1351 | 0.9511 | **0.9652** | must beat 0.9652 |
+>
+> An authored rewrite that lands between 0.6405 and 0.7026 has lost to pasting the body in, which
+> costs nothing. **Lead with gold-table coverage**, not `recall@k`: routing is already 0.965 and
+> has ~3pp of headroom, while coverage has ~30pp and is what gates whether the SQL can be written
+> at all. Reproduce with `runs/ablation/summary-form-1351-20260805.json`'s producer.
+>
+> Everything below is kept for the record and must not be used as an acceptance bar.
 
 Arm E is a **mechanical** rewrite: take `body`, drop stopwords and duplicates, keep the first 14
 content words, prepend them to the existing identifier list. No model, no judgement, ~40 lines. It
@@ -439,11 +529,16 @@ embedder. A number compared against one from another session is not a comparison
 - **EX.** Everything here is the *ceiling* — whether the question was answerable under this
   retrieval. Nothing in this brief says the model converts a newly-reachable question. The live
   arm at the time of writing converted about one answerable question in four.
-- **Whether the lift survives the facet rewriters.** All arms above ran with rewriting **off**.
-  Production runs four rewriters on the utility model and `facet_schema` on the raw question
-  (`register/facets.py:178`), whose best measured recall@3 was 0.877 — the same figure arm E
-  reaches with no rewriting at all. Whether the two stack, cancel, or overlap is **unknown** and
-  is a ~$0.30 run, not a free one.
+- **Whether the lift survives the facet rewriters. ANSWERED 2026-08-05: they do not interact.**
+  All arms above ran with rewriting **off**. This bullet used to compare against the 0.877
+  recall@3 in `register/facets.py`, and that figure is now **withdrawn** — it was measured under
+  `max(raw lexical, raw semantic)` and the `\S+` tokenizer, both since repaired, at n=114 against
+  a detection floor of 8.3pp. Re-measured paired at n=342 with only `facet_schema`'s query
+  varying: the rewrite is null on both readouts (recall@3 +0.88pp with keyword summaries,
+  −0.29pp with prose; gold-table coverage +0.64pp and 0.00pp; every p ≥ 0.45) and the
+  interaction with document form is null too (−1.17pp / −0.64pp). So the summary-form lift and
+  the query-form question are independent, and the rewriters neither stack with nor cancel this
+  work. See the retired-table note in `register/facets.py`.
 - **The 114-question sample.** Two questions per schema. Its 95% interval is roughly ±9 pp, so
   the +2.6 pp at recall@3 is inside the noise and only the +6.1/+7.9 pp coverage figures are
   worth arguing from. **This sample was a mistake and the tool no longer defaults to it** — all

@@ -153,8 +153,23 @@ def test_facet_schema_searches_index_within_target_types(
     for hit in result["hits"]:
         assert hit["asset_type"] == AssetType.schema.value
         assert hit["semantic"] is None
-        assert hit["score"] == hit["lexical"]
         assert hit["queries"] == ["customer commerce"]
+    # **This used to be ``hit["score"] == hit["lexical"]``, and that assertion was the reason
+    # the combiner went unexamined for so long.** It is a claim about how two channels combine,
+    # made in the only configuration the suite ever builds — one with no embedder, where the
+    # combiner is a no-op — so it held for ``max``, and it would equally have held for ``min``
+    # or for "return the lexical score and ignore the vector". The intent is worth keeping and
+    # is asserted here directly: with a single channel running, that channel alone decides both
+    # the ranking and the score. ``score`` is now the within-facet scaled value
+    # (``facets._within_facet_scale``), so equality with the raw score is no longer the way to
+    # say it. See ``test_the_two_channels_are_compared_on_one_scale`` for the case that
+    # actually exercises the combiner.
+    by_score = [h["asset_id"] for h in sorted(result["hits"], key=lambda h: -h["score"])]
+    by_lexical = [h["asset_id"] for h in sorted(result["hits"], key=lambda h: -h["lexical"])]
+    assert by_score == by_lexical, "a single running channel must decide the order outright"
+    assert max(h["score"] for h in result["hits"]) == 1.0, (
+        "the facet's best evidence is its own top of scale"
+    )
     assert result["channels"][Channel.lexical.value] == ChannelState.ran.value
 
 
@@ -332,3 +347,406 @@ def test_table_hits_capped_at_register_budget(
 
     tables = _table_ids_from_retrieved(routed.get("retrieved") or {}, two_schema_index)
     assert len(tables) <= table_budget
+
+
+def test_pass_two_scores_against_the_turns_query_vector_from_state(monkeypatch) -> None:
+    """``route_node`` read ``cfg.get("query_vector")`` only, so the served path had none.
+
+    ``accept`` writes the per-turn vector to **state** (``api/graph_app.py``), because
+    ``make_graph`` binds the run constants once at load time with no question — a query
+    vector cannot be a run constant. ``facets._query_vector`` was taught to read state first
+    and documents why at length; ``route_node`` was left on the other side of the same fix.
+    The consequence was silent and total: ``_semantic_scores`` returns ``{}`` for a ``None``
+    vector, so pass two — the pass that builds the analyst's context — fused a single
+    channel on every served turn, while the eval driver passed ``question=`` and therefore
+    measured a different system.
+    """
+    from governed_bi.serve.nodes import route_retrieve
+
+    seen: dict[str, object] = {}
+
+    def spy(*, state, index, schemas, ranking, query_vector=None):
+        seen["query_vector"] = query_vector
+        return route_retrieve.empty_retrieved(ranking)
+
+    monkeypatch.setattr(route_retrieve, "pass_two_retrieve", spy)
+
+    state = {
+        "question": "how many customers",
+        "query_vector": [0.5, 0.5],
+        "facet_route_hits": [("facet_schema", "sales", 0.9)],
+        "knobs_resolved": {},
+    }
+    config = {
+        "configurable": {
+            # Any non-None object reaches the `index is not None` branch; the spy replaces
+            # the only consumer, so no real index is needed to observe the vector.
+            "index": object(),
+            "corpus_structure": None,
+        }
+    }
+    route_retrieve.route_node(state, config)
+    assert seen["query_vector"] == [0.5, 0.5], (
+        "pass two was handed no query vector even though the turn had one in state"
+    )
+
+
+def _semantic_index(assets):
+    """A real two-channel index. Nothing else in the suite builds one.
+
+    Every serve fixture passes ``build_index(entries)`` with no embedder, so
+    ``UnifiedIndex.vectors is None``, ``semantic_search`` returns ``not_configured``, and the
+    suite's only assertion about the semantic channel is that it is absent
+    (``test_pass_two_carries_lexical_only_when_no_embedder`` below asserts
+    ``hit["semantic"] is None``). That is why every defect in the channel survived: the
+    combiner is a no-op in the only configuration it is ever tested in.
+    """
+    from governed_bi.model.deterministic_embedder import DeterministicEmbedder
+    from governed_bi.retrieve.index import IndexEntry, build_index, schema_tag_for
+
+    entries = [
+        IndexEntry(
+            id=a.id,
+            summary=a.summary,
+            asset_type=a.asset_type,
+            schema_tag=schema_tag_for(
+                a.asset_type,
+                name=getattr(a, "name", None),
+                schema=getattr(a, "schema", None),
+                parent_schema=getattr(a, "parent_table", "") .split(".")[0] or None,
+            ),
+        )
+        for a in assets
+    ]
+    embedder = DeterministicEmbedder(dimensions=64)
+    return build_index(entries, embedder=embedder), embedder
+
+
+def test_a_few_shot_reaches_retrieved_and_the_prompt() -> None:
+    """5 000 past SQL examples — 36% of the corpus — could never reach the analyst.
+
+    Two lines conspired. ``pass_two.py`` gated the whole scoring block on
+    ``_scores_lexical(name)``, and ``facet_example`` declares only ``Channel.semantic``
+    (``register/facets.py``), so the facet was skipped outright. Its pass-one hits were then
+    dropped by the carry-forward, which keeps only hits with **no** ``schema_tag`` — and
+    every few-shot carries ``TagRule.own_schema``. So ``retrieved["by_type"]["few_shot"]``
+    was never populated, the declared budget of 3 was unreachable, and ``context.py``'s
+    ``## Few-shots`` section could not render. The facet voted on schema routing and then
+    delivered nothing, which is the incident ``nodes/facets.py`` says it fixed one pass
+    earlier: *"the past-SQL-example facet retrieved nothing, ever."*
+    """
+    from governed_bi.corpus.schema import ColumnAsset, FewShotAsset, TableAsset
+    from governed_bi.serve.nodes.pass_two import pass_two_retrieve
+
+    table = TableAsset(
+        id="sales.customers",
+        schema="sales",
+        physical_name="customers",
+        summary="customers (customers): id, email",
+        columns=("sales.customers.id",),
+    )
+    column = ColumnAsset(
+        id="sales.customers.id",
+        schema="sales",
+        parent_table="sales.customers",
+        physical_name="id",
+        summary="id — customers.id",
+        physical_type="INTEGER",
+    )
+    shot = FewShotAsset(
+        id="fs_sales_0000",
+        schema="sales",
+        sql="SELECT count(*) FROM sales.customers",
+        summary="How many customers are there?",
+        body="Question: How many customers are there?\nSQL:\nSELECT count(*) FROM sales.customers",
+    )
+    index, embedder = _semantic_index([table, column, shot])
+    question = "How many customers are there?"
+    state = {
+        "question": question,
+        "knobs_resolved": {},
+        "facets": {
+            "facet_entity": {"facet": "facet_entity", "queries": [question], "hits": []},
+            "facet_example": {"facet": "facet_example", "queries": [question], "hits": []},
+        },
+    }
+    retrieved = pass_two_retrieve(
+        state=state,
+        index=index,
+        schemas=["sales"],
+        ranking=[("sales", 1.0)],
+        query_vector=embedder.embed([question])[0],
+    )
+
+    assert "fs_sales_0000" in (retrieved["by_type"].get("few_shot") or []), (
+        "facet_example produced no hit, so no past SQL example can reach the prompt: "
+        f"by_type={retrieved['by_type']}"
+    )
+    hit = retrieved["selected"]["fs_sales_0000"]
+    assert hit["semantic"] is not None, "the few-shot's only declared channel did not score"
+    assert hit["lexical"] is None, (
+        "facet_example declares no lexical channel; scoring it there is Anomaly.extra_channel"
+    )
+
+    # Retrieval is only half of it: the budget and the renderer both have to admit the
+    # asset, and `## Few-shots` is the one prompt section that had never been reachable.
+    from governed_bi.serve.context import render_context
+
+    text, _ = render_context(
+        retrieved=retrieved,
+        assets_by_id={a.id: a for a in (table, column, shot)},
+        schemas=["sales"],
+    )
+    assert "## Few-shots" in text, f"the section still cannot render:\n{text}"
+    assert "SELECT count(*) FROM sales.customers" in text, (
+        "the few-shot reached the prompt without its SQL, which is the half that helps"
+    )
+
+
+def test_a_semantic_only_candidate_can_enter_pass_two() -> None:
+    """The candidate set is the union of the channels, not the lexical list re-scored.
+
+    ``pass_two`` took the lexical top-``depth`` and then looked the cosine up **by id**, so
+    an asset with a strong cosine and no shared query term could not enter the context at
+    any depth. ``retrieve/semantic.py`` names the shape exactly: *"A caller that ranks
+    lexically and then attaches a cosine to the survivors has no semantic channel at all
+    for that facet: it has a lexical channel the facet does not declare, wearing a cosine."*
+    """
+    from governed_bi.corpus.schema import TableAsset
+    from governed_bi.serve.nodes.pass_two import pass_two_retrieve
+
+    # No token of the question appears in this summary, so BM25 scores it zero. The
+    # embedder is stubbed rather than hashed because `DeterministicEmbedder` puts an
+    # unrelated pair at cosine exactly 0.0 — which the `> 0.0` filter drops for the same
+    # reason `nodes/facets.py` drops it, so a hash embedder cannot express "found only by
+    # the vector channel".
+    orphan = TableAsset(
+        id="sales.zzz",
+        schema="sales",
+        physical_name="zzz",
+        summary="qqq (zzz): wwww, vvvv",
+        columns=(),
+    )
+    question = "how many customers are there"
+
+    class _Aligned:
+        """Everything embeds to the same unit vector, so every cosine is 1.0."""
+
+        model = "aligned-stub"
+        requested_model = "aligned-stub"
+        dimensions = 3
+
+        def embed(self, texts):
+            return [[1.0, 0.0, 0.0] for _ in texts]
+
+    from governed_bi.retrieve.index import IndexEntry, build_index
+
+    embedder = _Aligned()
+    index = build_index(
+        [
+            IndexEntry(
+                id=orphan.id,
+                summary=orphan.summary,
+                asset_type=orphan.asset_type,
+                schema_tag="sales",
+            )
+        ],
+        embedder=embedder,
+    )
+    state = {
+        "question": question,
+        "knobs_resolved": {},
+        "facets": {"facet_entity": {"facet": "facet_entity", "queries": [question], "hits": []}},
+    }
+    retrieved = pass_two_retrieve(
+        state=state,
+        index=index,
+        schemas=["sales"],
+        ranking=[("sales", 1.0)],
+        query_vector=embedder.embed([question])[0],
+    )
+    hit = retrieved["selected"].get("sales.zzz")
+    assert hit is not None, (
+        "an asset the lexical channel scored zero never reached pass two, so the semantic "
+        "channel cannot retrieve — only re-weight BM25's survivors"
+    )
+    assert hit["lexical"] is None and hit["semantic"] is not None
+
+
+def test_the_two_channels_are_compared_on_one_scale() -> None:
+    """The case the suite never built: hits with **both** channels non-``None``.
+
+    Every serve fixture calls ``build_index(entries)`` with no embedder, so
+    ``UnifiedIndex.vectors is None`` and the combiner is a no-op in the only configuration it
+    was ever exercised in. ``max(lexical or 0.0, semantic or 0.0)`` could have been ``min``,
+    or ``lexical``, or a constant, and the suite would have stayed green.
+
+    The defect that hid behind it: BM25-after-saturation occupies roughly 0.60–0.97 for
+    anything surviving the depth cut while cosine caps around 0.635, so ``max`` compared
+    *units* and not strength. Over 32 244 documents that both channels scored, the semantic
+    channel won 0 times.
+
+    Four documents, with the measured scores that make the two rules disagree. BM25 over this
+    index gives ``lex_best`` 0.627, ``lex_mid`` 0.599, ``lex_weak`` 0.207, and does not score
+    ``vector_only`` at all; the stub embedder puts ``vector_only`` at cosine 0.40, which is
+    where a real top cosine sits on this corpus (measured best-semantic per facet 0.34–0.43
+    against best-lexical 0.78–0.91).
+
+    So under ``max`` the vector channel's own best hit ranks **third**, below two lexical hits,
+    purely because BM25's scale starts near where cosine's ends. Note also that ``lex_mid``
+    repeats every query term four times and still scores *below* ``lex_best``: BM25's length
+    normalisation penalises it, which is worth seeing in a fixture rather than assumed away.
+    """
+    from governed_bi.register.stages import Stage
+    from governed_bi.retrieve.index import IndexEntry, build_index
+    from governed_bi.serve.nodes.facets import _pass_one_hits
+
+    QUERY = "customers id email"
+    QUERY_VECTOR = [0.0, 1.0]
+    #: ``[sqrt(1 - c**2), c]`` against the query vector above, so the cosine is exactly ``c``.
+    DOCS = {
+        "sales.lex_best": ("customers id email", [0.99499, 0.10]),
+        "sales.lex_mid": ("customers customers customers customers id email", [0.99875, 0.05]),
+        "sales.lex_weak": ("customers warehouse dock pallet crate forklift", [0.99980, 0.02]),
+        "sales.vector_only": ("widgets sku warehouse", [0.91652, 0.40]),
+    }
+
+    class _Stub:
+        model = "scale-stub"
+        requested_model = "scale-stub"
+        dimensions = 2
+        _by_text = {summary: vector for summary, vector in DOCS.values()}
+
+        def embed(self, texts):
+            return [self._by_text[t] for t in texts]
+
+    index = build_index(
+        [
+            IndexEntry(id=aid, summary=summary, asset_type=AssetType.table, schema_tag="sales")
+            for aid, (summary, _) in DOCS.items()
+        ],
+        embedder=_Stub(),
+    )
+    hits = {
+        h["asset_id"]: h
+        for h in _pass_one_hits(
+            index, Stage.facet_entity, QUERY, depth=10, ran=set(), query_vector=QUERY_VECTOR
+        )
+    }
+    assert set(hits) == set(DOCS), sorted(hits)
+    mid, only = hits["sales.lex_mid"], hits["sales.vector_only"]
+
+    # The fixture must exercise the combiner rather than bypass it.
+    assert mid["lexical"] is not None and mid["semantic"] is not None
+    assert only["lexical"] is None, "it shares no query term; BM25 must not score it"
+    assert only["semantic"] is not None
+
+    # The premise, asserted so a change to BM25's constants cannot quietly void the test.
+    assert mid["lexical"] > only["semantic"], (
+        "the fixture no longer reproduces the scale gap it exists to demonstrate: "
+        f"raw lexical {mid['lexical']} vs raw cosine {only['semantic']}"
+    )
+    assert only["score"] > mid["score"], (
+        "the vector channel's own best hit still ranks below a mid hit from the other "
+        f"channel, so the units are deciding: vector_only={only['score']} mid={mid['score']}"
+    )
+    # Attribution is untouched — the record still publishes what each channel actually said.
+    assert only["semantic"] == pytest.approx(0.40, abs=1e-3)
+    assert mid["lexical"] == pytest.approx(0.599, abs=5e-3)
+
+
+def test_pass_two_scores_on_one_scale_too() -> None:
+    """Pass two fused **raw** BM25 against **raw** cosine at 0.5/0.5, and it is the pass that
+    decides the budget.
+
+    Pass one's combiner was repaired first and this one was not, which left the defect exactly
+    where it costs most: ``_hybrid``'s output is what reaches ``apply_budgets``, so it decides
+    which tables survive the cap of 8 — the largest attributable loss in the pipeline. A
+    0.5/0.5 blend of a quantity in 0.60–0.97 with one in 0.00–0.635 is not a blend; it is the
+    lexical score plus a small constant.
+
+    Same fixture shape as ``test_the_two_channels_are_compared_on_one_scale``: a document only
+    the vector channel finds must not rank below a mid lexical hit.
+    """
+    from governed_bi.serve.nodes.pass_two import pass_two_retrieve
+
+    QUERY = "customers id email"
+    DOCS = {
+        "sales.lex_best": ("customers id email", [0.99499, 0.10]),
+        "sales.lex_mid": ("customers customers customers customers id email", [0.99875, 0.05]),
+        "sales.lex_weak": ("customers warehouse dock pallet crate forklift", [0.99980, 0.02]),
+        "sales.vector_only": ("widgets sku warehouse", [0.91652, 0.40]),
+    }
+
+    class _Stub:
+        model = "scale-stub"
+        requested_model = "scale-stub"
+        dimensions = 2
+        _by_text = {summary: vector for summary, vector in DOCS.values()}
+
+        def embed(self, texts):
+            return [self._by_text[t] for t in texts]
+
+    from governed_bi.retrieve.index import IndexEntry, build_index
+
+    index = build_index(
+        [
+            IndexEntry(id=aid, summary=summary, asset_type=AssetType.table, schema_tag="sales")
+            for aid, (summary, _) in DOCS.items()
+        ],
+        embedder=_Stub(),
+    )
+    retrieved = pass_two_retrieve(
+        state={
+            "question": QUERY,
+            "knobs_resolved": {},
+            "facets": {
+                "facet_entity": {"facet": "facet_entity", "queries": [QUERY], "hits": []}
+            },
+        },
+        index=index,
+        schemas=["sales"],
+        ranking=[("sales", 1.0)],
+        query_vector=[0.0, 1.0],
+    )
+    selected = retrieved["selected"]
+    mid, only = selected["sales.lex_mid"], selected["sales.vector_only"]
+
+    assert mid["lexical"] is not None and mid["semantic"] is not None
+    assert only["lexical"] is None and only["semantic"] is not None
+    # The premise: raw magnitudes rank the wrong way round.
+    assert mid["lexical"] > only["semantic"], (
+        f"fixture no longer shows the scale gap: {mid['lexical']} vs {only['semantic']}"
+    )
+    assert only["score"] > mid["score"], (
+        "pass two still blends raw scales, so the score that decides the table budget is the "
+        f"lexical one: vector_only={only['score']} mid={mid['score']}"
+    )
+
+
+def test_both_passes_use_one_combiner() -> None:
+    """One asset must not carry two different scores in a single turn.
+
+    Pass one used ``max`` and pass two used ``fuse``, and both scores reach
+    ``apply_budgets``' single global ordering because untagged pass-one hits are carried into
+    pass two verbatim. So a table found by both channels could hold 0.9 down one path and 0.7
+    down the other, and untagged assets were advantaged at the 8-table boundary by arithmetic
+    rather than by relevance.
+    """
+    import inspect
+
+    from governed_bi.serve.nodes import facets, pass_two
+    from governed_bi.serve.runtime import combine_channels
+
+    assert pass_two.combine_channels is combine_channels
+    assert facets.combine_channels is combine_channels
+    # Neither module may re-derive the rule locally.
+    for module in (facets, pass_two):
+        source = inspect.getsource(module)
+        assert "max(lexical" not in source, f"{module.__name__} still has a local combiner"
+    for value in (0.8, 1.0):
+        assert combine_channels(value, None) == value, (
+            "fuse must renormalise by active weight, or a single-channel facet is halved"
+        )
+    assert combine_channels(1.0, 0.0) == 0.5
+    assert combine_channels(None, None) is None

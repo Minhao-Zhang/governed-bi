@@ -164,9 +164,20 @@ def sample_rows(
     table = str(asset_attr(col, "parent_table") or "")
     physical = str(asset_attr(col, "physical_name") or "")
     schema = str(asset_attr(col, "schema") or "")
-    table_name = table.split(".")[-1] if table else ""
+    # **The engine's spelling, not the corpus key** (ADR 0008 D1: a key is not a name).
+    # `parent_table.split(".")[-1]` yields the *slug* — `Air_Carriers_66c534` for the table
+    # whose physical name is `Air Carriers` — which is not a relation in any engine. And the
+    # schema was read into a local and then dropped, so the connector fell back to `public`.
+    # Both halves had to be wrong for the failure to be invisible: an unqualified slug and a
+    # default schema produce 42P01, which surfaced as a tool error nothing counted.
+    parent = assets.get(table)
+    table_name = str(asset_attr(parent, "physical_name") or "") if parent is not None else ""
+    if not table_name:
+        table_name = table.split(".")[-1] if table else ""
     values = list(
-        connector.sample_values(table_name, physical, limit=max(1, int(limit)))
+        connector.sample_values(
+            table_name, physical, limit=max(1, int(limit)), schema=schema or None
+        )
     )
     payload = json.dumps(
         {

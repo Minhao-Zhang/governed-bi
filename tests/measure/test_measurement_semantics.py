@@ -325,3 +325,66 @@ def test_the_degradation_gate_runs_on_the_turns_that_did_fan_out() -> None:
     result = gates.GATE_IMPLEMENTATIONS["facet_channels"](Population.of("mixed", rows))
     assert result.verdict is gates.Verdict.failed
     assert "n=10" in result.population, "the denominator must exclude the refusals"
+
+
+def test_a_fully_instrumented_arm_can_actually_be_quotable() -> None:
+    """``quotable()`` could never return ``True``, on any input.
+
+    ``_context_hash_gate`` returned ``cannot_evaluate`` on **both** its branches — including
+    when coverage was complete — and ``quotable`` treats ``cannot_evaluate`` as blocking. So the
+    single-arm API was a permanent refusal. That is not a strict gate; it is a function no
+    caller can use, and the observable consequence is that no driver called it: ``measure/`` is
+    imported by ``eval/report.py`` and by nothing that produced a number this week.
+
+    The gate's real principle is preserved — the >= 95% cross-arm distinctness condition still
+    belongs to ``eval/report.comparison_quotable``, which holds both arms. What is decided here
+    is only the half one arm can answer: did every turn carry a ``context_hash`` at all.
+    """
+    rows = [
+        {
+            "question_id": str(i),
+            "correct": i % 2 == 0,
+            "outcome": "answered",
+            # The `outcome` gate reads a `crashed` boolean, not the outcome string, and refuses
+            # to evaluate when it is absent on any row -- correctly, since an absent counter is
+            # not a zero. Present here so the *other* gates are what this test is about.
+            "crashed": False,
+            "context_hash": f"hash-{i}",
+            "guardrail_error": False,
+            "re_served": False,
+            "negative_failed_open": False,
+            "facet_degraded": False,
+            "facet_channels": {"facet_schema": {"lexical": "ran"}},
+        }
+        for i in range(50)
+    ]
+    ok, results = gates.quotable(Population.of("instrumented", rows))
+    assert ok, {r.field: (r.verdict.value, r.detail) for r in results}
+    assert {r.verdict for r in results} == {gates.Verdict.passed}
+
+
+def test_partial_context_hash_coverage_fails_rather_than_abstaining() -> None:
+    """Recorded-on-some-turns is a defect, not an absence.
+
+    An arm with no ``context_hash`` at all was never instrumented for this gate and reports
+    ``cannot_evaluate``; an arm that records it on 49 of 50 turns has instrumentation that is
+    dropping turns, and abstaining there would excuse exactly the failure the gate exists for.
+    """
+    rows = [
+        {
+            "question_id": str(i),
+            "correct": True,
+            "outcome": "answered",
+            "crashed": False,
+            "context_hash": None if i == 0 else f"hash-{i}",
+            "guardrail_error": False,
+            "re_served": False,
+            "negative_failed_open": False,
+            "facet_degraded": False,
+        }
+        for i in range(50)
+    ]
+    ok, results = gates.quotable(Population.of("partial", rows))
+    assert not ok
+    ctx = next(r for r in results if r.field == "context_hash")
+    assert ctx.verdict is gates.Verdict.failed, ctx.detail

@@ -33,13 +33,54 @@ from typing import Any
 
 __all__ = [
     "load_questions",
+    "dataset_qid_lists",
     "routing_recall",
     "run_live",
     "observed_tokens",
     "summarise_routing",
     "gold_tables",
     "table_coverage",
+    "retrieval_funnel",
 ]
+
+#: The lists ``order_sensitive_qids.json`` publishes, and the only names read for them.
+QID_LIST_NAMES = ("order_sensitive", "exec_failed")
+
+
+def dataset_qid_lists(dataset: str | Path) -> dict[str, set[str]]:
+    """``{list_name -> question ids}`` from ``order_sensitive_qids.json``.
+
+    **Two callers read this file and both read a key it has never had.**
+    ``tools/run_datalake_eval.py`` and ``tools/regrade.py`` each did
+    ``raw.get("question_ids") or []``, while the file's keys are ``note``,
+    ``order_sensitive``, ``exec_failed`` and ``counts``. So both returned the empty set on
+    every run, and the 97 order-sensitive plus 10 degenerate golds the dataset explicitly
+    says to exclude were graded as ordinary engine misses instead.
+
+    The ``or []`` is what made it survive: an empty exclusion set is indistinguishable from
+    a dataset that declares no exclusions. So a file that exists and carries none of the
+    expected names **raises** here rather than reporting nothing to exclude. Absence of the
+    file is still fine — a dataset need not ship the list — because that is a real
+    "nothing declared", not a misread one.
+
+    The dataset's note: *"order_sensitive: gold has LIMIT-without-total-order or float
+    aggregate; returns a different-but-valid result on the decoy instances ... exec_failed:
+    pre-existing degenerate BIRD gold (>200k rows / 60s timeout). Exclude both from
+    cross-variant EX."*
+    """
+    path = Path(dataset) / "order_sensitive_qids.json"
+    if not path.exists():
+        return {name: set() for name in QID_LIST_NAMES}
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(raw, list):
+        # Older flat form: one bare list, order-sensitive only.
+        return {"order_sensitive": {str(q) for q in raw}, "exec_failed": set()}
+    if not any(name in raw for name in QID_LIST_NAMES):
+        raise KeyError(
+            f"{path} carries none of {QID_LIST_NAMES}; its keys are {sorted(raw)}. "
+            "Refusing to report an empty exclusion set as though the dataset declared one."
+        )
+    return {name: {str(q) for q in (raw.get(name) or ())} for name in QID_LIST_NAMES}
 
 
 def load_questions(
@@ -342,6 +383,132 @@ def table_coverage(
         #: ``n``. A run comparing itself against an older number must check this moved the
         #: denominator: on the 114-question sample it is 13.
         "gold_reads_no_table": tableless,
+    }
+
+
+def retrieval_funnel(
+    rows: Sequence[Mapping[str, Any]],
+    gold_sql_by_qid: Mapping[str, str],
+    gold_db_by_qid: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Where a question is lost, as **conditional** stages over one population.
+
+    **The measurement this repository could not make.** ``summarise_routing`` reports schema
+    ``recall@k`` over all rows and ``table_coverage`` reports gold-table coverage over all rows,
+    and nothing joins them — so "coverage 0.70 against recall@3 0.85" cannot distinguish *the
+    router sent us to the wrong schema* from *the router was right and the table budget cut the
+    table we needed*. Those two want opposite work, and a whole day of corpus rewriting was
+    spent without knowing which one was binding. Every field needed was already on the rows
+    (``routing_recall`` publishes ``licensed`` and ``licensed_schemas``; ``harness.project_turn``
+    publishes ``outcome`` and ``correct``); only the join was missing.
+
+    Each stage is conditioned on the one above it, and each carries its own denominator:
+
+    ``schema_routed``
+        gold ``db_id`` among the routed schemas. Unconditional.
+    ``tables_in_routed_schemas``
+        given that, every gold table lives in a schema that was routed. A drop here is a
+        genuinely cross-schema question — on BIRD-obfuscated there are none, which is worth
+        knowing before building for them.
+    ``all_gold_tables_licensed``
+        given that, every gold table survived pass two, the budget and ``connect``. This is the
+        stage the earlier work was actually fighting, and it was invisible.
+    ``answered`` / ``correct``
+        given a licensed set that could support an answer. The gap between the last two is
+        generation, and it is the only one a corpus change cannot touch.
+
+    Rates come from :meth:`~governed_bi.register.quantity.Measured.rate`, so a stage with no
+    population reports *unmeasured* rather than ``0.000`` — the ``or 1`` idiom elsewhere in this
+    module is what let a zero-row coverage read as a real ceiling of zero.
+    """
+    from governed_bi.register.quantity import Measured
+
+    counts = {
+        "rows": 0,
+        "scorable": 0,
+        "schema_routed": 0,
+        "tables_in_routed_schemas": 0,
+        "all_gold_tables_licensed": 0,
+        "answered": 0,
+        "correct": 0,
+        "gold_reads_no_table": 0,
+        "no_gold_sql": 0,
+    }
+    for row in rows:
+        counts["rows"] += 1
+        qid = str(row.get("question_id"))
+        sql = gold_sql_by_qid.get(qid)
+        if not sql:
+            # Counted, not skipped. A row silently leaving the denominator is the same defect
+            # as counting it wrongly, one level quieter.
+            counts["no_gold_sql"] += 1
+            continue
+        needed = gold_tables(sql)
+        if needed is None or not needed:
+            counts["gold_reads_no_table"] += 1
+            continue
+        counts["scorable"] += 1
+
+        routed = {str(s) for s in (row.get("licensed_schemas") or ())}
+        if not routed:
+            routed = {str(t).split(".", 1)[0] for t in (row.get("licensed") or ())}
+        gold_db = str((gold_db_by_qid or {}).get(qid) or row.get("db_id") or "")
+        if gold_db and gold_db not in routed:
+            continue
+        counts["schema_routed"] += 1
+
+        if not all(str(t).split(".", 1)[0] in routed for t in needed):
+            continue
+        counts["tables_in_routed_schemas"] += 1
+
+        licensed = {str(t).lower() for t in (row.get("licensed") or ())}
+        if not all(str(t).lower() in licensed for t in needed):
+            continue
+        counts["all_gold_tables_licensed"] += 1
+
+        if str(row.get("outcome") or "") != "answered":
+            continue
+        counts["answered"] += 1
+        if row.get("correct"):
+            counts["correct"] += 1
+
+    stages = (
+        ("schema_routed", "scorable"),
+        ("tables_in_routed_schemas", "schema_routed"),
+        ("all_gold_tables_licensed", "tables_in_routed_schemas"),
+        ("answered", "all_gold_tables_licensed"),
+        ("correct", "answered"),
+    )
+    def _stage(numerator: int, denominator: int, what: str) -> dict[str, Any]:
+        """A rate with its own denominator beside it, and a reason when there is no rate.
+
+        Serialised rather than returned as a :class:`Measured` because these land in a JSON
+        artifact: ``json.dumps(..., default=str)`` would render an absence as the *string*
+        ``"unmeasured"``, which sorts and compares like a value.
+        """
+        # ``.rounded`` and not ``round()``: ``tools/check_measurement_locality.py`` forbids the
+        # builtin in ``src/`` because v1's rounding helpers turned an unmeasured quantity into
+        # ``0.0`` on the way to a report, and that is exactly the failure this funnel exists to
+        # stop making. ``rounded`` carries the absence through instead of defaulting it.
+        measured = Measured.rate(numerator, denominator, what=what).rounded(4)
+        return {
+            "rate": measured.value if measured.is_measured else None,
+            "n": numerator,
+            "of": denominator,
+            "why": None if measured.is_measured else measured.why,
+        }
+
+    conditional = {
+        name: _stage(counts[name], counts[given], f"{name} given {given}")
+        for name, given in stages
+    }
+    end_to_end = _stage(
+        counts["correct"], counts["scorable"], "correct over scorable questions"
+    )
+    return {
+        "counts": counts,
+        "conditional": conditional,
+        "end_to_end": end_to_end,
     }
 
 

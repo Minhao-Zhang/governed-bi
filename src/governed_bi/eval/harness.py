@@ -146,6 +146,11 @@ def _run_one(
             turn_index=1,
             thread_id=thread_id,
             identity={"token": f"eval-{run_id}"},
+            # Loaded by `eval/datalake.py:load_questions` since the beginning and consumed by
+            # nothing until now, which made every EX a no-evidence number. Passing it is what
+            # makes the figure comparable to published BIRD; an arm that wants the harder
+            # no-hint condition omits the key from the question dict.
+            evidence=question.get("evidence"),
         )
     else:
         turn = _base_turn(question, run_id=run_id, arm=arm.name)
@@ -388,6 +393,7 @@ def _base_turn(question: Mapping[str, Any], *, run_id: str, arm: str) -> dict[st
         "turn_id": f"turn-{arm}-{qid}",
         "question_id": qid,
         "db_id": db,
+        "evidence": str(question.get("evidence") or ""),
         "attempt_id": f"attempt-{arm}-{qid}",
         "corpus_content_hash": str(question.get("corpus_content_hash") or f"corpus-{arm}"),
         "prompt_set_hash": str(question.get("prompt_set_hash") or "prompt-eval"),

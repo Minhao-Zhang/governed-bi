@@ -361,3 +361,180 @@ def test_connect_seeds_its_tree_deterministically() -> None:
         f"{sorted(set(results))}. The tree must not depend on set iteration order -- those "
         "points enter `licensed`, which table_coverage reads."
     )
+
+
+def test_the_dataset_exclusion_lists_are_read_by_their_real_names(tmp_path: Path) -> None:
+    """Both drivers asked for ``question_ids``, a key this file has never carried.
+
+    So ``order_sensitive_qids.json`` yielded ``set()`` on every run and the 97
+    order-sensitive plus 10 degenerate golds the dataset says to exclude were graded as
+    ordinary engine misses. The ``or []`` is what let it survive for so long: an empty
+    exclusion set reads exactly like a dataset that declares no exclusions.
+    """
+    from governed_bi.eval.datalake import dataset_qid_lists
+
+    (tmp_path / "order_sensitive_qids.json").write_text(
+        '{"note": "n", "order_sensitive": ["7", 8], "exec_failed": ["train_9"],'
+        ' "counts": {"order_sensitive": 2}}',
+        encoding="utf-8",
+    )
+    lists = dataset_qid_lists(tmp_path)
+    assert lists["order_sensitive"] == {"7", "8"}, "ids are compared as strings elsewhere"
+    assert lists["exec_failed"] == {"train_9"}
+
+
+def test_a_file_with_no_recognised_list_raises_instead_of_excluding_nothing(
+    tmp_path: Path,
+) -> None:
+    """The defect, made unrepresentable. A silent empty set is the whole bug."""
+    from governed_bi.eval.datalake import dataset_qid_lists
+
+    (tmp_path / "order_sensitive_qids.json").write_text(
+        '{"question_ids": ["7"]}', encoding="utf-8"
+    )
+    with pytest.raises(KeyError, match="none of"):
+        dataset_qid_lists(tmp_path)
+
+
+def test_no_file_at_all_is_a_real_absence_and_not_an_error(tmp_path: Path) -> None:
+    """A dataset need not ship the list; only a *misread* one is a defect."""
+    from governed_bi.eval.datalake import dataset_qid_lists
+
+    assert dataset_qid_lists(tmp_path) == {"order_sensitive": set(), "exec_failed": set()}
+
+
+def test_the_shipped_dataset_declares_exclusions_if_it_is_present() -> None:
+    """Guards the real file against a rename. Skips when the sibling repo is absent."""
+    from governed_bi.eval.datalake import dataset_qid_lists
+
+    dataset = Path(__file__).resolve().parents[2].parent / "BIRD-Data-Obfuscation" / "eval_dataset"
+    if not (dataset / "order_sensitive_qids.json").exists():
+        pytest.skip("BIRD-Data-Obfuscation not checked out beside this repo")
+    lists = dataset_qid_lists(dataset)
+    assert lists["order_sensitive"], "the shipped dataset declares 97 order-sensitive golds"
+    assert lists["exec_failed"], "the shipped dataset declares 10 degenerate golds"
+
+
+def _funnel_rows():
+    """Four rows, each lost at a different stage, so every conditional is exercised."""
+    return [
+        # Wrong schema entirely.
+        {
+            "question_id": "1",
+            "db_id": "sales",
+            "licensed_schemas": ["ops"],
+            "licensed": ["ops.things"],
+            "outcome": "answered",
+            "correct": False,
+        },
+        # Right schema, but the gold table did not survive to `licensed`.
+        {
+            "question_id": "2",
+            "db_id": "sales",
+            "licensed_schemas": ["sales"],
+            "licensed": ["sales.other"],
+            "outcome": "answered",
+            "correct": False,
+        },
+        # Everything licensed, model answered, wrong result. This is a *generation* loss.
+        {
+            "question_id": "3",
+            "db_id": "sales",
+            "licensed_schemas": ["sales"],
+            "licensed": ["sales.customers"],
+            "outcome": "answered",
+            "correct": False,
+        },
+        # Everything licensed and correct.
+        {
+            "question_id": "4",
+            "db_id": "sales",
+            "licensed_schemas": ["sales"],
+            "licensed": ["sales.customers"],
+            "outcome": "answered",
+            "correct": True,
+        },
+    ]
+
+
+def test_the_funnel_separates_routing_from_table_selection_from_generation() -> None:
+    """The measurement the repo could not make, and the reason a day was spent on the wrong fix.
+
+    ``summarise_routing`` reports schema recall over all rows and ``table_coverage`` reports
+    gold-table coverage over all rows; nothing joined them, so "coverage 0.70 against recall@3
+    0.85" could not distinguish a routing failure from a table-selection failure. Those want
+    opposite work.
+    """
+    from governed_bi.eval.datalake import retrieval_funnel
+
+    gold_sql = {str(i): "SELECT 1 FROM sales.customers" for i in range(1, 5)}
+    out = retrieval_funnel(_funnel_rows(), gold_sql)
+    counts, cond = out["counts"], out["conditional"]
+
+    assert counts["scorable"] == 4
+    assert counts["schema_routed"] == 3, "row 1 routed to the wrong schema"
+    assert counts["tables_in_routed_schemas"] == 3
+    assert counts["all_gold_tables_licensed"] == 2, "row 2 lost the table after routing"
+    assert counts["correct"] == 1
+
+    # Each stage is conditional on the one above, and each carries its own denominator.
+    assert cond["schema_routed"] == {"rate": 0.75, "n": 3, "of": 4, "why": None}
+    assert cond["all_gold_tables_licensed"]["of"] == 3, (
+        "the table-selection rate must be measured over questions that were routed correctly, "
+        "not over every question — that conflation is the whole defect"
+    )
+    assert cond["all_gold_tables_licensed"]["rate"] == pytest.approx(2 / 3, abs=1e-4)
+    # The generation stage: two answerable, one right.
+    assert cond["correct"] == {"rate": 0.5, "n": 1, "of": 2, "why": None}
+    assert out["end_to_end"] == {"rate": 0.25, "n": 1, "of": 4, "why": None}
+
+
+def test_an_empty_stage_is_unmeasured_and_not_a_rate_of_zero() -> None:
+    """``or 1`` elsewhere in this module turns a zero-row population into a real-looking 0.000.
+
+    ``Measured.rate`` refuses that, and the reason survives into the artifact rather than being
+    rendered as a string that sorts like a number.
+    """
+    from governed_bi.eval.datalake import retrieval_funnel
+
+    rows = [
+        {
+            "question_id": "1",
+            "db_id": "sales",
+            "licensed_schemas": ["ops"],
+            "licensed": [],
+            "outcome": "answered",
+            "correct": False,
+        }
+    ]
+    out = retrieval_funnel(rows, {"1": "SELECT 1 FROM sales.customers"})
+    stage = out["conditional"]["all_gold_tables_licensed"]
+    assert stage["rate"] is None, "a stage nothing reached must not report 0.0"
+    assert stage["of"] == 0
+    assert stage["why"], "an absence without a reason is a forgotten assignment"
+
+
+def test_a_row_with_no_gold_sql_is_counted_rather_than_dropped() -> None:
+    """``table_coverage`` does ``if not sql: continue`` with no counter — a silent denominator
+    shrink, which is the same defect as counting the row wrongly but quieter."""
+    from governed_bi.eval.datalake import retrieval_funnel
+
+    rows = _funnel_rows() + [{"question_id": "99", "db_id": "sales", "licensed": []}]
+    out = retrieval_funnel(rows, {str(i): "SELECT 1 FROM sales.customers" for i in range(1, 5)})
+    assert out["counts"]["no_gold_sql"] == 1
+    assert out["counts"]["rows"] == 5
+    assert out["counts"]["scorable"] == 4
+
+
+def test_table_less_gold_leaves_the_funnel_denominator() -> None:
+    """A constant-folded ``VALUES`` gold reads no table, so it cannot be a coverage miss.
+
+    127 of the 1 351 test golds are this shape; counting them as misses deflated every
+    coverage figure by a fixed ~9.4% until 2026-08-05.
+    """
+    from governed_bi.eval.datalake import retrieval_funnel
+
+    rows = [{"question_id": "1", "db_id": "sales", "licensed": [], "outcome": "answered"}]
+    out = retrieval_funnel(rows, {"1": 'SELECT "v"."c0" FROM (VALUES (121.0)) AS "v"("c0")'})
+    assert out["counts"]["gold_reads_no_table"] == 1
+    assert out["counts"]["scorable"] == 0

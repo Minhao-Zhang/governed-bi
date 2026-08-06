@@ -124,7 +124,17 @@ class SqliteConnector:
                 return table
         raise QueryError(f"no such table: {name}")
 
-    def sample_values(self, table: str, column: str, *, limit: int) -> Sequence[Any]:
+    def sample_values(
+        self, table: str, column: str, *, limit: int, schema: str | None = None
+    ) -> Sequence[Any]:
+        """``schema`` is accepted and ignored: SQLite has one table namespace.
+
+        Ignoring it is correct here rather than sloppy. A corpus asset always carries a
+        ``schema`` field because the *corpus* is organised by schema, and that bookkeeping
+        does not imply the engine has one. Raising would make every schema-organised corpus
+        unusable against SQLite, which is what the test fixtures are.
+        """
+        del schema
         sql = (
             f"SELECT DISTINCT {_quote(column)} FROM {_quote(table)} "
             f"WHERE {_quote(column)} IS NOT NULL "

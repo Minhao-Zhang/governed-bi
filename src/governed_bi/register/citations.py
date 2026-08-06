@@ -76,13 +76,43 @@ class Citation:
 
 
 CITATIONS: tuple[Citation, ...] = (
+    # ── the indexed text ────────────────────────────────────────────────────
+    Citation(
+        "indexing prose instead of an identifier list: gold-table coverage "
+        "0.6405 -> 0.7026 (+6.21pp, +193 -117, p=1.9e-05, MDE 4.03pp); "
+        "schema recall@3 0.9511 -> 0.9652 (+1.41pp, +29 -10, p=0.0034, MDE 1.30pp)",
+        "runs/ablation/summary-form-1351-20260805.json", "2026-08-05",
+        "All 1351 test questions, paired, one process, both deltas ABOVE their own "
+        "detection floor. The 342-question screen got +6.11pp and this got +6.21pp, "
+        "which is the cleanest replication in this repository. Coverage runs the real "
+        "pass_two_retrieve + apply_budgets path. Two things it is not: the prose arm "
+        "uses the corpus's existing machine-written `body`, not summaries authored for "
+        "retrieval, so this is a LOWER bound on deliberate writing; and resolve/connect "
+        "closure is excluded, so it measures retrieval alone rather than final licensing.",
+    ),
+    Citation(
+        "the query-form question is independent of the summary-form question: "
+        "rewriting facet_schema's query is null under both document forms",
+        "runs/ablation/summary-form-1351-20260805.json", "2026-08-05",
+        "342 questions, paired: recall@3 +0.88pp with identifier lists and -0.29pp with "
+        "prose; gold-table coverage +0.64pp and 0.00pp; every p >= 0.45; interaction "
+        "-1.17pp / -0.64pp. The rewriter was working -- 0 of 342 returned the question "
+        "unchanged, output is real keyword soup -- so this is 'rewriting does not help', "
+        "not 'the model did not rewrite'. Retires the 4.4pp claim in register/facets.py.",
+    ),
     # ── retrieval channels ──────────────────────────────────────────────────
     Citation(
         "schema shortlist recall: BM25 0.736@1 / 0.844@3 / 0.906@10; "
         "embedding 0.694@1 / 0.852@3 / 0.953@10",
         "runs/ablation/e1-shortlist-curated.json", "2026-07-31",
-        "57 schemas, all 1351 test questions, text-embedding-3-large. BM25 WINS at "
-        "@1. Falsifies the retired claim below by 2.4x.",
+        "57 schemas, all 1351 test questions, text-embedding-3-large. BM25 wins at @1 "
+        "IN THIS ARCHITECTURE, which is a single-channel shortlist ranking the 57 "
+        "schema summaries directly (channel_counts: bm25_fallback 1351) over "
+        "corpus_curated -- NOT v2's five-facet route, and not this corpus. It has been "
+        "read as a general claim about the served system and it is not one: measured "
+        "2026-08-05 through the five-facet path on gold-semantic-layer-20260804, "
+        "lexical-only reaches 0.5468@1 / 0.7018@3 while semantic-only reaches "
+        "0.9064@1 / 0.9825@3. Compare it only to another shortlist.",
     ),
     Citation(
         "RRF fusion: 0.733@1 / 0.871@3 / 0.922@10",

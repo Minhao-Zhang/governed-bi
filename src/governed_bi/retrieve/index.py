@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Mapping, Sequence
 
 from governed_bi.ports import Embedder
 from governed_bi.register.assets import ASSET_REGISTER, AssetType, TagRule
+from governed_bi.register.knobs import knob_default
 
 from .lexical import BM25
 from .semantic import cache_key
@@ -171,7 +172,10 @@ def build_index(
         by_id[entry.id] = entry
         docs.append((entry.id, text))
 
-    lexical = BM25(docs)
+    # `k` from the register, not from `BM25`'s own default. The two agreed at 1.2, which is
+    # exactly why nobody noticed that `lexical_saturation_k` shipped UNSET while this line ran
+    # a literal: the record omitted the knob and the code chose the value.
+    lexical = BM25(docs, k=float(knob_default("lexical_saturation_k")))
 
     if vector_cache is not None and embedder is None:
         raise ValueError(

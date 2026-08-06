@@ -155,10 +155,15 @@ def comparison_quotable(
 
     Single-arm ``context_hash`` gates are replaced by
     :func:`context_hashes_distinct`. Any ``fail`` or ``cannot_evaluate`` blocks.
+
+    The cross-arm result is computed **once** and substituted into both arms' rows. It was built
+    three times, and each call stamps the population of whichever arm it was given first — so
+    arm B's ``context_hash`` row reported arm **A**'s ``describe()``, on the provenance line the
+    design calls load-bearing. One computation cannot disagree with itself.
     """
-    results_a = _with_cross_arm_context(evaluate_arm(a), context_hashes_distinct(a, b, threshold=threshold))
-    results_b = _with_cross_arm_context(evaluate_arm(b), context_hashes_distinct(a, b, threshold=threshold))
     ctx = context_hashes_distinct(a, b, threshold=threshold)
+    results_a = _with_cross_arm_context(evaluate_arm(a), ctx)
+    results_b = _with_cross_arm_context(evaluate_arm(b), ctx)
     ok = all(r.verdict is Verdict.passed for r in results_a) and all(
         r.verdict is Verdict.passed for r in results_b
     )

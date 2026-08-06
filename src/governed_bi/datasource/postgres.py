@@ -221,9 +221,19 @@ class PostgresConnector:
         )
 
     def sample_values(
-        self, table: str, column: str, *, limit: int, schema: str = "public"
+        self, table: str, column: str, *, limit: int, schema: str | None = None
     ) -> Sequence[Any]:
-        schema_name, table_name = _split_name(table, default_schema=schema)
+        """``schema`` wins over anything parsed out of ``table``.
+
+        This used to be ``schema: str = "public"`` — a default no caller could see and none
+        of them passed, so every call on a pooled 57-schema lake became
+        ``FROM "public"."<table>"`` and raised 42P01. The parameter is now on the port and
+        the fallback is only for a caller that qualifies the name itself.
+        """
+        if schema:
+            schema_name, table_name = schema, _split_name(table, default_schema=schema)[1]
+        else:
+            schema_name, table_name = _split_name(table, default_schema="public")
         sql = (
             f'SELECT DISTINCT "{column}" FROM "{schema_name}"."{table_name}" '
             f'WHERE "{column}" IS NOT NULL '

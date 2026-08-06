@@ -142,9 +142,14 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        hashed_by_content=True),
 
     # ── retrieval ───────────────────────────────────────────────────────────
-    _k("max_queries_per_facet", 8, Role.comparability,
-       "extraction is model-controlled, and an unbounded phrase list is an "
-       "unbounded network fan-out"),
+    # `max_queries_per_facet` was declared here at 8, with the rationale "extraction is
+    # model-controlled, and an unbounded phrase list is an unbounded network fan-out". There is
+    # no phrase list: `_rewritten_query` returns one string and `_facet_result` builds
+    # `[question]`, so the bounded list is always length <= 1 and the bound has never been
+    # reachable. It is deleted rather than wired because wiring it would give a knob to a
+    # fan-out that does not exist — and it was `Role.comparability`, so every run published a
+    # limit on a feature it did not have. If per-facet multi-query retrieval is built, the knob
+    # comes back with the code that needs it.
     _k("candidate_depth", 50, Role.comparability,
        "top-N per query WITHIN the facet's target types. A global cut then "
        "filtered would give the term facet an empty result on most queries"),
@@ -157,10 +162,15 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "renormalised by active channels, so a single-channel facet is not "
        "structurally half-weighted"),
     _k("w_semantic", 0.5, Role.comparability, "as above"),
-    _k("lexical_saturation_k", UNSET, Role.comparability,
-       "fitted ONCE against the corpus BM25 distribution and then FROZEN across "
-       "arms. A per-arm fit would make the lexical score incomparable between "
-       "arms, which is the property the saturating form exists to provide"),
+    _k("lexical_saturation_k", 1.2, Role.comparability,
+       "the k in raw/(raw+k). Declared at 1.2 because that is the value every run "
+       "has always used: it shipped UNSET here while retrieve/lexical.py defaulted "
+       "k=1.2 and index.py called BM25(docs) with no k, so the register said nobody "
+       "had chosen it and the code chose it anyway. Declaring what runs is not the "
+       "same as fitting it -- 1.2 is still UNFITTED, and it is the constant that sets "
+       "where the lexical scale sits, so a fit is real outstanding work. It matters "
+       "less than it did: nodes/facets.py now scales each channel within its own "
+       "facet before comparing them, so k no longer decides which channel wins"),
     _k("expand_hops", 0, Role.comparability,
        "FK-neighbourhood expansion, off until its contribution is measured: of the "
        "tables gold SQL uses, how many entered neither by facet hit nor by Steiner "

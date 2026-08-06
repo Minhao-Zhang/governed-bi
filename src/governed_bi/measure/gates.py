@@ -201,29 +201,53 @@ def _context_hash_gate(arm: Population) -> GateResult:
     tool calls the model chose to make, so a gate on it would conflate "the treatment
     differs" with "the model behaved differently".
 
-    Evaluated per arm here — the cross-arm 95% comparison needs both arms and lives
-    in the caller that holds them, which is why this returns
-    :attr:`Verdict.cannot_evaluate` rather than inventing a single-arm proxy. A
-    single-arm approximation of a two-arm condition is how a gate ends up measuring
-    something adjacent to what it claims.
+    **This gate had two conditions in it and returned ``cannot_evaluate`` for both.** One is
+    genuinely single-arm — every turn must *carry* a ``context_hash``, or there is nothing to
+    compare later — and one is genuinely cross-arm: the >= 95% distinctness threshold needs both
+    arms and lives in ``eval/report.context_hashes_distinct``. Returning
+    ``cannot_evaluate`` even when coverage was complete made :func:`quotable` a function that
+    **could never return True**, because ``cannot_evaluate`` blocks quotation. A permanent
+    refusal is not a strict gate; it is an API no caller can use, and the observable consequence
+    was that no driver called it and no number this repository published passed any gate at all.
+
+    So the single-arm half is decided here and the cross-arm half is still refused to the
+    caller that holds both arms. That preserves the actual principle — *a single-arm
+    approximation of a two-arm condition is how a gate ends up measuring something adjacent to
+    what it claims* — while letting the condition this arm can answer be answered.
     """
     coverage = arm.coverage("context_hash")
-    if not coverage.is_measured or coverage.value < 1.0:
+    # Three states, not two. **Never recorded** is an absence — the arm was not instrumented for
+    # this and there is nothing to judge, which is what `cannot_evaluate` means and what an
+    # uninstrumented arm must report. **Recorded on some turns and not others** is a defect: the
+    # instrumentation exists and is dropping turns, so the treatment cannot be identified and a
+    # later comparison against this arm is untrustworthy. Collapsing the two would either
+    # excuse broken instrumentation or fail an arm for not having any.
+    if not coverage.is_measured or coverage.value == 0.0:
         return _result(
             "context_hash",
             Verdict.cannot_evaluate,
             coverage,
             arm,
-            "context_hash is missing on some turns, so cross-arm distinctness cannot "
-            "be established",
+            "no turn carries a context_hash, so this arm is not instrumented for the "
+            "delivery gate at all",
+        )
+    if coverage.value < 1.0:
+        return _result(
+            "context_hash",
+            Verdict.failed,
+            coverage,
+            arm,
+            "context_hash is recorded on some turns and missing on others, so the treatment "
+            "this arm delivered cannot be identified and no later comparison against it can "
+            "be trusted",
         )
     return _result(
         "context_hash",
-        Verdict.cannot_evaluate,
+        Verdict.passed,
         coverage,
         arm,
-        "single-arm evaluation only: the >= 95% distinctness condition is a two-arm "
-        "comparison and must be evaluated by the caller holding both arms",
+        "every turn carries a context_hash. The >= 95% cross-arm distinctness condition is "
+        "a two-arm comparison and is evaluated by eval/report.comparison_quotable",
     )
 
 

@@ -47,6 +47,7 @@ def main(argv: list[str] | None = None) -> int:
 
     import psycopg
 
+    from governed_bi.eval.datalake import dataset_qid_lists
     from governed_bi.eval.grade import grade_turn
 
     gold_sql: dict[str, str] = {}
@@ -57,10 +58,9 @@ def main(argv: list[str] | None = None) -> int:
             row = json.loads(line)
             if row.get("sql_rename"):
                 gold_sql[str(row["question_id"])] = str(row["sql_rename"])
-    osp = args.dataset / "order_sensitive_qids.json"
-    if osp.exists():
-        raw = json.loads(osp.read_text(encoding="utf-8"))
-        order_sensitive = set(raw if isinstance(raw, list) else raw.get("question_ids") or [])
+    # One reader for this file, in `eval/datalake.py`. Both tools had their own copy and
+    # both asked for a key the file has never carried.
+    order_sensitive = dataset_qid_lists(args.dataset)["order_sensitive"]
 
     rows = [
         json.loads(line)

@@ -15,7 +15,32 @@ from collections.abc import Iterable, Sequence
 
 __all__ = ["BM25"]
 
-_TOKEN = re.compile(r"\S+")
+#: A word, keeping ``_``, ``-`` and ``/`` **inside** a token so an identifier survives whole.
+#:
+#: **This was ``re.compile(r"\S+")``, and that one character class was most of why the lexical
+#: channel looked weak on this corpus.** Splitting on whitespace alone keeps every attached
+#: comma, colon and bracket, so a curated summary and a natural-language question tokenise into
+#: two vocabularies that cannot meet:
+#:
+#: * ``geographic (geografisch): city, county, region`` →
+#:   ``['geographic', '(geografisch):', 'city,', 'county,', 'region']``
+#: * ``List all the cities in Sonoma County.`` → ``[..., 'sonoma', 'county.']``
+#:
+#: ``county`` and ``county,`` and ``county.`` are three unrelated terms, each with its own IDF.
+#: Measured over the gold layer: 70.3% of table-summary tokens carried glued punctuation, only
+#: 3.1% of column physical names appeared as a clean token in their own table's summary, and the
+#: index vocabulary fell from 25 815 whitespace tokens to 12 397 once stripped — meaning more
+#: than half of what BM25 treated as distinct terms were punctuation variants of each other,
+#: splitting the IDF of the name they came from. The lexical channel scored **nothing at all**
+#: against all 57 schema summaries on 66.7% of held-out questions; stripping punctuation takes
+#: that to 19.0%.
+#:
+#: **This had to land after the channels were made commensurate, not before.** Under the old
+#: ``max(lexical, semantic)`` the same repair was a *regression* — schema recall@3 0.9269 →
+#: 0.8947, paired +9 −20 — because a stronger wrong-scaled channel simply wins more often. With
+#: ``facets._within_facet_scale`` in place it is a gain (gold tables inside the budget 0.6559 →
+#: 0.6752). Order of operations was the whole finding.
+_TOKEN = re.compile(r"[^\W_]+(?:[_\-/][^\W_]+)*", re.UNICODE)
 
 # Okapi term-frequency parameters; constructor ``k`` is saturating normalisation.
 _K1 = 1.2
@@ -23,6 +48,13 @@ _B = 0.75
 
 
 def _tokenize(text: str) -> list[str]:
+    """Lowercased word tokens with surrounding punctuation removed.
+
+    Applied to **both** sides, so the query and the document meet in one vocabulary. There is
+    still no stemming and no stopword list: both are real gaps, both change what a term *means*
+    rather than how it is spelled, and neither is needed to make ``food_type`` match
+    ``food_type,``.
+    """
     return [t.lower() for t in _TOKEN.findall(text)]
 
 

@@ -266,3 +266,37 @@ def test_the_context_block_never_enters_a_streamed_messages_channel(
         f"`messages` renders {len(block)} characters of scaffolding as a chat turn. "
         f"Carriers (namespace, index, role): {leaked}"
     )
+
+
+def test_the_dataset_evidence_hint_reaches_the_model() -> None:
+    """``eval/datalake.py`` has always loaded ``evidence``; nothing ever read it.
+
+    BIRD ships one hint per question naming the value vocabulary and the metric formula the
+    question refers to without stating — *"residential areas refers to type = 'Residential'"*
+    — which is precisely what the corpus cannot supply for a column whose ``sample_values``
+    is empty (0 of 5 947 in the gold layer). ``harness._run_one`` passed only the question
+    text and ``ServeState`` had no channel for it, so every EX this repository has produced
+    is a *no-evidence* number and is not comparable to any published BIRD figure.
+    """
+    from governed_bi.serve.nodes.agent_core import _question_message
+
+    with_hint = _question_message(
+        {"question": "how many residential areas", "evidence": "residential means type = 'R'"},
+        [],
+    )
+    assert with_hint is not None
+    assert "residential means type = 'R'" in str(with_hint.content), with_hint.content
+    assert "Question: how many residential areas" in str(with_hint.content)
+
+
+def test_a_turn_with_no_evidence_is_byte_identical_to_before() -> None:
+    """Every production path has no hint, so the line must be a no-op there."""
+    from governed_bi.serve.nodes.agent_core import _question_message
+
+    for state in (
+        {"question": "how many customers"},
+        {"question": "how many customers", "evidence": ""},
+        {"question": "how many customers", "evidence": "   "},
+    ):
+        message = _question_message(state, [])
+        assert str(message.content) == "Question: how many customers", state

@@ -33,6 +33,7 @@ from governed_bi.serve.runtime import (
     FUSE_WEIGHTS,
     corpus_structure,
     facet_hits,
+    facet_weights,
     int_knob,
 )
 from governed_bi.serve.runtime import (
@@ -86,7 +87,9 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
     structure = corpus_structure(config)
     hits = _route_hit_triples(state, structure)
     ranking = sorted(
-        route_scores(hits),
+        # `facet_weight_schema` / `facet_weight_other`, both 1.0 as shipped. They were
+        # declared comparability knobs with no reader until `route` took a `weights` argument.
+        route_scores(hits, weights=facet_weights(state)),
         key=lambda pair: (-float(pair[1]), str(pair[0])),
     )
     top_n = int_knob(state, "route_top_n")
@@ -108,7 +111,16 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
     cfg = runtime_config(config)
     index = cfg.get("index")
     if index is not None:
-        query_vector = cfg.get("query_vector")
+        # **State first, config second — and this line was the half that was never fixed.**
+        # A query vector is per-turn, so `graph_app.make_graph` binds the run constants once
+        # at load time with no question and the config key is simply absent on the streamed
+        # path, which is the only real one. `accept` writes it to *state* instead, and
+        # `facets._query_vector` was taught to read state first for exactly that reason
+        # (see its docstring). Reading config alone here meant pass two — the pass whose
+        # output becomes the analyst's context — had **no semantic channel at all** on every
+        # served turn, while `eval/datalake.py` supplied the config key and therefore
+        # measured a configuration the server does not run.
+        query_vector = state.get("query_vector") or cfg.get("query_vector")
         retrieved = pass_two_retrieve(
             state=state,
             index=index,

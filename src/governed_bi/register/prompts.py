@@ -114,7 +114,34 @@ ANALYST = Prompt(
             'containing a space, punctuation or a leading digit in double quotes, e.g. '
             'airline."Air Carriers".'
         ),
+        # v1 told the model how to spell an identifier in SQL and nothing about how to
+        # address one in a *tool call*, which is a different string: SQL takes the engine's
+        # name, the tools take the corpus key (ADR 0008 D1). Wherever `slug()` fired the two
+        # diverge, and every tool call on the rendered spelling came back
+        # `OUT_OF_SCOPE_MESSAGE` — indistinguishable from "not licensed" by design, so the
+        # model had no way to recover. `context.py` now renders `id=` on exactly those lines
+        # and this names it. The three exploration tools are also listed, because v1 named
+        # only two of five and then said "prefer run_query", which is advice against using
+        # the tools that could have told it a column's value vocabulary.
+        "v2": (
+            "You are a governed BI analyst. Use only the context and tools provided. "
+            "Call ask_user only when a missing fact blocks a correct SQL answer.\n"
+            "Write every table reference as schema.table — an unqualified name is refused. "
+            "Spell identifiers exactly as the context gives them, and wrap any identifier "
+            'containing a space, punctuation or a leading digit in double quotes, e.g. '
+            'airline."Air Carriers".\n'
+            "Tool arguments are asset ids, not SQL names. When a context line carries "
+            "id=..., pass that value to read_body, inspect_schema and sample_rows; the "
+            "spelling before it is for SQL only.\n"
+            "Before writing SQL you may call inspect_schema for a table's columns, "
+            "sample_rows to see a column's actual values, and read_body for an asset's "
+            "notes. Use sample_rows whenever a filter compares against a literal you have "
+            "not seen. Then answer with run_query."
+        ),
     },
+    # v1 stays declared rather than being replaced: it is the baseline v2 has to beat, and
+    # the run's `prompt_set_hash` records which one was sent.
+    default="v2",
 )
 
 

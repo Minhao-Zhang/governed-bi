@@ -222,9 +222,19 @@ class Connector(Protocol):
 
     def describe_table(self, name: str) -> TableInfo: ...
 
-    def sample_values(self, table: str, column: str, *, limit: int) -> Sequence[Any]:
+    def sample_values(
+        self, table: str, column: str, *, limit: int, schema: str | None = None
+    ) -> Sequence[Any]:
         """Sample distinct values. **Deterministic**: ordered, and run under
-        ``synchronize_seqscans = off``. See the note above on why."""
+        ``synchronize_seqscans = off``. See the note above on why.
+
+        ``schema`` is part of the port because leaving it out did not make the concept go
+        away — it made the Postgres adapter carry a private ``schema="public"`` default
+        that no caller could see and none of them passed. On a pooled 57-schema lake every
+        call became ``FROM "public"."<table>"`` and raised 42P01, so the one tool that
+        could tell the analyst whether a column holds ``'CA'`` or ``'California'`` had
+        never returned a row. An adapter over a namespace-free engine ignores it.
+        """
         ...
 
 

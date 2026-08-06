@@ -135,3 +135,90 @@ def test_route_top_n_from_knobs_resolved_changes_the_turn(
     # And the two ways of setting it agree, so there is one behaviour and not two.
     via_state = run(route_top_n=1)
     assert via_state.get("schemas") == narrow.get("schemas")
+
+
+def test_every_declared_ranking_knob_has_a_reader() -> None:
+    """A ``Role.comparability`` knob that cannot change a result is a false claim about a run.
+
+    Four of them shipped that way. ``facet_weight_schema`` and ``facet_weight_other`` were
+    declared while ``retrieve/route.route`` took no weights at all; ``w_lexical`` and
+    ``w_semantic`` were declared while ``serve/runtime.FUSE_WEIGHTS`` was a hardcoded literal.
+    All four entered ``config_hash_keys()`` and ``knobs_resolved``, so a run could publish
+    ``w_lexical: 0.9``, move its config hash, and behave identically — the inverse of the
+    defect ``register/knobs.py`` opens by describing.
+    """
+    import inspect
+
+    from governed_bi.register.knobs import knob_names
+    from governed_bi.retrieve.route import route
+    from governed_bi.serve.runtime import FUSE_WEIGHTS
+
+    declared = set(knob_names())
+    assert {"facet_weight_schema", "facet_weight_other", "w_lexical", "w_semantic"} <= declared
+
+    # `route` must be able to express a per-facet multiplier at all.
+    assert "weights" in inspect.signature(route).parameters, (
+        "facet_weight_* are declared and route cannot apply them"
+    )
+    # `FUSE_WEIGHTS` must come from the register rather than from a literal beside it.
+    from governed_bi.register.knobs import knob_default
+
+    assert FUSE_WEIGHTS["lexical"] == float(knob_default("w_lexical"))
+    assert FUSE_WEIGHTS["semantic"] == float(knob_default("w_semantic"))
+
+
+def test_a_facet_weight_actually_moves_the_ranking() -> None:
+    """Behaviour-preserving at 1.0, and *effective* off it. Both halves matter."""
+    from governed_bi.retrieve.route import route
+
+    hits = [
+        ("facet_schema", "sales", 0.4),
+        ("facet_term", "ops", 0.5),
+    ]
+    unweighted = dict(route(hits))
+    assert unweighted == dict(route(hits, weights={"facet_schema": 1.0, "facet_term": 1.0})), (
+        "the shipped 1.0/1.0 must be exactly the previous behaviour"
+    )
+    assert max(unweighted, key=lambda s: unweighted[s]) == "ops"
+    boosted = dict(route(hits, weights={"facet_schema": 2.0}))
+    assert max(boosted, key=lambda s: boosted[s]) == "sales", (
+        "doubling the schema facet's vote changed nothing, so the weight is not applied"
+    )
+
+
+def test_the_saturation_constant_is_declared_where_it_is_read() -> None:
+    """``lexical_saturation_k`` shipped ``UNSET`` while ``index.py`` ran the literal 1.2.
+
+    The register therefore said nobody had chosen the constant that sets where the lexical
+    scale sits, and the code chose it anyway. They agreed at 1.2, which is exactly why it
+    survived — ``session._resolved_knobs`` dropped the knob from the record while BM25 used a
+    value the record did not mention. Declaring what runs is not the same as fitting it, and
+    the register's note now says so out loud.
+    """
+    from governed_bi.register.knobs import Unset, knob_default
+    from governed_bi.retrieve.index import IndexEntry, build_index
+
+    value = knob_default("lexical_saturation_k")
+    assert not isinstance(value, Unset), "the code runs a value; the register must name it"
+    from governed_bi.register.assets import AssetType
+
+    index = build_index(
+        [IndexEntry(id="a", summary="customers orders", asset_type=AssetType.table)]
+    )
+    assert index.lexical.k == float(value), (
+        f"BM25 runs k={index.lexical.k} while the register declares {value}"
+    )
+
+
+def test_a_knob_describing_a_feature_that_does_not_exist_is_gone() -> None:
+    """``max_queries_per_facet`` bounded a list built as ``[question]``.
+
+    So the limit could never fire, and it was ``Role.comparability`` — every run published a
+    bound on a per-facet fan-out the code does not have. Deleted rather than wired: wiring it
+    would hand a knob to a feature that does not exist.
+    """
+    from governed_bi.register.knobs import knob_names
+    from governed_bi.serve.nodes import facets
+
+    assert "max_queries_per_facet" not in set(knob_names())
+    assert not hasattr(facets, "_MAX_QUERIES"), "the duplicate local constant is still there"
