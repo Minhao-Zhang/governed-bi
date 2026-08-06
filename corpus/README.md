@@ -1,7 +1,5 @@
 # corpus/
 
-_[English](README.md) · [简体中文](README.zh.md)_
-
 Git-tracked typed YAML assets for the semantic layer. Spec:
 [ADR 0005](../docs/adr/0005-v2-memory-layer-and-faceted-retrieval.md).
 Serve typically loads from `GOVERNED_BI_CORPUS_DIR` or a directory under

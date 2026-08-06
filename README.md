@@ -1,7 +1,5 @@
 # governed-bi
 
-_[English](README.md) · [简体中文](README.zh.md)_
-
 An agentic BI engine: natural-language question in, governed read-only SQL out,
 with an audit trail. It retrieves a slice of a curated semantic layer (typed
 YAML assets), a model writes SQL, seven deterministic guardrail layers check it,

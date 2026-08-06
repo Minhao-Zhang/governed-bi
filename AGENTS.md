@@ -11,20 +11,7 @@
 
 - No need to have a test for everything, unless it is a problem we encountered in the past and we want to avoid it in the future.
 - Before you write any LangGraph, LangChain, DeepAgents related code, use the relavent skill like `langgraph-fundementals` to understand the basic concepts and principles.
-
-## Documentation language workflow
-
-English is the source of truth. Keep a Chinese twin for these docs only:
-
-```
-README.md                docs/design-decisions.md    corpus/README.md
-docs/README.md           docs/glossary.md            data/README.md
-docs/architecture.md     docs/usage.md               data/generated/README.md
-```
-
-Everything else is **English only** — do not create a `.zh.md` for it.
-
-- **While the work is in progress**: edit the **English docs only**. Let the Chinese twins drift.
+- No need to comment every line of code, but do comment on the overall structure and design decisions.
 
 ## External dependencies
 

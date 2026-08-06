@@ -1,7 +1,5 @@
 # Architecture
 
-_[English](architecture.md) · [简体中文](architecture.zh.md)_
-
 How a question becomes a stamped answer in this tree. Binding detail lives in
 [ADR 0005](adr/0005-v2-memory-layer-and-faceted-retrieval.md) (retrieval /
 memory) and [ADR 0006](adr/0006-execution-time-governance.md) (governance).

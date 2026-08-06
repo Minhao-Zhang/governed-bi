@@ -1,7 +1,5 @@
 # Glossary
 
-_[English](glossary.md) · [简体中文](glossary.zh.md)_
-
 Canonical terms for the current tree. When a term conflicts with casual usage,
 this page wins. Binding design detail is in the [ADRs](adr/).
 

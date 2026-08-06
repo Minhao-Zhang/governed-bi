@@ -1,7 +1,5 @@
 # Usage
 
-_[English](usage.md) · [简体中文](usage.zh.md)_
-
 Install, configure, and run the current tree. Design background:
 [architecture](architecture.md), [ADRs](adr/).
 

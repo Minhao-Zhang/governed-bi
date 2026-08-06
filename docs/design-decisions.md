@@ -1,7 +1,5 @@
 # Design decisions
 
-_[English](design-decisions.md) · [简体中文](design-decisions.zh.md)_
-
 Binding decisions live as ADRs under [`adr/`](adr/). This page is only an index.
 Do not re-author ADR content here.
 

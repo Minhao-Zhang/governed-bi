@@ -1,7 +1,5 @@
 # governed-bi design
 
-_[English](README.md) · [简体中文](README.zh.md)_
-
 Design for an agentic BI system: natural-language questions → grounded,
 governed, auditable answers over relational data. Postgres is the live path;
 SQLite is the offline test/CI substrate.

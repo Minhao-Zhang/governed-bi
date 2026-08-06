@@ -1,7 +1,5 @@
 # data/
 
-_[English](README.md) · [简体中文](README.zh.md)_
-
 Vendored BIRD SQLite used as a **demo and test/CI fixture**, not as the default
 LangGraph serve datasource (serve expects Postgres — see [usage](../docs/usage.md)).
 
