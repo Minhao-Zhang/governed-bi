@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from governed_bi.serve.runtime import int_knob
+from governed_bi.serve.runtime import bool_knob, int_knob
 
 
 def test_state_wins_then_knobs_resolved_then_the_register() -> None:
@@ -53,6 +53,21 @@ def test_a_knob_that_cannot_be_read_raises_rather_than_substituting_a_value() ->
     # comparability hash entirely.
     with pytest.raises(KeyError):
         int_knob({}, "route_top_nn")
+
+
+def test_bool_knob_same_precedence_as_int_knob() -> None:
+    """`enable_structured_percentage_check` off by default, state wins over knobs_resolved."""
+    assert bool_knob({}, "enable_structured_percentage_check") is False
+    assert bool_knob({"knobs_resolved": {"enable_structured_percentage_check": True}},
+                      "enable_structured_percentage_check") is True
+    assert bool_knob({"enable_structured_percentage_check": True,
+                       "knobs_resolved": {"enable_structured_percentage_check": False}},
+                      "enable_structured_percentage_check") is True
+
+
+def test_bool_knob_refuses_a_non_bool_value() -> None:
+    with pytest.raises(ValueError, match="not a bool"):
+        bool_knob({"enable_structured_percentage_check": "true"}, "enable_structured_percentage_check")
 
 
 def test_route_top_n_from_knobs_resolved_changes_the_turn(

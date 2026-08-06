@@ -17,6 +17,7 @@ __all__ = [
     "DEFAULT_CONTEXT_BUDGET",
     "FUSE_WEIGHTS",
     "assets_by_id",
+    "bool_knob",
     "candidate_depth",
     "combine_channels",
     "configurable",
@@ -222,6 +223,33 @@ def float_knob(state: Mapping[str, Any], name: str) -> float:
             f"knob {name!r} is {raw!r}, which is not a number. Falling back to the "
             "register default would make the record report a value this turn did not use."
         ) from err
+
+
+def bool_knob(state: Mapping[str, Any], name: str) -> bool:
+    """:func:`int_knob` for an on/off knob. Same precedence, same two refusals.
+
+    ``bool(raw)`` is not used to coerce: a knob resolved to the string ``"false"`` would
+    otherwise read as on, which is the same quiet substitution the register exists to
+    prevent, just spelled as a truthiness bug instead of a silent default.
+    """
+    raw = state.get(name)
+    if raw is None:
+        knobs = state.get("knobs_resolved") or {}
+        if isinstance(knobs, Mapping):
+            raw = knobs.get(name)
+    if raw is None:
+        raw = knob_default(name)
+    if isinstance(raw, Unset):
+        raise ValueError(
+            f"knob {name!r} ships UNSET, so there is no value to run with. A guessed "
+            "one here would be a fabricated measurement."
+        )
+    if isinstance(raw, bool):
+        return raw
+    raise ValueError(
+        f"knob {name!r} is {raw!r}, which is not a bool. Falling back to the register "
+        "default would make the record report a value this turn did not use."
+    )
 
 
 def facet_weights(state: Mapping[str, Any]) -> Mapping[str, float]:

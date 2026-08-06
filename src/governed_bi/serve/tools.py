@@ -39,7 +39,8 @@ from governed_bi.serve.agent_state import AttemptBook
 from governed_bi.serve.delivery import payload_digest, tool_bounds_from_state
 from governed_bi.serve.events import emit, tool_event_id
 from governed_bi.serve.ledger import attempt_field, cap_attempt, execution_from_attempts
-from governed_bi.serve.runtime import configurable
+from governed_bi.serve.runtime import bool_knob, configurable
+from governed_bi.serve.structured_check import percentage_scale_suffix
 
 __all__ = [
     "SYSTEM_PROMPT",
@@ -403,9 +404,13 @@ def build_tools(
             return _reply(runtime, f"run_query error: {type(exc).__name__}: {exc}")
         _emit_attempt(runtime, attempt, number=attempt_number, payload=payload)
         table = _result_table(payload)
+        suffix = ""
+        if bool_knob(state, "enable_structured_percentage_check"):
+            # G4 (ADR 0006): check what was executed, not what the model asked for.
+            suffix = percentage_scale_suffix(state.get("question"), attempt_field(attempt, "executed_sql"))
         return _reply(
             runtime,
-            payload,
+            payload + suffix,
             attempts_by_call={call_id: attempt},
             **({"result_table": table} if table is not None else {}),
         )

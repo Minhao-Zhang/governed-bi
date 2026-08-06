@@ -293,6 +293,13 @@ KNOB_REGISTER: tuple[Knob, ...] = (
     _k("g_length_max_chars", 8_000, Role.comparability, "guard's hard input bound"),
     _k("cost_budget", UNSET, Role.comparability, "the cost layer's shape estimate bound"),
 
+    # ── structured checks (serve-level result sanity, not ADR 0006 governance) ──
+    _k("enable_structured_percentage_check", False, Role.comparability,
+       "flags a 'percentage' question whose run_query SQL never scales by 100 "
+       "(ported from v1's UtkuAI-line finding: Experiment 006 K2-c, a percentage "
+       "question answered as a 0-1 ratio). Off by default because it changes what "
+       "the model sees, so a run with it on is not comparable to one without"),
+
     # ── measurement ─────────────────────────────────────────────────────────
     _k("cache_cost_reduction_target", 0.30, Role.comparability,
        "the acceptance criterion for message placement and cache breakpoints, "
