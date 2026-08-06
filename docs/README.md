@@ -35,6 +35,12 @@ abstractions are seamed in but toggled off. Evaluated on the self-built
 
 [Open work](v1/open-work.md) is the single tracker for what is still open.
 
+[v2 post-mortem](v2-postmortem-and-v3-brief.md): an adversarial audit of **this tree at this
+commit** — ten findings, each produced by taking a claim in the docs and checking whether the
+wire it described was connected — plus a stage-by-stage comparison of how this repo writes SQL
+against CHESS, CHASE-SQL, XiYan-SQL, Agentar-Scale-SQL and LangGraph's own reference agent. It
+disagrees with several documents listed above; where it does, it says how it checked.
+
 [External design sources](v1/references.md) that ground the design.
 
 ## Using the repo
