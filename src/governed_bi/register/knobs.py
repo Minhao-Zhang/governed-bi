@@ -299,6 +299,14 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "(ported from v1's UtkuAI-line finding: Experiment 006 K2-c, a percentage "
        "question answered as a 0-1 ratio). Off by default because it changes what "
        "the model sees, so a run with it on is not comparable to one without"),
+    _k("enable_clarification_to_draft", False, Role.operational,
+       "an answered (not declined) live clarification is mined into a TermAsset draft "
+       "(curator/clarification.py), written proposed and invisible until an admin "
+       "approves it. Operational, not comparability: unlike the check above, this "
+       "changes the corpus on disk between two turns of the SAME run, never what a "
+       "given turn's own answer looks like — the next turn only sees the draft if "
+       "someone certified it first, so two runs with this on/off still answer every "
+       "question identically until a human acts"),
 
     # ── measurement ─────────────────────────────────────────────────────────
     _k("cache_cost_reduction_target", 0.30, Role.comparability,

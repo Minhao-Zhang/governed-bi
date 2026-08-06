@@ -543,11 +543,44 @@ def chat_resume(body: dict[str, Any]) -> dict[str, Any]:
         )
     except ResumeRejected:
         return _error("resume identity mismatch: the caller answering is not the caller that was asked")
+
+    _mine_clarification_draft(session, pending, reply, out)
+
     # Logged here too, and with the *clarification* as the question. A resumed turn is the
     # one that produces the record, so leaving it out would make every clarified
     # conversation invisible to the audit surface — which is the half of the traffic most
     # worth auditing.
     return _logged(_shape(out), str(pending.get("question") or ""))
+
+
+def _mine_clarification_draft(
+    session: Any, pending: dict[str, Any], reply: dict[str, Any], out: dict[str, Any]
+) -> None:
+    """UtkuAI, ported: an answered (not declined) clarification becomes a TermAsset draft.
+
+    Gated on ``enable_clarification_to_draft`` (off by default), read off ``out`` the same
+    way ``run_query``'s structured check reads its own knob — the resumed turn's own state,
+    not a session-level constant, so a per-turn override behaves the same way every other
+    knob does. Never lets a mining failure surface as a resume failure: the clarification was
+    answered and the turn must complete regardless of whether the corpus write worked.
+    """
+    from governed_bi.corpus.drafts import submit_draft
+    from governed_bi.curator.clarification import draft_from_clarification, resolved_answer_text
+    from governed_bi.serve.runtime import bool_knob
+
+    if not bool_knob(out, "enable_clarification_to_draft") or session.corpus_root is None:
+        return
+    answer_text = resolved_answer_text(reply)
+    if not answer_text:
+        return
+    question = str(pending.get("question") or "")
+    if not question:
+        return
+    try:
+        draft = draft_from_clarification(question, answer_text, schema=session.db_id)
+        submit_draft(session.corpus_root, draft, namespace=session.db_id)
+    except Exception:  # noqa: BLE001 — mining is best-effort, never fatal to the resumed turn
+        pass
 
 
 def _config(session: Any, question: str | None, thread_id: str) -> dict[str, Any]:
