@@ -454,9 +454,11 @@ def test_a_real_model_call_does_not_record_zero_tokens() -> None:
 
     model = ScriptedChatModel(responses=[AIMessage(content="three customers")])
     state: dict[str, Any] = {"turn_index": 1, "turn_id": "turn-usage", "messages": [], "usage": []}
-    out = agent_core_node(
-        state,
-        {"configurable": {"thread_id": "t-usage", "policy": _policy(), "agent_model": model}},
+    out = asyncio.run(
+        agent_core_node(
+            state,
+            {"configurable": {"thread_id": "t-usage", "policy": _policy(), "agent_model": model}},
+        )
     )
 
     usage = list(out.get("usage") or ())

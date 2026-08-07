@@ -10,6 +10,7 @@ Every tool returns a :class:`~langgraph.types.Command`.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from collections.abc import Callable, Mapping
@@ -77,7 +78,7 @@ def _reply(runtime: Any, text: str, **updates: Any) -> Command:
     return Command(update=update)
 
 
-def _fetch(
+async def _fetch(
     stage: str,
     runtime: Any,
     detail: dict[str, Any],
@@ -93,7 +94,7 @@ def _fetch(
     event_id = tool_event_id(stage, _call_id(runtime))
     emit(kind="tool", step=stage, status="start", event_id=event_id, detail=detail)
     try:
-        result = work()
+        result = await asyncio.to_thread(work)
     except GovernanceUsageError:
         # A security parameter was never wired up (G1). Must not become an error string that
         # reads like a tool failing on the model's input.
@@ -236,9 +237,9 @@ def build_tools(
     turn_id = str(state.get("turn_id") or "")
 
     @tool
-    def read_body(asset_ids: list[str], runtime: ToolRuntime) -> Command:
+    async def read_body(asset_ids: list[str], runtime: ToolRuntime) -> Command:
         """Return bodies for retrieved asset ids (hits ∪ pulled_in only)."""
-        return _fetch(
+        return await _fetch(
             "read_body",
             runtime,
             {"n_asset_ids": len(asset_ids or ())},
@@ -246,9 +247,9 @@ def build_tools(
         )
 
     @tool
-    def inspect_schema(table_id: str, runtime: ToolRuntime) -> Command:
+    async def inspect_schema(table_id: str, runtime: ToolRuntime) -> Command:
         """List columns and physical types for a licensed table."""
-        return _fetch(
+        return await _fetch(
             "inspect_schema",
             runtime,
             {"table_id": table_id},
@@ -256,9 +257,9 @@ def build_tools(
         )
 
     @tool
-    def sample_rows(column_id: str, runtime: ToolRuntime, limit: int = 5) -> Command:
+    async def sample_rows(column_id: str, runtime: ToolRuntime, limit: int = 5) -> Command:
         """Sample distinct values for a ColumnAsset id whose table is licensed."""
-        return _fetch(
+        return await _fetch(
             "sample_rows",
             runtime,
             {"column_id": column_id, "limit": limit},
@@ -274,7 +275,7 @@ def build_tools(
         )
 
     @tool
-    def run_query(sql: str, runtime: ToolRuntime) -> Command:
+    async def run_query(sql: str, runtime: ToolRuntime) -> Command:
         """Governed SQL execution against licensed tables only."""
         call_id = _call_id(runtime)
         committed = (getattr(runtime, "state", None) or {}).get("attempts_by_call")
@@ -300,8 +301,13 @@ def build_tools(
             detail={"attempt": attempt_number},
         )
         try:
-            payload, attempt = fetch.run_query(
-                sql, bounds=bounds, corpus=corpus, connector=connector, policy=policy
+            payload, attempt = await asyncio.to_thread(
+                fetch.run_query,
+                sql,
+                bounds=bounds,
+                corpus=corpus,
+                connector=connector,
+                policy=policy,
             )
         except GovernanceUsageError:
             # Wiring failure — must not look like a governance refusal.
@@ -333,7 +339,7 @@ def build_tools(
         )
 
     @tool
-    def ask_user(question: str, runtime: ToolRuntime, why: str = "") -> Command:
+    async def ask_user(question: str, runtime: ToolRuntime, why: str = "") -> Command:
         """Pause and ask the human a clarifying question (HITL interrupt)."""
         digest = hashlib.sha256(f"{turn_id}\x1f{question}".encode()).hexdigest()[:12]
         clarification_id = f"clar-{turn_id}-{digest}"

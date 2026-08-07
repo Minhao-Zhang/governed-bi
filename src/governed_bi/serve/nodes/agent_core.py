@@ -32,7 +32,7 @@ STUB_ANSWER = "STUB_ANSWER"
 # its home; defining it twice would be two strings that must stay equal for no reason.
 
 
-def agent_core_node(state: dict, config: RunnableConfig) -> dict:
+async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
     """Run the main model + tools, or the F1 stub when no ``agent_model`` is set.
 
     **No ``checkpointer`` parameter.** There was one, passed down from ``build_graph`` and
@@ -77,7 +77,7 @@ def agent_core_node(state: dict, config: RunnableConfig) -> dict:
     question = _question_message(state, history)
     inbound = history + ([question] if question is not None else [])
 
-    result, failure = _run(agent, inbound, config)
+    result, failure = await _run(agent, inbound, config)
     out_messages = list(result.get("messages") or [])
     fresh = out_messages[len(inbound) :]
 
@@ -123,7 +123,7 @@ def agent_core_node(state: dict, config: RunnableConfig) -> dict:
     return update
 
 
-def _run(
+async def _run(
     agent: Any, inbound: list[Any], config: RunnableConfig
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Drive the agent, keeping the last committed state. Returns ``(state, failure or None)``.
@@ -158,7 +158,9 @@ def _run(
 
     last: dict[str, Any] = {}
     try:
-        for frame in agent.stream({"messages": inbound}, config, stream_mode="values"):
+        async for frame in agent.astream(
+            {"messages": inbound}, config, stream_mode="values"
+        ):
             if isinstance(frame, Mapping):
                 last = dict(frame)
     except GraphInterrupt:
@@ -244,11 +246,18 @@ def _context_middleware(state: dict) -> list[AgentMiddleware]:
     if not block:
         return []
 
+    # ``async def``, and that is load-bearing rather than stylistic. ``wrap_model_call``
+    # branches on ``iscoroutinefunction`` and registers the hook it finds — a sync body becomes
+    # ``wrap_model_call`` only, and the agent is driven by ``astream``, so the first model call
+    # died on ``NotImplementedError: Asynchronous implementation of awrap_model_call is not
+    # available``. That surfaced as the *turn* crashing, because ``_run`` cannot tell a
+    # middleware wiring failure from a provider one — and the ``ask_user`` pause it swallowed
+    # looked exactly like the interrupt never happening.
     @wrap_model_call
-    def deliver_context(
-        request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]
+    async def deliver_context(
+        request: ModelRequest, handler: Callable[[ModelRequest], Any]
     ) -> ModelResponse:
-        return handler(request.override(messages=[*request.messages, HumanMessage(block)]))
+        return await handler(request.override(messages=[*request.messages, HumanMessage(block)]))
 
     return [deliver_context]
 

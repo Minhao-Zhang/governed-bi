@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -131,7 +133,11 @@ def _call(
 
     Returns ``(text the model sees, everything the call recorded)``.
     """
-    command = tool.func(runtime=_runtime(call_id, committed), **args)
+    # `.coroutine` first: the tools are `async def` now — the shape the nested agent's `astream`
+    # needs — and `@tool` puts an async implementation there, leaving `.func` as None.
+    body = tool.coroutine or tool.func
+    returned = body(runtime=_runtime(call_id, committed), **args)
+    command = asyncio.run(returned) if inspect.isawaitable(returned) else returned
     update = dict(getattr(command, "update", None) or {})
     messages = list(update.pop("messages", []) or [])
     return (str(getattr(messages[0], "content", "")) if messages else ""), update
