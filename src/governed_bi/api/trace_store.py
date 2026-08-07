@@ -100,8 +100,15 @@ def _entries() -> Iterator[dict[str, Any]]:
                 yield parsed
 
 
-def list_turns(limit: int = 50) -> list[dict[str, Any]]:
-    """Newest turns first, as summaries.
+def list_turns(limit: int = 50, thread_id: str | None = None) -> list[dict[str, Any]]:
+    """Newest turns first, as summaries. ``thread_id`` narrows to one conversation.
+
+    **Why the filter exists.** A turn's governed record lives in per-turn graph state
+    (``answer``, ``generated_sql``, ``execution``), which ``PER_TURN_RESET`` clears each turn —
+    so a thread's checkpoint can only ever describe its *newest* turn. Reopening a two-turn
+    conversation showed two questions and one audit card, because there was one record to show.
+    This log is the only place every turn of a conversation survives, so it has to be askable
+    per conversation; without the filter a client would page the whole log and filter by hand.
 
     ``missing_required`` is computed here rather than stored, so an entry written before a
     register row existed is judged by today's register — the point of the column is "is
@@ -112,6 +119,8 @@ def list_turns(limit: int = 50) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for entry in _entries():
         record = entry.get("record") or {}
+        if thread_id is not None and record.get("thread_id") != thread_id:
+            continue
         summary = {name: record.get(name) for name in SUMMARY_FIELDS}
         summary["asked_at"] = entry.get("asked_at")
         summary["question"] = entry.get("question")

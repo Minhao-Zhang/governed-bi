@@ -353,3 +353,30 @@ def test_a_clarification_interrupt_carries_an_id_and_a_reason() -> None:
     to record about a clarification — this is a better payload, not merely a conforming one.
     """
     pytest.fail("not implemented: see docstring")
+
+
+def test_the_audit_log_can_be_asked_for_one_conversation() -> None:
+    """A transcript needs every turn of a thread, and only this log has them.
+
+    A turn's governed record lives in per-turn graph state — `answer`, `generated_sql`,
+    `execution` — which `PER_TURN_RESET` clears each turn. So a thread's checkpoint describes
+    its *newest* turn and nothing earlier: reopening a two-turn conversation showed two
+    questions and one audit card, because there was one record left to show. The fix is to read
+    history from here rather than from the checkpoint, which needs the filter this asserts.
+    """
+    from governed_bi.api.trace_store import list_turns
+
+    everything = list_turns(limit=200)
+    threads = {t.get("thread_id") for t in everything if t.get("thread_id")}
+    if not threads:
+        pytest.skip("no turns logged yet; nothing to filter")
+
+    wanted = sorted(threads)[0]
+    scoped = list_turns(limit=200, thread_id=wanted)
+    assert scoped, f"filtering to {wanted!r} returned nothing though the log has turns for it"
+    assert {t["thread_id"] for t in scoped} == {wanted}, (
+        "the filter leaked turns from other conversations, which would put another thread's "
+        "SQL in this thread's transcript"
+    )
+    assert len(scoped) <= len(everything)
+    assert list_turns(limit=200, thread_id="no-such-thread") == []

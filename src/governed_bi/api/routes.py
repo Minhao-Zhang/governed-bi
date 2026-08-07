@@ -445,9 +445,14 @@ def knowledge_graph(
 
 
 @app.get("/audit/turns")
-def audit_turns(limit: int = 50) -> dict[str, Any]:
-    """Served turns, newest first. ``incomplete_fields`` is judged against today's register."""
-    turns = list_turns(limit=limit)
+def audit_turns(limit: int = 50, thread_id: str | None = None) -> dict[str, Any]:
+    """Served turns, newest first. ``incomplete_fields`` is judged against today's register.
+
+    ``thread_id`` narrows to one conversation, which is what a transcript needs: the graph
+    checkpoint holds only the newest turn's record (``PER_TURN_RESET``), so this log is the only
+    source for the earlier turns of a thread.
+    """
+    turns = list_turns(limit=limit, thread_id=thread_id)
     return {
         "turns": turns,
         "meta": {
