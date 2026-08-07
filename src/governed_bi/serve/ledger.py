@@ -78,6 +78,17 @@ def execution_from_attempts(attempts: Sequence[Any]) -> dict[str, Any]:
     that sampled a column and then answered from context is ``no_sql`` with a non-empty
     ledger, and both halves of that are true.
 
+    **The cap is tested before the pass, and the order is the fix.** It was the other way
+    round, so ``"capped"`` was unreachable on any turn where a statement had ever succeeded —
+    and that turn exists: measured live, an agent with two passing and two blocked attempts
+    hit the cap and wrote *"The query tool reached its execution-attempt limit before returning
+    the winning district, so I can't reliably state the result"*, while the record stamped
+    ``terminal: "answered"`` and ``outcome: answered``. The user got no answer and the artifact
+    said they did, which is the crash-counted-as-refusal inversion pointing the wrong way
+    again. ADR 0006 §5 is explicit that the cap **terminates the turn** and that a
+    cap-terminated turn gets its own ``Outcome`` member; an earlier success does not undo the
+    termination, it just means the turn had something to show for the attempts it burned.
+
     The vocabulary is ``govern.ledger.ExecutionRecord``'s. ``"graded"`` belongs to the
     graded-delivery path and is not written here.
     """
@@ -85,10 +96,10 @@ def execution_from_attempts(attempts: Sequence[Any]) -> dict[str, Any]:
     answering = answering_attempts(rows)
     if not answering:
         return execution_record(rows, "no_sql")
-    if any(attempt_field(a, "passed") is True for a in answering):
-        return execution_record(rows, "answered")
     if any(attempt_field(a, "reason_code") == ATTEMPT_CAP_REFUSED_BY for a in answering):
         return execution_record(rows, "capped")
+    if any(attempt_field(a, "passed") is True for a in answering):
+        return execution_record(rows, "answered")
     return execution_record(rows, "refused")
 
 

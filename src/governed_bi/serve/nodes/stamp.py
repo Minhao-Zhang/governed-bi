@@ -166,9 +166,16 @@ def _path_signals(
         execution = state.get("execution")
         attempts = _attempts(execution)
         terminal = execution.get("terminal") if isinstance(execution, Mapping) else None
+        # The cap first, and on its own condition. It used to be a ternary *inside* the
+        # "no attempt passed" branch, which made it unreachable on any turn where a statement
+        # had ever succeeded — so a turn with two passing and two blocked attempts, whose own
+        # closing text said it had hit the execution-attempt limit and could not state the
+        # result, recorded `outcome: answered`. `execution_from_attempts` decides this now and
+        # this reads its verdict, so the two cannot disagree about the same ledger.
+        if terminal == "capped":
+            return ATTEMPT_CAP_REFUSED_BY, None, None, None, False
         if attempts and not any(attempt_field(a, "passed") is True for a in attempts):
-            reason = ATTEMPT_CAP_REFUSED_BY if terminal == "capped" else GUARDRAIL_REFUSED_BY
-            return reason, None, None, None, False
+            return GUARDRAIL_REFUSED_BY, None, None, None, False
         # No attempt at all: the model answered from the delivered context (or the F3 stub
         # did). That is `answered` with `generated_sql` null, which the register declares.
         return None, None, None, None, True

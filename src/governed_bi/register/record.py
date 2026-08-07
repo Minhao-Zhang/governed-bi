@@ -246,9 +246,10 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
     _f("generated_sql", Tier.outcome, Absence.not_applicable, Stage.stamp,
        "null when no SQL was produced, which is not the same as empty. **On an answered turn "
        "this is the statement the engine SENT** — canonicalised, quoted and row-limited, read "
-       "from the ledger's `executed_sql`. On a refused or capped turn nothing was sent, so it "
-       "falls back to the last statement the model *proposed*, which may not execute at all: a "
-       "consumer that re-runs this field must gate on `outcome == 'answered'`, or it reports a "
+       "from the ledger's `executed_sql`. On a refused turn nothing was sent, so it falls back "
+       "to the last statement the model *proposed*, which may not execute at all; a capped turn "
+       "is either -- the cap can land after a statement succeeded, and the turn is still capped. "
+       "A consumer that re-runs this field must gate on `outcome == 'answered'`, or it reports a "
        "refusal as a broken statement — which is how 14 capped turns looked like an engine "
        "defect on 2026-08-04"),
     # `final_sql_source` was here and is gone (audit §10): zero writers, permanently null. It
