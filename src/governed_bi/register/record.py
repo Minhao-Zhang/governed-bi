@@ -158,7 +158,8 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "the resolved value of every comparability knob. Without it a turn cannot "
        "be joined against the configuration it ran under, and v1's manifest-only "
        "record is why two runs over different corpora on different splits compared "
-       "as the same configuration"),
+       "as the same configuration",
+       gate="every row in one arm agrees on knobs.resume_drift_keys()"),
 
     # ── decision ────────────────────────────────────────────────────────────
     _f("facet_hits", Tier.decision, Absence.not_applicable, Stage.route,

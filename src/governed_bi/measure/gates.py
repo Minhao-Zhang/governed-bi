@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Callable, Mapping
 
+from ..register.knobs import resume_drift_keys
 from ..register.quantity import Measured
 from ..register.record import GATE_CONDITIONS
 from .degradation import channel_anomalies
@@ -229,10 +230,92 @@ def _context_hash_gate(arm: Population) -> GateResult:
     )
 
 
+def _knobs_resolved_gate(arm: Population) -> GateResult:
+    """Every row in one arm ran under the same configuration.
+
+    **This is the gate that gives ``knobs.Role`` a production consumer** (audit §10). The
+    taxonomy declared three roles and derived three key sets from them —
+    ``comparability_keys``, ``resume_drift_keys``, ``config_hash_keys`` — and *none* had a
+    reader in ``src/``: no config hash existed and no resume-drift check existed. A knob whose
+    role decides nothing is a knob whose role is a comment.
+
+    ``resume_drift_keys()`` is the right set, and it is the role's own definition: comparability
+    knobs plus operational plus scope, i.e. everything whose change *within one run directory*
+    is fatal. An arm is one run directory. So a row that resolved ``route_top_n`` to 3 sitting
+    beside one that resolved it to 5 is not one arm, and any rate over the pair is a rate over a
+    population that does not exist — which is L-R3's defect with the filter moved into the
+    configuration.
+
+    Compared over the declared keys only, not over the whole mapping: a key the register does
+    not declare is caught by ``undeclared_keys``, and failing here on one as well would refuse
+    a run for a reason a reader would look for in the wrong place.
+
+    Absent ``knobs_resolved`` is unmeasured, not passing. ``Absence.never`` already makes an
+    absent one a ``missing_required`` failure; reporting *this* gate as clean on the same row
+    would be two gates disagreeing about the same hole.
+    """
+    keys = resume_drift_keys()
+    seen: dict[tuple[tuple[str, str], ...], int] = {}
+    absent = 0
+    for row in arm.rows:
+        knobs = row.get("knobs_resolved")
+        if not isinstance(knobs, Mapping):
+            absent += 1
+            continue
+        # `repr` of the value, so two runs differing in a knob's *type* (3 vs "3") are two
+        # configurations. A comparison that coerced them would report a drift as agreement.
+        signature = tuple(sorted((k, repr(knobs.get(k))) for k in keys))
+        seen[signature] = seen.get(signature, 0) + 1
+
+    if absent:
+        return _result(
+            "knobs_resolved",
+            Verdict.cannot_evaluate,
+            Measured.unmeasured(f"{absent}/{arm.n} row(s) carry no knobs_resolved mapping"),
+            arm,
+            detail=(
+                f"{absent} of {arm.n} rows have no knobs_resolved, so whether the arm ran under "
+                "one configuration is unknown. Absence.never already reports these as missing."
+            ),
+        )
+    if not seen:
+        return _result(
+            "knobs_resolved",
+            Verdict.cannot_evaluate,
+            Measured.unmeasured(f"{arm.label!r} is empty"),
+            arm,
+        )
+    distinct = len(seen)
+    observed = Measured.of(float(distinct))
+    if distinct == 1:
+        return _result("knobs_resolved", Verdict.passed, observed, arm)
+    return _result(
+        "knobs_resolved",
+        Verdict.failed,
+        observed,
+        arm,
+        detail=(
+            f"{distinct} distinct configurations across {arm.n} rows of one arm. Every rate over "
+            "this arm is a rate over a population that does not exist. Differing keys: "
+            + ", ".join(sorted(_differing_keys(seen)))
+        ),
+    )
+
+
+def _differing_keys(seen: Mapping[tuple[tuple[str, str], ...], int]) -> set[str]:
+    """Which knob names actually differ, so a failure names them rather than the count."""
+    per_key: dict[str, set[str]] = {}
+    for signature in seen:
+        for name, value in signature:
+            per_key.setdefault(name, set()).add(value)
+    return {name for name, values in per_key.items() if len(values) > 1}
+
+
 GATE_IMPLEMENTATIONS: Mapping[str, GateFn] = {
     "outcome": _outcome_gate,
     "facet_channels": _facet_channels_gate,
     "context_hash": _context_hash_gate,
+    "knobs_resolved": _knobs_resolved_gate,
     "guardrail_errors": _zero_count_gate("guardrail_errors", "guardrail_error"),
     "n_re_served": _zero_count_gate("n_re_served", "re_served"),
     "negative": _zero_count_gate("negative", "negative_failed_open"),
