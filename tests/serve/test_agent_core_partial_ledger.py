@@ -116,3 +116,47 @@ def test_a_clean_turn_is_unchanged_and_carries_no_failure() -> None:
 
     assert out["path_kind"] == "answered"
     assert "failure" not in out, "a turn that did not fail must not carry a failure marker"
+
+
+def test_two_statements_in_one_super_step_keep_both_ledger_rows() -> None:
+    """Parallel tool calls must not abort the step that already ran their SQL (audit §13.2).
+
+    ``result_table`` was the one channel on ``GovernedAgentState`` declared without a reducer,
+    so LangGraph backed it with LastValue, which raises ``InvalidUpdateError`` on a second write
+    in one super-step — and every successful ``run_query`` writes it. Measured before the fix:
+    three parallel calls executed three statements and recorded **zero** attempts, because the
+    abort discarded the ``attempts_by_call`` writes from the same step. "Executed but
+    unrecorded" is the one direction this file exists to prevent.
+
+    Written against the channel rather than a live turn on purpose: the defect is the channel's
+    declaration, and reproducing it end to end needs a Postgres server the CI box does not have.
+    """
+    from langgraph.graph import START, StateGraph
+
+    from governed_bi.serve.agent_state import GovernedAgentState
+
+    def writer(call_id: str) -> Any:
+        def node(_state: dict) -> dict:
+            return {
+                "result_table": {"columns": ["n"], "rows": [[call_id]], "row_count": 1},
+                "attempts_by_call": {call_id: {"executed_sql": f"SELECT '{call_id}'"}},
+            }
+
+        return node
+
+    graph = StateGraph(GovernedAgentState)
+    graph.add_node("first", writer("c1"))
+    graph.add_node("second", writer("c2"))
+    graph.add_edge(START, "first")
+    graph.add_edge(START, "second")
+
+    out = graph.compile().invoke({"messages": []})
+
+    assert set(out["attempts_by_call"]) == {"c1", "c2"}, (
+        "both statements reached governance in the same step; a ledger missing one says the "
+        f"turn touched less than it did, got {sorted(out.get('attempts_by_call') or {})}"
+    )
+    # Deliberately not asserting *which* table survives. The reducer takes the later write, and
+    # "later" is tool-call order, which says nothing about which candidate is right. Choosing is
+    # a selection step that does not exist yet (§16.3③); this only stops the crash.
+    assert out["result_table"] is not None

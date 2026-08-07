@@ -12,7 +12,7 @@ from typing import Annotated, Any
 
 from langchain.agents import AgentState
 
-__all__ = ["GovernedAgentState", "merge_by_call", "AttemptBook"]
+__all__ = ["GovernedAgentState", "merge_by_call", "keep_newest", "AttemptBook"]
 
 
 def merge_by_call(left: Any, right: Any) -> dict[str, Any]:
@@ -20,6 +20,30 @@ def merge_by_call(left: Any, right: Any) -> dict[str, Any]:
     merged = dict(left or {})
     merged.update(right or {})
     return merged
+
+
+def keep_newest(left: Any, right: Any) -> Any:
+    """Take the later write. Exists so a second write in one super-step cannot abort the turn.
+
+    **What it fixes (audit §13.2).** ``result_table`` was the one channel on this class with no
+    reducer, so LangGraph backed it with a LastValue channel, which raises ``InvalidUpdateError``
+    on a second write in the same super-step. Every successful ``run_query`` writes it. Two or
+    more ``run_query`` calls in one assistant message therefore ran **every** statement against
+    the database and *then* aborted the nested agent — measured on this tree: three parallel
+    calls gave ``path_kind='crashed'``, three statements executed, and **zero** ledger rows,
+    because the abort discarded the ``attempts_by_call`` writes from the same step.
+
+    This is an audit-trail fix, not a feature. Across super-steps it is what LastValue already
+    did — the repair loop's second successful query still replaces the first, which is the
+    behaviour ``narrate`` and ``stamp`` depend on.
+
+    **It does not choose.** Within one super-step "later" is tool-call order, which is arbitrary
+    with respect to which candidate is *right*. A k>1 candidate design (§16.3③) must not lean on
+    this: it needs a channel keyed by ``tool_call_id``, like the three above it, plus a real
+    selection step. What this reducer buys that design is that the three executions are now
+    ledgered instead of erased.
+    """
+    return right if right is not None else left
 
 
 class GovernedAgentState(AgentState):
@@ -34,8 +58,8 @@ class GovernedAgentState(AgentState):
     #: ``tool_call_id -> clarification``. One row per answered ``ask_user``.
     clarifications_by_call: Annotated[dict[str, Any], merge_by_call]
 
-    #: Last successful query's result table. Last write wins.
-    result_table: dict[str, Any] | None
+    #: Last successful query's result table. Reduced, not LastValue: see :func:`keep_newest`.
+    result_table: Annotated[dict[str, Any] | None, keep_newest]
 
 
 class AttemptBook:

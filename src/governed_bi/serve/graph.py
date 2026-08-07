@@ -25,7 +25,7 @@ from governed_bi.serve.nodes.rewrite import rewrite_node
 from governed_bi.serve.nodes.route_retrieve import connect_node, resolve_node, route_node
 from governed_bi.serve.nodes.stamp import stamp
 from governed_bi.serve.nodes.terminal import decline_node, refuse_node
-from governed_bi.serve.state import ServeState
+from governed_bi.serve.state import ServeInput, ServeState
 from governed_bi.serve.wrap import wrap_node
 
 __all__ = ["build_graph", "compile_graph"]
@@ -87,7 +87,15 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     ``record`` (optional, after ``stamp``) appends to the audit log.
     """
 
-    graph = StateGraph(ServeState)
+    # `input_schema` only when `accept` is present. That flag *is* the trust boundary: with it,
+    # a turn is derived from a client conversation and nothing else the client sends may reach
+    # state (audit §4.3); without it the caller is `serve/__main__`, `eval/` or `/chat`, which
+    # build the turn in-process and pass the whole of ServeState on purpose.
+    graph = (
+        StateGraph(ServeState, input_schema=ServeInput)
+        if accept is not None
+        else StateGraph(ServeState)
+    )
 
     graph.add_node("guard", wrap_node("guard", guard_node))
     graph.add_node("rewrite", wrap_node("rewrite", rewrite_node))

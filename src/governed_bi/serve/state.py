@@ -27,6 +27,7 @@ __all__ = [
     "Delivery",
     "UsageRecord",
     "Answer",
+    "ServeInput",
     "ServeState",
     "PathKind",
     "TERMINAL_PATH_KINDS",
@@ -179,6 +180,33 @@ def settle_failure(left: Any, right: Any) -> Any:
     also = f"{right.get('stage')}/{right.get('error_type')}"
     detail = left.get("detail")
     return {**left, "detail": f"{detail}; also failed: {also}" if detail else f"also failed: {also}"}
+
+
+class ServeInput(TypedDict, total=False):
+    """Everything a client is allowed to write into the graph. Deliberately one key.
+
+    **The defect this closes (audit §4.3).** ``trust()`` forces run constants over a
+    caller-supplied ``configurable``, and that is one of *two* channels a caller can write.
+    The other is the graph's own ``input``: ``langgraph_api`` forwards the client's dict to
+    the graph with no filtering, ``PER_TURN_RESET`` does not clear :data:`TEST_HOOKS`, and
+    ``int_knob`` reads state *before* ``knobs_resolved``. So a request could set
+    ``route_top_n`` and the record would publish the default it did not use.
+
+    ``StateGraph(ServeState, input_schema=ServeInput)`` drops undeclared keys at the entry
+    rather than policing them, which is the difference between a rule and an impossibility.
+    Measured on langgraph 1.2.10: a caller passing ``route_top_n=99`` alongside its messages
+    reaches the first node as absent, not as 99.
+
+    **Only the ``accept`` variant gets this.** ``build_graph()`` with no ``accept`` is entered
+    by ``serve/__main__``, ``eval/`` and ``/chat``, which construct the turn in-process through
+    ``Session.turn()`` and legitimately pass the whole of :class:`ServeState`. The untrusted
+    entry is the one where a turn is *derived* from a client conversation, and that is exactly
+    the one ``accept`` marks.
+    """
+
+    #: The conversation. ``_accept_node`` derives the whole turn from its last human message;
+    #: it reads no other state key, which is what makes one key sufficient.
+    messages: Annotated[list, add_messages]
 
 
 class ServeState(TypedDict, total=False):
