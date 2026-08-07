@@ -85,7 +85,7 @@ def session_from_environment() -> Session:
     from governed_bi.serve import session as session_mod
 
     schema = os.environ.get(SCHEMA_VAR)
-    corpus_dir = os.environ.get(CORPUS_DIR_VAR) or _dropped_in_corpus(root)
+    corpus_dir = _resolve_corpus_dir(os.environ.get(CORPUS_DIR_VAR), root) or _dropped_in_corpus(root)
     if not schema and not corpus_dir:
         raise RuntimeError(
             f"nothing to serve: set {CORPUS_DIR_VAR} (a curated corpus), or drop one into "
@@ -203,6 +203,23 @@ def _embedder_into(kwargs: dict[str, Any], credentials: Any) -> Any:
     kwargs["embedder"] = embedder
     kwargs["vector_cache"] = cache
     return cache
+
+
+def _resolve_corpus_dir(value: str | None, root: Path) -> str | None:
+    """Resolve ``GOVERNED_BI_CORPUS_DIR`` against the **repo root**, not the process's cwd.
+
+    The corpus lives in its own repository as of 2026-08-07 (D13), so the configured value is now
+    ``../BIRD-corpus`` — a path that leaves this tree. Left cwd-relative it would resolve to
+    whatever is beside the directory the server happened to be started from: usually nothing, and
+    the failure is "nothing to serve" rather than "you are in the wrong directory". Resolving
+    against the repo root is also what `BIRD-corpus/README.md` has always claimed happens.
+
+    An absolute value is returned untouched, so pointing at a checkout anywhere still works.
+    """
+    if not value:
+        return None
+    path = Path(value)
+    return str(path if path.is_absolute() else (root / path).resolve())
 
 
 def _dropped_in_corpus(root: Path) -> str | None:

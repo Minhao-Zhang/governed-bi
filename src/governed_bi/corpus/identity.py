@@ -1,4 +1,4 @@
-"""Ids and paths: where a corpus name becomes a filesystem path.
+r"""Ids and paths: where a corpus name becomes a filesystem path.
 
 Validate path components where used as paths (``\A``/``\Z``). Column ids are
 derived, never authored (ADR 0005 §1.2).
@@ -49,6 +49,9 @@ class UnsafeName(ValueError):
 #: explicit namespace; this constant is the name a caller passes when the asset is
 #: genuinely system-wide.
 SHARED_NAMESPACE = "_shared"
+
+#: Directory names that are a tool's bookkeeping, never corpus content — see :func:`_is_tooling`.
+_NON_CORPUS_DIRS = frozenset({".git", ".hg", ".svn", "__pycache__", ".ipynb_checkpoints"})
 
 #: A directory component: a bare identifier. It names a corpus subtree **and** a
 #: live SQL namespace, so separators, dots and ``..`` are all rejected.
@@ -231,7 +234,28 @@ def corpus_files(
         path
         for path in root.rglob("*")
         if path.is_file()
+        and not _is_tooling(root, path)
         and (wanted is None or path.suffix.lower() in wanted)
         and (allowed is None or namespace_of(root, path) in allowed)
     ]
     return sorted(out, key=lambda p: p.relative_to(root).as_posix())
+
+
+def _is_tooling(root: Path, path: Path) -> bool:
+    """Is this a tool's bookkeeping rather than corpus content?
+
+    **Found when the corpus moved into its own repository**, which is the only arrangement where
+    it matters: with ``schemas=None`` the tree is the manifest, and ``rglob`` had no exclusions —
+    so ``corpus_content_hash`` was reading 29 files inside ``.git/``. A corpus whose treatment
+    identity changes on every commit, every fetch and every ``git gc`` is not an identity, and it
+    would have defeated the reason for putting the corpus under version control in the first
+    place. It was harmless for exactly as long as every corpus was an untracked directory.
+
+    Deliberately narrow: only a VCS's or an interpreter's own bookkeeping. It does **not** exclude
+    a ``README.md`` or a manifest sitting at the corpus root, because ``corpus_content_hash``
+    documents that everything in the selected subtrees counts — *"the markdown D9 keeps beside the
+    assets is corpus content too"* — and deciding that a corpus's own prose is not part of it is a
+    judgement this function should not be making silently. A caller that wants the assets alone
+    already has the way to say so: pass ``schemas``, and a loose root file is not read at all.
+    """
+    return not _NON_CORPUS_DIRS.isdisjoint(path.relative_to(root).parts[:-1])

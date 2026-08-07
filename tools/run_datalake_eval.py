@@ -38,7 +38,11 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "src"))
 
-DEFAULT_CORPUS = "corpora/gold-semantic-layer-20260804"
+#: The corpus, in its own repository as of 2026-08-07 (D13). Derived from this file's location
+#: rather than left relative, for the same reason ``DEFAULT_DATASET`` is: a sibling path that
+#: resolves against the process's working directory picks a different tree — or none — depending
+#: on where the run was started from, and the corpus is what ``corpus_content_hash`` identifies.
+DEFAULT_CORPUS = REPO.parent / "BIRD-corpus"
 DEFAULT_DATASET = REPO.parent / "BIRD-Data-Obfuscation" / "eval_dataset"
 
 

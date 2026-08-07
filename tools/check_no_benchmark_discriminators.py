@@ -178,6 +178,15 @@ DATA_ROOTS: tuple[str, ...] = ("corpus", "corpora")
 #: Where a phrase could do damage: producing code, and any corpus tree.
 SCAN_ROOTS: tuple[str, ...] = ("src", "tools", "tests", "corpus", "corpora")
 
+#: Corpus trees **outside** this repository, scanned when the checkout is present.
+#:
+#: The served corpus moved to its own repository on 2026-08-07 (D13), which took it out of every
+#: root above — so this gate went on passing while no longer looking at the one corpus it exists
+#: to check. That is the shape §0.2 warned about in the audit: *"a run reporting `rule B: the
+#: summaries in 0 corpus data file(s)` has checked nothing, and now says so"*. The counts this
+#: gate prints are what makes the difference visible, so read them rather than the exit code.
+SIBLING_DATA_ROOTS: tuple[pathlib.Path, ...] = (REPO.parent / "BIRD-corpus",)
+
 SCAN_SUFFIXES: frozenset[str] = frozenset({".py", ".yaml", ".yml", ".json", ".jsonl", ".md"})
 
 SKIP_DIRS: frozenset[str] = frozenset({"__pycache__", ".venv", ".git", ".ruff_cache"})
@@ -193,8 +202,8 @@ EXEMPT: frozenset[str] = frozenset(
 
 def files_to_scan() -> list[pathlib.Path]:
     out: list[pathlib.Path] = []
-    for root in SCAN_ROOTS:
-        base = REPO / root
+    bases = [REPO / root for root in SCAN_ROOTS] + list(SIBLING_DATA_ROOTS)
+    for base in bases:
         if not base.is_dir():
             continue
         for path in base.rglob("*"):
@@ -202,15 +211,30 @@ def files_to_scan() -> list[pathlib.Path]:
                 continue
             if SKIP_DIRS & set(path.parts):
                 continue
-            if path.relative_to(REPO).as_posix() in EXEMPT:
+            if _relative(path) in EXEMPT:
                 continue
             out.append(path)
     return sorted(out)
 
 
+def _relative(path: pathlib.Path) -> str:
+    """Repo-relative posix path, or the absolute one for a sibling checkout."""
+    try:
+        return path.relative_to(REPO).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
 def _is_corpus_data(path: pathlib.Path) -> bool:
-    parts = path.relative_to(REPO).parts
-    return path.suffix.lower() in DATA_SUFFIXES and bool(parts) and parts[0] in DATA_ROOTS
+    if path.suffix.lower() not in DATA_SUFFIXES:
+        return False
+    if any(root == path or root in path.parents for root in SIBLING_DATA_ROOTS):
+        return True
+    try:
+        parts = path.relative_to(REPO).parts
+    except ValueError:
+        return False
+    return bool(parts) and parts[0] in DATA_ROOTS
 
 
 def summary_blocks(lines: list[str]) -> list[tuple[int, str]]:
@@ -270,7 +294,7 @@ def hits(paths: list[pathlib.Path]) -> list[str]:
         for schema, phrase in entries.items()
     ]
     for path in paths:
-        rel = path.relative_to(REPO).as_posix()
+        rel = _relative(path)
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):

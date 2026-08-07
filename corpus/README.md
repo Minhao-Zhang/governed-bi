@@ -5,20 +5,29 @@ The layout and field tiers for the semantic layer's typed YAML assets. Spec:
 Serve loads from `GOVERNED_BI_CORPUS_DIR` or a directory under `corpora/`
 (see [usage](../docs/usage.md)).
 
-**This directory holds no assets, and nothing in it is under version control.**
-`git ls-files corpus corpora` returns two paths: this file and `.gitignore`. The
-demo assets that used to live here were removed in `a506436` and this document
-went on calling the directory "Git-tracked typed YAML assets" for another week —
-along with `corpus/.gitignore` and the root `.gitignore`, which carved an
-exception to keep tracking a corpus that no longer existed. All three now say
-what is true.
+**This directory holds no assets, and it is not where the corpus lives.** The
+served semantic layer is its own repository — [BIRD-corpus][corpus-repo], checked
+out as a sibling and reached through `GOVERNED_BI_CORPUS_DIR=../BIRD-corpus`
+(resolved against this repo's root, not the process's cwd). This file documents
+the *format*; that repo holds the data.
 
-So: **the semantic layer is neither in version control nor reproducible from
-anything committed.** `corpora/` is ignored wholesale, and the root `.gitignore`
-called those trees "reproducible from BIRD-Data-Obfuscation" while there is still
-no curator module in `src/`. That is an open problem, recorded here rather than
-papered over — the corpus is the treatment every experiment in this repository
-compares, and it is currently a local directory nobody else can reconstruct.
+**Closed 2026-08-07.** For the whole of v2 up to that date the paragraph here read:
+*"the semantic layer is neither in version control nor reproducible from anything
+committed"* — the corpus was an untracked directory under `corpora/`, so
+`corpus_content_hash` named bytes no reader could obtain and no number this
+repository produced was reproducible from a clean checkout. The gold layer
+generated 2026-08-04 is now committed in BIRD-corpus, provenance and all, and a
+fresh clone was verified to reproduce the same digest (`cfdf0bac…` over the 57
+schema subtrees) as the tree that produced it.
+
+Two things that were true then and are still true, so they are not quietly
+retired with the rest: `corpora/` remains gitignored and still holds local
+variants nobody else can reconstruct (§6.2 covers those, not the served corpus),
+and there is still **no curator module in `src/`** — so this corpus is versioned
+now, but it is not yet *rebuildable* from anything committed. Those are different
+guarantees and only the first one has been obtained.
+
+[corpus-repo]: https://github.com/Minhao-Zhang/BIRD-corpus
 
 ## Layout
 

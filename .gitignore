@@ -228,15 +228,19 @@ data/logs/
 runs/
 tmp_agent_run/
 
-# Large curated corpora dropped in for local serving. Thousands of files each.
+# Local corpus variants dropped in for experiments. Thousands of files each.
 #
-# **This block used to carve an exception for "the vendored demo corpus in corpus/
-# [that] stays tracked", and there is no such corpus** — it was removed in a506436
-# and the exception outlived it. It also called these trees "reproducible from
-# BIRD-Data-Obfuscation", which is not supported by this tree: there is no curator
-# module in src/. So nothing here is in version control and nothing here can be
-# rebuilt from anything that is. See corpus/README.md; that is an open problem and
-# not a settled arrangement.
+# **The corpus the engine serves is no longer in here.** As of 2026-08-07 it is its own
+# repository (D13) — ../BIRD-corpus, pointed at by GOVERNED_BI_CORPUS_DIR — because a
+# served corpus that is untracked makes corpus_content_hash name bytes no reader can
+# obtain, and every number measured against it unreproducible. That was recorded here as
+# an open problem for the whole of v2 and is now closed for the served corpus.
+#
+# What is still ignored is what is still local: variant trees kept for comparison, and a
+# seeded corpus written by from_live_schema. None of them can be rebuilt from anything
+# committed — there is no curator module in src/ — so treat a variant as evidence only
+# for as long as the directory survives. Promote it to the corpus repo before quoting a
+# number from it. See corpus/README.md.
 corpora/
 
 # Firecrawl CLI scrape cache. The CLI writes it into the repo root, and AGENTS.md
