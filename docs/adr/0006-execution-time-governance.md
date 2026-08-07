@@ -508,6 +508,36 @@ to `identity` and rejects a mismatch.
 
 ### 11. The ledger and redaction
 
+> **Superseded, 2026-08-06. The retention table below was never implemented, and
+> the redaction vocabulary it specified is deleted.**
+>
+> `ledger_entry()` was the only implementation of the table in this section, and it
+> had **zero production callers** — one re-export and four lines in a test file,
+> with 45 green tests passing against dead code. `redaction_of()` and the
+> `Redaction` enum, declared on all 37 record fields, had zero callers anywhere.
+> `ports.Sink`, which promised "every record is redacted before write", had no
+> implementation and named two adapter files that did not exist.
+>
+> What actually reaches disk: `attempt_record()` carrying `executed_sql` **raw**,
+> and `api/trace_store.append_turn` writing the question, the answer and the whole
+> record verbatim to `runs/serve/<date>.jsonl`. Verified on a live log — one line
+> held a full `generated_sql`, another held `… WHERE c."county" = 'ARECIBO' …`.
+>
+> Deleted rather than wired, deliberately. This is a local-first single-user tool
+> and that file is the user's own transcript on their own disk; the honest thing is
+> to say so. A declared control with no enforcer is worse than an absent one,
+> because a reader takes the declaration for the behaviour — which is exactly what
+> happened here for the whole of v2, in a section whose subject is auditability.
+>
+> If redaction is wanted, it needs a threat model first, and the threat model
+> decides the vocabulary rather than the other way round. `statement_sha256` and
+> `structural_fingerprint` survive in `govern/ledger.py`: they have real callers
+> and are true facts about a statement, just not a retention policy.
+>
+> **Still in force from this section:** every executor writes an entry stamped with
+> its `path` (G2), and the verdict's `detail` is not carried into the row — it is
+> the one field guaranteed to contain a fragment of the statement.
+
 **Every executor writes an entry** (G2), stamped with its `path`. v1's
 graded-delivery path bypassed the middleware and produced answers whose record
 showed a query that never happened.

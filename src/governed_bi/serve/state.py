@@ -228,6 +228,10 @@ class ServeState(TypedDict, total=False):
     answer_text: str | None
     #: Question embedding. Per-turn (streamed path cannot put it on load-time config).
     query_vector: list[float] | None
+    #: Epoch seconds when the turn's first node ran. ``wrap_node`` writes it, ``stamp`` reads it
+    #: to derive ``latency_sec``. Wall clock rather than ``perf_counter`` because a clarification
+    #: can resume in a different process.
+    turn_started_at: float | None
     n_re_served: int
 
     # F1 test hooks and per-turn knobs.
@@ -256,6 +260,9 @@ PER_TURN_RESET: dict[str, Any] = {
     "result_table": None,
     "answer_text": None,
     "query_vector": None,
+    # The turn's clock. Cleared per turn, or turn two's `latency_sec` would span everything the
+    # user did between the two questions. `wrap_node` writes it from the first node to run.
+    "turn_started_at": None,
     "schemas": [],
     "crossings": [],
     "licensed": [],

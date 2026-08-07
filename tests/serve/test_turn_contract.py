@@ -501,6 +501,59 @@ def test_an_absent_corpus_raises_rather_than_defaulting_to_an_empty_one() -> Non
     )
 
 
+def test_the_three_cost_fields_are_measured_and_absence_is_not_zero() -> None:
+    """Audit §10. All three were declared record fields with **zero writers**.
+
+    ``latency_sec`` was the starkest: no clock was read anywhere in ``src/governed_bi`` — no
+    ``perf_counter``, no ``monotonic``, no ``time.time()`` — so latency was not merely
+    unrecorded, it had never been measured. ``cache_read_tokens`` / ``cache_write_tokens`` were
+    subtler and more annoying: ``serve/usage.reported_tokens`` had been reading them off the
+    provider's ``input_token_details`` all along and putting them on every usage row, and the
+    record simply never added them up.
+
+    The paired half is the one this repository keeps losing: a turn with no clock and no usage
+    rows must report *unmeasured*, not ``0.0``. A zero there is a measurement — v1 reported two
+    ladders as having successfully measured nothing that way.
+    """
+    from governed_bi.register.quantity import Measured
+    from governed_bi.serve.nodes.stamp import stamp
+    from governed_bi.serve.wrap import wrap_node
+
+    # The clock comes from the wrapper, which is the only writer.
+    began = wrap_node("guard", lambda s: {"guard": {"outcome": "clear"}})({"turn_id": "t"})
+
+    record = stamp(
+        {
+            "question": "q", "turn_id": "t", "turn_index": 1, "run_id": "r",
+            "path_kind": "answered", "generated_sql": "SELECT 1",
+            "knobs_resolved": {}, "guard": {"outcome": "clear"},
+            "turn_started_at": began["turn_started_at"],
+            "usage": [
+                {"turn_index": 1, "stage": "guard", "cache_read_tokens": 100},
+                {"turn_index": 1, "stage": "agent_core",
+                 "cache_read_tokens": 40, "cache_write_tokens": 7},
+                # A previous turn's row. `usage` accumulates across turns, so a total that did
+                # not filter on turn_index would bill this turn for the last one.
+                {"turn_index": 0, "stage": "agent_core", "cache_read_tokens": 9_999},
+            ],
+        }
+    )["answer"]["record"]
+
+    assert isinstance(record["latency_sec"], float) and record["latency_sec"] >= 0.0
+    assert record["cache_read_tokens"] == 140, record["cache_read_tokens"]
+    assert record["cache_write_tokens"] == 7
+
+    bare = stamp(
+        {"question": "q", "turn_id": "t", "turn_index": 1, "knobs_resolved": {},
+         "guard": {"outcome": "clear"}}
+    )["answer"]["record"]
+    for field in ("latency_sec", "cache_read_tokens", "cache_write_tokens"):
+        value = bare[field]
+        assert isinstance(value, Measured) and not value.is_measured, (
+            f"{field} reported {value!r} for a turn with nothing to measure. Absence is not zero"
+        )
+
+
 # ── the end-to-end assertion, and it must not use the stub ────────────────────
 
 

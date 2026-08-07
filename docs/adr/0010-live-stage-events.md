@@ -136,6 +136,15 @@ That leaves a real finding this ADR is **not** the place to fix: a redaction pol
 enforcement anywhere is the declared-but-unwired shape this repository keeps paying for. It is
 recorded here so the next person does not read this section as evidence the policy works.
 
+**Resolved 2026-08-06, and not in the direction this paragraph expected.** The policy is
+deleted rather than enforced: `Redaction`, `redaction_of()`, `ledger_entry()` and `ports.Sink`
+are gone, and ADR 0006 §11 now says the durable log is verbatim by design because this is a
+local-first tool writing the user's own transcript to the user's own disk. So the reasoning in
+this section still holds — the event discloses nothing the response does not — and it no longer
+rests on a policy that was never applied. Note this paragraph was *right*, and being right in a
+docstring for a month is exactly the failure mode: nothing acts on a finding recorded next to
+the thing it excuses.
+
 "Two projections of one turn" also constrains *how many* rows, not only what they carry, and that
 caught a real defect. The `cap` event was emitted outside `AttemptBook.cap_recorded`'s guard, so a
 cap of 1 against three calls produced **one** ledger row and **two** timeline rows — measured by

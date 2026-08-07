@@ -222,6 +222,9 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
         # A carried-over query vector would score the *previous* question's semantics against
         # this turn's candidates — a wrong ranking with nothing anywhere disagreeing.
         "query_vector": [0.1, 0.2, 0.3],
+        # A carried-over clock makes turn two's `latency_sec` span turn one plus everything the
+        # user did in between — the field would report a real number and mean nothing.
+        "turn_started_at": 1_700_000_000.0,
         "terminal_reason": "missing_join_path", "schemas": ["ops_b"], "crossings": [{}],
         "licensed": ["ops_b.sensors"], "clarification_requested": True,
     }

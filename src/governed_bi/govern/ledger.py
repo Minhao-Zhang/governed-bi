@@ -1,12 +1,24 @@
 """Audit ledger (ADR 0006 §11) and what measurement must see (§12).
 
-Every executor writes an entry stamped with its ``path`` (G2). Retention by
-vocabulary class: closed vocabulary and numbers kept; statement kept as
-``sha256`` plus a structural fingerprint (literals elided); ``detail``, driver
-errors, prose, and result rows dropped; column names only as ids.
+Every executor writes an entry stamped with its ``path`` (G2).
 
 Invariants: hash the executed string, not the checked one (G4);
 :func:`guardrail_errors` is derived from attempts (quotability precondition).
+
+**``ledger_entry()`` is gone** (audit §8.1 / §10). It was the only implementation of ADR
+0006 §11's retention table -- ``executed``, ``statement_sha256``, ``statement_shape`` -- and
+it had **zero production callers**: one re-export and four lines in a test file, with 45
+green tests passing against dead code. What actually reached disk was
+:func:`attempt_record`, carrying ``executed_sql`` raw.
+
+Deleted with the rest of the redaction vocabulary rather than wired. The retention table it
+implemented was a policy nothing enforced, and a redacted projection that no writer uses is
+a second answer to "what is the durable record" -- the one a reader believes and the engine
+never produced.
+
+:func:`statement_sha256` and :func:`structural_fingerprint` stay. They have real callers
+(the stream events include a statement digest) and they are useful facts about a statement
+regardless of any retention policy.
 """
 
 
@@ -29,7 +41,6 @@ __all__ = [
     "ExecutionRecord",
     "statement_sha256",
     "structural_fingerprint",
-    "ledger_entry",
     "attempt_record",
     "guardrail_errors",
     "execution_record",
@@ -89,49 +100,6 @@ def structural_fingerprint(sql: str, *, dialect: str = DEFAULT_DIALECT) -> str:
     for node in list(elided.find_all(exp.Literal)):
         node.replace(exp.Literal.string("?") if node.is_string else exp.Literal.number(0))
     return elided.sql(dialect=dialect)
-
-
-def ledger_entry(
-    *,
-    verdict: CheckVerdict,
-    path: ExecutorPath,
-    executed_sql: str | None,
-    attempt: int,
-    row_count: int | None = None,
-    truncated: bool | None = None,
-    ms: int | None = None,
-    dialect: str = DEFAULT_DIALECT,
-) -> dict[str, object]:
-    """The durable projection of one governance decision.
-
-    ``executed_sql`` is the string that reached the database, or ``None`` when the
-    statement was blocked and nothing ran — and the entry says which, rather than
-    leaving a reader to infer it from a missing key.
-
-    ``detail`` from the verdict is **not** carried. It is the one field guaranteed to
-    contain a fragment of the statement and, on a driver error, the statement itself.
-    """
-    failed_layer = verdict["failed_layer"]
-    return {
-        "path": path,
-        "attempt": attempt,
-        "passed": verdict["passed"],
-        "layer": failed_layer.name if failed_layer is not None else None,
-        "layer_value": int(failed_layer) if failed_layer is not None else None,
-        "reason_code": verdict["reason_code"],
-        "layers_evaluated": [layer.name for layer in verdict["layers_evaluated"]],
-        "bound_references": sorted(verdict["bound"]),
-        "executed": executed_sql is not None,
-        "statement_sha256": statement_sha256(executed_sql) if executed_sql is not None else None,
-        "statement_shape": (
-            structural_fingerprint(executed_sql, dialect=dialect)
-            if executed_sql is not None
-            else None
-        ),
-        "row_count": row_count,
-        "truncated": truncated,
-        "ms": ms,
-    }
 
 
 def attempt_record(

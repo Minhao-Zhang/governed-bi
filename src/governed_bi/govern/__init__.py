@@ -22,7 +22,7 @@ from .functions import (
 from .guard import GUARD_PUBLIC_MESSAGE, GuardVerdict, guard
 from .identifiers import column_key, fold, is_valid_schema_id, table_key
 from .layers import RULES, CheckVerdict, Layer
-from .ledger import AttemptRecord, ExecutionRecord, attempt_record, ledger_entry
+from .ledger import AttemptRecord, ExecutionRecord, attempt_record
 from .pipeline import Prepared, prepare
 from .policy import GovernancePolicy
 
@@ -53,7 +53,6 @@ __all__ = [
     "graded_delivery_eligible",
     "guard",
     "is_valid_schema_id",
-    "ledger_entry",
     "permitted_functions_digest",
     "prepare",
     "resume_authorised",

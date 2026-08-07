@@ -9,9 +9,18 @@ missing-call failure mode is a step that silently never appears in the timeline.
 **The two things this wrapper cannot see**, and which therefore emit for themselves: the tools,
 which run inside the nested ``create_agent`` graph (``serve/tools.py``), and ``stamp``, which is
 deliberately never wrapped (``graph.py``).
+
+**This is also where the turn's clock starts** (audit §10). ``latency_sec`` was a declared
+record field with zero writers, and no clock was read anywhere in ``src/governed_bi`` at all —
+no ``perf_counter``, no ``monotonic``, no ``time.time()``. Latency was not merely unrecorded;
+it had never been measured. The wrapper is the right home because every rail passes through it,
+so "when did this turn begin" has one answer rather than one per entry point: the graph starts
+at ``accept`` on the served path and at ``guard`` on the CLI and eval paths, and a stamp in
+each would be two clocks that drift.
 """
 
 import inspect
+import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -76,12 +85,29 @@ def wrap_node(stage: str, fn: Callable[..., dict[str, Any]], *, stream: bool = T
             "path_kind": "crashed",
         }
 
+    def _started(state: Mapping[str, Any]) -> dict[str, Any]:
+        """``{"turn_started_at": <epoch>}`` from the first node of the turn to run, else ``{}``.
+
+        Wall clock rather than ``perf_counter``, and that is the point rather than laziness: a
+        clarification suspends the turn on a ``GraphInterrupt`` and it can resume in a different
+        process, where a ``perf_counter`` reading from the first one means nothing. An epoch
+        float survives the checkpoint.
+
+        Written only when absent, so it is the *turn's* start and not the last node's. It is in
+        ``PER_TURN_RESET``, so turn two does not inherit turn one's clock and report a latency
+        that includes everything the user did in between.
+        """
+        if state.get("turn_started_at") is not None:
+            return {}
+        return {"turn_started_at": time.time()}
+
     if accepts_config:
 
         def inner(
             state: Mapping[str, Any], config: RunnableConfig
         ) -> dict[str, Any]:
             live = _start(state)
+            began = _started(state)
             try:
                 update = fn(state, config)
             except GraphInterrupt:
@@ -93,12 +119,16 @@ def wrap_node(stage: str, fn: Callable[..., dict[str, Any]], *, stream: bool = T
                 update = _crashed(e)
             if live:
                 _end(state, update)
-            return update
+            # The clock goes on the update even when the node crashed: a turn that died still
+            # took time, and `latency_sec` on a crashed turn is the number that says how long
+            # the user waited to be told nothing.
+            return {**began, **update}
 
         return inner
 
     def inner_state_only(state: Mapping[str, Any]) -> dict[str, Any]:
         live = _start(state)
+        began = _started(state)
         try:
             update = fn(state)
         except GraphInterrupt:
@@ -107,6 +137,6 @@ def wrap_node(stage: str, fn: Callable[..., dict[str, Any]], *, stream: bool = T
             update = _crashed(e)
         if live:
             _end(state, update)
-        return update
+        return {**began, **update}
 
     return inner_state_only

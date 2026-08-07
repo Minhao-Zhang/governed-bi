@@ -349,10 +349,22 @@ def test_a_healthy_turn_silences_nothing() -> None:
 def test_wrap_node_emits_start_then_the_observed_status(
     captured: list[dict[str, Any]],
 ) -> None:
+    import time
+
     wrapped = wrap_node("guard", lambda state: {"guard": {"outcome": "blocked"}})
     out = wrapped({"turn_id": "t1", "question": "q"})
-    assert out == {"guard": {"outcome": "blocked"}}
-    assert [(e["step"], e["status"]) for e in captured] == [
+    # The node's own keys pass through untouched, which is this test's name. The wrapper adds
+    # exactly one of its own: the turn's clock, because it is the one place every rail passes
+    # through and `latency_sec` needs a single start (audit §10 — no clock was read anywhere in
+    # `src/` at all). A second added key would be a wrapper deciding something.
+    assert {k: v for k, v in out.items() if k != "turn_started_at"} == {
+        "guard": {"outcome": "blocked"}
+    }
+    assert out["turn_started_at"] == pytest.approx(time.time(), abs=10)
+    # Already started: the wrapper must not restamp, or `latency_sec` measures the last node.
+    again = wrapped({"turn_id": "t1", "question": "q", "turn_started_at": 1.0})
+    assert "turn_started_at" not in again
+    assert [(e["step"], e["status"]) for e in captured][:2] == [
         ("guard", "start"),
         ("guard", "blocked"),
     ]
@@ -406,4 +418,6 @@ def test_a_failing_writer_cannot_fail_a_turn(monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setattr(events, "get_stream_writer", exploding_writer)
     out = wrap_node("guard", lambda state: {"guard": {"outcome": "clear"}})({"turn_id": "t1"})
-    assert out == {"guard": {"outcome": "clear"}}
+    assert {k: v for k, v in out.items() if k != "turn_started_at"} == {
+        "guard": {"outcome": "clear"}
+    }
