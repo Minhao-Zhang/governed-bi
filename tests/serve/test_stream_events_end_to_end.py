@@ -294,7 +294,7 @@ def test_a_streamed_turn_reaches_the_audit_log() -> None:
     not the file: a ``record`` node placed after ``stamp`` is called once, with the finished
     answer, on a turn that ends in a refusal — the cheapest path that still produces a record.
     """
-    from governed_bi.serve.graph import build_graph
+    from governed_bi.serve.graph import as_sync, build_graph
 
     seen: list[dict[str, Any]] = []
 
@@ -303,10 +303,8 @@ def test_a_streamed_turn_reaches_the_audit_log() -> None:
         return {}
 
     turn = _base_turn(question=INJECTION, turn_id="turn-logged")
-    out = (
-        build_graph(record=recorder)
-        .compile()
-        .invoke(turn, {"configurable": {"thread_id": "t-log", "policy": _policy(rules=INJECTION_RULES)}})
+    out = as_sync(build_graph(record=recorder).compile()).invoke(
+        turn, {"configurable": {"thread_id": "t-log", "policy": _policy(rules=INJECTION_RULES)}}
     )
 
     assert len(seen) == 1, "the recorder runs exactly once per turn"

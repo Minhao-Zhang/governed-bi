@@ -4,6 +4,7 @@ LangGraph entry surface. Avoids ``from __future__ import annotations`` so a grap
 loaded by file path keeps raw parameter annotations inspectable.
 """
 
+import asyncio
 from typing import Any, Literal
 
 from langgraph.checkpoint.memory import InMemorySaver
@@ -174,7 +175,49 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     return graph
 
 
-def compile_graph(*, checkpointer: Any | None = None):
+class _SyncApp:
+    """A sync front for an async graph, for the callers that are not going async.
+
+    Every node goes through ``wrap_node``, which is ``async def`` — the only shape LangGraph
+    will attach a node timeout to (``TimeoutPolicy`` refuses a sync node outright: "sync Python
+    execution cannot be safely cancelled in-process"). That makes ``.invoke()`` raise
+    ``TypeError: No synchronous function provided``, and the in-process callers — the CLI,
+    ``eval/``, ``/chat`` and the tests — have no reason to become async.
+
+    ``/chat``'s handlers are sync ``def``, so Starlette runs them in a worker thread with no
+    running loop, and ``asyncio.run`` is safe there. The served graph is **not** wrapped: the
+    platform drives ``ainvoke`` itself, which is the path this exists to leave alone.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self._app = app
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._app, name)
+
+    def invoke(self, *args: Any, **kwargs: Any) -> Any:
+        return asyncio.run(self._app.ainvoke(*args, **kwargs))
+
+    def stream(self, *args: Any, **kwargs: Any) -> Any:
+        """Drained, then replayed. Order is preserved; incrementality is not.
+
+        No production caller streams through this — ``/chat`` blocks and the live surface is
+        the platform's async one. It exists so the stream-event tests keep asserting the same
+        ordered timeline they always did.
+        """
+
+        async def drain() -> list[Any]:
+            return [chunk async for chunk in self._app.astream(*args, **kwargs)]
+
+        return iter(asyncio.run(drain()))
+
+
+def as_sync(app: Any) -> _SyncApp:
+    """Wrap a compiled async graph for a sync caller. See :class:`_SyncApp`."""
+    return _SyncApp(app)
+
+
+def compile_graph(*, checkpointer: Any | None = None) -> _SyncApp:
     """Compile with an in-memory checkpointer by default (interrupt-ready)."""
     saver = InMemorySaver() if checkpointer is None else checkpointer
-    return build_graph().compile(checkpointer=saver)
+    return as_sync(build_graph().compile(checkpointer=saver))

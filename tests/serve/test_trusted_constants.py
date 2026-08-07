@@ -231,10 +231,10 @@ def test_a_request_cannot_write_a_knob_into_graph_state():
     Dropped at the entry rather than policed: an allowlist has to be maintained against every
     channel added later, and the failure mode of forgetting one is silent.
     """
-    from governed_bi.serve.graph import build_graph
+    from governed_bi.serve.graph import as_sync, build_graph
 
     seen: dict = {}
-    build_graph(accept=_stop_at(seen)).compile().invoke(
+    as_sync(build_graph(accept=_stop_at(seen)).compile()).invoke(
         {
             "messages": [{"role": "user", "content": "how many sensors"}],
             "route_top_n": 99,
@@ -255,7 +255,7 @@ def test_the_in_process_graph_still_takes_a_whole_turn():
     and pass the whole of `ServeState`. Restricting that entry too would not be a hardening,
     it would delete the only way those three callers can run.
     """
-    from governed_bi.serve.graph import build_graph
+    from governed_bi.serve.graph import as_sync, build_graph
 
     seen: dict = {}
 
@@ -270,5 +270,5 @@ def test_the_in_process_graph_still_takes_a_whole_turn():
     graph = build_graph()
     graph.nodes.pop("guard")
     graph.add_node("guard", guard_stub)
-    graph.compile().invoke({"question": "how many sensors", "route_top_n": 7})
+    as_sync(graph.compile()).invoke({"question": "how many sensors", "route_top_n": 7})
     assert seen == {"route_top_n": 7, "question": "how many sensors"}

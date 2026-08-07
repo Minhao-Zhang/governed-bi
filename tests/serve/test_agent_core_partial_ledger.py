@@ -17,6 +17,7 @@ one direction it must not fail in. These tests hold that.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -65,7 +66,7 @@ def _run_turn(model: Any) -> dict[str, Any]:
     }
     # Through `wrap_node`, because that is the boundary that used to be the whole story: it
     # turned the exception into `{failure, path_kind}` and the ledger died with the frame.
-    return wrap_node("agent_core", agent_core_node)(state, config)
+    return asyncio.run(wrap_node("agent_core", agent_core_node)(state, config))
 
 
 def test_a_crash_after_a_governed_statement_keeps_the_attempt() -> None:

@@ -15,6 +15,7 @@ observation, so a broken run and a clean run produced identical artifacts.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 from typing import Any
@@ -520,7 +521,9 @@ def test_the_three_cost_fields_are_measured_and_absence_is_not_zero() -> None:
     from governed_bi.serve.wrap import wrap_node
 
     # The clock comes from the wrapper, which is the only writer.
-    began = wrap_node("guard", lambda s: {"guard": {"outcome": "clear"}})({"turn_id": "t"})
+    began = asyncio.run(
+        wrap_node("guard", lambda s: {"guard": {"outcome": "clear"}})({"turn_id": "t"})
+    )
 
     record = stamp(
         {

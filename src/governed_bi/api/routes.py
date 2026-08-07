@@ -45,9 +45,12 @@ def _graph() -> Any:
     if _GRAPH is None:
         from langgraph.checkpoint.memory import InMemorySaver
 
-        from governed_bi.serve.graph import build_graph
+        from governed_bi.serve.graph import as_sync, build_graph
 
-        _GRAPH = build_graph().compile(checkpointer=InMemorySaver())
+        # `as_sync`, because every node is `async def` now (the only shape LangGraph attaches a
+        # node timeout to) and this route's handlers are sync `def`. Starlette runs those in a
+        # worker thread with no running loop, so the facade's `asyncio.run` is safe here.
+        _GRAPH = as_sync(build_graph().compile(checkpointer=InMemorySaver()))
     return _GRAPH
 
 

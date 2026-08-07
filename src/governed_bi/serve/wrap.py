@@ -19,6 +19,7 @@ at ``accept`` on the served path and at ``guard`` on the CLI and eval paths, and
 each would be two clocks that drift.
 """
 
+import asyncio
 import inspect
 import time
 from collections.abc import Callable, Mapping
@@ -101,15 +102,32 @@ def wrap_node(stage: str, fn: Callable[..., dict[str, Any]], *, stream: bool = T
             return {}
         return {"turn_started_at": time.time()}
 
+    is_async = inspect.iscoroutinefunction(fn)
+
+    async def _body(state: Mapping[str, Any], config: RunnableConfig | None) -> dict[str, Any]:
+        """Run the node, off the event loop if it is still synchronous.
+
+        **Why ``to_thread`` and not a direct call.** LangGraph runs a sync node in a threadpool,
+        so two turns on the server interleave. An ``async def`` wrapper around a still-blocking
+        body would hold the loop for the whole of an 8-call turn and serialise them — a
+        concurrency regression bought with a refactor that was supposed to be neutral. Nodes
+        move to native ``async`` one at a time; until one does, this keeps its old scheduling.
+        """
+        if is_async:
+            return await (fn(state, config) if accepts_config else fn(state))
+        if accepts_config:
+            return await asyncio.to_thread(fn, state, config)
+        return await asyncio.to_thread(fn, state)
+
     if accepts_config:
 
-        def inner(
+        async def inner(
             state: Mapping[str, Any], config: RunnableConfig
         ) -> dict[str, Any]:
             live = _start(state)
             began = _started(state)
             try:
-                update = fn(state, config)
+                update = await _body(state, config)
             except GraphInterrupt:
                 # No resolve event. The node has not ended — it is suspended, and the row
                 # stays `running`, which is what the interface should show while a human is
@@ -126,11 +144,11 @@ def wrap_node(stage: str, fn: Callable[..., dict[str, Any]], *, stream: bool = T
 
         return inner
 
-    def inner_state_only(state: Mapping[str, Any]) -> dict[str, Any]:
+    async def inner_state_only(state: Mapping[str, Any]) -> dict[str, Any]:
         live = _start(state)
         began = _started(state)
         try:
-            update = fn(state)
+            update = await _body(state, None)
         except GraphInterrupt:
             raise
         except Exception as e:
