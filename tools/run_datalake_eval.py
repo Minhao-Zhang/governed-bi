@@ -106,6 +106,9 @@ def main(argv: list[str] | None = None) -> int:
     from governed_bi.datasource.postgres import PostgresConnector
     from governed_bi.eval.arms import live_arm
     from governed_bi.eval.datalake import (
+        attach_gold_fingerprints,
+        attach_quality_flags,
+        dataset_leakage_qids,
         dataset_qid_lists,
         load_questions,
         observed_tokens,
@@ -232,6 +235,35 @@ def main(argv: list[str] | None = None) -> int:
 
     qid_lists = dataset_qid_lists(args.dataset)
     order_sensitive = qid_lists["order_sensitive"]
+
+    # ── what the dataset already knows, and the harness used to ignore ────────────
+    #
+    # Both of these files ship with the dataset and had no reader. `attach_gold_fingerprints`
+    # gives the grader the published digest for every question it can safely use one for —
+    # which is what makes the oracle arm measurable at all, since without an independent gold
+    # every one of its rows is `correct=None`. `attach_quality_flags` marks the questions the
+    # dataset warns about (leakage, no-total-order gold, degenerate gold) on the row, so the
+    # headline can be recomputed under a different exclusion policy without paying for the run
+    # twice. Printed, both of them: a wiring that silently attaches nothing looks exactly like
+    # one that was never called, and that is how the first version of this file behaved for
+    # months.
+    fingerprints = attach_gold_fingerprints(
+        questions, args.dataset, dsn_key="rename_decoy", order_sensitive=order_sensitive
+    )
+    flags = attach_quality_flags(
+        questions,
+        leakage=dataset_leakage_qids(args.dataset),
+        order_sensitive=order_sensitive,
+        exec_failed=qid_lists["exec_failed"],
+    )
+    print(
+        "gold digests: "
+        + ", ".join(f"{k}={v}" for k, v in fingerprints.items() if v)
+        + "\nflagged by the dataset: "
+        + (", ".join(f"{k}={v}" for k, v in flags.items() if v) or "none"),
+        flush=True,
+    )
+
     if args.top_n is not None:
         for question in questions:
             question["knobs_resolved"] = {
@@ -297,38 +329,51 @@ def main(argv: list[str] | None = None) -> int:
 def _report(rows: list[dict], out_path: pathlib.Path, args, observed_tokens, table_coverage) -> None:
     """Print the whole file, not just this process's rows — a resumed run is one run."""
     every = [json.loads(line) for line in out_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    n = len(every) or 1
-    correct = sum(1 for r in every if r.get("correct"))
-    attempted = [r for r in every if r.get("outcome") != "clarification"]
     print(f"\nrows in {out_path}: {len(every)}")
-    print(f"EX                = {correct}/{len(every)} = {correct / n:.3f}")
-    print(
-        f"EX over attempted = {sum(1 for r in attempted if r.get('correct'))}/{len(attempted)} "
-        f"= {sum(1 for r in attempted if r.get('correct')) / max(1, len(attempted)):.3f}"
-    )
+
+    # `correct` has three values, and this function read it with `r.get("correct")` — so a row the
+    # grader could not judge counted in the denominator as a wrong answer. Split first, report the
+    # split, and take every rate below over the graded rows only.
+    graded = [r for r in every if r.get("correct") is not None]
+    unmeasured = [r for r in every if r.get("correct") is None]
+    if unmeasured:
+        print(
+            f"UNMEASURED        = {len(unmeasured)} row(s) the grader could not judge, "
+            "excluded from every EX below (not counted as wrong): "
+            + str(dict(collections.Counter(str(r.get("grade_detail")) for r in unmeasured)))
+        )
+
+    def ex(rows: list[dict], label: str, note: str = "") -> None:
+        ok = sum(1 for r in rows if r.get("correct"))
+        print(f"{label:<18}= {ok}/{len(rows)} = {ok / max(1, len(rows)):.3f}{note}")
+
+    ex(graded, "EX")
+    ex([r for r in graded if r.get("outcome") != "clarification"], "EX over attempted")
 
     # **The population, stated rather than quietly changed.** The dataset's own note is
     # "Exclude both from cross-variant EX": `order_sensitive` golds carry a
     # LIMIT-without-total-order or a float aggregate and return a different-but-valid
     # result on the decoy instances, and `exec_failed` golds are pre-existing degenerate
-    # BIRD (>200k rows / 60s timeout) that score `missing_gold` against any engine. Both
-    # lines are printed because dropping the rows would shrink a denominator with nothing
-    # in the artifact saying so, which is the defect this whole pass is repairing.
-    from governed_bi.eval.datalake import dataset_qid_lists
+    # BIRD (>200k rows / 60s timeout) that score `missing_gold` against any engine. Leakage is
+    # the dataset's third warning and joins them here: questions its own check can recover from
+    # the train split by retrieval. All of it is *printed*, never applied silently — dropping
+    # rows would shrink a denominator with nothing in the artifact saying so, which is the
+    # defect this whole pass is repairing.
+    from governed_bi.eval.datalake import dataset_leakage_qids, dataset_qid_lists
 
     lists = dataset_qid_lists(args.dataset)
-    unstable = lists["order_sensitive"] | lists["exec_failed"]
-    stable = [r for r in every if str(r.get("question_id")) not in unstable]
-    if len(stable) != len(every):
-        ok_stable = sum(1 for r in stable if r.get("correct"))
-        print(
-            f"EX over stable-gold = {ok_stable}/{len(stable)} = "
-            f"{ok_stable / max(1, len(stable)):.3f}   "
-            f"(excludes {len(every) - len(stable)}: "
-            f"{len(lists['order_sensitive'] & {str(r.get('question_id')) for r in every})} "
-            f"order-sensitive, "
-            f"{len(lists['exec_failed'] & {str(r.get('question_id')) for r in every})} "
-            f"exec-failed gold)"
+    leaked = dataset_leakage_qids(args.dataset)
+    excluded = lists["order_sensitive"] | lists["exec_failed"] | leaked
+    present = {str(r.get("question_id")) for r in graded}
+    stable = [r for r in graded if str(r.get("question_id")) not in excluded]
+    if len(stable) != len(graded):
+        ex(
+            stable,
+            "EX over clean",
+            f"   (excludes {len(graded) - len(stable)}: "
+            f"{len(lists['order_sensitive'] & present)} order-sensitive, "
+            f"{len(lists['exec_failed'] & present)} exec-failed gold, "
+            f"{len(leaked & present)} split-leaked)",
         )
     print("outcomes:", dict(collections.Counter(str(r.get("outcome")) for r in every)))
     crashed = [r for r in every if r.get("outcome") == "crashed"]
@@ -392,9 +437,15 @@ def _report(rows: list[dict], out_path: pathlib.Path, args, observed_tokens, tab
         for r in every
         if any(str(t).startswith(f"{gold.get(r['question_id'], chr(0))}.") for t in (r.get("licensed") or []))
     ]
-    ok = [r for r in reach if r.get("correct")]
-    print(f"gold schema reachable = {len(reach)}/{len(every)} = {len(reach) / n:.3f}")
-    print(f"EX among reachable    = {len(ok)}/{len(reach)} = {len(ok) / max(1, len(reach)):.3f}")
+    # Reachability is over every row (it is a routing fact, true or false regardless of grading);
+    # the EX beneath it is over the graded ones only.
+    reach_graded = [r for r in reach if r.get("correct") is not None]
+    ok = [r for r in reach_graded if r["correct"]]
+    print(f"gold schema reachable = {len(reach)}/{len(every)} = {len(reach) / max(1, len(every)):.3f}")
+    print(
+        f"EX among reachable    = {len(ok)}/{len(reach_graded)} = "
+        f"{len(ok) / max(1, len(reach_graded)):.3f}"
+    )
     clar_reach = sum(1 for r in reach if r.get("outcome") == "clarification")
     unreach = [r for r in every if r not in reach]
     print(

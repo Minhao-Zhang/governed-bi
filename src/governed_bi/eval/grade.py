@@ -88,11 +88,18 @@ def grade_turn(
     gold_fingerprint: str | None = None,
     order_sensitive: bool = False,
 ) -> GradeResult:
-    """Grade one serve turn.
+    """Grade one serve turn. ``correct`` is ``True``, ``False``, or ``None`` for *unmeasured*.
 
     Crashes and refusals are **incorrect**, never collapsed into each other —
     ``correct=False`` with ``detail`` naming the outcome. Only ``answered`` turns
     with a comparable result can be ``correct=True``.
+
+    **The three values are not two.** A turn the system got wrong and a turn this grader could
+    not judge are different facts, and only one of them is about the system. So a missing *gold*
+    is ``None`` (nothing to compare against — ours), while a missing *prediction* stays ``False``
+    (the model produced SQL that would not execute — theirs). Callers must propagate the ``None``
+    rather than coerce it: ``bool(None)`` is ``False``, which is precisely the collapse
+    :meth:`~governed_bi.measure.population.Population.count` refuses to make downstream.
     """
     if outcome == "crashed":
         return GradeResult(
@@ -132,8 +139,16 @@ def grade_turn(
 
     if gold_fingerprint is None:
         if gold_columns is None or gold_rows is None:
+            # **``None``, not ``False``: no gold is the instrument failing, not the model.**
+            #
+            # It returned ``False`` here, and that is the defect ``Population.count`` carries an
+            # import-time guard against — "an absent outcome is not a negative one" — arriving one
+            # layer upstream of the guard, where nothing was watching. A gold that will not
+            # execute (a connection blip mid-run, a schema that moved) was recorded as a question
+            # the system got wrong, indistinguishable in the artifact from a real mistake, and it
+            # deflated EX by however many of them there were.
             return GradeResult(
-                correct=False,
+                correct=None,
                 gold_fingerprint=None,
                 pred_fingerprint=None,
                 detail="missing_gold",

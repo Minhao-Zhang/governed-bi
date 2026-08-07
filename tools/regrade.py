@@ -116,7 +116,11 @@ def main(argv: list[str] | None = None) -> int:
                 gold_rows=grows,
                 order_sensitive=qid in order_sensitive,
             )
-            now = bool(verdict["correct"])
+            # Not coerced: a regrade that cannot judge a row must leave it unmeasured rather than
+            # record it as wrong, the same rule as `grade_turn`. `flips` below reads truthiness,
+            # so an unmeasured outcome lands in "correct -> wrong" only if it *was* correct, and
+            # `grade_detail` names why.
+            now = verdict["correct"]
             row["correct"] = now
             row["gold_fingerprint"] = verdict.get("gold_fingerprint")
             row["pred_fingerprint"] = verdict.get("pred_fingerprint")

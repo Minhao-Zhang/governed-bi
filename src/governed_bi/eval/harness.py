@@ -235,6 +235,7 @@ def _run_concurrently(
                 "outcome": Outcome.crashed.value,
                 "correct": False,
                 "crashed": True,
+                "quality_flags": list(question.get("quality_flags") or ()),
                 "error_type": type(err).__name__,
                 "grade_detail": f"harness: {type(err).__name__}: {err}",
                 "licensed": [],
@@ -354,8 +355,15 @@ def project_turn(
         "question_id": str(question["question_id"]),
         "arm": arm,
         "outcome": outcome,
-        "correct": bool(grade["correct"]),
+        # Propagated, never coerced. ``bool(grade["correct"])`` stood here and turned every
+        # ``missing_gold`` into a wrong answer — see :func:`~governed_bi.eval.grade.grade_turn`.
+        "correct": grade["correct"],
         "crashed": crashed,
+        # What the *dataset* says is wrong with this question — leakage, a gold with no total
+        # order, a degenerate gold. Carried onto the row rather than applied as a filter, so one
+        # artifact can be read under more than one exclusion policy; see
+        # :func:`~governed_bi.eval.datalake.attach_quality_flags`.
+        "quality_flags": list(question.get("quality_flags") or ()),
         "generated_sql": generated_sql,
         "gold_sql": question.get("gold_sql"),
         "gold_fingerprint": grade.get("gold_fingerprint"),

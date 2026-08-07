@@ -27,14 +27,18 @@ row it picked up overstated a measured run nine-fold.
 
 from __future__ import annotations
 
+import hashlib
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, MutableMapping, Sequence
 from pathlib import Path
 from typing import Any
 
 __all__ = [
     "load_questions",
     "dataset_qid_lists",
+    "dataset_leakage_qids",
+    "attach_quality_flags",
+    "attach_gold_fingerprints",
     "routing_recall",
     "observed_tokens",
     "summarise_routing",
@@ -81,6 +85,169 @@ def dataset_qid_lists(dataset: str | Path) -> dict[str, set[str]]:
             "Refusing to report an empty exclusion set as though the dataset declared one."
         )
     return {name: {str(q) for q in (raw.get(name) or ())} for name in QID_LIST_NAMES}
+
+
+def dataset_leakage_qids(dataset: str | Path) -> set[str]:
+    """Question ids the dataset's own split-leakage check flags, from ``leakage_test_qids.json``.
+
+    Its note: *"Test question_ids recoverable from the train split by retrieval rather than
+    induction. Same-database comparisons only."* The file publishes four detectors
+    (``exact_question_text``, ``exact_gold_sql``, ``template_collision``, ``fuzzy_jaccard_080``)
+    and their ``union``, which is what this reads — a question is suspect if any detector flagged
+    it.
+
+    **Nothing read this file, and 9 of the pooled arm's 1,351 questions are in the union.** They
+    were scored like any other question. That is 0.67%, which changes no conclusion on its own;
+    what it changes is whether the number can be defended, because the dataset shipped the
+    warning and the harness ignored it. Tagged rather than dropped — see
+    :func:`attach_quality_flags` for why that distinction is deliberate.
+
+    A missing file means the dataset declares no leakage, which is different from a file whose
+    keys are unreadable: that raises, for the reason spelled out in :func:`dataset_qid_lists`.
+    """
+    path = Path(dataset) / "leakage_test_qids.json"
+    if not path.exists():
+        return set()
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(raw, list):
+        return {str(q) for q in raw}
+    if "union" not in raw:
+        raise KeyError(
+            f"{path} has no 'union'; its keys are {sorted(raw)}. Refusing to report an empty "
+            "leakage set as though the dataset declared one."
+        )
+    return {str(q) for q in (raw.get("union") or ())}
+
+
+def attach_quality_flags(
+    questions: Sequence[MutableMapping[str, Any]],
+    *,
+    leakage: Collection[str] = (),
+    order_sensitive: Collection[str] = (),
+    exec_failed: Collection[str] = (),
+) -> dict[str, int]:
+    """Tag each question with what the *dataset* says is wrong with it. Returns per-flag counts.
+
+    **Tagged, not dropped, and that is the whole design.** Every one of these flags is an
+    argument for excluding a question from EX, and the dataset says so outright for two of them
+    (*"Exclude both from cross-variant EX"*). But which exclusions a headline number is computed
+    under is a claim about the number, and silently applying them here would mean no reader could
+    recover the other figure without paying for the run again. Flags on the row let one artifact
+    answer both, and make the exclusion visible in the place it is applied.
+
+    ``order_sensitive`` is flagged even though the harness already grades those questions with row
+    order preserved. Order-sensitivity is not the whole problem with them: the dataset's note says
+    the gold *"returns a different-but-valid result on the decoy instances"*, and no comparison
+    rule fixes a gold that is not a function of the query. Two of the four golds whose digest
+    disagrees with the dataset's own published hash are in this list.
+    """
+    buckets = (
+        ("leakage", {str(q) for q in leakage}),
+        ("order_sensitive", {str(q) for q in order_sensitive}),
+        ("exec_failed", {str(q) for q in exec_failed}),
+    )
+    counts = {name: 0 for name, _ in buckets}
+    for question in questions:
+        qid = str(question.get("question_id"))
+        flags = [name for name, ids in buckets if qid in ids]
+        question["quality_flags"] = flags
+        for name in flags:
+            counts[name] += 1
+    return counts
+
+
+def attach_gold_fingerprints(
+    questions: Sequence[MutableMapping[str, Any]],
+    dataset: str | Path,
+    *,
+    dsn_key: str,
+    order_sensitive: Collection[str] = (),
+) -> dict[str, int]:
+    """Give each question the dataset's published gold digest. Returns why each one did or didn't.
+
+    **The dataset ships a digest for every question and nothing read it.** For the pooled arm that
+    is 1,351 of 1,351 covered, recorded against this very database
+    (``gold_result_hashes_rename_decoy.jsonl``, ``dsn_key="rename_decoy"``). Reading it buys three
+    things, and only the first is about speed:
+
+    * The **grader-ceiling arm starts measuring.** Without an independent gold, every oracle row is
+      ``correct=None`` (:mod:`governed_bi.eval.oracle`) — the one arm whose entire purpose is to
+      show the grader is not the bottleneck could not show anything.
+    * The serve arm stops executing 1,351 gold statements it already knows the answer to.
+    * Gold stops depending on database state *at run time*, which is what makes two runs
+      comparable rather than merely similar.
+
+    Four guards, each because using the digest anyway would be wrong rather than merely unhelpful:
+
+    ``dsn_key``
+        a digest recorded against a different database is a different gold.
+    ``error``
+        the row records that the gold did not execute when the digest was taken; there is no
+        digest to use.
+    ``sql_sha256``
+        the digest belongs to a *statement*, and the dataset's statement can move under it. It
+        disagrees with ``sha256(gold_sql)`` on 2 of the arm's 1,351 questions today, and those two
+        would silently grade every prediction against the wrong target.
+    ``order_sensitive``
+        **the load-bearing one.** ``hash_lenient`` is ``normalise_result``, which always sorts, so
+        it is an *order-insensitive* digest. The harness grades these questions with row order
+        preserved, so comparing an order-preserving prediction digest against it would fail every
+        one of them. 23 of the arm's questions are on that list, and wiring this file without this
+        guard would have converted a fix into a 23-question regression.
+
+    Questions that pass no guard keep no ``gold_fingerprint``, and the harness's existing fallback
+    executes their gold live — which is what every question did before this.
+    """
+    path = Path(dataset) / f"gold_result_hashes_{dsn_key}.jsonl"
+    counts = {
+        "attached": 0,
+        "no_row": 0,
+        "recorded_error": 0,
+        "other_database": 0,
+        "statement_changed": 0,
+        "order_sensitive": 0,
+        "no_file": 0,
+    }
+    if not path.exists():
+        counts["no_file"] = len(questions)
+        return counts
+
+    shipped: dict[str, Mapping[str, Any]] = {}
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if line:
+                row = json.loads(line)
+                shipped[str(row.get("question_id"))] = row
+
+    skip_order = {str(q) for q in order_sensitive}
+    for question in questions:
+        qid = str(question.get("question_id"))
+        row = shipped.get(qid)
+        if row is None:
+            counts["no_row"] += 1
+            continue
+        if row.get("error"):
+            counts["recorded_error"] += 1
+            continue
+        if str(row.get("dsn_key") or "") != dsn_key:
+            counts["other_database"] += 1
+            continue
+        gold_sql = str(question.get("gold_sql") or "")
+        recorded = str(row.get("sql_sha256") or "")
+        if recorded and hashlib.sha256(gold_sql.encode("utf-8")).hexdigest() != recorded:
+            counts["statement_changed"] += 1
+            continue
+        if qid in skip_order:
+            counts["order_sensitive"] += 1
+            continue
+        digest = row.get("hash_lenient")
+        if not digest:
+            counts["no_row"] += 1
+            continue
+        question["gold_fingerprint"] = str(digest)
+        counts["attached"] += 1
+    return counts
 
 
 def load_questions(
@@ -401,9 +568,13 @@ def retrieval_funnel(
     ``all_gold_tables_licensed``
         given that, every gold table survived pass two, the budget and ``connect``. This is the
         stage the earlier work was actually fighting, and it was invisible.
-    ``answered`` / ``correct``
-        given a licensed set that could support an answer. The gap between the last two is
+    ``answered``
+        given a licensed set that could support an answer. The gap from the stage above is
         generation, and it is the only one a corpus change cannot touch.
+    ``graded`` / ``correct``
+        given an answer this grader could judge at all. ``graded`` is the *instrument's* stage,
+        not the system's: a turn with no comparable gold is unmeasured, and keeping it out of
+        EX's denominator is the difference between "the system was wrong" and "we did not look".
 
     Rates come from :meth:`~governed_bi.register.quantity.Measured.rate`, so a stage with no
     population reports *unmeasured* rather than ``0.000`` — the ``or 1`` idiom elsewhere in this
@@ -418,6 +589,8 @@ def retrieval_funnel(
         "tables_in_routed_schemas": 0,
         "all_gold_tables_licensed": 0,
         "answered": 0,
+        "graded": 0,
+        "unmeasured": 0,
         "correct": 0,
         "gold_reads_no_table": 0,
         "no_gold_sql": 0,
@@ -457,7 +630,17 @@ def retrieval_funnel(
         if str(row.get("outcome") or "") != "answered":
             continue
         counts["answered"] += 1
-        if row.get("correct"):
+
+        # **A stage for the grader itself**, because ``correct`` has three values and this funnel
+        # used ``if row.get("correct")`` — so an *unmeasured* row (no gold to compare against)
+        # counted in ``answered`` and not in ``correct``, and read exactly like a wrong answer.
+        # ``graded given answered`` is the grader's own coverage; when it is below 1.000 the EX
+        # below it is over a smaller population, and now says so.
+        if row.get("correct") is None:
+            counts["unmeasured"] += 1
+            continue
+        counts["graded"] += 1
+        if row["correct"]:
             counts["correct"] += 1
 
     stages = (
@@ -465,7 +648,8 @@ def retrieval_funnel(
         ("tables_in_routed_schemas", "schema_routed"),
         ("all_gold_tables_licensed", "tables_in_routed_schemas"),
         ("answered", "all_gold_tables_licensed"),
-        ("correct", "answered"),
+        ("graded", "answered"),
+        ("correct", "graded"),
     )
     def _stage(numerator: int, denominator: int, what: str) -> dict[str, Any]:
         """A rate with its own denominator beside it, and a reason when there is no rate.
@@ -490,8 +674,13 @@ def retrieval_funnel(
         name: _stage(counts[name], counts[given], f"{name} given {given}")
         for name, given in stages
     }
+    # ``scorable`` minus the rows the grader could not judge: they are scorable in principle
+    # (a gold that reads tables) and were not scored in fact, so leaving them in the denominator
+    # would charge the pipeline for the instrument's gaps.
     end_to_end = _stage(
-        counts["correct"], counts["scorable"], "correct over scorable questions"
+        counts["correct"],
+        counts["scorable"] - counts["unmeasured"],
+        "correct over scorable, graded questions",
     )
     return {
         "counts": counts,

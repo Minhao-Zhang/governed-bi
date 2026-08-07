@@ -126,7 +126,9 @@ def oracle_grade(
         qid,
         sql,
         outcome=Outcome.answered.value,
-        correct=bool(grade["correct"]),
+        # Propagated: this module's whole subject is that an ungradeable row is ``None`` and not
+        # ``False``, so it must not coerce on the one path where a gold *was* supplied.
+        correct=grade["correct"],
         crashed=False,
         grade_detail=grade.get("detail"),
         gold_fingerprint=grade.get("gold_fingerprint"),
