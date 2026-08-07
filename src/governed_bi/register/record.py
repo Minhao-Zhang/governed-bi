@@ -260,6 +260,24 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
     # answer delivered the count) is prevented by that function reading the ledger rather than
     # the tool arguments, which is a mechanism and not a field.
 
+    _f("reflect_verdict", Tier.decision, Absence.not_measured, Stage.reflect,
+       "what the post-hoc observer made of the turn: {verdict, reason, model, prompt_sha256, "
+       "signals}, where verdict is one of answered / wrong / unsure. **Null means reflection "
+       "did not run** -- the knob is off, no model is wired, the turn produced no statement, or "
+       "it ended before the node -- and it is emphatically not 'the turn looked fine'. That "
+       "collapse is the defect this repository has produced most often (an absent gold graded "
+       "as a wrong answer; an unrun facet reported as a clean channel; an unmeasured cache "
+       "count reported as zero), so the absence column is not_measured and a judge that ran and "
+       "could not decide writes verdict: null beside why_unmeasured rather than a label.\n"
+       "**No gate, deliberately.** A gate refuses a run, and this field holds a model's opinion "
+       "whose agreement with gold has not been measured yet; gating on an uncalibrated judge "
+       "would refuse runs for a reason nobody can defend. tools/score_reflector.py is what "
+       "decides whether it ever earns one.\n"
+       "Tier is decision and not outcome: `outcome` is the stamped fact of how the turn ended, "
+       "and a guess about whether that fact is *right* is evidence for attribution. Filing them "
+       "in one tier would invite a reader to treat a judgement and a measurement as the same "
+       "kind of claim, which is how this field would become the answer key it must never be"),
+
     # ── cost ────────────────────────────────────────────────────────────────
     _f("usage", Tier.cost, Absence.never, Stage.stamp,
        "one record per model call including facet and rewrite calls. An empty list "

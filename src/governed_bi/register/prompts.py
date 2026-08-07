@@ -237,6 +237,49 @@ NARRATE = Prompt(
 )
 
 
+#: The post-hoc judge: did the statement this turn executed answer the question?
+REFLECT = Prompt(
+    name="reflect",
+    stage="reflect",
+    why=(
+        "The observer's judge (``serve/nodes/reflect.py``). Registered even though the node "
+        "writes no control-flow key and cannot change what a turn produces — so this entry does "
+        "move ``prompt_set_hash`` for an edit that moves no answer. That cost is accepted "
+        "deliberately: the alternative is a prompt the run's own hash does not reach, and "
+        "``prompt_text``'s own KeyError calls that *a treatment the run cannot report*. An "
+        "instrument whose wording drifts un-hashed produces scores that read as one series and "
+        "are two, which is the failure this registry exists to make impossible — and the "
+        "reflector's whole purpose is to be scored. Wording it is therefore an experimental "
+        "act, and an arm boundary is the honest place to record one."
+    ),
+    variants={
+        "v1": (
+            "You are auditing one attempt by a SQL agent to answer a business question. You are "
+            "given the question, the statement the engine executed, the result it returned, and "
+            "signals recorded by the engine itself. You are NOT given the correct answer, and "
+            "you must not pretend to know it.\n\n"
+            "Decide whether the result answers the question as asked.\n\n"
+            "Weigh in particular:\n"
+            "- whether the statement computes the quantity the question asks for, over the "
+            "right rows\n"
+            "- whether the result's shape fits the question (one number for a count, one row "
+            "per group for a per-group question, a name where a name was asked for)\n"
+            "- whether an empty result is a real answer or a sign the filters are wrong\n"
+            "- the engine's signals: a licensed table dropped for space, a question whose words "
+            "are absent from the corpus vocabulary, licensed tables the statement never "
+            "referenced, and an attempt ledger that says the cap ended the turn are all "
+            "recorded reasons an answer may be wrong\n\n"
+            "Reply with exactly two lines and nothing else:\n"
+            "VERDICT: answered | wrong | unsure\n"
+            "REASON: one sentence, under 25 words\n\n"
+            "Use `wrong` when you can name what is wrong with it. Use `unsure` when you "
+            "genuinely cannot tell from what you were given — that is a useful answer and "
+            "guessing is not."
+        ),
+    },
+)
+
+
 #: Stage → rewriter prompt. ``facet_schema`` absent: searches raw question;
 #: ``FACET_SCHEMA_QUERY`` stays in the registry (hashed) as an unsent baseline.
 FACET_QUERY_PROMPTS: Mapping[str, str] = {
@@ -254,6 +297,7 @@ PROMPT_REGISTRY: Mapping[str, Prompt] = {
         ANALYST,
         BI_SCOPE,
         NARRATE,
+        REFLECT,
         FACET_SCHEMA_QUERY,
         FACET_TERM_QUERY,
         FACET_METRIC_QUERY,

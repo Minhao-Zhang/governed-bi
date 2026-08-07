@@ -50,6 +50,10 @@ EMITTED_STEPS = (
     "connect",
     "assemble",
     "agent_core",
+    # Emitted only when the observer ran, which the shipped configuration never does. Listed
+    # anyway: the point of this table is that a step the engine *can* put on the wire is
+    # declared, and "off by default" is a configuration rather than an absence.
+    "reflect",
     "read_body",
     "inspect_schema",
     "sample_rows",

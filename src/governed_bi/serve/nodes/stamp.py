@@ -228,6 +228,9 @@ def _extract_factory(
             "negative",
             "crossings",
             "licensed",
+            # The observer's verdict, copied and never interpreted here. `stamp` reading it
+            # to adjust `outcome` would be the control flow `reflect` is defined not to have.
+            "reflect_verdict",
             # Why a decline declined. `outcome: "declined"` is one value for four
             # different engineering problems, and this lived in graph state only -- so
             # "routing found nothing" and "the join graph is disconnected" were the same

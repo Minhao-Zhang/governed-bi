@@ -254,6 +254,9 @@ class ServeState(TypedDict, total=False):
     result_table: dict[str, Any] | None
     #: Prose answer from ``narrate``. Live only; distinct from system ``answer["text"]``.
     answer_text: str | None
+    #: The post-hoc observer's judgement (``serve/nodes/reflect.py``). Nothing routes on it, by
+    #: construction: no conditional edge reads it and ``stamp`` only copies it to the record.
+    reflect_verdict: dict[str, Any] | None
     #: Question embedding. Per-turn (streamed path cannot put it on load-time config).
     query_vector: list[float] | None
     #: Epoch seconds when the turn's first node ran. ``wrap_node`` writes it, ``stamp`` reads it
@@ -287,6 +290,7 @@ PER_TURN_RESET: dict[str, Any] = {
     "generated_sql": None,
     "result_table": None,
     "answer_text": None,
+    "reflect_verdict": None,
     "query_vector": None,
     # The turn's clock. Cleared per turn, or turn two's `latency_sec` would span everything the
     # user did between the two questions. `wrap_node` writes it from the first node to run.

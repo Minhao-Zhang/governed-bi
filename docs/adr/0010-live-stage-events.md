@@ -222,6 +222,7 @@ twice, and a seq-derived id would have shown the same step twice.
 | `execute` | tool | ok, error | `sql`, `sql_sha256`, `row_count`, `truncated`, `n_columns` |
 | `cap` | tool | cap | `cap` |
 | `ask_user` | tool | start, ok, declined | `clarification_id` |
+| `reflect` | rail | ok, error | `verdict` (`answered` / `wrong` / `unsure`, or why it is unmeasured). **One row, not a start/resolve pair, and only on turns where the observer actually judged something** — it ships disabled (`reflect_enabled`), and a disabled observer that still put a start row on every turn would have changed the timeline of every arm measured so far. |
 | `narrate` | rail | start, ok, error | `source` (`narrated` / `none` / `skipped`), `n_chars` |
 | `refuse` | rail | start, refused, error | `terminal_reason` |
 | `decline` | rail | start, declined, error | `terminal_reason` |

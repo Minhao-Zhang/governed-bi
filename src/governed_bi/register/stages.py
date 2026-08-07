@@ -80,6 +80,11 @@ class Stage(str, Enum):
     #: Attempt cap terminated the turn. Distinct from crash and model refusal.
     cap = "cap"
 
+    #: Post-hoc judgement of whether the statement answered the question. An
+    #: observer: it writes a verdict and decides nothing, so it appears in no
+    #: refusal table and ends no turn.
+    reflect = "reflect"
+
     #: Turns the turn into a sentence. Adopts the agent's closing text when
     #: present; generates only when the loop ended without prose.
     narrate = "narrate"

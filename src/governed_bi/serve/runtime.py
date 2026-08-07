@@ -17,6 +17,7 @@ __all__ = [
     "DEFAULT_CONTEXT_BUDGET",
     "FUSE_WEIGHTS",
     "assets_by_id",
+    "bool_knob",
     "candidate_depth",
     "combine_channels",
     "configurable",
@@ -169,6 +170,39 @@ def int_knob(state: Mapping[str, Any], name: str) -> int:
             f"knob {name!r} is {raw!r}, which is not an integer. Falling back to the "
             "register default would make the record report a value this turn did not use."
         ) from err
+
+
+def bool_knob(state: Mapping[str, Any], name: str) -> bool:
+    """Boolean knob with the same precedence as :func:`int_knob`.
+
+    A third reader rather than one generic function, because the coercion is where the danger
+    is and it differs per type: ``int("false")`` raises, and ``bool("false")`` is ``True``. A
+    knob that arrived from JSON as the string ``"false"`` would therefore switch a feature
+    **on** under a generic ``bool(raw)``, and the feature would be recorded as off. So only real
+    booleans and the two JSON spellings are accepted; anything else raises, for the reason
+    :func:`int_knob` gives — falling back to the register default would make the record report a
+    value the turn did not use.
+    """
+    raw = state.get(name)
+    if raw is None:
+        knobs = state.get("knobs_resolved") or {}
+        if isinstance(knobs, Mapping):
+            raw = knobs.get(name)
+    if raw is None:
+        raw = knob_default(name)
+    if isinstance(raw, Unset):
+        raise ValueError(
+            f"knob {name!r} ships UNSET, so there is no value to run with. A guessed "
+            "one here would be a fabricated measurement."
+        )
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str) and raw.strip().lower() in ("true", "false"):
+        return raw.strip().lower() == "true"
+    raise ValueError(
+        f"knob {name!r} is {raw!r}, which is not a boolean. Coercing it would read "
+        "the string 'false' as True and record the opposite of what ran."
+    )
 
 
 def float_knob(state: Mapping[str, Any], name: str) -> float:

@@ -268,6 +268,18 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "equal — equivalence needs more power than difference detection, and "
        "nothing tighter than about 3pp is demonstrable at this sample size"),
 
+    _k("reflect_enabled", False, Role.comparability,
+       "the post-hoc reflector (serve/nodes/reflect.py), OFF. It is an observer -- it writes a "
+       "verdict and no control flow -- so all it can do today is spend a model call, which is "
+       "why it ships off and why the arm every current number was measured on is unaffected. "
+       "Comparability and not operational because a turn that runs it makes one more call "
+       "against the same provider quota, and the two fields the quotability gates read -- "
+       "crashed outcomes and channel degradation -- are exactly what saturating that quota "
+       "moves. It stays off until tools/score_reflector.py shows the verdict beats the base "
+       "rate on rows that already carry a gold verdict: a retry loop built on a reflector that "
+       "cannot tell right from wrong re-rolls a draw after seeing it, which is the thing "
+       "n_re_served's gate exists to catch"),
+
     # ── operational: recorded, never a comparability key ────────────────────
     _k("git_sha", None, Role.operational,
        "two runs at different commits are the NORMAL comparison. Inside one run "

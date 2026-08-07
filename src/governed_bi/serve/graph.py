@@ -23,6 +23,7 @@ from governed_bi.serve.nodes.facets import (
 from governed_bi.serve.nodes.guard import guard_node
 from governed_bi.serve.nodes.narrate import narrate_node
 from governed_bi.serve.nodes.negative import negative_node
+from governed_bi.serve.nodes.reflect import reflect_node
 from governed_bi.serve.nodes.rewrite import rewrite_node
 from governed_bi.serve.nodes.route_retrieve import connect_node, resolve_node, route_node
 from governed_bi.serve.nodes.stamp import stamp
@@ -184,6 +185,21 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     rail("connect", connect_node)
     rail("assemble", assemble_node)
     rail("agent_core", agent_core_node)
+    # **Not through ``rail``, and both differences are the point.**
+    #
+    # ``stream=False``: ``wrap_node`` emits a start and a resolve row for every node it wraps,
+    # so an observer that ships disabled would still have put two rows per turn on the
+    # timeline. The node emits its own single row, only on the turns where it judged something,
+    # which is what keeps a default-off turn's event stream identical to what it was.
+    #
+    # **No timeout**, deliberately, though it is natively async and alone in its super-step —
+    # the two conditions ``_CANCELLABLE`` requires. A ``TimeoutPolicy`` fires *outside* the node
+    # and its handler marks the turn ``crashed`` and jumps to ``stamp``, so giving this node one
+    # would let an **observer** fail a turn that had already answered. That is the one thing it
+    # must never do. The model call is bounded by the model's own ``request_timeout``
+    # (``llm_utility_timeout_s``), and any exception it raises is caught and recorded as an
+    # unmeasured verdict.
+    graph.add_node("reflect", wrap_node("reflect", reflect_node, stream=False))
     rail("narrate", narrate_node)
     rail("refuse", refuse_node)
     rail("decline", decline_node)
@@ -239,8 +255,11 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
         _skip_if_terminal,
         {"stamp": "stamp", "continue": "agent_core"},
     )
-    # Terminals skip narrate: refusal/decline wording is system copy.
-    graph.add_edge("agent_core", "narrate")
+    # Terminals skip narrate: refusal/decline wording is system copy. ``reflect`` sits between
+    # the agent and the narrator as a plain edge and not a conditional one, because a
+    # conditional edge reading its verdict is exactly the control flow it must not have.
+    graph.add_edge("agent_core", "reflect")
+    graph.add_edge("reflect", "narrate")
     graph.add_edge("narrate", "stamp")
     graph.add_edge("refuse", "stamp")
     graph.add_edge("decline", "stamp")
