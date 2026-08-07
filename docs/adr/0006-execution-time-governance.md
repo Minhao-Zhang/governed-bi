@@ -600,7 +600,7 @@ to prevent.
 | `sqlglot_version` | pinned; canonical names are release-dependent |
 | `hard_block_suspect` | `True` in dev/BIRD, `False` in production |
 | `graded_delivery_enabled` | `True` (OQ4 may retire it) |
-| `run_query_attempt_cap` | 3 |
+| `run_query_attempt_cap` | 5 (was 3 until 2026-08-07; a blocked attempt charges a slot, so 3 bought as few as one real correction) |
 | `max_rows` | as today |
 | `guard_rules_enabled` | per `rule_id` |
 | `g_length_max_chars` | **8,000** — measured, see below |

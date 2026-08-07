@@ -246,10 +246,14 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "eligible only on a cost-layer failure. An open question asks whether the "
        "path earns its complexity at all, and with the rule narrowed to one layer "
        "deleting it is a small change"),
-    _k("run_query_attempt_cap", 3, Role.comparability,
+    _k("run_query_attempt_cap", 5, Role.comparability,
        "the cap TERMINATES the turn. v1's returned a 'capped' tool message and the "
        "agent kept going, burning unbounded round-trips against a cap it could "
-       "never clear"),
+       "never clear. Raised 3 -> 5 on 2026-08-07: a slot is charged before governance "
+       "runs, so a blocked attempt costs the same as an executed one and three slots "
+       "bought as few as one real correction. Being comparability-roled, this moves "
+       "prompt_set_hash / knobs_resolved -- every number measured at 3 is a different "
+       "arm and does not compare to one measured at 5"),
     _k("max_rows", 200_000, Role.comparability,
        "applied in the connector base class as max_rows + 1 so truncation is "
        "detectable. v1 documented a gateway-wide cap and SQLite was the one path "
