@@ -21,6 +21,7 @@ that called a model has a row, and a stage that did not has none.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from langchain_core.messages import AIMessage
@@ -46,6 +47,14 @@ class _Model:
         reply.usage_metadata = {"input_tokens": 100, "output_tokens": 5, "total_tokens": 105}
         return reply
 
+    async def ainvoke(self, messages: list[Any], config: Any = None, **kwargs: Any) -> Any:
+        """The nodes await now, and a double that only offers ``invoke`` fails them open.
+
+        Same lesson as the ``config=`` parameter below: a fake that is narrower than
+        ``BaseChatModel`` does not fail loudly, it makes the caller take its error branch. The
+        scope gate's error branch is ``error_failed_open``.
+        """
+        return self.invoke(messages, config, **kwargs)
 
 def _policy(*, scope_gate: bool) -> GovernancePolicy:
     return GovernancePolicy(guard_rules_enabled={BI_SCOPE_RULE_ID: scope_gate})
@@ -64,10 +73,10 @@ def test_the_scope_gate_bills_the_turn_whether_it_clears_or_blocks() -> None:
     """
     for reply, expected in (("yes", "clear"), ("no", "blocked")):
         model = _Model(reply)
-        out = guard_node(
+        out = asyncio.run(guard_node(
             {"question": "how many restaurants?", "turn_index": 1},
             {"configurable": {"policy": _policy(scope_gate=True), "utility_model": model}},
-        )
+        ))
         assert out["guard"]["outcome"] == expected
         assert [row["stage"] for row in out["usage"]] == ["guard"]
         assert out["usage"][0]["input_tokens"] == 100
@@ -82,10 +91,10 @@ def test_a_gate_that_never_calls_a_model_bills_nothing() -> None:
     measurement.
     """
     model = _Model()
-    out = guard_node(
+    out = asyncio.run(guard_node(
         {"question": "how many restaurants?", "turn_index": 1},
         {"configurable": {"policy": _policy(scope_gate=False), "utility_model": model}},
-    )
+    ))
     assert "usage" not in out
     assert model.calls == 0
 
@@ -107,11 +116,11 @@ def test_every_facet_rewriter_bills_its_own_stage() -> None:
     seen: list[str] = []
     for stage in sorted(FACET_EXTRACTS, key=lambda s: s.value):
         model = _Model("restaurants, dining establishments")
-        out = _run_facet(
+        out = asyncio.run(_run_facet(
             {"question": "how many restaurants?", "turn_index": 1},
             _cfg(model, index=index),
             stage,
-        )
+        ))
         rows = out.get("usage") or []
         assert [row["stage"] for row in rows] == [stage.value], (
             f"{stage.value} must bill its own rewrite, got {[r.get('stage') for r in rows]}"
@@ -127,10 +136,10 @@ def test_a_stage_name_in_a_usage_row_is_always_a_declared_stage() -> None:
     about; a cost report that cannot be grouped by a known stage is a report nobody can total.
     """
     model = _Model()
-    out = guard_node(
+    out = asyncio.run(guard_node(
         {"question": "how many restaurants?", "turn_index": 1},
         {"configurable": {"policy": _policy(scope_gate=True), "utility_model": model}},
-    )
+    ))
     known = {stage.value for stage in Stage}
     assert all(row["stage"] in known for row in out["usage"])
 
@@ -145,10 +154,10 @@ def test_the_non_rewriting_facet_bills_nothing() -> None:
     from governed_bi.retrieve.index import build_index
 
     model = _Model("would be a rewrite if anything asked for one")
-    out = _run_facet(
+    out = asyncio.run(_run_facet(
         {"question": "how many restaurants?", "turn_index": 1},
         _cfg(model, index=build_index([])),
         Stage.facet_schema,
-    )
+    ))
     assert "usage" not in out
     assert model.calls == 0

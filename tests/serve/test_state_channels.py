@@ -49,10 +49,14 @@ def _turn(**overrides: Any) -> dict[str, Any]:
 def _crash(real: Any, *, on_turn: int | None) -> Any:
     """A facet node that raises, on one turn index or on all of them."""
 
-    def node(state: dict, config: Any) -> dict:
+    # `async def`, because the facet nodes are. A sync double here does not fail loudly: it
+    # returns the real node's coroutine unawaited, `wrap_node` hands that to
+    # `rail_observation`, and the turn dies on `'coroutine' object has no attribute 'get'` —
+    # a stack trace about the double, three frames away from anything real.
+    async def node(state: dict, config: Any) -> dict:
         if on_turn is None or state.get("turn_index") == on_turn:
             raise ValueError("facet exploded")
-        return real(state, config)
+        return await real(state, config)
 
     return node
 

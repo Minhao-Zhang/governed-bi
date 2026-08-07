@@ -33,7 +33,7 @@ __all__ = ["guard_node"]
 _IN_SCOPE = "yes"
 
 
-def guard_node(state: dict, config: RunnableConfig) -> dict:
+async def guard_node(state: dict, config: RunnableConfig) -> dict:
     """Screen ``state["question"]`` with the policy from runnable config.
 
     Reads through :func:`~governed_bi.serve.runtime.configurable` rather than subscripting
@@ -70,14 +70,14 @@ def guard_node(state: dict, config: RunnableConfig) -> dict:
     # `error_failed_open` — the rule was enabled and could not run — which is the honest answer
     # and is exactly what that sentinel is for.
     model = cfg.get("utility_model")
-    verdict, usage = _bi_scope(state["question"], model, state.get("turn_index", 1))
+    verdict, usage = await _bi_scope(state["question"], model, state.get("turn_index", 1))
     update: dict = {"guard": verdict}
     if usage is not None:
         update["usage"] = [usage]
     return update
 
 
-def _bi_scope(question: str, model: Any, turn_index: Any) -> tuple[Any, dict | None]:
+async def _bi_scope(question: str, model: Any, turn_index: Any) -> tuple[Any, dict | None]:
     """Ask a model whether the question is in scope. Returns ``(GuardVerdict, usage row)``.
 
     **The usage row is why this returns a pair.** This call was invisible to the engine's own
@@ -119,7 +119,7 @@ def _bi_scope(question: str, model: Any, turn_index: Any) -> tuple[Any, dict | N
         )
 
     try:
-        reply = model.invoke(
+        reply = await model.ainvoke(
             [SystemMessage(prompt_text("bi_scope")), HumanMessage(question)],
             # **Named, because eight identical ``ChatOpenAI`` rows is not a trace.** One turn
             # makes eight model calls and LangChain names every one after the client class, so

@@ -281,7 +281,7 @@ def test_a_facet_with_no_index_reports_its_channel_as_failed() -> None:
     #
     # `FACET_CHANNELS[Stage.facet_entity]` is `{lexical, semantic}` (facets.py:114), so
     # `expected_channel_state` is `ran` and `_channels_for` reports it verbatim.
-    out = facet_entity_node({"question": "how many customers"}, {"configurable": {}})
+    out = asyncio.run(facet_entity_node({"question": "how many customers"}, {"configurable": {}}))
     channels = out.get("facets", {}).get(Stage.facet_entity.value, {}).get("channels", {})
     assert channels, "the facet must report its channel states"
     assert channels.get(Channel.lexical.value) == ChannelState.failed.value, (

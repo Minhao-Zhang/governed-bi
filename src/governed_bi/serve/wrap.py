@@ -115,9 +115,23 @@ def wrap_node(stage: str, fn: Callable[..., dict[str, Any]], *, stream: bool = T
         """
         if is_async:
             return await (fn(state, config) if accepts_config else fn(state))
-        if accepts_config:
-            return await asyncio.to_thread(fn, state, config)
-        return await asyncio.to_thread(fn, state)
+        update = await (
+            asyncio.to_thread(fn, state, config)
+            if accepts_config
+            else asyncio.to_thread(fn, state)
+        )
+        # Named here rather than awaited. A sync node returning a coroutine is always a
+        # mistake — usually a test double or a decorator that wrapped an async node without
+        # becoming one — and awaiting it would hide that. Left alone it surfaces four frames
+        # away as ``'coroutine' object has no attribute 'get'`` inside ``rail_observation``,
+        # which says nothing about the node that caused it.
+        if inspect.isawaitable(update):
+            update.close()
+            raise TypeError(
+                f"node {stage!r} is a sync function that returned an awaitable. It is probably "
+                "wrapping an async node without awaiting it; make the wrapper `async def`."
+            )
+        return update
 
     if accepts_config:
 

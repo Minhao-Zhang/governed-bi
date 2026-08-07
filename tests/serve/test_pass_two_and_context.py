@@ -6,6 +6,7 @@ Model-free. Hand-built two-schema UnifiedIndex; prefer unit imports of
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from typing import Any, Callable
 
@@ -86,8 +87,8 @@ def _empty_facet(stage: Stage, question: str) -> dict[str, Any]:
 
 def _live_facets(state: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     facets = {
-        "facet_entity": facet_entity_node(state, config)["facets"]["facet_entity"],
-        "facet_schema": facet_schema_node(state, config)["facets"]["facet_schema"],
+        "facet_entity": asyncio.run(facet_entity_node(state, config))["facets"]["facet_entity"],
+        "facet_schema": asyncio.run(facet_schema_node(state, config))["facets"]["facet_schema"],
     }
     for stage in (Stage.facet_term, Stage.facet_metric, Stage.facet_example):
         facets[stage.value] = _empty_facet(stage, state["question"])
@@ -147,7 +148,7 @@ def test_facet_schema_searches_index_within_target_types(
     config = _config(
         thread_id="t-facet-schema", policy=guard_off_policy, index=two_schema_index
     )
-    result = facet_schema_node(state, config)["facets"]["facet_schema"]
+    result = asyncio.run(facet_schema_node(state, config))["facets"]["facet_schema"]
     assert result["queries"] == ["customer commerce"]
     assert result["hits"]
     for hit in result["hits"]:
@@ -180,7 +181,7 @@ def test_facet_entity_filters_to_table_column_join(
     config = _config(
         thread_id="t-facet-entity", policy=guard_off_policy, index=two_schema_index
     )
-    result = facet_entity_node(state, config)["facets"]["facet_entity"]
+    result = asyncio.run(facet_entity_node(state, config))["facets"]["facet_entity"]
     assert result["hits"] and len(result["hits"]) <= 8
     assert all(h["asset_type"] == AssetType.table.value for h in result["hits"])
     assert _count_schema_hits(result["hits"], SCHEMA_A) >= _count_schema_hits(
@@ -194,7 +195,7 @@ def test_facet_example_keeps_lexical_not_configured(
     config = _config(
         thread_id="t-facet-example", policy=guard_off_policy, index=two_schema_index
     )
-    result = facet_example_node(_base_turn(), config)["facets"]["facet_example"]
+    result = asyncio.run(facet_example_node(_base_turn(), config))["facets"]["facet_example"]
     assert result["hits"] == []
     assert result["channels"][Channel.lexical.value] == ChannelState.not_configured.value
 
@@ -203,7 +204,7 @@ def test_facet_without_index_keeps_empty_hits_for_f1(
     guard_off_policy: GovernancePolicy,
 ) -> None:
     config = _config(thread_id="t-no-index", policy=guard_off_policy)
-    assert facet_entity_node(_base_turn(), config)["facets"]["facet_entity"]["hits"] == []
+    assert asyncio.run(facet_entity_node(_base_turn(), config))["facets"]["facet_entity"]["hits"] == []
 
 
 # ── pass-two / assemble / refuse / budgets ────────────────────────────────────

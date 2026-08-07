@@ -276,7 +276,7 @@ def _facet_result(
     }
 
 
-def _rewritten_query(
+async def _rewritten_query(
     question: str,
     stage: Stage,
     config: RunnableConfig,
@@ -319,7 +319,7 @@ def _rewritten_query(
     from governed_bi.serve.usage import usage_row
 
     try:
-        reply = model.invoke(
+        reply = await model.ainvoke(
             [SystemMessage(prompt_text(prompt_name)), HumanMessage(question)],
             # Named after the registered prompt, so the five concurrent rewrites are five
             # distinguishable rows in LangSmith instead of five `ChatOpenAI`s that started in
@@ -381,7 +381,7 @@ def _query_vector(
     )
 
 
-def _run_facet(
+async def _run_facet(
     state: Mapping[str, Any],
     config: RunnableConfig,
     stage: Stage,
@@ -401,7 +401,7 @@ def _run_facet(
         # The rewrite happens first, and both channels then search with it — a rewrite that
         # reached only BM25 would miss the point, since the whole reason to restate the question
         # in the vocabulary of the thing being searched is to move it *semantically* closer.
-        query = _rewritten_query(
+        query = await _rewritten_query(
             question, stage, config, ran=ran, spent=spent, turn_index=state.get("turn_index", 1)
         )
         hits: list[Any] = _pass_one_hits(
@@ -440,26 +440,26 @@ def _run_facet(
     return update
 
 
-def facet_schema_node(state: dict, config: RunnableConfig) -> dict:
+async def facet_schema_node(state: dict, config: RunnableConfig) -> dict:
     """Schema facet: pass-one lexical over schema assets when an index is configured."""
-    return _run_facet(state, config, Stage.facet_schema)
+    return await _run_facet(state, config, Stage.facet_schema)
 
 
-def facet_term_node(state: dict, config: RunnableConfig) -> dict:
+async def facet_term_node(state: dict, config: RunnableConfig) -> dict:
     """Term facet: stub extraction query + type-scoped lexical when indexed."""
-    return _run_facet(state, config, Stage.facet_term)
+    return await _run_facet(state, config, Stage.facet_term)
 
 
-def facet_metric_node(state: dict, config: RunnableConfig) -> dict:
+async def facet_metric_node(state: dict, config: RunnableConfig) -> dict:
     """Metric facet: stub extraction query + type-scoped lexical when indexed."""
-    return _run_facet(state, config, Stage.facet_metric)
+    return await _run_facet(state, config, Stage.facet_metric)
 
 
-def facet_entity_node(state: dict, config: RunnableConfig) -> dict:
+async def facet_entity_node(state: dict, config: RunnableConfig) -> dict:
     """Entity facet: stub extraction query + table/column/join lexical when indexed."""
-    return _run_facet(state, config, Stage.facet_entity)
+    return await _run_facet(state, config, Stage.facet_entity)
 
 
-def facet_example_node(state: dict, config: RunnableConfig) -> dict:
+async def facet_example_node(state: dict, config: RunnableConfig) -> dict:
     """Example facet: no lexical channel; empty hits until a semantic index is wired."""
-    return _run_facet(state, config, Stage.facet_example)
+    return await _run_facet(state, config, Stage.facet_example)

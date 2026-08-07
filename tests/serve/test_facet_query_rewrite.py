@@ -18,6 +18,7 @@ claims to be working.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -54,6 +55,14 @@ class _Rewriter:
             raise self.raises
         return type("Reply", (), {"text": self.text})()
 
+    async def ainvoke(self, messages: list[Any], config: Any = None, **kwargs: Any) -> Any:
+        """The nodes await now, and a double that only offers ``invoke`` fails them open.
+
+        Same lesson as the ``config=`` parameter below: a fake that is narrower than
+        ``BaseChatModel`` does not fail loudly, it makes the caller take its error branch. The
+        scope gate's error branch is ``error_failed_open``.
+        """
+        return self.invoke(messages, config, **kwargs)
 
 def _rewrite(
     question: str, stage: Stage, model: Any
@@ -65,9 +74,9 @@ def _rewrite(
     #: paths spend and which do not.
     spent: list[dict[str, Any]] = []
     conf: dict[str, Any] = {} if model is None else {"utility_model": model}
-    out = facets_mod._rewritten_query(
+    out = asyncio.run(facets_mod._rewritten_query(
         question, stage, {"configurable": conf}, ran=ran, spent=spent, turn_index=1
-    )
+    ))
     return out, ran, spent
 
 
