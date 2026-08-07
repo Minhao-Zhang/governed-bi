@@ -38,6 +38,11 @@ SUMMARY_FIELDS: tuple[str, ...] = (
     "schemas",
     "generated_sql",
     "latency_sec",
+    # The attempt ledger. Here because a transcript rebuilt from this log has to show the same
+    # governance badge the live turn showed: without it an earlier turn rendered "no SQL
+    # attempted" directly above its own SQL panel — one row of the artifact contradicting
+    # itself, which is the shape this repository keeps re-finding.
+    "execution",
 )
 
 
