@@ -29,8 +29,27 @@ slot. §6.1 was a lower bound.
 **Two rules, because a list of phrases only catches a repeat.** Rule A is the verbatim tables.
 Rule B is the *shape*: a summary that shouts what its schema is **NOT**. Ordinary domain prose
 does not need to; that spelling appears when someone is fixing a sibling collision they
-learned about from an evaluation. Rule B is scoped to corpus data files, where a lowercase
-"not" in prose is common and an upper-case one is not.
+learned about from an evaluation.
+
+**Inside a corpus, both rules read ``summary`` and nothing else.** The first version scanned
+every line of every corpus file and was unusable: 31,599 hits, of which 31,560 were rule B
+firing on the obfuscation dataset's own decoy marker — ``'DECOY column: not a real business
+field. Do NOT use it to answer questions.'`` — which is the corpus telling the model to
+*ignore* a column, the opposite of a leak. Rule A over-fired for the same reason in a subtler
+way: ``PREFIX['simpson_episodes'] = 'Simpsons season-20'`` is also just what that schema is,
+so it matched the ``body`` prose of six uncontaminated corpora including the one ``.env``
+serves. Both were false positives of the same kind — a phrase found somewhere a phrase cannot
+do any harm.
+
+Scoping to ``summary`` is not a tolerance, it is the rule restated: ``summary`` is the only
+text that enters either retrieval channel, so a discriminator anywhere else cannot steer the
+router. ``body``, ``rules`` and column ``note`` are read by the model *after* the schema has
+already been chosen. Outside a corpus — ``.py``, ``.md``, fixtures — rule A still scans every
+line, because there the artifact being defended against is the producing script, not the text.
+
+**The limit this leaves.** A single-line JSON corpus document is not decomposed into fields,
+so its summaries are unscanned. No corpus in this tree is written that way; if one is, this
+gate is blind to it.
 
 **What neither rule does.** A future build inventing a positive-only discriminator in new
 words is invisible here, exactly as a reworded leak is invisible to ``check_train_only``. The
@@ -133,6 +152,26 @@ NEGATIVE_DISCRIMINATOR = re.compile(r"\b(?:NOT|NEVER|EXCLUDES?)\s+[a-z]")
 #: Rule B scans data, not code: a comment reading "NOT a bypass" is normal in this tree.
 DATA_SUFFIXES: frozenset[str] = frozenset({".yaml", ".yml", ".json", ".jsonl"})
 
+#: A ``summary`` key at any nesting depth, quoted (JSON) or bare (YAML). Group 1 is the
+#: indent, which is what ends the value: a scalar's continuation lines are indented past its
+#: key, and the next key at the same depth is not.
+SUMMARY_KEY = re.compile(r'^(\s*)"?summary"?\s*:\s*(.*)$')
+
+#: The ``<id>: `` every corpus summary opens with, which both producers wrote their phrase
+#: immediately after.
+LEAD_IN = re.compile(r"^[\w.\-]+:\s*")
+
+#: Rule B is for schema summaries. A *term* asset defines itself by negation as a matter of
+#: course — ``student_loan``'s "female student" is "a student whose name does NOT appear in the
+#: male (nan_xing) table", because that schema has no female table. Shouting is only evidence
+#: of router-steering where the producers wrote, and both wrote schema summaries.
+#:
+#: Phrased as "not a declared non-schema asset" rather than "declares schema" on purpose: a
+#: file that declares no type at all is still scanned. The other spelling would mean a corpus
+#: that omits ``asset_type`` — or spells it differently — escapes rule B silently, and a gate
+#: that can be switched off by a missing line is the vacuous pass this one refuses.
+ASSET_TYPE = re.compile(r"^\s*\"?asset_type\"?\s*:\s*\"?([A-Za-z_]+)", re.MULTILINE)
+
 #: Only under a corpus root — an arbitrary JSON fixture is not a semantic-layer summary.
 DATA_ROOTS: tuple[str, ...] = ("corpus", "corpora")
 
@@ -174,6 +213,54 @@ def _is_corpus_data(path: pathlib.Path) -> bool:
     return path.suffix.lower() in DATA_SUFFIXES and bool(parts) and parts[0] in DATA_ROOTS
 
 
+def summary_blocks(lines: list[str]) -> list[tuple[int, str]]:
+    """``(first line number, joined value)`` for each ``summary`` in the file.
+
+    Indentation rather than a YAML parse: 59,661 corpus files is too many to load, and the
+    line number is what makes a hit checkable. Joined rather than per-line because both rules
+    read the value as a sentence — one asks what it *starts* with, the other would otherwise
+    miss a phrase that wrapped.
+    """
+    blocks: list[tuple[int, str]] = []
+    inside: int | None = None
+    current: list[str] = []
+    start = 0
+
+    def flush() -> None:
+        nonlocal current
+        if current:
+            blocks.append((start, " ".join(current).strip()))
+            current = []
+
+    for number, line in enumerate(lines, start=1):
+        if inside is not None:
+            stripped = line.strip()
+            if stripped and (len(line) - len(line.lstrip())) <= inside:
+                flush()
+                inside = None  # dedented to a sibling key: the value ended
+            else:
+                current.append(stripped)
+                continue
+        match = SUMMARY_KEY.match(line)
+        if match is not None:
+            flush()
+            inside, start, current = len(match.group(1)), number, [match.group(2).strip()]
+    flush()
+    return blocks
+
+
+def leads_with(value: str, phrase: str) -> bool:
+    """Does ``value`` open with ``phrase``, past the ``<id>: `` both producers wrote first?
+
+    Position is the signal. ``_nuclear_dense_plus_prefix`` built ``f"{schema}: {prefix} …"``
+    and ``_revise_miss_summaries``' phrases "lead a schema summary" — so a table phrase found
+    *mid-sentence* is the schema describing itself, not a prepended steer.
+    """
+    head = value.lstrip("'\"").strip()
+    head = LEAD_IN.sub("", head, count=1)
+    return head.casefold().startswith(phrase.casefold())
+
+
 def hits(paths: list[pathlib.Path]) -> list[str]:
     """``path:line: what`` for every occurrence of either rule."""
     found: list[str] = []
@@ -192,21 +279,32 @@ def hits(paths: list[pathlib.Path]) -> list[str]:
             found.append(f"{rel}: unreadable, so unchecked")
             continue
         lines = text.splitlines()
-        lowered = text.lower()
-        for schema, phrase, table in retired:
-            needle = phrase.lower()
-            if needle not in lowered:
-                continue
+        if not _is_corpus_data(path):
+            # Outside a corpus the subject is a producing script, so the whole file is in
+            # scope and position means nothing: a phrase in a docstring is still the table.
             for number, line in enumerate(lines, start=1):
-                if needle in line.lower():
-                    found.append(f"{rel}:{number}: rule A, {table}[{schema!r}] = {phrase!r}")
-        if _is_corpus_data(path):
-            for number, line in enumerate(lines, start=1):
-                match = NEGATIVE_DISCRIMINATOR.search(line)
+                haystack = line.lower()
+                for schema, phrase, table in retired:
+                    if phrase.lower() in haystack:
+                        found.append(f"{rel}:{number}: rule A, {table}[{schema!r}] = {phrase!r}")
+            continue
+
+        blocks = summary_blocks(lines)
+        for number, value in blocks:
+            for schema, phrase, table in retired:
+                if leads_with(value, phrase):
+                    found.append(
+                        f"{rel}:{number}: rule A, summary opens with "
+                        f"{table}[{schema!r}] = {phrase!r}"
+                    )
+        declared = ASSET_TYPE.search(text)
+        if declared is None or declared.group(1).casefold() == "schema":
+            for number, value in blocks:
+                match = NEGATIVE_DISCRIMINATOR.search(value)
                 if match is not None:
                     found.append(
                         f"{rel}:{number}: rule B, a shouted negative discriminator "
-                        f"({match.group(0)!r}) in corpus data"
+                        f"({match.group(0)!r}) in a schema summary"
                     )
     return found
 
@@ -243,7 +341,7 @@ def main() -> int:
     print(
         f"no hand-authored benchmark discriminators across {len(paths)} file(s); "
         f"rule A: {n_phrases} retired phrase(s), {len(EXEMPT)} exempt path(s); "
-        f"rule B: {data_files} corpus data file(s) scanned for shouted negatives"
+        f"rule B: the summaries in {data_files} corpus data file(s)"
     )
     if data_files == 0:
         print(

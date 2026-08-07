@@ -14,17 +14,27 @@ behind it.
 
 ## 0. Status, 2026-08-06 — items 1–8 are done
 
-**All eight items of §3's work order have landed**, one commit each, suite green at every step
-(783 → 810 passing). The evidence sections below are **not** rewritten: they describe the tree as
-audited, which is what makes them checkable against history. Where a section is closed, the code
-it names now carries the correction in its own docstring, so the two never drift.
+**All eight items of §3's work order have landed**, one commit each. The evidence sections below
+are **not** rewritten: they describe the tree as audited, which is what makes them checkable
+against history. Where a section is closed, the code it names now carries the correction in its
+own docstring, so the two never drift.
+
+> **Amended 2026-08-06, later the same day.** Item 4 was reported closed and was not. The row
+> below is rewritten; the original read *"`corpora/` is **not on disk in this tree**, so there was
+> nothing to quarantine."* It is on disk — eight corpora, and the contaminated one — and the
+> suite was not green: the gate item 4 added failed three tests. Both mistakes have the same
+> cause, and it is worth more than the fix. `corpora/` is gitignored, so an agent working in a
+> fresh clone or a worktree sees an empty tree, and "absent from my checkout" was published as
+> "absent from the repository". **A claim that is true of the author's environment is not a claim
+> about the tree.** That is §13.1's defect — measurements taken somewhere else, asserted here —
+> reintroduced in the commit sequence that was fixing it.
 
 | # | Item | Commit | What actually happened |
 |---|---|---|---|
 | 1 | `sample_rows` through `govern` | `b74c525` | Statement built as a syntax tree, run through `prepare()`, ledgered as `path="sample"`. `sample_values` **deleted** from the port and both adapters rather than fixed — keeping it would have left a method with no caller. `answering_attempts` added so a passing sample row cannot make a turn look answered. |
 | 2 | EX comparator | `2d4b52a` | BIRD-Obfuscation's `normalise_result` transcribed. `result_fingerprint` is now **byte-identical** to `hash_normalised_result`, verified on six rowsets. `EX 0.049` retired via `RETIRED_CLAIMS`; grep gate verified to fire on reinsertion. |
 | 3 | Oracle ceiling arm | `ed77bb9` | Self-grade branch deleted; no independent gold ⇒ `correct=None` ⇒ EX *unmeasured*, not 1.000 and not 0.000. Also fixed the bare list comprehension that discarded a whole arm on one unexecutable gold. |
-| 4 | Corpus contamination | `9320834` | `corpora/` is **not on disk in this tree**, so there was nothing to quarantine. The producers were the durable artifact: both deleted, plus four one-off scripts pointed at them. **The audit named one producer; running the new gate found a second** — `_revise_miss_summaries.py`, 26 phrases with *negative* discriminators, absent from §6.1. `check_train_only`'s self-comparison refused; `check_citations` + a new source-level gate added to CI. |
+| 4 | Corpus contamination | `9320834`, then amended | Producers deleted, and **the audit named one; the new gate found a second** — `_revise_miss_summaries.py`, 26 phrases with *negative* discriminators, absent from §6.1. `check_train_only`'s self-comparison refused; `check_citations` + the new gate added to CI. **The artifact half was missed and is now done** — see §0.2. |
 | 5 | Non-monotone fusion | `88713d9` | `fuse` takes `consulted` and renormalises over it. §7.2 fixed too: pass two now embeds each facet's rewritten query. **One unmeasured ranking change**, recorded inline — see §0.1. |
 | 6 | Dead connections | `93bc7ad` | `_discard()` on every `ConnectionError`; no-SQLSTATE faults classified from `Connection.closed`/`broken` and the DB-API split, never prose. §9.2 **verified** and fixed: the SQLite adapter classified a governance-blocked write as infrastructure being down. |
 | 7 | §10 wire-or-delete | `26739e4`, `2b8b10b`, `a296431` | Redaction vocabulary deleted (maintainer's call), `Sink` and `Responder` ports deleted, `latency_sec` **measured for the first time**, cache tokens summed, `lexical_coverage` given a real measurement, `knobs.Role` given a gate. Seven other declarations deleted. |
@@ -53,6 +63,59 @@ Three things a reader of the sections below should know before trusting them:
 Two findings **not** in the work order remain open and are not fixed: §6.2's corpus is neither
 in version control nor reproducible from anything committed (documented as an open problem in
 `corpus/README.md`), and §6.4's server-serves-what-the-CLI-refuses gap.
+
+### 0.2 Item 4, finished — the gate, and the artifact it was pointed at
+
+`corpora/` was on disk the whole time: eight corpora, 51,619 data files. Pointed at them, the
+new gate reported **31,599 hits and exited 1**, which is why three tests failed. Almost all of
+it was noise, and both rules produced it:
+
+| | Hits | What it actually was |
+|---|---|---|
+| Rule B, before | 31,560 | The obfuscation dataset's own decoy marker — `'DECOY column: not a real business field. Do NOT use it to answer questions.'` That is the corpus telling the model to *ignore* a column: the opposite of a leak. |
+| Rule A, before | 39 | 27 real. The other 12 were `PREFIX['simpson_episodes'] = 'Simpsons season-20'` matching `body` prose in six **uncontaminated** corpora — including the one `.env` serves. That phrase is simply what the schema *is*; the producer chose it because it was the natural description. |
+
+Two scoping rules, each learned from a specific false positive rather than tuned to a count:
+
+1. **Inside a corpus, both rules read `summary` and nothing else.** This is the gate's own
+   stated premise — `summary` is the only text entering either retrieval channel — so a phrase
+   in `body`, `rules` or a column `note` cannot steer the router. Outside a corpus, rule A still
+   reads every line: there the subject is a producing script.
+2. **Rule A matches only at the head of the summary, and rule B only on schema assets.**
+   Position, because both producers *prepended* — contaminated reads
+   `'simpson_episodes: Simpsons season-20 Catalog …'` and clean reads
+   `'simpson_episodes: Catalog Simpsons season-20 …'`. Schema assets, because a *term* defines
+   itself by negation as a matter of course: `student_loan`'s "female student" is "a student
+   whose name does NOT appear in the male (`nan_xing`) table", since that schema has no female
+   table. Rule B applies to any asset that does **not** declare a non-schema type, so a corpus
+   omitting `asset_type` is still scanned.
+
+After scoping, the gate reports **27 hits, all in `corpora/_variant-authored-20260805`** — which
+independently reproduces §6.1's "27 of 57 schemas", derived by a different method. Zero false
+positives.
+
+**The artifact.** `_variant-authored-20260805` (57 schemas, 19.1 MB, untracked) is moved to
+`_archive/quarantine/`, outside both `corpora/` and the gate's scan roots, with
+`_archive/quarantine/README.md` recording what it is. **Moved, not deleted**: nothing in this
+tree can rebuild it (§6.2), and the record of what was done is worth more than the disk. The
+whole corpus rather than the 27 files, because stripping the phrases would leave something that
+looks clean and has no provenance (§6.3) — worse than something plainly labelled.
+
+**Corrected, because it was stated the other way earlier in the day:** the corpus `.env:18`
+serves, `gold-semantic-layer-20260804`, is **clean**. Its only flagged line was `body` prose,
+and its `summary` carries no discriminator. The five dense variants are clean for the same
+reason. One contaminated corpus, not seven.
+
+Gate now exits 0 across 51,796 files, 51,619 of them corpus data — it is passing over the
+corpora, not passing because they are absent. Suite: **838 passed, 25 xfailed, 0 failed**,
+measured on a checkout that has the corpora, which is the only place the number means anything.
+
+**Still open, and worth naming because the gate is green now and that is persuasive.** CI has no
+`corpora/`, so rule B there scans nothing and rule A only guards the producers — the half of
+this gate that checks data can only run on a machine that has data, and nothing schedules that.
+That is §5.4's shape (a check whose default environment guarantees it passes) surviving in a
+narrower form. It is also why the gate prints its file counts: a run reporting
+`rule B: the summaries in 0 corpus data file(s)` has checked nothing, and now says so.
 
 ## How to read the tags
 
