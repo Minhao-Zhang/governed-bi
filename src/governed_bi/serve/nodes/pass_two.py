@@ -7,6 +7,7 @@ Untagged pass-one hits are carried forward unconditionally before budgets.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Any, Mapping, Sequence
 
 from governed_bi.register.assets import AssetType
@@ -15,7 +16,7 @@ from governed_bi.register.stages import Stage
 from governed_bi.retrieve.budget import apply_budgets
 from governed_bi.retrieve.fuse import scale_within_channel
 from governed_bi.retrieve.index import UnifiedIndex
-from governed_bi.serve.runtime import candidate_depth, combine_channels
+from governed_bi.serve.runtime import candidate_depth, combine_channels, vector_for_query
 from governed_bi.serve.runtime import facet_hits as hits_of
 
 __all__ = ["pass_two_retrieve"]
@@ -28,10 +29,21 @@ def pass_two_retrieve(
     schemas: Sequence[Any],
     ranking: list[tuple[Any, float]],
     query_vector: Sequence[float] | None = None,
+    embedder: Any | None = None,
 ) -> dict[str, Any]:
-    """Re-search selected schemas per facet query; merge untagged pass-one hits."""
+    """Re-search selected schemas per facet query; merge untagged pass-one hits.
+
+    ``query_vector`` is the raw question's, from ``accept``. ``embedder`` is what lets a facet's
+    *rewritten* query be scored semantically against its own vector rather than against the
+    question's — without it, this pass blends BM25 over one text with cosine over another. It
+    stays optional because every fixture and the no-embedder configurations legitimately have
+    none, and then ``query_vector`` is both the best and the only vector available.
+    """
     schema_set = {str(s) for s in schemas}
     depth = candidate_depth(state)
+    question = str(state.get("question") or "")
+    #: query text -> its vector, for this call. Two facets often rewrite to the same phrase.
+    vectors: dict[str, Sequence[float] | None] = {}
 
     # Per-facet hit lists (dict payloads) after within-facet dedup.
     hits_by_facet: dict[str, list[dict[str, Any]]] = {}
@@ -64,28 +76,16 @@ def pass_two_retrieve(
             # The `_scores_lexical` guard itself is kept, one level lower, because the
             # `Anomaly.extra_channel` it was added for is real: a facet must not be scored
             # on a channel `register/facets.py` does not declare for it.
-            semantic_scores = (
-                _semantic_scores(index, candidate_ids, query_vector)
-                if _scores_semantic(name)
-                else {}
-            )
-            # Positive only, matching `nodes/facets.py`. The two passes disagreeing about
-            # what counts as a semantic score is how one asset ends up with two different
-            # `score` values in one turn.
-            semantic_scores = {
-                str(aid): float(sc) for aid, sc in semantic_scores.items() if float(sc) > 0.0
-            }
-            # Query-independent — `pass_two_retrieve` takes one vector for the whole call —
-            # so the semantic candidates are ranked once rather than per query.
-            semantic_top = [
-                aid
-                for aid, _ in sorted(
-                    semantic_scores.items(), key=lambda p: (-float(p[1]), str(p[0]))
-                )
-            ][:depth]
             restricted = (
                 index.lexical.restrict_to(candidate_ids) if _scores_lexical(name) else None
             )
+            # The channels this facet declares and this pass therefore consulted. `fuse`
+            # renormalises over these, so `facet_example` (semantic only) is not diluted, and a
+            # document that one consulted channel did not return scores 0.0 on it rather than
+            # being credited as if the channel never ran.
+            consulted = frozenset(
+                {Channel.lexical.value} if _scores_lexical(name) else set()
+            ) | frozenset({Channel.semantic.value} if _scores_semantic(name) else set())
             for query in queries:
                 if not query:
                     continue
@@ -98,6 +98,40 @@ def pass_two_retrieve(
                         )
                         if float(sc) > 0.0
                     }
+                # **Inside the query loop, and scored against the vector of *this* query.**
+                # This block used to sit above, once per facet, against the single call-level
+                # `query_vector` — which `accept` computes from the **raw last human message**.
+                # The lexical channel meanwhile searched `queries`, which `_run_facet` set to
+                # the utility-model rewrite. So the two channels were scored over two different
+                # texts and then blended, in the pass whose output becomes the analyst's
+                # context. `facets.py:325-367` documents the fix — "both channels then search
+                # with it; a rewrite that reached only BM25 would miss the point" — and that fix
+                # applied to pass one only.
+                #
+                # Memoised per call, because two facets that produce the same rewrite would
+                # otherwise embed it twice, and the raw question resolves to the cached vector
+                # with no call at all.
+                semantic_scores = (
+                    _semantic_scores(
+                        index,
+                        candidate_ids,
+                        _vector_for(query, question, query_vector, embedder, vectors),
+                    )
+                    if _scores_semantic(name)
+                    else {}
+                )
+                # Positive only, matching `nodes/facets.py`. The two passes disagreeing about
+                # what counts as a semantic score is how one asset ends up with two different
+                # `score` values in one turn.
+                semantic_scores = {
+                    str(aid): float(sc) for aid, sc in semantic_scores.items() if float(sc) > 0.0
+                }
+                semantic_top = [
+                    aid
+                    for aid, _ in sorted(
+                        semantic_scores.items(), key=lambda p: (-float(p[1]), str(p[0]))
+                    )
+                ][:depth]
                 # `dict.fromkeys` unions the two candidate lists while keeping the lexical
                 # order first and de-duplicating; the real ordering happens in `apply_budgets`.
                 lexical_top = list(lexical_scores)[:depth]
@@ -117,7 +151,9 @@ def pass_two_retrieve(
                     lexical = lexical_scores.get(asset_id)
                     semantic = semantic_scores.get(asset_id)
                     score = _hybrid(
-                        lexical_scaled.get(asset_id), semantic_scaled.get(asset_id)
+                        lexical_scaled.get(asset_id),
+                        semantic_scaled.get(asset_id),
+                        consulted=consulted,
                     )
                     payload = {
                         "facet": name,
@@ -252,7 +288,29 @@ def _semantic_scores(
     return dict(store.search(query_vector, keys=candidate_ids))
 
 
-def _hybrid(lexical: float | None, semantic: float | None) -> float | None:
+def _vector_for(
+    query: str,
+    question: str,
+    fallback: Sequence[float] | None,
+    embedder: Any | None,
+    memo: dict[str, Sequence[float] | None],
+) -> Sequence[float] | None:
+    """:func:`~governed_bi.serve.runtime.vector_for_query`, memoised over this call.
+
+    The memo is what keeps the fix cheap: the five facets frequently rewrite a question into
+    overlapping phrases, and a facet whose query *is* the question resolves to ``fallback``
+    without an embedding call at all.
+    """
+    if query not in memo:
+        memo[query] = vector_for_query(
+            query, question=question, fallback=fallback, embedder=embedder
+        )
+    return memo[query]
+
+
+def _hybrid(
+    lexical: float | None, semantic: float | None, *, consulted: Collection[str]
+) -> float | None:
     """Delegates to :func:`~governed_bi.serve.runtime.combine_channels`.
 
     **Its inputs are now scaled and they were not before.** This fused *raw* BM25 saturation
@@ -260,8 +318,12 @@ def _hybrid(lexical: float | None, semantic: float | None) -> float | None:
     overlap is not a blend, it is the lexical score plus a small constant. That mattered more
     here than anywhere else: this score is what reaches ``apply_budgets``, so it decided which
     tables survived the cap of 8, which is the largest attributable loss in the pipeline.
+
+    ``consulted`` comes from the facet's declared channels, which is what this pass branches on
+    (``_scores_lexical`` / ``_scores_semantic``) — so a facet declaring one channel is not
+    diluted, and a document one channel missed is not credited as if that channel never ran.
     """
-    return combine_channels(lexical, semantic)
+    return combine_channels(lexical, semantic, consulted=consulted)
 
 
 def _merge_within_facet(
@@ -365,7 +427,9 @@ def _build_retrieved(
             "attributions": {},
             "pulled_in": {},
             "schema_ranking": list(ranking),
-            "lexical_coverage": float(state.get("lexical_coverage") or 0.0),
+            # Passed through, `None` included. `route_node._lexical_coverage` is the one
+            # derivation; this pass must not default absence to 0.0 on the way past it.
+            "lexical_coverage": state.get("lexical_coverage"),
         }
 
     budgeted = apply_budgets(list(by_id.values()), pulled_in=[])
@@ -382,7 +446,7 @@ def _build_retrieved(
         "attributions": {k: v for k, v in attributions.items() if k in kept_ids},
         "pulled_in": {},
         "schema_ranking": list(ranking),
-        "lexical_coverage": float(state.get("lexical_coverage") or 0.0),
+        "lexical_coverage": state.get("lexical_coverage"),
     }
     # **What the caps discarded, carried out rather than dropped on the floor.** The filter two
     # lines above deletes over-budget ids from `selected` and `attributions` and nothing counted

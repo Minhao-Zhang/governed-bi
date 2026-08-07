@@ -1,31 +1,14 @@
-"""The transformation pipeline (ADR 0006 §3). Fixed order, stated once — G4.
+"""Transformation pipeline (ADR 0006 §3). Fixed order — G4::
 
-::
-
-    1. normalise    NFKC, after the control-character check, never before
-    2. canonicalise rewrite each identifier to the corpus's declared spelling
+    1. normalise    NFKC, after the control-character check
+    2. canonicalise rewrite identifiers to corpus spelling (ambiguous folds refuse)
     3. check()      the layer stack
-    4. limit        min(existing_limit, max_rows + 1) at the statement root
-    5. execute      the caller's job; ports.Connector is the last hop
-    6. ledger       sha256 of the exact string produced by step 4
+    4. limit        min(existing, max_rows + 1) at the statement root
+    5. execute      caller's job via ports.Connector
+    6. ledger       sha256 of step 4's string
 
-**Canonicalisation precedes checking**, so the verdict is about the statement that
-runs. ADR 0006's first draft left the order unstated and called canonicalisation
-"cosmetic-but-recorded, never a control", which is false: an ambiguous fold — two
-corpus columns differing only by case — left unrewritten is folded by Postgres to one
-of them, possibly the **decoy**, so the column layer approves one binding and the
-engine reads another. Ambiguous folds therefore refuse.
-
-**The row limit is ``min(existing, max_rows + 1)``, and a parse failure at step 4
-refuses.** v1 left the limit unchanged when a ``LIMIT`` already existed, so
-``LIMIT 100000000`` defeated the cap — and it left it unchanged on parse failure, on
-a path that also served executors where ``check()`` never ran. The ``+ 1`` is what
-makes truncation *detectable* rather than inferable.
-
-**Step 4 is the only transformation after the check**, and it is structural: a
-``LIMIT`` at the statement root cannot change which tables, columns or functions the
-statement touches, which is why it can be last and why the ledger hashes its output
-rather than the checked string. Every other rewrite happens before the verdict.
+Canonicalisation precedes checking. Step 4 is the only post-check rewrite
+(structural LIMIT); the ledger hashes its output. Parse failure at step 4 refuses.
 """
 
 from __future__ import annotations
@@ -57,11 +40,9 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class Prepared:
-    """The outcome of steps 1–4. ``sql`` is ``None`` when nothing may run.
+    """Outcome of steps 1–4. ``sql`` is ``None`` when nothing may run.
 
-    Both the raw input and the canonical form are carried, because "what did the model
-    write" and "what did we check" are different questions and v1 could answer neither
-    from its record.
+    Carries both raw input and canonical form.
     """
 
     verdict: CheckVerdict
@@ -85,26 +66,10 @@ def normalise(text: str) -> str:
 def spellings_for(
     corpus: AnalystCorpus, licensed: frozenset[str]
 ) -> tuple[Mapping[str, str], frozenset[str]]:
-    """``(folded → declared spelling, ambiguous folds)`` for this turn's licensed tables.
+    """``(folded -> declared spelling, ambiguous folds)`` for this turn's licensed tables.
 
-    **Scoped to ``licensed``, and the scope is the whole design.** Built over the entire
-    corpus instead, 30 folded names carry more than one declared spelling — ``name``,
-    ``id``, ``city``, ``code``, ``type``, ``title`` — so every one of them would land in
-    the ambiguous set and ``r_ambiguous_fold`` would refuse almost every query ever
-    written. Restricted to the tables a turn actually licensed, the collisions are 2 in
-    57 schemas (``address.District``/``district``, ``card_games.multiverseId``/
-    ``multiverseid``, measured 2026-08-04), and refusing *there* is right: the engine
-    folds the reference to one of them, and under obfuscation the one it picks can be the
-    decoy.
-
-    Per turn rather than per run, which is safe because the input is per turn: this is a
-    pure function of ``(corpus, licensed)`` and ``licensed`` is already this turn's. It is
-    not the kind of per-turn derivation ``retrieve/structure.py`` argues against — that
-    one is a projection of the *corpus*, where two turns disagreeing would mean two turns
-    ran against different shapes.
-
-    Reads the table's own ``columns`` rather than scanning every column asset, which is
-    an exact index because ``parent_table`` and ``columns`` both hold ids (ADR 0008 D4).
+    Scoped to ``licensed`` (corpus-wide collisions would refuse almost everything).
+    Ambiguous folds refuse at canonicalisation. Pure function of ``(corpus, licensed)``.
     """
     names: list[str] = []
     for table_id in sorted(licensed):

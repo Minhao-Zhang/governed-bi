@@ -1,26 +1,9 @@
-"""One scope traversal, shared by the function layer and the binding layer.
+"""One scope traversal, shared by the function and binding layers (ADR 0006 §4).
 
-ADR 0006 §4 records two mechanics v1 paid for, and both are here rather than in the
-layer that uses them, because **each layer having its own walk is how two layers end
-up disagreeing about what a reference means**:
-
-* **Per-scope resolution via ``traverse_scope``, never a query-wide name map.** A CTE
-  named after a base table deferred that table's excluded column: the flat map said
-  "``customers`` is a table with an excluded ``ssn``", the query said "``customers``
-  is my CTE", and the flat map won.
-* **Iterate every ``Column`` node in the statement, not ``scope.columns``.** The
-  latter omits bare ``HAVING`` references — a column the allowlist never saw.
-
-``scope.expression.find_all(...)`` is not per-scope: called on an outer ``Select`` it
-also returns everything inside nested subqueries, which is the query-wide map with
-extra steps. :func:`scope_nodes` is the pruned walk that makes "every node in *this*
-scope" mean what it says — every node is yielded by exactly one scope.
-
-**Nothing here refuses.** Classification is separated from judgement on purpose: the
-function layer is layer 3 and binding is layer 4, so if building the scope view could
-refuse, a table-valued function in ``FROM`` would be blocked at BINDING *before*
-FUNCTIONS ran — and then "reached layer 4" would no longer prove layer 3 passed,
-which is the property the whole ordered stack rests on.
+Per-scope via ``traverse_scope`` / :func:`scope_nodes` — not a query-wide name
+map, not ``scope.columns`` (misses bare ``HAVING``), not ``find_all`` on the
+outer select. Every node is yielded by exactly one scope. Nothing here refuses;
+classification stays separate from judgement so layer order stays a proof.
 """
 
 from __future__ import annotations
@@ -48,11 +31,8 @@ SCOPE_BOUNDARY_NODES: tuple[type[exp.Expr], ...] = (
 def scope_nodes(scope: Scope) -> Iterator[exp.Expr]:
     """Every node belonging to ``scope`` itself, nested scopes excluded.
 
-    Depth-first from the scope's own expression, pruning at a boundary node other
-    than the root. Uses ``iter_expressions()`` rather than ``args`` keys because arg
-    names move between sqlglot releases — ``Select``'s ``FROM`` is under ``from_`` in
-    the pinned release and was ``from`` before it, and a walk keyed on the old name
-    would have silently stopped seeing ``FROM`` sources.
+    Depth-first; prune at boundary nodes other than the root. Uses
+    ``iter_expressions()`` (arg names move between sqlglot releases).
     """
     root = scope.expression
     stack: list[exp.Expr] = [root]

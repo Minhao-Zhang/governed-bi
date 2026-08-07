@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping
 from typing import Any
 
@@ -9,10 +10,11 @@ from governed_bi.govern.guard import GUARD_PUBLIC_MESSAGE
 from governed_bi.govern.layers import GUARDRAIL_REFUSED_BY
 from governed_bi.govern.ledger import ExecutionRecord
 from governed_bi.measure.degradation import facets_degraded
+from governed_bi.register.quantity import Measured
 from governed_bi.register.record import project
 from governed_bi.register.stages import ATTEMPT_CAP_REFUSED_BY, Outcome, classify_outcome
 from governed_bi.serve.events import emit, rail_event_id
-from governed_bi.serve.ledger import attempt_field, execution_from_attempts
+from governed_bi.serve.ledger import answering_attempts, attempt_field, execution_from_attempts
 from governed_bi.serve.state import cleared
 
 __all__ = ["stamp"]
@@ -23,6 +25,59 @@ def _usage_for_turn(state: Mapping[str, Any]) -> list[dict[str, Any]]:
     turn_index = state.get("turn_index", 1)
     raw = state.get("usage") or []
     return [u for u in raw if isinstance(u, Mapping) and u.get("turn_index") == turn_index]
+
+
+def _cache_total(usage: list[dict[str, Any]], field: str) -> int | Measured[int]:
+    """Sum one cache-token field across this turn's usage rows, or *unmeasured*.
+
+    **The counts existed and were never projected up** (audit §10). ``cache_read_tokens`` and
+    ``cache_write_tokens`` were declared record fields with zero writers, permanently null —
+    while ``serve/usage.reported_tokens`` was already reading ``cache_read`` and
+    ``cache_creation`` out of the provider's ``input_token_details`` and putting them on every
+    usage row. The record simply never added them together.
+
+    Unmeasured when **no** row reported the field, because that is the difference this
+    repository keeps losing: a provider that reports no cache activity has told us nothing
+    about caching, and ``0`` there is this code's claim wearing the provider's clothes. A row
+    that reported an explicit ``0`` is a measurement and counts.
+    """
+    total = 0
+    seen = False
+    for row in usage:
+        value = row.get(field)
+        if isinstance(value, bool) or not isinstance(value, int):
+            continue
+        seen = True
+        total += value
+    if not seen:
+        return Measured.unmeasured(
+            f"no model call this turn reported {field}; the provider was not asked and did not say"
+        )
+    return total
+
+
+def _latency_sec(state: Mapping[str, Any]) -> float | Measured[float]:
+    """Wall-clock seconds from the turn's first node to now, or *unmeasured*.
+
+    ``wrap_node`` stamps ``turn_started_at``, so this is measured on every path that ran a
+    wrapped node — which is every path, since ``stamp`` is the only unwrapped one and it cannot
+    be reached without one. Unmeasured is therefore the hand-built-state case (a unit test
+    calling ``stamp`` directly), and it says so rather than reporting 0.0.
+
+    **A clarified turn includes the human's thinking time**, deliberately. The field is how long
+    the user waited for an answer, and a turn that stopped to ask them something did make them
+    wait. Separating engine time from human time needs a second field and a reason to want it.
+
+    Unrounded, because ``tools/check_measurement_locality.py`` refuses formatting outside
+    ``register/quantity.py`` — and it is right to: v1's rounding helpers turned an unmeasured
+    quantity into ``0.0`` on the way to a report. Presentation is ``Measured.render``'s job.
+    """
+    started = state.get("turn_started_at")
+    if not isinstance(started, (int, float)) or isinstance(started, bool):
+        return Measured.unmeasured(
+            "turn_started_at is absent: no wrapped node ran, so the turn has no start"
+        )
+    return max(0.0, time.time() - float(started))
 
 
 def _execution(state: Mapping[str, Any]) -> ExecutionRecord:
@@ -58,9 +113,15 @@ def _facet_channels(state: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def _attempts(execution: Mapping[str, Any] | Any) -> list[Any]:
+    """This turn's **answering** ledger rows.
+
+    Filtered, because ``sample`` rows are in the same ledger and a passing sample row would
+    make ``_path_signals`` report a turn as answered whose every ``run_query`` was refused —
+    the crash-counted-as-refusal inversion, re-introduced through a second executor path.
+    """
     if not isinstance(execution, Mapping):
         return []
-    return list(execution.get("attempts") or ())
+    return answering_attempts(list(execution.get("attempts") or ()))
 
 
 def _path_signals(
@@ -121,6 +182,7 @@ def _extract_factory(
     outcome: Outcome,
     execution: ExecutionRecord,
     usage: list[dict[str, Any]],
+    latency: float | Measured[float],
     failed_stage: str | None,
     error_type: str | None,
 ) -> Any:
@@ -144,8 +206,6 @@ def _extract_factory(
             return error_type
         if name == "generated_sql":
             return state.get("generated_sql")
-        if name == "final_sql_source":
-            return state.get("final_sql_source")
         if name in (
             "run_id",
             "turn_id",
@@ -166,11 +226,16 @@ def _extract_factory(
             # "routing found nothing" and "the join graph is disconnected" were the same
             # recorded row.
             "terminal_reason",
-            "cache_read_tokens",
-            "cache_write_tokens",
-            "latency_sec",
         ):
             return state.get(name)
+
+        # The three cost fields, derived here rather than read off state. All three had zero
+        # writers and were permanently null (audit §10); `latency_sec` had never been measured
+        # at all, because no clock was read anywhere in `src/governed_bi`.
+        if name == "latency_sec":
+            return latency
+        if name in ("cache_read_tokens", "cache_write_tokens"):
+            return _cache_total(usage, name)
 
         if name == "schemas":
             return state.get("schemas")
@@ -272,6 +337,7 @@ def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
             outcome=outcome,
             execution=execution,
             usage=usage,
+            latency=_latency_sec(state),
             failed_stage=failed_stage,
             error_type=error_type,
         ),

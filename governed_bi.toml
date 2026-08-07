@@ -1,271 +1,41 @@
-# Project-level configuration for governed-bi.
-#
-# One source of truth for all non-secret policy, parsed by
-# governed_bi.config.load_settings(). Local overrides go in the git-ignored
-# governed_bi.local.toml beside this file (same tables; local wins on merge).
-#
-# SECURITY: never put an API key or DSN password in this file. Secrets live in
-# the environment (or a git-ignored .env). This file only names the env var
-# ([models].api_key_env, [datasource].dsn_env).
+# Reference / aspirational config. NOT loaded by src/ today.
+# Live config: GOVERNED_BI_* env vars + register/knobs.py defaults.
+# Secrets never belong here — only env-var *names*.
 
 [runtime]
-# dev  = BIRD scale: auto-accept corpus, single all-access identity, hard-block
-#        suspect columns, files + SQLite.
-# prod = enterprise *intent* (PR + owner + CI, real user + gateway RLS, soft-warn).
-# WARNING: environment = "prod" is NOT bootable in this demo repo. Settings.for_env
-# sets single_all_access_identity=False, and build_stack() then raises
-# NotImplementedError (per-user identity + gateway RLS live in the enterprise
-# fork, D1/D7). Keep "dev" here, or override single_all_access_identity = true
-# if you need prod-ish toggles without that identity path.
 environment = "dev"
-# Optional per-toggle overrides (otherwise follow environment defaults above):
-# auto_accept_corpus = true
-# single_all_access_identity = true
-# grade_semantic_failures = true   # D5: deliver + grade semantic failures instead
-#                                  # of refusing; L2 policy stays a hard refusal.
-# hard_block_suspect_columns = true
-# hard_block_suspect_columns now gates ONLY reliability marks an AI wrote: the
-# curator agent's `annotate_column(suspect=True, ...)`, and the SME round-trip
-# feeding that same channel. No deterministic pass marks reliability any more —
-# the gold-derived mask that used to stamp every column train gold never touched
-# is deleted — so on a corpus whose curator marked nothing, this toggle has
-# nothing to block and its value makes no difference.
 
 [paths]
-# Corpus root (D9/D13). Relative values resolve against the repo root, not CWD,
-# so a sibling checkout works as corpus_root = "../BIRD-corpus".
 corpus_root = "corpus"
 
 [models]
-# Provider-agnostic by shape; OpenAI by current project decision.
 provider = "openai"
-
-# LLM used by the curator proposer and the server SQL generator.
-# gpt-5.6-luna = GPT-5.6 Luna tier (account must have access; else 404).
-# Fall back to gpt-5.5 if your account is GA-only.
 llm_model = "gpt-5.6-luna"
-llm_reasoning_effort = "low" # none | low | medium | high | xhigh | max
-# llm_max_output_tokens = 4096   # omit for provider default
-
-# `request_timeout_s` and `max_retries` are **deleted from this table, not moved into it**.
-#
-# They were here with a comment calling them "the entire defence" against provider rate
-# limits — and v2 deleted the reader for this whole file, so nothing had loaded them since
-# the rewrite. Measured on the real objects: `ChatOpenAI.max_retries` was `None` and the
-# `openai` client fell back to its own default of **2**, not the 8 written here, with no
-# timeout at all rather than the 900s. A dead value that reads authoritative is worse than
-# no value, because it answers the question wrongly to anyone who looks.
-#
-# They now live where they are read, as declared knobs (`register/knobs.py`) with
-# environment overrides (`api/graph_app.py`):
-#
-#   llm_max_retries        GOVERNED_BI_LLM_MAX_RETRIES        3     every model surface
-#   llm_timeout_s          GOVERNED_BI_LLM_TIMEOUT_S          300   the agent
-#   llm_utility_timeout_s  GOVERNED_BI_UTILITY_TIMEOUT_S      30    gate, rewriters, embedder
-#
-# Being knobs is the substantive half: retries move `crash_rate`, which the quotability
-# gates read, so two runs differing only in retries must not compare as one.
-
-# Embedding model for the retrieval vector channel.
-#
-# This channel IS the schema router: with 57 schemas competing and no schema pinned,
-# the shortlist decides which corpus the analyst ever sees, and a question that never
-# surfaces its gold schema scores ~2% (measured: 3 of 143 misrouted questions were
-# answered correctly anyway). Measured on the CURATED corpus over all 1351 test
-# questions (`runs/ablation/e1-shortlist-curated.json`): embedding recall@10 = 0.953
-# against BM25's 0.906. At the shipped top_k that gap is what the embedder buys.
-#
-# It is NOT the 2x this comment used to claim. The retired figure ("recall@3 0.70 vs
-# BM25 0.35") came from a pre-refilter 2030-question pool on a corpus with no table
-# descriptions; on curated prose BM25 measures 0.844 @3 against 0.852, and at @1 BM25
-# is AHEAD. The "no lexical safety net" reading was wrong -- see
-# docs/plans/routing-redesign.md, which also shows a per-table embedding channel
-# beating this one at every k on 26% fewer tokens.
-#
-# -3-large (3072 dims) rather than -3-small (1536). It is 6.5x the price per token
-# and the volume is negligible: the schema documents are embedded once per graph
-# build (57 docs, median 2072 tokens, largest 5957) and each question once — both
-# are memoised process-wide now; before that a ladder spent ~1.0M duplicate
-# embedding tokens and blew a shared account limit. A full
-# four-arm ladder spends single-digit dollars here against ~167M chat tokens.
-# `embedding_model` and `embedding_dimensions` are manifest knobs as of schema
-# version 3, so a run cannot quietly change this and still compare.
+llm_reasoning_effort = "low"  # none | low | medium | high | xhigh | max
 embedding_model = "text-embedding-3-large"
-# embedding_dimensions = 3072    # omit for model default (3072 for -3-large)
-
-# Environment variable that holds the API key (the key itself never lives here).
 api_key_env = "OPENAI_API_KEY"
 
-# To run on AWS Bedrock instead, install the extra (`uv sync --extra bedrock`) and
-# switch the provider — typically in the git-ignored governed_bi.local.toml:
-#   [models]
-#   provider = "bedrock"
-#   llm_model = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"  # Bedrock model id
-#   embedding_model = "amazon.titan-embed-text-v2:0"            # Bedrock embedding id
-#   region = "us-east-1"                                        # omit for AWS_REGION default
-#   api_key_env = "AWS_BEARER_TOKEN_BEDROCK"  # any var that must be set to go live;
-#                                             # boto3 also honors AWS_ACCESS_KEY_ID / profile / role
-
 [datasource]
-# Which database the engine + curator read. Default: the vendored SQLite fixture
-# (data/bird/beer_factory.sqlite) — a DEMO / TEST fixture only, so the offline demo
-# and CI need no setup. For real work, do NOT build on beer_factory: override this
-# table in a git-ignored governed_bi.local.toml to point at your own DB, and author
-# a corpus for that schema. Built into a Connector by gateway.build_connector; the
-# corpus itself has no build CLI — curator/pipeline.py's build_baseline_corpus /
-# build_curated_corpus are library calls, driven today only by the eval drivers
-# (governed_bi.eval.run_datalake). `python -m governed_bi.corpus.cli`
-# only validates an already-authored corpus, it does not author one.
-kind = "sqlite"                               # sqlite | postgres | redshift
-corpus_pin = "beer_factory"                   # default corpus schema subtree / BIRD db_id
-# db = "main"                                 # lake identity for db: note scopes (ADR 0003);
-#                                             # distinct from corpus_pin / schema
-sqlite_path = "data/bird/beer_factory.sqlite" # repo-root-relative
-
-# To profile a BIRD-Obfuscation Postgres instance instead (e.g. the renamed+decoy
-# one), put the switch in governed_bi.local.toml (git-ignored) and the DSN
-# password in .env. Example local overlay:
-#   [datasource]
-#   kind = "postgres"
-#   corpus_pin = "beer_factory"
-#   dsn_env = "PG_RENAME_DECOY_DSN"
-# The engine is uniformly schema-qualified (D15). Leave `schema` unset to span all
-# user schemas; pin one to scope a single db_id (bare refs then resolve to it).
-#   # schema = "beer_factory"
+kind = "sqlite"  # sqlite | postgres | redshift
+corpus_pin = "beer_factory"
+sqlite_path = "data/bird/beer_factory.sqlite"
 
 [serve]
-# Capability flags the API / frontend adapt to.
-# can_stream: REST factory default. The LangGraph-mounted app (api/routes.py)
-# forces can_stream=True regardless of this value.
 can_stream = false
-# Corpus file-write (POST /corpus/edit). Safe default is false. for_env(dev)
-# opts in when this key is omitted; set true in governed_bi.local.toml for
-# local demo edits. Mutating routes also require auth when api_key_env is set.
 allow_edit = false
-# Env-var *name* for the shared HTTP API secret (X-API-Key or Bearer).
-# Unset = single-identity demo: reads stay open; writes still need allow_edit.
-# api_key_env = "GOVERNED_BI_API_KEY"
 cors_origins = ["http://localhost:3000"]
 
-# Memory / cache / few-shot numeric gates (docs/architecture.md §7) are design
-# targets in that doc only — this branch removed them from Settings, so there is
-# no knob here or in code to tune yet.
-
-# Conversation checkpointer + portable run-log knobs (ADR 0004). Defaults match
-# Settings; uncomment to override. DSN passwords never live here — only the env
-# var name.
-# [logging]
-# conversation_checkpointer_kind = "sqlite"   # sqlite | postgres | memory
-# conversation_checkpointer_path = "data/checkpoints/conversations.sqlite"
-# conversation_checkpointer_dsn_env = "CHECKPOINT_DSN"  # postgres only; never inline DSN
-# run_log_kind = "sqlite"                     # sqlite | jsonl | off
-# run_log_path = "data/logs/runs.sqlite"
-
-# Which registered prompt variant each stage sends (the governed_bi.prompts
-# registry). Omitted = every stage on v1. That v1 is byte-identical to the text the
-# stage sent before the registry existed for every stage EXCEPT `sme_rules`: its
-# original v1 and its v2 candidate both forbade SQL while the same call handed the
-# SME a read-only probe-query tool, so both were deleted rather than kept as a
-# baseline. The replacement is that stage's ONLY variant — there is nothing to
-# select, and `sme_rules = "v2"` now fails at startup.
-# A stage or variant this build does not know fails at startup rather than falling
-# back to v1: a run must never report a prompt it did not send. Read
-# src/governed_bi/prompts/registry.py for the stage list and each variant's
-# rationale. The eval CLIs take --prompt stage=variant for one-offs.
-# [prompts]
-# schema_pick = "v2"
-# agent_core = "v3"
-
 [notes]
-# Governed-note prompt budget and PIN authority (ADR 0003; the code lives in
-# analyst/note_inject.py and retrieval/triggers.py). Every value below IS the
-# dataclass default — spelled out because nothing else in the tree names them, and
-# each one silently DROPS corpus content when it binds.
-
-# Max `activation = always` notes injected into one turn's prompt. Counts EVERY
-# injected always-note. It used to count only notes with an empty scope, on the
-# theory that a scoped note is already narrowed by scope matching — but a curated
-# build writes every note as `schema:<name>`, so the cap was dead and char_max was
-# the only gate, which let dozens of short caveats through. Raise it and the rules
-# dilute each other; lower it and the tail is dropped in precedence order
-# (must_honour first, then publication status, then retrieval relevance — see
-# note_inject._precedence_key). It is a PER-TURN cap, not a per-schema one.
 always_note_global_max = 8
-# Total characters of the injected always-note SUMMARIES (an always-note never
-# contributes its body; that is on_match-only progressive disclosure). On a wordy
-# corpus this binds before the count cap. A single note longer than the whole
-# budget is still injected, alone, rather than vanishing silently.
 always_note_char_max = 2000
-
-# PIN channel master switch (ADR 0003 H2), off by default. False = triggers are
-# authored and stored but inert: fire_triggers() returns [] before it reads the
-# corpus, so an `on_match` note reaches the prompt only by ordinary retrieval
-# match. Two non-obvious effects when true:
-#  1. A pinned note is FORCED in — rvgd adds it to the grounded set directly,
-#     bypassing RRF ranking entirely, and being on_match it is exempt from
-#     always_note_global_max (it shares only the char budget).
-#  2. It ADDITIVELY prepends the note's `schema:` scope to the router shortlist
-#     while KEEPING every top_k-ranked schema (cap = top_k + pins), so a wrong or
-#     hostile note can widen the shortlist but can never evict the correct schema
-#     (GATE-ADV-WRONG-NOTE, retrieval/schema_router.py).
-# This flag is hashed into serve_config_hash (provenance.py), so flipping it is
-# attributable in the run ledger — a run cannot quietly claim the default.
 pin_triggers_enabled = false
-# Only `publication_status = certified` notes may PIN. Set false and an
-# unreviewed proposed/draft note can steer routing and force itself into the
-# prompt. Also part of serve_config_hash.
 pin_require_certified = true
-# Max notes pinned per question, applied after the certified filter and the
-# certified > confidence > id tiebreak. curator/asset_bag.py mirrors this value as
-# _TRIGGERS_PER_NOTE, the cap on how many triggers one authored note may carry.
 pin_max = 3
 
 [eval]
-# BIRD eval-harness concurrency (docs/measurement.md).
-# workers = serve-loop worker threads for run_datalake. 1 is the
-# non-negotiable default: fully serial, byte-identical to the pre-concurrency run.
-# Raise it on a dedicated box with no rate limits; size to your Postgres
-# max_connections (each worker holds its own connection). --workers on either CLI
-# overrides this. serve_workers/build_workers are optional splits: serve_workers
-# sizes the per-question serve loop, build_workers the per-schema corpus build loop.
-# Both are live — the build loop runs a thread pool with a staging root per schema,
-# and the runbook's own Step 2 command passes --build-workers 6.
 workers = 1
-# serve_workers = 1
-# build_workers = 1   # per-schema corpus builds; each gets its own staging root
 
-# NOT a knob, but it decides whether two runs may be compared: the graded question
-# pool's identity is hashed into every manifest as `question_pool_hash` (questions
-# AND the gold each is graded against) and is a comparability-gate key. A sibling
-# repo refilters the BIRD question set, so a refiltered pool stops comparing as the
-# same experiment instead of silently shifting EX. Nothing here to set — it is
-# derived from the pool the driver actually graded (eval/metrics.py).
-
-# Eval routing profile (D15 schema router). Now UNCOMMENTED, and that is a change.
-#
-# It used to sit commented out with a note that the pooled driver defaulted to
-# 10/true anyway. It did — but by hardcoded CLI defaults that overwrote this table
-# unconditionally, so setting `top_k = 3` here did nothing and every measured run
-# was 10/true whatever the file said. That is now fixed (the flags are None
-# sentinels), which means this table finally decides, and leaving it commented would
-# silently move the driver to the dataclass defaults 3/false — a configuration no
-# published number was produced under.
-#
-# So it is spelled out at the values every run in `runs/index.jsonl` actually used.
-# Measured on the curated corpus over the 1351-question test split
-# (`scripts/routing_ablation.py`), shortlist recall is 0.852 @3 against 0.953 @10:
-# the shipped product default of 3 gives away ten points of ceiling before the model
-# is asked anything. Aligning the two is what this table is for — a benchmark number
-# should describe a configuration a deployment could run.
 [routing]
 top_k = 10
 llm_pick = true
 pick_max_columns = 12
-
-# Analyst-side context budget (`[analyst]`, loaded into Settings). Both OFF by
-# default and deliberately absent here: turning either on changes what the model is
-# shown on every question, so they are experiment knobs, not policy. They are hashed
-# into `serve_config_hash`, so a run cannot enable one and still compare.
-#   [analyst]
-#   max_table_columns = 20       # 0 = no cap; per-table, relevance-selected
-#   compact_suspect_caveats = true

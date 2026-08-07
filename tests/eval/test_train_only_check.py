@@ -1,13 +1,8 @@
 """The leak detector must bite, and must not bite the corpus it is meant to clear.
 
-``docs/plans/corpus-summary-rewrite-2026-08-05.md`` outsources a corpus rewrite whose loudest
-constraint is that the held-out set stays held out. ``tools/check_train_only.py`` is the only
-mechanical check on that, and a check that cannot fail is this repository's named defect (L§7) --
-its first draft reported **67 containments in the certified train-only gold layer** and then, once
-the window was widened to clear them, **missed a question planted verbatim in a table body**.
-
-So both directions are asserted here over hand-built corpora: a planted question is found, and
-clean prose that merely shares vocabulary is not.
+``tools/check_train_only.py`` is the only mechanical check that the held-out set stays
+held out. Both directions are asserted here over hand-built corpora: a planted question
+is found, and clean prose that merely shares vocabulary is not.
 """
 
 from __future__ import annotations

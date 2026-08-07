@@ -1,10 +1,10 @@
 """BM25 lexical channel with saturating normalisation and global IDF.
 
-Scores are absolute: ``s / (s + k)`` so a weak query's top hit is not normalised
-up to the same value as a strong query's. ``restrict_to`` narrows the candidate
-set without recomputing IDF — otherwise a second routing pass rescores on a
-different scale than the first.
+Scores are absolute: ``s / (s + k)``. ``restrict_to`` narrows candidates without
+recomputation of IDF. Tokenizer keeps ``_``/``-``/``/`` inside tokens and strips
+attached punctuation.
 """
+
 
 from __future__ import annotations
 
@@ -15,31 +15,7 @@ from collections.abc import Iterable, Sequence
 
 __all__ = ["BM25"]
 
-#: A word, keeping ``_``, ``-`` and ``/`` **inside** a token so an identifier survives whole.
-#:
-#: **This was ``re.compile(r"\S+")``, and that one character class was most of why the lexical
-#: channel looked weak on this corpus.** Splitting on whitespace alone keeps every attached
-#: comma, colon and bracket, so a curated summary and a natural-language question tokenise into
-#: two vocabularies that cannot meet:
-#:
-#: * ``geographic (geografisch): city, county, region`` →
-#:   ``['geographic', '(geografisch):', 'city,', 'county,', 'region']``
-#: * ``List all the cities in Sonoma County.`` → ``[..., 'sonoma', 'county.']``
-#:
-#: ``county`` and ``county,`` and ``county.`` are three unrelated terms, each with its own IDF.
-#: Measured over the gold layer: 70.3% of table-summary tokens carried glued punctuation, only
-#: 3.1% of column physical names appeared as a clean token in their own table's summary, and the
-#: index vocabulary fell from 25 815 whitespace tokens to 12 397 once stripped — meaning more
-#: than half of what BM25 treated as distinct terms were punctuation variants of each other,
-#: splitting the IDF of the name they came from. The lexical channel scored **nothing at all**
-#: against all 57 schema summaries on 66.7% of held-out questions; stripping punctuation takes
-#: that to 19.0%.
-#:
-#: **This had to land after the channels were made commensurate, not before.** Under the old
-#: ``max(lexical, semantic)`` the same repair was a *regression* — schema recall@3 0.9269 →
-#: 0.8947, paired +9 −20 — because a stronger wrong-scaled channel simply wins more often. With
-#: ``facets._within_facet_scale`` in place it is a gain (gold tables inside the budget 0.6559 →
-#: 0.6752). Order of operations was the whole finding.
+#: Word token: keep ``_``/``-``/``/`` inside; strip attached punctuation.
 _TOKEN = re.compile(r"[^\W_]+(?:[_\-/][^\W_]+)*", re.UNICODE)
 
 # Okapi term-frequency parameters; constructor ``k`` is saturating normalisation.
@@ -144,6 +120,36 @@ class BM25:
             denom = f + _K1 * (1.0 - _B + _B * dl / avgdl)
             score += idf * (f * (_K1 + 1.0) / denom) * qf
         return score
+
+    def coverage(self, query: str) -> float | None:
+        """Share of the query's distinct terms this corpus has any document for.
+
+        ``None`` when the query tokenises to nothing, which is not 0.0: a blank query has no
+        coverage to measure, and reporting zero would say the corpus failed to match a question
+        nobody asked.
+
+        **This is the number ``lexical_coverage`` was declared for and never had** (audit §10).
+        It shipped hard-coded to ``0.0`` on every production turn, which reads as *the question
+        shares no vocabulary at all with the corpus* — the maximum-weakness reading of a field
+        whose whole job is to flag exactly that. The register declares it
+        ``Absence.not_measured``, so ``0.0`` was not even the honest placeholder.
+
+        Why the signal matters, from the register's own justification: with an embedder every
+        asset scores above zero, so an out-of-corpus question still returns ``top_k`` tables and
+        a clean run stamps confidence. Cosine cannot tell "nothing here is relevant" from
+        "everything here is a bit relevant". A query whose terms are absent from the corpus
+        vocabulary can.
+
+        Distinct terms, not occurrences: asking the same unknown word twice is one thing the
+        corpus does not know, not two. Measured against ``_idf`` — the full corpus vocabulary,
+        built once in ``__init__`` — rather than against this restricted view, because the
+        question is whether *the corpus* has the vocabulary, not whether this facet's candidate
+        subset does.
+        """
+        terms = set(_tokenize(query))
+        if not terms:
+            return None
+        return sum(1 for term in terms if term in self._idf) / len(terms)
 
     def search(self, query: str) -> list[tuple[str, float]]:
         """Return ``(id, saturated_score)`` for every document in this view."""

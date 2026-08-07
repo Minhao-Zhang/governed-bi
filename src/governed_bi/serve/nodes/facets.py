@@ -21,6 +21,7 @@ from langchain_core.runnables import RunnableConfig
 from governed_bi.register.facets import (
     FACET_CHANNELS,
     FACET_TARGETS,
+    SCORING_CHANNELS,
     Channel,
     ChannelState,
     expected_channel_state,
@@ -29,7 +30,7 @@ from governed_bi.register.stages import Stage
 from governed_bi.retrieve.fuse import scale_within_channel
 from governed_bi.retrieve.index import UnifiedIndex
 from governed_bi.retrieve.semantic import semantic_search
-from governed_bi.serve.runtime import candidate_depth, combine_channels
+from governed_bi.serve.runtime import candidate_depth, combine_channels, vector_for_query
 from governed_bi.serve.runtime import configurable as runtime_config
 
 __all__ = [
@@ -202,8 +203,23 @@ def _pass_one_hits(
     lexical_scaled = scale_within_channel(lexical_scores)
     semantic_scaled = scale_within_channel(semantic_scores)
 
+    # The channels that were actually consulted, from `ran` — which `semantic_search` sets from
+    # its own observed state rather than from the branch having been entered. `fuse` needs this
+    # to tell "this facet has no semantic channel" from "the semantic channel returned nothing
+    # for this asset"; conflating them made an asset found by both channels score below one
+    # found by only one.
+    #
+    # Restricted to `SCORING_CHANNELS`, because `ran` also carries `extraction` — the rewriter
+    # call — and `extraction` has no weight to fuse with.
+    consulted = frozenset(c.value for c in ran if c in SCORING_CHANNELS)
+
     def _combined(aid: str) -> float:
-        return combine_channels(lexical_scaled.get(aid), semantic_scaled.get(aid)) or 0.0
+        return (
+            combine_channels(
+                lexical_scaled.get(aid), semantic_scaled.get(aid), consulted=consulted
+            )
+            or 0.0
+        )
 
     merged = sorted(
         set(lexical_scores) | set(semantic_scores),
@@ -260,7 +276,7 @@ def _facet_result(
     }
 
 
-def _rewritten_query(
+async def _rewritten_query(
     question: str,
     stage: Stage,
     config: RunnableConfig,
@@ -303,7 +319,7 @@ def _rewritten_query(
     from governed_bi.serve.usage import usage_row
 
     try:
-        reply = model.invoke(
+        reply = await model.ainvoke(
             [SystemMessage(prompt_text(prompt_name)), HumanMessage(question)],
             # Named after the registered prompt, so the five concurrent rewrites are five
             # distinguishable rows in LangSmith instead of five `ChatOpenAI`s that started in
@@ -352,22 +368,20 @@ def _query_vector(
     reads it. Config remains the fallback so the two existing callers keep working unchanged —
     and reading state first means a per-turn value always wins over a run-constant one, which is
     the direction that cannot be wrong.
+
+    The embed-the-rewrite half now lives in
+    :func:`~governed_bi.serve.runtime.vector_for_query`, because pass two needed it and did not
+    have it: it blended BM25 over the rewrite against cosine over the raw question. This
+    function is the state/config lookup that produces the fallback.
     """
     cfg = runtime_config(config)
-    if query and question is not None and query != question:
-        embedder = cfg.get("embedder")
-        if embedder is not None:
-            try:
-                return list(embedder.embed([query])[0])
-            except Exception:  # noqa: BLE001 — fall back to the question's vector below
-                pass
-    vector = state.get("query_vector")
-    if vector:
-        return vector
-    return cfg.get("query_vector") or None
+    fallback = state.get("query_vector") or cfg.get("query_vector") or None
+    return vector_for_query(
+        query, question=question, fallback=fallback, embedder=cfg.get("embedder")
+    )
 
 
-def _run_facet(
+async def _run_facet(
     state: Mapping[str, Any],
     config: RunnableConfig,
     stage: Stage,
@@ -387,7 +401,7 @@ def _run_facet(
         # The rewrite happens first, and both channels then search with it — a rewrite that
         # reached only BM25 would miss the point, since the whole reason to restate the question
         # in the vocabulary of the thing being searched is to move it *semantically* closer.
-        query = _rewritten_query(
+        query = await _rewritten_query(
             question, stage, config, ran=ran, spent=spent, turn_index=state.get("turn_index", 1)
         )
         hits: list[Any] = _pass_one_hits(
@@ -426,26 +440,26 @@ def _run_facet(
     return update
 
 
-def facet_schema_node(state: dict, config: RunnableConfig) -> dict:
+async def facet_schema_node(state: dict, config: RunnableConfig) -> dict:
     """Schema facet: pass-one lexical over schema assets when an index is configured."""
-    return _run_facet(state, config, Stage.facet_schema)
+    return await _run_facet(state, config, Stage.facet_schema)
 
 
-def facet_term_node(state: dict, config: RunnableConfig) -> dict:
+async def facet_term_node(state: dict, config: RunnableConfig) -> dict:
     """Term facet: stub extraction query + type-scoped lexical when indexed."""
-    return _run_facet(state, config, Stage.facet_term)
+    return await _run_facet(state, config, Stage.facet_term)
 
 
-def facet_metric_node(state: dict, config: RunnableConfig) -> dict:
+async def facet_metric_node(state: dict, config: RunnableConfig) -> dict:
     """Metric facet: stub extraction query + type-scoped lexical when indexed."""
-    return _run_facet(state, config, Stage.facet_metric)
+    return await _run_facet(state, config, Stage.facet_metric)
 
 
-def facet_entity_node(state: dict, config: RunnableConfig) -> dict:
+async def facet_entity_node(state: dict, config: RunnableConfig) -> dict:
     """Entity facet: stub extraction query + table/column/join lexical when indexed."""
-    return _run_facet(state, config, Stage.facet_entity)
+    return await _run_facet(state, config, Stage.facet_entity)
 
 
-def facet_example_node(state: dict, config: RunnableConfig) -> dict:
+async def facet_example_node(state: dict, config: RunnableConfig) -> dict:
     """Example facet: no lexical channel; empty hits until a semantic index is wired."""
-    return _run_facet(state, config, Stage.facet_example)
+    return await _run_facet(state, config, Stage.facet_example)

@@ -49,10 +49,14 @@ def _turn(**overrides: Any) -> dict[str, Any]:
 def _crash(real: Any, *, on_turn: int | None) -> Any:
     """A facet node that raises, on one turn index or on all of them."""
 
-    def node(state: dict, config: Any) -> dict:
+    # `async def`, because the facet nodes are. A sync double here does not fail loudly: it
+    # returns the real node's coroutine unawaited, `wrap_node` hands that to
+    # `rail_observation`, and the turn dies on `'coroutine' object has no attribute 'get'` —
+    # a stack trace about the double, three frames away from anything real.
+    async def node(state: dict, config: Any) -> dict:
         if on_turn is None or state.get("turn_index") == on_turn:
             raise ValueError("facet exploded")
-        return real(state, config)
+        return await real(state, config)
 
     return node
 
@@ -222,6 +226,9 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
         # A carried-over query vector would score the *previous* question's semantics against
         # this turn's candidates — a wrong ranking with nothing anywhere disagreeing.
         "query_vector": [0.1, 0.2, 0.3],
+        # A carried-over clock makes turn two's `latency_sec` span turn one plus everything the
+        # user did in between — the field would report a real number and mean nothing.
+        "turn_started_at": 1_700_000_000.0,
         "terminal_reason": "missing_join_path", "schemas": ["ops_b"], "crossings": [{}],
         "licensed": ["ops_b.sensors"], "clarification_requested": True,
     }
@@ -263,6 +270,34 @@ def test_every_declared_channel_is_classified_as_per_turn_or_not():
     )
     invented = classified - declared
     assert not invented, f"{sorted(invented)} are classified but not declared on ServeState"
+
+
+def test_every_executor_path_is_classified_as_answering_or_introspecting():
+    """A new executor path must be classified before ``terminal`` can read it.
+
+    ``INTROSPECTION_PATHS`` is stated as the complement of "can answer the question", so a
+    path added to ``EXECUTOR_PATHS`` and forgotten counts as answering. That is the right
+    default — under-recording an answer is this repository's recurring failure mode — but it
+    is only right if forgetting is caught. It is caught here.
+
+    The distinction is load-bearing in three places: ``execution_from_attempts``' ``terminal``,
+    ``stamp``'s outcome, and ``agent_core``'s ``generated_sql``. A ``sample`` row counted as
+    answering makes a turn whose every ``run_query`` was refused record ``answered``, and makes
+    a ``SELECT DISTINCT`` over one column the statement an eval re-executes as the answer.
+    """
+    from governed_bi.govern.ledger import EXECUTOR_PATHS
+    from governed_bi.serve.ledger import INTROSPECTION_PATHS
+
+    #: The judgement, made once. ``agent`` writes the analyst's SQL; ``graded`` is the graded
+    #: delivery retry of the same statement (ADR 0006 §5), so both answer. ``sample`` and
+    #: ``profile`` describe a column to the model and answer nothing.
+    answering = {"agent", "graded"}
+    assert answering | INTROSPECTION_PATHS == set(EXECUTOR_PATHS), (
+        f"unclassified executor path(s): "
+        f"{sorted(set(EXECUTOR_PATHS) - answering - INTROSPECTION_PATHS)}. Decide whether the "
+        "path can answer the question; if it cannot, add it to INTROSPECTION_PATHS."
+    )
+    assert not (answering & INTROSPECTION_PATHS)
 
 
 def test_a_turn_built_by_the_session_seam_actually_answers(
@@ -350,3 +385,62 @@ def test_a_failure_in_stamp_is_not_swallowed(
             _turn(),
             _config(two_schema_index, two_schema_assets, guard_off_policy, "t-stamp"),
         )
+
+
+def test_a_node_timeout_is_attached_only_where_it_can_fire() -> None:
+    """The bound exists, and it is not claimed where it would be a false promise.
+
+    LangGraph refuses ``TimeoutPolicy`` on a sync node outright — "sync Python execution cannot
+    be safely cancelled in-process" — which is why every node became ``async def``. But a node
+    whose *body* still runs through ``asyncio.to_thread`` only has its ``await`` cancelled; the
+    thread keeps going. Attaching a policy there would report a ceiling that does not hold, so
+    the ones that are natively async carry it and the rest do not.
+
+    ``agent_core`` is the node this is for: ``llm_timeout_s`` bounds one of its provider calls,
+    the loop makes several, and the real recursion limit under the server is 10007 — so nothing
+    bounded the node.
+    """
+    from governed_bi.serve.graph import _CANCELLABLE, build_graph
+
+    nodes = build_graph().nodes
+    timed = {name for name, node in nodes.items() if getattr(node, "timeout", None) is not None}
+
+    assert "agent_core" in timed, "the unbounded node is still unbounded"
+    assert _CANCELLABLE <= timed, f"a cancellable rail carries no bound: {_CANCELLABLE - timed}"
+    # The fan-out is deliberately excluded: with concurrent siblings a NodeTimeoutError surfaces
+    # at executor teardown and never reaches the handler, so the turn would end with no record.
+    assert not (timed & {name for name, _ in graph_mod._FACET_NODES}), (
+        "a facet carries a timeout; a hang there escapes the handler and loses the record"
+    )
+    assert "stamp" not in timed, "stamp is unwrapped and must stay so"
+    for name in timed:
+        assert name == "agent_core" or name in _CANCELLABLE, (
+            f"{name!r} claims a timeout but its body is not natively async, so the await would "
+            "be cancelled and the work would carry on in its thread"
+        )
+
+
+def test_the_node_timeouts_are_settable_by_a_deployment() -> None:
+    """A knob reachable only from source is the defect the register exists to abolish.
+
+    Both are read from the environment before falling back to the declared default, the same way
+    the two model timeouts already are.
+    """
+    import os
+
+    from governed_bi.register.knobs import knob_default
+    from governed_bi.serve.graph import _node_timeout
+
+    assert _node_timeout("agent_core").run_timeout == float(knob_default("agent_node_timeout_s"))
+    assert _node_timeout("guard").run_timeout == float(knob_default("rail_node_timeout_s"))
+    assert _node_timeout("route") is None, "a to_thread node must not claim a bound"
+    assert _node_timeout("facet_term") is None, (
+        "a facet carries a timeout again: concurrent siblings make NodeTimeoutError escape the "
+        "handler, so the turn would end with no record"
+    )
+
+    os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"] = "12.5"
+    try:
+        assert _node_timeout("agent_core").run_timeout == 12.5
+    finally:
+        del os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"]

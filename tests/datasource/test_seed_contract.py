@@ -221,15 +221,167 @@ def test_classification_reads_the_code_not_the_message(connector, fixture_schema
 
 
 def test_introspection_classifies_its_own_failures(dsn) -> None:
-    """``introspect`` / ``list_tables`` / ``describe_table`` / ``sample_values`` leaked raw
-    driver exceptions in the predecessor, so they escaped the taxonomy entirely — a
-    failure there is neither a query fault nor infrastructure, it is unclassified."""
+    """``introspect`` / ``list_tables`` / ``describe_table`` leaked raw driver exceptions in
+    the predecessor, so they escaped the taxonomy entirely — a failure there is neither a query
+    fault nor infrastructure, it is unclassified."""
     from governed_bi.datasource import errors  # type: ignore[import-not-found]
     from governed_bi.datasource.postgres import PostgresConnector  # type: ignore[import-not-found]
 
     unreachable = PostgresConnector("postgresql://nobody@127.0.0.1:1/none")
     with pytest.raises((errors.ConnectionError, errors.QueryError)):
         unreachable.introspect("public")
+
+
+# ── a dead connection must not survive the statement that killed it ───────────
+
+
+def _connector_with(conn: object) -> object:
+    """A ``PostgresConnector`` over a fake handle, with reconnects counted.
+
+    No DSN and no server: these two tests are about what the connector does with a handle the
+    driver has given up on, and that needs a handle that fails on demand rather than a
+    database. The Postgres-gated tests above cover the SQLSTATE paths against a real server.
+    """
+    from governed_bi.datasource.postgres import (  # type: ignore[import-not-found]
+        PostgresConnector,
+    )
+
+    class _Fake(PostgresConnector):
+        def __init__(self) -> None:
+            self._dsn = "postgresql://unused"
+            self._max_rows = 10
+            self._conn = None
+            self.connects = 0
+
+        def _connect(self):  # noqa: ANN202
+            if self._conn is None:
+                self.connects += 1
+                self._conn = conn
+            return self._conn
+
+    return _Fake()
+
+
+def test_one_connection_blip_does_not_poison_the_rest_of_the_run() -> None:
+    """Audit §9.1. ``execute`` never cleared ``_conn``, and ``_connect`` returned it anyway.
+
+    ``close()`` was the only writer of ``_conn = None`` and it is reached only from
+    ``__exit__`` / ``__del__``, so a handle the driver had abandoned was reused for every
+    remaining statement. On a 1 351-question eval arm that is one network blip deciding
+    whether the rest of the run's data is real.
+
+    **And the failure was invisible**, which is the half that matters more: psycopg raises
+    ``the connection is closed`` with ``sqlstate=None``, so the classifier fell past the
+    class-42 test *and* the 08/53/57 test and returned ``QueryError`` — an infrastructure
+    fault recorded as *the model wrote bad SQL*, for every question after the blip.
+    """
+    import psycopg
+
+    from governed_bi.datasource import errors  # type: ignore[import-not-found]
+
+    class _Dead:
+        closed = False
+        broken = False
+
+        def execute(self, sql, *args, **kwargs):  # noqa: ANN001, ANN202
+            raise psycopg.OperationalError("the connection is closed")
+
+        def close(self) -> None:
+            pass
+
+    connector = _connector_with(_Dead())
+    for _ in range(3):
+        with pytest.raises(errors.ConnectionError) as caught:
+            connector.execute("SELECT 1")
+        assert caught.value.sqlstate, "an infrastructure fault must carry a class-08 code"
+        assert connector._conn is None, "the dead handle survived the statement that killed it"
+
+    assert connector.connects == 3, (
+        f"reconnected {connector.connects} time(s) in three calls; the cached handle is still "
+        "being reused after a failure"
+    )
+
+
+def test_a_client_side_fault_that_is_not_the_connection_is_still_a_query_fault() -> None:
+    """The paired negative. Invalidating on *every* SQLSTATE-less error would be too much.
+
+    A ``ProgrammingError`` with no SQLSTATE is a fault in the call, not in the socket, and
+    treating it as infrastructure would drop a live connection and relabel a real statement
+    problem — the same conflation as the original defect, pointing the other way. The
+    classification is on structured driver state (``closed`` / ``broken``, and the DB-API's
+    ``OperationalError`` / ``ProgrammingError`` split), never on the message.
+    """
+    import psycopg
+
+    from governed_bi.datasource import errors  # type: ignore[import-not-found]
+
+    class _Fussy:
+        closed = False
+        broken = False
+
+        def execute(self, sql, *args, **kwargs):  # noqa: ANN001, ANN202
+            # No sqlstate: psycopg raises this client-side, before the server sees anything.
+            raise psycopg.ProgrammingError("the connection cannot be used in this context")
+
+        def close(self) -> None:
+            pass
+
+    connector = _connector_with(_Fussy())
+    with pytest.raises(errors.QueryError):
+        connector.execute("SELECT 1")
+    assert connector._conn is not None, (
+        "a statement fault must not discard a working connection — and the message here "
+        "contains the word 'connection', so a prose-matching classifier inverts this"
+    )
+
+
+def test_the_sqlite_adapter_classifies_by_code_and_not_by_prose(tmp_path) -> None:
+    """Audit §9.2, verified. The prose regex misclassified two faults that matter.
+
+    ``test_classification_reads_the_code_not_the_message`` above states this rule and is
+    **Postgres-gated**, so it never ran against the adapter that failed it — and its literal
+    example, ``SELECT connection_is_not_a_function_xyz(1)``, raised *no such function*, which
+    matched none of ``no such column|no such table|syntax error|ambiguous column``. So a query
+    fault was reported as the database being unreachable.
+
+    The second one is worse: a write on the read-only connection raises ``SQLITE_READONLY``,
+    also unmatched, so **governance stopping a write was recorded as infrastructure being
+    down**. A control firing correctly, filed as an outage.
+
+    This test is not gated. That is the point of it: the class of defect here is a rule asserted
+    in one adapter's suite and unenforced in the other's.
+    """
+    import sqlite3
+
+    from governed_bi.datasource import errors  # type: ignore[import-not-found]
+    from governed_bi.datasource.sqlite import SqliteConnector  # type: ignore[import-not-found]
+
+    path = tmp_path / "taxonomy.db"
+    seed = sqlite3.connect(path)
+    seed.execute("CREATE TABLE t (a INTEGER)")
+    seed.commit()
+    seed.close()
+
+    connector = SqliteConnector(path)
+    statement_faults = [
+        # The Postgres test's own example. Its message contains "connection", so a
+        # prose-matching classifier inverts it in both directions at once.
+        "SELECT connection_is_not_a_function_xyz(1)",
+        "SELECT nope FROM t",
+        "SELEC 1",
+        "SELECT * FROM no_such_table",
+        # The read-only guard firing. SQLITE_READONLY is a verdict on the statement.
+        "INSERT INTO t VALUES (1)",
+    ]
+    for sql in statement_faults:
+        with pytest.raises(errors.QueryError, match=r".*") as caught:
+            connector.execute(sql)
+        assert not isinstance(caught.value, errors.ConnectionError), sql
+
+    # And the paired positive: a genuine infrastructure code must still be infrastructure.
+    missing = SqliteConnector(tmp_path / "not-here.db")
+    with pytest.raises(errors.ConnectionError):
+        missing.execute("SELECT 1")
 
 
 # ── the cross-parcel property that nobody owned ───────────────────────────────

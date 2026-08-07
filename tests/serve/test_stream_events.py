@@ -16,6 +16,7 @@ fire if someone adds a step by hand later.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -349,10 +350,22 @@ def test_a_healthy_turn_silences_nothing() -> None:
 def test_wrap_node_emits_start_then_the_observed_status(
     captured: list[dict[str, Any]],
 ) -> None:
+    import time
+
     wrapped = wrap_node("guard", lambda state: {"guard": {"outcome": "blocked"}})
-    out = wrapped({"turn_id": "t1", "question": "q"})
-    assert out == {"guard": {"outcome": "blocked"}}
-    assert [(e["step"], e["status"]) for e in captured] == [
+    out = asyncio.run(wrapped({"turn_id": "t1", "question": "q"}))
+    # The node's own keys pass through untouched, which is this test's name. The wrapper adds
+    # exactly one of its own: the turn's clock, because it is the one place every rail passes
+    # through and `latency_sec` needs a single start (audit §10 — no clock was read anywhere in
+    # `src/` at all). A second added key would be a wrapper deciding something.
+    assert {k: v for k, v in out.items() if k != "turn_started_at"} == {
+        "guard": {"outcome": "blocked"}
+    }
+    assert out["turn_started_at"] == pytest.approx(time.time(), abs=10)
+    # Already started: the wrapper must not restamp, or `latency_sec` measures the last node.
+    again = asyncio.run(wrapped({"turn_id": "t1", "question": "q", "turn_started_at": 1.0}))
+    assert "turn_started_at" not in again
+    assert [(e["step"], e["status"]) for e in captured][:2] == [
         ("guard", "start"),
         ("guard", "blocked"),
     ]
@@ -363,7 +376,7 @@ def test_wrap_node_reports_a_crash_as_error(captured: list[dict[str, Any]]) -> N
     def boom(state: Any) -> dict[str, Any]:
         raise KeyError("policy")
 
-    out = wrap_node("connect", boom)({"turn_id": "t1"})
+    out = asyncio.run(wrap_node("connect", boom)({"turn_id": "t1"}))
     assert out["path_kind"] == "crashed"
     assert out["failure"] == {"stage": "connect", "error_type": "KeyError"}
     assert [e["status"] for e in captured] == ["start", "error"]
@@ -372,14 +385,14 @@ def test_wrap_node_reports_a_crash_as_error(captured: list[dict[str, Any]]) -> N
 
 def test_wrap_node_emits_nothing_for_a_skipped_node(captured: list[dict[str, Any]]) -> None:
     wrapped = wrap_node("route", lambda state: {})
-    wrapped({"turn_id": "t1", "path_kind": "decline"})
+    asyncio.run(wrapped({"turn_id": "t1", "path_kind": "decline"}))
     assert captured == []
 
 
 def test_stream_false_suppresses_both_events(captured: list[dict[str, Any]]) -> None:
     """The ``fanout`` passthrough is registered under ``facet_schema``; emitting for it put a
     phantom row immediately before the real facet's."""
-    wrap_node("facet_schema", lambda state: {}, stream=False)({"turn_id": "t1"})
+    asyncio.run(wrap_node("facet_schema", lambda state: {}, stream=False)({"turn_id": "t1"}))
     assert captured == []
 
 
@@ -391,7 +404,7 @@ def test_an_interrupt_produces_no_resolve_event(captured: list[dict[str, Any]]) 
         raise GraphInterrupt(())
 
     with pytest.raises(GraphInterrupt):
-        wrap_node("agent_core", asks)({"turn_id": "t1"})
+        asyncio.run(wrap_node("agent_core", asks)({"turn_id": "t1"}))
     assert [e["status"] for e in captured] == ["start"]
 
 
@@ -405,5 +418,9 @@ def test_a_failing_writer_cannot_fail_a_turn(monkeypatch: pytest.MonkeyPatch) ->
         return w
 
     monkeypatch.setattr(events, "get_stream_writer", exploding_writer)
-    out = wrap_node("guard", lambda state: {"guard": {"outcome": "clear"}})({"turn_id": "t1"})
-    assert out == {"guard": {"outcome": "clear"}}
+    out = asyncio.run(
+        wrap_node("guard", lambda state: {"guard": {"outcome": "clear"}})({"turn_id": "t1"})
+    )
+    assert {k: v for k, v in out.items() if k != "turn_started_at"} == {
+        "guard": {"outcome": "clear"}
+    }

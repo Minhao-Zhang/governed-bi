@@ -263,7 +263,6 @@ def test_capabilities_reports_the_ported_utkuai_toggles(monkeypatch) -> None:
 # ── nothing is invented at the boundary ──────────────────────────────────────
 
 
-@UNWRITTEN
 def test_the_api_never_synthesizes_a_reliability_field() -> None:
     """ADR 0007 §3, asserted **structurally**, because that is the only way it survives.
 
@@ -271,14 +270,43 @@ def test_the_api_never_synthesizes_a_reliability_field() -> None:
     claim is about the code: `tier`, `safety_clearance` and `semantic_assurance` must not
     appear as *produced* values anywhere under `api/`.
 
-    Grep `SRC / "api"` for them. If a future decision earns a reliability tier from a
-    measurement, this test is the thing that must be deliberately changed, and that is the
-    point: it makes reintroducing the badge a decision rather than a diff nobody read.
+    If a future decision earns a reliability tier from a measurement, this test is the thing
+    that must be deliberately changed, and that is the point: it makes reintroducing the badge
+    a decision rather than a diff nobody read.
 
-    v1's `docs/openapi.json` is still tracked and still specifies the old `AnswerView`. It is
-    the spec-of-record for the twelve *routes*, **not** for the answer shape.
+    **Written 2026-08-06.** It was a strict-xfail stub for the whole of v2, and the audit
+    (§4.5) found what the gap cost: `safety_clearance` and `semantic_assurance` are the
+    two-axis stamp the README opens with, and they appeared in ten files — eight docs, the
+    README, and *this file* — and in **zero source files**. The one test that named them was a
+    stub in the file where 8 of 9 tests were stubs, so the honest paragraph at the top of this
+    module was the closest thing to a control, and a paragraph is not one.
+
+    Widened beyond `api/` to all of `src/`, deliberately. The claim in the docs was that the
+    *turn* is stamped with these, not that the API adds them — so a grep scoped to the boundary
+    would have passed while the docs stayed wrong, which is the situation this replaces.
     """
-    pytest.fail("not implemented: see docstring")
+    forbidden = ("safety_clearance", "semantic_assurance")
+    hits: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            for name in forbidden:
+                if name in line:
+                    hits.append(f"{path.relative_to(SRC).as_posix()}:{number}: {line.strip()}")
+
+    assert not hits, (
+        "a reliability verdict appears in source. It is not derived from anything the engine "
+        "observes: `stamp` projects `outcome`, `guardrail_errors` and `terminal_reason`. If one "
+        "of these has earned a definition, change this test on purpose and say what measures "
+        "it:\n  " + "\n  ".join(hits)
+    )
+
+    # The paired half: the two names must not be in the record register either, since that is
+    # where a field would have to be declared before `project()` could emit one.
+    from governed_bi.register.record import record_keys
+
+    assert not (set(forbidden) & record_keys()), record_keys() & set(forbidden)
 
 
 @UNWRITTEN
@@ -349,3 +377,30 @@ def test_a_clarification_interrupt_carries_an_id_and_a_reason() -> None:
     to record about a clarification — this is a better payload, not merely a conforming one.
     """
     pytest.fail("not implemented: see docstring")
+
+
+def test_the_audit_log_can_be_asked_for_one_conversation() -> None:
+    """A transcript needs every turn of a thread, and only this log has them.
+
+    A turn's governed record lives in per-turn graph state — `answer`, `generated_sql`,
+    `execution` — which `PER_TURN_RESET` clears each turn. So a thread's checkpoint describes
+    its *newest* turn and nothing earlier: reopening a two-turn conversation showed two
+    questions and one audit card, because there was one record left to show. The fix is to read
+    history from here rather than from the checkpoint, which needs the filter this asserts.
+    """
+    from governed_bi.api.trace_store import list_turns
+
+    everything = list_turns(limit=200)
+    threads = {t.get("thread_id") for t in everything if t.get("thread_id")}
+    if not threads:
+        pytest.skip("no turns logged yet; nothing to filter")
+
+    wanted = sorted(threads)[0]
+    scoped = list_turns(limit=200, thread_id=wanted)
+    assert scoped, f"filtering to {wanted!r} returned nothing though the log has turns for it"
+    assert {t["thread_id"] for t in scoped} == {wanted}, (
+        "the filter leaked turns from other conversations, which would put another thread's "
+        "SQL in this thread's transcript"
+    )
+    assert len(scoped) <= len(everything)
+    assert list_turns(limit=200, thread_id="no-such-thread") == []

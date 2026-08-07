@@ -19,10 +19,10 @@ facet rewriters off:
 
 Coverage rose while the net got *smaller*, which is better targeting rather than more licensing.
 
-**It exists to be beaten.** ``docs/plans/corpus-summary-rewrite-2026-08-05.md`` makes +6.1 pp the
-acceptance bar for a model-authored rewrite: a stopword regex bought that much, so an authored pass
-that does not clear it is not worth its tokens. Keeping the floor runnable is what makes the bar
-checkable — a baseline nobody can reproduce is not a baseline.
+**It exists to be beaten.** +6.1 pp is the acceptance bar for a model-authored rewrite:
+a stopword regex bought that much, so an authored pass that does not clear it is not
+worth its tokens. Keeping the floor runnable is what makes the bar checkable — a
+baseline nobody can reproduce is not a baseline.
 
 **What it deliberately does not do.** It does not replace the identifier list with prose. That was
 measured and it loses on both channels (recall@3 0.851 -> 0.825 with the embedder on, 0.640 -> 0.632

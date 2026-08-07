@@ -162,3 +162,33 @@ def test_a_dropped_in_corpus_is_found_but_ambiguity_is_refused(tmp_path, monkeyp
     (base / "curated_sme_20260730").mkdir()
     with pytest.raises(RuntimeError, match="holds 2 corpora"):
         graph_app._dropped_in_corpus(tmp_path)
+
+
+def test_chat_actually_answers_rather_than_raising() -> None:
+    """`/chat` must reach `stamp`, not just be importable.
+
+    Written because it did not exist and something silently broke. Every node became
+    `async def` (the only shape LangGraph will attach a node timeout to) while this route
+    still compiled the graph itself and called `.invoke()`, so every request raised
+    `TypeError: No synchronous function provided to "guard"` — and the whole suite, 841
+    passing, said nothing. The route's other tests assert response *shape* against stubs, so
+    none of them drives a turn end to end.
+
+    Deliberately asserts almost nothing about the answer. With no model configured this turn
+    refuses or crashes-closed, and that is fine: the property under test is that the transport
+    runs the graph and returns a shaped body, which is the part that broke.
+    """
+    from fastapi.testclient import TestClient
+
+    from governed_bi.api.routes import app
+
+    response = TestClient(app).post(
+        "/chat", json={"session_id": "t-transport", "question": "how many customers"}
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert isinstance(body, dict) and body, "the route returned no body"
+    assert "detail" not in body or "No synchronous function" not in str(body.get("detail")), (
+        f"the graph could not be driven from this transport: {body.get('detail')!r}"
+    )

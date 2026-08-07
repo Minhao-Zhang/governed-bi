@@ -1,16 +1,9 @@
-"""The analyst-visible corpus: a type, not a convention (ADR 0005 §1.5, B10).
+"""Analyst-visible corpus type (ADR 0005 §1.5, B10).
 
-v1's caller contract — "callers are documented as passing ``for_analyst()``" — was
-unenforced and was breached by the pooled driver, shipping excluded PII column
-names into the routing index. The fix is that everything that authorises or
-indexes reads an :class:`AnalystCorpus`, which can only be built by
-:func:`for_analyst`.
-
-Column keys are folded here the same way ``govern.identifiers`` folds them
-(``str.lower``, schema.table.column). The shapes must agree; a conformance test
-locks that. This module cannot import ``govern`` — corpus sits below it in the
-layer graph.
+Only :func:`for_analyst` builds :class:`AnalystCorpus`. Column keys folded like
+``govern.identifiers`` (conformance-tested); this module cannot import ``govern``.
 """
+
 
 from __future__ import annotations
 
@@ -30,15 +23,9 @@ __all__ = [
 
 
 def column_key_for(asset: ColumnAsset) -> str:
-    """``{schema}.{table}.{column}`` folded, or ``{table}.{column}`` when schema is empty.
+    """``{schema}.{table}.{column}`` folded, or ``{table}.{column}`` when schema empty.
 
-    Must match :func:`governed_bi.govern.identifiers.column_key` /
-    :func:`~governed_bi.govern.identifiers.normalise_column_key`, including the **slug**
-    (ADR 0008 D1): the table half comes from ``parent_table``, which is already an asset id
-    and therefore already slugged, while the column half is a raw ``physical_name`` and is
-    slugged here. A conformance test locks the two shapes together, and this module cannot
-    import ``govern`` -- ``corpus`` sits below it -- which is why ``slug`` lives in
-    ``corpus.identity`` where both halves can reach it.
+    Must match ``govern.identifiers`` column keys (ADR 0008 D1); conformance-tested.
     """
     table = _bare(asset.parent_table).lower()
     column = slug(asset.physical_name).lower()

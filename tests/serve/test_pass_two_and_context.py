@@ -6,6 +6,7 @@ Model-free. Hand-built two-schema UnifiedIndex; prefer unit imports of
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from typing import Any, Callable
 
@@ -86,8 +87,8 @@ def _empty_facet(stage: Stage, question: str) -> dict[str, Any]:
 
 def _live_facets(state: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     facets = {
-        "facet_entity": facet_entity_node(state, config)["facets"]["facet_entity"],
-        "facet_schema": facet_schema_node(state, config)["facets"]["facet_schema"],
+        "facet_entity": asyncio.run(facet_entity_node(state, config))["facets"]["facet_entity"],
+        "facet_schema": asyncio.run(facet_schema_node(state, config))["facets"]["facet_schema"],
     }
     for stage in (Stage.facet_term, Stage.facet_metric, Stage.facet_example):
         facets[stage.value] = _empty_facet(stage, state["question"])
@@ -147,7 +148,7 @@ def test_facet_schema_searches_index_within_target_types(
     config = _config(
         thread_id="t-facet-schema", policy=guard_off_policy, index=two_schema_index
     )
-    result = facet_schema_node(state, config)["facets"]["facet_schema"]
+    result = asyncio.run(facet_schema_node(state, config))["facets"]["facet_schema"]
     assert result["queries"] == ["customer commerce"]
     assert result["hits"]
     for hit in result["hits"]:
@@ -180,7 +181,7 @@ def test_facet_entity_filters_to_table_column_join(
     config = _config(
         thread_id="t-facet-entity", policy=guard_off_policy, index=two_schema_index
     )
-    result = facet_entity_node(state, config)["facets"]["facet_entity"]
+    result = asyncio.run(facet_entity_node(state, config))["facets"]["facet_entity"]
     assert result["hits"] and len(result["hits"]) <= 8
     assert all(h["asset_type"] == AssetType.table.value for h in result["hits"])
     assert _count_schema_hits(result["hits"], SCHEMA_A) >= _count_schema_hits(
@@ -194,7 +195,7 @@ def test_facet_example_keeps_lexical_not_configured(
     config = _config(
         thread_id="t-facet-example", policy=guard_off_policy, index=two_schema_index
     )
-    result = facet_example_node(_base_turn(), config)["facets"]["facet_example"]
+    result = asyncio.run(facet_example_node(_base_turn(), config))["facets"]["facet_example"]
     assert result["hits"] == []
     assert result["channels"][Channel.lexical.value] == ChannelState.not_configured.value
 
@@ -203,7 +204,7 @@ def test_facet_without_index_keeps_empty_hits_for_f1(
     guard_off_policy: GovernancePolicy,
 ) -> None:
     config = _config(thread_id="t-no-index", policy=guard_off_policy)
-    assert facet_entity_node(_base_turn(), config)["facets"]["facet_entity"]["hits"] == []
+    assert asyncio.run(facet_entity_node(_base_turn(), config))["facets"]["facet_entity"]["hits"] == []
 
 
 # ── pass-two / assemble / refuse / budgets ────────────────────────────────────
@@ -365,8 +366,9 @@ def test_pass_two_scores_against_the_turns_query_vector_from_state(monkeypatch) 
 
     seen: dict[str, object] = {}
 
-    def spy(*, state, index, schemas, ranking, query_vector=None):
+    def spy(*, state, index, schemas, ranking, query_vector=None, embedder=None):
         seen["query_vector"] = query_vector
+        seen["embedder"] = embedder
         return route_retrieve.empty_retrieved(ranking)
 
     monkeypatch.setattr(route_retrieve, "pass_two_retrieve", spy)
@@ -646,9 +648,39 @@ def test_the_two_channels_are_compared_on_one_scale() -> None:
         "the fixture no longer reproduces the scale gap it exists to demonstrate: "
         f"raw lexical {mid['lexical']} vs raw cosine {only['semantic']}"
     )
-    assert only["score"] > mid["score"], (
-        "the vector channel's own best hit still ranks below a mid hit from the other "
-        f"channel, so the units are deciding: vector_only={only['score']} mid={mid['score']}"
+    # **The units must not decide, and the assertion for that is on the *scaled* values.**
+    #
+    # This used to read ``only["score"] > mid["score"]``, and that ordering came from the old
+    # fusion rule rather than from the scaling this test is about: ``fuse`` renormalised over
+    # the channels present in the score dict, so ``vector_only`` — which BM25 never scored —
+    # was fused over the semantic channel alone and came out at a perfect 1.000. Being
+    # invisible to a channel was free, which is the non-monotonicity the 2026-08-06 audit
+    # found (§7.1): an asset found by *both* channels could rank below one found by only one.
+    #
+    # With the fixed denominator, a document only one channel found is capped at that
+    # channel's weight — 0.500 here — and ``lex_mid`` (0.933 lexical, 0.079 semantic) comes to
+    # 0.506. So the two are near-tied and ``lex_mid`` is marginally ahead. **That is a real
+    # ranking change and it is unmeasured**: a strong-cosine, no-shared-term asset is now
+    # demoted below a mediocre two-channel one. The alternatives were worse — noisy-OR breaks
+    # property 3 of ``tests/retrieve/test_scoring_contract.py``, ``max`` of the scaled values
+    # makes the two weight knobs inert, and a quadratic power mean satisfies everything only
+    # by being tuned until this fixture passed.
+    #
+    # What this test can still assert is the property it was written for: after scaling, the
+    # semantic channel's own best hit is at the top of its channel and the raw magnitudes no
+    # longer decide which channel wins.
+    assert only["semantic"] == max(
+        h["semantic"] for h in hits.values() if h["semantic"] is not None
+    ), "the semantic channel's own best hit"
+    assert only["score"] == pytest.approx(0.5), (
+        "one channel's best hit must reach that channel's full weight; anything less means "
+        f"the scaling is not per-channel: {only['score']}"
+    )
+    assert mid["score"] == pytest.approx(0.506, abs=0.002), mid["score"]
+    # The units-deciding failure would put `only` far below `mid`, not within 1.5% of it.
+    assert only["score"] > mid["score"] * 0.98, (
+        "the vector channel's own best hit is being ranked by units rather than by strength: "
+        f"vector_only={only['score']} mid={mid['score']}"
     )
     # Attribution is untouched — the record still publishes what each channel actually said.
     assert only["semantic"] == pytest.approx(0.40, abs=1e-3)
@@ -718,9 +750,145 @@ def test_pass_two_scores_on_one_scale_too() -> None:
     assert mid["lexical"] > only["semantic"], (
         f"fixture no longer shows the scale gap: {mid['lexical']} vs {only['semantic']}"
     )
-    assert only["score"] > mid["score"], (
+    # Same correction as the pass-one version above, and for the same reason: the old
+    # ``only > mid`` ordering came from ``fuse`` renormalising over present channels, which
+    # made invisibility to BM25 free. See that test for why the alternatives are worse.
+    assert only["score"] == pytest.approx(0.5), only["score"]
+    assert only["score"] > mid["score"] * 0.98, (
         "pass two still blends raw scales, so the score that decides the table budget is the "
         f"lexical one: vector_only={only['score']} mid={mid['score']}"
+    )
+
+
+def test_pass_two_scores_both_channels_over_the_same_text() -> None:
+    """Audit §7.2. BM25 searched the rewrite; cosine scored the raw question's vector.
+
+    ``accept`` embeds the **raw last human message** into ``state["query_vector"]`` — it is the
+    only writer of that key repo-wide — and ``route_node`` passed it straight through as one
+    call-level vector for the whole of pass two. The lexical channel meanwhile searched the
+    per-facet ``queries``, which ``_run_facet`` set to the utility-model rewrite. So the two
+    channels were scored over two different texts and then blended at 0.5/0.5.
+
+    ``facets.py`` documents the fix in the pass that already had it — *"the rewrite happens
+    first, and both channels then search with it; a rewrite that reached only BM25 would miss
+    the point, since the whole reason to restate the question in the vocabulary of the thing
+    being searched is to move it semantically closer"* — and that fix applied to pass one only,
+    leaving it undone in the pass whose output becomes the analyst's context.
+
+    The fixture makes the two texts disagree as sharply as possible: the raw question's vector
+    points at ``raw_match`` and the rewrite's points at ``rewrite_match``. Under the old code
+    the semantic channel scored ``raw_match``; it must now score ``rewrite_match``.
+    """
+    from governed_bi.retrieve.index import IndexEntry, build_index
+    from governed_bi.serve.nodes.pass_two import pass_two_retrieve
+
+    QUESTION = "how many buyers"
+    REWRITE = "customer count purchasers"
+    #: Unit vectors, so the cosine is the dot product. The two query texts are orthogonal.
+    QUESTION_VECTOR = [1.0, 0.0]
+    REWRITE_VECTOR = [0.0, 1.0]
+    DOCS = {
+        # Neither doc shares a term with either query, so BM25 scores nothing and the
+        # semantic channel alone decides — which is what isolates the vector under test.
+        "sales.raw_match": ("alpha widgets", [1.0, 0.0]),
+        "sales.rewrite_match": ("beta gadgets", [0.0, 1.0]),
+    }
+
+    class _Stub:
+        model = "which-text-stub"
+        requested_model = "which-text-stub"
+        dimensions = 2
+        _by_text = {
+            **{summary: vector for summary, vector in DOCS.values()},
+            QUESTION: QUESTION_VECTOR,
+            REWRITE: REWRITE_VECTOR,
+        }
+
+        def embed(self, texts):
+            return [self._by_text[t] for t in texts]
+
+    index = build_index(
+        [
+            IndexEntry(id=aid, summary=summary, asset_type=AssetType.table, schema_tag="sales")
+            for aid, (summary, _) in DOCS.items()
+        ],
+        embedder=_Stub(),
+    )
+    retrieved = pass_two_retrieve(
+        state={
+            "question": QUESTION,
+            "knobs_resolved": {},
+            "facets": {
+                "facet_entity": {"facet": "facet_entity", "queries": [REWRITE], "hits": []}
+            },
+        },
+        index=index,
+        schemas=["sales"],
+        ranking=[("sales", 1.0)],
+        # What ``accept`` writes: the raw question's vector.
+        query_vector=QUESTION_VECTOR,
+        embedder=_Stub(),
+    )
+    selected = retrieved["selected"]
+
+    assert "sales.rewrite_match" in selected, (
+        "the semantic channel is still scoring the raw question's vector, so the facet's "
+        f"rewrite reached BM25 only: {sorted(selected)}"
+    )
+    assert selected["sales.rewrite_match"]["semantic"] == pytest.approx(1.0)
+    assert "sales.raw_match" not in selected or (
+        selected["sales.raw_match"]["score"] < selected["sales.rewrite_match"]["score"]
+    ), selected
+
+
+def test_pass_two_falls_back_to_the_question_vector_with_no_embedder() -> None:
+    """The paired negative. No embedder is a legitimate configuration, not a failure.
+
+    Every serve fixture builds an index without one, and both eval arms may too. With no
+    embedder there is nothing to embed the rewrite with, and the question's vector is then both
+    the best and the only thing available — degrading to it silently is correct here, and
+    raising would make every no-embedder configuration unusable.
+    """
+    from governed_bi.retrieve.index import IndexEntry, build_index
+    from governed_bi.serve.nodes.pass_two import pass_two_retrieve
+
+    class _Stub:
+        model = "fallback-stub"
+        requested_model = "fallback-stub"
+        dimensions = 2
+
+        def embed(self, texts):
+            return [[0.0, 1.0] for _ in texts]
+
+    index = build_index(
+        [
+            IndexEntry(
+                id="sales.t", summary="beta gadgets", asset_type=AssetType.table, schema_tag="sales"
+            )
+        ],
+        embedder=_Stub(),
+    )
+    retrieved = pass_two_retrieve(
+        state={
+            "question": "how many buyers",
+            "knobs_resolved": {},
+            "facets": {
+                "facet_entity": {
+                    "facet": "facet_entity",
+                    "queries": ["customer count purchasers"],
+                    "hits": [],
+                }
+            },
+        },
+        index=index,
+        schemas=["sales"],
+        ranking=[("sales", 1.0)],
+        query_vector=[0.0, 1.0],
+        embedder=None,
+    )
+    hit = retrieved["selected"]["sales.t"]
+    assert hit["semantic"] == pytest.approx(1.0), (
+        "with no embedder the question's vector must still score the semantic channel"
     )
 
 
@@ -744,9 +912,16 @@ def test_both_passes_use_one_combiner() -> None:
     for module in (facets, pass_two):
         source = inspect.getsource(module)
         assert "max(lexical" not in source, f"{module.__name__} still has a local combiner"
+    both = {"lexical", "semantic"}
     for value in (0.8, 1.0):
-        assert combine_channels(value, None) == value, (
-            "fuse must renormalise by active weight, or a single-channel facet is halved"
+        # A facet that consulted **one** channel: renormalised by that channel's weight, so a
+        # one-channel facet is not halved.
+        assert combine_channels(value, None, consulted={"lexical"}) == value, (
+            "fuse must renormalise by consulted weight, or a one-channel facet is halved"
         )
-    assert combine_channels(1.0, 0.0) == 0.5
-    assert combine_channels(None, None) is None
+        # The same arguments where **both** channels ran: the semantic channel returned nothing
+        # for this document, which is a measurement of 0.0 and not an absent channel. Treating
+        # the two cases identically is what made additional evidence lower a score (§7.1).
+        assert combine_channels(value, None, consulted=both) == pytest.approx(value / 2)
+    assert combine_channels(1.0, 0.0, consulted=both) == 0.5
+    assert combine_channels(None, None, consulted=both) is None

@@ -1,45 +1,26 @@
-"""The audit ledger (ADR 0006 §11) and what measurement must see (§12).
+"""Audit ledger (ADR 0006 §11) and what measurement must see (§12).
 
-**Every executor writes an entry**, stamped with its ``path`` (G2). v1's
-graded-delivery path bypassed the middleware entirely and produced answers whose
-record showed a query that never happened.
+Every executor writes an entry stamped with its ``path`` (G2).
 
-**Retention is by vocabulary class, not by "drop every string".** ADR 0006's first
-draft said the ledger "keeps numbers and drops every string" and four lines later
-"keeps ``columns`` / ``row_count``" — column names are strings, and dropping every
-string also drops the statement, in a section whose stated purpose is that the record
-must show what ran. So:
+Invariants: hash the executed string, not the checked one (G4);
+:func:`guardrail_errors` is derived from attempts (quotability precondition).
 
-===========================  ==================================================
-field class                  durable projection
-===========================  ==================================================
-closed vocabulary            kept — ``layer``, ``passed``, ``reason_code``,
-                             ``path``, ``rule_id``, ``outcome``
-numbers                      kept — ``row_count``, ``truncated``, ``ms``,
-                             ``attempt``
-statement                    kept as ``sha256`` **plus a structural
-                             fingerprint**: the parsed AST with every literal
-                             elided
-``detail``, driver errors,   dropped
-prose, result rows
-column names                 kept only as ids, never as free text
-===========================  ==================================================
+**``ledger_entry()`` is gone** (audit §8.1 / §10). It was the only implementation of ADR
+0006 §11's retention table -- ``executed``, ``statement_sha256``, ``statement_shape`` -- and
+it had **zero production callers**: one re-export and four lines in a test file, with 45
+green tests passing against dead code. What actually reached disk was
+:func:`attempt_record`, carrying ``executed_sql`` raw.
 
-The fingerprint is what makes the record auditable — which tables, which shape,
-which functions — without echoing literals. libpq embeds the offending statement in
-its error text (``LINE 1: SELECT ...``), which is why free text goes.
+Deleted with the rest of the redaction vocabulary rather than wired. The retention table it
+implemented was a policy nothing enforced, and a redacted projection that no writer uses is
+a second answer to "what is the durable record" -- the one a reader believes and the engine
+never produced.
 
-**The hash is of the string that was executed**, not of the string that was checked
-(G4). Three transformations act on a statement — normalisation, checking, row-limit
-injection — and v1 hashed the wrong one, so the record attested to a statement the
-database never saw.
-
-**``guardrail_errors`` is a quotability precondition, not a diagnostic.** §12 records
-the chain it exists to catch: a ``NameError`` in the function-layer walk turns every
-turn in an arm into a refusal, ``crash_rate == 0``, every register key present, run
-declared quotable. :func:`guardrail_errors` counts them from the attempts, so the
-count and the attempts cannot disagree.
+:func:`statement_sha256` and :func:`structural_fingerprint` stay. They have real callers
+(the stream events include a statement digest) and they are useful facts about a statement
+regardless of any retention policy.
 """
+
 
 from __future__ import annotations
 
@@ -60,16 +41,12 @@ __all__ = [
     "ExecutionRecord",
     "statement_sha256",
     "structural_fingerprint",
-    "ledger_entry",
     "attempt_record",
     "guardrail_errors",
     "execution_record",
 ]
 
-#: The four executors ADR 0006 §7 enumerates. G2 is "every executor is enumerated,
-#: passes ``check()``, and writes a ledger entry" — not "one choke point", which was
-#: aspirational and which the ADR's own first draft contradicted in its own tool
-#: table by listing ``sample_rows`` beside the "single" one.
+#: The four executors ADR 0006 §7 enumerates (G2).
 ExecutorPath = Literal["agent", "graded", "sample", "profile"]
 
 #: The same four, as data, so a caller can iterate them instead of re-listing them.
@@ -77,42 +54,21 @@ EXECUTOR_PATHS: tuple[ExecutorPath, ...] = ("agent", "graded", "sample", "profil
 
 
 class AttemptRecord(TypedDict):
-    """One statement's trip through the stack. ADR 0006 §12.
+    """One statement's trip through the stack (ADR 0006 §12).
 
-    ``verdict_layer`` is the layer's **name**, not the :class:`Layer` member. It was the
-    member, and since 2026-08-04 these rows are checkpointed — the ledger moved into the
-    nested agent's state so it survives an ``ask_user`` interrupt — where LangGraph's msgpack
-    serde reported it: *"Deserializing unregistered type governed_bi.govern.layers.Layer from
-    checkpoint. This will be blocked in a future version."* A row that a future LangGraph
-    refuses to load is a ledger that stops existing on the resume path, which is the path it
-    was just moved there to protect. The name is also what ``trace()``'s ``layer`` field has
-    always written, so this makes two projections of one fact agree instead of differ.
+    ``verdict_layer`` is the layer's **name** (checkpoint-safe; matches ``trace()``).
     """
 
     verdict_layer: str | None
     passed: bool
     reason_code: str
     path: ExecutorPath
-    #: **The statement that was sent**, after canonicalisation and the row limit — not the
-    #: string the model wrote. ``None`` when nothing ran.
-    #:
-    #: The record's ``generated_sql`` used to be the model's raw tool argument, so a turn
-    #: that succeeded reported a statement the database had never seen: canonicalisation
-    #: rewrites an identifier to the corpus's declared spelling and quotes it (ADR 0008
-    #: D2), and ``apply_row_limit`` appends the cap. The ledger already hashed the executed
-    #: string, so one row carried the hash of one statement and the text of another — and
-    #: an eval that re-executes ``generated_sql`` then fails on every mixed-case identifier
-    #: the model happened to write unquoted, understating EX for 11% of the lake.
+    #: Statement sent after canonicalisation and row limit; ``None`` when nothing ran.
     executed_sql: str | None
 
 
 class ExecutionRecord(TypedDict):
-    """Written **every turn**, including turns with no SQL at all.
-
-    Total, and written unconditionally: a record that appears only when something
-    happened cannot afterwards be told from instrumentation that was never wired up —
-    half this repository's retired numbers have that shape.
-    """
+    """Written every turn, including turns with no SQL."""
 
     attempts: list[AttemptRecord]
     terminal: Literal["answered", "graded", "refused", "capped", "no_sql"]
@@ -144,49 +100,6 @@ def structural_fingerprint(sql: str, *, dialect: str = DEFAULT_DIALECT) -> str:
     for node in list(elided.find_all(exp.Literal)):
         node.replace(exp.Literal.string("?") if node.is_string else exp.Literal.number(0))
     return elided.sql(dialect=dialect)
-
-
-def ledger_entry(
-    *,
-    verdict: CheckVerdict,
-    path: ExecutorPath,
-    executed_sql: str | None,
-    attempt: int,
-    row_count: int | None = None,
-    truncated: bool | None = None,
-    ms: int | None = None,
-    dialect: str = DEFAULT_DIALECT,
-) -> dict[str, object]:
-    """The durable projection of one governance decision.
-
-    ``executed_sql`` is the string that reached the database, or ``None`` when the
-    statement was blocked and nothing ran — and the entry says which, rather than
-    leaving a reader to infer it from a missing key.
-
-    ``detail`` from the verdict is **not** carried. It is the one field guaranteed to
-    contain a fragment of the statement and, on a driver error, the statement itself.
-    """
-    failed_layer = verdict["failed_layer"]
-    return {
-        "path": path,
-        "attempt": attempt,
-        "passed": verdict["passed"],
-        "layer": failed_layer.name if failed_layer is not None else None,
-        "layer_value": int(failed_layer) if failed_layer is not None else None,
-        "reason_code": verdict["reason_code"],
-        "layers_evaluated": [layer.name for layer in verdict["layers_evaluated"]],
-        "bound_references": sorted(verdict["bound"]),
-        "executed": executed_sql is not None,
-        "statement_sha256": statement_sha256(executed_sql) if executed_sql is not None else None,
-        "statement_shape": (
-            structural_fingerprint(executed_sql, dialect=dialect)
-            if executed_sql is not None
-            else None
-        ),
-        "row_count": row_count,
-        "truncated": truncated,
-        "ms": ms,
-    }
 
 
 def attempt_record(

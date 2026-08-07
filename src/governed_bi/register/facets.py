@@ -1,30 +1,9 @@
-"""What each retrieval facet is configured to do, declared rather than assumed.
+"""Facet channel configuration: targets, channels, and extraction.
 
-A facet is **one query-construction strategy + one set of target asset types + one
-channel configuration**. The five of them fan out concurrently in a single
-LangGraph super-step, so latency is ``max(branches)`` while cost is
-``sum(branches)`` — fan-out buys latency, not money. That is why the two facets
-calling no model are the cheap ones, and why extraction runs on a small model.
-
-**The reason this file exists is** :class:`ChannelState`. Whether a channel ran has
-to be three-valued, and a boolean cannot carry it:
-
-* The ``example`` facet has **no lexical channel by design** — term-frequency
-  matching between two natural-language questions rewards shared function words.
-  So ``lexical`` not running there is *correct*.
-* The same absence on ``entity`` means the BM25 index died and that arm is now
-  running on one channel.
-
-Under a boolean, a gate reading "did any channel not run" either fails on every
-run or acquires a special case exempting ``example`` — and **that special case is
-where the next silent degradation hides.** v1's version of this incident had no
-field at all: a rate-limited embedder published a schema-pick accuracy
-that re-measured 21 points higher once quota was free. [retired]
-
-And ``not_configured`` is judged **against this table**, never taken on the
-producer's word. :func:`channel_anomaly` is the single place that judgement is
-made, because "is this absence a problem?" answered independently at three call
-sites is how two of them get it wrong.
+Declares which scoring channels and asset types each facet uses, and whether
+extraction runs. :class:`ChannelState` is three-valued so absence can be
+``not_configured`` (correct) or ``failed`` (degradation). Judgement of
+observed vs declared state is centralised in :func:`channel_anomaly`.
 """
 
 from __future__ import annotations
@@ -43,6 +22,7 @@ __all__ = [
     "FACET_EXTRACTS",
     "FACET_TARGETS",
     "GATE_CONSUMED_TYPES",
+    "SCORING_CHANNELS",
     "expected_channel_state",
     "channel_anomaly",
     "is_degraded",
@@ -50,13 +30,10 @@ __all__ = [
 
 
 class Channel(str, Enum):
-    """A way of scoring a candidate, or the step that produces the queries.
+    """Scoring channel, or the extraction step that produces queries.
 
-    ``extraction`` is here even though it is not a scoring channel, because its
-    failure mode is identical in shape — it either ran, was never configured for
-    this facet, or should have run and did not — and a separate two-valued field
-    for it would be the "not measured is not zero" defect in a different variable.
-    One three-valued vocabulary covering all three is worth the category stretch.
+    ``extraction`` shares the three-valued vocabulary even though it is not a
+    scoring channel: it either ran, was not configured, or should have run.
     """
 
     #: BM25. Saturating normalisation so the score is absolute rather than relative
@@ -66,6 +43,18 @@ class Channel(str, Enum):
     semantic = "semantic"
     #: The model call that turns a question into query phrases.
     extraction = "extraction"
+
+
+#: The members that actually score documents, so ``extraction`` cannot be fused.
+#:
+#: :class:`Channel` deliberately holds one member that is not a scoring channel, and every
+#: reader had to remember that. ``fuse`` now renormalises over the channels a caller says were
+#: consulted, and the caller's nearest source of that is the ``ran`` set — which ``_rewritten_query``
+#: also adds ``extraction`` to. Passing ``ran`` straight through therefore put ``extraction`` in
+#: the denominator, ``FUSE_WEIGHTS`` has no weight for it, and the ``KeyError`` surfaced as a
+#: facet that retrieved nothing. Named here rather than filtered at each call site, because that
+#: is three copies of one judgement.
+SCORING_CHANNELS: frozenset[Channel] = frozenset({Channel.lexical, Channel.semantic})
 
 
 class ChannelState(str, Enum):
@@ -84,23 +73,13 @@ class ChannelState(str, Enum):
 class Anomaly(str, Enum):
     """Why an observed :class:`ChannelState` differs from the declared expectation.
 
-    Three distinct facts, and collapsing them was the earlier draft's mistake —
-    ADR 0005 §2.3 says "only ``failed`` is degradation", which is right about
-    ``failed`` and silent about the other two:
-
-    * :attr:`failed` and :attr:`unconfigured` are **degradation**: the arm is now
-      running on fewer channels than it claims. Both feed the quotability gate.
-    * :attr:`extra_channel` is **configuration drift**, not degradation: a channel
-      ran that this facet does not declare. It should be reported and it must not
-      refuse a run, because more retrieval is not a broken run — but a table and
-      a producer disagreeing is exactly the shape that gave v1 two definitions of
-      "excluded".
+    ``failed`` and ``unconfigured`` are degradation (fewer channels than claimed).
+    ``extra_channel`` is configuration drift: report it, do not refuse the run.
     """
 
     #: Expected ``ran``, observed ``failed``.
     failed = "failed"
-    #: Expected ``ran``, observed ``not_configured`` — the channel silently stopped
-    #: being wired up. A gate that only looked for ``failed`` would pass this.
+    #: Expected ``ran``, observed ``not_configured``.
     unconfigured = "unconfigured"
     #: Expected ``not_configured``, observed ``ran``.
     extra_channel = "extra_channel"
@@ -112,93 +91,16 @@ FACET_CHANNELS: Mapping[Stage, frozenset[Channel]] = {
     Stage.facet_term: frozenset({Channel.lexical, Channel.semantic}),
     Stage.facet_metric: frozenset({Channel.lexical, Channel.semantic}),
     Stage.facet_entity: frozenset({Channel.lexical, Channel.semantic}),
-    # No lexical channel — see the module docstring.
+    # No lexical — term-frequency matching between NL questions rewards shared
+    # function words.
     Stage.facet_example: frozenset({Channel.semantic}),
 }
 
-#: Facets whose queries come from model extraction — **now all five** (ADR 0011).
+#: Facets whose queries come from model extraction.
 #:
-#: It was three, on the reasoning that "the two non-extracting facets are also the cheapest is
-#: what lets the pre-fan-out gates cost about 10ms instead of a model call". That trade stopped
-#: being available the moment those two facets started rewriting anyway, and the first live run
-#: after the rewriters landed is what showed it: ``facet_schema`` searched with *"authors corpus
-#: table schema author metadata document collection"* and ``facet_example`` with *"count authors
-#: corpus single query sql aggregate count distinct authors grouped no joins"* — plainly
-#: rewrites — while their channel state reported ``not_configured``, because the declaration
-#: still said they used the raw question.
-#:
-#: **The work was being done and the record denied it**, which is the declaration-versus-
-#: observation mismatch this module exists to make impossible, pointing the other way for once.
-#: Both are now declared, so ``_channels_for`` reports ``ran`` when a rewrite came back and
-#: ``failed`` when it did not.
-#:
-#: ``facet_example`` has the most to gain: it searches for past queries whose *shape* matches,
-#: which the raw wording does not describe.
-#:
-#: **``facet_schema`` is NOT here any more, and that is a measured retreat from the sentence
-#: above it.** The argument was that it "searches table and schema summaries written in catalogue
-#: vocabulary that a user's question never uses". That reads well and the measurement contradicts
-#: it. Decomposing one question's route score per facet, with the rewriters *off* so every facet
-#: searched the user's own words:
-#:
-#: .. code-block:: text
-#:
-#:     schema                  schema   term   metric  entity  example   TOTAL
-#:     restaurant               0.377  0.744   0.748   0.396   0.867     3.132   <- #1 in all five
-#:     public_review_platform   0.300  0.683   0.536   0.351   0.614     2.484
-#:     simpson_episodes         0.165  0.624   0.610   0.547   0.000     1.946
-#:
-#: The raw question wins ``facet_schema`` outright on that decomposition, by 0.65 overall. With
-#: the rewriter on, the same question put ``restaurant`` at #3 and then out of the top-3 entirely,
-#: displaced by schemas that store *ratings*.
-#:
-#: **RETIRED 2026-08-05, and the retraction is the point.** A four-arm table used to stand here
-#: — ``no rewriting 0.632/0.851/0.904/0.939``, ``all five 0.640/0.833/0.939/0.991``,
-#: ``four with schema on raw 0.658/0.877/0.930/0.991`` — and it was quoted as costing **4.4pp of
-#: recall@3** to rewrite this facet. That number is withdrawn. Every arm in it ran under three
-#: defects since repaired, and it was underpowered besides:
-#:
-#: * ``max(raw lexical, raw semantic)`` in ``nodes/facets.py``. BM25-after-saturation occupies
-#:   ~0.60-0.97 while cosine caps near 0.635, so over 32 244 documents both channels scored the
-#:   semantic one won **0 times**. All three arms were effectively BM25-only — and the mechanism
-#:   claimed above ("the rewrite spends its weight on the vocabulary many schemas share") is a
-#:   *BM25 dilution* argument, which does not automatically survive a normalised vector channel.
-#: * ``_TOKEN = r"\S+"`` in ``retrieve/lexical.py``, which kept attached punctuation. The lexical
-#:   channel scored nothing at all against all 57 schema summaries on **66.7%** of held-out
-#:   questions, so "this facet wants the user's own words, which is what both channels are good
-#:   at" was measured on a channel that mostly returned nothing.
-#: * n=114 against a claimed 4.4pp effect. This repository's own ``measure/stats.mde`` puts the
-#:   detection floor at n=114, d=0.10 at **8.3pp**. The effect was inside the noise.
-#: * Three separate unpaired processes (the 62s / 308s / ~250s wall times), no McNemar, no MDE —
-#:   and cross-process runs then carried the ``connect`` hash-order tremor, about one question in
-#:   114, the same order as the effect.
-#:
-#: **Re-measured after the repairs, and the answer is that it does not matter.** 342 held-out
-#: questions, paired, one process, only this facet's query varying and the other four holding the
-#: raw question as a constant; both readouts, the second through the real
-#: ``pass_two_retrieve`` + ``apply_budgets`` path (``scratchpad/query_x_summary.py``):
-#:
-#: .. code-block:: text
-#:
-#:                          recall@3           gold-table coverage
-#:     summary form     raw   rewritten        raw   rewritten
-#:     keywords       0.9532    0.9620       0.6367    0.6431
-#:     prose          0.9678    0.9649       0.6977    0.6977
-#:
-#:     rewrite | keywords   +5 -2  p=0.45      +7 -5  p=0.77
-#:     rewrite | prose      +1 -2  p=1.00      +4 -4  p=1.00
-#:
-#: Null on every comparison, and the interaction is null too (-1.17pp / -0.64pp), so the
-#: hypothesis that the rewriter's sign flips with the document form is not supported either.
-#:
-#: So ``facet_schema`` stays out of this set — **not** because rewriting costs 4.4pp, but because
-#: it buys nothing measurable and a model call per turn is not free. The decision is unchanged and
-#: its stated reason is now the one the evidence supports. Still underpowered for an effect below
-#: ~4.8pp; if a future rewriter claims one, it needs n≥1351.
-#:
-#: The prompt stays in ``PROMPT_REGISTRY`` as one nobody sends: the variant is what a future
-#: attempt is compared against, and deleting it would delete the baseline. That is exactly what
-#: made this re-measurement possible.
+#: ``facet_schema`` is absent: rewriting buys nothing measurable on that facet
+#: (see :mod:`.citations`); the prompt stays in ``PROMPT_REGISTRY`` as an
+#: unsent baseline.
 FACET_EXTRACTS: frozenset[Stage] = frozenset(
     {
         Stage.facet_term,
@@ -210,10 +112,8 @@ FACET_EXTRACTS: frozenset[Stage] = frozenset(
 
 #: Which asset types each facet retrieves over.
 #:
-#: ``column``, ``table`` and ``join`` share one facet because in a real question
-#: they arrive together: "which customers have the highest order amount" is a
-#: customer table, an order table, an amount column and the join between them, as
-#: one thought. Splitting them produces three highly overlapping extraction calls.
+#: ``column``, ``table`` and ``join`` share one facet: they arrive together in a
+#: real question, and splitting them produces overlapping extraction calls.
 FACET_TARGETS: Mapping[Stage, frozenset[AssetType]] = {
     Stage.facet_schema: frozenset({AssetType.schema}),
     Stage.facet_term: frozenset({AssetType.term}),
@@ -222,23 +122,18 @@ FACET_TARGETS: Mapping[Stage, frozenset[AssetType]] = {
     Stage.facet_example: frozenset({AssetType.few_shot}),
 }
 
-#: Asset types that enter the index but are consumed by a gate rather than a facet.
+#: Asset types indexed but consumed by a gate rather than a facet.
 #:
-#: Exactly one: ``negative_example`` is matched by the pre-fan-out
-#: ``negative_gate``, whose hit is a *decision* (refuse) rather than a *ranking*.
-#: Declared so that :func:`_assert_every_indexed_type_has_a_consumer` can close the
-#: loop — an indexed type nobody retrieves and nobody gates is precisely how v1
-#: made this same type structurally unreachable, with a budget lookup that
-#: defaulted to zero.
+#: ``negative_example`` is matched by ``negative_gate`` (refuse decision, not
+#: ranking). Declared so :func:`_assert_every_indexed_type_has_a_consumer` can
+#: close the loop.
 GATE_CONSUMED_TYPES: frozenset[AssetType] = frozenset({AssetType.negative_example})
 
 
 def expected_channel_state(facet: Stage, channel: Channel) -> ChannelState:
     """What ``channel``'s state must be for ``facet`` when nothing went wrong.
 
-    Raises ``KeyError`` for a stage that is not a facet, deliberately: a caller
-    asking this about ``Stage.route`` has a bug, and a plausible answer would hide
-    it.
+    Raises ``KeyError`` for a stage that is not a facet.
     """
     if facet not in FACET_CHANNELS:
         raise KeyError(f"{facet!r} is not a facet; see FACET_STAGES")
@@ -250,10 +145,7 @@ def expected_channel_state(facet: Stage, channel: Channel) -> ChannelState:
 def channel_anomaly(facet: Stage, channel: Channel, observed: ChannelState) -> Anomaly | None:
     """``None`` when ``observed`` matches the declared expectation, else why not.
 
-    Centralised so the three-way distinction is made once. A caller deciding for
-    itself whether a given ``not_configured`` is fine needs both this table and the
-    reasoning, and v1's evidence is that the second copy of that reasoning is
-    where the divergence happens.
+    Single call site for the three-way distinction.
     """
     expected = expected_channel_state(facet, channel)
     if observed is expected:
@@ -268,21 +160,13 @@ def channel_anomaly(facet: Stage, channel: Channel, observed: ChannelState) -> A
 def is_degraded(facet: Stage, channel: Channel, observed: ChannelState) -> bool:
     """True when the arm is running on fewer channels than it declares.
 
-    The quotability input. ``extra_channel`` is deliberately **not** degradation —
-    it is configuration drift, reported separately, because refusing a run for
-    having done more retrieval than declared would be a gate that punishes the
-    wrong thing.
+    Quotability input. ``extra_channel`` is not degradation.
     """
     return channel_anomaly(facet, channel, observed) in (Anomaly.failed, Anomaly.unconfigured)
 
 
 def _assert_tables_cover_every_facet() -> None:
-    """Import-time closure check.
-
-    A facet missing from one of these tables would otherwise surface as a
-    ``KeyError`` on the one question that reached it, in production, rather than at
-    import in every environment.
-    """
+    """Import-time: every facet appears in channel and target tables; no strays."""
     missing_channels = set(FACET_STAGES) - set(FACET_CHANNELS)
     missing_targets = set(FACET_STAGES) - set(FACET_TARGETS)
     if missing_channels or missing_targets:  # pragma: no cover - import-time guard
@@ -299,14 +183,7 @@ def _assert_tables_cover_every_facet() -> None:
 
 
 def _assert_every_indexed_type_has_a_consumer() -> None:
-    """Import-time closure check across two modules.
-
-    Every type that enters the index must be reachable by something. v1's
-    ``NegativeExampleAsset`` was in the index and in no budget, so
-    ``budgets.get(cls, 0)`` dropped it from every ranked pass — it existed, it was
-    embedded, and nothing could ever retrieve it. This is the assertion that
-    absence could not have survived.
-    """
+    """Import-time: every indexed type is retrieved by a facet or gate-consumed."""
     retrieved: set[AssetType] = set()
     for targets in FACET_TARGETS.values():
         retrieved |= targets

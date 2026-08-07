@@ -82,20 +82,95 @@ def test_crash_stays_crashed_not_refused() -> None:
     assert grade["detail"] != refused["detail"]
 
 
-def test_oracle_grades_gold_sql_ex_one(tmp_path: Path) -> None:
-    _, connector = _fixture_db(tmp_path)
-    q = _questions()[0]
-    row = oracle_grade(q, connector)
-    assert row["outcome"] == "answered"
-    assert row["correct"] is True
-    assert row["crashed"] is False
+def test_the_oracle_arm_is_unmeasured_without_an_independent_gold(tmp_path: Path) -> None:
+    """Not 1.000, and not 0.000. There is nothing to claim, so it claims nothing.
 
-    arm = oracle_arm(connector=connector)
-    rows = run_arm(_questions(), arm)
-    assert all(r["correct"] for r in rows)
-    pop = arm_population(rows, label="oracle")
-    ex = headline_ex(pop)
-    assert ex.is_measured and ex.value == 1.0
+    The branch this replaces called ``grade_results`` with ``gold_columns=pred[0],
+    gold_rows=pred[1]`` — the executed gold fingerprinted **against itself** — so it returned
+    ``correct=True`` for any statement at all, including ``SELECT 'garbage' AS wrong``. No
+    producer in the repository supplies ``gold_fingerprint`` or ``gold_columns``+``gold_rows``,
+    so this was the branch every run took. The predecessor of this test asserted
+    ``ex.value == 1.0`` and thereby made the construction the contract.
+
+    What it cost: the arm exists to establish that the grader is not the bottleneck, it could
+    establish nothing, and it was cited as having established it — while the grader *was* a
+    bottleneck, comparing every Postgres ``numeric`` cell as a string.
+
+    ``correct=None`` is the representation, because ``Population.count`` already reads an
+    absent outcome as unmeasured rather than as a zero.
+    """
+    _, connector = _fixture_db(tmp_path)
+    row = oracle_grade(_questions()[0], connector)
+    assert row["outcome"] == "answered"
+    assert row["correct"] is None
+    assert row["crashed"] is False
+    assert row["grade_detail"].startswith("no_independent_gold")
+    assert row["pred_fingerprint"], (
+        "the gold statement did execute, and its digest is what a later run needs in order "
+        "to become measurable"
+    )
+
+    rows = run_arm(_questions(), oracle_arm(connector=connector))
+    ex = headline_ex(arm_population(rows, label="oracle"))
+    assert not ex.is_measured, f"an arm with no independent gold reported {ex.value}"
+    assert "correct" in ex.why
+
+
+def test_the_oracle_arm_measures_against_an_independent_gold(tmp_path: Path) -> None:
+    """With a reference fingerprint it is a real measurement, and it can fail.
+
+    This is the arm doing its job: a disagreement here is the grader, the engine or the
+    harness, never the model — there is no model on this path.
+    """
+    from governed_bi.eval.grade import result_fingerprint
+
+    _, connector = _fixture_db(tmp_path)
+    question = dict(_questions()[0])
+
+    columns, rows, _ = connector.execute(question["gold_sql"])
+    truth = result_fingerprint(list(columns), [list(r) for r in rows])
+
+    matching = oracle_grade({**question, "gold_fingerprint": truth}, connector)
+    assert matching["correct"] is True
+    assert matching["grade_detail"] == "match"
+
+    wrong = oracle_grade({**question, "gold_fingerprint": "0" * 64}, connector)
+    assert wrong["correct"] is False, "the arm must be able to fail, or it is not a baseline"
+    assert wrong["grade_detail"] == "result_mismatch"
+
+
+def test_one_unexecutable_gold_statement_does_not_end_the_oracle_arm(tmp_path: Path) -> None:
+    """It did. The arm was one list comprehension, so the exception escaped ``run_arm``.
+
+    Every row already computed went with it — on the 1 351-question dataset that is hours of
+    execution discarded by one bad statement, and the symptom is a shorter output file rather
+    than an error attributable to a question.
+
+    A gold that does not run is ``crashed`` with ``correct=None``, not ``correct=False``: it is
+    a defect in the dataset or the engine, and scoring it as a wrong answer would charge the
+    model for it.
+    """
+    _, connector = _fixture_db(tmp_path)
+    questions = [
+        _questions()[0],
+        {"question_id": "bad", "question": "?", "db_id": "main",
+         "gold_sql": "SELECT * FROM no_such_table_at_all"},
+        _questions()[1],
+    ]
+    streamed: list[str] = []
+    rows = run_arm(
+        questions,
+        oracle_arm(connector=connector),
+        on_row=lambda _i, r: streamed.append(str(r["question_id"])),
+    )
+
+    assert [r["question_id"] for r in rows] == ["q1", "bad", "q2"]
+    assert streamed == ["q1", "bad", "q2"], "on_row was ignored on the oracle path"
+    bad = rows[1]
+    assert bad["crashed"] is True
+    assert bad["correct"] is None
+    assert bad["grade_detail"].startswith("gold_exec_failed:")
+    assert bad["error_type"]
 
 
 def test_context_hash_distinctness_pass_and_fail() -> None:
@@ -232,6 +307,120 @@ def test_the_relaxation_stops_at_names() -> None:
     assert result_fingerprint(["a"], [[1], [2]], order_sensitive=True) != result_fingerprint(
         ["a"], [[2], [1]], order_sensitive=True
     )
+
+
+def test_a_numeric_cell_is_compared_as_a_number() -> None:
+    """The six pairs that graded ``result_mismatch`` while being the same answer.
+
+    ``_cell``'s fallback was ``return str(value)`` and the type test above it was
+    ``isinstance(value, (int, float))``. ``Decimal`` is neither, so **every Postgres
+    ``numeric`` cell was compared as a string** — and the artifact recorded
+    ``correct=False`` with ``detail="result_mismatch"``, which is indistinguishable from a
+    genuinely wrong answer.
+
+    Every EX number this repository produced before the fix is therefore an underestimate,
+    and because the size of the underestimate is a function of the schema's numeric-column
+    density, the cross-schema comparisons did not hold either.
+
+    All six are accepted by the comparators shipped with the benchmark being graded
+    (``pipeline/_db.py``'s ``normalise_result``).
+    """
+    from decimal import Decimal
+
+    from governed_bi.eval.grade import grade_results
+
+    pairs = [
+        (Decimal("0.5"), 0.5),
+        (Decimal("100.00"), Decimal("100.0")),
+        (Decimal(100), 100),
+        (1.0, 1),
+        ("abc ", "abc"),  # CHAR padding
+        ("ABC", "abc"),
+    ]
+    for pred, gold in pairs:
+        verdict = grade_results(
+            pred_columns=["c"], pred_rows=[[pred]], gold_columns=["c"], gold_rows=[[gold]]
+        )
+        assert verdict["correct"] is True, f"{pred!r} vs {gold!r}: {verdict['detail']}"
+
+    # The paired negative: loosening the cell comparison must not make a wrong number pass.
+    assert (
+        grade_results(
+            pred_columns=["c"],
+            pred_rows=[[Decimal("100.01")]],
+            gold_columns=["c"],
+            gold_rows=[[Decimal("100.00")]],
+        )["correct"]
+        is False
+    )
+
+
+def test_the_fingerprint_is_the_benchmarks_own_hash() -> None:
+    """Byte-identical to ``hash_normalised_result``, not merely equivalent to it.
+
+    This is what makes ``gold_fingerprint`` a usable field: a fingerprint computed by
+    BIRD-Obfuscation's ``pipeline/_db.py`` can be put in a question row and compared here
+    without re-executing the gold statement. "Aligned with BIRD's own EX" was asserted in a
+    docstring for the whole of v2 and was never checked against BIRD's own code; the
+    predecessor sorted rows by ``json.dumps`` and wrapped them in ``{"rows": ...}``, so it
+    produced a different digest for the same rows and nothing ever noticed.
+
+    ``normalise_result`` is transcribed here rather than imported: the benchmark is a
+    separate repository that is not a dependency of this one, and a test that skips when it
+    is absent is a test that does not run.
+    """
+    import hashlib
+    import json as _json
+    import math as _math
+    from decimal import Decimal
+
+    from governed_bi.eval.grade import result_fingerprint
+
+    def normalise_result(rows):  # pipeline/_db.py, verbatim
+        if rows is None:
+            return []
+
+        def coerce(v):
+            if v is None:
+                return None
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return str(v).strip().lower()
+            if _math.isnan(f):
+                return "\x00nan"
+            if _math.isinf(f):
+                return "\x00inf" if f > 0 else "\x00-inf"
+            return f
+
+        def cell_key(v):
+            if v is None:
+                return (0, 0.0, "")
+            if isinstance(v, float):
+                return (1, v, "")
+            return (2, 0.0, v)
+
+        normalised = [tuple(coerce(c) for c in row) for row in rows]
+        return sorted(normalised, key=lambda row: tuple(cell_key(c) for c in row))
+
+    def hash_normalised_result(rows):
+        payload = _json.dumps(
+            [list(r) for r in normalise_result(rows)], separators=(",", ":"), ensure_ascii=False
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    rowsets = [
+        [],
+        [[1]],
+        [[Decimal("1.50"), "Ada"], [None, "grace "], [2, "ZOE"]],
+        [[float("nan")], [float("inf")], [float("-inf")]],
+        [["x"], [None], [3.0]],
+        [["café"], ["CAFÉ "]],  # ensure_ascii=False and the fold, together
+    ]
+    for rows in rowsets:
+        width = len(rows[0]) if rows else 1
+        ours = result_fingerprint([f"c{i}" for i in range(width)], rows)
+        assert ours == hash_normalised_result(rows), rows
 
 
 def test_table_coverage_refuses_rows_that_do_not_carry_licensed() -> None:

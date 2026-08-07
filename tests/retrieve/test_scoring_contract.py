@@ -4,7 +4,7 @@
 holder before implementation, because an agent writes tests that pass against the code
 it just produced. If a test looks wrong, stop and say so in your report.
 
-Specification: ``docs/plans/v2-layer-handoffs.md`` section 6 and ADR 0005 §2.
+Specification: ADR 0005 §2.
 
 **Why almost nothing here takes an ``Asset``.** Parcel D owns the asset types and is
 being built in parallel, so assertions against its API would be assertions against an
@@ -28,6 +28,17 @@ The four properties that carry this parcel, each with a specific v1 failure behi
    facet — an artefact of the arithmetic presented as relevance.
 4. **``resolve`` is total, ``connect`` is not.** Conflating them reports a bounded
    best-effort path as a closure.
+
+A fifth, added 2026-08-06 by the v2 audit (§7.1) rather than by the design holder, and
+recorded here because it is the same kind of statement as the four above:
+
+5. **``fuse`` is monotone in evidence.** A second channel finding a document must never
+   lower its score. The original implementation violated this, and it violated it *because*
+   property 2's mechanism was missing: with no way to be told which channels ran, ``fuse``
+   inferred it from the score dict, so "absent" was neutral and "scored 0.0" cost half the
+   score — and ``scale_within_channel`` floors every channel's weakest document at exactly
+   0.0. The two properties are one property; property 2 was stated and not given a parameter
+   to be stated *through*.
 """
 
 from __future__ import annotations
@@ -130,6 +141,42 @@ def test_idf_is_global_not_computed_within_the_selected_schemas() -> None:
     )
 
 
+def test_lexical_coverage_measures_the_share_of_query_terms_the_corpus_knows() -> None:
+    """Audit §10. The field shipped hard-coded to ``0.0`` on every production turn.
+
+    ``lexical_coverage`` is declared ``Tier.decision`` / ``Absence.not_measured`` and its stated
+    job is to feed ``weak_retrieval``: with an embedder every asset scores above zero, so an
+    out-of-corpus question still returns ``top_k`` tables and a clean run stamps confidence.
+    Cosine cannot tell "nothing here is relevant" from "everything here is a bit relevant".
+
+    A hard-coded ``0.0`` is the *maximum-weakness* reading of that signal, asserted on every
+    turn including the ones where retrieval worked — so the one field that could have caught an
+    out-of-corpus question said "caught it" always, which is the same as never.
+
+    Distinct terms, and ``None`` for a query with none: a blank question has no coverage to
+    measure, and zero there would say the corpus failed to match something nobody asked.
+    """
+    from governed_bi.retrieve.lexical import BM25  # type: ignore[import-not-found]
+
+    bm = BM25(
+        [
+            ("a", "customers orders revenue by region"),
+            ("b", "sensors voltage device readings"),
+        ]
+    )
+    assert bm.coverage("customers revenue") == pytest.approx(1.0)
+    assert bm.coverage("customers zebra") == pytest.approx(0.5)
+    # The case the field exists for: a question sharing no vocabulary with the corpus.
+    assert bm.coverage("zebra unicorn") == pytest.approx(0.0)
+    assert bm.coverage("") is None
+    # Repeating an unknown word is one thing the corpus does not know, not two.
+    assert bm.coverage("zebra zebra customers") == pytest.approx(0.5)
+    # Measured against the **full** corpus vocabulary, not the restricted view: the question is
+    # whether the corpus has the words, not whether this facet's candidate subset does. Same
+    # reasoning as `test_idf_is_global_not_computed_within_the_selected_schemas` above.
+    assert bm.restrict_to(["a"]).coverage("sensors voltage") == pytest.approx(1.0)
+
+
 # ── fusion ───────────────────────────────────────────────────────────────────
 
 
@@ -140,11 +187,18 @@ def test_fuse_renormalises_by_the_active_channels() -> None:
     ``0.5 * 0.8`` — otherwise ``example`` (semantic only, by design) always ranks below
     ``entity`` (both channels) for equal relevance, and the per-type budget then
     allocates on an artefact of the arithmetic.
+
+    **Body updated 2026-08-06 to pass ``consulted``; the property is unchanged.** Property 2
+    of this file's header ends "``register/facets.py`` decides which, and ``retrieve/`` must
+    never decide it locally" — and ``fuse``'s old signature gave it no way to be told, so it
+    decided locally by inspecting the score dict. The parameter is what the header asked for.
     """
     from governed_bi.retrieve.fuse import fuse  # type: ignore[import-not-found]
 
-    both = fuse({"lexical": 0.8, "semantic": 0.8}, weights={"lexical": 0.5, "semantic": 0.5})
-    one = fuse({"semantic": 0.8}, weights={"lexical": 0.5, "semantic": 0.5})
+    weights = {"lexical": 0.5, "semantic": 0.5}
+    both = fuse({"lexical": 0.8, "semantic": 0.8}, weights=weights,
+                consulted={"lexical", "semantic"})
+    one = fuse({"semantic": 0.8}, weights=weights, consulted={"semantic"})
     assert both == pytest.approx(0.8)
     assert one == pytest.approx(0.8)
 
@@ -155,13 +209,54 @@ def test_fuse_distinguishes_a_channel_that_did_not_run_from_one_that_scored_zero
     A document that a channel *scored at zero* is evidence of irrelevance. A document
     that channel never saw is no evidence at all, and treating it as zero is the
     25-times-recurring v1 defect.
+
+    The distinction now lives in ``consulted``, which is where the header says it belongs. It
+    used to be inferred from the score dict, and that inference is what made *additional*
+    evidence lower a score — see :func:`test_fuse_is_monotone_in_evidence`.
     """
     from governed_bi.retrieve.fuse import fuse  # type: ignore[import-not-found]
 
     weights = {"lexical": 0.5, "semantic": 0.5}
-    scored_zero = fuse({"lexical": 0.0, "semantic": 0.8}, weights=weights)
-    did_not_run = fuse({"semantic": 0.8}, weights=weights)
+    scored_zero = fuse(
+        {"lexical": 0.0, "semantic": 0.8}, weights=weights, consulted={"lexical", "semantic"}
+    )
+    did_not_run = fuse({"semantic": 0.8}, weights=weights, consulted={"semantic"})
     assert scored_zero != pytest.approx(did_not_run)
+    assert scored_zero == pytest.approx(0.4)
+    assert did_not_run == pytest.approx(0.8)
+
+
+def test_fuse_is_monotone_in_evidence() -> None:
+    """A fifth property, from the 2026-08-06 audit §7.1. Evidence must never cost you.
+
+    The old rule averaged over the channels **present** in the score dict, so an absent
+    channel was neutral and a present one scored 0.0 was maximally penalising — while
+    ``scale_within_channel`` floors each channel's weakest document at exactly 0.0. With the
+    shipped 0.5/0.5 weights that made
+
+        lexical 0.6, semantic never scored it   ->  0.60
+        lexical 0.6, semantic scaled it to 0.0  ->  0.30
+
+    so **an asset found by both channels could rank below an asset found by only one**, and
+    the min-max floor guarantees the case exists whenever a channel scores two documents with
+    distinct values — which, since the vector store returns a cosine for every candidate, is
+    the normal case on the semantic side.
+
+    Restoring a positive floor would not have fixed it: any weighted **mean** over a varying
+    set of terms falls when a term below the mean is added. The fixed denominator is the fix.
+    """
+    from governed_bi.retrieve.fuse import fuse  # type: ignore[import-not-found]
+
+    weights = {"lexical": 0.5, "semantic": 0.5}
+    both = {"lexical", "semantic"}
+
+    absent = fuse({"lexical": 0.6}, weights=weights, consulted=both)
+    zero = fuse({"lexical": 0.6, "semantic": 0.0}, weights=weights, consulted=both)
+    weak = fuse({"lexical": 0.6, "semantic": 0.1}, weights=weights, consulted=both)
+    strong = fuse({"lexical": 0.6, "semantic": 0.9}, weights=weights, consulted=both)
+
+    assert absent <= zero <= weak <= strong, (absent, zero, weak, strong)
+    assert weak > zero, "a second channel finding the document must not lower its score"
 
 
 def test_fuse_refuses_an_unknown_channel() -> None:
@@ -170,7 +265,24 @@ def test_fuse_refuses_an_unknown_channel() -> None:
     from governed_bi.retrieve.fuse import fuse  # type: ignore[import-not-found]
 
     with pytest.raises(Exception):
-        fuse({"lexicel": 0.8}, weights={"lexical": 0.5, "semantic": 0.5})
+        fuse({"lexicel": 0.8}, weights={"lexical": 0.5, "semantic": 0.5},
+             consulted={"lexicel"})
+
+
+def test_fuse_refuses_a_score_on_a_channel_it_was_told_did_not_run() -> None:
+    """The numerator and the denominator must be over the same channel set.
+
+    A caller that scores a document on a channel it says it did not consult is a caller whose
+    two facts disagree, and quietly widening the denominator to match would hide it.
+    """
+    from governed_bi.retrieve.fuse import fuse  # type: ignore[import-not-found]
+
+    with pytest.raises(Exception):
+        fuse(
+            {"lexical": 0.5, "semantic": 0.5},
+            weights={"lexical": 0.5, "semantic": 0.5},
+            consulted={"lexical"},
+        )
 
 
 # ── routing ──────────────────────────────────────────────────────────────────

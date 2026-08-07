@@ -1,76 +1,11 @@
 """Run N Cursor CLI agents in parallel, each in its own git worktree.
 
-**There is no "multi-task mode" in the Cursor CLI.** Cursor's parallel agents are a
-GUI feature (the Agents Window); the CLI gives you one agent per process. So
-parallelism here is *this script*: launch N processes, each with ``-w`` so they get an
-isolated worktree and cannot fight over one working tree.
-
-Verified against ``cursor-agent`` 2026.07.01 on 2026-08-03:
-
-* ``cursor-grok-4.5-high`` is in ``--list-models`` and the CLI is authenticated.
-* ``-p`` is headless. In headless mode ``--trust`` is **required** or the run exits 1
-  on a workspace-trust prompt with nothing to answer it.
-* ``--plan`` is read-only. ``-f``/``--yolo`` allows writes and shell without asking.
-* ``-w NAME`` puts the agent in ``~/.cursor/worktrees/<repo>/NAME``.
-
-**Why ``-w`` is not optional here, and it is not about merge conflicts.** ``.env`` is
-gitignored and untracked and there is no ``.cursor/worktrees.json`` setup script, so a
-fresh worktree contains **no credentials**. An agent running with ``--yolo`` in a
-worktree therefore cannot read this project's API keys. That is a real boundary and it
-is the reason ``--yolo`` is tolerable at all.
-
-It is a **soft** boundary: ``--yolo`` grants shell, and shell is not confined to the
-worktree. An agent that runs ``cat ../../Code/governed-bi/.env`` gets the keys, and one
-that runs ``git push`` pushes. So the worktree bounds *accidents*, not intent. Nothing
-here should be pointed at a prompt from an untrusted source.
-
-**``-w NAME`` REUSES an existing worktree of that name, and does not reliably rebase
-it onto current HEAD.** Found 2026-08-03 the first time this launched real work: three
-parcels went out, and one landed in a worktree left over from an earlier smoke test,
-**two commits behind**. That agent's tree contained no ``measure/``, no lint gates, and
-no acceptance-test file — it was asked to satisfy a contract that did not exist in the
-only tree it could see.
-
-Index-derived names (``fanout-0``, ``fanout-1``, ...) collide across runs *by
-construction*, so this was guaranteed rather than unlucky. Two defences, because the
-first is a convention and the second is a check:
-
-* Names carry a per-run token, so a name is never reused.
-* :func:`_verify_base` reads each worktree's ``HEAD`` after launch and **fails the
-  agent's result** if it is not the commit that was expected. "Commit before fanning
-  out" was the mitigation this file previously documented, and it is not sufficient on
-  its own: committing does nothing if the agent is looking at a different commit.
-
-**A worktree is based on HEAD, so uncommitted work is invisible to the agent** — and
-this is the trap that matters, because it fails *silently and plausibly*. The first
-real fan-out asked two agents factual questions about this repo. One was right. The
-other was asked how many ``.py`` files are under ``src/`` and answered **9**; the
-true answer was **15**, because six files were uncommitted. The agent was not wrong
-about the tree it was in. It was answering a different question than the one intended,
-and ``9`` is exactly the kind of number that survives review.
-
-So :func:`_dirty_paths` refuses the run when the working tree is dirty and ``-w`` is in
-use. ``--allow-dirty`` overrides it, for the case where the agents genuinely should see
-only committed state. A checkable trap gets checked; the alternative is a docstring
-nobody reads at the moment it matters.
-
-**What this is for, and what it must not be used for.** Work is being parcelled to
-agents, and the rule that came out of that (see
-``docs/plans/v2-layer-handoffs.md`` §9) is that an agent writes tests which pass
-against the implementation it just produced — v1's gold-gate test re-derived the
-condition it was checking, so deleting the gate, flipping the comparison and reversing
-the denominator all passed. So:
-
-* **Delegate** work whose acceptance criterion already exists and is machine-checkable:
-  renames, link fixes, moving files, filling a table from a declared source, running a
-  measurement and reporting the number, mechanical sweeps across many files.
-* **Do not delegate** the acceptance criteria themselves, the lint gates, or anything
-  where "looks right" and "is right" come apart — the absence semantics in
-  ``register/quantity.py`` being the clearest example.
-
-After any fan-out, run the five gates and read the diff. The gates are the reason
-delegating is safe at all, so skipping them removes the whole basis for it.
+Headless ``-p`` needs ``--trust``. ``-w`` isolates trees (soft boundary under
+``--yolo``). Worktree names carry a per-run token; :func:`_verify_base` fails
+agents not on the expected commit; :func:`_dirty_paths` refuses dirty trees
+unless ``--allow-dirty``. Delegate only machine-checkable work; run gates after.
 """
+
 
 from __future__ import annotations
 

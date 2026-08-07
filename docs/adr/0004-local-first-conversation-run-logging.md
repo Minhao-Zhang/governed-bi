@@ -10,8 +10,15 @@
 > is in [`lessons-from-v1.md`](../lessons-from-v1.md): a hand-maintained field list
 > let a degradation counter reach the summary that no gate ever read.
 
-- **Status:** Accepted (2026-07-22). M2 metadata track + durable conversation
-  checkpointer shipped; M5 gated full-content + deep-agent logging in progress.
+- **Status:** Superseded (2026-08-03) — see the note above. This line read
+  "Accepted (2026-07-22). M2 metadata track + durable conversation checkpointer
+  shipped; M5 gated full-content + deep-agent logging in progress." Corrected
+  2026-08-06 (audit §11): **the durable checkpointer did not ship.** The tree has
+  only `InMemorySaver`, in `serve/graph.py` and `api/routes.py`, and
+  `pyproject.toml` records that `langgraph-checkpoint-sqlite` and `-postgres` were
+  deliberately not taken because they had zero importers. So conversation state
+  does not survive a restart, and a status line saying it shipped is how a reader
+  would learn otherwise the hard way.
 - **Deciders:** project owner + design session
 - **Related:** [0001](0001-langgraph-server-chat-runtime.md) (LangGraph
   Server threads = persistence); [0002](0002-governed-agentic-serve-runtime.md)

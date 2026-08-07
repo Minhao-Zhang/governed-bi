@@ -1,14 +1,15 @@
 """Serve graph wiring (ADR 0005 §3.1).
 
-LangGraph entry surface. This module deliberately avoids
-``from __future__ import annotations`` because a graph loaded by file path
-must keep raw parameter annotations inspectable.
+LangGraph entry surface. Avoids ``from __future__ import annotations`` so a graph
+loaded by file path keeps raw parameter annotations inspectable.
 """
 
+import asyncio
 from typing import Any, Literal
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command, TimeoutPolicy
 
 from governed_bi.serve.nodes.agent_core import agent_core_node
 from governed_bi.serve.nodes.assemble import assemble_node
@@ -26,7 +27,7 @@ from governed_bi.serve.nodes.rewrite import rewrite_node
 from governed_bi.serve.nodes.route_retrieve import connect_node, resolve_node, route_node
 from governed_bi.serve.nodes.stamp import stamp
 from governed_bi.serve.nodes.terminal import decline_node, refuse_node
-from governed_bi.serve.state import ServeState
+from governed_bi.serve.state import ServeInput, ServeState
 from governed_bi.serve.wrap import wrap_node
 
 __all__ = ["build_graph", "compile_graph"]
@@ -80,74 +81,121 @@ def _skip_if_terminal(state: ServeState) -> Literal["stamp", "continue"]:
     return "continue"
 
 
+#: Rails that may carry a node timeout. Two conditions, both measured, both narrowing.
+#:
+#: **Natively async.** A node whose body still runs through ``asyncio.to_thread`` (``wrap_node``)
+#: would have its *await* cancelled and the thread left running, so the bound would be a claim
+#: rather than a fact.
+#:
+#: **Alone in its super-step.** The five facets are not, and that is why they are absent despite
+#: being natively async: with concurrent siblings a ``NodeTimeoutError`` surfaces at executor
+#: teardown (``pregel/_loop.py`` ``__aexit__``) and never reaches the node's ``error_handler``.
+#: Measured — a hung facet raised straight out of the graph and the turn produced no record,
+#: while the identical hang on ``guard`` was handled and stamped. A timeout that trades a hang
+#: for a missing record is not an improvement, so the fan-out keeps the hang until that is
+#: solved. ``agent_core`` is handled separately in :func:`_node_timeout`; it is the node with no
+#: other ceiling and it runs alone.
+_CANCELLABLE = frozenset({"guard", "narrate"})
+
+
+def _node_timeout(name: str) -> Any:
+    """The node's wall clock, or ``None`` where a timeout would be a false promise.
+
+    Env-settable like every other deployment knob, through the same names the model timeouts
+    use. ``tests/conformance`` exists because a knob reachable only from code is the defect the
+    register was written to abolish.
+    """
+    import os
+
+    from governed_bi.register.knobs import knob_default
+
+    if name == "agent_core":
+        var, knob = "GOVERNED_BI_AGENT_NODE_TIMEOUT_S", "agent_node_timeout_s"
+    elif name in _CANCELLABLE:
+        var, knob = "GOVERNED_BI_RAIL_NODE_TIMEOUT_S", "rail_node_timeout_s"
+    else:
+        return None
+    raw = os.environ.get(var)
+    seconds = float(raw) if raw else float(knob_default(knob))
+    return TimeoutPolicy(run_timeout=seconds)
+
+
 def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     """Construct the uncompiled serve graph.
 
-    **``agent_checkpointer`` is gone, and it never did anything.** It was passed to the nested
-    ``create_agent``, and three files carried comments explaining that HITL needed it and that
-    "two savers is worse than none: the interrupt is written to one and looked for in the
-    other". A probe falsifies all of it — inside a node, ``CONFIG_KEY_CHECKPOINTER`` is the
-    *outer* saver, the agent's own saver ends with zero checkpoints, and the outer one has
-    three. LangGraph propagates the checkpointer through ``config`` into a graph invoked inside
-    a node, under its own namespace. The nested agent was always checkpointed by the graph's
-    saver; the parameter was dead code documented as load-bearing, which is worse than either.
-
-    ``accept`` is an optional node placed **before** ``guard``, so ``START -> accept ->
-    guard``. It exists for one caller: a server whose client sends only a message. The
-    record requires fifteen fields and ``guard`` subscripts ``state["question"]``, so
-    something has to derive a turn from the conversation — and per ADR 0007 §2 that
-    something must be **server-side**, because ``run_id``, ``corpus_content_hash`` and
-    ``knobs_resolved`` are the run's own claims about itself and every quotability gate
-    reads them. A client that could set them could make two corpora report as one.
-
-    Passing nothing keeps ``START -> guard``, which is what a caller who builds its own
-    turn (``eval/harness.py``, ``python -m governed_bi.serve``) already does correctly.
-
-    ``record`` is the symmetric seam on the other end: an optional node placed **after**
-    ``stamp``, so ``stamp -> record -> END``. It exists for the same one caller and for a reason
-    ADR 0010 uncovered — the audit log was written by ``POST /chat``, and once the UI streams,
-    that route serves almost nothing, so ``/audit/turns`` went dark for every real turn while
-    still listing the old REST ones. "No turns are listed" and "no turns were served" became the
-    same observation, which is the failure ``routes.py``'s own ``audit_logged`` field exists to
-    prevent one layer out.
-
-    It cannot live in ``stamp``: ``tools/check_imports.py`` orders ``serve`` before ``api``, and
-    the log is ``api/trace_store.py``. So the server injects the recorder exactly as it injects
-    ``accept`` — the layer that owns the HTTP surface owns its log — and a caller that streams
-    nowhere passes nothing and writes nothing.
+    Nested agent is checkpointed via the outer graph's saver through ``config``.
+    ``accept`` (optional, before ``guard``) derives a turn from a client message.
+    ``record`` (optional, after ``stamp``) appends to the audit log.
     """
 
-    graph = StateGraph(ServeState)
+    # `input_schema` only when `accept` is present. That flag *is* the trust boundary: with it,
+    # a turn is derived from a client conversation and nothing else the client sends may reach
+    # state (audit §4.3); without it the caller is `serve/__main__`, `eval/` or `/chat`, which
+    # build the turn in-process and pass the whole of ServeState on purpose.
+    graph = (
+        StateGraph(ServeState, input_schema=ServeInput)
+        if accept is not None
+        else StateGraph(ServeState)
+    )
 
-    graph.add_node("guard", wrap_node("guard", guard_node))
-    graph.add_node("rewrite", wrap_node("rewrite", rewrite_node))
-    graph.add_node("negative_gate", wrap_node("negative_gate", negative_node))
+    def rail(name: str, fn: Any, **kw: Any) -> None:
+        """Register a wrapped node, with a timeout where one can really fire.
+
+        **The ``error_handler`` is what makes the timeout safe to add.** LangGraph enforces
+        ``run_timeout`` *outside* the node function, so ``wrap_node``'s ``except`` never sees it
+        — measured: a hung facet raised ``NodeTimeoutError`` straight out of the graph, ``stamp``
+        never ran, and the turn produced **no record at all**. That is the one direction this
+        engine must not fail in, and it would have been introduced by the fix for a hang.
+
+        The handler is only reachable on a timeout: ``wrap_node`` already turns every ordinary
+        exception into a ``crashed`` update and returns normally, so nothing else propagates far
+        enough to reach it. That is why it can name ``NodeTimeoutError`` without being handed the
+        exception — this LangGraph version passes the handler a state, not an error.
+        """
+        timeout = _node_timeout(name)
+        if timeout is None:
+            graph.add_node(name, wrap_node(name, fn, **kw))
+            return
+
+        def timed_out(_state: ServeState, _name: str = name) -> Any:
+            # ``goto="stamp"`` and not a bare update: the handler replaces the node, so the
+            # node's own outgoing edge does not run and the turn would end unstamped —
+            # `path_kind: crashed` in state and no record anywhere, which is the failure this
+            # engine exists to prevent. Measured before adding it: `answer` was None.
+            return Command(
+                update={
+                    "failure": {"stage": _name, "error_type": "NodeTimeoutError"},
+                    "path_kind": "crashed",
+                },
+                goto="stamp",
+            )
+
+        graph.add_node(
+            name, wrap_node(name, fn, **kw), timeout=timeout, error_handler=timed_out
+        )
+
+    rail("guard", guard_node)
+    rail("rewrite", rewrite_node)
+    rail("negative_gate", negative_node)
     for name, fn in _FACET_NODES:
-        graph.add_node(name, wrap_node(name, fn))
-    graph.add_node("route", wrap_node("route", route_node))
-    graph.add_node("resolve", wrap_node("resolve", resolve_node))
-    graph.add_node("connect", wrap_node("connect", connect_node))
-    graph.add_node("assemble", wrap_node("assemble", assemble_node))
-    graph.add_node("agent_core", wrap_node("agent_core", agent_core_node))
-    graph.add_node("narrate", wrap_node("narrate", narrate_node))
-    graph.add_node("refuse", wrap_node("refuse", refuse_node))
-    graph.add_node("decline", wrap_node("decline", decline_node))
-    # **``stamp`` is the one node that must not be wrapped.** ``wrap_node`` turns an
-    # exception into ``{"failure": ..., "path_kind": "crashed"}`` so the turn is *recorded* by
-    # the next node — and for every other node that next node is ``stamp``. There is nothing
-    # after ``stamp``, so wrapping it converted "the recorder crashed" into a run that
-    # reported no ``answer`` at all and no reason: ``graph.invoke`` returned a state with the
-    # key absent, and a caller reading ``out["answer"]["record"]`` got a ``KeyError`` several
-    # frames from the cause. Unwrapped, the traceback names the line.
+        rail(name, fn)
+    rail("route", route_node)
+    rail("resolve", resolve_node)
+    rail("connect", connect_node)
+    rail("assemble", assemble_node)
+    rail("agent_core", agent_core_node)
+    rail("narrate", narrate_node)
+    rail("refuse", refuse_node)
+    rail("decline", decline_node)
+    # Unwrapped: nothing after stamp can record a wrap crash.
     graph.add_node("stamp", stamp)
 
     def _fanout_passthrough(state: ServeState) -> dict[str, Any]:
         return {}
 
-    # ``stream=False``: this node is registered under ``facet_schema`` so a crash in it is
-    # attributed to a real stage, but it is a passthrough, and emitting for it put a phantom
-    # ``facet_schema`` row in the live timeline immediately before the real facet's — two rows
-    # for one stage, which reads as the facet having run twice.
+    # Not through `rail`: the node is `fanout` but its *stage* is `facet_schema`, and `rail`
+    # uses one name for both. stream=False means it emits nothing anyway, and it does no work,
+    # so it needs no timeout.
     graph.add_node("fanout", wrap_node("facet_schema", _fanout_passthrough, stream=False))
 
     if accept is not None:
@@ -191,20 +239,12 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
         _skip_if_terminal,
         {"stamp": "stamp", "continue": "agent_core"},
     )
-    # ``agent_core -> narrate -> stamp``, and ``narrate`` is on this edge only. The terminals go
-    # straight to ``stamp`` because their wording is *system* copy — `refuse` and `decline` write
-    # `answer["text"]` themselves, and a generated sentence over a governance decision would be
-    # the interface paraphrasing a refusal. The node re-checks `path_kind` anyway, because a turn
-    # can be marked terminal *inside* `agent_core` and still arrive here.
+    # Terminals skip narrate: refusal/decline wording is system copy.
     graph.add_edge("agent_core", "narrate")
     graph.add_edge("narrate", "stamp")
     graph.add_edge("refuse", "stamp")
     graph.add_edge("decline", "stamp")
     if record is not None:
-        # Unwrapped, like ``stamp`` and for the same reason inverted: there is nothing after it
-        # to receive a ``crashed`` stamp, so ``wrap_node`` here would convert "the logger failed"
-        # into a turn whose answer the client already has but whose run reports an error. The
-        # node swallows its own failures instead — see ``graph_app._record_node``.
         graph.add_node("record", record)
         graph.add_edge("stamp", "record")
         graph.add_edge("record", END)
@@ -213,11 +253,49 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     return graph
 
 
-def compile_graph(*, checkpointer: Any | None = None):
-    """Compile with an in-memory checkpointer by default (interrupt-ready).
+class _SyncApp:
+    """A sync front for an async graph, for the callers that are not going async.
 
-    One saver, and it reaches the nested agent through ``config`` rather than through a
-    constructor argument. See :func:`build_graph` for the probe that established that.
+    Every node goes through ``wrap_node``, which is ``async def`` — the only shape LangGraph
+    will attach a node timeout to (``TimeoutPolicy`` refuses a sync node outright: "sync Python
+    execution cannot be safely cancelled in-process"). That makes ``.invoke()`` raise
+    ``TypeError: No synchronous function provided``, and the in-process callers — the CLI,
+    ``eval/``, ``/chat`` and the tests — have no reason to become async.
+
+    ``/chat``'s handlers are sync ``def``, so Starlette runs them in a worker thread with no
+    running loop, and ``asyncio.run`` is safe there. The served graph is **not** wrapped: the
+    platform drives ``ainvoke`` itself, which is the path this exists to leave alone.
     """
+
+    def __init__(self, app: Any) -> None:
+        self._app = app
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._app, name)
+
+    def invoke(self, *args: Any, **kwargs: Any) -> Any:
+        return asyncio.run(self._app.ainvoke(*args, **kwargs))
+
+    def stream(self, *args: Any, **kwargs: Any) -> Any:
+        """Drained, then replayed. Order is preserved; incrementality is not.
+
+        No production caller streams through this — ``/chat`` blocks and the live surface is
+        the platform's async one. It exists so the stream-event tests keep asserting the same
+        ordered timeline they always did.
+        """
+
+        async def drain() -> list[Any]:
+            return [chunk async for chunk in self._app.astream(*args, **kwargs)]
+
+        return iter(asyncio.run(drain()))
+
+
+def as_sync(app: Any) -> _SyncApp:
+    """Wrap a compiled async graph for a sync caller. See :class:`_SyncApp`."""
+    return _SyncApp(app)
+
+
+def compile_graph(*, checkpointer: Any | None = None) -> _SyncApp:
+    """Compile with an in-memory checkpointer by default (interrupt-ready)."""
     saver = InMemorySaver() if checkpointer is None else checkpointer
-    return build_graph().compile(checkpointer=saver)
+    return as_sync(build_graph().compile(checkpointer=saver))

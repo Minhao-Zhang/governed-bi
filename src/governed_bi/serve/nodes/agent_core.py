@@ -17,7 +17,7 @@ from langchain_core.runnables import RunnableConfig
 
 from governed_bi.serve.agent_state import GovernedAgentState
 from governed_bi.serve.delivery import DeliveryTracker
-from governed_bi.serve.ledger import execution_from_attempts
+from governed_bi.serve.ledger import answering_attempts, execution_from_attempts
 from governed_bi.serve.runtime import configurable
 from governed_bi.serve.state import TERMINAL_PATH_KINDS
 from governed_bi.serve.tools import SYSTEM_PROMPT, build_tools
@@ -32,7 +32,7 @@ STUB_ANSWER = "STUB_ANSWER"
 # its home; defining it twice would be two strings that must stay equal for no reason.
 
 
-def agent_core_node(state: dict, config: RunnableConfig) -> dict:
+async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
     """Run the main model + tools, or the F1 stub when no ``agent_model`` is set.
 
     **No ``checkpointer`` parameter.** There was one, passed down from ``build_graph`` and
@@ -77,7 +77,7 @@ def agent_core_node(state: dict, config: RunnableConfig) -> dict:
     question = _question_message(state, history)
     inbound = history + ([question] if question is not None else [])
 
-    result, failure = _run(agent, inbound, config)
+    result, failure = await _run(agent, inbound, config)
     out_messages = list(result.get("messages") or [])
     fresh = out_messages[len(inbound) :]
 
@@ -123,7 +123,7 @@ def agent_core_node(state: dict, config: RunnableConfig) -> dict:
     return update
 
 
-def _run(
+async def _run(
     agent: Any, inbound: list[Any], config: RunnableConfig
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Drive the agent, keeping the last committed state. Returns ``(state, failure or None)``.
@@ -158,7 +158,9 @@ def _run(
 
     last: dict[str, Any] = {}
     try:
-        for frame in agent.stream({"messages": inbound}, config, stream_mode="values"):
+        async for frame in agent.astream(
+            {"messages": inbound}, config, stream_mode="values"
+        ):
             if isinstance(frame, Mapping):
                 last = dict(frame)
     except GraphInterrupt:
@@ -235,22 +237,57 @@ def _context_middleware(state: dict) -> list[AgentMiddleware]:
     (``tests/serve/test_model_inputs.py`` asserts the delivered system prompt is exactly
     ``prompt_text("analyst")``).
 
-    The block lands **last**, after any tool results, rather than at its old position ahead of
-    them. Consecutive user messages are legal on the one provider family this engine talks to
-    (``langchain-openai``; nothing here imports an Anthropic client), and last is where the
-    turn's governing constraints are most likely to be honoured.
+    **The block goes immediately before the turn's question, not after it.** It used to land
+    last, on the reasoning that late constraints are the ones a model honours. That is what
+    broke: last also means *newest*, and a wall of governance text arriving after a tool result
+    reads as the newest thing the user said. Observed live — the tool returned ``whuber`` and
+    the agent's final text was "Understood. I'll use the specified joins, bindings, and
+    non-suspect columns for subsequent queries." The record still stamped ``answered``, so the
+    turn looked healthy and told the user nothing.
+
+    It is intermittent: the same two turns replayed answer correctly. That is the argument for
+    removing the shape rather than tuning it — the failure rate is a property of the model, and
+    nothing in this repository would notice it moving.
+
+    Anchoring to the question fixes both calls of a loop. Call one is ``[…, block, question]``;
+    call two is ``[…, block, question, ai, tool_result]``, so what the model saw most recently
+    is the data it asked for, and the block is never the last word. Appended only when the
+    request carries no human message at all, which no real path produces.
+
+    Not a ``SystemMessage``, which would be the tidier shape: ``test_model_inputs`` asserts
+    every system prompt the model receives is one ``register/prompts.py`` declares, precisely so
+    ``prompt_set_hash`` covers all of it. Per-turn text as a system message would break that
+    invariant, and the invariant is worth more than the tidiness.
     """
     block = str((state.get("delivery") or {}).get("context_block") or "")
     if not block:
         return []
 
+    # ``async def``, and that is load-bearing rather than stylistic. ``wrap_model_call``
+    # branches on ``iscoroutinefunction`` and registers the hook it finds — a sync body becomes
+    # ``wrap_model_call`` only, and the agent is driven by ``astream``, so the first model call
+    # died on ``NotImplementedError: Asynchronous implementation of awrap_model_call is not
+    # available``. That surfaced as the *turn* crashing, because ``_run`` cannot tell a
+    # middleware wiring failure from a provider one — and the ``ask_user`` pause it swallowed
+    # looked exactly like the interrupt never happening.
     @wrap_model_call
-    def deliver_context(
-        request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]
+    async def deliver_context(
+        request: ModelRequest, handler: Callable[[ModelRequest], Any]
     ) -> ModelResponse:
-        return handler(request.override(messages=[*request.messages, HumanMessage(block)]))
+        return await handler(request.override(messages=_with_block(request.messages, block)))
 
     return [deliver_context]
+
+
+def _with_block(messages: list[Any], block: str) -> list[Any]:
+    """``messages`` with the context block inserted just before the last human turn."""
+    out = list(messages)
+    for i in range(len(out) - 1, -1, -1):
+        if str(getattr(out[i], "type", "")) == "human":
+            out.insert(i, HumanMessage(block))
+            return out
+    out.append(HumanMessage(block))
+    return out
 
 
 def _stub(state: dict) -> dict:
@@ -271,7 +308,12 @@ def _stub(state: dict) -> dict:
 
 
 def _last_executed_sql(attempts: Any) -> str | None:
-    """The last statement the engine actually **sent**, from the ledger.
+    """The last statement the engine actually **sent** on the answering path, from the ledger.
+
+    Filtered to :data:`~governed_bi.serve.ledger.ANSWERING_PATH`: a ``sample`` row also carries
+    an ``executed_sql``, and a turn that sampled a column after its last ``run_query`` would
+    otherwise record the sample's ``SELECT DISTINCT`` as the turn's ``generated_sql`` — which an
+    eval then re-executes and grades as the answer.
 
     Preferred over the model's ``run_query`` argument, which is what ``generated_sql`` used
     to hold — so a turn that succeeded reported a statement the database never saw.
@@ -285,7 +327,7 @@ def _last_executed_sql(attempts: Any) -> str | None:
     SQL, and "the model wrote this and it was refused" is worth recording.
     """
     last: str | None = None
-    for attempt in attempts or ():
+    for attempt in answering_attempts(list(attempts or ())):
         if not isinstance(attempt, Mapping):
             continue
         sql = attempt.get("executed_sql")

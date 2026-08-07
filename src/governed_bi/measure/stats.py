@@ -1,31 +1,9 @@
-"""One McNemar, one MDE, one rule-of-three. Each with exactly one home.
+"""One McNemar, one MDE, one rule-of-three (ADR 0005 §6 singleton).
 
-v1 had **two McNemars**, two EX definitions, and two ``LOW_CONFIDENCE_JOIN``
-constants *with different comparison operators*. That is why ADR 0005 §6 says one
-implementation per concept, one import name, and why
-``tools/check_one_implementation.py`` names :func:`mcnemar` as a declared singleton.
-With this rewrite being parcelled out to work in parallel, a second McNemar is the
-default outcome rather than a slip.
-
-**The test is exact, not approximate**, and that is a design decision with a
-reason. A normal approximation needs a continuity-correction choice, and a choice is
-a place two implementations can differ while both look right — which is precisely
-how v1 ended up with two. Under the null, each discordant pair is an independent
-coin flip, so the exact two-sided binomial is available from :mod:`math` alone: no
-dependency, no tuning knob, nothing to diverge on.
-
-**The MDE is post-hoc and says so.** It is computed from the *observed* discordance,
-because the standard error of a paired difference depends on how often the two arms
-disagree, not on ``n`` alone. An MDE derived from ``n`` and a base rate — which is
-what gets quoted when discordance is not to hand — is a different and generally
-smaller number, and quoting it makes an underpowered comparison look decisive. So
-:func:`mde` **requires** the discordance and returns unmeasured without it.
-
-**A zero count is bounded, not measured.** :func:`rule_of_three` returns a
-:class:`~governed_bi.register.quantity.Relation.at_most` bound, so "we observed no
-failures in 200 trials" renders as ``<= 1.50%`` and cannot be quoted as 0%. v1
-published the zero.
+Exact two-sided binomial McNemar. MDE is post-hoc from observed discordance.
+:func:`rule_of_three` returns an at-most bound, not a measured zero.
 """
+
 
 from __future__ import annotations
 
@@ -72,12 +50,7 @@ class McNemarResult:
 
     @property
     def is_decisive(self) -> bool:
-        """Whether the observed delta clears the comparison's own detection floor.
-
-        Not a significance test. A delta smaller than the MDE may still have a small
-        p-value and is not something this design will act on — the retired v1 numbers
-        include several sub-MDE deltas reported as findings.
-        """
+        """Whether the observed delta clears this comparison's own MDE (not a p-value test)."""
         if not (self.delta.is_measured and self.minimum_detectable.is_measured):
             return False
         return abs(self.delta.value) >= self.minimum_detectable.value
@@ -86,19 +59,8 @@ class McNemarResult:
 def mcnemar(a: Population, b: Population, outcome: str) -> McNemarResult:
     """Exact paired comparison of ``outcome`` between two populations.
 
-    Refuses, rather than adapting, when the two populations are not the same
-    population differently treated:
-
-    * different ``filtered_by`` trails — the L-R3 defect, caught structurally
-    * different ``unit_key`` — the pairing would be meaningless
-    * different unit sets — silently intersecting them is how v1 compared 1351
-      questions against 1025 and reported the delta as if both arms had answered
-      everything
-
-    The last one is the important refusal. Intersecting is *almost always* what the
-    caller wants, which is why it must be done explicitly: an arm that crashed on 300
-    questions and an arm that did not are not comparable on the 1051 that survived
-    without saying so, because the 300 are not missing at random.
+    Refuses on different ``filtered_by``, ``unit_key``, or unit sets; intersect
+    explicitly if that is the intended population.
     """
     if a.filtered_by != b.filtered_by:
         raise ValueError(

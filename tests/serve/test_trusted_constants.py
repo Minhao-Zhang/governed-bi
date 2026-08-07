@@ -197,3 +197,78 @@ def test_the_usage_row_and_the_knob_report_the_same_model(
         f"usage says {usage[0]['model']!r}, knobs_resolved says "
         f"{session.knobs_resolved.get('llm_model')!r}"
     )
+
+
+# --- The other caller-writable channel: the graph's own `input` (audit §4.3) -----------------
+#
+# `trust()` above closes `configurable`. It was the only one closed. `langgraph_api` forwards
+# the client's `input` dict to the graph unfiltered, `PER_TURN_RESET` does not clear
+# `TEST_HOOKS`, and `int_knob` reads state before `knobs_resolved` -- so a request could set
+# its own `route_top_n` and the record would then publish the default it did not use.
+
+
+def _stop_at(seen: dict) -> Any:
+    """An `accept` that records what reached it and ends the turn immediately."""
+
+    def accept(state: dict, config: Any) -> dict:
+        seen.update(
+            route_top_n=state.get("route_top_n"),
+            retrieve_hooks=state.get("retrieve_hooks"),
+            identity=state.get("identity"),
+            messages=len(state.get("messages") or []),
+        )
+        return {
+            "path_kind": "crashed",
+            "failure": {"stage": "accept", "error_type": "Stop", "detail": "stop"},
+        }
+
+    return accept
+
+
+def test_a_request_cannot_write_a_knob_into_graph_state():
+    """The served graph declares `input_schema`, so undeclared keys never enter state.
+
+    Dropped at the entry rather than policed: an allowlist has to be maintained against every
+    channel added later, and the failure mode of forgetting one is silent.
+    """
+    from governed_bi.serve.graph import as_sync, build_graph
+
+    seen: dict = {}
+    as_sync(build_graph(accept=_stop_at(seen)).compile()).invoke(
+        {
+            "messages": [{"role": "user", "content": "how many sensors"}],
+            "route_top_n": 99,
+            "retrieve_hooks": {"forced": True},
+            "identity": {"token": "someone-else"},
+        }
+    )
+    assert seen["messages"] == 1, "the conversation must still get through"
+    assert seen["route_top_n"] is None, f"client set route_top_n={seen['route_top_n']!r}"
+    assert seen["retrieve_hooks"] is None, "client reached a test hook"
+    assert seen["identity"] is None, "client named its own identity"
+
+
+def test_the_in_process_graph_still_takes_a_whole_turn():
+    """The paired negative, and the reason `input_schema` is not applied to both variants.
+
+    `serve/__main__`, `eval/` and `/chat` build the turn themselves through `Session.turn()`
+    and pass the whole of `ServeState`. Restricting that entry too would not be a hardening,
+    it would delete the only way those three callers can run.
+    """
+    from governed_bi.serve.graph import as_sync, build_graph
+
+    seen: dict = {}
+
+    def guard_stub(state: dict) -> dict:
+        seen["route_top_n"] = state.get("route_top_n")
+        seen["question"] = state.get("question")
+        return {
+            "path_kind": "crashed",
+            "failure": {"stage": "guard", "error_type": "Stop", "detail": "stop"},
+        }
+
+    graph = build_graph()
+    graph.nodes.pop("guard")
+    graph.add_node("guard", guard_stub)
+    as_sync(graph.compile()).invoke({"question": "how many sensors", "route_top_n": 7})
+    assert seen == {"route_top_n": 7, "question": "how many sensors"}

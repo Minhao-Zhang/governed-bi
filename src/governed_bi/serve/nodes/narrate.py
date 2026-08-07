@@ -42,7 +42,7 @@ __all__ = ["narrate_node"]
 _ROWS_SHOWN = 20
 
 
-def narrate_node(state: dict, config: RunnableConfig) -> dict:
+async def narrate_node(state: dict, config: RunnableConfig) -> dict:
     """Write ``answer_text``. Adopts the agent's prose; generates only when there is none.
 
     Returns ``{}`` rather than ``{"answer_text": None}`` on the paths with nothing to say, so a
@@ -66,14 +66,14 @@ def narrate_node(state: dict, config: RunnableConfig) -> dict:
         # would be the interface asserting an answer the turn did not produce.
         return {}
 
-    text, spent = _generate(state, config, result)
+    text, spent = await _generate(state, config, result)
     update: dict = {"answer_text": text}
     if spent is not None:
         update["usage"] = [spent]
     return update
 
 
-def _generate(
+async def _generate(
     state: Mapping[str, Any], config: RunnableConfig, result: Mapping[str, Any]
 ) -> tuple[str | None, dict | None]:
     """One utility-model call over (question, statement, rows). ``(None, None)`` if it cannot run.
@@ -100,7 +100,7 @@ def _generate(
         return None, None
 
     try:
-        reply = model.invoke(
+        reply = await model.ainvoke(
             [
                 SystemMessage(prompt_text("narrate")),
                 HumanMessage(_brief(state, result)),

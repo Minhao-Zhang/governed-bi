@@ -20,6 +20,7 @@ wiring failure, so the test would pass without exercising governance.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -260,11 +261,17 @@ def test_a_bounds_refused_read_is_blocked_not_ok(probe: Any) -> None:  # noqa: F
     original = events_mod.get_stream_writer
     events_mod.get_stream_writer = lambda: seen.append  # type: ignore[assignment]
     try:
-        refused = tools["inspect_schema"].func(
-            table_id=f"{probe.schema}.audit_log", runtime=runtime
+        # `.coroutine`, not `.func`: the tools are `async def` now, which is the shape the
+        # nested agent's `astream` needs, and `@tool` leaves `.func` as None for those.
+        refused = asyncio.run(
+            tools["inspect_schema"].coroutine(
+                table_id=f"{probe.schema}.audit_log", runtime=runtime
+            )
         )
-        allowed = tools["inspect_schema"].func(
-            table_id=f"{probe.schema}.customers", runtime=runtime
+        allowed = asyncio.run(
+            tools["inspect_schema"].coroutine(
+                table_id=f"{probe.schema}.customers", runtime=runtime
+            )
         )
     finally:
         events_mod.get_stream_writer = original  # type: ignore[assignment]
@@ -294,7 +301,7 @@ def test_a_streamed_turn_reaches_the_audit_log() -> None:
     not the file: a ``record`` node placed after ``stamp`` is called once, with the finished
     answer, on a turn that ends in a refusal — the cheapest path that still produces a record.
     """
-    from governed_bi.serve.graph import build_graph
+    from governed_bi.serve.graph import as_sync, build_graph
 
     seen: list[dict[str, Any]] = []
 
@@ -303,10 +310,8 @@ def test_a_streamed_turn_reaches_the_audit_log() -> None:
         return {}
 
     turn = _base_turn(question=INJECTION, turn_id="turn-logged")
-    out = (
-        build_graph(record=recorder)
-        .compile()
-        .invoke(turn, {"configurable": {"thread_id": "t-log", "policy": _policy(rules=INJECTION_RULES)}})
+    out = as_sync(build_graph(record=recorder).compile()).invoke(
+        turn, {"configurable": {"thread_id": "t-log", "policy": _policy(rules=INJECTION_RULES)}}
     )
 
     assert len(seen) == 1, "the recorder runs exactly once per turn"

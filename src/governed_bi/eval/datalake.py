@@ -7,9 +7,10 @@ back to the raw question, so routing is BM25 over the index and costs nothing. I
 the question that currently dominates every other number — *is the gold schema even a
 candidate* — over all 1 351 test questions for free.
 
-``run_live`` is the arm that costs money. Running it before the free measurement would be
-paying to discover that the router never shortlisted the right schema, which is a result
-you can have for nothing.
+The **live arm** is the one that costs money — ``harness.run_arm`` with ``arms.live_arm``, driven
+by ``tools/run_datalake_eval.py``. Running it before the free measurement would be paying to
+discover that the router never shortlisted the right schema, which is a result you can have for
+nothing.
 
 **The reference for correctness is the gold result set, never the SQL string.** Each
 question carries ``sql_rename``, the gold statement written against the obfuscated
@@ -35,7 +36,6 @@ __all__ = [
     "load_questions",
     "dataset_qid_lists",
     "routing_recall",
-    "run_live",
     "observed_tokens",
     "summarise_routing",
     "gold_tables",
@@ -257,29 +257,12 @@ def _median(values: Sequence[float]) -> float | None:
     return (ordered[mid - 1] + ordered[mid]) / 2.0
 
 
-def run_live(
-    questions: Sequence[Mapping[str, Any]],
-    *,
-    session: Any,
-    order_sensitive_qids: Iterable[str] = (),
-    run_id: str | None = None,
-) -> list[dict[str, Any]]:
-    """Serve every question with the session's real model and grade against gold.
-
-    Delegates to :func:`~governed_bi.eval.harness.run_arm` with ``session=`` so every turn
-    is minted by ``Session.turn`` — the run constants are the session's own, not a
-    fabricated ``f"corpus-{arm}"``.
-    """
-    from governed_bi.eval.arms import live_arm
-    from governed_bi.eval.harness import run_arm
-
-    return run_arm(
-        questions,
-        live_arm(session),
-        order_sensitive_qids=frozenset(str(q) for q in order_sensitive_qids),
-        run_id=run_id,
-        session=session,
-    )
+# **``run_live`` was here and is gone** (audit §10). It wrapped three lines --
+# ``run_arm(questions, live_arm(session), order_sensitive_qids=..., session=session)`` -- and had
+# zero callers: ``tools/run_datalake_eval.py``, the actual paid-arm driver, calls ``run_arm`` with
+# ``live_arm`` directly. A wrapper with no caller beside the thing it wraps is a second name for
+# one operation, and this module's docstring described the arm through it, so a reader looking for
+# where the money is spent found a function nothing runs.
 
 
 def gold_tables(sql: str) -> set[str] | None:
@@ -317,10 +300,15 @@ def table_coverage(
     budget licenses at most ``ASSET_REGISTER[table].budget`` ranked tables — so a question
     needing a table outside that set cannot succeed however good the model is. Measured on the
     xhigh arm at 344 rows: **51.2%** of questions had all their gold tables, against a
-    *schema* reachability of 62.5%. EX was 0.049.
+    *schema* reachability of 62.5%.
 
     That splits the problem in two, which one EX number cannot: whether a question was
     *answerable at all* under this retrieval, and whether the model converted it when it was.
+
+    The EX figure this docstring used to quote beside those two is retired
+    (``register/citations.RETIRED_CLAIMS``): it was graded by a comparator that read Postgres
+    ``numeric`` cells as strings, so it is an underestimate of unknown size. These two numbers
+    are unaffected — they are measurements of what was *licensed*, and no grader touches them.
 
     Compared case-insensitively. Licensed ids carry the slug (ADR 0008 D1) and a gold
     statement carries the engine's spelling; those agree for every identifier whose slug is

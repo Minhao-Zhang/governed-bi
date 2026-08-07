@@ -4,8 +4,7 @@
 holder before implementation, because an agent writes tests that pass against the code
 it just wrote. If a test looks wrong, say so and stop.
 
-Specification: ``docs/plans/v2-layer-handoffs.md`` §5 and ADR 0005 §1. The two
-invariants everything here turns on:
+Specification: ADR 0005 §1. The two invariants everything here turns on:
 
 * **I1 — ``summary`` is the only indexed field.** Bounded at 250 characters. A
   validator that lets a 4,000-character summary through has broken the index, not
@@ -15,21 +14,16 @@ invariants everything here turns on:
   seed produces assets with no body at all; a validator that requires one makes
   ADR 0005's "steps 6-9 are measurable with no model" false.
 
-The load-bearing failure mode, from ``lessons-from-v1.md``: the loader raised on the
-first unparseable file, inside a ``try/finally`` with no ``except``, so **one truncated
-YAML discarded a fully paid 69-schema build with no clue why**. The opposite failure is
-equally real and this project has already published a result on top of it — a *silent*
-skip turns "a corpus that lost half its assets" into "a corpus that merely looks
-small". Hence ``(assets, problems)``, with both halves load-bearing.
+Hence ``(assets, problems)``, with both halves load-bearing: a raise on the first
+bad file loses the rest of the build; a silent skip hides how much was lost.
 
 **Three tests were removed from this file on 2026-08-03, deliberately.** They asserted
 default-deny sanitization of corpus prose — a control that was specified, built, and
 then deleted, because the corpus is trusted and the incoming question is not: injection
 is checked once at the analyst's input by ``govern.guard``. Sanitizing on ``load`` also
 changed what reached the model while ``corpus_content_hash``, taken over the files on
-disk, did not move. See **ADR 0005 §1.6** and ``docs/plans/v2-implementation-decisions``
-#37. Recorded here because an acceptance file that quietly loses three tests cannot be
-told from one that was weakened to pass.
+disk, did not move. See **ADR 0005 §1.6**. Recorded here because an acceptance file
+that quietly loses three tests cannot be told from one that was weakened to pass.
 """
 
 from __future__ import annotations

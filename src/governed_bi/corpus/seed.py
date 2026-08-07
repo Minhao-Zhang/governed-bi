@@ -1,8 +1,9 @@
 """Model-free seed: introspection → valid assets (ADR 0005 §1.7).
 
-Deterministic, non-empty ``summary`` on every asset so steps 6–9 are measurable
-before a curator exists. Does not author ``reliability`` from absence.
+Deterministic non-empty ``summary`` on every asset. Does not author
+``reliability`` from absence.
 """
+
 
 from __future__ import annotations
 
@@ -24,23 +25,9 @@ __all__ = ["seed", "fit_summary"]
 
 
 def fit_summary(head: str, entries: list[str], *, joiner: str = ", ", tail: str = "") -> str:
-    """``head`` plus as many ``entries`` as fit the cap, dropping **whole** entries.
+    """``head`` plus as many whole ``entries`` as fit the cap; never mid-token truncate.
 
-    **The producer was doing what the validator forbids.** ``validate.py`` refuses an
-    oversized summary with *"Rewrite it; do not truncate -- the indexed text is the
-    treatment"*, and every summary here was composed with a bare ``[:250]``. The gold layer
-    inherited 26 table and 3 schema summaries sitting exactly at the cap, at least one cut
-    mid-identifier (``Goali…``, ``avg_…``) — a token that names nothing, occupying an entry
-    in a shared scoring space and splitting the IDF of the name it was cut out of.
-
-    Dropping a whole entry loses a column name; slicing mid-name invents one. And the loss
-    is **stated**: an entry that did not fit is counted in a ``(+N more)`` suffix, so a
-    reader of the corpus can see that the list is partial instead of inferring it from an
-    ellipsis that may itself have been cut off.
-
-    ``tail`` is measured inside the loop rather than concatenated by the caller. Appending a
-    closing bracket after the fit is how a 250-cap composer returns 251 characters — the same
-    off-by-a-suffix this function exists to remove.
+    Dropped count appears as ``(+N more)``. ``tail`` is measured inside the loop.
     """
     cap = int(knob_default("summary_max_chars"))
     kept = list(entries)

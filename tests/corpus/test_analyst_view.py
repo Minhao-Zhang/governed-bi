@@ -38,38 +38,42 @@ def test_excluded_assets_leave_the_analyst_view_but_stay_in_the_raw_load() -> No
     assert "s.t.ssn" in view.excluded_columns or "t.ssn" in view.excluded_columns
 
 
-def test_restamp_strips_excluded_and_certified_human_audit() -> None:
-    from governed_bi.corpus.provenance import restamp_model_authored
-    from governed_bi.corpus.schema import (
-        Audit,
-        ColumnAsset,
-        Governance,
-        Provenance,
-        ProvenanceSource,
-        ProvenanceStatus,
-    )
+def test_no_tool_can_write_governance_onto_an_asset() -> None:
+    """The control that replaces ``restamp_model_authored``, which had zero callers.
 
-    forged = ColumnAsset(
-        id="s.t.col",
-        schema="s",
-        parent_table="t",
-        physical_name="col",
-        summary="col - forged",
-        governance=Governance(excluded=True, reason="model says so", by="curator"),
-        audit=Audit(
-            provenance=Provenance(
-                source=ProvenanceSource.human,
-                status=ProvenanceStatus.certified,
-            )
-        ),
+    ADR 0005 §1.5 says ``governance.excluded`` and certified human provenance are human-only,
+    and ``corpus/provenance.py`` existed to strip forgeries at the phase boundary where a
+    model-authored corpus is accepted. It was never called — by anything, ever (audit §10) — so
+    a reader of §1.5 came away believing a boundary check ran.
+
+    There is no such boundary in this tree, and the reason is stronger than the check would
+    have been: the only model-authored write path, ``tools/graft_corpus_fields.py``, **refuses
+    the whole ``governance`` field** rather than sanitising it, and refuses ``reliability`` and
+    ``summary`` too. A refusal cannot be forged past; a re-stamp can be forgotten.
+
+    So this asserts the refusal instead, and it asserts it against the tool's own declared list
+    so that adding ``governance`` to the graftable set fails here. When a curator is built, it
+    is the thing that owes a re-stamp, and ADR 0005 §1.5 now says so.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "_graft", root / "tools" / "graft_corpus_fields.py"
     )
-    cleaned = restamp_model_authored(forged, model="test-model")
-    assert cleaned.governance.excluded is False
-    assert cleaned.audit is not None
-    assert cleaned.audit.provenance is not None
-    assert cleaned.audit.provenance.source is ProvenanceSource.curator
-    assert cleaned.audit.provenance.status is ProvenanceStatus.proposed
-    assert cleaned.audit.provenance.model == "test-model"
+    assert spec is not None and spec.loader is not None
+    graft = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(graft)
+
+    assert "governance" in graft.REFUSED, (
+        "governance is no longer refused by the one tool that writes authored fields, and "
+        "nothing re-stamps model-authored assets. ADR 0005 §1.5 would be unenforced."
+    )
+    assert not any(path.startswith("governance") for path in graft.GRAFTABLE), graft.GRAFTABLE
+    # The two fields that carry a caveat or the indexed text are refused for their own reasons,
+    # and a graft of either is how a softened decoy warning or a corpus swap would arrive.
+    assert {"reliability", "summary"} <= set(graft.REFUSED)
 
 
 def test_a_proposed_draft_is_invisible_to_the_analyst_but_a_certified_one_is_not() -> None:

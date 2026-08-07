@@ -1,31 +1,9 @@
-"""Identifier handling: path validation (§9), folding (B5), and the two key shapes (§4).
+"""Identifier handling: path validation (§9), folding (B5), two key shapes (§4).
 
-Three separate v1 defects live in this file, and they are here together because
-each one is a disagreement between *our* spelling of a name and *somebody else's*.
-
-**B8 — ``\\A``/``\\Z``, never ``^``/``$``.** ``asset.schema`` becomes a directory
-name while ``is_valid_id`` guarded only the asset id. Python's ``$`` also matches
-before a trailing newline, so ``"beer_factory\\n"`` clears a ``^...$`` validator
-labelled *security* and then names a directory. v2 makes the surface **wider**, not
-narrower: ``SchemaAsset.name`` is a first-class field, and ADR 0005 §1.5
-acknowledges the corpus is partly model-authored. **v2 has no HTTP corpus write**;
-CLI / ``CorpusStore.write`` still derive directories from these strings.
-
-**B5 — fold both sides, do not quote to compensate.** Postgres folds unquoted
-identifiers, so ``customerid`` clears a ``CustomerID`` allowlist; v1's fix was to
-quote the model's spelling, which then sent the engine a column that does not
-exist. The fix is that every comparison happens between folded keys and the
-*declared* spelling is what reaches the engine (§3 step 2).
-
-**§4's keys — two shapes, not one.** Tables key on ``{schema}.{physical_name}``,
-columns on ``{schema}.{table}.{column}``. ADR 0006's first draft claimed one
-uniform two-part key "everywhere", which would make two tables in one schema that
-both have an ``id`` column a corpus validation error — i.e. every corpus.
-
-Caller-supplied sets are normalised through the **same** functions the statement's
-own references go through, which is the only reason a two-part
-``customers.CustomerID`` in an allowlist can be compared with a three-part
-reference in a query at all.
+* Path components: ``\\A``/``\\Z``, never ``^``/``$``.
+* Fold both sides of every comparison; declared spelling reaches the engine.
+* Tables: ``{schema}.{physical_name}``; columns: ``{schema}.{table}.{column}``.
+  Caller sets and statement refs share the same normalisers.
 """
 
 from __future__ import annotations

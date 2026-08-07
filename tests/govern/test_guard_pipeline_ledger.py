@@ -288,35 +288,65 @@ def test_the_encoding_check_runs_on_the_raw_statement_not_the_normalised_one(pre
 # ── the ledger ────────────────────────────────────────────────────────────────
 
 
-def test_the_entry_hashes_the_executed_string_and_elides_its_literals(prepare) -> None:
-    """G4 and §11 together: the record attests to what ran, and the fingerprint shows
-    the shape without echoing the literals libpq would have quoted back."""
-    from governed_bi.govern.ledger import ledger_entry, statement_sha256
+def test_the_row_that_is_actually_written_carries_the_statement_verbatim(prepare) -> None:
+    """The two tests here used to exercise ``ledger_entry``, which nothing called.
+
+    It was the only implementation of ADR 0006 §11's retention table — ``executed`` /
+    ``statement_sha256`` / ``statement_shape``, literals elided — and it had **zero production
+    callers**: one re-export and four lines in this file. So a reader of §11, or of these
+    tests, came away believing the durable record held a digest and a shape. What it holds is
+    :func:`attempt_record`, and ``executed_sql`` is the statement, verbatim, literals and all.
+
+    ``ledger_entry`` is deleted (audit §8.1 / §10) and this test asserts what is true instead.
+    It is deliberately the *unflattering* assertion: if the raw statement ever stops being
+    written, this fails and someone has to decide that on purpose.
+    """
+    from governed_bi.govern.ledger import attempt_record
 
     prepared = prepare(
         "SELECT c.id FROM customers c WHERE c.id = 424242",
         licensed=CUSTOMERS,
         allowed_columns=ALLOWED,
     )
-    entry = ledger_entry(verdict=prepared.verdict, path="agent", executed_sql=prepared.sql, attempt=1)
-    assert entry["statement_sha256"] == statement_sha256(prepared.sql or "")
-    assert "424242" not in str(entry["statement_shape"])
-    assert "customers" in str(entry["statement_shape"]), "the shape must still show the table"
-    assert entry["executed"] is True
+    row = attempt_record(prepared.verdict, "agent", executed_sql=prepared.sql)
+    assert row["passed"] is True
+    assert row["executed_sql"] == prepared.sql
+    assert "424242" in str(row["executed_sql"]), (
+        "the durable row carries the literal. If that changes, it is a decision, not a detail"
+    )
+    assert "detail" not in row, "the verdict's detail quotes the statement and is not carried"
 
 
-def test_a_blocked_entry_says_nothing_ran_and_drops_the_detail(check) -> None:
-    """``detail`` is the one field guaranteed to contain a fragment of the statement,
-    and on a driver error the statement itself. The negative half of the test above:
-    ``executed`` is a recorded ``False``, not an absent key."""
-    from governed_bi.govern.ledger import ledger_entry
+def test_a_refused_attempt_records_that_nothing_ran(check) -> None:
+    """``executed_sql`` is a recorded ``None``, not an absent key.
+
+    The negative half of the test above, and the reason the field is stated rather than
+    omitted: a ``TypedDict`` tolerates a missing key at runtime, so a row built without it
+    forces every consumer to ``.get()`` defensively — and "nothing ran" is a value.
+    """
+    from governed_bi.govern.ledger import attempt_record
 
     verdict = check("SELECT pg_read_file('/etc/passwd')", licensed=CUSTOMERS)
-    entry = ledger_entry(verdict=verdict, path="agent", executed_sql=None, attempt=4)
-    assert entry["executed"] is False
-    assert entry["statement_sha256"] is None
-    assert "detail" not in entry
-    assert entry["layer"] == "FUNCTIONS" and entry["reason_code"] == "r_function_not_permitted"
+    row = attempt_record(verdict, "agent")
+    assert row["executed_sql"] is None
+    assert row["passed"] is False
+    assert row["verdict_layer"] == "FUNCTIONS"
+    assert row["reason_code"] == "r_function_not_permitted"
+
+
+def test_the_structural_fingerprint_still_elides_literals() -> None:
+    """Kept when ``ledger_entry`` went, because it has real callers and is a true fact.
+
+    The stream events carry a statement digest, and the shape is what a reader needs in order
+    to compare two statements without reading either. What it is *not* is a retention policy:
+    nothing writes it to disk in place of the statement.
+    """
+    from governed_bi.govern.ledger import structural_fingerprint
+
+    shape = structural_fingerprint("SELECT c.id FROM customers AS c WHERE c.id = 424242")
+    assert "424242" not in shape
+    assert "customers" in shape, "the shape must still show the table"
+    assert structural_fingerprint("NOT SQL AT ALL ((") == "unparseable"
 
 
 def test_the_execution_record_derives_its_error_count_from_its_attempts() -> None:

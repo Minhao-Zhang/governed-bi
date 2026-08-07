@@ -1,36 +1,9 @@
-"""The positive function allowlist (ADR 0006 §2), keyed on sqlglot classes.
+"""Positive function allowlist (ADR 0006 §2), keyed on sqlglot classes.
 
-v1 used a denylist, and v1's own code recorded the verdict: *"a positive allowlist
-of permitted functions would be more robust and is a deferred follow-up."* A
-denylist is unwinnable — the Postgres XML-export family alone has eight spellings,
-and one of them dumps a whole table from a **string literal** argument, which no
-column-level check can see.
-
-**This is a committed literal list of expression classes, against a pinned sqlglot
-release.** Not a category description. ADR 0006's first draft described the list as
-"aggregates, window functions, string/date/numeric scalars, ``CASE``/``COALESCE``/
-``NULLIF``, casts, and the dialect's standard set operations", which had three
-defects: set operations are not function calls (``exp.Union`` is not ``exp.Func``,
-so the list had never been enumerated); "every function call" is ambiguous, since
-matching only ``exp.Anonymous`` and matching all ``exp.Func`` are different
-allowlists; and **"aggregates" admits B2** — ``json_agg``, ``array_agg``,
-``row_to_json`` and ``to_jsonb`` are all aggregates and each emits every column of
-a row while producing zero ``Column`` nodes.
-
-**Why the class list is the source and the name set is derived.** sqlglot's
-canonical name for a class is not the SQL spelling and is not guessable:
-``json_agg`` parses to ``exp.JSONArrayAgg``, whose ``sql_name()`` is
-``J_S_O_N_ARRAY_AGG``. A hand-written *name* list would therefore have a hole
-exactly where the camel-case boundary falls, and — the reason the disjointness test
-below parses its fixture rather than comparing strings — an ``ADVERSARIAL_SET``
-holding the literal ``"json_agg"`` would compare unequal to the very name that
-permits it.
-
-**Two CI assertions, in both directions**, in ``tests/govern/``. Not too narrow,
-against the function inventory of the gold SQL corpus; and not too wide,
-``PERMITTED_FUNCTIONS ∩ ADVERSARIAL_SET == ∅``. ADR 0006's first draft had only
-the narrowness test, which a developer widening the list to make a gold query pass
-would have satisfied.
+Committed class list against a pinned sqlglot major; the name set is derived
+(canonical names are not SQL spellings). Everything absent is refused, including
+``exp.Anonymous``. CI asserts both directions: not too narrow vs gold inventory;
+``PERMITTED_FUNCTIONS ∩ ADVERSARIAL_SET == ∅``.
 """
 
 from __future__ import annotations

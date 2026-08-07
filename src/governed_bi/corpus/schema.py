@@ -1,78 +1,12 @@
-"""The eight asset types, and the conversion between a raw mapping and a typed one.
+"""The eight asset types (ADR 0005 §1).
 
-ADR 0005 §1. Every asset carries the same six common fields --
-
-.. code-block:: text
-
-    id          the identity every index, budget and closure keys on
-    summary     <= 250 chars, non-empty. THE ONLY INDEXED TEXT (I1)
-    body        unbounded, optional. What the system uses on hit (I2)
-    governance  D6. On every asset, because in v1 only two types had it and the
-                five types now entering the index had no D6 mechanism at all
-    confidence  curation-time belief. NOT an outcome score -- the first thing a
-                feedback loop will want is to write a hit rate here, and it must
-                not: belief and outcome have different lifetimes
-    audit       who said this, and why
-
-**I1 was measured on 2026-08-05 and it survives on a design argument, not on the numbers.**
-Indexing each asset's own ``body`` prose instead of its ``summary`` identifier list is worth
-**+6.21pp of gold-table coverage** and +1.41pp of schema recall@3 over all 1 351 test questions,
-paired, both deltas above their own detection floor
-(``runs/ablation/summary-form-1351-20260805.json``). So the cheap version of "make the indexed
-text meaningful" is to widen I1 to cover ``body``, and that option is **declined deliberately**:
-
-* I1 is what keeps the two fields' *roles* separate — ``summary`` is the retrieval treatment and
-  ``body`` is what the model reads on a hit. Merging them makes every future retrieval experiment
-  also a context-size experiment, and this repository has just spent two days establishing that a
-  measurement which changes two things at once cannot attribute either.
-* ``body`` averages 1.8-2.4x the length of ``summary``, so admitting it moves the corpus-global
-  ``avgdl`` that every BM25 score is normalised against. That re-scores the whole index and
-  invalidates every number measured before it — including the ones above.
-
-The measurement is therefore read as *"the indexed text should carry meaning"* and answered by
-**rewriting ``summary``**, not by widening what gets indexed. The 250-char cap is not the binding
-constraint either: gold schema summaries average 111 characters and table summaries 81, and an
-arm at a 600-char cap scored **worse** than one at 250. Density, not length, and not the field.
-
--- and those six are **repeated in all eight classes rather than inherited**,
-because dataclass inheritance orders base fields first and the common set is a mix
-of required and defaulted fields, which makes the split unreadable. Repetition
-without a check is the drift shape this project keeps paying for, so
-:func:`_assert_every_asset_carries_the_common_fields` closes it at import: a ninth
-type, or a class that forgets ``governance``, fails the import rather than the run.
-
-**Why plain frozen dataclasses and not Pydantic.** ADR 0005 §1.1 says "validation
-lives in the Pydantic model". It lives in :mod:`.validate` instead, as a function
-over a constructed asset, and the reason is the acceptance contract of the parcel
-next door: ``problems_with(asset)`` must be callable on an asset that already
-exists. A validating constructor makes an invalid asset unrepresentable, which
-sounds stronger and is weaker here -- it makes every ``problems_with`` call
-vacuously empty, and a check that cannot fail is L§7's named defect. So
-construction is dumb, one function holds the rules, and every untrusted entry point
-(:func:`~governed_bi.corpus.store.load`,
-:func:`~governed_bi.corpus.store.write`) runs it. Recorded as a deviation.
-
-**What is deleted here relative to v1**, each with the ADR line that deletes it:
-
-.. code-block:: text
-
-    description        -> summary + body (ADR 0005 supersedes the name)
-    NoteAsset, NoteKind, NoteActivation, NormativeForce, Trigger  (§1.4)
-    MetricRule         -> body (§1.4: free text under extra="allow", and it
-                          collides with the new `rules` while meaning a filter)
-    FewShotAsset.question -> summary IS the question (§1.2). Keeping both would be
-                          two fields that must agree.
-    NegativeExampleAsset.pattern / example_questions / reason / escalation
-                       -> the keyword/Jaccard matcher is deleted (§1.2); the gate
-                          is now a semantic threshold and `body` renders the
-                          refusal.
-
-**Conversion to and from a raw mapping is :mod:`.parse`**, not here. This file says
-what an asset is; that one says how a string somebody wrote becomes one. The
-dependency runs one way -- ``parse`` reads these dataclasses' own annotations and
-these dataclasses know nothing about parsing -- so the split has no two halves that
-must agree.
+Common fields on every type: ``id``, ``summary`` (≤250, I1), ``body`` (optional,
+I2), ``governance``, ``confidence`` (curation belief, not outcome), ``audit``.
+Repeated in each class rather than inherited; import-time assert keeps them
+aligned. Validation is :mod:`.validate`, not construction. Mapping conversion is
+:mod:`.parse`.
 """
+
 
 from __future__ import annotations
 

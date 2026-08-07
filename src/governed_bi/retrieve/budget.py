@@ -1,16 +1,9 @@
-"""Per-type retrieval budgets, read from the asset register.
+"""Per-type retrieval budgets from the asset register (ADR 0005 §2.5).
 
-Budgets live as a column of :data:`~governed_bi.register.assets.ASSET_REGISTER`.
-Looking them up via ``dict.get(cls, 0)`` is the defect that made
-``NegativeExampleAsset`` structurally unreachable in v1: the type existed, the
-budget table forgot it, and the default zero deleted every hit of that type
-with no record. Every type has an explicit budget here — including the literals
-``"all"`` and ``"n/a"`` — so there is no default to fall through to.
-
-Applied after pass two and dedup (ADR 0005 §2.5). Assets pulled in by
-``resolve`` / ``connect`` do not consume budget and stay distinguishable from
-ranked hits.
+Every type has an explicit budget — no ``dict.get(..., 0)`` default.
+``resolve``/``connect`` pulls do not consume budget.
 """
+
 
 from __future__ import annotations
 
@@ -34,20 +27,9 @@ class BudgetResult:
 
     hits: list[RankedHit]
     pulled_in: list[PulledIn]
-    #: ``{asset_type value -> how many ranked hits this cap discarded}``. Empty when nothing
-    #: was cut.
-    #:
-    #: **The cut had no witness.** A 9th-ranked gold table simply did not exist to the turn:
-    #: nothing counted it, no record field named it, and ``table_coverage`` reported the
-    #: resulting miss as though retrieval had never found the table at all. Measured offline,
-    #: 44% of questions whose schema was routed correctly have a gold table ranked outside the
-    #: 8-table cap, and the median worst gold-table rank is 9 — one position past the budget.
-    #: That is the single largest attributable loss in the pipeline and it was invisible,
-    #: which is why it went unexamined while a corpus was rewritten twice.
+    #: ``{asset_type -> count of ranked hits discarded by the cap}``.
     dropped: dict[str, int] = field(default_factory=dict)
-    #: The best score that did **not** survive, per type. A drop at 0.98 and a drop at 0.01
-    #: are different facts: the first says the cap is too tight, the second says the tail was
-    #: noise, and a bare count cannot tell them apart.
+    #: Best score that did not survive, per type (tight cap vs noise tail).
     best_dropped_score: dict[str, float] = field(default_factory=dict)
 
 

@@ -1,40 +1,26 @@
-"""Does this corpus contain text from the held-out test questions?
+"""Detect held-out test question text leaking into a corpus.
 
-``GOLD_LAYER_MANIFEST.json`` records the gold layer's scope as *"TRAIN ONLY (test_final.jsonl
-held out) -- fair benchmark"*, and until now that was an honour system. Every number this
-repository publishes rests on it: a corpus authored with a test question in context has the
-answer in the index, and the resulting score measures the leak rather than the engine.
+Checks: provenance citing test split; verbatim containment (min NGRAM content
+words; few_shots exempt with stricter provenance); n-gram rate vs a train-only
+control. Paraphrase leaks are undetectable — a pass is not cleanliness.
 
-``docs/plans/corpus-summary-rewrite-2026-08-05.md`` told an outsourced agent that contamination
-"cannot be detected afterwards". That is true of **paraphrase** and false of **copy-paste**, and
-copy-paste is the realistic failure when an agent has a question file open. So this exists.
+**The control has no default, as of 2026-08-06.** It defaulted to
+``corpora/gold-semantic-layer-20260804`` — the same corpus ``.env`` serves and
+``tools/run_datalake_eval.py`` evaluates. So the default invocation compared the
+shipped corpus **against itself**, printed ``ratio to control: 1.00x (tolerance
+2.0x)``, and the rate arm was *arithmetically incapable of failing* for the one
+corpus it mattered for. The gate ran, reported ok, and had measured nothing.
 
-**Three checks, sharpest first.**
+A control that is not genuinely held out cannot be guessed, so it is now required
+and ``--control`` equal to the corpus under test is refused rather than compared.
 
-1. **Provenance.** Does any asset's ``audit`` cite ``test_final.jsonl`` or a held-out
-   ``question_id``? Exact, and it needs no control: every few-shot in the gold layer cites
-   ``train_final.jsonl`` and a train qid, so a test citation is the leak naming itself.
-2. **Verbatim containment.** A held-out question's normalised text inside a corpus field.
-   **Both sides must carry at least ``NGRAM`` content words**, and that bound is the whole
-   correctness of the check -- without it the first draft reported **67 containments in the
-   certified train-only gold layer**, every one a coincidence: it tested containment in both
-   directions, so the two-word summary *"How many cancelled flights are there?"* matched any
-   longer question containing "cancelled flights". A leak detector with a 100% false-positive
-   rate is worse than none, because the next reader learns to ignore it.
-3. **N-gram collision rate**, against a control corpus. The weak one, and it is weak by
-   construction: BIRD asks near-identically-worded questions about one database across both
-   splits, and 5 000 few-shot assets are train questions verbatim, so *some* overlap is the
-   corpus doing its job. A bare threshold would flag that on every corpus ever built. The
-   certified train-only gold layer is therefore measured alongside and reported as the
-   reference. **A materially higher rate is the signal; a similar rate is not evidence.**
-
-**What none of them catch:** a leak that was reworded. Do not report a pass as cleanliness.
-
-The splits themselves were checked while writing this and are disjoint -- 0 shared
-``question_id`` and 0 shared verbatim question text between ``train_final.jsonl`` (5 392) and
-``test_final.jsonl`` (1 351). Both files use BIRD's original ``train_*`` id namespace, so a
-``train_`` prefix says nothing about which split a question is in; only membership does.
+**This gate cannot run in CI** and that is a property of the gate, not an
+oversight: it needs a corpus tree (untracked), a held-out question file (a
+separate repository), and a third corpus certified train-only. The CI-able half of
+corpus contamination is ``tools/check_no_benchmark_discriminators.py``, which
+needs no data at all — and which caught a producer this gate had already passed.
 """
+
 
 from __future__ import annotations
 
@@ -48,35 +34,12 @@ import sys
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
-DEFAULT_CONTROL = "corpora/gold-semantic-layer-20260804"
 DEFAULT_DATASET = REPO.parent / "BIRD-Data-Obfuscation" / "eval_dataset" / "test_final.jsonl"
 
-#: Length of the shared content-word window, and the minimum length of a question eligible for
-#: the containment check. **Chosen by sweeping it, not by taste.** Held-out questions carry a
-#: median of 8 content words and a p10 of 4, so the window doubles as a coverage limit:
-#:
-#: .. code-block:: text
-#:
-#:      N   questions eligible   containments in the train-only control   planted leak caught
-#:      4         95.9%                        12                               yes
-#:      5         88.8%                         4                               yes
-#:      7         67.5%                         2                               yes
-#:      8         52.3%                         0                               no
-#:
-#: At 8 the check is clean and blind — it misses a leak planted verbatim in a table body, because
-#: that question has 7 content words. **There is no N that is both clean and sensitive**, and the
-#: reason is not the threshold: every one of the control's containments is a ``few_shot``, whose
-#: summary *is* a train question by construction, matching a test question BIRD worded similarly.
-#: So the fix is the exclusion below rather than a bigger window, and N can then be small.
+#: Content-word window for containment / n-gram checks.
 NGRAM = 5
 
-#: Asset types excluded from the containment check, with their own stricter check instead.
-#:
-#: ``few_shot`` only. Its summary is a train question verbatim (ADR 0005 §1.2: "``summary`` IS the
-#: question"), so containment there measures BIRD's train/test phrasing overlap and not this
-#: corpus's hygiene — it is the entire false-positive population at every window size. In exchange
-#: these assets must **prove** their provenance: a few-shot whose audit does not cite the train
-#: file is reported, which is a sharper test than any wording comparison.
+#: ``few_shot`` summaries are train questions; exempt from containment, stricter provenance instead.
 CONTAINMENT_EXEMPT = frozenset({"few_shot"})
 
 #: Words dropped before windowing, so "how many of the" does not carry a collision by itself.
@@ -208,14 +171,30 @@ def scan(root: pathlib.Path, questions: list[dict]) -> dict:
     }
 
 
+def _same_tree(corpus: str, control: str) -> bool:
+    """Whether two corpus arguments name the same directory.
+
+    Resolved rather than string-compared: ``corpora/x`` and ``./corpora/x/`` and a symlink to
+    either are the same self-comparison, and a check that only caught the identical spelling
+    would be satisfied by a trailing slash.
+    """
+    try:
+        return (REPO / corpus).resolve() == (REPO / control).resolve()
+    except OSError:  # pragma: no cover - unresolvable path is not a self-comparison
+        return corpus.strip("./") == control.strip("./")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="check_train_only", description=__doc__)
     parser.add_argument("corpus", help="the corpus under test")
     parser.add_argument(
         "--control",
-        default=DEFAULT_CONTROL,
+        required=True,
         help="a corpus certified train-only, measured alongside as the reference rate. "
-        "Pass '' to skip, which makes the result uninterpretable and is for debugging only.",
+        "REQUIRED, with no default: the default used to be the corpus this repository "
+        "actually serves, so the ordinary invocation compared it against itself and the "
+        "rate arm could not fail. Pass '' to skip, which makes the result uninterpretable "
+        "and is for debugging only.",
     )
     parser.add_argument("--dataset", type=pathlib.Path, default=DEFAULT_DATASET)
     parser.add_argument(
@@ -225,6 +204,19 @@ def main(argv: list[str] | None = None) -> int:
         help="fail when the corpus's collision rate exceeds the control's by this factor",
     )
     args = parser.parse_args(argv)
+
+    # Argument sanity before data availability: a self-comparison is wrong to attempt whether
+    # or not the dataset happens to be present, and checking it second made the refusal
+    # unreachable in any environment without the benchmark repository checked out.
+    if args.control and _same_tree(args.corpus, args.control):
+        print(
+            f"the control and the corpus under test are the same tree ({args.corpus!r}). "
+            "A corpus compared against itself has a collision ratio of exactly 1.00x, so the "
+            "rate arm cannot fail and reports ok having measured nothing. This was the "
+            "shipped default.",
+            file=sys.stderr,
+        )
+        return 2
 
     if not args.dataset.exists():
         print(f"no test set at {args.dataset}", file=sys.stderr)

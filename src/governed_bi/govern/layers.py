@@ -1,31 +1,9 @@
-"""The layer stack, the verdict, and the rule table (ADR 0006 §1).
+"""Layer stack, verdict, and rule table (ADR 0006 §1).
 
-**Why an ordered ``IntEnum`` and not strings.** :func:`~governed_bi.govern.check.check`
-returns on first failure, so reaching layer *N* is a proof that layers ``1..N-1``
-passed, and ADR 0006 §5 expresses graded-delivery eligibility as a comparison
-against one member. ADR 0006's own first draft bolted the function allowlist on as
-"L1.5", which is unrepresentable in an ordered verdict — a block by it would have
-had to be reported as ``None``, which is bypass **B3** through the front door.
-
-**There is no third state.** ``failed_layer is None`` means *passed*, and nothing
-else. v1's attempt cap wrote a ledger entry before ``check()`` ran, so the entry
-carried no layer; graded delivery read ``failed_layer=None``, treated it as
-non-hard, and re-executed SQL that had cleared no layer at all. Every constructor
-below is therefore total in the same direction: :func:`refuse` cannot produce a
-verdict without a layer, and :func:`passed` cannot produce one with a layer.
-
-**The rule table is the only place a rule id and a layer meet.** ``failed_layer``
-is *derived* from the rule id rather than passed alongside it, because two tables
-that must agree is the defect that made v1's negative examples structurally
-unreachable — a caller that names a rule cannot also name a layer, so the two
-cannot drift. The one exception is :data:`GUARDRAIL_ERROR`, whose layer is
-contextual (it is wherever the exception happened) and which is deliberately not
-in :data:`RULES`; see :func:`internal_error`.
-
-``layers_evaluated`` answers a question a bare ``failed_layer`` cannot: a layer
-with **no entry did not run**, which is not the same as ran and objected to
-nothing (L-R1). Its last element is the failing layer, and the constructor
-enforces that rather than trusting a caller to keep them in step.
+Ordered ``IntEnum``: reaching layer *N* proves ``1..N-1`` passed.
+``failed_layer is None`` means passed and nothing else. ``failed_layer`` is
+derived from the rule id via :data:`RULES` (except :data:`GUARDRAIL_ERROR`).
+``layers_evaluated`` records what ran; its last element is the failing layer.
 """
 
 from __future__ import annotations
@@ -202,12 +180,7 @@ def allow(*, evaluated: Sequence[Layer], bound: Mapping[str, str]) -> CheckVerdi
 
 
 def internal_error(layer: Layer, detail: str, *, evaluated: Sequence[Layer] = ()) -> CheckVerdict:
-    """The exception-to-block wrapper's verdict (§1).
-
-    ``RecursionError`` from pathological nesting and tokenizer errors from
-    unterminated literals both escaped v1's parse layer. This is the only
-    constructor that takes a layer, because it is the only reason code whose layer
-    is a fact about *where we broke* rather than about the statement.
+    """Verdict for an exception inside ``check()`` (:data:`GUARDRAIL_ERROR`).
     """
     return CheckVerdict(
         passed=False,

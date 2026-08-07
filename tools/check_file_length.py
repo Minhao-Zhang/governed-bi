@@ -1,62 +1,22 @@
-"""Enforce ADR 0005 §6's file-length tiers: soft 400, hard 1000.
+"""Enforce ADR 0005 §6 file-length tiers: soft 400 (reported), hard 1000 (fatal).
 
-v1's shape: **17 files over 1,000 lines, one at 5,085, and 30% of all code in
-files over 1,000 lines** (``register.citations`` ``v1 was 86,746 lines``, measured
-2026-08-02). ADR 0005 §6 declared the limit "CI-enforced" and nothing enforced it,
-which is the same class of defect as the caller contract in ``check_imports.py``:
-a number in a table that no process reads is a preference, not a limit.
-
-Two tiers, and the soft one is the one that needs defending:
-
-* **hard 1000 — fatal.** Raised from 800 on 2026-08-03 by the maintainer, whose reason
-  was that Python at this repository's prose density is simply longer than 800 lines for
-  a coherent unit of work. That is a real observation: the file that forced the question
-  was a test contract at 855 lines, and the 55 lines over were failure messages and
-  preconditions — the evidence the file exists to produce.
-
-  Be honest about what the new number costs. The old cap's argument was that **every one
-  of v1's worst files passed through 800 on the way to 1,000**, so 800 caught them
-  early. At 1000 that argument is gone: v1 had 17 files over 1,000 lines, so this cap now
-  fires exactly *at* the shape v1 normalised rather than before it. The soft tier is what
-  carries the early warning now, which makes the printed overrun count — below — load
-  bearing rather than informational.
-* **soft 400 — reported, never fatal, and the count prints on every run.** A soft
-  cap that prints nothing when it is exceeded is indistinguishable from a soft cap
-  nobody wired up — the same argument the archive tier in ``check_citations.py``
-  earns its printing from. Publishing the count is what makes the *set* of
-  overruns visible, so growth from one to five is something a reviewer sees rather
-  than something they would have to go looking for.
-
-There is one overrun today — ``register/record.py`` — and it is a recorded,
-accepted decision, not an oversight. It is **not** special-cased here: the soft
-tier reporting it is the correct behaviour, and an exemption would delete the only
-signal that says how many overruns exist. A hard-cap exemption list is
-deliberately absent too; if a file ever needs one, that is a design conversation,
-not a constant.
-
-Lines are counted physically, including blanks and comments, because that is what
-a reader scrolls through. Docstrings are the bulk of this repo's line count by
-design, and they are still lines a reader must hold in their head.
-
-Exit code 1 only on a hard-cap violation.
+Physical lines including blanks and comments. Scans ``src``, ``tools``, ``tests``.
+Exit 1 only on hard-cap violation.
 """
+
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
-#: Reported, never fatal. The tier exists so an overrun is a visible decision.
+#: Reported, never fatal.
 SOFT_LIMIT = 400
 
-#: Fatal. ADR 0005 §6. Raised 800 -> 1000 on 2026-08-03; see the module docstring for
-#: what that trade costs, and note that nothing derives this number except the ADR — the
-#: conformance test reads it from here rather than restating it.
+#: Fatal. ADR 0005 §6.
 HARD_LIMIT = 1000
 
-#: Roots scanned. ``tools/`` and ``tests/`` are included on purpose — v1's largest
-#: single file was a test module, and the review cost of an unreadable test is the
-#: same as the review cost of an unreadable implementation.
+#: Roots scanned (src, tools, tests).
 ROOTS: tuple[str, ...] = ("src", "tools", "tests")
 
 #: Directory names skipped wherever they appear. Generated or vendored trees are

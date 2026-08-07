@@ -1,16 +1,6 @@
-"""The browsing routes: filtering, the lean catalog, one table's detail. ADR 0009.
+"""Browsing routes: filtering, lean catalog, table detail (ADR 0009).
 
-Split out of :mod:`governed_bi.api.routes` when that file crossed the 1 000-line hard cap
-(ADR 0005 §6). The split follows a real seam rather than a convenient line number:
-:mod:`governed_bi.api.browse` already holds the *pure* filtering, sorting and subgraph logic,
-and this module is the HTTP shell over it. Nothing here decides anything -- it reads query
-parameters, calls that module, and projects assets into the shapes the client declares.
-
-**Every projection here is the client's declared shape, and getting one wrong is not a
-validation nuisance.** The UI parses each response with zod at the boundary and throws on a
-mismatch, so one missing required field takes a whole page down -- and ``/schema`` is not one
-page: it is also the fallback catalog source, so its wrong shape emptied the namespace rail
-as well.
+HTTP shell over :mod:`governed_bi.api.browse`. Projections match the client's declared shapes.
 """
 
 from __future__ import annotations
@@ -32,59 +22,20 @@ from governed_bi.register.assets import ASSET_REGISTER
 
 __all__ = ["router"]
 
-#: Mounted by ``routes.app``. Declaration order inside a router is preserved, which
-#: ``/schema/summary`` depends on: it must be declared before ``/schema/{table_id}`` or the
-#: path parameter swallows ``summary`` as a table id.
+#: Mounted by ``routes.app``. Declare ``/schema/summary`` before ``/schema/{table_id}``.
 router = APIRouter()
 
 
 def _request_session() -> Any:
-    """This request's session, from the **one** definition in :mod:`~governed_bi.api.routes`.
-
-    Imported inside the function rather than at module scope: ``routes`` imports this
-    module's ``router``, so a top-level import would be circular.
-    ``tools/check_one_implementation.py`` refused a second ``_session`` here and was right --
-    two readers of "the session for this request" is two places to change when the session
-    stops being process-global.
-    """
+    """This request's session (imported lazily to avoid a circular import with ``routes``)."""
     from governed_bi.api.routes import _session
 
     return _session()
 
 
-# ``GET /schema`` -- the flat dump of every table with every column inlined -- was **deleted**
-# here, and its absence is the design rather than an omission.
-#
-# It measured 936 637 bytes on the pooled lake and was two projections of one thing: the same
-# tables that ``/schema/summary`` returns lean. Two projections of a table can disagree, and
-# this pair already had: the dump shipped a shape the client rejected, and because it was also
-# the fallback catalog source, one wrong field emptied the namespace rail as well as the page.
-#
-# Its only remaining consumer was the ER diagram, which needed exactly two fields the lean
-# column lacked -- ``nullable`` and ``is_unique``. Those are now on ``_table_summary``'s lean
-# column, so the diagram reads the catalog it was already fetching. Full per-column prose is
-# still available for the **one** table someone opens, from ``GET /schema/{table_id}``.
-#
-# What replaces it, then, is not a route: it is the rule that a catalog is lean, a detail is
-# per-item, and no route inlines a corpus.
-
-
-# ── browsing: filtering, the lean catalog, and bounded relationships ──────────
-#
-# ADR 0009. The four routes below are the ones `capabilities.can_scope` gates, and the UI
-# was already written against them — they returned 404, so the UI fell back to the flat
-# `/schema` + `/corpus/assets` dumps (937 KB and 2.25 MB measured on the live lake).
-
-
 @router.get("/corpus/fields")
 def corpus_fields(type: str | None = None) -> dict[str, Any]:
-    """The filterable columns of one asset type, **derived from its dataclass**.
-
-    The UI renders its filter row from this, so a field added to ``corpus/schema.py`` becomes
-    filterable with no change here and none in TypeScript. A column list written in this
-    route would be the drift ``register/`` exists to end — and it would drift silently,
-    because a missing column is indistinguishable from one somebody chose not to expose.
-    """
+    """Filterable columns of one asset type, derived from its dataclass."""
     known = {t.value: t for t in ASSET_REGISTER}
     if type is None or type not in known:
         return {
@@ -110,18 +61,10 @@ def corpus_rows(
     offset: int = 0,
     limit: int = 50,
 ) -> dict[str, Any]:
-    """Filtered, sorted, paginated assets of one type. ADR 0009 D1.
+    """Filtered, sorted, paginated assets of one type (ADR 0009 D1).
 
-    ``where`` repeats as ``field:op:value``. One opaque triple rather than a query parameter
-    per field, because the parameter set must not grow with the field set — that is three
-    places to forget a field instead of none.
-
-    A predicate naming an unknown field or an unsupported operator comes back in
-    ``unknown_where`` and is **not applied**. Ignoring it would render a filtered-looking
-    list that is not filtered, which is the same defect class as a gate that never fires.
-
-    ``total`` is the count **after** filtering: returning the unfiltered total beside a
-    filtered page is how a reader concludes their filter did nothing.
+    ``where`` repeats as ``field:op:value``. Unknown predicates land in ``unknown_where``
+    and are not applied. ``total`` is the count after filtering.
     """
     known_types = {t.value: t for t in ASSET_REGISTER}
     if type not in known_types:
@@ -156,29 +99,15 @@ def corpus_rows(
     }
 
 
-#: Page ceiling for ``/schema/summary``, and its default. The corpus has 656 tables, so one
-#: request covers the whole catalog — which is what the consumers need: the namespace rail, the
-#: table browser and the client-side search index all read the *entire* list, and none of them
-#: pages. The old default of 200 therefore did not bound a page, it **hid 456 tables**: the rail
-#: showed the alphabetically-first namespaces and the search index could not match a table it
-#: had never been sent, while ``can_search: false`` pointed at that index as the honest
-#: fallback. A default that silently truncates the only fetch anybody makes is the ADR 0009 D2
-#: defect wearing a parameter's clothes.
+#: Default/ceiling for ``/schema/summary``. Catalog consumers need the full table list.
 SUMMARY_PAGE_LIMIT = 1000
 
 
 @router.get("/schema/summary")
 def schema_summary(schema: str | None = None, limit: int = SUMMARY_PAGE_LIMIT, offset: int = 0) -> dict[str, Any]:
-    """The lean table catalog: enough for a browser row and a badge, no prose.
+    """Lean table catalog: enough for a browser row and a badge, no prose.
 
-    This is what removes the 937 KB. ``/schema`` inlines every column's ``summary`` and
-    ``body``; a catalog row needs a physical name, a type, a role and two flags, and the
-    prose is fetched for the one table someone opens.
-
-    ``offset`` and ``limit`` are **echoed** as applied, after clamping. A caller cannot
-    otherwise tell a short page from the end of the list: ``total: 656`` with 200 items is
-    ambiguous between "you asked for 200" and "we decided 200", and only one of those is the
-    caller's to fix.
+    ``offset`` and ``limit`` are echoed as applied after clamping.
     """
     session = _request_session()
     tables = sorted(
@@ -197,15 +126,10 @@ def schema_summary(schema: str | None = None, limit: int = SUMMARY_PAGE_LIMIT, o
 
 @router.get("/schema/{table_id}")
 def schema_detail(table_id: str) -> dict[str, Any]:
-    """One table's full detail, for a detail sheet. Declared **after** ``/schema/summary``
-    so the literal path wins the route match — FastAPI resolves in declaration order, and a
-    path parameter declared first would swallow ``summary`` as a table id."""
+    """One table's full detail. Declared after ``/schema/summary`` so the literal path wins."""
     session = _request_session()
     table = session.assets_by_id.get(table_id)
     if table is None or table.asset_type.value != "table":
-        # 404 rather than a hollow TableView. The client's `tableDetail` turns a 404 into a
-        # readable ApiError, where a body full of nulls would *parse* and render an empty
-        # table as though the corpus carried one.
         raise HTTPException(status_code=404, detail=f"no table asset {table_id!r}")
     return _table_view(session, table)
 
@@ -215,7 +139,7 @@ def _table_summary(session: Any, table: Any) -> dict[str, Any]:
     columns = [c for c in columns if c is not None]
     lean = [
         {
-            "id": c.id,  # the asset id; callers must never derive one (ADR 0008 D4)
+            "id": c.id,  # asset id; callers must never derive one (ADR 0008 D4)
             "physical_name": getattr(c, "physical_name", ""),
             "physical_type": getattr(c, "physical_type", None) or "",
             "role": getattr(getattr(c, "role", None), "value", None),
@@ -223,10 +147,7 @@ def _table_summary(session: Any, table: Any) -> dict[str, Any]:
             if getattr(getattr(c, "reliability", None), "status", None) is not None
             else "ok",
             "excluded": bool(getattr(getattr(c, "governance", None), "excluded", False)),
-            # The two remaining fields an ER card renders, and the reason it could not be built
-            # from this route: without them the diagram had to fetch the 937 KB flat dump for
-            # nullability and uniqueness alone. Both stay tri-state — `None` is "not observed",
-            # which is a different claim from "nullable: false" (ADR 0005 §6).
+            # Tri-state: None means not observed (ADR 0005 §6).
             "nullable": getattr(c, "nullable", None),
             "is_unique": getattr(c, "is_unique", None),
         }
@@ -247,22 +168,7 @@ def _table_summary(session: Any, table: Any) -> dict[str, Any]:
 
 
 def _table_view(session: Any, table: Any) -> dict[str, Any]:
-    """One table as the client's declared ``TableView``. Used by ``/schema`` **and**
-    ``/schema/{id}``, so the flat dump and the detail fetch cannot disagree about a table.
-
-    **This shape was wrong, and it broke more than one page.** Both routes emitted
-    ``{id, name, schema, summary, columns:[{id, name, summary, type}]}`` while the contract
-    declares ``physical_name``, ``row_count``, ``description``, ``grain``, ``confidence``,
-    ``excluded``, ``excluded_reason`` and ``provenance_status`` -- all required -- plus a much
-    richer column. So ``api.schema()`` threw at the zod boundary, and ``/schema`` is not only
-    the Tables tab: it is the **fallback catalog source**, so the namespace rail on the schema
-    page had nothing to list either. One wrong shape, three broken surfaces.
-
-    ``description`` is ``body`` falling back to ``summary``. v2 replaced v1's ``description``
-    with that pair (ADR 0005 §1), and a UI "description" wants the fuller text -- ``summary``
-    is the 250-character indexed line, ``body`` is what a reader opening a detail sheet came
-    for.
-    """
+    """One table as the client's ``TableView``. ``description`` is ``body`` falling back to ``summary``."""
     governance = getattr(table, "governance", None)
     provenance = getattr(getattr(table, "audit", None), "provenance", None)
     columns = [
@@ -282,30 +188,19 @@ def _table_view(session: Any, table: Any) -> dict[str, Any]:
         "excluded_reason": getattr(governance, "reason", None),
         "provenance_status": getattr(getattr(provenance, "status", None), "value", None),
         "columns": columns,
-        # Additive and not in the declared contract: zod strips unknown keys, so this costs
-        # the client nothing and is useful to anything reading the route directly.
         "rules": list(getattr(table, "rules", ()) or ()),
     }
 
 
 def _column_view(column: Any) -> dict[str, Any]:
-    """One column as the client's declared ``ColumnView``.
+    """One column as the client's ``ColumnView``.
 
-    ``is_unique`` is ``False`` when the corpus says nothing, and that is a claim about a
-    *missing* claim -- the contract types it as a required boolean, so ``None`` is not
-    expressible. Written down rather than hidden: an uncurated corpus reports nothing unique,
-    which is not the same as having checked and found nothing.
+    ``is_unique`` defaults to ``False`` when unobserved — the contract requires a boolean.
     """
     governance = getattr(column, "governance", None)
     reliability = getattr(column, "reliability", None)
     provenance = getattr(getattr(column, "audit", None), "provenance", None)
     return {
-        # The **asset id**, sent so no caller has to derive one. The client had its own
-        # `deriveColumnId` producing v1's `col_<table>_<physical>`, which ADR 0008 D1 replaced
-        # with `{table_id}.{slug(physical_name)}` — a scheme that hashes any name needing
-        # sanitisation and so cannot be reimplemented in a second language without becoming a
-        # second answer to what identifies a column. D4 says references are asset ids; this is
-        # the route that supplies them.
         "id": column.id,
         "physical_name": getattr(column, "physical_name", ""),
         "physical_type": getattr(column, "physical_type", None) or "",
@@ -342,21 +237,8 @@ def _column_ref(session: Any, column_id: str) -> dict[str, Any] | None:
 def column_related(column_id: str) -> dict[str, Any]:
     """Every semantic-layer item touching one physical column.
 
-    The route the column detail sheet opens on. It did not exist, and the client's query
-    declares ``retry: false``, so opening a column went straight to an error state -- the one
-    genuinely absent route in this surface rather than a shape mismatch.
-
-    **An unknown id answers 200 with ``column_resolvable: false``, not 404.** The client
-    declares that flag and renders it as a sentence; a 404 renders as a broken panel. The two
-    cases are different facts: "this corpus holds no such column" is an answer, and the sheet
-    is reached by clicking a column name, so an id that does not resolve means the id scheme
-    drifted -- exactly the thing worth saying out loud. (It had: the client derived
-    ``col_<table>_<physical>`` while ADR 0008 D1 mints ``{table_id}.{slug(physical_name)}``.
-    Column ids are now sent on every column projection so nobody derives one.)
-
-    Joins are matched by **parsing** the ON clause, not by scanning it for the column's name:
-    the panel's claim is that a relationship uses this column, and ``id`` occurs inside
-    ``customer_id``.
+    Unknown id → 200 with ``column_resolvable: false`` (not 404).
+    Joins match by parsing the ON clause, not by substring.
     """
     session = _request_session()
     by_id = session.assets_by_id
@@ -400,11 +282,7 @@ def column_related(column_id: str) -> dict[str, Any]:
         if asset.asset_type.value == "term" and getattr(getattr(asset, "binding", None), "target_id", None) == column_id
     ]
 
-    # v2 has no rule asset -- the note/rule IR is designed and unbuilt -- so the normative text
-    # reaching a column is its table's `rules`, which nothing in `src/` reads and no route has
-    # ever emitted. The id is **positional**, and says so: these are strings in a tuple, not
-    # assets, and minting an asset-looking id for one would invent an identity the corpus does
-    # not carry. `kind: "table"` records the scope the statement actually has.
+    # Positional ids: table rules are strings, not assets.
     rules = [
         {
             "id": f"{table_id}#rule-{index}",
@@ -434,8 +312,6 @@ def column_related(column_id: str) -> dict[str, Any]:
         if asset.asset_type.value != "join":
             continue
         named = predicate_columns(getattr(asset, "on", "") or "")
-        # Qualified match on this column's own table, or a bare `col = col` predicate. A
-        # qualified reference to another table's same-named column is not this column.
         if (table_key, wanted) not in named and ("", wanted) not in named:
             continue
         left, right = getattr(asset, "left_table", ""), getattr(asset, "right_table", "")
@@ -454,8 +330,6 @@ def column_related(column_id: str) -> dict[str, Any]:
             }
         )
 
-    # Metrics are table-grain: a metric is an aggregate over its base table, so it relates to
-    # every column of that table and to none of them more than the others.
     metrics = [
         {"id": asset.id, "name": getattr(asset, "name", asset.id), "granularity": "table"}
         for asset in sorted(by_id.values(), key=lambda a: a.id)

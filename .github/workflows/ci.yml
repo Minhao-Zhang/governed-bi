@@ -43,6 +43,11 @@ jobs:
       # The five gates ADR 0005 §6 declares. Run explicitly as well as through the
       # conformance suite: the suite asserts they *exit zero on a clean tree*, and running
       # them directly is what makes their output visible in the log when they do not.
+      #
+      # **`check_citations` was the fifth and was missing here** until 2026-08-06: the register
+      # named five gates, this file ran four, and the one absent was the one that fails when a
+      # retired number reappears in live code. Adding it is what makes the previous commit's
+      # retirement of `EX was 0.049` enforced rather than recorded.
       - name: Gate — file length (soft 400, hard 1000)
         run: uv run --frozen python tools/check_file_length.py
 
@@ -54,6 +59,20 @@ jobs:
 
       - name: Gate — import layering
         run: uv run --frozen python tools/check_imports.py
+
+      - name: Gate — no retired claims in live code
+        run: uv run --frozen python tools/check_citations.py
+
+      # Corpus contamination, source level. Needs no corpus and no dataset, which is why it
+      # can run here at all: it refuses the two tables of hand-authored sibling discriminators
+      # that were written by reading the held-out questions, and the shape they were written in.
+      #
+      # `tools/check_train_only.py` is the other half and deliberately is NOT here. It needs a
+      # corpus tree (untracked), the held-out question file (a separate repository) and a third
+      # corpus certified train-only. Naming it as a CI gate would be the "CI-enforced" claim
+      # this file's header is about. It is a manual gate; its preconditions are in its docstring.
+      - name: Gate — no benchmark discriminators in the tree
+        run: uv run --frozen python tools/check_no_benchmark_discriminators.py
 
       # `-rs` prints every skip with its reason. That is not cosmetic here: the Postgres and
       # OpenAI-backed contracts skip without credentials, and a silent skip turns "we tested

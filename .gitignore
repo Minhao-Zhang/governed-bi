@@ -228,10 +228,15 @@ data/logs/
 runs/
 tmp_agent_run/
 
-# Large curated corpora dropped in for local serving (the vendored demo corpus in
-# corpus/ stays tracked). These are build outputs of a curator run, reproducible
-# from BIRD-Data-Obfuscation, and run to thousands of files — git is the source of
-# truth for the authored demo corpus, not for these.
+# Large curated corpora dropped in for local serving. Thousands of files each.
+#
+# **This block used to carve an exception for "the vendored demo corpus in corpus/
+# [that] stays tracked", and there is no such corpus** — it was removed in a506436
+# and the exception outlived it. It also called these trees "reproducible from
+# BIRD-Data-Obfuscation", which is not supported by this tree: there is no curator
+# module in src/. So nothing here is in version control and nothing here can be
+# rebuilt from anything that is. See corpus/README.md; that is an open problem and
+# not a settled arrangement.
 corpora/
 
 # Firecrawl CLI scrape cache. The CLI writes it into the repo root, and AGENTS.md

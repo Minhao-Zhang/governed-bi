@@ -392,10 +392,27 @@ sample_rows(column_id: str, limit: int)   # a ColumnAsset id, not a name
 ```
 
 The statement is constructed from the resolved asset, so no model string reaches
-SQL. It still passes `check()` — it is one generated statement and trivially
-checkable — and it still applies the exclusion/suspect filter **in the tool**,
-tested with the outer corpus filter removed (v1's filter had never executed in
-any test because every test passed the already-filtered corpus).
+SQL. It passes `check()`, which is where the exclusion/suspect filter comes from:
+one generated statement is trivially checkable, and the COLUMNS layer already
+refuses an excluded column and — under `hard_block_suspect` — a suspect one.
+
+**Superseded, 2026-08-06.** For most of v2 this section described something that
+did not exist. `sample_rows` called `connector.sample_values`, which called
+`execute` — the method `ports.Connector` reserves for `govern.pipeline` — so the
+path reached Postgres through **no** layer and wrote **no** ledger entry. Two
+things followed. `guardrail_errors == 0` and an empty attempt list held
+*vacuously* for every value the tool ever returned. And because
+`hard_block_suspect` is enforced only inside `check()`, one identical policy made
+`run_query` refuse a suspect column while `sample_rows` handed over its real
+values — no attacker and no unusual configuration required.
+
+There is no "filter in the tool" now, and there never was one. The filter is the
+layer stack, reached the same way `run_query` reaches it:
+`serve/fetch.distinct_values_statement` builds the statement as a syntax tree —
+so an identifier is escaped by sqlglot's generator rather than by an adapter that
+remembered to, which the Postgres one did not — and `serve/fetch.sample_rows`
+runs it through `prepare()` and ledgers the verdict as `path="sample"`.
+`sample_values` is gone from the port and from both adapters.
 
 The profiler runs at seed time, on the same connector base class, with the same
 session settings as §8 — including `synchronize_seqscans = off`, which 0005 §1.7
@@ -432,7 +449,7 @@ lake — the same shape as B7.
 |---|---|
 | `read_body` | asset ids in this turn's `hits ∪ pulled_in` |
 | `inspect_schema` | table ids in `licensed` |
-| `sample_rows` | column ids whose table is in `licensed` |
+| `sample_rows` | column ids whose table is in `licensed`, **and then the layer stack** |
 | `run_query` | the table layer, against `licensed` |
 
 **No tool writes to `licensed`.** A clarification resume continues from the
@@ -490,6 +507,36 @@ it **raises at construction**.
 to `identity` and rejects a mismatch.
 
 ### 11. The ledger and redaction
+
+> **Superseded, 2026-08-06. The retention table below was never implemented, and
+> the redaction vocabulary it specified is deleted.**
+>
+> `ledger_entry()` was the only implementation of the table in this section, and it
+> had **zero production callers** — one re-export and four lines in a test file,
+> with 45 green tests passing against dead code. `redaction_of()` and the
+> `Redaction` enum, declared on all 37 record fields, had zero callers anywhere.
+> `ports.Sink`, which promised "every record is redacted before write", had no
+> implementation and named two adapter files that did not exist.
+>
+> What actually reaches disk: `attempt_record()` carrying `executed_sql` **raw**,
+> and `api/trace_store.append_turn` writing the question, the answer and the whole
+> record verbatim to `runs/serve/<date>.jsonl`. Verified on a live log — one line
+> held a full `generated_sql`, another held `… WHERE c."county" = 'ARECIBO' …`.
+>
+> Deleted rather than wired, deliberately. This is a local-first single-user tool
+> and that file is the user's own transcript on their own disk; the honest thing is
+> to say so. A declared control with no enforcer is worse than an absent one,
+> because a reader takes the declaration for the behaviour — which is exactly what
+> happened here for the whole of v2, in a section whose subject is auditability.
+>
+> If redaction is wanted, it needs a threat model first, and the threat model
+> decides the vocabulary rather than the other way round. `statement_sha256` and
+> `structural_fingerprint` survive in `govern/ledger.py`: they have real callers
+> and are true facts about a statement, just not a retention policy.
+>
+> **Still in force from this section:** every executor writes an entry stamped with
+> its `path` (G2), and the verdict's `detail` is not carried into the row — it is
+> the one field guaranteed to contain a fragment of the statement.
 
 **Every executor writes an entry** (G2), stamped with its `path`. v1's
 graded-delivery path bypassed the middleware and produced answers whose record

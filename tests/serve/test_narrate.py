@@ -12,6 +12,7 @@ detail: the node **adopts** the agent's prose instead of paying for a second opi
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -40,6 +41,14 @@ class _Recorder:
         self.calls.append(messages)
         return AIMessage(self._text)
 
+    async def ainvoke(self, messages: list[Any], config: Any = None, **kwargs: Any) -> Any:
+        """The nodes await now, and a double that only offers ``invoke`` fails them open.
+
+        Same lesson as the ``config=`` parameter below: a fake that is narrower than
+        ``BaseChatModel`` does not fail loudly, it makes the caller take its error branch. The
+        scope gate's error branch is ``error_failed_open``.
+        """
+        return self.invoke(messages, config, **kwargs)
 
 def _config(model: Any) -> dict[str, Any]:
     return {"configurable": {"utility_model": model}}
@@ -64,7 +73,7 @@ def test_the_agents_own_sentence_is_adopted_and_no_model_is_called() -> None:
         ],
     }
 
-    out = narrate_node(state, _config(model))
+    out = asyncio.run(narrate_node(state, _config(model)))
 
     assert out == {"answer_text": "There are **9,590 restaurants** in total."}
     assert model.calls == [], "the agent had already answered; a second call buys nothing"
@@ -90,7 +99,7 @@ def test_a_loop_that_ended_without_prose_gets_a_generated_sentence() -> None:
         ],
     }
 
-    out = narrate_node(state, _config(model))
+    out = asyncio.run(narrate_node(state, _config(model)))
 
     assert out["answer_text"] == "There are 9,590 restaurants."
     assert len(model.calls) == 1
@@ -110,10 +119,10 @@ def test_a_refusal_keeps_the_systems_own_wording() -> None:
     interface restating a refusal in words nobody reviewed."""
     model = _Recorder()
     for path_kind in ("refuse", "decline", "crashed"):
-        out = narrate_node(
+        out = asyncio.run(narrate_node(
             {"path_kind": path_kind, "question": "q", "result_table": RESULT, "messages": []},
             _config(model),
-        )
+        ))
         assert out == {}, f"{path_kind} must not be narrated"
     assert model.calls == []
 
@@ -138,18 +147,18 @@ def test_a_dead_narrator_costs_the_sentence_and_not_the_turn() -> None:
     # No `usage` key on either: a call that raised and a call that never happened both cost
     # nothing this code can attest to, and writing a zero row would be the ledger inventing
     # a measurement — the same defect `Measured.unmeasured` exists to prevent one level in.
-    assert narrate_node(state, _config(_Dead())) == {"answer_text": None}
+    assert asyncio.run(narrate_node(state, _config(_Dead()))) == {"answer_text": None}
     # And with no utility model configured at all.
-    assert narrate_node(state, {"configurable": {}}) == {"answer_text": None}
+    assert asyncio.run(narrate_node(state, {"configurable": {}})) == {"answer_text": None}
 
 
 def test_nothing_is_invented_when_there_is_no_prose_and_no_rows() -> None:
     """No text to adopt and no table to read: there is nothing to narrate *from*, and a sentence
     written here would be the interface asserting an answer the turn did not produce."""
     model = _Recorder()
-    out = narrate_node(
+    out = asyncio.run(narrate_node(
         {"path_kind": "answered", "question": "q", "messages": [HumanMessage("q")]},
         _config(model),
-    )
+    ))
     assert out == {}
     assert model.calls == []

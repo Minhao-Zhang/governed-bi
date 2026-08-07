@@ -27,6 +27,7 @@ __all__ = [
     "Delivery",
     "UsageRecord",
     "Answer",
+    "ServeInput",
     "ServeState",
     "PathKind",
     "TERMINAL_PATH_KINDS",
@@ -56,25 +57,8 @@ RESET = "reset"
 def cleared(left: Any) -> Any:
     """``None`` if ``left`` is the reset sentinel, else ``left``.
 
-    **Every reducer in this module must call this on its left operand, and the reason is a
-    LangGraph channel detail that cost a working entry point.** ``BinaryOperatorAggregate``
-    assigns the **first** value a channel ever receives *without calling the reducer* — it
-    reduces only from the second write onward. ``Session.turn`` writes :data:`RESET` as part of
-    the graph's input, which is the first write, so the sentinel lands in the channel as a bare
-    string that no reducer ever got the chance to interpret.
-
-    What that did, measured on the real CLI path rather than reasoned about: ``path_kind``
-    became ``"reset"``, ``settle_path_kind("reset", "answered")`` kept ``"reset"`` under
-    first-wins, ``stamp`` saw an unmarked path with no SQL, and **every turn reported
-    ``outcome: "crashed"``** — while 387 tests stayed green, because their fixtures hand-build
-    turn dicts and never call ``Session.turn``. ``settle_failure`` and ``merge_facets`` were
-    worse: ``"reset".get(...)`` and ``dict("reset")`` raise, inside the channel, where nothing
-    catches them.
-
-    So the sentinel has to be inert wherever it lands, not merely honoured where it is
-    expected. It is still a sentinel rather than ``None`` for the reason
-    :func:`settle_path_kind` gives: ``None`` cannot both mean "clear this" and "I have nothing
-    to say", and turn 2 needs the first while every partial node update means the second.
+    Required because LangGraph assigns the first channel value without calling the reducer,
+    so ``RESET`` written by ``Session.turn`` can land as a bare string.
     """
     return None if isinstance(left, str) and left == RESET else left
 
@@ -118,13 +102,7 @@ class RetrievalResult(TypedDict):
 
 
 class NodeFailure(TypedDict):
-    """Which node raised, and what.
-
-    ``detail`` was written by ``api/graph_app.py``'s ``accept`` node and declared nowhere,
-    which is a field reaching the record through a hole in the schema. It is optional
-    because ``wrap.py`` has only the exception type to offer, and a fabricated sentence
-    there would read as a diagnosis nobody made.
-    """
+    """Which node raised, and what. ``detail`` is optional free text."""
 
     stage: str
     error_type: str
@@ -139,17 +117,7 @@ class Delivery(TypedDict):
 
 
 class UsageRecord(TypedDict):
-    """One model-call cost row. ``turn_index`` is required for multi-turn projection.
-
-    **The token counts are ``int | Measured[int]``, and the union is the point.** They
-    were ``NotRequired[int]``, so the only value a turn could record when the provider
-    reported nothing was ``0`` — a measured zero, indistinguishable from a real count by
-    any consumer that totals these rows.
-    An ``int`` is what a provider reported; a :class:`~governed_bi.register.quantity.Measured`
-    in the unmeasured state is the turn saying it was not told, with the reason attached.
-    Absent is the third legal shape and means the same as unmeasured for the two cache
-    fields, where absence means the provider reported no caching.
-    """
+    """One model-call cost row. Token fields are ``int | Measured[int]`` (unmeasured ≠ zero)."""
 
     turn_index: int
     model: NotRequired[str]
@@ -174,14 +142,7 @@ def merge_facets(
     left: dict[str, FacetResult],
     right: Any,
 ) -> dict[str, FacetResult]:
-    """Replace by key — right wins per key. :data:`RESET` clears.
-
-    Concurrent-safe within a super-step (five disjoint facet keys) and
-    overwrite-per-turn across turns (turn 2 writes the same five keys) — *provided the
-    fan-out runs*. A turn refused at ``guard`` never reaches it, which is why the sentinel
-    is honoured here too: without it, that turn stamped the **previous** turn's
-    ``facet_hits``, ``facet_channels`` and ``facet_degraded`` into its own record.
-    """
+    """Replace by key — right wins. :data:`RESET` clears."""
     if right == RESET:
         return {}
     merged = dict(cleared(left) or {})
@@ -192,32 +153,8 @@ def merge_facets(
 def settle_path_kind(left: Any, right: Any) -> Any:
     """First terminal wins; ``None`` is a no-op; :data:`RESET` clears.
 
-    **Both channels this reducer and** :func:`settle_failure` **guard were un-reduced, and
-    that is a crash the graph cannot record.** Five facet nodes run in one super-step and
-    ``wrap.py`` turns any exception into ``{"failure": ..., "path_kind": "crashed"}``, so two
-    facets failing means two writes to one un-reduced channel — ``InvalidUpdateError: At key
-    'failure': Can receive only one value per step``. It is raised by the **channel**, after
-    the nodes have returned, where ``wrap_node`` is no longer on the stack. Nothing catches
-    it, ``stamp`` never runs, and the turn produces no record at all: the one failure mode
-    the whole ``wrap_node`` design exists to make impossible.
-
-    **Why the sentinel.** A per-turn channel has to be clearable, because ``path_kind``
-    outlives its turn under a checkpointer: a crashed turn 1 left ``"crashed"`` in the
-    channel, so ``_after_guard`` sent **turn 2 straight to stamp** and that thread could
-    never be served again. But if ``None`` did the clearing, every node that returns a
-    ``None`` path_kind would silently erase a terminal set by an earlier node — which is not
-    hypothetical: ``route_node`` wrote ``"path_kind": None`` unconditionally, erasing a facet
-    crash and buying a full billed model call on a turn that had already failed.
-
-    So the two are separated. ``None`` means "this node has nothing to say", which is what a
-    node returning a partial update actually means, and :data:`RESET` — written only by
-    :meth:`~governed_bi.serve.session.Session.turn` — means "a new turn starts here". One
-    caller must remember the sentinel and it is tested; the alternative asks every node to
-    remember not to mention a field.
-
-    First-wins rather than last-wins for the same reason: within a turn the graph routes
-    every terminal straight to ``stamp``, so a *second* different terminal is a bug, and the
-    first one is the causal one.
+    Concurrent facet crashes need a reducer (un-reduced → InvalidUpdateError).
+    ``None`` ≠ clear: nodes may return a null path_kind without erasing a prior terminal.
     """
     left = cleared(left)
     if right == RESET:
@@ -230,14 +167,7 @@ def settle_path_kind(left: Any, right: Any) -> Any:
 
 
 def settle_failure(left: Any, right: Any) -> Any:
-    """First failure wins, and a concurrently dropped one is named in ``detail``.
-
-    Same three cases as :func:`settle_path_kind`. The difference is that two concurrent
-    failures are *different* values, so one is genuinely lost — and ``failed_stage`` is a
-    single field in the register, so the record cannot hold both. Losing it silently would be
-    the reportable-state-treated-as-nothing shape, so the dropped stage is appended to
-    ``detail``, which is free text that already reaches the record.
-    """
+    """First failure wins; a concurrent second is named in ``detail``."""
     left = cleared(left)
     if right == RESET:
         return None
@@ -252,19 +182,40 @@ def settle_failure(left: Any, right: Any) -> Any:
     return {**left, "detail": f"{detail}; also failed: {also}" if detail else f"also failed: {also}"}
 
 
+class ServeInput(TypedDict, total=False):
+    """Everything a client is allowed to write into the graph. Deliberately one key.
+
+    **The defect this closes (audit §4.3).** ``trust()`` forces run constants over a
+    caller-supplied ``configurable``, and that is one of *two* channels a caller can write.
+    The other is the graph's own ``input``: ``langgraph_api`` forwards the client's dict to
+    the graph with no filtering, ``PER_TURN_RESET`` does not clear :data:`TEST_HOOKS`, and
+    ``int_knob`` reads state *before* ``knobs_resolved``. So a request could set
+    ``route_top_n`` and the record would publish the default it did not use.
+
+    ``StateGraph(ServeState, input_schema=ServeInput)`` drops undeclared keys at the entry
+    rather than policing them, which is the difference between a rule and an impossibility.
+    Measured on langgraph 1.2.10: a caller passing ``route_top_n=99`` alongside its messages
+    reaches the first node as absent, not as 99.
+
+    **Only the ``accept`` variant gets this.** ``build_graph()`` with no ``accept`` is entered
+    by ``serve/__main__``, ``eval/`` and ``/chat``, which construct the turn in-process through
+    ``Session.turn()`` and legitimately pass the whole of :class:`ServeState`. The untrusted
+    entry is the one where a turn is *derived* from a client conversation, and that is exactly
+    the one ``accept`` marks.
+    """
+
+    #: The conversation. ``_accept_node`` derives the whole turn from its last human message;
+    #: it reads no other state key, which is what makes one key sufficient.
+    messages: Annotated[list, add_messages]
+
+
 class ServeState(TypedDict, total=False):
     question: str
-    #: A caller-supplied hint that travels with the question, empty on every production path.
-    #: BIRD ships one per question and ``eval/datalake.py`` has always loaded it — it carries
-    #: the value vocabulary ("residential areas means ... = 'R'") and the metric formula a
-    #: question refers to but does not state. Nothing consumed it, so every EX this repository
-    #: has produced is silently a *no-evidence* number and is not comparable to any published
-    #: BIRD figure. It is a state channel rather than a config key because it is per-turn.
+    #: Caller-supplied hint (empty on production paths). Per-turn, not config.
     evidence: str
     thread_id: str
     turn_index: int
-    #: GovernancePolicy is passed via ``configurable["policy"]``, not state
-    #: (checkpointer cannot msgpack the dataclass).
+    #: GovernancePolicy rides ``configurable["policy"]`` (not msgpack-safe).
     identity: dict[str, Any]
     run_id: str
     turn_id: str
@@ -299,55 +250,19 @@ class ServeState(TypedDict, total=False):
     terminal_reason: str | None
     path_kind: Annotated[PathKind | None, settle_path_kind]
     generated_sql: str | None
-    #: The last successful query's result, as ``{columns, rows, row_count, truncated}``.
-    #:
-    #: **The answer already carries prose and did not carry the table**, which is the inverse of
-    #: how it looked from outside. Measured on a live turn: the agent's final message reads *"The
-    #: largest queryable table is `authors.PaperAuthor`, with 2,315,574 rows"* — narration the
-    #: model produces for free — while the rows themselves existed only inside a ``ToolMessage``'s
-    #: JSON string, reachable by a client only by parsing the transcript. So this channel is the
-    #: table, not a second narration.
-    #:
-    #: Overwritten rather than accumulated: a turn's answer is about its last successful query,
-    #: and a list would make "which one is the answer" a question the client has to re-decide.
-    #:
-    #: **Not a record field, deliberately.** ADR 0006 §11 puts result rows in the class the
-    #: durable projection *drops*. This rides the live ``answer`` — which the audit log does not
-    #: persist — so the client can render a table without the rows entering the ledger.
+    #: Last successful query result ``{columns, rows, row_count, truncated}``. Live only (ADR 0006 §11).
     result_table: dict[str, Any] | None
-    #: The turn's answer in prose, written by ``narrate`` and read by the answer card.
-    #:
-    #: **Not a record field, for the same reason as ``result_table`` above.** It quotes the
-    #: rows — *"There are 9,590 restaurants"* is the result set spelled out — so ADR 0006 §11
-    #: puts it in the class the durable projection drops. It rides the live ``answer``, which
-    #: the audit log does not persist, and the log carries its own copy beside the record.
-    #:
-    #: Distinct from ``answer["text"]``, which is *system* copy: refusal and decline wording
-    #: this repository writes. On a refusal ``text`` is set and this is null; on an answered
-    #: turn it is the other way round. That asymmetry is the signal the client renders on.
+    #: Prose answer from ``narrate``. Live only; distinct from system ``answer["text"]``.
     answer_text: str | None
-    #: This turn's question, embedded. **Per-turn, which is why it cannot live on the config.**
-    #:
-    #: ``Session.configurable(question=...)`` adds a ``query_vector`` and that serves the callers
-    #: who build one config per question (``eval/harness.py``, ``POST /chat``). The streamed path
-    #: cannot use it: ``graph_app.make_graph`` binds the run constants once at load time with no
-    #: question, so the key was never present and the semantic channel reported ``failed`` no
-    #: matter how many vectors the index held. ``accept`` writes this; the facets read state
-    #: first and config second.
+    #: Question embedding. Per-turn (streamed path cannot put it on load-time config).
     query_vector: list[float] | None
+    #: Epoch seconds when the turn's first node ran. ``wrap_node`` writes it, ``stamp`` reads it
+    #: to derive ``latency_sec``. Wall clock rather than ``perf_counter`` because a clarification
+    #: can resume in a different process.
+    turn_started_at: float | None
     n_re_served: int
 
     # F1 test hooks and per-turn knobs.
-    #
-    #: Five more fields lived here until 2026-08-03 -- ``references``, ``join_edges``,
-    #: ``schema_tags``, ``asset_types``, ``table_schemas`` -- labelled *optional*, read
-    #: by ``resolve`` and ``connect``, and **written by nothing in the repository**. The
-    #: word "optional" was the defect in one word: two functions that cannot work
-    #: without their inputs were declared not to need them, so ``connect`` ran on an
-    #: empty edge set on every turn ever served. They are not five per-turn hooks but
-    #: one projection of the corpus, so they now live in
-    #: :class:`~governed_bi.retrieve.structure.CorpusStructure` on ``configurable``
-    #: (ADR 0005 §2.8.2), where the thing that builds them is the thing that has them.
     facet_route_hits: list[tuple[Any, Any, float]]
     retrieve_hooks: dict[str, Any]
     route_top_n: int
@@ -356,12 +271,7 @@ class ServeState(TypedDict, total=False):
     lexical_coverage: float
 
 
-#: What :meth:`~governed_bi.serve.session.Session.turn` writes to clear the previous turn.
-#:
-#: A channel outlives its turn under a checkpointer, so every one of these was readable by
-#: the *next* turn until 2026-08-04. Two of them changed that turn's outcome: a stale
-#: ``path_kind="crashed"`` routed it straight to ``stamp``, and a stale ``negative`` verdict
-#: was stamped into its record by a turn that never ran the gate.
+#: Cleared by :meth:`~governed_bi.serve.session.Session.turn` so a prior turn cannot leak.
 PER_TURN_RESET: dict[str, Any] = {
     "path_kind": RESET,
     "failure": RESET,
@@ -378,26 +288,26 @@ PER_TURN_RESET: dict[str, Any] = {
     "result_table": None,
     "answer_text": None,
     "query_vector": None,
+    # The turn's clock. Cleared per turn, or turn two's `latency_sec` would span everything the
+    # user did between the two questions. `wrap_node` writes it from the first node to run.
+    "turn_started_at": None,
     "schemas": [],
     "crossings": [],
     "licensed": [],
     "clarification_requested": False,
 }
 
-#: Channels that accumulate **across** turns on purpose, each row carrying its own
-#: ``turn_index`` or ``turn_id`` so a projection can filter. Clearing one would destroy the
-#: conversation (``messages``) or the run's cost history (``usage``).
+#: Channels that accumulate across turns (each row carries turn identity).
 ACCUMULATING: frozenset[str] = frozenset({"messages", "usage", "clarifications"})
 
-#: Written by ``turn()`` itself — the turn's identity and the run's claims about itself.
+#: Written by ``turn()`` itself — turn identity and run claims.
 TURN_IDENTITY: frozenset[str] = frozenset({
     "question", "evidence", "turn_index", "thread_id", "identity", "run_id", "turn_id",
     "question_id", "db_id", "attempt_id", "corpus_content_hash", "prompt_set_hash",
     "knobs_resolved", "n_re_served",
 })
 
-#: Per-turn knobs and F1 injection points. A caller sets these *over* ``turn()``'s output, so
-#: ``turn()`` must not write them: a reset here would overwrite the hook it was handed.
+#: Per-turn knobs and F1 hooks. Caller sets these over ``turn()``'s output.
 TEST_HOOKS: frozenset[str] = frozenset({
     "facet_route_hits", "retrieve_hooks", "route_top_n", "max_steiner_points",
     "max_crossings", "lexical_coverage",

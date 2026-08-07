@@ -355,12 +355,88 @@ def test_a_fully_instrumented_arm_can_actually_be_quotable() -> None:
             "negative_failed_open": False,
             "facet_degraded": False,
             "facet_channels": {"facet_schema": {"lexical": "ran"}},
+            # Added 2026-08-06 with the `knobs_resolved` gate (audit §10): `knobs.Role` derived
+            # three key sets and none had a reader in `src/`, so a knob's role decided nothing.
+            # A row with no resolved knobs cannot be shown to have run under this arm's
+            # configuration -- and `Absence.never` already reports it as missing, so this
+            # fixture was not "fully instrumented" before.
+            "knobs_resolved": {"route_top_n": 3, "candidate_depth": 50},
         }
         for i in range(50)
     ]
     ok, results = gates.quotable(Population.of("instrumented", rows))
     assert ok, {r.field: (r.verdict.value, r.detail) for r in results}
     assert {r.verdict for r in results} == {gates.Verdict.passed}
+
+
+def test_one_arm_two_configurations_is_not_one_arm() -> None:
+    """The gate that gives ``knobs.Role`` a production consumer (audit §10).
+
+    ``Role`` declared three values and derived ``comparability_keys``,
+    ``resume_drift_keys`` and ``config_hash_keys`` from them — and **none had a reader in**
+    ``src/``: no config hash existed and no resume-drift check existed, so a knob's declared role
+    decided nothing anywhere. A role that decides nothing is a comment.
+
+    ``resume_drift_keys()`` is the role's own definition of "fatal within one run directory",
+    and an arm *is* one run directory. So a row that resolved ``route_top_n`` to 3 beside one
+    that resolved it to 5 is not one arm, and every rate over the pair is a rate over a
+    population that does not exist — L-R3's defect with the filter moved into the configuration.
+
+    The failure names the differing knobs rather than only the count, because "2 distinct
+    configurations" sends a reader to the code and ``route_top_n`` sends them to the driver.
+    """
+    from governed_bi.register.knobs import resume_drift_keys
+
+    def row(i: int, top_n: int) -> dict:
+        return {
+            "question_id": str(i),
+            "correct": True,
+            "outcome": "answered",
+            "crashed": False,
+            "context_hash": f"hash-{i}",
+            "guardrail_error": False,
+            "re_served": False,
+            "negative_failed_open": False,
+            "facet_degraded": False,
+            "facet_channels": {"facet_schema": {"lexical": "ran"}},
+            "knobs_resolved": {"route_top_n": top_n, "candidate_depth": 50},
+        }
+
+    assert "route_top_n" in resume_drift_keys(), (
+        "the knob this fixture drifts is no longer a resume-drift key, so the test proves nothing"
+    )
+
+    drifted = gates.GATE_IMPLEMENTATIONS["knobs_resolved"](
+        Population.of("drifted", [row(i, 3 if i < 25 else 5) for i in range(50)])
+    )
+    assert drifted.verdict is gates.Verdict.failed
+    assert "route_top_n" in drifted.detail, drifted.detail
+    assert "candidate_depth" not in drifted.detail, "only the knobs that differ are named"
+
+    steady = gates.GATE_IMPLEMENTATIONS["knobs_resolved"](
+        Population.of("steady", [row(i, 3) for i in range(50)])
+    )
+    assert steady.verdict is gates.Verdict.passed
+
+    # Absent is not passing. `Absence.never` already reports these as missing_required, and this
+    # gate reporting clean on the same row would be two gates disagreeing about one hole.
+    missing = gates.GATE_IMPLEMENTATIONS["knobs_resolved"](
+        Population.of("missing", [{"question_id": "a", "correct": True}])
+    )
+    assert missing.verdict is gates.Verdict.cannot_evaluate
+
+    # A type change is a configuration change: 3 and "3" are two configurations, and a
+    # comparison that coerced them would report drift as agreement.
+    typed = gates.GATE_IMPLEMENTATIONS["knobs_resolved"](
+        Population.of(
+            "typed",
+            [
+                {**row(i, 3), "knobs_resolved": {"route_top_n": 3 if i < 25 else "3"}}
+                for i in range(50)
+            ],
+        )
+    )
+    assert typed.verdict is gates.Verdict.failed
 
 
 def test_partial_context_hash_coverage_fails_rather_than_abstaining() -> None:

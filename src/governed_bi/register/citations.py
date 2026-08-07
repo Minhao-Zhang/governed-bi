@@ -1,40 +1,11 @@
-"""Every number in this codebase that describes the world, with where it came from.
+"""World-describing numbers with provenance, plus retired-literal patterns.
 
-**The defect this file prevents: a number describing the world, written as a
-literal, pinned to nothing.** v1's instances —
-
-* ``recall@3 drops 0.70 -> 0.35`` spread to five places in ``src/`` including an
-  operator-facing warning, a summary print and four comments, **and a test asserted
-  it**, which is how it survived. The repo's own artifact measures 0.844 vs 0.852
-  at @3, and at @1 BM25 is *ahead*. Wrong by 2.4x.
-* A price-table entry matching neither the new price nor the old, overstating a
-  measured run **nine-fold**.
-* "69 unwinnable questions", verified as **4**. Overstated 17x.
-* "+46 points of headroom", revised to "3–5" with nothing in between to justify
-  either.
-
-And why it kept happening: **the fix landed where it was found and never reached
-the adjacent copies.** So the rule is mechanical — every world-describing number
-carries an artifact and a date, and the retired ones carry a pattern a grep gate
-can fail on.
-
-**Two properties this module needs that are easy to get wrong.**
-
-*Every citation has an artifact.* :attr:`Citation.artifact` is a plain ``str``,
-never optional. When the producing code was deleted in the v1 removal the artifact
-is written ``git-history:<path>``, which is a locatable reference — ``git show
-main:<path>`` retrieves it. An optional field here would make "the artifact is git
-history" indistinguishable from "no artifact recorded", for exactly the numbers
-most likely to be re-quoted.
-
-*The grep gate must not fail on this file.* It necessarily contains every retired
-pattern, so :data:`GREP_EXEMPT_PATHS` declares the exemption rather than leaving
-the checker to hard-code one. A checker with a built-in exemption is a checker
-whose exemption nobody reviews.
-
-``tools/check_citations.py`` reads this module. **That tool does not exist yet** —
-see ``docs/plans/v2-implementation-decisions.md``. Nothing imports this module at
-runtime; it is a test surface, deliberately.
+Rule: every number that describes the world carries an artifact path and a
+date. Retired claims carry a regex :data:`RETIRED_CLAIMS` that
+``tools/check_citations.py`` greps for. :attr:`Citation.artifact` is never
+empty — use ``git-history:<path>`` when the producing code is gone.
+:data:`GREP_EXEMPT_PATHS` is data the gate reads (this file must quote retired
+patterns). Nothing imports this module at runtime.
 """
 
 from __future__ import annotations
@@ -49,15 +20,9 @@ __all__ = [
     "GREP_EXEMPT_PATHS",
 ]
 
-#: Paths the retired-literal grep gate must skip.
-#:
-#: This module and the lessons document both quote the retired claims in order to
-#: retire them. Declared here so the exemption is data the gate reads, not a
-#: special case inside the gate.
+#: Paths the retired-literal grep gate must skip (this file quotes every pattern).
 GREP_EXEMPT_PATHS: tuple[str, ...] = (
     "src/governed_bi/register/citations.py",
-    "docs/lessons-from-v1.md",
-    "docs/plans/v2-implementation-decisions.md",
 )
 
 
@@ -66,9 +31,8 @@ class Citation:
     """One measured fact, with provenance."""
 
     claim: str
-    #: Where the measurement lives. A repo-relative path, or ``git-history:<path>``
-    #: when the producing code was deleted in the v1 removal. **Never empty** — see
-    #: the module docstring.
+    #: Where the measurement lives. Repo-relative path, or ``git-history:<path>``
+    #: when the producing code is gone. Never empty.
     artifact: str
     #: ISO date the measurement was taken.
     measured: str
@@ -132,14 +96,14 @@ CITATIONS: tuple[Citation, ...] = (
     # ── the grader and the ceiling ──────────────────────────────────────────
     Citation(
         "grader ceiling 1347/1351 = 0.9970 on gold SQL submitted directly",
-        "docs/plans/measurement-and-observability.md", "2026-08-01",
+        "git-history:docs/v1/plans/measurement-and-observability.md", "2026-08-01",
         "No model, no API key, about four minutes. So 56.3% must be read against "
         "~100%, not against a lower hidden ceiling. Producing code: "
         "git-history:src/governed_bi/eval/oracle.py",
     ),
     Citation(
         "unwinnable questions: 4",
-        "docs/plans/measurement-and-observability.md", "2026-08-01",
+        "git-history:docs/v1/plans/measurement-and-observability.md", "2026-08-01",
         "Three retails questions over the harness row cap, plus one SELECT * gold "
         "hash defect. Replaces the retired '69' below.",
     ),
@@ -148,7 +112,7 @@ CITATIONS: tuple[Citation, ...] = (
     Citation(
         "McNemar discordance between adjacent arms 16-20%; MDE 3.23% at n=1351 and "
         "2.64% over the full 2030-question split",
-        "docs/plans/measurement-and-observability.md", "2026-08-01",
+        "git-history:docs/v1/plans/measurement-and-observability.md", "2026-08-01",
         "The interventions under test move 1-2pp, so EX cannot resolve them at any "
         "price. Ladder cost spans $16 to $4,065 for the same effect size.",
     ),
@@ -183,7 +147,7 @@ CITATIONS: tuple[Citation, ...] = (
     ),
     Citation(
         "curator averages ~293k tokens per turn (58.1M input over 198 turns)",
-        "docs/plans/measurement-and-observability.md", "2026-08-01",
+        "git-history:docs/v1/plans/measurement-and-observability.md", "2026-08-01",
         "Against a ~500k TPM local quota, so a full ladder rate-limits even at one "
         "build worker. One ladder is roughly 30 hours locally.",
     ),
@@ -251,13 +215,9 @@ CITATIONS: tuple[Citation, ...] = (
 class RetiredClaim:
     """A falsified number, and a pattern a grep gate can fail on."""
 
-    #: A regular expression. Long enough not to false-positive on an unrelated
-    #: number — a bare ``0\\.35`` would match anything — and loose enough to catch
-    #: the spellings the claim actually appeared in, since v1 had it in five places
-    #: with different wording.
+    #: Regex long enough to avoid unrelated numbers, loose enough for observed spellings.
     pattern: str
-    #: One spelling actually observed in v1, so the pattern can be tested against
-    #: something real rather than against itself.
+    #: One spelling actually observed, so the pattern can be tested.
     observed: str
     why: str
     replaced_by: str
@@ -331,6 +291,25 @@ RETIRED_CLAIMS: tuple[RetiredClaim, ...] = (
             "quota free. The degradation counter existed and no gate read it.",
         replaced_by="91.0%, with facet channel state as a quotability input",
     ),
+    RetiredClaim(
+        pattern=r"EX\s+(was|of|at)\s+0\.049|0\.049\s*EX",
+        observed="EX was 0.049.",
+        why="every absolute EX this repository produced before 2026-08-06 was measured "
+            "through a grader that compared Postgres `numeric` cells as strings. "
+            "`_cell`'s fallback was `return str(value)` and `Decimal` is neither `int` nor "
+            "`float`, so `Decimal('100.00')` and `Decimal('100.0')` -- the same number -- "
+            "graded `result_mismatch`, indistinguishable in the artifact from a wrong "
+            "answer. The figure is an underestimate of unknown size, and the size is a "
+            "function of the schema's numeric-column density, so the cross-schema "
+            "comparisons do not hold either. Retired rather than corrected: the arm "
+            "cannot be regraded without re-executing it, because the artifact kept the "
+            "fingerprint and not the rows.",
+        replaced_by="nothing yet. The grader is now BIRD-Obfuscation's own "
+        "`normalise_result`, transcribed and fingerprint-identical, so the next ladder "
+        "produces the first EX this repository has that is comparable to published BIRD. "
+        "The 51.2% table coverage and 62.5% schema reachability beside it are NOT retired: "
+        "they are licensing measurements and do not touch the grader.",
+    ),
 )
 
 
@@ -352,9 +331,7 @@ def _assert_citations_are_sourced() -> None:
         except re.error as err:  # pragma: no cover - import-time guard
             bad.append(f"{claim.pattern!r}: {err}")
             continue
-        # A pattern that does not match the spelling actually observed in v1 is a
-        # gate that catches nothing — v1's own retired-literal test had exactly that
-        # shape for one entry.
+        # Pattern must match its own observed spelling.
         if not rx.search(claim.observed):
             bad.append(f"{claim.pattern!r} does not match its own observed spelling")
     if bad:  # pragma: no cover - import-time guard

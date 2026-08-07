@@ -13,6 +13,7 @@ not run, and it must not cost a model call on a question a free rule already ref
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -55,6 +56,14 @@ class _Model:
             raise self.raises
         return type("Reply", (), {"text": self.text})()
 
+    async def ainvoke(self, messages: list[Any], config: Any = None, **kwargs: Any) -> Any:
+        """The nodes await now, and a double that only offers ``invoke`` fails them open.
+
+        Same lesson as the ``config=`` parameter below: a fake that is narrower than
+        ``BaseChatModel`` does not fail loudly, it makes the caller take its error branch. The
+        scope gate's error branch is ``error_failed_open``.
+        """
+        return self.invoke(messages, config, **kwargs)
 
 def _run(question: str, *, rules: dict[str, bool] | None = None, model: Any = None) -> dict:
     policy = GovernancePolicy(guard_rules_enabled=rules if rules is not None else SCOPE_ONLY)
@@ -64,7 +73,7 @@ def _run(question: str, *, rules: dict[str, bool] | None = None, model: Any = No
         # the fallback to `agent_model` once, in one place, so a hand-built config states what it
         # means rather than relying on a second copy of the rule inside the node.
         conf["utility_model"] = model
-    return guard_node({"question": question}, {"configurable": conf})["guard"]
+    return asyncio.run(guard_node({"question": question}, {"configurable": conf}))["guard"]
 
 
 def test_a_bi_question_clears() -> None:
