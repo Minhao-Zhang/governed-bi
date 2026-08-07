@@ -237,10 +237,27 @@ def _context_middleware(state: dict) -> list[AgentMiddleware]:
     (``tests/serve/test_model_inputs.py`` asserts the delivered system prompt is exactly
     ``prompt_text("analyst")``).
 
-    The block lands **last**, after any tool results, rather than at its old position ahead of
-    them. Consecutive user messages are legal on the one provider family this engine talks to
-    (``langchain-openai``; nothing here imports an Anthropic client), and last is where the
-    turn's governing constraints are most likely to be honoured.
+    **The block goes immediately before the turn's question, not after it.** It used to land
+    last, on the reasoning that late constraints are the ones a model honours. That is what
+    broke: last also means *newest*, and a wall of governance text arriving after a tool result
+    reads as the newest thing the user said. Observed live — the tool returned ``whuber`` and
+    the agent's final text was "Understood. I'll use the specified joins, bindings, and
+    non-suspect columns for subsequent queries." The record still stamped ``answered``, so the
+    turn looked healthy and told the user nothing.
+
+    It is intermittent: the same two turns replayed answer correctly. That is the argument for
+    removing the shape rather than tuning it — the failure rate is a property of the model, and
+    nothing in this repository would notice it moving.
+
+    Anchoring to the question fixes both calls of a loop. Call one is ``[…, block, question]``;
+    call two is ``[…, block, question, ai, tool_result]``, so what the model saw most recently
+    is the data it asked for, and the block is never the last word. Appended only when the
+    request carries no human message at all, which no real path produces.
+
+    Not a ``SystemMessage``, which would be the tidier shape: ``test_model_inputs`` asserts
+    every system prompt the model receives is one ``register/prompts.py`` declares, precisely so
+    ``prompt_set_hash`` covers all of it. Per-turn text as a system message would break that
+    invariant, and the invariant is worth more than the tidiness.
     """
     block = str((state.get("delivery") or {}).get("context_block") or "")
     if not block:
@@ -257,9 +274,20 @@ def _context_middleware(state: dict) -> list[AgentMiddleware]:
     async def deliver_context(
         request: ModelRequest, handler: Callable[[ModelRequest], Any]
     ) -> ModelResponse:
-        return await handler(request.override(messages=[*request.messages, HumanMessage(block)]))
+        return await handler(request.override(messages=_with_block(request.messages, block)))
 
     return [deliver_context]
+
+
+def _with_block(messages: list[Any], block: str) -> list[Any]:
+    """``messages`` with the context block inserted just before the last human turn."""
+    out = list(messages)
+    for i in range(len(out) - 1, -1, -1):
+        if str(getattr(out[i], "type", "")) == "human":
+            out.insert(i, HumanMessage(block))
+            return out
+    out.append(HumanMessage(block))
+    return out
 
 
 def _stub(state: dict) -> dict:

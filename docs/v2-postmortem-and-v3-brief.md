@@ -64,7 +64,7 @@ Two findings **not** in the work order remain open and are not fixed: §6.2's co
 in version control nor reproducible from anything committed (documented as an open problem in
 `corpus/README.md`), and §6.4's server-serves-what-the-CLI-refuses gap.
 
-### 0.1a Turn two of a conversation answers the context block instead of the question — **[M] high**
+### 0.1a Turn two answered the context block instead of the question — **[M] high, fixed 2026-08-07**
 
 Found 2026-08-07 while driving the live UI, and **not** in the audit above. On a fresh thread the
 engine is correct. On the *second* turn of the same thread it routes correctly, generates correct
@@ -87,6 +87,19 @@ sees a replayed conversation followed by a fresh wall of governance text and rep
 found this was five single-turn threads; multi-turn was never exercised, and nothing in the suite
 covers it — `tests/serve/test_state_channels.py` asserts turn two is *servable*, not that its
 answer is about the question. The eval harness is single-turn by construction.
+
+**Fixed.** The block was appended *last*, and last is also newest: after a tool result it reads
+as the newest thing the user said. It now goes immediately before the turn's question
+(`_with_block`), so call one is `[…, block, question]` and call two is
+`[…, block, question, ai, tool_result]` — the model's most recent input is always the data it
+asked for, never the governance text. A `SystemMessage` would have been tidier and is ruled out:
+`test_model_inputs` asserts every system prompt the model sees is one the registry declares, so
+`prompt_set_hash` covers all of it.
+
+Verified: two four-turn conversations over the persistent HTTP path, eight turns, no
+acknowledgement. That is evidence, not proof — the failure was intermittent, which is why the
+*position* is now pinned by a test rather than the behaviour. Multi-turn remains uncovered by
+the eval harness.
 
 ### 0.2 Item 4, finished — the gate, and the artifact it was pointed at
 

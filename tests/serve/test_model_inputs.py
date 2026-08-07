@@ -300,3 +300,44 @@ def test_a_turn_with_no_evidence_is_byte_identical_to_before() -> None:
     ):
         message = _question_message(state, [])
         assert str(message.content) == "Question: how many customers", state
+
+
+def test_the_context_block_is_never_the_last_thing_the_model_sees() -> None:
+    """Position, because position was the defect.
+
+    The block used to be appended last. Last is also *newest*, so after a tool result it reads
+    as the newest thing the user said — and the model sometimes answered the block instead of
+    the question. Observed live: the tool returned ``whuber`` and the agent's final text was
+    "Understood. I'll use the specified joins, bindings, and non-suspect columns for subsequent
+    queries", with the record still stamping ``answered``.
+
+    It is intermittent, so a behavioural test would be flaky in the direction that matters —
+    passing while broken. This pins the shape instead.
+    """
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
+    from governed_bi.serve.nodes.agent_core import _with_block
+
+    block = "CONTEXT BLOCK"
+
+    # Call one of the loop: the question is the last word.
+    first = _with_block([SystemMessage("sys"), HumanMessage("Q")], block)
+    assert [m.content for m in first] == ["sys", block, "Q"]
+
+    # Call two, after a tool result: the data is the last word, the block is not.
+    second = _with_block(
+        [SystemMessage("sys"), HumanMessage("Q"), AIMessage("call"),
+         ToolMessage("rows", tool_call_id="c1")],
+        block,
+    )
+    assert [m.content for m in second] == ["sys", block, "Q", "call", "rows"]
+    assert second[-1].content != block, "the block is the newest message again"
+
+    # Turn two of a conversation: it anchors to *this* turn's question, not turn one's.
+    third = _with_block(
+        [HumanMessage("Q1"), AIMessage("A1"), HumanMessage("Q2")], block
+    )
+    assert [m.content for m in third] == ["Q1", "A1", block, "Q2"]
+
+    # Degenerate: nothing human to anchor to. Appending is the only option and must not crash.
+    assert [m.content for m in _with_block([SystemMessage("sys")], block)] == ["sys", block]
