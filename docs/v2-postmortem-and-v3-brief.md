@@ -10,6 +10,50 @@ adversarially checked from what is still a lead.
 few days, so §3 (the work order) comes before the evidence. §4–§13 are the reference material
 behind it.
 
+---
+
+## 0. Status, 2026-08-06 — items 1–8 are done
+
+**All eight items of §3's work order have landed**, one commit each, suite green at every step
+(783 → 810 passing). The evidence sections below are **not** rewritten: they describe the tree as
+audited, which is what makes them checkable against history. Where a section is closed, the code
+it names now carries the correction in its own docstring, so the two never drift.
+
+| # | Item | Commit | What actually happened |
+|---|---|---|---|
+| 1 | `sample_rows` through `govern` | `b74c525` | Statement built as a syntax tree, run through `prepare()`, ledgered as `path="sample"`. `sample_values` **deleted** from the port and both adapters rather than fixed — keeping it would have left a method with no caller. `answering_attempts` added so a passing sample row cannot make a turn look answered. |
+| 2 | EX comparator | `2d4b52a` | BIRD-Obfuscation's `normalise_result` transcribed. `result_fingerprint` is now **byte-identical** to `hash_normalised_result`, verified on six rowsets. `EX 0.049` retired via `RETIRED_CLAIMS`; grep gate verified to fire on reinsertion. |
+| 3 | Oracle ceiling arm | `ed77bb9` | Self-grade branch deleted; no independent gold ⇒ `correct=None` ⇒ EX *unmeasured*, not 1.000 and not 0.000. Also fixed the bare list comprehension that discarded a whole arm on one unexecutable gold. |
+| 4 | Corpus contamination | `9320834` | `corpora/` is **not on disk in this tree**, so there was nothing to quarantine. The producers were the durable artifact: both deleted, plus four one-off scripts pointed at them. **The audit named one producer; running the new gate found a second** — `_revise_miss_summaries.py`, 26 phrases with *negative* discriminators, absent from §6.1. `check_train_only`'s self-comparison refused; `check_citations` + a new source-level gate added to CI. |
+| 5 | Non-monotone fusion | `88713d9` | `fuse` takes `consulted` and renormalises over it. §7.2 fixed too: pass two now embeds each facet's rewritten query. **One unmeasured ranking change**, recorded inline — see §0.1. |
+| 6 | Dead connections | `93bc7ad` | `_discard()` on every `ConnectionError`; no-SQLSTATE faults classified from `Connection.closed`/`broken` and the DB-API split, never prose. §9.2 **verified** and fixed: the SQLite adapter classified a governance-blocked write as infrastructure being down. |
+| 7 | §10 wire-or-delete | `26739e4`, `2b8b10b`, `a296431` | Redaction vocabulary deleted (maintainer's call), `Sink` and `Responder` ports deleted, `latency_sec` **measured for the first time**, cache tokens summed, `lexical_coverage` given a real measurement, `knobs.Role` given a gate. Seven other declarations deleted. |
+| 8 | The two verdicts | `5a20958` | Removed from every live doc and from `openapi.json`'s `AnswerResponse` (which was v1's shape entire). The stub test that named them is **written**, greps all of `src/`, and fails if either returns. |
+
+### 0.1 What is owed, and what changed without a measurement
+
+Three things a reader of the sections below should know before trusting them:
+
+1. **Item 5 demoted single-channel retrieval hits, and nothing measured the effect.** With a
+   fixed denominator, a document only one channel found is capped at that channel's weight
+   (0.5). On the contract fixture a strong-cosine/no-shared-term asset goes 1.000 → 0.500 and
+   now sits marginally *below* a mediocre two-channel asset. That is the price of monotonicity
+   and the alternatives were worse (noisy-OR breaks the contract's property 3, `max` makes both
+   weight knobs inert, a p=2 power mean fits the rule to one fixture). **It wants a routing-recall
+   measurement.**
+2. **§12 is still entirely `[U]`.** Nothing in it was verified or acted on. The test-suite
+   claims — 25 of 26 xfails are stubs, 216 of 837 tests are one tautological grid, CI runs no
+   Postgres — are unchanged findings, and one of them moved by exactly one: the §4.5 stub is now
+   a real test.
+3. **The completeness critic still has not run.** Its named blind spots stand, minus latency:
+   cost accounting, multi-turn behaviour, the `../governed-bi-ui` contract, corpus migration.
+   The `governed-bi-ui` one is now sharper, not softer — `openapi.json`'s answer schema changed,
+   and nothing checks the spec against the served app.
+
+Two findings **not** in the work order remain open and are not fixed: §6.2's corpus is neither
+in version control nor reproducible from anything committed (documented as an open problem in
+`corpus/README.md`), and §6.4's server-serves-what-the-CLI-refuses gap.
+
 ## How to read the tags
 
 | Tag | Meaning |
@@ -114,6 +158,13 @@ Items 1–6 are the gate. **I would not trust a number this repository produces 
 target — until 2, 3, 4 and 6 are done.**
 
 Items 7 and 8 are cleanup, but 8 is the one a reader hits first, so it is cheap and high-leverage.
+
+> **All eight landed on 2026-08-06; see §0 for the commit per item and for what changed without
+> a measurement.** The instrument items (2, 3, 4) are the ones that unblock the next ladder: the
+> grader is now the benchmark's own and fingerprint-identical to it, the oracle arm reports
+> *unmeasured* instead of a constructed 1.000, and the contamination producers are deleted with a
+> CI gate over their phrases. Nothing has been re-measured yet — no number in this repository has
+> been produced by the fixed instrument.
 
 ---
 
