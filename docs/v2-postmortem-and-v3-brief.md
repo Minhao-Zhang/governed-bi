@@ -64,6 +64,30 @@ Two findings **not** in the work order remain open and are not fixed: §6.2's co
 in version control nor reproducible from anything committed (documented as an open problem in
 `corpus/README.md`), and §6.4's server-serves-what-the-CLI-refuses gap.
 
+### 0.1a Turn two of a conversation answers the context block instead of the question — **[M] high**
+
+Found 2026-08-07 while driving the live UI, and **not** in the audit above. On a fresh thread the
+engine is correct. On the *second* turn of the same thread it routes correctly, generates correct
+SQL, executes it, stamps `outcome: answered` — and `answer_text` is:
+
+> "Understood. I'll use the specified joins, bindings, and non-suspect columns for subsequent
+> queries."
+
+The same question on a fresh thread answers `The display name is **whuber**.` Identical SQL both
+times (`codebase_community.usuarios`, `MAX(reputacion)`), so retrieval and governance are not
+involved. The model is acknowledging the retrieval context block as an instruction rather than
+narrating the result it just fetched.
+
+This is §2.2 and §16.3④ arriving as a user-visible bug. The block is injected per model call as a
+trailing `HumanMessage` (`serve/nodes/agent_core._context_middleware`), and turn two's inbound
+`messages` already carries turn one's whole exchange including its `ToolMessage`s. So the model
+sees a replayed conversation followed by a fresh wall of governance text and replies to the text.
+
+**Every number and every screenshot in this repository is from a first turn.** The live check that
+found this was five single-turn threads; multi-turn was never exercised, and nothing in the suite
+covers it — `tests/serve/test_state_channels.py` asserts turn two is *servable*, not that its
+answer is about the question. The eval harness is single-turn by construction.
+
 ### 0.2 Item 4, finished — the gate, and the artifact it was pointed at
 
 `corpora/` was on disk the whole time: eight corpora, 51,619 data files. Pointed at them, the
