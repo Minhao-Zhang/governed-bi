@@ -121,6 +121,36 @@ class BM25:
             score += idf * (f * (_K1 + 1.0) / denom) * qf
         return score
 
+    def coverage(self, query: str) -> float | None:
+        """Share of the query's distinct terms this corpus has any document for.
+
+        ``None`` when the query tokenises to nothing, which is not 0.0: a blank query has no
+        coverage to measure, and reporting zero would say the corpus failed to match a question
+        nobody asked.
+
+        **This is the number ``lexical_coverage`` was declared for and never had** (audit §10).
+        It shipped hard-coded to ``0.0`` on every production turn, which reads as *the question
+        shares no vocabulary at all with the corpus* — the maximum-weakness reading of a field
+        whose whole job is to flag exactly that. The register declares it
+        ``Absence.not_measured``, so ``0.0`` was not even the honest placeholder.
+
+        Why the signal matters, from the register's own justification: with an embedder every
+        asset scores above zero, so an out-of-corpus question still returns ``top_k`` tables and
+        a clean run stamps confidence. Cosine cannot tell "nothing here is relevant" from
+        "everything here is a bit relevant". A query whose terms are absent from the corpus
+        vocabulary can.
+
+        Distinct terms, not occurrences: asking the same unknown word twice is one thing the
+        corpus does not know, not two. Measured against ``_idf`` — the full corpus vocabulary,
+        built once in ``__init__`` — rather than against this restricted view, because the
+        question is whether *the corpus* has the vocabulary, not whether this facet's candidate
+        subset does.
+        """
+        terms = set(_tokenize(query))
+        if not terms:
+            return None
+        return sum(1 for term in terms if term in self._idf) / len(terms)
+
     def search(self, query: str) -> list[tuple[str, float]]:
         """Return ``(id, saturated_score)`` for every document in this view."""
         query_tf = Counter(_tokenize(query))

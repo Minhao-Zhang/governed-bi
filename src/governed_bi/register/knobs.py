@@ -158,10 +158,11 @@ KNOB_REGISTER: tuple[Knob, ...] = (
     _k("rewrite_model", None, Role.comparability,
        "separate from facet_model even though both are small: two call sites under "
        "one knob means a run with a different rewrite model hashes identically"),
-    _k("llm_temperature", None, Role.comparability,
-       "None means provider default. v1 recorded None for runs that really did "
-       "forward a temperature, because a defaulted parameter passes a presence "
-       "check while recording a value the run never used"),
+    # `llm_temperature` was here and is gone (audit §10): zero readers, and it entered the
+    # config hash. Its own justification was that "a defaulted parameter passes a presence check
+    # while recording a value the run never used" -- and that is precisely what it then did,
+    # for its whole life. Nothing in this repository sets a temperature on a model, so the knob
+    # recorded `None` for every run and hashed it. Re-declare it when something forwards one.
     _k("llm_reasoning_effort", None, Role.comparability,
        "two v1 ladders differed ONLY in this and compared as one experiment; it "
        "moved the baseline arm +2.5pp against a 2.3pp detection threshold"),

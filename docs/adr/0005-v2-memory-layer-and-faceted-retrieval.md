@@ -354,6 +354,27 @@ on all eight types. Therefore: **a phase-boundary code guard strips and
 re-stamps every model-authored `governance` and `audit` block**, on all eight
 types, before any write reaches the corpus. Not a prompt instruction. Code.
 
+> **Amended 2026-08-06.** That guard was built — `corpus/provenance.py`'s
+> `restamp_model_authored` — and it had **zero callers**, ever (audit §10). So a
+> reader of the paragraph above came away believing a boundary check ran, which is
+> the same failure the paragraph itself is about: *"the prompt telling the agent to
+> write `status: open` is not a control. This is."* An uncalled control is not one
+> either.
+>
+> It is deleted, because the boundary it guarded does not exist in this tree and the
+> control that does exist is stronger. `tools/graft_corpus_fields.py` is the only
+> path that writes authored fields from a model-produced corpus, and it **refuses
+> the whole `governance` field** rather than sanitising it — along with
+> `reliability` (a softened decoy caveat is worse than none) and `summary` (the only
+> indexed text, so copying it is a corpus swap wearing a field graft). A refusal
+> cannot be forged past; a re-stamp can be forgotten, and was.
+>
+> **What is owed.** The moment a curator writes assets from model output, it owes
+> this guard, and it owes it as code at its own write boundary — not as a shared
+> function that the next author has to remember to call. `tests/corpus/
+> test_analyst_view.py::test_no_tool_can_write_governance_onto_an_asset` pins the
+> refusal so that adding `governance` to the graftable set fails a test.
+
 #### 1.6 The trust boundary — and why there is no corpus sanitization
 
 **Superseded 2026-08-03.** Earlier drafts specified a default-deny sanitizer over

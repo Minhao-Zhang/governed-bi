@@ -141,6 +141,42 @@ def test_idf_is_global_not_computed_within_the_selected_schemas() -> None:
     )
 
 
+def test_lexical_coverage_measures_the_share_of_query_terms_the_corpus_knows() -> None:
+    """Audit §10. The field shipped hard-coded to ``0.0`` on every production turn.
+
+    ``lexical_coverage`` is declared ``Tier.decision`` / ``Absence.not_measured`` and its stated
+    job is to feed ``weak_retrieval``: with an embedder every asset scores above zero, so an
+    out-of-corpus question still returns ``top_k`` tables and a clean run stamps confidence.
+    Cosine cannot tell "nothing here is relevant" from "everything here is a bit relevant".
+
+    A hard-coded ``0.0`` is the *maximum-weakness* reading of that signal, asserted on every
+    turn including the ones where retrieval worked — so the one field that could have caught an
+    out-of-corpus question said "caught it" always, which is the same as never.
+
+    Distinct terms, and ``None`` for a query with none: a blank question has no coverage to
+    measure, and zero there would say the corpus failed to match something nobody asked.
+    """
+    from governed_bi.retrieve.lexical import BM25  # type: ignore[import-not-found]
+
+    bm = BM25(
+        [
+            ("a", "customers orders revenue by region"),
+            ("b", "sensors voltage device readings"),
+        ]
+    )
+    assert bm.coverage("customers revenue") == pytest.approx(1.0)
+    assert bm.coverage("customers zebra") == pytest.approx(0.5)
+    # The case the field exists for: a question sharing no vocabulary with the corpus.
+    assert bm.coverage("zebra unicorn") == pytest.approx(0.0)
+    assert bm.coverage("") is None
+    # Repeating an unknown word is one thing the corpus does not know, not two.
+    assert bm.coverage("zebra zebra customers") == pytest.approx(0.5)
+    # Measured against the **full** corpus vocabulary, not the restricted view: the question is
+    # whether the corpus has the words, not whether this facet's candidate subset does. Same
+    # reasoning as `test_idf_is_global_not_computed_within_the_selected_schemas` above.
+    assert bm.restrict_to(["a"]).coverage("sensors voltage") == pytest.approx(1.0)
+
+
 # ── fusion ───────────────────────────────────────────────────────────────────
 
 

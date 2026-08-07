@@ -66,8 +66,35 @@ def empty_retrieved(
         "attributions": {},
         "pulled_in": {},
         "schema_ranking": list(schema_ranking or ()),
-        "lexical_coverage": 0.0,
+        # `None`, not 0.0. An empty retrieval measured no coverage; it did not measure none.
+        "lexical_coverage": None,
     }
+
+
+def _lexical_coverage(state: Mapping[str, Any], index: Any) -> float | None:
+    """Share of the question's terms the corpus vocabulary has, or ``None``.
+
+    **The field shipped hard-coded to ``0.0`` on every production turn** (audit §10), which is
+    the maximum-weakness reading of a signal whose job is to flag exactly that — and the
+    register declares it ``Absence.not_measured``, so zero was not even the honest placeholder.
+    ``BM25.coverage`` is the measurement; this decides *which text* is measured and honours the
+    ``lexical_coverage`` test hook when a caller set one.
+
+    The **raw question**, not a facet rewrite. The point of the field is whether the user's own
+    words are in the corpus vocabulary; a rewrite is the utility model restating them *into*
+    that vocabulary, so measuring it would report the rewriter's success as the corpus's.
+    """
+    hooked = state.get("lexical_coverage")
+    if isinstance(hooked, (int, float)) and not isinstance(hooked, bool):
+        return float(hooked)
+    lexical = getattr(index, "lexical", None)
+    coverage = getattr(lexical, "coverage", None)
+    if coverage is None:
+        return None
+    try:
+        return coverage(str(state.get("question") or ""))
+    except Exception:  # noqa: BLE001 — a degraded signal must not fail the turn
+        return None
 
 
 def route_node(state: dict, config: RunnableConfig) -> dict:
@@ -480,7 +507,12 @@ def _retrieved_for_schemas(
         "attributions": {k: v for k, v in attributions.items() if k in kept_ids},
         "pulled_in": {},
         "schema_ranking": list(ranking),
-        "lexical_coverage": float(state.get("lexical_coverage") or 0.0),
+        # The F1 no-index path. There is no BM25 to ask, so there is no coverage to measure —
+        # `None`, honouring the register's `Absence.not_measured`. This is the branch that made
+        # the old hard-coded 0.0 look defensible: without an index the number was never
+        # obtainable, and writing zero rather than nothing is how "we did not look" became "we
+        # looked and found none" on every turn, indexed or not.
+        "lexical_coverage": _lexical_coverage(state, None),
     }
 
 
@@ -495,7 +527,9 @@ def _copy_retrieved(raw: Any) -> dict[str, Any]:
         },
         "pulled_in": dict(raw.get("pulled_in") or {}),
         "schema_ranking": list(raw.get("schema_ranking") or ()),
-        "lexical_coverage": float(raw.get("lexical_coverage") or 0.0),
+        # Copied through, `None` included: a copy that defaulted absence to 0.0 would
+        # manufacture the measurement the original declined to make.
+        "lexical_coverage": raw.get("lexical_coverage"),
     }
 
 

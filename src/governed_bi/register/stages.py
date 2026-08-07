@@ -9,7 +9,7 @@ share one enum.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Mapping
+from typing import Mapping
 
 __all__ = [
     "Stage",
@@ -22,7 +22,6 @@ __all__ = [
     "INFRA_ERROR_PREFIX",
     "GRADER_ANSWER_PREFIXES",
     "classify_outcome",
-    "classify_row",
 ]
 
 
@@ -180,38 +179,14 @@ def classify_outcome(
     return Outcome.crashed
 
 
-def classify_row(row: Mapping[str, Any]) -> tuple[Outcome, Stage | None]:
-    """Classify a recorded row, preferring a stamped ``outcome``.
-
-    Returns ``(outcome, failed_stage)``. ``failed_stage`` is ``None`` when the
-    turn did not fail.
-    """
-    stamped = row.get("outcome")
-    if isinstance(stamped, str):
-        try:
-            outcome = Outcome(stamped)
-        except ValueError:
-            outcome = None
-        if outcome is not None:
-            failed = row.get("failed_stage")
-            stage: Stage | None = None
-            if isinstance(failed, str):
-                try:
-                    stage = Stage(failed)
-                except ValueError:
-                    stage = None
-            return outcome, stage
-
-    refused_by = row.get("refused_by")
-    refused_by = refused_by if isinstance(refused_by, str) else None
-    outcome = classify_outcome(
-        error=row.get("error") if isinstance(row.get("error"), str) else None,
-        refused_by=refused_by,
-        has_sql=bool(row.get("generated_sql")),
-        clarification_requested=bool(row.get("clarification_requested")),
-    )
-    stage = REFUSED_BY_TO_STAGE.get(refused_by) if refused_by else None
-    return outcome, stage
+# **``classify_row`` was here and is gone** (audit §10). It was named by ``register/record.py``
+# as the reader of the outcome tier and had **zero callers**: every real classification goes
+# through :func:`classify_outcome`, which ``stamp`` calls with the state it already holds.
+#
+# It was a second entry point to one decision -- read the stamped ``outcome`` if it parses,
+# otherwise re-derive -- and the two would have disagreed exactly when the stamp was wrong,
+# which is the case a reader would have used it to check. One derivation, no fallback: a row
+# whose ``outcome`` does not parse is a broken row, not a row to guess about.
 
 
 def _assert_refusal_tables_are_closed() -> None:

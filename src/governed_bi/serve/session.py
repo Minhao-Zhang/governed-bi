@@ -21,6 +21,7 @@ from ..corpus.hash import corpus_content_hash
 from ..corpus.schema import Asset
 from ..corpus.store import load as load_corpus
 from ..corpus.store import write as write_asset
+from ..model.embedder import embedding_knobs
 from ..ports import Embedder
 from ..register.knobs import defaults as knob_defaults
 from ..retrieve.index import UnifiedIndex, build_index
@@ -198,8 +199,11 @@ def from_assets(
     index = build_index(entries, embedder=embedder, vector_cache=vector_cache)
     knobs = _resolved_knobs(policy)
     if embedder is not None:
-        knobs["embedding_model"] = embedder.model
-        knobs["embedding_dimensions"] = embedder.dimensions
+        # `model/embedder.embedding_knobs`, not two lines repeating it. The audit found that
+        # function with zero callers (§10) -- and it was not unwired so much as *duplicated*
+        # here, which is the worse of the two: one resolution of the embedder's comparability
+        # identity, in two places, either of which could drift from `knob_names()`.
+        knobs.update(embedding_knobs(embedder))
     if agent_model is not None:
         knobs["llm_model"] = (
             model_id(agent_model) or getattr(agent_model, "_llm_type", None)

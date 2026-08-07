@@ -206,8 +206,6 @@ def _extract_factory(
             return error_type
         if name == "generated_sql":
             return state.get("generated_sql")
-        if name == "final_sql_source":
-            return state.get("final_sql_source")
         if name in (
             "run_id",
             "turn_id",

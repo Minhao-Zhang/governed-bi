@@ -55,7 +55,7 @@ class Tier(str, Enum):
     treatment = "treatment"
     #: Retrieval and governance decisions. Attribution reads these.
     decision = "decision"
-    #: How the turn ended. ``stages.classify_row`` reads these.
+    #: How the turn ended. ``stages.classify_outcome`` decides it.
     outcome = "outcome"
     #: Cost and latency.
     cost = "cost"
@@ -250,10 +250,13 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "consumer that re-runs this field must gate on `outcome == 'answered'`, or it reports a "
        "refusal as a broken statement — which is how 14 capped turns looked like an engine "
        "defect on 2026-08-04"),
-    _f("final_sql_source", Tier.outcome, Absence.not_applicable, Stage.stamp,
-       "which rule selected it. v1 took the last passing query, so a turn that ran "
-       "a sanity check after its real answer delivered the count while the correct "
-       "query sat earlier in the same ledger"),
+    # `final_sql_source` was here and is gone (audit §10): zero writers, permanently null. It
+    # was to record *which rule* selected the final statement -- and there is one rule, in
+    # `agent_core._last_executed_sql`: the last statement the answering path executed. A field
+    # naming a choice between alternatives that do not exist records nothing. The v1 defect its
+    # justification cited (taking the last *passing* query, so a sanity check after the real
+    # answer delivered the count) is prevented by that function reading the ledger rather than
+    # the tool arguments, which is a mechanism and not a field.
 
     # ── cost ────────────────────────────────────────────────────────────────
     _f("usage", Tier.cost, Absence.never, Stage.stamp,

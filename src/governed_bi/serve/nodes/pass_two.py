@@ -427,7 +427,9 @@ def _build_retrieved(
             "attributions": {},
             "pulled_in": {},
             "schema_ranking": list(ranking),
-            "lexical_coverage": float(state.get("lexical_coverage") or 0.0),
+            # Passed through, `None` included. `route_node._lexical_coverage` is the one
+            # derivation; this pass must not default absence to 0.0 on the way past it.
+            "lexical_coverage": state.get("lexical_coverage"),
         }
 
     budgeted = apply_budgets(list(by_id.values()), pulled_in=[])
@@ -444,7 +446,7 @@ def _build_retrieved(
         "attributions": {k: v for k, v in attributions.items() if k in kept_ids},
         "pulled_in": {},
         "schema_ranking": list(ranking),
-        "lexical_coverage": float(state.get("lexical_coverage") or 0.0),
+        "lexical_coverage": state.get("lexical_coverage"),
     }
     # **What the caps discarded, carried out rather than dropped on the floor.** The filter two
     # lines above deletes over-budget ids from `selected` and `attributions` and nothing counted
