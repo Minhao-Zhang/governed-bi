@@ -10,8 +10,11 @@ Install, configure, and run the current tree. Design background:
 
 ```bash
 uv sync
-uv sync --extra bedrock   # optional
 ```
+
+There are **no extras**. The second line here used to read
+`uv sync --extra bedrock`; `pyproject.toml` records that the extra was removed on
+2026-08-04, and the command exits 2.
 
 ## Configuration
 
@@ -27,8 +30,8 @@ A `governed_bi.toml` may exist in the repo; it is not loaded by `src/`.
 
 | Variable | Role |
 |---|---|
-| `PG_DSN` (or other names accepted by `tools/credentials.py`) | Postgres DSN — required for LangGraph serve |
-| `OPENAI_API_KEY` | Model access (or Bedrock credentials when using that extra) |
+| `GOVERNED_BI_PG_DSN`, else `PG_RENAME_DECOY_DSN` | Postgres DSN — required for LangGraph serve. Those two names in that precedence, from `tools/credentials.PG_DSN_NAMES`. `PG_DSN` was listed here and is read by nothing |
+| `OPENAI_API_KEY` | Model access. There is no Bedrock path; the extra that fronted it was removed |
 | `GOVERNED_BI_CORPUS_DIR` | Corpus directory (else one dir under `corpora/`, or seed via schema) |
 | `GOVERNED_BI_SCHEMA` | Optional: seed / pin schema from the live database |
 | `GOVERNED_BI_MODEL` | Main chat model; unset → `has_live_model: false` |

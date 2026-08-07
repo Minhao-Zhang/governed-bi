@@ -239,7 +239,6 @@ def test_the_pages_that_do_not_need_a_model_work_without_one(monkeypatch) -> Non
 # ── nothing is invented at the boundary ──────────────────────────────────────
 
 
-@UNWRITTEN
 def test_the_api_never_synthesizes_a_reliability_field() -> None:
     """ADR 0007 §3, asserted **structurally**, because that is the only way it survives.
 
@@ -247,14 +246,43 @@ def test_the_api_never_synthesizes_a_reliability_field() -> None:
     claim is about the code: `tier`, `safety_clearance` and `semantic_assurance` must not
     appear as *produced* values anywhere under `api/`.
 
-    Grep `SRC / "api"` for them. If a future decision earns a reliability tier from a
-    measurement, this test is the thing that must be deliberately changed, and that is the
-    point: it makes reintroducing the badge a decision rather than a diff nobody read.
+    If a future decision earns a reliability tier from a measurement, this test is the thing
+    that must be deliberately changed, and that is the point: it makes reintroducing the badge
+    a decision rather than a diff nobody read.
 
-    v1's `docs/openapi.json` is still tracked and still specifies the old `AnswerView`. It is
-    the spec-of-record for the twelve *routes*, **not** for the answer shape.
+    **Written 2026-08-06.** It was a strict-xfail stub for the whole of v2, and the audit
+    (§4.5) found what the gap cost: `safety_clearance` and `semantic_assurance` are the
+    two-axis stamp the README opens with, and they appeared in ten files — eight docs, the
+    README, and *this file* — and in **zero source files**. The one test that named them was a
+    stub in the file where 8 of 9 tests were stubs, so the honest paragraph at the top of this
+    module was the closest thing to a control, and a paragraph is not one.
+
+    Widened beyond `api/` to all of `src/`, deliberately. The claim in the docs was that the
+    *turn* is stamped with these, not that the API adds them — so a grep scoped to the boundary
+    would have passed while the docs stayed wrong, which is the situation this replaces.
     """
-    pytest.fail("not implemented: see docstring")
+    forbidden = ("safety_clearance", "semantic_assurance")
+    hits: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            for name in forbidden:
+                if name in line:
+                    hits.append(f"{path.relative_to(SRC).as_posix()}:{number}: {line.strip()}")
+
+    assert not hits, (
+        "a reliability verdict appears in source. It is not derived from anything the engine "
+        "observes: `stamp` projects `outcome`, `guardrail_errors` and `terminal_reason`. If one "
+        "of these has earned a definition, change this test on purpose and say what measures "
+        "it:\n  " + "\n  ".join(hits)
+    )
+
+    # The paired half: the two names must not be in the record register either, since that is
+    # where a field would have to be declared before `project()` could emit one.
+    from governed_bi.register.record import record_keys
+
+    assert not (set(forbidden) & record_keys()), record_keys() & set(forbidden)
 
 
 @UNWRITTEN

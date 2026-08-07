@@ -64,6 +64,23 @@ prominent badge in the interface.
 observations. If a reliability tier is wanted later it must be *earned* by a measurement, in
 its own ADR.
 
+> **Enforced 2026-08-06, and this section was the only place that had it right.** The decision
+> above is correct and was correct when written; the audit (§4.5) found that everywhere *else*
+> went on asserting the opposite. `safety_clearance` and `semantic_assurance` were in the
+> README's opening paragraph, `architecture.md`, `glossary.md`, `design-decisions.md`,
+> `openapi.json`'s required-field list, and two superseded ADRs — ten files, and **zero source
+> files**. So a reader who started at the README learned the turn carries a two-axis stamp, and
+> only a reader who reached this ADR learned it does not.
+>
+> The one test that named the fields was a strict-xfail stub in the file whose header states
+> this rule. `tests/api/test_http_contract.py::test_the_api_never_synthesizes_a_reliability_field`
+> is written now, greps all of `src/` rather than just `api/` — the false claim was about the
+> *turn*, not the boundary — and also asserts neither name is in the record register. Bringing
+> the badge back is a deliberate edit to that test.
+>
+> `openapi.json`'s `AnswerResponse` was v1's `AnswerView` verbatim, eight required fields the
+> engine produces none of, and is replaced with the shape this section specifies.
+
 Note this is a hard failure today, not a soft one, and it fails in the worst direction:
 `parseAnswer` `safeParse`s and **returns null on mismatch**, so a run completes, no answer
 card renders, and no error appears.

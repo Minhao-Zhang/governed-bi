@@ -30,7 +30,7 @@ accept → guard → rewrite → negative_gate
 | `assemble` | Render retrieval context block |
 | `agent_core` | Nested `create_agent` loop (read-only tools) |
 | `narrate` | Short answer over the result table |
-| `stamp` | `safety_clearance` + `semantic_assurance` |
+| `stamp` | The turn record: `outcome`, `guardrail_errors`, the ledger, `latency_sec` |
 
 `agent_core` tools: `read_body`, `inspect_schema`, `sample_rows`, `run_query`,
 `ask_user`. Governance wraps `run_query` / `sample_rows` ([ADR 0006](adr/0006-execution-time-governance.md)).
@@ -63,7 +63,30 @@ Live configuration is environment variables (`GOVERNED_BI_*`, secrets in `.env`)
 plus defaults in [`register/knobs.py`](../src/governed_bi/register/knobs.py).
 See [usage](usage.md).
 
-## Two stamps, not one trust score
+## What the turn is stamped with
 
-- **`safety_clearance`** — did the delivery path clear the guardrails / authorization surface.
-- **`semantic_assurance`** — whether uncertainty flags fired (`unflagged` / `heuristic` / `unverified`). `unflagged` means no flag fired; it is not “verified correct.”
+`stamp` projects the record `register/record.py` declares. The fields a reader reaches
+for first:
+
+- **`outcome`** — `answered` / `refused` / `capped` / `crashed` / `clarification`, from
+  `register/stages.classify_outcome`, derived from the **ledger** rather than from
+  whether a SQL string exists.
+- **`guardrail_errors`** — how many attempts died of an exception *inside* `check()`.
+  Derived from the attempts, never counted alongside them.
+- **`terminal_reason`** — why a refusal or decline ended the way it did, so that
+  "routing found nothing" and "the join graph is disconnected" are not one row.
+- **`execution`** — every attempt, with its verdict layer, reason code and executor
+  path.
+
+> **This section used to describe "two stamps, not one trust score":
+> `safety_clearance` (bool) and `semantic_assurance` (`unflagged` / `heuristic` /
+> `unverified`).** Neither existed. The two names were in eight documents, the README
+> and one test, and in **zero source files** — there is no two-verdict stamp on any
+> path and there never was, so the careful distinction this section drew was between
+> two things that did not exist.
+>
+> The underlying argument is still right and is why nothing was invented to fill the
+> gap: a single collapsed trust score is worse than none, and a verdict needs a
+> definition of what measures it before it needs a field. The fields above are the
+> ones something observes. `tests/api/test_http_contract.py` fails if either retired
+> name reappears in `src/`.

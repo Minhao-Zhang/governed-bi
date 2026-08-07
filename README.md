@@ -2,21 +2,41 @@
 
 An agentic BI engine: natural-language question in, governed read-only SQL out,
 with an audit trail. It retrieves a slice of a curated semantic layer (typed
-YAML assets), a model writes SQL, seven deterministic guardrail layers check it,
-the statement executes read-only, and the turn is stamped with
-`safety_clearance` and `semantic_assurance`.
+YAML assets), a model writes SQL, deterministic guardrail layers check it, the
+statement executes read-only, and the turn is recorded — `outcome`,
+`guardrail_errors`, the per-attempt ledger, and `terminal_reason` when it did not
+answer.
 
 Postgres is the live serve path. SQLite under `data/bird/` is an offline
 test/CI fixture only.
+
+> **Three claims were removed from the paragraph above on 2026-08-06**, and what
+> they were is worth more than a clean sentence.
+>
+> It said the turn is stamped with `safety_clearance` and `semantic_assurance`.
+> Those two names appear in eight documents, this README, and one test — and in
+> **zero source files**. There is no two-verdict stamp on any path and never was.
+> They are gone from the docs rather than implemented, because a verdict needs a
+> definition of what measures it before it needs a field, and neither had one.
+> `tests/api/test_http_contract.py` now fails if either name reappears in `src/`.
+>
+> It said **seven** guardrail layers. Six run in any configuration a deployment
+> can reach: `cost_budget` ships `UNSET`, `govern/policy.py` asserts at import
+> that it must never acquire a default, and no environment variable or config key
+> can set it — so `COST` is absent from `layers_evaluated` on every served turn.
+> The number is now unstated here; `docs/glossary.md` lists the layers that run.
 
 ## Quickstart
 
 Requires [uv](https://docs.astral.sh/uv/) and Python 3.13.
 
 ```bash
-uv sync                       # create .venv, install the default (OpenAI) stack
-uv sync --extra bedrock       # optional AWS Bedrock provider
+uv sync                       # create .venv, install the stack
 ```
+
+There are **no extras**. This block used to offer `uv sync --extra bedrock` as
+its second line; `pyproject.toml` records that the extra was removed on
+2026-08-04, and the command exits 2.
 
 **1. Secrets and connection** in a git-ignored `.env` at the repo root:
 

@@ -23,6 +23,10 @@ Non-ADR judgements that still matter in code:
   `register/knobs.py`. Deployment-facing knobs that operators can set today are
   primarily `GOVERNED_BI_*` environment variables (models, paths, timeouts,
   retries, embedder).
-- **Two stamps.** Answers carry `safety_clearance` and `semantic_assurance`
-  separately; they are never collapsed into one trust score (see ADR 0002 / 0006).
+- **No trust score, and no two-axis stamp either.** A single collapsed reliability
+  number is refused (ADR 0002 / 0006), and that still holds. But the two axes this
+  entry used to name — `safety_clearance` and `semantic_assurance` — were never
+  built: they existed in eight documents and zero source files (audit §4.5). What a
+  turn carries is `outcome`, `guardrail_errors`, `terminal_reason` and the
+  per-attempt ledger, each derived from something observed.
 - **UI is out of tree.** Interactive chat UI lives in `governed-bi-ui`.

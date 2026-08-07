@@ -776,18 +776,21 @@
   "components": {
     "schemas": {
       "AnswerResponse": {
+        "title": "AnswerResponse",
+        "description": "The v2 answer shape, as api/routes._shape builds it.\n\nReplaced 2026-08-06. This schema declared eight required fields -- tier, safety_clearance, semantic_assurance, text, sql, escalation, provenance, result -- and the engine produces **none** of them: it is v1's AnswerView, left behind when v1 was deleted. safety_clearance and semantic_assurance in particular exist in no source file at all (audit sections 4.5 and 11), so a client generated from this spec waited for a reliability badge that no turn has ever sent.\n\nTwo ADRs and api/routes.py's own docstring call this file the spec-of-record, and nothing checks it against the served app -- which is why it could differ on 9 of 18 paths. This schema is now correct; the paths are not yet all verified.",
+        "type": "object",
         "properties": {
-          "tier": {
+          "outcome": {
             "type": "string",
-            "title": "Tier"
-          },
-          "safety_clearance": {
-            "type": "boolean",
-            "title": "Safety Clearance"
-          },
-          "semantic_assurance": {
-            "type": "string",
-            "title": "Semantic Assurance"
+            "enum": [
+              "answered",
+              "refused",
+              "capped",
+              "crashed",
+              "clarification"
+            ],
+            "title": "Outcome",
+            "description": "register/stages.Outcome. Derived from the ledger, not from whether a SQL string exists."
           },
           "text": {
             "anyOf": [
@@ -798,9 +801,10 @@
                 "type": "null"
               }
             ],
-            "title": "Text"
+            "title": "Text",
+            "description": "**System copy, not the answer.** Null on the answered path and set on a refusal; answer_text is the other way round, and the client renders on that asymmetry."
           },
-          "sql": {
+          "answer_text": {
             "anyOf": [
               {
                 "type": "string"
@@ -809,9 +813,10 @@
                 "type": "null"
               }
             ],
-            "title": "Sql"
+            "title": "Answer Text",
+            "description": "The model's prose answer, from the narrate stage."
           },
-          "escalation": {
+          "failed_stage": {
             "anyOf": [
               {
                 "type": "string"
@@ -820,36 +825,76 @@
                 "type": "null"
               }
             ],
-            "title": "Escalation"
+            "title": "Failed Stage",
+            "description": "Which node raised, on a crashed turn. A register/stages.Stage value."
           },
-          "provenance": {
-            "additionalProperties": true,
+          "error_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Type",
+            "description": "Exception class name on a crashed turn. Never a driver message."
+          },
+          "refused_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refused By",
+            "description": "Which control refused, keyed into register/stages.REFUSED_BY_TO_STAGE."
+          },
+          "record": {
             "type": "object",
-            "title": "Provenance"
+            "title": "Record",
+            "description": "The turn record: exactly register/record.record_keys(), projected by serve/nodes/stamp.py. Empty object on a paused (clarification) turn."
           },
-          "result": {
+          "result_table": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ResultTableResponse"
+                "type": "object"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Result Table",
+            "description": "{columns, rows, row_count, truncated, preview_rows} from the last successful query. Live only -- deliberately not in `record`."
+          },
+          "clarification": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clarification",
+            "description": "Set only when outcome is clarification; the pending ask_user interrupt."
+          },
+          "audit_logged": {
+            "type": "boolean",
+            "title": "Audit Logged",
+            "description": "Whether the turn reached the durable log. Absent on a paused turn."
           }
         },
-        "type": "object",
         "required": [
-          "tier",
-          "safety_clearance",
-          "semantic_assurance",
+          "outcome",
           "text",
-          "sql",
-          "escalation",
-          "provenance",
-          "result"
-        ],
-        "title": "AnswerResponse"
+          "failed_stage",
+          "error_type",
+          "refused_by",
+          "record"
+        ]
       },
       "AssetRowResponse": {
         "properties": {
