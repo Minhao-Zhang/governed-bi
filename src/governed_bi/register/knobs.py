@@ -197,6 +197,19 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "so the SDK's 600s default meant one hung call stalled a turn for ten minutes when "
        "every one of those call sites already degrades gracefully. Failing fast into a "
        "degradation the code already handles beats waiting for a call that is not coming"),
+    _k("rail_node_timeout_s", 60.0, Role.comparability,
+       "wall clock for ONE utility rail node -- the scope gate, a facet rewriter, narrate. "
+       "Distinct from llm_utility_timeout_s, which bounds one provider CALL: retries multiply "
+       "that, and a node also does retrieval and rendering around it, so the call bound is not "
+       "a node bound. Set above the call bound on purpose -- a node hitting this means "
+       "something other than the provider is wrong, not that the model was slow"),
+    _k("agent_node_timeout_s", 900.0, Role.comparability,
+       "wall clock for the whole agent_core loop, which is the one node with no other ceiling. "
+       "llm_timeout_s bounds one of its calls; the loop makes several, and LangGraph's default "
+       "recursion_limit is 10007 under the server, so nothing bounded the node itself. 900s is "
+       "generous against a measured 7-14s turn: this is a hang stop, not a latency target. "
+       "NOT paired with a retry -- agent_core executes governed SQL, so a retried node re-runs "
+       "statements the ledger has already recorded"),
     _k("embedding_model", None, Role.comparability,
        "part of every vector cache key. cosine returns 0.0 on a width mismatch "
        "rather than raising, so a cross-model cache hit degrades routing to "

@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command, TimeoutPolicy
 
 from governed_bi.serve.nodes.agent_core import agent_core_node
 from governed_bi.serve.nodes.assemble import assemble_node
@@ -80,6 +81,45 @@ def _skip_if_terminal(state: ServeState) -> Literal["stamp", "continue"]:
     return "continue"
 
 
+#: Rails that may carry a node timeout. Two conditions, both measured, both narrowing.
+#:
+#: **Natively async.** A node whose body still runs through ``asyncio.to_thread`` (``wrap_node``)
+#: would have its *await* cancelled and the thread left running, so the bound would be a claim
+#: rather than a fact.
+#:
+#: **Alone in its super-step.** The five facets are not, and that is why they are absent despite
+#: being natively async: with concurrent siblings a ``NodeTimeoutError`` surfaces at executor
+#: teardown (``pregel/_loop.py`` ``__aexit__``) and never reaches the node's ``error_handler``.
+#: Measured — a hung facet raised straight out of the graph and the turn produced no record,
+#: while the identical hang on ``guard`` was handled and stamped. A timeout that trades a hang
+#: for a missing record is not an improvement, so the fan-out keeps the hang until that is
+#: solved. ``agent_core`` is handled separately in :func:`_node_timeout`; it is the node with no
+#: other ceiling and it runs alone.
+_CANCELLABLE = frozenset({"guard", "narrate"})
+
+
+def _node_timeout(name: str) -> Any:
+    """The node's wall clock, or ``None`` where a timeout would be a false promise.
+
+    Env-settable like every other deployment knob, through the same names the model timeouts
+    use. ``tests/conformance`` exists because a knob reachable only from code is the defect the
+    register was written to abolish.
+    """
+    import os
+
+    from governed_bi.register.knobs import knob_default
+
+    if name == "agent_core":
+        var, knob = "GOVERNED_BI_AGENT_NODE_TIMEOUT_S", "agent_node_timeout_s"
+    elif name in _CANCELLABLE:
+        var, knob = "GOVERNED_BI_RAIL_NODE_TIMEOUT_S", "rail_node_timeout_s"
+    else:
+        return None
+    raw = os.environ.get(var)
+    seconds = float(raw) if raw else float(knob_default(knob))
+    return TimeoutPolicy(run_timeout=seconds)
+
+
 def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     """Construct the uncompiled serve graph.
 
@@ -98,26 +138,64 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
         else StateGraph(ServeState)
     )
 
-    graph.add_node("guard", wrap_node("guard", guard_node))
-    graph.add_node("rewrite", wrap_node("rewrite", rewrite_node))
-    graph.add_node("negative_gate", wrap_node("negative_gate", negative_node))
+    def rail(name: str, fn: Any, **kw: Any) -> None:
+        """Register a wrapped node, with a timeout where one can really fire.
+
+        **The ``error_handler`` is what makes the timeout safe to add.** LangGraph enforces
+        ``run_timeout`` *outside* the node function, so ``wrap_node``'s ``except`` never sees it
+        — measured: a hung facet raised ``NodeTimeoutError`` straight out of the graph, ``stamp``
+        never ran, and the turn produced **no record at all**. That is the one direction this
+        engine must not fail in, and it would have been introduced by the fix for a hang.
+
+        The handler is only reachable on a timeout: ``wrap_node`` already turns every ordinary
+        exception into a ``crashed`` update and returns normally, so nothing else propagates far
+        enough to reach it. That is why it can name ``NodeTimeoutError`` without being handed the
+        exception — this LangGraph version passes the handler a state, not an error.
+        """
+        timeout = _node_timeout(name)
+        if timeout is None:
+            graph.add_node(name, wrap_node(name, fn, **kw))
+            return
+
+        def timed_out(_state: ServeState, _name: str = name) -> Any:
+            # ``goto="stamp"`` and not a bare update: the handler replaces the node, so the
+            # node's own outgoing edge does not run and the turn would end unstamped —
+            # `path_kind: crashed` in state and no record anywhere, which is the failure this
+            # engine exists to prevent. Measured before adding it: `answer` was None.
+            return Command(
+                update={
+                    "failure": {"stage": _name, "error_type": "NodeTimeoutError"},
+                    "path_kind": "crashed",
+                },
+                goto="stamp",
+            )
+
+        graph.add_node(
+            name, wrap_node(name, fn, **kw), timeout=timeout, error_handler=timed_out
+        )
+
+    rail("guard", guard_node)
+    rail("rewrite", rewrite_node)
+    rail("negative_gate", negative_node)
     for name, fn in _FACET_NODES:
-        graph.add_node(name, wrap_node(name, fn))
-    graph.add_node("route", wrap_node("route", route_node))
-    graph.add_node("resolve", wrap_node("resolve", resolve_node))
-    graph.add_node("connect", wrap_node("connect", connect_node))
-    graph.add_node("assemble", wrap_node("assemble", assemble_node))
-    graph.add_node("agent_core", wrap_node("agent_core", agent_core_node))
-    graph.add_node("narrate", wrap_node("narrate", narrate_node))
-    graph.add_node("refuse", wrap_node("refuse", refuse_node))
-    graph.add_node("decline", wrap_node("decline", decline_node))
+        rail(name, fn)
+    rail("route", route_node)
+    rail("resolve", resolve_node)
+    rail("connect", connect_node)
+    rail("assemble", assemble_node)
+    rail("agent_core", agent_core_node)
+    rail("narrate", narrate_node)
+    rail("refuse", refuse_node)
+    rail("decline", decline_node)
     # Unwrapped: nothing after stamp can record a wrap crash.
     graph.add_node("stamp", stamp)
 
     def _fanout_passthrough(state: ServeState) -> dict[str, Any]:
         return {}
 
-    # stream=False: passthrough must not emit a phantom facet_schema row.
+    # Not through `rail`: the node is `fanout` but its *stage* is `facet_schema`, and `rail`
+    # uses one name for both. stream=False means it emits nothing anyway, and it does no work,
+    # so it needs no timeout.
     graph.add_node("fanout", wrap_node("facet_schema", _fanout_passthrough, stream=False))
 
     if accept is not None:
