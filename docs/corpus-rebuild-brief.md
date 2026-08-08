@@ -266,9 +266,10 @@ Not given: the test split, gold answers, paraphrases.
   suffix — which 69% of `corpus-a-20260807` carries — is a template tail, not a sentence.
 - **No values, no examples, no `e.g.`, no quoted literals.** Those are `body`'s job by spec, and
   15% of `corpus-a-20260807`'s table and column summaries break this.
-- ≤ 250 characters for table, column, join, metric, few_shot. **≤ 400 for `SchemaAsset`** — the
-  only place the cap measurably binds (mean summary length on `corpus-a-20260807`: 220.8 for
-  schemas, 154.4 tables, 99.8 columns). 400 is provisional; §6 measures it.
+- ≤ 250 characters, every type. `summary_max_chars` is one global knob enforced in the model
+  (`corpus/validate.py`); a per-type cap would be a knob change and a treatment change. The cap
+  binds hardest on schema summaries (mean 220.8 on the richest corpus so far, against 154.4 for
+  tables and 99.8 for columns), and §6 is where raising it gets argued with a measurement.
 - A `TermAsset`'s summary contains **every one of its `synonyms`**, verbatim. Only `summary` is
   indexed, so an alias living anywhere else is unreachable. Broken today on 441 of 949.
 

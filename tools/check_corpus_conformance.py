@@ -36,6 +36,7 @@ from typing import Any, Iterable
 import yaml
 
 from governed_bi.register.assets import ASSET_REGISTER, AssetType
+from governed_bi.register.knobs import knob_default
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CORPUS = ROOT.parent / "BIRD-corpus"
@@ -44,11 +45,13 @@ DEFAULT_DATASET = ROOT.parent / "BIRD-Data-Obfuscation" / "eval_dataset"
 #: The sentinel the scaffold writes. It must fail, so an unfinished asset cannot ship.
 SENTINEL = "TODO"
 
-#: Per-type ``summary`` cap. 400 for a schema because it is the routing signal for a whole
-#: database and is the one place the cap measurably binds (mean 220.8 chars on the richest
-#: corpus written so far, against 154.4 for tables and 99.8 for columns). Provisional: the cap
-#: is a retrieval parameter, so ``tools/routing_recall.py`` settles it, not taste.
-SUMMARY_CAP: dict[AssetType, int] = {t: 400 if t is AssetType.schema else 250 for t in AssetType}
+#: ``summary`` cap, **read from the knob rather than restated**. It is one global value for
+#: every type (``knobs.py`` `summary_max_chars`, enforced in ``corpus/validate.py``), and this
+#: file first hard-coded 400 for schema assets on the argument that the routing signal for a
+#: whole database deserves more room. It does not get more room: V1 passed at 340 characters
+#: and the model rejected the file, so the writer met a validator that was more permissive than
+#: the thing it validates. Raising it is a knob change and a treatment change, not a cap here.
+SUMMARY_CAP: dict[AssetType, int] = {t: int(knob_default("summary_max_chars")) for t in AssetType}
 
 #: Every type's §1.2 entry names a ``body``, and ``summary`` never reaches the model
 #: (``serve/context.py``), so an empty one delivers nothing but the structural line.
@@ -73,7 +76,13 @@ TEMPLATES: tuple[re.Pattern[str], ...] = (
 
 #: ``body``'s job, per §1.2. In ``summary`` it spends the retrieval budget on text the model
 #: never sees.
-VALUE_TALK = re.compile(r"(\be\.g\.|\bfor example\b|\bsuch as\b|\bcoded as\b|'[^']{1,60}')", re.I)
+#: The quoted-literal arm needs the lookarounds: without them ``the restaurant's name and the
+#: city's rating`` reads as a quoted literal spanning the two possessives, and a writer ends up
+#: deleting correct English to satisfy a false positive.
+VALUE_TALK = re.compile(
+    r"(\be\.g\.|\bfor example\b|\bsuch as\b|\bcoded as\b|(?<![A-Za-z])'[^']{1,60}'(?![A-Za-z]))",
+    re.I,
+)
 
 #: The mechanical identifier suffix. Satisfies the identifier rule without being a sentence.
 PAREN_TAIL = re.compile(r"\((?:column|table)\s+\S+\)\s*\.?\s*$", re.I)
@@ -82,6 +91,14 @@ PAREN_TAIL = re.compile(r"\((?:column|table)\s+\S+\)\s*\.?\s*$", re.I)
 #: governance; saying it was fabricated to imitate another column is a description of the
 #: benchmark, and naming that other column makes this one rank for its questions.
 FORBIDDEN_WORDS = ("decoy", "trap", "fabricated", "synthetic", "planted", "mimic", "imitat")
+
+#: Rules that police *authored* prose, and the one type whose text is not authored. A few-shot's
+#: summary **is** a training question, harvested verbatim by script: it quotes the values it asks
+#: about (V5), it can name a film called "The Trap" (V10), and a terse wh-question like
+#: "How many employees sold X?" carries no function words at all (V4). Holding harvested text to
+#: a prose standard makes the writer falsify the asset to satisfy the checker. If a few-shot ever
+#: becomes agent-written, this exemption has to go with it.
+AUTHORED_ONLY: frozenset[str] = frozenset({"V4", "V5", "V10"})
 
 #: ``Means 'x' (obfuscated to 'x')`` -- 42% of column bodies in both existing corpora.
 TAUTOLOGY_BODY = re.compile(r"^(physical column\s+'[^']*'\.\s*)?means\s+['\"]", re.I)
@@ -201,15 +218,14 @@ def check_local(kind: str, a: dict[str, Any], where: str) -> dict[str, list[Find
         elif ident not in summary:
             out["V3"].append(Finding(f"{where}: summary omits {field}={ident!r}"))
 
-    if summary and summary != SENTINEL and not is_prose(summary):
+    authored = at is not AssetType.few_shot
+    if authored and summary and summary != SENTINEL and not is_prose(summary):
         out["V4"].append(
             Finding(f"{where}: summary is not prose (function-word ratio "
                     f"{function_ratio(summary):.2f}): {summary[:70]!r}")
         )
 
-    # A few-shot's summary *is* the question (ADR 0005 §1.2), and questions legitimately quote
-    # the values they ask about. Policing value-talk there would reject the spec.
-    if at is not AssetType.few_shot and VALUE_TALK.search(summary):
+    if authored and VALUE_TALK.search(summary):
         out["V5"].append(Finding(f"{where}: summary carries values or examples, which belong in body"))
     if PAREN_TAIL.search(summary):
         out["V5"].append(Finding(f"{where}: summary ends in a mechanical '(column x)' tail"))
@@ -236,10 +252,7 @@ def check_local(kind: str, a: dict[str, Any], where: str) -> dict[str, list[Find
         [summary, body, *(str(r) for r in (a.get("rules") or [])),
          _text((a.get("reliability") or {}).get("note") if isinstance(a.get("reliability"), dict) else "")]
     ).lower()
-    # V10 governs what the *writer* discloses. A few-shot is a verbatim train question and its
-    # gold SQL, harvested by script and never authored, so a film called "The Trap" is not a
-    # disclosure. If a few-shot ever becomes agent-written this exemption has to go.
-    for word in () if at is AssetType.few_shot else FORBIDDEN_WORDS:
+    for word in FORBIDDEN_WORDS if authored else ():
         if word in blob:
             out["V10"].append(Finding(f"{where}: text contains {word!r}"))
             break
@@ -340,7 +353,7 @@ def check_split_leak(assets, test_split: Path) -> list[Finding]:
 
 RULES: dict[str, str] = {
     "V0": "the file parses and declares a known asset_type",
-    "V1": "1 <= len(summary) <= cap (400 schema, else 250)",
+    "V1": "1 <= len(summary) <= summary_max_chars",
     "V2": "summary is not the scaffold sentinel",
     "V3": "summary contains the identifier ASSET_REGISTER declares",
     "V4": "summary is prose, not a template or an identifier roster",

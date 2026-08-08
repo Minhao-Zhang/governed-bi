@@ -49,9 +49,10 @@ a column — those are derived, and supplying one is an error.
 
 ### 2. The schema file, `../BIRD-corpus/<schema>/<schema>.yaml`
 
-- `summary`: what this database is *for*, containing the schema name. Up to 400 characters —
-  this single string is what routes a question to this database out of 57, so spend it on the
-  domain vocabulary a user would actually say, not on a list of table names.
+- `summary`: what this database is *for*, containing the schema name. **250 characters, same as
+  every other asset** — the cap is one global knob enforced in the model, not a per-type one.
+  This single string is what routes a question to this database out of 57, so spend all 250 on
+  the domain vocabulary a user would actually say, not on a list of table names.
 - `body`: business background and cross-table conventions.
 - `rules`: a short list of hard constraints that must hold on every query — a join path that is
   easy to get wrong, a filter that is always required. Few and load-bearing, or none at all.
@@ -165,7 +166,7 @@ That must report **zero** violations on every rule it evaluates. The rules, in s
 
 | | |
 |---|---|
-| V1 | summary is 1–250 characters (400 for the schema asset) |
+| V1 | summary is 1–250 characters, every type |
 | V2 | summary is not still `TODO ...` |
 | V3 | summary contains the asset's own identifier |
 | V4 | summary is prose — function-word ratio ≥ 0.10, and not a template or a list of names |
