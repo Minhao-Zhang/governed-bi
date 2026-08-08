@@ -127,11 +127,12 @@ DATA_ROOTS: tuple[str, ...] = ("corpus", "corpora")
 #: Where a phrase could do damage: producing code, and any corpus tree.
 SCAN_ROOTS: tuple[str, ...] = ("src", "tools", "tests", "corpus", "corpora")
 
-#: Corpus trees **outside** this repository, scanned when the checkout is present. The served
-#: corpus moved to its own repository on 2026-08-07 (D13), which took it out of every root
-#: above, and this gate went on passing while looking at no corpus at all. The counts printed
-#: on success are what makes that visible, so read them rather than the exit code.
-SIBLING_DATA_ROOTS: tuple[pathlib.Path, ...] = (REPO.parent / "BIRD-corpus",)
+#: Corpus trees **outside** the scanned repository, scanned when the checkout is present. The
+#: served corpus moved to its own repository on 2026-08-07 (D13), which took it out of every
+#: root above, and this gate went on passing while looking at no corpus at all. The counts
+#: printed on success are what makes that visible, so read them rather than the exit code.
+def sibling_data_roots(repo: pathlib.Path) -> tuple[pathlib.Path, ...]:
+    return (repo.parent / "BIRD-corpus",)
 
 SCAN_SUFFIXES: frozenset[str] = frozenset({".py", ".yaml", ".yml", ".json", ".jsonl", ".md"})
 
@@ -146,9 +147,9 @@ EXEMPT: frozenset[str] = frozenset(
 )
 
 
-def files_to_scan() -> list[pathlib.Path]:
+def files_to_scan(repo: pathlib.Path = REPO) -> list[pathlib.Path]:
     out: list[pathlib.Path] = []
-    bases = [REPO / root for root in SCAN_ROOTS] + list(SIBLING_DATA_ROOTS)
+    bases = [repo / root for root in SCAN_ROOTS] + list(sibling_data_roots(repo))
     for base in bases:
         if not base.is_dir():
             continue
@@ -157,27 +158,27 @@ def files_to_scan() -> list[pathlib.Path]:
                 continue
             if SKIP_DIRS & set(path.parts):
                 continue
-            if _relative(path) in EXEMPT:
+            if _relative(path, repo) in EXEMPT:
                 continue
             out.append(path)
     return sorted(out)
 
 
-def _relative(path: pathlib.Path) -> str:
+def _relative(path: pathlib.Path, repo: pathlib.Path = REPO) -> str:
     """Repo-relative posix path, or the absolute one for a sibling checkout."""
     try:
-        return path.relative_to(REPO).as_posix()
+        return path.relative_to(repo).as_posix()
     except ValueError:
         return path.as_posix()
 
 
-def _is_corpus_data(path: pathlib.Path) -> bool:
+def _is_corpus_data(path: pathlib.Path, repo: pathlib.Path = REPO) -> bool:
     if path.suffix.lower() not in DATA_SUFFIXES:
         return False
-    if any(root == path or root in path.parents for root in SIBLING_DATA_ROOTS):
+    if any(root == path or root in path.parents for root in sibling_data_roots(repo)):
         return True
     try:
-        parts = path.relative_to(REPO).parts
+        parts = path.relative_to(repo).parts
     except ValueError:
         return False
     return bool(parts) and parts[0] in DATA_ROOTS
@@ -229,7 +230,7 @@ def leads_with(value: str, phrase: str) -> bool:
     return head.casefold().startswith(phrase.casefold())
 
 
-def hits(paths: list[pathlib.Path]) -> list[str]:
+def hits(paths: list[pathlib.Path], repo: pathlib.Path = REPO) -> list[str]:
     """``path:line: what`` for every occurrence of either rule."""
     found: list[str] = []
     retired = [
@@ -238,7 +239,7 @@ def hits(paths: list[pathlib.Path]) -> list[str]:
         for schema, phrase in entries.items()
     ]
     for path in paths:
-        rel = _relative(path)
+        rel = _relative(path, repo)
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -247,7 +248,7 @@ def hits(paths: list[pathlib.Path]) -> list[str]:
             found.append(f"{rel}: unreadable, so unchecked")
             continue
         lines = text.splitlines()
-        if not _is_corpus_data(path):
+        if not _is_corpus_data(path, repo):
             # Outside a corpus the subject is a producing script, so the whole file is in
             # scope and position means nothing: a phrase in a docstring is still the table.
             for number, line in enumerate(lines, start=1):
@@ -278,7 +279,16 @@ def hits(paths: list[pathlib.Path]) -> list[str]:
 
 
 def main() -> int:
-    paths = files_to_scan()
+    # ``--root DIR`` scans a tree the caller owns instead of this repository, so the negative
+    # tests can plant a discriminator without writing one into ``corpora/`` — where a crashed
+    # run leaves it behind and every later invocation of this gate then fails on it. The
+    # tables above are declarations and stay this repository's either way.
+    argv = sys.argv[1:]
+    repo = REPO
+    if "--root" in argv:
+        repo = pathlib.Path(argv[argv.index("--root") + 1]).resolve()
+
+    paths = files_to_scan(repo)
     if not paths:
         print(
             f"no files matched {sorted(SCAN_SUFFIXES)} under {list(SCAN_ROOTS)} — refusing to "
@@ -287,7 +297,7 @@ def main() -> int:
         )
         return 1
 
-    problems = hits(paths)
+    problems = hits(paths, repo)
     if problems:
         print(
             f"{len(problems)} hand-authored benchmark discriminator(s) in the tree:\n",
@@ -305,7 +315,7 @@ def main() -> int:
         return 1
 
     n_phrases = len(RETIRED_DISCRIMINATORS) + len(RETIRED_LEADS)
-    data_files = sum(1 for p in paths if _is_corpus_data(p))
+    data_files = sum(1 for p in paths if _is_corpus_data(p, repo))
     print(
         f"no hand-authored benchmark discriminators across {len(paths)} file(s); "
         f"rule A: {n_phrases} retired phrase(s), {len(EXEMPT)} exempt path(s); "

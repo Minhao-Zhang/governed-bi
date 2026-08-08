@@ -3,11 +3,11 @@
 Importing this package has no side effects. Imports run downward only, in the order
 ``tools/check_imports.py`` declares::
 
-    ports -> register -> measure -> corpus -> retrieve -> govern
-          -> datasource -> model -> serve -> record -> eval -> api
+    paths -> ports -> register -> measure -> corpus -> retrieve -> govern
+          -> datasource -> model -> serve -> eval -> api
 
-``record`` is declared there but no such package exists; ``verify`` exists and is not
-declared, so nothing constrains its imports. See ADR 0005 §6 and ADR 0006.
+That list is the whole of what is here: the gate fails when a package under this one is
+missing from it, or declared in it and absent from disk. See ADR 0005 §6 and ADR 0006.
 """
 
 

@@ -11,7 +11,13 @@ from collections.abc import Collection
 from typing import Any, Mapping, Sequence
 
 from governed_bi.register.assets import AssetType
-from governed_bi.register.facets import FACET_CHANNELS, FACET_TARGETS, Channel
+from governed_bi.register.facets import (
+    FACET_CHANNELS,
+    FACET_TARGETS,
+    SCORING_CHANNELS,
+    Channel,
+    ChannelState,
+)
 from governed_bi.register.stages import Stage
 from governed_bi.retrieve.budget import apply_budgets
 from governed_bi.retrieve.fuse import scale_within_channel
@@ -150,10 +156,11 @@ def pass_two_retrieve(
                     _merge_within_facet(merged, payload)
 
         # Untagged pass-one hits for this facet — unconditional carry-forward.
+        pass_one_consulted = _pass_one_consulted(facet_result)
         for hit in hits_of(facet_result):
             if _raw_schema_tag(hit) is not None:
                 continue
-            payload = _pass_one_payload(hit, name)
+            payload = _pass_one_payload(hit, name, pass_one_consulted)
             if payload is None:
                 continue
             _merge_within_facet(merged, payload)
@@ -312,7 +319,30 @@ def _merge_within_facet(
         prev["queries"] = queries
 
 
-def _pass_one_payload(hit: Any, facet_name: str) -> dict[str, Any] | None:
+def _pass_one_consulted(facet_result: Any) -> frozenset[str]:
+    """The scoring channels pass one **recorded as having run** for this facet.
+
+    Read from the facet result's ``channels``, not from ``FACET_CHANNELS``: the declaration says
+    which channels the facet uses, and a declared channel that failed reports ``failed`` there.
+    Counting it as consulted would divide by a channel that never scored anything.
+    """
+    if isinstance(facet_result, Mapping):
+        channels = facet_result.get("channels")
+    else:
+        channels = getattr(facet_result, "channels", None)
+    if not isinstance(channels, Mapping):
+        return frozenset()
+    scoring = {c.value for c in SCORING_CHANNELS}
+    return frozenset(
+        str(name)
+        for name, state in channels.items()
+        if str(name) in scoring and str(state) == ChannelState.ran.value
+    )
+
+
+def _pass_one_payload(
+    hit: Any, facet_name: str, consulted: Collection[str] = ()
+) -> dict[str, Any] | None:
     if isinstance(hit, Mapping):
         asset_id = hit.get("asset_id")
         asset_type = hit.get("asset_type")
@@ -333,9 +363,22 @@ def _pass_one_payload(hit: Any, facet_name: str) -> dict[str, Any] | None:
     if asset_id is None or asset_type is None:
         return None
     if score is None:
+        # A pass-one hit that arrived without a score — a `retrieve_hooks` hit or a hand-built
+        # one. `consulted` is what pass one recorded, widened by the channels that scored *this*
+        # hit: a channel holding a component for it demonstrably ran, whatever the record says.
+        # Both empty means nothing is recorded about which channels ran, and then the components
+        # present are the whole of what is known — the fallback `route_retrieve._hit_score` takes,
+        # for the same reason. Never the facet's declaration, which would divide by a channel
+        # that did not run.
+        present = frozenset(
+            channel
+            for channel, value in (("lexical", lexical), ("semantic", semantic))
+            if value is not None
+        )
         score = _hybrid(
             float(lexical) if lexical is not None else None,
             float(semantic) if semantic is not None else None,
+            consulted=frozenset(consulted) | present,
         )
     if score is None:
         return None
@@ -416,9 +459,9 @@ def _build_retrieved(
     # **What the caps discarded, carried out rather than dropped on the floor.** The filter two
     # lines above deletes over-budget ids from `selected` and `attributions`, so without this a
     # 9th-ranked gold table does not exist to the turn and the miss reads as "retrieval never
-    # found it". Measured offline: 44% of questions whose schema was routed correctly have a
-    # gold table outside the 8-table cap, median worst rank 9. Emitted only when something was
-    # cut, so a turn under budget is byte-identical and its `context_hash` does not move.
+    # found it". A correctly routed question can still have its gold table below the cap; the
+    # offline arm that sized how often is retired (register/citations.py). Emitted only when
+    # something was cut, so a turn under budget is byte-identical and `context_hash` holds.
     if budgeted.dropped:
         out["budget_dropped"] = dict(budgeted.dropped)
         out["budget_best_dropped_score"] = dict(budgeted.best_dropped_score)

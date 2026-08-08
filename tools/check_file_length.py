@@ -26,10 +26,10 @@ SKIP_DIRS: frozenset[str] = frozenset({"__pycache__", ".venv", "venv", "node_mod
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def _files() -> list[Path]:
+def _files(base: Path = ROOT) -> list[Path]:
     out: list[Path] = []
     for name in ROOTS:
-        root = ROOT / name
+        root = base / name
         if not root.exists():
             continue
         for path in sorted(root.rglob("*.py")):
@@ -46,13 +46,20 @@ def measure(path: Path) -> int:
 
 
 def main() -> int:
-    files = _files()
+    # ``--root DIR`` measures a tree the caller owns, so a negative test never writes an
+    # over-length probe into ``src/`` (see ``check_one_implementation.py``).
+    argv = sys.argv[1:]
+    base = ROOT
+    if "--root" in argv:
+        base = Path(argv[argv.index("--root") + 1]).resolve()
+
+    files = _files(base)
     if not files:
         print(f"no Python files under {', '.join(ROOTS)} — refusing to pass vacuously",
               file=sys.stderr)
         return 1
 
-    counted = [(measure(p), p.relative_to(ROOT).as_posix()) for p in files]
+    counted = [(measure(p), p.relative_to(base).as_posix()) for p in files]
     hard = sorted((c for c in counted if c[0] > HARD_LIMIT), reverse=True)
     soft = sorted((c for c in counted if SOFT_LIMIT < c[0] <= HARD_LIMIT), reverse=True)
 

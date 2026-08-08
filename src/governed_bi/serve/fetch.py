@@ -36,6 +36,18 @@ from governed_bi.govern.ledger import (
 from governed_bi.govern.pipeline import prepare, spellings_for
 from governed_bi.govern.policy import GovernancePolicy
 
+__all__ = [
+    "SAMPLE_ROWS_MAX_VALUES",
+    "asset_attr",
+    "asset_is_table",
+    "distinct_values_statement",
+    "inspect_schema",
+    "read_body",
+    "read_body_cap",
+    "run_query",
+    "sample_rows",
+]
+
 _DEFAULT_READ_BODY_MAX_CHARS = 80_000
 
 #: Ceiling on the number of distinct values ``sample_rows`` returns.

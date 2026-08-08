@@ -205,9 +205,8 @@ def summarise(
             "gates_b": [g.render() for g in gb],
         }
         if a_s.n and b_s.n:
-            # Always compute McNemar on the shared population for diagnostics;
-            # quotation still gated by ``quotable``.
-            summary["comparison"]["mcnemar"] = paired_ex(a_s, b_s).render()
+            # ``mcnemar`` is already set above, on the wider condition — computing it for
+            # diagnostics whatever ``quotable`` says is that line's job, not this block's.
             summary["comparison"]["ex_a"] = _measured_dict(headline_ex(a_s))
             summary["comparison"]["ex_b"] = _measured_dict(headline_ex(b_s))
     return summary

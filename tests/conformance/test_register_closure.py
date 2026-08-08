@@ -269,57 +269,80 @@ def _gate(tool: str, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-#: Every negative test writes here. One path, so a crashed test leaves at most one
-#: file behind and every gate's probe is findable by the same name.
-PROBE = ROOT / "src" / "governed_bi" / "register" / "_conformance_probe.py"
+#: Probe filename, shared by every negative test below so a hit is recognisable in a gate's
+#: output. It is planted in a ``tmp_path`` tree, never in this repository — see
+#: :func:`_synthetic_tree`, and :func:`_probe_tree` for the gates that scan outside ``src/``.
+PROBE_NAME = "_conformance_probe"
+
+
+def _probe_tree(tmp: Path, rel: str, body: str) -> Path:
+    """A throwaway repository root holding one file at ``rel``, for ``--root``.
+
+    :func:`_synthetic_tree`'s argument, generalised past ``src/governed_bi/``: two of these
+    gates scan ``docs/`` and ``tools/`` as well.
+    """
+    path = tmp / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    return tmp
+
+
+def _layer_packages() -> dict[str, str]:
+    """An empty package per layer ``check_imports.LAYERS`` declares.
+
+    That gate fails on a declared layer with no package on disk, so a tree holding only the
+    probe would fail for a reason the test is not about. Read from the tool, not restated.
+    """
+    sys.path.insert(0, str(ROOT / "tools"))
+    from check_imports import LAYERS
+
+    return {f"{name}/__init__.py": "" for names in LAYERS for name in names}
 
 
 def test_layering_gate_fires_on_a_third_party_import_in_register(tmp_path: Path) -> None:
     """Written as a negative test because a gate that only leaves a trace when it
     fires cannot afterwards be told from a gate that was never wired up."""
-    probe = ROOT / "src" / "governed_bi" / "register" / "_conformance_probe.py"
-    probe.write_text("import pydantic\n", encoding="utf-8")
-    try:
-        result = subprocess.run(
-            [sys.executable, str(ROOT / "tools" / "check_imports.py")],
-            capture_output=True,
-            text=True,
-            cwd=ROOT,
-        )
-        assert result.returncode == 1
-        assert "stdlib-only" in result.stderr
-    finally:
-        probe.unlink()
+    modules = {**_layer_packages(), f"register/{PROBE_NAME}.py": "import pydantic\n"}
+    result = _gate("check_imports.py", "--root", str(_synthetic_tree(tmp_path, modules)))
+    assert result.returncode == 1
+    assert "stdlib-only" in result.stderr
+
+
+def test_layering_gate_fires_on_an_undeclared_package(tmp_path: Path) -> None:
+    """A package ``LAYERS`` omits is checked against nothing, and the run still passes.
+
+    ``verify/`` sat outside the layering that way, and ``record`` was declared with no package
+    to be in — the same rot from the other side, so both directions are asserted.
+    """
+    layers = _layer_packages()
+    undeclared = _synthetic_tree(tmp_path / "extra", {**layers, "smuggled/__init__.py": ""})
+    result = _gate("check_imports.py", "--root", str(undeclared))
+    assert result.returncode == 1
+    assert "smuggled" in result.stderr and "nothing constrains" in result.stderr
+
+    absent = dict(layers)
+    del absent["register/__init__.py"]
+    result = _gate("check_imports.py", "--root", str(_synthetic_tree(tmp_path / "gone", absent)))
+    assert result.returncode == 1
+    assert "LAYERS declares 'register'" in result.stderr
 
 
 RETIRED_LITERAL = "# recall drops 0.70 -> 0.35\n"
 
 
-def _citation_gate() -> subprocess.CompletedProcess[str]:
-    return _gate("check_citations.py")
+def test_citation_gate_fires_on_a_retired_literal_in_live_code(tmp_path: Path) -> None:
+    root = _synthetic_tree(tmp_path, {f"register/{PROBE_NAME}.py": RETIRED_LITERAL})
+    result = _gate("check_citations.py", "--root", str(root))
+    assert result.returncode == 1
+    assert PROBE_NAME in result.stderr
 
 
-def test_citation_gate_fires_on_a_retired_literal_in_live_code() -> None:
-    probe = ROOT / "src" / "governed_bi" / "register" / "_conformance_probe.py"
-    probe.write_text(RETIRED_LITERAL, encoding="utf-8")
-    try:
-        result = _citation_gate()
-        assert result.returncode == 1
-        assert "_conformance_probe" in result.stderr
-    finally:
-        probe.unlink()
-
-
-def test_citation_gate_fires_in_live_documentation() -> None:
+def test_citation_gate_fires_in_live_documentation(tmp_path: Path) -> None:
     """``docs`` is a strict root (same fatal tier as ``src/`` / ``tools/``)."""
-    probe = ROOT / "docs" / "_conformance_probe.md"
-    probe.write_text(RETIRED_LITERAL, encoding="utf-8")
-    try:
-        result = _citation_gate()
-        assert result.returncode == 1, "docs/ is a strict root and must fail the run"
-        assert "_conformance_probe" in result.stderr
-    finally:
-        probe.unlink()
+    root = _probe_tree(tmp_path, f"docs/{PROBE_NAME}.md", RETIRED_LITERAL)
+    result = _gate("check_citations.py", "--root", str(root))
+    assert result.returncode == 1, "docs/ is a strict root and must fail the run"
+    assert PROBE_NAME in result.stderr
 
 
 def test_citation_gate_has_no_archive_tier() -> None:
@@ -371,7 +394,7 @@ def test_the_adr_and_the_gate_declare_the_same_file_length_tiers() -> None:
     )
 
 
-def test_file_length_gate_fires_over_the_hard_cap() -> None:
+def test_file_length_gate_fires_over_the_hard_cap(tmp_path: Path) -> None:
     """ADR 0005 §6 declared soft 400 / hard 1000 "CI-enforced" and for a while
     nothing enforced it, which is the same defect as v1's caller contract that was
     documented and breached. v1 reached 17 files over 1,000 lines, one at 5,085, and
@@ -382,16 +405,14 @@ def test_file_length_gate_fires_over_the_hard_cap() -> None:
     saying nothing about the actual change — a stale duplicate of a number, which is the
     defect class §6 forbids two rows below the one it was enforcing.
     """
-    PROBE.write_text("x = 0\n" * (_declared_limits()[1] + 1), encoding="utf-8")
-    try:
-        result = _gate("check_file_length.py")
-        assert result.returncode == 1
-        assert "_conformance_probe" in result.stderr
-    finally:
-        PROBE.unlink()
+    over = "x = 0\n" * (_declared_limits()[1] + 1)
+    root = _synthetic_tree(tmp_path, {f"{PROBE_NAME}.py": over})
+    result = _gate("check_file_length.py", "--root", str(root))
+    assert result.returncode == 1
+    assert PROBE_NAME in result.stderr
 
 
-def test_file_length_gate_publishes_a_soft_overrun_without_failing() -> None:
+def test_file_length_gate_publishes_a_soft_overrun_without_failing(tmp_path: Path) -> None:
     """The soft tier is a *tier*, not a warning nobody prints.
 
     A soft cap that says nothing when it is exceeded cannot be told from a soft cap
@@ -401,27 +422,27 @@ def test_file_length_gate_publishes_a_soft_overrun_without_failing() -> None:
     (``register/record.py``, a recorded decision), and the count is what makes a
     second one visible.
     """
-    before = _gate("check_file_length.py")
-    assert before.returncode == 0
-    baseline = before.stdout
+    soft, hard = _declared_limits()
+    quiet = _synthetic_tree(tmp_path / "quiet", {"small.py": "x = 0\n"})
+    baseline = _gate("check_file_length.py", "--root", str(quiet))
+    assert baseline.returncode == 0
 
-    PROBE.write_text("x = 0\n" * 500, encoding="utf-8")
-    try:
-        result = _gate("check_file_length.py")
-        assert result.returncode == 0, "the soft cap must never fail the run"
-        assert "_conformance_probe" in result.stdout
-        assert result.stdout != baseline, (
-            "the soft-cap count did not change, so this tier is a silent allowance "
-            "rather than a published one"
-        )
-    finally:
-        PROBE.unlink()
+    over = "x = 0\n" * ((soft + hard) // 2)
+    loud = _synthetic_tree(tmp_path / "loud", {"small.py": "x = 0\n", f"{PROBE_NAME}.py": over})
+    result = _gate("check_file_length.py", "--root", str(loud))
+
+    assert result.returncode == 0, "the soft cap must never fail the run"
+    assert PROBE_NAME in result.stdout
+    assert result.stdout != baseline.stdout, (
+        "the soft-cap count did not change, so this tier is a silent allowance "
+        "rather than a published one"
+    )
 
 
 # ── one implementation per concept ────────────────────────────────────────────
 
 
-def test_duplicate_concept_gate_fires_on_a_duplicate_top_level_name() -> None:
+def test_duplicate_concept_gate_fires_on_a_duplicate_top_level_name(tmp_path: Path) -> None:
     """v1 had two McNemars, two EX definitions, two temp-then-replace helpers (and
     **none** of the three was durable, which is how the run ledger lost 16 of 17
     records), and two ``LOW_CONFIDENCE_JOIN`` constants with different comparison
@@ -430,14 +451,14 @@ def test_duplicate_concept_gate_fires_on_a_duplicate_top_level_name() -> None:
     the default outcome rather than a slip — so the gate defaults to deny and this
     asserts the deny actually fires.
     """
-    PROBE.write_text("def gate_keys() -> None:\n    ...\n", encoding="utf-8")
-    try:
-        result = _gate("check_one_implementation.py")
-        assert result.returncode == 1
-        assert "_conformance_probe" in result.stderr
-        assert "gate_keys" in result.stderr
-    finally:
-        PROBE.unlink()
+    twice = "def gate_keys() -> None:\n    ...\n"
+    root = _synthetic_tree(
+        tmp_path, {"first.py": twice, f"{PROBE_NAME}.py": twice}
+    )
+    result = _gate("check_one_implementation.py", "--root", str(root))
+    assert result.returncode == 1
+    assert PROBE_NAME in result.stderr
+    assert "gate_keys" in result.stderr
 
 
 def _singleton_concepts() -> tuple[object, ...]:
@@ -569,7 +590,9 @@ def test_duplicate_concept_gate_reports_a_pending_singleton_without_failing(
     ],
     ids=["round", "fstring_spec", "str_format", "percent_format"],
 )
-def test_measurement_locality_gate_fires_on_formatting_outside_quantity(source: str) -> None:
+def test_measurement_locality_gate_fires_on_formatting_outside_quantity(
+    source: str, tmp_path: Path
+) -> None:
     """v1's rounding helpers turned an unmeasured quantity into ``0.0`` on the way
     to a report: the value was honest right up to the last function that touched it.
     The sibling incident from the same family is a ``:.3f`` on a ``None`` rate that
@@ -582,13 +605,10 @@ def test_measurement_locality_gate_fires_on_formatting_outside_quantity(source: 
     grep, precisely so that ``register/record.py`` and ``register/quantity.py`` can
     go on quoting ``round(x or 0.0, n)`` in prose while explaining the rule.
     """
-    PROBE.write_text(source, encoding="utf-8")
-    try:
-        result = _gate("check_measurement_locality.py")
-        assert result.returncode == 1
-        assert "_conformance_probe" in result.stderr
-    finally:
-        PROBE.unlink()
+    root = _synthetic_tree(tmp_path, {f"{PROBE_NAME}.py": source})
+    result = _gate("check_measurement_locality.py", "--root", str(root))
+    assert result.returncode == 1
+    assert PROBE_NAME in result.stderr
 
 
 # ── pending: needs the graph ───────────────────────────────────────────────────

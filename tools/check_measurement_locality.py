@@ -105,15 +105,22 @@ def check_file(path: Path, rel: str) -> list[str]:
 
 
 def main() -> int:
-    if not PKG.exists():
-        print(f"no package at {PKG}", file=sys.stderr)
+    # ``--root DIR`` scans a tree the caller owns, so a negative test never writes a probe
+    # into ``src/`` (see ``check_one_implementation.py``).
+    argv = sys.argv[1:]
+    pkg = PKG
+    if "--root" in argv:
+        pkg = Path(argv[argv.index("--root") + 1]).resolve() / "src" / "governed_bi"
+
+    if not pkg.exists():
+        print(f"no package at {pkg}", file=sys.stderr)
         return 1
 
-    files = [p for p in sorted(PKG.rglob("*.py")) if not SKIP_DIRS & set(p.parts)]
+    files = [p for p in sorted(pkg.rglob("*.py")) if not SKIP_DIRS & set(p.parts)]
     problems: list[str] = []
     scanned = 0
     for path in files:
-        rel = path.relative_to(PKG).as_posix()
+        rel = path.relative_to(pkg).as_posix()
         if rel in EXEMPT:
             continue
         scanned += 1

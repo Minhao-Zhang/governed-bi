@@ -1,7 +1,12 @@
 """Enforce import layering declared in ``governed_bi/__init__.py``.
 
-AST-only (never imports the package). ``ports``/``register`` are stdlib-only;
+AST-only (never imports the package). ``paths``/``ports``/``register`` are stdlib-only;
 nothing imports upward. Exit 1 on violation.
+
+``LAYERS`` must name every package under ``src/governed_bi`` and nothing else, and
+:func:`undeclared` fails the run when it does not. A file's constraints come from its
+package's position, so a package the list omits has none at all — the run still exits 0
+while checking nothing, which is how ``verify/`` came to sit outside the layering.
 """
 
 
@@ -14,6 +19,9 @@ from pathlib import Path
 #: Layer order, innermost first. A module may import its own layer and any layer **before** it;
 #: anything else is an upward import. One list, so adding a package forces a decision here.
 LAYERS: tuple[tuple[str, ...], ...] = (
+    # A top-level module, not a package: `paths.py` says where the repository is and every
+    # layer may ask, so it is innermost.
+    ("paths",),
     ("ports",),
     ("register",),
     ("measure",),
@@ -23,13 +31,16 @@ LAYERS: tuple[tuple[str, ...], ...] = (
     ("datasource",),
     ("model",),
     ("serve",),
-    ("record",),
     ("eval",),
     ("api",),
 )
 
+#: Top-level names exempt from :func:`undeclared`. ``__init__`` is the package's own
+#: docstring and imports nothing, so a layer for it would order it against itself.
+UNLAYERED: frozenset[str] = frozenset({"__init__"})
+
 #: Packages required to import in a bare interpreter: stdlib only, no third party.
-STDLIB_ONLY: frozenset[str] = frozenset({"ports", "register"})
+STDLIB_ONLY: frozenset[str] = frozenset({"paths", "ports", "register"})
 
 #: Third-party roots that must never appear in a ``STDLIB_ONLY`` module. A denylist of this
 #: project's own dependencies, not an exhaustive one: the inverse — an allowlist of stdlib —
@@ -52,9 +63,9 @@ def _layer_index(package: str) -> int | None:
     return None
 
 
-def _own_package(path: Path) -> str:
+def _own_package(path: Path, pkg: Path = PKG) -> str:
     """Which declared package a file belongs to. ``""`` for the root modules."""
-    rel = path.relative_to(PKG)
+    rel = path.relative_to(pkg)
     return rel.parts[0] if len(rel.parts) > 1 else rel.stem
 
 
@@ -76,10 +87,10 @@ def _imports(tree: ast.Module) -> list[tuple[int, str]]:
     return out
 
 
-def check_file(path: Path) -> list[str]:
+def check_file(path: Path, pkg: Path = PKG) -> list[str]:
     problems: list[str] = []
-    rel = path.relative_to(ROOT).as_posix()
-    own = _own_package(path)
+    rel = path.relative_to(pkg.parent.parent).as_posix()
+    own = _own_package(path, pkg)
     own_idx = _layer_index(own)
 
     try:
@@ -118,21 +129,59 @@ def check_file(path: Path) -> list[str]:
     return problems
 
 
-def main() -> int:
-    if not PKG.exists():
-        print(f"no package at {PKG}", file=sys.stderr)
-        return 1
-    files = sorted(PKG.rglob("*.py"))
+def undeclared(pkg: Path = PKG) -> list[str]:
+    """``LAYERS`` against what is on disk, in both directions.
+
+    Omission is the silent failure: an undeclared package is checked against nothing and the
+    run still passes. A declared name with no package is the same rot from the other side —
+    an ordering claim about something nobody can be in, which is what ``record`` was.
+    """
+    declared = {name for names in LAYERS for name in names}
     problems: list[str] = []
+
+    # Keyed the way :func:`_own_package` keys a file: a package by its directory name, a
+    # top-level module by its stem.
+    on_disk = {
+        path.stem
+        for path in pkg.iterdir()
+        if (path.is_dir() and path.name != "__pycache__") or path.suffix == ".py"
+    }
+    for name in sorted(on_disk - declared - UNLAYERED):
+        problems.append(
+            f"src/governed_bi/{name}: on disk and absent from LAYERS, so nothing constrains "
+            "its imports. Give it a position, add it to UNLAYERED with a reason, or delete it."
+        )
+    for name in sorted(declared - on_disk):
+        problems.append(
+            f"LAYERS declares {name!r}, but src/governed_bi/{name} does not exist. A layer "
+            "nobody can be in orders nothing; drop the row."
+        )
+    return problems
+
+
+def main() -> int:
+    # ``--root DIR`` checks a tree the caller owns, so a negative test never writes a probe
+    # module into ``src/`` (see ``check_one_implementation.py``).
+    argv = sys.argv[1:]
+    pkg = PKG
+    if "--root" in argv:
+        pkg = Path(argv[argv.index("--root") + 1]).resolve() / "src" / "governed_bi"
+
+    if not pkg.exists():
+        print(f"no package at {pkg}", file=sys.stderr)
+        return 1
+    files = sorted(pkg.rglob("*.py"))
+    problems: list[str] = undeclared(pkg)
     for path in files:
-        problems.extend(check_file(path))
+        problems.extend(check_file(path, pkg))
 
     if problems:
         print(f"{len(problems)} layering violation(s):\n", file=sys.stderr)
         for p in problems:
             print(f"  {p}", file=sys.stderr)
         return 1
-    print(f"import layering OK across {len(files)} file(s)")
+    n_layers = sum(len(names) for names in LAYERS)
+    print(f"import layering OK across {len(files)} file(s) in {n_layers} declared layer(s)")
     return 0
 
 

@@ -925,3 +925,61 @@ def test_both_passes_use_one_combiner() -> None:
         assert combine_channels(value, None, consulted=both) == pytest.approx(value / 2)
     assert combine_channels(1.0, 0.0, consulted=both) == 0.5
     assert combine_channels(None, None, consulted=both) is None
+
+
+@pytest.mark.parametrize(
+    "semantic_state, expected",
+    [
+        # Both ran and the semantic one returned nothing for this asset: a measured 0.0, so
+        # the score halves — what pass one itself computed for the same hit.
+        (ChannelState.ran.value, 0.4),
+        # The semantic channel failed, so it is out of the denominator: a channel that did
+        # not run must not be scored as if it had returned zero.
+        (ChannelState.failed.value, 0.8),
+        # No record for it at all: the components present are the whole of what is known.
+        (None, 0.8),
+    ],
+    ids=["ran", "failed", "unrecorded"],
+)
+def test_carry_forward_scores_an_unscored_pass_one_hit(semantic_state, expected) -> None:
+    """The carry-forward called ``_hybrid`` without ``consulted``, which is a ``TypeError``.
+
+    Every payload the fan-out writes carries a ``score``, so only a hit built elsewhere — a
+    ``retrieve_hooks`` hook, a fixture — reaches the branch, and it crashed the turn. The
+    consulted set comes from what the facet result records as ``ran``, so the recomputed score
+    is pass one's own rather than an average over whichever components happen to be present.
+    """
+    from governed_bi.corpus.schema import TableAsset
+    from governed_bi.serve.nodes.pass_two import pass_two_retrieve
+
+    question = "how many customers"
+    index, embedder = _semantic_index([
+        TableAsset(id="sales.customers", schema="sales", physical_name="customers",
+                   summary="customers (customers): id, email", columns=()),
+    ])
+    channels = {Channel.lexical.value: ChannelState.ran.value}
+    if semantic_state is not None:
+        channels[Channel.semantic.value] = semantic_state
+    # No `score` and no `schema_tag`, so the carry-forward keeps this hit and must score it.
+    # `queries: []` keeps pass two's own scoring block out of the way.
+    facet = {
+        "facet": "facet_entity",
+        "queries": [],
+        "channels": channels,
+        "hits": [{
+            "asset_id": "sales.customers",
+            "asset_type": AssetType.table.value,
+            "lexical": 0.8,
+            "semantic": None,
+            "queries": [question],
+            "schema_tag": None,
+        }],
+    }
+    retrieved = pass_two_retrieve(
+        state={"question": question, "knobs_resolved": {}, "facets": {"facet_entity": facet}},
+        index=index,
+        schemas=["sales"],
+        ranking=[("sales", 1.0)],
+        query_vector=embedder.embed([question])[0],
+    )
+    assert retrieved["selected"]["sales.customers"]["score"] == pytest.approx(expected)
