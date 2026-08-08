@@ -250,6 +250,11 @@ def test_every_gate_in_tools_is_either_in_ci_or_declared_manual() -> None:
             "needs a corpus tree (untracked), the held-out question file (a separate "
             "repository) and a third corpus certified train-only"
         ),
+        "check_corpus_conformance.py": (
+            "needs the corpus repository and BIRD-Data-Obfuscation, both siblings of this "
+            "tree; its own rules are exercised in "
+            "tests/conformance/test_corpus_conformance_rules_fire.py, which does run in CI"
+        ),
     }
     missing = [g for g in gates if g not in ci and g not in manual]
     assert not missing, (

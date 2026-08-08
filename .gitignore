@@ -71,6 +71,10 @@ instance/
 # Sphinx documentation
 docs/_build/
 
+# Staging for the one-shot corpus rebuild scripts (docs/corpus-rebuild-brief.md §3).
+# Extracts of BIRD's shipped documentation and evidence clauses -- regenerable, and large.
+scripts/corpus_rebuild/_build/
+
 # PyBuilder
 .pybuilder/
 target/
