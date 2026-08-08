@@ -13,6 +13,31 @@ measurement and is meant to be superseded by a clean run. It sits beside
 [`v2-postmortem-and-v3-brief.md`](v2-postmortem-and-v3-brief.md), the other dated analysis in
 this directory.
 
+> **Corrections, 2026-08-08.** Two claims below are wrong. The original text is left standing so
+> the record shows what was believed; see
+> [`survey-2026-08-08-corpus-and-experiment.md`](survey-2026-08-08-corpus-and-experiment.md)
+> for the evidence.
+>
+> 1. **§2's "retrieval is roughly 62% of the gap" overstates it. The figure is ~47%.** The
+>    counterfactual imputes the succeeded set's rate (0.675) to the failed set, which assumes
+>    the two are equally hard. They are not, and the comparison system's own scores bound the
+>    difference: it gets 0.5603 on the 116 retrieval failures against 0.7265 on the 1108
+>    successes, a difficulty ratio of 0.771. Imputing 0.675 × 0.771 = 0.521 gives a
+>    counterfactual EX of 0.6605, closing **47.3%** of the gap, not 62.7%.
+>    Worse for the thesis: on the 1108 rows where retrieval *already* succeeded, this arm still
+>    trails 0.6751 to 0.7265, paired McNemar p = 1.6e-04. **Perfect retrieval does not close
+>    the gap.**
+> 2. **§7's root cause for the `facet_schema.semantic` outage is wrong.** Schema assets do have
+>    vectors — `build_index` embeds every entry with no type filter. The failure was a `None`
+>    query vector on the eval config path: `eval/arms.py` builds `Session.configurable()` with
+>    no question, the eval graph omits `accept`, and `facet_schema` is the one facet that does
+>    not rewrite, so the old `vector_for_query` treated the unchanged query as a fallback hit
+>    on a fallback that was `None`. `73f5312` fixes exactly this.
+>
+> A third framing is also wrong, though it is stated in §1 rather than claimed as a finding:
+> **few-shots are not a comparison-system-only advantage.** This engine's corpus carries 5,000
+> of them, harvested from the same `train_final.jsonl`, behind the `facet_example` facet.
+
 ---
 
 ## 1. What was run
