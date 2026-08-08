@@ -394,8 +394,37 @@ def _mine_clarification_draft(
     ``graph.invoke`` actually returns and what ``out`` here is. Checked live: reading
     ``clarifications_by_call`` off ``out`` returns ``None`` on every resumed turn, which would
     have made this gate a silent no-op.
+
+    Phase 3: a candidate that survives the basis gate is no longer submitted as its own
+    independent draft unconditionally. It goes through ``curator/enhancer.py``'s ``apply()``
+    first, compared against every already-**certified** ``TermAsset`` this session already has
+    loaded (``session.assets_by_id`` — the same source ``/corpus/assets`` reads from), so a
+    reworded restatement of an existing fact does not mint a second, unlinked draft and a
+    contradicting answer is flagged (``audit.extra["conflict_with"]``) rather than silently
+    producing a second, disagreeing certified fact once approved. Only pending/proposed drafts
+    and unresolved conflicts are excluded from the comparison set on purpose — comparing a new
+    answer against another answer nobody has reviewed yet would let two unreviewed guesses
+    silently agree with each other and call that "no conflict".
+
+    Deviation from "same schema/namespace": ``TermAsset`` declares no ``schema`` field (its
+    namespace is only known at write time, via ``store.write``'s explicit ``namespace=``, and
+    is not retained on the loaded dataclass — see ``corpus/store.py::_namespace``), and its
+    index-time schema tag (``TagRule.binding_target``) resolves to ``None`` for every
+    clarification-mined term, since none of them carry a ``binding``. There is therefore no
+    per-asset field to re-derive "belongs to ``session.db_id``" from. ``session.assets_by_id``
+    is itself already schema-scoped at session-construction time (``corpus_files()`` only reads
+    a schema's own subtree plus ``_shared`` for a session built on that schema), so the
+    comparison set below relies on that existing boundary rather than inventing a second,
+    unenforceable one.
+
+    On :class:`~governed_bi.curator.enhancer.EnhancerError` (the dedup/conflict model call
+    itself failed, or its response could not be parsed) this falls back to the pre-Phase-3
+    unconditional write: a broken dedup check must never cost a real user's answer. The worst
+    case is a duplicate or unflagged-conflict draft an admin reviews anyway, which is strictly
+    better than the clarification vanishing.
     """
     from governed_bi.corpus.drafts import submit_draft
+    from governed_bi.curator import enhancer
     from governed_bi.curator.clarification import draft_from_clarification, resolved_answer_text
 
     if not bool_knob(out, "enable_clarification_to_draft") or session.corpus_root is None:
@@ -419,7 +448,22 @@ def _mine_clarification_draft(
         return
     try:
         draft = draft_from_clarification(question, answer_text, schema=session.db_id)
-        submit_draft(session.corpus_root, draft, namespace=session.db_id)
+        try:
+            existing = [
+                a
+                for a in getattr(session, "assets_by_id", {}).values()
+                if a.asset_type.value == "term" and _provenance_status(a) == "certified"
+            ]
+            enhancer.apply(
+                getattr(session, "agent_model", None),
+                session.corpus_root,
+                draft,
+                existing=existing,
+                namespace=session.db_id,
+                write_model=getattr(session, "knobs_resolved", {}).get("llm_model"),
+            )
+        except enhancer.EnhancerError:
+            submit_draft(session.corpus_root, draft, namespace=session.db_id)
     except Exception:  # noqa: BLE001 — mining is best-effort, never fatal to the resumed turn
         pass
 
