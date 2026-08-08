@@ -19,7 +19,7 @@ from governed_bi.register.prompts import prompt_set_hash
 
 from ..corpus.analyst import for_analyst
 from ..corpus.hash import corpus_content_hash
-from ..corpus.schema import Asset
+from ..corpus.schema import Asset, AssetType
 from ..corpus.store import load as load_corpus
 from ..corpus.store import write as write_asset
 from ..model.embedder import embedding_knobs
@@ -165,6 +165,41 @@ def _index_entries(assets: Sequence[Asset], structure: CorpusStructure) -> list[
     ]
 
 
+def _is_excluded(asset: Any) -> bool:
+    return bool(getattr(getattr(asset, "governance", None), "excluded", False))
+
+
+def _visible(assets: Sequence[Asset]) -> list[Asset]:
+    """``assets`` minus everything ``governance.excluded`` reaches (D6).
+
+    ``Governance.excluded`` is documented as removing an asset "from everything the analyst
+    sees, in every environment", but only :func:`for_analyst` honoured it. The index was built
+    from the full set, so an excluded column still scored in both channels, still spent one of
+    the 30 column slots, and still rendered once the reference closure pulled it in from its
+    parent table — three ways for an asset nobody may query to crowd out one they need.
+    Filtering here makes the index, ``assets_by_id`` and the structure agree; ``for_analyst``
+    still receives the **whole** list, because it needs the excluded columns' keys to make
+    ``check()`` refuse SQL that names one.
+
+    Exclusion carries to a table's own columns. A column id is ``{table_id}.{slug(name)}`` by
+    construction (:func:`~governed_bi.corpus.identity.derive_column_id` is the single spelling
+    for loader and seed alike), so the prefix test is exact rather than a guess. Without it,
+    excluding a table would leave its columns' ``parent_table`` dangling and turn a deliberate
+    exclusion into a **fatal** structure problem — an unservable corpus as the reward for using
+    the feature.
+    """
+    excluded_tables = tuple(
+        f"{asset.id}."
+        for asset in assets
+        if _is_excluded(asset) and getattr(asset, "asset_type", None) is AssetType.table
+    )
+    return [
+        asset
+        for asset in assets
+        if not _is_excluded(asset) and not asset.id.startswith(excluded_tables)
+    ]
+
+
 def _provider_of(model: Any) -> str:
     """Which gateway served the model — ``"openai"``, or ``"custom:<digest>"``.
 
@@ -209,8 +244,11 @@ def from_assets(
     corpus_root: Path | None = None,
 ) -> Session:
     """Session over an in-memory asset set. The other constructors funnel here."""
-    structure, structure_problems = build_structure(assets)
-    entries = _index_entries(assets, structure)
+    # `_visible` for the three views the analyst can reach; the full list for `for_analyst`,
+    # which turns the excluded columns into `check()` refusals rather than silent absences.
+    visible = _visible(assets)
+    structure, structure_problems = build_structure(visible)
+    entries = _index_entries(visible, structure)
     index = build_index(entries, embedder=embedder, vector_cache=vector_cache)
     knobs = _resolved_knobs(policy)
     if embedder is not None:
@@ -245,7 +283,7 @@ def from_assets(
     return Session(
         index=index,
         structure=structure,
-        assets_by_id={a.id: a for a in assets},
+        assets_by_id={a.id: a for a in visible},
         corpus=for_analyst(list(assets)),
         connector=connector,
         policy=policy,
