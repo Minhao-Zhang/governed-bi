@@ -281,7 +281,10 @@ RETIRED_CLAIMS: tuple[RetiredClaim, ...] = (
         replaced_by="91.0%, with facet channel state as a quotability input",
     ),
     RetiredClaim(
-        pattern=r"EX\s+(was|of|at)\s+0\.049|0\.049\s*EX",
+        # `EX 0.049` in a table cell matched none of the prose spellings, so the figure sat
+        # unmarked in docs/ while the gate reported clean. Widened to any `EX` within a few
+        # characters of the number.
+        pattern=r"EX[^\n]{0,12}0\.049|0\.049\s*EX",
         observed="EX was 0.049.",
         why="every absolute EX this repository produced before 2026-08-06 was measured "
             "through a grader that compared Postgres `numeric` cells as strings. "
@@ -298,6 +301,141 @@ RETIRED_CLAIMS: tuple[RetiredClaim, ...] = (
         "produces the first EX this repository has that is comparable to published BIRD. "
         "The 51.2% table coverage and 62.5% schema reachability beside it are NOT retired: "
         "they are licensing measurements and do not touch the grader.",
+    ),
+
+    # ── the pre-2026-08-05 arms ─────────────────────────────────────────────
+    # Every figure below came out of a scored arm run before 2026-08-05, when crashes were
+    # counted as refusals, the notes tools raised NameError, unbuilt schemas competed in the
+    # router and the routing index carried PII. Eight of them were declared; the rest stayed
+    # in live docstrings and were left there three times over because this gate did not
+    # object. Each keeps its mechanism in the call site and loses its magnitude here.
+    RetiredClaim(
+        pattern=r"recall@3\W{0,4}0\.609|0\.442\s+of\s+the\s+time|worse\s+\(0\.417\)",
+        observed="the gold schema 823 times (``recall@3`` 0.609), a single-component pick "
+                 "reached it 0.442 of the time ... worse (0.417)",
+        why="the shortlist-and-pick triple `connect_node` cites for licensing every "
+            "component instead of picking one. All three rates are drawn from a population "
+            "that is not the one they name. The argument does not need them: a pick caps "
+            "reachability at recall@1 by construction, whatever recall@1 turns out to be.",
+        replaced_by="nothing yet -- the bound is arithmetic, not a measurement",
+    ),
+    RetiredClaim(
+        pattern=r"44%\s+of\s+questions\s+whose\s+schema|median\s+worst\s+rank\s+9",
+        observed="44% of questions whose schema was routed correctly have a gold table "
+                 "outside the 8-table cap, median worst rank 9",
+        why="the per-type budget's miss rate, measured offline against a router that "
+            "shortlisted schemas nothing had built. What survives is the shape: a cap can "
+            "discard a gold table, so pass two must carry `budget_dropped` out or the miss "
+            "reads as 'retrieval never found it'.",
+        replaced_by="nothing yet",
+    ),
+    RetiredClaim(
+        pattern=r"32[\s,]244|semantic channel won \*{0,2}0 times",
+        observed="Measured over 32 244 documents ... the semantic channel won **0 times**",
+        why="the audit that killed the `max` combine rule, run over an index carrying "
+            "unbuilt schemas and PII-bearing routing text. The count is void and the "
+            "conclusion is not: BM25-after-saturation runs 0.60-0.97 and cosine 0.00-0.635, "
+            "so `max` is a lexical-only rule by construction.",
+        replaced_by="the range comparison in retrieve/fuse.py, which needs no arm",
+    ),
+    RetiredClaim(
+        pattern=r"0\.6316|0\.6228",
+        observed="two processes, 0.6316 vs 0.6228",
+        why="the coverage pair that exposed hash-seed-dependent Steiner seeding. The *gap* "
+            "is the finding and it is a same-corpus, same-code contrast, so it survives; "
+            "the two levels are void like every other absolute from that arm.",
+        replaced_by="nothing -- `min(remaining, key=str)` removed the variance the pair "
+        "measured, so there is no second number to take",
+    ),
+    RetiredClaim(
+        pattern=r"0\.851\s+and\s+0\.877|routing recall was 0\.851",
+        observed="arms whose routing recall was 0.851 and 0.877",
+        why="two routing-recall arms measured with unbuilt schemas in the shortlist. Quoted "
+            "only to show that scoring an absent `licensed` as zero published a 0.000 "
+            "ceiling for arms that had routed well, and the KeyError prevents that at any "
+            "recall.",
+        replaced_by="nothing yet",
+    ),
+    RetiredClaim(
+        pattern=r"0/57\s+on\s+a\s+corpus|corpus\s+measured\s+at\s+0\.608",
+        observed="once reported 0/57 on a corpus measured at 0.608",
+        why="an absent `reached_gold` read as zero, so the artifact said the run reached no "
+            "gold schema at all and contradicted the corpus's own figure. Both ends of the "
+            "contradiction are void; the defect -- absence scored as a measurement -- is why "
+            "the field is written explicitly.",
+        replaced_by="nothing yet",
+    ),
+    RetiredClaim(
+        pattern=r"16%\s+of\s+turns\s+crash",
+        observed="a run where 16% of turns crash",
+        why="a crash rate taken while a crash was also being counted as a refusal, so the "
+            "run disagreed with itself about what the numerator was. That a crashed turn "
+            "needs `error_type` to be actionable holds at any rate above zero.",
+        replaced_by="nothing yet",
+    ),
+    RetiredClaim(
+        pattern=r"2\.5\s*pp\s+against\s+a\s+2\.3\s*pp",
+        observed="moved the baseline arm +2.5pp against a 2.3pp detection threshold",
+        why="v1's reasoning-effort incident, sized on a ladder whose detection threshold was "
+            "itself computed over the contaminated population. It reached three places as "
+            "the reason `llm_reasoning_effort` is a comparability knob; it is one because an "
+            "unrecorded live config field makes two ladders hash as one experiment, which is "
+            "true at any effect size.",
+        replaced_by="nothing yet",
+    ),
+    RetiredClaim(
+        pattern=r"21\s+points\s+higher",
+        observed="re-measured 21 points higher with quota free",
+        why="the distance between the retired 69.9% and its re-measurement: a difference "
+            "taken from a void endpoint is void. The port's rule stands on its own -- a "
+            "rate-limited embedder returns a degraded ranking, and a run that does not raise "
+            "records it as if it were a real one.",
+        replaced_by="nothing yet; quote the two figures and their conditions, not the gap",
+    ),
+    RetiredClaim(
+        pattern=r"5%\s+of\s+answerable-but-wrong",
+        observed="5% of answerable-but-wrong turns on the xhigh arm",
+        why="counted on the xhigh arm through the pre-2026-08-06 grader, so the "
+            "'answerable-but-wrong' denominator is built out of the same `Decimal`-as-string "
+            "mismatches the numerator is meant to measure. That hashing column names made "
+            "this grader stricter than BIRD is a property of the code.",
+        replaced_by="nothing yet",
+    ),
+    RetiredClaim(
+        pattern=r"EX\s+0\.667|0\.667\s+vs\.?\s+(the\s+)?agent|context\s+\(0\.667\)",
+        observed="curated/curated_sme flow EX 0.667 vs. agent 0.267",
+        why="ADR 0002's flow-versus-agent pair and the parity floor read off it. Absolute EX "
+            "from before 2026-08-06, so the `Decimal`-as-string comparator applies to both "
+            "arms and to the gap between them.",
+        replaced_by="nothing yet. ADR 0002's decision -- one agentic serve path -- was taken "
+        "on topology, not on this pair",
+    ),
+    RetiredClaim(
+        pattern=r"shortlist\s+0\.952|pick\s+(accuracy\s+of\s+)?0\.873",
+        observed="v1 measured shortlist 0.952 / pick 0.873 at top-10",
+        why="v1's shortlist-and-pick pair, offered in ADR 0005 as the bar v2's route recall "
+            "must clear. It was measured on the architecture that ADR replaces, so it is not "
+            "a bar anything here can be held to even if it were sound.",
+        replaced_by="the e1-shortlist-curated.json figures above, the only shortlist numbers "
+        "in this tree with an artifact -- and comparable only to another shortlist",
+    ),
+    RetiredClaim(
+        pattern=r"56\.3\s*%",
+        observed="v1 spent a long time reading 56.3% against an unknown ceiling",
+        why="v1's headline EX, and every absolute EX before 2026-08-06 went through the "
+            "`Decimal`-as-string comparator (see the 0.049 entry). What it is quoted for -- "
+            "that a score is unreadable without its ceiling -- is a point about the missing "
+            "denominator and does not need this numerator.",
+        replaced_by="nothing yet",
+    ),
+    RetiredClaim(
+        pattern=r"0\.444\s+vs\.?\s+0\.503|coverage\s+ceiling\s+6-9\s*pp",
+        observed="lexical and embedded runs have different ceilings (0.444 vs 0.503 at "
+                 "top_n=3)",
+        why="the lexical-versus-embedded coverage ceilings, measured 2026-08-04 with unbuilt "
+            "schemas still in the shortlist. That the retrieval channel is an arm and "
+            "belongs in the artifact name is a comparability rule; it needs no gap.",
+        replaced_by="nothing yet",
     ),
 )
 

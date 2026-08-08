@@ -65,8 +65,8 @@ def main(argv: list[str] | None = None) -> int:
         "--embed",
         action="store_true",
         help="build the index with an embedder. Costs ~420k embedding tokens (about $0.01) "
-        "and raises the gold-table-coverage ceiling 6-9pp. Off by default so the lexical "
-        "arm stays the reproducible baseline.",
+        "and raises the gold-table-coverage ceiling by an amount whose measurement is "
+        "retired. Off by default so the lexical arm stays the reproducible baseline.",
     )
     parser.add_argument(
         "--timeout",
@@ -168,7 +168,8 @@ def main(argv: list[str] | None = None) -> int:
         questions[0].pop("_skipped_uncovered", None)
 
     # The retrieval channel is in the tag because it is an arm, not a detail: lexical and
-    # embedded runs have different ceilings (0.444 vs 0.503 at top_n=3).
+    # embedded runs have different coverage ceilings, so a tag that hid which one ran would
+    # let two incomparable runs read as replicates. (The measured gap is retired.)
     tag = (
         f"{args.model}_{args.effort or 'default'}_top{args.top_n or 'default'}"
         f"_{'embed' if args.embed else 'lexical'}"

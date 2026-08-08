@@ -60,9 +60,9 @@ def connect(
     # **Sorted, not ``next(iter(...))``.** ``remaining`` holds table-id strings and Python
     # randomises string hashing per process, so the greedy builder started from a different
     # terminal each process and added different (equally minimal) Steiner points -- which go
-    # into ``licensed``, which ``eval.datalake.table_coverage`` reads. Measured: same corpus,
-    # one process, coverage delta 0.0000; two processes, 0.6316 vs 0.6228, one question of
-    # 114 (pre-2026-08-05 arm -- the absolutes are void, the cross-process gap is the point).
+    # into ``licensed``, which ``eval.datalake.table_coverage`` reads. Measured on one corpus:
+    # one process, coverage delta 0.0000; two processes, 0.6316 vs 0.6228 [retired] on one of
+    # 114 questions. Both levels are void; the cross-process gap is the whole finding.
     # ``key=str`` because terminals are ``Hashable``; the sort must be stable, not meaningful.
     seed = min(remaining, key=str)
     tree_nodes.add(seed)

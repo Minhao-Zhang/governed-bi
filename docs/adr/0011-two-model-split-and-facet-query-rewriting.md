@@ -91,7 +91,7 @@ shared case would make the two runs agree on every hashed field, so comparabilit
 exactly the pair an experiment was built to separate. That is not hypothetical: it is the
 `llm_reasoning_effort` incident this register already records. Two v1 ladders differed **only**
 in reasoning effort, it was recorded nowhere, comparability cleared the pair — and effort moved
-the baseline arm **+2.5pp against a 2.3pp detection threshold**. The utility model has a larger
+the baseline arm **+2.5pp against a 2.3pp detection threshold** <!-- [retired]: sizes void, the comparability argument is not; register/citations.py -->. The utility model has a larger
 lever than effort did, because what these six calls produce is *what gets retrieved at all*: a
 cheaper rewriter that phrases the schema query worse moves routing recall, and routing recall
 moves everything after it.

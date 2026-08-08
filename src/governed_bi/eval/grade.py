@@ -176,8 +176,8 @@ def _normalise(
     **Column names are deliberately not part of the fingerprint.** BIRD's EX compares result
     *values*, so hashing names made this grader stricter than the benchmark it implements:
     ``SELECT COUNT(*) AS paper_count`` graded wrong against a gold ``SELECT COUNT(*)``
-    returning the same ``100`` (5% of answerable-but-wrong turns on the xhigh arm — figure
-    predates the current grader, treat as indicative).
+    returning the same ``100``. How often that happened was counted through the old grader and
+    is retired (``register/citations.py``); the mismatch itself is mechanical.
 
     ``columns`` stays in the signature because the *count* still matters implicitly: an extra
     column produces longer row tuples and a different fingerprint, which is how

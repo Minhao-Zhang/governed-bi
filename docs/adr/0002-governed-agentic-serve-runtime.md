@@ -281,7 +281,7 @@ exists to kill the two-implementations drift (`flow.py` monolith vs. stale
 
 **Status:** Proposed — blocks P2. **Trigger:** the first live serve-path A/B
 (fixed corpus, `cs_semester`, N=15) showed the agent core **regressing** vs. the
-deterministic flow — curated/curated_sme flow EX 0.667 vs. agent 0.267, and
+deterministic flow — curated/curated_sme flow EX 0.667 vs. agent 0.267 <!-- [retired]: both absolutes went through the pre-2026-08-06 grader; the regression's direction is what the amendment rests on. register/citations.py -->, and
 curated==curated_sme (curation added nothing through the agent).
 
 **Root cause.** The P1 tools exposed only *names*: `search_corpus` → asset
@@ -320,7 +320,7 @@ node runs before `agent_core`**, reusing the flow's exact front half
    reach a table not listed."
 
 **Rationale.**
-- **Parity floor:** the agent starts from the flow's exact context (0.667), so it
+- **Parity floor:** the agent starts from the flow's exact context (0.667 <!-- [retired] -->), so it
   cannot regress below the flow for lack of the layer.
 - **Fewer super-steps:** the seed removes the search/inspect round-trips that (with
   sequential tool calls, G1) blew the step budget — complementary to the 15→40

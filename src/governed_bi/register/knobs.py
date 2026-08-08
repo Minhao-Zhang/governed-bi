@@ -154,7 +154,7 @@ KNOB_REGISTER: tuple[Knob, ...] = (
     # a temperature to a model.
     _k("llm_reasoning_effort", None, Role.comparability,
        "two v1 ladders differed ONLY in this and compared as one experiment; it "
-       "moved the baseline arm +2.5pp against a 2.3pp detection threshold"),
+       "moved the baseline arm past that ladder's detection threshold (sizes retired)"),
     _k("llm_utility_model", None, Role.comparability,
        "the model behind the guard's scope gate and the five facet query rewriters. "
        "Separate from llm_model because a cheaper rewriter phrases the schema query "

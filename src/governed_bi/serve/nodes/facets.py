@@ -129,9 +129,9 @@ def _pass_one_hits(
 
     **The two channels are scaled, then blended by the declared weights** —
     :func:`~governed_bi.retrieve.fuse.scale_within_channel` then
-    :func:`~governed_bi.serve.runtime.combine_channels`, never ``max``. Measured over 32 244
-    documents that both channels scored, the semantic channel won **0 times** under ``max``,
-    because BM25-after-saturation starts roughly where cosine ends. ``fuse`` renormalises by
+    :func:`~governed_bi.serve.runtime.combine_channels`, never ``max``: BM25-after-saturation
+    starts roughly where cosine ends, so ``max`` is a lexical-only rule by construction. The
+    audit that caught it is retired (register/citations.py). ``fuse`` renormalises by
     *active* weight, so an asset missed by one channel is not penalised and a facet declaring
     one channel does not score structurally below one declaring two.
     """

@@ -379,9 +379,9 @@ def project_turn(
         # Retrieval and crash attribution. Without `licensed`/`schemas` a row says EX=0 and
         # not *why*: a miss with the gold schema never licensed is a routing problem, a miss
         # with the right tables in hand is a generation problem — and an absent `reached_gold`
-        # reads as zero (once reported 0/57 on a corpus measured at 0.608; both retired,
-        # pre-2026-08-05). Without `error_type`, `outcome: "crashed"` carries no stage and no
-        # exception class and is unactionable on a run where 16% of turns crash (also retired).
+        # reads as zero, which once made a run contradict its own corpus (both figures
+        # retired; citations.py). Without `error_type`, `outcome: "crashed"` carries no stage
+        # and no exception class, which is unactionable on any run that crashes at all.
         "error_type": record.get("error_type") or state.get("failure", {}).get("error_type")
         if isinstance(state.get("failure"), Mapping)
         else record.get("error_type"),

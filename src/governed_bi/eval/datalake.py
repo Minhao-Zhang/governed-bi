@@ -436,8 +436,8 @@ def table_coverage(
             continue
         # A row with no ``licensed`` key is a caller error, not a coverage of zero: absent
         # means the producer does not carry the field, empty means the turn licensed nothing
-        # and is a real measurement. Scoring absent as zero published a 0.000 ceiling for arms
-        # whose routing recall was 0.851 and 0.877 (both pre-2026-08-05, retired).
+        # and is a real measurement. Scoring absent as zero published a 0.000 ceiling for two
+        # arms that had in fact routed well (their recalls are retired; citations.py).
         if "licensed" not in row:
             raise KeyError(
                 "table_coverage needs `licensed` (the table ids) on every row and this one "

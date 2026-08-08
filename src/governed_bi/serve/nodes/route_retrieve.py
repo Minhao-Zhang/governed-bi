@@ -214,11 +214,10 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
     edges = structure.join_edges
     max_points = int_knob(state, "max_steiner_points")
 
-    # **Connect each component; license every one that connects.** Do not pick: picking caps
-    # reachability at ``recall@1``. Measured over 1 351 BIRD test questions — the router
-    # shortlisted the gold schema 823 times (``recall@3`` 0.609), a single-component pick
-    # reached it 0.442 of the time, and ranking by pass-two score instead of routing rank was
-    # worse (0.417).
+    # **Connect each component; license every one that connects.** Do not pick: a pick caps
+    # reachability at ``recall@1``, and no ranking rule — routing rank, pass-two score, any
+    # other — escapes a ceiling set by the shortlist it ranks. The 1 351-question arm that
+    # showed it is retired (register/citations.py); the bound is arithmetic and stands anyway.
     #
     # Licensing all of them is sound: ``licensed`` is govern's table allowlist and ``check()``
     # refuses any table a statement names but ``licensed`` does not. What ``connect``

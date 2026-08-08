@@ -8,7 +8,7 @@ was rejected as a port, ``ports.py:22``).
 serve an alias, a dated snapshot or a silent upgrade, and ``embedding_model`` is a
 comparability knob, so recording the request would let two runs on different snapshots
 compare as one (v1's reasoning-effort incident: an unrecorded live config field moved the
-baseline arm +2.5pp against a 2.3pp threshold — figure retired, mechanism is not).
+baseline arm past that ladder's own detection threshold — sizes retired, mechanism is not).
 ``ports.py:124`` also requires ``model`` to be stable for the object's
 lifetime, which rules out returning the request and replacing it after the first call —
 that changes identity under a cache key already formed. One memoised probe holds both.
@@ -19,8 +19,8 @@ most one two-token probe per object, and only when ``model`` or an unspecified
 owns that.
 
 **A rate limit or a dead endpoint raises** (``ports.py:127``) — a rate-limited embedder
-once published a schema-pick accuracy that re-measured 21 points higher with quota free
-(both figures retired; see ``register/citations.py``).
+once published a schema-pick accuracy that rose sharply when re-measured with quota free
+(both figures and the gap between them retired; see ``register/citations.py``).
 """
 
 from __future__ import annotations

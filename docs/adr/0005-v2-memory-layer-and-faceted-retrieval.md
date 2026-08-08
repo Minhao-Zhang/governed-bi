@@ -1839,11 +1839,11 @@ design** (§4.1).
    within-schema table selection accuracy, global vs subset IDF. Withdrawn from
    the design (§2.5); this is the experiment that could bring it back.
 7. **Is `route` top-3 without an LLM pick better than v1's top-10 with one?**
-   v1 measured shortlist 0.952 / pick 0.873 at top-10 — **106 questions had gold
+   v1 measured shortlist 0.952 / pick 0.873 at top-10 <!-- [retired]: measured on the architecture this ADR replaces; register/citations.py --> — **106 questions had gold
    in the shortlist and the pick chose otherwise, only 3 survived.** The often-
    quoted "~0.85 at top-3" is an **inherited estimate measured on the
    mean-by-concatenation index v2 deletes**, so it is not a v2 property. If
-   measured v2 route recall@3 comes in below v1's pick accuracy of 0.873, revisit
+   measured v2 route recall@3 comes in below v1's pick accuracy of 0.873, revisit <!-- [retired]: that threshold is void, so step 7 is the experiment and not the bar -->
    the picker.
 8. **What is `_SEMANTIC_BOOST` worth?** v1's BM25F field weight expressed this
    project's central thesis — *curator-authored language is the trusted match
@@ -1910,7 +1910,7 @@ what it actually is: the first module of the new system.
 14. **Frontend deltas** (§4.2).
 15. **Eval rewrite**, against the golden from step 5. **Run the free grader
     ceiling first** (`--oracle-only`, no model, ~4 minutes) — it re-scales every
-    downstream conclusion, and v1 spent a long time reading 56.3% against an
+    downstream conclusion, and v1 spent a long time reading 56.3% against an <!-- [retired]: absolute EX through the pre-2026-08-06 grader; the point is the missing denominator -->
     unknown ceiling that turned out to be 99.70%.
 
     **Amended 2026-08-06.** The ceiling needs an *independent* gold to compare
