@@ -323,12 +323,24 @@ def test_the_analyst_prompt_names_the_id_convention_and_every_tool() -> None:
     v1 named two of the five bound tools and then said *"Prefer run_query"*, which is advice
     against calling the three that could have told it a column's value vocabulary — the
     information the corpus does not carry (0 of 5 947 columns have ``sample_values``).
+
+    ``state_assumption`` is the sixth bound tool (Gap 1, 2026-08-07 Power Kiosk audit) and was
+    never named here — nothing told the model when to prefer it over ``ask_user``, which is
+    exactly why "Who are our best customers?" landed on either one non-deterministically across
+    runs instead of reliably asking which metric "best" means.
     """
     from governed_bi.register.prompts import PROMPT_REGISTRY, prompt_text
 
     text = prompt_text("analyst")
     assert "id=" in text, "the id convention is rendered but never explained"
-    for tool in ("read_body", "inspect_schema", "sample_rows", "run_query", "ask_user"):
+    for tool in (
+        "read_body",
+        "inspect_schema",
+        "sample_rows",
+        "run_query",
+        "ask_user",
+        "state_assumption",
+    ):
         assert tool in text, f"{tool} is bound on every turn and never mentioned"
     assert "v1" in PROMPT_REGISTRY["analyst"].variants, (
         "v1 is the baseline v2 has to beat; deleting it deletes the comparison"
