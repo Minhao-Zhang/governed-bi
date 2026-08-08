@@ -309,6 +309,33 @@ def test_tool_exception_is_not_refuse() -> None:
     assert list(update.get("attempts_by_call") or {}) == ["call-1"], update
 
 
+def test_ask_user_rejects_a_schema_term_leak_before_pausing() -> None:
+    """Gap 2 (utku-ai-deployment-targets.md): a dotted `table.column` reference
+    in `question`/`why` is rejected before `ask_user` ever calls `interrupt` --
+    checked via direct tool invocation (`_call`), which would surface an
+    unhandled `GraphInterrupt` if the rejection didn't short-circuit before it.
+    """
+    tools = _tools()
+    text, update = _call(
+        tools["ask_user"],
+        question="does revenue mean payments.amount or line_items.unit_price?",
+    )
+    assert "rejected" in text
+    assert "payments.amount" in text or "line_items.unit_price" in text
+    assert "clarifications_by_call" not in update
+
+
+def test_ask_user_rejects_a_leak_in_why_too() -> None:
+    tools = _tools()
+    text, _update = _call(
+        tools["ask_user"],
+        question="How should we handle cancelled orders?",
+        why="the amount could come from pct_delivered",
+    )
+    assert "rejected" in text
+    assert "pct_delivered" in text
+
+
 def test_ask_user_interrupt_and_identity_resume() -> None:
     model = ScriptedChatModel(
         responses=[

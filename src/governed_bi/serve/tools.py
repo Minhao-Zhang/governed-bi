@@ -34,6 +34,7 @@ from governed_bi.serve.delivery import payload_digest, tool_bounds_from_state
 from governed_bi.serve.events import emit, tool_event_id
 from governed_bi.serve.ledger import attempt_field, cap_attempt, execution_from_attempts
 from governed_bi.serve.runtime import bool_knob, configurable
+from governed_bi.serve.schema_term_guard import find_schema_leak
 from governed_bi.serve.structured_check import percentage_scale_suffix
 
 __all__ = [
@@ -345,7 +346,21 @@ def build_tools(
 
     @tool
     async def ask_user(question: str, runtime: ToolRuntime, why: str = "") -> Command:
-        """Pause and ask the human a clarifying question (HITL interrupt)."""
+        """Pause and ask the human a clarifying question (HITL interrupt).
+
+        ``question``/``why`` reach a business user, never an engineer — write them in
+        plain language, with no table/column names, no dotted `table.column` paths, and
+        no snake_case or camelCase identifiers. A leaked identifier is rejected before
+        this pauses the turn; rephrase and call ``ask_user`` again.
+        """
+        leak = find_schema_leak(question, why)
+        if leak is not None:
+            return _reply(
+                runtime,
+                f"ask_user rejected: {leak!r} looks like a raw schema identifier, not "
+                "plain business language. Rephrase question/why without table.column "
+                "paths, snake_case, or camelCase identifiers, then call ask_user again.",
+            )
         digest = hashlib.sha256(f"{turn_id}\x1f{question}".encode()).hexdigest()[:12]
         clarification_id = f"clar-{turn_id}-{digest}"
         started = {"clarification_id": clarification_id}
