@@ -161,6 +161,12 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "worse, which moves routing recall and everything downstream. Written even when "
        "it falls back to llm_model: 'shared one model' and 'split them' are two "
        "treatments, and a blank makes them compare as one"),
+    _k("llm_provider", "openai", Role.comparability,
+       "which gateway served the model. `llm_model` records only the id, and `model_id` "
+       "reads it off the client -- so the same id behind two gateways resolves to one config "
+       "hash and two runs compare as one treatment, though the routing, the snapshot behind "
+       "the id and the failure modes all differ. Added 2026-08-07 with the the internal proxy, whose "
+       "arm was until then distinguishable only by its artifact filename"),
     _k("llm_max_retries", 3, Role.comparability,
        "how many times the provider SDK retries one call, across EVERY model surface: "
        "the agent, the utility model and the embedder. Comparability and not merely "

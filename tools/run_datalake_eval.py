@@ -52,6 +52,25 @@ def main(argv: list[str] | None = None) -> int:
         default="xhigh",
         help="reasoning effort (none/low/medium/high/xhigh); omit with --effort ''",
     )
+    parser.add_argument(
+        "--provider",
+        default="openai",
+        choices=["openai", "proxy"],
+        help="model provider. 'proxy' routes through the internal the internal proxy (credentials from "
+        "AWS Secrets Manager, GOVERNED_BI_PROXY_SECRET names the secret; no OPENAI_API_KEY "
+        "needed). It is in the artifact tag because it is an arm, not a detail.",
+    )
+    parser.add_argument(
+        "--utility-model",
+        default=None,
+        help="separate model id for the guard's scope gate and the facet rewriters (proxy "
+        "provider only; defaults to --model)",
+    )
+    parser.add_argument(
+        "--utility-effort",
+        default=None,
+        help="reasoning effort for the utility model (proxy provider only)",
+    )
     parser.add_argument("--top-n", type=int, default=None, help="override route_top_n")
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument(
@@ -90,18 +109,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    # Refused rather than ignored. A split utility model changes routing recall and everything
+    # downstream, so a flag that was accepted and dropped would put an unrecorded treatment in
+    # the artifact — the shape of the incident `llm_utility_model` was declared to prevent.
+    if args.provider != "proxy" and (args.utility_model or args.utility_effort):
+        parser.error("--utility-model/--utility-effort are only wired for --provider proxy")
+
     import credentials
 
     credentials.load_into_environ()
-    if not credentials.have(*credentials.OPENAI_KEY_NAMES):
+    # Only the OpenAI arm needs a key in the environment; the internal proxy arm mints a bearer token
+    # from a secret it looks up, and refuses by itself when its secret is unnamed.
+    if args.provider == "openai" and not credentials.have(*credentials.OPENAI_KEY_NAMES):
         print("no model credential reachable", file=sys.stderr)
         return 2
     dsn = credentials.secret(*credentials.PG_DSN_NAMES)
     if not dsn:
         print("no database credential reachable", file=sys.stderr)
         return 2
-
-    from langchain.chat_models import init_chat_model
 
     from governed_bi.datasource.postgres import PostgresConnector
     from governed_bi.eval.arms import live_arm
@@ -118,39 +143,22 @@ def main(argv: list[str] | None = None) -> int:
     from governed_bi.govern.policy import GovernancePolicy
     from governed_bi.serve import session as session_mod
 
-    # `max_retries` is not a nicety: a 429 inside a node is marked `crashed`, so a rate limit is
-    # a lost measurement. A 3-worker run lost 30 of its first 194 (15%). The SDK default is 2.
-    kwargs = {
-        "model_provider": "openai",
-        "use_responses_api": True,
-        "max_retries": max(0, int(args.max_retries)),
-        # Bounded, because unbounded is how a run stalls rather than fails. See --timeout.
-        "timeout": float(args.timeout),
-    }
-    if args.effort:
-        kwargs["reasoning_effort"] = args.effort
-    model = init_chat_model(args.model, **kwargs)
-
-    embedder = None
-    vector_cache = None
-    if args.embed:
-        from governed_bi.model import OpenAIEmbedder
-        from governed_bi.retrieve.vector_cache import vector_cache_from_environment
-
-        embedder = OpenAIEmbedder()
-        # The persisted store, shared with the server. Without it this driver re-embedded all
-        # 13,968 pooled summaries on every invocation — paid tokens, before the first question.
-        vector_cache = vector_cache_from_environment(model=embedder.requested_model)
+    model, utility_model, embedder, vector_cache = _build_models(args)
 
     # One connector for the session and the graph; each worker gets its own below.
-    session = session_mod.from_corpus_dir(
-        args.corpus_dir,
-        connector=PostgresConnector(dsn),
-        policy=GovernancePolicy(guard_rules_enabled={}),
-        agent_model=model,
-        embedder=embedder,
-        vector_cache=vector_cache,
-    )
+    # `utility_model` is passed only when there is one: `session` writes `llm_utility_model`
+    # from the agent model when it is absent, and "shared one model" and "split them" are two
+    # treatments that must not resolve to the same knob set.
+    session_kwargs: dict = {
+        "connector": PostgresConnector(dsn),
+        "policy": GovernancePolicy(guard_rules_enabled={}),
+        "agent_model": model,
+        "embedder": embedder,
+        "vector_cache": vector_cache,
+    }
+    if utility_model is not None:
+        session_kwargs["utility_model"] = utility_model
+    session = session_mod.from_corpus_dir(args.corpus_dir, **session_kwargs)
     if session.fatal_problems:
         print(f"corpus has {len(session.fatal_problems)} fatal problem(s); refusing", file=sys.stderr)
         for problem in session.fatal_problems:
@@ -169,10 +177,13 @@ def main(argv: list[str] | None = None) -> int:
 
     # The retrieval channel is in the tag because it is an arm, not a detail: lexical and
     # embedded runs have different coverage ceilings, so a tag that hid which one ran would
-    # let two incomparable runs read as replicates. (The measured gap is retired.)
+    # let two incomparable runs read as replicates. (The measured gap is retired.) The provider
+    # is in it for the same reason, and only when it is not the default, so the OpenAI arm's
+    # artifact names do not move: one model id served by two gateways is two treatments.
+    provider_tag = f"_{args.provider}" if args.provider != "openai" else ""
     tag = (
         f"{args.model}_{args.effort or 'default'}_top{args.top_n or 'default'}"
-        f"_{'embed' if args.embed else 'lexical'}"
+        f"_{'embed' if args.embed else 'lexical'}{provider_tag}"
     )
     out_path = args.out or pathlib.Path("runs/eval") / f"live_full_{tag}.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -314,6 +325,71 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+
+
+def _build_models(args):
+    """``(model, utility_model, embedder, vector_cache)`` for the chosen provider.
+
+    ``openai`` goes through ``init_chat_model`` + ``OpenAIEmbedder``; ``proxy`` through the
+    proxy builders in ``governed_bi.model``. Both trees are imported here rather than at module
+    scope so the arm that is not selected costs nothing — the internal proxy one needs ``boto3``, which
+    this project does not declare.
+
+    ``max_retries`` is not a nicety on either: a 429 inside a node is marked `crashed`, so a
+    rate limit is a lost measurement rather than a slow one. A 3-worker run lost 30 of its
+    first 194. The SDK default is 2.
+    """
+    embedder = None
+    vector_cache = None
+    utility_model = None
+
+    if args.provider == "proxy":
+        from governed_bi.model.proxy_gateway import build_chat_model
+
+        model = build_chat_model(
+            llm_model=args.model,
+            reasoning_effort=args.effort or None,
+            max_retries=max(0, int(args.max_retries)),
+            request_timeout_s=float(args.timeout),
+        )
+        if args.utility_model:
+            utility_model = build_chat_model(
+                llm_model=args.utility_model,
+                reasoning_effort=args.utility_effort or None,
+                max_retries=max(0, int(args.max_retries)),
+                request_timeout_s=float(args.timeout),
+            )
+        if args.embed:
+            from governed_bi.model import ProxyEmbedder
+            from governed_bi.retrieve.vector_cache import vector_cache_from_environment
+
+            embedder = ProxyEmbedder()
+            # Keyed on the provider-qualified identity, so a the internal proxy-served vector cannot be
+            # handed to an OpenAI-served run of the same width.
+            vector_cache = vector_cache_from_environment(model=embedder.model)
+        return model, utility_model, embedder, vector_cache
+
+    from langchain.chat_models import init_chat_model
+
+    kwargs = {
+        "model_provider": "openai",
+        "use_responses_api": True,
+        "max_retries": max(0, int(args.max_retries)),
+        # Bounded, because unbounded is how a run stalls rather than fails. See --timeout.
+        "timeout": float(args.timeout),
+    }
+    if args.effort:
+        kwargs["reasoning_effort"] = args.effort
+    model = init_chat_model(args.model, **kwargs)
+    if args.embed:
+        from governed_bi.model import OpenAIEmbedder
+        from governed_bi.retrieve.vector_cache import vector_cache_from_environment
+
+        embedder = OpenAIEmbedder()
+        # The persisted store, shared with the server. Without it this driver re-embedded all
+        # 13,968 pooled summaries on every invocation — paid tokens, before the first question.
+        vector_cache = vector_cache_from_environment(model=embedder.requested_model)
+    return model, utility_model, embedder, vector_cache
 
 
 def _report(rows: list[dict], out_path: pathlib.Path, args, observed_tokens, table_coverage) -> None:

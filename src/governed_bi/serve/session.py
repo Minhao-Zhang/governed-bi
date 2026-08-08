@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 from governed_bi.register.prompts import prompt_set_hash
 
@@ -164,6 +165,20 @@ def _index_entries(assets: Sequence[Asset], structure: CorpusStructure) -> list[
     ]
 
 
+def _provider_of(model: Any) -> str:
+    """Which gateway served the model — ``"openai"``, or ``"custom:<digest>"``.
+
+    A digest of the base URL's host rather than the host: it separates two gateways in the
+    config hash, which is the whole job, without writing an internal endpoint into every audit
+    row. Absent base URL means the vendor's own, which is the library default.
+    """
+    base = getattr(model, "openai_api_base", None) or getattr(model, "base_url", None)
+    if not base:
+        return "openai"
+    host = urlsplit(str(base)).netloc or str(base)
+    return "custom:" + hashlib.sha256(host.encode("utf-8")).hexdigest()[:8]
+
+
 def _resolved_knobs(policy: Any) -> dict[str, Any]:
     """Knob defaults with UNSET omitted; policy-resolved knobs included when set."""
     from ..register.knobs import UNSET
@@ -210,6 +225,10 @@ def from_assets(
         effort = getattr(agent_model, "reasoning_effort", None)
         if effort:
             knobs["llm_reasoning_effort"] = str(effort)
+        # The gateway, not the model. Read off the client's base URL because that is the one
+        # place a proxy differs from the vendor while `model_id` returns the same string for
+        # both -- see the knob's own note for what that cost.
+        knobs["llm_provider"] = _provider_of(agent_model)
         resolved_utility = utility_model or agent_model
         knobs["llm_utility_model"] = (
             model_id(resolved_utility) or getattr(resolved_utility, "_llm_type", None)
