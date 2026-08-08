@@ -355,6 +355,13 @@ def project_turn(
         "arm": arm,
         "outcome": outcome,
         "correct": bool(grade["correct"]),
+        # Which non-answered reason this row was, as a field `Population.rate()` can
+        # aggregate (utku-ai-deployment-targets.md's `correct/clarified/refused`
+        # scorecard) -- `outcome` already distinguishes these, but nothing stored it as
+        # a rate-able boolean, so a run's summary could not tell "needed a live
+        # clarification" apart from "refused" apart from "wrong answer".
+        "clarified": outcome == Outcome.clarification.value,
+        "refused": outcome == Outcome.refused.value,
         "crashed": crashed,
         "generated_sql": generated_sql,
         "gold_sql": question.get("gold_sql"),
