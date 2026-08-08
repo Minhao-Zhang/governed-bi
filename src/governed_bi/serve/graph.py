@@ -9,7 +9,6 @@ from typing import Any, Literal
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command, TimeoutPolicy
 
 from governed_bi.serve.nodes.agent_core import agent_core_node
 from governed_bi.serve.nodes.assemble import assemble_node
@@ -28,7 +27,7 @@ from governed_bi.serve.nodes.rewrite import rewrite_node
 from governed_bi.serve.nodes.route_retrieve import connect_node, resolve_node, route_node
 from governed_bi.serve.nodes.stamp import stamp
 from governed_bi.serve.nodes.terminal import decline_node, refuse_node
-from governed_bi.serve.state import ServeInput, ServeState
+from governed_bi.serve.state import ServeInput, ServeOutput, ServeState
 from governed_bi.serve.wrap import wrap_node
 
 __all__ = ["build_graph", "compile_graph"]
@@ -82,29 +81,25 @@ def _skip_if_terminal(state: ServeState) -> Literal["stamp", "continue"]:
     return "continue"
 
 
-#: Rails that may carry a node timeout. Two conditions, both measured, both narrowing.
+#: Rails that carry a node timeout. Natively async only, because ``wrap_node`` refuses a timeout
+#: on a sync node: cancelling the ``await`` around ``asyncio.to_thread`` leaves the thread
+#: running, so the bound would be a claim rather than a fact.
 #:
-#: **Natively async.** A node whose body still runs through ``asyncio.to_thread`` (``wrap_node``)
-#: would have its *await* cancelled and the thread left running, so the bound would be a claim
-#: rather than a fact.
-#:
-#: **Alone in its super-step.** The five facets are not, and that is why they are absent despite
-#: being natively async: with concurrent siblings a ``NodeTimeoutError`` surfaces at executor
-#: teardown (``pregel/_loop.py`` ``__aexit__``) and never reaches the node's ``error_handler``.
-#: Measured — a hung facet raised straight out of the graph and the turn produced no record,
-#: while the identical hang on ``guard`` was handled and stamped. A timeout that trades a hang
-#: for a missing record is not an improvement, so the fan-out keeps the hang until that is
-#: solved. ``agent_core`` is handled separately in :func:`_node_timeout`; it is the node with no
-#: other ceiling and it runs alone.
+#: The five facets are excluded by **decision, not constraint**: five concurrent bounds interact
+#: with the shared provider quota in a way nobody has measured, and turning them on is a
+#: comparability change that belongs to its own experiment. Adding them is a one-line edit here.
 _CANCELLABLE = frozenset({"guard", "narrate"})
 
 
-def _node_timeout(name: str) -> Any:
-    """The node's wall clock, or ``None`` where a timeout would be a false promise.
+def _node_timeout(name: str) -> float | None:
+    """The node's wall clock in seconds, or ``None`` where it would be a false promise.
 
-    Env-settable like every other deployment knob, through the same names the model timeouts
-    use. ``tests/conformance`` exists because a knob reachable only from code is the defect the
-    register was written to abolish.
+    Env-settable through the same names the model timeouts use, because a knob reachable only
+    from code is the defect the register was written to abolish (``tests/conformance`` pins it).
+
+    Plain seconds, not a ``TimeoutPolicy``: the bound is applied by ``wrap_node`` with
+    ``asyncio.wait_for`` and never reaches LangGraph's node-timeout machinery. See
+    ``wrap_node``'s docstring for the measurement that moved it.
     """
     import os
 
@@ -117,8 +112,7 @@ def _node_timeout(name: str) -> Any:
     else:
         return None
     raw = os.environ.get(var)
-    seconds = float(raw) if raw else float(knob_default(knob))
-    return TimeoutPolicy(run_timeout=seconds)
+    return float(raw) if raw else float(knob_default(knob))
 
 
 def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
@@ -129,12 +123,14 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     ``record`` (optional, after ``stamp``) appends to the audit log.
     """
 
-    # `input_schema` only when `accept` is present. That flag *is* the trust boundary: with it,
-    # a turn is derived from a client conversation and nothing else the client sends may reach
-    # state (audit §4.3); without it the caller is `serve/__main__`, `eval/` or `/chat`, which
-    # build the turn in-process and pass the whole of ServeState on purpose.
+    # `input_schema` / `output_schema` only when `accept` is present. That flag *is* the trust
+    # boundary: with it a turn is derived from a client conversation, so nothing else the client
+    # sends may reach state and nothing it did not ask for goes back (audit §4.3; see
+    # `ServeInput` / `ServeOutput`). Without it the caller is `serve/__main__`, `eval/` or
+    # `/chat`, which build the turn in-process and pass and read the whole of ServeState on
+    # purpose — the eval harness projects its record out of channels no client sees.
     graph = (
-        StateGraph(ServeState, input_schema=ServeInput)
+        StateGraph(ServeState, input_schema=ServeInput, output_schema=ServeOutput)
         if accept is not None
         else StateGraph(ServeState)
     )
@@ -142,38 +138,14 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     def rail(name: str, fn: Any, **kw: Any) -> None:
         """Register a wrapped node, with a timeout where one can really fire.
 
-        **The ``error_handler`` is what makes the timeout safe to add.** LangGraph enforces
-        ``run_timeout`` *outside* the node function, so ``wrap_node``'s ``except`` never sees it
-        — measured: a hung facet raised ``NodeTimeoutError`` straight out of the graph, ``stamp``
-        never ran, and the turn produced **no record at all**. That is the one direction this
-        engine must not fail in, and it would have been introduced by the fix for a hang.
-
-        The handler is only reachable on a timeout: ``wrap_node`` already turns every ordinary
-        exception into a ``crashed`` update and returns normally, so nothing else propagates far
-        enough to reach it. That is why it can name ``NodeTimeoutError`` without being handed the
-        exception — this LangGraph version passes the handler a state, not an error.
+        The clock is ``wrap_node``'s, not LangGraph's: measured on 1.2.10 an ``add_node``
+        timeout's ``error_handler`` runs but does not save the run, because
+        ``pregel/_executor.py``'s teardown re-raises the first task exception and the fast path
+        that would suppress it is disabled by ``stream_eager``, ``subgraphs=True`` or
+        ``"messages"`` / ``"custom"`` stream modes — the served surface submits three of those
+        at once. Nothing here registers an ``error_handler``.
         """
-        timeout = _node_timeout(name)
-        if timeout is None:
-            graph.add_node(name, wrap_node(name, fn, **kw))
-            return
-
-        def timed_out(_state: ServeState, _name: str = name) -> Any:
-            # ``goto="stamp"`` and not a bare update: the handler replaces the node, so the
-            # node's own outgoing edge does not run and the turn would end unstamped —
-            # `path_kind: crashed` in state and no record anywhere, which is the failure this
-            # engine exists to prevent. Measured before adding it: `answer` was None.
-            return Command(
-                update={
-                    "failure": {"stage": _name, "error_type": "NodeTimeoutError"},
-                    "path_kind": "crashed",
-                },
-                goto="stamp",
-            )
-
-        graph.add_node(
-            name, wrap_node(name, fn, **kw), timeout=timeout, error_handler=timed_out
-        )
+        graph.add_node(name, wrap_node(name, fn, timeout=_node_timeout(name), **kw))
 
     rail("guard", guard_node)
     rail("rewrite", rewrite_node)
@@ -185,20 +157,11 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     rail("connect", connect_node)
     rail("assemble", assemble_node)
     rail("agent_core", agent_core_node)
-    # **Not through ``rail``, and both differences are the point.**
-    #
-    # ``stream=False``: ``wrap_node`` emits a start and a resolve row for every node it wraps,
-    # so an observer that ships disabled would still have put two rows per turn on the
-    # timeline. The node emits its own single row, only on the turns where it judged something,
-    # which is what keeps a default-off turn's event stream identical to what it was.
-    #
-    # **No timeout**, deliberately, though it is natively async and alone in its super-step —
-    # the two conditions ``_CANCELLABLE`` requires. A ``TimeoutPolicy`` fires *outside* the node
-    # and its handler marks the turn ``crashed`` and jumps to ``stamp``, so giving this node one
-    # would let an **observer** fail a turn that had already answered. That is the one thing it
-    # must never do. The model call is bounded by the model's own ``request_timeout``
-    # (``llm_utility_timeout_s``), and any exception it raises is caught and recorded as an
-    # unmeasured verdict.
+    # Not through `rail`. `stream=False`: the node emits its own single row only on the turns
+    # where it judged something, so a default-off turn's event stream is unchanged. No timeout,
+    # deliberately: a timeout marks the turn `crashed` and jumps to `stamp`, which would let an
+    # **observer** fail a turn that had already answered. The model call is bounded by its own
+    # `request_timeout` (`llm_utility_timeout_s`) and any exception is recorded as unmeasured.
     graph.add_node("reflect", wrap_node("reflect", reflect_node, stream=False))
     rail("narrate", narrate_node)
     rail("refuse", refuse_node)
@@ -210,8 +173,7 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
         return {}
 
     # Not through `rail`: the node is `fanout` but its *stage* is `facet_schema`, and `rail`
-    # uses one name for both. stream=False means it emits nothing anyway, and it does no work,
-    # so it needs no timeout.
+    # uses one name for both. It does no work, so it needs no timeout.
     graph.add_node("fanout", wrap_node("facet_schema", _fanout_passthrough, stream=False))
 
     if accept is not None:
@@ -255,9 +217,9 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
         _skip_if_terminal,
         {"stamp": "stamp", "continue": "agent_core"},
     )
-    # Terminals skip narrate: refusal/decline wording is system copy. ``reflect`` sits between
-    # the agent and the narrator as a plain edge and not a conditional one, because a
-    # conditional edge reading its verdict is exactly the control flow it must not have.
+    # Terminals skip narrate: refusal/decline wording is system copy. `reflect` is a plain edge
+    # and not a conditional one, because an edge reading its verdict is exactly the control flow
+    # the observer must not have.
     graph.add_edge("agent_core", "reflect")
     graph.add_edge("reflect", "narrate")
     graph.add_edge("narrate", "stamp")
@@ -275,15 +237,23 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
 class _SyncApp:
     """A sync front for an async graph, for the callers that are not going async.
 
-    Every node goes through ``wrap_node``, which is ``async def`` — the only shape LangGraph
-    will attach a node timeout to (``TimeoutPolicy`` refuses a sync node outright: "sync Python
-    execution cannot be safely cancelled in-process"). That makes ``.invoke()`` raise
-    ``TypeError: No synchronous function provided``, and the in-process callers — the CLI,
-    ``eval/``, ``/chat`` and the tests — have no reason to become async.
+    Every node goes through ``wrap_node``, which is ``async def``, so ``.invoke()`` raises
+    ``TypeError: No synchronous function provided to "guard"``. The in-process callers — the
+    CLI, ``eval/``, ``/chat`` and the tests — have no reason to become async, so they go
+    through here.
+
+    **That ``TypeError`` must keep being raised.** While the rails carried LangGraph node
+    timeouts it was swallowed and ``.invoke()`` returned a complete ``outcome: "crashed"``
+    record instead, so forgetting ``as_sync`` produced a whole arm of fabricated measurements.
+    ``tests/serve/test_node_timeout_is_enforced_inside_the_wrapper.py`` pins it.
 
     ``/chat``'s handlers are sync ``def``, so Starlette runs them in a worker thread with no
-    running loop, and ``asyncio.run`` is safe there. The served graph is **not** wrapped: the
-    platform drives ``ainvoke`` itself, which is the path this exists to leave alone.
+    running loop and ``asyncio.run`` is safe. The served graph is **not** wrapped: the platform
+    drives ``ainvoke`` itself.
+
+    Known hazard, not fixed: ``asyncio.run`` builds and tears down an event loop per call while
+    the model objects are process-wide, which matters for a provider client that caches a
+    connection pool on its first loop.
     """
 
     def __init__(self, app: Any) -> None:
@@ -299,8 +269,7 @@ class _SyncApp:
         """Drained, then replayed. Order is preserved; incrementality is not.
 
         No production caller streams through this — ``/chat`` blocks and the live surface is
-        the platform's async one. It exists so the stream-event tests keep asserting the same
-        ordered timeline they always did.
+        the platform's async one. It exists for the stream-event tests.
         """
 
         async def drain() -> list[Any]:
@@ -315,6 +284,21 @@ def as_sync(app: Any) -> _SyncApp:
 
 
 def compile_graph(*, checkpointer: Any | None = None) -> _SyncApp:
-    """Compile with an in-memory checkpointer by default (interrupt-ready)."""
+    """Compile with an in-memory checkpointer by default (interrupt-ready).
+
+    ``checkpointer=False`` compiles with **no** saver, because ``None`` already means "make me
+    an ``InMemorySaver``" and otherwise "do not persist" is only sayable by bypassing this
+    facade — which also bypasses ``as_sync``. A saver-less graph cannot interrupt, so
+    ``ask_user`` is unavailable; that is the whole trade.
+
+    **The default saver grows for as long as it lives and nothing evicts it.** Measured on a
+    two-schema corpus: 101 KB after one turn, 844 KB after six, because ``usage`` and ``answer``
+    accumulate and every superstep re-serialises them with ``knobs_resolved``. ``eval/harness.py``
+    holds one compiled graph per worker for a whole arm, so a 1,351-question run retains on the
+    order of 135 MB per worker unless it calls ``InMemorySaver.delete_thread`` — which it does,
+    per question.
+    """
+    if checkpointer is False:
+        return as_sync(build_graph().compile())
     saver = InMemorySaver() if checkpointer is None else checkpointer
     return as_sync(build_graph().compile(checkpointer=saver))

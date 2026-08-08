@@ -394,27 +394,37 @@ def test_a_failure_in_stamp_is_not_swallowed(
 def test_a_node_timeout_is_attached_only_where_it_can_fire() -> None:
     """The bound exists, and it is not claimed where it would be a false promise.
 
-    LangGraph refuses ``TimeoutPolicy`` on a sync node outright — "sync Python execution cannot
-    be safely cancelled in-process" — which is why every node became ``async def``. But a node
-    whose *body* still runs through ``asyncio.to_thread`` only has its ``await`` cancelled; the
-    thread keeps going. Attaching a policy there would report a ceiling that does not hold, so
-    the ones that are natively async carry it and the rest do not.
+    A node whose *body* still runs through ``asyncio.to_thread`` only has its ``await``
+    cancelled; the thread keeps going. Claiming a ceiling there reports a stop that did not
+    happen, so ``wrap_node`` refuses the wiring outright and only natively-async nodes carry a
+    bound.
 
     ``agent_core`` is the node this is for: ``llm_timeout_s`` bounds one of its provider calls,
-    the loop makes several, and the real recursion limit under the server is 10007 — so nothing
-    bounded the node.
+    the loop makes several, and nothing else bounds the node.
+
+    **The bound is no longer LangGraph's.** ``add_node(timeout=...)`` enforced it outside the
+    node function, which needed an ``error_handler`` to catch — and that handler was measured
+    not to save the run under the stream modes the served path uses. ``wrap_node`` owns the
+    clock now, so the assertion reads the wrapper's configuration rather than the node's.
     """
-    from governed_bi.serve.graph import _CANCELLABLE, build_graph
+    from governed_bi.serve.graph import _CANCELLABLE, _node_timeout, build_graph
 
     nodes = build_graph().nodes
-    timed = {name for name, node in nodes.items() if getattr(node, "timeout", None) is not None}
+    # Nothing carries a LangGraph node timeout any more; if one reappears, the error_handler
+    # question comes back with it.
+    assert not [n for n, node in nodes.items() if getattr(node, "timeout", None) is not None], (
+        "a node carries a LangGraph-enforced timeout again — it cannot be caught by wrap_node "
+        "and its handler does not save the run under custom/messages/subgraph streaming"
+    )
 
+    timed = {name for name in nodes if _node_timeout(name) is not None}
     assert "agent_core" in timed, "the unbounded node is still unbounded"
     assert _CANCELLABLE <= timed, f"a cancellable rail carries no bound: {_CANCELLABLE - timed}"
-    # The fan-out is deliberately excluded: with concurrent siblings a NodeTimeoutError surfaces
-    # at executor teardown and never reaches the handler, so the turn would end with no record.
+    # The fan-out stays out by decision, not by constraint: moving the clock inside wrap_node
+    # removed the concurrent-sibling problem, but five simultaneous bounds against a shared
+    # provider quota is an unmeasured comparability change.
     assert not (timed & {name for name, _ in graph_mod._FACET_NODES}), (
-        "a facet carries a timeout; a hang there escapes the handler and loses the record"
+        "a facet carries a timeout; that is now possible but is an unmeasured arm change"
     )
     assert "stamp" not in timed, "stamp is unwrapped and must stay so"
     for name in timed:
@@ -428,23 +438,23 @@ def test_the_node_timeouts_are_settable_by_a_deployment() -> None:
     """A knob reachable only from source is the defect the register exists to abolish.
 
     Both are read from the environment before falling back to the declared default, the same way
-    the two model timeouts already are.
+    the two model timeouts already are. Plain seconds now, not a ``TimeoutPolicy``: the bound is
+    applied by ``asyncio.wait_for`` inside ``wrap_node``.
     """
     import os
 
     from governed_bi.register.knobs import knob_default
     from governed_bi.serve.graph import _node_timeout
 
-    assert _node_timeout("agent_core").run_timeout == float(knob_default("agent_node_timeout_s"))
-    assert _node_timeout("guard").run_timeout == float(knob_default("rail_node_timeout_s"))
+    assert _node_timeout("agent_core") == float(knob_default("agent_node_timeout_s"))
+    assert _node_timeout("guard") == float(knob_default("rail_node_timeout_s"))
     assert _node_timeout("route") is None, "a to_thread node must not claim a bound"
     assert _node_timeout("facet_term") is None, (
-        "a facet carries a timeout again: concurrent siblings make NodeTimeoutError escape the "
-        "handler, so the turn would end with no record"
+        "a facet carries a timeout again: possible now, but an unmeasured comparability change"
     )
 
     os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"] = "12.5"
     try:
-        assert _node_timeout("agent_core").run_timeout == 12.5
+        assert _node_timeout("agent_core") == 12.5
     finally:
         del os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"]

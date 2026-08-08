@@ -57,8 +57,11 @@ RESET = "reset"
 def cleared(left: Any) -> Any:
     """``None`` if ``left`` is the reset sentinel, else ``left``.
 
-    Required because LangGraph assigns the first channel value without calling the reducer,
-    so ``RESET`` written by ``Session.turn`` can land as a bare string.
+    Needed on ``path_kind`` and ``failure`` only: their annotations strip to a ``Union``, so
+    ``BinaryOperatorAggregate``'s ``typ()`` seed raises, the channel starts ``MISSING``, and
+    LangGraph assigns the first write raw, bypassing the reducer (1.2.10,
+    ``channels/binop.py``). Fields typed ``dict``/``list``/``str`` seed empty and never see it,
+    and ``LastValue`` has no reducer at all. It bites only on turn one of a fresh thread.
     """
     return None if isinstance(left, str) and left == RESET else left
 
@@ -142,7 +145,12 @@ def merge_facets(
     left: dict[str, FacetResult],
     right: Any,
 ) -> dict[str, FacetResult]:
-    """Replace by key — right wins. :data:`RESET` clears."""
+    """Replace by key — right wins. :data:`RESET` clears.
+
+    The ``cleared()`` below is belt over braces: this annotation strips to ``dict``, so the
+    channel seeds ``{}`` and this reducer runs from the first write — ``left`` is never the
+    sentinel. See :func:`cleared` for where the call really is load-bearing.
+    """
     if right == RESET:
         return {}
     merged = dict(cleared(left) or {})
@@ -183,30 +191,38 @@ def settle_failure(left: Any, right: Any) -> Any:
 
 
 class ServeInput(TypedDict, total=False):
-    """Everything a client is allowed to write into the graph. Deliberately one key.
+    """Everything a client is allowed to write into the graph. Deliberately one key (audit §4.3).
 
-    **The defect this closes (audit §4.3).** ``trust()`` forces run constants over a
-    caller-supplied ``configurable``, and that is one of *two* channels a caller can write.
-    The other is the graph's own ``input``: ``langgraph_api`` forwards the client's dict to
-    the graph with no filtering, ``PER_TURN_RESET`` does not clear :data:`TEST_HOOKS`, and
-    ``int_knob`` reads state *before* ``knobs_resolved``. So a request could set
-    ``route_top_n`` and the record would publish the default it did not use.
+    ``trust()`` forces run constants over a caller's ``configurable``, but the graph's own
+    ``input`` is a second write channel: ``langgraph_api`` forwards the client's dict unfiltered,
+    ``PER_TURN_RESET`` does not clear :data:`TEST_HOOKS`, and ``int_knob`` reads state *before*
+    ``knobs_resolved`` — so a request could set ``route_top_n`` while the record published the
+    default. ``input_schema`` drops undeclared keys at the entry; measured on langgraph 1.2.10,
+    ``route_top_n=99`` reaches the first node as absent, not as 99.
 
-    ``StateGraph(ServeState, input_schema=ServeInput)`` drops undeclared keys at the entry
-    rather than policing them, which is the difference between a rule and an impossibility.
-    Measured on langgraph 1.2.10: a caller passing ``route_top_n=99`` alongside its messages
-    reaches the first node as absent, not as 99.
-
-    **Only the ``accept`` variant gets this.** ``build_graph()`` with no ``accept`` is entered
-    by ``serve/__main__``, ``eval/`` and ``/chat``, which construct the turn in-process through
-    ``Session.turn()`` and legitimately pass the whole of :class:`ServeState`. The untrusted
-    entry is the one where a turn is *derived* from a client conversation, and that is exactly
-    the one ``accept`` marks.
+    Only the ``accept`` variant gets this. ``build_graph()`` without ``accept`` is entered by
+    ``serve/__main__``, ``eval/`` and ``/chat``, which build the turn in-process through
+    ``Session.turn()`` and legitimately pass the whole of :class:`ServeState`.
     """
 
     #: The conversation. ``_accept_node`` derives the whole turn from its last human message;
     #: it reads no other state key, which is what makes one key sufficient.
     messages: Annotated[list, add_messages]
+
+
+class ServeOutput(TypedDict, total=False):
+    """Everything a client is allowed to read back — the read half of the trust boundary.
+
+    Measured on langgraph 1.2.10, the compiled ``accept`` graph returned **44 channels** on
+    every ``invoke`` and every ``values`` frame, among them ``identity`` (the token
+    :func:`~governed_bi.serve.resume.resume_authorised` gates clarification resume on) and
+    ``delivery`` (the whole rendered corpus context block). Two keys instead, matching what the
+    interface consumes: the transcript the SDK reconciles, and the turn's whole result. Adding
+    a key here is the deliberate act.
+    """
+
+    messages: Annotated[list, add_messages]
+    answer: dict[str, Any]
 
 
 class ServeState(TypedDict, total=False):
@@ -254,14 +270,13 @@ class ServeState(TypedDict, total=False):
     result_table: dict[str, Any] | None
     #: Prose answer from ``narrate``. Live only; distinct from system ``answer["text"]``.
     answer_text: str | None
-    #: The post-hoc observer's judgement (``serve/nodes/reflect.py``). Nothing routes on it, by
-    #: construction: no conditional edge reads it and ``stamp`` only copies it to the record.
+    #: The post-hoc observer's judgement (``serve/nodes/reflect.py``). Nothing routes on it:
+    #: no conditional edge reads it and ``stamp`` only copies it to the record.
     reflect_verdict: dict[str, Any] | None
     #: Question embedding. Per-turn (streamed path cannot put it on load-time config).
     query_vector: list[float] | None
-    #: Epoch seconds when the turn's first node ran. ``wrap_node`` writes it, ``stamp`` reads it
-    #: to derive ``latency_sec``. Wall clock rather than ``perf_counter`` because a clarification
-    #: can resume in a different process.
+    #: Epoch seconds when the turn's first node ran. ``wrap_node`` writes it, ``stamp`` derives
+    #: ``latency_sec`` from it. Wall clock, because a clarification can resume in another process.
     turn_started_at: float | None
     n_re_served: int
 
@@ -292,8 +307,7 @@ PER_TURN_RESET: dict[str, Any] = {
     "answer_text": None,
     "reflect_verdict": None,
     "query_vector": None,
-    # The turn's clock. Cleared per turn, or turn two's `latency_sec` would span everything the
-    # user did between the two questions. `wrap_node` writes it from the first node to run.
+    # Cleared per turn, or turn two's `latency_sec` spans everything the user did in between.
     "turn_started_at": None,
     "schemas": [],
     "crossings": [],

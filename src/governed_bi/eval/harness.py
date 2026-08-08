@@ -29,25 +29,19 @@ def run_arm(
 ) -> list[dict[str, Any]]:
     """Run every question under one arm; return graded turn rows, **in input order**.
 
-    ``session`` is how a **quotable** run is produced. Without it each turn comes from
-    :func:`_base_turn`, which fabricates ``corpus_content_hash`` as ``f"corpus-{arm}"`` —
-    fine for a fixture, forged for a real corpus, because two runs over two different
-    corpora then compare equal. With a session, every id and every run constant is minted
-    by ``Session.turn``, which is the one place allowed to mint them.
+    ``session`` is how a **quotable** run is produced: every id and run constant is minted by
+    ``Session.turn``. Without it turns come from :func:`_base_turn`, which fabricates
+    ``corpus_content_hash`` — fine for a fixture, forged for a real corpus, because two runs
+    over different corpora then compare equal.
 
-    ``workers`` > 1 runs questions concurrently, and **each worker gets its own graph and
-    its own connector**. That is not tidiness: ``psycopg`` connections are not thread-safe,
-    and this harness executes SQL on the connector twice per row — once for the prediction
-    and once for the gold — on top of whatever the turn itself ran. Sharing one connection
-    across threads interleaves two result sets on one socket, and the failure surfaces as a
-    *grading* mismatch, which is indistinguishable from a wrong answer. So ``workers`` > 1
-    without a ``connector_factory`` raises rather than racing.
+    ``workers`` > 1 gives **each worker its own graph and connector**, and raises without a
+    ``connector_factory``. ``psycopg`` connections are not thread-safe and this harness runs
+    SQL twice per row (prediction and gold); sharing one interleaves result sets on a socket
+    and surfaces as a *grading* mismatch, indistinguishable from a wrong answer.
 
-    ``on_row(index, row)`` is called as each row completes, from the calling thread's
-    perspective in completion order. It exists so a long run is crash-safe: a 1 351-question
-    arm at four workers is hours, and a driver that writes only at the end is one
-    interruption away from having measured nothing. The return value is still ordered by
-    input, so a caller using both gets streaming *and* determinism.
+    ``on_row(index, row)`` fires in completion order so a long run is crash-safe — a driver
+    that writes only at the end is one interruption away from having measured nothing. The
+    return value stays in input order.
     """
     order_sensitive_qids = order_sensitive_qids or frozenset()
     run_id = run_id or f"run-{uuid4().hex[:12]}"
@@ -57,12 +51,9 @@ def run_arm(
         connector = base_cfg.get("connector")
         if connector is None:
             raise ValueError("oracle arm requires connector in configurable")
-        # **Row by row, with ``on_row``, like every other arm.** This was one list
-        # comprehension sitting before the concurrency dispatch, so it ignored ``on_row``
-        # entirely and one gold statement that failed to execute ended the arm and discarded
-        # every row already computed. ``oracle_grade`` now records an execution failure as a
-        # crashed row, and the loop is here so a long oracle pass is crash-safe for the same
-        # reason the paid arms are.
+        # Row by row with ``on_row``, like every other arm: a list comprehension here would
+        # ignore ``on_row`` and let one unexecutable gold discard every row already computed.
+        # ``oracle_grade`` records an execution failure as a crashed row.
         rows: list[dict[str, Any]] = []
         for index, question in enumerate(questions):
             row = oracle_grade(question, connector, order_sensitive_qids=order_sensitive_qids)
@@ -125,11 +116,10 @@ def _run_one(
     order_sensitive_qids: frozenset[str],
     connector: Any | None = None,
 ) -> dict[str, Any]:
-    """One question, start to graded row. The body ``run_arm`` used to inline.
+    """One question, start to graded row.
 
-    Extracted so the serial and concurrent paths are the **same** code rather than two
-    implementations that must agree — a second copy here would be a second answer to what
-    a measured turn is, which is the shape this file's own ``_base_turn`` note is about.
+    Shared by the serial and concurrent paths so there is one answer to what a measured turn
+    is, rather than two implementations that must agree.
     """
     qid = str(question["question_id"])
     conf = dict(base_cfg)
@@ -143,22 +133,17 @@ def _run_one(
     conf["thread_id"] = thread_id
 
     if session is not None:
-        # The session mints the ids and the run constants; the eval's own ``question_id``
-        # stays in the measurement row, where `project_turn` reads it. It deliberately
-        # cannot enter the turn: `Session.turn` digests the question text for
-        # ``question_id`` so a re-serve is recognisable, and letting a caller set it would
-        # break that.
+        # The session mints ids and run constants. The eval's own ``question_id`` stays in
+        # the measurement row and deliberately cannot enter the turn: `Session.turn` digests
+        # the question text for ``question_id`` so a re-serve is recognisable.
         turn = session.turn(
             str(question.get("question") or question.get("utterance") or qid),
             turn_index=1,
             thread_id=thread_id,
             identity={"token": f"eval-{run_id}"},
-            # Loaded by `eval/datalake.py:load_questions` since the beginning and consumed by
-            # nothing until now, which made every EX a no-evidence number. Passing it is one
-            # of the two conditions for the figure being comparable to published BIRD; the
-            # other is the grader, and for the whole of v2 that half was false — see
-            # `eval/grade._coerce_cell`. An arm that wants the harder no-hint condition omits
-            # the key from the question dict.
+            # Passing evidence is one of the two conditions for EX being comparable to
+            # published BIRD (the other is the grader, `eval/grade._coerce_cell`). An arm
+            # that wants the harder no-hint condition omits the key from the question dict.
             evidence=question.get("evidence"),
         )
     else:
@@ -177,7 +162,30 @@ def _run_one(
         connector=conf.get("connector"),
     )
     row["run_id"] = run_id
+    _evict(compiled, thread_id)
     return row
+
+
+def _evict(compiled: Any, thread_id: str) -> None:
+    """Drop this question's checkpoints. Never raises; an arm must not die over housekeeping.
+
+    A worker holds one compiled graph for the whole arm and nothing else empties its saver —
+    roughly 100 KB of checkpoint per question (``usage`` and ``answer`` accumulate and every
+    superstep re-serialises them), retained until the process exits for state no later
+    question reads.
+
+    Called **after** the row is projected: a resumed clarification does read the checkpoint,
+    so evicting earlier would trade a memory bound for a lost measurement. Per *thread*, not
+    a blunt clear — with ``workers > 1`` several questions share the saver.
+    """
+    saver = getattr(getattr(compiled, "_app", compiled), "checkpointer", None)
+    delete = getattr(saver, "delete_thread", None)
+    if delete is None:
+        return
+    try:
+        delete(thread_id)
+    except Exception:  # noqa: BLE001 — a saver that cannot evict is a leak, not a failed turn
+        return
 
 
 def _run_concurrently(
@@ -194,14 +202,12 @@ def _run_concurrently(
 ) -> list[dict[str, Any]]:
     """``workers`` threads, one graph and one connector each, results in input order.
 
-    Thread-local rather than a pool of pre-built pairs, because the count of *live* workers
-    is what decides how many connections exist — building ``workers`` connectors up front
-    and handing them out would open all of them even on a short run.
+    Thread-local rather than a pool of pre-built pairs, so a short run does not open
+    ``workers`` connections it never uses.
 
-    A question that raises is recorded as a **crashed row** rather than ending the arm. One
-    provider timeout at question 900 of 1 351 must not discard 899 measured turns; the row
-    says which question and which exception, so a systematic failure is still visible as a
-    count rather than as a shorter file.
+    A question that raises is recorded as a **crashed row** rather than ending the arm, with
+    the question and exception named — a systematic failure must be visible as a count, not
+    as a shorter file.
     """
     import threading
     from concurrent.futures import ThreadPoolExecutor
@@ -286,11 +292,9 @@ def project_turn(
     record = answer.get("record") if isinstance(answer, Mapping) else None
     if not isinstance(record, Mapping):
         record = {}
-    # **A paused turn is not a crashed one.** `ask_user` interrupts, no node writes
-    # `answer`, and this defaulted to "crashed" — so 7 of 57 questions in a live batch were
-    # reported as engine crashes with no stage and no exception class, while every one of
-    # them had simply asked the analyst a question. `python -m governed_bi.serve` has exit
-    # code 4 for exactly this distinction; the harness had none.
+    # A paused turn is not a crashed one. `ask_user` interrupts and no node writes `answer`,
+    # so defaulting to "crashed" reports a question asked of the analyst as an engine crash
+    # with no stage and no exception class. (`python -m governed_bi.serve` exit code 4.)
     interrupted = bool(state.get("__interrupt__")) and not answer
     if interrupted:
         outcome = Outcome.clarification.value
@@ -355,13 +359,13 @@ def project_turn(
         "question_id": str(question["question_id"]),
         "arm": arm,
         "outcome": outcome,
-        # Propagated, never coerced. ``bool(grade["correct"])`` stood here and turned every
-        # ``missing_gold`` into a wrong answer — see :func:`~governed_bi.eval.grade.grade_turn`.
+        # Propagated, never coerced: ``bool(grade["correct"])`` here turns every
+        # ``missing_gold`` into a wrong answer (see ``grade.grade_turn``).
         "correct": grade["correct"],
         "crashed": crashed,
-        # What the *dataset* says is wrong with this question — leakage, a gold with no total
-        # order, a degenerate gold. Carried onto the row rather than applied as a filter, so one
-        # artifact can be read under more than one exclusion policy; see
+        # What the *dataset* says is wrong with this question (leakage, a gold with no total
+        # order, a degenerate gold). Carried on the row rather than filtered, so one artifact
+        # can be read under more than one exclusion policy — see
         # :func:`~governed_bi.eval.datalake.attach_quality_flags`.
         "quality_flags": list(question.get("quality_flags") or ()),
         "generated_sql": generated_sql,
@@ -372,24 +376,21 @@ def project_turn(
         "context_hash": context_hash,
         "facet_channels": facet_channels,
         "facet_degraded": bool(record.get("facet_degraded") or False),
-        # **Retrieval attribution, and the reason it is here.** A row could say EX=0 and
-        # not say *why*: a miss because the gold schema was never licensed is a routing
-        # problem, and a miss with the right tables in hand is a generation problem. Without
-        # these two, a live run over 57 questions reported `reached_gold 0/57` on a corpus
-        # measured at 0.608 — the number was absent, not zero, and absent read as zero.
-        # Crash attribution. `outcome: "crashed"` with no stage and no exception class is
-        # unactionable, and a run where 16% of turns crash needs to say where.
+        # Retrieval and crash attribution. Without `licensed`/`schemas` a row says EX=0 and
+        # not *why*: a miss with the gold schema never licensed is a routing problem, a miss
+        # with the right tables in hand is a generation problem — and an absent `reached_gold`
+        # reads as zero (once reported 0/57 on a corpus measured at 0.608; both retired,
+        # pre-2026-08-05). Without `error_type`, `outcome: "crashed"` carries no stage and no
+        # exception class and is unactionable on a run where 16% of turns crash (also retired).
         "error_type": record.get("error_type") or state.get("failure", {}).get("error_type")
         if isinstance(state.get("failure"), Mapping)
         else record.get("error_type"),
         "licensed": list(record.get("licensed") or ()),
         "schemas": list(record.get("schemas") or ()),
         "terminal_reason": record.get("terminal_reason"),
-        # Carried so the run can be counted. `observed_tokens` reads it; without it a batch
-        # reports no calls at all, which reads as a free run rather than an unmeasured one.
-        # It used to say **priced** -- `measure/price.py` is deleted, and tokens are as far
-        # as this repository goes now: what they cost is the provider's number.
-        # which is honest and useless.
+        # Carried so the run can be counted: `observed_tokens` reads it, and without it a
+        # batch reports no calls at all, reading as a free run rather than an unmeasured one.
+        # Tokens only — `measure/price.py` is deleted, so cost is the provider's number.
         "usage": list(record.get("usage") or ()),
         "guardrail_error": guardrail_errors > 0,
         "re_served": n_re_served > 0,

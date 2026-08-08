@@ -29,7 +29,7 @@ from governed_bi.govern.ledger import (
 from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.register.prompts import prompt_text
 from governed_bi.serve import fetch
-from governed_bi.serve.agent_state import AttemptBook
+from governed_bi.serve.agent_state import CAP_LEDGER_KEY, AttemptBook
 from governed_bi.serve.delivery import payload_digest, tool_bounds_from_state
 from governed_bi.serve.events import emit, tool_event_id
 from governed_bi.serve.ledger import attempt_field, cap_attempt, execution_from_attempts
@@ -38,6 +38,7 @@ from governed_bi.serve.runtime import configurable
 __all__ = [
     "SYSTEM_PROMPT",
     "build_tools",
+    "policy_from_config",
     "resolve_assets",
     "attempt_field",
     "execution_from_attempts",
@@ -64,6 +65,18 @@ def resolve_assets(config: Mapping[str, Any] | None) -> dict[str, Any]:
     return {}
 
 
+def policy_from_config(config: Mapping[str, Any] | None) -> GovernancePolicy:
+    """The turn's :class:`GovernancePolicy`, defaulted when configurable carries none.
+
+    One reader, because the attempt cap has two enforcers (:class:`AttemptBook` here and
+    ``agent_core``'s ``ToolCallLimitMiddleware``), and a second copy of "how the policy is
+    fetched" is how they come to enforce different numbers while both quoting
+    ``run_query_attempt_cap``.
+    """
+    policy = configurable(config).get("policy")
+    return policy if isinstance(policy, GovernancePolicy) else GovernancePolicy()
+
+
 def _call_id(runtime: Any) -> str:
     """This tool call's id. It keys every durable thing a tool writes."""
     return str(getattr(runtime, "tool_call_id", "") or "")
@@ -87,9 +100,7 @@ async def _fetch(
     """Corpus tools with stream events. Status: ok / blocked / error.
 
     ``work`` returns ``(payload, delivered)``, or ``(payload, delivered, attempt)`` when the
-    tool is an **executor path** and owes the ledger a row. ``sample_rows`` is that case, and
-    it used to return the two-tuple — which is precisely what "the sample path writes no ledger
-    entry" was: a shape with nowhere to put the fact.
+    tool is an **executor path** and owes the ledger a row. ``sample_rows`` is that case.
     """
     event_id = tool_event_id(stage, _call_id(runtime))
     emit(kind="tool", step=stage, status="start", event_id=event_id, detail=detail)
@@ -126,8 +137,8 @@ async def _fetch(
     updates: dict[str, Any] = dict(_delivered(runtime, payload)) if delivered else {}
     if attempt is not None:
         # The verdict rides **this** step's detail rather than emitting ``check`` / ``execute``
-        # rows. Those two steps are ``run_query``'s attempt numbering, and a sample verdict
-        # appearing among them would read as a SQL attempt the model never made.
+        # rows: those two are ``run_query``'s attempt numbering, and a sample verdict among
+        # them would read as a SQL attempt the model never made.
         detail = {
             **detail,
             "layer": attempt["verdict_layer"],
@@ -136,9 +147,8 @@ async def _fetch(
         }
         if attempt["executed_sql"] is not None:
             detail["sql_sha256"] = statement_sha256(attempt["executed_sql"])
-        # **The ledger row rides the same Command as the payload.** With no ``attempts_by_call``
-        # write on this path, ``guardrail_errors == 0`` and an empty attempt list were true of
-        # every value the tool ever showed the model.
+        # The ledger row rides the same Command as the payload. Without it,
+        # ``guardrail_errors == 0`` and an empty attempt list held vacuously for this path.
         updates["attempts_by_call"] = {f"{stage}:{_call_id(runtime)}": attempt}
     emit(kind="tool", step=stage, status=status, event_id=event_id, detail=detail)
     return _reply(runtime, payload, **updates)
@@ -224,13 +234,11 @@ def build_tools(
     cfg = configurable(config)
     bounds = bounds or tool_bounds_from_state(state)
     assets = resolve_assets(config)
-    policy = cfg.get("policy")
-    if not isinstance(policy, GovernancePolicy):
-        policy = GovernancePolicy()
+    policy = policy_from_config(config)
     connector = cfg.get("connector")
-    # Passed through as whatever is on ``configurable``. A wrong-typed or absent corpus
-    # is a wiring failure and ``_run_query`` raises on it; coercing it to ``None`` here
-    # is what let the default below stand in for it (G1).
+    # Passed through as whatever is on ``configurable``: a wrong-typed or absent corpus is a
+    # wiring failure and ``fetch.run_query`` raises on it, where coercing it to ``None`` would
+    # let a default stand in for it (G1).
     corpus = cfg.get("corpus")
     read_cap = fetch.read_body_cap(state, cfg)
     book = AttemptBook(policy.run_query_attempt_cap)
@@ -280,10 +288,13 @@ def build_tools(
         call_id = _call_id(runtime)
         committed = (getattr(runtime, "state", None) or {}).get("attempts_by_call")
         if not book.admit(committed, call_id):
-            update: dict[str, Any] = {}
+            # The backstop, not the brake: `agent_core`'s middleware counts the same proposal a
+            # node earlier, so this branch belongs to callers that build tools without an agent.
+            # The row is written either way (`execution_from_attempts` reads the ledger, not the
+            # enforcer), and `CAP_LEDGER_KEY` makes a second write a no-op.
+            update: dict[str, Any] = {"attempts_by_call": {CAP_LEDGER_KEY: cap_attempt()}}
             if not book.cap_recorded:
                 book.cap_recorded = True
-                update["attempts_by_call"] = {f"cap:{call_id}": cap_attempt()}
                 emit(
                     kind="tool",
                     step="cap",

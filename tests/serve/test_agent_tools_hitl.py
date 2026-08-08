@@ -15,6 +15,7 @@ from governed_bi.corpus.analyst import for_analyst
 from governed_bi.corpus.schema import ColumnAsset, TableAsset
 from governed_bi.govern.bounds import OUT_OF_SCOPE_MESSAGE
 from governed_bi.govern.policy import GovernancePolicy
+from governed_bi.serve.agent_state import CAP_LEDGER_KEY
 from governed_bi.serve.delivery import delivery_hash_for, payload_digest
 from governed_bi.serve.graph import compile_graph
 from governed_bi.serve.resume import ResumeRejected, resume_clarification
@@ -254,11 +255,12 @@ def test_run_query_attempt_cap(tmp_path: Path) -> None:
 
     capped, update = _call(tools["run_query"], call_id="rq-2", sql="SELECT * FROM nope")
     assert "capped" in capped.lower()
-    assert list(update.get("attempts_by_call") or {}) == ["cap:rq-2"], (
+    assert list(update.get("attempts_by_call") or {}) == [CAP_LEDGER_KEY], (
         "the cap must write its own ledger row. `_run_query` used to return on the cap "
         "*before* appending, so a capped turn carried an empty ledger while `generated_sql` "
         "was still read out of the tool arguments -- ExecutionRecord declared 'capped' and "
-        "nothing ever wrote it."
+        "nothing ever wrote it. The key is a constant rather than `cap:<call_id>` so that "
+        "the tool and the middleware that now ends the turn cannot write two of them."
     )
 
 
