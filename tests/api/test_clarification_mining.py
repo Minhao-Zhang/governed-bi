@@ -41,13 +41,34 @@ def test_mines_a_draft_when_the_knob_is_on(tmp_path: Path) -> None:
     from governed_bi.corpus.store import load
 
     session = _Session(tmp_path)
-    out = {"knobs_resolved": {"enable_clarification_to_draft": True}}
+    out = {
+        "knobs_resolved": {"enable_clarification_to_draft": True},
+        "clarifications": [{"clarification_id": "c1", "basis": "data_definition"}],
+    }
     _mine_clarification_draft(session, _pending(), {"answer": "90 days"}, out=out)
     assets, problems = load(tmp_path)
     assert not problems
     (draft,) = assets
     assert draft.asset_type.value == "term"
     assert "90 days" in draft.summary
+
+
+def test_mines_nothing_when_basis_is_ranking_ambiguity_even_with_the_knob_on(tmp_path: Path) -> None:
+    """Phase 2: a ranking/superlative answer ("best" means X) is a judgment call for the one
+    question that asked it, not a durable schema fact -- it must never reach the shared
+    corpus, regardless of ``enable_clarification_to_draft``.
+    """
+    from governed_bi.api.routes import _mine_clarification_draft
+    from governed_bi.corpus.store import load
+
+    session = _Session(tmp_path)
+    out = {
+        "knobs_resolved": {"enable_clarification_to_draft": True},
+        "clarifications": [{"clarification_id": "c1", "basis": "ranking_ambiguity"}],
+    }
+    _mine_clarification_draft(session, _pending(), {"answer": "total lifetime spend"}, out=out)
+    assets, _ = load(tmp_path)
+    assert assets == []
 
 
 def test_mines_nothing_on_a_decline_even_with_the_knob_on(tmp_path: Path) -> None:

@@ -376,11 +376,40 @@ def _mine_clarification_draft(
     not a session-level constant, so a per-turn override behaves the same way every other
     knob does. Never lets a mining failure surface as a resume failure: the clarification was
     answered and the turn must complete regardless of whether the corpus write worked.
+
+    Phase 2 gate: a clarification whose ``ask_user`` call reported
+    ``basis="ranking_ambiguity"`` is never mined, regardless of the knob. A ranking or
+    superlative reading ("best" means X) is a judgment call for the one question that asked
+    it, not a durable fact about the schema — mining it would let one user's reading of
+    "best" quietly become everyone's default. Only ``basis="data_definition"`` (or a
+    clarification whose basis can't be determined, e.g. pre-Phase-1 state) proceeds through
+    the mining logic below, unchanged. ``pending`` (the ``interrupt()`` payload) does not
+    carry ``basis`` — Phase 1 left that payload UI-facing and untouched on purpose — so it is
+    looked up from ``out["clarifications"]`` by matching ``clarification_id``. **Not**
+    ``out["clarifications_by_call"]``: that dict (keyed by tool call id) is a channel of the
+    *nested* agent's ``GovernedAgentState`` (``serve/agent_state.py``) and never reaches the
+    outer graph's own state. ``serve/nodes/agent_core.py`` reads it off the nested agent's
+    result and re-emits it as ``clarifications`` — a plain accumulating list, one entry per
+    resumed ``ask_user`` call — onto ``ServeState`` (``serve/state.py``), which is what
+    ``graph.invoke`` actually returns and what ``out`` here is. Checked live: reading
+    ``clarifications_by_call`` off ``out`` returns ``None`` on every resumed turn, which would
+    have made this gate a silent no-op.
     """
     from governed_bi.corpus.drafts import submit_draft
     from governed_bi.curator.clarification import draft_from_clarification, resolved_answer_text
 
     if not bool_knob(out, "enable_clarification_to_draft") or session.corpus_root is None:
+        return
+    clarification_id = pending.get("clarification_id")
+    record = next(
+        (
+            c
+            for c in (out.get("clarifications") or [])
+            if isinstance(c, dict) and c.get("clarification_id") == clarification_id
+        ),
+        None,
+    )
+    if record is not None and record.get("basis") == "ranking_ambiguity":
         return
     answer_text = resolved_answer_text(reply)
     if not answer_text:
