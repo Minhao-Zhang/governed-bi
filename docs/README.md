@@ -31,6 +31,16 @@ superseding ADR or a code change wins. Living how-to docs may drift; ADRs do not
 | [0010](adr/0010-live-stage-events.md) | Live stage events |
 | [0011](adr/0011-two-model-split-and-facet-query-rewriting.md) | Two models and a query per facet |
 
+## Measurement findings
+
+Dated analyses of a specific tree or a specific run. Unlike an ADR these decide
+nothing; unlike a how-to they are not maintained. Read the date first.
+
+| Doc | What it covers |
+|---|---|
+| [v2 audit](v2-postmortem-and-v3-brief.md) | what is broken in the tree at `9a3dc4b`, and in what order |
+| [BIRD run 2026-08-07](bird-run-2026-08-07-reanalysis.md) | re-analysis of that run: the gap to WrenAI is mostly retrieval, and why the figures are diagnostic rather than quotable |
+
 ## External UI and data
 
 - UI: [governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui) (`../governed-bi-ui`)
