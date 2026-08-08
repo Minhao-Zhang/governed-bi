@@ -12,6 +12,8 @@ from typing import Annotated, Any
 
 from langchain.agents import AgentState
 
+from governed_bi.serve.ledger import INTROSPECTION_PATHS, attempt_field
+
 __all__ = ["GovernedAgentState", "merge_by_call", "keep_newest", "AttemptBook"]
 
 
@@ -72,7 +74,7 @@ class GovernedAgentState(AgentState):
 
 
 class AttemptBook:
-    """Attempt cap over committed ∪ in-flight tool call ids.
+    """Attempt cap over committed ∪ in-flight *answering* tool call ids.
 
     Committed alone misses parallel siblings in one super-step; in-flight alone
     resets on resume. ``refund`` releases a slot when an admitted call produces no row.
@@ -85,7 +87,19 @@ class AttemptBook:
         self.cap_recorded = False
 
     def charged(self, committed: Mapping[str, Any] | None) -> int:
-        return len(set(committed or ()) | self._in_flight)
+        # ``committed`` is the turn's whole ``attempts_by_call`` ledger, and that ledger
+        # also carries ``sample_rows`` introspection rows (audit visibility, not an
+        # answering statement — see ``ledger.answering_attempts``). Counting those against
+        # this cap meant a model that checked which of two similarly-named columns was the
+        # right join key before writing SQL could exhaust the cap on introspection alone,
+        # leaving zero attempts for the first real ``run_query``. ``_in_flight`` needs no
+        # equivalent filter: only ``run_query`` ever adds to it.
+        answering_ids = {
+            call_id
+            for call_id, attempt in (committed or {}).items()
+            if attempt_field(attempt, "path") not in INTROSPECTION_PATHS
+        }
+        return len(answering_ids | self._in_flight)
 
     def admit(self, committed: Mapping[str, Any] | None, call_id: str) -> bool:
         """Whether this call may run, charging a slot if so."""
