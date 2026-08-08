@@ -402,7 +402,39 @@ def build_tools(
             },
         )
 
-    return [read_body, inspect_schema, sample_rows, run_query, ask_user]
+    @tool
+    async def state_assumption(text: str, runtime: ToolRuntime) -> Command:
+        """Record one plain-language assumption you made answering this question.
+
+        Call this — never as a substitute for ``ask_user`` when a question is genuinely
+        ambiguous — whenever you resolved an ambiguity, applied a filter, or picked one
+        of several plausible readings **without** asking, so the person reading the
+        answer sees what you decided rather than an unexplained number. Examples:
+        "Excluded cancelled orders from the total." / "Assumed 'active' means a purchase
+        in the last 30 days." One call per assumption; call it as many times as you have
+        assumptions to state. Never a substitute for asking when you are genuinely
+        unsure — state an assumption only when you judged the question answerable without
+        asking.
+
+        Same plain-language requirement as ``ask_user``: no table/column names, no
+        dotted paths, no snake_case or camelCase identifiers. A leaked identifier is
+        rejected; rephrase and call again.
+        """
+        leak = find_schema_leak(text)
+        if leak is not None:
+            return _reply(
+                runtime,
+                f"state_assumption rejected: {leak!r} looks like a raw schema identifier, "
+                "not plain business language. Rephrase without table.column paths, "
+                "snake_case, or camelCase identifiers, then call state_assumption again.",
+            )
+        return _reply(
+            runtime,
+            "noted",
+            assumptions_by_call={_call_id(runtime): text},
+        )
+
+    return [read_body, inspect_schema, sample_rows, run_query, ask_user, state_assumption]
 
 
 def _clarification_answer(resume: Any) -> str:

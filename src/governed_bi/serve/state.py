@@ -254,6 +254,10 @@ class ServeState(TypedDict, total=False):
     result_table: dict[str, Any] | None
     #: Prose answer from ``narrate``. Live only; distinct from system ``answer["text"]``.
     answer_text: str | None
+    #: Model-self-reported assumptions from ``state_assumption`` (Gap 1, utku-ai-deployment-
+    #: targets.md). Live only, same class as ``result_table``/``answer_text`` above — per-turn,
+    #: never accumulated, so turn two's answer cannot show turn one's assumptions.
+    assumptions: list[str] | None
     #: Question embedding. Per-turn (streamed path cannot put it on load-time config).
     query_vector: list[float] | None
     #: Epoch seconds when the turn's first node ran. ``wrap_node`` writes it, ``stamp`` reads it
@@ -287,6 +291,7 @@ PER_TURN_RESET: dict[str, Any] = {
     "generated_sql": None,
     "result_table": None,
     "answer_text": None,
+    "assumptions": None,
     "query_vector": None,
     # The turn's clock. Cleared per turn, or turn two's `latency_sec` would span everything the
     # user did between the two questions. `wrap_node` writes it from the first node to run.

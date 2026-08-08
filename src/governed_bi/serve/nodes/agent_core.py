@@ -86,6 +86,7 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
     # keeps the accumulated map first).
     attempts = list((result.get("attempts_by_call") or {}).values())
     clarifications = list((result.get("clarifications_by_call") or {}).values())
+    assumptions = list((result.get("assumptions_by_call") or {}).values())
     delivered = dict(result.get("tool_delivered") or {})
 
     generated_sql = _last_executed_sql(attempts) or _last_run_query_sql(out_messages)
@@ -112,6 +113,8 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
         update["failure"] = failure
     if clarifications:
         update["clarifications"] = clarifications
+    if assumptions:
+        update["assumptions"] = assumptions
     if generated_sql:
         update["generated_sql"] = generated_sql
     # Lifted out of the nested agent's channel, like the ledger above it. The table is what the

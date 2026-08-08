@@ -336,6 +336,29 @@ def test_ask_user_rejects_a_leak_in_why_too() -> None:
     assert "pct_delivered" in text
 
 
+def test_state_assumption_records_plain_language_text() -> None:
+    """Gap 1 (utku-ai-deployment-targets.md): the model's own self-reported
+    assumption, distinct from `ask_user` (no interrupt, never pauses the turn)."""
+    tools = _tools()
+    text, update = _call(
+        tools["state_assumption"], text="Excluded cancelled orders from the total."
+    )
+    assert text == "noted"
+    assert list(update["assumptions_by_call"].values()) == [
+        "Excluded cancelled orders from the total."
+    ]
+
+
+def test_state_assumption_rejects_a_schema_term_leak() -> None:
+    tools = _tools()
+    text, update = _call(
+        tools["state_assumption"], text="Used payments.amount for the total."
+    )
+    assert "rejected" in text
+    assert "payments.amount" in text
+    assert "assumptions_by_call" not in update
+
+
 def test_ask_user_interrupt_and_identity_resume() -> None:
     model = ScriptedChatModel(
         responses=[
@@ -398,6 +421,88 @@ def test_ask_user_interrupt_and_identity_resume() -> None:
     clars = done.get("clarifications") or []
     assert any(c.get("answer") == "2020" for c in clars)
     assert done["answer"]["outcome"] in {"answered", "clarification"}
+
+
+def test_state_assumption_reaches_the_final_answer_unconditionally() -> None:
+    """Gap 1 end to end: a self-reported assumption survives agent_core -> stamp and
+    lands on `answer["assumptions"]` — the exact field the UI must render
+    unconditionally, not gated behind `graded`/`heuristic` the way `why` is."""
+    model = ScriptedChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "state_assumption",
+                        "args": {"text": "Excluded cancelled orders from the total."},
+                        "id": "c1",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(content="Total revenue is $18,496."),
+        ]
+    )
+    graph = compile_graph()
+    config = {
+        "configurable": {
+            "thread_id": "t-assumption",
+            "policy": GovernancePolicy(guard_rules_enabled={}),
+            "agent_model": model,
+        }
+    }
+    turn = {
+        "question": "revenue?",
+        "thread_id": "t-assumption",
+        "turn_index": 1,
+        "turn_id": "turn-assumption",
+        "run_id": "r",
+        "question_id": "q",
+        "db_id": "sales",
+        "attempt_id": "a",
+        "corpus_content_hash": "c",
+        "prompt_set_hash": "p",
+        "knobs_resolved": {},
+        "n_re_served": 0,
+        "facet_route_hits": [("facet_schema", "sales", 1.0)],
+        "messages": [],
+        "usage": [],
+        "clarifications": [],
+    }
+    out = graph.invoke(turn, config)
+    assert out["answer"]["assumptions"] == ["Excluded cancelled orders from the total."]
+
+
+def test_no_assumption_stated_is_a_real_empty_list_not_a_missing_field() -> None:
+    model = ScriptedChatModel(responses=[AIMessage(content="Total revenue is $18,496.")])
+    graph = compile_graph()
+    config = {
+        "configurable": {
+            "thread_id": "t-no-assumption",
+            "policy": GovernancePolicy(guard_rules_enabled={}),
+            "agent_model": model,
+        }
+    }
+    turn = {
+        "question": "revenue?",
+        "thread_id": "t-no-assumption",
+        "turn_index": 1,
+        "turn_id": "turn-no-assumption",
+        "run_id": "r",
+        "question_id": "q",
+        "db_id": "sales",
+        "attempt_id": "a",
+        "corpus_content_hash": "c",
+        "prompt_set_hash": "p",
+        "knobs_resolved": {},
+        "n_re_served": 0,
+        "facet_route_hits": [("facet_schema", "sales", 1.0)],
+        "messages": [],
+        "usage": [],
+        "clarifications": [],
+    }
+    out = graph.invoke(turn, config)
+    assert out["answer"]["assumptions"] == []
 
 
 def test_the_ledger_survives_the_interrupt() -> None:

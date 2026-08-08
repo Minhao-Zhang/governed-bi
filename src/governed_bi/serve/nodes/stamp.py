@@ -369,6 +369,14 @@ def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
         # decides what the turn says, and a second derivation in the recorder is how the audit
         # list and the answer card came to disagree about `answer_text` in the first place.
         "answer_text": state.get("answer_text"),
+        # **The model's own self-reported assumptions (Gap 1, utku-ai-deployment-targets.md),
+        # unconditionally — never gated on delivery/confidence the way `uncertainty_flags` is.**
+        # Same class as `result_table`/`answer_text` above and for the same reason: this is what
+        # the turn's answer *says*, not a durable measured field, so it lives on the live answer
+        # and stays out of `record`. Always a list, never null, so a client can render "no
+        # assumptions stated" as a real (and itself informative) empty state rather than an
+        # absent field it has to null-check.
+        "assumptions": list(state.get("assumptions") or []),
     }
     # The turn's one ``final`` event (ADR 0010 §1). Emitted here rather than from ``wrap.py``
     # because ``stamp`` is the one node deliberately left unwrapped — wrapping the recorder

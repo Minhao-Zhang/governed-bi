@@ -58,6 +58,15 @@ class GovernedAgentState(AgentState):
     #: ``tool_call_id -> clarification``. One row per answered ``ask_user``.
     clarifications_by_call: Annotated[dict[str, Any], merge_by_call]
 
+    #: ``tool_call_id -> plain-language assumption text``. One row per
+    #: ``state_assumption`` call (Gap 1, utku-ai-deployment-targets.md) — the
+    #: model's own self-reported "here is what I assumed answering this",
+    #: distinct from ``clarifications_by_call`` (a question the model asked and
+    #: a human answered) and from anything derivable from ``pulled_in``/
+    #: ``licensed`` (which say a definition was *available*, not that it was
+    #: *applied*).
+    assumptions_by_call: Annotated[dict[str, Any], merge_by_call]
+
     #: Last successful query's result table. Reduced, not LastValue: see :func:`keep_newest`.
     result_table: Annotated[dict[str, Any] | None, keep_newest]
 
