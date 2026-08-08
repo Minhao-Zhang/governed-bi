@@ -90,7 +90,70 @@ declared default). There is no `governed_bi.local.toml` on this branch.
 - [ ] `GET /capabilities` reports `enable_clarification_to_draft` matching
   the session's actual value.
 
-## 6. Cross-cutting
+## 7. Outcome breakdown reporting (2026-08-07 Power Kiosk audit, Gap 3)
+
+- [ ] `eval/harness.py`'s per-row output carries `clarified`/`refused` booleans
+  that agree with the row's actual `outcome` (`Outcome.clarification.value`/
+  `Outcome.refused.value`) — spot-check a few rows from a real eval run, not
+  just the unit tests.
+- [ ] `report.outcome_rates(population)` returns `correct`/`clarified`/
+  `refused` rates that sum to the population (allowing for `Measured.unmeasured`
+  on rows missing a field) — this is offline-report-only, no UI surface to
+  check.
+
+## 8. Schema-term leak guard on `ask_user` (2026-08-07 Power Kiosk audit, Gap 2)
+
+- [ ] `find_schema_leak()` unit tests still pass (dotted path, snake_case,
+  camelCase, and the documented false-positive case: a camelCase *proper noun*
+  like a customer name is indistinguishable from a real leak by design).
+- [ ] **Not yet observed live**: get a real model to draft a clarification
+  question that references a raw column/table name, and confirm the backend
+  log shows `ask_user rejected: ...` before the turn pauses, and the *next*
+  question the user actually sees is the rewritten, plain-language version.
+  Forcing this naturally is hard — if you hit it while testing something
+  else, that's the first live confirmation; don't go out of your way.
+
+## 9. Assumption self-report (2026-08-07 Power Kiosk audit, Gap 1)
+
+- [ ] Backend: `state_assumption` is bound (6 tools total — confirm against
+  ADR 0005 §3.5, not just a hard-coded count) and a turn that calls it lands
+  the text, verbatim, in `answer["assumptions"]`.
+- [ ] **UI, not yet observed live**: an `answered` outcome whose `assumptions`
+  array is non-empty renders the "Assumptions" block in `answer-card.tsx`
+  (`ListChecks` icon + bullet list) — ask a question with a plausible-but-
+  unstated interpretation gap (e.g. two tables that could both be "the"
+  answer) and see whether the model states an assumption instead of asking.
+
+## 10. Chat UI retarget to v2's answer/interrupt contract (2026-08-07)
+
+- [ ] `refused` and `capped` outcomes render the right badge + explanation
+  text (`reliability-stamp.tsx`/`answer-card.tsx`).
+- [ ] A live `ask_user` interrupt renders the `ClarificationPrompt` (question,
+  why, freeform input, defer button) — **this exact path was silently broken**
+  until 2026-08-07 (`clarificationRequestSchema` required a `tier` field v2
+  never sends; `safeParse` failed silently, interrupt rendered as nothing).
+  If a clarification ever shows a blank screen again, suspect a schema/wire
+  mismatch first — check the raw `GET /threads/{id}/state` JSON against the
+  zod schema by hand before assuming it's a new bug.
+- [ ] Submitting a clarification answer resumes the turn to a real final
+  answer (`stream.submit(undefined, { command: { resume } })`).
+
+## ⚠️ Known out of scope: v1-only admin/corpus surface, not ported to v2
+
+The `/corpus` page (`AssumptionsLog`, `ConflictsPanel`, `ClarificationToggle`,
+the elicitation wizard) and its backing routes —
+`/corpus/conflicts`, `/corpus/assumptions`, `/clarifications`,
+`/elicitation/candidates`, `/settings/allow-user-clarification` — are v1-only.
+v2's `routes.py` never implemented them; `/capabilities` hard-codes
+`can_edit: False`, which is *why* `ClarificationToggle` renders nothing (it
+bails out on `!canEdit(caps)`) rather than a bug in the toggle itself. Testing
+these against the v2 backend will reliably 404/blank — that's expected until
+someone does the (separate, sizable) work of porting v1's admin API surface
+to v2. Don't file these as regressions from the 2026-08-07 loop; they predate
+it and are untouched by it. Skip section testing on `/corpus` entirely until
+that porting work is scoped and started.
+
+## 11. Cross-cutting
 
 - [ ] Full suite green (`uv run pytest`) and all five conformance lints clean
   (`uv run python tools/check_imports.py`,
@@ -100,3 +163,10 @@ declared default). There is no `governed_bi.local.toml` on this branch.
   `corpus/drafts.py`'s `submit_draft`/`approve_draft` — grep for any direct
   `corpus.store.write` call outside that module before merging a change to
   any of the four phases.
+- [ ] **Local dev env**: `.claude/launch.json`'s backend config sets
+  `GOVERNED_BI_EMBEDDING_MODEL`/`GOVERNED_BI_EMBEDDING_PROVIDER` — without
+  these, the semantic retrieval channel silently reports `failed` on every
+  facet and the corpus (German-language `beer_factory` schema) becomes
+  effectively unsearchable against English questions, producing a wall of
+  `no_schema_matched` refusals that look like a serving bug but are a missing
+  local env var.
