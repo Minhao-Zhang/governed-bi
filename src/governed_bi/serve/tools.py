@@ -14,7 +14,7 @@ import asyncio
 import hashlib
 import json
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Any, Literal
 
 from langchain.tools import ToolRuntime
 from langchain_core.messages import ToolMessage
@@ -345,13 +345,30 @@ def build_tools(
         )
 
     @tool
-    async def ask_user(question: str, runtime: ToolRuntime, why: str = "") -> Command:
+    async def ask_user(
+        question: str,
+        runtime: ToolRuntime,
+        basis: Literal["data_definition", "ranking_ambiguity"],
+        why: str = "",
+    ) -> Command:
         """Pause and ask the human a clarifying question (HITL interrupt).
 
         ``question``/``why`` reach a business user, never an engineer — write them in
         plain language, with no table/column names, no dotted `table.column` paths, and
         no snake_case or camelCase identifiers. A leaked identifier is rejected before
         this pauses the turn; rephrase and call ``ask_user`` again.
+
+        ``basis`` states which of two reasons made you call this tool, so the answer can
+        be routed correctly afterwards:
+
+        - ``"data_definition"`` — a missing fact about the schema or a business rule that
+          has one right answer for everyone (e.g. how a column encodes a value, what
+          counts toward a metric). The answer is a durable fact worth remembering for
+          every future question, not just this one.
+        - ``"ranking_ambiguity"`` — the question turns on a ranking or superlative
+          ("best", "top", "most valuable") that more than one metric could reasonably
+          mean. The answer is a choice for this turn only; a different user, or the same
+          user on another day, may mean something else by the same word.
         """
         leak = find_schema_leak(question, why)
         if leak is not None:
@@ -398,6 +415,7 @@ def build_tools(
                     "why": why,
                     "answer": text,
                     "turn_id": turn_id,
+                    "basis": basis,
                 }
             },
         )

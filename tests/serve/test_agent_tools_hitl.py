@@ -355,6 +355,7 @@ def test_ask_user_rejects_a_schema_term_leak_before_pausing() -> None:
     text, update = _call(
         tools["ask_user"],
         question="does revenue mean payments.amount or line_items.unit_price?",
+        basis="data_definition",
     )
     assert "rejected" in text
     assert "payments.amount" in text or "line_items.unit_price" in text
@@ -367,9 +368,32 @@ def test_ask_user_rejects_a_leak_in_why_too() -> None:
         tools["ask_user"],
         question="How should we handle cancelled orders?",
         why="the amount could come from pct_delivered",
+        basis="data_definition",
     )
     assert "rejected" in text
     assert "pct_delivered" in text
+
+
+def test_ask_user_requires_a_basis_of_exactly_two_kinds() -> None:
+    """Phase 1 (this initiative): the model must self-report which of two ambiguity
+    kinds triggered ``ask_user``, so a later phase can route a data-definition answer
+    into the shared corpus while keeping a ranking/superlative answer turn-scoped only.
+
+    ``basis`` has no default, so its absence must be visible in the tool's own schema
+    (``required``) rather than discovered only when a call omits it and something downstream
+    silently guesses. ``.args`` is ``StructuredTool``'s public view of its argument schema
+    (``tool_call_schema.model_json_schema()`` under the hood); no test in this repo already
+    asserts a tool's arg schema, so this is the standard LangChain property rather than a
+    codebase-specific idiom.
+    """
+    tools = _tools()
+    schema = tools["ask_user"].args
+    assert schema["basis"]["enum"] == ["data_definition", "ranking_ambiguity"], schema
+    assert "default" not in schema["basis"], (
+        "basis must have no default -- the model has to state one every time"
+    )
+    required = tools["ask_user"].tool_call_schema.model_json_schema().get("required", [])
+    assert "basis" in required, "basis must be required, not optional"
 
 
 def test_state_assumption_records_plain_language_text() -> None:
@@ -403,7 +427,7 @@ def test_ask_user_interrupt_and_identity_resume() -> None:
                 tool_calls=[
                     {
                         "name": "ask_user",
-                        "args": {"question": "which year?"},
+                        "args": {"question": "which year?", "basis": "data_definition"},
                         "id": "c1",
                         "type": "tool_call",
                     }
@@ -560,8 +584,8 @@ def test_the_ledger_survives_the_interrupt() -> None:
         responses=[
             AIMessage(content="", tool_calls=[{**call, "id": "rq-1"}]),
             AIMessage(content="", tool_calls=[
-                {"name": "ask_user", "args": {"question": "which year?"}, "id": "c1",
-                 "type": "tool_call"},
+                {"name": "ask_user", "args": {"question": "which year?", "basis": "data_definition"},
+                 "id": "c1", "type": "tool_call"},
             ]),
             AIMessage(content="ok: 2020"),
         ]

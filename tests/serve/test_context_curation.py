@@ -328,6 +328,10 @@ def test_the_analyst_prompt_names_the_id_convention_and_every_tool() -> None:
     never named here — nothing told the model when to prefer it over ``ask_user``, which is
     exactly why "Who are our best customers?" landed on either one non-deterministically across
     runs instead of reliably asking which metric "best" means.
+
+    v4 adds ``ask_user``'s new required ``basis`` argument — the prompt must name it and both
+    of its literal values, or the model has no guidance on which one to pass for either of the
+    two triggers this docstring already describes.
     """
     from governed_bi.register.prompts import PROMPT_REGISTRY, prompt_text
 
@@ -345,6 +349,9 @@ def test_the_analyst_prompt_names_the_id_convention_and_every_tool() -> None:
     assert "v1" in PROMPT_REGISTRY["analyst"].variants, (
         "v1 is the baseline v2 has to beat; deleting it deletes the comparison"
     )
+    assert "basis" in text, "ask_user's basis argument is required but never explained"
+    assert "data_definition" in text, "no guidance on when to pass basis=\"data_definition\""
+    assert "ranking_ambiguity" in text, "no guidance on when to pass basis=\"ranking_ambiguity\""
 
 
 def test_context_eviction_reports_what_it_dropped() -> None:
