@@ -2,15 +2,13 @@
 
     uv run --frozen python tools/smoke_api.py
 
-Why a script and not a test: the routes are pure projections of a loaded `Session`, but
-*loading* one needs a corpus on disk and the environment that names it, which a unit test must
-not depend on. And why not `langgraph dev`: a long-running server is a second thing to remember
-to stop, its reloader has served stale `src/` here before, and every question this answers is
-answerable by calling the route functions directly.
+A script and not a test because loading a `Session` needs a corpus on disk and the environment
+naming it, which a unit test must not depend on. Not `langgraph dev` because its reloader has
+served stale `src/` here before, and every question this answers is answerable by calling the
+route functions directly.
 
-This is the cheap half of verification. The other half is `npm run check:api` in
-`governed-bi-ui`, which validates these same payloads against the client's real zod schemas —
-that needs a live engine, because the schemas are TypeScript.
+The cheap half of verification. The other half is `npm run check:api` in `governed-bi-ui`, which
+validates these payloads against the client's zod schemas and needs a live engine.
 
 Prints shapes and counts only. Never prints an environment value: a DSN carries credentials.
 """
@@ -25,11 +23,10 @@ REPO = Path(__file__).resolve().parent.parent
 
 
 def _load_env() -> list[str]:
-    """Put `.env` into the process environment. **A process entry point may do this; `src/`
-    may not** — the engine reads its configuration from the environment, and a library that
-    reaches for a dotfile makes its behaviour depend on the working directory.
+    """Put `.env` into the process environment. Returns the NAMES it set, never the values.
 
-    Returns the NAMES it set, never the values.
+    A process entry point may do this; `src/` may not — a library that reaches for a dotfile
+    makes its behaviour depend on the working directory.
     """
     path = REPO / ".env"
     if not path.exists():

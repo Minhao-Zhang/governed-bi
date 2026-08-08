@@ -18,10 +18,9 @@ __all__ = ["GovernancePolicy", "DEFAULT_DIALECT"]
 
 #: The dialect assumed when a caller does not thread one from its connector.
 #:
-#: Not a knob: it is a fact about the datasource, and ``ports.Connector.dialect``
-#: is where the real value comes from. Postgres because the obfuscated BIRD
-#: databases are Postgres-only, and because the bypass list is Postgres-specific —
-#: a stricter default than SQLite in the one dimension that matters.
+#: Not a knob: ``ports.Connector.dialect`` is where the real value comes from.
+#: Postgres because the bypass list is Postgres-specific, so it is the stricter
+#: default of the two.
 DEFAULT_DIALECT = "postgres"
 
 
@@ -51,8 +50,8 @@ class GovernancePolicy:
     def cost_layer_enabled(self) -> bool:
         """Whether the cost layer has a bound to compare against.
 
-        The only reader of ``cost_budget``, so ``UNSET`` is handled in exactly one
-        place instead of at every branch that might have written ``or 0``.
+        The only reader of ``cost_budget``, so ``UNSET`` is handled in one place
+        rather than at every branch that might have written ``or 0``.
         """
         return not isinstance(self.cost_budget, Unset)
 
@@ -71,9 +70,9 @@ class GovernancePolicy:
 def _assert_policy_tracks_the_register() -> None:
     """Import-time guard: the two knobs that must stay uncalibrated still are.
 
-    Asserted as an **effect** on a constructed policy, not by comparing this module
-    against its own constant: a default that silently became a number is the failure
-    this catches, and it would read as a perfectly ordinary integer here.
+    Asserted as an effect on a constructed policy, not against this module's own
+    constants: the failure being caught is a default that became a number, which
+    would read as an ordinary integer here.
     """
     policy = GovernancePolicy()
     if policy.cost_layer_enabled():  # pragma: no cover - import-time guard

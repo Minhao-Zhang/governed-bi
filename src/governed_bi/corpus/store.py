@@ -31,11 +31,9 @@ __all__ = ["SUFFIX", "load", "load_file", "write"]
 #: The one suffix a corpus asset file has.
 SUFFIX = ".yaml"
 
-#: Suffixes :func:`load` looks at. ``.yml`` is included **so that it can be
-#: reported**: it is the one near-miss that is almost certainly a typo rather than a
-#: deliberately different file, and a file the loader ignores in silence is an asset
-#: the corpus lost. Everything else under the tree -- the markdown D9 keeps beside
-#: the YAML -- is not an asset file and is not reported as a missing one.
+#: Suffixes :func:`load` looks at. ``.yml`` is included **so it can be reported**: it is
+#: the one near-miss that is almost certainly a typo, and a file the loader ignores in
+#: silence is an asset the corpus lost. Other files (D9's markdown) are not asset files.
 _LOOKED_AT: tuple[str, ...] = (SUFFIX, ".yml")
 
 
@@ -111,9 +109,8 @@ def load(
 def load_file(path: Path, *, where: str | None = None) -> tuple[list[Asset], list[Problem]]:
     """One file. Never raises.
 
-    ``where`` overrides the label in a problem, so a caller can report a path
-    relative to the corpus root rather than an absolute one that differs per machine
-    -- and a digest or a diff of the reported problems stays comparable between runs.
+    ``where`` overrides the label in a problem so a caller can report a corpus-relative
+    path; an absolute one differs per machine and makes problem diffs incomparable.
     """
     label = where or str(path)
     try:
@@ -140,17 +137,11 @@ def load_file(path: Path, *, where: str | None = None) -> tuple[list[Asset], lis
 def _one(raw: Any, *, where: str) -> tuple[list[Asset], list[str]]:
     """One raw mapping into its asset, plus any inline columns.
 
-    Order matters: **construct, then validate.** Two steps, not three. There was a
-    sanitize step ahead of both; it is gone, and ADR 0005 §1.6 is where the reasoning
-    lives. In short: the corpus is trusted, the incoming question is not, so injection
-    is checked once at the analyst's input by ``govern.guard`` rather than by editing
-    what a data engineer wrote. Deleting it also closed a defect -- sanitizing on
-    ``load`` changed what reached the model while ``corpus_content_hash``, computed
-    over the files on disk, did not move.
-
-    Validation therefore now checks exactly the text that enters the index: the
-    250-character bound is a bound on the value as written, with nothing in between
-    rewriting it.
+    **Construct, then validate — two steps, no sanitize step** (ADR 0005 §1.6). The corpus
+    is trusted and the question is not, so injection is checked at the analyst's input by
+    ``govern.guard``. Re-adding a sanitizer here would also break treatment identity:
+    it changes what reaches the model while ``corpus_content_hash``, taken over the files
+    on disk, does not move. Validation therefore bounds exactly the text that is indexed.
     """
     if not isinstance(raw, Mapping):
         return [], [f"expected a mapping, got {type(raw).__name__}"]
@@ -182,16 +173,13 @@ def _split_inline_columns(
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
     """A table's inline columns into their own raw mappings, with derived ids.
 
-    On disk a column lives inline under its table; in memory it is its own asset
-    with its own index entry, because v1 concatenated a table and all its columns
-    into one document and columns were never ranked at all. ``columns`` on the
-    parent becomes the derived ids, so a column has exactly one representation.
+    On disk a column lives inline under its table; in memory it is its own asset with its
+    own index entry, so that columns are ranked at all. ``columns`` on the parent becomes
+    the derived ids, so a column has exactly one representation.
 
-    **Identity is derived, never read.** ADR 0005 §1.2: columns carry no ``id`` in
-    YAML. A file that supplies one anyway, or a ``parent_table``/``schema`` that
-    disagrees with the table it is stored under, is a problem rather than an
-    override -- two spellings of one fact is the shape this package exists to
-    avoid.
+    **Identity is derived, never read** (ADR 0005 §1.2): a file supplying an ``id``, or a
+    ``parent_table``/``schema`` disagreeing with the table it is stored under, is a problem
+    rather than an override.
     """
     if raw.get("asset_type") != "table" or "columns" not in raw:
         return raw, [], []
@@ -216,12 +204,10 @@ def _split_inline_columns(
             "asset_type": "column",
             "id": derive_column_id(table_id, name),
             "schema": schema,
-            # The table's **id**, not its bare physical name. ADR 0008 D4: a reference
-            # field names an asset, exactly, and a bare physical name is only
-            # unambiguous inside one schema -- which is the defect that cost 25% of the
-            # corpus's joins when 57 schemas were pooled (decision #47). This was the
-            # last bare table reference in the asset set, and it survived only because
-            # `_bind` is handed the column's own `schema` as a scope.
+            # The table's **id**, not its bare physical name (ADR 0008 D4): a reference
+            # field names an asset exactly, and a bare physical name is unambiguous only
+            # inside one schema -- the defect that cost 25% of the corpus's joins when 57
+            # schemas were pooled (decision #47, pre-2026-08-05).
             "parent_table": table_id,
         }
         clashes = sorted(k for k, v in derived.items() if k in column and column[k] != v)
@@ -241,20 +227,15 @@ def _split_inline_columns(
 def write(root: Path | str, asset: Asset, *, namespace: str | None = None) -> Path:
     """Persist one asset, and **raise** on anything unsafe or invalid.
 
-    Unlike :func:`load` this is not error-isolated, and the asymmetry is the point:
-    a bad item on the read path is a degradation the caller must survive, while an
-    unsafe path component on the write path is a security control. v1's
-    ``asset.schema`` escaped the corpus root because the write directory was derived
-    from it while the only validator in the area guarded the asset *id*.
+    Not error-isolated, unlike :func:`load`: a bad item on the read path is a degradation to
+    survive, an unsafe path component on the write path is a security control. v1's
+    ``asset.schema`` escaped the corpus root because the write directory was derived from it
+    while the only validator nearby guarded the asset *id*.
 
-    ``namespace`` is required for the three types that declare no ``schema`` field
-    (``join``, ``metric``, ``term``): each one's namespace is a fact held by another
-    asset -- a join's is its left endpoint's, a metric's its base table's, a term's
-    its binding target's -- and ADR 0005 does not say where such a file lives. So
-    this refuses to guess rather than inventing a default that then has to be
-    reconciled with the tag rule. Pass
-    :data:`~governed_bi.corpus.identity.SHARED_NAMESPACE` for one that really is
-    system-wide.
+    ``namespace`` is required for the three types with no ``schema`` field (``join``,
+    ``metric``, ``term``): ADR 0005 does not say where such a file lives, so this refuses to
+    guess rather than inventing a default that must then be reconciled with the tag rule.
+    Pass :data:`~governed_bi.corpus.identity.SHARED_NAMESPACE` for a genuinely global asset.
     """
     reasons = problems_with(asset)
     if reasons:
@@ -280,11 +261,9 @@ def write(root: Path | str, asset: Asset, *, namespace: str | None = None) -> Pa
 def _namespace(asset: Asset) -> str | None:
     """The subtree this asset belongs in, or ``None`` when its type declares none.
 
-    Written as two explicit cases rather than "the first string-ish attribute that
-    looks like a name". ``MetricAsset`` and ``TermAsset`` both have a ``name``, and
-    it is a business name -- a metric called ``revenue`` would land in a directory
-    called ``revenue``, which is a plausible-looking wrong answer of exactly the kind
-    an attribute sweep produces.
+    Two explicit cases, not an attribute sweep: ``MetricAsset`` and ``TermAsset`` also have
+    a ``name``, and it is a *business* name — a metric called ``revenue`` would land in a
+    directory called ``revenue``.
     """
     if isinstance(asset, SchemaAsset):
         return asset.name or None
@@ -295,11 +274,10 @@ def _namespace(asset: Asset) -> str | None:
 def _assert_column_ids_are_derived_the_same_way() -> None:
     """Import-time guard on the one identity this module computes.
 
-    :func:`_split_inline_columns` and the seed both mint column ids, and if they ever
-    disagree the retrieval index, ``resolve``'s closure and the per-type budget all
-    key on different strings for one column -- with nothing anywhere raising. Both go
-    through :func:`~governed_bi.corpus.identity.derive_column_id`; this asserts the
-    shape that function produces is the shape the loader relies on.
+    :func:`_split_inline_columns` and the seed both mint column ids through
+    :func:`~governed_bi.corpus.identity.derive_column_id`. If its shape changes, the index,
+    ``resolve``'s closure and the budget key on different strings for one column, with
+    nothing raising. This asserts the shape the loader relies on.
     """
     probe = derive_column_id("beer_factory.customers", "email")
     if not probe.startswith("beer_factory.customers") or probe.rsplit(".", 1)[-1] != "email":

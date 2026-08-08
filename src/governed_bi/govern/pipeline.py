@@ -40,10 +40,7 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class Prepared:
-    """Outcome of steps 1–4. ``sql`` is ``None`` when nothing may run.
-
-    Carries both raw input and canonical form.
-    """
+    """Outcome of steps 1–4. ``sql`` is ``None`` when nothing may run."""
 
     verdict: CheckVerdict
     #: The exact string to hand to ``Connector.execute``, limit included.
@@ -55,10 +52,9 @@ class Prepared:
 def normalise(text: str) -> str:
     """NFKC. **Only** after :func:`~governed_bi.govern.guard.has_control_characters`.
 
-    The order is kept from ADR 0006 §3, though not for the reason the ADR gives — NFKC
-    does not strip any character the encoding rule rejects (see
-    :mod:`~governed_bi.govern.guard`). It is still the correct order: NFKC *rewrites*
-    text, so any check placed after it is a check on a string nobody sent.
+    NFKC *rewrites* text, so any check placed after it is a check on a string nobody
+    sent. (Not for the reason ADR 0006 §3 gives: NFKC strips no character the encoding
+    rule rejects.)
     """
     return unicodedata.normalize("NFKC", text)
 
@@ -97,23 +93,18 @@ def canonicalise(
 ) -> str | CheckVerdict:
     """Rewrite every declared identifier to the corpus's spelling, **and quote it**.
 
-    Unknown identifiers — model-invented aliases, CTE names — pass through untouched.
-    They are resolved by the binding rule, not by spelling, and rewriting them would
-    be inventing a name.
+    Unknown identifiers — aliases, CTE names — pass through untouched: the binding rule
+    resolves them, and rewriting one would be inventing a name.
 
     **Quoting is unconditional for a known identifier, including one already spelled
-    correctly.** ADR 0008 D2. Rewriting alone is not enough and this was the shipped
-    defect: ``identifier.set("this", "CBSA")`` emits ``address.CBSA`` *unquoted*, and
-    Postgres folds an unquoted identifier to lower case, so it looks for
-    ``address.cbsa`` and reports that the relation does not exist. 81 of 738 tables and
-    610 of 6,909 columns in the obfuscated lake are mixed-case, and each of them failed
-    at the engine **after** a passing verdict — because ``check()`` compares folded keys
-    and the fold made the wrong spelling match.
-
-    "Quote only when necessary" is not the rule, deliberately: *necessary* is a
-    predicate over the engine's folding and quoting rules, and getting it wrong is
-    exactly the above. Always-quoting is also what makes the ledger's ``generated_sql``
-    comparable across runs — one spelling per identifier, forever.
+    correctly** (ADR 0008 D2). Rewriting alone emits the name unquoted, and Postgres
+    folds an unquoted identifier to lower case, so the engine looks for ``address.cbsa``
+    and reports no such relation. 81 of 738 tables and 610 of 6,909 columns in the
+    obfuscated lake are mixed-case, and each failed at the engine *after* a passing
+    verdict, because ``check()`` compares folded keys. "Quote only when necessary" is
+    rejected: *necessary* is a predicate over the engine's folding rules, which is the
+    thing that was got wrong. Always-quoting also gives one spelling per identifier, so
+    ``generated_sql`` is comparable across runs.
 
     Returns the rewritten SQL, or a refusing :class:`CheckVerdict` when an identifier's
     folded form is ambiguous in the corpus.
@@ -135,9 +126,8 @@ def canonicalise(
             )
         declared = spellings.get(key)
         if declared is None:
-            # Not a name the corpus declares: an alias, a CTE, an output label. Left
-            # alone *and left unquoted*, because quoting a name we cannot vouch for adds
-            # nothing and the binding rule is what resolves it.
+            # An alias, a CTE, an output label. Left unquoted: quoting a name we cannot
+            # vouch for adds nothing, and the binding rule is what resolves it.
             continue
         if declared != identifier.name:
             identifier.set("this", declared)
@@ -148,9 +138,9 @@ def canonicalise(
 def _existing_limit(tree: exp.Query) -> int | None:
     """The root's own limit as an integer, or ``None`` if there is not one to read.
 
-    ``None`` means *replace*: no limit, a non-numeric limit (a bound parameter), or a
-    shape this code does not understand. Every one of those is a case where "leave it
-    alone" is how ``LIMIT 100000000`` survived.
+    ``None`` means *replace*: no limit, a non-numeric limit (a bound parameter), or an
+    unrecognised shape. "Leave it alone" on any of those is how ``LIMIT 100000000``
+    survived.
     """
     node = tree.args.get("limit")
     if node is None:
@@ -177,10 +167,9 @@ def apply_row_limit(sql: str, *, max_rows: int, dialect: str = DEFAULT_DIALECT) 
     if tree is None:
         return refuse("r_empty_statement", "no statement to limit")
     if not isinstance(tree, exp.Query):
-        # Only a query has a root LIMIT to set. Anything else reaching step 4 has
-        # already cleared check(), so this is unreachable rather than tolerated — and
-        # it refuses rather than returning the statement unlimited, which is the v1
-        # behaviour this whole function replaces.
+        # Only a query has a root LIMIT to set, and anything reaching step 4 cleared
+        # check(), so this is unreachable. It refuses rather than returning the
+        # statement unlimited.
         return refuse(
             "r_not_a_read", f"{type(tree).__name__} has no statement-level row limit"
         )
@@ -203,16 +192,11 @@ def prepare(
 ) -> Prepared:
     """Steps 1–4. The only function that may produce a string for execution.
 
-    ``spellings`` has **no default**, and that is the fix for the defect this signature
-    caused. ADR 0008 D7: *an optional control argument is a control that will be
-    un-wired.* It shipped as ``spellings: ... = None``, the only production caller never
-    passed it, ``fold_map`` — which produces it — had no caller in ``src/`` at all, and
-    two green tests exercised canonicalisation in isolation with hand-written dicts. A
-    control with a producer nobody calls and a consumer nobody feeds.
-
-    Pass ``spellings={}`` to state that this call declares none. ``None`` raises, on the
-    same reasoning ``check()`` gives for ``licensed=None``: absence is not permission,
-    and it must not be spellable by omission.
+    ``spellings`` has **no default** (ADR 0008 D7: an optional control argument is a
+    control that will be un-wired — this one shipped optional and no production caller
+    passed it). Pass ``spellings={}`` to state that this call declares none; ``None``
+    raises, on ``check()``'s reasoning for ``licensed=None`` — absence is not
+    permission and must not be spellable by omission.
     """
     if spellings is None:
         raise GovernanceUsageError(

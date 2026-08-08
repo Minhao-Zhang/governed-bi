@@ -34,10 +34,9 @@ def oracle_arm(*, connector: Any, **extra: Any) -> ArmSpec:
     """Grader ceiling — gold SQL only, no model.
 
     **Measures nothing unless the questions carry an independent gold** — a
-    ``gold_fingerprint``, or ``gold_columns`` + ``gold_rows``. Without one, every row is
-    ``correct=None`` and the arm's EX is *unmeasured*, with the reason attached. It used to
-    grade the executed gold against itself and return 1.000 for any statement whatsoever; see
-    :mod:`governed_bi.eval.oracle` for what that cost.
+    ``gold_fingerprint``, or ``gold_columns`` + ``gold_rows``. Without one every row is
+    ``correct=None`` and the arm's EX is *unmeasured*, because the only comparison left is
+    the executed gold against itself, which returns 1.000 for any statement whatsoever.
     """
 
     def build() -> dict[str, Any]:
@@ -53,16 +52,14 @@ def oracle_arm(*, connector: Any, **extra: Any) -> ArmSpec:
 def live_arm(session: Any, *, name: str = "live", **extra: Any) -> ArmSpec:
     """A real model over a real corpus — the arm that costs money.
 
-    Built from a :class:`~governed_bi.serve.session.Session` rather than from loose
-    keyword arguments, and that is the point: the session is what mints
-    ``corpus_content_hash``, ``prompt_set_hash`` and ``knobs_resolved``, and those are the
-    fields every quotability gate reads. ``_base_turn`` in the harness fabricated
-    ``corpus_content_hash`` as ``f"corpus-{arm}"`` — so two runs over two *different*
-    corpora compared equal, which is a forged comparison rather than a wrong one, and is
-    v1's ``corpus_content_hash == "unknown"`` defect with a friendlier spelling.
+    Built from a :class:`~governed_bi.serve.session.Session`, not loose keyword arguments:
+    the session is what mints ``corpus_content_hash``, ``prompt_set_hash`` and
+    ``knobs_resolved``, the fields every quotability gate reads. A fabricated hash (the
+    harness once used ``f"corpus-{arm}"``) makes two runs over *different* corpora compare
+    equal — a forged comparison, not a wrong one.
 
-    Pass the returned arm to ``run_arm(..., session=session)``; the harness then takes
-    each turn from ``Session.turn`` instead of building one.
+    Pass the returned arm to ``run_arm(..., session=session)``; the harness then takes each
+    turn from ``Session.turn`` instead of building one.
     """
     def build() -> dict[str, Any]:
         cfg = dict(session.configurable()["configurable"])

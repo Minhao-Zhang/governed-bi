@@ -39,10 +39,10 @@ class GovernanceUsageError(TypeError):
 #: statement it does not model (``exp.Command`` — ``VACUUM``, ``COPY``, anything the
 #: parser passes through as text).
 #:
-#: This is a **denylist inside a fail-closed frame**, and the frame is what makes it
-#: safe: the root of the statement must already be a read expression, so these are
-#: the constructs that can hide *inside* one — ``WITH d AS (DELETE FROM t RETURNING
-#: *) SELECT * FROM d`` is a ``Select`` at the root and deletes rows.
+#: A **denylist inside a fail-closed frame**: the root must already be a read
+#: expression (``READ_ROOTS``), so these are only the constructs that hide *inside*
+#: one — ``WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d`` is a ``Select`` at
+#: the root and deletes rows.
 WRITE_NODES: tuple[type[exp.Expr], ...] = (
     exp.Insert, exp.Update, exp.Delete, exp.Merge, exp.Copy,
     exp.Create, exp.Drop, exp.Alter, exp.TruncateTable,
@@ -86,8 +86,8 @@ def check(
         )
     policy = policy or GovernancePolicy()
 
-    # Normalised OUTSIDE the wrapper: a malformed key is a caller error, and turning
-    # it into a blocked verdict would hide a broken caller as an unsafe query.
+    # Normalised OUTSIDE the try: a malformed key is a caller error, and a blocked
+    # verdict would report a broken caller as an unsafe query.
     licensed_keys = frozenset(normalise_table_key(key, default_schema) for key in licensed)
     excluded_keys = frozenset(
         normalise_column_key(key, default_schema) for key in corpus.excluded_columns
@@ -123,10 +123,10 @@ def check(
 
         layer = Layer.BINDING
         evaluated.append(layer)
-        # Every column key the corpus declares, whatever its disposition. Binding uses
-        # it to decide *which* source a bare name belongs to and authorises nothing
-        # with it — an excluded column must still bind, or the column layer never gets
-        # to refuse it and the statement fails as "ambiguous" instead of "excluded".
+        # Every column key the corpus declares, whatever its disposition: binding uses
+        # it to pick *which* source a bare name belongs to and authorises nothing. An
+        # excluded column must still bind, or the column layer never gets to refuse it
+        # and the statement fails as "ambiguous" instead of "excluded".
         declared = excluded_keys | suspect_keys | allowed_keys
         bound = bind(views, default_schema=default_schema, known_columns=declared)
         if isinstance(bound, LayerRefusal):
@@ -219,9 +219,8 @@ def _scope_arguments(func: exp.Func, own: frozenset[int]) -> Iterator[exp.Column
     functions (so ``NULLIF(COUNT(*), 0)`` keeps the ``count(*)`` carve-out).
     """
     for node in func.find_all(exp.Column, exp.Star):
-        # isinstance rather than trusting find_all's filter: the narrowing is what lets
-        # the caller read `.parts` and `.table` without a cast, and a shape that is
-        # neither is skipped rather than read with the wrong attribute.
+        # isinstance rather than trusting find_all's filter: the narrowing lets the
+        # caller read `.parts` and `.table` without a cast.
         if not (id(node) in own and isinstance(node, (exp.Column, exp.Star))):
             continue
         if _nearest_function(node) is not func:
@@ -345,11 +344,10 @@ def graded_delivery_eligible(verdict: CheckVerdict, policy: GovernancePolicy | N
 
 
 def _assert_no_write_frame_is_closed() -> None:
-    """Import-time guard: the write denylist cannot be read as the whole control.
+    """Import-time guard: ``READ_ROOTS`` and ``WRITE_NODES`` must not overlap.
 
-    ``READ_ROOTS`` and ``WRITE_NODES`` must not overlap. An overlap would mean a
-    statement root that is simultaneously a legal read and a write construct, which
-    would make the frame that keeps the denylist honest vacuous.
+    An overlap is a root that is simultaneously a legal read and a write construct,
+    which makes the frame that keeps the denylist honest vacuous.
     """
     overlap = [cls for cls in READ_ROOTS if cls in WRITE_NODES]
     if overlap:  # pragma: no cover - import-time guard

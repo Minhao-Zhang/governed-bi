@@ -11,11 +11,8 @@ import ast
 import sys
 from pathlib import Path
 
-#: Layer order, innermost first. A module may import its own layer and any layer
-#: **before** it. Anything else is an upward import.
-#:
-#: Declared as one list so the order is stated once. Adding a package means adding
-#: it here, which is the point at which someone has to think about where it sits.
+#: Layer order, innermost first. A module may import its own layer and any layer **before** it;
+#: anything else is an upward import. One list, so adding a package forces a decision here.
 LAYERS: tuple[tuple[str, ...], ...] = (
     ("ports",),
     ("register",),
@@ -34,10 +31,9 @@ LAYERS: tuple[tuple[str, ...], ...] = (
 #: Packages required to import in a bare interpreter: stdlib only, no third party.
 STDLIB_ONLY: frozenset[str] = frozenset({"ports", "register"})
 
-#: Third-party roots that must never appear in a ``STDLIB_ONLY`` module. Not an
-#: exhaustive list of third-party packages — an allowlist of *stdlib* would be a
-#: maintenance burden that drifts with every Python release. These are the ones the
-#: project actually depends on, so these are the ones that can leak.
+#: Third-party roots that must never appear in a ``STDLIB_ONLY`` module. A denylist of this
+#: project's own dependencies, not an exhaustive one: the inverse — an allowlist of stdlib —
+#: would drift with every Python release.
 FORBIDDEN_IN_STDLIB_ONLY: frozenset[str] = frozenset({
     "pydantic", "sqlglot", "networkx", "yaml", "numpy",
     "langchain", "langchain_core", "langchain_openai", "langgraph", "deepagents",

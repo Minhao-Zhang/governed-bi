@@ -26,9 +26,8 @@ _B = 0.75
 def _tokenize(text: str) -> list[str]:
     """Lowercased word tokens with surrounding punctuation removed.
 
-    Applied to **both** sides, so the query and the document meet in one vocabulary. There is
-    still no stemming and no stopword list: both are real gaps, both change what a term *means*
-    rather than how it is spelled, and neither is needed to make ``food_type`` match
+    Applied to **both** sides, so query and document meet in one vocabulary. No stemming and
+    no stopword list: both are known gaps, and neither is needed to make ``food_type`` match
     ``food_type,``.
     """
     return [t.lower() for t in _TOKEN.findall(text)]
@@ -124,27 +123,14 @@ class BM25:
     def coverage(self, query: str) -> float | None:
         """Share of the query's distinct terms this corpus has any document for.
 
-        ``None`` when the query tokenises to nothing, which is not 0.0: a blank query has no
-        coverage to measure, and reporting zero would say the corpus failed to match a question
-        nobody asked.
+        ``None``, never 0.0, when the query tokenises to nothing: a blank query has no
+        coverage to measure, and zero would claim the corpus matched nothing.
 
-        **This is the number ``lexical_coverage`` was declared for and never had** (audit §10).
-        It shipped hard-coded to ``0.0`` on every production turn, which reads as *the question
-        shares no vocabulary at all with the corpus* — the maximum-weakness reading of a field
-        whose whole job is to flag exactly that. The register declares it
-        ``Absence.not_measured``, so ``0.0`` was not even the honest placeholder.
-
-        Why the signal matters, from the register's own justification: with an embedder every
-        asset scores above zero, so an out-of-corpus question still returns ``top_k`` tables and
-        a clean run stamps confidence. Cosine cannot tell "nothing here is relevant" from
-        "everything here is a bit relevant". A query whose terms are absent from the corpus
-        vocabulary can.
-
-        Distinct terms, not occurrences: asking the same unknown word twice is one thing the
-        corpus does not know, not two. Measured against ``_idf`` — the full corpus vocabulary,
-        built once in ``__init__`` — rather than against this restricted view, because the
-        question is whether *the corpus* has the vocabulary, not whether this facet's candidate
-        subset does.
+        This is the out-of-corpus signal cosine cannot give — with an embedder every asset
+        scores above zero, so an unanswerable question still returns ``top_k`` tables and
+        stamps confidence. Distinct terms, not occurrences. Measured against ``_idf``, the
+        full corpus vocabulary, not this restricted view: the question is whether *the
+        corpus* has the vocabulary, not whether this facet's candidates do.
         """
         terms = set(_tokenize(query))
         if not terms:

@@ -25,10 +25,8 @@ __all__ = [
     "fold_map",
 ]
 
-#: ``\A``/``\Z`` and nothing else. Written as a compiled pattern rather than
-#: inlined at a call site because there is exactly one definition of "safe as a
-#: path component" and duplicating it is how the asset id got one and the schema
-#: name got none.
+#: ``\A``/``\Z`` and nothing else. One definition of "safe as a path component":
+#: duplicating it is how the asset id got one and the schema name got none.
 SCHEMA_ID_PATTERN = re.compile(r"\A[A-Za-z0-9_][A-Za-z0-9_-]*\Z")
 
 #: Postgres truncates identifiers at ``NAMEDATALEN - 1`` = 63 bytes, so a longer
@@ -40,9 +38,9 @@ MAX_IDENTIFIER_BYTES = 63
 def is_valid_schema_id(raw: object) -> bool:
     """Whether ``raw`` is safe to use as a path component and as a schema name.
 
-    Total on ``object`` on purpose: a non-``str`` arriving here is model-authored
-    YAML that parsed into an ``int`` or a ``list``, and ``re.match`` would raise
-    ``TypeError`` on the security path instead of refusing.
+    Total on ``object``: a non-``str`` here is model-authored YAML that parsed as an
+    ``int`` or ``list``, and ``re.match`` would raise on the security path rather
+    than refuse.
     """
     if not isinstance(raw, str):
         return False
@@ -54,10 +52,9 @@ def is_valid_schema_id(raw: object) -> bool:
 def fold(name: str) -> str:
     """Fold an unquoted identifier the way the engine will.
 
-    ``str.lower`` rather than ``str.casefold``: casefold maps ``ß`` to ``ss``,
-    which would make two distinct identifiers compare equal here and *not* in the
-    engine — a fold that is more aggressive than the engine's is a new
-    mis-binding, which is the direction B5 already went wrong once.
+    ``str.lower``, not ``str.casefold``: casefold maps ``ß`` to ``ss``, so two
+    distinct identifiers would compare equal here and not in the engine. A fold more
+    aggressive than the engine's is a new mis-binding, which is B5's direction.
     """
     return name.lower()
 
@@ -65,15 +62,12 @@ def fold(name: str) -> str:
 def table_key(schema: str | None, name: str) -> str:
     """``{schema}.{slug(physical_name)}``, folded. Unqualified when there is no schema.
 
-    **Slugged, because the allowlist it is compared against is keyed on asset ids** and an
-    asset id carries the slug (ADR 0008 D1). A statement writes the engine's spelling —
-    ``FROM airline."Air Carriers"`` — and ``licensed`` holds ``airline.Air_Carriers_66c534``;
-    without the slug here the two never compare equal and a licensed table refuses.
-
-    Idempotent on an already-slugged name, which is what lets
-    :func:`normalise_table_key` push a caller-supplied *key* through the same function as a
-    statement's *reference*. That single path is the only reason a two-part allowlist entry
-    and a three-part query reference can be compared at all.
+    Slugged because the allowlist it is compared against is keyed on asset ids, which
+    carry the slug (ADR 0008 D1): a statement writes ``FROM airline."Air Carriers"``
+    while ``licensed`` holds ``airline.Air_Carriers_66c534``. Idempotent on an
+    already-slugged name, so :func:`normalise_table_key` can push a caller's *key*
+    through the same function as a statement's *reference* — the only reason a
+    two-part allowlist entry and a three-part reference compare at all.
     """
     return f"{fold(schema)}.{fold(slug(name))}" if schema else fold(slug(name))
 
@@ -87,9 +81,8 @@ def normalise_table_key(raw: str, default_schema: str | None) -> str:
     """A caller-supplied table key, in the same shape a reference resolves to.
 
     A bare name is qualified with ``default_schema`` when the datasource pins one.
-    Without this, an allowlist written as ``{"customers"}`` and a statement written
-    as ``FROM public.customers`` never compare equal, and "the allowlist is empty"
-    and "the allowlist does not match" become the same observation.
+    Otherwise ``{"customers"}`` and ``FROM public.customers`` never compare equal, and
+    "the allowlist is empty" and "it does not match" become one observation.
     """
     parts = [p for p in raw.split(".") if p]
     if not parts:
@@ -105,9 +98,8 @@ def normalise_column_key(raw: str, default_schema: str | None) -> str:
     """A caller-supplied column key, in the same shape a reference resolves to.
 
     Two parts is ``table.column``; three is ``schema.table.column``. One part
-    **raises**: a column key with no table cannot be compared against a bound
-    reference, and silently accepting it would make a lake-wide bare-name allowlist
-    representable again — which is exactly what made B4 exploitable.
+    **raises**: it cannot be compared against a bound reference, and accepting it
+    would make a lake-wide bare-name allowlist representable — B4's hole.
     """
     parts = [p for p in raw.split(".") if p]
     if len(parts) == 2:
@@ -126,10 +118,8 @@ def fold_map(declared: Iterable[str]) -> tuple[Mapping[str, str], frozenset[str]
     An ambiguous fold is two declared identifiers differing only by case. Left
     un-rewritten, the engine folds the reference to one of them — possibly the
     **decoy** — so the column layer approves one binding and the engine reads
-    another. ADR 0006 §3's first draft called canonicalisation "cosmetic-but-
-    recorded, never a control"; this is why that was false. Ambiguous folds refuse
-    (``r_ambiguous_fold``); they are rare and the alternative is silent
-    mis-binding.
+    another. That is why canonicalisation is a control and not cosmetic (against ADR
+    0006 §3's first draft). Ambiguous folds refuse: ``r_ambiguous_fold``.
     """
     spellings: dict[str, str] = {}
     ambiguous: set[str] = set()

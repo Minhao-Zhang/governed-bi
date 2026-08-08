@@ -80,13 +80,12 @@ class Stage(str, Enum):
     #: Attempt cap terminated the turn. Distinct from crash and model refusal.
     cap = "cap"
 
-    #: Post-hoc judgement of whether the statement answered the question. An
-    #: observer: it writes a verdict and decides nothing, so it appears in no
-    #: refusal table and ends no turn.
+    #: Post-hoc judgement of whether the statement answered the question. An observer:
+    #: it decides nothing, so it appears in no refusal table and ends no turn.
     reflect = "reflect"
 
-    #: Turns the turn into a sentence. Adopts the agent's closing text when
-    #: present; generates only when the loop ended without prose.
+    #: Turns the turn into a sentence. Adopts the agent's closing text when present;
+    #: generates only when the loop ended without prose.
     narrate = "narrate"
 
     # ── Terminals ──
@@ -119,9 +118,9 @@ TERMINAL_STAGES: frozenset[Stage] = frozenset({Stage.refuse, Stage.decline, Stag
 class Outcome(str, Enum):
     """How a turn ended, from the measurement's point of view.
 
-    ``crashed`` vs ``refused`` must stay separate: a crash is our bug; a refusal
-    is the product working. ``capped`` is separate from both (ADR 0006 §5).
-    Graded delivery is not an outcome — the turn ``answered``.
+    ``crashed`` vs ``refused`` must stay separate: a crash is our bug, a refusal is
+    the product working, and ``capped`` is neither (ADR 0006 §5). Graded delivery is
+    not an outcome — the turn ``answered``.
     """
 
     answered = "answered"
@@ -184,14 +183,10 @@ def classify_outcome(
     return Outcome.crashed
 
 
-# **``classify_row`` was here and is gone** (audit §10). It was named by ``register/record.py``
-# as the reader of the outcome tier and had **zero callers**: every real classification goes
-# through :func:`classify_outcome`, which ``stamp`` calls with the state it already holds.
-#
-# It was a second entry point to one decision -- read the stamped ``outcome`` if it parses,
-# otherwise re-derive -- and the two would have disagreed exactly when the stamp was wrong,
-# which is the case a reader would have used it to check. One derivation, no fallback: a row
-# whose ``outcome`` does not parse is a broken row, not a row to guess about.
+# ``classify_row`` was here and is gone (audit §10): zero callers, and it was a second
+# entry point to one decision (read the stamped ``outcome`` if it parses, else re-derive)
+# that would have disagreed exactly when the stamp was wrong. One derivation, no fallback:
+# a row whose ``outcome`` does not parse is a broken row, not a row to guess about.
 
 
 def _assert_refusal_tables_are_closed() -> None:

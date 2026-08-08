@@ -1,18 +1,13 @@
 """Route / resolve / connect nodes — thin wrappers over ``retrieve.*``.
 
-F2: ``route_node`` runs ADR 0005 §2.5 two-pass retrieval when a
-``UnifiedIndex`` is on ``config["configurable"]["index"]``. Without an index,
-F1-compatible behaviour remains (schema selection from facet / injector hits;
-filter-or-empty ``retrieved``).
+F2: ``route_node`` runs ADR 0005 §2.5 two-pass retrieval when a ``UnifiedIndex`` is on
+``config["configurable"]["index"]``. Without an index, F1-compatible behaviour remains
+(schema selection from facet / injector hits; filter-or-empty ``retrieved``).
 
-**All three nodes declare ``config``, and that is load-bearing** (ADR 0005 §2.8.2).
-``wrap.py`` forwards ``RunnableConfig`` only to nodes whose signature asks for it, so
-until 2026-08-03 ``resolve_node`` and ``connect_node`` had no way to reach the corpus
-and read their inputs off ``state`` instead -- five fields that nothing anywhere ever
-wrote. ``connect`` therefore ran on an empty edge set on every turn ever served and
-declined ``missing_join_path`` whenever a turn licensed more than one table, while
-``resolve`` ran on an empty reference map so **no closure row in §2.8 had ever fired**.
-Single-table turns answered, which is what made it invisible.
+**All three nodes must declare ``config``** (ADR 0005 §2.8.2): ``wrap.py`` forwards
+``RunnableConfig`` only to nodes whose signature asks for it, so a node that drops the
+parameter cannot reach the corpus and falls back to ``state`` keys nothing writes — an
+empty edge set and an empty reference map, silently.
 """
 
 from __future__ import annotations
@@ -48,12 +43,9 @@ __all__ = [
     "connect_node",
 ]
 
-# No local defaults for `route_top_n`, `max_steiner_points` or `max_crossings`. All three
-# used to be `state.get(name, <constant here>)`, and no production entry point writes those
-# state keys -- so they were comparability knobs nothing could set, and the record agreed
-# with routing only because the constants happened to equal the register's defaults.
-# `int_knob` reads state, then `knobs_resolved`, then the register, which is the one place
-# the value is declared. ADR 0008 D7.
+# No local defaults for `route_top_n`, `max_steiner_points` or `max_crossings`: `int_knob`
+# reads state, then `knobs_resolved`, then the register, which is the one place the value is
+# declared. A `state.get(name, <constant>)` here is a knob nothing can set. ADR 0008 D7.
 
 
 def empty_retrieved(
@@ -74,15 +66,11 @@ def empty_retrieved(
 def _lexical_coverage(state: Mapping[str, Any], index: Any) -> float | None:
     """Share of the question's terms the corpus vocabulary has, or ``None``.
 
-    **The field shipped hard-coded to ``0.0`` on every production turn** (audit §10), which is
-    the maximum-weakness reading of a signal whose job is to flag exactly that — and the
-    register declares it ``Absence.not_measured``, so zero was not even the honest placeholder.
     ``BM25.coverage`` is the measurement; this decides *which text* is measured and honours the
-    ``lexical_coverage`` test hook when a caller set one.
-
-    The **raw question**, not a facet rewrite. The point of the field is whether the user's own
-    words are in the corpus vocabulary; a rewrite is the utility model restating them *into*
-    that vocabulary, so measuring it would report the rewriter's success as the corpus's.
+    ``lexical_coverage`` test hook. The **raw question**, not a facet rewrite: a rewrite is the
+    utility model restating the question *into* the corpus's vocabulary, so measuring it would
+    report the rewriter's success as the corpus's. ``None`` and never ``0.0`` when unavailable
+    — the register declares the field ``Absence.not_measured``.
     """
     hooked = state.get("lexical_coverage")
     if isinstance(hooked, (int, float)) and not isinstance(hooked, bool):
@@ -100,13 +88,11 @@ def _lexical_coverage(state: Mapping[str, Any], index: Any) -> float | None:
 def route_node(state: dict, config: RunnableConfig) -> dict:
     """Pass-one evidence → top-N schemas → pass-two re-search (or F1 fallback).
 
-    **The terminal guard is not boilerplate here; it is the one place it was missing.**
-    ``route`` is the fan-in of five facet nodes, so it runs whenever *any* of them ran —
-    including when one crashed and ``wrap.py`` marked the turn ``crashed``. Every other node
-    downstream guards, and this one did not, so a facet crash proceeded through routing,
-    retrieval, assembly and a full billed model call before ``stamp`` recorded the crash that
-    had already happened. It also wrote ``"path_kind": None`` unconditionally, which erased
-    that mark outright — the reason ``settle_path_kind`` now treats ``None`` as a no-op.
+    The terminal guard is load-bearing: ``route`` is the fan-in of five facet nodes, so it runs
+    whenever *any* of them ran, including when one crashed and ``wrap.py`` marked the turn
+    ``crashed``. Without it a facet crash reaches a full billed model call. This node must also
+    write no ``path_kind`` key at all — writing ``None`` erased that mark, which is why
+    ``settle_path_kind`` treats ``None`` as a no-op.
     """
     if state.get("path_kind") in TERMINAL_PATH_KINDS:
         return {}
@@ -114,8 +100,7 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
     structure = corpus_structure(config)
     hits = _route_hit_triples(state, structure)
     ranking = sorted(
-        # `facet_weight_schema` / `facet_weight_other`, both 1.0 as shipped. They were
-        # declared comparability knobs with no reader until `route` took a `weights` argument.
+        # `facet_weight_schema` / `facet_weight_other`, comparability knobs, both 1.0 as shipped.
         route_scores(hits, weights=facet_weights(state)),
         key=lambda pair: (-float(pair[1]), str(pair[0])),
     )
@@ -124,10 +109,8 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
     schemas = [schema for schema, _ in eligible[:top_n]]
 
     if not schemas:
-        # ``schema_ranking`` is **not** returned as a top-level key. It was, and
-        # ``ServeState`` declares no such channel, so LangGraph dropped it — while ``stamp``
-        # read the field it publishes out of ``retrieved``, where ``empty_retrieved`` had
-        # already put it. One write reached the record and the other went nowhere.
+        # ``schema_ranking`` is **not** a top-level key: ``ServeState`` declares no such
+        # channel, so LangGraph drops it silently. ``stamp`` reads it out of ``retrieved``.
         return {
             "schemas": [],
             "path_kind": "decline",
@@ -138,15 +121,10 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
     cfg = runtime_config(config)
     index = cfg.get("index")
     if index is not None:
-        # **State first, config second — and this line was the half that was never fixed.**
-        # A query vector is per-turn, so `graph_app.make_graph` binds the run constants once
-        # at load time with no question and the config key is simply absent on the streamed
-        # path, which is the only real one. `accept` writes it to *state* instead, and
-        # `facets._query_vector` was taught to read state first for exactly that reason
-        # (see its docstring). Reading config alone here meant pass two — the pass whose
-        # output becomes the analyst's context — had **no semantic channel at all** on every
-        # served turn, while `eval/datalake.py` supplied the config key and therefore
-        # measured a configuration the server does not run.
+        # **State first, config second.** A query vector is per-turn, but `graph_app.make_graph`
+        # binds the run constants once at load time with no question, so the config key is
+        # absent on the streamed path — the only real one. `accept` writes it to state instead.
+        # Config alone here leaves pass two with no semantic channel on every served turn.
         query_vector = state.get("query_vector") or cfg.get("query_vector")
         retrieved = pass_two_retrieve(
             state=state,
@@ -155,17 +133,15 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
             ranking=ranking,
             query_vector=query_vector,
             # Threaded so pass two can embed each facet's *rewritten* query. Without it the
-            # lexical channel searched the rewrite and the semantic channel scored the raw
-            # question's vector, and the two were then blended — in the pass whose output
-            # becomes the analyst's context.
+            # lexical channel searches the rewrite while the semantic channel scores the raw
+            # question's vector, and the two are then blended.
             embedder=cfg.get("embedder"),
         )
     else:
         # No index: F1-compatible — filter pass-one hits (empty when only injector).
         retrieved = _retrieved_for_schemas(state, schemas, ranking, structure)
 
-    # No ``path_kind`` key at all. Routing succeeding is not a path kind, and the node has
-    # nothing to say about one — saying ``None`` was how a crash got erased.
+    # No ``path_kind`` key: routing succeeding is not a path kind, and ``None`` erases a crash.
     out: dict[str, Any] = {"schemas": schemas, "retrieved": retrieved}
     licensed = list((retrieved.get("by_type") or {}).get("table") or ())
     if licensed:
@@ -176,10 +152,9 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
 def resolve_node(state: dict, config: RunnableConfig) -> dict:
     """Reference closure over hit ids; additions land in ``pulled_in`` / ``licensed``.
 
-    The closure rows are §2.8's, **minus** its last one: join completion needs both
-    endpoints, which a disjunctive fixpoint cannot express, and it runs after
-    ``connect`` (§2.8.1). Everything here is ``join -> its two tables``, never the
-    reverse.
+    §2.8's closure rows **minus** its last one: join completion needs both endpoints, which a
+    disjunctive fixpoint cannot express, so it runs in ``connect`` (§2.8.1). Everything here is
+    ``join -> its two tables``, never the reverse.
     """
     if state.get("path_kind") in TERMINAL_PATH_KINDS:
         return {}
@@ -211,30 +186,21 @@ def resolve_node(state: dict, config: RunnableConfig) -> dict:
 def connect_node(state: dict, config: RunnableConfig) -> dict:
     """Bounded Steiner join over licensed tables; decline when disconnected / over caps.
 
-    **``route_top_n`` is a shortlist, not a conjunction.** Routing selects the top N
-    schemas of 57 and pass two licenses tables from every one of them, so on a pooled lake
-    the terminal set spans schemas that share no join edge and ``connect`` declined
-    ``missing_join_path`` — a decline that says nothing about the question, because the
-    terminals were disconnected *by construction*. Measured 2026-08-04: three questions
-    that answered at ``route_top_n = 1`` all declined at the register default of 3.
+    **``route_top_n`` is a shortlist, not a conjunction.** Pass two licenses tables from every
+    shortlisted schema, so on a pooled lake the terminal set spans schemas that share no join
+    edge and a ``missing_join_path`` decline says nothing about the question. Measured
+    2026-08-04: three questions that answered at ``route_top_n = 1`` all declined at the
+    register default of 3.
 
-    So the terminals are partitioned into :func:`~governed_bi.retrieve.connect.components`
-    first and **one component is kept**. Partitioning by component rather than by schema is
-    deliberate: two schemas with a declared cross-schema join are one component and stay
-    together, which is the case ADR 0005 §2.8.2 charges ``crossings`` for, while two
-    unrelated schemas are two components and the loser is dropped. A decline then means
-    what it says — the tables the turn kept cannot be joined.
+    So terminals are partitioned into :func:`~governed_bi.retrieve.connect.components` first —
+    by component and not by schema, so two schemas with a declared cross-schema join stay
+    together (the case ADR 0005 §2.8.2 charges ``crossings`` for). A losing component's assets
+    are dropped from ``retrieved`` as well as from ``licensed``, so the prompt cannot show the
+    analyst a table the turn may not query.
 
-    The drop is **not silent** and it is not only a licensing change: the losing component's
-    assets are removed from ``retrieved`` as well, so the prompt cannot show the analyst a
-    table the turn may not query. ``schemas`` keeps its declared meaning (route's selected
-    top-N) and ``schema_ranking`` still holds every candidate, so what was shortlisted, what
-    survived and what the turn could reach are three readable facts rather than one.
-
-    Then **join completion** (§2.8.1): every join whose both endpoints are in the final
-    licensed set is pulled in. It runs here rather than in ``resolve`` because a Steiner
-    point's whole purpose is to sit on a join path, so the pairs that most need their
-    ``on`` clause in the prompt are the ones this node has just created.
+    **Join completion** (§2.8.1) runs here rather than in ``resolve``: a Steiner point exists
+    to sit on a join path, so the pairs that most need their ``on`` clause in the prompt are
+    the ones this node has just created.
     """
     if state.get("path_kind") in TERMINAL_PATH_KINDS:
         return {}
@@ -248,22 +214,17 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
     edges = structure.join_edges
     max_points = int_knob(state, "max_steiner_points")
 
-    # **Connect each component; license every one that connects.** Do not pick.
+    # **Connect each component; license every one that connects.** Do not pick: picking caps
+    # reachability at ``recall@1``. Measured over 1 351 BIRD test questions — the router
+    # shortlisted the gold schema 823 times (``recall@3`` 0.609), a single-component pick
+    # reached it 0.442 of the time, and ranking by pass-two score instead of routing rank was
+    # worse (0.417).
     #
-    # Picking one was measured and it caps reachability at ``recall@1``. Over 1 351 BIRD
-    # test questions the router shortlisted the gold schema 823 times (``recall@3`` 0.609)
-    # and a single-component pick reached it only 0.442 of the time — every one of the 226
-    # losses ranked 2nd or 3rd. Ranking by pass-two score instead of by routing rank was
-    # worse (0.417), which is the useful part of the result: no *pick* rule can beat
-    # ``recall@1``, because picking is the thing that throws the other candidates away.
-    #
-    # Licensing all of them is sound rather than lax. ``licensed`` is govern's table
-    # allowlist, and a statement can only reach a table it names; ``check()`` refuses any
-    # it does not. What ``connect`` guarantees is a *retrieval* property — that the prompt
-    # carries a join path for the tables it offers — and that holds per component. So each
-    # component is connected on its own, its Steiner points are added, and
-    # ``complete_joins`` supplies every ON clause. The turn declines only when **no**
-    # component connects, which is now what ``missing_join_path`` means.
+    # Licensing all of them is sound: ``licensed`` is govern's table allowlist and ``check()``
+    # refuses any table a statement names but ``licensed`` does not. What ``connect``
+    # guarantees is a *retrieval* property — that the prompt carries a join path for the
+    # tables it offers — and that holds per component. The turn declines only when **no**
+    # component connects, which is what ``missing_join_path`` means.
     groups = components(terminals, edges=edges)
     connected: set[str] = set()
     added: set[str] = set()
@@ -276,12 +237,10 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
         connected.update(str(t) for t in group)
         added.update(str(a) for a in result.added)
 
-    # ``terminals`` guards the decline, and its absence is not a connect failure. Zero
-    # terminals means retrieval licensed no table at all — there is nothing to join, and
-    # ``connect(set())`` has always returned "not declined" for exactly that reason. Without
-    # the guard this declined every such turn as ``over_connect_bounds``, which is both the
-    # wrong reason and the wrong outcome: the conformance suite's answered path licenses no
-    # table and is supposed to reach the agent.
+    # ``terminals`` guards the decline: zero terminals means retrieval licensed no table, so
+    # there is nothing to join and ``connect(set())`` returns "not declined". Without the guard
+    # every such turn declines ``over_connect_bounds`` — including the conformance suite's
+    # answered path, which licenses no table and is supposed to reach the agent.
     if terminals and not connected:
         reason = _connect_decline_reason(terminals, edges, max_points)
         return {
@@ -293,8 +252,8 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
         }
 
     if unconnectable:
-        # A component that cannot be joined internally is dropped from *both* licensing and
-        # context, so the prompt never shows a table the turn could not write a join for.
+        # Dropped from *both* licensing and context, so the prompt never shows a table the
+        # turn could not write a join for.
         dropped = frozenset().union(*unconnectable)
         retrieved = _restrict_to_component(
             retrieved, frozenset(connected), structure, dropped=dropped
@@ -403,13 +362,10 @@ def _hit_score(hit: Any) -> float | None:
         scores["semantic"] = float(semantic)
     if not scores:
         return None
-    # **``consulted=scores`` here, and only here, because there is nothing better to pass.**
-    # This branch is the fallback for a hit payload carrying components but no ``score`` —
-    # every payload the fan-out and pass two write has one, and it is preferred above. A bare
-    # component payload does not record which channels ran for the query that produced it, so
-    # the components present are the whole of what is known. Stated explicitly rather than
-    # defaulted, because for the two real scoring paths the same assumption is the defect
-    # ``fuse``'s signature exists to prevent.
+    # ``consulted=scores`` here and only here: this is the fallback for a hit payload carrying
+    # components but no ``score``, and such a payload does not record which channels ran, so
+    # the components present are the whole of what is known. Stated rather than defaulted —
+    # for the two real scoring paths the same assumption is what ``fuse``'s signature prevents.
     return float(fuse(scores, FUSE_WEIGHTS, consulted=scores.keys()))
 
 
@@ -507,11 +463,8 @@ def _retrieved_for_schemas(
         "attributions": {k: v for k, v in attributions.items() if k in kept_ids},
         "pulled_in": {},
         "schema_ranking": list(ranking),
-        # The F1 no-index path. There is no BM25 to ask, so there is no coverage to measure —
-        # `None`, honouring the register's `Absence.not_measured`. This is the branch that made
-        # the old hard-coded 0.0 look defensible: without an index the number was never
-        # obtainable, and writing zero rather than nothing is how "we did not look" became "we
-        # looked and found none" on every turn, indexed or not.
+        # F1 no-index path: no BM25 to ask, so no coverage to measure. `None`, honouring the
+        # register's `Absence.not_measured` — zero would read as "looked and found none".
         "lexical_coverage": _lexical_coverage(state, None),
     }
 
@@ -527,8 +480,8 @@ def _copy_retrieved(raw: Any) -> dict[str, Any]:
         },
         "pulled_in": dict(raw.get("pulled_in") or {}),
         "schema_ranking": list(raw.get("schema_ranking") or ()),
-        # Copied through, `None` included: a copy that defaulted absence to 0.0 would
-        # manufacture the measurement the original declined to make.
+        # Copied through, `None` included: defaulting absence to 0.0 would manufacture the
+        # measurement the original declined to make.
         "lexical_coverage": raw.get("lexical_coverage"),
     }
 
@@ -612,24 +565,20 @@ def _restrict_to_component(
     """Drop assets belonging to schemas no kept table belongs to.
 
     ``dropped`` names the tables whose component could not be connected. Their schemas are
-    excluded **only when no kept table shares the schema** -- two components inside one
-    schema are possible, and dropping the whole schema for one of them would delete the
-    half that works.
+    excluded **only when no kept table shares the schema** — two components inside one schema
+    are possible, and dropping the whole schema would delete the half that works.
 
-    Licensing and context must agree. Narrowing ``licensed`` alone would leave the losing
-    schema's tables and columns rendered in the prompt while being unqueryable, so the
-    model would be shown a table and then refused for using it — which reads to the
-    analyst as a governance fault rather than as a routing decision.
+    Licensing and context must agree: narrowing ``licensed`` alone leaves the losing schema's
+    tables rendered in the prompt but unqueryable, so the model is shown a table and then
+    refused for using it.
 
     **Untagged assets are kept.** An unbound term has no schema to be outside of (ADR 0005
-    makes untagged a value, not a defect), and dropping it here would delete a pass-one hit
-    with no record — the failure ``retrieve/structure.py`` was written about.
+    makes untagged a value, not a defect).
     """
     keep_schemas = {structure.table_schemas.get(str(t), "") for t in kept}
     keep_schemas.discard("")
     if dropped:
-        # Tables named explicitly, so a schema that survives in another component keeps
-        # its assets. Only the unreachable *tables* go.
+        # Tables named explicitly, so a schema surviving in another component keeps its assets.
         gone = {str(t) for t in dropped} - {str(t) for t in kept}
     else:
         gone = set()

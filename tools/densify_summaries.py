@@ -1,13 +1,11 @@
 """The mechanical floor for a summary rewrite: move `body`'s domain vocabulary into `summary`.
 
-**Only ``summary`` is indexed** (ADR 0005 I1, ``retrieve/index.py:41``). Every schema and table in
-the gold layer already carries good domain prose in ``body`` and the index has never seen a word of
-it — the indexed text is a list of identifiers with a function-word ratio of 0.00.
+Only ``summary`` is indexed (ADR 0005 I1, ``retrieve/index.py:41``) and the gold layer's domain
+prose all sits in ``body``, so the indexed text is an identifier list with a function-word ratio
+of 0.00. This drops stopwords and duplicates from ``body`` and puts the leading content words in
+front of that list. No model call, no judgement.
 
-This script is the cheapest possible fix: take ``body``, drop stopwords and duplicates, keep the
-leading content words, and put them in front of the identifier list that is already there. No model
-call, no judgement. Measured through the real graph on 114 questions (2 per schema), embedder on,
-facet rewriters off:
+Measured through the real graph on 114 questions (2 per schema), embedder on, facet rewriters off:
 
 .. code-block:: text
 
@@ -17,19 +15,12 @@ facet rewriters off:
     schema recall@1                      0.632    0.693    +6.1 pp
     mean tables licensed      top_n=3     13.7     13.1       -0.6
 
-Coverage rose while the net got *smaller*, which is better targeting rather than more licensing.
-
-**It exists to be beaten.** +6.1 pp is the acceptance bar for a model-authored rewrite:
-a stopword regex bought that much, so an authored pass that does not clear it is not
-worth its tokens. Keeping the floor runnable is what makes the bar checkable — a
-baseline nobody can reproduce is not a baseline.
-
-**What it deliberately does not do.** It does not replace the identifier list with prose. That was
-measured and it loses on both channels (recall@3 0.851 -> 0.825 with the embedder on, 0.640 -> 0.632
-lexical-only): under obfuscation the English table and column *meanings* in that list are the only
-English in a routing document, and prose's function words dilute BM25 while adding nothing an
-embedder needs. Nor does it raise the 250-character cap — the longer-cap arm scored worse than this
-one. Density, not length.
++6.1 pp is the acceptance bar for a model-authored rewrite, and keeping this floor runnable is
+what makes that bar checkable. Two things it deliberately does not do, both measured: replacing
+the identifier list with prose loses on both channels (recall@3 0.851 -> 0.825 embedded, 0.640 ->
+0.632 lexical-only), because under obfuscation those English table and column meanings are the
+only English in a routing document; and raising the 250-character cap scored worse than this.
+Density, not length.
 """
 
 from __future__ import annotations
@@ -49,16 +40,13 @@ from governed_bi.corpus.store import _LOADER, load  # noqa: E402
 from governed_bi.register.knobs import knob_default  # noqa: E402
 
 #: Words that cost characters and buy no discrimination. Not a general English stopword list --
-#: it also drops the catalogue vocabulary every one of the 57 schemas shares (``database``,
-#: ``table``, ``record``), which is the half that matters here: a term fitting twenty schemas
-#: cannot separate them, and BM25 charges for it anyway.
-#: Extended by **measuring** which extracted words appear in the most schemas, not by taste. Over
-#: the 57 gold bodies only four words reached 6 or more: ``tracks`` (15), ``catalog`` (11),
-#: ``reference`` (7), ``sales`` (6). Only ``tracks`` is added -- it is a verb of the same class as
-#: ``holds`` and ``carries``, which were already here. The other three are nouns that carry real
-#: meaning (a catalog is not a transaction log, and ``sales`` names a domain four schemas are
-#: about), and stopping nouns is where a stopword list starts eroding the signal it exists to
-#: concentrate. The function words below were simply missing.
+#: it also drops the catalogue vocabulary all 57 schemas share (``database``, ``table``,
+#: ``record``), since a term fitting twenty schemas cannot separate them and BM25 charges for it.
+#:
+#: Extended by measuring which extracted words appear in the most schemas, not by taste. Over the
+#: 57 gold bodies only four reached 6 or more: ``tracks`` (15), ``catalog`` (11), ``reference``
+#: (7), ``sales`` (6). Only ``tracks`` is added, as a verb like ``holds``; the other three are
+#: nouns carrying real meaning, and stopping nouns erodes the signal this exists to concentrate.
 STOP = frozenset(
     "a an the of and or in on for to with by is are was were be been from as at that this it its "
     "which who whom what when where how many much per each all any not no one row rows table "
@@ -71,9 +59,8 @@ STOP = frozenset(
 def content_words(text: str, *, limit: int) -> list[str]:
     """Domain terms from prose: order preserved, deduplicated, stopwords and 1-2 char tokens gone.
 
-    Order is preserved rather than sorted by any frequency measure, because the opening clause of
-    these bodies is where the curator put the discriminating nouns and a frequency ranking would
-    promote whatever the sentence happened to repeat.
+    Order preserved rather than frequency-sorted: the opening clause is where the curator put the
+    discriminating nouns, and a frequency ranking would promote whatever the sentence repeated.
     """
     out: list[str] = []
     seen: set[str] = set()
@@ -97,10 +84,8 @@ _ELLIPSIS = ("…", "...")
 def _untruncated(text: str) -> str:
     """The source summary with an inherited truncation marker and its partial term removed.
 
-    ``corpus/validate.py`` calls truncation "the treatment" and forbids it, and this tool used to
-    carry gold's markers straight through: the 26 table summaries that arrived at the cap kept
-    their trailing ellipsis, and the partial identifier in front of it. A wasted character in the
-    one field the index reads, and a token that names nothing.
+    ``corpus/validate.py`` forbids truncation. This tool used to carry gold's markers straight
+    through, leaving a token that names nothing in the one field the index reads.
     """
     out = text.rstrip()
     for marker in _ELLIPSIS:
@@ -117,15 +102,10 @@ def _untruncated(text: str) -> str:
 def _fit(prefix: str, added: str, tail: str, cap: int, *, joiner: str) -> tuple[str, bool]:
     """``prefix + added + joiner + tail``, shortened by dropping whole tail entries.
 
-    Returns ``(text, trimmed)``. **The added vocabulary is what must survive, and the tail is
-    what gives way** — that ordering is the fix for this tool's worst defect. It composed with
-    ``f"...{nouns}"[:cap]``, so for a summary already at the cap the slice discarded the nouns
-    entirely and the tool made **no change at all** to those 26 tables while reporting a count
-    that quietly excluded them. Those are the widest tables in the corpus, so the intervention
-    was skipping exactly the rows with the most columns to disambiguate.
-
-    Entries are dropped whole. A mid-word cut would put a fragment in the index, which is the
-    thing being removed here, not the thing being introduced.
+    Returns ``(text, trimmed)``. The added vocabulary must survive and the tail gives way: the
+    previous ``f"...{nouns}"[:cap]`` composition discarded the nouns for any summary already at
+    the cap, silently leaving 26 tables — the widest in the corpus — unchanged. Entries are
+    dropped whole, since a mid-word cut puts a fragment in the index.
     """
     entries = [e.strip() for e in tail.split(",") if e.strip()]
     trimmed = False
@@ -151,10 +131,10 @@ def dense_schema(doc: dict, cap: int) -> tuple[str, bool]:
 
 def dense_table(doc: dict, cap: int) -> tuple[str, bool]:
     """The existing summary, then the domain terms. The column-meaning list leads because it is
-    the more discriminating half — these are English glosses of obfuscated identifiers.
+    the more discriminating half — English glosses of obfuscated identifiers.
 
-    Composed head-first so the identifier ``physical_name`` cannot be trimmed away:
-    ``corpus/validate.py`` requires it in ``summary``, and it lives in the head.
+    Composed head-first so ``physical_name``, which ``corpus/validate.py`` requires in
+    ``summary``, cannot be trimmed away.
     """
     body = str(doc.get("body") or "").strip()
     summary = _untruncated(str(doc["summary"]))
@@ -192,10 +172,9 @@ def main(argv: list[str] | None = None) -> int:
     # second literal here is how this repository acquired two thresholds with different operators.
     cap = int(knob_default("summary_max_chars"))
 
-    # A YAML round-trip of only the affected documents, rather than `store.write()` per asset:
-    # inline columns live nested under their table on disk and are separate assets in memory, so
-    # writing assets back would flatten 5 947 columns into their own files and change the corpus
-    # shape while claiming to change only its text.
+    # A YAML round-trip of only the affected documents, not `store.write()` per asset: inline
+    # columns nest under their table on disk but are separate assets in memory, so writing assets
+    # back would flatten 5 947 columns into their own files and change the corpus shape.
     shutil.copytree(source, dest)
     changed = 0
     unchanged: list[str] = []
@@ -213,9 +192,8 @@ def main(argv: list[str] | None = None) -> int:
             continue
         trimmed_tails += 1 if trimmed else 0
         if new == doc["summary"]:
-            # **Reported, not skipped.** 26 tables previously landed here in silence because the
-            # composition was truncated back to the original, so the count said 687 rewritten and
-            # nothing said 26 were not.
+            # Reported, not skipped: 26 tables previously landed here in silence, so the count
+            # said 687 rewritten and nothing said 26 were not.
             unchanged.append(str(path.relative_to(dest).as_posix()))
             continue
         doc["summary"] = new
@@ -225,8 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         changed += 1
 
     # Loaded before anything measures it. `load()` never raises for a bad item, so a broken file
-    # makes the corpus *smaller* rather than loud -- and a silently smaller corpus is how this
-    # project published a wrong number before.
+    # makes the corpus silently *smaller*, which is how this project published a wrong number.
     assets, problems = load(dest)
     print(f"rewrote {changed} summaries into {dest.relative_to(REPO)}")
     print(f"  {trimmed_tails} needed the identifier tail trimmed to fit the {cap}-char cap")

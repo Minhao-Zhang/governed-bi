@@ -19,9 +19,8 @@ HARD_LIMIT = 1000
 #: Roots scanned (src, tools, tests).
 ROOTS: tuple[str, ...] = ("src", "tools", "tests")
 
-#: Directory names skipped wherever they appear. Generated or vendored trees are
-#: not code anyone reads, and ``__pycache__`` holds no ``.py`` files but costs a
-#: walk.
+#: Directory names skipped wherever they appear: generated or vendored trees are not code
+#: anyone reads, and ``__pycache__`` holds no ``.py`` files but costs a walk.
 SKIP_DIRS: frozenset[str] = frozenset({"__pycache__", ".venv", "venv", "node_modules"})
 
 ROOT = Path(__file__).resolve().parent.parent

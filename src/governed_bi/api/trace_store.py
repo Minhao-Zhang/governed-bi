@@ -38,10 +38,9 @@ SUMMARY_FIELDS: tuple[str, ...] = (
     "schemas",
     "generated_sql",
     "latency_sec",
-    # The attempt ledger. Here because a transcript rebuilt from this log has to show the same
-    # governance badge the live turn showed: without it an earlier turn rendered "no SQL
-    # attempted" directly above its own SQL panel — one row of the artifact contradicting
-    # itself, which is the shape this repository keeps re-finding.
+    # The attempt ledger. A transcript rebuilt from this log has to show the same governance
+    # badge the live turn showed; without it a turn renders "no SQL attempted" above its own
+    # SQL panel.
     "execution",
 )
 
@@ -59,10 +58,8 @@ def append_turn(
 ) -> tuple[str | None, str | None]:
     """Append one turn. Returns ``(turn_id, error)`` — never raises.
 
-    ``question`` and ``answer_text`` are carried **beside** the record rather than merged
-    into it. ``undeclared_keys`` exists precisely to catch a key nobody declared appearing
-    in a record, and a log entry that quietly grew two of them would make every record
-    read out of this file fail that check for a reason the reader cannot see.
+    ``question`` and ``answer_text`` sit **beside** the record, not merged into it: merging
+    would make every record read back out of this file fail ``undeclared_keys``.
     """
     turn_id = str(record.get("turn_id") or "") or None
     entry = {
@@ -98,8 +95,7 @@ def _entries() -> Iterator[dict[str, Any]]:
             try:
                 parsed = json.loads(line)
             except json.JSONDecodeError:
-                # One truncated line must not hide every turn behind it. v1's loader
-                # raised on the first bad file and discarded a paid 69-schema build.
+                # One truncated line must not hide every turn behind it.
                 continue
             if isinstance(parsed, dict):
                 yield parsed
@@ -108,16 +104,13 @@ def _entries() -> Iterator[dict[str, Any]]:
 def list_turns(limit: int = 50, thread_id: str | None = None) -> list[dict[str, Any]]:
     """Newest turns first, as summaries. ``thread_id`` narrows to one conversation.
 
-    **Why the filter exists.** A turn's governed record lives in per-turn graph state
-    (``answer``, ``generated_sql``, ``execution``), which ``PER_TURN_RESET`` clears each turn —
-    so a thread's checkpoint can only ever describe its *newest* turn. Reopening a two-turn
-    conversation showed two questions and one audit card, because there was one record to show.
-    This log is the only place every turn of a conversation survives, so it has to be askable
-    per conversation; without the filter a client would page the whole log and filter by hand.
+    The filter exists because ``PER_TURN_RESET`` clears the per-turn record state each turn, so
+    a thread's checkpoint only ever describes its *newest* turn. This log is the only place
+    every turn of a conversation survives.
 
     ``missing_required`` is computed here rather than stored, so an entry written before a
-    register row existed is judged by today's register — the point of the column is "is
-    this turn quotable", and that is a question about the current declaration.
+    register row existed is judged by today's register — the column asks "is this turn
+    quotable", which is a question about the current declaration.
     """
     from ..register.record import missing_required
 
@@ -146,9 +139,8 @@ def list_turns(limit: int = 50, thread_id: str | None = None) -> list[dict[str, 
 def get_turn(turn_id: str) -> dict[str, Any] | None:
     """One logged turn in full, or ``None``.
 
-    A linear scan, newest first. There is no index, because an index over an append-only
-    local log is a second source of truth for a lookup that takes milliseconds over the
-    volume one developer's machine produces.
+    A linear scan, newest first. No index: over one developer's log volume it would be a
+    second source of truth for a millisecond lookup.
     """
     wanted = str(turn_id)
     for entry in _entries():

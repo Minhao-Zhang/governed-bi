@@ -52,11 +52,9 @@ def combine_channels(
     (:func:`~governed_bi.retrieve.fuse.scale_within_channel`). ``None`` when neither scored.
 
     ``consulted`` names the channels that ran for this query, and it is not derivable from the
-    two arguments: ``semantic=None`` means *either* "the semantic channel did not run for this
-    facet" *or* "it ran and did not return this document", and
-    :func:`~governed_bi.retrieve.fuse.fuse` has to tell those apart or additional evidence
-    lowers the score. Passing the two ``None``-or-float scores and letting ``fuse`` infer the
-    rest is exactly what this signature stops.
+    two arguments: ``semantic=None`` means either "the channel did not run for this facet" or
+    "it ran and did not return this document", and :func:`~governed_bi.retrieve.fuse.fuse` must
+    tell those apart or additional evidence lowers the score.
     """
     scores: dict[str, float] = {}
     if lexical is not None:
@@ -77,23 +75,14 @@ def vector_for_query(
 ) -> Sequence[float] | None:
     """The vector of the text that was **actually searched**, or ``fallback``.
 
-    Shared by both retrieval passes, and the reason it is shared is that only one of them had
-    it. Pass one embedded each facet's rewritten query; pass two took a single call-level
-    vector — the *raw question's*, computed once per turn by ``accept`` — and blended BM25 over
-    the rewrite against cosine over the question. Two different texts, one score.
-
-    ``facets.py``'s own comment says the fix out loud: *"the rewrite happens first, and both
-    channels then search with it — a rewrite that reached only BM25 would miss the point."*
-    That comment sat in the pass that already did it, and pass two is the pass whose output
-    becomes the analyst's context and decides which tables survive the budget.
-
-    A rewrite costs one embedding call. They are small, and the model call that produced the
-    rewrite has already been paid for; scoring it against the wrong vector wastes that call
-    rather than saving anything.
+    Shared by both retrieval passes because only one of them had it: pass one embedded each
+    facet's rewritten query, while pass two took the raw question's call-level vector and
+    blended BM25 over the rewrite against cosine over the question — two texts, one score. Pass
+    two is the pass whose output becomes the analyst's context and decides which tables survive
+    the budget.
 
     ``fallback`` is returned when there is no rewrite (``query == question``), when no embedder
-    is wired, or when the embed fails — the raw question's vector is the right thing in the
-    first case and the best available thing in the other two.
+    is wired, or when the embed fails.
     """
     if query and question is not None and query != question and embedder is not None:
         try:
@@ -175,13 +164,10 @@ def int_knob(state: Mapping[str, Any], name: str) -> int:
 def bool_knob(state: Mapping[str, Any], name: str) -> bool:
     """Boolean knob with the same precedence as :func:`int_knob`.
 
-    A third reader rather than one generic function, because the coercion is where the danger
-    is and it differs per type: ``int("false")`` raises, and ``bool("false")`` is ``True``. A
-    knob that arrived from JSON as the string ``"false"`` would therefore switch a feature
-    **on** under a generic ``bool(raw)``, and the feature would be recorded as off. So only real
-    booleans and the two JSON spellings are accepted; anything else raises, for the reason
-    :func:`int_knob` gives — falling back to the register default would make the record report a
-    value the turn did not use.
+    A separate reader rather than one generic function, because the coercion is where the danger
+    is and it differs per type: ``int("false")`` raises, but ``bool("false")`` is ``True``, so a
+    knob that arrived from JSON as ``"false"`` would switch a feature **on** and be recorded as
+    off. Only real booleans and the two JSON spellings are accepted.
     """
     raw = state.get(name)
     if raw is None:
@@ -231,10 +217,9 @@ def float_knob(state: Mapping[str, Any], name: str) -> float:
 def facet_weights(state: Mapping[str, Any]) -> Mapping[str, float]:
     """Per-facet vote multipliers for :func:`~governed_bi.retrieve.route.route`.
 
-    ``facet_weight_schema`` applies to ``facet_schema`` and ``facet_weight_other`` to every
-    other facet, which is the split the two knobs describe. Both ship 1.0, so this is
-    behaviour-preserving — the point is that moving either one now moves the result, which was
-    not true while ``route`` took no weights at all.
+    ``facet_weight_schema`` applies to ``facet_schema``, ``facet_weight_other`` to the rest.
+    Both ship 1.0, so this is behaviour-preserving; the point is that moving either now moves
+    the result, which was not true while ``route`` took no weights at all.
     """
     from governed_bi.register.stages import FACET_STAGES, Stage
 

@@ -5,20 +5,10 @@ Every executor writes an entry stamped with its ``path`` (G2).
 Invariants: hash the executed string, not the checked one (G4);
 :func:`guardrail_errors` is derived from attempts (quotability precondition).
 
-**``ledger_entry()`` is gone** (audit §8.1 / §10). It was the only implementation of ADR
-0006 §11's retention table -- ``executed``, ``statement_sha256``, ``statement_shape`` -- and
-it had **zero production callers**: one re-export and four lines in a test file, with 45
-green tests passing against dead code. What actually reached disk was
-:func:`attempt_record`, carrying ``executed_sql`` raw.
-
-Deleted with the rest of the redaction vocabulary rather than wired. The retention table it
-implemented was a policy nothing enforced, and a redacted projection that no writer uses is
-a second answer to "what is the durable record" -- the one a reader believes and the engine
-never produced.
-
-:func:`statement_sha256` and :func:`structural_fingerprint` stay. They have real callers
-(the stream events include a statement digest) and they are useful facts about a statement
-regardless of any retention policy.
+ADR 0006 §11's redacted retention table (``ledger_entry()``) is gone (audit §8.1/§10):
+it had zero production callers while :func:`attempt_record` was what reached disk,
+carrying ``executed_sql`` raw. Do not re-add a redacted projection with no writer — it
+is a second answer to "what is the durable record", and the one a reader believes.
 """
 
 
@@ -85,10 +75,8 @@ def statement_sha256(sql: str) -> str:
 def structural_fingerprint(sql: str, *, dialect: str = DEFAULT_DIALECT) -> str:
     """The statement's shape, with every literal elided.
 
-    Returns ``"unparseable"`` for a statement that does not parse — which is itself
-    the fact worth recording, and is not an error condition here: the ledger must be
-    able to describe a statement that the parse layer rejected, or the one record
-    that matters most is the one that is missing.
+    Returns ``"unparseable"`` rather than raising: the ledger must be able to describe
+    a statement the parse layer rejected, which is the record that matters most.
     """
     try:
         tree = sqlglot.parse_one(sql, dialect=dialect)
@@ -107,9 +95,9 @@ def attempt_record(
 ) -> AttemptRecord:
     """Project a verdict into the measurement layer's per-attempt row.
 
-    ``executed_sql`` is what :func:`~governed_bi.govern.pipeline.prepare` produced, so the
-    row says what the engine sent rather than what the model asked for. It defaults to
-    ``None`` because a refused attempt sent nothing, which is a value and not a gap.
+    ``executed_sql`` is :func:`~governed_bi.govern.pipeline.prepare`'s output, so the row
+    says what the engine sent, not what the model asked for. ``None`` means a refused
+    attempt sent nothing — a value, not a gap.
     """
     failed = verdict["failed_layer"]
     return AttemptRecord(
@@ -124,9 +112,8 @@ def attempt_record(
 def guardrail_errors(attempts: Iterable[AttemptRecord]) -> int:
     """How many attempts died of an exception inside ``check()``.
 
-    Derived from the attempts rather than counted alongside them: a separate counter
-    is a second table that must agree, and the disagreeing case here is the one that
-    makes a run look clean.
+    Derived rather than counted alongside: a separate counter is a second table that
+    must agree, and the disagreeing case is the one that makes a run look clean.
     """
     return sum(1 for attempt in attempts if attempt["reason_code"] == GUARDRAIL_ERROR)
 

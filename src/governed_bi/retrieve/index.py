@@ -22,10 +22,9 @@ from .lexical import BM25
 from .semantic import cache_key
 
 if TYPE_CHECKING:
-    # Imported for real inside ``build_index``, and only when an embedder is passed.
-    # ``import lancedb`` costs ~1.1 s, which every no-embedder caller — 50 of the 55 index
-    # builds in the test suite, and every ``langgraph dev`` reload — would otherwise pay
-    # for a store it never opens.
+    # Imported for real inside ``build_index``, and only when an embedder is passed:
+    # ``import lancedb`` costs ~1.1 s that every no-embedder caller (most test builds, and
+    # every ``langgraph dev`` reload) would otherwise pay for a store it never opens.
     from .vector_cache import VectorCache
     from .vectors import VectorStore
 
@@ -77,8 +76,7 @@ def schema_tag_for(
 ) -> str | None:
     """Derive the index-time schema tag from :class:`~governed_bi.register.assets.TagRule`.
 
-    Callers that already computed the tag may pass it on :class:`IndexEntry`
-    directly; this helper is the declared table in function form.
+    The declared table in function form — the one answer to which schema an asset votes for.
     """
     rule = ASSET_REGISTER[asset_type].tag_rule
     if rule is TagRule.itself:
@@ -122,9 +120,8 @@ def build_index(
         by_id[entry.id] = entry
         docs.append((entry.id, text))
 
-    # `k` from the register, not from `BM25`'s own default. The two agreed at 1.2, which is
-    # exactly why nobody noticed that `lexical_saturation_k` shipped UNSET while this line ran
-    # a literal: the record omitted the knob and the code chose the value.
+    # `k` from the register, not `BM25`'s own default. The two agreed at 1.2, which is why
+    # nobody noticed `lexical_saturation_k` shipping UNSET while this line ran a literal.
     lexical = BM25(docs, k=float(knob_default("lexical_saturation_k")))
 
     if vector_cache is not None and embedder is None:
@@ -142,14 +139,12 @@ def build_index(
         from .vectors import VectorStore
 
         model, dims = embedder.model, embedder.dimensions
-        # The cache holds one store per width and this build reads exactly one of them. A
-        # wrong-width row cannot reach it: the column type is `fixed_size_list[dims]`, so
-        # the storage layer refuses what the dict cache needed a hand-written check for.
+        # One store per width. A wrong-width row cannot reach it: the column type is
+        # `fixed_size_list[dims]`, so storage refuses what a dict cache had to check by hand.
         cached = (VectorCache() if vector_cache is None else vector_cache).at_width(dims)
 
-        # One cache key per distinct summary — two assets sharing a summary share the
-        # entry, which is the whole reason the cache is content-keyed and not id-keyed:
-        # curation rewrites summaries in place under the same id (ADR 0005 §2.2).
+        # One cache key per distinct summary. Content-keyed, not id-keyed, because curation
+        # rewrites summaries in place under the same id (ADR 0005 §2.2).
         keys: dict[str, str] = {}
         for entry in by_id.values():
             keys.setdefault(entry.summary, cache_key(entry.summary, model=model, dimensions=dims))

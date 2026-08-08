@@ -1,22 +1,13 @@
 """governed-bi: a governed agentic text-to-SQL engine.
 
-Importing this package has no side effects. Layout and import direction
-(enforced by ``tools/check_imports.py``)::
+Importing this package has no side effects. Imports run downward only, in the order
+``tools/check_imports.py`` declares::
 
-    ports.py        Protocols only. stdlib.
-    register/       Declared tables. May import ports.
-    measure/        Quantities, populations, statistics.
-    corpus/         Assets, identity, filtered view, index.
-    retrieve/       Query-time retrieval.
-    govern/         ADR 0006 layer stack and executors.
-    datasource/     Connectors.
-    model/          Chat and embedding clients.
-    serve/          LangGraph graph.
-    record/         Write-only sink.
-    eval/           Experiment driver.
-    api/            Read routes.
+    ports -> register -> measure -> corpus -> retrieve -> govern
+          -> datasource -> model -> serve -> record -> eval -> api
 
-See ADR 0005 §6 and ADR 0006.
+``record`` is declared there but no such package exists; ``verify`` exists and is not
+declared, so nothing constrains its imports. See ADR 0005 §6 and ADR 0006.
 """
 
 

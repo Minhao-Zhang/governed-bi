@@ -24,9 +24,8 @@ VECTOR_CACHE_VAR = "GOVERNED_BI_VECTOR_CACHE"
 class VectorCache:
     """Cache keys to vectors, persistent, across every width an embedder produces.
 
-    A thin router over :class:`VectorStore` — one per width, opened on first use — plus the
-    aggregate figures the server prints. It holds no vectors and does no scoring; splitting it
-    out is what lets ``VectorStore`` keep "one width" as an invariant rather than an argument.
+    A router over :class:`VectorStore` — one per width, opened on first use. Holds no
+    vectors itself, which is what lets ``VectorStore`` keep "one width" as an invariant.
     """
 
     def __init__(self, *, uri: str | Path = MEMORY_URI) -> None:
@@ -40,8 +39,7 @@ class VectorCache:
 
     @property
     def opened_with(self) -> int:
-        """Rows already present at open, over the widths touched. Aggregated so the server can
-        print it: a cache nobody can measure is one that can silently stop working."""
+        """Rows already present at open, over the widths touched."""
         return sum(store.opened_with for store in self._stores.values())
 
     @property
@@ -53,8 +51,8 @@ class VectorCache:
         return sum(len(store) for store in self._stores.values())
 
     def keys(self) -> list[str]:
-        """Every key, over the widths touched. Widths nobody asked for are not opened, so
-        they are not counted — a cache reports on what this run actually consulted."""
+        """Every key, over the widths touched. A width nobody asked for is never opened,
+        so it is not counted: this reports what the run actually consulted."""
         return [key for store in self._stores.values() for key in store.keys()]
 
     def at_width(self, dimensions: int) -> VectorStore:
@@ -69,13 +67,12 @@ class VectorCache:
 def vector_cache_from_environment(*, model: str) -> VectorCache:
     """The persistent cache the server, the CLI and the eval driver share.
 
-    One database directory per model, so a human can delete one model's vectors correctly; one
-    table per width inside it. The key already carries both, so the layout is defence in depth
-    rather than the mechanism.
+    One database directory per model, one table per width inside it. The key already carries
+    both, so the layout is defence in depth rather than the mechanism.
 
     ``model`` is the **requested** name, never ``Embedder.model``: reading that property on a
-    cold ``OpenAIEmbedder`` issues a network probe to report what the provider actually
-    served, and a directory name is not worth a request at boot.
+    cold ``OpenAIEmbedder`` issues a network probe, and a directory name is not worth a
+    request at boot.
     """
     configured = os.environ.get(VECTOR_CACHE_VAR)
     root = Path(configured) if configured else REPO_ROOT / "runs" / "vectors"

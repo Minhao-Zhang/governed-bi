@@ -26,8 +26,8 @@ __all__ = [
 class Prompt:
     """One prompt, its variants, and which stage sends it.
 
-    ``stage`` is a Stage value held as a string (this module must not import
-    ``stages``); coherence is checked in tests. ``why`` is required.
+    ``stage`` is a Stage value held as a string, because this module must not import
+    ``stages``; coherence is checked in tests. ``why`` is required.
     """
 
     name: str
@@ -91,9 +91,9 @@ BI_SCOPE = Prompt(
     name="bi_scope",
     stage="guard",
     why=(
-        "Refuses a turn that is not a business-intelligence question, before any retrieval or "
-        "SQL is paid for. Not an injection defence — the deterministic guard rules own that, and "
-        "the maintainer scoped this to an internal tool where injection is not the concern."
+        "Refuses a turn that is not a business-intelligence question, before any retrieval "
+        "or SQL is paid for. Not an injection defence — the deterministic guard rules own "
+        "that."
     ),
     variants={
         "v1": (
@@ -123,9 +123,9 @@ FACET_SCHEMA_QUERY = Prompt(
     name="facet_schema_query",
     stage="facet_schema",
     why=(
-        "Turns the question into catalogue search terms for the tables and schemas that would "
-        "answer it. This is the rewrite the schema router consumes, so it decides which corpus "
-        "the analyst is shown at all."
+        "Turns the question into catalogue search terms for the tables and schemas that "
+        "would answer it. The schema router consumes this, so it decides which corpus the "
+        "analyst is shown at all."
     ),
     default="v2",
     variants={
@@ -198,9 +198,9 @@ FACET_EXAMPLE_QUERY = Prompt(
     name="facet_example_query",
     stage="facet_example",
     why=(
-        "Turns the question into search text for past question/SQL example pairs. The facet the "
-        "maintainer singled out: past SQL examples help a lot, and an embedder retrieves them "
-        "better than BM25 — which is why this facet declares only the semantic channel."
+        "Turns the question into search text for past question/SQL example pairs. An "
+        "embedder retrieves these better than BM25, which is why this facet declares only "
+        "the semantic channel."
     ),
     variants={
         "v1": (
@@ -243,14 +243,10 @@ REFLECT = Prompt(
     stage="reflect",
     why=(
         "The observer's judge (``serve/nodes/reflect.py``). Registered even though the node "
-        "writes no control-flow key and cannot change what a turn produces — so this entry does "
-        "move ``prompt_set_hash`` for an edit that moves no answer. That cost is accepted "
-        "deliberately: the alternative is a prompt the run's own hash does not reach, and "
-        "``prompt_text``'s own KeyError calls that *a treatment the run cannot report*. An "
-        "instrument whose wording drifts un-hashed produces scores that read as one series and "
-        "are two, which is the failure this registry exists to make impossible — and the "
-        "reflector's whole purpose is to be scored. Wording it is therefore an experimental "
-        "act, and an arm boundary is the honest place to record one."
+        "changes no answer, so editing it moves ``prompt_set_hash`` for no behavioural "
+        "change. That cost is accepted: an instrument whose wording drifts un-hashed "
+        "produces scores that read as one series and are two, and the reflector's whole "
+        "purpose is to be scored."
     ),
     variants={
         "v1": (
@@ -339,7 +335,7 @@ def select(overrides: Mapping[str, str] | None = None) -> dict[str, str]:
 def prompt_set_hash(overrides: Mapping[str, str] | None = None) -> str:
     """Digest of active variant names and their text, sorted by prompt name.
 
-    Both halves: names alone miss in-place edits; text alone collapses identical
+    Both halves: names alone miss in-place edits, text alone collapses identical
     variants that later diverge.
     """
     active = select(overrides)

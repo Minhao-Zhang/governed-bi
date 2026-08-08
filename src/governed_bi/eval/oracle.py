@@ -1,30 +1,16 @@
 """Oracle-only ceiling: execute gold SQL, no model (ADR 0005 step 15).
 
-**What this arm can and cannot establish.** It re-executes each question's ``gold_sql`` on
-this connector and compares the result against an *independent* record of what that statement
-returns — a ``gold_fingerprint``, or ``gold_columns`` + ``gold_rows``. When it drops below
-1.000 the finding is real and it is not about the model: the grader disagrees with the
-reference, or this engine returns something different from the one the reference was taken on,
-or the harness lost rows on the way. That is the "grader ceiling".
+Re-executes each question's ``gold_sql`` on this connector and compares the result against an
+*independent* record of what that statement returns — a ``gold_fingerprint``, or
+``gold_columns`` + ``gold_rows``. Below 1.000 the finding is real and is not about the model:
+the grader disagrees with the reference, this engine returns something different from the one
+the reference was taken on, or the harness lost rows. That is the "grader ceiling".
 
-It requires that independent record. **Without one there is no measurement here at all**, and
-that is the correction this module carries: for most of v2 the fallback branch called
-``grade_results(pred_columns=pred[0], pred_rows=pred[1], gold_columns=pred[0],
-gold_rows=pred[1])`` — the executed gold fingerprinted **against itself** — which returns
-``correct=True`` for any statement whatsoever. ``oracle_grade({"question_id": "q",
-"gold_sql": "SELECT 'garbage' AS wrong"}, conn)`` returned ``correct=True``. No producer in
-the repository supplies the three keys that would have taken a different branch, so this was
-the branch every run took, and ``tests/eval/test_eval_contract.py`` enshrined ``ex.value ==
-1.000`` as the contract.
-
-The arm exists to show that the grader is not the bottleneck. It could not show anything, and
-it was cited as having shown it — while the grader *was* a bottleneck (§5.1: every Postgres
-``numeric`` cell compared as a string).
-
-A question with no independent gold now yields ``correct=None``, which
-``measure/population.Population.count`` reads as *unmeasured* rather than as a zero, so the
-arm's headline EX is ``unmeasured`` with a reason attached. Neither 1.000 nor 0.000: both of
-those are claims, and there is nothing here to claim.
+**Without that independent record there is no measurement here at all.** Fingerprinting the
+executed gold against itself returns ``correct=True`` for any statement whatsoever, including
+``SELECT 'garbage'``. Such a question yields ``correct=None``, which
+``measure/population.Population.count`` reads as unmeasured, so the arm's headline EX is
+unmeasured with a reason attached — neither 1.000 nor 0.000, both of which are claims.
 """
 
 from __future__ import annotations
@@ -41,10 +27,8 @@ __all__ = ["oracle_grade", "OracleQuestion", "NO_INDEPENDENT_GOLD"]
 #: One fixture / dataset question for the free grader ceiling.
 OracleQuestion = Mapping[str, Any]
 
-#: ``grade_detail`` for a question this arm cannot grade.
-#:
-#: Spelled out rather than left as a bare string because it is what a reader of the artifact
-#: sees instead of a score, and it has to say why the cell is empty.
+#: ``grade_detail`` for a question this arm cannot grade. Spelled out because it is what a
+#: reader of the artifact sees instead of a score, so it has to say why the cell is empty.
 NO_INDEPENDENT_GOLD = (
     "no_independent_gold: the question carries neither gold_fingerprint nor "
     "gold_columns+gold_rows, so the only available comparison is the executed gold against "
@@ -74,10 +58,9 @@ def oracle_grade(
     try:
         columns, rows, _truncated = connector.execute(sql)
     except Exception as err:  # noqa: BLE001 — the row is the point
-        # **Caught here rather than left to propagate.** The harness ran this arm as a bare
-        # list comprehension, so one gold statement that failed to execute ended the arm and
-        # discarded every row already computed — and on a 1 351-question dataset that is
-        # hours of work thrown away by one bad statement, reported as a shorter file.
+        # Caught rather than propagated: the harness runs this arm as a list comprehension,
+        # so one unexecutable gold statement would end the arm and discard every row already
+        # computed, reported as a shorter file.
         return _row(
             qid,
             sql,
@@ -126,8 +109,7 @@ def oracle_grade(
         qid,
         sql,
         outcome=Outcome.answered.value,
-        # Propagated: this module's whole subject is that an ungradeable row is ``None`` and not
-        # ``False``, so it must not coerce on the one path where a gold *was* supplied.
+        # Propagated, never coerced: an ungradeable row is ``None``, not ``False``.
         correct=grade["correct"],
         crashed=False,
         grade_detail=grade.get("detail"),
@@ -150,9 +132,9 @@ def _row(
 ) -> dict[str, Any]:
     """One oracle row. Built in one place so every branch produces the same keys.
 
-    ``pred_fingerprint`` is filled even on the unmeasured branch: the arm still *executed* the
-    gold statement, and the digest of what it returned is the thing a later run needs in order
-    to become measurable. It is the field to harvest into ``gold_fingerprint``.
+    ``pred_fingerprint`` is filled even on the unmeasured branch: the gold statement did
+    execute, and its digest is the field to harvest into ``gold_fingerprint`` so a later run
+    becomes measurable.
     """
     return {
         "question_id": qid,

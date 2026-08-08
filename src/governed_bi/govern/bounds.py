@@ -24,8 +24,7 @@ OUT_OF_SCOPE_MESSAGE = (
 
 @dataclass(frozen=True, slots=True)
 class ToolBounds:
-    """What this turn's tools may touch. Closed at ``connect``, never widened.
-    """
+    """What this turn's tools may touch. Closed at ``connect``, never widened."""
 
     #: Table keys (``{schema}.{physical_name}``) this turn licenses.
     licensed: frozenset[str] = frozenset()
@@ -41,19 +40,18 @@ class ToolBounds:
     def may_sample(self, column_id: str) -> bool:
         """``sample_rows`` takes a **column id**, not a name (§7).
 
-        v1's signature took a model-supplied ``column`` string and hand-built
-        ``SELECT {column} FROM {table}`` — identifiers cannot be bound as parameters,
-        so that was a direct injection surface with no parse layer, no function layer,
-        no column layer and no ledger entry. The bound is the column's *table*: a
-        column id whose table this turn does not license is out of scope.
+        A model-supplied column name would be interpolated into ``SELECT {column} FROM
+        {table}`` — identifiers cannot be bound as parameters — giving an injection
+        surface with no parse, function or column layer and no ledger entry. The bound
+        is the column's *table*: a column id whose table this turn does not license is
+        out of scope.
         """
         table = column_id.rsplit(".", 1)[0]
         return bool(table) and table != column_id and table in self.licensed
 
 
 def resume_authorised(*, stored_identity: str | None, caller_identity: str | None) -> bool:
-    """Constant-time check that ``claimed`` matches ``expected`` (hmac.compare_digest).
-    """
+    """Constant-time identity check (``hmac.compare_digest``)."""
     if not stored_identity or not caller_identity:
         return False
     return hmac.compare_digest(stored_identity, caller_identity)

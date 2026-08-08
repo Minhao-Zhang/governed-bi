@@ -4,21 +4,16 @@ Checks: provenance citing test split; verbatim containment (min NGRAM content
 words; few_shots exempt with stricter provenance); n-gram rate vs a train-only
 control. Paraphrase leaks are undetectable — a pass is not cleanliness.
 
-**The control has no default, as of 2026-08-06.** It defaulted to
-``corpora/gold-semantic-layer-20260804`` — the same corpus ``.env`` serves and
-``tools/run_datalake_eval.py`` evaluates. So the default invocation compared the
-shipped corpus **against itself**, printed ``ratio to control: 1.00x (tolerance
-2.0x)``, and the rate arm was *arithmetically incapable of failing* for the one
-corpus it mattered for. The gate ran, reported ok, and had measured nothing.
+``--control`` is required with no default, as of 2026-08-06. It defaulted to
+``corpora/gold-semantic-layer-20260804`` — the corpus ``.env`` serves — so the
+ordinary invocation compared that corpus against itself, printed ``ratio to
+control: 1.00x (tolerance 2.0x)``, and the rate arm was arithmetically incapable
+of failing. A control equal to the corpus under test is now refused, not compared.
 
-A control that is not genuinely held out cannot be guessed, so it is now required
-and ``--control`` equal to the corpus under test is refused rather than compared.
-
-**This gate cannot run in CI** and that is a property of the gate, not an
-oversight: it needs a corpus tree (untracked), a held-out question file (a
-separate repository), and a third corpus certified train-only. The CI-able half of
-corpus contamination is ``tools/check_no_benchmark_discriminators.py``, which
-needs no data at all — and which caught a producer this gate had already passed.
+This gate cannot run in CI by construction: it needs a corpus tree (untracked), a
+held-out question file (a separate repository), and a third corpus certified
+train-only. The CI-able half of corpus contamination is
+``tools/check_no_benchmark_discriminators.py``, which needs no data at all.
 """
 
 
@@ -60,10 +55,9 @@ def windows(tokens: list[str], n: int) -> set[tuple[str, ...]]:
 def corpus_texts(root: pathlib.Path) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """``(authored_texts, provenance_texts)``, both as ``(where, text)``. Never raises.
 
-    The two are kept apart because they are checked differently: authored prose is compared
-    against question wording, while ``audit`` is compared against question *ids* and file names.
-    An id in a summary would be strange; an id in ``audit.evidence`` is the normal case and is
-    exactly where a leak would announce itself.
+    Kept apart because they are checked differently: authored prose against question wording,
+    ``audit`` against question *ids* and file names — an id in ``audit.evidence`` is the normal
+    case and exactly where a leak announces itself.
     """
     from governed_bi.corpus.store import load
 
@@ -118,17 +112,15 @@ def scan(root: pathlib.Path, questions: list[dict]) -> dict:
             if token in held_out_ids:
                 cited.append((where, token))
         # The other half of the few-shot exemption: excused from the wording check, so it owes a
-        # provable source. A few-shot citing nothing is not a leak, but it is the one asset class
-        # whose origin can be checked exactly, and an unproven one is where a leak would hide.
+        # provable source. Few-shots are the one asset class whose origin can be checked exactly.
         if where.startswith("few_shot:") and "train_final" not in blob:
             unproven.append(where)
 
     # question n-gram -> the question that owns it. A window shared by two questions is kept
     # under the first; attributing it twice would double-count one collision.
     owner: dict[tuple[str, ...], str] = {}
-    # Only questions long enough to be identifiable are containment candidates. A short one is
-    # a substring of something by luck, which is the false-positive class that made the first
-    # draft of this file useless.
+    # Only questions long enough to be identifiable are containment candidates: a short one is a
+    # substring of something by luck, the false-positive class that made the first draft useless.
     candidates: list[tuple[str, str]] = []
     for question in questions:
         tokens = words(str(question.get("question") or ""))
@@ -144,9 +136,8 @@ def scan(root: pathlib.Path, questions: list[dict]) -> dict:
         tokens = words(text)
         joined = " ".join(tokens)
         if len(tokens) >= NGRAM and where.split(":", 1)[0] not in CONTAINMENT_EXEMPT:
-            # One direction only: a held-out question sitting inside authored text. The reverse
-            # -- authored text inside a question -- is what produced 67 false positives, because
-            # every short few-shot summary is a substring of some longer question.
+            # One direction only: a held-out question inside authored text. The reverse produced
+            # 67 false positives — every short few-shot summary sits inside some longer question.
             for qid, question_text in candidates:
                 if question_text in joined:
                     exact.append((where, qid))
@@ -174,9 +165,8 @@ def scan(root: pathlib.Path, questions: list[dict]) -> dict:
 def _same_tree(corpus: str, control: str) -> bool:
     """Whether two corpus arguments name the same directory.
 
-    Resolved rather than string-compared: ``corpora/x`` and ``./corpora/x/`` and a symlink to
-    either are the same self-comparison, and a check that only caught the identical spelling
-    would be satisfied by a trailing slash.
+    Resolved rather than string-compared: ``corpora/x``, ``./corpora/x/`` and a symlink to
+    either are the same self-comparison, but only one spelling.
     """
     try:
         return (REPO / corpus).resolve() == (REPO / control).resolve()
@@ -205,9 +195,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    # Argument sanity before data availability: a self-comparison is wrong to attempt whether
-    # or not the dataset happens to be present, and checking it second made the refusal
-    # unreachable in any environment without the benchmark repository checked out.
+    # Argument sanity before data availability. Checked second, the refusal was unreachable in
+    # any environment without the benchmark repository checked out.
     if args.control and _same_tree(args.corpus, args.control):
         print(
             f"the control and the corpus under test are the same tree ({args.corpus!r}). "

@@ -36,8 +36,8 @@ class BudgetResult:
 def budget_for(asset_type: AssetType) -> Budget:
     """Return the register budget for ``asset_type``.
 
-    Raises ``KeyError`` if the type is missing from the register — that is the
-    import-time guard's job to prevent, and a silent ``0`` must not replace it.
+    Raises ``KeyError`` on a type missing from the register; a silent ``0`` default would
+    turn a missing policy row into a type that is never retrieved.
     """
     return ASSET_REGISTER[asset_type].budget
 
@@ -58,18 +58,15 @@ def apply_budgets(
 
     ``pulled_in`` is returned unchanged in membership and does not consume budget.
 
-    What the caps discarded is returned in :attr:`BudgetResult.dropped` and
-    :attr:`BudgetResult.best_dropped_score`, because a cap with no witness is indistinguishable
+    Caps report what they discarded in :attr:`BudgetResult.dropped` and
+    :attr:`BudgetResult.best_dropped_score`: a cap with no witness is indistinguishable
     from a retrieval that never found the asset.
 
-    **The sort now breaks ties on the asset id.** It was ``key=lambda h: h[2]`` alone, while
-    every other ordering in the retrieval path is ``(-score, str(id))`` — ``pass_two`` and
-    ``semantic_search`` both say why, and ``retrieve/connect.py`` was given three explicit
-    sorts for the same reason after a cross-process coverage tremor of one question in 114 was
-    traced to hash order. Here the tie was resolved by ``hits_by_facet`` iteration order, so at
-    the 8-table boundary two equal-scoring tables swapped on a dict ordering — and equal scores
-    are no longer rare, because ``facets._within_facet_scale`` puts every channel's best hit at
-    exactly 1.0.
+    **Ties break on the asset id**, matching every other ordering in the retrieval path
+    (``(-score, str(id))``). Score alone left the tie to ``hits_by_facet`` dict order, so
+    two equal-scoring tables swapped across processes at the cap boundary — and equal
+    scores are common, because ``facets._within_facet_scale`` puts each channel's best hit
+    at exactly 1.0.
     """
     ranked = sorted(hits, key=lambda h: (-h[2], str(h[0])))
     taken: dict[AssetType, int] = {}

@@ -1,20 +1,11 @@
 """SQLite connector adapter (dev path and the parcel C acceptance suite).
 
-**Classification is on SQLite's own result code, not on the message** (audit §9.2). It was a
-prose regex — ``no such column|no such table|syntax error|ambiguous column``, anything else
-``ConnectionError`` — and it misclassified two faults that matter, both verified:
-
-* ``SELECT connection_is_not_a_function_xyz(1)`` raises *no such function*, which no marker
-  matches, so a query fault was reported as the database being unreachable. That statement is
-  the literal example ``test_classification_reads_the_code_not_the_message`` uses to assert the
-  classifier reads a code and not prose — and that test is Postgres-gated, so it never ran
-  against the adapter that fails it.
-* A write on the read-only connection raises ``SQLITE_READONLY``, also unmatched. So
-  **governance stopping a write was recorded as infrastructure being down**, which is the
-  crash-counted-as-refusal inversion in the one direction that hides a working control.
-
+**Classification is on SQLite's own result code, not on the message** (audit §9.2).
 ``sqlite3.Error.sqlite_errorname`` (Python 3.11+) is this engine's SQLSTATE: a closed
-vocabulary the driver assigns, rather than a sentence it may reword.
+vocabulary the driver assigns, rather than a sentence it may reword. The prose regex it
+replaced misclassified two verified faults — *no such function* read as the database
+being unreachable, and ``SQLITE_READONLY`` (governance stopping a write) recorded as
+infrastructure being down, which hides a working control.
 """
 
 from __future__ import annotations
@@ -40,11 +31,10 @@ _DEFAULT_MAX_ROWS = 200_000
 #: Prefixes because SQLite extends its primary codes (``SQLITE_IOERR_READ``,
 #: ``SQLITE_BUSY_SNAPSHOT``) and a new extended code must land on the same side as its base.
 #:
-#: Everything not listed classifies as a query fault, matching the Postgres adapter's rule for
-#: its statement path: an engine that answered at all answered about the statement. The set is
-#: small and closed, so a code nobody thought about degrades to "the statement was wrong", which
-#: is recoverable — the reverse would make a real outage look like a model error, which is the
-#: defect §9.1 documents on the other adapter.
+#: Everything not listed classifies as a query fault, matching the Postgres adapter's
+#: statement path. Deliberately the safe direction: an unanticipated code degrades to "the
+#: statement was wrong", which is recoverable, where the reverse makes a real outage look
+#: like a model error (§9.1).
 _INFRASTRUCTURE_CODES: tuple[str, ...] = (
     "SQLITE_BUSY",      # another writer holds the lock
     "SQLITE_LOCKED",    # a table in this connection is locked
@@ -115,25 +105,23 @@ class SqliteConnector:
     def _raise_classified(self, err: sqlite3.Error) -> None:
         """Map a driver fault by result code. One classifier, so both callers agree.
 
-        ``introspect`` did not classify at all — it let ``sqlite3.Error`` escape raw, so a
-        failure there was neither a query fault nor infrastructure but unclassified, which is
-        exactly what the Postgres adapter's ``test_introspection_classifies_its_own_failures``
-        exists to forbid.
+        ``introspect`` must route through here too: letting ``sqlite3.Error`` escape raw
+        leaves a failure neither a query fault nor infrastructure, which the Postgres
+        adapter's ``test_introspection_classifies_its_own_failures`` forbids.
         """
         code = getattr(err, "sqlite_errorname", None)
         if isinstance(code, str) and code.startswith(_INFRASTRUCTURE_CODES):
             raise ConnectionError(str(err), sqlstate=code) from err
         if code is None and isinstance(err, sqlite3.OperationalError):
-            # No result code (an older interpreter, or an error raised before a statement was
-            # prepared). ``OperationalError`` without one is the DB-API's "not under the
-            # programmer's control", which is the same reading the Postgres adapter takes.
+            # No result code: an older interpreter, or an error raised before a statement
+            # was prepared. ``OperationalError`` without one is the DB-API's "not under the
+            # programmer's control", the same reading the Postgres adapter takes.
             raise ConnectionError(str(err)) from err
         raise QueryError(str(err), sqlstate=code if isinstance(code, str) else None) from err
 
     def introspect(self) -> Introspection:
-        # Classified like ``execute``, rather than letting ``sqlite3.Error`` escape raw. An
-        # unclassified failure here is neither a query fault nor infrastructure, so nothing
-        # downstream can decide whether to retry or to record a bad statement.
+        # Classified like ``execute``: an unclassified failure is neither a query fault nor
+        # infrastructure, so nothing downstream can decide whether to retry.
         try:
             conn = self._connect()
             table_names = [
@@ -180,10 +168,9 @@ class SqliteConnector:
                 return table
         raise QueryError(f"no such table: {name}")
 
-    # ``sample_values`` was here and is gone; see ``ports.Connector``. This adapter's version
-    # quoted correctly and its Postgres sibling did not, which is the argument against having
-    # the method at all: one port method, two implementations, and the security property held
-    # in only one of them, with no test on either.
+    # ``sample_values`` was here and is gone; see ``ports.Connector``. This adapter quoted
+    # correctly and its Postgres sibling did not: one port method, two implementations, and
+    # the security property held in only one of them.
 
 
 def _quote(name: str) -> str:

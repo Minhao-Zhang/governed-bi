@@ -40,10 +40,9 @@ def _head() -> str:
 def _verify_base(worktree: Path, expected: str) -> str | None:
     """``None`` when ``worktree`` sits on ``expected``, else a description of the drift.
 
-    Checked rather than trusted: ``-w`` reuses a worktree of the same name, so a
-    leftover from an earlier run silently supplies an older commit. An agent working
-    from the wrong commit produces confident, plausible, useless output -- the first
-    real fan-out lost a third of its work this way.
+    Checked rather than trusted: ``-w`` reuses a worktree of the same name, so a leftover from
+    an earlier run silently supplies an older commit, and an agent on the wrong commit produces
+    confident, plausible, useless output. The first real fan-out lost a third of its work here.
     """
     if not worktree.exists():
         return f"worktree {worktree} was never created"
@@ -66,8 +65,8 @@ def _verify_base(worktree: Path, expected: str) -> str | None:
 def _dirty_paths() -> list[str]:
     """Tracked-or-untracked paths that a HEAD-based worktree will not contain.
 
-    Excludes the ignored set, since ``.env`` being absent from the worktree is the
-    property this script relies on rather than a problem to report.
+    Excludes the ignored set: ``.env`` being absent from the worktree is the property this
+    script relies on, not a problem to report.
     """
     try:
         out = subprocess.run(
@@ -214,9 +213,8 @@ def main() -> int:
         )
 
     head = _head()
-    # A per-run token so a worktree name is never reused. Derived from the base commit
-    # plus the prompt set, so re-running the same fan-out against the same commit reuses
-    # its own worktrees (resumable) while a different run cannot collide with it.
+    # A per-run token so a worktree name is never reused. Derived from the base commit plus the
+    # prompt set, so an identical re-run reuses its own worktrees and a different run cannot.
     run_token = hashlib.sha256((head + "\x00".join(prompts)).encode()).hexdigest()[:8]
 
     mode = "WRITE + shell (--force)" if args.write else "read-only (--plan)"
@@ -226,11 +224,8 @@ def main() -> int:
         file=sys.stderr,
     )
 
-    # as_completed, NOT pool.map. map() is a barrier: it yields nothing until every
-    # agent has finished, so a caller cannot tell "one done, two running" from "all
-    # three hung" -- and on the first real fan-out that is exactly the question that
-    # mattered, because one agent had silently landed on the wrong commit. Progress that
-    # only arrives at the end is not progress reporting.
+    # as_completed, NOT pool.map. map() is a barrier: it yields nothing until every agent has
+    # finished, so a caller cannot tell "one done, two running" from "all three hung".
     results: list[dict[str, object]] = []
     with ThreadPoolExecutor(max_workers=min(len(prompts), SANE_MAX)) as pool:
         futures = {

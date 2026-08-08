@@ -24,9 +24,8 @@ EXEMPT: tuple[str, ...] = ("register/quantity.py",)
 #: introduces precision, so this does not need to know the type letters.
 NUMERIC_SPEC = re.compile(r"\.(?:\d+|\{\})[a-zA-Z%]")
 
-#: ``%``-style conversions that format a *float*. ``%d``/``%s`` are excluded: they
-#: are not a precision claim, and including them would flag ordinary message
-#: building for no measurement-integrity reason.
+#: ``%``-style conversions that format a *float*. ``%d``/``%s`` are excluded: they make no
+#: precision claim, so flagging them would only catch ordinary message building.
 PERCENT_FLOAT = re.compile(r"%[-+ 0#]*\d*(?:\.\d+)?[fFeEgG]")
 
 SKIP_DIRS: frozenset[str] = frozenset({"__pycache__"})
@@ -100,9 +99,8 @@ def check_file(path: Path, rel: str) -> list[str]:
             if template and PERCENT_FLOAT.search(template):
                 report(node.lineno, f"%-formats a float via {template!r}")
 
-    # ``ast.walk`` is breadth-first, so an f-string nested inside a call reports
-    # after a later top-level statement. Sorted numerically, because a reader fixes
-    # these top to bottom and a lexicographic sort puts line 10 before line 2.
+    # ``ast.walk`` is breadth-first, so a nested f-string reports after a later top-level
+    # statement. Sorted numerically, since a lexicographic sort puts line 10 before line 2.
     return [msg for _, msg in sorted(found)]
 
 

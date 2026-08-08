@@ -26,11 +26,10 @@ __all__ = [
     "permitted_functions_digest",
 ]
 
-#: The sqlglot generation this list was enumerated against. Canonical names are
-#: release-dependent — a major bump renames and re-parents node classes, which
-#: silently changes what the allowlist matches — so a mismatch raises at import
-#: rather than degrading quietly. The minor version is recorded (not asserted) via
-#: the ``sqlglot_version`` knob, which is a comparability key.
+#: The sqlglot generation this list was enumerated against. A major bump renames and
+#: re-parents node classes, silently changing what the allowlist matches, so a
+#: mismatch raises at import. The minor version is recorded (not asserted) by the
+#: ``sqlglot_version`` comparability knob.
 SQLGLOT_TESTED_MAJOR = 30
 
 
@@ -58,9 +57,8 @@ PERMITTED_FUNCTION_CLASSES: tuple[type[exp.Func], ...] = (
     exp.RowNumber, exp.Rank, exp.DenseRank, exp.Ntile, exp.NthValue,
     exp.Lag, exp.Lead, exp.FirstValue, exp.LastValue,
     # ── conditional and boolean ──
-    # And/Or/Exists ARE exp.Func subclasses in this release, which is not obvious
-    # and is load-bearing: omit them and every WHERE clause with a conjunction
-    # false-refuses. Exactly the release-dependence the pin exists for.
+    # And/Or/Exists ARE exp.Func subclasses in this release: omit them and every WHERE
+    # clause with a conjunction false-refuses. The release-dependence the pin exists for.
     exp.Case, exp.If, exp.Coalesce, exp.Nullif, exp.Nvl2,
     exp.Least, exp.Greatest, exp.Exists, exp.And, exp.Or, exp.Xor,
     # ── casts ──
@@ -74,10 +72,9 @@ PERMITTED_FUNCTION_CLASSES: tuple[type[exp.Func], ...] = (
     exp.Abs, exp.Ceil, exp.Floor, exp.Round, exp.Sign, exp.Sqrt, exp.Cbrt,
     exp.Exp, exp.Ln, exp.Log, exp.Pow,
     # ── date and time ──
-    # The `current_*` date/time family is legitimate analytics and must be IN the
-    # list. `version()` is not: it canonicalises to CURRENT_VERSION, which is how
-    # v1's denylist entry for "version" missed it, and a server version string is
-    # not an analytic quantity.
+    # The `current_*` family is legitimate analytics. `version()` is not, and is
+    # absent: it canonicalises to CURRENT_VERSION, which is how a denylist entry
+    # spelled "version" missed it.
     exp.CurrentDate, exp.CurrentTime, exp.CurrentTimestamp, exp.CurrentDatetime,
     exp.Date, exp.DateAdd, exp.DateSub, exp.DateDiff, exp.DateTrunc,
     exp.DateStrToDate, exp.DatetimeAdd, exp.DatetimeDiff, exp.DatetimeTrunc,
@@ -89,13 +86,12 @@ PERMITTED_FUNCTION_CLASSES: tuple[type[exp.Func], ...] = (
 
 #: Functions permitted by *name* because sqlglot parses them as ``exp.Anonymous``.
 #:
-#: **Empty, and measured rather than assumed.** Across the 6,743 gold statements in
+#: **Empty, and measured rather than assumed:** zero of the 6,743 gold statements in
 #: ``BIRD-Data-Obfuscation/eval_dataset/{train,test}_final.jsonl`` (``sql_base``,
-#: measured 2026-08-03, inventory committed at ``tests/govern/gold_functions.json``)
-#: **zero** function calls parse as ``Anonymous``, so refusing the whole shape costs
-#: nothing on gold. An entry here is a name the pinned sqlglot does not model, which
-#: means the allowlist cannot reason about its arguments either — so each one needs
-#: its own argument rule, not just a name.
+#: 2026-08-03, inventory at ``tests/govern/gold_functions.json``) parse a function as
+#: ``Anonymous``, so refusing the shape costs nothing. An entry here is a name the
+#: pinned sqlglot does not model, so the allowlist cannot reason about its arguments
+#: either — each one needs its own argument rule, not just a name.
 PERMITTED_ANONYMOUS_NAMES: frozenset[str] = frozenset()
 
 #: The allowlist as ``check()`` uses it: canonical names, folded.
@@ -127,9 +123,8 @@ ADVERSARIAL_SET: tuple[str, ...] = (
 
 #: Functions that **do** appear in gold SQL and are still refused, with the reason.
 #:
-#: The narrowness assertion is satisfied by "permitted **or** recorded here", so
-#: this is the honest half of a positive allowlist: a false refusal that was chosen,
-#: with its measured cost, rather than one nobody noticed.
+#: The narrowness assertion is satisfied by "permitted **or** recorded here", so a
+#: chosen false refusal carries its measured cost instead of going unnoticed.
 INTENTIONALLY_ABSENT: Mapping[str, str] = {
     "array_agg": (
         "B2. array_agg(t) emits every column of a row — including excluded and "
@@ -145,8 +140,8 @@ INTENTIONALLY_ABSENT: Mapping[str, str] = {
 def canonical_function_name(node: exp.Expr) -> str:
     """The name the allowlist is keyed on: folded, schema-qualification stripped.
 
-    ``pg_catalog.setval`` and ``setval`` are the same function, and only one of them
-    would be on a name list somebody wrote by hand.
+    ``pg_catalog.setval`` and ``setval`` are the same function; only one of them
+    would be on a hand-written name list.
     """
     if isinstance(node, exp.Anonymous):
         raw = node.this
@@ -154,20 +149,17 @@ def canonical_function_name(node: exp.Expr) -> str:
         return name.rsplit(".", 1)[-1].lower()
     if isinstance(node, exp.Func):
         return node.sql_name().lower()
-    # Not a function node at all. Returning "" rather than raising keeps the caller —
-    # the FUNCTIONS layer — total: "" is on no allowlist, so a shape this function does
-    # not understand refuses instead of escaping.
+    # Not a function node. "" rather than raising keeps the FUNCTIONS layer total: ""
+    # is on no allowlist, so an unrecognised shape refuses instead of escaping.
     return ""
 
 
 def permitted_functions_digest() -> str:
     """Content digest of the allowlist, for the ``permitted_functions`` knob.
 
-    Hashed by content, so **widening the list moves the serve config hash** and
-    breaks comparability with earlier runs. That is correct and must not be worked
-    around: a run whose function allowlist differs is a run with different security
-    configuration, and ADR 0006 §13 exists because two such runs otherwise hash
-    identically.
+    Hashed by content, so widening the list moves the serve config hash and breaks
+    comparability with earlier runs. Intended, and not to be worked around: without
+    it two runs with different security configuration hash identically (ADR 0006 §13).
     """
     payload = "\n".join(sorted(PERMITTED_FUNCTIONS))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()

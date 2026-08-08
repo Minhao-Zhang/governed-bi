@@ -16,10 +16,9 @@ from ..register.quantity import Measured
 
 __all__ = ["Population", "TurnRow"]
 
-#: One recorded turn. Named apart from ``ports.Row``, which is a database result
-#: row (``tuple[Any, ...]``) — two different types under one import name is the
-#: defect ``tools/check_one_implementation.py`` exists to catch, and it caught this
-#: one within a day of being written.
+#: One recorded turn. Named apart from ``ports.Row`` (a database result row,
+#: ``tuple[Any, ...]``): two different types under one import name is the defect
+#: ``tools/check_one_implementation.py`` exists to catch.
 TurnRow = Mapping[str, object]
 
 
@@ -82,9 +81,9 @@ class Population:
     def restrict(self, predicate: Callable[[TurnRow], bool], label: str) -> Population:
         """A sub-population, with the filter recorded.
 
-        ``label`` is not decoration. It is what :func:`~.stats.mcnemar` compares to
-        decide whether two populations are the same population, so it must describe
-        the *filter*, not the intent — "excluded crashes" rather than "cleaned".
+        ``label`` is what :func:`~.stats.mcnemar` compares to decide whether two
+        populations are the same population, so it must describe the *filter*, not the
+        intent — "excluded crashes" rather than "cleaned".
         """
         if not label:
             raise ValueError(
@@ -139,19 +138,17 @@ class Population:
     def describe(self) -> str:
         """One line naming the population, for putting beside any number from it.
 
-        Exists so that quoting a rate without its population takes deliberate
-        effort. Every retired figure in this project was a number without this line.
+        Exists so quoting a rate without its population takes deliberate effort.
         """
         trail = " -> ".join(self.filtered_by) if self.filtered_by else "unfiltered"
         return f"{self.label!r} n={self.n} ({trail})"
 
 
 def _assert_absent_outcome_is_not_zero() -> None:
-    """Import-time guard on the one behaviour most likely to be "simplified" later.
+    """Import-time guard: an absent outcome must stay unmeasured, not become a zero.
 
-    Rewriting :meth:`count` as ``sum(1 for r in rows if r.get(outcome))`` is a
-    natural-looking cleanup that silently reintroduces v1's defect, and it would
-    pass any test that only used complete rows. This fails the import instead.
+    Rewriting :meth:`count` as ``sum(1 for r in rows if r.get(outcome))`` looks like a
+    cleanup and passes any test built from complete rows. This fails the import instead.
     """
     probe = Population.of("probe", [{"question_id": "a", "correct": True}, {"question_id": "b"}])
     if probe.count("correct").is_measured:  # pragma: no cover - import-time guard

@@ -25,22 +25,11 @@ __all__ = ["assemble_node"]
 def assemble_node(state: dict, config: RunnableConfig) -> dict:
     """Render retrieval context into ``delivery``. **Not into ``messages``.**
 
-    It used to append the whole block to ``messages`` as a human turn, and that one line cost
-    three separate things:
-
-    * **Every prior turn's context was re-sent.** ``messages`` is checkpointed and
-      ``add_messages``-reduced, so turn 3 handed the provider turn 1's and turn 2's context
-      blocks again — paid for, and describing a retrieval that is no longer the current one.
-    * **``turn_index`` came out at 2n-1.** Both ``api/graph_app.py`` and ``POST /chat`` number
-      the turn by counting human messages, and this added a second one per turn. Every
-      multi-turn record after the first was misnumbered, which is what ``usage``'s per-turn
-      projection filters on.
-    * ``messages`` stopped being the conversation and became the conversation plus its
-      scaffolding, so no reader could tell the two apart.
-
-    ``agent_core`` now passes the block into the agent as an ephemeral message that is never
-    written back. The block itself is not lost: it is in ``delivery``, hashed, and the record
-    publishes ``context_hash`` — which is where an audit was always meant to read it.
+    ``messages`` is checkpointed and ``add_messages``-reduced, so appending the block re-sends
+    every prior turn's context to the provider; it also adds a second human message per turn,
+    and both ``api/graph_app.py`` and ``POST /chat`` derive ``turn_index`` by counting those.
+    ``agent_core`` passes the block to the agent as an ephemeral message instead. The block is
+    not lost — it is in ``delivery``, hashed, and the record publishes ``context_hash``.
 
     Declares ``config`` so :func:`~governed_bi.serve.wrap.wrap_node` forwards
     ``RunnableConfig`` (corpus / assets live under ``configurable``).
@@ -54,11 +43,9 @@ def assemble_node(state: dict, config: RunnableConfig) -> dict:
     schemas = list(state.get("schemas") or ())
     budget = _budget_chars(state, cfg)
 
-    # Out-parameter, filled only when the char budget actually bit. Before this the eviction
-    # ladder dropped asset bodies and whole pulled-in tables with no signal anywhere, so a gold
-    # table that was routed, licensed and then evicted for space was indistinguishable from one
-    # that was rendered — the blind spot sitting exactly between "table selection" and
-    # "generation".
+    # Out-parameter, filled only when the char budget bit. Without it the eviction ladder drops
+    # asset bodies and whole pulled-in tables with no signal anywhere, so a gold table that was
+    # routed, licensed and then evicted for space is indistinguishable from one that rendered.
     evicted: dict[str, Any] = {}
     block, context_hash = render_context(
         retrieved=retrieved,

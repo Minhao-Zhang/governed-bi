@@ -57,21 +57,13 @@ def connect(
     tree_edges: list[tuple[Hashable, Hashable]] = []
     remaining = set(terms)
 
-    # **Sorted, not ``next(iter(...))``.** ``remaining`` is a set of table-id *strings*, and
-    # Python randomises string hashing per process unless ``PYTHONHASHSEED`` is pinned -- so the
-    # greedy builder started from a different terminal in every process, produced a different
-    # (equally valid, equally minimal) tree, and added different Steiner points. Those points go
-    # into ``licensed``, which is what ``eval.datalake.table_coverage`` reads.
-    #
-    # Measured: the same corpus measured twice **in one process** gives a coverage delta of
-    # exactly 0.0000, and the same corpus measured in two different processes moved by one
-    # question of 114 (0.6316 vs 0.6228). A direct probe over one 4-terminal graph produced three
-    # distinct Steiner sets across five hash seeds. So every cross-session comparison of a
-    # coverage or licensing number carried this as noise, at roughly the size of the effects the
-    # corpus work is trying to detect.
-    #
-    # ``key=str`` because terminals are typed ``Hashable`` and a mixed set has no natural order;
-    # the sort only has to be *stable across processes*, not meaningful.
+    # **Sorted, not ``next(iter(...))``.** ``remaining`` holds table-id strings and Python
+    # randomises string hashing per process, so the greedy builder started from a different
+    # terminal each process and added different (equally minimal) Steiner points -- which go
+    # into ``licensed``, which ``eval.datalake.table_coverage`` reads. Measured: same corpus,
+    # one process, coverage delta 0.0000; two processes, 0.6316 vs 0.6228, one question of
+    # 114 (pre-2026-08-05 arm -- the absolutes are void, the cross-process gap is the point).
+    # ``key=str`` because terminals are ``Hashable``; the sort must be stable, not meaningful.
     seed = min(remaining, key=str)
     tree_nodes.add(seed)
     remaining.remove(seed)
@@ -106,19 +98,13 @@ def components(
 ) -> tuple[frozenset[Hashable], ...]:
     """Partition ``nodes`` by which connected component of ``edges`` each one sits in.
 
-    :func:`connect` answers *"can these be joined"* with a yes or a no, and the no is the
-    same value whether the terminals span two schemas that were never meant to be joined
-    or genuinely need a path the graph does not have. That single value is why a pooled
-    turn declined ``missing_join_path``: routing shortlists three schemas, pass two
-    licenses tables from all three, and unrelated schemas share no edge — so the terminal
-    set is disconnected *by construction* and the decline says nothing about the question.
+    The same graph walk as :func:`connect`, reported as a partition instead of a verdict.
+    Needed because ``connect``'s single "no" cannot distinguish a genuinely missing path
+    from a terminal set that spans shortlisted schemas and is therefore disconnected *by
+    construction* — which is why pooled turns declined ``missing_join_path``. A node with
+    no incident edge is its own component, so a single-table turn is a component of one.
 
-    This is the same graph walk, reported as a partition instead of a verdict, so a caller
-    can decide which component to keep. A node with no incident edge is its own component,
-    which is what makes a single-table turn a component of one rather than a missing key.
-
-    Deterministic: components are ordered by their lexicographically first member, so two
-    runs over the same corpus partition identically.
+    Deterministic: components ordered by their lexicographically first member.
     """
     adj = _adjacency(edges)
     remaining = set(nodes)
@@ -152,12 +138,10 @@ def _adjacency(
 def canon_edge(a: Hashable, b: Hashable) -> tuple[Hashable, Hashable]:
     """One undirected edge, in a canonical order. **Exported, not private.**
 
-    :mod:`~governed_bi.retrieve.structure` builds the edge set this module searches,
-    so both halves must agree on which of ``(a, b)`` and ``(b, a)`` an edge *is*.
-    Two spellings of that would not raise anywhere: the builder would emit one
-    orientation, ``connect`` would look for the other, and every multi-table turn
-    would decline ``missing_join_path`` -- which is the defect §2.8.2 was written
-    about, reproduced one layer up.
+    :mod:`~governed_bi.retrieve.structure` builds the edge set this module searches, so
+    both must agree on which of ``(a, b)`` / ``(b, a)`` an edge *is*. Two spellings raise
+    nowhere: the builder emits one orientation, ``connect`` looks for the other, and every
+    multi-table turn declines ``missing_join_path``.
     """
     return (a, b) if str(a) <= str(b) else (b, a)
 
@@ -175,13 +159,11 @@ def _nearest_path(
     if not sources or not goals:
         return None
 
-    # **Sorted at both traversal points, and both were needed.** ``sources``, ``goals`` and every
-    # ``adj`` value are sets of table-id strings, and Python randomises string hashing per
-    # process. Two shortest paths of equal length are both correct, and which one BFS finds
-    # decided which Steiner points landed in ``licensed`` — so the metric moved between runs of
-    # the same corpus. Fixing only the seed in ``connect`` was measured and **did not** fix it:
-    # the probe still produced three distinct Steiner sets across five hash seeds, because the
-    # queue order and the neighbour order are two more places the tie is broken by hash.
+    # **Sorted at both traversal points, and both were needed.** ``sources``, ``goals`` and
+    # ``adj`` values are sets of table-id strings under per-process hash randomisation, so
+    # which equal-length shortest path BFS finds decided which Steiner points landed in
+    # ``licensed``. Sorting only the seed in ``connect`` was measured and did not fix it:
+    # queue order and neighbour order are two more places the tie is broken by hash.
     parent: dict[Hashable, Hashable | None] = {s: None for s in sources}
     queue: deque[Hashable] = deque(sorted(sources, key=str))
 

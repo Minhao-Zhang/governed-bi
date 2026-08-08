@@ -199,10 +199,8 @@ def from_assets(
     index = build_index(entries, embedder=embedder, vector_cache=vector_cache)
     knobs = _resolved_knobs(policy)
     if embedder is not None:
-        # `model/embedder.embedding_knobs`, not two lines repeating it. The audit found that
-        # function with zero callers (§10) -- and it was not unwired so much as *duplicated*
-        # here, which is the worse of the two: one resolution of the embedder's comparability
-        # identity, in two places, either of which could drift from `knob_names()`.
+        # One resolution of the embedder's comparability identity. It was duplicated here
+        # (audit §10), and two copies is how one drifts from `knob_names()`.
         knobs.update(embedding_knobs(embedder))
     if agent_model is not None:
         knobs["llm_model"] = (
@@ -265,10 +263,8 @@ def from_live_schema(schema: str, *, connector: Any, corpus_root: Path | str, **
     """Seed a corpus from a live schema, **write it**, and load it back.
 
     The write is what makes this uniform with :func:`from_corpus_dir` — one load path, one
-    digest — and it is also what makes a seeded corpus a thing you can read and edit rather
-    than a value that existed for one process. ``corpus_content_hash`` needs a tree, and
-    reporting a seeded corpus's identity as "no digest" would be an absence that compares
-    equal to every other absence.
+    digest. ``corpus_content_hash`` needs a tree, and reporting a seeded corpus's identity as
+    "no digest" would be an absence that compares equal to every other absence.
     """
     from ..corpus.seed import seed
 

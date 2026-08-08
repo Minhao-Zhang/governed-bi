@@ -2,6 +2,15 @@
 
 Status is observed from node updates, never declared. Stream retention follows
 ADR 0006 §11. :func:`emit` never raises.
+
+``kind`` / ``step`` / ``id`` restore an identity the channel throws away: ``stream_mode="custom"``
+is the one mode LangGraph strips node identity from — building a chunk it drops the last
+checkpoint-namespace segment, which is ``node:task_id`` (``CHECKPOINT_NS.split(NS_SEP)[:-1]`` in
+``pregel/main.py``, 1.2.10) — and it is the only channel a node may write to.
+
+The rest is domain: ``rail_observation`` computes ``blocked`` / ``refused`` / ``declined`` /
+``hit`` / ``miss`` from a node's update, and ``error_type`` records an exception's **class**
+where the native ``tasks`` payload carries ``repr(exc)``, which ADR 0006 §11 keeps off the wire.
 """
 
 from __future__ import annotations
@@ -60,7 +69,7 @@ def emit(
         payload["serve_path"] = serve_path
     try:
         get_stream_writer()(payload)
-    except Exception:  # noqa: BLE001 — see the module docstring's third rule
+    except Exception:  # noqa: BLE001 — an observability channel must not fail a turn
         return
 
 
@@ -93,10 +102,8 @@ def rail_observation(stage: str, update: Mapping[str, Any]) -> tuple[str, dict[s
     if path_kind == "refuse":
         return "refused", _reason(update)
     if path_kind == "decline":
-        # A declining ``route`` or ``connect`` also carries the numbers it got as far as
-        # computing, and dropping them made the row that most needs explaining the least
-        # informative one: "No join path" with nothing beside it, where the same node on a
-        # success reports ``n_crossings`` and ``n_licensed``.
+        # A declining ``route`` or ``connect`` keeps the numbers it got as far as computing,
+        # so the row that most needs explaining is not the least informative one.
         detail = _reason(update)
         handler = _DETAIL_BY_STAGE.get(stage)
         if handler is not None:

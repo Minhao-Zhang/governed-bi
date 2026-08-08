@@ -63,32 +63,28 @@ class CheckVerdict(TypedDict):
 
 
 #: The reason code of a passing verdict. A closed vocabulary needs a member for
-#: "nothing objected", or the field is empty on the exact path a reader checks
-#: first.
+#: "nothing objected", or the field is empty on the path a reader checks first.
 PASSED = "passed"
 
-#: An exception was swallowed inside ``check()``. **Not** in :data:`RULES`: its
-#: layer is wherever the exception happened, so it is the one reason code whose
-#: layer is contextual. ADR 0006 §12 requires these be *counted* as well as
-#: blocked — a systematically broken ``check()`` otherwise presents as an arm that
-#: refuses everything, with ``crash_rate == 0`` and every register key present.
+#: An exception was swallowed inside ``check()``. **Not** in :data:`RULES`: its layer
+#: is wherever the exception happened, so it is the one reason code whose layer is
+#: contextual. ADR 0006 §12 requires these be *counted* as well as blocked — a
+#: systematically broken ``check()`` otherwise presents as an arm that refuses
+#: everything, with ``crash_rate == 0`` and every register key present.
 GUARDRAIL_ERROR = "guardrail_error"
 
-#: ``refused_by`` for a turn this module refused. Asserted against
-#: ``register.stages`` at import rather than restated, because a literal here that
-#: no longer matches a key there is a refusal with no stage — which is how a
-#: ``NameError`` in a tool helper spent a long time looking like a model hiccup.
+#: ``refused_by`` for a turn this module refused. Asserted against ``register.stages``
+#: at import rather than restated: a literal here that no longer matches a key there
+#: is a refusal with no stage.
 GUARDRAIL_REFUSED_BY = "guardrail"
 
 #: ``refused_by`` for a turn the input guard refused (§6).
 GUARD_REFUSED_BY = "guard"
 
 
-#: rule id → the layer that owns it. Every rule in the system, once.
-#:
-#: The ids are the verdict's ``reason_code`` vocabulary, so this table is also the
-#: enumeration of legal values. Adding a rule means adding it here, which is the
-#: point at which someone has to say which layer it belongs to.
+#: rule id → the layer that owns it. Every rule in the system, once; also the
+#: enumeration of legal ``reason_code`` values. Adding a rule here is the point at
+#: which someone has to say which layer it belongs to.
 RULES: Mapping[str, Layer] = {
     # ── PARSE ──
     "r_unparseable": Layer.PARSE,
@@ -133,8 +129,7 @@ RULES: Mapping[str, Layer] = {
 def rule_layer(rule_id: str) -> Layer:
     """The layer that owns ``rule_id``. Raises on an undeclared rule.
 
-    Raising is the point. A rule id nothing declares would otherwise produce a
-    verdict with no layer, and that verdict is B3.
+    An undeclared rule would otherwise produce a verdict with no layer, which is B3.
     """
     try:
         return RULES[rule_id]
@@ -180,8 +175,7 @@ def allow(*, evaluated: Sequence[Layer], bound: Mapping[str, str]) -> CheckVerdi
 
 
 def internal_error(layer: Layer, detail: str, *, evaluated: Sequence[Layer] = ()) -> CheckVerdict:
-    """Verdict for an exception inside ``check()`` (:data:`GUARDRAIL_ERROR`).
-    """
+    """Verdict for an exception inside ``check()`` (:data:`GUARDRAIL_ERROR`)."""
     return CheckVerdict(
         passed=False,
         failed_layer=layer,
@@ -193,12 +187,9 @@ def internal_error(layer: Layer, detail: str, *, evaluated: Sequence[Layer] = ()
 
 
 def _assert_stage_vocabulary_is_shared() -> None:
-    """Import-time guard: our ``refused_by`` strings are keys over there.
-
-    Not a restatement of ``register.stages`` — a check that this module's two
-    literals still resolve. A refusal whose stage is unknown cannot be attributed,
-    and ``classify_row`` would return ``(refused, None)`` for every turn this
-    module blocks.
+    """Import-time guard: this module's two ``refused_by`` literals still resolve to
+    stages in ``register.stages``. A refusal whose stage is unknown cannot be
+    attributed to anything.
     """
     for value, expected in ((GUARDRAIL_REFUSED_BY, Stage.check), (GUARD_REFUSED_BY, Stage.guard)):
         actual = REFUSED_BY_TO_STAGE.get(value)

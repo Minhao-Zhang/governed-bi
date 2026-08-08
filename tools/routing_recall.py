@@ -1,22 +1,18 @@
 """Shortlist recall for the schema router — with the facet rewriters and without them.
 
-**The measurement this repository claimed to have and does not.** ``governed_bi.toml`` cites
-recall@10 = 0.953 and recall@3 = 0.852 "measured on the curated corpus over all 1351 test
-questions (``scripts/routing_ablation.py``)". That script does not exist in the tree. So the
-number every routing decision is argued from is not reproducible, which is the exact shape of
-the stale claim ``tools/check_citations.py`` exists to catch one directory over.
+``governed_bi.toml`` cites recall@10 = 0.953 and recall@3 = 0.852 "measured on the curated corpus
+over all 1351 test questions (``scripts/routing_ablation.py``)", and that script does not exist in
+the tree — so the number every routing decision is argued from is not reproducible.
 
-**Why the two arms.** ``eval.datalake.routing_recall`` needs no *agent* model, but the five facet
-query rewriters use the **utility** model, and with none configured they fall back to the raw
-question. So the same function measures two different systems depending on what the session
-carries, and nobody had separated them:
+Two arms, because ``eval.datalake.routing_recall`` needs no *agent* model but the five facet query
+rewriters use the **utility** model, falling back to the raw question when none is configured. The
+same function therefore measures two different systems depending on what the session carries:
 
 * ``--no-rewrite`` — the corpus and the router alone, on the user's own words. Free.
 * ``--rewrite``   — five short rewrites per question, which is what production does. ~150 tokens
   a call, so a 100-question arm is ~75k utility tokens.
 
-Run both on one question set and the difference is the rewriter's contribution to routing, which
-is the number the prompt work has been arguing about without it.
+Run both on one question set and the difference is the rewriter's contribution to routing.
 
 ``rank`` is reported, not just ``hit``: "the router never scored the gold schema" and "it ranked
 4th" are different failures, and collapsing them is how v1 published a documented failure bucket
@@ -131,16 +127,14 @@ def main(argv: list[str] | None = None) -> int:
             vector_cache=vector_cache,
         )
 
-    # The **first** corpus decides the question set, and both arms then answer the same
-    # questions. Letting each arm derive its own would compare two scores over two populations
-    # the moment one variant covered a schema the other did not — which is the shape
-    # `measure/population.py` exists to refuse.
+    # The *first* corpus decides the question set, and both arms answer the same questions.
+    # Letting each derive its own compares two scores over two populations the moment one variant
+    # covers a schema the other does not — what `measure/population.py` exists to refuse.
     primary = build(args.corpus_dir)
     schemas = sorted({s for s in primary.structure.table_schemas.values() if s})
     questions = load_questions(
-        # `--dataset` is the *directory*, as `run_datalake_eval.py` takes it; the question
-        # file inside it is `test_final.jsonl`. Passing the directory raised PermissionError,
-        # which on Windows is what opening a directory looks like.
+        # `--dataset` is the *directory*, as `run_datalake_eval.py` takes it. Passing it whole
+        # raised PermissionError, which on Windows is what opening a directory looks like.
         args.dataset / "test_final.jsonl",
         schemas=schemas,
         limit=args.limit,
@@ -153,15 +147,12 @@ def main(argv: list[str] | None = None) -> int:
         started = time.time()
         rows = routing_recall(questions, session=session, top_n=args.top_n)
         took = time.time() - started
-        # **Table coverage is the number to lead with.** Schema recall@k can look fine
-        # while a turn still cannot answer: the per-type budget licenses at most 8 ranked
-        # tables, so coverage bounds EX and recall does not.
+        # Table coverage is the number to lead with: schema recall@k can look fine while a turn
+        # still cannot answer, because the per-type budget licenses at most 8 ranked tables.
         out = {
-            # **The corpus's content digest, not its directory name.** A variant iterated in
-            # place keeps its path and changes its meaning, so two artifacts would claim the
-            # same treatment while describing different corpora — `corpus/hash.py` opens by
-            # naming that as v1's `corpus_content_hash == "unknown"` defect, and a directory
-            # name is the same failure with a friendlier spelling.
+            # The content digest, not the directory name: a variant iterated in place keeps its
+            # path and changes its meaning, so two artifacts would claim the same treatment while
+            # describing different corpora (v1's `corpus_content_hash == "unknown"` defect).
             "corpus_dir": str(session.corpus_root),
             "corpus_content_hash": session.corpus_content_hash,
             "n_questions": len(rows),

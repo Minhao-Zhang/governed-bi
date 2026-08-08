@@ -149,8 +149,21 @@ def test_empty_detail_is_omitted_not_sent_as_an_empty_object(
 
 
 def test_emit_outside_a_runnable_context_is_a_noop() -> None:
-    """``get_stream_writer()`` raises ``RuntimeError`` outside a graph run — which is
-    ``eval/harness.py`` and ``python -m governed_bi.serve``. Both must keep working."""
+    """A call with **no graph running at all** must not raise. This test is that caller.
+
+    The population used to be named as ``eval/harness.py`` and ``python -m governed_bi.serve``,
+    and that was wrong in a way worth keeping on record: both of them *run the graph*
+    (``compile_graph().invoke(...)``), so both are firmly inside a runnable context. Read on
+    langgraph 1.2.10 — the raise lives in ``get_config()``, not in ``get_stream_writer``, and
+    ``astream`` installs a writer unconditionally, falling back to ``def stream_writer(c): pass``
+    when ``"custom"`` is absent from the stream modes. ``ainvoke`` streams ``"values"``, so it
+    gets the no-op writer rather than an exception.
+
+    The real population is a caller that never enters Pregel: a unit test like this one, or a
+    node function invoked directly. The swallow in ``emit`` is still right — it just protects a
+    much narrower set than the docstring claimed, and someone deciding whether to delete it
+    should be weighing the true one.
+    """
     events.emit(kind="rail", step="guard", status="ok", event_id="guard:t1")
 
 

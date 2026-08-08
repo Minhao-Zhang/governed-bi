@@ -1,15 +1,12 @@
 """Serve one question and print what was recorded. ADR 0005 §2.8.2.2.
 
-**This is a skeleton, not a demo, and the difference is the exit code.** It exits non-zero
-when ``missing_required(record)`` is non-empty, and it names the fields. An entry point that
-prints a plausible answer and exits 0 is indistinguishable from one that works — which is the
-failure this repository keeps rediscovering in new costumes: ``STUB_ANSWER`` reaching an
-artifact, ``ex=1.00`` from zero executions, a degradation gate passing with no index.
+**A skeleton, not a demo, and the difference is the exit code**: it exits non-zero when
+``missing_required(record)`` is non-empty and names the fields, because an entry point that
+prints a plausible answer and exits 0 is indistinguishable from one that works.
 
-It also refuses to serve at all when the corpus reports a problem. ADR 0005 §2.8.2 requires an
+It also refuses to serve when the corpus reports a fatal problem. ADR 0005 §2.8.2 requires an
 unresolvable join endpoint to surface **where the corpus is built**, and until there was an
-entry point there was no caller in a position to exit non-zero, so the requirement was
-unsatisfiable rather than unsatisfied.
+entry point no caller was in a position to exit non-zero.
 
 Usage::
 
@@ -40,11 +37,9 @@ from ..paths import TOOLS_DIR
 def _credentials() -> Any:
     """The shared reader, with ``.env`` bridged into the environment for this process.
 
-    The bridge is not optional and it is not for us: `langchain_openai` and the `openai`
-    client read `os.environ` directly, so knowing a key exists is not the same as their
-    being able to use it. Asking `have()` and then handing control to a library that cannot
-    see the value fails with the library's message, three frames deep, naming an environment
-    variable that *is* set in the file the caller was looking at.
+    The bridge is for the libraries, not for us: `langchain_openai` and the `openai` client
+    read `os.environ` directly, so `have()` returning true is not the same as their being able
+    to use the value.
     """
     sys.path.insert(0, str(TOOLS_DIR))
     import credentials
@@ -57,8 +52,7 @@ def _model(name: str, creds: Any, effort: str | None = None) -> Any:
     """A real chat model, constructed **here** rather than behind a port.
 
     Decision #1: LangChain's ``BaseChatModel`` already *is* that port, and v1's three layers
-    over it (`llm/client.py` + `llm/langchain_client.py` + `llm/fake.py`) are recorded as a
-    mistake. So this is the only place a model is chosen.
+    over it are recorded as a mistake. This is the only place a model is chosen.
     """
     if not creds.have(*creds.OPENAI_KEY_NAMES):
         raise SystemExit(
@@ -67,10 +61,10 @@ def _model(name: str, creds: Any, effort: str | None = None) -> Any:
         )
     from langchain.chat_models import init_chat_model
 
-    # Same two LangChain fields the server passes, and for the same reason: this agent binds
-    # tools, and the provider refuses tools alongside `reasoning_effort` on chat completions.
-    # Kept identical to `api/graph_app.py` deliberately — two entry points that construct a
-    # model differently are two answers to "what did this run use", on a comparability knob.
+    # `use_responses_api` because this agent binds tools and the provider refuses tools
+    # alongside `reasoning_effort` on chat completions. Kept identical to `api/graph_app.py`:
+    # two entry points constructing a model differently are two answers to "what did this run
+    # use", on a comparability knob.
     kwargs: dict[str, Any] = {"model_provider": "openai", "use_responses_api": True}
     if effort:
         kwargs["reasoning_effort"] = effort
@@ -115,11 +109,9 @@ def main(argv: list[str] | None = None) -> int:
         from ..retrieve.vector_cache import vector_cache_from_environment
 
         embedder = OpenAIEmbedder()
-        # The same persisted cache the server uses. Until now this passed `embedder=` and no
-        # cache, so every invocation re-embedded all 13,968 summaries in the pooled corpus
-        # before it could answer one question. Removing that is the largest single cost the
-        # LanceDB migration removed, and it had gone unnoticed because nothing here reports
-        # how many vectors were reused.
+        # The same persisted cache the server uses. Without it every invocation re-embedded
+        # all 13,968 summaries in the pooled corpus before answering one question, and nothing
+        # here reports how many vectors were reused, so it went unnoticed.
         vector_cache = vector_cache_from_environment(model=embedder.requested_model)
     model = None if args.no_model else _model(args.model, creds, args.effort)
 
@@ -139,11 +131,10 @@ def main(argv: list[str] | None = None) -> int:
         if not args.json:
             print(f"seeded {len(session.assets_by_id)} assets from {args.schema!r} into {root}")
 
-    # Problems first, and the fatal ones stop the serve. A warning printed beside an answer
-    # is the silent-skip shape: it satisfies "we reported it" and changes no outcome. But
-    # refusing on *every* problem was the opposite failure — this exited 3 on a corpus the
-    # server served without checking anything, so the two readers of one list disagreed
-    # (ADR 0008 D9). `Problem.fatal` decides; degradations are counted and named.
+    # Fatal problems stop the serve; a warning printed beside an answer changes no outcome.
+    # Refusing on *every* problem was the opposite failure — this exited 3 on a corpus the
+    # server served without checking anything, so two readers of one list disagreed
+    # (ADR 0008 D9). `Problem.fatal` decides.
     if session.fatal_problems:
         print(
             f"corpus has {len(session.fatal_problems)} fatal problem(s); refusing to serve:",
@@ -153,9 +144,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {problem}", file=sys.stderr)
         return 3
     if session.degradations and not args.json:
-        # Printed, counted, and *not* a stop. The corpus is smaller than the lake and a run
-        # over it is not comparable to a run over a clean one, so the number goes next to
-        # the answer rather than into a log nobody reads.
+        # Printed and counted, not a stop: a run over a degraded corpus is not comparable to
+        # a run over a clean one, so the number goes next to the answer.
         print(f"corpus has {len(session.degradations)} degradation(s) (serving anyway):")
         for problem in session.degradations[:10]:
             print(f"  {problem}")
@@ -163,17 +153,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  ... and {len(session.degradations) - 10} more")
 
     graph = compile_graph()
-    # One question, one thread. `configurable()` no longer supplies a `thread_id` -- a thread is
-    # per conversation, not a run constant, and defaulting it collapsed conversations together
-    # -- so the caller names it. Here that caller serves a single turn, so the run id is the
-    # honest answer rather than a default hiding somewhere deeper.
+    # One question, one thread. `configurable()` supplies no `thread_id` -- a thread is per
+    # conversation, not a run constant, and defaulting it collapsed conversations together --
+    # so the caller names it, and here the run id is the honest answer.
     config = session.configurable(question=args.question)
     config["configurable"]["thread_id"] = session.run_id
     out = graph.invoke(session.turn(args.question), config)
 
-    # A paused turn is not a failed one, and it must not be reported as either. `ask_user`
-    # interrupts, no node writes `answer`, and the code below would have printed
-    # `outcome: None` / `answer: (no text)` and exited 1 on an incomplete record -- naming
+    # A paused turn is not a failed one. `ask_user` interrupts and no node writes `answer`, so
+    # the code below would print `outcome: None` and exit 1 on an incomplete record, naming
     # fifteen absent fields for a turn that is waiting rather than broken. Exit 4 says which.
     pending = _pending_clarification(out)
     if pending:
@@ -229,15 +217,13 @@ def _answer_text(state: dict[str, Any], answer: dict[str, Any]) -> str:
     """The model's answer from ``messages``; the system's from ``answer["text"]``.
 
     ADR 0007 §4: ``text`` is *system copy* and is null on the answered path, so a caller that
-    reads only ``answer["text"]`` shows nothing for every successful turn. One source each,
-    rather than two fields that must agree.
+    reads only ``answer["text"]`` shows nothing for every successful turn.
     """
     if answer.get("text"):
         return str(answer["text"])
     for message in reversed(state.get("messages") or []):
-        # `.text` rather than `str(content)`: `langchain-core` already concatenates content
-        # blocks, and the Responses API returns blocks. `str()` on that prints a Python repr
-        # of a list of dicts and calls it the answer.
+        # `.text` rather than `str(content)`: the Responses API returns content blocks, and
+        # `str()` on those prints a Python repr of a list of dicts and calls it the answer.
         text = getattr(message, "text", None)
         if text and getattr(message, "type", "") != "human":
             return str(text)

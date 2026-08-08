@@ -6,20 +6,14 @@ Session settings required by ADR 0006 §10 are applied on open:
 Error taxonomy is SQLSTATE class lookup (parcel C): ``42`` → ``QueryError``;
 ``08`` / ``53`` / ``57`` → ``ConnectionError``. Never message-regex.
 
-**A failed statement discards a dead connection** (audit §9.1). It did not, and
-``_connect`` returned the cached handle unconditionally, so one network blip
-poisoned every remaining question in the run. And because psycopg raises
-``the connection is closed`` with ``sqlstate=None``, the classification fell past
-both SQLSTATE tests and returned ``QueryError`` — an infrastructure fault recorded
-as *the model wrote bad SQL*, for every question after the blip. Reproduced against
-psycopg 3.3.4: one injected ``OperationalError`` yielded ``QueryError`` on three
-consecutive calls with the connector still holding the dead handle.
-
-The no-SQLSTATE case is now decided from **structured driver state** —
-``Connection.closed`` / ``Connection.broken``, and the DB-API's own
-``OperationalError`` / ``ProgrammingError`` split — never from the message text.
-An exception the server classified carries a SQLSTATE; one that does not is a
-client-side or transport failure, which is what ``OperationalError`` means.
+**A failed statement must discard a dead connection** (audit §9.1). Reusing the
+cached handle let one network blip poison every remaining question in the run, and
+because psycopg raises ``the connection is closed`` with ``sqlstate=None`` the fault
+was recorded as *the model wrote bad SQL* (reproduced on psycopg 3.3.4). The
+no-SQLSTATE case is therefore decided from structured driver state —
+``Connection.closed`` / ``Connection.broken`` and the DB-API ``OperationalError`` /
+``ProgrammingError`` split — never message text: an exception the server classified
+carries a SQLSTATE, so one without is a client-side or transport failure.
 """
 
 from __future__ import annotations
@@ -64,11 +58,10 @@ class PostgresConnector:
     def _discard(self) -> None:
         """Drop the cached handle so the next call reconnects. Never raises.
 
-        Separate from :meth:`close` because it runs on the *failure* path: a handle that is
-        already broken can raise from ``close()``, and letting that escape would replace the
-        classified datasource error with a driver exception from the cleanup. ``_conn`` is
-        cleared first, so it is dropped whether or not the close succeeds — the alternative
-        ordering is how the dead handle survived.
+        Separate from :meth:`close` because it runs on the failure path: a broken handle
+        can raise from ``close()``, which would replace the classified datasource error
+        with a cleanup exception. ``_conn`` is cleared *first*, so the handle is dropped
+        whether or not the close succeeds.
         """
         conn, self._conn = self._conn, None
         if conn is None:
@@ -116,18 +109,15 @@ class PostgresConnector:
 
         Two signals, in order of directness:
 
-        * ``Connection.closed`` / ``Connection.broken`` — psycopg's own view of the handle it
+        * ``Connection.closed`` / ``Connection.broken`` — psycopg's view of the handle it
           just failed on. If either is set, the next statement on it cannot succeed.
-        * ``isinstance(err, psycopg.OperationalError)`` — the DB-API split. psycopg raises a
-          *server* error as the subclass its SQLSTATE selects, and every one of those carries a
-          ``sqlstate``; this method is only reached when there is none, so the exception did not
-          come from the server at all. ``OperationalError`` is the DB-API class for exactly that
-          ("an unexpected disconnect occurs, the data source name is not found"), against
-          ``ProgrammingError`` for a fault in the statement.
+        * ``isinstance(err, psycopg.OperationalError)`` — the DB-API split. A *server*
+          error always carries a ``sqlstate``, and this method is only reached when there
+          is none, so the exception is client-side or transport, which is precisely what
+          ``OperationalError`` means (against ``ProgrammingError`` for a statement fault).
 
-        The module contract forbids message-regex, and it is right to: the SQLite adapter
-        classifies by prose and misclassifies the two faults its own acceptance test singles
-        out. ``"the connection is closed"`` is a string psycopg may reword in any release.
+        Never message text: ``"the connection is closed"`` is a string psycopg may reword
+        in any release.
         """
         conn = self._conn
         if conn is not None and (
@@ -169,10 +159,9 @@ class PostgresConnector:
                 str(err),
                 sqlstate=sqlstate or _FALLBACK_CONNECTION_SQLSTATE,
             ) from err
-        # Statement path, no SQLSTATE: the server did not classify this, so it is not a verdict
-        # on the statement. **This branch used to fall straight through to QueryError**, and
-        # that is how one blip made every remaining question in the run read as "the model wrote
-        # bad SQL" — psycopg raises `the connection is closed` with sqlstate=None.
+        # Statement path, no SQLSTATE: the server did not classify this, so it is not a
+        # verdict on the statement. Falling through to QueryError here is how one blip made
+        # every remaining question read as "the model wrote bad SQL".
         if self._connection_is_unusable(err):
             self._discard()
             raise ConnectionError(
@@ -297,11 +286,11 @@ class PostgresConnector:
         )
 
     # ``sample_values`` was here and is gone; see ``ports.Connector``. It hand-built
-    # ``f'SELECT DISTINCT "{column}" FROM "{schema}"."{table}"'`` — Postgres has no
-    # quote-doubling and this adapter did none, so a ``physical_name`` containing a double
-    # quote escaped its intended relation, and ``corpus/validate.py`` validates only
-    # ``slug(physical_name)`` and so raises no objection to such an asset. Its one caller now
-    # builds the statement from ``exp.Identifier`` nodes and runs it through ``govern``.
+    # ``f'SELECT DISTINCT "{column}" FROM "{schema}"."{table}"'`` with no quote-doubling,
+    # so a ``physical_name`` containing a double quote escaped its intended relation —
+    # and ``corpus/validate.py`` validates only ``slug(physical_name)``, so no such asset
+    # is rejected. Its one caller now builds the statement from ``exp.Identifier`` nodes
+    # and runs it through ``govern``.
 
 
 def _split_name(name: str, *, default_schema: str) -> tuple[str, str]:

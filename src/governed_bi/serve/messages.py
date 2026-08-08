@@ -1,13 +1,10 @@
 """Readers over the ``messages`` channel. One implementation each, at the layer that owns it.
 
-**This module exists because of an import order, and the order was right.**
-:func:`last_ai_text` lived in ``api/trace_store.py``, which is where its first two callers were.
-Its third caller is ``serve/nodes/narrate.py``, and ``tools/check_imports.py`` orders ``serve``
-before ``api`` — so the node could not reach it. The options were to copy it into ``serve``,
-which ``tools/check_one_implementation.py`` refuses and has already refused once for this exact
-function, or to move it to the layer that actually owns the concept. The ``messages`` channel is
-declared in ``serve/state.py``; a reader of it belongs beside the declaration, and ``api`` may
-import ``serve``.
+:func:`last_ai_text` lived in ``api/trace_store.py`` where its first two callers were, but
+``tools/check_imports.py`` orders ``serve`` before ``api``, so its third caller
+(``serve/nodes/narrate.py``) could not reach it. The ``messages`` channel is declared in
+``serve/state.py``; a reader of it belongs beside the declaration, and ``api`` may import
+``serve``.
 """
 
 from __future__ import annotations
@@ -21,26 +18,19 @@ __all__ = ["last_ai_text"]
 def last_ai_text(state: Mapping[str, Any]) -> str | None:
     """The model's answer, via LangChain's own ``AIMessage.text``.
 
-    Three callers that must not disagree: ``routes._shape``, which supplies it to a REST caller
-    with no message channel to read; ``graph_app._record_node``, which supplies it to the audit
-    log; and ``serve/nodes/narrate.py``, which adopts it as the turn's ``answer_text`` when the
-    agent wrote one. Two readers of "what did the model say" is how the audit list, the response
-    and the answer card drift apart.
+    Three callers that must not disagree — ``routes._shape``, ``graph_app._record_node`` and
+    ``serve/nodes/narrate.py`` — because two readers of "what did the model say" is how the
+    audit list, the response and the answer card drift apart.
 
-    Not hand-flattened. The Responses API returns content as blocks (``[{"type": "text", ...},
-    {"type": "reasoning", ...}]``), and an earlier draft walked them itself — which is
-    re-implementing something ``langchain-core`` owns, and decision #1 records that v1's three
-    layers over ``BaseChatModel`` were a mistake for exactly this reason. ``.text`` already
-    concatenates the text blocks and ignores the rest.
+    Not hand-flattened: the Responses API returns content as blocks and ``.text`` already
+    concatenates the text ones (decision #1 — do not re-implement what ``langchain-core`` owns).
+    A dict message is read too, and that is not defensive: restored from a checkpoint over the
+    wire a message is a plain mapping with no ``.text``, so the ``getattr`` path alone returns
+    ``None`` for every message of a rehydrated thread.
 
-    **A dict message is read too, and that is not defensive.** Restored from a checkpoint over
-    the wire a message is a plain mapping with ``content`` as a list of blocks and no ``.text``
-    property, so the ``getattr`` path alone returns ``None`` for every message of a rehydrated
-    thread — which is a conversation that reloads with its answers missing.
-
-    ``human`` and ``tool`` messages are skipped rather than filtered on ``type == "ai"``: a
-    provider message type this code has not seen is more likely to be the answer than to be a
-    turn of someone else's, and reading it is recoverable where skipping it is silent.
+    ``human`` and ``tool`` are skipped rather than filtering on ``type == "ai"``: an unseen
+    provider message type is more likely to be the answer than someone else's turn, and reading
+    it is recoverable where skipping it is silent.
     """
     for message in reversed(state.get("messages") or []):
         kind = str(getattr(message, "type", "") or "")

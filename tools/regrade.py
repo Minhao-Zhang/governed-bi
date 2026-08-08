@@ -2,15 +2,12 @@
 
     uv run --frozen python tools/regrade.py runs/eval/live_full_....jsonl
 
-**Why this can exist at all.** EX is graded on executed *result sets*, not on SQL text, so a
-change to the grader is replayable: re-execute the prediction and the gold, compare again, and
-the model is never called. A grader that compared SQL strings would make every grader fix cost
-a full re-run.
+Replayable because EX is graded on executed *result sets*, not SQL text: re-execute the
+prediction and the gold and compare again, with no model call. A grader comparing SQL strings
+would make every grader fix cost a full re-run.
 
-It writes ``<artifact>.regraded.jsonl`` and **reports how many rows flipped in each
-direction**. It does not overwrite the input: a re-scored artifact and an original that
-disagree is exactly the situation where you want both, and "the number changed" is a claim
-that has to be inspectable rather than asserted.
+Writes ``<artifact>.regraded.jsonl`` and reports how many rows flipped in each direction. The
+input is never overwritten — "the number changed" is a claim that has to stay inspectable.
 
 Never prints the DSN.
 """
@@ -86,9 +83,8 @@ def main(argv: list[str] | None = None) -> int:
             pred = row.get("generated_sql")
 
             if not gold or not pred or row.get("outcome") == "clarification":
-                # Nothing to re-grade: a paused turn produced no statement, and a question
-                # with no gold has no reference. Carried through unchanged rather than
-                # silently recounted as wrong.
+                # Nothing to re-grade: a paused turn produced no statement, a question with no
+                # gold has no reference. Carried through rather than silently recounted as wrong.
                 flips["unchanged (nothing to grade)"] += 1
                 handle.write(json.dumps(row, default=str) + "\n")
                 continue
@@ -116,10 +112,9 @@ def main(argv: list[str] | None = None) -> int:
                 gold_rows=grows,
                 order_sensitive=qid in order_sensitive,
             )
-            # Not coerced: a regrade that cannot judge a row must leave it unmeasured rather than
-            # record it as wrong, the same rule as `grade_turn`. `flips` below reads truthiness,
-            # so an unmeasured outcome lands in "correct -> wrong" only if it *was* correct, and
-            # `grade_detail` names why.
+            # Not coerced: a regrade that cannot judge a row leaves it unmeasured rather than
+            # wrong, the same rule as `grade_turn`. `flips` below reads truthiness, so an
+            # unmeasured row lands in "correct -> wrong" only if it *was* correct.
             now = verdict["correct"]
             row["correct"] = now
             row["gold_fingerprint"] = verdict.get("gold_fingerprint")

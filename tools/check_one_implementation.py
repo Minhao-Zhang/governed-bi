@@ -17,20 +17,13 @@ from typing import NamedTuple
 ROOT = Path(__file__).resolve().parent.parent
 PKG = ROOT / "src" / "governed_bi"
 
-#: Names allowed to appear in more than one module, each with the reason.
-#:
-#: Kept as short as the tree forces. Every entry is a hole in rule (a), so the bar
-#: is "this name cannot mean one concept" rather than "fixing this is annoying".
+#: Names allowed to appear in more than one module, each with the reason. Every entry is a hole
+#: in rule (a), so the bar is "this name cannot mean one concept", not "fixing this is annoying".
 KNOWN_DUPLICATES: dict[str, str] = {
-    #: The module export protocol. Required to recur by construction — one per
-    #: module is the correct number, and its contents are checked by nothing here.
+    #: Required to recur by construction — one per module is the correct number.
     "__all__": "Python's per-module export list; recurrence is the language, not a concept",
-    #: The ``python -m`` entry-point protocol. `eval/__main__.py` and `serve/__main__.py` are
-    #: two *programs*, not two implementations of one concept, and the name is fixed by the
-    #: runtime rather than chosen. Narrowly true: this exempts the name `main`, and both
-    #: definition sites are `__main__.py` modules whose bodies share nothing. If `main` ever
-    #: appears in a module that is not an entry point, that is a different situation and this
-    #: entry should not be what permits it.
+    #: Exempts the name only. Both current sites are `__main__.py` modules sharing no body; a
+    #: `main` in a module that is not an entry point is a different case this must not permit.
     "main": "the `python -m` entry-point protocol; one per program, name fixed by the runtime",
 }
 
@@ -89,11 +82,9 @@ SINGLETON_CONCEPTS: tuple[Singleton, ...] = (
     ),
 )
 
-#: Assignments whose value is one of these calls bind scaffolding, not a concept.
-#: ``T = TypeVar("T")`` in two generic modules is not two implementations of
-#: anything, and treating it as one would put ``T`` in :data:`KNOWN_DUPLICATES` —
-#: a name-shaped hole that then excuses a real ``T``. Matching on the *call* keeps
-#: the exemption tied to what the line does.
+#: Assignments whose value is one of these calls bind scaffolding, not a concept. Matching on
+#: the *call* rather than adding ``T`` to :data:`KNOWN_DUPLICATES` keeps the exemption tied to
+#: what the line does, instead of opening a name-shaped hole that would excuse a real ``T``.
 SCAFFOLD_CALLS: frozenset[str] = frozenset({"TypeVar", "ParamSpec", "TypeVarTuple"})
 
 SKIP_DIRS: frozenset[str] = frozenset({"__pycache__"})
@@ -110,15 +101,10 @@ def _is_scaffold(value: ast.expr | None) -> bool:
 def top_level_names(tree: ast.Module) -> list[tuple[str, int]]:
     """Every name this module binds at module level, with its line.
 
-    **Plain assignments are included, and that is a deliberate widening** of the
-    "def / class / annotated assignment" reading. v1's cited case —
-    ``LOW_CONFIDENCE_JOIN``, two copies with different comparison operators — is a
-    bare constant assignment, and a gate that scanned only annotated declarations
-    would have watched it happen. Type aliases (``Row = tuple[Any, ...]``) are bare
-    assignments too, and an alias is a concept.
-
-    Only the module's own top level: a name inside a class or a function is scoped
-    and cannot be imported, so it is not an import name.
+    Plain assignments count, deliberately: v1's cited case (``LOW_CONFIDENCE_JOIN``, two copies
+    with different comparison operators) is a bare constant, as are type aliases, so a gate
+    reading only annotated declarations would have watched it happen. Top level only — a name
+    scoped to a class or function cannot be imported.
     """
     out: list[tuple[str, int]] = []
     for node in tree.body:
@@ -136,16 +122,10 @@ def top_level_names(tree: ast.Module) -> list[tuple[str, int]]:
 
 
 def main() -> int:
-    # ``--root DIR`` scans a different tree, and it exists so this gate can be tested
-    # without writing into ``src/``.
-    #
-    # Not a test hook bolted on: the two tests that previously covered the singleton
-    # tiers used ``src/governed_bi/corpus/hash.py`` as a scratch file, chosen because
-    # that path was expected to stay absent. Parcel D built it, and from then on the
-    # suite **overwrote and then deleted real source code** — the ``rmdir`` in their
-    # ``finally`` also raised, because ``corpus/`` was no longer empty. A test that
-    # writes to a production path is a test that will eventually overwrite production
-    # code; the only durable fix is for the tool to be pointable at a tree the test owns.
+    # ``--root DIR`` scans a different tree, so this gate can be tested without writing into
+    # ``src/``. The singleton-tier tests used to scratch-write ``src/governed_bi/corpus/hash.py``
+    # on the assumption it would stay absent; once Parcel D built it, the suite overwrote and
+    # then deleted real source. A tool pointable at a tree the test owns is the durable fix.
     argv = sys.argv[1:]
     pkg = PKG
     if "--root" in argv:

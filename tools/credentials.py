@@ -1,25 +1,15 @@
 """One reader for credentials, for tests and tools. Never for ``src/``.
 
-**Why this exists.** On 2026-08-03 there were three copies of "read a secret from the
-environment or ``.env``" and they did not agree: `tests/serve/turn_contract_fixtures.py`
-read both sources, `tests/embedders.py` read only `os.environ`, and
-`tools/load_demo_schema.py` read both again. The consequence was not a crash. It was that
-parcel I's contract **skipped its OpenAI half over a key that was present in `.env` the whole
-time**, and said in capitals that it had only exercised one of two adapters — a true
-statement about a false situation.
+On 2026-08-03 three copies of "read a secret from the environment or ``.env``" disagreed about
+which sources they read, and parcel I's contract skipped its OpenAI half over a key that was
+present in ``.env`` the whole time. The failure mode of a duplicated credential reader is a
+quiet reduction in what ran, not a crash.
 
-That is the shape `tools/check_one_implementation.py` exists to catch: two implementations of
-one concept, differing in a way nobody reads until it costs coverage. A credential reader is
-an unusually bad place for it, because the failure mode is a *quiet reduction in what ran*.
+Not in ``src/``, deliberately: a library that reads ``.env`` decides its own configuration
+behind its caller's back. Production code takes a DSN or a client.
 
-**Not in `src/`, deliberately.** `tools/check_imports.py` keeps the library layered, and a
-library that reads `.env` decides its own configuration behind its caller's back. Production
-code takes a DSN or a client; only the test suite and the developer-facing tools go looking
-for one.
-
-**Values are never returned to a log.** :func:`secret` returns the value to its caller and
-:func:`have` answers yes/no without it, so a caller that only needs presence — a skip
-condition, a capability flag — cannot accidentally interpolate a credential into a message.
+:func:`secret` returns the value; :func:`have` answers yes/no without it, so a caller that only
+needs presence cannot interpolate a credential into a skip message.
 """
 
 from __future__ import annotations
@@ -31,8 +21,7 @@ from pathlib import Path
 #: invoked from a subdirectory finds the same ``.env`` as one invoked from the root.
 ROOT = Path(__file__).resolve().parent.parent
 
-#: The dotenv file. Git-ignored, and its contents are the developer's to manage: nothing here
-#: writes to it.
+#: The dotenv file. Git-ignored and the developer's to manage: nothing here writes to it.
 DOTENV = ROOT / ".env"
 
 
@@ -40,10 +29,8 @@ def _dotenv() -> dict[str, str]:
     """Parse ``.env`` into a mapping. Absent file is an empty mapping, not an error.
 
     Deliberately minimal: ``KEY=value``, ``#`` comments, optional surrounding quotes. No
-    interpolation, no ``export``, no multi-line values. A fuller parser would be a second
-    implementation of python-dotenv, and the failure mode of guessing wrong here is a
-    credential that silently reads as absent — which is the defect this module was written to
-    remove.
+    interpolation, no ``export``, no multi-line values — a fuller parser would be a second
+    implementation of python-dotenv.
     """
     if not DOTENV.exists():
         return {}
@@ -60,13 +47,11 @@ def _dotenv() -> dict[str, str]:
 def secret(*names: str) -> str:
     """The first non-empty value among ``names``, from the environment then ``.env``.
 
-    Environment first so a caller can override the file for one run without editing it.
-    Several names because a secret legitimately has aliases — the Postgres DSN is
-    ``GOVERNED_BI_PG_DSN`` or ``PG_RENAME_DECOY_DSN`` — and the *order* is the precedence.
+    Environment first so a caller can override the file for one run without editing it. Several
+    names because a secret has aliases, and the *order* is the precedence.
 
-    Returns ``""`` when nothing is set. Not ``None``: every caller here immediately asks
-    "is there one", and a falsy string answers that without inviting a `None` check that
-    passes for an empty value.
+    Returns ``""``, not ``None``: a falsy string answers "is there one" without inviting a
+    ``None`` check that passes for an empty value.
     """
     for name in names:
         value = os.environ.get(name)
@@ -83,9 +68,8 @@ def secret(*names: str) -> str:
 def have(*names: str) -> bool:
     """Whether :func:`secret` would find one — without handing the value to the caller.
 
-    For skip conditions and capability flags. The point is that a caller which only needs
-    presence cannot interpolate a credential into a skip message by accident, which is how a
-    secret reaches a terminal scrollback or a CI log.
+    For skip conditions and capability flags, so a caller that only needs presence cannot
+    interpolate a credential into a CI log.
     """
     return bool(secret(*names))
 
@@ -93,16 +77,12 @@ def have(*names: str) -> bool:
 def load_into_environ() -> int:
     """Fill **unset** environment variables from ``.env``. Returns how many were filled.
 
-    For process entry points, and it is the only thing that actually works. Third-party
-    libraries read `os.environ` directly and are right to — `langchain_openai` and the
-    `openai` client both raise on a missing `OPENAI_API_KEY` no matter what this module
-    knows — so a per-reader bridge cannot help them. Twice on 2026-08-03 a caller used
-    :func:`have` to decide a key was present and then handed control to a library that
-    could not see it.
+    For process entry points, and the only thing that works for third-party libraries: they read
+    ``os.environ`` directly, so :func:`have` can report a key present and the library still not
+    see it. That happened twice on 2026-08-03.
 
-    **Existing environment always wins**, so `OPENAI_API_KEY=... python -m ...` overrides
-    the file for one run. Nothing is printed: a loader that echoes what it found puts
-    credentials in every log that runs it.
+    Existing environment always wins, so ``OPENAI_API_KEY=... python -m ...`` overrides the file
+    for one run. Nothing is printed — a loader that echoes what it found logs credentials.
     """
     for key, value in _dotenv().items():
         if value and not os.environ.get(key):
@@ -110,11 +90,9 @@ def load_into_environ() -> int:
     return sum(1 for k, v in _dotenv().items() if v and os.environ.get(k) == v)
 
 
-#: The Postgres DSN's names, in precedence order. Declared here rather than repeated at each
-#: call site: an alias list is exactly the kind of thing that grows in one copy and not the
-#: other, which is the bug this module exists for.
+#: The Postgres DSN's names, in precedence order. Declared once rather than at each call site:
+#: an alias list is the kind of thing that grows in one copy and not the other.
 PG_DSN_NAMES = ("GOVERNED_BI_PG_DSN", "PG_RENAME_DECOY_DSN")
 
-#: The OpenAI key's name. A tuple for symmetry with :data:`PG_DSN_NAMES`, so callers use one
-#: spelling of the idiom.
+#: The OpenAI key's name. A tuple for symmetry with :data:`PG_DSN_NAMES`.
 OPENAI_KEY_NAMES = ("OPENAI_API_KEY",)

@@ -2,23 +2,20 @@
 
     uv run --frozen python tools/run_datalake_eval.py --workers 2 --effort xhigh --resume
 
-**Why this is in ``tools/`` and not the scratchpad.** The 1 351-question arm takes hours,
-so it will be interrupted, resumed, and re-read by someone who did not start it. A one-shot
-script in a temp directory cannot be any of those things.
+In ``tools/`` rather than a scratchpad because the 1 351-question arm takes hours: it will be
+interrupted, resumed, and re-read by someone who did not start it.
 
 Three properties the earlier scratchpad driver lacked, each of which cost a run:
 
-* **Rows are appended as they complete.** A driver that writes at the end is one
-  interruption away from having measured nothing. The 3-per-schema run took 50 minutes and
-  its process was still holding a database connection long after the artifact was written.
-* **``--resume`` keeps what was measured and *retries what crashed*.** A crashed row is not
-  a measurement, so skipping it would bake a permanent hole into the artifact and compute the
-  final score over a denominator that silently included it.
-* **Concurrency is bounded and declared.** ``--workers`` maps to
-  ``harness.run_arm(workers=...)``, which gives each thread its own graph and its own
-  connector. The default is **2**: three workers at ``xhigh`` lost 30 of the first 194
-  questions to ``RateLimitError`` against a 500 k TPM ceiling — a 429 raised inside a node is
-  caught by the graph wrapper and the turn is marked ``crashed``, so a rate limit is a lost
+* **Rows are appended as they complete.** A driver that writes at the end is one interruption
+  away from having measured nothing.
+* **``--resume`` keeps what was measured and *retries what crashed*.** A crashed row is not a
+  measurement, so skipping it bakes a permanent hole into the artifact and computes the final
+  score over a denominator that silently included it.
+* **Concurrency is bounded and declared.** ``--workers`` maps to ``harness.run_arm(workers=...)``,
+  which gives each thread its own graph and connector. Default 2: three workers at ``xhigh``
+  lost 30 of the first 194 questions to ``RateLimitError`` against a 500 k TPM ceiling, and a
+  429 raised inside a node is caught by the graph wrapper and marked ``crashed`` — a lost
   measurement rather than a slow one. ``--max-retries`` (default 8) is the other half.
 
 Never prints the DSN or the API key.
@@ -38,10 +35,9 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "src"))
 
-#: The corpus, in its own repository as of 2026-08-07 (D13). Derived from this file's location
-#: rather than left relative, for the same reason ``DEFAULT_DATASET`` is: a sibling path that
-#: resolves against the process's working directory picks a different tree — or none — depending
-#: on where the run was started from, and the corpus is what ``corpus_content_hash`` identifies.
+#: The corpus, in its own repository as of 2026-08-07 (D13). Derived from this file's location,
+#: like ``DEFAULT_DATASET``: a relative sibling path resolves against the process's working
+#: directory, and the corpus is what ``corpus_content_hash`` identifies.
 DEFAULT_CORPUS = REPO.parent / "BIRD-corpus"
 DEFAULT_DATASET = REPO.parent / "BIRD-Data-Obfuscation" / "eval_dataset"
 
@@ -122,10 +118,8 @@ def main(argv: list[str] | None = None) -> int:
     from governed_bi.govern.policy import GovernancePolicy
     from governed_bi.serve import session as session_mod
 
-    # `max_retries` is not a nicety. A 429 raised inside a node is caught by the graph's
-    # wrapper and the turn is marked `crashed`, so a rate limit becomes a *lost measurement*
-    # rather than a slow one: a 3-worker run over this corpus lost 30 of its first 194
-    # questions that way (15%). The SDK default is 2.
+    # `max_retries` is not a nicety: a 429 inside a node is marked `crashed`, so a rate limit is
+    # a lost measurement. A 3-worker run lost 30 of its first 194 (15%). The SDK default is 2.
     kwargs = {
         "model_provider": "openai",
         "use_responses_api": True,
@@ -173,9 +167,8 @@ def main(argv: list[str] | None = None) -> int:
     if questions:
         questions[0].pop("_skipped_uncovered", None)
 
-    # The retrieval channel is in the tag, because it is an arm and not a detail: the lexical
-    # and embedded runs have different ceilings (0.444 vs 0.503 at top_n=3) and must never
-    # land in one artifact.
+    # The retrieval channel is in the tag because it is an arm, not a detail: lexical and
+    # embedded runs have different ceilings (0.444 vs 0.503 at top_n=3).
     tag = (
         f"{args.model}_{args.effort or 'default'}_top{args.top_n or 'default'}"
         f"_{'embed' if args.embed else 'lexical'}"
@@ -185,15 +178,11 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── resume: keep what was *measured*, retry what crashed ──────────────────────
     #
-    # A crashed row is not a measurement. Skipping it on resume would bake a permanent hole
-    # into the artifact — 30 rate-limited questions would stay unanswered no matter how many
-    # times the run was resumed, and the final EX would be computed over a denominator that
-    # silently included them. So the file is rewritten with the crashed rows dropped, and
-    # those question ids go back into the queue.
-    # **A resume that finds nothing is usually a renamed artifact, not a first run.** Adding
-    # the retrieval channel to the tag silently orphaned a 515-row artifact and started a
-    # 1 351-question run from scratch; the rows were recoverable only because the process was
-    # noticed early. Refusing here costs one flag and saves a multi-hour run.
+    # The file is rewritten with crashed rows dropped and their question ids requeued, because a
+    # crashed row is not a measurement and skipping it leaves a permanent hole in the artifact.
+    # A resume that finds nothing is usually a renamed artifact, not a first run: adding the
+    # retrieval channel to the tag once orphaned a 515-row artifact and restarted a 1 351-question
+    # run from scratch. Refusing here costs one flag and saves a multi-hour run.
     if args.resume and not out_path.exists():
         siblings = sorted(
             path
@@ -242,15 +231,11 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── what the dataset already knows, and the harness used to ignore ────────────
     #
-    # Both of these files ship with the dataset and had no reader. `attach_gold_fingerprints`
-    # gives the grader the published digest for every question it can safely use one for —
-    # which is what makes the oracle arm measurable at all, since without an independent gold
-    # every one of its rows is `correct=None`. `attach_quality_flags` marks the questions the
-    # dataset warns about (leakage, no-total-order gold, degenerate gold) on the row, so the
-    # headline can be recomputed under a different exclusion policy without paying for the run
-    # twice. Printed, both of them: a wiring that silently attaches nothing looks exactly like
-    # one that was never called, and that is how the first version of this file behaved for
-    # months.
+    # Both files ship with the dataset and had no reader. `attach_gold_fingerprints` supplies the
+    # published digest, without which every oracle-arm row is `correct=None`. `attach_quality_flags`
+    # marks the questions the dataset warns about, so the headline can be recomputed under a
+    # different exclusion policy without paying for the run twice. Both counts are printed: a
+    # wiring that silently attaches nothing looks exactly like one that was never called.
     fingerprints = attach_gold_fingerprints(
         questions, args.dataset, dsn_key="rename_decoy", order_sensitive=order_sensitive
     )
@@ -335,9 +320,8 @@ def _report(rows: list[dict], out_path: pathlib.Path, args, observed_tokens, tab
     every = [json.loads(line) for line in out_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     print(f"\nrows in {out_path}: {len(every)}")
 
-    # `correct` has three values, and this function read it with `r.get("correct")` — so a row the
-    # grader could not judge counted in the denominator as a wrong answer. Split first, report the
-    # split, and take every rate below over the graded rows only.
+    # `correct` has three values, and reading it with `r.get("correct")` counted a row the grader
+    # could not judge as a wrong answer. Split first; every rate below is over graded rows only.
     graded = [r for r in every if r.get("correct") is not None]
     unmeasured = [r for r in every if r.get("correct") is None]
     if unmeasured:
@@ -354,15 +338,11 @@ def _report(rows: list[dict], out_path: pathlib.Path, args, observed_tokens, tab
     ex(graded, "EX")
     ex([r for r in graded if r.get("outcome") != "clarification"], "EX over attempted")
 
-    # **The population, stated rather than quietly changed.** The dataset's own note is
-    # "Exclude both from cross-variant EX": `order_sensitive` golds carry a
-    # LIMIT-without-total-order or a float aggregate and return a different-but-valid
-    # result on the decoy instances, and `exec_failed` golds are pre-existing degenerate
-    # BIRD (>200k rows / 60s timeout) that score `missing_gold` against any engine. Leakage is
-    # the dataset's third warning and joins them here: questions its own check can recover from
-    # the train split by retrieval. All of it is *printed*, never applied silently — dropping
-    # rows would shrink a denominator with nothing in the artifact saying so, which is the
-    # defect this whole pass is repairing.
+    # The population, stated rather than quietly changed. The dataset says "Exclude both from
+    # cross-variant EX": `order_sensitive` golds return a different-but-valid result on the decoy
+    # instances, and `exec_failed` golds are degenerate BIRD (>200k rows / 60s timeout) that score
+    # `missing_gold` against any engine. Leakage is its third warning. All printed, never applied
+    # silently — dropping rows shrinks a denominator with nothing in the artifact saying so.
     from governed_bi.eval.datalake import dataset_leakage_qids, dataset_qid_lists
 
     lists = dataset_qid_lists(args.dataset)
@@ -384,9 +364,8 @@ def _report(rows: list[dict], out_path: pathlib.Path, args, observed_tokens, tab
     if crashed:
         print("crashes:", dict(collections.Counter(str(r.get("error_type")) for r in crashed)))
 
-    # The EX **ceiling** first, because it decides how to read everything below it: a
-    # question whose gold tables were never licensed could not have been answered by any
-    # model, and averaging those into EX hides which half of the pipeline to work on.
+    # The EX ceiling first, because it decides how to read everything below it: a question whose
+    # gold tables were never licensed could not have been answered by any model.
     cov = table_coverage(every, _gold_sql_by_qid(args.dataset))
     print(
         f"all gold tables licensed = {cov['all_gold_tables_licensed']:.3f}  "
@@ -394,10 +373,9 @@ def _report(rows: list[dict], out_path: pathlib.Path, args, observed_tokens, tab
         f"unparsed gold {cov['gold_sql_unparsed']})"
     )
 
-    # **The funnel, printed before the flat rates below.** Each stage is conditional on the one
-    # above, so a drop is attributable: `all_gold_tables_licensed` measured over questions that
-    # were *routed correctly* is a table-selection number, and the same count over every
-    # question is a blend of two failures that want opposite work.
+    # The funnel, before the flat rates below. Each stage is conditional on the one above, so a
+    # drop is attributable: `all_gold_tables_licensed` over correctly-routed questions is a
+    # table-selection number; over every question it blends two failures wanting opposite work.
     from governed_bi.eval.datalake import retrieval_funnel
 
     funnel = retrieval_funnel(every, _gold_sql_by_qid(args.dataset), _gold_db_by_qid(args.dataset))
@@ -413,13 +391,11 @@ def _report(rows: list[dict], out_path: pathlib.Path, args, observed_tokens, tab
     print(f"  {'end to end':<28}{_rate(e2e):>12}   {e2e['n']}/{e2e['of']}")
     print(f"  counts: {json.dumps(funnel['counts'])}")
 
-    # **The gates, on the path that actually produces numbers.** `measure/` was imported by
-    # `eval/report.py`, whose only caller is `eval/__main__.py` — SQLite-only, and unable to run
-    # the live datalake arm at all. So this driver, `routing_recall.py` and
-    # `query_summary_alignment.py` produced every figure quoted in the last week and none of them
-    # passed a single quotability gate, because none of them could reach one. Printed rather than
-    # enforced: a driver that refused to report a run would lose the run, and the point is that
-    # the reader sees which check did not hold.
+    # The gates, on the path that actually produces numbers. `eval/report.py`'s only caller was
+    # `eval/__main__.py` — SQLite-only, unable to run the live datalake arm — so this driver,
+    # `routing_recall.py` and `query_summary_alignment.py` produced every quoted figure without
+    # reaching a single quotability gate. Printed rather than enforced: a driver that refused to
+    # report a run would lose the run.
     from governed_bi.eval.report import evaluate_arm
     from governed_bi.measure.population import Population
 

@@ -1,19 +1,12 @@
 """Does the schema facet want a word-soup query once the schema summary IS a word soup?
 
-**The decision this re-opens, and why it deserves re-opening.** ``register/facets.py`` removed
-``facet_schema`` from ``FACET_EXTRACTS`` on a measurement: the raw question beat every rewrite of
-it, by 1.8 pp of recall@3 over 114 questions. That measurement is sound and it was taken against
-the **gold** schema summaries — sparse identifier lists like ``restaurant: 3 tables — generalinfo,
-geographic, location``. So the rewriter was judged against a document form that no longer exists
-in the corpus under test.
+``register/facets.py`` removed ``facet_schema`` from ``FACET_EXTRACTS`` on a measurement: the raw
+question beat every rewrite of it by 1.8 pp of recall@3 over 114 questions. That was taken against
+the **gold** schema summaries — sparse identifier lists — a document form the corpus under test no
+longer has, since ``tools/densify_summaries.py`` made those summaries dense term lists and
+``facet_schema_query`` variant ``v2`` emits terms rather than a sentence.
 
-``tools/densify_summaries.py`` turned those summaries into dense term lists with no function words.
-A rewriter whose whole job is to emit terms rather than a sentence — ``facet_schema_query`` variant
-``v2``: *"Emit terms, not a sentence... Do not join the terms into clauses"* — has a document form
-to align with now, and it did not before. The prompt was kept unsent for exactly this: *"a prompt
-deleted outright is a baseline a future attempt has nothing to beat."*
-
-**The 2x2.** Two factors, and the cell that matters has never been measured:
+Two factors, and the cell that matters has never been measured:
 
 .. code-block:: text
 
@@ -21,21 +14,14 @@ deleted outright is a baseline a future attempt has nothing to beat."*
     gold summaries          measured           measured  (the 1.8 pp loss)
     dense summaries         measured (+6 pp)  NEVER MEASURED   <- the hypothesis
 
-The claim under test is an **interaction**, not a main effect: that the rewriter's sign flips with
-the document form. Both main effects are already known, so a design that only re-measured them
-would answer nothing.
+The claim under test is the **interaction** — the rewriter's sign flipping with the document form
+— not either main effect, both already known. The other four facets are held OFF in every cell so
+they contribute a constant to ``route``'s sum and only the schema facet's query form varies;
+re-testing in the production configuration is a different run.
 
-**Isolation over realism, deliberately.** The other four facets rewrite in production and here they
-are held OFF in every cell, so they contribute a constant to ``route``'s sum and only the schema
-facet's query form varies. That makes this cheap (one model call per question in two of four cells
-rather than five in all four) and it makes the interaction attributable. If the interaction is real,
-the follow-up is to re-test in the production configuration — that is a different run, not this one.
-
-**One confound, stated rather than hidden.** ``densify_summaries`` rewrites schema *and* table
-summaries, and table summaries are read by ``facet_entity``. So the summary-form factor is not
-purely the schema facet's document. It is constant across the query-form factor, which leaves the
-interaction clean; only the main effect of summary form carries the confound, and that main effect
-is already measured elsewhere.
+One confound: ``densify_summaries`` rewrites table summaries too and ``facet_entity`` reads those.
+It is constant across the query-form factor, so the interaction stays clean and only the main
+effect of summary form carries it.
 """
 
 from __future__ import annotations

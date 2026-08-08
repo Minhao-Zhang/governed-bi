@@ -61,7 +61,8 @@ def paired_ex(a: Population, b: Population) -> McNemarResult:
 
 
 def evaluate_arm(arm: Population) -> tuple[GateResult, ...]:
-    """Single-arm gates (``context_hash`` will be ``cannot_evaluate`` by design)."""
+    """Single-arm gates. ``context_hash`` here only checks coverage; the cross-arm
+    distinctness half is :func:`context_hashes_distinct`."""
     return tuple(GATE_IMPLEMENTATIONS[field](arm) for field in sorted(_GATE_TEXT))
 
 
@@ -153,13 +154,12 @@ def comparison_quotable(
 ) -> tuple[bool, tuple[GateResult, ...], tuple[GateResult, ...], GateResult]:
     """Whether an arm-to-arm delta may be quoted.
 
-    Single-arm ``context_hash`` gates are replaced by
-    :func:`context_hashes_distinct`. Any ``fail`` or ``cannot_evaluate`` blocks.
+    Single-arm ``context_hash`` gates are replaced by :func:`context_hashes_distinct`. Any
+    ``fail`` or ``cannot_evaluate`` blocks.
 
-    The cross-arm result is computed **once** and substituted into both arms' rows. It was built
-    three times, and each call stamps the population of whichever arm it was given first — so
-    arm B's ``context_hash`` row reported arm **A**'s ``describe()``, on the provenance line the
-    design calls load-bearing. One computation cannot disagree with itself.
+    Computed **once** and substituted into both arms' rows: each call stamps the population
+    of whichever arm it was given first, so recomputing per arm makes arm B's row report arm
+    A's ``describe()`` on the provenance line.
     """
     ctx = context_hashes_distinct(a, b, threshold=threshold)
     results_a = _with_cross_arm_context(evaluate_arm(a), ctx)

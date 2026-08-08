@@ -1,32 +1,19 @@
 """What each governed tool actually does — the bodies, with no LangGraph in them.
 
-**The seam is measured, not asserted.** These four functions mention ``runtime``, ``Command``
-and ``_reply`` exactly **zero** times: each is a function of ``(identifiers, bounds, corpus,
-connector, policy)`` returning a payload, and nothing about how that payload reaches the model.
-``serve/tools.py`` is the adapter that makes them tools; this is the work.
+Each function is of ``(identifiers, bounds, corpus, connector, policy)`` and mentions
+``runtime``, ``Command`` and ``_reply`` exactly zero times; ``serve/tools.py`` is the adapter
+that makes them tools.
 
-Splitting them out is what took ``tools.py`` under ADR 0005 §6's 400-line tier, but the reason to
-put the cut *here* is the boundary rather than the arithmetic: a reader asking "what does
-``sample_rows`` show the model, and what does governance stop it showing" now reads one file with
-no tool-call plumbing in it, and a reader asking "how does a tool answer" reads the other with no
-SQL in it.
+Every function returns a **tuple** whose second element is a fact the adapter has to record:
+``read_body`` returns whether the payload counts as a *delivery* (an out-of-scope refusal is
+received by the model and is not one, and ``delivery_hash`` audits what was shown); ``run_query``
+and ``sample_rows`` return the ledger row for the attempt.
 
-Every function returns a **tuple**, and each second element is a different fact the adapter has
-to record: ``read_body`` returns whether the payload counts as a *delivery* (an out-of-scope
-refusal is received by the model and is not one, and ``delivery_hash`` audits what was shown);
-``run_query`` and ``sample_rows`` return the ledger row for the attempt. A single string would
-have made all of those invisible.
-
-**The two executing tools take the same route.** ``sample_rows`` used to hand-build a string and
-call ``connector.sample_values``, which calls ``execute`` — the method ``ports.Connector``
-reserves for ``govern.pipeline``. So it reached the database through none of the layers and wrote
-no ledger row, which made ``guardrail_errors == 0`` hold *vacuously* for that path, and made one
-policy refuse a suspect column in ``run_query`` while returning its values through
-``sample_rows``. Both tools now build a statement, pass it through :func:`prepare`, and ledger the
-verdict; the only difference is who writes the statement.
-
-__all__ = ["read_body", "inspect_schema", "sample_rows", "run_query", "read_body_cap",
-           "distinct_values_statement", "SAMPLE_ROWS_MAX_VALUES"]
+Both executing tools take the same route — build a statement, pass it through :func:`prepare`,
+ledger the verdict. ``sample_rows`` used to call ``connector.sample_values`` directly, reaching
+the database through none of the layers and writing no ledger row, which made
+``guardrail_errors == 0`` hold vacuously for that path and let one policy refuse a suspect
+column in ``run_query`` while returning its values here.
 """
 
 from __future__ import annotations
@@ -54,12 +41,12 @@ _DEFAULT_READ_BODY_MAX_CHARS = 80_000
 #: Ceiling on the number of distinct values ``sample_rows`` returns.
 #:
 #: The old bound was ``max(1, int(limit))`` — clamped from below only, so the row bound was a
-#: model-supplied argument with no ceiling, which is the shape :class:`ToolBounds` exists to
-#: prevent (ADR 0006 §8: a tool that grants privilege must have a bound the model cannot widen).
+#: model-supplied argument with no ceiling (ADR 0006 §8: a tool that grants privilege must have
+#: a bound the model cannot widen).
 #:
 #: A constant rather than a knob because nothing can set a knob on this surface: ``cost_budget``
 #: ships UNSET and no env var, config key or ``int_knob`` entry can write it, so a knob here
-#: would be a declaration with no writer — the class of defect this repository has the most of.
+#: would be a declaration with no writer.
 SAMPLE_ROWS_MAX_VALUES = 20
 
 
@@ -88,10 +75,9 @@ def read_body(
 ) -> tuple[str, bool]:
     """``(payload, delivered)``.
 
-    The flag is the reason this is a tuple rather than a string: an out-of-scope refusal is a
-    payload the model receives but **not** a delivery, and ``delivery_hash`` is an audit of
-    what the corpus handed over. The tracker call used to be skipped by an early ``return``,
-    which encoded the same distinction where a caller could not see it.
+    The flag is why this is a tuple rather than a string: an out-of-scope refusal is a payload
+    the model receives but **not** a delivery, and ``delivery_hash`` audits what the corpus
+    handed over.
     """
     parts: list[str] = []
     used = 0
@@ -169,17 +155,12 @@ def distinct_values_statement(
 ) -> str:
     """``SELECT DISTINCT c FROM t WHERE c IS NOT NULL ORDER BY c LIMIT n``, as a tree.
 
-    **Built as a syntax tree and rendered, never interpolated.** The string this replaces was
-    ``f'SELECT DISTINCT "{column}" FROM "{schema}"."{table}"…'``, and Postgres has no
-    quote-doubling, so a ``physical_name`` containing ``"`` closed the quote and the rest of
-    the value became SQL. That is not a hypothetical input: ``corpus/identity.slug`` exists
-    precisely because ``physical_name`` holds the engine's identifier *verbatim* — "any
-    character, any case, any script" — and ``corpus/validate.py`` validates only its slug, so
-    the corpus deliberately does not constrain the content of this field.
-
-    Rendering from ``exp.Identifier`` nodes puts the escaping in sqlglot's generator, which
-    doubles an embedded quote for whichever dialect is asked for. The identifier reaches the
-    engine as a *name*, which is the only thing it can be.
+    **Built as a syntax tree and rendered, never interpolated.** Postgres has no
+    quote-doubling, so the f-string this replaces let a ``physical_name`` containing ``"``
+    close the quote and turn the rest of the value into SQL — and ``physical_name`` holds the
+    engine's identifier verbatim (any character, any case, any script; ``corpus/validate.py``
+    validates only its slug). Rendering from ``exp.Identifier`` nodes puts the escaping in
+    sqlglot's generator, so the identifier reaches the engine as a *name*.
     """
     col = exp.column(column, table=table, quoted=True)
     query = (
@@ -205,14 +186,12 @@ def sample_rows(
 ) -> tuple[str, bool, AttemptRecord | None]:
     """``(payload, delivered, attempt_row)``. A governed executor path, like ``run_query``.
 
-    The ledger row is ``path="sample"`` — the second of ``EXECUTOR_PATHS`` to acquire a
-    writer. It is ``None`` only when no statement was ever built: an out-of-scope column id
-    produces no SQL, so there is no governance decision to record, and the licensing surface
-    that refused it is already in ``licensed`` / ``readable_assets``.
+    The ledger row is ``path="sample"``. It is ``None`` only when no statement was ever built:
+    an out-of-scope column id produces no SQL, so there is no governance decision to record.
 
-    Layer coverage is the point. ``check()`` refuses a suspect column at COLUMNS when
-    ``hard_block_suspect`` is on — which is what closes the bypass where one policy refused a
-    suspect column in ``run_query`` and handed over its values here. ADR 0006 §7 said the
+    Layer coverage is the point: ``check()`` refuses a suspect column at COLUMNS when
+    ``hard_block_suspect`` is on, which closes the bypass where one policy refused a suspect
+    column in ``run_query`` and handed over its values here. ADR 0006 §7 said the
     exclusion/suspect filter was applied "in the tool"; it was not applied anywhere.
     """
     cid = str(column_id)
@@ -234,8 +213,8 @@ def sample_rows(
             ),
         )
     if not isinstance(corpus, AnalystCorpus):
-        # G1, and the same reasoning ``run_query`` gives: a missing corpus is a wiring
-        # failure, and refusing on it would record a governance verdict for it.
+        # G1: a missing corpus is a wiring failure, and refusing on it would record a
+        # governance verdict for it.
         raise GovernanceUsageError(
             "sample_rows has no AnalystCorpus: configurable['corpus'] is "
             f"{type(corpus).__name__}. The sample path now runs through check(), which "
@@ -247,10 +226,9 @@ def sample_rows(
     schema = str(asset_attr(col, "schema") or "")
     # **The engine's spelling, not the corpus key** (ADR 0008 D1: a key is not a name).
     # `parent_table.split(".")[-1]` yields the *slug* — `Air_Carriers_66c534` for the table
-    # whose physical name is `Air Carriers` — which is not a relation in any engine. And the
-    # schema was read into a local and then dropped, so the connector fell back to `public`.
-    # Both halves had to be wrong for the failure to be invisible: an unqualified slug and a
-    # default schema produce 42P01, which surfaced as a tool error nothing counted.
+    # whose physical name is `Air Carriers` — which is not a relation in any engine, and the
+    # schema was dropped so the connector fell back to `public`. Together they produce 42P01,
+    # which surfaced as a tool error nothing counted.
     parent = assets.get(table)
     table_name = str(asset_attr(parent, "physical_name") or "") if parent is not None else ""
     if not table_name:
@@ -325,11 +303,10 @@ def run_query(
         )
 
     if not isinstance(corpus, AnalystCorpus):
-        # G1: absence refuses. An empty corpus here fails closed, so nothing leaks — but
-        # it records "the corpus was never wired up" as ``r_column_not_allowed`` with
-        # ``guardrail_errors: 0``, indistinguishable from "the model asked for a column it
-        # may not see". ``check()`` raises this for the same input; ``serve/`` must not
-        # catch it and substitute a default.
+        # G1: an empty corpus fails closed, so nothing leaks — but it records "the corpus was
+        # never wired up" as ``r_column_not_allowed`` with ``guardrail_errors: 0``,
+        # indistinguishable from "the model asked for a column it may not see". ``serve/`` must
+        # not catch this and substitute a default.
         raise GovernanceUsageError(
             "run_query has no AnalystCorpus: configurable['corpus'] is "
             f"{type(corpus).__name__}. Every tool reads through AnalystCorpus as a type, "
@@ -337,13 +314,12 @@ def run_query(
             "governance refusal from its own wiring failure."
         )
 
-    # ADR 0008 D2/D7. Without these two the model's spelling reaches the engine
-    # unchanged: `check()` compares folded keys, so `FROM address.cbsa` matches the
-    # licensed `address.CBSA` and passes every layer, and Postgres then folds the
-    # unquoted name and reports that the relation does not exist. 81 tables and 610
-    # columns in the obfuscated lake failed that way, each *after* a passing verdict.
-    # Scoped to `bounds.licensed`, because a corpus-wide map makes `name`, `id` and
-    # `city` ambiguous and would refuse nearly every query.
+    # ADR 0008 D2/D7. Without these two the model's spelling reaches the engine unchanged:
+    # `check()` compares folded keys, so `FROM address.cbsa` matches the licensed
+    # `address.CBSA` and passes every layer, then Postgres folds the unquoted name and reports
+    # no such relation — 81 tables and 610 columns in the obfuscated lake failed that way,
+    # each *after* a passing verdict. Scoped to `bounds.licensed`, because a corpus-wide map
+    # makes `name`, `id` and `city` ambiguous and would refuse nearly every query.
     spellings, ambiguous = spellings_for(corpus, bounds.licensed)
     prepared = prepare(
         sql,
@@ -364,12 +340,10 @@ def run_query(
     try:
         columns, rows, truncated = connector.execute(prepared.sql)
     except Exception as exc:  # noqa: BLE001 — the row is the point, not the traceback
-        # **The attempt is returned even though the execution failed.** It passed every
-        # governance layer and was sent to the database, so it is a governed statement and the
-        # ledger owes it a row. The old shared-box code kept the row by accident — it appended
-        # before executing and the box outlived the exception — and returning only the error
-        # string here would have made a driver failure look like a turn that never attempted
-        # anything, which is the empty-ledger-holds-vacuously shape.
+        # **The attempt is returned even though the execution failed.** It passed every layer
+        # and was sent to the database, so it is a governed statement and the ledger owes it a
+        # row; returning only the error string makes a driver failure look like a turn that
+        # never attempted anything.
         return f"run_query error: {type(exc).__name__}: {exc}", attempt
     preview = [list(r) for r in list(rows)[:20]]
     payload = json.dumps(

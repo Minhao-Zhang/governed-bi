@@ -110,10 +110,8 @@ def analyst_corpus_from_keys(
     excluded: Iterable[str] = (),
     suspect: Iterable[str] = (),
 ) -> AnalystCorpus:
-    """Build a minimal :class:`AnalystCorpus` for tests and key-holding call sites.
-
-    Production paths use :func:`for_analyst` over real assets.
-    """
+    """A minimal :class:`AnalystCorpus` for tests and key-holding call sites; production
+    paths use :func:`for_analyst` over real assets."""
     by_raw: dict[str, ColumnAsset] = {}
     for raw in allowed:
         schema, table, column = _parse_column_key(raw)

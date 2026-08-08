@@ -3,32 +3,22 @@
     uv run --frozen python tools/score_reflector.py runs/eval/live_full_*.jsonl --dry-run
     uv run --frozen python tools/score_reflector.py runs/eval/live_full_*.jsonl --limit 100
 
-**The one question this answers: when the reflector says "this is wrong", how often is EX
-actually 0?** Everything else here is bookkeeping around that. If the answer is "about as
-often as the base rate", the reflector cannot tell right from wrong on this task, and the
-retry loop that would sit on top of it is a re-roll of a draw after seeing it — which is
-exactly what ``n_re_served``'s refusing gate exists to catch. Finding that out costs one
-utility-model call per already-graded row, which is orders of magnitude cheaper than a paid
-arm, and that is the whole reason this script exists before the loop does.
+The one question this answers: when the reflector says "this is wrong", how often is EX actually
+0? If that is about the base rate, the reflector cannot tell right from wrong here, and a retry
+loop on top of it re-rolls a draw after seeing it — what ``n_re_served``'s gate exists to catch.
+One utility-model call per already-graded row answers that far cheaper than a paid arm.
 
-**It runs the same reflector the graph runs.** ``reflect_on`` from
-``serve/nodes/reflect.py``, not a copy of its prompt: an offline score is evidence about the
-live judge only if it *is* the live judge.
+It calls ``reflect_on`` from ``serve/nodes/reflect.py``, not a copy of its prompt: an offline
+score is evidence about the live judge only if it *is* the live judge. The judge never sees gold —
+``correct`` and ``gold_sql`` are read after the verdict comes back, by this file.
 
-**The judge never sees gold.** The row's ``correct`` and ``gold_sql`` are read *after* the
-verdict comes back, by this file, and are never part of the state handed to ``reflect_on``.
+``correct`` is three-valued; ``None`` rows are excluded rather than counted wrong, since
+collapsing them with ``bool()`` would inflate the base rate and flatter the reflector at once.
 
-**``correct`` is three-valued.** ``None`` means the grader could not judge the row — a missing
-or unexecutable gold — and those rows are **excluded**, never counted as wrong. Collapsing
-them with ``bool()`` is the defect ``eval/grade.grade_turn`` was changed to stop, and doing it
-here would inflate the base rate and flatter the reflector at the same time.
-
-**What the artifact cannot supply, and it is not nothing.** An eval row carries the statement,
-the licensed set and the graded verdict; it does **not** carry the result table, the eviction
-record, ``lexical_coverage`` or the attempt ledger. The result table is rebuilt by re-executing
-the statement (that is what ``--no-execute`` turns off); the other three are simply absent, and
-the header prints which signals were available so the number is read as what it is — a lower
-bound on a reflector that would see more at serve time.
+An eval row does not carry the result table, the eviction record, ``lexical_coverage`` or the
+attempt ledger. The first is rebuilt by re-executing the statement (``--no-execute`` turns that
+off); the rest are absent, so the header prints which signals were available and this is a lower
+bound.
 
 Never prints the DSN or the API key.
 """
@@ -48,9 +38,8 @@ sys.path.insert(0, str(REPO / "src"))
 
 DEFAULT_DATASET = REPO.parent / "BIRD-Data-Obfuscation" / "eval_dataset"
 
-#: Rows the reflector has nothing to judge, with the reason each is dropped. Reported as
-#: counts rather than silently filtered: a population that shrank by 80% is a finding about
-#: the artifact, and a table printed over the survivors would hide it.
+#: Rows the reflector has nothing to judge, with the reason each is dropped. Counted and
+#: reported rather than silently filtered: a population that shrank by 80% is itself a finding.
 EXCLUSIONS = {
     "not_answered": "outcome is not `answered`: refusals and crashes are trivially EX=0 and "
                     "would inflate precision on the `wrong` class for free",
@@ -93,9 +82,8 @@ def main(argv: list[str] | None = None) -> int:
 
     result_tables: dict[str, dict] = {}
     if not args.no_execute:
-        # A dry run must cost nothing and require nothing, so a missing database downgrades it
-        # to a warning there and stops a real scoring run — where a judge shown no result table
-        # is a different instrument from the one the graph runs.
+        # A dry run must require nothing, so a missing database is only a warning there. It
+        # stops a real run: a judge shown no result table is a different instrument.
         rebuilt = _result_tables(rows, required=not args.dry_run)
         if rebuilt is None:
             return 2
@@ -221,11 +209,10 @@ def _report_population(kept: int, dropped: Counter) -> None:
 def _result_tables(rows: list[dict], *, required: bool) -> dict[str, dict] | None:
     """Re-execute each statement to rebuild the result table the artifact does not keep.
 
-    ADR 0006 §11 keeps result rows out of the durable record on purpose, so this is the only
-    way to show the judge what the turn actually returned — and the judge at serve time does
-    see it, so scoring without it would measure a different instrument. A statement that no
-    longer executes yields no table for that row rather than dropping the row: "the engine
-    produced SQL that will not run" is itself something a reflector should catch.
+    ADR 0006 §11 keeps result rows out of the durable record, and the judge at serve time does
+    see them, so scoring without a table measures a different instrument. A statement that no
+    longer executes yields no table rather than dropping the row — SQL that will not run is
+    itself something a reflector should catch.
     """
     import credentials
 
@@ -275,8 +262,8 @@ def _result_tables(rows: list[dict], *, required: bool) -> dict[str, dict] | Non
 def _state_for(row: dict, result_table: dict | None) -> dict:
     """A turn-state-shaped mapping, carrying only what ``reflect_signals`` reads.
 
-    Built here rather than by mutating the row so that ``correct``, ``gold_sql`` and
-    ``gold_fingerprint`` — all of which sit on the row — cannot travel into the prompt.
+    Built fresh rather than by mutating the row, so ``correct``, ``gold_sql`` and
+    ``gold_fingerprint`` cannot travel into the prompt.
     """
     return {
         "question": row["question"],
@@ -361,9 +348,8 @@ def _report_score(scored: list[dict]) -> None:
 def _rates(name: str, cell: dict, *, n_ex0: int, n: int) -> None:
     """Base rate, precision and recall on the flagged class, as counts *and* rates.
 
-    An undefined rate is printed as undefined and never as ``0.0`` or ``1.0``: a reflector
-    that flagged nothing has a precision of nothing, and 1.0 there would read as the best
-    possible instrument. That substitution is the one this repository keeps making.
+    An undefined rate prints as undefined, never ``0.0`` or ``1.0``: a reflector that flagged
+    nothing has no precision, and 1.0 there would read as the best possible instrument.
     """
     flagged = cell["ex0"] + cell["ex1"]
     base = n_ex0 / n if n else 0.0

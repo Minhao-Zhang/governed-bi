@@ -228,22 +228,13 @@ RETIRED_CLAIMS: tuple[RetiredClaim, ...] = (
         pattern=r"15\.0{1,2}\s*[,/]\s*75\.0{1,2}",
         observed='"Claude-Opus-4.8": (15.0, 75.0, 1.50)',
         why="v1's Opus 4.8 price, 3x the published 5.00/25.00/0.50 "
-            "(platform.claude.com, read 2026-08-03). The reason it is here rather "
-            "than filed with the other stale prices: it was left wrong BY THE COMMIT "
-            "THAT FIXED THE ADJACENT ROW. 4567eeb, 'fix(cost): price the cached input "
-            "share, and use real prices', corrected gpt-5.6-luna from (2.0, 8.0) to "
-            "(0.20, 1.20, 0.02) and in the same hunk changed Opus 4.8 from "
-            "(15.0, 75.0) to (15.0, 75.0, 1.50) -- it added the cache rate and did "
-            "not check the other two. So this is a stronger instance than "
-            "check_imports' 'the fix never reached the adjacent copies': the fix "
-            "*edited* the adjacent copy and still left it 3x over, under a commit "
-            "message asserting real prices. Found 2026-08-03 while sourcing the v2 "
-            "price table, by an agent that went looking for the incident behind the "
-            "rule it was implementing.",
+            "(platform.claude.com, read 2026-08-03). Left wrong by the commit that "
+            "fixed the adjacent row: 4567eeb, 'fix(cost): price the cached input "
+            "share, and use real prices', corrected gpt-5.6-luna in the same hunk that "
+            "added Opus 4.8's cache rate without checking the other two figures. A fix "
+            "can edit an adjacent copy and still leave it wrong.",
         replaced_by="nothing in this tree -- measure/price.py and its PRICE_TABLE are "
-        "deleted, because a price list kept here has to track a provider's by hand. The "
-        "original note read: every row carries the date "
-                    "it was observed and the URL it was read from",
+        "deleted, because a price list kept here has to track a provider's by hand",
     ),
     RetiredClaim(
         pattern=r"0\.70.{0,40}0\.35|0\.35.{0,40}0\.70",
@@ -280,10 +271,8 @@ RETIRED_CLAIMS: tuple[RetiredClaim, ...] = (
         replaced_by="a dated price table returning unmeasured for an unknown model",
     ),
     RetiredClaim(
-        # Both spellings occur: prose quoted it as a percentage, the artifact as a
-        # fraction. A pattern covering only one is a gate that misses half the
-        # reappearances — which the import-time guard below caught on this exact
-        # entry.
+        # Both spellings occur (prose as a percentage, the artifact as a fraction), so
+        # a pattern covering only one misses half the reappearances.
         pattern=r"(69\.9\s*%|0\.699)|"
                 r"(schema[_ ]?pick|pick[_ ]?accuracy)\D{0,20}(69\.9|0\.699)",
         observed="schema_pick_accuracy: 0.699",
@@ -314,9 +303,9 @@ RETIRED_CLAIMS: tuple[RetiredClaim, ...] = (
 
 
 def _assert_citations_are_sourced() -> None:
-    """Import-time invariant: no citation without an artifact and a date.
-
-    The rule this file exists to enforce, enforced on this file.
+    """Import-time: no citation without an artifact and a date, and every retired
+    pattern matches its own observed spelling. The rule this file enforces, enforced
+    on this file.
     """
     unsourced = [c.claim[:60] for c in CITATIONS if not c.artifact or not c.measured]
     if unsourced:  # pragma: no cover - import-time guard

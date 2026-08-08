@@ -32,12 +32,12 @@ __all__ = [
 class Channel(str, Enum):
     """Scoring channel, or the extraction step that produces queries.
 
-    ``extraction`` shares the three-valued vocabulary even though it is not a
-    scoring channel: it either ran, was not configured, or should have run.
+    ``extraction`` shares the three-valued vocabulary though it is not a scoring
+    channel: it either ran, was not configured, or should have run.
     """
 
-    #: BM25. Saturating normalisation so the score is absolute rather than relative
-    #: to the current query's best hit.
+    #: BM25. Saturating normalisation so the score is absolute rather than relative to
+    #: the current query's best hit.
     lexical = "lexical"
     #: Embedding cosine. Already bounded, so comparable across queries.
     semantic = "semantic"
@@ -47,21 +47,18 @@ class Channel(str, Enum):
 
 #: The members that actually score documents, so ``extraction`` cannot be fused.
 #:
-#: :class:`Channel` deliberately holds one member that is not a scoring channel, and every
-#: reader had to remember that. ``fuse`` now renormalises over the channels a caller says were
-#: consulted, and the caller's nearest source of that is the ``ran`` set — which ``_rewritten_query``
-#: also adds ``extraction`` to. Passing ``ran`` straight through therefore put ``extraction`` in
-#: the denominator, ``FUSE_WEIGHTS`` has no weight for it, and the ``KeyError`` surfaced as a
-#: facet that retrieved nothing. Named here rather than filtered at each call site, because that
-#: is three copies of one judgement.
+#: ``fuse`` renormalises over the channels a caller says were consulted, and the nearest
+#: source of that is the ``ran`` set — to which ``_rewritten_query`` also adds
+#: ``extraction``. ``FUSE_WEIGHTS`` has no weight for it, so the ``KeyError`` surfaces as
+#: a facet that retrieved nothing. Named here rather than filtered at three call sites.
 SCORING_CHANNELS: frozenset[Channel] = frozenset({Channel.lexical, Channel.semantic})
 
 
 class ChannelState(str, Enum):
     """Whether a channel ran for one facet. Three-valued on purpose."""
 
-    #: Executed and returned. Says nothing about whether it found anything — "ran
-    #: and scored zero" is a measurement, and not this field's job.
+    #: Executed and returned. Says nothing about whether it found anything: "ran and
+    #: scored zero" is a measurement, not this field's job.
     ran = "ran"
     #: This facet does not use this channel. Correct behaviour when declared.
     not_configured = "not_configured"
@@ -96,11 +93,9 @@ FACET_CHANNELS: Mapping[Stage, frozenset[Channel]] = {
     Stage.facet_example: frozenset({Channel.semantic}),
 }
 
-#: Facets whose queries come from model extraction.
-#:
-#: ``facet_schema`` is absent: rewriting buys nothing measurable on that facet
-#: (see :mod:`.citations`); the prompt stays in ``PROMPT_REGISTRY`` as an
-#: unsent baseline.
+#: Facets whose queries come from model extraction. ``facet_schema`` is absent because
+#: rewriting buys nothing measurable there (see :mod:`.citations`); its prompt stays in
+#: ``PROMPT_REGISTRY`` as an unsent baseline.
 FACET_EXTRACTS: frozenset[Stage] = frozenset(
     {
         Stage.facet_term,
@@ -110,10 +105,9 @@ FACET_EXTRACTS: frozenset[Stage] = frozenset(
     }
 )
 
-#: Which asset types each facet retrieves over.
-#:
-#: ``column``, ``table`` and ``join`` share one facet: they arrive together in a
-#: real question, and splitting them produces overlapping extraction calls.
+#: Which asset types each facet retrieves over. ``column``, ``table`` and ``join``
+#: share one facet: they arrive together in a real question, and splitting them
+#: produces overlapping extraction calls.
 FACET_TARGETS: Mapping[Stage, frozenset[AssetType]] = {
     Stage.facet_schema: frozenset({AssetType.schema}),
     Stage.facet_term: frozenset({AssetType.term}),
@@ -122,11 +116,9 @@ FACET_TARGETS: Mapping[Stage, frozenset[AssetType]] = {
     Stage.facet_example: frozenset({AssetType.few_shot}),
 }
 
-#: Asset types indexed but consumed by a gate rather than a facet.
-#:
-#: ``negative_example`` is matched by ``negative_gate`` (refuse decision, not
-#: ranking). Declared so :func:`_assert_every_indexed_type_has_a_consumer` can
-#: close the loop.
+#: Asset types indexed but consumed by a gate rather than a facet:
+#: ``negative_example`` is matched by ``negative_gate`` (a refuse decision, not a
+#: ranking). Declared so :func:`_assert_every_indexed_type_has_a_consumer` closes.
 GATE_CONSUMED_TYPES: frozenset[AssetType] = frozenset({AssetType.negative_example})
 
 
@@ -145,7 +137,7 @@ def expected_channel_state(facet: Stage, channel: Channel) -> ChannelState:
 def channel_anomaly(facet: Stage, channel: Channel, observed: ChannelState) -> Anomaly | None:
     """``None`` when ``observed`` matches the declared expectation, else why not.
 
-    Single call site for the three-way distinction.
+    The single site for the three-way distinction.
     """
     expected = expected_channel_state(facet, channel)
     if observed is expected:
@@ -158,9 +150,8 @@ def channel_anomaly(facet: Stage, channel: Channel, observed: ChannelState) -> A
 
 
 def is_degraded(facet: Stage, channel: Channel, observed: ChannelState) -> bool:
-    """True when the arm is running on fewer channels than it declares.
-
-    Quotability input. ``extra_channel`` is not degradation.
+    """True when the arm is running on fewer channels than it declares. A quotability
+    input; ``extra_channel`` is drift, not degradation.
     """
     return channel_anomaly(facet, channel, observed) in (Anomaly.failed, Anomaly.unconfigured)
 

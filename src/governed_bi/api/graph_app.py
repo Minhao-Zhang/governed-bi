@@ -208,13 +208,10 @@ def _embedder_into(kwargs: dict[str, Any], credentials: Any) -> Any:
 def _resolve_corpus_dir(value: str | None, root: Path) -> str | None:
     """Resolve ``GOVERNED_BI_CORPUS_DIR`` against the **repo root**, not the process's cwd.
 
-    The corpus lives in its own repository as of 2026-08-07 (D13), so the configured value is now
-    ``../BIRD-corpus`` — a path that leaves this tree. Left cwd-relative it would resolve to
-    whatever is beside the directory the server happened to be started from: usually nothing, and
-    the failure is "nothing to serve" rather than "you are in the wrong directory". Resolving
-    against the repo root is also what `BIRD-corpus/README.md` has always claimed happens.
-
-    An absolute value is returned untouched, so pointing at a checkout anywhere still works.
+    The configured value is ``../BIRD-corpus`` (D13, 2026-08-07), a path that leaves this tree.
+    Left cwd-relative it resolves to whatever sits beside the start directory — usually
+    nothing, failing as "nothing to serve" rather than "you are in the wrong directory".
+    Absolute values are returned untouched.
     """
     if not value:
         return None
