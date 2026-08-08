@@ -727,3 +727,67 @@ def test_table_less_gold_leaves_the_funnel_denominator() -> None:
     out = retrieval_funnel(rows, {"1": 'SELECT "v"."c0" FROM (VALUES (121.0)) AS "v"("c0")'})
     assert out["counts"]["gold_reads_no_table"] == 1
     assert out["counts"]["scorable"] == 0
+
+
+def test_the_table_less_population_is_published_with_its_own_ex() -> None:
+    """Leaving the denominator must not mean leaving the report.
+
+    127 of 1 351 questions have a constant-folded gold. They are gradeable — an engine that
+    queries the database and returns the right value still matches the digest — but the gold
+    carries no table and no join, so every arm scores far below its headline there and
+    excluding them lifts all arms by roughly the same 3 points. That is a choice about what
+    a headline means, not a correction, so the funnel reports the set as its own line and
+    leaves the choice to the reader.
+    """
+    from governed_bi.eval.datalake import retrieval_funnel
+
+    folded = 'SELECT "v"."c0" FROM (VALUES (121.0)) AS "v"("c0")'
+    rows = [
+        {"question_id": "a", "db_id": "sales", "licensed": [], "outcome": "answered",
+         "correct": True},
+        {"question_id": "b", "db_id": "sales", "licensed": [], "outcome": "answered",
+         "correct": False},
+        {"question_id": "c", "db_id": "sales", "licensed": [], "outcome": "answered",
+         "correct": False},
+        # Answered but ungradeable: it must not count as a wrong answer here either.
+        {"question_id": "d", "db_id": "sales", "licensed": [], "outcome": "answered",
+         "correct": None},
+    ]
+    out = retrieval_funnel(rows, dict.fromkeys("abcd", folded))
+
+    assert out["counts"]["gold_reads_no_table"] == 4
+    assert out["counts"]["gold_reads_no_table_graded"] == 3, "the ungradeable row is not wrong"
+    assert out["gold_reads_no_table"] == {
+        "rate": pytest.approx(1 / 3, abs=1e-4), "n": 1, "of": 3, "why": None
+    }
+    # And with nothing in the set, an absence rather than an EX of zero.
+    empty = retrieval_funnel(
+        [{"question_id": "1", "db_id": "sales", "licensed": ["sales.customers"],
+          "outcome": "answered", "correct": True}],
+        {"1": "SELECT 1 FROM sales.customers"},
+    )
+    assert empty["gold_reads_no_table"]["rate"] is None
+    assert empty["gold_reads_no_table"]["why"]
+
+
+def test_an_unparseable_gold_is_not_a_gold_that_reads_no_table() -> None:
+    """One counter carried both, so the funnel disagreed with ``table_coverage``.
+
+    "the metric cannot read this statement" and "this statement genuinely reads nothing" want
+    different follow-ups — a parser fix versus a dataset fact — and pooling them makes the
+    tableless count the funnel publishes unusable as the size of that population.
+    """
+    from governed_bi.eval.datalake import retrieval_funnel
+
+    out = retrieval_funnel(
+        [
+            {"question_id": "junk", "db_id": "sales", "licensed": [], "outcome": "answered"},
+            {"question_id": "folded", "db_id": "sales", "licensed": [], "outcome": "answered"},
+        ],
+        {
+            "junk": "NOT SQL AT ALL ((( ;",
+            "folded": 'SELECT "v"."c0" FROM (VALUES (121.0)) AS "v"("c0")',
+        },
+    )
+    assert out["counts"]["gold_sql_unparsed"] == 1
+    assert out["counts"]["gold_reads_no_table"] == 1

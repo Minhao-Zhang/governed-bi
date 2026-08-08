@@ -498,6 +498,12 @@ def retrieval_funnel(
     Rates come from :meth:`~governed_bi.register.quantity.Measured.rate`, so a stage with no
     population reports *unmeasured* rather than ``0.000`` — the ``or 1`` idiom elsewhere in
     this module is what lets a zero-row coverage read as a real ceiling of zero.
+
+    The stages above are over ``scorable``, which excludes golds that read no table. On the
+    2026-08-07 pooled run that set is 127 of 1 351 and every arm does badly on it, so
+    ``gold_reads_no_table`` is returned beside them with **its own EX** — published as a
+    population rather than dropped, because an exclusion that lifts every arm by the same
+    ~3 points is a reporting choice and the reader is the one who has to make it.
     """
     from governed_bi.register.quantity import Measured
 
@@ -511,7 +517,16 @@ def retrieval_funnel(
         "graded": 0,
         "unmeasured": 0,
         "correct": 0,
+        # Two different facts, counted apart. They were one counter, so a gold this metric
+        # *cannot read* and a gold that genuinely reads nothing were indistinguishable —
+        # ``table_coverage`` has always separated them and the funnel disagreed with it.
+        "gold_sql_unparsed": 0,
         "gold_reads_no_table": 0,
+        # The tableless population's own funnel tail, so its EX can be read off the artifact
+        # instead of inferred from a denominator that changed. See the docstring.
+        "gold_reads_no_table_answered": 0,
+        "gold_reads_no_table_graded": 0,
+        "gold_reads_no_table_correct": 0,
         "no_gold_sql": 0,
     }
     for row in rows:
@@ -524,8 +539,17 @@ def retrieval_funnel(
             counts["no_gold_sql"] += 1
             continue
         needed = gold_tables(sql)
-        if needed is None or not needed:
+        if needed is None:
+            counts["gold_sql_unparsed"] += 1
+            continue
+        if not needed:
             counts["gold_reads_no_table"] += 1
+            if str(row.get("outcome") or "") == "answered":
+                counts["gold_reads_no_table_answered"] += 1
+            if row.get("correct") is not None:
+                counts["gold_reads_no_table_graded"] += 1
+                if row["correct"]:
+                    counts["gold_reads_no_table_correct"] += 1
             continue
         counts["scorable"] += 1
 
@@ -599,10 +623,24 @@ def retrieval_funnel(
         counts["scorable"] - counts["unmeasured"],
         "correct over scorable, graded questions",
     )
+    # The excluded population, with the same shape as ``end_to_end`` so the two are read side
+    # by side. These questions *are* gradeable — an engine that queries the database and gets
+    # the right value still matches the digest — but the gold names no table and no join, so
+    # nothing above ``answered`` can be conditioned on them and every arm scores poorly.
+    # Measured 2026-08-07 over 1 351 questions: 127 tableless, EX 0.276 / 0.228 / 0.354 against
+    # 0.615 / 0.561 / 0.711 on the other 1 224. Reported, not dropped: the ~3-point lift from
+    # excluding them is uniform across arms and changes no ranking, which makes it a choice
+    # about what a headline means rather than a correction, and the reader owns that choice.
+    tableless = _stage(
+        counts["gold_reads_no_table_correct"],
+        counts["gold_reads_no_table_graded"],
+        "correct over graded questions whose gold reads no table",
+    )
     return {
         "counts": counts,
         "conditional": conditional,
         "end_to_end": end_to_end,
+        "gold_reads_no_table": tableless,
     }
 
 

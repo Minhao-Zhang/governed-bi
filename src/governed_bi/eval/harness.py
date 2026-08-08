@@ -146,6 +146,13 @@ def _run_one(
             # that wants the harder no-hint condition omits the key from the question dict.
             evidence=question.get("evidence"),
         )
+        # ``Session.turn`` writes the session's own knobs, so a driver that set a per-question
+        # override (``tools/run_datalake_eval.py --top-n``) had it silently replaced and the
+        # run served the register default under a header announcing the override. The
+        # no-session path below has always honoured the question; these now agree.
+        knobs = _turn_knobs(question, session)
+        if knobs is not None:
+            turn["knobs_resolved"] = knobs
     else:
         turn = _base_turn(question, run_id=run_id, arm=arm.name)
     # Inject route hits when no index so answered path can reach agent.
@@ -164,6 +171,18 @@ def _run_one(
     row["run_id"] = run_id
     _evict(compiled, thread_id)
     return row
+
+
+def _turn_knobs(question: Mapping[str, Any], session: Any) -> dict[str, Any] | None:
+    """The configuration this question runs under: its own override, else the session's.
+
+    ``None`` when neither carries one — absent, not ``{}``, because an empty mapping reads to
+    ``measure.gates`` as "one configuration whose every knob is None".
+    """
+    for source in (question.get("knobs_resolved"), getattr(session, "knobs_resolved", None)):
+        if isinstance(source, Mapping):
+            return dict(source)
+    return None
 
 
 def _evict(compiled: Any, thread_id: str) -> None:
@@ -238,6 +257,12 @@ def _run_concurrently(
                 "question_id": str(question.get("question_id")),
                 "arm": arm.name,
                 "run_id": run_id,
+                # The arm's configuration and the question's gold schema are known whether or
+                # not the turn reached ``stamp``. Omitting them here would make one crash turn
+                # the whole arm's knobs gate ``cannot_evaluate`` and drop the row out of the
+                # funnel's routing stage, for a reason that has nothing to do with either.
+                "knobs_resolved": _turn_knobs(question, session),
+                "db_id": question.get("db_id"),
                 "outcome": Outcome.crashed.value,
                 "correct": False,
                 "crashed": True,
@@ -355,9 +380,24 @@ def project_turn(
     guardrail_errors = int(record.get("guardrail_errors") or 0)
     n_re_served = int(state.get("n_re_served") or record.get("n_re_served") or 0)
 
+    # Absent stays absent. ``{}`` would read to ``measure.gates`` as a real configuration in
+    # which every knob resolved to None, so one arm of empties would *pass* the gate.
+    knobs = record.get("knobs_resolved")
+    if not isinstance(knobs, Mapping):
+        knobs = state.get("knobs_resolved")
+
     return {
         "question_id": str(question["question_id"]),
         "arm": arm,
+        # The gold schema, from the question. Every funnel stage under ``schema_routed`` is
+        # conditional on it, and it was reachable only by re-reading the dataset file beside
+        # the artifact — so a row could not be attributed to a routing failure on its own.
+        "db_id": question.get("db_id"),
+        # The configuration the turn ran under (register: Absence.never, "the corpus IS the
+        # treatment" applies to knobs too). It reached ``stamp`` and stopped there: 1351/1351
+        # rows of the 2026-08-07 run carry no such key, so the knobs gate reported
+        # ``cannot_evaluate`` and no number could be joined to what produced it.
+        "knobs_resolved": dict(knobs) if isinstance(knobs, Mapping) else None,
         "outcome": outcome,
         # Propagated, never coerced: ``bool(grade["correct"])`` here turns every
         # ``missing_gold`` into a wrong answer (see ``grade.grade_turn``).
