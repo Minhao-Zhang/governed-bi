@@ -6,6 +6,7 @@ No ungated route needs a model — corpus browsing is model-free.
 
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Any
 
@@ -159,6 +160,260 @@ def approve_draft_route(asset_id: str, body: dict[str, Any] | None = None) -> di
         "id": certified.id,
         "asset_type": certified.asset_type.value,
         "provenance_status": _provenance_status(certified),
+    }
+
+
+# ── /corpus/assumptions, /corpus/conflicts: v1 admin curation queues, restored ─────────────
+#
+# Phase 4 of restoring v1 admin corpus curation onto v2 (Phase 3: enhancer.py's dedup/conflict
+# wired into live clarification mining). Read-only listing plus one resolve action over what
+# Phase 3 already writes; nothing here writes a *new* candidate.
+
+#: The id namespace ``curator/clarification.py::draft_from_clarification`` mints
+#: (``clarification.<schema>.<hash>``) — Problem 1's discriminator, see
+#: ``_is_clarification_derived``.
+_CLARIFICATION_ID_PREFIX = "clarification."
+
+
+def _is_clarification_derived(asset: Any) -> bool:
+    """True only for a ``TermAsset`` minted by ``draft_from_clarification``.
+
+    **Problem 1: distinguishing a live clarification answer from any other curator-authored
+    draft.** ``curator/mistake_memory.py`` goes through the same ``submit_draft``/
+    ``store.write`` machinery and is also model-authored/``proposed`` — but it always builds a
+    ``FewShotAsset`` (checked: its only caller anywhere is ``scripts/mine_mistakes_v2.py``, an
+    offline script with no live route), so ``asset_type == "term"`` already rules it out. What
+    it does not rule out is a hand-authored or seeded ``TermAsset`` that happens to be
+    ``proposed``/``certified`` through some other path.
+
+    Chosen discriminator: the id namespace ``draft_from_clarification`` already mints
+    unconditionally, on every write it produces (novel or conflict-flagged alike) —
+    ``clarification.<schema>.<hash>``. That shape is unique to this one producer today, so
+    reusing it needs no code change anywhere upstream and cannot drift out of sync with a
+    second, parallel "is this a clarification" flag. The alternative the task considered —
+    threading an explicit marker through ``enhancer.apply()``'s ``extra`` on every write path
+    — would be a second source of truth for a fact the id already states once, which is
+    exactly the "flexibility nobody asked for" this project's own guidelines warn against. If
+    a future producer ever mints a non-clarification ``TermAsset`` under this same prefix,
+    that is a new collision to solve then, not a reason to pre-build a marker nothing needs
+    yet.
+    """
+    return asset.asset_type.value == "term" and asset.id.startswith(_CLARIFICATION_ID_PREFIX)
+
+
+#: ``draft_from_clarification``'s exact body shape (``f"Q: {question}\nA: {answer}"``).
+_QA_BODY_RE = re.compile(r"\AQ: (?P<question>.*?)\nA: (?P<answer>.*)\Z", re.DOTALL)
+
+
+def _parse_qa(body: str | None) -> tuple[str, str] | None:
+    """``(question, answer)`` out of a clarification-derived ``body``, or ``None``.
+
+    Every asset ``_is_clarification_derived`` accepts has a body in exactly this shape (it is
+    the only thing ``draft_from_clarification`` ever writes into ``body``), so this only
+    returns ``None`` for an asset that is not clarification-derived at all — e.g. the
+    "existing" side of a conflict row, which may be any asset type with any ``body``.
+    """
+    if not body:
+        return None
+    match = _QA_BODY_RE.match(body)
+    return (match.group("question"), match.group("answer")) if match else None
+
+
+def _reload_assets(session: Any) -> list[Any]:
+    """Every asset under this session's corpus root, reloaded fresh from disk.
+
+    Deliberately **not** ``session.assets_by_id``. That mapping is a run constant, frozen at
+    session-build time — ``/corpus/drafts/{id}/approve``'s own docstring already documents
+    this: a write it makes is invisible to ``/corpus/assets`` until the process restarts, "the
+    same limitation a live ``run_query`` retrieval has for any other out-of-band corpus edit".
+    That limitation is tolerable for an asset browser. It is not tolerable here: the entire
+    point of these two routes is "did the clarification I just answered show up", within the
+    same long-running server process and the same request-response cycle a live admin actually
+    drives. So this reloads the corpus root straight off disk on every call, scoped to
+    ``session.db_id`` the same way ``session.assets_by_id`` itself was originally built
+    (``corpus.store.load(root, schemas=[db_id])`` — ``_shared`` is always included, see
+    ``identity.corpus_files``). ``session.corpus_root is None`` (no writable corpus at all)
+    returns an empty list rather than raising, matching ``/corpus/assets``'s handling of an
+    unrecognised ``type``.
+    """
+    if session.corpus_root is None:
+        return []
+    from governed_bi.corpus.store import load
+
+    assets, _problems = load(session.corpus_root, schemas=[session.db_id])
+    return assets
+
+
+def _conflict_status(extra: Any) -> str:
+    """**Problem 2: what "resolved" means with no dedicated status field.**
+
+    ``Audit.extra`` is the only place additional facts land (``corpus/schema.py``), so
+    "resolved" is derived from two keys in it rather than stored directly: ``conflict_with``
+    present + no ``conflict_resolution`` -> ``unresolved``; ``conflict_resolution ==
+    "kept_existing"`` -> ``resolved_kept_existing``; ``== "replaced"`` -> ``resolved_replaced``.
+    ``corpus/drafts.py::resolve_conflict`` is the only writer of ``conflict_resolution``, and
+    ``approve_draft`` already preserves ``audit.extra`` across its status flip (verified: it
+    rebuilds ``audit`` via ``dataclasses.replace(asset.audit, provenance=...)``, which carries
+    every field it does not name forward unchanged) — so a replaced-and-certified conflict
+    keeps this marker rather than becoming indistinguishable from a plain approved draft.
+    """
+    resolution = extra.get("conflict_resolution")
+    if resolution == "kept_existing":
+        return "resolved_kept_existing"
+    if resolution == "replaced":
+        return "resolved_replaced"
+    return "unresolved"
+
+
+@app.get("/corpus/assumptions")
+def corpus_assumptions() -> list[dict[str, Any]]:
+    """Every answered live clarification folded into the corpus, that nothing disputes.
+
+    v1's "agreed assumptions" log, restored. A conflict-flagged clarification — whether
+    resolved or not — belongs to ``/corpus/conflicts`` instead and is excluded here
+    permanently: this is a read-only history of the answers nobody disagreed with, not a
+    superset of every clarification-derived asset. Includes both ``proposed`` and
+    ``certified`` clarification-derived terms — an admin certifying it via
+    ``/corpus/drafts/{id}/approve`` is a separate, later action this log does not require
+    first: the assumption was already agreed to the moment it was answered without
+    contradiction.
+
+    ``answered_by``/``answered_at`` are read from ``audit.extra`` and are ``null`` on every
+    row today: nothing in the write path (``curator/clarification.py``,
+    ``curator/enhancer.py``) captures caller identity or a timestamp yet, and inventing either
+    here would be exactly the "field the engine does not observe" this module's own docstring
+    rule forbids. ``source`` is always ``"live_chat"``: every row this route can produce came
+    through ``POST /chat/resume``, which is the one live-chat surface that mines a
+    clarification at all.
+    """
+    session = _session()
+    rows: list[dict[str, Any]] = []
+    for asset in _reload_assets(session):
+        if not _is_clarification_derived(asset):
+            continue
+        if bool(getattr(getattr(asset, "governance", None), "excluded", False)):
+            # Found live (2026-08-08): a "replace" conflict resolution excludes the asset it
+            # superseded (corpus/drafts.py::resolve_conflict), but does not touch
+            # audit.extra["conflict_with"] on the *other* side of the conflict it resolved --
+            # so absent this check, a definition a later conflict overturned kept reporting
+            # here as a currently-agreed assumption. "Agreed" means "not currently disputed
+            # and not currently superseded", not just "not conflict-flagged at write time".
+            continue
+        extra = asset.audit.extra if asset.audit is not None else {}
+        if "conflict_with" in extra:
+            continue
+        parsed = _parse_qa(asset.body)
+        if parsed is None:
+            continue
+        question, answer = parsed
+        rows.append(
+            {
+                "id": asset.id,
+                "question": question,
+                "answer": answer,
+                "answered_by": extra.get("answered_by"),
+                "answered_at": extra.get("answered_at"),
+                "source": "live_chat",
+            }
+        )
+    return sorted(rows, key=lambda r: r["id"])
+
+
+@app.get("/corpus/conflicts")
+def corpus_conflicts(status: str | None = None) -> list[dict[str, Any]]:
+    """Clarifications whose Enhancer decision contradicted an existing certified asset.
+
+    ``status`` (``unresolved`` / ``resolved_kept_existing`` / ``resolved_replaced``) narrows
+    the list; omitted, every conflict is returned regardless of resolution.
+
+    A row whose ``conflict_with`` names an asset not found in this reload is skipped rather
+    than synthesising the required non-nullable ``existing_asset_type``/``existing_text``
+    fields with nothing behind them — this should not happen (Phase 3 only ever sets
+    ``conflict_with`` to an id drawn from ``session.assets_by_id`` at mining time), so a miss
+    here means the referenced asset left the corpus scope some other way, not a shape this
+    route should paper over.
+    """
+    session = _session()
+    assets = _reload_assets(session)
+    by_id = {a.id: a for a in assets}
+    rows: list[dict[str, Any]] = []
+    for asset in assets:
+        extra = asset.audit.extra if asset.audit is not None else {}
+        conflict_with = extra.get("conflict_with")
+        if not conflict_with:
+            continue
+        row_status = _conflict_status(extra)
+        if status is not None and row_status != status:
+            continue
+        existing = by_id.get(conflict_with)
+        if existing is None:
+            continue
+        new_question, _ = _parse_qa(asset.body) or (None, None)
+        existing_question, _ = _parse_qa(existing.body) or (None, None)
+        rows.append(
+            {
+                "id": asset.id,
+                "status": row_status,
+                "existing_asset_id": existing.id,
+                "existing_asset_type": existing.asset_type.value,
+                "existing_text": existing.summary,
+                "existing_question": existing_question,
+                "new_question": new_question,
+                "new_text": asset.summary,
+                "answered_by": extra.get("answered_by"),
+                "created_at": extra.get("created_at"),
+                "source": "live_chat",
+            }
+        )
+    return sorted(rows, key=lambda r: r["id"])
+
+
+@app.post("/corpus/conflicts/{asset_id}/resolve")
+def resolve_conflict_route(asset_id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Resolve one flagged conflict. **Not gated on ``can_edit``** — mirrors
+    ``/corpus/drafts/{id}/approve``'s existing pattern exactly (that route checks only
+    ``session.corpus_root is None``; ``can_edit`` gates the unrelated free-form corpus editor
+    surface, and this route has nothing to do with it).
+
+    Request body: ``{"resolution": "keep_existing" | "replace", "answered_by"?: "..."}``.
+    ``resolution`` is validated before anything else: an unrecognised value is a 422
+    regardless of whether ``asset_id`` also happens to be wrong.
+
+    404 when ``asset_id`` names no asset, or one with no ``conflict_with`` flag. 409 when it
+    was already resolved — matching v1: a second resolve call is an error, not a silent
+    no-op.
+    """
+    from fastapi import HTTPException
+
+    from governed_bi.corpus.drafts import (
+        ConflictAlreadyResolved,
+        ConflictNotFound,
+        resolve_conflict as resolve,
+    )
+
+    session = _session()
+    if session.corpus_root is None:
+        raise HTTPException(status_code=409, detail="this session has no corpus_root to write back to")
+    resolution = str((body or {}).get("resolution") or "")
+    if resolution not in ("keep_existing", "replace"):
+        raise HTTPException(
+            status_code=422,
+            detail=f"resolution must be 'keep_existing' or 'replace', got {resolution!r}",
+        )
+    by = (body or {}).get("answered_by")
+    try:
+        candidate, _existing = resolve(session.corpus_root, asset_id, resolution, by=by)
+    except ConflictNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ConflictAlreadyResolved as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    status = "resolved_kept_existing" if resolution == "keep_existing" else "resolved_replaced"
+    return {
+        "resolved": True,
+        "conflict_id": candidate.id,
+        "status": status,
+        "detail": f"resolved {candidate.id} ({resolution})",
     }
 
 
