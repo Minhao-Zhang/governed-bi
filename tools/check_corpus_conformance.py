@@ -63,7 +63,14 @@ BODY_REQUIRED: frozenset[AssetType] = frozenset(AssetType)
 FUNCTION_WORDS = frozenset(
     "a an the of in on for to from by with at as is are was were be been that which who whose "
     "this these those and or not its it their there each per into over under between within "
-    "about across than then when where while has have had do does no any all both".split()
+    "about across than then when where while has have had do does no any all both "
+    # Prepositions and subordinators the first list missed. "a line item's price *before*
+    # discount" scored 0.083 and failed V4 -- correct English rejected because the checker did
+    # not know a preposition. Closed-class words only: nothing here lets an identifier roster
+    # through, and every one of them is what prose uses to relate two nouns.
+    "before after during without against above below behind beyond along among around toward "
+    "towards onto upon out up down off near via if because unless whether until since although "
+    "though but also".split()
 )
 MIN_FUNCTION_RATIO = 0.10
 
@@ -90,7 +97,15 @@ PAREN_TAIL = re.compile(r"\((?:column|table)\s+\S+\)\s*\.?\s*$", re.I)
 #: Never disclose how an unreliable column came to be unreliable. Saying it is unreliable is
 #: governance; saying it was fabricated to imitate another column is a description of the
 #: benchmark, and naming that other column makes this one rank for its questions.
-FORBIDDEN_WORDS = ("decoy", "trap", "fabricated", "synthetic", "planted", "mimic", "imitat")
+#: Matched at a word boundary, not as a bare substring: `imitat` was catching `limitations`
+#: (l-IMITAT-ions), which is ordinary vocabulary for a data caveat, and `trap`/`planted` would
+#: have caught `trapezoid`/`transplanted` the same way. The stems stay stems so `imitates`,
+#: `imitating` and `fabricated` are all still caught.
+FORBIDDEN = re.compile(
+    "(?<![A-Za-z])(decoy|trap|mimic|planted|synthetic)(?![A-Za-z])"
+    "|(?<![A-Za-z])(fabricat|imitat)",
+    re.I,
+)
 
 #: Rules that police *authored* prose, and the one type whose text is not authored. A few-shot's
 #: summary **is** a training question, harvested verbatim by script: it quotes the values it asks
@@ -252,10 +267,9 @@ def check_local(kind: str, a: dict[str, Any], where: str) -> dict[str, list[Find
         [summary, body, *(str(r) for r in (a.get("rules") or [])),
          _text((a.get("reliability") or {}).get("note") if isinstance(a.get("reliability"), dict) else "")]
     ).lower()
-    for word in FORBIDDEN_WORDS if authored else ():
-        if word in blob:
-            out["V10"].append(Finding(f"{where}: text contains {word!r}"))
-            break
+    hit = FORBIDDEN.search(blob) if authored else None
+    if hit:
+        out["V10"].append(Finding(f"{where}: text contains {hit.group(0)!r}"))
     return out
 
 
