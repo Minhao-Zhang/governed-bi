@@ -226,5 +226,11 @@ def _is_tooling(root: Path, path: Path) -> bool:
     Deliberately narrow — only VCS and interpreter bookkeeping. A ``README.md`` at the corpus
     root is *not* excluded: ``corpus_content_hash`` counts everything in the selected
     subtrees, and a caller wanting assets alone passes ``schemas``.
+
+    **The last component is checked too, because ``.git`` is not always a directory.** In a
+    ``git worktree`` it is a *file* holding a pointer, and that pointer embeds an absolute
+    path — so digesting it gave the same commit a different identity in every worktree, and a
+    different one again in a clone. Measured: three checkouts of one commit, three hashes.
     """
-    return not _NON_CORPUS_DIRS.isdisjoint(path.relative_to(root).parts[:-1])
+    parts = path.relative_to(root).parts
+    return not _NON_CORPUS_DIRS.isdisjoint(parts)
