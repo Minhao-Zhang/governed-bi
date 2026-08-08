@@ -10,7 +10,17 @@
 ## Coding guidelines
 
 - No need to have a test for everything, unless it is a problem we encountered in the past and we want to avoid it in the future.
-- Before you write any LangGraph, LangChain, DeepAgents related code, use the relavent skill like `langgraph-fundementals` to understand the basic concepts and principles.
+- Before you write any LangGraph, LangChain, DeepAgents related code, use the relevant skill to
+  understand the basic concepts and principles. The names are exact and the Skill tool will not
+  guess: `langgraph-fundamentals`, `langgraph-persistence`, `langgraph-human-in-the-loop`,
+  `langgraph-cli`, `langchain-fundamentals`, `langchain-middleware`, `langchain-dependencies`,
+  and `ecosystem-primer` for framework selection. They are installed under `.claude/skills/`
+  and pinned by hash in `skills-lock.json`.
+- **The skills describe the framework's defaults; this repo departs from several of them on
+  purpose.** Where the two disagree the call-site docstring is the authority — it cites the
+  turn that went wrong. The one that will bite hardest: there is no `RetryPolicy` anywhere,
+  because re-running a node after it failed resamples a draw after seeing it, and the gate
+  written to catch that (`n_re_served == 0`) counts nothing at the node level.
 - No need to comment every line of code, but do comment on the overall structure and design decisions.
 
 ## External dependencies

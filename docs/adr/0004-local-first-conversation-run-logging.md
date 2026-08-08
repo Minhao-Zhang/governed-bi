@@ -66,16 +66,60 @@
   - **Conversation history is ephemeral, or lives in a checkpointer nobody
     attaches.** `InMemoryWorkingMemory` (`memory/store.py:36-70`, D8) is
     explicitly "ephemeral by design (lost on restart)." Separately,
-    `build_chat_graph` (`api/graph_app.py:99-107`) is "Compiled **without** a
+    ~~`build_chat_graph` (`api/graph_app.py:99-107`)~~ is "Compiled **without** a
     checkpointer by default: on LangGraph Server the runtime injects
-    persistence" (`graph_app.py:103-104`), and the actual `compile(...)` call
+    persistence" ~~(`graph_app.py:103-104`)~~, and the actual `compile(...)` call
     only attaches one if the caller passes it in
-    (`graph_app.py:181`). The plain REST `/chat` path never passes one. The
-    only checkpointer instantiated anywhere in serve is `stack.py`'s
+    ~~(`graph_app.py:181`)~~. The plain REST `/chat` path never passes one. The
+    only checkpointer instantiated anywhere in serve is ~~`stack.py`'s
     per-process `InMemorySaver`, and it exists solely for the **inner** agent's
     `ask_user` HITL interrupt/resume, not for conversation durability
     (`api/stack.py:53-54` field + comment, `stack.py:172-178` construction,
-    `stack.py:222` wiring into `ServeStack`).
+    `stack.py:222` wiring into `ServeStack`)~~.
+
+    > **Citations corrected 2026-08-07 (v2).** `build_chat_graph`, `api/stack.py`
+    > and `ServeStack` no longer exist in `src/governed_bi/`; the struck references
+    > point at v1 files that were deleted with the stale-DAG serve path (ADR 0002).
+    > The finding survives the rename in full, and there are now **two**
+    > `InMemorySaver`s, not one:
+    >
+    > - **`serve/graph.py:331-353`, `compile_graph()`** — the default for every
+    >   in-process caller (eval harness, CLI, tests). `checkpointer=None` means
+    >   "make me an `InMemorySaver`"; `checkpointer=False` is the explicit
+    >   no-saver option, which also means no `ask_user`, since a saver-less graph
+    >   cannot interrupt. Its own docstring records that the saver grows
+    >   unboundedly and that `eval/harness.py` calls `delete_thread` per question
+    >   to contain it.
+    > - **`api/routes.py:38-54`, `_graph()`** — the REST `/chat` fallback's
+    >   process-wide saver, compiled once so `thread_id` stays meaningful across
+    >   turns.
+    >
+    > The server entry is **`api/graph_app.py:311-319`, `make_graph()`**, which
+    > `langgraph.json` points `graphs.serve` at and which compiles with **no**
+    > checkpointer. So the third v1 claim — "compiled without one, the runtime
+    > injects persistence" — is the one that is not merely still true but now
+    > mandatory: see the framework check below.
+    >
+    > What changed materially is the *scope* of the surviving finding. In v1 the
+    > only saver was the inner agent's HITL saver, so conversation durability had
+    > no store at all. In v2 the two savers above do serve conversation state
+    > across turns of a live process — they are just in-memory, so the gap this
+    > ADR opened is now "does not survive a restart" rather than "is not kept."
+    > ADR 0010's Consequences records the second-order defect that falls out of
+    > having two of them: one `session_id` names two unrelated checkpoints,
+    > so a REST fallback mid-conversation serves its turn in isolation.
+
+  - **The framework half of the claim above is correct, verified 2026-08-07
+    against the installed `langgraph-api` 0.12.0.** LangGraph Server does inject
+    a checkpointer: `get_graph` yields `graph_obj.copy(update={"checkpointer":
+    checkpointer, "store": store})` (`langgraph_api/graph.py:409-415`) and
+    forwards it through `config["configurable"][CONFIG_KEY_CHECKPOINTER]` on the
+    factory path (`graph.py:382-385`). It is stronger than "injects", which is why
+    `make_graph()` must not bring its own: under `API_VARIANT == "local_dev"` a
+    registered `Pregel` carrying a `BaseCheckpointSaver` is a **hard startup
+    error** — *"persistence is handled automatically by the platform … will be
+    ignored when deployed"* (`graph.py:806-829`). Compiling `make_graph()` with a
+    saver would not degrade `langgraph dev`; it would refuse to start it.
   - **The governance ledger is in-state, not durable.** `ledger:
     Annotated[list, operator.add]` (`analyst/middleware.py:47`, on `GovState`)
     accumulates one entry per governed tool call for the turn, but it lives
@@ -90,6 +134,17 @@ interception points ADR 0002 already owns, and add **one thin, decoupled
 portable append** for longevity and eval reuse.
 
 ### 1. A durable checkpointer is the conversation store
+
+> **Re-cited 2026-08-07.** Every `build_chat_graph` / `graph_app.py:181` /
+> `stack.py` / `api/app.py` / `answer_question_agent` reference in this section
+> names a v1 symbol that no longer exists in `src/governed_bi/`. Read them against
+> the v2 map in the Context correction above: the server entry is
+> `api/graph_app.py:311-319` (`make_graph()`, no checkpointer, and it must stay
+> that way — the platform errors on a graph that brings its own), the in-process
+> default is `serve/graph.py:331-353` (`compile_graph()`, `InMemorySaver`), and the
+> REST fallback is `api/routes.py:38-54`. The decision itself is unaffected: no
+> durable saver shipped on any of the three, which is what the status note at the
+> top of this file records.
 
 Swap the ephemeral setup (no checkpointer at all on `build_chat_graph`,
 `graph_app.py:181`, and an in-memory saver scoped only to inner-agent HITL,

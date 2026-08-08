@@ -305,7 +305,8 @@ Reaching `COST` is a proof minted by `check()` that PARSE, NO_WRITE, FUNCTIONS,
 BINDING, COLUMNS and TABLES all passed. **Everything else hard-refuses** —
 including any entry that never earned a verdict: cap, error, exhausted,
 no-coverage and missing-pass-result all carry `failed_layer=None`, and treating
-that as forgivable was B3.
+that as forgivable was B3. (In v2 the cap does not even reach this rule: it
+produces no `CheckVerdict` at all — see the withdrawn third requirement below.)
 
 Three structural requirements:
 
@@ -313,9 +314,48 @@ Three structural requirements:
   `if allowlist is not None`.
 - **The cap terminates the turn**, it does not decline a call. v1's cap returned
   a "capped" tool message and the agent kept going, burning unbounded round-trips
-  against a cap it could never clear.
-- **The cap's ledger entry is written after `check()`**, so it carries a layer.
-  Writing it before produced the `failed_layer=None` that B3 walked through.
+  against a cap it could never clear. *(So did v2's, until 2026-08-07. §13 records
+  the enforcer that finally makes this requirement true and the 25 wasted model
+  calls that were the cost of leaving it aspirational.)*
+- ~~**The cap's ledger entry is written after `check()`**, so it carries a layer.
+  Writing it before produced the `failed_layer=None` that B3 walked through.~~
+  **Withdrawn 2026-08-07: this requirement is wrong, and the code that contradicts
+  it is right.** `cap_attempt()` (`serve/ledger.py:106-129`) deliberately sets
+  `verdict_layer=None` and says why — the cap is not a layer verdict, §5 keeps
+  `capped` distinct from `refused`, and a rule id would attribute the stop to a
+  governance layer that never ran. Manufacturing a layer for it would put a false
+  entry in the one table B3 taught us to read literally.
+
+  The requirement is wrong because it describes v1's architecture, where the ledger
+  entry *was* the object graded delivery read. In v2 they are two types and the
+  conversion runs one way only:
+
+  - `graded_delivery_eligible` (`govern/check.py:335-344`) takes a **`CheckVerdict`**
+    and reads `verdict["failed_layer"]`. A `CheckVerdict` is only ever produced by
+    `check()` (`govern/layers.py:50-63`).
+  - The cap row is an **`AttemptRecord`** with a different field, `verdict_layer`, a
+    layer *name* rather than a `Layer` (`govern/ledger.py:56-68`). `attempt_record()`
+    projects a verdict into a row (`ledger.py:105-121`); nothing projects a row back
+    into a verdict.
+  - `cap_attempt()` builds its `AttemptRecord` directly, without calling `check()` at
+    all. There is no verdict to carry a layer.
+
+  So **the graded-delivery path cannot see a cap row**, structurally, and B3's chain
+  is cut in three independent places rather than one. First, the predicate is
+  positive — `return verdict["failed_layer"] is Layer.COST` — so `None` is ineligible
+  by construction, which is G3 (`govern/__init__.py:7`, *"`failed_layer=None` never
+  means safe"*) and is what `tests/govern/test_graded_delivery.py:68` pins. Second,
+  the type gap above means a cap row is not a candidate input in the first place.
+  Third, the cap now jumps the loop to `end`, so there is no post-cap turn left for
+  anything to re-execute in.
+
+  Two things this correction does not let us claim. `graded_delivery_eligible` has
+  **no caller in `src/`** — only tests — and neither `terminal="graded"` nor
+  `path="graded"` is ever written, so graded delivery is declared and unwired in v2,
+  the same shape ADR 0010 §4 flags elsewhere. And the `knobs.py` default is
+  `graded_delivery_enabled=True`, which reads as "on" for a path that does not run.
+  OQ4's question — whether this earns its complexity — is now cheaper to answer than
+  when it was asked.
 
 **A cap-terminated turn gets its own `Outcome` member**, distinct from `crashed`
 and from a model refusal — 0005's node wrapper would otherwise stamp
@@ -600,11 +640,57 @@ to prevent.
 | `sqlglot_version` | pinned; canonical names are release-dependent |
 | `hard_block_suspect` | `True` in dev/BIRD, `False` in production |
 | `graded_delivery_enabled` | `True` (OQ4 may retire it) |
-| `run_query_attempt_cap` | 5 (was 3 until 2026-08-07; a blocked attempt charges a slot, so 3 bought as few as one real correction) |
+| `run_query_attempt_cap` | 5 (was 3 until 2026-08-07; a blocked attempt charges a slot, so 3 bought as few as one real correction). **Enforced by `_CapEndsTheTurn` in `serve/nodes/agent_core.py:315-405`, not by the tool** — see below |
 | `max_rows` | as today |
 | `guard_rules_enabled` | per `rule_id` |
 | `g_length_max_chars` | **8,000** — measured, see below |
 | `cost_budget` | **unset**; ships disabled rather than guessed |
+
+**`run_query_attempt_cap` now has an enforcer, and until 2026-08-07 it did not.** This table
+gave a number and §5's second structural requirement gave the semantics — *"the cap terminates
+the turn, it does not decline a call"* — and between them nothing named the mechanism, so the
+requirement went unbuilt for as long as the ADR read as if it were built. v2's cap did exactly
+what §5 accuses v1's of: `run_query` returned a "capped" tool message and control went straight
+back to the model with one more sentence and the same instructions. A tool return value cannot
+end an agent loop. Measured on this tree at `cap=5, recursion_limit=60`: five statements
+executed, then **25** further model calls, then `GraphRecursionError` — worse than unbounded
+round-trips, because the crashed super-step is discarded and the same paid turn that answered
+nothing also loses its ledger. The quieter symptom was an agent that stopped because it *chose*
+to, writing "the query tool reached its execution-attempt limit … so I can't reliably state the
+result"; a bound that depends on the model agreeing is not a bound.
+
+What ships now is `_CapEndsTheTurn`, a `ToolCallLimitMiddleware` subclass
+(`serve/nodes/agent_core.py:315-405`) installed in the nested agent's middleware list
+(`agent_core.py:71-74`). Four properties of it are load-bearing and none is obvious from the
+knob:
+
+- **It ends the loop from `after_model`, not from the tool.** The hook is decorated
+  `@hook_config(can_jump_to=["end"])` and returns `jump_to: "end"`, which is the thing a return
+  value cannot do. It costs exactly one model call, because the cap fires on the *proposal*
+  that would exceed it: the model must ask for a sixth statement before the sixth is refused.
+  Six model calls instead of thirty, and the turn ends `capped` rather than `crashed`.
+- **`thread_limit`, not `run_limit`.** `run_tool_call_count` is an `UntrackedValue`
+  (`langchain/agents/middleware/tool_call_limit.py:49`) and resets on every invocation —
+  including the re-invocation an `ask_user` resume performs, which would hand a paused turn a
+  second full budget. `thread_tool_call_count` is a `PrivateStateAttr` on the nested agent's
+  checkpointed state, where `attempts_by_call` already lives, so the two reset together. Here
+  "thread" means the turn.
+- **Native counting, local ending.** Constructed `exit_behavior="continue"` and the subclass
+  jumps, rather than constructed `"end"`: native's `"end"` raises `NotImplementedError` when
+  the same AI message also calls a different tool (`tool_call_limit.py:344`), which the node
+  would record as `path_kind="crashed"`, and a model that pairs `run_query` with
+  `inspect_schema` reaches that branch routinely. Ending anyway requires answering the stranded
+  sibling calls with an error `ToolMessage`, since a tool call with no `ToolMessage` is a
+  history most providers reject on the *next* turn.
+- **It writes the cap ledger row itself.** Blocking happens a node earlier than the tool, so
+  `AttemptBook` never sees the refused call and `execution_from_attempts` would report
+  `answered` for a turn the cap ended. `serve/tools.py:288-309` keeps the book's own cap branch
+  as a backstop for callers that assemble tools without an agent; both writes key on
+  `CAP_LEDGER_KEY`, so a turn that trips both enforcers still carries exactly one row.
+
+The default moved 3 → 5 the same day, and it is `Role.comparability`: it enters
+`prompt_set_hash` / `knobs_resolved`, so every number measured at 3 is a different arm and does
+not compare to one measured at 5.
 
 **`g_length_max_chars` is now measured, not TBD.** Across all 10,962 BIRD dev +
 train questions:
