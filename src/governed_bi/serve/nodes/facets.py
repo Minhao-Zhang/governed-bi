@@ -53,15 +53,24 @@ def _effective_question(state: Mapping[str, Any]) -> str:
     return str(state["question"])
 
 
-def _channels_for(stage: Stage, ran: frozenset[Channel]) -> dict[str, str]:
+def _channels_for(
+    stage: Stage,
+    ran: frozenset[Channel],
+    observed: Mapping[Channel, ChannelState],
+) -> dict[str, str]:
     """What each channel **did** for this facet, against what the table declares.
 
     Never :func:`expected_channel_state` verbatim — that reports the configuration, which is
     the degradation gate's only input. The declaration decides one thing and the observation
     the other: a channel this facet does not declare is ``not_configured``, **taken from the
-    table** and never from the producer (ADR 0005 §2.3); a channel it does declare and did not
-    consult is ``failed``. ``ran`` is collected where the call happens, so it cannot claim a
-    channel the code did not reach.
+    table** and never from the producer (ADR 0005 §2.3). ``ran`` is collected where the call
+    happens, so it cannot claim a channel the code did not reach.
+
+    ``observed`` is how a *declared* channel says why it did not run. Without it every such
+    channel read ``failed``, so "this arm wired no embedder" and "the embedder died" were one
+    word, and ``Anomaly.unconfigured`` — declared in ``register/facets.py`` for exactly this —
+    was unreachable from the only producer of channel state. Both remain degradation under
+    ``is_degraded``; the distinction is diagnostic, and ``pass_two`` still consults only ``ran``.
     """
     out: dict[str, str] = {}
     for ch in Channel:
@@ -69,7 +78,10 @@ def _channels_for(stage: Stage, ran: frozenset[Channel]) -> dict[str, str]:
         if expected is ChannelState.not_configured:
             out[ch.value] = expected.value
             continue
-        out[ch.value] = (ChannelState.ran if ch in ran else ChannelState.failed).value
+        if ch in ran:
+            out[ch.value] = ChannelState.ran.value
+            continue
+        out[ch.value] = observed.get(ch, ChannelState.failed).value
     return out
 
 
@@ -115,6 +127,7 @@ def _pass_one_hits(
     *,
     depth: int,
     ran: set[Channel],
+    observed: dict[Channel, ChannelState],
     query_vector: Sequence[float] | None = None,
 ) -> list[dict[str, Any]]:
     """Top-``depth`` over this facet's target types, on every channel it declares.
@@ -166,6 +179,9 @@ def _pass_one_hits(
             for asset_id, score in ranked:
                 if float(score) > 0.0:
                     semantic_scores[str(asset_id)] = float(score)
+        else:
+            # Its own verdict, carried to the record rather than flattened to `failed`.
+            observed[Channel.semantic] = state
 
     if not candidate_ids:
         return []
@@ -230,6 +246,7 @@ def _facet_result(
     *,
     hits: list[Any] | None,
     ran: frozenset[Channel],
+    observed: Mapping[Channel, ChannelState],
 ) -> dict[str, Any]:
     # One query per facet, always. There is no `max_queries_per_facet` bound because there is
     # no per-facet fan-out; a real multi-query facet brings its own.
@@ -238,7 +255,7 @@ def _facet_result(
         "facet": stage.value,
         "queries": queries,
         "hits": list(hits) if hits is not None else [],
-        "channels": _channels_for(stage, ran),
+        "channels": _channels_for(stage, ran, observed),
     }
 
 
@@ -332,6 +349,8 @@ async def _run_facet(
     question = _effective_question(state)
     index = _index_from_config(config)
     ran: set[Channel] = set()
+    #: Declared channels that did not run, with the reason they gave. See `_channels_for`.
+    observed: dict[Channel, ChannelState] = {}
     # Filled by the rewriter, appended to the `usage` channel below. A list because that is
     # the channel's shape and `operator.add` merges the five concurrent facets for free.
     spent: list[dict] = []
@@ -352,6 +371,7 @@ async def _run_facet(
             query,
             depth=candidate_depth(state),
             ran=ran,
+            observed=observed,
             query_vector=_query_vector(state, config, query=query, question=question),
         )
     elif _hooked(state, stage):
@@ -366,7 +386,9 @@ async def _run_facet(
 
     update: dict[str, Any] = {
         "facets": {
-            stage.value: _facet_result(stage, query, hits=hits, ran=frozenset(ran))
+            stage.value: _facet_result(
+                stage, query, hits=hits, ran=frozenset(ran), observed=observed
+            )
         }
     }
     # Omitted when empty rather than written as `[]`: the reducer is `operator.add`, so both are

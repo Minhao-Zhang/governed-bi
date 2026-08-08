@@ -632,7 +632,13 @@ def test_the_two_channels_are_compared_on_one_scale() -> None:
     hits = {
         h["asset_id"]: h
         for h in _pass_one_hits(
-            index, Stage.facet_entity, QUERY, depth=10, ran=set(), query_vector=QUERY_VECTOR
+            index,
+            Stage.facet_entity,
+            QUERY,
+            depth=10,
+            ran=set(),
+            observed={},
+            query_vector=QUERY_VECTOR,
         )
     }
     assert set(hits) == set(DOCS), sorted(hits)

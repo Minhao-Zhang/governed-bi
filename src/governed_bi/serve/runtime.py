@@ -83,8 +83,15 @@ def vector_for_query(
 
     ``fallback`` is returned when there is no rewrite (``query == question``), when no embedder
     is wired, or when the embed fails.
+
+    **Skipping the embed when ``query == question`` is a cache hit on ``fallback``, so it is
+    only correct while there is one.** On the harness path there is not (``eval/arms.py``
+    builds the config with no question), and ``facet_schema`` is the one facet that never
+    rewrites — so it scored against ``None`` and reported ``semantic: failed`` on every turn
+    of a 1,351-question run while the four rewriting facets reported ``ran``.
     """
-    if query and question is not None and query != question and embedder is not None:
+    rewritten = question is not None and query != question
+    if query and embedder is not None and (rewritten or fallback is None):
         try:
             return list(embedder.embed([query])[0])
         except Exception:  # noqa: BLE001 — a degraded channel, not a failed turn
