@@ -101,8 +101,16 @@ def _edges(sql: str) -> set[tuple[str, str, str, str, str]]:
 
 
 def _from_foreign_keys(schemas: set[str]) -> set[tuple[str, str, str, str, str]]:
+    """Declared foreign keys, **mapped through the rename map**.
+
+    ``*_tables.json`` is upstream BIRD, so it names ``beer_factory.customers`` while the
+    instance under test calls it something else. Emitting the original spelling produced 691
+    join endpoints resolving to no asset -- edges that exist in the corpus, are counted as
+    coverage, and can never license a table.
+    """
     import json
 
+    rename = C.rename_map()
     found: set[tuple[str, str, str, str, str]] = set()
     for path in sorted(C.DATASET.glob("data/*/**/*_tables.json")):
         for db in json.loads(path.read_text(encoding="utf-8")):
@@ -119,7 +127,9 @@ def _from_foreign_keys(schemas: set[str]) -> set[tuple[str, str, str, str, str]]
                     continue
                 if lt < 0 or rt < 0 or lt == rt:
                     continue
-                pair = ((tables[lt], lcol), (tables[rt], rcol))
+                m = rename.get(name, {})
+                pair = ((m.get(tables[lt], tables[lt]), m.get(lcol, lcol)),
+                        (m.get(tables[rt], tables[rt]), m.get(rcol, rcol)))
                 (a, acol), (b, bcol) = sorted(pair)
                 found.add((name, a, b, acol, bcol))
     return found

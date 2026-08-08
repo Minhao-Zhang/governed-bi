@@ -36,6 +36,11 @@ import _common as C  # noqa: E402
 #: Matches ``check_corpus_conformance``'s few-shot cap; a bigger one is a materialised result.
 MAX_BYTES = 4_000
 
+#: A few-shot's summary *is* the question, and the summary cap is a hard one -- the index is
+#: one shared scoring space. Truncating would change the indexed text, so an over-long question
+#: is dropped instead.
+MAX_SUMMARY = 250
+
 
 def reads_a_table(sql: str) -> bool:
     try:
@@ -68,12 +73,12 @@ def main(argv: list[str] | None = None) -> int:
             dropped["gold reads no table"] += 1
             continue
 
-        index = kept[schema]
-        body = f"Question: {question}\nSQL:\n{sql}"
-        if len((question + body).encode("utf-8")) > MAX_BYTES:
-            dropped["over the byte cap"] += 1
+        if len(question) > MAX_SUMMARY:
+            dropped["question over the summary cap"] += 1
             continue
 
+        index = kept[schema]
+        body = f"Question: {question}\nSQL:\n{sql}"
         C.write_asset(
             args.out, schema, "few-shots", f"fs_{schema}_{index:04d}",
             {
@@ -89,6 +94,13 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             },
         )
+        # Measure the file, not the fields: YAML quoting and the repeated SQL add a fifth of
+        # the bytes, and two assets slipped the cap when only the fields were counted.
+        written_path = args.out / schema / "few-shots" / f"fs_{schema}_{index:04d}.yaml"
+        if written_path.stat().st_size > MAX_BYTES:
+            written_path.unlink()
+            dropped["over the byte cap"] += 1
+            continue
         kept[schema] += 1
 
     print(

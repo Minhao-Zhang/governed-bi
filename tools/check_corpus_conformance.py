@@ -236,7 +236,10 @@ def check_local(kind: str, a: dict[str, Any], where: str) -> dict[str, list[Find
         [summary, body, *(str(r) for r in (a.get("rules") or [])),
          _text((a.get("reliability") or {}).get("note") if isinstance(a.get("reliability"), dict) else "")]
     ).lower()
-    for word in FORBIDDEN_WORDS:
+    # V10 governs what the *writer* discloses. A few-shot is a verbatim train question and its
+    # gold SQL, harvested by script and never authored, so a film called "The Trap" is not a
+    # disclosure. If a few-shot ever becomes agent-written this exemption has to go.
+    for word in () if at is AssetType.few_shot else FORBIDDEN_WORDS:
         if word in blob:
             out["V10"].append(Finding(f"{where}: text contains {word!r}"))
             break
