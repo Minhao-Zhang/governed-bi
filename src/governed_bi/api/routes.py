@@ -80,6 +80,13 @@ def capabilities() -> dict[str, Any]:
         "can_search": False,
         # Clarification UI mounts only on the streaming transport.
         "can_clarify": can_stream and session.agent_model is not None,
+        # Corpus curation (the Agreed Assumptions / Needs Review admin tabs) is a different
+        # question from can_clarify above -- that one is "does a live ask_user interrupt
+        # fire", this one is "would /corpus/conflicts*, /corpus/assumptions, and
+        # /corpus/drafts/{id}/approve actually work for this session". Mirrors those routes'
+        # own precondition exactly (session.corpus_root is None -> 409), so the UI can gate on
+        # this instead of reusing can_clarify for a thing it says nothing about.
+        "can_curate_corpus": session.corpus_root is not None,
         # UtkuAI, ported (utku-ai-v2-porting-spec.md), not upstream. Read the same way every
         # other knob is: session.knobs_resolved is the flat resolved mapping bool_knob's first
         # precedence tier already checks, so this is the register's declared value unless a

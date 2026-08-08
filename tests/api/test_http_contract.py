@@ -260,6 +260,30 @@ def test_capabilities_reports_the_ported_utkuai_toggles(monkeypatch) -> None:
     assert caps["enable_clarification_to_draft"] is True
 
 
+def test_capabilities_reports_can_curate_corpus_from_corpus_root(monkeypatch, tmp_path: Path) -> None:
+    """`can_curate_corpus` (Phase 5) is a separate question from `can_clarify`: `can_clarify`
+    is "does a live `ask_user` interrupt fire", `can_curate_corpus` is "would
+    `/corpus/conflicts*`, `/corpus/assumptions`, and `/corpus/drafts/{id}/approve` actually
+    work for this session". Mirrors `approve_draft_route`'s own precondition exactly
+    (`session.corpus_root is None` -> 409), so the two flags cannot be conflated again."""
+    from dataclasses import replace
+
+    from fastapi.testclient import TestClient
+
+    from governed_bi.api import routes
+
+    session = _tiny_session()
+    monkeypatch.setattr(routes, "_session", lambda: session)
+    client = TestClient(routes.app)
+
+    caps = client.get("/capabilities").json()
+    assert caps["can_curate_corpus"] is False  # _tiny_session has no corpus_root
+
+    monkeypatch.setattr(routes, "_session", lambda: replace(session, corpus_root=tmp_path))
+    caps = client.get("/capabilities").json()
+    assert caps["can_curate_corpus"] is True
+
+
 # ── nothing is invented at the boundary ──────────────────────────────────────
 
 
