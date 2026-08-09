@@ -129,7 +129,27 @@ read the printed licensed-drift block before trusting the delta.
 that produced it are out of tree, and there is no curator in `src/` for most asset types.
 Versioned is not reproducible-from-source, and no document may describe it as such.
 
-### 3.3 Cost per arm is not in the artifact
+### 3.3 Three `src/` fixes held back while an arm was running
+
+Each was verified on 2026-08-09 and deliberately not applied: a paid run was executing against
+`ba8cef2`, and the source tree is not covered by `corpus_content_hash` or `prompt_set_hash`, so
+a mid-run edit is invisible in the artifact. None is urgent; all are small.
+
+1. **`model/proxy_gateway.py:71,77` tells the user something false.** The lazy `boto3` import
+   raises *"boto3 is not in this project's dependencies (pyproject.toml has no extras)"*, and
+   the docstring above says the same. Both were true for five days and are not now — the
+   `bedrock` extra brings `boto3`, so the fix the message should name is
+   `uv sync --extra bedrock`. This was the fifth copy of one stale sentence; the other four
+   were in `pyproject.toml`, `README.md` and `docs/usage.md` (twice).
+2. **A hard cancel after the agent's grace period can leave an executed statement out of the
+   ledger.** A turn killed between `execute` and the ledger write records no attempt for SQL
+   the database actually ran. Rare, and it makes the ledger under-count rather than invent —
+   but "the ledger is the record of what ran" is a property this repository leans on.
+3. **`knobs_resolved` carries no `chat_model`.** `llm_utility_model` is recorded and the agent
+   model is not; it survives only in the `arm` string, which is a filename convention. Same
+   class as §1's treatment identities, one field further down.
+
+### 3.4 Cost per arm is not in the artifact
 
 `usage` carries tokens. Price is the provider's number and `measure/price.py` is deleted, so an
 arm's cost is not recoverable from the artifact alone.

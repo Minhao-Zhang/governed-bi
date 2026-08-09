@@ -9,12 +9,16 @@ Install, configure, and run the current tree. Design background:
 - Python 3.13 (pinned in `.python-version`)
 
 ```bash
-uv sync
+uv sync                  # OpenAI and proxy arms
+uv sync --extra bedrock  # + langchain-aws / boto3, for the Bedrock arm
 ```
 
-There are **no extras**. The second line here used to read
-`uv sync --extra bedrock`; `pyproject.toml` records that the extra was removed on
-2026-08-04, and the command exits 2.
+One extra exists, `bedrock`. It is required for the Bedrock chat and embedding
+path — `model/provider.py` imports `botocore.config.Config` to carry timeout and
+retry onto the client, and `model/bedrock_embedder.py` raises naming this command
+when `langchain-aws` is absent — and for the provider-translation tests in
+`tests/model/test_provider_selection.py`, which skip without it. CI runs
+`uv sync --frozen --extra bedrock`.
 
 ## Configuration
 
@@ -31,7 +35,12 @@ A `governed_bi.toml` may exist in the repo; it is not loaded by `src/`.
 | Variable | Role |
 |---|---|
 | `GOVERNED_BI_PG_DSN`, else `PG_RENAME_DECOY_DSN` | Postgres DSN — required for LangGraph serve. Those two names in that precedence, from `tools/credentials.PG_DSN_NAMES`. `PG_DSN` was listed here and is read by nothing |
-| `OPENAI_API_KEY` | Model access. There is no Bedrock path; the extra that fronted it was removed |
+| `OPENAI_API_KEY` | Model access on the `openai` gateway — the default one |
+| `GOVERNED_BI_PROVIDER` | Gateway for every surface: `openai` (default), `bedrock`, `proxy` |
+| `GOVERNED_BI_MODEL_PROVIDER`, `GOVERNED_BI_UTILITY_PROVIDER`, `GOVERNED_BI_EMBEDDING_PROVIDER` | Per-surface override of the above. The three surfaces resolve independently |
+| `GOVERNED_BI_AWS_REGION`, else `AWS_REGION`, else `AWS_DEFAULT_REGION` | Bedrock region, in that precedence — the engine's own name wins over whatever the shell exports for other tooling |
+| `AWS_ACCESS_KEY_ID` / `AWS_PROFILE` / `AWS_ROLE_ARN` / `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` | Bedrock credentials. None is required by name: `provider.credentials_present` asks botocore's resolver, so an instance or task role with nothing set here authenticates |
+| `GOVERNED_BI_PROXY_SECRET` | Credential for the `proxy` gateway |
 | `GOVERNED_BI_CORPUS_DIR` | Corpus directory (else one dir under `corpora/`, or seed via schema) |
 | `GOVERNED_BI_SCHEMA` | Optional: seed / pin schema from the live database |
 | `GOVERNED_BI_MODEL` | Main chat model; unset → `has_live_model: false` |
@@ -44,6 +53,11 @@ A `governed_bi.toml` may exist in the repo; it is not loaded by `src/`.
 | `GOVERNED_BI_MODEL_EFFORT` | Main-model effort |
 | `GOVERNED_BI_SEED_DIR` | Seed directory |
 | `GOVERNED_BI_TURN_LOG_DIR` | Optional turn log root |
+
+The provider, region and credential names are read in exactly one module —
+[`model/provider.py`](../src/governed_bi/model/provider.py) (`PROVIDER_VAR`,
+`SURFACE_PROVIDER_VARS`, `AWS_REGION_VARS`, `_CREDENTIAL_NAMES`). Check them there
+rather than against this table.
 
 ## Serve (LangGraph Server)
 

@@ -10,12 +10,19 @@
 ## Coding guidelines
 
 - No need to have a test for everything, unless it is a problem we encountered in the past and we want to avoid it in the future.
-- Before you write any LangGraph, LangChain, DeepAgents related code, use the relevant skill to
-  understand the basic concepts and principles. The names are exact and the Skill tool will not
-  guess: `langgraph-fundamentals`, `langgraph-persistence`, `langgraph-human-in-the-loop`,
-  `langgraph-cli`, `langchain-fundamentals`, `langchain-middleware`, `langchain-dependencies`,
-  and `ecosystem-primer` for framework selection. They are installed under `.claude/skills/`
-  and pinned by hash in `skills-lock.json`.
+- Before you write any LangGraph or LangChain code, use the relevant skill to understand the
+  basic concepts and principles. The names are exact and the Skill tool will not guess:
+  `langgraph-fundamentals`, `langgraph-persistence`, `langgraph-human-in-the-loop`,
+  `langgraph-cli`, `langchain-fundamentals`, `langchain-middleware`, `langchain-dependencies`.
+  They are installed under `.claude/skills/` and pinned by hash in `skills-lock.json`.
+- **Deep Agents is retired for this project; do not adopt or re-add it.** `.claude/skills/`
+  still carries the `deep-agents-*` skills and `ecosystem-primer`, whose decision table sends
+  planning / subagent / memory work to Deep Agents — do not take that route here, and do not
+  consult framework selection: it is decided. `FilesystemMiddleware` contributes `write_file`
+  and `edit_file` and they are not removable, and a generic write channel is what let v1 forge
+  `source=human, status=certified` on curated assets; the governance boundary in this repo is
+  the *absence* of a tool (ADR 0006). Use a LangGraph `StateGraph` with a `create_agent` node,
+  which is how `serve/` is already built. `pyproject.toml` carries the full reasoning.
 - **The skills describe the framework's defaults; this repo departs from several of them on
   purpose.** Where the two disagree the call-site docstring is the authority — it cites the
   turn that went wrong. The one that will bite hardest: there is no LangGraph `RetryPolicy`

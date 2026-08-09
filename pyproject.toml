@@ -6,13 +6,18 @@ readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "MIT" }
 authors = [{ name = "Minhao Zhang" }]
-# Core + agent deps live here (no extra): a plain `uv sync` installs everything the
-# default OpenAI-backed stack needs, so dev never hits a "feature silently off
-# because its extra wasn't installed" bug. There are **no extras**: the `bedrock`
-# one was removed on 2026-08-04 because it fronted `model/bedrock_embedder.py`, a
-# module `model/__init__.py` says in its own docstring is deliberately absent. An
-# extra that installs a provider tree for an adapter that does not exist is a
-# capability the packaging claims and the code does not have.
+# Core + agent deps live here: a plain `uv sync` installs everything the default
+# OpenAI-backed stack needs, so dev never hits a "feature silently off because its
+# extra wasn't installed" bug. There is exactly **one** extra, `bedrock`, and it is
+# the only thing a base install leaves out; see [project.optional-dependencies].
+#
+# This paragraph read "There are **no extras**" until 2026-08-09, and it was wrong
+# for days. The extra really was removed on 2026-08-04 (it fronted
+# `model/bedrock_embedder.py`, which was absent then), and it came back when
+# multi-provider support landed and that module with it — but the note stayed, and
+# README.md and docs/usage.md had copied it. Someone following them skipped a
+# dependency CI installs (`uv sync --frozen --extra bedrock`), so the provider
+# translation tests skipped on their machine and ran on CI's.
 #
 # Every entry below is imported by something under `src/` or `tests/`, checked by
 # grep on the same date. Four were not and are gone; see the git log for the reasoning

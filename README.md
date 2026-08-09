@@ -32,11 +32,15 @@ Requires [uv](https://docs.astral.sh/uv/) and Python 3.13.
 
 ```bash
 uv sync                       # create .venv, install the stack
+uv sync --extra bedrock       # ...plus langchain-aws + boto3, for the Bedrock arm
 ```
 
-There are **no extras**. This block used to offer `uv sync --extra bedrock` as
-its second line; `pyproject.toml` records that the extra was removed on
-2026-08-04, and the command exits 2.
+A base `uv sync` is all the OpenAI and proxy arms need. The **`bedrock` extra** is
+what makes the Bedrock chat and embedding path importable — `model/provider.py`
+reaches for `botocore.config.Config`, and `model/bedrock_embedder.py` raises with
+that exact command when `langchain-aws` is missing. CI installs it
+(`uv sync --frozen --extra bedrock`) so the provider-translation tests in
+`tests/model/test_provider_selection.py` run there rather than skip.
 
 **1. Secrets and connection** in a git-ignored `.env` at the repo root:
 
