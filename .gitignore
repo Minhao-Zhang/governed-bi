@@ -250,3 +250,17 @@ corpora/
 # Firecrawl CLI scrape cache. The CLI writes it into the repo root, and AGENTS.md
 # says the top level holds only README.md and configuration files.
 .firecrawl/
+
+# Vendored agent skills, fetched not authored. `skills-lock.json` pins each one by hash
+# and IS committed — the same split as a package lock: the manifest is the source of
+# truth, the tree beside it is the install. AGENTS.md names both.
+.claude/skills/
+.agents/
+
+# Pre-v2 state parked before the rewrite: 293 MB of zipped corpora, runs and quarantine.
+# Not history worth carrying in the repo, and large enough to make a clone painful.
+_archive/
+
+# One-off slices written while debugging the rebuild packets. The packets themselves are
+# already ignored under scripts/corpus_rebuild/_build/; these are hand-cut copies of them.
+scratch_*.json
