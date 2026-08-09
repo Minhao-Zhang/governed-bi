@@ -169,11 +169,15 @@ later through the standard LangGraph thread API (`get_state` /
 `useStream` path shares. This is the ADR 0001 thread model, made durable and
 frontend-agnostic for that path. **It covers the LangGraph-Server /
 `useStream` path only, not the plain REST `/chat` route**, which calls
-`answer_question_agent` directly and is stateless by design
-(`api/app.py:414-459`, "the caller persists the transcript," with a fresh
-`InMemoryWorkingMemory` per request). Making REST `/chat` durable is a separate
-migration step: route it through the checkpointed graph, or add persistence
-inside `answer_question_agent`.
+`answer_question_agent` directly. **Today `/chat` is checkpointed with a
+process-local `InMemorySaver`** (multi-turn + HITL within one process; lost on
+restart; dual universe vs the Server path). Historical ADR text called it
+"stateless by design" — that referred to an earlier per-request memory and is
+no longer accurate. Durable (Postgres) checkpointing for `/chat` remains a
+separate migration; `/capabilities` reports `checkpoint_durable: false` and
+`hitl_survives_process_restart: false`. Making REST `/chat` durable means
+swapping the saver (or routing it through the Server), not inventing a second
+transcript store.
 
 **Naming the roles.** The checkpointer is the thread resume / UX store: it is
 not a cache, it is not the audit record, and it carries no retention guarantee
@@ -349,8 +353,9 @@ durable sqlite log where only tokens and latency were available as proxies befor
 
 **Positive**
 - Durable, frontend-agnostic conversation history plus metadata on the
-  LangGraph-Server / `useStream` path (REST `/chat` durability is a separate
-  migration step, since `/chat` is stateless by design today).
+  LangGraph-Server / `useStream` path (REST `/chat` uses process-local
+  `InMemorySaver` today — multi-turn within a process only; not durable across
+  restart. See `/capabilities.checkpoint_durable`).
 - A concrete build of R3 / R5 and the ADR 0002 Inv #10 durable audit sink,
   rather than another deferred seam.
 - Fixes D8 ephemerality for chat history and the governance ledger on that path.

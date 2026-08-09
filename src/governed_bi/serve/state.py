@@ -276,7 +276,10 @@ class ServeState(TypedDict, total=False):
     #: Question embedding. Per-turn (streamed path cannot put it on load-time config).
     query_vector: list[float] | None
     #: Epoch seconds when the turn's first node ran. ``wrap_node`` writes it, ``stamp`` derives
-    #: ``latency_sec`` from it. Wall clock, because a clarification can resume in another process.
+    #: ``latency_sec`` from it. Wall clock so a clarification resume after a process bounce
+    #: still yields a defined span *if* a durable checkpointer is present. `/chat` today uses
+    #: ``InMemorySaver`` only — resume across processes is not supported there
+    #: (``hitl_survives_process_restart: false``).
     turn_started_at: float | None
     n_re_served: int
 

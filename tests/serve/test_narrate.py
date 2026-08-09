@@ -127,6 +127,33 @@ def test_a_refusal_keeps_the_systems_own_wording() -> None:
     assert model.calls == []
 
 
+def test_a_capped_or_all_refused_ledger_is_not_narrated() -> None:
+    """``agent_core`` still writes ``path_kind: answered``; stamp reclassifies from the ledger.
+
+    Narrating those turns would put generated prose on a refusal/cap the card should not
+    decorate.
+    """
+    model = _Recorder()
+    for terminal in ("capped", "refused"):
+        out = asyncio.run(
+            narrate_node(
+                {
+                    "path_kind": "answered",
+                    "question": "q",
+                    "result_table": RESULT,
+                    "messages": [
+                        HumanMessage("q"),
+                        AIMessage("There are nine thousand restaurants."),
+                    ],
+                    "execution": {"terminal": terminal, "attempts": [], "guardrail_errors": 0},
+                },
+                _config(model),
+            )
+        )
+        assert out == {}, f"ledger terminal {terminal!r} must not be narrated"
+    assert model.calls == []
+
+
 def test_a_dead_narrator_costs_the_sentence_and_not_the_turn() -> None:
     """The answer, the SQL and the ledger are computed and correct before this node runs.
 

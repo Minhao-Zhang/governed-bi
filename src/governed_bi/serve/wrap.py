@@ -92,9 +92,9 @@ def wrap_node(
         """``{"turn_started_at": <epoch>}`` from the first node of the turn to run, else ``{}``.
 
         Wall clock rather than ``perf_counter``: a clarification suspends the turn on a
-        ``GraphInterrupt`` and can resume in a different process. Written only when absent, so
-        it is the *turn's* start; and in ``PER_TURN_RESET``, so turn two does not inherit turn
-        one's clock.
+        ``GraphInterrupt`` and, with a durable checkpointer, can resume later. Written only
+        when absent, so it is the *turn's* start; and in ``PER_TURN_RESET``, so turn two does
+        not inherit turn one's clock. (`/chat`'s ``InMemorySaver`` does not survive restart.)
         """
         if state.get("turn_started_at") is not None:
             return {}

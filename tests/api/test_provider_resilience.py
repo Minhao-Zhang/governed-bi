@@ -60,6 +60,22 @@ def test_the_worst_case_for_one_call_is_bounded() -> None:
     )
 
 
+def test_node_timeouts_cover_one_call_provider_retry_budget() -> None:
+    """Rail/agent hang-stops must not fire inside a single call's SDK retry budget.
+
+    Same pairing as the knob docstrings: ``rail_node_timeout_s`` vs utility×(retries+1),
+    ``agent_node_timeout_s`` vs agent×(retries+1). Shrinking either below its ceiling makes
+    ``TimeoutError`` and a provider retry disagree about the same hung call.
+    """
+    attempts = int(knob_default("llm_max_retries")) + 1
+    assert float(knob_default("rail_node_timeout_s")) >= (
+        float(knob_default("llm_utility_timeout_s")) * attempts
+    )
+    assert float(knob_default("agent_node_timeout_s")) >= (
+        float(knob_default("llm_timeout_s")) * attempts
+    )
+
+
 def test_the_settings_reach_the_openai_client_on_every_surface(monkeypatch) -> None:
     """Chat models **and** the embedder.
 

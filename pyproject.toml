@@ -55,10 +55,10 @@ dependencies = [
     "langchain>=1.0",
     "langchain-openai>=1.0",
     # No `langgraph-checkpoint-sqlite` / `-postgres`: zero importers. `InMemorySaver` is
-    # the only saver in the tree and LangGraph Server brings its own persistence. ADR
-    # 0004 proposes durable run logging and will need one of these — it is Proposed with
-    # no code, and declaring a dependency for a design is how a package ends up
-    # advertising a capability nobody built.
+    # the only saver compiled in-tree (`/chat`); LangGraph Server injects its own for the
+    # stream path. ADR 0004's durable checkpointer half did not ship — `/capabilities`
+    # reports `checkpoint_durable: false`. Declaring a dependency for an unbuilt saver
+    # would advertise a capability nobody built.
     #
     # No `deepagents`: zero importers, and **retired rather than deferred.**
     # `FilesystemMiddleware` contributes `write_file` / `edit_file` and they are not

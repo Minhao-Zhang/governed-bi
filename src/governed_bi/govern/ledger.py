@@ -61,7 +61,9 @@ class ExecutionRecord(TypedDict):
     """Written every turn, including turns with no SQL."""
 
     attempts: list[AttemptRecord]
-    terminal: Literal["answered", "graded", "refused", "capped", "no_sql"]
+    #: ``crashed`` is written only by ``stamp`` when the turn failed after attempts
+    #: existed — so ``outcome=crashed`` never sits beside ``terminal=answered``.
+    terminal: Literal["answered", "graded", "refused", "capped", "no_sql", "crashed"]
     #: Exceptions swallowed by ``check()``. ``== 0`` joins the quotability
     #: preconditions.
     guardrail_errors: int
@@ -120,7 +122,7 @@ def guardrail_errors(attempts: Iterable[AttemptRecord]) -> int:
 
 def execution_record(
     attempts: Sequence[AttemptRecord],
-    terminal: Literal["answered", "graded", "refused", "capped", "no_sql"],
+    terminal: Literal["answered", "graded", "refused", "capped", "no_sql", "crashed"],
 ) -> ExecutionRecord:
     """Assemble the turn's record. ``guardrail_errors`` is derived, never passed in."""
     return ExecutionRecord(

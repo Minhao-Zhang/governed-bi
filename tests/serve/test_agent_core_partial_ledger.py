@@ -22,6 +22,7 @@ from typing import Any
 
 import httpx
 import openai
+import pytest
 from langchain_core.messages import AIMessage
 
 from governed_bi.govern.policy import GovernancePolicy
@@ -117,6 +118,100 @@ def test_a_clean_turn_is_unchanged_and_carries_no_failure() -> None:
 
     assert out["path_kind"] == "answered"
     assert "failure" not in out, "a turn that did not fail must not carry a failure marker"
+
+
+def test_a_node_timeout_keeps_the_streamed_ledger() -> None:
+    """``agent_core`` owns its hang-stop so a TimeoutError still projects the ledger.
+
+    The bound lives inside the node and fires between astream frames, so a timeout
+    still sees the last committed values snapshot (including attempts). A slow *next*
+    model call after the tool is long enough past the deadline that the frame completes
+    and then the hang-stop stamps crashed — mid-call cancel is deliberately not used
+    (see F1 / ``wrap.py``'s to_thread hazard).
+    """
+    import os
+    import time
+
+    from langchain_core.outputs import ChatGeneration, ChatResult
+
+    class _HangsAfterOneToolCall(_DiesAfterOneToolCall):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):  # type: ignore[no-untyped-def]
+            if any(getattr(m, "type", "") == "tool" for m in messages):
+                time.sleep(0.5)
+                return ChatResult(
+                    generations=[ChatGeneration(message=AIMessage("too late"))]
+                )
+            return ScriptedChatModel._generate(
+                self, messages, stop=stop, run_manager=run_manager, **kwargs
+            )
+
+    os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"] = "0.15"
+    try:
+        out = _run_turn(_HangsAfterOneToolCall(responses=[ASK]))
+    finally:
+        del os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"]
+
+    assert out["path_kind"] == "crashed"
+    assert out["failure"] == {"stage": "agent_core", "error_type": "TimeoutError"}
+    attempts = (out.get("execution") or {}).get("attempts") or []
+    assert len(attempts) == 1, (
+        "the statement ran before the hang; a timeout must not drop it, got "
+        f"{attempts!r}"
+    )
+    assert out.get("generated_sql")
+
+
+def test_a_timeout_overlapping_in_flight_run_query_still_records_the_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hang-stop must not cancel mid-``to_thread`` after the statement finished.
+
+    ``asyncio.wait_for`` around ``_run`` used to cancel the tool coroutine between DB
+    completion and the ``attempts_by_call`` write, so the projected ledger omitted a
+    statement that had already run. Deadline checks between frames let the tool finish
+    recording first.
+    """
+    import os
+    import time
+
+    from governed_bi.serve import fetch
+
+    def _slow_run_query(*_a: Any, **_k: Any) -> tuple[str, dict[str, Any]]:
+        time.sleep(0.35)
+        return (
+            '{"columns":["n"],"rows":[[1]],"row_count":1,"truncated":false}',
+            {
+                "verdict_layer": None,
+                "passed": True,
+                "reason_code": "passed",
+                "path": "agent",
+                "executed_sql": "SELECT 1 AS n",
+            },
+        )
+
+    monkeypatch.setattr(fetch, "run_query", _slow_run_query)
+    os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"] = "0.05"
+    try:
+        out = _run_turn(
+            ScriptedChatModel(
+                responses=[
+                    ASK,
+                    AIMessage("one row"),
+                ]
+            )
+        )
+    finally:
+        del os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"]
+
+    assert out["path_kind"] == "crashed"
+    assert out["failure"] == {"stage": "agent_core", "error_type": "TimeoutError"}
+    attempts = (out.get("execution") or {}).get("attempts") or []
+    assert len(attempts) == 1, (
+        "run_query finished under a firing node timeout; omitting it is executed-but-"
+        f"unrecorded, got {attempts!r}"
+    )
+    assert attempts[0].get("executed_sql") == "SELECT 1 AS n"
+    assert out.get("generated_sql") == "SELECT 1 AS n"
 
 
 def test_two_statements_in_one_super_step_keep_both_ledger_rows() -> None:

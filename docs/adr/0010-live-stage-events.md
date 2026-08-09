@@ -25,7 +25,8 @@ warning. Two runs were measured that way before the field name was found. The JS
 `streamSubgraphs`, which is the same name.
 
 **M2 — `stream_subgraphs` is load-bearing for both tokens and tools, and this is the finding
-that matters.** `agent_core` calls `agent.invoke(...)` on a nested `create_agent` graph, so
+that matters.** `agent_core` drives a nested `create_agent` graph with
+`agent.astream(..., stream_mode="values")` (not `invoke`), so
 every model token and every tool call of the turn happens *inside a subgraph*. Measured on one
 question, same graph, same model:
 

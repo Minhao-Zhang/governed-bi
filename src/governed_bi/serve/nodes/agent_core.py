@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -74,7 +75,21 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
     question = _question_message(state, history)
     inbound = history + ([question] if question is not None else [])
 
-    result, failure = await _run(agent, inbound, config)
+    # Hang-stop lives *here* (not ``wrap_node``) so a timeout still projects the streamed
+    # ledger. Deadline is checked **between** astream frames rather than via ``wait_for``:
+    # cancelling mid-``run_query`` ``to_thread`` leaves an executed statement off the projected
+    # ledger (the same cancel-vs-thread hazard ``wrap.py`` refuses for sync nodes). Provider
+    # calls stay bounded by ``llm_timeout_s``; the node wall only ends the loop after a frame.
+    progress: dict[str, Any] = {"result": {}}
+    result, failure = await _run(
+        agent,
+        inbound,
+        config,
+        recursion_limit=_recursion_limit(state),
+        progress=progress,
+        timeout=_agent_node_timeout(),
+    )
+
     out_messages = list(result.get("messages") or [])
     fresh = out_messages[len(inbound) :]
 
@@ -89,16 +104,18 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
     delivery = DeliveryTracker(delivered).merge_into(state.get("delivery"))
     usage = [usage_row(stage="agent_core", model=model, messages=fresh,
                        turn_index=state.get("turn_index", 1))]
+    execution = execution_from_attempts(attempts)
 
     update: dict[str, Any] = {
         # ``crashed`` when the loop died, and the ledger above is returned anyway: the two
-        # facts are independent. See :func:`_run`.
+        # facts are independent. See :func:`_run`. Stamp still re-reads ``execution.terminal``
+        # when ``path_kind`` is ``answered`` (capped / all-refused).
         "path_kind": "crashed" if failure is not None else "answered",
         "messages": fresh,
         "usage": usage,
         "delivery": delivery,
         "clarification_requested": False,
-        "execution": execution_from_attempts(attempts),
+        "execution": execution,
     }
     if failure is not None:
         # ``wrap_node`` never sees this exception, so the marker it would have written is
@@ -119,7 +136,13 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
 
 
 async def _run(
-    agent: Any, inbound: list[Any], config: RunnableConfig
+    agent: Any,
+    inbound: list[Any],
+    config: RunnableConfig,
+    *,
+    recursion_limit: int,
+    progress: dict[str, Any] | None = None,
+    timeout: float | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Drive the agent, keeping the last committed state. Returns ``(state, failure or None)``.
 
@@ -138,23 +161,70 @@ async def _run(
     checkpointed channel and not from an in-memory set. Sibling tool tasks do *not* re-run: each
     tool call is its own ``Send``, so a ``run_query`` completed before the pause stays completed
     (probed on langgraph 1.2.10).
+
+    **``recursion_limit`` is passed at the top level of config** (not under ``configurable``).
+    ``create_agent`` binds 9999 via ``with_config``; a non-default value here is what actually
+    bounds exploration tools that ``_CapEndsTheTurn`` does not cover.
+
+    **``progress``** is updated every values frame so a caller can still read the last snapshot
+    if this coroutine is abandoned. **``timeout``** is a between-frame deadline (not
+    ``asyncio.wait_for``): cancelling mid-tool would drop a finished ``run_query`` off the
+    projected ledger while the DB thread kept running.
     """
     from langgraph.errors import GraphInterrupt
 
+    run_config: dict[str, Any] = {**config, "recursion_limit": int(recursion_limit)}
     last: dict[str, Any] = {}
+    deadline = (time.monotonic() + float(timeout)) if timeout is not None else None
     try:
         async for frame in agent.astream(
-            {"messages": inbound}, config, stream_mode="values"
+            {"messages": inbound}, run_config, stream_mode="values"
         ):
             if isinstance(frame, Mapping):
                 last = dict(frame)
+                if progress is not None:
+                    progress["result"] = last
+            if deadline is not None and time.monotonic() >= deadline:
+                return last, {"stage": "agent_core", "error_type": "TimeoutError"}
     except GraphInterrupt:
         raise
     except Exception as exc:  # noqa: BLE001 — the ledger is the point, not the traceback
         # ``type(exc).__name__`` and never ``str(exc)``: ADR 0006 §11 keeps exceptions as their
         # class because driver error text echoes the statement and its literals.
+        if progress is not None:
+            progress["result"] = last
         return last, {"stage": "agent_core", "error_type": type(exc).__name__}
     return last, None
+
+
+def _agent_node_timeout() -> float | None:
+    """Wall clock for the whole agent loop. Owned here, not by ``wrap_node``.
+
+    ``wrap_node``'s ``wait_for`` turns a timeout into ``{failure, path_kind}`` only — the ledger
+    that ``_run`` already streamed would be discarded. Applying the bound inside this node keeps
+    the same hang-stop and the partial ledger. Enforced between astream frames (see ``_run``).
+    """
+    import os
+
+    from governed_bi.register.knobs import knob_default
+
+    raw = os.environ.get("GOVERNED_BI_AGENT_NODE_TIMEOUT_S")
+    return float(raw) if raw else float(knob_default("agent_node_timeout_s"))
+
+
+def _recursion_limit(state: Mapping[str, Any]) -> int:
+    """Nested-agent superstep ceiling from env, then knobs_resolved, then the register default."""
+    import os
+
+    from governed_bi.register.knobs import knob_default
+
+    raw = os.environ.get("GOVERNED_BI_AGENT_RECURSION_LIMIT")
+    if raw is not None and str(raw).strip() != "":
+        return int(raw)
+    knobs = state.get("knobs_resolved") or {}
+    if knobs.get("agent_recursion_limit") is not None:
+        return int(knobs["agent_recursion_limit"])
+    return int(knob_default("agent_recursion_limit"))
 
 
 def _question_message(state: dict, history: list[Any]) -> HumanMessage | None:

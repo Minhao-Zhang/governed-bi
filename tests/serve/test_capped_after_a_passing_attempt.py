@@ -102,3 +102,30 @@ def test_a_turn_whose_every_attempt_was_blocked_is_still_a_guardrail_refusal() -
     )
     assert out["answer"]["outcome"] == Outcome.refused.value
     assert out["answer"]["refused_by"] != ATTEMPT_CAP_REFUSED_BY
+
+
+def test_a_crashed_turn_does_not_keep_execution_terminal_answered() -> None:
+    """``outcome=crashed`` beside ``execution.terminal=answered`` invites readers to treat
+    a failed turn as answered. Stamp rewrites the projected terminal; attempts stay."""
+    execution = execution_from_attempts([_attempt(True, "passed")])
+    assert execution["terminal"] == "answered"
+    out = stamp(
+        {
+            "path_kind": "crashed",
+            "failure": {"stage": "agent_core", "error_type": "TimeoutError"},
+            "execution": execution,
+            "generated_sql": "SELECT 1",
+            "turn_id": "turn-crashed",
+            "turn_index": 1,
+            "knobs_resolved": {},
+            "usage": [],
+        }
+    )
+    answer = out["answer"]
+    assert answer["outcome"] == Outcome.crashed.value
+    projected = answer["record"]["execution"]
+    assert projected["terminal"] == "crashed", (
+        f"outcome=crashed beside terminal={projected['terminal']!r}; "
+        "whichever a reader trusts, the other is lying"
+    )
+    assert projected["attempts"], "the ledger rows that already ran must still be on the record"

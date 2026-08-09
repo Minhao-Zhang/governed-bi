@@ -110,6 +110,22 @@ def test_a_turn_that_produced_no_statement_has_nothing_to_judge() -> None:
     assert judge.calls == []
 
 
+@pytest.mark.parametrize("terminal", ["capped", "refused"])
+def test_a_capped_or_all_refused_ledger_is_not_reflected(terminal: str) -> None:
+    """Same as narrate: ``path_kind`` stays ``answered`` until stamp; observers must not decorate."""
+    judge = _Judge(reply="VERDICT: wrong\nREASON: no")
+    state = _answered_state(
+        execution={
+            "attempts": [{"passed": False, "reason_code": "r_table_not_licensed", "path": "agent"}],
+            "terminal": terminal,
+            "guardrail_errors": 0,
+        }
+    )
+    update = asyncio.run(reflect_node(state, {"configurable": {"reflect_model": judge}}))
+    assert update == {}
+    assert judge.calls == []
+
+
 def test_the_default_arm_records_a_null_verdict_and_emits_no_reflect_row(
     two_schema_index: Any, two_schema_assets: Any
 ) -> None:

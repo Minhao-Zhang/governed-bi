@@ -17,19 +17,20 @@ accept → guard → rewrite → negative_gate
             ├─ facet_entity
             └─ facet_example
   → route → resolve → connect → assemble
-  → agent_core → narrate → stamp → record
+  → agent_core → reflect → narrate → stamp → record
 ```
 
 | Stage | Role |
 |---|---|
 | `guard` | LLM / structured scope gate |
-| `rewrite` | Utility-model rewrite for most facets |
+| `rewrite` | Stub rail today; facet query rewriting lives inside `facet_*` |
 | `negative_gate` | Negative-example refuse path |
-| `facet_*` | Parallel retrieval channels |
+| `facet_*` | Parallel retrieval channels (each may rewrite its query) |
 | `route` / `resolve` / `connect` | Schema pick, budgets, Steiner join |
 | `assemble` | Render retrieval context block |
 | `agent_core` | Nested `create_agent` loop (read-only tools) |
-| `narrate` | Short answer over the result table |
+| `reflect` | Post-hoc observer; never routes the turn |
+| `narrate` | Short answer over the result table (must not crash an answered turn) |
 | `stamp` | The turn record: `outcome`, `guardrail_errors`, the ledger, `latency_sec` |
 
 `agent_core` tools: `read_body`, `inspect_schema`, `sample_rows`, `run_query`,

@@ -239,10 +239,15 @@ def _dropped_in_corpus(root: Path) -> str | None:
 
 def _accept_node(state: dict, config: Any) -> dict:
     """Derive a turn from the conversation. Client provenance fields are ignored."""
+    from governed_bi.serve.state import PER_TURN_RESET
+
     session = session_from_environment()
     question = _last_human(state)
     if not question:
+        # Clear prior-turn LastValue channels before jumping to stamp. Without this (and
+        # without the accept→stamp edge) guard would still run on the previous question.
         return {
+            **PER_TURN_RESET,
             "path_kind": "crashed",
             "failure": {
                 "stage": "accept",
@@ -265,7 +270,7 @@ def _accept_node(state: dict, config: Any) -> dict:
 def _record_node(state: dict) -> dict:
     """Append the finished turn to the audit log. After ``stamp``; never raises."""
     from governed_bi.api.trace_store import append_turn
-    from governed_bi.serve.messages import last_ai_text
+    from governed_bi.serve.messages import surface_answer_text
 
     try:
         answer = state.get("answer") or {}
@@ -275,7 +280,7 @@ def _record_node(state: dict) -> dict:
         append_turn(
             record,
             question=str(state.get("question") or "") or None,
-            answer_text=(answer.get("answer_text") or last_ai_text(state)),
+            answer_text=surface_answer_text(answer, state),
             outcome=answer.get("outcome"),
         )
     except Exception:  # noqa: BLE001 — logging must not fail a served turn

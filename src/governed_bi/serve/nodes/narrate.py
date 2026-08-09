@@ -20,6 +20,7 @@ from langchain_core.runnables import RunnableConfig
 
 from governed_bi.serve.messages import last_ai_text
 from governed_bi.serve.runtime import configurable
+from governed_bi.serve.ledger import ledger_ended_without_answer
 
 __all__ = ["narrate_node"]
 
@@ -34,28 +35,37 @@ async def narrate_node(state: dict, config: RunnableConfig) -> dict:
     Returns ``{}`` rather than ``{"answer_text": None}`` on the paths with nothing to say: the
     channel keeps its reset value and ``stamp`` reads null either way, but the *update* says
     which of the two happened.
+
+    **Never raises into ``wrap_node``.** A timeout or unexpected exception would otherwise mark
+    an already-answered turn ``crashed`` (``failure is not None`` wins in ``stamp``). Degrade
+    to no prose instead.
     """
     # A terminal turn already has its wording, and it is not the model's: `refuse` and `decline`
     # write `answer["text"]`, which is system copy, and narrating over it would put a generated
     # sentence where a governance decision belongs.
     if state.get("path_kind") in ("refuse", "decline", "crashed"):
         return {}
-
-    adopted = last_ai_text(state)
-    if adopted:
-        return {"answer_text": adopted.strip()}
-
-    result = state.get("result_table")
-    if not isinstance(result, Mapping):
-        # No prose and no rows: inventing a sentence here would be the interface asserting an
-        # answer the turn did not produce.
+    if ledger_ended_without_answer(state):
         return {}
 
-    text, spent = await _generate(state, config, result)
-    update: dict = {"answer_text": text}
-    if spent is not None:
-        update["usage"] = [spent]
-    return update
+    try:
+        adopted = last_ai_text(state)
+        if adopted:
+            return {"answer_text": adopted.strip()}
+
+        result = state.get("result_table")
+        if not isinstance(result, Mapping):
+            # No prose and no rows: inventing a sentence here would be the interface asserting an
+            # answer the turn did not produce.
+            return {}
+
+        text, spent = await _generate(state, config, result)
+        update: dict = {"answer_text": text}
+        if spent is not None:
+            update["usage"] = [spent]
+        return update
+    except Exception:  # noqa: BLE001 — observer/narrator must not fail the turn
+        return {}
 
 
 async def _generate(

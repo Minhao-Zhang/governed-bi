@@ -418,8 +418,15 @@ def test_a_node_timeout_is_attached_only_where_it_can_fire() -> None:
     )
 
     timed = {name for name in nodes if _node_timeout(name) is not None}
-    assert "agent_core" in timed, "the unbounded node is still unbounded"
+    assert "agent_core" not in timed, (
+        "agent_core's hang-stop must live inside the node so a timeout keeps the ledger; "
+        "wrap_node would discard streamed attempts"
+    )
     assert _CANCELLABLE <= timed, f"a cancellable rail carries no bound: {_CANCELLABLE - timed}"
+    assert "narrate" not in timed, (
+        "narrate carries a node timeout again — that marks an answered turn crashed"
+    )
+    assert "reflect" not in timed, "reflect must stay an observer that cannot fail the turn"
     # The fan-out stays out by decision, not by constraint: moving the clock inside wrap_node
     # removed the concurrent-sibling problem, but five simultaneous bounds against a shared
     # provider quota is an unmeasured comparability change.
@@ -428,33 +435,39 @@ def test_a_node_timeout_is_attached_only_where_it_can_fire() -> None:
     )
     assert "stamp" not in timed, "stamp is unwrapped and must stay so"
     for name in timed:
-        assert name == "agent_core" or name in _CANCELLABLE, (
-            f"{name!r} claims a timeout but its body is not natively async, so the await would "
-            "be cancelled and the work would carry on in its thread"
+        assert name in _CANCELLABLE, (
+            f"{name!r} claims a wrap_node timeout but its body is not natively async, so the "
+            "await would be cancelled and the work would carry on in its thread"
         )
 
 
 def test_the_node_timeouts_are_settable_by_a_deployment() -> None:
     """A knob reachable only from source is the defect the register exists to abolish.
 
-    Both are read from the environment before falling back to the declared default, the same way
-    the two model timeouts already are. Plain seconds now, not a ``TimeoutPolicy``: the bound is
-    applied by ``asyncio.wait_for`` inside ``wrap_node``.
+    Rail bounds are read from the environment before falling back to the declared default.
+    ``agent_core``'s bound is settable the same way but lives on the node, not ``wrap_node``.
     """
     import os
 
     from governed_bi.register.knobs import knob_default
     from governed_bi.serve.graph import _node_timeout
+    from governed_bi.serve.nodes.agent_core import _agent_node_timeout
 
-    assert _node_timeout("agent_core") == float(knob_default("agent_node_timeout_s"))
+    assert _node_timeout("agent_core") is None, (
+        "agent_core owns agent_node_timeout_s internally; wrap must not double-bound it"
+    )
     assert _node_timeout("guard") == float(knob_default("rail_node_timeout_s"))
     assert _node_timeout("route") is None, "a to_thread node must not claim a bound"
     assert _node_timeout("facet_term") is None, (
         "a facet carries a timeout again: possible now, but an unmeasured comparability change"
     )
+    assert _agent_node_timeout() == float(knob_default("agent_node_timeout_s"))
 
     os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"] = "12.5"
+    os.environ["GOVERNED_BI_RAIL_NODE_TIMEOUT_S"] = "7"
     try:
-        assert _node_timeout("agent_core") == 12.5
+        assert _agent_node_timeout() == 12.5
+        assert _node_timeout("guard") == 7.0
     finally:
         del os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"]
+        del os.environ["GOVERNED_BI_RAIL_NODE_TIMEOUT_S"]

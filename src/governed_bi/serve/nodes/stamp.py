@@ -299,6 +299,10 @@ def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
         outcome = Outcome.crashed
 
     execution = _execution(state)
+    # Attempts stay; rewrite terminal so outcome=crashed never sits beside
+    # execution.terminal=answered (a careless reader would treat the crash as answered).
+    if outcome is Outcome.crashed and execution.get("terminal") != "crashed":
+        execution = {**execution, "terminal": "crashed"}
     usage = _usage_for_turn(state)
 
     # ``guard`` is Absence.never and must **not** be substituted here. Standing in

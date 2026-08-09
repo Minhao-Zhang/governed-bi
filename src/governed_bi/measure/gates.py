@@ -288,7 +288,6 @@ GATE_IMPLEMENTATIONS: Mapping[str, GateFn] = {
     "context_hash": _context_hash_gate,
     "knobs_resolved": _knobs_resolved_gate,
     "guardrail_errors": _zero_count_gate("guardrail_errors", "guardrail_error"),
-    "n_re_served": _zero_count_gate("n_re_served", "re_served"),
     "negative": _zero_count_gate("negative", "negative_failed_open"),
 }
 

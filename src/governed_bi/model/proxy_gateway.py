@@ -380,7 +380,7 @@ def build_chat_model(
     reasoning_effort: str | None = None,
     max_output_tokens: int | None = None,
     request_timeout_s: float | None = 900.0,
-    max_retries: int = 8,
+    max_retries: int = 3,
     proxy_secret_name: str | None = None,
     proxy_region: str | None = None,
     proxy_verify: Any = None,

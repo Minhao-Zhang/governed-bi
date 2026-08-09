@@ -18,9 +18,12 @@
   and pinned by hash in `skills-lock.json`.
 - **The skills describe the framework's defaults; this repo departs from several of them on
   purpose.** Where the two disagree the call-site docstring is the authority — it cites the
-  turn that went wrong. The one that will bite hardest: there is no `RetryPolicy` anywhere,
-  because re-running a node after it failed resamples a draw after seeing it, and the gate
-  written to catch that (`n_re_served == 0`) counts nothing at the node level.
+  turn that went wrong. The one that will bite hardest: there is no LangGraph `RetryPolicy`
+  anywhere, because re-running a node after it failed resamples a draw after seeing it.
+  Provider SDK `max_retries` (`llm_max_retries`, default 3) still exists and is a
+  comparability knob — that is not the same as node retry. `n_re_served` is always 0 and is
+  not a quotability gate. Nested `create_agent` recursion is capped by `agent_recursion_limit`
+  (default 40), not by `create_agent`'s built-in 9999.
 - No need to comment every line of code, but do comment on the overall structure and design decisions.
 
 ## External dependencies

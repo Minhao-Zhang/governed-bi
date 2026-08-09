@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-__all__ = ["last_ai_text"]
+__all__ = ["last_ai_text", "surface_answer_text"]
 
 
 def last_ai_text(state: Mapping[str, Any]) -> str | None:
@@ -44,6 +44,21 @@ def last_ai_text(state: Mapping[str, Any]) -> str | None:
         if text:
             return str(text)
     return None
+
+
+def surface_answer_text(answer: Mapping[str, Any], state: Mapping[str, Any]) -> str | None:
+    """Prose for REST/audit. Never backfill model text over a governance terminal.
+
+    ``narrate`` already skips refuse/decline/crashed and ledger capped/refused. The old
+    ``answer_text or last_ai_text(...)`` at the boundary undid that and put model prose on
+    crashed/capped/refused turns. Only ``outcome=answered`` may adopt leftover AI text.
+    """
+    text = answer.get("answer_text")
+    if text:
+        return str(text)
+    if answer.get("outcome") != "answered":
+        return None
+    return last_ai_text(state)
 
 
 def _text_of(content: Any) -> str | None:

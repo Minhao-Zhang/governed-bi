@@ -20,6 +20,7 @@ __all__ = [
     "answering_attempts",
     "execution_from_attempts",
     "cap_attempt",
+    "ledger_ended_without_answer",
 ]
 
 #: Executor paths whose statements **introspect** rather than answer.
@@ -82,6 +83,18 @@ def execution_from_attempts(attempts: Sequence[Any]) -> dict[str, Any]:
     if any(attempt_field(a, "passed") is True for a in answering):
         return execution_record(rows, "answered")
     return execution_record(rows, "refused")
+
+
+def ledger_ended_without_answer(state: Mapping[str, Any]) -> bool:
+    """True when stamp will classify the turn capped/refused from ``execution.terminal``.
+
+    ``agent_core`` still writes ``path_kind: answered`` on those turns (stamp's ledger branch
+    requires it). Reflect/narrate use this so they do not decorate a refusal.
+    """
+    execution = state.get("execution")
+    if not isinstance(execution, Mapping):
+        return False
+    return execution.get("terminal") in ("capped", "refused")
 
 
 def cap_attempt() -> AttemptRecord:

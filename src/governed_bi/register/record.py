@@ -262,11 +262,13 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "billed at 1.25x, so it cannot be folded into the input count"),
     _f("latency_sec", Tier.cost, Absence.not_measured, Stage.stamp, "wall clock"),
 
-    # ── health ──────────────────────────────────────────────────────────────
-    _f("n_re_served", Tier.health, Absence.never, Stage.stamp,
-       "re-serving a crashed turn resamples that draw AFTER failure, laundering "
-       "crash_rate back to zero and conditioning the arm's EX on a re-roll",
-       gate="n_re_served == 0"),
+    # ── frozen witness (not health: health fields must gate quotability) ────
+    _f("n_re_served", Tier.decision, Absence.never, Stage.stamp,
+       "always 0 on every production path: Session.turn seeds it and nothing increments. "
+       "Retained so historical rows and the schema stay comparable. It was meant to catch "
+       "LangGraph node RetryPolicy re-serving a crashed draw; that policy is banned, and "
+       "provider SDK retries (llm_max_retries) are invisible here. Demoted from Tier.health "
+       "so it cannot sit as an always-pass quotability gate"),
 )
 
 #: Quotability preconditions derived from the register. Refuse; do not warn.

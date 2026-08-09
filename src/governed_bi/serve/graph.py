@@ -41,6 +41,13 @@ _FACET_NODES = (
 )
 
 
+def _after_accept(state: ServeState) -> Literal["guard", "stamp"]:
+    """Accept soft-crashes must not enter ``guard`` on a prior turn's leftover channels."""
+    if state.get("path_kind") == "crashed":
+        return "stamp"
+    return "guard"
+
+
 def _after_guard(state: ServeState) -> Literal["refuse", "rewrite", "stamp"]:
     if state.get("path_kind") == "crashed":
         return "stamp"
@@ -48,6 +55,13 @@ def _after_guard(state: ServeState) -> Literal["refuse", "rewrite", "stamp"]:
     if guard.get("outcome") == "blocked":
         return "refuse"
     return "rewrite"
+
+
+def _after_rewrite(state: ServeState) -> Literal["negative_gate", "stamp"]:
+    """Rewrite used to fall through to ``negative_gate`` even after a wrap crash."""
+    if state.get("path_kind") == "crashed":
+        return "stamp"
+    return "negative_gate"
 
 
 def _after_negative(state: ServeState) -> Literal["decline", "fanout", "stamp"]:
@@ -85,10 +99,14 @@ def _skip_if_terminal(state: ServeState) -> Literal["stamp", "continue"]:
 #: on a sync node: cancelling the ``await`` around ``asyncio.to_thread`` leaves the thread
 #: running, so the bound would be a claim rather than a fact.
 #:
+#: ``narrate`` is excluded on purpose (same reason as ``reflect``): a timeout marks the turn
+#: ``crashed``, and by then ``agent_core`` may already have answered. Model failures inside
+#: narrate are swallowed; a wall-clock bound would still rewrite the outcome.
+#:
 #: The five facets are excluded by **decision, not constraint**: five concurrent bounds interact
 #: with the shared provider quota in a way nobody has measured, and turning them on is a
 #: comparability change that belongs to its own experiment. Adding them is a one-line edit here.
-_CANCELLABLE = frozenset({"guard", "narrate"})
+_CANCELLABLE = frozenset({"guard"})
 
 
 def _node_timeout(name: str) -> float | None:
@@ -100,14 +118,18 @@ def _node_timeout(name: str) -> float | None:
     Plain seconds, not a ``TimeoutPolicy``: the bound is applied by ``wrap_node`` with
     ``asyncio.wait_for`` and never reaches LangGraph's node-timeout machinery. See
     ``wrap_node``'s docstring for the measurement that moved it.
+
+    ``agent_core`` is excluded on purpose: its hang-stop lives inside the node so a timeout
+    still projects the streamed ledger (``serve/nodes/agent_core.py``). Putting the bound in
+    ``wrap_node`` would reduce the update to ``{failure, path_kind}`` again.
     """
     import os
 
     from governed_bi.register.knobs import knob_default
 
     if name == "agent_core":
-        var, knob = "GOVERNED_BI_AGENT_NODE_TIMEOUT_S", "agent_node_timeout_s"
-    elif name in _CANCELLABLE:
+        return None
+    if name in _CANCELLABLE:
         var, knob = "GOVERNED_BI_RAIL_NODE_TIMEOUT_S", "rail_node_timeout_s"
     else:
         return None
@@ -163,7 +185,10 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     # **observer** fail a turn that had already answered. The model call is bounded by its own
     # `request_timeout` (`llm_utility_timeout_s`) and any exception is recorded as unmeasured.
     graph.add_node("reflect", wrap_node("reflect", reflect_node, stream=False))
-    rail("narrate", narrate_node)
+    # Not through `rail`. Same observer rule as ``reflect``: a timeout or wrap crash here
+    # would mark an already-answered turn ``crashed``. Model call failures are swallowed inside
+    # the node; the utility ``request_timeout`` still bounds the provider call.
+    graph.add_node("narrate", wrap_node("narrate", narrate_node))
     rail("refuse", refuse_node)
     rail("decline", decline_node)
     # Unwrapped: nothing after stamp can record a wrap crash.
@@ -179,7 +204,11 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     if accept is not None:
         graph.add_node("accept", wrap_node("accept", accept))
         graph.add_edge(START, "accept")
-        graph.add_edge("accept", "guard")
+        graph.add_conditional_edges(
+            "accept",
+            _after_accept,
+            {"guard": "guard", "stamp": "stamp"},
+        )
     else:
         graph.add_edge(START, "guard")
     graph.add_conditional_edges(
@@ -187,7 +216,11 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
         _after_guard,
         {"refuse": "refuse", "rewrite": "rewrite", "stamp": "stamp"},
     )
-    graph.add_edge("rewrite", "negative_gate")
+    graph.add_conditional_edges(
+        "rewrite",
+        _after_rewrite,
+        {"negative_gate": "negative_gate", "stamp": "stamp"},
+    )
     graph.add_conditional_edges(
         "negative_gate",
         _after_negative,

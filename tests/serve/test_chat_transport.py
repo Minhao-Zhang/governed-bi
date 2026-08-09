@@ -77,6 +77,31 @@ def test_an_ordinary_answer_is_unchanged_and_says_no_clarification() -> None:
     assert shaped["record"]["generated_sql"] == "SELECT 1"
 
 
+def test_governance_terminals_do_not_backfill_model_prose() -> None:
+    """``narrate`` skips crashed/capped/refused; REST must not undo that via ``last_ai_text``.
+
+    Before: ``answer_text or last_ai_text(out)`` put the model's last sentence on a turn the
+    card should render from system copy / null only.
+    """
+    from langchain_core.messages import AIMessage
+
+    for outcome in ("crashed", "capped", "refused"):
+        shaped = routes._shape(
+            {
+                "answer": {
+                    "outcome": outcome,
+                    "text": "blocked",
+                    "answer_text": None,
+                    "record": {"turn_id": "t1"},
+                },
+                "messages": [AIMessage(content="I found three customers anyway")],
+            }
+        )
+        assert shaped["answer_text"] is None, (
+            f"outcome={outcome!r} backfilled model prose onto answer_text"
+        )
+
+
 def test_shaping_an_answer_does_not_touch_the_checkpoint() -> None:
     """``_shape`` must be pure over the returned state.
 
@@ -93,6 +118,34 @@ def test_shaping_an_answer_does_not_touch_the_checkpoint() -> None:
     finally:
         routes._graph = original  # type: ignore[assignment]
     assert not called, "_shape reached for the compiled graph on a turn that did not pause"
+
+
+def test_record_node_does_not_backfill_model_prose_on_crash(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``graph_app._record_node`` shares the narrate skip: no last_ai_text on terminals."""
+    from langchain_core.messages import AIMessage
+
+    from governed_bi.api import graph_app
+
+    logged: list[Any] = []
+
+    def _append(record: Any, **kwargs: Any) -> tuple[str, None]:
+        logged.append(kwargs)
+        return "t1", None
+
+    monkeypatch.setattr("governed_bi.api.trace_store.append_turn", _append)
+    graph_app._record_node(
+        {
+            "question": "how many?",
+            "answer": {
+                "outcome": "crashed",
+                "answer_text": None,
+                "record": {"turn_id": "t1"},
+            },
+            "messages": [AIMessage(content="almost had it")],
+        }
+    )
+    assert logged and logged[0]["answer_text"] is None
+    assert logged[0]["outcome"] == "crashed"
 
 
 def test_an_interrupt_of_another_kind_is_not_answered_by_the_clarification_route() -> None:

@@ -175,6 +175,9 @@ def classify_outcome(
     if refused_by == ATTEMPT_CAP_REFUSED_BY:
         return Outcome.capped
     if clarification_requested:
+        # Serve never sets this True: ask_user pauses via GraphInterrupt before stamp.
+        # Transport surfaces clarification via __interrupt__ / HTTP outcome instead.
+        # Kept so a test or future writer can still classify a stamped clarification.
         return Outcome.clarification
     if refused_by:
         return Outcome.refused

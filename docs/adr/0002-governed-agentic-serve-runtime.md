@@ -211,7 +211,7 @@ exists to kill the two-implementations drift (`flow.py` monolith vs. stale
 | `while attempts < 3` repair loop (`flow.py:640`) | the agent's tool-reflection loop; `run_query` cap in `wrap_tool_call` |
 | `_emit`/`on_event` callback shim (`flow.py:247`) | native `stream_mode` + per-tool LangSmith traces |
 | single-shot `SqlGenerator` protocol | `create_agent` with governed tools |
-| ad-hoc `try/except` per stage | `RetryPolicy` per node + LLM-recoverable tool errors as `ToolMessage` |
+| ad-hoc `try/except` per stage | Soft-crash via `wrap_node` (no LangGraph `RetryPolicy` — node retry resamples after failure; see `AGENTS.md`) |
 | governance scattered across `flow.py` | `AgentMiddleware` (`wrap_tool_call` guardrail+audit, `wrap_model_call` scoping) |
 | no clarification (the model guesses) | `interrupt()` + checkpointer (deferred with durable persistence) |
 | two divergent implementations + template path | one architecture; deterministic in CI via a fake model |

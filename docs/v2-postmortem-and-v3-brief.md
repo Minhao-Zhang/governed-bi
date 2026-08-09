@@ -673,7 +673,7 @@ the codebase makes about itself that nothing enforces or consumes.
 | `llm_temperature` (comparability knob) | 0 | **[U]** |
 | `final_sql_source`, `cache_read_tokens`, `cache_write_tokens`, `latency_sec` | 0 writers, permanently null | **[V]** |
 | `lexical_coverage` (decision tier) | hard-coded 0.0 on every production turn | **[V]** |
-| `n_re_served == 0` quotability gate | no path writes a nonzero value; can never fail | **[U]** |
+| `n_re_served` field | always 0; quotability gate **removed** 2026-08-08 (could never fail) | **[U]→fixed** |
 | context eviction witness | deleted by the delivery merge before `stamp`, and no readers anyway | **[V]** |
 | knob `Role` taxonomy | no config hash, no resume-drift check exist | **[U]** |
 | `ports.py`'s "≥2 adapters per port" | 3 of 5 ports have 0; the named adapter files do not exist | **[U]** |

@@ -22,7 +22,7 @@ from governed_bi.api.trace_store import (
     list_turns,
 )
 from governed_bi.register.assets import ASSET_REGISTER
-from governed_bi.serve.messages import last_ai_text
+from governed_bi.serve.messages import surface_answer_text
 
 __all__ = ["app"]
 
@@ -39,6 +39,12 @@ def _session() -> Any:
 #: call; compiling once keeps ``thread_id`` meaningful across turns and interrupts.
 _GRAPH: Any = None
 
+#: Cap how many `/chat` threads the process-local ``InMemorySaver`` retains. Eval already
+#: calls ``delete_thread`` per question; without a bound here a long-lived API worker keeps
+#: every session (~100 KB+/turn). Threads with a pending clarification are never evicted.
+_CHAT_THREAD_LRU: list[str] = []
+_CHAT_THREAD_CAP = 32
+
 
 def _graph() -> Any:
     global _GRAPH
@@ -52,6 +58,30 @@ def _graph() -> Any:
         # worker thread with no running loop, so the facade's `asyncio.run` is safe here.
         _GRAPH = as_sync(build_graph().compile(checkpointer=InMemorySaver()))
     return _GRAPH
+
+
+def _touch_chat_thread(thread_id: str) -> None:
+    """Remember ``thread_id`` as most-recently used; drop the oldest idle threads over the cap."""
+    if thread_id in _CHAT_THREAD_LRU:
+        _CHAT_THREAD_LRU.remove(thread_id)
+    _CHAT_THREAD_LRU.append(thread_id)
+    protected = {thread_id}
+    scanned = 0
+    initial = len(_CHAT_THREAD_LRU)
+    while len(_CHAT_THREAD_LRU) > _CHAT_THREAD_CAP and scanned < initial:
+        victim = _CHAT_THREAD_LRU.pop(0)
+        scanned += 1
+        if victim in protected:
+            _CHAT_THREAD_LRU.append(victim)
+            continue
+        if _pending_on_thread({"configurable": {"thread_id": victim}}) is not None:
+            protected.add(victim)
+            _CHAT_THREAD_LRU.append(victim)
+            continue
+        saver = getattr(_graph(), "checkpointer", None)
+        delete = getattr(saver, "delete_thread", None)
+        if callable(delete):
+            delete(victim)
 
 
 @app.get("/livez")
@@ -78,6 +108,11 @@ def capabilities() -> dict[str, Any]:
         "can_search": False,
         # Clarification UI mounts only on the streaming transport.
         "can_clarify": can_stream and session.agent_model is not None,
+        # Honest durability: `/chat` compiles with InMemorySaver (process-local). LangGraph
+        # Server injects its own saver for the stream path; local_dev is still not Postgres.
+        # Pause/resume does not survive a process restart on either surface today.
+        "checkpoint_durable": False,
+        "hitl_survives_process_restart": False,
     }
 
 
@@ -272,7 +307,10 @@ def chat(body: dict[str, Any]) -> dict[str, Any]:
         identity=_identity(body, thread_id),
     )
     config = _config(session, question, thread_id)
-    return _logged(_shape(_graph().invoke(turn, config)), question)
+    shaped = _logged(_shape(_graph().invoke(turn, config)), question)
+    # Evict after the invoke so a pending clarification on this thread is visible to the LRU.
+    _touch_chat_thread(thread_id)
+    return shaped
 
 
 @app.post("/chat/resume")
@@ -309,7 +347,9 @@ def chat_resume(body: dict[str, Any]) -> dict[str, Any]:
         )
     except ResumeRejected:
         return _error("resume identity mismatch: the caller answering is not the caller that was asked")
-    return _logged(_shape(out), str(pending.get("question") or ""))
+    shaped = _logged(_shape(out), str(pending.get("question") or ""))
+    _touch_chat_thread(thread_id)
+    return shaped
 
 
 def _config(session: Any, question: str | None, thread_id: str) -> dict[str, Any]:
@@ -361,9 +401,7 @@ def _shape(out: dict[str, Any]) -> dict[str, Any]:
             "clarification": pending,
         }
     answer = dict(out.get("answer") or {})
-    answer.setdefault("answer_text", None)
-    if answer.get("answer_text") is None:
-        answer["answer_text"] = last_ai_text(out)
+    answer["answer_text"] = surface_answer_text(answer, out)
     answer.setdefault("clarification", None)
     return answer
 

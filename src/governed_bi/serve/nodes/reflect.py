@@ -281,6 +281,10 @@ async def reflect_node(state: dict, config: RunnableConfig) -> dict:
     """
     if state.get("path_kind") in TERMINAL_PATH_KINDS:
         return {}
+    from governed_bi.serve.ledger import ledger_ended_without_answer
+
+    if ledger_ended_without_answer(state):
+        return {}
     try:
         return await _reflect(state, config)
     except Exception as exc:  # noqa: BLE001 — an observer must not be able to fail a turn

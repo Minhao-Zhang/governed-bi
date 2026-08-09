@@ -1174,12 +1174,17 @@ system's own answers, which contain data read from the database, so indirect
 injection bypasses `guard` and can be pulled into the rewritten question. Larger
 than this layer; recorded, not solved. ADR 0006 owns the rule set.
 
-**Clarification needs no extra machinery.** `ask_user` → `interrupt` → resume
-continues **from the interrupt point**, so the front half does not re-run and
-the answer completes the current turn. **The resume must be bound to
-`identity`** and reject a mismatch — v1's process-global checkpointer let a
-guessable `thread_id` land on another caller's paused clarification, which
-embeds their question. Namespacing is a mitigation, not authentication.
+**Clarification needs no extra machinery.** `ask_user` → `interrupt` →
+`Command(resume=…)`. On resume LangGraph **restarts the interrupted node from the
+beginning** (and the outer `agent_core` body re-runs); side effects before
+`interrupt()` must be idempotent. Sibling tool `Send`s that already completed do
+not re-run (probed on langgraph 1.2.10). The pause itself is never stamped —
+`Outcome.clarification` is transport-level (`__interrupt__` / HTTP), not a
+register path. **The resume must be bound to `identity`** on the REST path and
+reject a mismatch — v1's process-global checkpointer let a guessable
+`thread_id` land on another caller's paused clarification, which embeds their
+question. The primary UI stream path bypasses that gate by design (ADR 0007 §6);
+namespacing is a mitigation, not authentication.
 
 **LangGraph mechanics:**
 

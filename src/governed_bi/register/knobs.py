@@ -170,8 +170,9 @@ KNOB_REGISTER: tuple[Knob, ...] = (
     _k("llm_max_retries", 3, Role.comparability,
        "how many times the provider SDK retries one call, across EVERY model surface: "
        "the agent, the utility model and the embedder. Comparability and not merely "
-       "operational because retries move crash_rate, which is what the quotability "
-       "gates read: two runs differing only here would compare as one"),
+       "operational because retries move crash_rate. This is NOT LangGraph RetryPolicy "
+       "(banned: node retry resamples after seeing failure) and not ModelRetryMiddleware; "
+       "it is the ChatModel/httpx layer. Keep it identical across arms"),
     _k("llm_timeout_s", 300.0, Role.comparability,
        "wall clock for one AGENT call. Separate from the retry count and from the "
        "utility timeout because the three answer different questions. The product is "
@@ -184,22 +185,27 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "each and all run before anything appears on screen, so the SDK's 600s default "
        "stalled a turn for ten minutes; every one of those call sites already degrades "
        "gracefully, so failing fast is better than waiting"),
-    _k("rail_node_timeout_s", 60.0, Role.comparability,
-       "wall clock for ONE utility rail node -- the scope gate, a facet rewriter, "
-       "narrate. Distinct from llm_utility_timeout_s, which bounds one provider CALL: "
-       "retries multiply that and a node does retrieval and rendering around it. Set "
-       "above the call bound so that hitting it means something other than the provider "
-       "is wrong"),
-    _k("agent_node_timeout_s", 900.0, Role.comparability,
-       "wall clock for the whole agent_core loop; llm_timeout_s bounds one of its "
-       "several calls. The recursion limit does not help: on 1.2.10 langgraph's OSS "
-       "default is 10007 and the server's 10011 (only a NON-default outer value "
-       "propagates into a nested graph) while create_agent binds 9999 of its own, so "
-       "the ceiling is ~10^4 either way. 900s is generous against a measured 7-14s "
-       "turn: a hang stop, not a latency target. Since 2026-08-07 the run_query cap "
-       "also ends the turn, but this still catches a loop that never calls a tool. "
-       "NOT paired with a retry -- agent_core executes governed SQL, so a retried node "
-       "re-runs statements the ledger has already recorded"),
+    _k("rail_node_timeout_s", 120.0, Role.comparability,
+       "wall clock for ONE cancellable utility rail -- today only the scope gate (guard). "
+       "Default matches llm_utility_timeout_s * (llm_max_retries + 1) = 30 * 4 so a provider "
+       "retry budget can finish before the rail stamps crashed (fail-open on model error vs "
+       "crashed on rail timeout must not disagree for the same hung call). Facets and narrate "
+       "are excluded: facets by unmeasured five-way quota; narrate so an answered turn cannot "
+       "be rewritten to crashed"),
+    _k("agent_node_timeout_s", 1200.0, Role.comparability,
+       "wall clock for the whole agent_core loop; applied INSIDE agent_core (not wrap_node) so "
+       "a timeout still projects the streamed ledger. Default matches "
+       "llm_timeout_s * (llm_max_retries + 1) = 300 * 4 so one hung agent call's full provider "
+       "retry budget can finish before the node stamps crashed (same pairing as "
+       "rail_node_timeout_s vs utility). create_agent binds recursion_limit=9999; we override "
+       "with agent_recursion_limit. NOT paired with a node RetryPolicy -- agent_core executes "
+       "governed SQL"),
+    _k("agent_recursion_limit", 40, Role.comparability,
+       "superstep ceiling for the nested create_agent graph. create_agent's own default "
+       "is 9999; without an explicit outer override that ceiling wins. run_query is also "
+       "capped by AttemptBook, but read_body/inspect_schema/sample_rows are not -- this "
+       "bound is what stops a non-SQL tool loop. Measured with cap tests at 60; 40 is the "
+       "production default so a hung loop fails before the agent_node_timeout_s wall clock"),
     _k("embedding_model", None, Role.comparability,
        "part of every vector cache key: cosine returns 0.0 on a width mismatch rather "
        "than raising, so a cross-model cache hit degrades routing to 'nothing scores' "
@@ -264,8 +270,8 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "provider quota whose saturation moves the two fields the quotability gates "
        "read. Stays off until tools/score_reflector.py shows the verdict beats the base "
        "rate on rows carrying a gold verdict: a retry loop built on a reflector that "
-       "cannot tell right from wrong re-rolls a draw after seeing it, which is what "
-       "n_re_served's gate exists to catch"),
+       "cannot tell right from wrong re-rolls a draw after seeing it. Node RetryPolicy "
+       "is banned for that reason; n_re_served is a frozen always-0 field, not a gate"),
 
     # ── operational: recorded, never a comparability key ────────────────────
     _k("git_sha", None, Role.operational,
