@@ -10,7 +10,7 @@
   [ADR 0006](0006-execution-time-governance.md)** and is a hard dependency of
   this one.
 - **Related:**
-  - **[lessons-from-v1.md](../lessons-from-v1.md)** — what v1's failures cost.
+  - **`lessons-from-v1.md` (deleted with v1)** — what v1's failures cost.
     Cited below as **L§n** (thematic section) and **L-R#** (the five top-level
     rules). Read it before writing v2 code.
   - [0002](0002-governed-agentic-serve-runtime.md) — the agentic serve core.
@@ -35,7 +35,7 @@ one actor: the curator agent, which on 6 of 57 schemas wrote nothing at all.
 
 ### The evidence, condensed
 
-Full detail and provenance in [lessons-from-v1.md](../lessons-from-v1.md).
+Full detail and provenance in `lessons-from-v1.md` (deleted with v1).
 Figures from `runs/datalake/20260731T233457Z-opus48-high-ladder/20260731T233545Z`
 (57 schemas, 1,351 questions/arm, 5,404 rows) unless another artifact is named.
 

@@ -204,8 +204,39 @@ def test_quality_flags_tag_the_question_rather_than_dropping_it() -> None:
         ["order_sensitive"],
         ["exec_failed"],
     ]
-    assert counts == {"leakage": 1, "order_sensitive": 2, "exec_failed": 1}
+    assert counts == {"leakage": 1, "order_sensitive": 2, "exec_failed": 1, "degenerate": 0}
     assert len(questions) == 3, "flagged, never filtered — the exclusion is the reader's call"
+
+
+def test_a_gold_that_reads_no_table_is_flagged_degenerate() -> None:
+    """The one flag derived here rather than published by the dataset.
+
+    127 of the 1 351 test questions have a gold that is a frozen answer literal rather than a
+    query, and the engine won 42 of them by accident (2026-08-09 full run, corpus 30872d3).
+    They were found by hand-reading an artifact; the flag makes the next reader's headline
+    recomputable without that.
+
+    The three cases that matter are the boundaries, not the happy path: a real query is not
+    degenerate, an *unparseable* gold is not degenerate either (that is the instrument failing,
+    and collapsing it with "no tables" would shrink a denominator over a parser gap), and the
+    flag composes with a dataset-published one rather than replacing it.
+    """
+    questions = [
+        {"question_id": "real", "gold_sql": 'SELECT "a" FROM "s"."t"'},
+        {"question_id": "frozen", "gold_sql": "SELECT \"v\".\"c0\" FROM (VALUES (42)) AS \"v\"(\"c0\")"},
+        {"question_id": "unparseable", "gold_sql": "SELEKT nonsense FROM ("},
+        {"question_id": "absent"},
+        {"question_id": "both", "gold_sql": "SELECT 1", "x": None},
+    ]
+    counts = attach_quality_flags(questions, leakage={"both"})
+
+    flags = {q["question_id"]: q["quality_flags"] for q in questions}
+    assert flags["real"] == []
+    assert flags["frozen"] == ["degenerate"]
+    assert flags["unparseable"] == [], "an unparseable gold is the instrument failing, not a frozen literal"
+    assert flags["absent"] == []
+    assert flags["both"] == ["leakage", "degenerate"], "derived flags compose with published ones"
+    assert counts["degenerate"] == 2, counts
 
 
 def _tmp() -> str:

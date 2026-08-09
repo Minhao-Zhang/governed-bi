@@ -112,6 +112,17 @@ def attach_quality_flags(
     row order preserved: the dataset's note says the gold *"returns a different-but-valid
     result on the decoy instances"*, and no comparison rule fixes a gold that is not a function
     of the query.
+
+    ``degenerate`` is the one flag **derived here rather than published by the dataset**: a
+    gold that reads no table is a frozen answer literal, not a query --
+    ``SELECT "v"."c0" FROM (VALUES ('captain eli''s')) AS "v"("c0")``. The engine writes a real
+    statement against the schema and can only match by reproducing the frozen shape, so these
+    are won by accident. 127 of the 1 351 test questions are like this and the engine matched
+    42 of them (2026-08-09 full run, corpus 30872d3). Derived rather than listed because the
+    judgement is a property of the gold text and needs no curation --
+    :func:`gold_tables` already computes it, and ``table_coverage`` already excludes the same
+    rows under the name ``gold_reads_no_table``. Two places deciding "is this gold real" by
+    two rules is the drift this repository keeps paying for; one rule, read twice.
     """
     buckets = (
         ("leakage", {str(q) for q in leakage}),
@@ -119,9 +130,15 @@ def attach_quality_flags(
         ("exec_failed", {str(q) for q in exec_failed}),
     )
     counts = {name: 0 for name, _ in buckets}
+    counts["degenerate"] = 0
     for question in questions:
         qid = str(question.get("question_id"))
         flags = [name for name, ids in buckets if qid in ids]
+        # An unparseable gold is **not** degenerate: `gold_tables` returns None there, and
+        # collapsing "no tables" with "could not tell" would flag a parser gap as a dataset
+        # defect and quietly shrink the denominator.
+        if gold_tables(str(question.get("gold_sql") or "")) == set():
+            flags.append("degenerate")
         question["quality_flags"] = flags
         for name in flags:
             counts[name] += 1

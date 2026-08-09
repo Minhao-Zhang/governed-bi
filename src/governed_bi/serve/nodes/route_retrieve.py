@@ -108,6 +108,20 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
     eligible = [(schema, score) for schema, score in ranking if float(score) > 0]
     schemas = [schema for schema, _ in eligible[:top_n]]
 
+    # **Eval only** (`eval/replay.py`), and applied *after* the ranking is computed so the
+    # ranking still reaches `retrieved` — pass two scores against it, and a pinned run that
+    # skipped it would not be the same system. Nothing on a served turn writes this key.
+    #
+    # Restricted to schemas the structure actually knows: an artifact from another corpus
+    # would otherwise pin a name that licenses nothing, and the arm would read as a routing
+    # collapse caused by the replay rather than by anything under test.
+    pinned = state.get("pinned_schemas")
+    if pinned:
+        known = set(structure.table_schemas.values())
+        chosen = [str(s) for s in pinned if str(s) in known]
+        if chosen:
+            schemas = chosen
+
     if not schemas:
         # ``schema_ranking`` is **not** a top-level key: ``ServeState`` declares no such
         # channel, so LangGraph drops it silently. ``stamp`` reads it out of ``retrieved``.

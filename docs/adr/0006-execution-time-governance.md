@@ -9,7 +9,7 @@
   handling, scope resolution, graded delivery, the input guard, tool bounds, the
   connection contract, path validation, and the audit ledger. **The memory
   layer, retrieval and the serve graph are 0005.**
-- **Related:** [lessons-from-v1.md](../lessons-from-v1.md) §4 is the evidence
+- **Related:** `lessons-from-v1.md` (deleted with v1) §4 is the evidence
   base for nearly every decision here; cited as **L§4**.
   [0002](0002-governed-agentic-serve-runtime.md) established the shape.
 - **Supersedes:** ADR 0002's safety spine. It **amends invariant 1** ("the

@@ -121,6 +121,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--per-schema", type=int, default=None, help="cap questions per schema")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--out", type=pathlib.Path, default=None)
+    parser.add_argument(
+        "--replay-routing",
+        type=pathlib.Path,
+        default=None,
+        help="a prior run's JSONL whose `schemas` shortlist this run reuses instead of routing "
+        "for itself. `route` is deterministic, but the five facet rewriters above it are model "
+        "calls, so an unpinned A/B cannot tell its own effect from a shortlist that moved. "
+        "Pass two still re-searches inside the pinned schemas -- the residual is measured and "
+        "printed as licensed drift, not assumed away.",
+    )
     parser.add_argument("--resume", action="store_true")
     parser.add_argument(
         "--force-fresh",
@@ -303,6 +313,22 @@ def main(argv: list[str] | None = None) -> int:
         flush=True,
     )
 
+    # Before the `--top-n` override below, and deliberately: pinning a shortlist that was
+    # produced under a different `route_top_n` is a contradiction, and printing both lets the
+    # operator see it. The pin wins if they disagree -- it is the whole point of the flag.
+    if args.replay_routing is not None:
+        from governed_bi.eval.replay import attach_pinned_routing, routing_from_artifact
+
+        pinned_baseline = routing_from_artifact(args.replay_routing)
+        pin_counts = attach_pinned_routing(questions, pinned_baseline)
+        print(
+            f"routing pinned from {args.replay_routing}: "
+            f"{pin_counts['pinned']} pinned, {pin_counts['unpinned']} routed live "
+            "(a question the artifact does not cover routes for itself and is counted here, "
+            "because an arm labelled pinned always has some fraction that is not)",
+            flush=True,
+        )
+
     if args.top_n is not None:
         for question in questions:
             question["knobs_resolved"] = {
@@ -454,6 +480,72 @@ def _build_models(args):
     return model, utility_model, embedder, vector_cache
 
 
+def _abstention(every: list[dict]) -> None:
+    """What declining to answer bought, and what it cost.
+
+    The engine's committed answers are the ones it stood behind; the abstained ones are the
+    turns it capped, refused or asked about. Two numbers make that a measurement rather than a
+    posture: how accurate the committed set is, and how accurate the abstained set *would have
+    been*. If the second is near the first, abstention is noise. If it is far below, the engine
+    knows what it does not know, and that is a property no single EX figure can show.
+
+    ``computed_correct`` is the abstained turn's last statement re-executed by the harness and
+    never counted as correct. Rows written before that field existed carry ``None`` and are
+    reported as unmeasured rather than as zero.
+    """
+    committed = [r for r in every if r.get("outcome") == "answered"]
+    # Wider than the harness's `PRICED_ABSTENTIONS`, on purpose: a clarification is an
+    # abstention, it just has no statement to re-execute. Counting it here and not there keeps
+    # "how often did the engine decline" separate from "of those, how many could be priced".
+    abstained = [r for r in every if r.get("outcome") in ("capped", "refused", "clarification")]
+    if not committed or not abstained:
+        return
+    ok = sum(1 for r in committed if r.get("correct") is True)
+    priced = [r for r in abstained if r.get("computed_correct") is not None]
+    would = sum(1 for r in priced if r.get("computed_correct") is True)
+
+    print("\nabstention (the engine declined; scoring is unchanged, this only prices it):")
+    print(f"  committed        {ok}/{len(committed)} = {ok / len(committed):.3f}   accuracy of delivered answers")
+    print(f"  abstained        {len(abstained)} turn(s) = {len(abstained) / len(every):.3f} of the run")
+    if not priced:
+        print("  would-have-been  unmeasured (no `computed_correct` on these rows)")
+        return
+    print(
+        f"  would have been  {would}/{len(priced)} = {would / len(priced):.3f} correct if forced to commit"
+        + (f"   ({len(abstained) - len(priced)} had no runnable statement)" if len(priced) != len(abstained) else "")
+    )
+    print(
+        f"  abstention precision {len(priced) - would}/{len(priced)} = "
+        f"{(len(priced) - would) / len(priced):.3f} of priced abstentions would have been wrong"
+    )
+    print(
+        f"  computed EX      {ok + would}/{len(every)} = {(ok + would) / len(every):.3f}"
+        "   <- NOT the headline: it credits statements the engine refused to stand behind"
+    )
+
+
+def _refusal_layers(every: list[dict]) -> None:
+    """Which governance layer refused, per attempt.
+
+    A refusal reported only as ``refused_by: guardrail`` names the *stage* and not the rule, and
+    the two suggest opposite work: ``r_table_not_licensed`` is a retrieval failure the corpus or
+    the router owns, while an excluded-column refusal is the policy working as designed. Reading
+    the 2026-08-09 run needed every refused statement replayed through ``check()`` offline to
+    tell them apart. This prints it.
+    """
+    codes: collections.Counter = collections.Counter()
+    for row in every:
+        for attempt in row.get("attempts") or ():
+            if attempt.get("passed") is True:
+                continue
+            codes[f"{attempt.get('layer') or '-'}/{attempt.get('reason_code') or '-'}"] += 1
+    if not codes:
+        return
+    print("\nfailed attempts by layer/rule:")
+    for name, n in codes.most_common(12):
+        print(f"  {name:<44}{n:>6}")
+
+
 def _report(rows: list[dict], out_path: pathlib.Path, args, observed_tokens, table_coverage) -> None:
     """Print the whole file, not just this process's rows — a resumed run is one run."""
     every = [json.loads(line) for line in out_path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -511,6 +603,39 @@ def _report(rows: list[dict], out_path: pathlib.Path, args, observed_tokens, tab
         f"(some {cov['some_licensed']:.3f}, none {cov['none_licensed']:.3f}, "
         f"unparsed gold {cov['gold_sql_unparsed']})"
     )
+
+    _abstention(every)
+    _refusal_layers(every)
+    if getattr(args, "replay_routing", None) is not None:
+        from governed_bi.eval.replay import licensed_drift
+
+        prior = {
+            str(k): v
+            for k, v in (
+                (r.get("question_id"), r.get("licensed") or [])
+                for r in (
+                    json.loads(line)
+                    for line in args.replay_routing.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                )
+            )
+        }
+        drift = licensed_drift(every, prior)
+        rate = drift["identical_rate"]
+        print(
+            "\nrouting pinned; residual drift in the licensed table set:"
+            f"\n  identical      {'unmeasured' if rate is None else f'{rate:.4f}'}"
+            f"   {drift['identical']}/{drift['compared']}"
+            f"\n  moved          {drift['moved']}"
+            + (
+                f"   mean Jaccard {drift['mean_jaccard_when_moved']:.3f} over those"
+                if drift["mean_jaccard_when_moved"] is not None
+                else ""
+            )
+            + "\n  Pass two re-searches inside the pinned schemas, so this is expected to be "
+            "non-zero.\n  It is printed because an unquantified drift turns 'we pinned routing' "
+            "into a wider claim than what was done."
+        )
 
     # The funnel, before the flat rates below. Each stage is conditional on the one above, so a
     # drop is attributable: `all_gold_tables_licensed` over correctly-routed questions is a

@@ -7,8 +7,9 @@ from typing import Any
 from uuid import uuid4
 
 from governed_bi.eval.arms import ArmSpec, model_for_question
-from governed_bi.eval.grade import grade_turn
+from governed_bi.eval.grade import grade_turn, result_fingerprint
 from governed_bi.eval.oracle import oracle_grade
+from governed_bi.eval.replay import PINNED_SCHEMAS_KEY
 from governed_bi.register.stages import Outcome
 from governed_bi.serve.graph import compile_graph
 
@@ -160,6 +161,12 @@ def _run_one(
         db = str(question.get("db_id") or "fixture")
         turn["facet_route_hits"] = [("facet_schema", db, 1.0)]
 
+    # After `Session.turn`, which resets this channel with every other per-turn key. Only
+    # present when `--replay-routing` attached one; a question the artifact did not cover is
+    # left to route live and is counted as unpinned by `attach_pinned_routing`.
+    if question.get(PINNED_SCHEMAS_KEY):
+        turn[PINNED_SCHEMAS_KEY] = list(question[PINNED_SCHEMAS_KEY])
+
     result = compiled.invoke(turn, {"configurable": conf})
     row = project_turn(
         result,
@@ -171,6 +178,66 @@ def _run_one(
     row["run_id"] = run_id
     _evict(compiled, thread_id)
     return row
+
+
+#: Abstentions that carry a statement, so the decline can be priced (see ``project_turn``)
+#: without ever being counted. Narrower than "the engine abstained": a ``clarification`` is an
+#: abstention too and has no statement to re-execute, so it is absent here and still reported
+#: as one by the driver. Two questions, two sets -- merging them would either invent a
+#: fingerprint for a turn that ran nothing or drop a decline from the abstention rate.
+PRICED_ABSTENTIONS: frozenset[str] = frozenset({"capped", "refused"})
+
+
+def _abstained_fingerprint(
+    *,
+    outcome: str,
+    generated_sql: str | None,
+    connector: Any | None,
+    order_sensitive: bool,
+    already_executed: bool,
+) -> str | None:
+    """Fingerprint of an abstained turn's last statement, or ``None``.
+
+    ``None`` for every answered turn (``grade`` already has it), every turn with no statement,
+    and every statement that will not run — the last of those is a real state, because a turn
+    can be capped precisely because its statements kept failing.
+    """
+    if already_executed or outcome not in PRICED_ABSTENTIONS:
+        return None
+    if not generated_sql or connector is None:
+        return None
+    try:
+        cols, rows, _ = connector.execute(str(generated_sql))
+    except Exception:  # noqa: BLE001 — a statement that will not run has no fingerprint
+        return None
+    return result_fingerprint(list(cols), [list(r) for r in rows], order_sensitive=order_sensitive)
+
+
+def _attempt_trace(execution: Any) -> list[dict[str, Any]]:
+    """Per-attempt ``(layer, reason_code, passed)`` for the measurement row.
+
+    ``CheckVerdict`` has carried ``failed_layer`` and ``reason_code`` all along and they
+    stopped at the turn record, so a refused row in an artifact said *that* governance
+    declined and never *which layer*. Reading the 2026-08-09 run therefore required replaying
+    every refused statement through ``check()`` offline to learn that 18 of 21 were
+    ``r_table_not_licensed`` — a retrieval failure the analysis had attributed to a
+    guardrail false-positive. The field that would have said so already existed.
+    """
+    if not isinstance(execution, Mapping):
+        return []
+    trace: list[dict[str, Any]] = []
+    for attempt in execution.get("attempts") or ():
+        if not isinstance(attempt, Mapping):
+            continue
+        trace.append(
+            {
+                "layer": attempt.get("verdict_layer"),
+                "reason_code": attempt.get("reason_code"),
+                "passed": attempt.get("passed"),
+                "path": attempt.get("path"),
+            }
+        )
+    return trace
 
 
 def _turn_knobs(question: Mapping[str, Any], session: Any) -> dict[str, Any] | None:
@@ -371,6 +438,23 @@ def project_turn(
         order_sensitive=order_sensitive,
     )
 
+    # **The abstention's price, measured but never scored.** A capped or refused turn keeps
+    # ``correct=False`` — an engine that would not commit to a statement does not get credit
+    # for it, and `grade_turn` owns that rule. But the rule has a cost, and until this ran
+    # nobody knew what it was: of the 2026-08-09 full run's 133 capped turns, 23 had the
+    # correct answer in their last statement. That is a scoring policy worth keeping and worth
+    # pricing, and the two are only distinguishable if the number exists.
+    #
+    # A separate field, never folded into ``correct``: one merge of the two and the artifact
+    # silently reports an engine that commits to everything.
+    computed_fp = _abstained_fingerprint(
+        outcome=outcome,
+        generated_sql=generated_sql,
+        connector=connector,
+        order_sensitive=order_sensitive,
+        already_executed=pred_columns is not None,
+    )
+
     facet_channels = record.get("facet_channels")
     negative = state.get("negative") or record.get("negative") or {}
     negative_failed_open = (
@@ -427,6 +511,17 @@ def project_turn(
         else record.get("error_type"),
         "licensed": list(record.get("licensed") or ()),
         "schemas": list(record.get("schemas") or ()),
+        # Whether this row's shortlist was replayed rather than routed. An arm described as
+        # pinned always has some fraction that was not (a question the artifact did not cover),
+        # and per-row is the only place that fraction stays recoverable.
+        "routing_pinned": bool(question.get(PINNED_SCHEMAS_KEY)),
+        # Which layer refused, per attempt. See `_attempt_trace`.
+        "attempts": _attempt_trace(record.get("execution")),
+        # Set only on abstained turns; never folded into `correct`. See `_abstained_fingerprint`.
+        "computed_fingerprint": computed_fp,
+        "computed_correct": (
+            None if computed_fp is None or not gold_fp else computed_fp == str(gold_fp)
+        ),
         "terminal_reason": record.get("terminal_reason"),
         # Carried so the run can be counted: `observed_tokens` reads it, and without it a
         # batch reports no calls at all, reading as a free run rather than an unmeasured one.

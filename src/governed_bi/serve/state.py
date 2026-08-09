@@ -249,6 +249,11 @@ class ServeState(TypedDict, total=False):
     facets: Annotated[dict[str, FacetResult], merge_facets]
 
     schemas: list[str]
+    #: Eval only: a shortlist replayed from a prior artifact, honoured by ``route`` in place of
+    #: its own ranking (``eval/replay.py``). Absent on every served turn. It exists because the
+    #: five facet rewriters are model calls, so two runs of one question can hand ``route``
+    #: different hits — and an A/B that lets the shortlist move cannot attribute its own delta.
+    pinned_schemas: list[str] | None
     retrieved: RetrievalResult
     crossings: list[SchemaCrossing]
     licensed: list[str]
@@ -313,6 +318,10 @@ PER_TURN_RESET: dict[str, Any] = {
     # Cleared per turn, or turn two's `latency_sec` spans everything the user did in between.
     "turn_started_at": None,
     "schemas": [],
+    # Cleared like any other per-turn channel: the eval writes it onto the turn dict *after*
+    # `Session.turn` returns, so resetting here cannot erase it, and not resetting would let
+    # turn one's pinned shortlist silently route turn two.
+    "pinned_schemas": None,
     "crossings": [],
     "licensed": [],
     "clarification_requested": False,

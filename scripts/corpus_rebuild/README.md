@@ -1,8 +1,12 @@
 # Corpus rebuild scripts
 
 One-shot, BIRD-specific, not portable. Deliberately outside `src/governed_bi`; nothing in the
-package imports them. See [`docs/corpus-rebuild-brief.md`](../../docs/corpus-rebuild-brief.md)
-for what they are for and what the agent does afterwards.
+package imports them.
+
+They produce the mechanical half of `../BIRD-corpus` — ids, structure, join edges and sampled
+values — which a writing agent then fills in per schema. They are **not** a rebuild path: the
+corpus cannot be regenerated from this repository, and the prose half has no producer here at
+all. See [`docs/open-work.md`](../../docs/open-work.md) §3.2.
 
 Plain Python — stdlib, `pyyaml`, `psycopg`, `sqlglot` — with one engine import:
 `governed_bi.corpus.identity` for `table_id`, `derive_column_id`, `join_id` and `slug`. Ids must

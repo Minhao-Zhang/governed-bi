@@ -48,8 +48,8 @@ def _sort_key(values: list[Any]) -> Any:
 
     ``sorted(values, key=str)`` put ``"9935"`` above ``"48196"`` and ``"897"`` above ``"16658"``.
     Writers copied those into bodies as observed ranges, and 87 column bodies across 13 schemas
-    ended up asserting a range that excludes the very sample values printed beside it. The
-    audit that found it is at docs/corpus-audit-2026-08-09.md.
+    ended up asserting a range that excludes the very sample values printed beside it — found
+    by an audit of the rebuilt corpus, 2026-08-09, and repaired in ``30872d3``.
 
     Postgres hands back ``Decimal``/``int``/``float`` for numeric columns, so the check is on the
     Python type rather than on a regex over the text: a zip code stored as text stays lexical,

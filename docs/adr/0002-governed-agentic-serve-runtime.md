@@ -360,7 +360,7 @@ by the frontend on `stream_mode="custom"`):
 
 - `rail` — each deterministic outer step (`route`, `refuse_gate`, `cache`, `assemble`);
   *(Reader note, 2026-08: live rails are `route` / `schema_route` / `refuse_gate` /
-  `assemble` — the `cache` rail was deleted 2026-07-28. See [analyst.md](../v1/analyst.md).
+  `assemble` — the `cache` rail was deleted 2026-07-28. See `v1/analyst.md` (deleted with v1).
   Historical Amendment text left unchanged.)*
 - `tool` — each governed action inside the agent loop (`search_corpus` /
   `inspect_schema` / `sample_rows` / `run_query`), as a `start` then an
@@ -387,7 +387,7 @@ worker thread. The shared finalize helpers run with `on_event=None` on this path
 so only the rich contract is emitted. The deterministic flow path is unchanged —
 it keeps emitting the legacy `{stage}` events.
 
-Full event contract: [`docs/analyst.md`](../v1/analyst.md#the-event-contract-per-step).
+Full event contract: `v1/analyst.md` (deleted with v1).
 The frontend that renders it is built, in [`governed-bi-ui`](https://github.com/Minhao-Zhang/governed-bi-ui).
 Tests: `tests/test_agent_step_events.py`.
 
@@ -467,7 +467,7 @@ wires `can_clarify` + a `clarify_checkpointer` (covered by
 `tests/test_serve_clarify.py`). What remains deferred is only the **durable**
 checkpointer (Postgres) — today's checkpointer is in-memory, so a clarification
 does not survive a process restart. The wire contract is in
-[`docs/analyst.md`](../v1/analyst.md#serve-time-clarification-hitl); the frontend
+`v1/analyst.md` (deleted with v1); the frontend
 that consumes it is built, in [`governed-bi-ui`](https://github.com/Minhao-Zhang/governed-bi-ui),
 not here. So
 "Open questions → HITL" now scopes to *durable persistence*, not the mechanism.

@@ -11,6 +11,7 @@ SQLite is the offline test/CI substrate.
 3. [ADRs](adr/) — binding decisions (start with 0005 and 0006).
 4. [Design decisions](design-decisions.md) — short index into the ADRs.
 5. [Glossary](glossary.md) — canonical terms.
+6. [Open work](open-work.md) — what is unfinished, and the evidence for each.
 
 ## Decision records (ADRs)
 
@@ -33,13 +34,16 @@ superseding ADR or a code change wins. Living how-to docs may drift; ADRs do not
 
 ## Measurement findings
 
-Dated analyses of a specific tree or a specific run. Unlike an ADR these decide
-nothing; unlike a how-to they are not maintained. Read the date first.
+A measurement is only true of the tree and the corpus it was taken on, so each of
+these names both. **One document per question, replaced rather than appended to**:
+an analysis that has been superseded is deleted, because a page carrying both the
+old reading and the correction is a page a reader has to date-check line by line.
+Git history is the record of what changed.
 
 | Doc | What it covers |
 |---|---|
-| [v2 audit](v2-postmortem-and-v3-brief.md) | what is broken in the tree at `9a3dc4b`, and in what order |
-| [BIRD run 2026-08-07](bird-run-2026-08-07-reanalysis.md) | re-analysis of that run: the gap to WrenAI is mostly retrieval, and why the figures are diagnostic rather than quotable |
+| [Failure modes](failure-modes.md) | how the engine answers wrongly, per failure class, with the causal repair experiments — engine `d121c34`, corpus `30872d3` |
+| [Open work](open-work.md) | the unfinished items those findings imply, re-verified against the current tree |
 
 ## External UI and data
 

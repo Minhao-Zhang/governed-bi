@@ -7,7 +7,7 @@
 > [ADR 0005](0005-v2-memory-layer-and-faceted-retrieval.md) §4 and
 > `src/governed_bi/register/record.py`, where every logged field names its
 > producing stage and states whether absence is an error. The reason for the change
-> is in [`lessons-from-v1.md`](../lessons-from-v1.md): a hand-maintained field list
+> is in `lessons-from-v1.md` (deleted with v1): a hand-maintained field list
 > let a degradation counter reach the summary that no gate ever read.
 
 - **Status:** Superseded (2026-08-03) — see the note above. This line read

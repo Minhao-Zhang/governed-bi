@@ -234,6 +234,11 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
         # user did in between — the field would report a real number and mean nothing.
         "turn_started_at": 1_700_000_000.0,
         "terminal_reason": "missing_join_path", "schemas": ["ops_b"], "crossings": [{}],
+        # A carried-over pin routes turn two to turn one's schemas and *succeeds*, so the run
+        # produces a plausible answer against the wrong database with nothing recording that
+        # routing never ran. Eval-only, which is why it has to be reset here rather than
+        # noticed in production.
+        "pinned_schemas": ["ops_b"],
         "licensed": ["ops_b.sensors"], "clarification_requested": True,
     }
     assert set(stale) == set(PER_TURN_RESET), (

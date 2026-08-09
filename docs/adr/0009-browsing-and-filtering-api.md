@@ -154,7 +154,7 @@ because the database is.
 ## Amendment 1 — the sufficient set (2026-08-04)
 
 An audit of this surface against the frontend's actual needs
-([api-sufficiency-audit-2026-08-04.md](../plans/api-sufficiency-audit-2026-08-04.md))
+(`plans/api-sufficiency-audit-2026-08-04.md` (deleted))
 cross-referenced every client method in `lib/api-client.ts` against every route. It found
 **zero field-level breaks** -- no route omitted a field the client requires -- and three
 truncation defects, one absent route, and one capability flag that described the server rather

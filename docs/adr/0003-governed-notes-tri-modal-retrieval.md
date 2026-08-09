@@ -31,8 +31,8 @@
   pipeline-design.md (removed; see git history);
   [design-decisions.md](../design-decisions.md) (D6 human gate, D9 corpus
   file-structure, D10 proposer+adversary, D15 multi-schema, D16 agentic core);
-  [asset-schemas.md](../v1/asset-schemas.md);
-  [plans/datalake-run.md](../v1/plans/datalake-run.md) (the routing numbers)
+  `v1/asset-schemas.md` (deleted with v1);
+  `v1/plans/datalake-run.md` (deleted with v1) (the routing numbers)
 - **Supersedes:** the `skill` asset concept entirely: `SkillFrontmatter` /
   `SkillKind` (`schemas.py:388-396,130-134`), the `corpus/<schema>/skills/*.md`
   markdown surface, and the (never-true) framing that a `kind=routing` skill
@@ -236,7 +236,7 @@ injected per turn AND at most 2000 chars of total injected notes text
 > turned out to cap nothing: every note a producer actually wrote was
 > `schema:`-scoped, so all of them cleared the count and only the char budget
 > bound. Corrected 2026-07-29 to count every injected always note. See
-> [../plans/eval-rebuild.md](../v1/plans/eval-rebuild.md).
+> `v1/plans/eval-rebuild.md` (deleted with v1).
 
 **Precedence for overflow or
 conflict**, applied in order: (1) `publication_status` certified before
