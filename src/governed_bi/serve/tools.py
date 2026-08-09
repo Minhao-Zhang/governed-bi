@@ -350,13 +350,17 @@ def build_tools(
         runtime: ToolRuntime,
         basis: Literal["data_definition", "ranking_ambiguity"],
         why: str = "",
+        choices: list[dict[str, str]] | None = None,
+        allow_freeform: bool = True,
     ) -> Command:
         """Pause and ask the human a clarifying question (HITL interrupt).
 
         ``question``/``why`` reach a business user, never an engineer — write them in
         plain language, with no table/column names, no dotted `table.column` paths, and
         no snake_case or camelCase identifiers. A leaked identifier is rejected before
-        this pauses the turn; rephrase and call ``ask_user`` again.
+        this pauses the turn; rephrase and call ``ask_user`` again. Write both in the same
+        language the user's own question was asked in, never the corpus's or schema's
+        language.
 
         ``basis`` states which of two reasons made you call this tool, so the answer can
         be routed correctly afterwards:
@@ -369,6 +373,18 @@ def build_tools(
           ("best", "top", "most valuable") that more than one metric could reasonably
           mean. The answer is a choice for this turn only; a different user, or the same
           user on another day, may mean something else by the same word.
+
+        ``choices`` offers 2-4 concrete, clickable candidate answers, each shaped
+        ``{"id": ..., "label": ...}``. Pass it only when you can name candidates you have
+        actually **grounded** — in columns or values you inspected via ``inspect_schema``
+        or ``sample_rows``, or in the schema's own structure — never invented ones. Leave
+        it ``None`` when nothing is genuinely grounded; free text alone is correct then.
+        A malformed entry (missing or empty ``id``/``label``) is rejected the same way a
+        schema-identifier leak is, before this pauses the turn.
+
+        ``allow_freeform`` defaults to ``True`` and should almost always stay ``True`` even
+        when ``choices`` is given, so a real answer outside the offered list still reaches
+        you rather than being boxed out.
         """
         leak = find_schema_leak(question, why)
         if leak is not None:
@@ -378,6 +394,24 @@ def build_tools(
                 "plain business language. Rephrase question/why without table.column "
                 "paths, snake_case, or camelCase identifiers, then call ask_user again.",
             )
+        if choices:
+            bad_choice = next(
+                (
+                    c
+                    for c in choices
+                    if not isinstance(c, Mapping)
+                    or not str(c.get("id") or "").strip()
+                    or not str(c.get("label") or "").strip()
+                ),
+                None,
+            )
+            if bad_choice is not None:
+                return _reply(
+                    runtime,
+                    f"ask_user rejected: choices entry {bad_choice!r} needs a non-empty "
+                    "'id' and 'label'. Fix it -- or drop choices entirely for a "
+                    "free-text-only question -- then call ask_user again.",
+                )
         digest = hashlib.sha256(f"{turn_id}\x1f{question}".encode()).hexdigest()[:12]
         clarification_id = f"clar-{turn_id}-{digest}"
         started = {"clarification_id": clarification_id}
@@ -388,16 +422,30 @@ def build_tools(
             event_id=tool_event_id("ask_user", _call_id(runtime)),
             detail=started,
         )
-        answer = interrupt(
-            {
-                "kind": "clarification",
-                "clarification_id": clarification_id,
-                "question": question,
-                "why": why or "The question is ambiguous and the answer depends on which reading is meant.",
-            }
-        )
+        interrupt_payload: dict[str, Any] = {
+            "kind": "clarification",
+            "clarification_id": clarification_id,
+            "question": question,
+            "why": why or "The question is ambiguous and the answer depends on which reading is meant.",
+            # Phase 6 of this initiative (governed-bi-analysis): withheld from this payload
+            # deliberately in Phase 1 as "a backend-only routing signal" -- that reasoning held
+            # while nothing downstream of the UI needed it. It no longer holds: the product
+            # owner wants ranking_ambiguity questions (per-user judgment calls) to never offer a
+            # "defer to admin" button, which data_definition questions (objective schema/rule
+            # facts) may. Enforcing that is a UI button-visibility decision, and the UI cannot
+            # make it without knowing basis.
+            "basis": basis,
+            "allow_freeform": allow_freeform,
+        }
+        if choices:
+            interrupt_payload["choices"] = choices
+        answer = interrupt(interrupt_payload)
         text = _clarification_answer(answer)
-        declined = bool(answer.get("declined")) if isinstance(answer, Mapping) else False
+        declined = (
+            bool(answer.get("declined") or answer.get("defer"))
+            if isinstance(answer, Mapping)
+            else False
+        )
         emit(
             kind="tool",
             step="ask_user",
@@ -464,9 +512,14 @@ def build_tools(
 
 
 def _clarification_answer(resume: Any) -> str:
-    """Human answer from a bare string or structured ``{answer|choice_id|declined}`` reply."""
+    """Human answer from a bare string or structured ``{answer|choice_id|declined|defer}`` reply.
+
+    ``defer`` (governed-bi-ui's "I don't know -- ask the admin later" button) is an alias of
+    ``declined``: both mean the user answered nothing, and neither must be read as a real
+    empty-string answer.
+    """
     if isinstance(resume, Mapping):
-        if resume.get("declined"):
+        if resume.get("declined") or resume.get("defer"):
             return "The user declined to answer this clarification."
         for key in ("answer", "choice_id", "text"):
             value = resume.get(key)
