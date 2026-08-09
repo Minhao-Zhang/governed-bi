@@ -116,6 +116,24 @@ def test_the_identity_falls_back_to_the_thread_and_prefers_a_supplied_one() -> N
     assert routes._identity({"identity": {}}, "thread-9") == {"token": "thread-9"}
 
 
+def test_the_resume_reply_passes_defer_through_like_declined() -> None:
+    """``/chat/resume``'s own bug alongside Bug 3 (this initiative, ``serve/tools.py``): the
+    body-to-``answer`` filter this route applied before calling ``resume_clarification`` never
+    included ``defer``, so governed-bi-ui's "I don't know -- ask the admin later" button (which
+    sends ``{"defer": true}``) produced an empty ``reply``, fell back to the bare-``answer``
+    branch, and reached ``_clarification_answer`` as ``""`` -- the exact empty-string-answer bug
+    Bug 3's fix closed one layer down, still open here. ``defer`` must survive this filter
+    exactly as ``declined`` already does.
+    """
+    assert routes._resume_reply({"declined": True}) == {"declined": True}
+    assert routes._resume_reply({"defer": True}) == {"defer": True}
+    assert routes._resume_reply({"session_id": "t", "clarification_id": "c", "defer": True}) == {
+        "defer": True
+    }
+    assert routes._resume_reply({"answer": "blue"}) == {"answer": "blue"}
+    assert routes._resume_reply({"session_id": "t"}) == ""
+
+
 def test_the_resume_route_exists_and_the_turn_can_carry_an_identity() -> None:
     """Both halves of the fix, asserted where they live.
 

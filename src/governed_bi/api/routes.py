@@ -590,7 +590,7 @@ def chat(body: dict[str, Any]) -> dict[str, Any]:
 def chat_resume(body: dict[str, Any]) -> dict[str, Any]:
     """Answer a clarification paused by ``ask_user``.
 
-    Request: ``{session_id, clarification_id?, answer | choice_id | declined, identity?}``.
+    Request: ``{session_id, clarification_id?, answer | choice_id | declined | defer, identity?}``.
     """
     session = _session()
     thread_id = str(body.get("session_id") or "")
@@ -610,13 +610,12 @@ def chat_resume(body: dict[str, Any]) -> dict[str, Any]:
 
     from governed_bi.serve.resume import ResumeRejected, resume_clarification
 
-    reply = {k: v for k, v in body.items() if k in ("answer", "choice_id", "declined")}
     try:
         out = resume_clarification(
             _graph(),
             config=config,
             identity=_identity(body, thread_id),
-            answer=reply or str(body.get("answer") or ""),
+            answer=_resume_reply(body),
         )
     except ResumeRejected:
         return _error("resume identity mismatch: the caller answering is not the caller that was asked")
@@ -642,6 +641,21 @@ def _config(session: Any, question: str | None, thread_id: str) -> dict[str, Any
     config = session.configurable(question=question) if question else session.configurable()
     config["configurable"]["thread_id"] = thread_id
     return config
+
+
+def _resume_reply(body: dict[str, Any]) -> Any:
+    """The payload ``resume_clarification`` receives: a structured reply pulled out of the
+    request body, or the bare ``answer`` string when nothing structured was sent.
+
+    ``defer`` sits beside ``declined`` here for the reason Bug 3 (this initiative) exists at
+    all: governed-bi-ui's "I don't know — ask the admin later" button sends
+    ``{"defer": true}``. Before this, that key was not in the filter, so ``reply`` came back
+    ``{}`` — falsy — and the bare-``answer`` fallback below it produced ``""``: a live client
+    hitting exactly the path ``_clarification_answer``'s ``defer`` alias was fixed for still
+    reached the model as an empty-string answer, one HTTP layer up from that fix.
+    """
+    reply = {k: v for k, v in body.items() if k in ("answer", "choice_id", "declined", "defer")}
+    return reply or str(body.get("answer") or "")
 
 
 def _identity(body: dict[str, Any], thread_id: str) -> dict[str, str]:
