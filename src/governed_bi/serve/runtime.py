@@ -136,6 +136,19 @@ def configurable(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
     return {**raw, **_TRUSTED} if _TRUSTED else raw
 
 
+def prompt_variants(config: Mapping[str, Any] | None) -> dict[str, str]:
+    """``{prompt name -> variant}`` this run selected, empty when it selected none.
+
+    One reader, because a prompt sent at the wrong variant fails **silently**: the turn records
+    the overriding ``prompt_set_hash`` and the model receives the default. Every ``prompt_text``
+    call site in ``serve/`` passes this; ``tests/conformance`` refuses a call site that does not.
+    """
+    raw = configurable(config).get("prompt_variants")
+    if not isinstance(raw, Mapping):
+        return {}
+    return {str(k): str(v) for k, v in raw.items()}
+
+
 def model_id(model: Any) -> str | None:
     """Provider model id, or ``None``. Prefer ``model_name`` / ``model`` over ``_llm_type``."""
     for attr in ("model_name", "model", "deployment_name"):

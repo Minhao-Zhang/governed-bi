@@ -73,6 +73,10 @@ class Session:
     agent_model: Any | None = None
     #: Model for guard + facet rewriters. Falls back to :attr:`agent_model`.
     utility_model: Any | None = None
+    #: ``{prompt name -> variant}`` this run selected; empty means every prompt at its default.
+    #: Reaches the nodes through :meth:`configurable` and **must** be the same mapping
+    #: :attr:`prompt_set_hash` was computed from, or the run records a treatment it did not send.
+    prompt_variants: Mapping[str, str] = field(default_factory=dict)
     embedder: Embedder | None = None
     problems: tuple[Any, ...] = ()
     corpus_root: Path | None = None
@@ -98,6 +102,8 @@ class Session:
             conf["utility_model"] = utility
         if self.embedder is not None:
             conf["embedder"] = self.embedder
+        if self.prompt_variants:
+            conf["prompt_variants"] = dict(self.prompt_variants)
         if question and self.embedder is not None:
             conf["query_vector"] = self.embedder.embed([question])[0]
         return {"configurable": conf}
@@ -339,6 +345,7 @@ def from_assets(
     problems: Sequence[Any] = (),
     run_id: str | None = None,
     corpus_root: Path | None = None,
+    prompt_variants: Mapping[str, str] | None = None,
 ) -> Session:
     """Session over an in-memory asset set. The other constructors funnel here."""
     # `_visible` for the three views the analyst can reach; the full list for `for_analyst`,
@@ -385,12 +392,13 @@ def from_assets(
         connector=connector,
         policy=policy,
         corpus_content_hash=corpus_content_hash_,
-        prompt_set_hash=prompt_set_hash(),
+        prompt_set_hash=prompt_set_hash(prompt_variants),
         knobs_resolved=knobs,
         db_id=db_id,
         run_id=run_id or uuid.uuid4().hex[:16],
         agent_model=agent_model,
         utility_model=utility_model,
+        prompt_variants=dict(prompt_variants or {}),
         embedder=embedder,
         problems=(*problems, *structure_problems),
         corpus_root=corpus_root,

@@ -30,7 +30,12 @@ from governed_bi.register.stages import Stage
 from governed_bi.retrieve.fuse import scale_within_channel
 from governed_bi.retrieve.index import UnifiedIndex
 from governed_bi.retrieve.semantic import semantic_search
-from governed_bi.serve.runtime import candidate_depth, combine_channels, vector_for_query
+from governed_bi.serve.runtime import (
+    candidate_depth,
+    combine_channels,
+    prompt_variants,
+    vector_for_query,
+)
 from governed_bi.serve.runtime import configurable as runtime_config
 
 __all__ = [
@@ -296,7 +301,7 @@ async def _rewritten_query(
 
     try:
         reply = await model.ainvoke(
-            [SystemMessage(prompt_text(prompt_name)), HumanMessage(question)],
+            [SystemMessage(prompt_text(prompt_name, prompt_variants(config))), HumanMessage(question)],
             # Named after the registered prompt, so the five concurrent rewrites are five
             # distinguishable rows in LangSmith rather than five `ChatOpenAI`s.
             config={"run_name": prompt_name},

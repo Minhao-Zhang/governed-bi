@@ -21,7 +21,7 @@ from langgraph.errors import GraphBubbleUp
 
 from governed_bi.serve.ledger import ledger_ended_without_answer
 from governed_bi.serve.messages import last_ai_text
-from governed_bi.serve.runtime import configurable
+from governed_bi.serve.runtime import configurable, prompt_variants
 
 __all__ = ["narrate_node"]
 
@@ -100,7 +100,7 @@ async def _generate(
     try:
         reply = await model.ainvoke(
             [
-                SystemMessage(prompt_text("narrate")),
+                SystemMessage(prompt_text("narrate", prompt_variants(config))),
                 HumanMessage(_brief(state, result)),
             ],
             # Named after the registered prompt, like the scope gate and the rewriters.

@@ -33,10 +33,10 @@ from governed_bi.serve.agent_state import CAP_LEDGER_KEY, AttemptBook
 from governed_bi.serve.delivery import payload_digest, tool_bounds_from_state
 from governed_bi.serve.events import emit, tool_event_id
 from governed_bi.serve.ledger import attempt_field, cap_attempt, execution_from_attempts
-from governed_bi.serve.runtime import configurable
+from governed_bi.serve.runtime import configurable, prompt_variants
 
 __all__ = [
-    "SYSTEM_PROMPT",
+    "analyst_prompt",
     "build_tools",
     "policy_from_config",
     "resolve_assets",
@@ -45,8 +45,17 @@ __all__ = [
     "tool_bounds_from_state",
 ]
 
-#: Agent standing instructions (from ``register/prompts.py``).
-SYSTEM_PROMPT = prompt_text("analyst")
+
+def analyst_prompt(config: Mapping[str, Any] | None = None) -> str:
+    """Agent standing instructions, at the variant this run selected.
+
+    **A function, not the module constant it was.** ``SYSTEM_PROMPT = prompt_text("analyst")``
+    bound at import, so a run selecting a non-default variant sent the default and recorded the
+    override's ``prompt_set_hash`` — an artifact naming a treatment it did not receive, which is
+    strictly worse than not having the knob. The registry has carried ``variants`` since it was
+    written; nothing in ``src/`` ever passed one, so nothing exercised the gap.
+    """
+    return prompt_text("analyst", prompt_variants(config))
 
 def resolve_assets(config: Mapping[str, Any] | None) -> dict[str, Any]:
     """``assets_by_id`` or ``corpus.by_id`` from configurable."""

@@ -120,6 +120,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--per-schema", type=int, default=None, help="cap questions per schema")
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--prompt-variant",
+        action="append",
+        default=[],
+        metavar="NAME=VARIANT",
+        help="select a non-default variant of a registered prompt, e.g. "
+        "`--prompt-variant analyst=v3`. Repeatable. The selection moves `prompt_set_hash`, so "
+        "the artifact records which wording produced it; an unknown prompt or variant is "
+        "refused here rather than falling back to the default three stages later.",
+    )
     parser.add_argument("--out", type=pathlib.Path, default=None)
     parser.add_argument(
         "--replay-routing",
@@ -206,7 +216,21 @@ def main(argv: list[str] | None = None) -> int:
     }
     if utility_model is not None:
         session_kwargs["utility_model"] = utility_model
+    if args.prompt_variant:
+        from governed_bi.register.prompts import select
+
+        variants = dict(pair.split("=", 1) for pair in args.prompt_variant)
+        # `select` raises on an unknown prompt *or* an unknown variant, here rather than three
+        # stages later when a node asks for text and silently gets the default.
+        select(variants)
+        session_kwargs["prompt_variants"] = variants
     session = session_mod.from_corpus_dir(args.corpus_dir, **session_kwargs)
+    if args.prompt_variant:
+        print(
+            f"prompt variants: {session.prompt_variants} -> prompt_set_hash="
+            f"{session.prompt_set_hash}",
+            flush=True,
+        )
     if session.fatal_problems:
         print(f"corpus has {len(session.fatal_problems)} fatal problem(s); refusing", file=sys.stderr)
         for problem in session.fatal_problems:

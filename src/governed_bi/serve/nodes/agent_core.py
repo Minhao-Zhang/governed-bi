@@ -25,7 +25,7 @@ from governed_bi.serve.events import emit, tool_event_id
 from governed_bi.serve.ledger import answering_attempts, cap_attempt, execution_from_attempts
 from governed_bi.serve.runtime import configurable
 from governed_bi.serve.state import TERMINAL_PATH_KINDS
-from governed_bi.serve.tools import SYSTEM_PROMPT, build_tools, policy_from_config
+from governed_bi.serve.tools import analyst_prompt, build_tools, policy_from_config
 from governed_bi.serve.usage import NO_TOKEN_USAGE, usage_row
 
 __all__ = ["agent_core_node", "STUB_ANSWER", "NO_TOKEN_USAGE"]
@@ -56,7 +56,7 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
     agent = create_agent(
         model=model,
         tools=tools,
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=analyst_prompt(config),
         # The ledger channels the tools write. Without the schema LangGraph drops updates
         # naming keys the graph does not declare, silently — see ``serve/agent_state.py``.
         state_schema=GovernedAgentState,

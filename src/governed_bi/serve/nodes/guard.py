@@ -18,11 +18,12 @@ The deterministic rules run **first** because they are free, and a question that
 should not cost a model call to refuse.
 """
 
+from collections.abc import Mapping
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 
-from governed_bi.serve.runtime import configurable
+from governed_bi.serve.runtime import configurable, prompt_variants
 
 __all__ = ["guard_node"]
 
@@ -61,14 +62,18 @@ async def guard_node(state: dict, config: RunnableConfig) -> dict:
     # a rule six call sites must spell identically. A caller who hand-builds a config with only
     # `agent_model` gets `error_failed_open`, which is what that sentinel is for.
     model = cfg.get("utility_model")
-    verdict, usage = await _bi_scope(state["question"], model, state.get("turn_index", 1))
+    verdict, usage = await _bi_scope(
+        state["question"], model, state.get("turn_index", 1), prompt_variants(config)
+    )
     update: dict = {"guard": verdict}
     if usage is not None:
         update["usage"] = [usage]
     return update
 
 
-async def _bi_scope(question: str, model: Any, turn_index: Any) -> tuple[Any, dict | None]:
+async def _bi_scope(
+    question: str, model: Any, turn_index: Any, variants: Mapping[str, str] | None = None
+) -> tuple[Any, dict | None]:
     """Ask a model whether the question is in scope. Returns ``(GuardVerdict, usage row)``.
 
     The usage row is why this returns a pair: without it a turn the gate refused records
@@ -103,7 +108,7 @@ async def _bi_scope(question: str, model: Any, turn_index: Any) -> tuple[Any, di
 
     try:
         reply = await model.ainvoke(
-            [SystemMessage(prompt_text("bi_scope")), HumanMessage(question)],
+            [SystemMessage(prompt_text("bi_scope", variants)), HumanMessage(question)],
             # Named, because a turn makes eight model calls and LangChain names every one after
             # the client class. The name is the *registered prompt's*, so the trace and
             # ``register/prompts.py`` cannot drift apart.

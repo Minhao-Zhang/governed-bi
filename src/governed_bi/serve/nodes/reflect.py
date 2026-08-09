@@ -38,11 +38,11 @@ from governed_bi.serve.ledger import (
     attempt_field,
     ledger_ended_without_answer,
 )
-from governed_bi.serve.runtime import bool_knob, configurable, model_id
+from governed_bi.serve.runtime import bool_knob, configurable, model_id, prompt_variants
 from governed_bi.serve.state import TERMINAL_PATH_KINDS
 
 __all__ = [
-    "REFLECT_PROMPT",
+    "reflect_prompt",
     "REFLECT_VERDICTS",
     "reflect_node",
     "reflect_signals",
@@ -61,14 +61,22 @@ _REFLECT_ROWS_SHOWN = 10
 #: How much of one cell it is shown. A wide text column would otherwise be most of the prompt.
 _CELL_CHARS = 200
 
-#: The judge's system prompt, resolved from the registry at import like every other prompt this
-#: engine sends. Registered knowingly at the cost of moving ``prompt_set_hash`` for edits that
-#: move no answer: this judge exists to be scored, so two scores computed under two wordings
-#: must not be able to read as one series.
-REFLECT_PROMPT = prompt_text("reflect")
+def reflect_prompt(variants: Mapping[str, str] | None = None) -> str:
+    """The judge's system prompt, at the variant this run selected.
+
+    Registered knowingly at the cost of moving ``prompt_set_hash`` for edits that move no
+    answer: this judge exists to be scored, so two scores computed under two wordings must not
+    be able to read as one series.
+
+    Resolved per call rather than at import. ``REFLECT_PROMPT = prompt_text("reflect")`` bound
+    once, so a selected variant would have been recorded in the hash and never sent — and the
+    digest below, which exists so a scorer can tell which judge produced a verdict, would have
+    named the wrong one.
+    """
+    return prompt_text("reflect", variants)
 
 
-def _prompt_digest() -> str:
+def _prompt_digest(variants: Mapping[str, str] | None = None) -> str:
     """Digest of the judge's own prompt, carried on every verdict.
 
     Not replaced by ``prompt_set_hash``, which is one value for a whole run: this says which
@@ -76,7 +84,7 @@ def _prompt_digest() -> str:
     including ``tools/score_reflector.py``, which calls :func:`reflect_on` outside the graph and
     has no run-level hash to quote.
     """
-    return hashlib.sha256(REFLECT_PROMPT.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(reflect_prompt(variants).encode("utf-8")).hexdigest()[:16]
 
 
 def _result_shape(result: Any) -> dict[str, Any]:
@@ -216,24 +224,36 @@ def _read_verdict(text: str) -> tuple[str | None, str | None]:
     return verdict, reason
 
 
-def _unmeasured(why: str, signals: Mapping[str, Any]) -> dict[str, Any]:
-    """A verdict row for a judge that ran and could not decide. ``verdict`` is null, not 'fine'."""
+def _unmeasured(
+    why: str, signals: Mapping[str, Any], variants: Mapping[str, str] | None = None
+) -> dict[str, Any]:
+    """A verdict row for a judge that ran and could not decide. ``verdict`` is null, not 'fine'.
+
+    ``variants`` is threaded so this row digests the prompt the judge was **sent**. Defaulting
+    it here would make an unmeasured row claim the default judge on a run using another.
+    """
     return {
         "verdict": None,
         "reason": None,
         "why_unmeasured": why,
-        "prompt_sha256": _prompt_digest(),
+        "prompt_sha256": _prompt_digest(variants),
         "signals": dict(signals),
     }
 
 
 async def reflect_on(
-    model: Any, state: Mapping[str, Any]
+    model: Any,
+    state: Mapping[str, Any],
+    *,
+    variants: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Judge one turn. Returns ``(verdict, usage row or None)``. Never raises.
 
     The single entry point, shared by :func:`reflect_node` and ``tools/score_reflector.py``: an
     offline score is only evidence about the live reflector if it *is* the live reflector.
+
+    ``variants`` is the run's prompt selection. Defaulted rather than required because the
+    offline scorer has no graph config; the node passes ``prompt_variants(config)``.
     """
     from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -245,25 +265,25 @@ async def reflect_on(
         # malformed one would raise out of an observer and crash a turn that had answered.
         signals = reflect_signals(state)
         reply = await model.ainvoke(
-            [SystemMessage(REFLECT_PROMPT), HumanMessage(reflect_brief(state, signals))],
+            [SystemMessage(reflect_prompt(variants)), HumanMessage(reflect_brief(state, signals))],
             config={"run_name": "reflect"},
         )
         text = str(getattr(reply, "text", "") or "")
     except Exception as exc:  # noqa: BLE001 — see the module docstring: the class, never the text
-        return {**_unmeasured(type(exc).__name__, signals), "model": model_id(model)}, None
+        return {**_unmeasured(type(exc).__name__, signals, variants), "model": model_id(model)}, None
 
     verdict, reason = _read_verdict(text)
     spent = usage_row(
         stage="reflect", model=model, messages=reply, turn_index=state.get("turn_index", 1)
     )
     if verdict is None:
-        row = _unmeasured("reply named no declared verdict", signals)
+        row = _unmeasured("reply named no declared verdict", signals, variants)
     else:
         row = {
             "verdict": verdict,
             "reason": reason,
             "why_unmeasured": None,
-            "prompt_sha256": _prompt_digest(),
+            "prompt_sha256": _prompt_digest(variants),
             "signals": dict(signals),
         }
     return {**row, "model": model_id(model)}, spent
@@ -316,7 +336,7 @@ async def _reflect(state: dict, config: RunnableConfig) -> dict:
     if model is None:
         return {}
 
-    verdict, spent = await reflect_on(model, state)
+    verdict, spent = await reflect_on(model, state, variants=prompt_variants(config))
     emit(
         kind="rail",
         step="reflect",
