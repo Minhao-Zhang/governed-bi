@@ -516,6 +516,12 @@ def project_turn(
         # A/B. Read from the record, which ``Session`` minted them into.
         "corpus_content_hash": record.get("corpus_content_hash"),
         "prompt_set_hash": record.get("prompt_set_hash"),
+        # What the char budget dropped before the model saw it. Absent when the block fit.
+        # ``table_coverage`` is computed over ``licensed`` and is therefore a *licensing*
+        # figure, not a delivered one: a table can be routed, licensed, counted as covered,
+        # and then evicted for space. On a 25-turn reconstruction of the 2026-08-09 run the
+        # budget bit on 16, so the gap is not a corner case.
+        "context_evicted": (delivery.get("evicted") if isinstance(delivery, Mapping) else None),
         "licensed": list(record.get("licensed") or ()),
         "schemas": list(record.get("schemas") or ()),
         # Whether this row's shortlist was replayed rather than routed. An arm described as

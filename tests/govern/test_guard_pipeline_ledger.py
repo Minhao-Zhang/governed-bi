@@ -481,3 +481,137 @@ def test_agent_core_prefers_the_executed_statement_over_the_tool_argument() -> N
     # The *last* one that ran, not the last row: a refused retry after a passing query
     # must not blank the statement that answered.
     assert _last_executed_sql([{"executed_sql": "A"}, {"executed_sql": None}]) == "A"
+
+
+def test_a_qualified_reference_is_not_ambiguous(prepare) -> None:
+    """The collision two tables away must not refuse a reference that names its own table.
+
+    ``r_ambiguous_fold`` compared every identifier against one flat namespace built from the
+    turn's whole licensed set — ~26 tables across ~8 schemas. Two of them declaring ``Name``
+    and ``name`` therefore refused *every* reference to either, qualified or not. Measured on
+    the 2026-08-09 v3 arm: 119 of 1 351 turns, 112 of them ending ``capped`` at EX 0.025, and
+    24% of the run's input tokens spent re-trying a statement nothing told the model how to fix.
+
+    ``T1."Name"`` names one table. Given that table's own spellings, there is nothing to guess.
+    """
+    refused = prepare(
+        "SELECT alias FROM customers",
+        licensed=CUSTOMERS,
+        allowed_columns=frozenset({"customers.Alias"}),
+        spellings={"alias": "Alias", "customers": "customers"},
+        ambiguous_folds=frozenset({"alias"}),
+    )
+    assert refused.verdict["reason_code"] == "r_ambiguous_fold", "precondition"
+
+    resolved = prepare(
+        "SELECT customers.alias FROM customers",
+        licensed=CUSTOMERS,
+        allowed_columns=frozenset({"customers.Alias"}),
+        spellings={"alias": "Alias", "customers": "customers"},
+        ambiguous_folds=frozenset({"alias"}),
+        spellings_by_table={"customers": {"alias": "Alias"}},
+    )
+    assert resolved.verdict["passed"] is True, resolved.verdict
+    assert '"Alias"' in (resolved.sql or ""), resolved.sql
+
+
+def test_an_unqualified_ambiguous_reference_still_refuses(prepare) -> None:
+    """The narrowing must not become a repeal. With no qualifier there is still nothing to
+    resolve against, and picking one is exactly the decoy hazard the rule exists for."""
+    refused = prepare(
+        "SELECT alias FROM customers",
+        licensed=CUSTOMERS,
+        allowed_columns=frozenset({"customers.Alias"}),
+        spellings={"alias": "Alias", "customers": "customers"},
+        ambiguous_folds=frozenset({"alias"}),
+        spellings_by_table={"customers": {"alias": "Alias"}},
+    )
+    assert refused.verdict["reason_code"] == "r_ambiguous_fold", refused.verdict
+
+
+def test_a_cte_name_does_not_resolve_against_a_licensed_table_that_shares_it() -> None:
+    """A CTE is a name the statement *defines*. Resolving a column against a licensed table of
+    the same name would canonicalise a reference to something the query never read."""
+    from governed_bi.govern.pipeline import canonicalise
+
+    out = canonicalise(
+        'WITH customers AS (SELECT 1 AS alias) SELECT customers.alias FROM customers',
+        spellings={"alias": "Alias"},
+        ambiguous=frozenset({"alias"}),
+        dialect="postgres",
+        by_table={"customers": {"alias": "Alias"}},
+    )
+    assert isinstance(out, dict) and out["reason_code"] == "r_ambiguous_fold", (
+        f"a CTE alias resolved against the licensed table sharing its name: {out!r}"
+    )
+
+
+def test_a_table_whose_own_columns_collide_keeps_refusing() -> None:
+    """Within one table the collision is real, so the flat map's refusal is the right answer.
+    ``spellings_for`` therefore records no per-table entry for such a table."""
+    from governed_bi.govern.pipeline import canonicalise
+
+    out = canonicalise(
+        "SELECT t.name FROM t",
+        spellings={"name": "Name"},
+        ambiguous=frozenset({"name"}),
+        dialect="postgres",
+        by_table={},  # what spellings_for emits for a self-colliding table
+    )
+    assert isinstance(out, dict) and out["reason_code"] == "r_ambiguous_fold"
+
+
+class _StubCorpus:
+    """The three attributes ``spellings_for`` reads, and nothing else.
+
+    Duck-typed rather than built from real assets: the property under test is about name
+    collisions, and a real corpus that happens to have none cannot exercise it.
+    """
+
+    def __init__(self, tables):
+        self._by_id = {}
+        for schema, name, columns in tables:
+            cols = []
+            for col in columns:
+                cid = f"{schema}.{name}.{col}"
+                self._by_id[cid] = type("C", (), {"physical_name": col})()
+                cols.append(cid)
+            self._by_id[f"{schema}.{name}"] = type(
+                "T", (), {"physical_name": name, "schema": schema, "columns": cols}
+            )()
+
+    def get(self, asset_id):
+        return self._by_id.get(asset_id)
+
+
+def test_spellings_for_separates_the_flat_map_from_the_per_table_one() -> None:
+    """The producer half, so the two halves of the fix cannot drift apart.
+
+    Two tables declaring ``Name`` and ``name`` make the flat fold ambiguous — correctly, it is
+    ambiguous *there*. Each table's own map still resolves its own spelling, which is what lets
+    a qualified reference through.
+    """
+    from governed_bi.govern.pipeline import spellings_for
+
+    corpus = _StubCorpus([
+        ("s", "people", ["Name", "id"]),
+        ("s", "places", ["name", "id"]),
+    ])
+    _, ambiguous, by_table = spellings_for(corpus, frozenset({"s.people", "s.places"}))
+
+    assert "name" in ambiguous, "the flat namespace really is ambiguous across the two tables"
+    assert by_table["people"]["name"] == "Name"
+    assert by_table["places"]["name"] == "name"
+    assert by_table["s.people"]["name"] == "Name", "the schema-qualified handle resolves too"
+
+
+def test_spellings_for_omits_a_table_whose_own_columns_collide() -> None:
+    """Within one table the collision is real and unresolvable, so there must be no per-table
+    entry to resolve against — otherwise the narrowing would silently pick one."""
+    from governed_bi.govern.pipeline import spellings_for
+
+    corpus = _StubCorpus([("s", "t", ["Name", "name"])])
+    _, ambiguous, by_table = spellings_for(corpus, frozenset({"s.t"}))
+
+    assert "name" in ambiguous
+    assert "t" not in by_table and "s.t" not in by_table, by_table

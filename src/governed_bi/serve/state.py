@@ -117,6 +117,10 @@ class Delivery(TypedDict):
     context_hash: str | None
     tool_delivered: dict[str, str]
     delivery_hash: str | None
+    #: What the char budget dropped, present only when it bit: ``bodies_dropped``,
+    #: ``tables_dropped``, ``dropped_ids``, ``over_budget``. Absent means the block fit, which
+    #: is a different fact from "nothing was dropped and we checked".
+    evicted: NotRequired[dict[str, Any]]
 
 
 class UsageRecord(TypedDict):
@@ -128,6 +132,9 @@ class UsageRecord(TypedDict):
     output_tokens: NotRequired[int | Measured[int]]
     cache_read_tokens: NotRequired[int | Measured[int]]
     cache_write_tokens: NotRequired[int | Measured[int]]
+    #: Model round trips this row paid for. An agent loop aggregates into one row, so without
+    #: it the repeated share of the input -- the only part caching can remove -- is a guess.
+    model_calls: NotRequired[int]
 
 
 class Answer(TypedDict):

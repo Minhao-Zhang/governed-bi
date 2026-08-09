@@ -70,9 +70,18 @@ class DeliveryTracker:
         existing = dict(base.get("tool_delivered") or {})
         existing.update(self.tool_delivered)
         context_hash = base.get("context_hash")
-        return {
+        merged: dict[str, Any] = {
             "context_block": base.get("context_block"),
             "context_hash": context_hash,
             "tool_delivered": existing,
             "delivery_hash": delivery_hash_for(context_hash, existing),
         }
+        # **Carried, not rebuilt away.** This returned a fresh four-key dict, so ``assemble``'s
+        # ``evicted`` — the only record that the char budget dropped a licensed table before the
+        # model ever saw it — was destroyed here, mid-turn, on every turn that had one. It is
+        # written on ~2 in 3 turns, which is why ``table_coverage`` reads as an EX ceiling and
+        # is really a licensing figure: a table can be routed, licensed, counted as covered,
+        # and then evicted for space with nothing anywhere saying so.
+        if base.get("evicted"):
+            merged["evicted"] = base["evicted"]
+        return merged

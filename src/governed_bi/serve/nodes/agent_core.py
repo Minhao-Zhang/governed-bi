@@ -63,7 +63,7 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
         # The delivered context, injected at model-call time rather than put in ``messages``,
         # plus the thing that actually stops the loop at the attempt cap.
         middleware=[
-            *_context_middleware(state),
+            *_context_middleware(state, model),
             _CapEndsTheTurn(policy_from_config(config).run_query_attempt_cap),
         ],
     )
@@ -340,7 +340,7 @@ def _question_message(state: dict, history: list[Any]) -> HumanMessage | None:
     return HumanMessage(content=f"Question: {question}")
 
 
-def _context_middleware(state: dict) -> list[AgentMiddleware]:
+def _context_middleware(state: dict, model: Any = None) -> list[AgentMiddleware]:
     """Deliver ``delivery.context_block`` on every model call, without it entering ``messages``.
 
     Empty list when the turn rendered no block, so a turn with nothing to deliver builds exactly
@@ -370,6 +370,7 @@ def _context_middleware(state: dict) -> list[AgentMiddleware]:
     block = str((state.get("delivery") or {}).get("context_block") or "")
     if not block:
         return []
+    cache_point = _cache_point(model)
 
     # ``async def`` is load-bearing: ``wrap_model_call`` branches on ``iscoroutinefunction``, so
     # a sync body registers ``wrap_model_call`` only and the ``astream``-driven agent dies on
@@ -379,19 +380,51 @@ def _context_middleware(state: dict) -> list[AgentMiddleware]:
     async def deliver_context(
         request: ModelRequest, handler: Callable[[ModelRequest], Any]
     ) -> ModelResponse:
-        return await handler(request.override(messages=_with_block(request.messages, block)))
+        return await handler(
+            request.override(messages=_with_block(request.messages, block, cache_point))
+        )
 
     return [deliver_context]
 
 
-def _with_block(messages: list[Any], block: str) -> list[Any]:
-    """``messages`` with the context block inserted just before the last human turn."""
+def _cache_point(model: Any) -> dict[str, Any] | None:
+    """A provider's "cache everything up to here" marker, or ``None`` if it needs none.
+
+    Only the Converse API takes an explicit breakpoint, and ``ChatBedrockConverse`` exposes the
+    factory for it, so this duck-types on the method rather than on a class name. OpenAI and the
+    OpenAI-compatible internal proxy cache a long prefix automatically and accept no such block
+    — sending one there would put an unknown dict in the content list.
+
+    **This is the only half of caching that is ours.** The block below is byte-identical on
+    every call of a turn, which is what makes it cacheable at all; whether a gateway acts on
+    that is the gateway's business. The proxy reports no ``cache_read_tokens`` in any run so
+    far, which is why ``usage.model_calls`` exists — the repeated share has to be computable
+    without the provider's cooperation.
+    """
+    factory = getattr(model, "create_cache_point", None)
+    if not callable(factory):
+        return None
+    try:
+        point = factory()
+    except Exception:  # noqa: BLE001 — a provider that cannot make one simply gets none
+        return None
+    return point if isinstance(point, dict) else None
+
+
+def _with_block(messages: list[Any], block: str, cache_point: dict[str, Any] | None = None) -> list[Any]:
+    """``messages`` with the context block inserted just before the last human turn.
+
+    ``cache_point`` rides in the same message, after the text, so the breakpoint sits at the end
+    of the stable prefix — system prompt plus this block — and every later call re-reads it
+    instead of re-paying for it.
+    """
+    content: Any = [block, cache_point] if cache_point else block
     out = list(messages)
     for i in range(len(out) - 1, -1, -1):
         if str(getattr(out[i], "type", "")) == "human":
-            out.insert(i, HumanMessage(block))
+            out.insert(i, HumanMessage(content=content))
             return out
-    out.append(HumanMessage(block))
+    out.append(HumanMessage(content=content))
     return out
 
 

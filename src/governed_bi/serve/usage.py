@@ -39,6 +39,13 @@ def reported_tokens(messages: Any) -> dict[str, int] | None:
     if isinstance(messages, Mapping) or not isinstance(messages, (list, tuple)):
         messages = [messages]
     total = {"input_tokens": 0, "output_tokens": 0}
+    #: How many model calls contributed. One per ``AIMessage`` carrying usage metadata, so an
+    #: agent loop's row says how many round trips it paid for instead of only the sum.
+    #: Without it a turn's cost cannot be split into "one big call" and "six repeated ones",
+    #: and the repeated part is the whole of what prompt caching can remove -- which matters
+    #: because the internal proxy does not report ``cache_read_tokens`` at all, so this count
+    #: is the only route to an exact figure rather than a bound.
+    calls = 0
     #: Only the cache keys a provider actually reported. A two-key dict initialised to zero and
     #: emitted whole as soon as **either** key appeared made ``cache_write_tokens: 0`` this
     #: code's claim wearing the provider's clothes.
@@ -52,6 +59,7 @@ def reported_tokens(messages: Any) -> dict[str, int] | None:
         if not all(isinstance(v, int) and not isinstance(v, bool) for v in counts.values()):
             return None
         seen = True
+        calls += 1
         for key, value in counts.items():
             total[key] += int(value)  # type: ignore[arg-type]
         details = usage.get("input_token_details")
@@ -70,7 +78,7 @@ def reported_tokens(messages: Any) -> dict[str, int] | None:
                 cache["reasoning_tokens"] = cache.get("reasoning_tokens", 0) + value
     if not seen:
         return None
-    return {**total, **cache}
+    return {**total, **cache, "model_calls": calls}
 
 
 def usage_row(*, stage: str, model: Any, messages: Any, turn_index: Any) -> dict[str, Any]:

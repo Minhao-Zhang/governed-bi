@@ -61,13 +61,22 @@ def normalise(text: str) -> str:
 
 def spellings_for(
     corpus: AnalystCorpus, licensed: frozenset[str]
-) -> tuple[Mapping[str, str], frozenset[str]]:
-    """``(folded -> declared spelling, ambiguous folds)`` for this turn's licensed tables.
+) -> tuple[Mapping[str, str], frozenset[str], Mapping[str, Mapping[str, str]]]:
+    """``(folded -> declared, ambiguous folds, per-table folded -> declared)``.
 
-    Scoped to ``licensed`` (corpus-wide collisions would refuse almost everything).
-    Ambiguous folds refuse at canonicalisation. Pure function of ``(corpus, licensed)``.
+    Scoped to ``licensed``, because a corpus-wide map makes ``name``, ``id`` and ``city``
+    ambiguous and would refuse nearly every query. **That scoping is right in kind and was not
+    narrow enough**: a turn licenses ~26 tables across ~8 schemas, so two of them declaring
+    ``Name`` and ``name`` made every reference to either refuse. Measured on the 2026-08-09 v3
+    arm, that hit 119 of 1 351 turns, 112 of which ended ``capped`` at EX 0.025, and it burned
+    24% of the run's input tokens on statements the model was never told how to fix.
+
+    The third return value is the fix: the same map **per table**, so a *qualified* reference
+    resolves against its own table and never consults the flat one. ``T1."Name"`` was never
+    ambiguous; only the flat namespace made it look that way.
     """
     names: list[str] = []
+    by_table: dict[str, Mapping[str, str]] = {}
     for table_id in sorted(licensed):
         table = corpus.get(table_id)
         if table is None:
@@ -76,12 +85,49 @@ def spellings_for(
             value = getattr(table, attr, None)
             if isinstance(value, str) and value:
                 names.append(value)
+        own: list[str] = []
         for column_id in getattr(table, "columns", ()) or ():
             column = corpus.get(str(column_id))
             physical = getattr(column, "physical_name", None)
             if isinstance(physical, str) and physical:
                 names.append(physical)
-    return fold_map(names)
+                own.append(physical)
+        # Keyed by both the bare and the schema-qualified table name, because a reference may
+        # carry either. A table whose *own* columns collide keeps no entry: within one table
+        # the collision is real and the flat map's refusal is the right answer.
+        own_spellings, own_ambiguous = fold_map(own)
+        if own_ambiguous:
+            continue
+        physical_name = getattr(table, "physical_name", None)
+        schema = getattr(table, "schema", None)
+        if isinstance(physical_name, str) and physical_name:
+            by_table[fold(physical_name)] = own_spellings
+            if isinstance(schema, str) and schema:
+                by_table[f"{fold(schema)}.{fold(physical_name)}"] = own_spellings
+    return (*fold_map(names), by_table)
+
+
+def _sources(tree: exp.Expression) -> dict[str, str]:
+    """``{alias or bare name (folded) -> by_table key}`` for the statement's real tables.
+
+    A CTE name is **excluded**: it is a name the statement defines, so resolving a column
+    against a licensed table that happens to share its name would canonicalise a reference to
+    something the query never read. Absent from this map means "fall through to the flat pass",
+    which is the behaviour that already existed.
+    """
+    defined = {fold(str(c.alias_or_name)) for c in tree.find_all(exp.CTE) if c.alias_or_name}
+    out: dict[str, str] = {}
+    for table in tree.find_all(exp.Table):
+        name = fold(str(table.name or ""))
+        if not name or name in defined:
+            continue
+        key = f"{fold(str(table.db))}.{name}" if table.db else name
+        for handle in (fold(str(table.alias or "")), name):
+            if handle and handle not in defined:
+                # First writer wins: two sources sharing an alias is a statement BINDING will
+                # refuse, and guessing between them here would be the very thing this refuses.
+                out.setdefault(handle, key)
+    return out
 
 
 def canonicalise(
@@ -90,6 +136,7 @@ def canonicalise(
     spellings: Mapping[str, str],
     ambiguous: frozenset[str] = frozenset(),
     dialect: str = DEFAULT_DIALECT,
+    by_table: Mapping[str, Mapping[str, str]] | None = None,
 ) -> str | CheckVerdict:
     """Rewrite every declared identifier to the corpus's spelling, **and quote it**.
 
@@ -116,13 +163,41 @@ def canonicalise(
     if tree is None:
         return refuse("r_empty_statement", "no statement to canonicalise")
 
+    # Qualified columns first. ``T1."Name"`` names exactly one table, so the flat map's
+    # ambiguity — which exists only because ~26 licensed tables share one namespace — cannot
+    # apply to it. Resolving these here is what stops a genuine collision two tables away from
+    # refusing a reference that was never in doubt.
+    settled: set[int] = set()
+    if by_table is None:
+        by_table = {}
+    if by_table:
+        sources = _sources(tree)
+        for column in tree.find_all(exp.Column):
+            identifier = column.this
+            if not isinstance(identifier, exp.Identifier):
+                continue
+            own = by_table.get(sources.get(fold(column.table or ""), ""))
+            if own is None:
+                continue
+            declared = own.get(fold(identifier.name))
+            if declared is None:
+                # Not this table's column. Left to the flat pass and then to BINDING, which is
+                # the layer that decides what a reference resolves to.
+                continue
+            identifier.set("this", declared)
+            identifier.set("quoted", True)
+            settled.add(id(identifier))
+
     for identifier in tree.find_all(exp.Identifier):
+        if id(identifier) in settled:
+            continue
         key = fold(identifier.name)
         if key in ambiguous:
             return refuse(
                 "r_ambiguous_fold",
-                f"{identifier.name} folds onto more than one declared identifier, so the "
-                "engine would pick one and the column layer would approve another",
+                f"{identifier.name} folds onto more than one declared identifier and carries "
+                "no qualifier that names which, so the engine would pick one and the column "
+                "layer would approve another",
             )
         declared = spellings.get(key)
         if declared is None:
@@ -186,6 +261,7 @@ def prepare(
     corpus: AnalystCorpus | None,
     spellings: Mapping[str, str] | None,
     ambiguous_folds: frozenset[str] = frozenset(),
+    spellings_by_table: Mapping[str, Mapping[str, str]] | None = None,
     default_schema: str | None = None,
     dialect: str = DEFAULT_DIALECT,
     policy: GovernancePolicy | None = None,
@@ -222,7 +298,11 @@ def prepare(
 
     normalised = normalise(sql)
     canonical = canonicalise(
-        normalised, spellings=spellings or {}, ambiguous=ambiguous_folds, dialect=dialect
+        normalised,
+        spellings=spellings or {},
+        ambiguous=ambiguous_folds,
+        dialect=dialect,
+        by_table=spellings_by_table,
     )
     if isinstance(canonical, dict):
         return Prepared(verdict=canonical, sql=None, raw=sql, canonical=None)

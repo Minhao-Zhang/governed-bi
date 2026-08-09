@@ -258,13 +258,14 @@ def sample_rows(
         limit=max(1, min(int(limit), SAMPLE_ROWS_MAX_VALUES)),
         dialect=dialect,
     )
-    spellings, ambiguous = spellings_for(corpus, bounds.licensed)
+    spellings, ambiguous, by_table = spellings_for(corpus, bounds.licensed)
     prepared = prepare(
         statement,
         licensed=bounds.licensed,
         corpus=corpus,
         spellings=spellings,
         ambiguous_folds=ambiguous,
+        spellings_by_table=by_table,
         dialect=dialect,
         policy=policy,
     )
@@ -332,13 +333,14 @@ def run_query(
     # no such relation — 81 tables and 610 columns in the obfuscated lake failed that way,
     # each *after* a passing verdict. Scoped to `bounds.licensed`, because a corpus-wide map
     # makes `name`, `id` and `city` ambiguous and would refuse nearly every query.
-    spellings, ambiguous = spellings_for(corpus, bounds.licensed)
+    spellings, ambiguous, by_table = spellings_for(corpus, bounds.licensed)
     prepared = prepare(
         sql,
         licensed=bounds.licensed,
         corpus=corpus,
         spellings=spellings,
         ambiguous_folds=ambiguous,
+        spellings_by_table=by_table,
         dialect=getattr(connector, "dialect", None) or "sqlite",
         policy=policy,
     )
