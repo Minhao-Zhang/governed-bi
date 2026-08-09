@@ -34,8 +34,16 @@ jobs:
       # `--frozen` on purpose: a CI run that re-resolves the lockfile is not testing the
       # dependency set anyone else has. It is also what every command in this repo's own
       # docs uses, so CI and a developer's shell agree.
+      #
+      # `--extra bedrock` because the provider translation is pure Python and is exactly the
+      # code that fails silently: `max_retries` handed to a boto client is accepted and
+      # ignored, so an arm records a retry budget it does not honour. Testing it needs
+      # `botocore.config.Config` importable and costs no AWS call. Without the extra those
+      # tests raised ModuleNotFoundError here while passing on a developer machine that had
+      # run `uv sync --extra bedrock` — CI and the shell disagreeing, which is the one thing
+      # `--frozen` is here to prevent.
       - name: Sync (frozen)
-        run: uv sync --frozen
+        run: uv sync --frozen --extra bedrock
 
       - name: Lint
         run: uv run --frozen ruff check .

@@ -20,12 +20,17 @@ half of the interrupt is covered end to end by
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from governed_bi.api import routes
-from governed_bi.register.stages import Outcome
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from turn_contract_fixtures import dsn  # noqa: E402, F401 -- pytest fixture, by name
+
+from governed_bi.api import routes  # noqa: E402
+from governed_bi.register.stages import Outcome  # noqa: E402
 
 CLARIFICATION = {
     "kind": "clarification",
@@ -217,8 +222,14 @@ def test_a_dropped_in_corpus_is_found_but_ambiguity_is_refused(tmp_path, monkeyp
         graph_app._dropped_in_corpus(tmp_path)
 
 
-def test_chat_actually_answers_rather_than_raising() -> None:
+def test_chat_actually_answers_rather_than_raising(dsn: str) -> None:  # noqa: F811
     """`/chat` must reach `stamp`, not just be importable.
+
+    Takes the shared ``dsn`` fixture, which skips when no server is configured. Without it
+    this raised in CI rather than skipping: the route builds a session, and ``graph_app``
+    refuses to build one with no connector because "the server serves a corpus over a live
+    connector; there is no offline mode". A test that needs a database has to say so the way
+    its neighbours do, or it reports a missing environment as a broken transport.
 
     Written because it did not exist and something silently broke. Every node became
     `async def` (the only shape LangGraph will attach a node timeout to) while this route

@@ -9,9 +9,20 @@ failure mode is silence.
 
 from __future__ import annotations
 
+import importlib.util
+
 import pytest
 
 from governed_bi.model import provider as P
+
+#: Bedrock's half of the translation needs ``botocore.config.Config`` to build a real object
+#: to assert on. CI installs it (`uv sync --frozen --extra bedrock`) so these run there; a
+#: base install skips them rather than erroring, because `langchain-aws` is an extra on
+#: purpose — it pulls a boto3 tree the OpenAI and proxy arms never touch.
+needs_bedrock = pytest.mark.skipif(
+    importlib.util.find_spec("botocore") is None,
+    reason="needs the bedrock extra: uv sync --extra bedrock",
+)
 
 # ── which gateway serves a surface ────────────────────────────────────────────
 
@@ -56,12 +67,14 @@ def test_openai_keeps_its_own_spelling() -> None:
     }
 
 
+@needs_bedrock
 def test_bedrock_never_receives_openai_keywords() -> None:
     """``use_responses_api`` raises on ``ChatBedrockConverse``; the other two are dropped."""
     kwargs = P._bedrock_kwargs(effort="high", timeout=300.0, max_retries=3, tools=True)
     assert not {"use_responses_api", "reasoning_effort", "timeout", "max_retries"} & set(kwargs)
 
 
+@needs_bedrock
 def test_bedrock_retries_count_the_first_attempt() -> None:
     """``max_attempts`` includes the first try; the knob counts retries after it.
 
