@@ -52,23 +52,30 @@ def _model(name: str, creds: Any, effort: str | None = None) -> Any:
     """A real chat model, constructed **here** rather than behind a port.
 
     Decision #1: LangChain's ``BaseChatModel`` already *is* that port, and v1's three layers
-    over it are recorded as a mistake. This is the only place a model is chosen.
-    """
-    if not creds.have(*creds.OPENAI_KEY_NAMES):
-        raise SystemExit(
-            f"no model credential: set one of {' / '.join(creds.OPENAI_KEY_NAMES)} in the "
-            "environment or .env, or pass --no-model to serve the stub path"
-        )
-    from langchain.chat_models import init_chat_model
+    over it are recorded as a mistake. This is the only place *this entry point* chooses one.
 
-    # `use_responses_api` because this agent binds tools and the provider refuses tools
-    # alongside `reasoning_effort` on chat completions. Kept identical to `api/graph_app.py`:
-    # two entry points constructing a model differently are two answers to "what did this run
-    # use", on a comparability knob.
-    kwargs: dict[str, Any] = {"model_provider": "openai", "use_responses_api": True}
-    if effort:
-        kwargs["reasoning_effort"] = effort
-    return init_chat_model(name, **kwargs)
+    Which gateway serves it, and how effort/timeout/retries are spelled for that gateway,
+    is :mod:`governed_bi.model.provider` -- shared with ``api/graph_app.py`` and the eval
+    driver. Two entry points constructing a model differently are two answers to "what did
+    this run use" on a comparability knob, and the previous copy of the OpenAI spelling here
+    was exactly that waiting to happen: it went stale the moment Bedrock landed in the other
+    one. ``creds`` is no longer consulted for the key -- the provider module asks whichever
+    gateway was selected, and Bedrock authenticates from a role with no variable set.
+    """
+    from ..model import provider as provider_mod
+
+    chosen = provider_mod.provider_for("agent")
+    if not provider_mod.credentials_present(chosen):
+        names = " / ".join(provider_mod.credential_names(chosen)) or "none known"
+        raise SystemExit(
+            f"no credential for the {chosen} provider ({names}); set one in the environment "
+            "or .env, or pass --no-model to serve the stub path"
+        )
+    # tools=True: this agent binds tools, which on OpenAI selects the Responses API -- the
+    # only transport there that carries tools and reasoning_effort together.
+    return provider_mod.chat_model(
+        name, surface="agent", provider=chosen, effort=effort or None, tools=True
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -105,10 +112,10 @@ def main(argv: list[str] | None = None) -> int:
     embedder = None
     vector_cache = None
     if args.embed:
-        from ..model import OpenAIEmbedder
+        from ..model import provider as provider_mod
         from ..retrieve.vector_cache import vector_cache_from_environment
 
-        embedder = OpenAIEmbedder()
+        embedder = provider_mod.embedder(provider_mod.default_embedding_model())
         # The same persisted cache the server uses. Without it every invocation re-embedded
         # all 13,968 summaries in the pooled corpus before answering one question, and nothing
         # here reports how many vectors were reused, so it went unnoticed.

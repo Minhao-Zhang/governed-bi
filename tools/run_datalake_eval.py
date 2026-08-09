@@ -398,13 +398,20 @@ def _build_models(args):
                 request_timeout_s=float(args.timeout),
             )
         if args.embed:
-            from governed_bi.model import ProxyEmbedder
+            from governed_bi.model import provider as provider_mod
             from governed_bi.retrieve.vector_cache import vector_cache_from_environment
 
-            embedder = ProxyEmbedder()
-            # Keyed on the provider-qualified identity, so a the internal proxy-served vector cannot be
-            # handed to an OpenAI-served run of the same width.
-            vector_cache = vector_cache_from_environment(model=embedder.model)
+            # Honours --embedding-provider even on the proxy arm: the embedder is a separate
+            # surface, and pairing a proxy agent with an OpenAI embedder is a real arm.
+            embed_provider = args.embedding_provider or "proxy"
+            embedder = provider_mod.embedder(
+                args.embedding_model or provider_mod.default_embedding_model(embed_provider),
+                provider=embed_provider,
+            )
+            # The requested name only chooses a directory. Each entry inside is keyed on the
+            # provider-qualified `embedder.model`, so a proxy-served vector cannot be handed
+            # to an OpenAI-served run of the same width.
+            vector_cache = vector_cache_from_environment(model=embedder.requested_model)
         return model, utility_model, embedder, vector_cache
 
     from governed_bi.model import provider as provider_mod

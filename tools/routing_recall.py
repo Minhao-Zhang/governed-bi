@@ -89,28 +89,32 @@ def main(argv: list[str] | None = None) -> int:
     from governed_bi.govern.policy import GovernancePolicy
     from governed_bi.serve import session as session_mod
 
+    from governed_bi.model import provider as provider_mod
+
     embedder = None
     vector_cache = None
     if args.embed:
-        from governed_bi.model import OpenAIEmbedder
         from governed_bi.retrieve.vector_cache import vector_cache_from_environment
 
-        embedder = OpenAIEmbedder()
+        # The embedder's gateway is exactly what this tool measures the effect of: the
+        # semantic channel is half of routing, so an arm on a different embedding provider
+        # is a different recall number, not a detail. Printed for the same reason.
+        embed_provider = provider_mod.provider_for("embedding")
+        embedder = provider_mod.embedder(provider_mod.default_embedding_model(embed_provider))
         vector_cache = vector_cache_from_environment(model=embedder.requested_model)
+        print(f"embedder: {embedder.requested_model} on {embed_provider}")
 
     utility = None
     if args.rewrite:
         import os
 
-        from langchain.chat_models import init_chat_model
-
         model_id = os.environ.get("GOVERNED_BI_UTILITY_MODEL") or os.environ["GOVERNED_BI_MODEL"]
-        kwargs = {"model_provider": "openai"}
         effort = os.environ.get("GOVERNED_BI_UTILITY_MODEL_EFFORT")
-        if effort:
-            kwargs["reasoning_effort"] = effort
-        utility = init_chat_model(model_id, **kwargs)
-        print(f"rewriters ON: {model_id} effort={effort or '(default)'}")
+        chosen = provider_mod.provider_for("utility")
+        utility = provider_mod.chat_model(
+            model_id, surface="utility", provider=chosen, effort=effort or None
+        )
+        print(f"rewriters ON: {model_id} on {chosen} effort={effort or '(default)'}")
     else:
         print("rewriters OFF: facets search the raw question")
 

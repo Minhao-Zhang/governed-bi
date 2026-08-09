@@ -82,8 +82,6 @@ def main(argv: list[str] | None = None) -> int:
 
     import os
 
-    from langchain.chat_models import init_chat_model
-
     from governed_bi.datasource.postgres import PostgresConnector
     from governed_bi.eval.datalake import (
         gold_tables,
@@ -93,19 +91,16 @@ def main(argv: list[str] | None = None) -> int:
         table_coverage,
     )
     from governed_bi.govern.policy import GovernancePolicy
-    from governed_bi.model import OpenAIEmbedder
+    from governed_bi.model import provider as provider_mod
     from governed_bi.register import prompts as prompts_mod
     from governed_bi.retrieve.vector_cache import vector_cache_from_environment
     from governed_bi.serve import session as session_mod
 
     model_id = os.environ.get("GOVERNED_BI_UTILITY_MODEL") or os.environ["GOVERNED_BI_MODEL"]
-    kwargs: dict = {"model_provider": "openai"}
     effort = os.environ.get("GOVERNED_BI_UTILITY_MODEL_EFFORT")
-    if effort:
-        kwargs["reasoning_effort"] = effort
-    utility = init_chat_model(model_id, **kwargs)
+    utility = provider_mod.chat_model(model_id, surface="utility", effort=effort or None)
 
-    embedder = OpenAIEmbedder()
+    embedder = provider_mod.embedder(provider_mod.default_embedding_model())
     cache = vector_cache_from_environment(model=embedder.requested_model)
 
     def build(corpus_dir: str):

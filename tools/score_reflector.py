@@ -287,14 +287,15 @@ def _report_signals(states: list[dict]) -> None:
 
 
 def _judge_all(states: list[dict], *, model: str, effort: str) -> list[dict]:
-    from langchain.chat_models import init_chat_model
-
+    from governed_bi.model import provider as provider_mod
     from governed_bi.serve.nodes.reflect import reflect_on
 
-    kwargs: dict = {"model_provider": "openai", "use_responses_api": True, "max_retries": 8}
-    if effort:
-        kwargs["reasoning_effort"] = effort
-    judge = init_chat_model(model, **kwargs)
+    # The judge runs on the agent surface's gateway: it is scoring the same reflector the
+    # agent runs, so a judge on a different provider grades one arm with another's model.
+    # tools=True because `reflect_on` binds a structured-output tool.
+    judge = provider_mod.chat_model(
+        model, surface="agent", effort=effort or None, max_retries=8, tools=True
+    )
 
     async def run() -> list[dict]:
         out = []
