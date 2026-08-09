@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
@@ -19,14 +19,19 @@ from governed_bi.register.prompts import prompt_set_hash
 
 from ..corpus.analyst import for_analyst
 from ..corpus.hash import corpus_content_hash
-from ..corpus.schema import Asset, AssetType
+from ..corpus.schema import Asset, AssetType, MetricAsset, TableAsset, TermAsset
 from ..corpus.store import load as load_corpus
 from ..corpus.store import write as write_asset
 from ..model.embedder import embedding_knobs
 from ..ports import Embedder
 from ..register.knobs import defaults as knob_defaults
 from ..retrieve.index import UnifiedIndex, build_index
-from ..retrieve.structure import CorpusStructure, build_structure
+from ..retrieve.structure import (
+    CorpusStructure,
+    bind_endpoint,
+    build_structure,
+    table_lookup,
+)
 from .runtime import model_id
 from .state import PER_TURN_RESET
 
@@ -169,6 +174,90 @@ def _is_excluded(asset: Any) -> bool:
     return bool(getattr(getattr(asset, "governance", None), "excluded", False))
 
 
+#: The references a type **cannot lose**. ``build_structure`` records a *fatal* problem when one
+#: of these fails to resolve, so an asset whose required reference is excluded has to leave with
+#: it — otherwise honouring a governance flag produces a corpus that refuses to serve.
+#:
+#: Read against ``retrieve/structure.py``, not invented here: these are exactly the endpoints
+#: whose ``Problem`` takes the default ``fatal=True``. ``few_shot.sql`` is absent on purpose —
+#: :func:`~governed_bi.retrieve.structure._link_few_shot` passes ``fatal=False``, so a few-shot
+#: citing an excluded table degrades rather than stops (see :func:`_visible`).
+_REQUIRED_TABLE_REFS: Mapping[AssetType, tuple[str, ...]] = {
+    AssetType.column: ("parent_table",),
+    AssetType.join: ("left_table", "right_table"),
+    AssetType.metric: ("base_table",),
+}
+
+
+def _excluded_closure(assets: Sequence[Asset]) -> frozenset[str]:
+    """Ids that must leave the served set: the ones a person marked, plus their dependents.
+
+    Endpoints are resolved with :func:`~governed_bi.retrieve.structure.bind_endpoint` rather
+    than compared as strings, because ``left_table``/``base_table``/``parent_table`` may be any
+    of four spellings — asset id, ``table_id``, bare ``physical_name``, or the engine's
+    ``{schema}.{physical_name}``. A string test would miss the three that are not the id and let
+    the fatal problem back in.
+
+    The lookup is built over **every** table including the excluded ones, so an endpoint binds
+    to its real target and is then tested for exclusion. Binding against the survivors instead
+    would make an ambiguous bare name resolve to whichever table happened to remain.
+
+    ``scope`` reproduces structure.py's three call sites in one expression: only ``column``
+    declares a ``schema`` field, so ``join`` and ``metric`` get ``None`` — which is what
+    ``_link_join`` and ``_link_metric`` pass.
+
+    A fixpoint rather than one pass. Today no required reference points at a join or a metric,
+    so a single round would do; a bounded loop cannot be wrong when one is added.
+
+    ``asset_type`` is read inline rather than through a local helper: ``structure.py`` already
+    owns ``_type_of``, and ``tools/check_one_implementation.py`` is right to refuse a second one.
+    """
+    lookup = table_lookup({a.id: a for a in assets if a.asset_type is AssetType.table})
+    out = {asset.id for asset in assets if _is_excluded(asset)}
+    for _ in range(len(assets) + 1):
+        before = len(out)
+        for asset in assets:
+            if asset.id in out:
+                continue
+            for field_name in _REQUIRED_TABLE_REFS.get(asset.asset_type, ()):
+                bound, _why = bind_endpoint(
+                    getattr(asset, field_name, None),
+                    lookup,
+                    scope=getattr(asset, "schema", None),
+                )
+                # `bound is None` means the corpus was already broken or ambiguous there.
+                # Leave it: `build_structure` reports it exactly as it does today, and
+                # inventing an exclusion would hide a curation defect behind a policy flag.
+                if bound is not None and bound in out:
+                    out.add(asset.id)
+                    break
+        if len(out) == before:
+            break
+    return frozenset(out)
+
+
+def _without_excluded_refs(asset: Asset, excluded: frozenset[str]) -> Asset:
+    """``asset`` with its **optional** references to excluded ids removed.
+
+    The collections and the one nullable binding. Dropping a member costs recall; dropping the
+    whole asset would withhold text that stands on its own — a term still glosses business
+    vocabulary once its binding is gone, which ``_link_term`` treats as a state rather than a
+    defect ("an unbound term is a state, not a defect").
+    """
+    # ``isinstance`` rather than ``asset_type`` here: ``Asset`` is a union of the eight
+    # dataclasses, and narrowing is what lets ``replace`` type-check per field.
+    if isinstance(asset, TableAsset):
+        columns = tuple(c for c in asset.columns if c not in excluded)
+        return replace(asset, columns=columns) if len(columns) != len(asset.columns) else asset
+    if isinstance(asset, MetricAsset):
+        dims = tuple(d for d in asset.dimensions if d not in excluded)
+        return replace(asset, dimensions=dims) if len(dims) != len(asset.dimensions) else asset
+    if isinstance(asset, TermAsset):
+        if asset.binding is not None and asset.binding.target_id in excluded:
+            return replace(asset, binding=None)
+    return asset
+
+
 def _visible(assets: Sequence[Asset]) -> list[Asset]:
     """``assets`` minus everything ``governance.excluded`` reaches (D6).
 
@@ -181,22 +270,30 @@ def _visible(assets: Sequence[Asset]) -> list[Asset]:
     still receives the **whole** list, because it needs the excluded columns' keys to make
     ``check()`` refuse SQL that names one.
 
-    Exclusion carries to a table's own columns. A column id is ``{table_id}.{slug(name)}`` by
-    construction (:func:`~governed_bi.corpus.identity.derive_column_id` is the single spelling
-    for loader and seed alike), so the prefix test is exact rather than a guess. Without it,
-    excluding a table would leave its columns' ``parent_table`` dangling and turn a deliberate
-    exclusion into a **fatal** structure problem — an unservable corpus as the reward for using
-    the feature.
+    **Dropping an asset is not enough on its own, and the first version of this shipped that
+    way.** Removing an asset leaves every reference to it dangling, and a dangling *required*
+    reference is a ``fatal`` problem — so ``serve/__main__.py`` refuses to serve and
+    ``/routes`` reports ``servable: false``. Measured on the two shapes the corpus actually
+    has: excluding one column left its parent table still declaring the id in ``columns``
+    (``TableAsset.columns`` holds derived ids), and excluding one table left every join on it
+    unbindable. Withholding a decoy — the whole point of the flag — made the corpus unloadable.
+
+    So exclusion propagates two ways, split on what structure.py treats as required:
+
+    * a **required** reference to an excluded asset excludes the referrer too
+      (:data:`_REQUIRED_TABLE_REFS`, via :func:`_excluded_closure`);
+    * an **optional** one is pruned in place (:func:`_without_excluded_refs`).
+
+    One thing is deliberately *not* handled: a ``few_shot`` whose ``sql`` names an excluded
+    table still ships, because that reference is non-fatal and pruning it would mean parsing
+    SQL here. It teaches the model a query over a withheld table, which is a curation question
+    rather than a loading one — worth deciding, not worth guessing at inside this function.
     """
-    excluded_tables = tuple(
-        f"{asset.id}."
-        for asset in assets
-        if _is_excluded(asset) and getattr(asset, "asset_type", None) is AssetType.table
-    )
+    if not any(_is_excluded(asset) for asset in assets):
+        return list(assets)  # the path every existing corpus takes: nothing is copied
+    excluded = _excluded_closure(assets)
     return [
-        asset
-        for asset in assets
-        if not _is_excluded(asset) and not asset.id.startswith(excluded_tables)
+        _without_excluded_refs(asset, excluded) for asset in assets if asset.id not in excluded
     ]
 
 

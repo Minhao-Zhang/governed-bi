@@ -23,7 +23,13 @@ from governed_bi.register.assets import AssetType
 from .connect import canon_edge
 from .index import schema_tag_for
 
-__all__ = ["CorpusStructure", "build_structure", "complete_joins"]
+__all__ = [
+    "CorpusStructure",
+    "bind_endpoint",
+    "build_structure",
+    "complete_joins",
+    "table_lookup",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +82,7 @@ def build_structure(
     types = {aid: _type_of(asset) for aid, asset in by_id.items()}
     tables = {aid: a for aid, a in by_id.items() if types.get(aid) == AssetType.table.value}
     table_schemas = {aid: str(_attr(a, "schema") or "") for aid, a in tables.items()}
-    lookup = _table_lookup(tables)
+    lookup = table_lookup(tables)
 
     references: dict[str, set[str]] = {}
     joins_by_edge: dict[tuple[str, str], list[str]] = {}
@@ -127,7 +133,7 @@ def complete_joins(licensed: Set[Any], structure: CorpusStructure) -> frozenset[
 # ── endpoint reconciliation ───────────────────────────────────────────────────
 
 
-def _table_lookup(tables: Mapping[str, Any]) -> Mapping[str, frozenset[str]]:
+def table_lookup(tables: Mapping[str, Any]) -> Mapping[str, frozenset[str]]:
     """Every spelling a table endpoint may use -> the table ids that answer to it.
 
     Four keys per table: the asset id, ``table_id(schema, physical_name)``, the bare
@@ -137,7 +143,11 @@ def _table_lookup(tables: Mapping[str, Any]) -> Mapping[str, frozenset[str]]:
     without it every few-shot citing a slugged table reports "matches no table asset".
 
     The value is a **set**: a bare name present in two schemas answers with two ids, and
-    :func:`_bind` refuses rather than guessing.
+    :func:`bind_endpoint` refuses rather than guessing.
+
+    Public because ``serve/session.py`` has to answer "does this endpoint name an excluded
+    table?" before ``build_structure`` runs, and a second copy of the four-key policy here is
+    how ``airline."Air Carriers"`` ended up with no table asset in the first place.
     """
     out: dict[str, set[str]] = {}
     for aid, asset in tables.items():
@@ -154,7 +164,7 @@ def _table_lookup(tables: Mapping[str, Any]) -> Mapping[str, frozenset[str]]:
     return {key: frozenset(ids) for key, ids in out.items()}
 
 
-def _bind(
+def bind_endpoint(
     endpoint: Any,
     lookup: Mapping[str, frozenset[str]],
     *,
@@ -204,7 +214,7 @@ def _link_column(
 ) -> None:
     """``ColumnAsset`` hit pulls in its ``TableAsset``."""
     parent = _attr(asset, "parent_table")
-    bound, why = _bind(parent, lookup, scope=_attr(asset, "schema"))
+    bound, why = bind_endpoint(parent, lookup, scope=_attr(asset, "schema"))
     if bound is None:
         problems.append(Problem(where=aid, reason=f"parent_table {why}"))
         return
@@ -272,7 +282,7 @@ def _link_metric(
     looked up in ``by_id`` rather than bound through ``lookup``, which answers for tables
     only. Resolving them is also what makes a dangling dimension reportable at all.
     """
-    bound, why = _bind(_attr(asset, "base_table"), lookup)
+    bound, why = bind_endpoint(_attr(asset, "base_table"), lookup)
     if bound is None:
         problems.append(Problem(where=aid, reason=f"base_table {why}"))
         return
@@ -324,7 +334,7 @@ def _link_few_shot(
         return
     scope = _attr(asset, "schema")
     for name in names:
-        bound, why = _bind(name, lookup, scope=scope)
+        bound, why = bind_endpoint(name, lookup, scope=scope)
         if bound is None:
             problems.append(
                 Problem(where=aid, reason=f"sql references a table that {why}", fatal=False)
@@ -348,8 +358,8 @@ def _link_join(
     then join. The reverse direction is :func:`complete_joins` (§2.8.1: it cannot live
     in a disjunctive fixpoint).
     """
-    left, left_why = _bind(_attr(asset, "left_table"), lookup)
-    right, right_why = _bind(_attr(asset, "right_table"), lookup)
+    left, left_why = bind_endpoint(_attr(asset, "left_table"), lookup)
+    right, right_why = bind_endpoint(_attr(asset, "right_table"), lookup)
     for side, why in (("left_table", left_why), ("right_table", right_why)):
         if why is not None:
             problems.append(
@@ -396,9 +406,9 @@ def _schema_tags(
             asset_type = AssetType(kind)
         except ValueError:  # pragma: no cover - _type_of only yields register values
             continue
-        parent, _ = _bind(_attr(asset, "parent_table"), lookup, scope=_attr(asset, "schema"))
-        base, _ = _bind(_attr(asset, "base_table"), lookup)
-        left, _ = _bind(_attr(asset, "left_table"), lookup)
+        parent, _ = bind_endpoint(_attr(asset, "parent_table"), lookup, scope=_attr(asset, "schema"))
+        base, _ = bind_endpoint(_attr(asset, "base_table"), lookup)
+        left, _ = bind_endpoint(_attr(asset, "left_table"), lookup)
         binding = _attr(asset, "binding")
         target_id = str(_attr(binding, "target_id")) if binding is not None else ""
         target = by_id.get(target_id)
