@@ -10,19 +10,30 @@ Wired in [`serve/graph.py`](../src/governed_bi/serve/graph.py). Nodes live under
 [`serve/nodes/`](../src/governed_bi/serve/nodes/).
 
 ```
-accept → guard → rewrite → negative_gate
+[accept] → guard → rewrite → negative_gate
   → fanout ─┬─ facet_schema
             ├─ facet_term
             ├─ facet_metric
             ├─ facet_entity
             └─ facet_example
   → route → resolve → connect → assemble
-  → agent_core → reflect → narrate → stamp → record
+  → agent_core → reflect → narrate → stamp → [record] → END
+
+guard blocked ─────────────────────→ refuse  ─┐
+negative hit / route / connect ────→ decline ─┼─→ stamp
+any node raising (wrap_node) ─────────────────┘
 ```
+
+`accept` and `record` are bracketed because both are optional arguments to
+`build_graph`: `accept` (the client-facing path) also switches the graph to the
+`ServeInput` / `ServeOutput` schemas, and without `record` the graph runs
+`stamp → END`. Every terminal path funnels through `stamp`, including crashes —
+`wrap_node` turns a node exception into `failure` + `path_kind: crashed` and
+routes there rather than letting it escape the graph.
 
 | Stage | Role |
 |---|---|
-| `guard` | LLM / structured scope gate |
+| `guard` | Five deterministic rules first, then a model-backed BI-scope gate on the utility model |
 | `rewrite` | Stub rail today; facet query rewriting lives inside `facet_*` |
 | `negative_gate` | Negative-example refuse path |
 | `facet_*` | Parallel retrieval channels (each may rewrite its query) |
@@ -34,9 +45,28 @@ accept → guard → rewrite → negative_gate
 | `stamp` | The turn record: `outcome`, `guardrail_errors`, the ledger, `latency_sec` |
 
 `agent_core` tools: `read_body`, `inspect_schema`, `sample_rows`, `run_query`,
-`ask_user`. Governance wraps `run_query` / `sample_rows` ([ADR 0006](adr/0006-execution-time-governance.md)).
-The retrieval context block is injected per model call via middleware; it is not
-appended as an ordinary user message.
+`ask_user`.
+
+**Where governance actually runs.** The two executing tools call it themselves —
+there is no tool-call interceptor, and `wrap_tool_call` appears nowhere in `src/`:
+
+```
+serve/tools.py  →  serve/fetch.py  →  govern/pipeline.py::prepare
+                →  govern/check.py::check()  →  read-only connector
+```
+
+The ledger row comes back on the tool's own `Command(update=...)`, beside the
+payload. What keeps this from being merely a convention is that the model holds no
+connector handle — the connector is closed over inside `build_tools` — and that
+`check()` raises `GovernanceUsageError` rather than defaulting permissive when a
+security argument is unwired. Adding a new executor that skips `check()` is caught
+by `govern/`'s G2 invariant and its tests, not by the topology. Layers, rules and
+executor paths: [ADR 0006](adr/0006-execution-time-governance.md).
+
+`AgentMiddleware` *is* used in `agent_core`, for two things that are **not**
+governance: injecting the retrieval context block on every model call (via
+`wrap_model_call`, so it never enters `messages`), and ending the turn at the
+`run_query` attempt cap.
 
 Server entry: [`api/graph_app.py:make_graph`](../src/governed_bi/api/graph_app.py)
 (`uv run langgraph dev`). HTTP app: [`api/routes.py:app`](../src/governed_bi/api/routes.py)

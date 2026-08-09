@@ -10,6 +10,60 @@
 > current execution governance — 0006 exists because an audit of this design found
 > ten distinct bypasses, one of them in its own first draft.
 
+> **Status note, 2026-08-09 (engine `ba8cef2`).** *Nothing below is edited; this
+> records what the enforcement mechanism actually became, because the banner above
+> retires "tools, ledger shape, and stage names" and a reader can fairly conclude
+> that the **interception point** survived. It did not.*
+>
+> **`wrap_tool_call` does not exist in this tree.** `grep -rn "wrap_tool_call" src/`
+> returns nothing. Every sentence below that places the guardrail or the audit "in
+> `wrap_tool_call`" — Q1, the architecture diagram, the `run_query` row of the tool
+> table, and safety-spine invariants 2, 3 and 10 — describes an intent that took a
+> different form.
+>
+> **What shipped instead: the tool body calls governance, rather than an interceptor
+> wrapping it.** `serve/tools.py::build_tools` closes each tool over a frozen
+> `ToolBounds`, and the two executing tools run
+> `serve/tools.py` → `serve/fetch.py` → `govern/pipeline.py::prepare` →
+> `govern/check.py::check()` → the read-only connector. The ledger row rides back on
+> the tool's own `Command(update={"attempts_by_call": …})` — the same `Command` as
+> the payload — not out of a shared interception point.
+>
+> **The middleware seam is real; governance is not on it.** `AgentMiddleware` and
+> `wrap_model_call` *are* used, in `serve/nodes/agent_core.py`, for two things that
+> are not the guardrail: delivering the retrieval context block on every model call
+> (`_context_middleware`), and ending the turn at the attempt cap
+> (`_CapEndsTheTurn`, a `ToolCallLimitMiddleware.after_model` hook). So the framework
+> primitive this ADR chose is present and doing other work, which is the easiest way
+> to misread the sections below.
+>
+> **What this costs the "by construction" claim.** The guarantee is no longer
+> *framework-enforced at one choke point*; it is *invariant-plus-test* —
+> `govern/__init__.py`'s **G2** ("every executor in `EXECUTOR_PATHS` passes
+> `check()` and ledgers") is a declared invariant with test coverage, not something
+> the runtime makes unskippable. A new executor that forgets `check()` is stopped by
+> review and by G2's tests, not by the topology.
+>
+> What *does* still hold by construction is narrower, and worth stating exactly so it
+> is not oversold either: **the model never holds a connector handle.** The connector
+> is closed over inside `build_tools`, so the only SQL that can reach the database is
+> SQL some tool body chose to send — a prompt still cannot talk its way to the
+> database, which is this ADR's central thesis and is intact. And `check()` fails
+> closed on unwired security arguments: `licensed=None` or a non-`AnalystCorpus`
+> corpus raise `GovernanceUsageError` rather than defaulting to permissive
+> (`govern/check.py:74-86`).
+>
+> **The Context section's own exception list is also out of date — in the safe
+> direction.** Both named exceptions are gone rather than lurking. The semantic cache
+> was deleted 2026-07-28 (Amendment 3 records it inline), so there is no cache-hit
+> path. Graded delivery has no live path at all: `graded_delivery_eligible()` has
+> **zero callers in `src/`** (only `tests/govern/test_graded_delivery.py`),
+> `serve/graph.py` wires no `graded_delivery` node, and nothing writes the `"graded"`
+> executor path that `govern/ledger.py:43` declares — `register/stages.py:79` still
+> declares the stage name. Of the four declared `EXECUTOR_PATHS`, only `agent` and
+> `sample` are written by `src/`. The remaining honest exception in that sentence is
+> the best-effort durable run-log write.
+
 - **Status:** Accepted / Implemented. Grilled & refined in design review
   2026-07-13; cutover landed on `main` 2026-07-14 (commit `d2fdd6a`).
 - **Deciders:** project owner + design session

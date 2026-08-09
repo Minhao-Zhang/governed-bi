@@ -23,6 +23,19 @@
   `NormativeForce`, `Trigger`/PIN, the "tri-modal" framing); the `RVGD` name;
   the `description` field name.
 
+> **Status note, 2026-08-09 (engine `ba8cef2`).** *The Status line above is the
+> 2026-08-03 reading and is left as written; it now understates what shipped.*
+> `retrieve/`, `serve/` and `eval/` have all landed on `v2` —
+> `src/governed_bi/retrieve/` (index, lexical, semantic, fuse, route, resolve,
+> connect, structure, vectors), `src/governed_bi/serve/` (the §3.1 graph, plus two
+> nodes §3.1 does not list) and `src/governed_bi/eval/`. **Curator is still absent:**
+> there is no `curator` package in `src/`, which is why `AGENTS.md` records that the
+> corpus cannot be rebuilt from anything in this tree.
+>
+> The §3.1 topology has drifted from `serve/graph.py`. See the topology note there —
+> it is the discrepancy most likely to mislead, because two shipped nodes run between
+> `agent_core` and `stamp`.
+
 ---
 
 ## Context
@@ -1151,6 +1164,47 @@ START
  END
 ```
 
+> **Topology note, 2026-08-09 (engine `ba8cef2`).** *The diagram is left as decided.
+> [`serve/graph.py`](../../src/governed_bi/serve/graph.py) is the authority for what
+> runs; `docs/architecture.md` is the living version of this picture.* Four nodes are
+> missing from the drawing above, and the first two are the ones that matter:
+>
+> ```
+> [assemble] → [agent_core] ⇄ [tools] → [reflect] → [narrate] → [stamp]
+> ```
+>
+> - **`reflect`** — a post-hoc observer asking whether the SQL this turn produced
+>   answered the question. It **changes no control flow at all**: never `path_kind`,
+>   never `terminal_reason`, never `answer`. Its edge to `narrate` is plain rather
+>   than conditional precisely so that no edge can read its verdict. It ships
+>   **disabled** (`reflect_enabled` defaults `False`, and no production path wires a
+>   `reflect_model`), returning `{}` before reading anything but the knob; registered
+>   with `stream=False` so a disabled observer adds no timeline rows. It calls a model
+>   only when enabled.
+> - **`narrate`** — writes `answer_text`, which is what the answer card reads.
+>   **Usually calls no model:** the normal path adopts the agent's own prose, and the
+>   model runs only on the remainder, where the loop ended with no text to adopt. A
+>   no-op on `refuse` / `decline` / `crashed`, whose wording is system copy. It
+>   swallows its own failures, because a narrator timeout must not mark an
+>   already-answered turn `crashed`.
+> - **`accept`** (optional, before `guard`) — present only when `build_graph` is
+>   passed one, which is the client-facing path. That argument is also the trust
+>   boundary: with it the graph is compiled with `ServeInput`/`ServeOutput` schemas.
+> - **`fanout`** — the five facets hang off a real passthrough node, not the implicit
+>   edge drawn above. It reports stage `facet_schema`, not `fanout`.
+> - **`record`** (optional, after `stamp`) — the audit-log append, when `build_graph`
+>   is passed one. `stamp → END` otherwise.
+>
+> Two consequences for §3.3 below, which lists neither new node: its node-contract
+> table is missing `reflect` and `narrate` rows, and **its model-entry-point count is
+> understated** — `reflect` (when enabled) and `narrate` (on the no-prose remainder)
+> both call a model. Separately, §3.3's `guard` row reads "**no** — rules (ADR 0006)",
+> but `guard` has a sixth, model-backed gate: the five deterministic rules run first
+> and free, and a question that clears them is then asked *is this a BI question at
+> all?* on the **utility** model (`serve/nodes/guard.py::_bi_scope`, gated by
+> `policy.guard_rule_enabled(BI_SCOPE_RULE_ID)`; enabled-with-no-model records
+> `error_failed_open`, never `clear`).
+
 **Every terminal path funnels through `[stamp]`**, the only node that writes
 `answer`, because §4.1's contract is one question in, one `Answer` out. A
 refusal path that bypasses it hands eval `None` — the same class of defect as
@@ -1348,6 +1402,15 @@ wired up — *"half this repo's defects have that shape."*
 | `agent_core` | all | `messages`, `usage` | **yes**, main model |
 | `refuse` / `decline` | `guard` / `negative` / route / connect reason | `messages` | no |
 | `stamp` | all | `answer` | no |
+
+> **Status note, 2026-08-09 (engine `ba8cef2`).** Left as decided; three rows of this
+> section are stale, and §3.1's topology note carries the detail. In short: the table
+> is missing **`reflect`** (reads the ledger + result, writes `reflect`, model **yes**
+> when enabled — ships disabled, and routes nothing) and **`narrate`** (reads
+> `messages` + `result_table`, writes `answer_text`, model **only** when there is no
+> agent prose to adopt); and the `guard` row's "**no**" covers the five deterministic
+> rules but not the sixth BI-scope gate, which calls the utility model. The
+> "everything else is deterministic" claim below is unaffected.
 
 "Effective question" = `rewrite.after` when rewriting succeeded, else
 `question`.
