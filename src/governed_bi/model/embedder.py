@@ -24,6 +24,7 @@ from governed_bi.register.knobs import knob_names
 
 __all__ = [
     "DEFAULT_BATCH_SIZE",
+    "PROBE_TEXT",
     "BaseEmbedder",
     "refuse_blank",
     "embedding_knobs",
@@ -32,6 +33,13 @@ __all__ = [
 #: Inputs per provider request. Not a provider maximum (OpenAI accepts 2048) but a size that
 #: keeps one failed request from discarding a large batch's worth of paid work.
 DEFAULT_BATCH_SIZE = 256
+
+#: Shortest non-blank probe, for adapters that can only learn their served model or their
+#: vector width from a response. Non-blank because :func:`refuse_blank` refuses one, and an
+#: adapter exempting its own probe from its own rule is exactly what that function closes.
+#: Here rather than in each adapter: two spellings of one concept is what
+#: ``tools/check_one_implementation.py`` exists to catch.
+PROBE_TEXT = "probe"
 
 
 def refuse_blank(texts: Sequence[str]) -> None:

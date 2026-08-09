@@ -30,7 +30,7 @@ from typing import Any, Sequence
 
 from governed_bi.ports import Vector
 
-from .embedder import BaseEmbedder
+from .embedder import PROBE_TEXT, BaseEmbedder
 
 __all__ = ["OPENAI_API_KEY_VAR", "OPENAI_EMBEDDING_MODEL", "OpenAIEmbedder"]
 
@@ -40,10 +40,6 @@ OPENAI_API_KEY_VAR = "OPENAI_API_KEY"
 #: Every ladder embeds through this model, so changing the default without adding a
 #: ``Price`` row makes every USD figure a floor of unknown depth.
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-large"
-
-#: Shortest non-blank probe. Non-blank because this adapter refuses a blank string, and an
-#: adapter exempting its own probe from its own rule is what ``refuse_blank`` closes.
-_PROBE_TEXT = "probe"
 
 
 class OpenAIEmbedder(BaseEmbedder):
@@ -143,7 +139,7 @@ class OpenAIEmbedder(BaseEmbedder):
 
     def _probe(self) -> None:
         """Learn the served model and native width from one two-token request."""
-        self._call([_PROBE_TEXT])
+        self._call([PROBE_TEXT])
 
     def _record_identity(self, served: str, width: int) -> None:
         if self._served_model is None:

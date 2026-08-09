@@ -167,6 +167,19 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "hash and two runs compare as one treatment, though the routing, the snapshot behind "
        "the id and the failure modes all differ. Added 2026-08-07 with the the internal proxy, whose "
        "arm was until then distinguishable only by its artifact filename"),
+    _k("llm_utility_provider", "openai", Role.comparability,
+       "the gateway behind the utility model, which since Bedrock landed no longer has to "
+       "be the agent's. The `llm_provider` argument applies unchanged: two gateways serving "
+       "one id are two treatments. Separate knob rather than reuse because the cheap-utility "
+       "configuration -- a small model on one gateway beside a large one on another -- is the "
+       "reason per-surface providers exist, and a shared knob would hash those as one"),
+    _k("embedding_provider", "openai", Role.comparability,
+       "the gateway behind the embedder. The cache cannot collide across gateways -- "
+       "`cache_key` takes the embedder's `model`, and the port requires that to be "
+       "provider-qualified (`openai:...`, `proxy:...`, `bedrock:...`), which is the whole "
+       "reason for that rule. This knob is the reporting half: `embedding_model` alone "
+       "carries the prefix but nothing reads it back out, so an arm's gateway was legible "
+       "only by eye"),
     _k("llm_max_retries", 3, Role.comparability,
        "how many times the provider SDK retries one call, across EVERY model surface: "
        "the agent, the utility model and the embedder. Comparability and not merely "

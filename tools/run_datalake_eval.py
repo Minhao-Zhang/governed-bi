@@ -55,21 +55,43 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--provider",
         default="openai",
-        choices=["openai", "proxy"],
-        help="model provider. 'proxy' routes through the internal the internal proxy (credentials from "
-        "AWS Secrets Manager, GOVERNED_BI_PROXY_SECRET names the secret; no OPENAI_API_KEY "
-        "needed). It is in the artifact tag because it is an arm, not a detail.",
+        choices=["openai", "bedrock", "proxy"],
+        help="model provider for every surface. 'proxy' routes through the internal proxy "
+        "(credentials from AWS Secrets Manager, GOVERNED_BI_PROXY_SECRET names the secret; no "
+        "OPENAI_API_KEY needed). 'bedrock' needs the extra: `uv sync --extra bedrock`, plus a "
+        "region in GOVERNED_BI_AWS_REGION/AWS_REGION and whatever boto3 resolves for "
+        "credentials. It is in the artifact tag because it is an arm, not a detail.",
+    )
+    parser.add_argument(
+        "--utility-provider",
+        default=None,
+        help="override the provider for the utility surface only (scope gate + facet "
+        "rewriters). Defaults to --provider. A cheap rewriter on one gateway beside a large "
+        "agent on another is a distinct arm, recorded as llm_utility_provider.",
+    )
+    parser.add_argument(
+        "--embedding-provider",
+        default=None,
+        help="override the provider for the embedder only. Defaults to --provider, and is "
+        "recorded as embedding_provider.",
+    )
+    parser.add_argument(
+        "--embedding-model",
+        default=None,
+        help="embedding model id. Defaults to the selected provider's own default, which is "
+        "not the same string across providers.",
     )
     parser.add_argument(
         "--utility-model",
         default=None,
-        help="separate model id for the guard's scope gate and the facet rewriters (proxy "
-        "provider only; defaults to --model)",
+        help="separate model id for the guard's scope gate and the facet rewriters. Defaults to "
+        "--model. Wired on every provider; pair it with --utility-provider to put it on a "
+        "different gateway than the agent.",
     )
     parser.add_argument(
         "--utility-effort",
         default=None,
-        help="reasoning effort for the utility model (proxy provider only)",
+        help="reasoning effort for the utility model. Needs --utility-model.",
     )
     parser.add_argument("--top-n", type=int, default=None, help="override route_top_n")
     parser.add_argument("--workers", type=int, default=2)
@@ -109,20 +131,36 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    # Refused rather than ignored. A split utility model changes routing recall and everything
-    # downstream, so a flag that was accepted and dropped would put an unrecorded treatment in
-    # the artifact — the shape of the incident `llm_utility_model` was declared to prevent.
-    if args.provider != "proxy" and (args.utility_model or args.utility_effort):
-        parser.error("--utility-model/--utility-effort are only wired for --provider proxy")
+    # A split utility model is wired on every provider since `model/provider.py` landed, so
+    # the old "proxy only" refusal is gone. What remains refused is a *silent* one: an effort
+    # with no model to apply it to would be accepted and dropped, putting an unrecorded
+    # treatment in the artifact — the shape of the incident `llm_utility_model` was declared
+    # to prevent.
+    if args.utility_effort and not args.utility_model:
+        parser.error("--utility-effort needs --utility-model; alone it is accepted and ignored")
 
     import credentials
 
     credentials.load_into_environ()
-    # Only the OpenAI arm needs a key in the environment; the internal proxy arm mints a bearer token
-    # from a secret it looks up, and refuses by itself when its secret is unnamed.
-    if args.provider == "openai" and not credentials.have(*credentials.OPENAI_KEY_NAMES):
-        print("no model credential reachable", file=sys.stderr)
-        return 2
+    from governed_bi.model import provider as provider_mod
+
+    # Asked per surface, because they no longer share a gateway. The proxy answers for itself
+    # (it mints a bearer token from a secret it looks up) and Bedrock is asked through boto3's
+    # own resolver, since an instance or task role authenticates with no variable set.
+    for surface, chosen in (
+        ("agent", args.provider),
+        ("utility", args.utility_provider or args.provider),
+        ("embedding", (args.embedding_provider or args.provider) if args.embed else None),
+    ):
+        if chosen is None or chosen == "proxy":
+            continue
+        if not provider_mod.credentials_present(chosen):
+            names = " / ".join(provider_mod.credential_names(chosen)) or "none known"
+            print(
+                f"no {chosen} credential reachable for the {surface} surface ({names})",
+                file=sys.stderr,
+            )
+            return 2
     dsn = credentials.secret(*credentials.PG_DSN_NAMES)
     if not dsn:
         print("no database credential reachable", file=sys.stderr)
@@ -369,23 +407,40 @@ def _build_models(args):
             vector_cache = vector_cache_from_environment(model=embedder.model)
         return model, utility_model, embedder, vector_cache
 
-    from langchain.chat_models import init_chat_model
+    from governed_bi.model import provider as provider_mod
 
-    kwargs = {
-        "model_provider": "openai",
-        "use_responses_api": True,
-        "max_retries": max(0, int(args.max_retries)),
+    retries = max(0, int(args.max_retries))
+    # tools=True: the agent binds tools, which on OpenAI selects the Responses API. Every
+    # provider-specific spelling of effort/timeout/retries lives in model/provider.py, so this
+    # driver and api/graph_app.py cannot drift on a comparability knob.
+    model = provider_mod.chat_model(
+        args.model,
+        surface="agent",
+        provider=args.provider,
+        effort=args.effort or None,
         # Bounded, because unbounded is how a run stalls rather than fails. See --timeout.
-        "timeout": float(args.timeout),
-    }
-    if args.effort:
-        kwargs["reasoning_effort"] = args.effort
-    model = init_chat_model(args.model, **kwargs)
+        timeout=float(args.timeout),
+        max_retries=retries,
+        tools=True,
+    )
+    if args.utility_model:
+        utility_model = provider_mod.chat_model(
+            args.utility_model,
+            surface="utility",
+            provider=args.utility_provider or args.provider,
+            effort=args.utility_effort or None,
+            timeout=float(args.timeout),
+            max_retries=retries,
+        )
     if args.embed:
-        from governed_bi.model import OpenAIEmbedder
         from governed_bi.retrieve.vector_cache import vector_cache_from_environment
 
-        embedder = OpenAIEmbedder()
+        embed_provider = args.embedding_provider or args.provider
+        embedder = provider_mod.embedder(
+            args.embedding_model or provider_mod.default_embedding_model(embed_provider),
+            provider=embed_provider,
+            max_retries=retries,
+        )
         # The persisted store, shared with the server. Without it this driver re-embedded all
         # 13,968 pooled summaries on every invocation — paid tokens, before the first question.
         vector_cache = vector_cache_from_environment(model=embedder.requested_model)

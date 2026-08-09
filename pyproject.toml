@@ -54,6 +54,11 @@ dependencies = [
     "langgraph-cli[inmem]>=0.4,<0.5",
     "langchain>=1.0",
     "langchain-openai>=1.0",
+    # No `langchain-aws` here: it pulls a boto3/botocore tree that the OpenAI and proxy arms
+    # never touch, and the base install is what every model-free test runs against. It is an
+    # extra — `uv sync --extra bedrock` — and every import of it is inside the function that
+    # needs it, so selecting a non-Bedrock provider never pays for it. See
+    # [project.optional-dependencies].
     # No `langgraph-checkpoint-sqlite` / `-postgres`: zero importers. `InMemorySaver` is
     # the only saver compiled in-tree (`/chat`); LangGraph Server injects its own for the
     # stream path. ADR 0004's durable checkpointer half did not ship — `/capabilities`
@@ -85,6 +90,16 @@ dependencies = [
     "pyarrow>=25.0",
     # No `numpy`. It arrives under `lancedb` and nothing in `src/` or `tests/` imports it;
     # the dev group's note on why it was removed is about declared dependencies and holds.
+]
+
+[project.optional-dependencies]
+# AWS Bedrock, for both the chat surfaces and the embedder. `uv sync --extra bedrock`.
+# `langchain-aws` brings boto3/botocore transitively; both are named so the floor is visible
+# to a reader — `botocore.config.Config` is what carries the timeout and retry knobs onto a
+# Bedrock client, and `model/provider.py` imports it directly.
+bedrock = [
+    "langchain-aws>=1.0",
+    "boto3>=1.34",
 ]
 
 [dependency-groups]

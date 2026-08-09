@@ -95,25 +95,28 @@ def session_from_environment() -> Session:
     model = None
     model_id = os.environ.get(MODEL_VAR)
     if model_id:
-        if not credentials.have(*credentials.OPENAI_KEY_NAMES):
-            raise RuntimeError(
-                f"{MODEL_VAR} is set to {model_id!r} but no model credential is available "
-                f"({' / '.join(credentials.OPENAI_KEY_NAMES)}). Unset {MODEL_VAR} to serve "
-                "without a model rather than starting a server that cannot answer."
-            )
-        from langchain.chat_models import init_chat_model
+        from governed_bi.model import provider as provider_mod
 
-        # Responses API is required for tools + reasoning_effort together.
-        kwargs_model: dict[str, Any] = {
-            "model_provider": "openai",
-            "use_responses_api": True,
-            "max_retries": _retries(),
-            "timeout": _timeout(TIMEOUT_VAR, "llm_timeout_s"),
-        }
-        effort = os.environ.get(MODEL_EFFORT_VAR)
-        if effort:
-            kwargs_model["reasoning_effort"] = effort
-        model = init_chat_model(model_id, **kwargs_model)
+        name = provider_mod.provider_for("agent")
+        if not provider_mod.credentials_present(name):
+            raise RuntimeError(
+                f"{MODEL_VAR} is set to {model_id!r} and the agent surface resolves to "
+                f"provider {name!r}, but no credential for it is available "
+                f"({' / '.join(provider_mod.credential_names(name)) or 'none found'}). "
+                f"Unset {MODEL_VAR} to serve without a model rather than starting a server "
+                "that cannot answer."
+            )
+        # tools=True: agent_core binds tools, which on OpenAI selects the Responses API —
+        # the only transport carrying tools and reasoning_effort together.
+        model = provider_mod.chat_model(
+            model_id,
+            surface="agent",
+            provider=name,
+            effort=os.environ.get(MODEL_EFFORT_VAR) or None,
+            timeout=_timeout(TIMEOUT_VAR, "llm_timeout_s"),
+            max_retries=_retries(),
+            tools=True,
+        )
 
     utility = _utility_model(credentials)
 
@@ -145,22 +148,25 @@ def _utility_model(credentials: Any) -> Any:
     model_id = os.environ.get(UTILITY_MODEL_VAR)
     if not model_id:
         return None
-    if not credentials.have(*credentials.OPENAI_KEY_NAMES):
-        raise RuntimeError(
-            f"{UTILITY_MODEL_VAR} is set to {model_id!r} but no model credential is available "
-            f"({' / '.join(credentials.OPENAI_KEY_NAMES)}). Unset it to share the agent's model."
-        )
-    from langchain.chat_models import init_chat_model
+    from governed_bi.model import provider as provider_mod
 
-    kwargs: dict[str, Any] = {
-        "model_provider": "openai",
-        "max_retries": _retries(),
-        "timeout": _timeout(UTILITY_TIMEOUT_VAR, "llm_utility_timeout_s"),
-    }
-    effort = os.environ.get(UTILITY_MODEL_EFFORT_VAR)
-    if effort:
-        kwargs["reasoning_effort"] = effort
-    return init_chat_model(model_id, **kwargs)
+    name = provider_mod.provider_for("utility")
+    if not provider_mod.credentials_present(name):
+        raise RuntimeError(
+            f"{UTILITY_MODEL_VAR} is set to {model_id!r} and the utility surface resolves to "
+            f"provider {name!r}, but no credential for it is available "
+            f"({' / '.join(provider_mod.credential_names(name)) or 'none found'}). "
+            "Unset it to share the agent's model."
+        )
+    # tools=False: the scope gate and the rewriters return text, so no Responses API.
+    return provider_mod.chat_model(
+        model_id,
+        surface="utility",
+        provider=name,
+        effort=os.environ.get(UTILITY_MODEL_EFFORT_VAR) or None,
+        timeout=_timeout(UTILITY_TIMEOUT_VAR, "llm_utility_timeout_s"),
+        max_retries=_retries(),
+    )
 
 
 def _retries() -> int:
@@ -184,22 +190,30 @@ def _embedder_into(kwargs: dict[str, Any], credentials: Any) -> Any:
     model_id = os.environ.get(EMBEDDING_MODEL_VAR)
     if not model_id:
         return None
-    if not credentials.have(*credentials.OPENAI_KEY_NAMES):
+    from governed_bi.model import provider as provider_mod
+
+    name = provider_mod.provider_for("embedding")
+    if not provider_mod.credentials_present(name):
         raise RuntimeError(
-            f"{EMBEDDING_MODEL_VAR} is set to {model_id!r} but no embedding credential is "
-            f"available ({' / '.join(credentials.OPENAI_KEY_NAMES)}). Unset it to serve with "
-            "lexical retrieval only, rather than starting a server whose semantic channel "
-            "reports failed on every turn."
+            f"{EMBEDDING_MODEL_VAR} is set to {model_id!r} and the embedding surface resolves "
+            f"to provider {name!r}, but no credential for it is available "
+            f"({' / '.join(provider_mod.credential_names(name)) or 'none found'}). Unset it "
+            "to serve with lexical retrieval only, rather than starting a server whose "
+            "semantic channel reports failed on every turn."
         )
-    from governed_bi.model.openai_embedder import OpenAIEmbedder
     from governed_bi.retrieve.vector_cache import vector_cache_from_environment
 
-    embedder = OpenAIEmbedder(
-        model=model_id,
+    embedder = provider_mod.embedder(
+        model_id,
+        provider=name,
         max_retries=_retries(),
         timeout=_timeout(UTILITY_TIMEOUT_VAR, "llm_utility_timeout_s"),
     )
-    cache = vector_cache_from_environment(model=model_id)
+    # The **requested** name, per that function's contract: reading `Embedder.model` on a cold
+    # embedder issues a network probe, and this only names a directory. Two providers can share
+    # that directory safely — `build_index` keys each entry on the provider-qualified
+    # `embedder.model`, so the keys differ even where the folder does not.
+    cache = vector_cache_from_environment(model=embedder.requested_model)
     kwargs["embedder"] = embedder
     kwargs["vector_cache"] = cache
     return cache
