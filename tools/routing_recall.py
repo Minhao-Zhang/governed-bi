@@ -87,9 +87,8 @@ def main(argv: list[str] | None = None) -> int:
         table_coverage,
     )
     from governed_bi.govern.policy import GovernancePolicy
-    from governed_bi.serve import session as session_mod
-
     from governed_bi.model import provider as provider_mod
+    from governed_bi.serve import session as session_mod
 
     embedder = None
     vector_cache = None

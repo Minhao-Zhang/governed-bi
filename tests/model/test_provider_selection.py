@@ -13,7 +13,6 @@ import pytest
 
 from governed_bi.model import provider as P
 
-
 # ── which gateway serves a surface ────────────────────────────────────────────
 
 
