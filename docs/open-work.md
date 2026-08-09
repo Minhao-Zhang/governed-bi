@@ -129,12 +129,33 @@ read the printed licensed-drift block before trusting the delta.
 that produced it are out of tree, and there is no curator in `src/` for most asset types.
 Versioned is not reproducible-from-source, and no document may describe it as such.
 
+### 3.2a `r_ambiguous_fold`'s residual is bounded by the data, not by the code
+
+The rule now resolves a qualified reference against its own table and refuses only what it
+cannot decide. Where it *could* still resolve wrongly, the consequence is bounded by a property
+of this database rather than by the resolver: **no table in the obfuscated lake has two columns
+differing only by case** (70 schemas, 738 tables, 6 909 columns, checked 2026-08-09). So a
+mis-resolution names a column that does not exist and Postgres errors, rather than reading a
+decoy — the decoys here are differently-named `suspect` columns, not case variants.
+
+Verified absent from 1 351 gold statements, 4 857 corpus few-shots and every model statement
+observed so far: none reuses one alias for two tables.
+
+**A corpus rebuild can unbound this.** No rebuild is planned as of 2026-08-09; if one happens,
+re-check that property before trusting the resolver, or replace the tree-wide handle map with
+the `traverse_scope` walk `binding.py` already uses, which removes the bound entirely.
+
 ### 3.3 Three `src/` fixes held back while an arm was running
 
 Each was verified on 2026-08-09 and deliberately not applied: a paid run was executing against
 `ba8cef2`, and the source tree is not covered by `corpus_content_hash` or `prompt_set_hash`, so
 a mid-run edit is invisible in the artifact. None is urgent; all are small.
 
+0. **Comparability: the engine changed after the three 2026-08-09 arms.** run1, run2 and the
+   v3 arm all ran on `ba8cef2` or earlier. `r_ambiguous_fold` was narrowed afterwards, and it
+   moves ~119 turns, so a new arm is **not** paired-comparable with those three on anything the
+   fold touches. Run the next arm as its own control (v3 prompt plus the narrowed fold) and
+   compare it to the v3 arm to isolate the fold's own effect.
 1. **`model/proxy_gateway.py:71,77` tells the user something false.** The lazy `boto3` import
    raises *"boto3 is not in this project's dependencies (pyproject.toml has no extras)"*, and
    the docstring above says the same. Both were true for five days and are not now — the
