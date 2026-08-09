@@ -144,3 +144,40 @@ def test_a_per_question_knob_override_is_not_silently_replaced(tmp_path: Path) -
         session=_FakeSession(),
     )
     assert all(r["knobs_resolved"]["route_top_n"] == 7 for r in rows)
+
+
+def test_a_measured_row_names_both_treatment_identities(tmp_path: Path) -> None:
+    """The corpus and the prompt wording that produced the row.
+
+    Same defect as ``knobs_resolved`` above, found the same way and later: ``Session`` mints
+    both, ``stamp`` projects both, and ``project_turn``'s key list carried neither. The
+    2026-08-09 artifacts therefore record which corpus produced them only in their *filename*
+    — a human convention — and which prompt wording produced them not at all.
+
+    That is fatal for the thing the prompt registry exists to enable. Two arms differing only
+    in ``--prompt-variant`` would emit rows indistinguishable in every field, so a merged
+    analysis could not tell the treatment from the control, and neither could a later reader.
+
+    AGENTS.md: the corpus is the treatment identity of every measurement. An identity that
+    lives in a filename is one ``mv`` away from being wrong.
+    """
+    rows = run_arm(_questions(), stub_arm(connector=_connector(tmp_path)))
+
+    for row in rows:
+        assert "corpus_content_hash" in row, "the row does not say which corpus produced it"
+        assert "prompt_set_hash" in row, "the row does not say which prompt wording produced it"
+
+
+def test_the_prompt_hash_on_the_row_moves_with_the_selected_variant() -> None:
+    """Presence is not enough: the field has to *track* the selection.
+
+    A row carrying a constant would satisfy the test above forever while reporting one
+    treatment for both arms — the failure that test exists to catch, reintroduced one layer
+    down. Asserted against the registry rather than against a literal, because a hardcoded
+    digest here would pin the test to today's wording of every prompt in the tree.
+    """
+    from governed_bi.register.prompts import prompt_set_hash
+
+    assert prompt_set_hash({"analyst": "v3"}) != prompt_set_hash(), (
+        "selecting v3 does not move prompt_set_hash, so the row cannot distinguish the arms"
+    )

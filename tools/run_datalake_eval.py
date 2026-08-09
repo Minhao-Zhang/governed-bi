@@ -253,9 +253,16 @@ def main(argv: list[str] | None = None) -> int:
     # is in it for the same reason, and only when it is not the default, so the OpenAI arm's
     # artifact names do not move: one model id served by two gateways is two treatments.
     provider_tag = f"_{args.provider}" if args.provider != "openai" else ""
+    # The prompt selection belongs in the tag for exactly the reason the retrieval channel
+    # does, and more sharply: an A/B differing *only* in --prompt-variant would otherwise
+    # auto-name both arms to one path, and --resume would read the first arm's rows as this
+    # one's and skip the questions. Two treatments, one artifact, no error anywhere.
+    variant_tag = "".join(
+        f"_{pair.replace('=', '')}" for pair in sorted(args.prompt_variant or ())
+    )
     tag = (
         f"{args.model}_{args.effort or 'default'}_top{args.top_n or 'default'}"
-        f"_{'embed' if args.embed else 'lexical'}{provider_tag}"
+        f"_{'embed' if args.embed else 'lexical'}{provider_tag}{variant_tag}"
     )
     out_path = args.out or pathlib.Path("runs/eval") / f"live_full_{tag}.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)

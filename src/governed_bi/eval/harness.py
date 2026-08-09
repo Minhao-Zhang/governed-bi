@@ -509,6 +509,13 @@ def project_turn(
         "error_type": record.get("error_type") or state.get("failure", {}).get("error_type")
         if isinstance(state.get("failure"), Mapping)
         else record.get("error_type"),
+        # **The two treatment identities.** Both reached ``stamp`` and stopped there, so no
+        # artifact this repository has produced says which corpus or which prompt wording made
+        # it — the corpus was recoverable only from the filename, a human convention, and the
+        # prompt not at all. A prompt A/B whose two artifacts cannot be told apart is not an
+        # A/B. Read from the record, which ``Session`` minted them into.
+        "corpus_content_hash": record.get("corpus_content_hash"),
+        "prompt_set_hash": record.get("prompt_set_hash"),
         "licensed": list(record.get("licensed") or ()),
         "schemas": list(record.get("schemas") or ()),
         # Whether this row's shortlist was replayed rather than routed. An arm described as
