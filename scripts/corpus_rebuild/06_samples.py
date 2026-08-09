@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -39,6 +41,23 @@ TABLES_SQL = """
      where table_type = 'BASE TABLE' and table_schema = any(%s)
      order by table_schema, table_name
 """
+
+
+def _sort_key(values: list[Any]) -> Any:
+    """Sort numerically when every value is a number, lexically otherwise.
+
+    ``sorted(values, key=str)`` put ``"9935"`` above ``"48196"`` and ``"897"`` above ``"16658"``.
+    Writers copied those into bodies as observed ranges, and 87 column bodies across 13 schemas
+    ended up asserting a range that excludes the very sample values printed beside it. The
+    audit that found it is at docs/corpus-audit-2026-08-09.md.
+
+    Postgres hands back ``Decimal``/``int``/``float`` for numeric columns, so the check is on the
+    Python type rather than on a regex over the text: a zip code stored as text stays lexical,
+    which is right -- ``01001`` is not the number 1001.
+    """
+    if all(isinstance(v, (int, float, Decimal)) and not isinstance(v, bool) for v in values):
+        return lambda v: (0, float(v), "")
+    return lambda v: (1, 0.0, str(v))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -81,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
                         distinct.append(text)
                     if len(distinct) >= KEEP:
                         break
-                ordered = sorted(values, key=str) if values else []
+                ordered = sorted(values, key=_sort_key(values)) if values else []
                 rows.append(
                     {
                         "db": schema,
