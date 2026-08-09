@@ -1,77 +1,77 @@
 # governed-bi
 
-An agentic BI engine: natural-language question in, governed read-only SQL out,
-with an audit trail. It retrieves a slice of a curated semantic layer (typed
-YAML assets), a model writes SQL, deterministic guardrail layers check it, the
-statement executes read-only, and the turn is recorded — `outcome`,
-`guardrail_errors`, the per-attempt ledger, and `terminal_reason` when it did not
-answer.
+Ask a question in English. Get an answer backed by read-only SQL and a record of
+how the engine got there.
 
-Postgres is the live serve path. SQLite under `data/bird/` is an offline
-test/CI fixture only.
+Each turn does four things:
 
-> **Three claims were removed from the paragraph above on 2026-08-06**, and what
-> they were is worth more than a clean sentence.
->
-> It said the turn is stamped with `safety_clearance` and `semantic_assurance`.
-> Those two names appear in eight documents, this README, and one test — and in
-> **zero source files**. There is no two-verdict stamp on any path and never was.
-> They are gone from the docs rather than implemented, because a verdict needs a
-> definition of what measures it before it needs a field, and neither had one.
-> `tests/api/test_http_contract.py` now fails if either name reappears in `src/`.
->
-> It said **seven** guardrail layers. Six run in any configuration a deployment
-> can reach: `cost_budget` ships `UNSET`, `govern/policy.py` asserts at import
-> that it must never acquire a default, and no environment variable or config key
-> can set it — so `COST` is absent from `layers_evaluated` on every served turn.
-> The number is now unstated here; `docs/glossary.md` lists the layers that run.
+1. Retrieves a slice of a curated semantic layer — typed YAML assets that
+   describe tables, columns, joins, metrics, and business terms.
+2. Asks a model to write SQL, using only the tables that slice licensed.
+3. Checks the statement through a stack of deterministic layers. A statement
+   that names an unlicensed table or an excluded column never runs.
+4. Executes it read-only and stamps the turn: `outcome`, `guardrail_errors`, a
+   per-attempt ledger, and `terminal_reason` when the turn did not answer.
+
+The model never holds a database handle. It can only send SQL that a checked
+tool body chose to send, so a prompt cannot talk its way to the database.
+
+Postgres is the live path. The SQLite file under `data/bird/` is an offline test
+fixture, not a supported target.
 
 ## Quickstart
 
-Requires [uv](https://docs.astral.sh/uv/) and Python 3.13.
+You need [uv](https://docs.astral.sh/uv/) and Python 3.13.
 
-```bash
-uv sync                       # create .venv, install the stack
-uv sync --extra bedrock       # ...plus langchain-aws + boto3, for the Bedrock arm
-```
+1. Install the stack:
 
-A base `uv sync` is all the OpenAI and proxy arms need. The **`bedrock` extra** is
-what makes the Bedrock chat and embedding path importable — `model/provider.py`
-reaches for `botocore.config.Config`, and `model/bedrock_embedder.py` raises with
-that exact command when `langchain-aws` is missing. CI installs it
-(`uv sync --frozen --extra bedrock`) so the provider-translation tests in
-`tests/model/test_provider_selection.py` run there rather than skip.
+   ```bash
+   uv sync
+   ```
 
-**1. Secrets and connection** in a git-ignored `.env` at the repo root:
+   To use AWS Bedrock for chat or embeddings, add the one extra:
 
-```bash
-OPENAI_API_KEY=sk-...
-PG_DSN=host=... port=5432 dbname=... user=... password=...
-```
+   ```bash
+   uv sync --extra bedrock
+   ```
 
-**2. Corpus and models** via environment variables (there is no live TOML
-settings loader — defaults live in `register/knobs.py`):
+   The OpenAI and proxy gateways need only the base install.
 
-```bash
-GOVERNED_BI_CORPUS_DIR=...    # or place a single corpus under corpora/
-GOVERNED_BI_MODEL=...         # optional; unset → graph runs with has_live_model=false
-GOVERNED_BI_UTILITY_MODEL=... # optional small model for facet rewrite / scope gate
-GOVERNED_BI_EMBEDDING_MODEL=...
-```
+2. Put your secrets in a git-ignored `.env` at the repository root:
 
-**3. Serve:**
+   ```bash
+   OPENAI_API_KEY=sk-...
+   GOVERNED_BI_PG_DSN=host=... port=5432 dbname=... user=... password=...
+   ```
 
-```bash
-uv run langgraph dev          # graph "serve" from langgraph.json
-```
+3. Point the engine at a corpus and choose your models. Configuration is
+   environment variables only — the `governed_bi.toml` in the repository root is
+   not loaded by anything in `src/`, and defaults live in `register/knobs.py`.
 
-A turn takes 30–120 seconds. Prefer the streamed surface:
-`POST /threads/{id}/runs/stream` with
-`stream_mode: ["values", "messages", "custom"]` and `stream_subgraphs: true`
-([ADR 0010](docs/adr/0010-live-stage-events.md)). `POST /chat` is the blocking
-fallback.
+   ```bash
+   GOVERNED_BI_CORPUS_DIR=...     # or put a single corpus under corpora/
+   GOVERNED_BI_MODEL=...          # unset → the graph runs with has_live_model=false
+   GOVERNED_BI_UTILITY_MODEL=...  # smaller model for facet rewrites and the scope gate
+   GOVERNED_BI_EMBEDDING_MODEL=...
+   ```
 
-One-turn CLI (no LangGraph Server):
+   For the full list, including the Bedrock and proxy variables, see
+   [the usage guide](docs/usage.md).
+
+4. Serve the graph:
+
+   ```bash
+   uv run langgraph dev
+   ```
+
+A turn takes 30 to 120 seconds, so prefer the streaming surface:
+`POST /threads/{id}/runs/stream`, with `stream_mode: ["values", "messages",
+"custom"]` and `stream_subgraphs: true`. Without `stream_subgraphs`, tool and
+token events never reach the client — see
+[ADR 0010 on live stage events](docs/adr/0010-live-stage-events.md). `POST /chat`
+is the blocking fallback.
+
+To run one turn without LangGraph Server:
 
 ```bash
 uv run python -m governed_bi.serve --schema … -q "…"
@@ -86,41 +86,44 @@ uv run pytest
 
 ## Web UI
 
-Separate repo: [governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui)
-(Next.js). Available locally at `../governed-bi-ui`.
+The UI lives in a separate repository,
+[governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui) (Next.js), and
+is available locally at `../governed-bi-ui`.
 
 ## Documentation
 
-Start at [`docs/README.md`](docs/README.md):
-[usage](docs/usage.md) · [architecture](docs/architecture.md) ·
-[ADRs](docs/adr/) · [glossary](docs/glossary.md).
+Start at [the docs index](docs/README.md), or go straight to
+[usage](docs/usage.md), [architecture](docs/architecture.md), the
+[ADRs](docs/adr/), the [glossary](docs/glossary.md), or
+[what is still open](docs/open-work.md).
 
-## Repo layout
+## Repository layout
 
 ```
-docs/               design docs + ADRs
+docs/               design docs and ADRs
 corpora/            corpus directories for serve (or set GOVERNED_BI_CORPUS_DIR)
 data/bird/          beer_factory.sqlite offline fixture (BIRD, CC BY-SA 4.0)
+scripts/            one-shot corpus build scripts, outside the package
 src/governed_bi/
-  api/              FastAPI app + LangGraph make_graph entry
-  corpus/           asset schemas, load, validate
+  api/              FastAPI app and the LangGraph make_graph entry point
+  corpus/           asset schemas, loading, validation
   datasource/       connectors
   eval/             measurement harness
-  govern/           seven-layer check, ledger, tool bounds
-  measure/          populations / stats helpers
-  model/            chat + embedder adapters
+  govern/           the layer stack, ledger, and tool bounds
+  measure/          populations and statistics helpers
+  model/            chat and embedder adapters, gateway selection
   register/         knobs, prompts, records, citations
   retrieve/         BM25, semantic channel, Steiner joins
-  serve/            rails graph + agent_core tools
+  serve/            the rails graph and agent_core tools
 tests/
 tools/              structural checks and offline helpers
 ```
 
 ## License
 
-Code is under the MIT License (see [LICENSE](LICENSE)), © 2026 Minhao Zhang.
+The code is under the MIT License (see [LICENSE](LICENSE)), © 2026 Minhao Zhang.
 
-Bundled data is third-party: `data/bird/beer_factory.sqlite` from the
+The bundled data is third-party: `data/bird/beer_factory.sqlite` comes from the
 [BIRD benchmark](https://bird-bench.github.io/) under
-[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/); see
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). See
 [`data/bird/NOTICE`](data/bird/NOTICE).
