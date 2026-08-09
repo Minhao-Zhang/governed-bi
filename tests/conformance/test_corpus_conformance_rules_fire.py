@@ -150,6 +150,45 @@ def test_v12_catches_a_quoted_held_out_question(tmp_path: Path) -> None:
     assert cc.check_split_leak([("table", CLEAN_TABLE, tmp_path / "t.yaml")], split) == []
 
 
+def test_v15_catches_a_real_column_marked_suspect(tmp_path: Path) -> None:
+    """Both directions, and the rename hop that a first pass at this rule got wrong.
+
+    The manifest keys tables by their upstream BIRD name; the corpus uses the renamed one. Skip
+    the map and every real column in a renamed schema reads as mis-marked -- 930 false findings
+    across the tree when this was first measured, all of them the measurement's fault.
+    """
+    traps = tmp_path / "traps.json"
+    traps.write_text(json.dumps([
+        {"db": "addr", "table": "Store Locations", "source_column": "AreaCode",
+         "names": {"base": "b", "rename": "code_zone_geo"}},
+    ]), encoding="utf-8")
+    tables = tmp_path / "tables.json"
+    tables.write_text(json.dumps([]), encoding="utf-8")
+    rename = tmp_path / "rename.json"
+    rename.write_text(json.dumps({"addr": {"Store Locations": "zip_data"}}), encoding="utf-8")
+
+    def col(name: str, *, suspect: bool) -> dict:
+        c = {"physical_name": name, "summary": f"{name}, a column.", "body": "b."}
+        if suspect:
+            c["reliability"] = {"status": "suspect", "note": "Unreliable for analysis."}
+        return c
+
+    def check(columns: list[dict]) -> list[str]:
+        path = tmp_path / "tbl.yaml"
+        path.write_text(yaml.safe_dump({**CLEAN_TABLE, "columns": columns}, allow_unicode=True),
+                        encoding="utf-8")
+        return cc.check_suspect_set(cc.load_assets(path), traps, tables, rename)
+
+    planted, real = "code_zone_geo", "code_zone"
+    assert check([col(planted, suspect=True), col(real, suspect=False)]) == [], (
+        "the manifest's table name must be mapped through the rename map before comparing"
+    )
+    over = check([col(planted, suspect=True), col(real, suspect=True)])
+    assert over and real in over[0], "a real column marked suspect must be caught"
+    under = check([col(planted, suspect=False), col(real, suspect=False)])
+    assert under and planted in under[0], "an unmarked planted column must be caught"
+
+
 def test_v14_catches_a_file_the_engine_cannot_load(tmp_path: Path) -> None:
     """The rule that exists because the text rules cannot see a structural break.
 
@@ -172,9 +211,9 @@ def test_v14_catches_a_file_the_engine_cannot_load(tmp_path: Path) -> None:
     assert cc.check_loadable([ok]) == []
 
 
-#: Rules ``check_local`` cannot emit: three need the whole tree or an external manifest, V13 is
+#: Rules ``check_local`` cannot emit: four need the whole tree or an external manifest, V13 is
 #: a filesystem size check, and V14 needs a real file for the loader. Each has its own test.
-NOT_LOCAL = {"V9", "V11", "V12", "V13", "V14"}
+NOT_LOCAL = {"V9", "V11", "V12", "V13", "V14", "V15"}
 
 
 def test_every_rule_is_documented_and_exercised() -> None:

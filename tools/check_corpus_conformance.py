@@ -358,6 +358,67 @@ def check_suspect_summaries(assets, trap_manifest: Path) -> list[Finding]:
     return bad
 
 
+def check_suspect_set(assets, trap_manifest: Path, table_manifest: Path,
+                      rename_map: Path) -> list[Finding]:
+    """V15 -- exactly the manifest's columns are marked suspect, no more and no fewer.
+
+    V11 polices how a suspect column is *worded*; nothing until now policed *which* columns
+    carry the mark, and the two failure directions cost different things. Marking a real column
+    suspect is the expensive one: ``reliability.note`` is never dropped from the context, so the
+    model is told every turn not to use a column it needs.
+
+    The packet hands writers a flat, de-duplicated list of bare column names, so a name that is
+    real on one table and planted on another arrives indistinguishable. That is how
+    ``regional_sales.emplacements_magasin.code_zone`` -- a real telephone area code -- came to be
+    suppressed alongside the planted ``code_zone_geo``, while a *different* real ``code_zone``
+    on ``zones_geographiques`` holds state abbreviations.
+
+    The manifest keys tables by their upstream BIRD name, so every lookup goes through
+    ``schema_rename_map.json`` first. Comparing against the raw name silently reports every real
+    column in a renamed schema as mis-marked, which is what a first pass at this check did.
+    """
+    rmap = json.loads(rename_map.read_text(encoding="utf-8"))
+    traps = json.loads(trap_manifest.read_text(encoding="utf-8"))
+    tables = json.loads(table_manifest.read_text(encoding="utf-8"))
+
+    planted: dict[str, set[tuple[str, str]]] = defaultdict(set)
+    for t in traps:
+        if t.get("names"):
+            db = t["db"]
+            renamed = (rmap.get(db) or {}).get(t["table"], t["table"])
+            planted[db].add((renamed, t["names"]["rename"]))
+    decoy_tables: dict[str, set[str]] = defaultdict(set)
+    for t in tables:
+        renamed = (t.get("names") or {}).get("rename") or {}
+        if t.get("db") and renamed.get("table"):
+            decoy_tables[t["db"]].add(renamed["table"])
+
+    bad: list[Finding] = []
+    for kind, a, path in assets:
+        if kind != "table":
+            continue
+        db, tbl = _text(a.get("schema")), _text(a.get("physical_name"))
+        if db not in planted and db not in decoy_tables:
+            continue
+        whole = tbl in decoy_tables.get(db, set())
+        for col in a.get("columns") or []:
+            if not isinstance(col, dict):
+                continue
+            name = _text(col.get("physical_name"))
+            rel = col.get("reliability")
+            status = (rel or {}).get("status") if isinstance(rel, dict) else None
+            marked = str(getattr(status, "value", status)) == "suspect"
+            should = whole or (tbl, name) in planted.get(db, set())
+            if marked and not should:
+                bad.append(Finding(
+                    f"{path.name}:{tbl}.{name}: marked suspect but the manifest says it is real; "
+                    "the caveat renders every turn and can never be dropped"))
+            elif should and not marked:
+                bad.append(Finding(f"{path.name}:{tbl}.{name}: the manifest plants this column, "
+                                   "but it carries no reliability caveat"))
+    return bad
+
+
 def check_loadable(paths: Iterable[Path]) -> list[Finding]:
     """V14 -- the engine can actually load the file.
 
@@ -411,8 +472,9 @@ RULES: dict[str, str] = {
     "V12": "no asset quotes a held-out question",
     "V13": "no file exceeds its byte cap (few_shot 4k, else 32k)",
     "V14": "the engine's loader accepts the file",
+    "V15": "exactly the manifest's columns are marked suspect",
 }
-WHOLE_TREE_ONLY = ("V9", "V11", "V12")
+WHOLE_TREE_ONLY = ("V9", "V11", "V12", "V15")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -420,6 +482,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--corpus-dir", type=Path, default=DEFAULT_CORPUS)
     ap.add_argument("--file", type=Path, default=None, help="check one asset file (rebuild loop)")
     ap.add_argument("--trap-manifest", type=Path, default=DEFAULT_DATASET / "trap_manifest.json")
+    ap.add_argument("--table-manifest",
+                    type=Path, default=DEFAULT_DATASET / "trap_table_manifest.json")
+    ap.add_argument("--rename-map",
+                    type=Path, default=DEFAULT_DATASET / "schema_rename_map.json")
     ap.add_argument("--test-split", type=Path, default=DEFAULT_DATASET / "test_final.jsonl")
     ap.add_argument("--max-lines", type=int, default=15, help="findings printed per rule")
     args = ap.parse_args(argv)
@@ -463,6 +529,12 @@ def main(argv: list[str] | None = None) -> int:
             findings["V12"].extend(check_split_leak(assets, args.test_split))
         else:
             skipped["V12"] = f"no test split at {args.test_split}"
+        if args.trap_manifest.exists() and args.table_manifest.exists() and args.rename_map.exists():
+            findings["V15"].extend(
+                check_suspect_set(assets, args.trap_manifest, args.table_manifest, args.rename_map)
+            )
+        else:
+            skipped["V15"] = "needs the trap, table and rename manifests"
     else:
         for rule in WHOLE_TREE_ONLY:
             skipped[rule] = "needs the whole tree"
