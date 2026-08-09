@@ -120,6 +120,17 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "quota the crash and degradation gates read"),
 
     # ── treatment ───────────────────────────────────────────────────────────
+    _f("evicted", Tier.treatment, Absence.not_applicable, Stage.assemble,
+       "what the char budget dropped before the model saw it: bodies, whole tables, and by "
+       "how much the block still overran. Null means the block fit, which the assemble node "
+       "distinguishes from an empty mapping. Treatment, not outcome, because it changes what "
+       "was served: `table_coverage` is computed over `licensed` and is therefore a LICENSING "
+       "figure -- a table can be routed, licensed, counted as covered, and then evicted here. "
+       "Reconstructing 25 turns of the 2026-08-09 v3 arm offline, the budget bit on 16 and the "
+       "median block rendered at 79,866 of 80,000 chars, so the gap between licensed and "
+       "delivered is not a corner case. `DeliveryTracker.merge_into` destroyed this mid-turn "
+       "for the whole life of the field before it was carried"),
+
     _f("context_hash", Tier.treatment, Absence.not_applicable, Stage.assemble,
        "the delivery gate. Deterministic: a pure function of corpus content and "
        "pipeline decisions. Null on paths that skip assemble, and NEVER the string "

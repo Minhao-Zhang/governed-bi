@@ -101,32 +101,57 @@ def spellings_for(
         physical_name = getattr(table, "physical_name", None)
         schema = getattr(table, "schema", None)
         if isinstance(physical_name, str) and physical_name:
-            by_table[fold(physical_name)] = own_spellings
+            bare = fold(physical_name)
+            # Two licensed schemas both declaring ``country`` must not have one of them own the
+            # bare key by sort order -- the same collision this function refuses, one scope up.
+            # ``None`` poisons it; the schema-qualified key still resolves.
+            by_table[bare] = None if bare in by_table else own_spellings
             if isinstance(schema, str) and schema:
-                by_table[f"{fold(schema)}.{fold(physical_name)}"] = own_spellings
-    return (*fold_map(names), by_table)
+                by_table[f"{fold(schema)}.{bare}"] = own_spellings
+    return (*fold_map(names), {k: v for k, v in by_table.items() if v is not None})
 
 
 def _sources(tree: exp.Expression) -> dict[str, str]:
-    """``{alias or bare name (folded) -> by_table key}`` for the statement's real tables.
+    """``{handle (folded) -> by_table key}``, **only for handles that name exactly one table**.
 
-    A CTE name is **excluded**: it is a name the statement defines, so resolving a column
-    against a licensed table that happens to share its name would canonicalise a reference to
-    something the query never read. Absent from this map means "fall through to the flat pass",
-    which is the behaviour that already existed.
+    A handle used for two different tables anywhere in the statement is dropped, not guessed.
+    That is what makes this safe to run beside ``binding.py``, which resolves per scope with
+    ``traverse_scope``: a handle unambiguous over the whole tree resolves the same way in every
+    scope, so the two resolvers cannot disagree. A handle that is not tree-unambiguous falls
+    through to the flat pass and refuses exactly as it did before this resolver existed.
+
+    An aliased table is registered **under its alias only**, the rule
+    ``binding.py::_classify_sources`` states — Postgres hides the table name behind an alias.
+
+    Three statements motivated both rules; the first draft rewrote each one **wrongly** while
+    reaching a passing verdict, which is the precise failure ``r_ambiguous_fold`` exists to
+    prevent:
+
+    * ``... FROM s.people AS T1 WHERE id IN (SELECT T1.name FROM s.places AS T1)`` — the inner
+      ``T1`` is ``s.places``; the draft spelled it from ``s.people``.
+    * the same shape across a ``UNION``.
+    * ``FROM s.customers AS c JOIN s.orders AS customers`` — ``customers`` is an *alias* of
+      ``s.orders``, and the draft resolved it to the table of that name. ``bind()`` accepts the
+      statement, so nothing downstream would have caught it.
+
+    A CTE name is excluded: it is a name the statement defines, not one the corpus declares.
     """
     defined = {fold(str(c.alias_or_name)) for c in tree.find_all(exp.CTE) if c.alias_or_name}
     out: dict[str, str] = {}
+    conflicted: set[str] = set()
     for table in tree.find_all(exp.Table):
         name = fold(str(table.name or ""))
         if not name or name in defined:
             continue
         key = f"{fold(str(table.db))}.{name}" if table.db else name
-        for handle in (fold(str(table.alias or "")), name):
-            if handle and handle not in defined:
-                # First writer wins: two sources sharing an alias is a statement BINDING will
-                # refuse, and guessing between them here would be the very thing this refuses.
-                out.setdefault(handle, key)
+        handle = fold(str(table.alias or "")) or name
+        if handle in defined:
+            continue
+        if out.get(handle, key) != key:
+            conflicted.add(handle)
+        out.setdefault(handle, key)
+    for handle in conflicted:
+        out.pop(handle, None)
     return out
 
 

@@ -668,12 +668,17 @@ def observed_tokens(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     that lived here overstated a measured run nine-fold), and LangSmith already reports cost
     per trace.
 
-    ``calls`` counts usage **rows**, one per model call now that every calling stage writes its
-    own. That went from 1 to 7 per turn when the guard and rewriters started billing, so a jump
-    against an older batch is the older batch under-reporting, not this one inflating.
+    ``calls`` prefers each row's own ``model_calls`` and falls back to counting the row. The
+    fallback is not equivalent and the difference is the point: one row per model call holds
+    for the guard and the five rewriters, and **not** for ``agent_core``, which aggregates a
+    whole tool loop into one row. Counting rows there reported 1 call for a turn that made up
+    to 13, which understated the repeated share of the input -- the only part prompt caching
+    can remove -- by an order of magnitude. Rows written before ``model_calls`` existed still
+    count as one, so a mixed batch under-reports rather than inventing.
     """
     per_stage: dict[str, dict[str, int]] = {}
     calls = 0
+    calls_measured = 0
     tokens_in = 0
     tokens_out = 0
 
@@ -693,20 +698,31 @@ def observed_tokens(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                 continue
             got_in = _count(entry.get("input_tokens"))
             got_out = _count(entry.get("output_tokens"))
-            calls += 1
+            # The row's own count when it has one; otherwise the row is one call. `agent_core`
+            # aggregates a whole tool loop, so counting rows there reported 1 for a turn that
+            # made up to 13.
+            reported_calls = _count(entry.get("model_calls"))
+            got_calls = reported_calls or 1
+            calls_measured += reported_calls
+            calls += got_calls
             tokens_in += got_in
             tokens_out += got_out
             stage = str(entry.get("stage") or "unattributed")
             bucket = per_stage.setdefault(
                 stage, {"calls": 0, "input_tokens": 0, "output_tokens": 0}
             )
-            bucket["calls"] += 1
+            bucket["calls"] += got_calls
             bucket["input_tokens"] += got_in
             bucket["output_tokens"] += got_out
 
     return {
         "rows": len(rows),
         "calls": calls,
+        # How much of ``calls`` came from a row that actually counted, rather than from the
+        # one-row-is-one-call fallback. Below ``calls`` means the batch predates ``model_calls``
+        # and its agent loops are under-counted -- stated, because a total that is partly a
+        # fallback and says so is a different fact from one that is not.
+        "calls_measured": calls_measured,
         "input_tokens": tokens_in,
         "output_tokens": tokens_out,
         # Per stage: ``llm_utility_model`` is a comparability knob justified by cost and

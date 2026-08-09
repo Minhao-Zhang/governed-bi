@@ -535,7 +535,8 @@ def test_a_cte_name_does_not_resolve_against_a_licensed_table_that_shares_it() -
     from governed_bi.govern.pipeline import canonicalise
 
     out = canonicalise(
-        'WITH customers AS (SELECT 1 AS alias) SELECT customers.alias FROM customers',
+        "WITH customers AS (SELECT c2.x AS other FROM t2 AS c2) "
+        "SELECT customers.alias FROM customers",
         spellings={"alias": "Alias"},
         ambiguous=frozenset({"alias"}),
         dialect="postgres",
@@ -615,3 +616,76 @@ def test_spellings_for_omits_a_table_whose_own_columns_collide() -> None:
 
     assert "name" in ambiguous
     assert "t" not in by_table and "s.t" not in by_table, by_table
+
+
+def test_a_handle_naming_two_tables_is_not_resolved() -> None:
+    """The defect the first draft shipped: resolve on a tree-wide alias map and you answer a
+    different question from ``binding.py``, which resolves per scope.
+
+    Each of these reached a **passing** verdict with the wrong spelling. They are the reason
+    ``_sources`` drops a conflicted handle instead of taking the first writer: a handle that is
+    unambiguous over the whole tree resolves the same way in every scope, and one that is not
+    has no answer this pass is entitled to give.
+    """
+    from governed_bi.govern.pipeline import canonicalise
+
+    by_table = {
+        "people": {"name": "Name"}, "s.people": {"name": "Name"},
+        "places": {"name": "name"}, "s.places": {"name": "name"},
+    }
+    for label, sql in (
+        ("alias reused in a subquery",
+         "SELECT T1.name FROM s.people AS T1 WHERE T1.id IN "
+         "(SELECT T1.name FROM s.places AS T1)"),
+        ("alias reused across a UNION",
+         "SELECT T1.name FROM s.people AS T1 UNION SELECT T1.name FROM s.places AS T1"),
+    ):
+        out = canonicalise(
+            sql,
+            spellings={"name": "Name"},
+            ambiguous=frozenset({"name"}),
+            dialect="postgres",
+            by_table=by_table,
+        )
+        assert isinstance(out, dict) and out["reason_code"] == "r_ambiguous_fold", (
+            f"{label}: resolved a handle that names two tables -> {out!r}"
+        )
+
+
+def test_an_alias_hides_the_table_name_behind_it() -> None:
+    """``FROM s.orders AS customers`` means ``customers`` is ``s.orders``, not ``s.customers``.
+
+    ``binding.py::_classify_sources`` states the rule — Postgres hides the table name behind an
+    alias — and the first draft of this resolver registered both, so the *other* table's
+    spelling won. ``bind()`` accepts the statement, so nothing downstream would have caught it.
+    """
+    from governed_bi.govern.pipeline import canonicalise
+
+    out = canonicalise(
+        "SELECT customers.name FROM s.customers AS c JOIN s.orders AS customers ON c.id = customers.id",
+        spellings={"name": "Name", "id": "id"},
+        ambiguous=frozenset({"name"}),
+        dialect="postgres",
+        by_table={
+            "customers": {"name": "Name", "id": "id"}, "s.customers": {"name": "Name", "id": "id"},
+            "orders": {"name": "name", "id": "id"}, "s.orders": {"name": "name", "id": "id"},
+        },
+    )
+    assert not isinstance(out, dict), out
+    assert '"name"' in out and '"Name"' not in out, (
+        f"took s.customers' spelling (Name) for a handle that is s.orders' alias: {out}"
+    )
+
+
+def test_a_bare_table_name_shared_by_two_licensed_schemas_is_not_resolvable() -> None:
+    """``country`` in three schemas must not have one of them own the bare key by sort order —
+    the same collision this whole rule refuses, one scope up. The schema-qualified key stays."""
+    from governed_bi.govern.pipeline import spellings_for
+
+    corpus = _StubCorpus([("a", "country", ["Name"]), ("b", "country", ["name"])])
+    _, ambiguous, by_table = spellings_for(corpus, frozenset({"a.country", "b.country"}))
+
+    assert "name" in ambiguous
+    assert "country" not in by_table, by_table
+    assert by_table["a.country"]["name"] == "Name"
+    assert by_table["b.country"]["name"] == "name"

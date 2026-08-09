@@ -141,3 +141,85 @@ def test_no_reported_usage_still_means_unmeasured_not_zero_calls() -> None:
     from governed_bi.serve.usage import reported_tokens
 
     assert reported_tokens([AIMessage("x")]) is None
+
+
+# ── what the budget dropped, which was being destroyed mid-turn ───────────────
+
+
+def test_the_delivery_merge_carries_what_the_budget_evicted() -> None:
+    """``merge_into`` rebuilt a fresh four-key dict, so ``assemble``'s ``evicted`` was destroyed
+    in ``agent_core`` on every turn that had one — a silent data loss that lived undetected.
+
+    It is the only record that a table was routed, licensed, *counted as covered* by
+    ``table_coverage``, and then dropped for space before the model saw it. Reconstructing 25
+    turns of the 2026-08-09 v3 arm offline, the 80 000-char budget bit on 16 of them.
+    """
+    from governed_bi.serve.delivery import DeliveryTracker
+
+    evicted = {"bodies_dropped": 3, "tables_dropped": 1, "dropped_ids": ["s.t"]}
+    merged = DeliveryTracker({"a": "1"}).merge_into(
+        {"context_block": "B", "context_hash": "h", "tool_delivered": {}, "evicted": evicted}
+    )
+
+    assert merged["evicted"] == evicted
+    assert merged["context_hash"] == "h" and merged["tool_delivered"] == {"a": "1"}
+
+
+def test_a_turn_whose_block_fit_carries_no_evicted_key() -> None:
+    """Absent and empty must stay distinguishable: ``{}`` would read as "we checked and dropped
+    nothing", which is a different fact from "the budget never bit"."""
+    from governed_bi.serve.delivery import DeliveryTracker
+
+    assert "evicted" not in DeliveryTracker().merge_into(
+        {"context_block": "B", "context_hash": "h", "tool_delivered": {}}
+    )
+    assert "evicted" not in DeliveryTracker().merge_into(
+        {"context_block": "B", "context_hash": "h", "tool_delivered": {}, "evicted": {}}
+    )
+
+
+def test_the_eval_row_reports_what_was_evicted() -> None:
+    """The consumer half. ``project_turn`` reads it off ``state["delivery"]``."""
+    from governed_bi.eval.harness import project_turn
+
+    evicted = {"tables_dropped": 2, "over_budget": 512}
+    row = project_turn(
+        {
+            "answer": {"outcome": "answered", "record": {}},
+            "delivery": {"context_hash": "h", "evicted": evicted},
+            "messages": [],
+        },
+        question={"question_id": "q1", "db_id": "d"},
+        arm="a",
+    )
+    assert row["context_evicted"] == evicted
+
+
+def test_assemble_records_an_eviction_only_when_the_budget_bites() -> None:
+    """The producer half, against the real renderer, so the three cannot drift apart."""
+    from governed_bi.serve.context import render_context
+
+    pieces = {
+        "by_type": {"table": [f"s.t{i}" for i in range(40)]},
+        "schema_ranking": [],
+    }
+    assets = {
+        f"s.t{i}": type(
+            "T", (), {
+                "id": f"s.t{i}", "asset_type": type("A", (), {"value": "table"})(),
+                "physical_name": f"t{i}", "schema": "s", "columns": [],
+                "summary": "x" * 400, "body": "y" * 400,
+            },
+        )()
+        for i in range(40)
+    }
+
+    roomy: dict = {}
+    render_context(retrieved=pieces, assets_by_id=assets, schemas=["s"], budget_chars=10**7,
+                   evicted=roomy)
+    assert roomy == {}, "a block that fits must record no eviction"
+
+    tight: dict = {}
+    render_context(retrieved=pieces, assets_by_id=assets, schemas=["s"], budget_chars=800,
+                   evicted=tight)
+    assert tight, "the budget bit and nothing was recorded"

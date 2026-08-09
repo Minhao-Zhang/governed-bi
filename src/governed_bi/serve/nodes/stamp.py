@@ -174,7 +174,10 @@ def _extract_factory(
     failed_stage: str | None,
     error_type: str | None,
 ) -> Any:
-    delivery_keys = {"context_hash", "delivery_hash", "tool_delivered"}
+    # ``evicted`` included, so the served record carries it too: it was reaching the eval row
+    # and nothing else, which would have left ``runs/serve/*.jsonl`` with no trace that the
+    # char budget dropped a licensed table before the model ever saw it.
+    delivery_keys = {"context_hash", "delivery_hash", "tool_delivered", "evicted"}
 
     def extract(state: Mapping[str, Any], name: str) -> Any:
         if name == "outcome":
