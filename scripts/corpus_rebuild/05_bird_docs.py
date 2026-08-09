@@ -13,9 +13,13 @@ real columns; ``column_description`` is present on 91.5% of the rows it covers b
 length is **28 characters**, and 9% merely restate the column name ("the title of the movie").
 This is a starting point, not a description. The agent writes; it does not transcribe.
 
-Encoding: these CSVs are a mix of UTF-8 and cp1252. A file that decodes under none of the three
-attempts is reported, never skipped silently — a schema quietly missing its documentation is a
-schema the writer invents from nothing.
+Encoding: these CSVs are a mix of UTF-8 and cp1252, and a file that decodes under neither is
+reported rather than skipped silently — a schema quietly missing its documentation is a schema
+the writer invents from nothing. **The list was `("utf-8-sig", "cp1252", "latin-1")` and that
+made the promise vacuous:** latin-1 maps all 256 byte values, so it never raises, `_decode` could
+never return `None`, and a file in any other encoding was staged as mojibake at exit 0. cp1252
+already covers latin-1 apart from five undefined bytes, and a CSV containing one of those is not
+text in either encoding — which is exactly the case worth reporting.
 
     uv run python scripts/corpus_rebuild/05_bird_docs.py
 """
@@ -35,7 +39,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import _common as C  # noqa: E402
 
-ENCODINGS = ("utf-8-sig", "cp1252", "latin-1")
+#: No byte-preserving fallback on purpose — see the module docstring. A codec that cannot fail
+#: turns the undecodable report into dead code.
+ENCODINGS = ("utf-8-sig", "cp1252")
 _ALNUM = re.compile(r"[^a-z0-9]")
 
 
@@ -100,12 +106,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"{written} documented columns into {args.out}")
     for key in ("with_description", "with_value_description", "description_restates_the_name"):
         print(f"  {key:<32}{stat[key]:>6}  ({stat[key]/max(stat['rows'],1):.1%})")
-    if undecodable:
-        print(f"  UNDECODABLE, not staged: {undecodable}", file=sys.stderr)
-        return 1
+    # Written before the undecodable check: the stats describe what *was* staged, and they are
+    # most useful on the run that reported a problem. Returning first skipped them exactly then.
     (C.BUILD / "bird_docs_stats.json").write_text(
         json.dumps(dict(stat), indent=2, sort_keys=True), encoding="utf-8", newline="\n"
     )
+    if undecodable:
+        print(f"  UNDECODABLE, not staged: {undecodable}", file=sys.stderr)
+        return 1
     return 0
 
 

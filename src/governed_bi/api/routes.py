@@ -61,27 +61,38 @@ def _graph() -> Any:
 
 
 def _touch_chat_thread(thread_id: str) -> None:
-    """Remember ``thread_id`` as most-recently used; drop the oldest idle threads over the cap."""
+    """Remember ``thread_id`` as most-recently used; drop the oldest idle threads over the cap.
+
+    **A thread leaves the list only once the saver has actually dropped it.** The first version
+    popped the victim before checking whether the checkpointer could delete it, so a saver
+    without ``delete_thread`` left the thread retained but untracked — the unbounded growth the
+    cap exists to prevent, reported as a bounded LRU. ``InMemorySaver`` does expose the method,
+    but the guard is here precisely because the saver gets swapped (LangGraph Server injects its
+    own), so the case it was written for is the one that must not fail silently.
+    """
     if thread_id in _CHAT_THREAD_LRU:
         _CHAT_THREAD_LRU.remove(thread_id)
     _CHAT_THREAD_LRU.append(thread_id)
-    protected = {thread_id}
-    scanned = 0
-    initial = len(_CHAT_THREAD_LRU)
-    while len(_CHAT_THREAD_LRU) > _CHAT_THREAD_CAP and scanned < initial:
-        victim = _CHAT_THREAD_LRU.pop(0)
-        scanned += 1
-        if victim in protected:
-            _CHAT_THREAD_LRU.append(victim)
-            continue
-        if _pending_on_thread({"configurable": {"thread_id": victim}}) is not None:
-            protected.add(victim)
-            _CHAT_THREAD_LRU.append(victim)
-            continue
-        saver = getattr(_graph(), "checkpointer", None)
-        delete = getattr(saver, "delete_thread", None)
-        if callable(delete):
+
+    saver = getattr(_graph(), "checkpointer", None)
+    delete = getattr(saver, "delete_thread", None)
+    if not callable(delete):
+        return  # nothing can be evicted; keep the list honest rather than forgetting threads
+
+    # Oldest first, newest last; the current thread is never a candidate, because a
+    # clarification it just raised may not be visible until the invoke that follows.
+    current = _CHAT_THREAD_LRU[-1]
+    remaining = len(_CHAT_THREAD_LRU) - _CHAT_THREAD_CAP
+    keep: list[str] = []
+    for victim in _CHAT_THREAD_LRU[:-1]:
+        # Left to right: no checkpointer read at all once enough have been evicted.
+        if remaining > 0 and _pending_on_thread({"configurable": {"thread_id": victim}}) is None:
             delete(victim)
+            remaining -= 1
+        else:
+            keep.append(victim)  # under the cap, or a paused turn that is never evicted
+    keep.append(current)
+    _CHAT_THREAD_LRU[:] = keep
 
 
 @app.get("/livez")

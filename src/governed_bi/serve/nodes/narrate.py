@@ -17,10 +17,11 @@ from collections.abc import Mapping
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
+from langgraph.errors import GraphBubbleUp
 
+from governed_bi.serve.ledger import ledger_ended_without_answer
 from governed_bi.serve.messages import last_ai_text
 from governed_bi.serve.runtime import configurable
-from governed_bi.serve.ledger import ledger_ended_without_answer
 
 __all__ = ["narrate_node"]
 
@@ -64,6 +65,12 @@ async def narrate_node(state: dict, config: RunnableConfig) -> dict:
         if spent is not None:
             update["usage"] = [spent]
         return update
+    except GraphBubbleUp:
+        # Not an error to swallow: ``GraphInterrupt`` is a ``GraphBubbleUp`` and so an
+        # ``Exception``, and ``wrap_node`` re-raises it on purpose so the checkpointer can pause
+        # and resume. Catching it below would turn a clarification into a silently dropped
+        # pause — the turn would return ``{}`` and the question would never be asked.
+        raise
     except Exception:  # noqa: BLE001 — observer/narrator must not fail the turn
         return {}
 
@@ -100,6 +107,8 @@ async def _generate(
             config={"run_name": "narrate"},
         )
         text = str(getattr(reply, "text", "") or "").strip()
+    except GraphBubbleUp:  # see :func:`narrate_node` — a pause is not a failed sentence
+        raise
     except Exception:  # noqa: BLE001 — see the docstring: a lost sentence is not a lost turn
         return None, None
     spent = usage_row(

@@ -29,10 +29,15 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
+from langgraph.errors import GraphBubbleUp
 
 from governed_bi.register.prompts import prompt_text
 from governed_bi.serve.events import emit, rail_event_id
-from governed_bi.serve.ledger import answering_attempts, attempt_field
+from governed_bi.serve.ledger import (
+    answering_attempts,
+    attempt_field,
+    ledger_ended_without_answer,
+)
 from governed_bi.serve.runtime import bool_knob, configurable, model_id
 from governed_bi.serve.state import TERMINAL_PATH_KINDS
 
@@ -281,12 +286,14 @@ async def reflect_node(state: dict, config: RunnableConfig) -> dict:
     """
     if state.get("path_kind") in TERMINAL_PATH_KINDS:
         return {}
-    from governed_bi.serve.ledger import ledger_ended_without_answer
-
     if ledger_ended_without_answer(state):
         return {}
     try:
         return await _reflect(state, config)
+    except GraphBubbleUp:
+        # A pause is not a verdict. ``GraphInterrupt`` is an ``Exception``, so the clause below
+        # would swallow the very thing ``wrap_node`` re-raises to let the checkpointer resume.
+        raise
     except Exception as exc:  # noqa: BLE001 — an observer must not be able to fail a turn
         return {"reflect_verdict": _unmeasured(type(exc).__name__, {})}
 

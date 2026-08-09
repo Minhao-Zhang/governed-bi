@@ -43,15 +43,25 @@ def main(argv: list[str] | None = None) -> int:
     for row in C.read_jsonl(C.BUILD / "evidence_clauses.jsonl"):
         evidence[row["db"]].append(row)
 
+    # The manifest keys tables by their **upstream BIRD** name, so every lookup goes through
+    # schema_rename_map.json first -- the same route `check_corpus_conformance`'s V15 takes.
+    # Emitting the raw name would hand the writer a table that does not exist in their schema.
+    rmap = C.rename_map()
+
+    def _table(db: str, table: str) -> str:
+        return (rmap.get(db) or {}).get(table, table)
+
     unreliable: dict[str, set[tuple[str, str]]] = defaultdict(set)
     traps = json.loads((C.EVAL_DATASET / "trap_manifest.json").read_text(encoding="utf-8"))
     for trap in traps:
         if trap.get("names"):
-            unreliable[trap["db"]].add((trap["table"], trap["names"]["rename"]))
-    unreliable_keys: dict[str, set[str]] = defaultdict(set)
+            unreliable[trap["db"]].add((_table(trap["db"], trap["table"]), trap["names"]["rename"]))
+    unreliable_keys: dict[str, set[tuple[str, str]]] = defaultdict(set)
     for trap in traps:
         if trap.get("names") and trap.get("is_key"):
-            unreliable_keys[trap["db"]].add(trap["names"]["rename"])
+            unreliable_keys[trap["db"]].add(
+                (_table(trap["db"], trap["table"]), trap["names"]["rename"])
+            )
 
     # A clone table's `names.rename` is `{"table": ..., "columns": [...]}`, not a string, and
     # every column of a clone is unreliable whether or not the column manifest lists it.
@@ -69,13 +79,24 @@ def main(argv: list[str] | None = None) -> int:
 
     written = 0
     for schema in C.evaluated_schemas():
-        # A column is unreliable if the manifest names it, or if its whole table is a clone.
-        cols = {name for _, name in unreliable.get(schema, set())}
         packet = {
             "schema": schema,
             "unreliable_tables": sorted(unreliable_tables.get(schema, set())),
-            "unreliable_columns": sorted(cols),
-            "unreliable_join_keys": sorted(unreliable_keys.get(schema, set())),
+            # ``table.column``, never a bare column name. Flattening these told writers that a
+            # name planted on one table was unreliable on *every* table in the schema, and a
+            # clone table is the amplifier because it shares its original's column names. That
+            # is how regional_sales.emplacements_magasin.code_zone -- a real telephone area code
+            # -- came to be suppressed alongside the planted code_zone_geo. Measured: 130 real
+            # columns were presented as unreliable, and separately 929 manifest entries named a
+            # table that does not exist in the corpus because the upstream name never went
+            # through the rename map above. Both are 0 now. V15 catches the *result* of this in
+            # the written tree; this is the input that caused it.
+            "unreliable_columns": sorted(
+                f"{table}.{column}" for table, column in unreliable.get(schema, set())
+            ),
+            "unreliable_join_keys": sorted(
+                f"{table}.{column}" for table, column in unreliable_keys.get(schema, set())
+            ),
             "bird_documentation": docs.get(schema, []),
             "value_samples": samples.get(schema, []),
             "evidence_clauses": evidence.get(schema, []),

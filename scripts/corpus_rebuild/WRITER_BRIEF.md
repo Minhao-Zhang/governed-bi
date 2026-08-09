@@ -109,7 +109,16 @@ vote in routing.
 ### 5. Unreliable tables and columns
 
 Some columns hold data that does not correspond to the business facts the table records. The
-packet names them. For each one:
+packet names them.
+
+**`unreliable_columns` and `unreliable_join_keys` are `table.column`, and the table half is
+binding.** Mark the column on *that* table only. The same column name on a different table is a
+different column and is very often real: `emplacements_magasin.code_zone` is a telephone area
+code and `zones_geographiques.code_zone` holds state abbreviations, and only one of them may be
+suspect. Marking a real column is the expensive mistake — `reliability.note` is never dropped
+from the context, so the model is told every turn not to use a column it needs.
+
+For each entry:
 
 ```yaml
 reliability:

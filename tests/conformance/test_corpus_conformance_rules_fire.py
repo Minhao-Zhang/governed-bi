@@ -112,6 +112,66 @@ def test_v9_catches_a_reference_to_nothing(tmp_path: Path) -> None:
     assert cc.check_references(ok) == []
 
 
+def test_v9_spells_a_column_id_the_way_the_loader_does(tmp_path: Path) -> None:
+    """A gate that rejects a *valid* corpus is worse than one that misses an invalid one.
+
+    An inline column's id comes from ``derive_column_id``, which slugs the physical name. V9
+    built ``f"{table_id}.{physical_name}"`` instead, so the two agreed only while every column
+    name was a bare identifier — and a reference to a correctly-spelled slugged column resolved
+    to nothing, failing a rule that returns exit 1. This is the ``airline."Air Carriers"``
+    two-spellings defect the module docstring cites as its own reason for existing.
+    """
+    from governed_bi.corpus.identity import derive_column_id
+
+    awkward = {
+        "asset_type": "table",
+        "id": "airline.Air_Carriers_66c534",
+        "schema": "airline",
+        "physical_name": "Air Carriers",
+        "summary": "Air Carriers lists every carrier that files a flight in the airline database.",
+        "body": "One row per carrier code.",
+        "columns": [{"physical_name": "Carrier Name", "summary": "s", "body": "b"}],
+    }
+    real_id = derive_column_id("airline.Air_Carriers_66c534", "Carrier Name")
+    assert real_id != "airline.Air_Carriers_66c534.Carrier Name", "fixture no longer covers slugging"
+
+    assets = [
+        ("table", awkward, tmp_path / "t.yaml"),
+        ("term", {"id": "term_c", "binding": {"target_id": real_id}}, tmp_path / "c.yaml"),
+    ]
+    assert cc.check_references(assets) == [], (
+        "a term bound to the id the loader actually mints must resolve"
+    )
+
+
+def test_the_few_shot_exemption_is_enforced_by_authored_only(tmp_path: Path) -> None:
+    """``AUTHORED_ONLY`` must be what exempts, not a comment beside a separate condition.
+
+    It was defined and referenced nowhere: the exemption came from an inline
+    ``at is not AssetType.few_shot``, which also left the ``PAREN_TAIL`` half of V5 ungated. So
+    the declaration and the behaviour could drift, and adding a rule id to the set did nothing.
+
+    A few-shot's summary is a harvested question: it quotes values (V5), can name a film called
+    "The Trap" (V10), and a terse wh-question carries no function words (V4).
+    """
+    harvested = {
+        "asset_type": "few_shot",
+        "id": "fs_addr_0001",
+        "schema": "addr",
+        "sql": "SELECT 1 FROM addr.zip_data",
+        "summary": "How many customers bought 'The Trap' (column title)?",
+        "body": "Question and SQL.",
+    }
+    assert {r for r in cc.check_local("few_shot", harvested, "f.yaml:fs") if r in cc.AUTHORED_ONLY} == set(), (
+        "every rule in AUTHORED_ONLY must be exempt for a few_shot, including both halves of V5"
+    )
+
+    # The same text authored on a column is still policed, so the exemption is about the type.
+    authored = {**harvested, "asset_type": "column", "physical_name": "title"}
+    fired = set(cc.check_local("column", authored, "c.yaml:title"))
+    assert cc.AUTHORED_ONLY & fired, f"authored prose must still be policed, got {fired}"
+
+
 def test_v11_needs_the_column_schema_and_catches_the_named_resemblance(tmp_path: Path) -> None:
     """The regression that made this rule vacuous: an inline column has no ``schema`` key."""
     manifest = tmp_path / "trap.json"

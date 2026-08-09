@@ -446,12 +446,17 @@ def test_the_node_timeouts_are_settable_by_a_deployment() -> None:
 
     Rail bounds are read from the environment before falling back to the declared default.
     ``agent_core``'s bound is settable the same way but lives on the node, not ``wrap_node``.
+
+    ``agent_node_timeout_s`` must also be reachable from ``knobs_resolved``, because it is
+    ``Role.comparability``: it took no state at all, so two arms declaring different values
+    recorded two configurations that had behaved identically. And ``0`` must mean *no wall*
+    rather than a zero-second deadline that fails every turn on its first frame.
     """
     import os
 
     from governed_bi.register.knobs import knob_default
     from governed_bi.serve.graph import _node_timeout
-    from governed_bi.serve.nodes.agent_core import _agent_node_timeout
+    from governed_bi.serve.nodes.agent_core import _agent_node_timeout, _hang_grace
 
     assert _node_timeout("agent_core") is None, (
         "agent_core owns agent_node_timeout_s internally; wrap must not double-bound it"
@@ -461,13 +466,31 @@ def test_the_node_timeouts_are_settable_by_a_deployment() -> None:
     assert _node_timeout("facet_term") is None, (
         "a facet carries a timeout again: possible now, but an unmeasured comparability change"
     )
-    assert _agent_node_timeout() == float(knob_default("agent_node_timeout_s"))
+    assert _agent_node_timeout({}) == float(knob_default("agent_node_timeout_s"))
+
+    # The arm-settable path, which is the whole reason the knob is Role.comparability.
+    assert _agent_node_timeout({"knobs_resolved": {"agent_node_timeout_s": 55.0}}) == 55.0
+
+    # `0` disables rather than kills. Both surfaces, because both used to parse it as a deadline.
+    assert _agent_node_timeout({"knobs_resolved": {"agent_node_timeout_s": 0}}) is None
+
+    # The grace is what lets the soft wall stay between-frames without losing the hang-stop.
+    assert _hang_grace({}) == float(knob_default("llm_timeout_s"))
+    assert _hang_grace({"knobs_resolved": {"llm_timeout_s": 42.0}}) == 42.0
 
     os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"] = "12.5"
     os.environ["GOVERNED_BI_RAIL_NODE_TIMEOUT_S"] = "7"
     try:
-        assert _agent_node_timeout() == 12.5
+        assert _agent_node_timeout({}) == 12.5
+        # Env still wins over a resolved knob, as it does for every other node bound.
+        assert _agent_node_timeout({"knobs_resolved": {"agent_node_timeout_s": 55.0}}) == 12.5
         assert _node_timeout("guard") == 7.0
+        os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"] = "0"
+        assert _agent_node_timeout({}) is None, "'0' from a deployment must mean off, not 0s"
+        os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"] = ""
+        assert _agent_node_timeout({}) == float(knob_default("agent_node_timeout_s")), (
+            "an empty env var is unset, not zero"
+        )
     finally:
         del os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"]
         del os.environ["GOVERNED_BI_RAIL_NODE_TIMEOUT_S"]

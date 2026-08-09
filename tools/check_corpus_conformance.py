@@ -35,6 +35,7 @@ from typing import Any, Iterable
 
 import yaml
 
+from governed_bi.corpus.identity import derive_column_id
 from governed_bi.register.assets import ASSET_REGISTER, AssetType
 from governed_bi.register.knobs import knob_default
 
@@ -257,17 +258,30 @@ def check_local(kind: str, a: dict[str, Any], where: str) -> dict[str, list[Find
         elif ident not in summary:
             out["V3"].append(Finding(f"{where}: summary omits {field}={ident!r}"))
 
-    authored = at is not AssetType.few_shot
-    if authored and summary and summary != SENTINEL and not is_prose(summary):
+    def polices(rule: str) -> bool:
+        """Does ``rule`` apply to this asset? ``AUTHORED_ONLY`` is the whole answer.
+
+        Read through the set rather than an inline ``at is not AssetType.few_shot``: that
+        spelling left ``AUTHORED_ONLY`` defined and referenced nowhere, so it documented an
+        exemption it did not enforce, and adding a rule id to it did nothing. It also exempted
+        only half of V5 -- the ``PAREN_TAIL`` branch was ungated, which contradicted the
+        declaration. "Prose rules that nothing executes are not rules" applies to this file too.
+        """
+        return not (at is AssetType.few_shot and rule in AUTHORED_ONLY)
+
+    if polices("V4") and summary and summary != SENTINEL and not is_prose(summary):
         out["V4"].append(
             Finding(f"{where}: summary is not prose (function-word ratio "
                     f"{function_ratio(summary):.2f}): {summary[:70]!r}")
         )
 
-    if authored and VALUE_TALK.search(summary):
-        out["V5"].append(Finding(f"{where}: summary carries values or examples, which belong in body"))
-    if PAREN_TAIL.search(summary):
-        out["V5"].append(Finding(f"{where}: summary ends in a mechanical '(column x)' tail"))
+    if polices("V5"):
+        if VALUE_TALK.search(summary):
+            out["V5"].append(
+                Finding(f"{where}: summary carries values or examples, which belong in body")
+            )
+        if PAREN_TAIL.search(summary):
+            out["V5"].append(Finding(f"{where}: summary ends in a mechanical '(column x)' tail"))
 
     if at in BODY_REQUIRED and not body:
         out["V6"].append(Finding(f"{where}: {kind} has no body, and the model never sees summary"))
@@ -297,21 +311,30 @@ def check_local(kind: str, a: dict[str, Any], where: str) -> dict[str, list[Find
     # summary existed. Blank the identifier out before searching rather than weakening the stem.
     for own in _own_identifiers(at, a):
         blob = blob.replace(own.lower(), " ")
-    hit = FORBIDDEN.search(blob) if authored else None
+    hit = FORBIDDEN.search(blob) if polices("V10") else None
     if hit:
         out["V10"].append(Finding(f"{where}: text contains {hit.group(0)!r}"))
     return out
 
 
 def check_references(assets: Iterable[tuple[str, dict[str, Any], Path]]) -> list[Finding]:
-    """V9 -- every declared reference resolves. Whole-corpus only."""
+    """V9 -- every declared reference resolves. Whole-corpus only.
+
+    An inline column's id comes from :func:`~governed_bi.corpus.identity.derive_column_id`, not
+    from ``f"{table_id}.{physical_name}"``. The two agree only while every column name is a bare
+    identifier: ``derive_column_id`` slugs the name, so a column physically called
+    ``Air Carriers`` is ``...Air_Carriers_66c534`` to the loader and ``...Air Carriers`` to the
+    hand-rolled spelling. A corpus that referenced such a column *correctly* therefore failed
+    this rule, and V9 returns exit 1 — a gate blocking a valid tree. The module docstring names
+    this exact class of bug as the reason this file imports its policy instead of restating it.
+    """
     ids = {str(a.get("id")) for kind, a, _ in assets if a.get("id")}
     for kind, a, _ in assets:
         if kind == "table":
             tid = str(a.get("id") or "")
             for col in a.get("columns") or []:
                 if isinstance(col, dict) and col.get("physical_name"):
-                    ids.add(f"{tid}.{col['physical_name']}")
+                    ids.add(derive_column_id(tid, str(col["physical_name"])))
     bad: list[Finding] = []
     for kind, a, path in assets:
         where = _where(kind, a, path)

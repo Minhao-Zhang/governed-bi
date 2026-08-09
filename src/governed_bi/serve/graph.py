@@ -185,10 +185,13 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     # **observer** fail a turn that had already answered. The model call is bounded by its own
     # `request_timeout` (`llm_utility_timeout_s`) and any exception is recorded as unmeasured.
     graph.add_node("reflect", wrap_node("reflect", reflect_node, stream=False))
-    # Not through `rail`. Same observer rule as ``reflect``: a timeout or wrap crash here
-    # would mark an already-answered turn ``crashed``. Model call failures are swallowed inside
-    # the node; the utility ``request_timeout`` still bounds the provider call.
-    graph.add_node("narrate", wrap_node("narrate", narrate_node))
+    # Through `rail` like every other wrapped node, and it gets no timeout because it is absent
+    # from `_CANCELLABLE` — which is the single place that decision is written down. Registering
+    # it with a bare `add_node` said the same thing twice and made `_CANCELLABLE` a liar: adding
+    # `narrate` back to that set would arm a bound `_node_timeout` reports and `rail` never
+    # applies. Model call failures are swallowed inside the node; the utility `request_timeout`
+    # still bounds the provider call.
+    rail("narrate", narrate_node)
     rail("refuse", refuse_node)
     rail("decline", decline_node)
     # Unwrapped: nothing after stamp can record a wrap crash.

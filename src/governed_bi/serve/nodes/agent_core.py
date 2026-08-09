@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -76,18 +77,16 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
     inbound = history + ([question] if question is not None else [])
 
     # Hang-stop lives *here* (not ``wrap_node``) so a timeout still projects the streamed
-    # ledger. Deadline is checked **between** astream frames rather than via ``wait_for``:
-    # cancelling mid-``run_query`` ``to_thread`` leaves an executed statement off the projected
-    # ledger (the same cancel-vs-thread hazard ``wrap.py`` refuses for sync nodes). Provider
-    # calls stay bounded by ``llm_timeout_s``; the node wall only ends the loop after a frame.
-    progress: dict[str, Any] = {"result": {}}
+    # ledger: ``wrap_node``'s ``wait_for`` would reduce the update to ``{failure, path_kind}``
+    # and discard every attempt the loop already recorded. See :func:`_run` for how the bound
+    # is applied, and what it costs.
     result, failure = await _run(
         agent,
         inbound,
         config,
         recursion_limit=_recursion_limit(state),
-        progress=progress,
-        timeout=_agent_node_timeout(),
+        timeout=_agent_node_timeout(state),
+        grace=_hang_grace(state),
     )
 
     out_messages = list(result.get("messages") or [])
@@ -141,8 +140,8 @@ async def _run(
     config: RunnableConfig,
     *,
     recursion_limit: int,
-    progress: dict[str, Any] | None = None,
     timeout: float | None = None,
+    grace: float | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Drive the agent, keeping the last committed state. Returns ``(state, failure or None)``.
 
@@ -166,50 +165,138 @@ async def _run(
     ``create_agent`` binds 9999 via ``with_config``; a non-default value here is what actually
     bounds exploration tools that ``_CapEndsTheTurn`` does not cover.
 
-    **``progress``** is updated every values frame so a caller can still read the last snapshot
-    if this coroutine is abandoned. **``timeout``** is a between-frame deadline (not
-    ``asyncio.wait_for``): cancelling mid-tool would drop a finished ``run_query`` off the
-    projected ledger while the DB thread kept running.
+    **Two bounds, because one cannot hold both guarantees.** ``timeout`` is the soft wall and is
+    checked **between** frames; ``grace`` extends the wait for a single frame past it, and only
+    that wait is ever cancelled.
+
+    * *Between frames* is what keeps the ledger honest. Cancelling mid-``run_query`` leaves a
+      statement that reached the database off the projected ledger, because the ``to_thread``
+      worker keeps running — the cancel-vs-thread hazard ``wrap.py`` refuses for sync nodes.
+      Executed-but-unrecorded is an audit break, and worse than being slow
+      (``test_a_timeout_overlapping_in_flight_run_query_still_records_the_attempt``).
+    * *But the soft wall alone cannot fire during a hang*, which is the only thing a wall exists
+      for: no frame arrives, so ``async for`` never reaches the loop body. Measured — a stub whose
+      first superstep never yields ran past a 0.3 s wall indefinitely. With ``wrap_node`` no
+      longer bounding this node, that left ``agent_core`` with no wall clock at all.
+
+    So: a tool still running when the soft wall expires gets ``grace`` to finish and record, and
+    the turn ends at the next frame with its ledger intact. Only a wedge — nothing at all for
+    ``timeout + grace`` — is cancelled, and there the missing attempt row is accepted because the
+    alternative is a turn that never returns. See :func:`_hang_grace` for the sizing.
+
+    Provider calls stay separately bounded by ``llm_timeout_s``.
     """
     from langgraph.errors import GraphInterrupt
 
     run_config: dict[str, Any] = {**config, "recursion_limit": int(recursion_limit)}
     last: dict[str, Any] = {}
-    deadline = (time.monotonic() + float(timeout)) if timeout is not None else None
+    soft = (time.monotonic() + float(timeout)) if timeout is not None else None
+    # `grace=None` collapses the ceiling onto the soft wall rather than removing it. A caller
+    # that asks for a wall and forgets the grace gets a bound that fires — losing the in-flight
+    # tool's chance to record, but never silently restoring the unbounded wait this fixed.
+    hard = (soft + max(float(grace or 0.0), 0.0)) if soft is not None else None
+    stream = agent.astream({"messages": inbound}, run_config, stream_mode="values")
     try:
-        async for frame in agent.astream(
-            {"messages": inbound}, run_config, stream_mode="values"
-        ):
+        while True:
+            # Soft wall first: reached only after a frame, so nothing is in flight to cut off.
+            if soft is not None and time.monotonic() >= soft:
+                return last, {"stage": "agent_core", "error_type": "TimeoutError"}
+            if hard is None:
+                frame = await anext(stream)
+            else:
+                frame = await asyncio.wait_for(anext(stream), max(hard - time.monotonic(), 0.0))
             if isinstance(frame, Mapping):
                 last = dict(frame)
-                if progress is not None:
-                    progress["result"] = last
-            if deadline is not None and time.monotonic() >= deadline:
-                return last, {"stage": "agent_core", "error_type": "TimeoutError"}
+    except StopAsyncIteration:
+        return last, None
     except GraphInterrupt:
         raise
     except Exception as exc:  # noqa: BLE001 — the ledger is the point, not the traceback
+        # ``wait_for``'s ``TimeoutError`` lands here too, and wants no separate clause: it
+        # already records ``error_type="TimeoutError"``, which is what the wall firing means.
         # ``type(exc).__name__`` and never ``str(exc)``: ADR 0006 §11 keeps exceptions as their
         # class because driver error text echoes the statement and its literals.
-        if progress is not None:
-            progress["result"] = last
         return last, {"stage": "agent_core", "error_type": type(exc).__name__}
-    return last, None
+    finally:
+        # The generator is abandoned on every path but the exhausted one; closing it lets
+        # langgraph release the checkpointer work it holds instead of waiting for the GC.
+        await _aclose(stream)
 
 
-def _agent_node_timeout() -> float | None:
-    """Wall clock for the whole agent loop. Owned here, not by ``wrap_node``.
+#: Budget for closing an abandoned ``astream``. Small and bounded because :func:`_aclose` runs
+#: in a ``finally`` on the timeout path: anything that can block there would defeat the wall
+#: clock it is cleaning up after, which is the defect this whole mechanism exists to fix.
+_ACLOSE_BUDGET_S = 5.0
+
+
+async def _aclose(stream: Any) -> None:
+    """Best-effort close of an abandoned ``astream`` generator.
+
+    Bounded and exception-swallowing on purpose. ``aclose`` throws ``GeneratorExit`` in at the
+    suspension point, which on the timeout path is inside a cancelled tool call — it can raise,
+    and it can block. Neither may replace the outcome the caller already decided.
+
+    ``CancelledError`` is **not** caught: it is a ``BaseException``, and if the surrounding task
+    is being cancelled the right thing is to let that through.
+    """
+    close = getattr(stream, "aclose", None)
+    if close is None:
+        return
+    try:
+        await asyncio.wait_for(close(), _ACLOSE_BUDGET_S)
+    except Exception:  # noqa: BLE001 — cleanup is not an outcome
+        pass
+
+
+def _agent_node_timeout(state: Mapping[str, Any]) -> float | None:
+    """Soft wall for the whole agent loop. Owned here, not by ``wrap_node``.
 
     ``wrap_node``'s ``wait_for`` turns a timeout into ``{failure, path_kind}`` only — the ledger
     that ``_run`` already streamed would be discarded. Applying the bound inside this node keeps
-    the same hang-stop and the partial ledger. Enforced between astream frames (see ``_run``).
+    the partial ledger; ``_run`` is where it fires, and it fires **between frames** so a tool that
+    has already reached the database is never cut off before recording.
+
+    **Resolved through :func:`~governed_bi.serve.runtime.float_knob`, like every other knob.**
+    This previously took no state and read ``knob_default`` directly, which made
+    ``agent_node_timeout_s`` a ``Role.comparability`` knob that no arm could set: two arms
+    declaring different values recorded two configurations that had behaved identically.
+
+    ``<= 0`` means **no wall**, which is why the return type is optional. ``"0"`` used to parse as
+    a zero-second deadline that failed every turn on its first frame — a plausible thing to type
+    for "off".
     """
     import os
 
-    from governed_bi.register.knobs import knob_default
+    from governed_bi.serve.runtime import float_knob
 
     raw = os.environ.get("GOVERNED_BI_AGENT_NODE_TIMEOUT_S")
-    return float(raw) if raw else float(knob_default("agent_node_timeout_s"))
+    if raw is not None and str(raw).strip() != "":
+        return _positive(float(raw))
+    return _positive(float_knob(state, "agent_node_timeout_s"))
+
+
+def _hang_grace(state: Mapping[str, Any]) -> float:
+    """Extra time one in-flight operation gets to finish *after* the soft wall expired.
+
+    This is what keeps the two guarantees from trading against each other. The soft wall is
+    checked between frames, which is audit-safe but cannot fire while the agent is hung, because
+    no frame arrives. So the wait for each frame is additionally bounded by
+    ``soft + grace`` — and only *that* cancels.
+
+    Sized on ``llm_timeout_s``, the longest **bounded** single operation. A ``run_query`` has no
+    bound of its own (there is no ``statement_timeout`` on the connection), so this is a ceiling
+    on being wedged, not a promise that nothing was in flight when it fired. Reaching it means
+    accepting that a statement may have executed without reaching the ledger — the lesser of two
+    evils only because the alternative is a turn that never returns at all.
+    """
+    from governed_bi.serve.runtime import float_knob
+
+    return max(float_knob(state, "llm_timeout_s"), 1.0)
+
+
+def _positive(seconds: float) -> float | None:
+    """``seconds``, or ``None`` when it is not a usable bound. See :func:`_agent_node_timeout`."""
+    return seconds if seconds > 0 else None
 
 
 def _recursion_limit(state: Mapping[str, Any]) -> int:

@@ -22,10 +22,23 @@ import _common as C  # noqa: E402
 
 
 def audit(root: Path, schema: str) -> tuple[int, int, int, int]:
-    """``(assets, still sentinel, no body, terms+metrics)`` for one schema."""
+    """``(assets, still sentinel, no body, terms+metrics)`` for one schema.
+
+    An unparseable file counts as one unfinished asset rather than raising. This runs *during*
+    the rebuild, against a tree being written asset by asset, and it is what dispatch reads:
+    one half-written YAML file used to abort the whole run with a ``ScannerError`` and report
+    nothing about the other 56 schemas. ``check_corpus_conformance.load_assets`` guards the same
+    read for the same reason — a tool that must answer on a half-written tree cannot assume the
+    tree parses. Counting it unfinished is also the right answer: the schema is not done.
+    """
     total = sentinel = bodyless = extra = 0
     for path in sorted((root / schema).rglob("*.yaml")):
-        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        try:
+            doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 — malformed, mid-write, or unreadable: all "not done"
+            total += 1
+            sentinel += 1
+            continue
         if not isinstance(doc, dict):
             continue
         kind = doc.get("asset_type")

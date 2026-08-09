@@ -214,6 +214,60 @@ def test_a_timeout_overlapping_in_flight_run_query_still_records_the_attempt(
     assert out.get("generated_sql") == "SELECT 1 AS n"
 
 
+def test_the_wall_still_ends_a_turn_that_produces_no_frame_at_all() -> None:
+    """The other half of the bound, and the half that had no test.
+
+    The soft wall is checked *between* frames, which is what the test above requires. On its own
+    that cannot fire while the agent is **hung**, because no frame ever arrives and ``async for``
+    never reaches the loop body — so ``agent_core`` had no wall clock at all for the one case a
+    wall exists for. Measured before the fix: a stub whose first superstep never yields ran past
+    a 0.3 s wall until the harness gave up.
+
+    ``grace`` is what closes it: the wait for a single frame is bounded by ``soft + grace``, and
+    only that wait is cancelled. Kept small here; in production it is ``llm_timeout_s``.
+    """
+    from governed_bi.serve.nodes.agent_core import _run
+
+    class NeverYields:
+        async def astream(self, _inbound: Any, _config: Any, stream_mode: str = "values") -> Any:
+            await asyncio.sleep(3600)
+            yield {"messages": []}
+
+    async def drive() -> tuple[dict[str, Any], dict[str, Any] | None]:
+        return await asyncio.wait_for(
+            _run(NeverYields(), [], {}, recursion_limit=40, timeout=0.05, grace=0.05),
+            timeout=5.0,
+        )
+
+    last, failure = asyncio.run(drive())
+    assert failure == {"stage": "agent_core", "error_type": "TimeoutError"}
+    assert last == {}, "nothing was ever streamed, so there is no ledger to keep"
+
+
+def test_a_tool_still_running_when_the_wall_expires_is_given_time_to_record() -> None:
+    """``grace`` must not become a second way to lose an executed statement.
+
+    The frame arrives *after* the soft wall has passed. It must still be consumed — that is the
+    frame carrying ``attempts_by_call`` — and the turn must then end on the soft wall with the
+    ledger intact, rather than being cancelled at the wall itself.
+    """
+    from governed_bi.serve.nodes.agent_core import _run
+
+    class LateFrame:
+        async def astream(self, _inbound: Any, _config: Any, stream_mode: str = "values") -> Any:
+            await asyncio.sleep(0.20)  # a statement finishing after the wall expired
+            yield {"messages": ["m"], "attempts_by_call": {"c1": {"executed_sql": "SELECT 1"}}}
+            await asyncio.sleep(3600)  # and then the loop wedges
+
+    last, failure = asyncio.run(
+        _run(LateFrame(), [], {}, recursion_limit=40, timeout=0.05, grace=5.0)
+    )
+    assert failure == {"stage": "agent_core", "error_type": "TimeoutError"}
+    assert last.get("attempts_by_call") == {"c1": {"executed_sql": "SELECT 1"}}, (
+        "the late frame carried the ledger; cancelling at the soft wall would have dropped it"
+    )
+
+
 def test_two_statements_in_one_super_step_keep_both_ledger_rows() -> None:
     """Parallel tool calls must not abort the step that already ran their SQL (audit §13.2).
 
