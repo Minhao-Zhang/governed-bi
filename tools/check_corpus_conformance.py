@@ -101,8 +101,15 @@ PAREN_TAIL = re.compile(r"\((?:column|table)\s+\S+\)\s*\.?\s*$", re.I)
 #: (l-IMITAT-ions), which is ordinary vocabulary for a data caveat, and `trap`/`planted` would
 #: have caught `trapezoid`/`transplanted` the same way. The stems stay stems so `imitates`,
 #: `imitating` and `fabricated` are all still caught.
+#:
+#: `offside trap` is exempt because it is a *value*, not a description of the benchmark:
+#: `european_football_2.atributos_equipo.clase_linea_defensores` holds exactly two literals,
+#: `Cover` and `Offside Trap`. Censoring it cost the body the one string a query needs, and the
+#: writer who hit this described the setting behaviourally instead -- a corpus made worse by a
+#: rule that was never aimed at it. The exemption is deliberately narrow: only this bigram, so
+#: `trap` on its own still fails.
 FORBIDDEN = re.compile(
-    "(?<![A-Za-z])(decoy|trap|mimic|planted|synthetic)(?![A-Za-z])"
+    "(?<![A-Za-z])(decoy|(?<!offside )trap|mimic|planted|synthetic)(?![A-Za-z])"
     "|(?<![A-Za-z])(fabricat|imitat)",
     re.I,
 )
@@ -201,6 +208,23 @@ def walk(root: Path) -> list[tuple[str, dict[str, Any], Path]]:
 # ── the rules ─────────────────────────────────────────────────────────────────
 
 
+def _own_identifiers(at: AssetType, a: dict[str, Any]) -> list[str]:
+    """The names this asset is entitled to spell: its identifier fields, and its table's name.
+
+    Used only to exempt them from V10. A column on a table called `fabrication_log` has to be
+    able to say so. Longest first, so a name that contains another is blanked whole.
+    """
+    names = {
+        str(a.get(field)).rsplit(".", 1)[-1]
+        for field in ASSET_REGISTER[at].identifier_fields
+        if a.get(field)
+    }
+    for field in ("parent_table", "base_table", "left_table", "right_table"):
+        if a.get(field):
+            names.add(str(a[field]).rsplit(".", 1)[-1])
+    return sorted((n for n in names if n), key=len, reverse=True)
+
+
 def check_local(kind: str, a: dict[str, Any], where: str) -> dict[str, list[Finding]]:
     """Every rule answerable from one asset alone."""
     out: dict[str, list[Finding]] = defaultdict(list)
@@ -267,6 +291,12 @@ def check_local(kind: str, a: dict[str, Any], where: str) -> dict[str, list[Find
         [summary, body, *(str(r) for r in (a.get("rules") or [])),
          _text((a.get("reliability") or {}).get("note") if isinstance(a.get("reliability"), dict) else "")]
     ).lower()
+    # An asset's own name is not a disclosure, and V3 *requires* the summary to carry it. The
+    # two rules contradicted each other on `shipping.camion.annee_fabrication` -- French for
+    # year of manufacture, so the physical name contains the `fabricat` stem and no legal
+    # summary existed. Blank the identifier out before searching rather than weakening the stem.
+    for own in _own_identifiers(at, a):
+        blob = blob.replace(own.lower(), " ")
     hit = FORBIDDEN.search(blob) if authored else None
     if hit:
         out["V10"].append(Finding(f"{where}: text contains {hit.group(0)!r}"))
