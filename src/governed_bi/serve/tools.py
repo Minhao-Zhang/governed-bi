@@ -416,6 +416,14 @@ def build_tools(
                     "answer": text,
                     "turn_id": turn_id,
                     "basis": basis,
+                    # UtkuAI, ported: whether the human declined rather than answered.
+                    # `answer` above is `text` -- always a sentence, even on decline
+                    # ("The user declined to answer this clarification.") -- so a reader of
+                    # `ServeState.clarifications` (e.g. `serve/nodes/mine_corpus.py`) cannot
+                    # tell a decline from a real answer by inspecting `answer` alone. This is
+                    # the same `declined` value already computed above for the emitted
+                    # status; plumbing it through is cheaper than re-deriving it from prose.
+                    "declined": declined,
                 }
             },
         )

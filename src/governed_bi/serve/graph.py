@@ -21,6 +21,7 @@ from governed_bi.serve.nodes.facets import (
     facet_term_node,
 )
 from governed_bi.serve.nodes.guard import guard_node
+from governed_bi.serve.nodes.mine_corpus import mine_corpus_node
 from governed_bi.serve.nodes.narrate import narrate_node
 from governed_bi.serve.nodes.negative import negative_node
 from governed_bi.serve.nodes.rewrite import rewrite_node
@@ -184,6 +185,14 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     rail("connect", connect_node)
     rail("assemble", assemble_node)
     rail("agent_core", agent_core_node)
+    # `stream=False`: mining runs on every turn (not just a resume, since it has to see the
+    # whole thread-accumulated `clarifications` list to find the unmined ones) and has nothing
+    # to show a live viewer on the turns where it finds none -- the same reasoning `fanout`
+    # applies below. Still gets `wrap_node`'s crash safety; the node's own broad
+    # `except Exception` around the mining logic already swallows every failure that matters,
+    # so this is belt and braces rather than the thing standing between a bug here and a lost
+    # turn.
+    rail("mine_corpus", mine_corpus_node, stream=False)
     rail("narrate", narrate_node)
     rail("refuse", refuse_node)
     rail("decline", decline_node)
@@ -239,8 +248,15 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
         _skip_if_terminal,
         {"stamp": "stamp", "continue": "agent_core"},
     )
-    # Terminals skip narrate: refusal/decline wording is system copy.
-    graph.add_edge("agent_core", "narrate")
+    # Terminals skip narrate (and mine_corpus): refusal/decline wording is system copy, and
+    # `assemble`'s conditional edge sends a terminal turn straight to `stamp` without ever
+    # reaching `agent_core`. `mine_corpus` sits before `narrate` rather than after or in
+    # parallel with it: mining and narration read disjoint state (`clarifications` vs.
+    # `messages`/`result_table`) and neither depends on the other's output, so ordering here
+    # is a wiring choice, not a correctness one -- sequential over a fan-out because a corpus
+    # write is not the latency-sensitive half of the turn.
+    graph.add_edge("agent_core", "mine_corpus")
+    graph.add_edge("mine_corpus", "narrate")
     graph.add_edge("narrate", "stamp")
     graph.add_edge("refuse", "stamp")
     graph.add_edge("decline", "stamp")

@@ -290,8 +290,10 @@ def corpus_assumptions() -> list[dict[str, Any]]:
     ``curator/enhancer.py``) captures caller identity or a timestamp yet, and inventing either
     here would be exactly the "field the engine does not observe" this module's own docstring
     rule forbids. ``source`` is always ``"live_chat"``: every row this route can produce came
-    through ``POST /chat/resume``, which is the one live-chat surface that mines a
-    clarification at all.
+    through an answered ``ask_user`` interrupt, mined by ``serve/nodes/mine_corpus.py`` --
+    reached identically whether the resume arrived over ``POST /chat/resume`` or LangGraph
+    Server's own ``/threads/{id}/runs/stream``, since both resume by invoking the same
+    compiled graph.
     """
     session = _session()
     rows: list[dict[str, Any]] = []
@@ -619,115 +621,20 @@ def chat_resume(body: dict[str, Any]) -> dict[str, Any]:
     except ResumeRejected:
         return _error("resume identity mismatch: the caller answering is not the caller that was asked")
 
-    _mine_clarification_draft(session, pending, reply, out)
+    # Mining an answered clarification into a corpus draft (UtkuAI, ported) now happens inside
+    # the compiled graph itself -- `serve/nodes/mine_corpus.py`, wired in right after
+    # `agent_core` -- which `resume_clarification`'s own `graph.invoke()` call above already
+    # triggered. A second call here would double-mine: `resume_clarification` and LangGraph
+    # Server's native `/threads/{id}/runs/stream` both resume by invoking this same compiled
+    # graph, so a route-level call was one of two places doing the same thing, and the other
+    # was the one every real end-user interaction actually reaches. See `mine_corpus.py`'s
+    # module docstring for why the trigger moved rather than being duplicated.
 
     # Logged here too, and with the *clarification* as the question. A resumed turn is the
     # one that produces the record, so leaving it out would make every clarified
     # conversation invisible to the audit surface — which is the half of the traffic most
     # worth auditing.
     return _logged(_shape(out), str(pending.get("question") or ""))
-
-
-def _mine_clarification_draft(
-    session: Any, pending: dict[str, Any], reply: dict[str, Any], out: dict[str, Any]
-) -> None:
-    """UtkuAI, ported: an answered (not declined) clarification becomes a TermAsset draft.
-
-    Gated on ``enable_clarification_to_draft`` (off by default), read off ``out`` the same
-    way ``run_query``'s structured check reads its own knob — the resumed turn's own state,
-    not a session-level constant, so a per-turn override behaves the same way every other
-    knob does. Never lets a mining failure surface as a resume failure: the clarification was
-    answered and the turn must complete regardless of whether the corpus write worked.
-
-    Phase 2 gate: a clarification whose ``ask_user`` call reported
-    ``basis="ranking_ambiguity"`` is never mined, regardless of the knob. A ranking or
-    superlative reading ("best" means X) is a judgment call for the one question that asked
-    it, not a durable fact about the schema — mining it would let one user's reading of
-    "best" quietly become everyone's default. Only ``basis="data_definition"`` (or a
-    clarification whose basis can't be determined, e.g. pre-Phase-1 state) proceeds through
-    the mining logic below, unchanged. ``pending`` (the ``interrupt()`` payload) does not
-    carry ``basis`` — Phase 1 left that payload UI-facing and untouched on purpose — so it is
-    looked up from ``out["clarifications"]`` by matching ``clarification_id``. **Not**
-    ``out["clarifications_by_call"]``: that dict (keyed by tool call id) is a channel of the
-    *nested* agent's ``GovernedAgentState`` (``serve/agent_state.py``) and never reaches the
-    outer graph's own state. ``serve/nodes/agent_core.py`` reads it off the nested agent's
-    result and re-emits it as ``clarifications`` — a plain accumulating list, one entry per
-    resumed ``ask_user`` call — onto ``ServeState`` (``serve/state.py``), which is what
-    ``graph.invoke`` actually returns and what ``out`` here is. Checked live: reading
-    ``clarifications_by_call`` off ``out`` returns ``None`` on every resumed turn, which would
-    have made this gate a silent no-op.
-
-    Phase 3: a candidate that survives the basis gate is no longer submitted as its own
-    independent draft unconditionally. It goes through ``curator/enhancer.py``'s ``apply()``
-    first, compared against every already-**certified** ``TermAsset`` this session already has
-    loaded (``session.assets_by_id`` — the same source ``/corpus/assets`` reads from), so a
-    reworded restatement of an existing fact does not mint a second, unlinked draft and a
-    contradicting answer is flagged (``audit.extra["conflict_with"]``) rather than silently
-    producing a second, disagreeing certified fact once approved. Only pending/proposed drafts
-    and unresolved conflicts are excluded from the comparison set on purpose — comparing a new
-    answer against another answer nobody has reviewed yet would let two unreviewed guesses
-    silently agree with each other and call that "no conflict".
-
-    Deviation from "same schema/namespace": ``TermAsset`` declares no ``schema`` field (its
-    namespace is only known at write time, via ``store.write``'s explicit ``namespace=``, and
-    is not retained on the loaded dataclass — see ``corpus/store.py::_namespace``), and its
-    index-time schema tag (``TagRule.binding_target``) resolves to ``None`` for every
-    clarification-mined term, since none of them carry a ``binding``. There is therefore no
-    per-asset field to re-derive "belongs to ``session.db_id``" from. ``session.assets_by_id``
-    is itself already schema-scoped at session-construction time (``corpus_files()`` only reads
-    a schema's own subtree plus ``_shared`` for a session built on that schema), so the
-    comparison set below relies on that existing boundary rather than inventing a second,
-    unenforceable one.
-
-    On :class:`~governed_bi.curator.enhancer.EnhancerError` (the dedup/conflict model call
-    itself failed, or its response could not be parsed) this falls back to the pre-Phase-3
-    unconditional write: a broken dedup check must never cost a real user's answer. The worst
-    case is a duplicate or unflagged-conflict draft an admin reviews anyway, which is strictly
-    better than the clarification vanishing.
-    """
-    from governed_bi.corpus.drafts import submit_draft
-    from governed_bi.curator import enhancer
-    from governed_bi.curator.clarification import draft_from_clarification, resolved_answer_text
-
-    if not bool_knob(out, "enable_clarification_to_draft") or session.corpus_root is None:
-        return
-    clarification_id = pending.get("clarification_id")
-    record = next(
-        (
-            c
-            for c in (out.get("clarifications") or [])
-            if isinstance(c, dict) and c.get("clarification_id") == clarification_id
-        ),
-        None,
-    )
-    if record is not None and record.get("basis") == "ranking_ambiguity":
-        return
-    answer_text = resolved_answer_text(reply)
-    if not answer_text:
-        return
-    question = str(pending.get("question") or "")
-    if not question:
-        return
-    try:
-        draft = draft_from_clarification(question, answer_text, schema=session.db_id)
-        try:
-            existing = [
-                a
-                for a in getattr(session, "assets_by_id", {}).values()
-                if a.asset_type.value == "term" and _provenance_status(a) == "certified"
-            ]
-            enhancer.apply(
-                getattr(session, "agent_model", None),
-                session.corpus_root,
-                draft,
-                existing=existing,
-                namespace=session.db_id,
-                write_model=getattr(session, "knobs_resolved", {}).get("llm_model"),
-            )
-        except enhancer.EnhancerError:
-            submit_draft(session.corpus_root, draft, namespace=session.db_id)
-    except Exception:  # noqa: BLE001 — mining is best-effort, never fatal to the resumed turn
-        pass
 
 
 def _config(session: Any, question: str | None, thread_id: str) -> dict[str, Any]:

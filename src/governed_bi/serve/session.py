@@ -94,6 +94,12 @@ class Session:
             conf["embedder"] = self.embedder
         if question and self.embedder is not None:
             conf["query_vector"] = self.embedder.embed([question])[0]
+        if self.corpus_root is not None:
+            # UtkuAI, ported: the write target for `serve/nodes/mine_corpus.py`. Conditional
+            # like `agent_model`/`embedder` above -- a session with no curated corpus to write
+            # back to must not hand a node a key whose presence it would otherwise take as
+            # permission to write.
+            conf["corpus_root"] = self.corpus_root
         return {"configurable": conf}
 
     def turn(

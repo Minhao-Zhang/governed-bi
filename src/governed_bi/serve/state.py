@@ -242,6 +242,12 @@ class ServeState(TypedDict, total=False):
     usage: Annotated[list[UsageRecord], operator.add]
     clarifications: Annotated[list[dict[str, Any]], operator.add]
     clarification_requested: bool
+    #: ``clarification_id``s ``mine_corpus`` has already processed. UtkuAI, ported: without
+    #: this, a node reading the thread-accumulated ``clarifications`` list would re-mine every
+    #: clarification ever answered on this thread on every later turn -- `corpus/store.py`'s
+    #: `write()` overwrites the same asset id cleanly, so a re-mine raises nothing, but it
+    #: would silently revert a since-approved/-certified draft back to `proposed`.
+    clarifications_mined: Annotated[list[str], operator.add]
 
     execution: ExecutionRecord
     failure: Annotated[NodeFailure | None, settle_failure]
@@ -303,7 +309,9 @@ PER_TURN_RESET: dict[str, Any] = {
 }
 
 #: Channels that accumulate across turns (each row carries turn identity).
-ACCUMULATING: frozenset[str] = frozenset({"messages", "usage", "clarifications"})
+ACCUMULATING: frozenset[str] = frozenset(
+    {"messages", "usage", "clarifications", "clarifications_mined"}
+)
 
 #: Written by ``turn()`` itself — turn identity and run claims.
 TURN_IDENTITY: frozenset[str] = frozenset({
