@@ -57,7 +57,21 @@ class ProxyEmbedder(BaseEmbedder):
         )
 
     @property
+    def requested_model(self) -> str:
+        """The id this object was constructed with. **Not** the cache-key identity.
+
+        ``vector_cache_from_environment`` takes this and not :attr:`model`, because it only
+        names a directory and reading :attr:`model` on a cold adapter can cost a request.
+        ``OpenAIEmbedder`` and ``BedrockEmbedder`` have carried it all along; this one did
+        not, so the eval driver's proxy path raised ``AttributeError`` the moment it was
+        routed through the shared builder. Every adapter owes the whole identity surface,
+        not the half its own caller happened to use.
+        """
+        return self._requested_model
+
+    @property
     def model(self) -> str:
+        """``proxy:<requested id>``. Provider-qualified, per ``ports.py:140``."""
         return f"proxy:{self._requested_model}"
 
     @property

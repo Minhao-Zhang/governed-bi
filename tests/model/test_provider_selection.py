@@ -128,6 +128,30 @@ def test_every_embedder_qualifies_its_model_with_its_provider() -> None:
     )
 
 
+def _adapters() -> list[type]:
+    from governed_bi.model.bedrock_embedder import BedrockEmbedder
+    from governed_bi.model.openai_embedder import OpenAIEmbedder
+    from governed_bi.model.proxy_embedder import ProxyEmbedder
+
+    return [OpenAIEmbedder, BedrockEmbedder, ProxyEmbedder]
+
+
+@pytest.mark.parametrize("name", ["requested_model", "model", "dimensions"])
+def test_every_adapter_carries_the_whole_identity_surface(name: str) -> None:
+    """Across **all three**, not whichever one the test author happened to construct.
+
+    ``ProxyEmbedder`` shipped without ``requested_model`` while the other two had it. Nothing
+    noticed until the eval driver's proxy path was routed through the shared builder and
+    raised ``AttributeError`` on the first embed. The earlier version of this file asserted
+    the property on ``BedrockEmbedder`` alone, so it could not have caught that -- checking
+    one implementation of a shared contract is the same blind spot in miniature.
+
+    Asserted on the class, not an instance: two of the three need credentials to construct.
+    """
+    missing = [c.__name__ for c in _adapters() if not hasattr(c, name)]
+    assert not missing, f"{missing} do not expose {name!r}, which every caller may rely on"
+
+
 def test_the_cache_directory_uses_the_requested_name_not_the_probing_one() -> None:
     """``vector_cache_from_environment`` documents this: reading ``model`` can cost a request."""
     from governed_bi.model.bedrock_embedder import BedrockEmbedder
