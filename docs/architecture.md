@@ -109,15 +109,8 @@ for first:
 - **`execution`** — every attempt, with its verdict layer, reason code and executor
   path.
 
-> **This section used to describe "two stamps, not one trust score":
-> `safety_clearance` (bool) and `semantic_assurance` (`unflagged` / `heuristic` /
-> `unverified`).** Neither existed. The two names were in eight documents, the README
-> and one test, and in **zero source files** — there is no two-verdict stamp on any
-> path and there never was, so the careful distinction this section drew was between
-> two things that did not exist.
->
-> The underlying argument is still right and is why nothing was invented to fill the
-> gap: a single collapsed trust score is worse than none, and a verdict needs a
-> definition of what measures it before it needs a field. The fields above are the
-> ones something observes. `tests/api/test_http_contract.py` fails if either retired
-> name reappears in `src/`.
+> **There is no reliability stamp on any path.** A turn carries the fields above and
+> nothing that summarises them. A single collapsed trust score is worse than none, and
+> a verdict needs a definition of what measures it before it needs a field — so the
+> record carries only what something observes. `tests/api/test_http_contract.py` fails
+> if `safety_clearance` or `semantic_assurance` appears in `src/`.

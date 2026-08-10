@@ -55,14 +55,14 @@
     eval row, and nothing in the repo read `usage_metadata` off a model
     response (a repo-wide search for the string returned zero hits at the
     time). The M2 work below (§2, §3) closes both gaps.
-  - **Observability is cloud-only and a silent no-op without keys.**
-    `obs.py:1-4` documents "two tracers, both opt-in by environment and both
-    no-ops when unset"; LangSmith gates on env vars
-    (`obs.py:45-52`, `langsmith_enabled`), and `tracing_callbacks()` returns
-    `[]` when the Langfuse keys are unset (`obs.py:125-133`). There is no
-    local, vendor-independent fallback. *(2026-08-02: there is now one tracer,
-    LangSmith. The finding is unaffected — one cloud tracer, still opt-in, still
-    no local fallback without this ADR — and the line references are stale.)*
+  - **Observability is cloud-only and a silent no-op without keys.** v1's
+    `git-history:src/governed_bi/obs.py` (deleted in `2347ae3` with the rest of v1)
+    documented "two tracers, both opt-in by environment and both no-ops when unset":
+    LangSmith gated on env vars, and `tracing_callbacks()` returned `[]` when the
+    Langfuse keys were unset. There is no local, vendor-independent fallback in the
+    tree today either, and no module has taken that file's place — tracing is
+    whatever the LangSmith environment variables the SDK reads say it is. The
+    finding is what motivates this ADR and it is still open.
   - **Conversation history is ephemeral, or lives in a checkpointer nobody
     attaches.** `InMemoryWorkingMemory` (`memory/store.py:36-70`, D8) is
     explicitly "ephemeral by design (lost on restart)." Separately,
@@ -83,18 +83,18 @@
     > The finding survives the rename in full, and there are now **two**
     > `InMemorySaver`s, not one:
     >
-    > - **`serve/graph.py:331-353`, `compile_graph()`** — the default for every
+    > - **`serve/graph.py::compile_graph`** — the default for every
     >   in-process caller (eval harness, CLI, tests). `checkpointer=None` means
     >   "make me an `InMemorySaver`"; `checkpointer=False` is the explicit
     >   no-saver option, which also means no `ask_user`, since a saver-less graph
     >   cannot interrupt. Its own docstring records that the saver grows
     >   unboundedly and that `eval/harness.py` calls `delete_thread` per question
     >   to contain it.
-    > - **`api/routes.py:38-54`, `_graph()`** — the REST `/chat` fallback's
+    > - **`api/routes.py::_graph`** — the REST `/chat` fallback's
     >   process-wide saver, compiled once so `thread_id` stays meaningful across
     >   turns.
     >
-    > The server entry is **`api/graph_app.py:311-319`, `make_graph()`**, which
+    > The server entry is **`api/graph_app.py::make_graph`**, which
     > `langgraph.json` points `graphs.serve` at and which compiles with **no**
     > checkpointer. So the third v1 claim — "compiled without one, the runtime
     > injects persistence" — is the one that is not merely still true but now
@@ -139,10 +139,10 @@ portable append** for longevity and eval reuse.
 > `stack.py` / `api/app.py` / `answer_question_agent` reference in this section
 > names a v1 symbol that no longer exists in `src/governed_bi/`. Read them against
 > the v2 map in the Context correction above: the server entry is
-> `api/graph_app.py:311-319` (`make_graph()`, no checkpointer, and it must stay
+> `api/graph_app.py::make_graph` (no checkpointer, and it must stay
 > that way — the platform errors on a graph that brings its own), the in-process
-> default is `serve/graph.py:331-353` (`compile_graph()`, `InMemorySaver`), and the
-> REST fallback is `api/routes.py:38-54`. The decision itself is unaffected: no
+> default is `serve/graph.py::compile_graph` (`InMemorySaver`), and the
+> REST fallback is `api/routes.py::_graph`. The decision itself is unaffected: no
 > durable saver shipped on any of the three, which is what the status note at the
 > top of this file records.
 
@@ -284,34 +284,31 @@ key, per R3's own caveat. It also closes the `run_experiment.py:213`
 `"usage": None` gap, because eval reads tokens/cost from the same append
 instead of hard-coding `None`.
 
-### 4. Scope: serve conversations AND DeepAgents runs
+### 4. Scope: serve conversations, and one producer only
 
-The serve agent (`create_agent` + `GovernanceMiddleware`, assembled in
-`build_agent_core`, `agent.py:163-211`) and the curator/SME deep agents
-(`create_deep_agent`: `curator/deep_agent.py`, `curator/sme.py`) are all LangGraph
-graphs, and all three emit the same portable per-run record. One mechanism, three
-producers (serve, curator, SME).
+**One mechanism, one producer.** The serve turn is the only graph that emits a portable
+per-turn record. It is a LangGraph `StateGraph` whose agent step is a nested `create_agent`
+node (`serve/nodes/agent_core.py::agent_core_node`, ADR 0002), the record is assembled by
+`serve/nodes/stamp.py` against `register/record.py`'s declared field set, and the append is
+the optional `record` node `build_graph` mounts after `stamp`
+(`api/trace_store.py::append_turn`, writing `runs/serve/<date>.jsonl`).
 
-**The curator deliberately runs without a checkpointer, and that stands.** The config
-`pipeline._invoke_agent` passes carries `recursion_limit`, `callbacks` and a
-`configurable.thread_id`, and the run record is emitted by `emit_run_record` around the
-stream rather than by a saver. deepagents needs a checkpointer only for `interrupt_on`,
-which the curator does not use: it invokes once per phase and never resumes. The sqlite
-saver it used to create was written, closed, relocated and never read back by anything.
-The harness's own `--resume` decides from existing YAML, and the validate fix pass mints
-a fresh thread instead of continuing the fold's. It was not free either: an open sqlite
-handle is unmovable on Windows, which aborted every curated build and would have ended a
-paid run with "every db failed to build", and the release-in-finally, copy-fallback and
-promotion-exemption code all existed to protect a file nothing read. So the third
-producer's durable record comes from the portable append, not from a checkpoint table.
+**The scope stops there, and stating why is the point of this section.** A curator producer and
+an SME producer would be the obvious second and third, built on Deep Agents. They are not in
+scope: **Deep Agents is not used in this project** and there is no curator module in
+`src/`: the corpus is authored out of tree (`../BIRD-corpus`) and is not rebuildable from
+anything committed here. So there is no `create_deep_agent`, no `curator/deep_agent.py`, no
+`curator/sme.py`, no `emit_run_record`, and no `GovernanceMiddleware` / `build_agent_core`
+pair — governance in v2 is the *absence* of a tool plus `check()` at execution time
+(ADR 0006), not a middleware.
 
-`_invoke_agent` also **streams** (`stream_mode=["updates", "values"]`) rather than
-calling `.invoke()`, keeping the last `values` chunk. That is what makes the record
-honest on the failure path: `.invoke()` returns accumulated state only on success, so a
-`GraphRecursionError` used to leave the tool counts unmeasurable. The run record's Tier
-A extra carries `n_tool_calls` and `n_steps` (both already on `_TIER_A_EXTRA_KEYS`, so
-they survive with full-content logging off), which is what puts step counts in the
-durable sqlite log where only tokens and latency were available as proxies before.
+What survives the narrowing is the part that was never about the framework: a record is
+written on **every terminal outcome**, not only on success. The serve graph gets that from
+its wrap-every-node rule — a node exception writes `failure: NodeFailure` and routes to
+`stamp`, which stamps `Outcome.crashed` with the failing stage — rather than from a
+streaming call pattern. `.invoke()` returning accumulated state only on success is exactly
+the shape that made a `GraphRecursionError` unmeasurable, and the fix is that the terminal
+funnel is a graph edge instead of a return value.
 
 ### Owner invariants + local-first posture
 
@@ -343,7 +340,8 @@ durable sqlite log where only tokens and latency were available as proxies befor
   without `log_full_content_ack` fails loud at `build_stack`. Cloud-tracer
   masking was independent of this and no longer exists at all:
   `GOVERNED_BI_TRACE_MAX_CHARS` went with Langfuse on 2026-08-02 and LangSmith
-  exports content in full by decision (see `obs.py`). This ADR's tiering is
+  exports content in full by decision (v1's `git-history:src/governed_bi/obs.py`).
+  This ADR's tiering is
   therefore the only content control in the repo.
 - **Local-first, on by default.** Unlike the cloud tracer, which is a no-op when
   unset, the local **metadata** log is on by default and needs no keys.
@@ -388,7 +386,7 @@ durable sqlite log where only tokens and latency were available as proxies befor
 
 - **Cloud tracers only (Langfuse/LangSmith — LangSmith alone since 2026-08-02).**
   Rejected: vendor-locked, a
-  silent no-op without keys (`obs.py:1-4,125-133`), not a backend-owned
+  silent no-op without keys (`git-history:src/governed_bi/obs.py`), not a backend-owned
   frontend-agnostic record, and no local source of truth, exactly the R5 gap
   ("with tracing off ... there is no vendor-independent record",
   `design-decisions.md:501-503`).

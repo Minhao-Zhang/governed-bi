@@ -29,13 +29,13 @@ You need [uv](https://docs.astral.sh/uv/) and Python 3.13.
    uv sync
    ```
 
-   To use AWS Bedrock for chat or embeddings, add the one extra:
+   The OpenAI gateway needs only that. Add the one extra for AWS Bedrock chat
+   or embeddings, and for the proxy gateway, which reads its API key and base
+   URL from AWS Secrets Manager through `boto3`:
 
    ```bash
    uv sync --extra bedrock
    ```
-
-   The OpenAI and proxy gateways need only the base install.
 
 2. Put your secrets in a git-ignored `.env` at the repository root:
 
@@ -93,9 +93,9 @@ is available locally at `../governed-bi-ui`.
 ## Documentation
 
 Start at [the docs index](docs/README.md), or go straight to
-[usage](docs/usage.md), [architecture](docs/architecture.md), the
-[ADRs](docs/adr/), the [glossary](docs/glossary.md), or
-[what is still open](docs/open-work.md).
+[usage](docs/usage.md), [architecture](docs/architecture.md),
+[measurement](docs/measurement.md), the [ADRs](docs/adr/), the
+[glossary](docs/glossary.md), or [what is still open](docs/open-work.md).
 
 ## Repository layout
 
@@ -116,7 +116,7 @@ src/governed_bi/
   retrieve/         BM25, semantic channel, Steiner joins
   serve/            the rails graph and agent_core tools
 tests/
-tools/              structural checks and offline helpers
+tools/              the eval driver (run_datalake_eval.py), structural checks
 ```
 
 ## License

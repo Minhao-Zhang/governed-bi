@@ -115,8 +115,8 @@ consequences for this repo:
   (`serve/graph.py`). A crash in the recorder is precisely the event that leaves no other
   trace, and `updates` is the one channel that would not carry it.
 - `updates` keys on the **node** name, which is not the step vocabulary of §2. `fanout`
-  (`serve/graph.py:214`, registered under the *stage* `facet_schema`) and `record`
-  (`serve/graph.py:266`) are node names with no `Stage` member at all, so a client reading
+  (added in `serve/graph.py::build_graph`, registered under the *stage* `facet_schema`) and
+  `record` (added in the same function) are node names with no `Stage` member at all, so a client reading
   `updates` keys as steps gets two names §2 says do not exist.
 
 **M6 — `custom` is the one channel LangGraph strips node identity from, and that single fact

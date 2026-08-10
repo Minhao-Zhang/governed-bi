@@ -204,17 +204,22 @@ single-operator local tool, and it gets its own decision rather than an improvis
 
 ### 7. `/capabilities` reports what is true, and false is a legitimate answer
 
-It is the UI's **first** request; without it the chat panel pins at a skeleton forever. Nine
-fields, and each is an observation: `has_live_model` iff a model is actually configured,
-`can_stream` true, **`can_edit` false** (the curator is out of scope), `can_clarify` iff the
-`ask_user` tool is bound.
+It is the UI's **first** request; without it the chat panel pins at a skeleton forever. Twelve
+fields, and each is an observation: `environment`, `dialect`, `model`, `has_live_model` iff a
+model is actually configured, `can_stream` true, **`can_edit` false** with `edit_mode: "none"`
+(the curator is out of scope), `can_clarify` iff the `ask_user` tool is bound *and* a model is
+configured, `can_scope` true, `can_search` false, and the two durability flags
+`checkpoint_durable` / `hitl_survives_process_restart`, both false because pause/resume does not
+survive a process restart on either transport.
 
-Reporting `can_scope` and `can_search` **false** is not a defeat — the UI degrades to the
-flat `/schema` dump and a client-side index, which is four routes we do not have to build to
-get end to end. That is the cheapest honest path.
+Reporting a capability **false** is not a defeat. `can_search` is false and the UI degrades to a
+client-side index over what it already has, which is a route we do not have to build to get end
+to end. Two flags reporting the *server* rather than the mounted client is the failure this
+field set is shaped against — hence `can_clarify` binding to both the tool and the model, and
+hence the durability flags saying what the checkpointer actually does.
 
 Required for the chat path: `/capabilities` plus the graph. Ungated and therefore required
-for the other pages not to error: `/health`, `/schema`, `/corpus/assets`, `/graph`,
+for the other pages not to error: `/health`, `/schema/summary`, `/corpus/assets`, `/graph`,
 `/knowledge-graph` — all cheap projections of the `Session`'s assets and, now that
 `CorpusStructure` exists, the two graph routes are edges plus assets rather than new work.
 
@@ -243,5 +248,8 @@ for the other pages not to error: `/health`, `/schema`, `/corpus/assets`, `/grap
   clarification flow, provenance drawer and schema pages do not.
 - `docs/openapi.json` must be regenerated from the implementation rather than kept by hand;
   a spec no process checks is the defect this repository keeps rediscovering.
-- Nothing here makes a run quotable. `facet_degraded` is `True` on every turn until the
-  embedder and an extraction model land, and that gate is doing its job.
+- Nothing here makes a run quotable on its own. `facet_degraded` is the gate: it is `True`
+  whenever some facet ran on fewer channels than `FACET_CHANNELS` declares
+  (`measure/degradation.py::facets_degraded`). The embedder and the extraction model are both
+  wired, so a fully configured turn can now clear it, and a `True` names a live failure rather
+  than a missing component.

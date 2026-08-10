@@ -283,9 +283,10 @@ content-scanning validator would be needed for a structural guarantee.
 ### Honest limits (from the red-team)
 
 1. **Regex-over-the-question triggers are the weakest mode.** They are
-   lexical, so they inherit BM25's 0.35-recall vocabulary mismatch; they patch
+   lexical, so they inherit the lexical channel's vocabulary mismatch against a
+   question phrased in the user's words rather than the corpus's <!-- [retired]: the argument was written on the embedding-vs-BM25 pair 0.70 / 0.35, which is void; the channel recalls in force are in register/citations.py and they do not change its direction -->; they patch
    *named* misses (an overfitting risk, since every trigger is one more thing
-   someone had to have already seen fail) and will not lift the 0.70 recall
+   someone had to have already seen fail) and will not lift the recall
    ceiling on unseen questions; and hand-authoring triggers does not scale to
    69 schemas. The real value of regex is `grep_notes` over asset **text**,
    not over the incoming question. Default to keyword-only triggers; defer

@@ -413,7 +413,7 @@ Three consequences, each replacing a piece of what the sanitizer was doing:
 | what the sanitizer was for | where it actually belongs |
 |---|---|
 | prose that reads like an instruction to the model | **nowhere.** Governance is topology (ADR 0002): a fully persuaded analyst still reaches the database only through `check()`, so the worst case is a wrong answer, not an exfiltration. A bounded phrase list cannot beat a paraphrase anyway |
-| PII or secrets in corpus text | a different layer already: `register/record.py`'s `Redaction` column for the durable sink, and the routing index's exclusion of governance-excluded columns (ADR 0006 B10) |
+| PII or secrets in corpus text | the routing index's exclusion of governance-excluded columns (ADR 0006 B10), and `check()`'s COLUMNS layer at execution time. **Not** the durable sink: the record schema has no redaction column, and ADR 0006 §11 says the log is verbatim by design — a local-first tool writing the user's own transcript to the user's own disk |
 | a newline escaping a field's indentation and opening a top-level prompt section | **render time**, in `serve/context.py`, as **lossless escaping** — done where the prompt format is known and reversible, not as a lossy edit in the store |
 
 **What is kept, with its reason corrected.** Identifier fields that become path
@@ -595,12 +595,17 @@ arrive together ("which customers have the highest order amount" is a customer
 table, an order table, an amount column and the join between them, as one
 thought). Splitting produces three highly overlapping extraction calls.
 
-**Each extracted phrase is its own query.** `["客户", "订单", "金额"]` runs three
+**A phrase list would be one query each.** `["客户", "订单", "金额"]` would run three
 retrievals: concatenation looks for one asset containing all three words
 (usually nonexistent), separate queries find the customer table, the order table
-and the amount column. **`max_queries_per_facet = 8`** — extraction is
-model-controlled and an unbounded phrase list is an unbounded network fan-out
-(v1's analogue: the 40-pair slice that "was never a size bound either").
+and the amount column. What ships instead is one rewritten string per facet
+(ADR 0011 §7), so `queries` holds exactly one element and there is **no
+`max_queries_per_facet` bound** — a knob bounding a fan-out the code does not have
+is a comparability key describing nothing, and it was deleted rather than wired
+(`tests/serve/test_comparability_knobs.py`). If extraction ever returns a list,
+the bound comes back with it: extraction is model-controlled and an unbounded
+phrase list is an unbounded network fan-out (v1's analogue: the 40-pair slice that
+"was never a size bound either").
 
 **Extraction is a better query, not a replacement for retrieval.** Phrases go
 into the same hybrid index, never into a lookup — if the model extracts
@@ -1166,7 +1171,7 @@ START
 
 > **Topology note, 2026-08-09 (engine `ba8cef2`).** *The diagram is left as decided.
 > [`serve/graph.py`](../../src/governed_bi/serve/graph.py) is the authority for what
-> runs; `docs/architecture.md` is the living version of this picture.* Four nodes are
+> runs; `docs/architecture.md` is the living version of this picture.* Five nodes are
 > missing from the drawing above, and the first two are the ones that matter:
 >
 > ```
@@ -1217,10 +1222,14 @@ the graph. So: **every node is wrapped, exceptions write
 `failure: NodeFailure` and route to `[stamp]`**, which stamps
 `Outcome.crashed` with the failing `Stage`. That is a §4.3 enum precondition.
 
-**Why the gates precede fan-out.** Neither calls a model — `guard` is
-deterministic rules, `negative_gate` one vector lookup (~10 ms). 10 ms to skip
-four model calls is net positive on a hit, nearly free on a miss. **If `guard`
-ever needs a model it becomes a sixth facet.**
+**Why the gates precede fan-out.** They are cheap relative to what they skip:
+`negative_gate` is one vector lookup (~10 ms), and `guard`'s five deterministic rules
+are free. 10 ms to skip four rewrite calls is net positive on a hit, nearly free on a
+miss. **`guard`'s sixth rule, `g_bi_scope`, does call a model** — one word on the
+utility model, run only after the free rules clear — so the gate row is not free in
+the way this paragraph's arithmetic assumes; it stays in front of fan-out because a
+question that is not a BI question at all should not pay for five facets, and because
+a refusal the model decides is still one call against four.
 
 **Why `guard` precedes `rewrite`.** This turn's input is the only new input;
 history was guarded in its own turn. **Known gap:** history contains the
@@ -1331,7 +1340,7 @@ class RewriteResult(TypedDict):
 
 class FacetResult(TypedDict):
     facet: Stage                    # one of FACET_STAGES
-    queries: list[str]              # ≤ max_queries_per_facet
+    queries: list[str]              # the text actually searched; one element
     hits: list[Hit]                 # deduped within the facet
     channels: dict[str, ChannelState]   # extraction / lexical / semantic
                                         # degradation = differs from
@@ -1394,7 +1403,7 @@ wired up — *"half this repo's defects have that shape."*
 | `guard` | `question` | `guard` | **no** — rules (ADR 0006) |
 | `rewrite` | `question`, `messages` | `rewrite` | yes (small), only with prior turns |
 | `negative_gate` | effective question | `negative` | no |
-| `facet:*` ×5 | effective question | `facets[name]` | 3 of 5, small model |
+| `facet:*` ×5 | effective question | `facets[name]` | 4 of 5, utility model — `facet_schema` searches the raw question and calls nothing (ADR 0011) |
 | `route` | `facets` | `schemas`, `retrieved` | no |
 | `resolve` | `retrieved` | `retrieved` | no |
 | `connect` | `retrieved` | `retrieved`, `crossings` | no |
@@ -1415,7 +1424,7 @@ wired up — *"half this repo's defects have that shape."*
 "Effective question" = `rewrite.after` when rewriting succeeded, else
 `question`.
 
-**Four model entry points:** three extracting facets, `rewrite` (conditional),
+**Six model entry points:** four extracting facets, `rewrite` (conditional),
 and the main loop. Everything else is deterministic and testable without a
 model — which is what makes steps 6–9 cheap.
 
@@ -1815,12 +1824,11 @@ configuration no deployment could run).
 |---|---|---|
 | `summary_max_chars` | 250 | Pydantic; over-length is an error, never truncation |
 | `summary_min_chars` | 1 | blank documents are a live provider hazard |
-| `max_queries_per_facet` | 8 | extraction is model-controlled |
 | `candidate_depth` | 50 per query, within target types | calibration: route recall@3 vs depth |
 | `route_top_n` | 3 | |
 | facet weights | all 1.0 | `schema` arguably deserves more; no data |
 | `w_lex` / `w_sem` | 0.5 / 0.5 | renormalised by active channels |
-| `lexical_saturation_k` | **unset** | fit once against the corpus BM25 distribution, then **frozen across arms** — a per-arm fit would make `lexical` incomparable |
+| `lexical_saturation_k` | 1.2 | declared at the value every run has used, and **frozen across arms** — a per-arm fit would make `lexical` incomparable. Still unfitted against the corpus BM25 distribution; `nodes/facets.py` scales each channel within its own facet, so `k` no longer decides which channel wins |
 | per-type budgets | declared in `register.assets` beside the types they belong to (schema all · table 8 · column 30 · join 5 · metric 5 · term 5 · few_shot 3 · negative n/a); referenced here as one content-hashed knob so a budget change moves the config hash | after pass two |
 | `max_steiner_points` | 5 | exceed ⇒ decline |
 | `max_crossings` | 2 | exceed ⇒ decline |

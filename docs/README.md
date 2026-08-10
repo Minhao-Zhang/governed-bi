@@ -8,10 +8,12 @@ SQLite is the offline test/CI substrate.
 
 1. [Usage](usage.md) — install, env, serve.
 2. [Architecture](architecture.md) — serve spine and package map.
-3. [ADRs](adr/) — binding decisions (start with 0005 and 0006).
-4. [Design decisions](design-decisions.md) — short index into the ADRs.
-5. [Glossary](glossary.md) — canonical terms.
-6. [Open work](open-work.md) — what is unfinished, and the evidence for each.
+3. [Measurement](measurement.md) — how to run an evaluation arm, what a
+   measurement row carries, and what makes a number quotable.
+4. [ADRs](adr/) — binding decisions (start with 0005 and 0006).
+5. [Design decisions](design-decisions.md) — short index into the ADRs.
+6. [Glossary](glossary.md) — canonical terms.
+7. [Open work](open-work.md) — what is unfinished, and the evidence for each.
 
 ## Decision records (ADRs)
 
@@ -34,15 +36,17 @@ superseding ADR or a code change wins. Living how-to docs may drift; ADRs do not
 
 ## Measurement findings
 
-A measurement is only true of the tree and the corpus it was taken on, so each of
-these names both. **One document per question, replaced rather than appended to**:
+A measurement is only true of the tree and the corpus it was taken on, so every
+finding below names both. **One document per question, replaced rather than
+appended to**:
 an analysis that has been superseded is deleted, because a page carrying both the
 old reading and the correction is a page a reader has to date-check line by line.
 Git history is the record of what changed.
 
 | Doc | What it covers |
 |---|---|
-| [Failure modes](failure-modes.md) | how the engine answers wrongly, per failure class, with the causal repair experiments — engine `d121c34`, corpus `30872d3` |
+| [Measurement](measurement.md) | how to produce a finding: the eval driver's flags, the prompt registry, the measurement row schema, and the quotability gates |
+| [Failure modes](failure-modes.md) | how the engine answers wrongly, per failure class, with the causal repair experiments — engine `4f7430a`, corpus `30872d3` |
 | [Open work](open-work.md) | the unfinished items those findings imply, re-verified against the current tree |
 
 ## External UI and data

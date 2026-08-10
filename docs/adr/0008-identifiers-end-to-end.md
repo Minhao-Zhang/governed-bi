@@ -239,7 +239,7 @@ and B5 is the reason ADR 0006 exists.
 
 ### P8 — Nothing tells the model the naming rules, and the refusal misnames the cause
 
-`SYSTEM_PROMPT` is three sentences and mentions neither schema-qualification nor
+The analyst prompt is three sentences and mentions neither schema-qualification nor
 quoting. `tools.py` passes no `default_schema`, so `_classify_sources` keys an
 unqualified `FROM customers` as `customers` while `licensed` holds
 `beer_factory.customers`. The table layer refuses `r_table_not_licensed` — *"the
@@ -404,10 +404,17 @@ comparable to a run over a clean one.
 ### D10 — Tell the model the one rule it must follow, and derive it from the same table
 
 After D2 the model's *spelling* no longer matters — canonicalisation fixes it. Only
-qualification does. So `SYSTEM_PROMPT` states: **every table reference is
+qualification does. So the analyst prompt states: **every table reference is
 `schema.table`**; and `default_schema` is passed **iff every licensed table shares
 one schema**, otherwise `None`. That removes P8's misleading `r_table_not_licensed`
 without ever guessing a schema for a multi-schema turn.
+
+The prompt is a registry entry, not a module constant: `register/prompts.py::ANALYST`
+carries variants `v1`–`v4` with `v3` as the default, and `serve/tools.py::analyst_prompt`
+resolves the run's selected variant at call time. The qualification rule is therefore a
+property of a *variant*, and every variant that ships states it — a variant that dropped
+it would reopen P8 while `prompt_set_hash` recorded the change, which is the point of
+having the registry own the text.
 
 ---
 
