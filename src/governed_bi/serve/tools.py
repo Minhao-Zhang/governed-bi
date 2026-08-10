@@ -358,11 +358,38 @@ def build_tools(
             **({"result_table": table} if table is not None else {}),
         )
 
+    #: One pending clarification per turn. Closure-level and mutable, the same shape as
+    #: ``book`` above, because both ``Send``s from one assistant message share this closure.
+    #:
+    #: **Two ``ask_user`` calls in one assistant message cross-wire the answer.** LangGraph
+    #: dispatches one ``Send`` per pending tool call and both interrupt; the surfacing order is
+    #: a race, ``_clarification`` returns the first interrupt, and ``Command(resume=...)`` always
+    #: lands on the first tool call. Measured: the user is shown "which region?", answers it, and
+    #: the answer is recorded against — and handed to the model as — "which year?". The resume
+    #: surface has no way to say which question is being answered, so the fix is upstream: there
+    #: is only ever one question outstanding.
+    #:
+    #: It resets on every ``build_tools``, which is once per node execution. That is correct: on
+    #: resume the satisfied call's ``Send`` is filtered out by its existing ``ToolMessage``, so a
+    #: second question after a resume is a genuinely new one.
+    pending_clarification: list[str] = []
+
     @tool
     async def ask_user(question: str, runtime: ToolRuntime, why: str = "") -> Command:
         """Pause and ask the human a clarifying question (HITL interrupt)."""
+        if pending_clarification:
+            # Refused, not queued, and no interrupt: the model gets a tool reply it can act on
+            # while the first question is still outstanding. Checked and set with no `await`
+            # between, so two concurrent `Send`s cannot both pass.
+            return _reply(
+                runtime,
+                "Only one clarifying question may be outstanding at a time, and this turn "
+                "already has one. Ask the single question whose answer most changes the SQL; "
+                "if more are needed, ask them after this one is answered.",
+            )
         digest = hashlib.sha256(f"{turn_id}\x1f{question}".encode()).hexdigest()[:12]
         clarification_id = f"clar-{turn_id}-{digest}"
+        pending_clarification.append(clarification_id)
         started = {"clarification_id": clarification_id}
         emit(
             kind="tool",

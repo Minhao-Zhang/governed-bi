@@ -714,3 +714,49 @@ def test_sample_rows_cannot_escape_its_identifier() -> None:
     assert tables == {'"sales"."customers"'}, tables
     columns = {c.name for c in tree.find_all(sqlglot.exp.Column)}
     assert columns == {evil}, columns
+
+
+def test_only_one_clarification_may_be_outstanding_per_turn() -> None:
+    """A second ``ask_user`` in one assistant message is refused, not queued.
+
+    **The bug it closes.** LangGraph dispatches one ``Send`` per pending tool call, so two
+    ``ask_user`` calls in one message both interrupt. The surfacing order is a race,
+    ``_clarification`` returns the first interrupt, and ``Command(resume=...)`` always lands on
+    the first tool call — so the user is shown "which region?", answers it, and the answer is
+    recorded against, and handed to the model as, "which year?". The resume surface carries no
+    way to say *which* question is being answered, so the fix has to be that only one is ever
+    outstanding.
+
+    Both calls share one ``build_tools`` closure, which is what makes a latch work. The check
+    and the set have no ``await`` between them, so two concurrent ``Send``s cannot both pass.
+    """
+    import asyncio
+
+    ask = _tools()["ask_user"]
+
+    async def _both() -> tuple[Any, Any]:
+        first = asyncio.create_task(
+            ask.coroutine(question="which region?", runtime=_runtime("c1"))
+        )
+        second = asyncio.create_task(
+            ask.coroutine(question="which year?", runtime=_runtime("c2"))
+        )
+        done, pending = await asyncio.wait({first, second}, timeout=5)
+        for task in pending:
+            task.cancel()
+        return done, {first: "first", second: "second"}
+
+    done, _ = asyncio.run(_both())
+
+    # Exactly one of the two returned. The other raised `GraphInterrupt` (it paused) or is still
+    # pending; either way it did not produce a second question for the user to answer.
+    replies = []
+    for task in done:
+        try:
+            replies.append(task.result())
+        except BaseException:  # noqa: BLE001 — GraphInterrupt is the paused call, not a failure
+            pass
+    assert len(replies) == 1, "exactly one ask_user should return a refusal without pausing"
+    text = replies[0].update["messages"][0].content
+    assert "one clarifying question" in text.lower()
+    assert "already has one" in text.lower()
