@@ -402,9 +402,13 @@ def test_the_embedding_knobs_reach_knobs_resolved() -> None:
     embedder = DeterministicEmbedder(dimensions=64)
     knobs = embedding_knobs(embedder)
 
-    assert set(knobs) == {"embedding_model", "embedding_dimensions"}
+    assert set(knobs) == {"embedding_model", "embedding_dimensions", "embedding_provider"}
     assert knobs["embedding_model"] == embedder.model
     assert knobs["embedding_dimensions"] == 64
+    # `embedding_provider` had no writer anywhere, so all six arms in `runs/eval/` published
+    # the register default "openai" beside `embedding_model: "proxy:..."`. The gateway comes
+    # off the port-required qualification prefix rather than from a second declaration.
+    assert knobs["embedding_provider"] == "deterministic"
 
     # Declared, and declared as `comparability` -- so they are IN the config hash rather
     # than recorded beside it. A threshold outside the comparability hash is v1's

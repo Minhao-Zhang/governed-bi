@@ -28,6 +28,7 @@ __all__ = [
     "BaseEmbedder",
     "refuse_blank",
     "embedding_knobs",
+    "embedding_provider",
 ]
 
 #: Inputs per provider request. Not a provider maximum (OpenAI accepts 2048) but a size that
@@ -122,17 +123,49 @@ class BaseEmbedder(ABC):
         return out
 
 
-def embedding_knobs(embedder: Any) -> dict[str, Any]:
-    """The two declared knobs an embedder contributes to ``knobs_resolved``.
+def embedding_provider(model: str) -> str:
+    """The gateway named by an :class:`~governed_bi.ports.Embedder`'s qualification prefix.
 
-    ``embedding_model`` and ``embedding_dimensions`` are ``Role.comparability``; without
-    them two ladders differing only in embedder compare as one experiment. Names are checked
-    against :func:`~governed_bi.register.knobs.knob_names` because a typo'd name ships a
-    literal no knob backs, so the config hash does not move when the real knob does.
+    ``Embedder.model`` is required to be *provider-qualified* (``openai:…``, ``proxy:…``,
+    ``bedrock:…``, ``deterministic:…``) — ``ports.py`` states it and all four adapters honour
+    it — so the prefix is a fact the port already guarantees rather than something inferred
+    here.
+
+    **Refuses rather than guessing.** An unqualified id would otherwise be reported as
+    whatever looked plausible, and the defect this closes is exactly that: nothing wrote
+    ``embedding_provider`` at all, so all six proxy-served arms in ``runs/eval/`` published
+    the register default ``"openai"`` beside ``embedding_model:
+    "proxy:text-embedding-3-large"``. Each row contradicted itself, and a wrong value reads
+    as a measurement where a null reads as an absence.
     """
+    prefix, separator, _rest = model.partition(":")
+    if not separator or not prefix.strip():
+        raise ValueError(
+            f"embedder model {model!r} is not provider-qualified, so the gateway behind it "
+            "cannot be recorded. ports.py requires 'openai:<id>' / 'proxy:<id>' / "
+            "'bedrock:<id>'; naming a plausible provider here is how six arms came to say "
+            "they embedded through OpenAI when they embedded through the proxy"
+        )
+    return prefix.strip()
+
+
+def embedding_knobs(embedder: Any) -> dict[str, Any]:
+    """The three declared knobs an embedder contributes to ``knobs_resolved``.
+
+    ``embedding_model``, ``embedding_dimensions`` and ``embedding_provider`` are all
+    ``Role.comparability``; without them two ladders differing only in embedder compare as
+    one experiment. Names are checked against
+    :func:`~governed_bi.register.knobs.knob_names` because a typo'd name ships a literal no
+    knob backs, so the config hash does not move when the real knob does.
+
+    ``embedding_provider``'s own note calls this function's output "the reporting half" and
+    it was not reported. See :func:`embedding_provider`.
+    """
+    model = str(embedder.model)
     values: dict[str, Any] = {
-        "embedding_model": str(embedder.model),
+        "embedding_model": model,
         "embedding_dimensions": int(embedder.dimensions),
+        "embedding_provider": embedding_provider(model),
     }
     undeclared = sorted(set(values) - knob_names())
     if undeclared:

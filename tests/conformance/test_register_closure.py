@@ -256,9 +256,9 @@ def test_every_gate_in_tools_is_either_in_ci_or_declared_manual() -> None:
             "tests/conformance/test_corpus_conformance_rules_fire.py, which does run in CI"
         ),
         "check_declared_is_consumed.py": (
-            "reports 27 real violations today (open-work.md 3.10). Wiring it now would fail "
+            "reports 14 real violations today (open-work.md 3.10). Wiring it now would fail "
             "every commit from the day it landed, which trains everyone to skip it, and "
-            "waiving 27 genuine findings to make it green is the exact lie it was written to "
+            "waiving 14 genuine findings to make it green is the exact lie it was written to "
             "catch. Wire it -- and delete this entry -- once the tier-1 items in "
             "docs/analysis/declared-not-consumed.md are fixed and the waiver list holds only "
             "declarations that are correct to leave unconsumed"

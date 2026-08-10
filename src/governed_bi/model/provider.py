@@ -31,6 +31,11 @@ and only one has it. Everything here exists to make that impossible from one pla
 **Built on ``init_chat_model``**, not on the provider classes, so a provider LangChain adds
 later needs a row in :data:`_TRANSLATORS` rather than a new branch at every call site.
 
+**The table runs both ways.** :func:`reasoning_effort_of` reads the effort back off a built
+client, whichever of the three spellings it is wearing, because ``knobs_resolved`` needs one
+string and the recording side must not know three shapes. Reading only the OpenAI attribute
+is what left ``llm_reasoning_effort`` null on every measured row.
+
 **The provider is a comparability knob, per surface.** ``llm_provider`` already says why:
 the same model id behind two gateways is two treatments that would otherwise share one
 config hash. That argument does not weaken for the utility model or the embedder, so
@@ -40,7 +45,7 @@ config hash. That argument does not weaken for the utility model or the embedder
 from __future__ import annotations
 
 import os
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, Mapping
 
 __all__ = [
     "PROVIDER_VAR",
@@ -53,6 +58,7 @@ __all__ = [
     "default_embedding_model",
     "embedder",
     "provider_for",
+    "reasoning_effort_of",
     "supported_providers",
 ]
 
@@ -189,6 +195,61 @@ _TRANSLATORS: dict[str, Callable[..., dict[str, Any]]] = {
     "openai": _openai_kwargs,
     "bedrock": _bedrock_kwargs,
 }
+
+
+#: The Anthropic-on-Bedrock budget map, read backwards. Derived rather than restated, so a
+#: budget edited above cannot leave the reporting side answering with the old number.
+_EFFORT_BY_THINKING_BUDGET: dict[int, str] = {
+    budget: effort for effort, budget in _ANTHROPIC_THINKING_BUDGET.items()
+}
+
+
+def reasoning_effort_of(model: Any) -> str | None:
+    """The reasoning effort ``model`` will actually send, in the engine's vocabulary.
+
+    **The reporting half of the table at the top of this module.** One intent has three
+    spellings and the record needs one string, so the inverse belongs beside the forward
+    translation rather than at the call site that happens to need it.
+
+    It exists because reading it off a client's attributes does not work in general and the
+    place that tried was ``session._resolved_knobs``:
+    ``getattr(agent_model, "reasoning_effort", None)`` is only the *OpenAI-direct* spelling.
+    On the proxy the effort is inside ``extra_body`` and on Bedrock it is a token budget or a
+    Nova ``maxReasoningEffort``, so all 8,106 rows of the six arms in ``runs/eval/`` recorded
+    ``llm_reasoning_effort: null`` while ``driver_v4.log`` records ``effort=high``. A
+    high-vs-low A/B on the proxy therefore produced two artifacts with identical
+    ``knobs_resolved``, which is the incident the knob's own note exists to prevent.
+
+    ``None`` means *this client sends no reasoning configuration* — which is a real state
+    (``effort=none`` on a GPT model behind the proxy), not a failure to look.
+    """
+    # OpenAI-direct first: it is the one spelling that is a plain attribute, and a client
+    # carrying it is not carrying either of the other two.
+    direct = getattr(model, "reasoning_effort", None)
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+
+    from .proxy_gateway import effort_from_extra_body  # noqa: PLC0415 (lazy, and cheap)
+
+    proxied = effort_from_extra_body(getattr(model, "extra_body", None))
+    if proxied:
+        return proxied
+
+    return _bedrock_effort(getattr(model, "additional_model_request_fields", None))
+
+
+def _bedrock_effort(fields: Any) -> str | None:
+    """Invert :func:`_bedrock_reasoning`. Both families, because both are produced above."""
+    if not isinstance(fields, Mapping):
+        return None
+    nova = fields.get("reasoningConfig")
+    if isinstance(nova, Mapping):
+        effort = nova.get("maxReasoningEffort")
+        return str(effort) if effort else None
+    thinking = fields.get("thinking")
+    if isinstance(thinking, Mapping):
+        return _EFFORT_BY_THINKING_BUDGET.get(thinking.get("budget_tokens"))
+    return None
 
 
 def chat_model(

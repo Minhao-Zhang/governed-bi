@@ -6,6 +6,7 @@ not a default — reading an uncalibrated knob raises.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Final, Mapping
@@ -24,6 +25,8 @@ __all__ = [
     "comparability_keys",
     "resume_drift_keys",
     "config_hash_keys",
+    "env_overrides",
+    "env_override",
 ]
 
 
@@ -71,10 +74,28 @@ class Knob:
     #: Digest of something larger (function list, budgets) so the hash moves
     #: when content does.
     hashed_by_content: bool = False
+    #: The environment variable a *reader* consults **before** this knob's resolved value.
+    #:
+    #: Declared here because the recording side has to know it exists. Three variables
+    #: (``GOVERNED_BI_RAIL_NODE_TIMEOUT_S``, ``GOVERNED_BI_AGENT_NODE_TIMEOUT_S``,
+    #: ``GOVERNED_BI_AGENT_RECURSION_LIMIT``) were read env-first by ``serve/graph.py`` and
+    #: ``serve/nodes/agent_core.py`` while ``session._resolved_knobs`` built the record from
+    #: ``defaults()`` alone -- so setting one moved the behaviour and the artifact still
+    #: published 120.0 / 1200.0 / 40. All three are ``Role.comparability``, which makes that
+    #: two treatments sharing one config hash.
+    env_var: str | None = None
 
 
-def _k(name: str, default: Any, role: Role, why: str, *, hashed_by_content: bool = False) -> Knob:
-    return Knob(name, default, role, why, hashed_by_content=hashed_by_content)
+def _k(
+    name: str,
+    default: Any,
+    role: Role,
+    why: str,
+    *,
+    hashed_by_content: bool = False,
+    env_var: str | None = None,
+) -> Knob:
+    return Knob(name, default, role, why, hashed_by_content=hashed_by_content, env_var=env_var)
 
 
 #: Digest input for the per-type budgets, declared in :mod:`.assets` beside the types.
@@ -204,7 +225,8 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "retry budget can finish before the rail stamps crashed (fail-open on model error vs "
        "crashed on rail timeout must not disagree for the same hung call). Facets and narrate "
        "are excluded: facets by unmeasured five-way quota; narrate so an answered turn cannot "
-       "be rewritten to crashed"),
+       "be rewritten to crashed",
+       env_var="GOVERNED_BI_RAIL_NODE_TIMEOUT_S"),
     _k("agent_node_timeout_s", 1200.0, Role.comparability,
        "wall clock for the whole agent_core loop; applied INSIDE agent_core (not wrap_node) so "
        "a timeout still projects the streamed ledger. Default matches "
@@ -212,13 +234,15 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "retry budget can finish before the node stamps crashed (same pairing as "
        "rail_node_timeout_s vs utility). create_agent binds recursion_limit=9999; we override "
        "with agent_recursion_limit. NOT paired with a node RetryPolicy -- agent_core executes "
-       "governed SQL"),
+       "governed SQL",
+       env_var="GOVERNED_BI_AGENT_NODE_TIMEOUT_S"),
     _k("agent_recursion_limit", 40, Role.comparability,
        "superstep ceiling for the nested create_agent graph. create_agent's own default "
        "is 9999; without an explicit outer override that ceiling wins. run_query is also "
        "capped by AttemptBook, but read_body/inspect_schema/sample_rows are not -- this "
        "bound is what stops a non-SQL tool loop. Measured with cap tests at 60; 40 is the "
-       "production default so a hung loop fails before the agent_node_timeout_s wall clock"),
+       "production default so a hung loop fails before the agent_node_timeout_s wall clock",
+       env_var="GOVERNED_BI_AGENT_RECURSION_LIMIT"),
     _k("embedding_model", None, Role.comparability,
        "part of every vector cache key: cosine returns 0.0 on a width mismatch rather "
        "than raising, so a cross-model cache hit degrades routing to 'nothing scores' "
@@ -354,6 +378,69 @@ def resume_drift_keys() -> frozenset[str]:
 def config_hash_keys() -> frozenset[str]:
     """Knobs that enter the serve config hash (the comparability set)."""
     return comparability_keys()
+
+
+def env_overrides() -> Mapping[str, str]:
+    """``{knob name -> environment variable}`` for every knob a reader reads env-first."""
+    return {k.name: k.env_var for k in KNOB_REGISTER if k.env_var}
+
+
+def env_override(name: str) -> Any | None:
+    """What ``name``'s environment variable says this run will run at, or ``None``.
+
+    The **recording** half of an env-first knob, and the reason it lives in the register
+    rather than beside either reader: ``serve/graph.py`` and ``serve/nodes/agent_core.py``
+    consult the variable before anything else, while ``session._resolved_knobs`` built the
+    record from :func:`defaults` — so all three variables moved behaviour and left the
+    artifact saying 120.0 / 1200.0 / 40.
+
+    Two parsing rules are copied from those readers on purpose, because a record that
+    disagreed with the reader would be the same defect wearing the opposite sign:
+
+    * **Blank is unset.** ``graph.py`` tests ``if raw`` and ``agent_core.py`` tests
+      ``str(raw).strip() != ""``; an exported-but-empty variable falls through to the knob.
+    * **The declared default decides the type.** ``agent_recursion_limit`` defaults to an
+      ``int`` and its reader calls ``int()``; the two timeouts default to ``float`` and their
+      readers call ``float()``. Deriving the cast from the default is what stops the record's
+      type drifting from the reader's when a default changes — ``_knobs_resolved_gate``
+      compares by ``repr``, so ``40`` and ``40.0`` are two configurations.
+
+    A value the reader would choke on raises here instead, at session construction, rather
+    than mid-run in a node: the run is lost either way and the early failure names the
+    variable.
+    """
+    for knob in KNOB_REGISTER:
+        if knob.name != name:
+            continue
+        if not knob.env_var:
+            return None
+        raw = os.environ.get(knob.env_var)
+        if raw is None or not str(raw).strip():
+            return None
+        default = knob.default
+        # bool before int: `bool` is an int subclass and `int("true")` raises, so an
+        # env-overridable boolean would otherwise fail on the spelling people actually type.
+        if isinstance(default, bool):
+            text = str(raw).strip().lower()
+            if text not in ("true", "false"):
+                raise ValueError(
+                    f"{knob.env_var}={raw!r} is not a boolean; knob {name!r} declares "
+                    f"{default!r}"
+                )
+            return text == "true"
+        try:
+            if isinstance(default, int):
+                return int(str(raw).strip())
+            if isinstance(default, float):
+                return float(str(raw).strip())
+        except ValueError as err:
+            raise ValueError(
+                f"{knob.env_var}={raw!r} cannot be read as the {type(default).__name__} "
+                f"that knob {name!r} declares. The node that reads it would raise mid-run; "
+                "refusing here names the variable instead."
+            ) from err
+        return str(raw).strip()
+    raise KeyError(f"{name!r} is not a declared knob")
 
 
 #: Knobs whose role placement must not drift (asserted at import).

@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 import threading
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 # Ported from the proxy fork branch's llm/proxy_gateway.py. v2 has no ModelConfig, so the
 # builders take plain kwargs; the token flow, extra_body and embedding sanitising are as they
@@ -36,6 +36,7 @@ __all__ = [
     "build_chat_model",
     "build_embeddings",
     "build_extra_body",
+    "effort_from_extra_body",
     "get_proxy_credentials",
     "mint_bearer_token",
     "shared_token_provider",
@@ -333,6 +334,39 @@ def build_extra_body(session_id: str, reasoning_effort: str | None) -> dict[str,
             "output_config": {"effort": effort},
         }
     return {"extra_body": inner}
+
+
+def effort_from_extra_body(extra_body: Any) -> str | None:
+    """The effort :func:`build_extra_body` encoded, read back out. ``None`` when it encoded none.
+
+    **Why an inverse and not an attribute on the returned client.** ``build_chat_model``
+    returns a plain ``ChatOpenAI``, so ``session._resolved_knobs``'s
+    ``getattr(model, "reasoning_effort", None)`` found nothing and every one of the 8,106
+    rows in ``runs/eval/`` recorded ``llm_reasoning_effort: null`` while every arm ran at
+    ``high``. Setting ``ChatOpenAI.reasoning_effort`` to make the record legible is not
+    available: that field is a **request** field, so it would also start sending
+    ``reasoning_effort`` to a proxy that does not take it — changing behaviour to fix a
+    recording bug. The envelope the request already carries is the honest source.
+
+    It reports the **effective** effort, not the requested one. :func:`_thinking_effort`
+    clamps ``xhigh``/``max`` to ``high`` and drops ``none``/``off`` entirely, and two runs
+    that both put ``high`` on the wire are one treatment however they spelled the request.
+    """
+    if not isinstance(extra_body, Mapping):
+        return None
+    # One level of nesting because the OpenAI client spreads `extra_body` into the body root;
+    # `build_extra_body` says why.
+    inner = extra_body.get("extra_body")
+    if not isinstance(inner, Mapping):
+        return None
+    fields = inner.get("additionalModelRequestFields")
+    if not isinstance(fields, Mapping):
+        return None
+    output_config = fields.get("output_config")
+    if not isinstance(output_config, Mapping):
+        return None
+    effort = output_config.get("effort")
+    return str(effort) if effort else None
 
 
 # --------------------------------------------------------------------------- #

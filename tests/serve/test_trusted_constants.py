@@ -142,7 +142,7 @@ def test_trust_is_registered_by_the_server_factory():
 
 
 def test_model_id_prefers_the_provider_id_over_the_langchain_class_label():
-    """``usage[].model`` and ``knobs_resolved["llm_model"]`` are compared, so they must agree.
+    """``usage[].model`` and ``knobs_resolved["chat_model"]`` are compared, so they must agree.
 
     The usage row asked ``_llm_type`` first and recorded ``"openai-chat"`` for every OpenAI
     model ever served, while the knob beside it held the real id. One turn reporting two
@@ -179,8 +179,9 @@ def test_the_usage_row_and_the_knob_report_the_same_model(
         model_name: str = "gpt-5.6-luna"
 
     model: Any = Named(responses=[AIMessage(content="one sensor")])
-    # Through `from_assets`, not by constructing `Session` directly: `llm_model` is set there,
-    # and the property under test is that the two writers agree.
+    # Through `from_assets`, not by constructing `Session` directly: `chat_model` is set
+    # there, and the property under test is that the two writers agree. The knob used to be
+    # spelled `llm_model`, which `KNOB_REGISTER` never declared.
     session = from_assets(
         list(two_schema_assets.values()), connector=None, policy=guard_off_policy,
         db_id="ops_b", corpus_content_hash_="c", agent_model=model,
@@ -193,9 +194,9 @@ def test_the_usage_row_and_the_knob_report_the_same_model(
     record = out["answer"]["record"]
     usage = list(record.get("usage") or [])
     assert usage, f"no usage row: path_kind={out.get('path_kind')!r}"
-    assert usage[0]["model"] == session.knobs_resolved["llm_model"] == "gpt-5.6-luna", (
+    assert usage[0]["model"] == session.knobs_resolved["chat_model"] == "gpt-5.6-luna", (
         f"usage says {usage[0]['model']!r}, knobs_resolved says "
-        f"{session.knobs_resolved.get('llm_model')!r}"
+        f"{session.knobs_resolved.get('chat_model')!r}"
     )
 
 

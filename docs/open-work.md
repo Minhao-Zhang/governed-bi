@@ -321,58 +321,32 @@ One shape keeps recurring: something is declared in the register, stamped by a n
 in a docstring, and **nothing on the other end reads it**. Each instance is individually small;
 together they are the reason numbers here have twice been quotable and wrong.
 
-Found so far, all in one week:
+A sweep found 28. **Fourteen are fixed** — the five that recorded a *wrong* value rather than a
+missing one, the nine record fields that reached the turn record and no artifact, and
+`lexical_coverage`, whose producer turned out to be dead rather than absent. Evidence and the
+per-field decisions are in [declared-not-consumed](analysis/declared-not-consumed.md).
 
-| | What was declared | What was missing |
-|---|---|---|
-| `reflect_verdict` | a record field, projected by `stamp` since the node landed | `project_turn` never carried it to the artifact, so the arm the knob's own note demands could not be scored |
-| `w_lexical` / `w_semantic` | comparability knobs, in `config_hash_keys()` | bound into `FUSE_WEIGHTS` at import; no arm can move them (§3.8) |
-| three timeout env vars | read by the code | absent from `knobs_resolved`; behaviour moves, the record does not (§3.8) |
-| `git_sha` | an operational knob on every row | `None` on every row of every arm; nothing populates it |
-| `routing_pinned` | the pin's own outcome | reads the question dict, not the turn; no reader anywhere (§3.7) |
-| eight instrument tests | coverage of a named behaviour | asserted constants against themselves (§3.9) |
-| `facet_degraded` | a retrieval-health signal | constant `False` on all 1,351 rows of every arm |
+Fourteen remain, and none of them currently corrupts a number:
+
+| | |
+|---|---|
+| `git_sha`, `git_main_sha`, `working_tree_dirty` | the resume-drift keys, null on every row of every arm, so the gate compares each against itself |
+| `schemas_under_test`, `question_subset`, `split` | scope keys nothing writes |
+| `serve_workers`, `build_workers` | null while the driver runs ten workers |
+| `expand_hops` | a comparability knob with no reader: setting it changes no behaviour and does change the config hash. `pulled_in` now reaches the row, which makes the knob's own question answerable — the measurement half exists, the behaviour half does not |
+| `negative_tau`, `facet_model`, `rewrite_model`, `clarifications` | dead declarations |
 
 The common cause is that declaring and consuming live in different files and nothing forces them
-to meet. `tools/check_one_implementation.py` and the register's closure test cover part of it;
-neither catches "declared, written, never read".
-
-**A sweep found 21 more**, ranked with evidence in
-[declared-not-consumed](analysis/declared-not-consumed.md). Five of them record a number that is
-*wrong* rather than missing, which is the worse half:
-
-- **`llm_reasoning_effort` is null on all 8 106 rows and every arm ran at `high`.** `session.py`
-  resolves it with `getattr(agent_model, "reasoning_effort", None)`; the proxy gateway folds
-  effort into `extra_body` and returns a plain `ChatOpenAI` with no such attribute. **A
-  high-vs-low effort A/B on the proxy produces two artifacts with identical `knobs_resolved`** —
-  precisely the incident the knob's own note says it exists to prevent.
-- **`llm_utility_provider` and `embedding_provider` say `openai` on six proxy-served arms.** No
-  writer at all, so both sit at the register default while the same row carries
-  `llm_provider: custom:007df842`. A null says "not measured"; these say "measured, and it was
-  openai".
-- `chat_model` is null on four of six arms; the real value is in `llm_model`, which
-  `KNOB_REGISTER` does not declare and which is therefore outside `comparability_keys()`.
-- `sqlglot_version`, `negative_tau` and `cost_budget` are absent from `knobs_resolved` entirely.
-  `sqlglot_version`'s note says it is UNSET "so it cannot be silently absent"; it is silently
-  absent. The resume-drift gate compares with `row.get(key)`, so a key missing from every row
-  compares equal to itself.
-- The three timeout env vars (§3.8), confirmed live.
-
-Nine record fields reach the turn record and no artifact — including `latency_sec`, so **no
-artifact records wall clock at all** — and `prompt_set` is null on the four arms whose entire
-treatment is a prompt variant.
+to meet. **Two of the fixed items were invisible to any static rule by construction** — in each
+the declaration had a consumer and the missing wire was on the recording side, so only the
+artifacts showed them.
 
 `tools/check_declared_is_consumed.py` closes the statically-visible part: four rules over knobs,
-record fields and state channels, mutation-verified against a fixture tree, reporting 27
-violations today. **It is deliberately not wired into CI yet.** A gate that fails on every commit
-from the day it lands is a gate people learn to skip, and waiving 27 real findings to make it
-green would be the lie it was written to catch. Wire it once the tier-1 items above are fixed,
-with a waiver list holding only declarations that are correct to leave unconsumed.
-
-Its own docstring states the blind spot: rule K1 credits any occurrence of a knob's name, so a
-coincidental string literal launders one. And the five findings above are invisible to any static
-rule by construction — in each the declaration *has* a consumer and the missing wire is on the
-recording side. Only the artifacts show those.
+record fields and state channels, mutation-verified against a fixture tree. It reported 27
+violations when written and reports 14 now. **It is deliberately not wired into CI yet**, and
+`tests/conformance/test_register_closure.py` carries that decision with the condition for
+reversing it. Its own docstring states the blind spot: rule K1 credits any occurrence of a knob's
+name, so a coincidental string literal launders one.
 
 ### 3.11 The reflector's output is parsed from text, and the decision to keep it that way
 
@@ -401,7 +375,7 @@ Two things to carry into that arm when it is built:
   transport. It does not: `tools` in `model/provider.py` only selects OpenAI's Responses API, and
   `response_format` is available on the path the utility model already uses.
 
-### 3.10 The noise floor is five times a comparison system's, and that is architectural
+### 3.12 The noise floor is five times a comparison system's, and that is architectural
 
 Two runs of this engine with the configuration held fixed — run1 and run2, same prompt, same
 corpus, same knobs — disagree on **12.7% of outcomes** (172 of 1 351). WrenAI's two runs over

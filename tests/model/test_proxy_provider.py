@@ -147,7 +147,13 @@ def test_the_embedder_satisfies_the_port_and_records_a_provider_qualified_knob(c
     assert embedder.dimensions == 64  # the requested width, without a probe request
 
     knobs = embedding_knobs(embedder)
-    assert knobs == {"embedding_model": "proxy:text-embedding-3-large", "embedding_dimensions": 64}
+    assert knobs == {
+        "embedding_model": "proxy:text-embedding-3-large",
+        "embedding_dimensions": 64,
+        # Not "openai". This knob had no writer at all, so every proxy-served arm recorded the
+        # register default while `embedding_model` on the same row said `proxy:`.
+        "embedding_provider": "proxy",
+    }
     assert set(knobs) <= comparability_keys()
     assert set(knobs) <= config_hash_keys()
 

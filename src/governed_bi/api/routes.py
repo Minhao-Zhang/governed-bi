@@ -114,7 +114,7 @@ def capabilities() -> dict[str, Any]:
         "edit_mode": "none",
         "can_stream": can_stream,
         "has_live_model": session.agent_model is not None,
-        "model": session.knobs_resolved.get("llm_model"),
+        "model": session.knobs_resolved.get("chat_model"),
         "can_scope": True,
         "can_search": False,
         # Clarification UI mounts only on the streaming transport.

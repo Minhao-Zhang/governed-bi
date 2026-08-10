@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from governed_bi.register.prompts import prompt_set_hash
+from governed_bi.register.prompts import select as selected_variants
 
 from ..corpus.analyst import for_analyst
 from ..corpus.hash import corpus_content_hash
@@ -23,6 +24,7 @@ from ..corpus.schema import Asset, AssetType, MetricAsset, TableAsset, TermAsset
 from ..corpus.store import load as load_corpus
 from ..corpus.store import write as write_asset
 from ..model.embedder import embedding_knobs
+from ..model.provider import reasoning_effort_of
 from ..ports import Embedder
 from ..register.knobs import defaults as knob_defaults
 from ..retrieve.index import UnifiedIndex, build_index
@@ -304,30 +306,80 @@ def _visible(assets: Sequence[Asset]) -> list[Asset]:
 
 
 def _provider_of(model: Any) -> str:
-    """Which gateway served the model — ``"openai"``, or ``"custom:<digest>"``.
+    """Which gateway served the model — ``"openai"``, ``"bedrock"``, or ``"custom:<digest>"``.
 
     A digest of the base URL's host rather than the host: it separates two gateways in the
     config hash, which is the whole job, without writing an internal endpoint into every audit
-    row. Absent base URL means the vendor's own, which is the library default.
+    row.
+
+    Bedrock is asked separately because it has no base URL at all. Falling through to
+    ``"openai"`` for it would be the defect this function is used to close, one gateway over:
+    a wrong provider on a comparability field reads as a measurement, where a null reads as an
+    absence. Absent both, the vendor's own endpoint is the library default.
     """
     base = getattr(model, "openai_api_base", None) or getattr(model, "base_url", None)
     if not base:
-        return "openai"
+        # `_llm_type` is LangChain's own label; `ChatBedrockConverse` reports
+        # "chat-bedrock-converse" and carries no URL to digest.
+        label = str(getattr(model, "_llm_type", "") or "")
+        return "bedrock" if "bedrock" in label.lower() else "openai"
     host = urlsplit(str(base)).netloc or str(base)
     return "custom:" + hashlib.sha256(host.encode("utf-8")).hexdigest()[:8]
 
 
-def _resolved_knobs(policy: Any) -> dict[str, Any]:
-    """Knob defaults with UNSET omitted; policy-resolved knobs included when set."""
-    from ..register.knobs import UNSET
+def _model_name(model: Any) -> str:
+    """The id to record for ``model``. One derivation, used by every model knob.
 
-    knobs = {k: v for k, v in knob_defaults().items() if v is not UNSET}
+    Three call sites wrote this expression out; ``chat_model`` and ``llm_utility_model``
+    disagreeing about what "the model" means is not a thing anyone should be able to
+    introduce by editing one of them.
+    """
+    return (
+        model_id(model) or getattr(model, "_llm_type", None) or type(model).__name__
+    )
+
+
+def _resolved_knobs(policy: Any) -> dict[str, Any]:
+    """Every declared knob, resolved. **No key is ever omitted.**
+
+    Omission was the defect. This dropped every ``UNSET`` knob and re-added exactly three from
+    the policy, so ``sqlglot_version``, ``negative_tau`` and ``cost_budget`` were *absent* —
+    not null — from all 8,106 rows of the six arms in ``runs/eval/``. That is worse than it
+    sounds: ``measure/gates.py::_knobs_resolved_gate`` compares rows with ``row.get(key)``, so
+    a key missing from every row compares equal to itself and the drift gate passes on a
+    configuration it never saw.
+
+    Three resolutions, in order:
+
+    * **``UNSET`` becomes ``None``.** ``UNSET`` is not JSON and "this run had no calibrated
+      value" is a measurement worth writing down. Readers are unaffected: ``int_knob`` and
+      friends fall through a ``None`` to ``knob_default``, which is still ``UNSET`` and still
+      raises rather than substituting a number.
+    * **The policy, then the resolvers.** ``sqlglot_version``'s own note says it is UNSET
+      "so it cannot be silently absent" and it was silently absent on every row;
+      ``govern/functions.py`` has implemented exactly that resolver all along and nothing
+      called it. Canonical function names are release-dependent and the ADR 0006 allowlist is
+      keyed on them, so without it no artifact says which vocabulary the governance layer was
+      enforcing. ``negative_tau`` stays ``None`` and that is the true value: the gate ships
+      disabled and ``serve/nodes/negative.py`` writes ``"tau": None`` on every turn.
+    * **The environment last**, because that is the order the readers use — see
+      :func:`~governed_bi.register.knobs.env_override`.
+    """
+    from ..govern.functions import sqlglot_version
+    from ..register.knobs import UNSET, env_override
+
+    knobs = {k: (None if v is UNSET else v) for k, v in knob_defaults().items()}
     for name in ("guard_rules_enabled", "permitted_functions", "cost_budget"):
         value = getattr(policy, name, UNSET)
         if value is not UNSET and value is not None:
             # `frozenset` and `Mapping` both need a serializable form: the record is written
             # to JSON and read by a gate, and a set is not JSON.
             knobs[name] = sorted(value) if isinstance(value, (set, frozenset)) else value
+    knobs["sqlglot_version"] = sqlglot_version()
+    for name in knobs:
+        override = env_override(name)
+        if override is not None:
+            knobs[name] = override
     return knobs
 
 
@@ -355,43 +407,60 @@ def from_assets(
     entries = _index_entries(visible, structure)
     index = build_index(entries, embedder=embedder, vector_cache=vector_cache)
     knobs = _resolved_knobs(policy)
+    # The variant of every prompt this run selected -- exactly the "resolved variant per
+    # stage" the knob is declared to hold. `register/prompts.select()` computed it all along
+    # and no caller wrote it down, so `prompt_set` was null on v2, v3, v4 and v5, the four
+    # arms whose entire treatment is a prompt variant. They were still *distinguishable*,
+    # because `prompt_set_hash` is on the row and does differ; they were not *nameable* --
+    # nothing in an artifact said which variant produced which digest.
+    #
+    # Here rather than in the driver, and from the same `prompt_variants` argument
+    # `prompt_set_hash` is computed from two lines below: a second knob-resolution site is
+    # the defect this repository keeps paying for, and resolving it in the harness would
+    # leave the served path null. `select` raises on an undeclared prompt name, which is the
+    # same refusal `prompt_set_hash` already makes on the same input.
+    knobs["prompt_set"] = selected_variants(prompt_variants)
     if embedder is not None:
         # One resolution of the embedder's comparability identity. It was duplicated here
         # (audit §10), and two copies is how one drifts from `knob_names()`.
         knobs.update(embedding_knobs(embedder))
+    resolved_utility = utility_model or agent_model
     if agent_model is not None:
-        knobs["llm_model"] = (
-            model_id(agent_model) or getattr(agent_model, "_llm_type", None)
-            or type(agent_model).__name__
-        )
-        effort = getattr(agent_model, "reasoning_effort", None)
+        # The agent model itself, under the name the register declares. `llm_model` used to be
+        # written here beside it and is gone: `KNOB_REGISTER` never declared it, so it sat
+        # outside `comparability_keys()` -- and on run1, run2, v3-pinned and v3-fold it was the
+        # ONLY field carrying the model, which meant the one value that could have told those
+        # arms apart was outside the comparability set. One spelling, and it is the declared
+        # one.
+        knobs["chat_model"] = _model_name(agent_model)
+        # Whichever of the three spellings this client wears. `getattr(model,
+        # "reasoning_effort")` was here and is only OpenAI's, so the proxy arms recorded null
+        # while running at `high` -- see `model/provider.py::reasoning_effort_of`.
+        effort = reasoning_effort_of(agent_model)
         if effort:
             knobs["llm_reasoning_effort"] = str(effort)
         # The gateway, not the model. Read off the client's base URL because that is the one
         # place a proxy differs from the vendor while `model_id` returns the same string for
         # both -- see the knob's own note for what that cost.
         knobs["llm_provider"] = _provider_of(agent_model)
-        # The agent model itself. Declared in the register as `chat_model` and resolved by
-        # nothing, so every artifact recorded `llm_utility_model` beside a null main model and
-        # the agent's identity survived only in the `arm` filename -- a naming convention, not
-        # a record. Same derivation as the utility one so the two cannot disagree.
-        knobs["chat_model"] = (
-            model_id(agent_model) or getattr(agent_model, "_llm_type", None)
-            or type(agent_model).__name__
-        )
-        resolved_utility = utility_model or agent_model
-        knobs["llm_utility_model"] = (
-            model_id(resolved_utility) or getattr(resolved_utility, "_llm_type", None)
-            or type(resolved_utility).__name__
-        )
-        for knob, attr, cast, source in (
-            ("llm_max_retries", "max_retries", int, agent_model),
-            ("llm_timeout_s", "request_timeout", float, agent_model),
-            ("llm_utility_timeout_s", "request_timeout", float, resolved_utility),
+        for knob, attr, cast in (
+            ("llm_max_retries", "max_retries", int),
+            ("llm_timeout_s", "request_timeout", float),
         ):
-            value = getattr(source, attr, None)
+            value = getattr(agent_model, attr, None)
             if value is not None:
                 knobs[knob] = cast(value)
+    if resolved_utility is not None:
+        # Written even when it falls back to the agent model, per the knob's note: "shared one
+        # model" and "split them" are two treatments.
+        knobs["llm_utility_model"] = _model_name(resolved_utility)
+        # Same argument as `llm_provider`, one surface over, and it had no writer at all: six
+        # proxy-served arms published the register default "openai" on this field while
+        # `llm_provider` on the same row said "custom:007df842".
+        knobs["llm_utility_provider"] = _provider_of(resolved_utility)
+        timeout = getattr(resolved_utility, "request_timeout", None)
+        if timeout is not None:
+            knobs["llm_utility_timeout_s"] = float(timeout)
     return Session(
         index=index,
         structure=structure,

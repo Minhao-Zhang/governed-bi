@@ -90,7 +90,7 @@ def usage_row(*, stage: str, model: Any, messages: Any, turn_index: Any) -> dict
 
     ``model_id(model)`` first and ``_llm_type`` only as the fallback. Reversed, every OpenAI turn
     recorded ``model: "openai-chat"`` — a LangChain *class* label — while
-    ``knobs_resolved["llm_model"]`` beside it held the real id, on a comparability field.
+    ``knobs_resolved["chat_model"]`` beside it held the real id, on a comparability field.
     """
     reported = reported_tokens(messages)
     if reported is None:
