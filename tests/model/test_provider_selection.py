@@ -24,6 +24,24 @@ needs_bedrock = pytest.mark.skipif(
     reason="needs the bedrock extra: uv sync --extra bedrock",
 )
 
+@pytest.fixture(autouse=True)
+def _no_inherited_provider_vars(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start every test from "no provider configured anywhere".
+
+    ``provider_for`` reads a precedence chain, so a test that sets one link asserts nothing
+    unless the others are known to be empty. These tests set :data:`P.PROVIDER_VAR` and were
+    silently relying on the per-surface variables being unset in the developer's shell — true
+    until ``.env`` gained ``GOVERNED_BI_EMBEDDING_PROVIDER=openai`` (2026-08-10, to keep the
+    embedder on OpenAI while the two chat surfaces moved to Bedrock). The whole-suite run then
+    failed on the embedding surface while ``pytest tests/model`` alone still passed, because
+    the leak arrives via another test's ``credentials.load_into_environ()`` and so depends on
+    test order. Clearing here rather than in each test: the precondition is the file's, and the
+    next variable added to ``SURFACE_PROVIDER_VARS`` is covered without touching the tests.
+    """
+    for name in (P.PROVIDER_VAR, *P.SURFACE_PROVIDER_VARS.values()):
+        monkeypatch.delenv(name, raising=False)
+
+
 # ── which gateway serves a surface ────────────────────────────────────────────
 
 
