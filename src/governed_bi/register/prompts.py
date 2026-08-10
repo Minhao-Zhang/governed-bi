@@ -63,6 +63,13 @@ ANALYST = Prompt(
         "**v3 is the default from 2026-08-09**: two arms, paired McNemar p = 0.0008 against "
         "run1 and p = 0.00008 against run2, with over-projection 107 -> 18 and every guardrail "
         "flat or better. Leaving v2 default meant an unflagged run served the worse wording. "
+        "**v4 is the default from 2026-08-10, and not because it won on EX.** Against v3-fold "
+        "it is net +16, p = 0.18 -- inside the noise. It is the default because its mechanism "
+        "is unambiguous (r_star_projection 35 attempts over 29 turns down to 2 over 2, and "
+        "r_column_not_allowed 22/13 down to 3/3), because it states a constraint the engine "
+        "actually enforces, and because no guardrail moved: over-projection flat at 40 under, "
+        "abstention precision unchanged inside its own error bar. A prompt that says what "
+        "check() will refuse is right whether or not the score notices.\n"
         "v4 is v3 plus the star rule: `check()` refuses `SELECT *` at BINDING and the prompt "
         "had never said so, so the agent wrote it, was refused, and had nothing to go on -- 29 "
         "turns of the v3-fold arm, of which 1 ended correct, and 14 of the 48 questions WrenAI "
@@ -197,7 +204,7 @@ ANALYST = Prompt(
             "`COUNT(DISTINCT col)`."
         ),
     },
-    default="v3",
+    default="v4",
 )
 
 
