@@ -68,14 +68,16 @@ _THINKING_EFFORTS = ("low", "medium", "high")
 
 
 def _require_boto3():
-    """Import ``boto3`` lazily. It is **not** a declared dependency of this project."""
+    """Import ``boto3`` lazily. It arrives with the ``bedrock`` extra, not with a base install."""
     try:
         import boto3  # noqa: PLC0415
     except ModuleNotFoundError as err:  # pragma: no cover - exercised only sans dep
         raise ModuleNotFoundError(
-            "the internal proxy provider needs 'boto3' to read its secret from AWS Secrets Manager, and "
-            "boto3 is not in this project's dependencies (pyproject.toml has no extras). "
-            "Install it into the environment before running --provider proxy."
+            "the internal proxy provider needs 'boto3' to read its secret from AWS Secrets "
+            "Manager. Install it with `uv sync --extra bedrock`, which is where boto3 comes "
+            "from -- the extra fronts the Bedrock adapter and brings the boto3 tree with it. "
+            "This message used to say the project had no extras and to install boto3 by hand; "
+            "that was true for five days and is the fifth copy of one stale sentence."
         ) from err
     return boto3
 

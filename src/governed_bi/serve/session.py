@@ -371,6 +371,14 @@ def from_assets(
         # place a proxy differs from the vendor while `model_id` returns the same string for
         # both -- see the knob's own note for what that cost.
         knobs["llm_provider"] = _provider_of(agent_model)
+        # The agent model itself. Declared in the register as `chat_model` and resolved by
+        # nothing, so every artifact recorded `llm_utility_model` beside a null main model and
+        # the agent's identity survived only in the `arm` filename -- a naming convention, not
+        # a record. Same derivation as the utility one so the two cannot disagree.
+        knobs["chat_model"] = (
+            model_id(agent_model) or getattr(agent_model, "_llm_type", None)
+            or type(agent_model).__name__
+        )
         resolved_utility = utility_model or agent_model
         knobs["llm_utility_model"] = (
             model_id(resolved_utility) or getattr(resolved_utility, "_llm_type", None)

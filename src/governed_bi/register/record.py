@@ -126,10 +126,12 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "distinguishes from an empty mapping. Treatment, not outcome, because it changes what "
        "was served: `table_coverage` is computed over `licensed` and is therefore a LICENSING "
        "figure -- a table can be routed, licensed, counted as covered, and then evicted here. "
-       "Reconstructing 25 turns of the 2026-08-09 v3 arm offline, the budget bit on 16 and the "
-       "median block rendered at 79,866 of 80,000 chars, so the gap between licensed and "
-       "delivered is not a corner case. `DeliveryTracker.merge_into` destroyed this mid-turn "
-       "for the whole life of the field before it was carried"),
+       "First measured on the 2026-08-09 v3-fold arm: the budget bit on 19 of 1 351 turns "
+       "(1.4%), dropping bodies only and never a whole table. So the 80 000-char budget is "
+       "NOT the binding constraint an offline reconstruction had suggested -- that estimate "
+       "built the context from every licensed table's every column and ignored the per-type "
+       "budgets pass two applies. `DeliveryTracker.merge_into` destroyed this field mid-turn "
+       "for its whole life before it was carried, which is why no earlier arm can report it"),
 
     _f("context_hash", Tier.treatment, Absence.not_applicable, Stage.assemble,
        "the delivery gate. Deterministic: a pure function of corpus content and "

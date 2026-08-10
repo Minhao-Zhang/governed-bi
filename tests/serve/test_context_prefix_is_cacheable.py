@@ -3,7 +3,10 @@
 The agent re-sends a ~22k-token context block on every model call, by design — it cannot be a
 ``SystemMessage`` (that would make ``prompt_set_hash`` describe text never sent) and cannot sit
 in ``messages`` as the client's own turn (the SDK renders it as the user's bubble). Measured on
-the 2026-08-09 v3 arm, the repeated prefix is **at most 66.6%** of all input tokens.
+the 2026-08-09 v3-fold arm, ``agent_core`` makes 3 308 model calls over 1 345 turns -- 2.5
+each -- so the repeated prefix is **58.3%** of all input tokens. That is a measurement, not the
+bound it replaced: the bound came from dividing tokens by block size, and ``model_calls`` now
+counts the calls directly.
 
 Caching removes that repeat without touching any of those three constraints. Only two halves of
 it are ours:
@@ -151,8 +154,9 @@ def test_the_delivery_merge_carries_what_the_budget_evicted() -> None:
     in ``agent_core`` on every turn that had one — a silent data loss that lived undetected.
 
     It is the only record that a table was routed, licensed, *counted as covered* by
-    ``table_coverage``, and then dropped for space before the model saw it. Reconstructing 25
-    turns of the 2026-08-09 v3 arm offline, the 80 000-char budget bit on 16 of them.
+    ``table_coverage``, and then dropped for space before the model saw it. Measured once it
+    survived: 19 of 1 351 turns (1.4%), bodies only, never a whole table. Rare — but nothing
+    could know that while this function deleted the field.
     """
     from governed_bi.serve.delivery import DeliveryTracker
 
