@@ -328,13 +328,16 @@ per-field decisions are in [declared-not-consumed](analysis/declared-not-consume
 
 Fourteen remain, and none of them currently corrupts a number:
 
+Thirteen unconsumed knobs and one half-wired state channel:
+
 | | |
 |---|---|
-| `git_sha`, `git_main_sha`, `working_tree_dirty` | the resume-drift keys, null on every row of every arm, so the gate compares each against itself |
+| `git_sha`, `git_main_sha`, `working_tree_dirty`, `diff_sha256` | the resume-drift keys, null on every row of every arm, so the gate compares each against itself |
 | `schemas_under_test`, `question_subset`, `split` | scope keys nothing writes |
 | `serve_workers`, `build_workers` | null while the driver runs ten workers |
 | `expand_hops` | a comparability knob with no reader: setting it changes no behaviour and does change the config hash. `pulled_in` now reaches the row, which makes the knob's own question answerable — the measurement half exists, the behaviour half does not |
-| `negative_tau`, `facet_model`, `rewrite_model`, `clarifications` | dead declarations |
+| `negative_tau`, `facet_model`, `rewrite_model` | dead declarations |
+| `clarifications` | a `ServeState` channel with two writers and no reader outside `state.py` |
 
 The common cause is that declaring and consuming live in different files and nothing forces them
 to meet. **Two of the fixed items were invisible to any static rule by construction** — in each

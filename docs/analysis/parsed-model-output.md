@@ -1,12 +1,14 @@
 # Every hand-parsed model reply in `src/governed_bi/`
 
-**Two defects, both narrow, both real.** The scope gate's fail-closed property does not hold for
-one class of reply — anything beginning with the affirmative token, which includes the gate's own
-instruction sentence — and that class clears the gate leaving no trace. The reflector accepts a
-verbatim echo of its answer template as a fully-formed `answered` verdict with a fabricated
-reason. Everything else checked is fine and is said so plainly below.
+**Two defects, both narrow, both real, both now fixed at `95e3b07`.** The scope gate's fail-closed
+property did not hold for one class of reply — anything beginning with the affirmative token,
+which includes the gate's own instruction sentence — and that class cleared the gate leaving no
+trace. The reflector accepted a verbatim echo of its answer template as a fully-formed `answered`
+verdict with a fabricated reason. Everything else checked is fine and is said so plainly below.
 
-Audited at engine `a5727b0`. This is a code audit; no figure here is measured on a run.
+Audited at engine `a5727b0`. This is a code audit; no figure here is measured on a run. The
+sections below keep the evidence, because each fix is shaped by what the probe found and a fix
+without its evidence is a change nobody can review later.
 
 ## 0. The complete inventory
 
@@ -16,8 +18,8 @@ nested `create_agent`, whose output is consumed as **tool calls**, not text.
 
 | Site | What it reads | Malformed reply | Verdict |
 |---|---|---|---|
-| `serve/nodes/guard.py:136` (`_bi_scope`) | `yes` prefix | **fails open** on a prefix-affirmative non-answer; fails closed on everything else | **defect** |
-| `serve/nodes/reflect.py:207` (`_read_verdict`) | `VERDICT:` / `REASON:` lines | **fails silently** on a template echo; fails safe on everything else | **defect** |
+| `serve/nodes/guard.py:136` (`_bi_scope`) | `yes` prefix | **failed open** on a prefix-affirmative non-answer; fails closed on everything else | **defect, fixed at `95e3b07`** |
+| `serve/nodes/reflect.py:207` (`_read_verdict`) | `VERDICT:` / `REASON:` lines | **failed silently** on a template echo; fails safe on everything else | **defect, fixed at `95e3b07`** |
 | `serve/nodes/facets.py:309` (`_rewritten_query`) | free text | fails safe *and visibly* | fine |
 | `serve/nodes/narrate.py:109` (`_generate`) | free text | fails safe | fine |
 | `serve/nodes/agent_core.py` (`create_agent`) | tool-call args | not a text parse — see §2.3 | fine |
@@ -25,9 +27,9 @@ nested `create_agent`, whose output is consumed as **tool calls**, not text.
 Embedder replies (`model/*_embedder.py`) are vectors read through LangChain's typed client and
 are out of scope for this question.
 
-## 1. The two defects
+## 1. The two defects, and the fix each got
 
-### 1.1 The scope gate clears on any reply that *starts with* "yes", including its own prompt
+### 1.1 The scope gate cleared on any reply that *started with* "yes", including its own prompt
 
 `serve/nodes/guard.py`:
 
@@ -77,8 +79,9 @@ no measured number is affected. This is a production-path finding, not a measure
 not the kind of thing that gets noticed when it happens, because the record shows an ordinary
 `clear`.
 
-**Fix, three lines, no schema.** Tokenise and require an unambiguous affirmative, and separate the
-"neither" case from the substantive `no`:
+**The fix, shipped at `95e3b07`**: tokenise and require an unambiguous affirmative, and separate
+the "neither" case from the substantive `no`. `_clears_scope` in `guard.py` is the result. What
+was proposed and what landed:
 
 ```python
 words = re.findall(r"[a-z]+", answer)
@@ -94,7 +97,7 @@ This keeps every case the current test asserts (`"Yes."`, `"YES\n"`, `"yes, that
 still clear) and closes the three rows above. The `unparseable:` prefix in `detail` is enough to
 count the two kinds of refusal apart offline, since `stamp` copies `guard` into the record whole.
 
-### 1.2 The reflector reads its own answer template as `answered`
+### 1.2 The reflector read its own answer template as `answered`
 
 `serve/nodes/reflect.py::_read_verdict` is, as the brief says, well-built: lenient about layout,
 strict about vocabulary, and an undeclared label yields `verdict: null` with `why_unmeasured`
@@ -123,12 +126,16 @@ Three things make this worse than its blast radius suggests:
 - **It is whitespace-dependent.** The spaced form parses, the unspaced form does not. Two models
   that both echo the template produce different measurements.
 
-Consequence is bounded: `reflect_enabled` ships `False`, the node changes no control flow, and
-`reflect_verdict` has no quotability gate (deliberately — `register/record.py`). So no shipped
-number is contaminated today. It will contaminate the first reflected arm.
+Consequence was bounded: `reflect_enabled` ships `False`, the node changes no control flow, and
+`reflect_verdict` has no quotability gate (deliberately — `register/record.py`). No shipped number
+was contaminated.
 
-**Fix, two lines, no schema, and it should not wait for the structured-output arm** — the
-baseline that arm is compared against is measured with this parser:
+**It also never fired.** The one reflected arm ran on `2da223c`, which predates the fix, so an
+echo would have parsed as a complete favourable verdict. Zero of its 1,351 rows carry the
+signature, and `why_unmeasured` is empty on every row — so the arm is uncontaminated and the
+hand parser's robustness is settled ([reflect arm](reflect-arm-v4.md)).
+
+**The fix, shipped at `95e3b07`** — two lines, no schema:
 
 ```python
 declared = [w for w in word if w in REFLECT_VERDICTS]
@@ -235,25 +242,26 @@ specifically:
 The §1.1 tokeniser fix costs none of that and closes the same hole. **Recommendation: fix the
 parser; do not adopt a schema here.**
 
-### 4.2 `reflect` — yes, and `docs/open-work.md` §3.11 already has this right
+### 4.2 `reflect` — the arm ran, and the answer is now no
 
-Nothing found in this audit changes that plan. Confirming the two carried notes:
+This section recommended a typed schema for the reflector. **The arm that would have been its
+baseline has since run, and it closed the direction**: the judge scores AUC 0.597, below the count
+of tokens the agent emitted, and the turns it calls `unsure` are as likely to be right (0.766) as
+the ones it calls correct (0.763). A judge whose "I cannot tell" bucket matches its "this is
+right" bucket has no perception of its own uncertainty, and no output format supplies one. See
+[reflect arm](reflect-arm-v4.md) and [open work](../open-work.md) §3.11.
+
+Two carried notes survive and are worth keeping if anyone revisits it:
 
 - `include_raw=True` is mandatory for the reason §3.11 states, and §4.1 above is the concrete
   demonstration of what the bare form does to a call site whose `except` has a consequence.
 - The transport objection is dead. `tools` in `model/provider.py` only selects OpenAI's Responses
   API; `response_format` is available on the path the utility model already uses.
 
-What the schema buys beyond one declaration is the thing the parser cannot give at any price: a
-`confidence: int` field. Three labels are three operating points, and
-`docs/analysis/risk-coverage-v4.md` is an analysis of a curve — a judge that emits only a
-three-way label cannot produce one. That is the argument for the arm, not tidiness.
-
-One addition to the plan: **land the §1.2 echo fix before the baseline arm runs.** Constrained
-decoding cannot echo a template, so the schema arm is immune to this defect and the text arm is
-not. Measuring them against each other with the defect live would credit the schema with an
-improvement that is really a parser bug, and the direction of the bias (`answered`) is the
-direction the comparison is most sensitive to.
+The argument for the schema was a `confidence: int` field, on the grounds that three labels are
+three operating points and [risk coverage](risk-coverage-v4.md) is an analysis of a curve. The arm
+answered that too: the three-way label has no resolution to grade more finely, because the
+middle label carries the same accuracy as the favourable one.
 
 ### 4.3 `facets` and `narrate` — no
 
@@ -266,19 +274,13 @@ concurrent calls per turn. There is no defect to fix and no ambiguity to remove.
 
 Neither is a parser, both are on the governance path, and both are cheap to state.
 
-### 5.1 Two docstrings claim a quotability gate on `guard` that does not exist
+### 5.1 There is no quotability gate on `guard`, and two docstrings used to claim one
 
-`serve/nodes/guard.py:87`:
+`serve/nodes/guard.py` said "the sentinel … joins a run's quotability gates", and
+`serve/nodes/stamp.py` said "`register/record.py` gates on it". **Both are corrected; the missing
+gate is still missing.**
 
-> The sentinel is countable and joins a run's quotability gates, so a gate that was never wired up
-> cannot pass for one that never fired (`register/record.py`).
-
-and `serve/nodes/stamp.py:313`:
-
-> that sentinel means the guard ran, errored and let the question through, and
-> `register/record.py` gates on it.
-
-It does not. `GATE_CONDITIONS` is derived from `_f(..., gate=...)` in `register/record.py`, and
+`GATE_CONDITIONS` is derived from `_f(..., gate=...)` in `register/record.py`, and
 the `guard` field is declared with no `gate=`. `measure/gates.py::GATE_IMPLEMENTATIONS` has six
 entries and none of them reads `guard`; the analogous sentinel one field down **is** gated
 (`negative` → `"no negative_gate error_failed_open"`). So an arm in which the scope gate was
@@ -286,10 +288,12 @@ enabled and could not run — every turn `error_failed_open` — is fully quotab
 objects.
 
 Practically inert today, because the rule is off in every eval arm. It is a live trap for the
-first arm that turns it on. Either add
-`gate="no guard error_failed_open"` to the field and the matching `_zero_count_gate`, or correct
-both docstrings. The current state is the worst of the three: two call sites reasoning from a
-guarantee that is not there.
+first arm that turns it on.
+
+Of the two available repairs — add `gate="no guard error_failed_open"` to the field with a
+matching `_zero_count_gate`, or correct the docstrings — the second is done, because a call site
+reasoning from a guarantee that is not there is the worse of the two failures. Adding the gate is
+still open, and it should be decided by whoever turns the rule on for an arm.
 
 ### 5.2 The record cannot distinguish "the scope gate passed" from "the scope gate was off"
 

@@ -3,11 +3,11 @@
 A sweep for the defect class in `open-work.md` §3.10: something is declared — a knob, a record
 field, a state channel, an env var, a docstring promise — and nothing on the other end reads it.
 
-Two instruments. The mechanical one is the six artifacts in `runs/eval/`, 1,351 rows each, all on
-corpus `86ed1dbf…` (`../BIRD-corpus` @ `30872d3`): a field constant across all 8,106 rows of all
-six arms is evidence of no writer, which is how `facet_degraded` and `git_sha` were originally
-caught. The static one is `tools/check_declared_is_consumed.py`, written in the same pass; it
-finds 27 of the items below and exits 1 today.
+Two instruments. The mechanical one is the six artifacts this sweep ran over, 1,351 rows each, all
+on corpus `86ed1dbf…` (`../BIRD-corpus` @ `30872d3`): a field constant across all 8,106 rows of
+all six arms is evidence of no writer, which is how `facet_degraded` and `git_sha` were originally
+caught. The static one is `tools/check_declared_is_consumed.py`, written in the same pass. It
+found 27 of the items below when it was written and finds **14** now.
 
 Findings are ranked by consequence. Tier 1 means a **recorded number is wrong**, not missing.
 
@@ -215,17 +215,17 @@ only by a coincidental `"arms"` dict key in `eval/report.py`, and is in the same
 
 `tools/check_declared_is_consumed.py`, AST-only, exit 1 on violation. Four rules:
 
-| | rule | hits today |
-|---|---|---:|
-| K1 | every declared knob is named outside `register/` | 16 |
-| K2 | every key written into a `knobs` mapping is a declared knob | 1 |
-| R1 | every declared record field is named in `eval/harness.py` | 9 |
-| S1 | every `ServeState` channel has a writer *and* a reader outside `state.py` | 1 |
+| | rule | when written | today |
+|---|---|---:|---:|
+| K1 | every declared knob is named outside `register/` | 16 | 13 |
+| K2 | every key written into a `knobs` mapping is a declared knob | 1 | 0 |
+| R1 | every declared record field is named in `eval/harness.py` | 9 | 0 |
+| S1 | every `ServeState` channel has a writer *and* a reader outside `state.py` | 1 | 1 |
 
 It is red on purpose. A conformance check that went green on first run against a tree with this
 population would be the same defect as the eight tests that asserted constants against
 themselves. Six waivers are in place, each with a reason that says why a declaration with no
-consumer is correct; removing all six raises the count from 27 to 33.
+consumer is correct; removing all six adds six to whatever the count is.
 
 Two laundering bugs were found by mutation-testing the checker against a fixture tree under
 `--root`, and both are fixed and commented at the site:

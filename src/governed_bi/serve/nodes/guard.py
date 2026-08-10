@@ -113,9 +113,15 @@ async def _bi_scope(
 
     **Enabled with no model is ``error_failed_open``, not ``clear``**, and so is a model error
     — the question goes through either way, as ADR 0006 §1 has a raising deterministic rule do,
-    because this gate is about *scope* and not safety. The sentinel is countable and joins a
-    run's quotability gates, so a gate that was never wired up cannot pass for one that never
-    fired (``register/record.py``).
+    because this gate is about *scope* and not safety. The sentinel is countable, which is what
+    keeps a gate that was never wired up from passing for one that never fired.
+
+    It is **not** gated. The ``guard`` field in ``register/record.py`` carries no ``gate=``, so
+    ``measure/gates.py`` has no implementation reading it and an arm in which this gate was
+    enabled and errored on every turn is still fully quotable. The sibling field one row down
+    (``negative``) *is* gated, which is what the wording here used to claim for this one. Inert
+    while every eval arm passes ``guard_rules_enabled={}``; a trap for the first arm that does
+    not. See ``docs/analysis/parsed-model-output.md`` §5.1.
     """
     from langchain_core.messages import HumanMessage, SystemMessage
 

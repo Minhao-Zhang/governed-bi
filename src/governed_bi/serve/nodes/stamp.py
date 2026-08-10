@@ -310,7 +310,8 @@ def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
 
     # ``guard`` is Absence.never and must **not** be substituted here. Standing in
     # ``{"outcome": "error_failed_open"}`` fabricates a security event — that sentinel means the
-    # guard ran, errored and let the question through, and ``register/record.py`` gates on it.
+    # guard ran, errored and let the question through, and it is what a reader counts to find
+    # out whether the gate worked. (No quotability gate reads it; see ``guard.py::_bi_scope``.)
     # An absent guard stays absent; ``missing_required`` names it as the wiring failure it is.
     projected_state: dict[str, Any] = dict(state)
     projected_state["execution"] = execution
