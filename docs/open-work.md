@@ -348,32 +348,36 @@ violations when written and reports 14 now. **It is deliberately not wired into 
 reversing it. Its own docstring states the blind spot: rule K1 credits any occurrence of a knob's
 name, so a coincidental string literal launders one.
 
-### 3.11 The reflector's output is parsed from text, and the decision to keep it that way
+### 3.11 Selective prediction is closed at 0.80, and the reflector closed it
 
-`reflect` asks for `VERDICT: answered | wrong | unsure` on one line and parses it with
-`_read_verdict`. The vocabulary therefore lives in two places — `REFLECT_VERDICTS` and the
-prompt's own wording — and a three-way label is not a ranking, so it yields three operating
-points rather than a risk-coverage curve.
+The reflector ran, once, as the last untested source of information: everything that does not
+read meaning had already been measured and capped at OOF AUC 0.721. **It scores 0.597** — worse
+than the count of tokens the agent emitted, and combining the two is worse than the token count
+alone. Full result: [reflect arm](analysis/reflect-arm-v4.md).
 
-``with_structured_output`` with a `TypedDict` carrying `Literal` values is the idiomatic fix and
-would collapse both problems: one declaration, and room for a `confidence: int` field that gives
-the continuous score the curve needs. It is used **nowhere** in this repository.
+The row that matters is `unsure`. The judge called 77 turns unsure and they are **as likely to be
+right (0.766) as the ones it called correct (0.763)**. So the follow-ups that suggest themselves —
+a graded `confidence`, `right` instead of the ambiguous `answered`, a `TypedDict` of `Literal`s
+through `with_structured_output` — all address expression, and expression is not the problem. A
+judge whose "I cannot tell" bucket matches its "this is right" bucket has no perception of its own
+uncertainty to express.
 
-It is **not** being adopted before the first reflected arm runs, for one reason: constrained
-decoding is not behaviour-neutral, so shipping it with the baseline would leave a null result
-ambiguous between "the judge has no signal" and "the schema suppressed it". It is the second arm,
-not a refactor of the first.
+`with_structured_output` therefore stays unused here, and the reason has changed: not "wait for
+the baseline" but "the baseline came back and there is nothing to express". Two facts from that
+work survive and are worth keeping if anyone revisits it: `include_raw=True` is mandatory, because
+the hand parser fails safe into a recorded `why_unmeasured` and a bare
+`with_structured_output` raises and loses the reply; and structured output needs no transport
+change, since `tools` in `model/provider.py` only selects OpenAI's Responses API.
 
-Two things to carry into that arm when it is built:
+Two things the arm settled in passing. The parse-failure rate is **zero** — `why_unmeasured` is
+empty on every row — so the hand parser is robust enough, which was left open pending exactly this
+data. And the template-echo bug fixed in `95e3b07` **did not fire**: this arm predates the fix and
+zero rows carry the signature, so it is uncontaminated.
 
-- **`include_raw=True` is mandatory.** The current parser fails safe — an undeclared label yields
-  `verdict: null` and a recorded `why_unmeasured`, never a guess, because "mapping an invented
-  label onto the nearest declared one would be the instrument inventing its own readings". A bare
-  `with_structured_output` raises on validation failure and loses the reply, which is a worse
-  failure mode traded for a tidier success path.
-- An earlier note here claimed structured output would force the utility surface onto a different
-  transport. It does not: `tools` in `model/provider.py` only selects OpenAI's Responses API, and
-  `response_format` is available on the path the utility model already uses.
+What remains open is not a better judge. It is that **the thesis of this project has never been
+measured**: the layer stack, the allowlist and the scope gate have no adversarial evaluation, so
+what governance buys has no number. The scope gate's fail-open on affirmative-prefixed replies was
+found by reading the code, not by a test, because nothing tries to get past it.
 
 ### 3.12 The noise floor is five times a comparison system's, and that is architectural
 
