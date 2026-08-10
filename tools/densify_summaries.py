@@ -150,8 +150,12 @@ def dense_table(doc: dict, cap: int) -> tuple[str, bool]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="densify_summaries", description=__doc__)
-    parser.add_argument("--source", default="corpora/gold-semantic-layer-20260804")
-    parser.add_argument("--out", default="corpora/_variant-dense-20260805")
+    # Required, not defaulted. Both used to name a directory under the gitignored `corpora/`,
+    # so the defaults pointed at trees that exist on one machine and nowhere else -- and the
+    # source default named one that had already been deleted, which fails as a missing path
+    # rather than as a missing argument.
+    parser.add_argument("--source", required=True, help="corpus to read summaries from")
+    parser.add_argument("--out", required=True, help="corpus to write; must not exist")
     parser.add_argument(
         "--force", action="store_true", help="replace --out if it already exists"
     )

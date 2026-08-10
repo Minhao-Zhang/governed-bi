@@ -18,6 +18,6 @@ from pathlib import Path
 
 __all__ = ["REPO_ROOT"]
 
-#: The repository root: the directory holding ``pyproject.toml`` and ``corpora/``.
+#: The repository root: the directory holding ``pyproject.toml``.
 #: ``src/governed_bi/paths.py`` → ``src/governed_bi`` → ``src`` → root.
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent

@@ -52,8 +52,10 @@ def mcnemar(reference: dict[str, bool], arm: dict[str, bool]) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="query_summary_alignment", description=__doc__)
-    parser.add_argument("--gold-corpus", default="corpora/gold-semantic-layer-20260804")
-    parser.add_argument("--dense-corpus", default="corpora/_dense-v3")
+    # Required, not defaulted: the old defaults named directories under the gitignored
+    # `corpora/`, which exist on one machine and nowhere else.
+    parser.add_argument("--gold-corpus", required=True, help="baseline corpus to compare")
+    parser.add_argument("--dense-corpus", required=True, help="variant corpus to compare")
     parser.add_argument("--dataset", type=pathlib.Path, default=DEFAULT_DATASET)
     parser.add_argument(
         "--per-schema",
