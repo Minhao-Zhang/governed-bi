@@ -595,7 +595,7 @@ arrive together ("which customers have the highest order amount" is a customer
 table, an order table, an amount column and the join between them, as one
 thought). Splitting produces three highly overlapping extraction calls.
 
-**A phrase list would be one query each.** `["客户", "订单", "金额"]` would run three
+**A phrase list would be one query each.** `["customer", "order", "amount"]` would run three
 retrievals: concatenation looks for one asset containing all three words
 (usually nonexistent), separate queries find the customer table, the order table
 and the amount column. What ships instead is one rewritten string per facet

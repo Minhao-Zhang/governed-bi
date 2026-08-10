@@ -1,231 +1,260 @@
-# 失败模式 — 这个引擎在 BIRD 上答错的时候，是怎么错的
+# Failure modes: how this engine gets BIRD questions wrong
 
-**当前臂**：`proxy_v4_corpus30872d3.jsonl`，**EX 0.676**（clean 0.6762）
-**引擎**：`3c0079a`　**语料**：`../BIRD-corpus` @ `30872d3`　**prompt**：ANALYST v4
+**Arm**: `proxy_v4_corpus30872d3.jsonl`, **EX 0.676** (clean 0.6762)
+**Engine**: `3c0079a`  **Corpus**: `../BIRD-corpus` @ `30872d3`  **Prompt**: ANALYST v4
 
-run1（0.579）/ run2（0.570）/ v3-pinned（0.611）跑在 `ba8cef2` 或更早的引擎上，`r_ambiguous_fold`
-在它们之后才收窄，所以在这条规则触及的范围内它们与之后的臂**不可配对比较**。v3-fold（0.664）
-跑在 `4f7430a` 上，是 v4 与 v5 用 `--replay-routing` 钉路由所依据的那一臂。下面每一节标注
-它的测量臂 —— 一个数字只对它测出来的那个引擎成立。
+run1 (0.579), run2 (0.570) and v3-pinned (0.611) ran on engine `ba8cef2` or earlier.
+`r_ambiguous_fold` was narrowed after them, so on anything that rule touches they are **not**
+paired-comparable with later arms. v3-fold (0.664) ran on `4f7430a`, and it is the artifact v4
+and v5 pin their routing to with `--replay-routing`. Every section below names the arm it was
+measured on. A number is only true of the engine it came from.
 
-**证据**：逐题带 `licensed` / `gold_sql` / `generated_sql` / `gold_fingerprint` /
-`attempts` / `computed_correct` / `context_evicted` / `routing_pinned`，以及
-`corpus_content_hash` 和 `prompt_set_hash` 两个处理身份。`model_calls` 是每条 `usage`
-记录内部的键，不是行上的字段。
-**臂**：agent = Claude-Opus-4.8/high，utility = Claude-Sonnet-5/high，embed top-n=10，
-workers=10，`run_query_attempt_cap=5`
+**Evidence**: per question, the row carries `licensed`, `gold_sql`, `generated_sql`,
+`gold_fingerprint`, `attempts`, `computed_correct`, `context_evicted` and `routing_pinned`, plus
+the two treatment identities `corpus_content_hash` and `prompt_set_hash`. `model_calls` is a key
+inside each `usage` record, not a field on the row.
 
-> 语料是每一次测量的处理身份。本文所有数字只在语料 `30872d3` 上可比。语料已入 git，
-> 但不能从任何已提交的东西重新生成。
+**Arm configuration**: agent Claude-Opus-4.8/high, utility Claude-Sonnet-5/high, embed, top-n 10,
+10 workers, `run_query_attempt_cap=5`.
 
-待办清单在 [open-work.md](open-work.md)；本文是它引用的证据。
+> The corpus is the treatment identity of every measurement. Every number on this page holds only
+> on corpus `30872d3`. The corpus is in git, and it cannot be regenerated from anything committed.
 
----
-
-## 方法
-
-三件事让下面的数字比"在失败集合上数特征"更有力：
-
-**对照组。** 每个特征同时在正确答案上计算，给出 lift。只在失败集合上计数会犯基率错误：
-如果 37% 的错误答案存在过度投影，而 35% 的正确答案也存在，那么过度投影就不是病因。
-
-**离线重放治理层。** 把被拒绝的语句连同当时的 `licensed` 集合喂回 `check()`，直接读出
-失败在第几层，而不是从 `refused_by` 猜。
-
-**因果修复实验。** 连上评测数据库，对错误预测施加一个受控修复（只改输出形状），
-**重新执行、重新指纹比对**。这把"相关"变成"可计数的因果上界"。
-
-**方法有效性校验**：随机取 60 条已记录预测重新执行，60/60 复现了记录中的 `pred_fingerprint`。
-数据库状态与运行时一致，因此所有重执行结论成立。
+The to-do list is [open work](open-work.md). This page is the evidence it cites.
 
 ---
 
-## 一、总账（v4）
+## Method
+
+Three disciplines make these numbers stronger than counting features on a set of failures.
+
+**A control group.** Every feature is computed on the correct answers too, and reported as lift.
+Counting only failures makes the base-rate mistake: if 37% of wrong answers over-project and 35%
+of right ones do as well, over-projection is not the disease.
+
+**Offline replay of the governance layers.** Each refused statement goes back into `check()` with
+the `licensed` set it had at the time, so the failing layer is read directly rather than guessed
+from `refused_by`.
+
+**Causal repair experiments.** Connect to the evaluation database, apply one controlled repair to
+a wrong prediction — output shape only — then **re-execute and re-fingerprint**. That turns a
+correlation into a countable causal upper bound.
+
+**Method validity check**: 60 recorded predictions, re-executed at random, reproduced the recorded
+`pred_fingerprint` 60 times out of 60. The database state matches the state at run time, so every
+re-execution result below holds.
+
+---
+
+## 1. The ledger (v4)
 
 ```
-1351 题，正确 913，EX = 0.676       clean（剔除 29）= 0.6762
-失败 438
+1351 questions, 913 correct, EX = 0.676       clean (29 excluded) = 0.6762
+438 failures
 ```
 
-下面六个桶**互斥且穷尽**这 438 条，每条失败只落一格：
+These six buckets are **mutually exclusive and exhaustive** over the 438. Each failure lands in
+exactly one:
 
-| 桶 | n | 性质 |
+| Bucket | n | Nature |
 |---|---:|---|
-| **满覆盖 answered 答错** | **257** | 真语义错误 |
-| answered，gold 是冻结字面量 | 75 | 数据集缺陷，不可赢 |
-| capped | 49 | 五次尝试用尽仍无通过的语句 |
-| answered，表覆盖不全 | 33 | 检索 |
-| refused | 20 | 零个满覆盖 |
-| clarification | 4 | 全部零授权 |
+| **answered wrong, full coverage** | **257** | genuine semantics |
+| answered, frozen-literal gold | 75 | dataset defect, unwinnable |
+| capped | 49 | five attempts spent with no passing statement |
+| answered, incomplete table coverage | 33 | retrieval |
+| refused | 20 | none with full coverage |
+| clarification | 4 | all zero-licensed |
 
-按覆盖横切（跨 outcome 合计）：**表覆盖不全的失败共 73 条**，**冻结字面量 gold 的失败共
-85 条**。两者与上表的 capped / refused / clarification 三格重叠 —— 20 条 refused 里 19 条
-表覆盖不全、1 条 gold 无表；49 条 capped 里 26 条覆盖不全或 gold 无表。
+Cut the same 438 by coverage instead, across outcomes: **73 failures had incomplete table
+coverage** and **85 had a frozen-literal gold**. Those two totals overlap the capped, refused and
+clarification rows above — of the 20 refusals, 19 had incomplete coverage and one had a gold that
+reads no table; of the 49 capped turns, 26 were incompletely covered or had a tableless gold.
 
-**refused 和 clarification 仍然 100% 是检索失败** —— 没有一个是"看得见数据却拒绝"。
+**Refusals and clarifications are still 100% retrieval failures.** Not one of them is a case of
+"the data was visible and the engine refused anyway."
 
-**真 gold 上的表覆盖率是 0.936**（1145/1224 题的 gold 表全部被授权）。检索基本到位——
-这一点很重要，因为它决定了下面每一桶该怎么读：覆盖不全的只有 79 道题，而引擎在这 79 道
-上几乎全灭，只答对 6 道。
+**Table coverage on real golds is 0.936** — 1,145 of the 1,224 questions with a real gold
+statement had every gold table licensed. Retrieval is mostly working, and that decides how to read
+every bucket below: only 79 questions were incompletely covered, and the engine answered just 6 of
+them correctly.
 
-outcome 与覆盖的交叉表（v4，全部 1351 行，含答对的）：
+Outcome against coverage, v4, all 1,351 rows including the correct ones:
 
-| outcome | full | partial | none | tableless |
+| Outcome | Full | Partial | None | Tableless |
 |---|---:|---:|---:|---:|
 | answered | 1122 | 31 | 8 | 117 |
 | capped | 23 | 12 | 7 | 7 |
 | **clarification** | **0** | **0** | **2** | 2 |
 | **refused** | **0** | **15** | **4** | 1 |
 
-拒绝和澄清一个都没落在满覆盖那一列；capped 则一半在满覆盖、一半在覆盖不全。
+Not one refusal or clarification lands in the full-coverage column. Capped splits about evenly
+between full coverage and incomplete.
 
-### 历史臂（run1，引擎 `d121c34`）
+### 1.1 The historical arm (run1, engine `d121c34`)
 
-按表覆盖分层（`table_coverage()`，其 docstring 称之为 "The EX ceiling"）：
+Stratified by table coverage, using `table_coverage()`, whose docstring calls this "the EX
+ceiling":
 
-| 表覆盖 | n | EX |
+| Table coverage | n | EX |
 |---|---:|---:|
 | full | 1132 | **0.647** |
 | partial | 67 | **0.119** |
 | none | 25 | **0.000** |
-| tableless（冻结字面量 gold） | 127 | 0.331 |
+| tableless (frozen-literal gold) | 127 | 0.331 |
 
-outcome 与覆盖的交叉表是全表最干净的一条结构信号：
+The outcome-by-coverage cross-tab is the cleanest structural signal in the whole artifact:
 
-| outcome | full | partial | none | tableless |
+| Outcome | Full | Partial | None | Tableless |
 |---|---:|---:|---:|---:|
 | answered | 1024 | 40 | 11 | 114 |
 | capped | 106 | 14 | 3 | 10 |
 | **clarification** | **0** | **0** | **6** | 2 |
 | **refused** | **2** | **13** | **5** | 1 |
 
-拒绝和澄清几乎完全落在覆盖不全的格子里；capped 几乎完全落在覆盖完整的格子里。
-这三个桶不是三种病。
+Refusals and clarifications sit almost entirely in the under-covered cells; capped sits almost
+entirely in the fully covered one. These three buckets are not three diseases.
 
 ---
 
-## 二、拒绝：治理层在报告检索失败〔run1 / 21 例；v3-fold 23 例；v4 20 例，结论不变〕
+## 2. Refusals: the governance layers reporting a retrieval failure
 
-把 21 条语句连同各自的 `licensed` 重放进 `check()`：
+*(run1, 21 cases; v3-fold 23; v4 20. The conclusion does not change.)*
 
-| 失败层 | 数量 | reason_code |
+Replaying the 21 statements into `check()` with each one's own `licensed` set:
+
+| Failing layer | n | Reason code |
 |---|---:|---|
 | **Layer 6 TABLES** | **18** | `r_table_not_licensed` |
-| Layer 4 BINDING | 1 | `r_star_projection`（`SELECT *`） |
-| 重放通过 | 2 | — |
+| Layer 4 BINDING | 1 | `r_star_projection` (`SELECT *`) |
+| replay passed | 2 | — |
 
-治理层给出的理由是逐字打印出来的：
+The layers print their reason verbatim:
 
 ```
 beer_factory.kunden resolves to beer_factory.kunden, which this turn does not license
 works_cycles.EmailAddress resolves to works_cycles.emailaddress, which this turn does not license
 ```
 
-21 个里有 19 个的 gold 表根本不在 `licensed` 里。**这不是治理误伤，是治理正确地报告了
-一次检索失败。** 放宽这一层等于让引擎去查它没被授权的表，那测出来的就不再是一个
-governed engine。
+In 19 of the 21, the gold table was not in `licensed` at all. **This is not governance
+misfiring; it is governance correctly reporting a retrieval failure.** Relaxing this layer would
+let the engine query tables it was not licensed for, and what you would then be measuring is no
+longer a governed engine.
 
-> `works_cycles` 的报错里有大小写外观（`Product` → `product`），查过 `normalise_table_key`：
-> 两侧都规范化，对称，**没有 bug**。那只是在显示规范化后的形式。
+> The `works_cycles` message shows a case difference (`Product` → `product`). `normalise_table_key`
+> normalises both sides symmetrically, so there is **no bug** — the message is displaying the
+> normalised form.
 
-剩下 2 条（train_667、train_5044）重放**通过**——记录下来的 `generated_sql` 与被拒绝的
-那一次尝试不是同一条。未解释，值得单独查。
-
----
-
-## 三、澄清：全部是零授权〔run1 / 8 例；v3-fold 6 例；v4 4 例，仍全部零授权〕
-
-八次澄清的 `licensed` 全部为空，`schemas` 全部为空。agent 的上下文里什么都没有，
-它说"我需要更多信息"是唯一正确的反应。
-
-这不是"agent 太谨慎"，而且不能用"在 eval 下偏向尽力回答"来处理——那是逼一个看不见任何
-schema 的 agent 凭空编 SQL，把一个诚实的信号换成一个必然错误的捏造答案。
-
-真正该修的是**为什么这 8 轮路由返回了零个 schema**（`licensed` 中位数 26，全库只有这
-8 行低于 5）。
+The remaining two (train_667, train_5044) **pass** on replay: the recorded `generated_sql` is not
+the same statement as the attempt that was refused. Unexplained, and worth its own look.
 
 ---
 
-## 四、答了但错了〔run1 / 292 例；v3-fold 262 例；v4 257 例〕
+## 3. Clarifications: every one licensed nothing
 
-这一层的 EX 是 0.715。
+*(run1, 8 cases; v3-fold 6; v4 4. Still all zero-licensed.)*
 
-### 4.1 特征 lift（对照组是 732 个正确答案）
+All eight clarification turns had an empty `licensed` and an empty `schemas`. The agent's context
+held nothing, so "I need more information" is the only correct response.
 
-| 特征 | 错误率 | 正确率 | **lift** |
+This is not over-caution, and the fix is not to bias the agent toward answering under evaluation.
+That would force an agent that can see no schema at all to invent SQL, trading an honest signal
+for a guaranteed wrong answer.
+
+What actually needs fixing is **why routing returned zero schemas on those 8 turns**. `licensed`
+has a median of 26, and these 8 rows are the only ones below 5.
+
+---
+
+## 4. Answered, and wrong
+
+*(run1, 292 cases; v3-fold 262; v4 257.)*
+
+EX within this layer is 0.715.
+
+### 4.1 Feature lift, against a control group of 732 correct answers
+
+| Feature | Rate when wrong | Rate when right | **Lift** |
 |---|---:|---:|---:|
-| 投影列数不符（多 107 / 少 12） | 0.366 / 0.041 | **0.000** | **∞** |
-| **缺 DISTINCT** | 0.068 | 0.007 | **10.0x** |
-| GROUP BY 不符 | 0.103 | 0.014 | 7.5x |
-| 多 join | 0.106 | 0.019 | 5.6x |
-| ORDER BY 不符 | 0.082 | 0.029 | 2.9x |
-| 子查询结构不符 | 0.110 | 0.041 | 2.7x |
-| 少 join | 0.099 | 0.041 | 2.4x |
-| 聚合不符 | 0.182 | 0.082 | 2.2x |
-| **多余 DISTINCT** | 0.096 | **0.072** | **1.32x** |
-| LIMIT 不符 | 0.781 | 0.898 | 0.87x |
-| 形状完全一致 | 0.271 | 0.795 | 0.34x |
+| projection width differs (107 wider / 12 narrower) | 0.366 / 0.041 | **0.000** | **∞** |
+| **missing DISTINCT** | 0.068 | 0.007 | **10.0×** |
+| GROUP BY differs | 0.103 | 0.014 | 7.5× |
+| extra join | 0.106 | 0.019 | 5.6× |
+| ORDER BY differs | 0.082 | 0.029 | 2.9× |
+| subquery structure differs | 0.110 | 0.041 | 2.7× |
+| missing join | 0.099 | 0.041 | 2.4× |
+| aggregate differs | 0.182 | 0.082 | 2.2× |
+| **extra DISTINCT** | 0.096 | **0.072** | **1.32×** |
+| LIMIT differs | 0.781 | 0.898 | 0.87× |
+| shape identical | 0.271 | 0.795 | 0.34× |
 
-两个必须记住的读数：
+Two readings to hold on to:
 
-- **多余 DISTINCT 基本无害。** lift 1.32，**53 个正确答案也多加了 DISTINCT**。一条方向性的
-  "少用 DISTINCT"规则会打坏它们。真正的信号是**缺** DISTINCT。
-- **投影列数不符的 lift 是无穷**——零个正确答案有列数差异。grader 对结果集做哈希，
-  所以这是失败的充分条件。但作为诊断它是同义反复；真正的问题是删掉多余的列之后剩下的
-  查询对不对。
-- 安全 `LIMIT 200001` 是惰性的（lift 0.87，695 个正确答案也带着它）。
+- **An extra DISTINCT is close to harmless.** Lift 1.32, and **53 correct answers carry one too**.
+  A directional "use DISTINCT less" rule would break them. The real signal is a **missing**
+  DISTINCT.
+- **Projection width has infinite lift** — no correct answer differs in width. The grader hashes
+  the result set, so a width mismatch is a sufficient condition for failure. As a diagnosis it is
+  a tautology; the real question is whether the query is right once the extra columns come off.
+- The safety `LIMIT 200001` is inert: lift 0.87, and 695 correct answers carry it.
 
-### 4.2 因果修复：修完再执行一遍
+### 4.2 Causal repair: fix it, then run it again
 
-修复格 = 丢掉安全 LIMIT × DISTINCT 开/关 × 保留任意 k 个投影列（k = gold 的列数）。
-由 oracle 挑选最优修复，因此是**上界**。
+The repair grid is: drop the safety LIMIT × DISTINCT on or off × keep any k projection columns,
+where k is the gold's width. An oracle picks the best repair, so this is an **upper bound**.
 
 ```
-population (answered, wrong, full-coverage) : 292
+population (answered, wrong, full coverage) : 292
   RECOVERED:projection      52
-  RECOVERED:distinct        27      （15 例"加上"，12 例"去掉"）
+  RECOVERED:distinct        27      (15 by adding, 12 by removing)
   semantic                 213
 
-纯输出形状可救回 : 79/292 = 27.1%
-不可约的语义错误 : 213/292 = 72.9%
+recoverable by output shape alone : 79/292 = 27.1%
+irreducible semantic errors       : 213/292 = 72.9%
 ```
 
-**输出形状完全正确时：EX 0.579 → 0.637（+5.85 pp）。**
-单看投影：107 个过度投影中 **51 个（47.7%）删掉多余列就正确**。
+**With output shape perfect, EX goes 0.579 → 0.637 (+5.85pp).** Projection alone: of the 107
+over-projecting statements, **51 (47.7%) are correct once the extra columns come off**.
 
-典型形态是"问一个东西，返回那个东西 + 用来排序/筛选的指标"：
+The typical shape is "ask for one thing, return that thing plus the measure used to rank or filter
+it":
 
 ```sql
--- train_5274 「2016 年销量最高的根汁汽水属于哪家酒厂」
+-- train_5274  "Which brewery made the best-selling root beer in 2016?"
 -- GOLD: SELECT brauerei_name … GROUP BY … ORDER BY COUNT(...) DESC LIMIT 1
--- PRED: SELECT brauerei_name, COUNT(wurzelbier_id) AS cnt …     ← 多一列，哈希不匹配
+-- PRED: SELECT brauerei_name, COUNT(wurzelbier_id) AS cnt …     ← one column too many, hash misses
 ```
 
 ---
 
-## 五、capped〔v3-fold / 57 例〕：主因已不是 join 装配
+## 5. Capped turns: join assembly is no longer the main cause
+
+*(v3-fold, 57 cases.)*
 
 ```
-表覆盖 full = 21,  partial = 19,  none = 9,  tableless = 8
-gold 需要 join : 40 / 57
-预测含有 join  : 7 / 57
-【表覆盖完整 + gold 需要 join + 预测没有 join】= 10
+table coverage full = 21,  partial = 19,  none = 9,  tableless = 8
+gold needs a join   : 40 / 57
+prediction has one  :  7 / 57
+[full coverage + gold needs a join + prediction has none] = 10
 ```
 
-**这个桶的性质变了。** `r_ambiguous_fold` 收窄前，capped 有 150 例，其中 112 例是
-Layer 1 拒掉的（见 §九）；收窄后剩 57 例。剩下的这 57 例里只有 21 例表覆盖完整，
-28 例覆盖不全或为零 —— 也就是说 **capped 现在主要是检索问题，不是"表都给了却不会连"**。
-真正落在「表齐了、需要 join、却没写 join」这一格的只有 10 例。
+**This bucket changed character.** Before `r_ambiguous_fold` was narrowed there were 150 capped
+turns, 112 of them refused at Layer 1 (see §9). Afterwards there are 57. Of those 57, only 21 have
+full table coverage and 28 have partial or no coverage — so **capped is now mostly a retrieval
+problem, not "we gave it the tables and it could not join them"**. Only 10 turns land in the
+tables-were-there-and-it-needed-a-join cell.
 
-下面关于 join 装配的分析对那 10 例仍然成立，但它不再是这个桶的主要解释。
+The join-assembly analysis below still holds for those 10, but it is no longer what explains the
+bucket.
 
-**不是超时。** `authors` 有 18/21 是 capped，实测其最终语句都是秒级：
+**It is not timeouts.** `authors` has 18 capped turns out of 21, and their final statements all run
+in seconds:
 
 ```
 train_3518: 1.0s  rows=5      train_3515: 0.2s  rows=1      train_3510: 0.0s  rows=3
 ```
 
-而 train_3518 的最终语句与 gold 语义等价。把 133 条 capped 的最终语句全部重新执行：
+train_3518's final statement is semantically equivalent to gold. Re-executing the final statement
+of all 133 capped turns:
 
 ```
 ALREADY_CORRECT   23
@@ -233,46 +262,50 @@ wrong            103
 exec_error         7
 ```
 
-> **23 个 capped 轮次的最后一条语句就是正确答案，被记 0 分。**
+> **23 capped turns ended on a statement that was the correct answer, and scored zero.**
 
-机制在 `eval/harness.py`：预测只在 `outcome == "answered"` 时才被执行；`grade_turn` 对
-`capped` 直接返回 `correct=False`，不看 SQL。
+The mechanism is in `eval/harness.py`: a prediction is executed only when `outcome == "answered"`,
+and `grade_turn` returns `correct=False` for `capped` without looking at the SQL.
 
-**这是一个成立的记分政策**——耗尽尝试、没有对答案背书的引擎，不该拿到它自己都不敢交付
-的分。但它有代价，而代价此前不可见。现在 `computed_correct` 记录它、`--replay-routing`
-之外的报告打印它，记分规则不变。
+**That is a defensible scoring policy.** An engine that ran out of attempts and never endorsed an
+answer should not collect the score for a statement it would not deliver. But the policy has a
+cost, and that cost used to be invisible. `computed_correct` records it now and the report prints
+it. The scoring rule is unchanged.
 
-配套机制（`serve/tools.py`）：每次 `run_query` 都扣配额，**包括被治理拒绝的那一次**；
-只有基础设施异常才 refund；agent 从未被告知还剩几次。所以它在盲目预算：
+The mechanism that produces it is in `serve/tools.py`: every `run_query` spends one attempt,
+**including one the governance layers refuse**, and only an infrastructure exception refunds. The
+agent is never told how many attempts remain, so it budgets blind:
 
 ```
-train_5116 (address)  gold 需要 congress ⋈ zip_congress
+train_5116 (address)  gold needs congress ⋈ zip_congress
            PRED: SELECT DISTINCT district_zip FROM address.zip_congress LIMIT 5
-train_3510 (authors)  gold 需要 Journal ⋈ Paper
+train_3510 (authors)  gold needs Journal ⋈ Paper
            PRED: SELECT Keyword FROM authors.Paper WHERE Year=2008 LIMIT 3
 ```
 
 ---
 
-## 六、不可约语义错误〔run1 / 213 例〕
+## 6. Irreducible semantic errors
 
-把 pred 和 gold 都执行，按结果集关系分类：
+*(run1, 213 cases.)*
 
-| 差异形态 | n | 占比 | 含义 |
+Execute both the prediction and the gold, then classify by how the result sets relate:
+
+| Difference | n | Share | Meaning |
 |---|---:|---:|---|
-| **值完全不相交** | **183** | **85.9%** | 算的根本不是同一个量 |
-| 少行（pred ⊂ gold） | 9 | 4.2% | 多了过滤 / join 丢行 |
-| 多行（pred ⊃ gold） | 7 | 3.3% | 少了过滤 / 缺 DISTINCT |
-| 部分重叠 | 6 | 2.8% | join 粒度错 |
-| 行数相同值不同 | 4 | 1.9% | 去重语义 |
-| pred 为空 | 3 | 1.4% | 过滤过紧 / 字面量错 |
+| **values disjoint** | **183** | **85.9%** | it computed a different quantity entirely |
+| fewer rows (pred ⊂ gold) | 9 | 4.2% | over-filtered, or a join dropped rows |
+| more rows (pred ⊃ gold) | 7 | 3.3% | under-filtered, or a missing DISTINCT |
+| partial overlap | 6 | 2.8% | wrong join grain |
+| same row count, different values | 4 | 1.9% | deduplication semantics |
+| prediction empty | 3 | 1.4% | filter too tight, or a wrong literal |
 
-**183 个"值完全不相交"里 151 个是单行结果**——主导性的语义失败是「算出了一个标量，
-而这个标量是错的」。不是列表问题，是计算问题。
+**151 of the 183 disjoint cases are single-row results.** The dominant semantic failure is
+computing one scalar and getting it wrong. It is not a list problem; it is an arithmetic problem.
 
-### 病例
+### Case studies
 
-**字面量落地失败 — train_5821 (airline)**
+**A literal that never landed — train_5821 (airline)**
 
 ```sql
 -- GOLD
@@ -282,46 +315,53 @@ SELECT COUNT(*) FROM airline.Airlines T2 JOIN airline.Airports T1 ON T1.Code=T2.
 WHERE T2.FL_DATE='2018/8/1' AND T1.Description LIKE 'New Yo%'
 ```
 
-agent 不知道 `ORIGIN` 直接存机场代码，跑去 join 机场表按描述模糊匹配。这是语料的
-列值/枚举描述该承担的活。
+The agent did not know that `ORIGIN` stores the airport code directly, so it joined the airports
+table and matched the description with a wildcard. Column values and enumerations are exactly what
+the corpus is supposed to carry.
 
-**跨 schema 串台 — 全库 22 例**，配对全是语义相邻的诱饵对，见
-[open-work §1.4](open-work.md)。这些轮次 gold schema **是被路由到了的**——是授权集内部
-的消歧问题，不是召回问题。
+**Cross-schema crossings — 22 across the lake.** Every pair is a semantically adjacent decoy set;
+see [open work §1.4](open-work.md). The gold schema **was** routed on these turns, so this is
+disambiguation inside the licensed set, not a recall failure.
 
-**gold 本身可议 — train_7810 (hockey)，340 vs 339 行。** gold 带一个冗余的
-`AND NOT spieler_id IS NULL`。属于 [Pervasive Annotation Errors Break Text-to-SQL
-Benchmarks](https://arxiv.org/abs/2601.08778)（CIDR 2026）在 BIRD 上测到的 52.8% 标注
-错误率那一类。
+**A questionable gold — train_7810 (hockey), 340 rows against 339.** The gold carries a redundant
+`AND NOT spieler_id IS NULL`. This is the category [Pervasive Annotation Errors Break Text-to-SQL
+Benchmarks](https://arxiv.org/abs/2601.08778) (CIDR 2026) measured at a 52.8% annotation error rate
+on BIRD.
 
-**方言级去重 — train_8833 (food_inspection)。** gold 用 Postgres 专有的
-`DISTINCT ON (betrieb_id)`，pred 用普通 join，行数相同值不同。
+**Dialect-level deduplication — train_8833 (food_inspection).** The gold uses Postgres-only
+`DISTINCT ON (betrieb_id)`; the prediction uses an ordinary join. Same row count, different values.
 
 ---
 
-## 七、冻结字面量 gold（127）〔数据集属性，各臂一致〕
+## 7. Frozen-literal golds (127)
 
-127 道题的 gold 不是查询，是硬编码的答案字面量：
+*(A dataset property. Identical across arms.)*
+
+For 127 questions the gold is not a query. It is a hard-coded answer literal:
 
 ```sql
 SELECT "v"."c0" FROM (VALUES ('captain eli''s')) AS "v"("c0")
 ```
 
-引擎写真实查询，只能靠复现冻结的形状才能对上——匹配了 42 个，基本靠运气。
-这是数据集的属性，不是引擎的。
+The engine writes a real query, so it can only match by reproducing the frozen shape. It matches 42
+of them, essentially by luck. This is a property of the dataset, not of the engine.
 
-现在由 `attach_quality_flags` 的第四个 flag `degenerate` 自动标注，判据与
-`table_coverage` 的 `gold_reads_no_table` 是同一条规则（`gold_tables()` 返回空集），
-两处读同一个判断而不是各写一份。
+`attach_quality_flags` now tags these automatically with its fourth flag, `degenerate`. The test is
+the same rule `table_coverage` uses for `gold_reads_no_table` — `gold_tables()` returns an empty
+set — so the two read one judgement rather than each carrying its own.
 
-**口径纪律**：对外报**未剔除的 EX**（与公开 BIRD 同口径），当前臂为 **0.676**。剔除退化题
-后的数字只能作为补充，并注明是单边剔除——把差距说小是口径不一致，不是结果。
+**Reporting discipline**: publish the **unfiltered EX**, which is what public BIRD reports, and
+which is **0.676** on this arm. A figure with the degenerate questions removed is supplementary
+only, and must be labelled as a one-sided exclusion. Shrinking the gap by changing the denominator
+is a change of definition, not a result.
 
 ---
 
-## 八、弃权质量：这个引擎与众不同的地方，以及对照臂给它划的上界〔含 v4〕
+## 8. Abstention quality, and the ceiling a contrast arm puts on it
 
-| 臂 | committed | 弃权率 | 弃权若强行提交 | 弃权精确率 |
+*(Includes v4.)*
+
+| Arm | Committed | Abstention rate | Abstained, if forced | Abstention precision |
 |---|---:|---:|---:|---:|
 | run1 | 0.658 (n=1189) | 12.0% (162) | 0.204 † | 0.796 † |
 | run2 | 0.655 (n=1175) | 13.0% (176) | 0.168 † | 0.832 † |
@@ -330,175 +370,217 @@ SELECT "v"."c0" FROM (VALUES ('captain eli''s')) AS "v"("c0")
 | **v4** | **0.714** (n=1278) | **5.4%** (73) | **0.226** (14/62) | **0.774** |
 | v5 | 0.670 (n=1281) | 5.2% (70) | 0.153 (9/59) | 0.847 |
 
-† run1 与 run2 的行上没有 `computed_correct` 字段，这两列出自另一次 oracle 定价，无法从
-产物本身复算；v3-pinned 及其后的四臂可以。
+† run1 and run2 have no `computed_correct` field on their rows. Those two columns come from a
+separate oracle pricing pass and cannot be recomputed from the artifact. v3-pinned and the three
+arms after it can.
 
-弃权率从 13.0% 一路降到 5.4% 而精确率仍在 0.77–0.85 之间，说明减少的是 bug 造成的弃权，
-不是判断力。v4 的 refused/clarification **全部**落在检索失败的题上。
+The abstention rate fell from 13.0% to 5.4% while precision stayed between 0.77 and 0.85. What
+went away were abstentions caused by a bug, not judgement. On v4, **every** refusal and
+clarification lands on a question where retrieval failed.
 
-**"弃权若强行提交"这一列只覆盖能定价的那部分。** v4 的 73 次弃权里只有 62 次能定价——
-另外 11 题数据集没发 gold fingerprint，引擎本会答对还是答错**不可知，不是零**。
-精确率 0.774 是这 62 题上的数字，引用时必须带着这个分母。
+**The "if forced" column covers only the priceable subset.** Of v4's 73 abstentions only 62 can be
+priced; for the other 11 the dataset ships no gold fingerprint, so whether the engine would have
+been right is **unknown, not zero**. The precision of 0.774 is a figure over those 62, and it has
+to be quoted with that denominator.
 
-交付集准确率是可定价弃权集的 **3.16 倍**（0.714 / 0.226）。若弃权是随机的，弃权集
-应该也在 0.676 附近。
+Delivered accuracy is **3.16×** the accuracy of the priceable withheld set (0.714 / 0.226). If
+abstention were random, the withheld set should sit near 0.676.
 
-这个行为不是叙事，是机制——20 个拒绝里 19 个终止在 `r_table_not_licensed`（check Layer 6
-在报告检索失败），4 个澄清全部是授权集为空。**治理层在充当"我不知道"的检测器。**
+This behaviour is mechanical rather than narrative: 19 of the 20 refusals terminate on
+`r_table_not_licensed` — Layer 6 of `check()` reporting a retrieval failure — and all 4
+clarifications had an empty licensed set. **The governance layers are acting as an "I don't know"
+detector.**
 
-### 8.1 对照臂给这个论点划的上界〔v4 vs WrenAI〕
+### 8.1 What the contrast arm does to that claim
 
-上面这套说法需要一根"关掉治理层"的对照臂才算结论，而这根臂现成就有：WrenAI 在同一批
-1351 题、同一个库上 `refusal_rate: 0.0`，**从不弃权**。
+The argument above needs a governance-off arm to be a conclusion, and one is already on disk.
+WrenAI runs the same 1,351 questions on the same database with `refusal_rate: 0.0`. **It never
+abstains.**
 
 ```
-v4 弃权的 73 题：WrenAI 全部作答，答对 41 题 = 56.2%
-v4 提交的 1278 题：WrenAI 答对 875 题 = 68.5%
-比值 1.22x
+the 73 questions v4 declines : WrenAI answers all of them, 41 correct = 56.2%
+the 1278 v4 commits to       : WrenAI gets 875 correct       = 68.5%
+ratio 1.22×
 ```
 
-**如果弃权跟踪的是题目难度，无治理引擎应该在被弃权的那一批上崩掉；实际只掉了 12 个点。**
-所以这些题绝大多数是**可答的**。弃权跟踪的不是题难，是**这一轮里本引擎自己的上下文够不够**
-—— 而那几乎全是检索：19/20 拒绝终止在 `r_table_not_licensed`，4/4 澄清零授权。
+**If abstention tracked question difficulty, an ungoverned engine should collapse on the declined
+set. It loses twelve points.** So those questions are mostly answerable. What abstention tracks is
+not difficulty but **whether this engine had enough context on this turn** — and that is almost
+entirely retrieval: 19 of 20 refusals end on `r_table_not_licensed`, and 4 of 4 clarifications
+licensed nothing.
 
-这仍然是一条真实且有用的性质：检索漏了一张表，在这里表现为"我答不了"，而不是表现为一句
-对着错表写出来的自信答案。但它不是更强的那句话（"引擎知道哪些题难"），而写作时很容易滑到
-更强的那句去。诚实的说法是窄的：**引擎在自己上下文不足时弃权，并且在可定价的那部分上有
-77.4% 的概率弃对了。**
+That is still a real and useful property. A missed table surfaces here as "I cannot answer" rather
+than as a confident answer written against the wrong table. But it is not the stronger claim —
+that the engine knows which questions are hard — and prose slides toward the stronger claim
+easily. The honest version is narrow: **the engine abstains when its own context is insufficient,
+and on the priceable subset it is right to abstain 77.4% of the time.**
 
-WrenAI 与本引擎在每一个维度上都不同，所以它能给这个论点划上界，却不能做归因。真正能归因的
-对照臂是把 Layer 6 从"授权的 8 张表"放宽到"整个被路由的 schema"，模型与语料都不动，只动
-allowlist。见 [open-work §4.1 / §4.2](open-work.md)。
+WrenAI differs from this engine on every dimension at once, so it can bound the claim but cannot
+attribute it. The arm that would attribute it relaxes Layer 6 from "the 8 licensed tables" to "the
+whole routed schema", holding the model and the corpus fixed and moving only the allowlist. See
+[open work §4.1 / §4.2](open-work.md).
 
 ---
 
-## 九、`r_ambiguous_fold`：一个 8pp 的缺陷，靠一个字段才看见〔run1→v3-fold〕
+## 9. `r_ambiguous_fold`: an 8pp defect that one field made visible
 
-`attempts[].reason_code` 这个字段 2026-08-09 才进产物。它一进去，最大的一项立刻显形：
+*(run1 → v3-fold.)*
 
-```
-v3-pinned:  PARSE/r_ambiguous_fold   568 次尝试 / 119 轮（8.8%）
-              其中 112 轮以 capped 收场，那批的 EX = 0.025（未受影响 0.668）
-              吃掉全部输入 token 的 24%
-```
-
-**机制**：`spellings_for` 把一轮全部被授权表（约 26 张、跨约 8 个 schema）的名字压成
-**一个平面命名空间**，任意两个只差大小写的名字（`Name` / `name`）就让**任何**对它们的
-引用被拒 —— 包括写全了限定的 `T1."Name"`。规则的意图（大小写折叠可能落到诱饵上）是对的，
-作用域错了一级。
-
-**修法**：限定引用按自己那张表解析；别名表只登记在别名下（Postgres 用别名遮住表名）；
-一个句柄在全树里指向两张表就丢弃、回落到原行为。
-
-> **这个解析器本身有两个已确认的缺陷，尚未修复**（见 [open work](open-work.md) §3.2a）：
-> 它看不见派生源，因此一个既是子查询别名、又是别处基表别名的句柄会被判为"全树无歧义"
-> 并按错的那张表改写；另外自撞表不会毒化自己的裸名。两者在本臂上都是 0 命中
-> （1 342 条语句、656 张表全扫过），所以下面这组数字不受影响 —— 但那是这个数据集的性质，
-> 不是代码的性质。
-
-**结果**（v3-pinned → v3-fold，同 prompt）：
+The `attempts[].reason_code` field only reached the artifact on 2026-08-09. The largest single item
+showed up immediately:
 
 ```
-r_ambiguous_fold   568 次 / 119 轮  →  109 次 / 35 轮
-attempt_cap        150  →  57            capped 率 11.1% → 4.2%
-EX                 0.611 → 0.664         net +71（130 对 59，189 discordant）  精确 McNemar p=2.6e-07
-输入 token         87.2M → 74.7M         −14.4%
+v3-pinned:  PARSE/r_ambiguous_fold   568 attempts / 119 turns (8.8%)
+              112 of those turns ended capped, and that group scored EX 0.025
+              (the unaffected turns scored 0.668)
+              they consumed 24% of all input tokens
 ```
 
-**这条的教训不是"有个 bug"，是"它躺了不知道多久，因为记录它的字段停在 `stamp`"。**
-加那个字段的回报比同期任何 prompt 干预都高。
+**Mechanism.** `spellings_for` flattened the names of a turn's licensed tables — around 26 of them
+across about 8 schemas — into **one namespace**. Any two names differing only in case (`Name` and
+`name`) then caused **every** reference to either to be refused, including a fully qualified
+`T1."Name"`. The rule's intent, that a case fold might land on a decoy, was right. Its scope was
+one level too wide.
+
+**The fix.** Resolve a qualified reference against its own table; register an aliased table only
+under its alias, because Postgres hides the table name behind one; and if a handle points at two
+tables anywhere in the tree, discard it and fall back to the old behaviour.
+
+> **The resolver has two confirmed defects of its own, still unfixed** (see
+> [open work](open-work.md) §3.2a). It cannot see derived sources, so a handle that is both a
+> subquery alias and a base-table alias elsewhere is judged tree-unambiguous and rewritten against
+> the wrong table. And a self-colliding table fails to poison its own bare name. Both have zero
+> hits on this arm — all 1,342 statements and all 656 tables were scanned — so the numbers below
+> are unaffected. That is a property of this dataset, not of the code.
+
+**Result** (v3-pinned → v3-fold, same prompt):
+
+```
+r_ambiguous_fold   568 attempts / 119 turns  →  109 / 35
+attempt_cap        150  →  57            capped rate 11.1% → 4.2%
+EX                 0.611 → 0.664         net +71 (130 against 59, 189 discordant)
+                                         exact McNemar p = 2.6e-07
+input tokens       87.2M → 74.7M         −14.4%
+```
+
+**The lesson is not "there was a bug."** It is that the bug sat there for an unknown length of time
+because the field that would have shown it stopped at `stamp`. Adding that field paid better than
+any prompt intervention tried in the same period.
 
 ---
 
-## 十、上下文预算〔v3-fold 首测〕
+## 10. The context budget
 
-`context_budget_chars = 80000`，**每次模型调用重发一遍**。
+*(First measured on v3-fold.)*
 
-`context_evicted` 落地后的真实测量：
+`context_budget_chars = 80000`, **re-sent on every model call**.
 
-```
-触发驱逐  19/1351 = 1.4%      而且只有 bodies_dropped —— 一张整表都没丢过
-```
-
-据此，「预算已经在卡，不要削减」这条建议**作废**：它来自离线重建，不是来自这次测量。
-
-**预算不是约束。** 要问的是"这些内容值不值得"，不是"装不装得下"。
-
-配套的精确量（`model_calls` 首次落地）：
+What `context_evicted` shows now that it survives the turn:
 
 ```
-agent_core 调用 3,308 次 / 1,345 轮 = 每轮 2.46 次，每次平均输入 22,285 token
-一轮内的第二次及以后 = 1,963 次 = 59.3% 的调用
-agent_core 占全臂输入 token 的 98.7%（73.7M / 74.7M）
+eviction fired  19/1351 = 1.4%      and only bodies_dropped — never a whole table
 ```
 
-调用次数与 token 总量都是从 `usage` 直接读出来的。但 `usage` 每轮只写**一条** `agent_core`
-聚合记录，所以"重复调用各自吃了多少 token"在产物里不可分——任何按重复调用归因的 token
-份额都是按均值摊的推算，不是测量。
+On that evidence, the advice that the budget already binds and must not be cut is **withdrawn**. It
+came from an offline reconstruction, not from this measurement.
 
-代理是 OpenAI 兼容的，长前缀自动缓存且不报缓存计数，所以上面这些量只能靠 `model_calls`
-算，不能靠 provider 的缓存计数。
+**The budget is not the constraint.** The question is whether the content earns its place, not
+whether it fits.
+
+The companion figures, from the first arm to carry `model_calls`:
+
+```
+agent_core: 3,308 calls over 1,345 turns = 2.46 per turn, 22,285 input tokens per call
+second and later calls within a turn = 1,963 = 59.3% of all calls
+agent_core is 98.7% of the arm's input tokens (73.7M of 74.7M)
+```
+
+Call counts and token totals are read straight out of `usage`. But `usage` writes **one** aggregated
+`agent_core` record per turn, so how many tokens each repeated call consumed is not recoverable
+from the artifact. Any token share attributed to repeat calls specifically is an average, not a
+measurement.
+
+The proxy is OpenAI-compatible and caches long prefixes automatically without reporting cache
+counts, so these quantities have to come from `model_calls` rather than from the provider's cache
+numbers.
 
 ---
 
-## 十一、投影规则：这个 EX 里有多少是在对形状〔v4 → v5〕
+## 11. The projection rule: how much of this EX is shape matching
 
-前面每一节问的都是"引擎为什么答错"。这一节问的是另一件事：**答对里有多少不是因为找对了
-数据，而是因为把结果的列摆成了参考答案的样子。**
+*(v4 → v5.)*
 
-**机制**。ANALYST v4 里有一段是关于投影的——"结果表就是答案，它的列也是对错的一部分；
-只选问题要的那些列"。这一段在整套 prompt 里是个异类：v4 的另外两条规则（标识符限定、
-`SELECT *` 被拒）陈述的都是 `check()` 真的会执行的约束，而投影规则陈述的东西**这个引擎
-一条都不管**——
+Every section above asks why the engine got an answer wrong. This one asks something else: **how
+much of the right answers came not from finding the right data, but from arranging the result
+columns the way the reference answer arranges them.**
 
-- `govern/layers.py` 的 `RULES` 里没有任何一条约束 select list 的宽度；
-- `eval/grade.py` 的 `result_fingerprint` 只对行元组做哈希，docstring 里明写
-  `columns` **不参与哈希**。
+**Mechanism.** ANALYST v4 contains a paragraph about projection — the result table is the answer,
+its columns are part of being right, select only the columns the question asks for. That paragraph
+is an outlier in the prompt. v4's other two rules — qualify identifiers, `SELECT *` is refused —
+state constraints `check()` actually enforces. The projection rule states something **this engine
+does not check at all**:
 
-也就是说，多一列在引擎侧不改变任何东西，只改变 grader 的摘要。一条只瞄准比较器这一个
-维度、别处一概不影响的规则，测的就是比较器。
+- nothing in `RULES` in `govern/layers.py` constrains select-list width;
+- `result_fingerprint` in `eval/grade.py` hashes row tuples only, and its docstring says
+  explicitly that `columns` are **not** hashed.
 
-**方法**。v5 = v4 逐字节相同，**只删掉那一段**。同一引擎、同一语料 `30872d3`、同一份
-`--replay-routing` 钉在 `proxy_v3_fold_opus_high_corpus30872d3.jsonl` 上（1345/1351 命中，
-残余 Jaccard 0.702 对 0.70）。这是这批产物里最干净的一对：只有一个变量。配对 McNemar，
-不是拿两个 EX 相减。
+An extra column therefore changes nothing inside the engine. It changes the grader's digest. A rule
+that aims at exactly one dimension of the comparator and affects nothing else is measuring the
+comparator.
 
-**结果**：
+**Method.** v5 is v4 byte-for-byte with **only that paragraph deleted**. Same engine, same corpus
+`30872d3`, same `--replay-routing` pin on `proxy_v3_fold_opus_high_corpus30872d3.jsonl` (1,345 of
+1,351 pinned, residual Jaccard 0.702 against 0.70). It is the cleanest pair in the set: one
+variable. Paired McNemar, not two EX numbers subtracted.
+
+**Result**:
 
 ```
-EX               0.676 → 0.635      net −55  −4.07pp  p = 4.9e-06 （n=1351，143 discordant）
-投影列数多于 gold     43 → 126
-投影列数少于 gold     40 → 34
-弃权精确率        0.774 → 0.847
-弃权率             5.4% → 5.2%
+EX                        0.676 → 0.635    net −55  −4.07pp  p = 4.9e-06 (n=1351, 143 discordant)
+wider than gold            43 → 125
+narrower than gold         40 → 34
+abstention precision      0.774 → 0.847
+abstention rate            5.4% → 5.2%
 ```
 
-**这意味着什么。** 这个引擎的 EX 里大约有 **4 个点**来自把输出列集对齐到参考答案，而不是
-来自把数据取对。这不是本引擎独有的——任何一个在 BIRD 上报 EX 的系统都含有这一份，只是几乎
-没人去测，因为要测就得多跑一整条臂。
+Width is counted by parsing both statements with sqlglot and comparing the number of select
+expressions, skipping any pair where either side fails to parse or projects a star: 1,343
+comparable pairs on v4 and 1,341 on v5.
 
-**两个方向的过度解读都要避免。**
+**What it means.** About **4 points** of this engine's EX come from aligning the output column set
+to the reference answer rather than from retrieving the right data. This is not specific to this
+engine — every system reporting EX on this benchmark carries some of it. Almost nobody measures it,
+because measuring it costs a whole second arm.
 
-- 不能因此就说"0.635 才是诚实的数字"。WrenAI 的 0.678 里同样含有形状分量，而它的那一份
-  从外部量不出来；只在自己这一侧减，比较只会变得更不准，不是更准。
-- 也不能说 v5"推理变差了"。v5 的**弃权精确率反而升了**（0.774 → 0.847），弃权率、拒绝
-  构成都没塌。退化集中在形状：over-projection 43 → 126，增量几乎全在这一格。变差的不是
-  判断，是对形状的服从。
+**Two over-readings to avoid.**
 
-正确的读法是：这是一次**对指标自身混杂因子的测量**。它同时也解释了 §四 4.1 里"投影列数
-不符"的 lift 为什么是无穷——那从来不是一个诊断，而是 grader 定义出来的一条同义反复。
+- It does not follow that 0.635 is the honest number. WrenAI's 0.678 contains a shape component
+  too, and that one cannot be measured from outside. Subtracting on this side only makes the
+  comparison less accurate, not more.
+- It does not follow that v5 reasons worse. v5's **abstention precision went up** (0.774 → 0.847),
+  and neither the abstention rate nor the refusal mix collapsed. The regression is concentrated in
+  shape: over-projection 43 → 125, and almost the whole delta sits in that cell. What got worse is
+  compliance with a shape, not judgement.
 
-**它对 prompt 的裁决。** v4 仍然是默认：在一个用 EX 定档的项目里，明知会掉 4 个点还把这段
-删掉，是拿别人的记分牌换自己的洁癖。但这一段应当**记在"记分牌适配"这一栏**，不能记成让
-引擎变好的工程。v5 的 prompt 保留在 registry 里，就是为了让这笔账随时能重算。
+The right reading is that this is **a measurement of a confounder in the metric**. It also explains
+why the projection-width lift in §4.1 is infinite: that was never a diagnosis, only a tautology the
+grader's definition creates.
+
+**What it decides about the prompt.** v4 stays the default. In a project graded on EX, deleting a
+paragraph you know is worth 4 points is trading someone else's scoreboard for your own tidiness.
+But the paragraph belongs in the **scoreboard-fitting** column, not in the column of engineering
+that made the engine better. v5 stays in the registry so this account can be recomputed at any
+time.
 
 ---
 
-## 附录：外部参考
+## Appendix: external references
 
 - [Pervasive Annotation Errors Break Text-to-SQL Benchmarks and Leaderboards](https://arxiv.org/abs/2601.08778)
-  — BIRD 标注错误率 52.8%
-- [The Death of Schema Linking?](https://arxiv.org/html/2408.07702) — 激进裁剪丢失 22.6%
-  必需元素；本臂 0.936 的覆盖率说明当前配置不在那个陷阱里
-- [CHASE-SQL](https://arxiv.org/html/2410.01943v1) / [DPC](https://aclanthology.org/2026.acl-long.313/)
-  — 候选生成 + 选择，BIRD 73.01%。成本高且与本项目的治理论点无关
+  — a 52.8% annotation error rate on BIRD.
+- [The Death of Schema Linking?](https://arxiv.org/html/2408.07702) — aggressive pruning loses
+  22.6% of required elements. This arm's 0.936 coverage says the current configuration is not in
+  that trap.
+- [CHASE-SQL](https://arxiv.org/html/2410.01943v1) /
+  [DPC](https://aclanthology.org/2026.acl-long.313/) — candidate generation plus selection, BIRD
+  73.01%. Expensive, and orthogonal to this project's governance argument.

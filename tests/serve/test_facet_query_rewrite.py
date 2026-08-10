@@ -7,7 +7,7 @@ associated with the following sentence?"*
 The reason it matters is concrete. A user asks *"what is the average star rating for restaurants
 in this area"*; a schema summary reads *"stores basic information about restaurants"*. Neither
 BM25 nor an embedder finds much between those two, and until now every facet searched with the
-raw question — which is why the maintainer's own testing found retrieval "完全没有做对".
+raw question — which is why the maintainer's own testing found retrieval was getting nothing right.
 
 Two properties carry the weight here, and both are about honesty rather than quality: the
 ``extraction`` channel must be marked ``ran`` **only** when a rewrite actually came back, and a

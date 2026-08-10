@@ -48,7 +48,7 @@ Git history is the record of what changed.
 | Doc | What it covers |
 |---|---|
 | [Measurement](measurement.md) | how to produce a finding: the eval driver's flags, the prompt registry, the measurement row schema, and the quotability gates |
-| [Failure modes](failure-modes.md) | how the engine answers wrongly, per failure class, with the causal repair experiments — engine `4f7430a`, corpus `30872d3` |
+| [Failure modes](failure-modes.md) | how the engine answers wrongly, per failure class, with the causal repair experiments — arm `v4`, engine `3c0079a`, corpus `30872d3` |
 | [Open work](open-work.md) | the unfinished items those findings imply, re-verified against the current tree |
 
 ## External UI and data

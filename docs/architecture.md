@@ -81,7 +81,7 @@ Server entry: [`api/graph_app.py:make_graph`](../src/governed_bi/api/graph_app.p
 | `corpus` | Typed assets, load, validate |
 | `datasource` | Connectors |
 | `eval` | Measurement harness |
-| `govern` | Seven-layer check, ledger, tool bounds |
+| `govern` | The layer stack (six that run, `COST` declared and off), ledger, tool bounds |
 | `measure` | Population / stats helpers |
 | `model` | Chat and embedder adapters |
 | `register` | Knobs, prompts, turn records, citations |

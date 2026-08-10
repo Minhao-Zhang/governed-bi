@@ -1,8 +1,8 @@
 """Shortlist recall for the schema router — with the facet rewriters and without them.
 
-``governed_bi.toml`` cites recall@10 = 0.953 and recall@3 = 0.852 "measured on the curated corpus
-over all 1351 test questions (``scripts/routing_ablation.py``)", and that script does not exist in
-the tree — so the number every routing decision is argued from is not reproducible.
+This script exists because the routing recall figures the project used to argue from — recall@10 =
+0.953 and recall@3 = 0.852, attributed to a ``scripts/routing_ablation.py`` that was never in the
+tree — had no producer anyone could run. They are retired. Measure recall here or do not quote it.
 
 Two arms, because ``eval.datalake.routing_recall`` needs no *agent* model but the five facet query
 rewriters use the **utility** model, falling back to the raw question when none is configured. The

@@ -17,7 +17,7 @@ restate that page; it goes inside its §4 and asks what the statements got wrong
 
 ## 0. Method, and what makes these numbers trustworthy
 
-Three disciplines, all house style (`docs/failure-modes.md` §方法):
+Three disciplines, all house style ([failure modes](../failure-modes.md#method)):
 
 **Control group.** Every feature is computed on the 865 *correct* full-coverage answers as well,
 and reported as lift. Three features that look damning on failures turn out to be more common on

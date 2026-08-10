@@ -87,6 +87,12 @@ A full arm takes hours. Expect to interrupt it and resume it.
 |---|---|---|
 | `--prompt-variant` | registry defaults | Select a non-default variant, as `NAME=VARIANT`. Repeatable. See [Select a prompt variant](#select-a-prompt-variant) |
 
+**Observation**
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--reflect` | off | Turn on the post-hoc reflector. It writes a verdict and changes no control flow, so EX should not move — that is the arm's own sanity check. Costs one utility-model call per turn, and it is a comparability knob, so a reflected arm and an unreflected one are two arms. Measured once: [reflect arm](analysis/reflect-arm-v4.md) |
+
 **Concurrency and robustness**
 
 | Flag | Default | What it does |
@@ -195,7 +201,7 @@ so that `prompt_set_hash` covers the whole set.
 
 | Prompt | Stage | Variants | Default |
 |---|---|---|---|
-| `analyst` | `agent_core` | `v1`–`v4` | `v3` |
+| `analyst` | `agent_core` | `v1`–`v5` | `v4` |
 | `bi_scope` | `guard` | `v1` | `v1` |
 | `narrate` | `narrate` | `v1` | `v1` |
 | `reflect` | `reflect` | `v1` | `v1` |
@@ -212,7 +218,7 @@ baseline.
 ### The ANALYST variants
 
 `analyst` is the SQL-writing agent's system prompt, and the only prompt with
-more than two variants. **`v3` is the default.**
+more than two variants. **`v4` is the default.**
 
 | Variant | What distinguishes it |
 |---|---|
@@ -220,6 +226,7 @@ more than two variants. **`v3` is the default.**
 | `v2` | Drops the "prefer `run_query`" line and adds the tool contract: tool arguments are asset ids rather than SQL names, and `inspect_schema`, `sample_rows` and `read_body` are available before writing SQL |
 | `v3` | `v2` byte-for-byte, plus two paragraphs on the shape of the result: select exactly what the question asks for and nothing else, and choose `DISTINCT` on what the question means rather than as a precaution |
 | `v4` | `v3` plus the star rule: name your columns, because a bare `SELECT *` or `t.*` is refused at the `BINDING` layer, with `COUNT(*)` and `COUNT(DISTINCT col)` as the carve-out |
+| `v5` | `v4` minus the projection paragraph, and nothing else. It was written to lose, so that the paragraph's contribution could be priced; it costs 4.07pp. See [failure modes](failure-modes.md#11-the-projection-rule-how-much-of-this-ex-is-shape-matching) |
 
 ## The measurement row
 
@@ -325,9 +332,11 @@ run is one run — and prints:
 - The row count, and how many rows the grader could not judge. Those are
   excluded from every EX below rather than counted as wrong.
 - `EX`, `EX over attempted` (excluding clarifications), and `EX over clean`
-  (excluding the questions the dataset itself warns about: order-sensitive
-  golds, degenerate golds, and split leakage). The exclusions are printed with
-  their counts, never applied silently.
+  (excluding the three lists the dataset itself warns about: order-sensitive
+  golds, `exec_failed` golds, and split leakage — 29 questions on the v4 arm).
+  The exclusions are printed with their counts, never applied silently.
+  Frozen-literal golds are **not** excluded: they are flagged `degenerate` on
+  the row, and the flag is derived here rather than published by the dataset.
 - The outcome counts, and the exception classes behind any crashes.
 - `all gold tables licensed` — the EX ceiling. A question whose gold tables
   were never licensed could not have been answered by any model.

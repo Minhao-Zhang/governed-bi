@@ -58,14 +58,22 @@ before touching anything in `eval/` or `tools/run_datalake_eval.py`.
   keeps paying for; `tools/check_one_implementation.py` and `tools/check_imports.py` enforce
   parts of it.
 
-Run before you commit — CI runs all of these:
+Run before you commit. CI runs all of these plus the full suite:
 
 ```bash
 uv run --frozen ruff check .
-uv run --frozen pytest tests/<subset> -q     # the full suite OOMs on a 16 GB machine
+uv run --frozen pytest tests/<subset> -q     # the full suite needs more than 16 GB
+uv run --frozen python tools/check_file_length.py
+uv run --frozen python tools/check_one_implementation.py
+uv run --frozen python tools/check_measurement_locality.py
 uv run --frozen python tools/check_imports.py
 uv run --frozen python tools/check_citations.py
+uv run --frozen python tools/check_no_benchmark_discriminators.py
 ```
+
+`tools/check_declared_is_consumed.py` is deliberately **not** in CI. It is declared in
+`tests/conformance/test_register_closure.py`'s manual list, which also carries the condition
+for wiring it up. Adding any `tools/check_*.py` without doing one or the other fails that test.
 
 ## LangGraph and LangChain
 

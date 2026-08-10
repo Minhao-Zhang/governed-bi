@@ -10,7 +10,7 @@ Do not re-author ADR content here.
 | Notes and tri-modal retrieval | [0003](adr/0003-governed-notes-tri-modal-retrieval.md) |
 | Local-first turn / run logging | [0004](adr/0004-local-first-conversation-run-logging.md) |
 | Memory layer and faceted retrieval | [0005](adr/0005-v2-memory-layer-and-faceted-retrieval.md) |
-| Execution-time governance (seven layers) | [0006](adr/0006-execution-time-governance.md) |
+| Execution-time governance (the layer stack) | [0006](adr/0006-execution-time-governance.md) |
 | HTTP surface and UI contract | [0007](adr/0007-http-surface-and-the-ui-contract.md) |
 | Identifiers end to end | [0008](adr/0008-identifiers-end-to-end.md) |
 | Browse / filter / relationship API | [0009](adr/0009-browsing-and-filtering-api.md) |

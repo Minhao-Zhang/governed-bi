@@ -1,10 +1,11 @@
 """Retries and timeouts reach the provider, and the run records what it ran with.
 
-**The defect.** `governed_bi.toml` carried `max_retries = 8` and `request_timeout_s = 900.0`
+**The defect.** A TOML config file carried `max_retries = 8` and `request_timeout_s = 900.0`
 under a comment calling them *"the entire defence"* against provider rate limits — and v2
 deleted the reader for that file, so nothing had loaded them since the rewrite. Measured on the
 real objects: `ChatOpenAI.max_retries` was `None`, the underlying `openai` client fell back to
-its own default of **2**, and there was no timeout at all.
+its own default of **2**, and there was no timeout at all. The file itself is gone; retries and
+timeouts are knobs now.
 
 Two things are asserted here and they fail differently, which is why both exist:
 

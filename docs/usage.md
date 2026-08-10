@@ -31,13 +31,13 @@ CI runs `uv sync --frozen --extra bedrock`.
 
 ## Configuration
 
-There is **no** live `governed_bi.config.load_settings()` path. Runtime config is:
+There is no config file. Runtime configuration is, in precedence order:
 
-1. Secrets and DSN in `.env` / the process environment.
+1. Secrets and the DSN in `.env` or the process environment.
 2. `GOVERNED_BI_*` variables (see below).
 3. Defaults in [`register/knobs.py`](../src/governed_bi/register/knobs.py).
 
-A `governed_bi.toml` may exist in the repo; it is not loaded by `src/`.
+Copy [`.env.example`](../.env.example) to `.env` and fill in what you need.
 
 ### Environment
 
@@ -105,8 +105,13 @@ uv run python -m governed_bi.serve --schema <schema> -q "…" --no-model
 ## Tests
 
 ```bash
-uv run pytest
+uv run --frozen pytest -q -rs
 ```
+
+That is what CI runs. The whole suite needs more than 16 GB, so on a smaller
+machine run a subset by directory — `uv run --frozen pytest tests/serve -q`.
+`-rs` prints every skip with its reason: the Postgres and OpenAI-backed
+contracts skip without credentials, and a silent skip reads as a pass.
 
 ## Evaluation
 

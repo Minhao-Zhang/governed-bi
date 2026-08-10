@@ -50,8 +50,9 @@ dependencies = [
     "openai>=1.40",
     # --- Agent harness: LangGraph server + LangChain clients ---
     # Upper bounds pin the wire-protocol generation this repo was built against
-    # (see docs/architecture.md §9). Transitive langgraph-api / langgraph-sdk are
-    # constrained under [tool.uv] rather than declared as direct deps.
+    # (see docs/adr/0007-http-surface-and-the-ui-contract.md). Transitive
+    # langgraph-api / langgraph-sdk are constrained under [tool.uv] rather than
+    # declared as direct deps.
     "langgraph>=1.0,<2",
     "langgraph-cli[inmem]>=0.4,<0.5",
     "langchain>=1.0",
@@ -146,7 +147,8 @@ packages = ["src/governed_bi"]
 # `stream_subgraphs` carrying custom events *and* tokens (ADR 0010 M2 — without it the
 # timeline is empty and the server still answers 200), the checkpointer reaching the
 # nested `create_agent` through config (which is what makes `ask_user` resumable and
-# `/threads` persist), and `http.app` mounting the custom routes.
+# `/threads` persist), and `http.app` mounting the custom routes. See
+# docs/adr/0007-http-surface-and-the-ui-contract.md.
 [tool.uv]
 constraint-dependencies = [
     "langgraph-api>=0.12,<0.13",

@@ -169,9 +169,10 @@ one column is 0.0084 (`sql_len`), and the bottom columns have *negative* drops (
 −0.0032, including `total_out_tok`, which is collinear with `agent_out_tok` and so free to be
 permuted). The model has no concentrated dependence beyond the token counts.
 
-**No critic verdict exists to test.** `reflect_enabled` is `False` on every row of every arm, and
-no reflect/critic field is present in the schema. That is the most obvious missing signal and it
-is simply not on disk.
+**The critic verdict was the one missing signal, and it has since been measured.** No arm on disk
+carried `reflect_enabled` when this analysis ran. One does now, and it scores **AUC 0.597** —
+below `agent_out_tok`, and worse than `agent_out_tok` alone when the two are combined. See
+[reflect arm](reflect-arm-v4.md).
 
 ## 6. Replication
 
@@ -188,7 +189,7 @@ The pattern replicates. `v3-fold` (1,265 delivered = 93.6%, precision 0.7091, EX
 `agent_out_tok` alone. Same conclusion, same magnitudes, same winner. Its `agent_out_tok` top
 decile is 0.213 precision.
 
-`agent_out_tok` holds on **all six arms** on disk (raw AUC, delivered turns only):
+`agent_out_tok` holds on **every arm this was measured on** (raw AUC, delivered turns only):
 
 | arm | delivered | precision | `agent_out_tok` AUC |
 |---|---:|---:|---:|
@@ -227,13 +228,13 @@ arms, and yields 0.7945 at 70% coverage from a single fitted threshold. If selec
 worth doing at all it should be done with that threshold and nothing else; if the product needs
 0.90, this direction cannot supply it and the effort belongs in generation, not in triage.
 
-The honest caveat, stated as a limit rather than a hedge: every signal here is **structural**.
-Nothing in this analysis reads the generated SQL *against the question*. A semantic verifier — an
-LLM critic, or self-consistency over resamples from the same arm rather than across different
-prompt arms — is untested, because `reflect_enabled` is `False` on every arm and no such run
-exists on disk. The 0.695 AUC from cross-*arm* agreement is a weak lower bound on what
-same-arm self-consistency might give, and it is the one experiment this analysis says is worth
-paying for.
+The caveat this analysis shipped with — that every signal here is **structural**, and that
+nothing in it reads the generated SQL *against the question* — has since been tested. It was the
+one experiment this page said was worth paying for, and it did not pay: an LLM critic reading the
+SQL scores AUC **0.597**, below the token count, and the turns it calls `unsure` are as likely to
+be right as the ones it calls correct ([reflect arm](reflect-arm-v4.md)). The 0.695 AUC from
+cross-*arm* agreement remains the only semantic signal that beats the structural ceiling, and it
+costs a second full inference pass.
 
 ---
 
