@@ -18,6 +18,7 @@ The deterministic rules run **first** because they are free, and a question that
 should not cost a model call to refuse.
 """
 
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -30,6 +31,36 @@ __all__ = ["guard_node"]
 #: The one token that clears the scope gate. Keying on the negative instead would make any
 #: unexpected reply read as "in scope", failing **open** exactly when the model was confused.
 _IN_SCOPE = "yes"
+
+#: Named so a reply that says *both* can be rejected. It is not a clearing token and nothing
+#: keys on it alone.
+_OUT_OF_SCOPE = "no"
+
+
+def _words(text: str) -> list[str]:
+    """Lowercased alphabetic tokens, so punctuation and separators do not hide a word."""
+    return re.findall(r"[a-z]+", text.lower())
+
+
+def _clears_scope(answer: str) -> bool:
+    """Whether the judge said yes, and only yes.
+
+    ``answer.startswith("yes")`` was the rule, and it fails **open** on a whole class: any reply
+    that merely *begins* with the affirmative clears. Probed against the live parser, ``YES/NO``,
+    ``Yes and no``, ``yes or no?`` and the prompt's own instruction echoed back
+    (``YES if it is in scope, NO if it is not.``) all cleared the gate. That direction is the
+    dangerous one -- ``detail`` is ``None`` on the clear branch and carries the reply on
+    ``blocked``, so a wrongly *blocked* turn can be diagnosed afterwards and a wrongly *cleared*
+    one leaves no trace at all.
+
+    The rule now: the first word is the affirmative **and** the reply does not also name the
+    negative. A message containing both is an echo of the format or a hesitation about it, not an
+    answer. An affirmative that goes on to explain itself still clears, which is what
+    ``test_an_affirmative_with_punctuation_still_clears`` is for -- demanding exact equality would
+    refuse every well-behaved model.
+    """
+    words = _words(answer)
+    return bool(words) and words[0] == _IN_SCOPE and _OUT_OF_SCOPE not in words
 
 
 async def guard_node(state: dict, config: RunnableConfig) -> dict:
@@ -131,9 +162,9 @@ async def _bi_scope(
     # row attached to only one outcome makes refusals look cheaper than they are.
     spent = usage_row(stage="guard", model=model, messages=reply, turn_index=turn_index)
 
-    # ``startswith`` rather than equality, so "Yes." and "YES\n" count. The *affirmative* is
-    # matched, so an apology, a clarifying question or an empty completion refuses.
-    if answer.startswith(_IN_SCOPE):
+    # The *affirmative* is matched, so an apology, a clarifying question or an empty completion
+    # refuses. See ``_clears_scope`` for why it is not ``startswith``.
+    if _clears_scope(answer):
         return GuardVerdict(outcome="clear", rule_id=None, detail=None), spent
     verdict = GuardVerdict(
         outcome="blocked",

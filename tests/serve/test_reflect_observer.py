@@ -349,3 +349,53 @@ def test_an_introspection_row_is_not_an_attempt_to_answer() -> None:
     assert reflect_signals(state)["attempts"] == {
         "n_attempts": 1, "n_passed": 0, "terminal": "refused"
     }
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "VERDICT: answered | wrong | unsure",
+        "VERDICT: answered | wrong | unsure\nREASON: one sentence, under 25 words",
+        "VERDICT: wrong | unsure",
+    ],
+)
+def test_the_prompt_template_echoed_back_is_not_a_verdict(reply: str) -> None:
+    """A judge that repeats the format has not judged.
+
+    Reading only the first word after ``VERDICT:`` made the prompt's own instruction line parse
+    as a complete verdict of ``answered`` — the favourable label, winning by its position in the
+    list — with ``one sentence, under 25 words`` alongside it as the reason. The row was
+    indistinguishable from a real one.
+
+    It matters beyond tidiness: this instrument exists to be scored against correctness, and the
+    structured-output arm planned against it is immune to the bug by construction. Left in, the
+    schema would have been credited with a parser fix.
+    """
+    from governed_bi.serve.nodes.reflect import _read_verdict
+
+    verdict, _ = _read_verdict(reply)
+    assert verdict is None
+
+
+@pytest.mark.parametrize(
+    ("reply", "expected"),
+    [
+        ("VERDICT: wrong\nREASON: the filter is inverted", "wrong"),
+        ("VERDICT: unsure\nREASON: cannot tell without the join", "unsure"),
+        ("VERDICT: answered", "answered"),
+        ("verdict: unsure\nreason: lowercase keys are accepted", "unsure"),
+    ],
+)
+def test_a_real_verdict_still_parses(reply: str, expected: str) -> None:
+    """The template guard must not cost the ordinary case.
+
+    Not asserted here, because it was already true before the guard and is a separate question:
+    a verdict carrying its reason on the same line (``VERDICT: wrong, the aggregate is over the
+    wrong column``) does **not** parse — ``word[0]`` is ``wrong,`` with the comma attached. That
+    fails safe, into an unmeasured row rather than a wrong one. Whether to loosen it is a
+    question for the first reflected arm's parse-failure rate, which the artifact reports for
+    free; loosening it on a guess would trade a measured problem for an unmeasured one.
+    """
+    from governed_bi.serve.nodes.reflect import _read_verdict
+
+    assert _read_verdict(reply)[0] == expected

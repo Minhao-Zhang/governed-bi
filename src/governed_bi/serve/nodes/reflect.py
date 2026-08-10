@@ -217,7 +217,14 @@ def _read_verdict(text: str) -> tuple[str | None, str | None]:
         lowered = stripped.lower()
         if verdict is None and lowered.startswith("verdict:"):
             word = lowered.split(":", 1)[1].strip().strip(".`*").split()
-            if word and word[0] in REFLECT_VERDICTS:
+            # **A line naming more than one declared verdict is the template, echoed.** The
+            # prompt's own instruction line is `VERDICT: answered | wrong | unsure`, and reading
+            # only the first word made it parse as a complete verdict of `answered` -- the
+            # favourable label, winning by its position in the list -- with `REASON: one
+            # sentence, under 25 words` alongside it as the justification. Indistinguishable
+            # from a real row. A judge that repeats the format has not judged.
+            named = {w.strip(".,|`*") for w in word} & REFLECT_VERDICTS
+            if word and word[0] in REFLECT_VERDICTS and len(named) == 1:
                 verdict = word[0]
         elif reason is None and lowered.startswith("reason:"):
             reason = stripped.split(":", 1)[1].strip() or None
