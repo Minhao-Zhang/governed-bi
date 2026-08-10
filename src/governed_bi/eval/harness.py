@@ -10,6 +10,7 @@ from governed_bi.eval.arms import ArmSpec, model_for_question
 from governed_bi.eval.grade import grade_turn, result_fingerprint
 from governed_bi.eval.oracle import oracle_grade
 from governed_bi.eval.replay import PINNED_SCHEMAS_KEY
+from governed_bi.register.quantity import Measured
 from governed_bi.register.stages import Outcome
 from governed_bi.serve.graph import compile_graph
 
@@ -371,6 +372,164 @@ def run_comparison(
     }
 
 
+#: How many ranked entries the summarised retrieval fields keep.
+#:
+#: Measured over the turn records in ``runs/serve/2026-08-09.jsonl``, which are the same shape
+#: a BIRD turn produces: ``facet_hits`` is **59 KB** per turn (five facets x fifty hits, each
+#: hit carrying a score triple and a copy of the facet's query) and ``schema_ranking`` 2.0 KB,
+#: against a 6.4 KB measurement row. Carried verbatim they take a 1 351-question arm from
+#: 8.6 MB to 89 MB and the six arms in ``runs/eval/`` past half a gigabyte.
+#:
+#: The truncation is defensible because the *sampled* half of retrieval is the facet
+#: ``queries``, which the row keeps whole; below them everything is a pure function of those
+#: queries, ``corpus_content_hash`` and ``knobs_resolved``, so a replay reconstructs it with no
+#: model call. What each summary still gives up is stated at its own call site.
+_RANK_KEPT = 10
+
+
+def _number(value: Any) -> float | None:
+    """A number, or ``None``. ``bool`` is not a number here (``True`` would read as 1.0)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _row_latency_sec(record: Mapping[str, Any]) -> float | None:
+    """Wall clock for the turn, in seconds.
+
+    No artifact this repository has produced records wall clock at all: ``stamp`` has derived
+    the field since it was declared and ``project_turn`` did not carry it, so latency was
+    knowable only from a driver log's start and end times, per *run*.
+
+    A :class:`Measured` absence must not reach the row. The drivers serialise with
+    ``json.dumps(..., default=str)``, which writes the dataclass's repr as a **string** that
+    then sorts and compares like a value -- ``eval/datalake._stage`` carries the same note.
+    ``None`` here means the turn had no ``turn_started_at``, which on a real arm means no
+    wrapped node ran; the reason string is a constant and is not worth a column.
+    """
+    value = record.get("latency_sec")
+    if isinstance(value, Measured):
+        return _number(value.value) if value.is_measured else None
+    return _number(value)
+
+
+def _schema_ranking(
+    record: Mapping[str, Any], question: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    """Where the gold schema placed among **all** scored schemas, and the head of the list.
+
+    The register's reason for the field is that "the gold schema was not a candidate" and "it
+    ranked 4th" must not be the same observation. ``gold_rank`` and ``n_scored`` answer that
+    for *every* rank, not only the ten kept below, so the summary loses nothing there.
+
+    ``eval/datalake.routing_recall`` computes the same two numbers today by re-serving every
+    question with no model. That is a **different draw**: two identical runs of this engine
+    disagree on 12.7% of turns, so the recall it reports is not the recall the measured arm
+    got. This is the same number taken from the turn that was scored.
+
+    ``top`` keeps scores, which is what distinguishes "the gold lost by 0.01" from "the gold
+    was never in contention". Given up below rank ten: the tail's score distribution, so a
+    study of how the router calibrates over schemas nobody selected needs a replay.
+
+    ``None`` when routing did not run. An empty ranking is a measured zero -- ``route`` writes
+    the full ranking even on the ``no_schema_matched`` decline -- and stays ``n_scored: 0``.
+    """
+    ranking = record.get("schema_ranking")
+    if not isinstance(ranking, (list, tuple)):
+        return None
+    pairs = [
+        (str(pair[0]), _number(pair[1]))
+        for pair in ranking
+        if isinstance(pair, (list, tuple)) and len(pair) >= 2
+    ]
+    gold = str(question.get("db_id") or "")
+    return {
+        "n_scored": len(pairs),
+        "gold_rank": next((i + 1 for i, (name, _) in enumerate(pairs) if name == gold), None),
+        "gold_score": next((score for name, score in pairs if name == gold), None),
+        "top": [[name, score] for name, score in pairs[:_RANK_KEPT]],
+    }
+
+
+def _facet_hits(record: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Per facet: the query it searched, how many assets it hit, and the top ids.
+
+    The register's reason is attribution -- "counts alone cannot attribute a finding to an
+    asset, so no feedback loop is possible" -- so the asset ids stay. What goes is the per-hit
+    ``lexical`` / ``semantic`` / ``score`` triple on all fifty hits, which is 90% of the 59 KB.
+
+    ``queries`` is kept whole and is the load-bearing half: it is the only part of retrieval a
+    model sampled, so it cannot be recovered by any replay, while the hits it produced are a
+    pure function of it and the pinned corpus. ``n_hits`` is the count *before* truncation, so
+    the row still says the fan-out returned fifty and not ten.
+
+    Given up: the lexical-vs-semantic score pairs, which is the evidence a study of the fusion
+    rule reads. That study is a no-model replay of these queries against the corpus commit the
+    row names, so it does not need the paid arm to carry it.
+    """
+    facets = record.get("facet_hits")
+    if not isinstance(facets, Mapping):
+        return None
+    out: dict[str, Any] = {}
+    for name, result in facets.items():
+        if not isinstance(result, Mapping):
+            continue
+        hits = [h for h in (result.get("hits") or ()) if isinstance(h, Mapping)]
+        out[str(name)] = {
+            "queries": list(result.get("queries") or ()),
+            "n_hits": len(hits),
+            "top": [str(h.get("asset_id")) for h in hits[:_RANK_KEPT]],
+        }
+    return out
+
+
+def _pulled_in(record: Mapping[str, Any]) -> dict[str, Any] | None:
+    """How many assets entered by reference closure, how many by the join walk, and which.
+
+    The field's declared job is to answer what ``expand_hops`` is worth, and ``expand_hops``
+    today is a comparability knob with no reader at all: setting it changes no behaviour and
+    does change the config hash. This is the half of that measurement that can be built here
+    -- the knob's own question ("of the tables gold SQL uses, how many entered neither by
+    facet hit nor by Steiner path?") is a join of ``connect_ids`` against ``licensed`` and the
+    gold statement, all three of which the row now carries.
+
+    Summarised because the field is dominated by the closure: measured over the 2026-08-09
+    records it runs about 140 ``resolve`` entries to 20 ``connect`` ones, 7.0 KB against a
+    6.4 KB row. ``connect`` ids are kept in full because they are the small, load-bearing set
+    -- the Steiner points and completed joins the walk added. Given up: *which* columns the
+    reference closure pulled in, which is the read-body bound in ``govern/bounds.py``; the
+    count is what remains of it.
+    """
+    pulled = record.get("pulled_in")
+    if not isinstance(pulled, Mapping):
+        return None
+    connect = sorted(str(k) for k, v in pulled.items() if str(v) == "connect")
+    return {
+        "n_resolve": sum(1 for v in pulled.values() if str(v) == "resolve"),
+        "n_connect": len(connect),
+        "connect_ids": connect,
+    }
+
+
+def _guard_verdict(record: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The guard's verdict on this turn, including ``clear``.
+
+    Carried on every turn on purpose, which is the register's own reason: "a gate that leaves
+    a trace only when it fires cannot afterwards be told from one never wired up". The row
+    already has ``refused_by``, which names the *stage* that ended the turn; this names the
+    rule, and a cleared guard has no ``refused_by`` at all.
+
+    ``detail`` is dropped -- free text, and the register says so. ``rule_id`` is
+    closed-vocabulary and is the only part a count can be built on.
+    """
+    guard = record.get("guard")
+    if not isinstance(guard, Mapping):
+        guard = state.get("guard")
+    if not isinstance(guard, Mapping):
+        return None
+    return {"outcome": guard.get("outcome"), "rule_id": guard.get("rule_id")}
+
+
 def project_turn(
     state: Mapping[str, Any],
     *,
@@ -400,6 +559,16 @@ def project_turn(
         context_hash = delivery.get("context_hash")
     if context_hash is None:
         context_hash = record.get("context_hash")
+
+    # The two delivery-audit fields, record first because ``stamp`` is their declared owner and
+    # ``delivery`` second for the same reason ``context_hash`` reads that way round.
+    delivery_hash = record.get("delivery_hash")
+    tool_delivered = record.get("tool_delivered")
+    if isinstance(delivery, Mapping):
+        if delivery_hash is None:
+            delivery_hash = delivery.get("delivery_hash")
+        if tool_delivered is None:
+            tool_delivered = delivery.get("tool_delivered")
 
     generated_sql = state.get("generated_sql") or record.get("generated_sql")
     pred_columns = None
@@ -524,8 +693,40 @@ def project_turn(
         # offline reconstruction had put it at 16 of 25 by building the context from every
         # licensed table's every column, which ignores the per-type budgets pass two applies.
         "context_evicted": (delivery.get("evicted") if isinstance(delivery, Mapping) else None),
+        # **What was delivered, and whether it can be checked afterwards.** ``context_hash``
+        # above is the deterministic half and is what `measure/gates.py` gates on;
+        # `delivery_hash` folds in every tool return the model actually asked for, so it is the
+        # only field that answers whether curated bodies reached the model. A digest is the
+        # whole point of it, which makes carrying it 66 bytes.
+        "delivery_hash": delivery_hash,
+        # Carried verbatim: bounded by the agent's tool-call count (nine attempts was the
+        # maximum over the 2026-08-09 v4 arm) and 16 hex characters per entry, so it costs a
+        # few hundred bytes. `None` means the agent loop never ran, which is a different fact
+        # from `{}`. The call ids are provider-minted and therefore do **not** join across
+        # arms; what compares is the ordered digests.
+        "tool_delivered": dict(tool_delivered) if isinstance(tool_delivered, Mapping) else None,
         "licensed": list(record.get("licensed") or ()),
         "schemas": list(record.get("schemas") or ()),
+        # **Retrieval evidence.** ``schemas`` above is the selected top-N and ``licensed`` what
+        # the turn may reach; neither says what was scored and rejected, which is the
+        # difference between a routing failure and a generation failure. Each is summarised
+        # rather than copied -- see the helper for the size that forced it and what it costs.
+        "schema_ranking": _schema_ranking(record, question),
+        "facet_hits": _facet_hits(record),
+        "pulled_in": _pulled_in(record),
+        # A float or `None`, never `0.0` for "not measured": with an embedder every asset
+        # scores above zero, so an out-of-corpus question still returns top_k tables and a
+        # clean run stamps confidence. This is the signal that says so.
+        "lexical_coverage": _number(record.get("lexical_coverage")),
+        # Cross-schema Steiner points, verbatim: `max_crossings` bounds the list at 2 on every
+        # non-declining turn, so "how often does connect cross, and what is accuracy on those
+        # turns" costs nothing to make answerable.
+        "crossings": (
+            list(record.get("crossings"))
+            if isinstance(record.get("crossings"), (list, tuple))
+            else None
+        ),
+        "guard": _guard_verdict(record, state),
         # Whether this row's shortlist was replayed rather than routed. An arm described as
         # pinned always has some fraction that was not (a question the artifact did not cover),
         # and per-row is the only place that fraction stays recoverable.
@@ -549,6 +750,9 @@ def project_turn(
         # batch reports no calls at all, reading as a free run rather than an unmeasured one.
         # Tokens only — `measure/price.py` is deleted, so cost is the provider's number.
         "usage": list(record.get("usage") or ()),
+        # The other half of cost, and the half no artifact has ever had: `usage` is tokens
+        # only. See `_row_latency_sec` for why a `Measured` absence must not be serialised here.
+        "latency_sec": _row_latency_sec(record),
         "guardrail_error": guardrail_errors > 0,
         "re_served": n_re_served > 0,
         "negative_failed_open": bool(negative_failed_open),
