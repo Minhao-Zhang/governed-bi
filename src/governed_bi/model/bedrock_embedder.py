@@ -24,8 +24,14 @@ from .embedder import PROBE_TEXT, BaseEmbedder
 
 __all__ = ["BEDROCK_EMBEDDING_MODEL", "BedrockEmbedder"]
 
-#: Titan Text Embeddings v2. Changing the default without adding a ``Price`` row makes every
-#: USD figure a floor of unknown depth, the same rule the OpenAI default carries.
+#: Titan Text Embeddings v2, 1024 wide by default. Changing it changes the vector space and
+#: invalidates every cached row, the same rule the OpenAI default carries. (Not a ``Price``
+#: rule any more: ``measure/price.py`` is deleted and USD is the provider's number.)
+#:
+#: Titan and not ``cohere.embed-v4:0``, which is also on-demand: Cohere is trained on an
+#: ``input_type`` asymmetry and ``langchain_aws`` hard-codes ``search_document``, while this
+#: engine's port is a single ``embed(texts)`` with no ``embed_query`` -- so the per-turn
+#: question would be embedded on the document side and config could not say otherwise.
 BEDROCK_EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"
 
 

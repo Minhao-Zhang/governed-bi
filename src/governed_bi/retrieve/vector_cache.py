@@ -20,6 +20,32 @@ __all__ = ["VECTOR_CACHE_VAR", "VectorCache", "vector_cache_from_environment"]
 #: Persistent cache directory (env override). One LanceDB DB per model, table per width.
 VECTOR_CACHE_VAR = "GOVERNED_BI_VECTOR_CACHE"
 
+#: Characters no path component may contain on Windows. NTFS reads ``name:stream`` as an
+#: alternate data stream, so ``mkdir`` raises rather than creating a directory. POSIX reserves
+#: only ``/``; the stricter set is applied on both so one cache has one name everywhere.
+_UNSAFE_IN_PATH = '<>:"/\\|?*'
+
+
+def _directory_name(model: str) -> str:
+    """``model`` reduced to something that can be a single path component.
+
+    **Bedrock ids are versioned with a colon** -- ``amazon.titan-embed-text-v2:0`` -- and that
+    is not a legal directory name on Windows: it raises ``NotADirectoryError`` (WinError 267).
+    Nothing degraded, the server simply could not boot the first time the embedding surface
+    moved to Bedrock, and the traceback named LanceDB rather than the model id.
+
+    Only illegal characters are replaced, so every name that already works is byte-identical
+    and ``text-embedding-3-large`` keeps resolving to the directory already holding its rows.
+
+    **Not** :func:`corpus.identity.slug`, though the layering would allow it. That function is
+    injective by construction because an asset id keys the retrieval index, and its charset
+    excludes ``-``, so it would rename the existing store instead of leaving it alone. The
+    contract here is the opposite: this directory is *not* the identity. ``cache_key`` is
+    ``model|dimensions|text`` over the provider-qualified id with the colon intact, so two ids
+    that sanitise alike share a directory and still cannot read each other's rows.
+    """
+    return "".join("_" if ch in _UNSAFE_IN_PATH else ch for ch in model)
+
 
 class VectorCache:
     """Cache keys to vectors, persistent, across every width an embedder produces.
@@ -73,7 +99,11 @@ def vector_cache_from_environment(*, model: str) -> VectorCache:
     ``model`` is the **requested** name, never ``Embedder.model``: reading that property on a
     cold ``OpenAIEmbedder`` issues a network probe, and a directory name is not worth a
     request at boot.
+
+    The name is passed through :func:`_directory_name` because a Bedrock id is not a legal
+    directory on Windows. Sanitising here rather than at the call sites keeps the server, the
+    CLI and the eval driver pointing at one directory per model.
     """
     configured = os.environ.get(VECTOR_CACHE_VAR)
     root = Path(configured) if configured else REPO_ROOT / "runs" / "vectors"
-    return VectorCache(uri=root / model)
+    return VectorCache(uri=root / _directory_name(model))

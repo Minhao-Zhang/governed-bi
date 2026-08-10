@@ -37,8 +37,11 @@ __all__ = ["OPENAI_API_KEY_VAR", "OPENAI_EMBEDDING_MODEL", "OpenAIEmbedder"]
 #: The environment variable, by **name**. Never log, print or record its value.
 OPENAI_API_KEY_VAR = "OPENAI_API_KEY"
 
-#: Every ladder embeds through this model, so changing the default without adding a
-#: ``Price`` row makes every USD figure a floor of unknown depth.
+#: Every ladder embeds through this model. Changing it changes the vector space: ``cache_key``
+#: is ``model|dimensions|text``, so no cached row carries over and no retrieval figure measured
+#: before the change is comparable to one measured after. The cost half of this note used to
+#: say "add a ``Price`` row" -- there is nowhere to add one, ``measure/price.py`` is deleted and
+#: USD is the provider's number now.
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-large"
 
 

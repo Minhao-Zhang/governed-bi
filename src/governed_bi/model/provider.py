@@ -343,8 +343,11 @@ def credentials_present(provider: str) -> bool:
 def default_embedding_model(provider: str | None = None) -> str:
     """The embedding model id for ``provider``. There is no cross-provider default.
 
-    Each provider's default is defined beside its adapter, because changing one without
-    adding a ``Price`` row makes every USD figure on that arm a floor of unknown depth.
+    Each provider's default is defined beside its adapter, because changing one changes the
+    vector space that arm retrieves in: ``cache_key`` is ``model|dimensions|text``, so nothing
+    carries over and figures either side of the change are not comparable. That is a
+    comparability break rather than a cost one -- ``measure/price.py`` is deleted, so USD comes
+    from the provider and is not this repo's to keep in step.
     """
     name = provider or provider_for("embedding")
     if name == "bedrock":

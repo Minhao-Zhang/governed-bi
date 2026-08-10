@@ -10,6 +10,7 @@ failure mode is silence.
 from __future__ import annotations
 
 import importlib.util
+from pathlib import Path
 
 import pytest
 
@@ -207,6 +208,37 @@ def test_the_cache_directory_uses_the_requested_name_not_the_probing_one() -> No
 
     embedder = BedrockEmbedder(model="amazon.titan-embed-text-v2:0")
     assert embedder.requested_model == "amazon.titan-embed-text-v2:0"
+
+
+def test_a_bedrock_models_cache_directory_can_actually_be_created(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The half the assertion above is missing: the requested name must be *usable* as a path.
+
+    Every Bedrock id is versioned with a colon, and a colon cannot appear in a Windows path
+    component -- NTFS reads ``name:stream`` as an alternate data stream, so ``mkdir`` raises
+    ``NotADirectoryError`` (WinError 267). The test above names this exact model and checks
+    only that the string survives a round trip, so nothing caught it and the server could not
+    boot the first time the embedding surface moved to Bedrock.
+
+    ``mkdir`` is the assertion, not the absence of a colon: the point is the filesystem
+    accepting it, and asserting on the sanitised spelling would pass for a name that still
+    cannot be created.
+    """
+    from governed_bi.retrieve.vector_cache import (
+        VECTOR_CACHE_VAR,
+        _directory_name,
+        vector_cache_from_environment,
+    )
+
+    monkeypatch.setenv(VECTOR_CACHE_VAR, str(tmp_path))
+    cache = vector_cache_from_environment(model="amazon.titan-embed-text-v2:0")
+    Path(cache.uri).mkdir(parents=True)
+    assert Path(cache.uri).is_dir()
+
+    # And a name that already works must not move -- that directory holds rows already, so
+    # sanitising it would silently abandon a paid-for store rather than reuse it.
+    assert _directory_name("text-embedding-3-large") == "text-embedding-3-large"
 
 
 def test_the_default_embedding_model_differs_by_provider() -> None:
