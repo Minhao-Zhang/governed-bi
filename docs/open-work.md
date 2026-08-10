@@ -315,6 +315,58 @@ which `None` satisfies. Its sibling was written to close exactly that hole and a
 constant. `test_comparability_knobs` asserts `FUSE_WEIGHTS["lexical"] == knob_default("w_lexical")`,
 which is the tautology behind §3.8.
 
+### 3.10 Declared machinery with no wire is this repository's recurring defect
+
+One shape keeps recurring: something is declared in the register, stamped by a node, or promised
+in a docstring, and **nothing on the other end reads it**. Each instance is individually small;
+together they are the reason numbers here have twice been quotable and wrong.
+
+Found so far, all in one week:
+
+| | What was declared | What was missing |
+|---|---|---|
+| `reflect_verdict` | a record field, projected by `stamp` since the node landed | `project_turn` never carried it to the artifact, so the arm the knob's own note demands could not be scored |
+| `w_lexical` / `w_semantic` | comparability knobs, in `config_hash_keys()` | bound into `FUSE_WEIGHTS` at import; no arm can move them (§3.8) |
+| three timeout env vars | read by the code | absent from `knobs_resolved`; behaviour moves, the record does not (§3.8) |
+| `git_sha` | an operational knob on every row | `None` on every row of every arm; nothing populates it |
+| `routing_pinned` | the pin's own outcome | reads the question dict, not the turn; no reader anywhere (§3.7) |
+| eight instrument tests | coverage of a named behaviour | asserted constants against themselves (§3.9) |
+| `facet_degraded` | a retrieval-health signal | constant `False` on all 1,351 rows of every arm |
+
+The common cause is that declaring and consuming live in different files and nothing forces them
+to meet. `tools/check_one_implementation.py` and the register's closure test cover part of it;
+neither catches "declared, written, never read".
+
+**A conformance check that walks the register and fails on a field no reader consumes would
+close the class**, and is worth more than any individual fix above.
+
+### 3.11 The reflector's output is parsed from text, and the decision to keep it that way
+
+`reflect` asks for `VERDICT: answered | wrong | unsure` on one line and parses it with
+`_read_verdict`. The vocabulary therefore lives in two places — `REFLECT_VERDICTS` and the
+prompt's own wording — and a three-way label is not a ranking, so it yields three operating
+points rather than a risk-coverage curve.
+
+``with_structured_output`` with a `TypedDict` carrying `Literal` values is the idiomatic fix and
+would collapse both problems: one declaration, and room for a `confidence: int` field that gives
+the continuous score the curve needs. It is used **nowhere** in this repository.
+
+It is **not** being adopted before the first reflected arm runs, for one reason: constrained
+decoding is not behaviour-neutral, so shipping it with the baseline would leave a null result
+ambiguous between "the judge has no signal" and "the schema suppressed it". It is the second arm,
+not a refactor of the first.
+
+Two things to carry into that arm when it is built:
+
+- **`include_raw=True` is mandatory.** The current parser fails safe — an undeclared label yields
+  `verdict: null` and a recorded `why_unmeasured`, never a guess, because "mapping an invented
+  label onto the nearest declared one would be the instrument inventing its own readings". A bare
+  `with_structured_output` raises on validation failure and loses the reply, which is a worse
+  failure mode traded for a tidier success path.
+- An earlier note here claimed structured output would force the utility surface onto a different
+  transport. It does not: `tools` in `model/provider.py` only selects OpenAI's Responses API, and
+  `response_format` is available on the path the utility model already uses.
+
 ### 3.10 The noise floor is five times a comparison system's, and that is architectural
 
 Two runs of this engine with the configuration held fixed — run1 and run2, same prompt, same
