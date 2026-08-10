@@ -337,8 +337,42 @@ The common cause is that declaring and consuming live in different files and not
 to meet. `tools/check_one_implementation.py` and the register's closure test cover part of it;
 neither catches "declared, written, never read".
 
-**A conformance check that walks the register and fails on a field no reader consumes would
-close the class**, and is worth more than any individual fix above.
+**A sweep found 21 more**, ranked with evidence in
+[declared-not-consumed](analysis/declared-not-consumed.md). Five of them record a number that is
+*wrong* rather than missing, which is the worse half:
+
+- **`llm_reasoning_effort` is null on all 8 106 rows and every arm ran at `high`.** `session.py`
+  resolves it with `getattr(agent_model, "reasoning_effort", None)`; the proxy gateway folds
+  effort into `extra_body` and returns a plain `ChatOpenAI` with no such attribute. **A
+  high-vs-low effort A/B on the proxy produces two artifacts with identical `knobs_resolved`** —
+  precisely the incident the knob's own note says it exists to prevent.
+- **`llm_utility_provider` and `embedding_provider` say `openai` on six proxy-served arms.** No
+  writer at all, so both sit at the register default while the same row carries
+  `llm_provider: custom:007df842`. A null says "not measured"; these say "measured, and it was
+  openai".
+- `chat_model` is null on four of six arms; the real value is in `llm_model`, which
+  `KNOB_REGISTER` does not declare and which is therefore outside `comparability_keys()`.
+- `sqlglot_version`, `negative_tau` and `cost_budget` are absent from `knobs_resolved` entirely.
+  `sqlglot_version`'s note says it is UNSET "so it cannot be silently absent"; it is silently
+  absent. The resume-drift gate compares with `row.get(key)`, so a key missing from every row
+  compares equal to itself.
+- The three timeout env vars (§3.8), confirmed live.
+
+Nine record fields reach the turn record and no artifact — including `latency_sec`, so **no
+artifact records wall clock at all** — and `prompt_set` is null on the four arms whose entire
+treatment is a prompt variant.
+
+`tools/check_declared_is_consumed.py` closes the statically-visible part: four rules over knobs,
+record fields and state channels, mutation-verified against a fixture tree, reporting 27
+violations today. **It is deliberately not wired into CI yet.** A gate that fails on every commit
+from the day it lands is a gate people learn to skip, and waiving 27 real findings to make it
+green would be the lie it was written to catch. Wire it once the tier-1 items above are fixed,
+with a waiver list holding only declarations that are correct to leave unconsumed.
+
+Its own docstring states the blind spot: rule K1 credits any occurrence of a knob's name, so a
+coincidental string literal launders one. And the five findings above are invisible to any static
+rule by construction — in each the declaration *has* a consumer and the missing wire is on the
+recording side. Only the artifacts show those.
 
 ### 3.11 The reflector's output is parsed from text, and the decision to keep it that way
 

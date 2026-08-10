@@ -31,6 +31,26 @@ from governed_bi.serve.events import (
 __all__ = ["wrap_node"]
 
 
+def _without_cleared_clock(update: Mapping[str, Any]) -> dict[str, Any]:
+    """``update`` with a null ``turn_started_at`` dropped, so the wrapper's stamp survives it.
+
+    This wrapper is the declared single owner of the turn clock — "so ``turn_started_at`` has one
+    answer rather than one per node". It was not: ``Session.turn`` spreads ``PER_TURN_RESET``,
+    which carries ``turn_started_at: None``, and ``accept`` returns that dict, so the merge
+    ``{**began, **update}`` let the reset win over the stamp taken microseconds earlier. The clock
+    then restarted at whichever node ran next, and ``latency_sec`` measured a served turn from
+    after ``accept`` — a turn taking 0.266 s of wall clock recorded 0.010 s.
+
+    Dropping the key rather than reordering the merge, because a node writing ``None`` here is
+    always ``PER_TURN_RESET`` boilerplate and never a deliberate act, while a node writing a real
+    timestamp should still win. Only served turns were affected: ``eval/harness.py`` has no
+    ``accept`` node, so no measured arm moves.
+    """
+    if "turn_started_at" in update and update["turn_started_at"] is None:
+        return {k: v for k, v in update.items() if k != "turn_started_at"}
+    return dict(update)
+
+
 def wrap_node(
     stage: str,
     fn: Callable[..., dict[str, Any]],
@@ -90,6 +110,9 @@ def wrap_node(
 
     def _started(state: Mapping[str, Any]) -> dict[str, Any]:
         """``{"turn_started_at": <epoch>}`` from the first node of the turn to run, else ``{}``.
+
+        See :func:`_without_cleared_clock` for why the stamp must be defended from the update it
+        is merged with.
 
         Wall clock rather than ``perf_counter``: a clarification suspends the turn on a
         ``GraphInterrupt`` and, with a durable checkpointer, can resume later. Written only
@@ -161,7 +184,7 @@ def wrap_node(
                 _end(state, update)
             # The clock rides the update even on a crash: `latency_sec` on a crashed turn is
             # how long the user waited to be told nothing.
-            return {**began, **update}
+            return {**began, **_without_cleared_clock(update)}
 
         return inner
 
@@ -176,6 +199,6 @@ def wrap_node(
             update = _crashed(e)
         if live:
             _end(state, update)
-        return {**began, **update}
+        return {**began, **_without_cleared_clock(update)}
 
     return inner_state_only
