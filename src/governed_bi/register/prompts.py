@@ -60,6 +60,15 @@ ANALYST = Prompt(
         "over-projected and 51 of them (47.7%) became correct once the extra columns were "
         "dropped, while a repair sweep recovered 27 more by toggling DISTINCT — 15 by adding it, "
         "12 by removing it, which is why the DISTINCT rule is about intent and not a direction. "
+        "**v3 is the default from 2026-08-09**: two arms, paired McNemar p = 0.0008 against "
+        "run1 and p = 0.00008 against run2, with over-projection 107 -> 18 and every guardrail "
+        "flat or better. Leaving v2 default meant an unflagged run served the worse wording. "
+        "v4 is v3 plus the star rule: `check()` refuses `SELECT *` at BINDING and the prompt "
+        "had never said so, so the agent wrote it, was refused, and had nothing to go on -- 29 "
+        "turns of the v3-fold arm, of which 1 ended correct, and 14 of the 48 questions WrenAI "
+        "solves and we abstain on. The same shape as the identifier rules two paragraphs up: a "
+        "constraint that exists, fires, and was never stated. `COUNT(*)` is named explicitly "
+        "because it is the carve-out and an agent told only 'no star' would stop using it. "
         "Its worked example names no schema in the evaluation set on purpose: the rule is "
         "derived from measurement, which is the loop working, but an illustration borrowed from "
         "a held-out question's domain would let the prompt be read as tuned on the test split "
@@ -117,8 +126,39 @@ ANALYST = Prompt(
             "add it to tidy a result you have not looked at, and do not drop it where the "
             "question is about how many different things there are."
         ),
+        "v4": (
+            "You are a governed BI analyst. Use only the context and tools provided. "
+            "Call ask_user only when a missing fact blocks a correct SQL answer.\n"
+            "Write every table reference as schema.table — an unqualified name is refused. "
+            "Spell identifiers exactly as the context gives them, and wrap any identifier "
+            'containing a space, punctuation or a leading digit in double quotes, e.g. '
+            'airline."Air Carriers".\n'
+            "Tool arguments are asset ids, not SQL names. When a context line carries "
+            "id=..., pass that value to read_body, inspect_schema and sample_rows; the "
+            "spelling before it is for SQL only.\n"
+            "Before writing SQL you may call inspect_schema for a table's columns, "
+            "sample_rows to see a column's actual values, and read_body for an asset's "
+            "notes. Use sample_rows whenever a filter compares against a literal you have "
+            "not seen. Then answer with run_query.\n"
+            "The result table is the answer, so its columns are part of being right. Select "
+            "exactly what the question asks for and nothing else. A column you only used to "
+            "rank, filter or aggregate by belongs in ORDER BY, WHERE or HAVING, not in the "
+            "SELECT list: asked which supplier shipped the most units, return the supplier "
+            "name alone, not the name and the total beside it. Add a second column only "
+            "when the question asks for a second thing.\n"
+            "Choose DISTINCT on what the question means, never as a precaution. Use it when "
+            "the question asks for distinct, unique, different or separate things, and when "
+            "a join fans one row out into duplicates you would otherwise count twice. Do not "
+            "add it to tidy a result you have not looked at, and do not drop it where the "
+            "question is about how many different things there are.\n"
+            "Name the columns you want. A bare star in the select list is refused, because the "
+            "allowlist cannot vouch for columns the statement never names: neither "
+            "`SELECT *` nor `SELECT t.*` will run, however few columns the table has. "
+            "`COUNT(*)` is the one carve-out and is always fine, as is "
+            "`COUNT(DISTINCT col)`."
+        ),
     },
-    default="v2",
+    default="v3",
 )
 
 

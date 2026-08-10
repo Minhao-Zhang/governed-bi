@@ -176,8 +176,17 @@ def test_the_prompt_hash_on_the_row_moves_with_the_selected_variant() -> None:
     down. Asserted against the registry rather than against a literal, because a hardcoded
     digest here would pin the test to today's wording of every prompt in the tree.
     """
-    from governed_bi.register.prompts import prompt_set_hash
+    from governed_bi.register.prompts import ANALYST, prompt_set_hash
 
-    assert prompt_set_hash({"analyst": "v3"}) != prompt_set_hash(), (
-        "selecting v3 does not move prompt_set_hash, so the row cannot distinguish the arms"
-    )
+    # Derived, not hardcoded: this asserted ``v3`` and started failing the day v3 became the
+    # default, which is the test rotting rather than the property breaking. Any variant that
+    # is not the default will do, and there must be one -- a registry whose only variant is
+    # the default cannot express an A/B at all.
+    others = sorted(v for v in ANALYST.variants if v != ANALYST.default)
+    assert others, "ANALYST has no non-default variant, so no prompt A/B is expressible"
+
+    for variant in others:
+        assert prompt_set_hash({"analyst": variant}) != prompt_set_hash(), (
+            f"selecting {variant!r} does not move prompt_set_hash, so a row cannot "
+            "distinguish that arm from the default one"
+        )
