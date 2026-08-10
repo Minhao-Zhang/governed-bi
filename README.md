@@ -1,109 +1,161 @@
 # governed-bi
 
-Ask a question in English. Get an answer backed by read-only SQL and a record of
-how the engine got there.
+Ask a question in English. Get an answer backed by read-only SQL, and a record of
+exactly how the engine got there — or a refusal that says which rule stopped it.
 
-Each turn does four things:
+**The model never holds a database handle.** There is no tool that executes
+arbitrary SQL, no filesystem write channel, no escape hatch. The agent can only
+propose a statement to a tool body that checks it first, and governance here is
+the *absence* of the tool rather than a policy asking the model to behave. A
+prompt injection cannot talk its way to the database, because there is nothing to
+talk to.
 
-1. Retrieves a slice of a curated semantic layer — typed YAML assets that
-   describe tables, columns, joins, metrics, and business terms.
-2. Asks a model to write SQL, using only the tables that slice licensed.
-3. Checks the statement through a stack of deterministic layers. A statement
-   that names an unlicensed table or an excluded column never runs.
-4. Executes it read-only and stamps the turn: `outcome`, `guardrail_errors`, a
-   per-attempt ledger, and `terminal_reason` when the turn did not answer.
+Built on LangGraph, measured on an obfuscated 57-schema Postgres data lake, and
+instrumented so that every number it produces names the corpus and the prompt
+wording that produced it.
 
-The model never holds a database handle. It can only send SQL that a checked
-tool body chose to send, so a prompt cannot talk its way to the database.
+---
 
-Postgres is the live path. The SQLite file under `data/bird/` is an offline test
-fixture, not a supported target.
+## What it can say about itself
 
-## Quickstart
+Measured on 1,351 questions across 57 schemas, decoy tables included.
 
-You need [uv](https://docs.astral.sh/uv/) and Python 3.13.
+| | |
+|---|---:|
+| Execution accuracy | **0.664** |
+| Accuracy on turns it commits to | **0.709** (n = 1,265) |
+| Turns it declines | 86 (6.4%) |
+| Declined turns that would have been **wrong** | **81.2%** |
+| Delivered accuracy ÷ withheld accuracy | **3.76×** |
 
-1. Install the stack:
+The last three rows are the point. An engine that answers everything gives you no
+signal about which of its answers to distrust; this one abstains on 6.4% of turns
+and is right about *why* four times out of five. That is a claim about
+calibration, and it is orthogonal to accuracy — a system with a higher score can
+still leave you unable to tell its good answers from its bad ones.
 
-   ```bash
-   uv sync
-   ```
+For reference, [WrenAI](https://github.com/Canner/WrenAI) scores 0.678 on the same
+questions and the same database. Paired over the 1,351 questions that is a net
+difference of 19, McNemar p = 0.240 — **a statistical tie**, and stated as one
+rather than rounded into a win.
 
-   The OpenAI gateway needs only that. Add the one extra for AWS Bedrock chat
-   or embeddings, and for the proxy gateway, which reads its API key and base
-   URL from AWS Secrets Manager through `boto3`:
+---
 
-   ```bash
-   uv sync --extra bedrock
-   ```
+## How a turn works
 
-2. Put your secrets in a git-ignored `.env` at the repository root:
+1. **Retrieve.** Five parallel facets search a curated semantic layer — 13,304
+   typed YAML assets describing tables, columns, joins, metrics and business
+   terms — and license a slice of it for this turn.
+2. **Generate.** A model writes SQL against that slice, with tools to inspect a
+   table's columns, sample a column's real values, and read an asset's notes.
+3. **Check.** The statement passes seven declared layers — parse, read-only,
+   permitted functions, binding, columns, tables, cost. A statement naming an
+   unlicensed table or an excluded column never reaches the database.
+4. **Execute and stamp.** Read-only, then a record: the outcome, every attempt
+   with the layer and rule that refused it, and why the turn ended.
 
-   ```bash
-   OPENAI_API_KEY=sk-...
-   GOVERNED_BI_PG_DSN=host=... port=5432 dbname=... user=... password=...
-   ```
+Retrieval doubles as the allowlist. A table the router did not surface is a table
+the checker will not permit, so a retrieval miss becomes a visible refusal rather
+than a confident answer over the wrong table.
 
-3. Point the engine at a corpus and choose your models. Configuration is
-   environment variables only — the `governed_bi.toml` in the repository root is
-   not loaded by anything in `src/`, and defaults live in `register/knobs.py`.
+---
 
-   ```bash
-   GOVERNED_BI_CORPUS_DIR=...     # or put a single corpus under corpora/
-   GOVERNED_BI_MODEL=...          # unset → the graph runs with has_live_model=false
-   GOVERNED_BI_UTILITY_MODEL=...  # smaller model for facet rewrites and the scope gate
-   GOVERNED_BI_EMBEDDING_MODEL=...
-   ```
+## The instrument
 
-   For the full list, including the Bedrock and proxy variables, see
-   [the usage guide](docs/usage.md).
+Most of the engineering here is not in the engine. A text-to-SQL score moves by a
+point or two for reasons that have nothing to do with the change you made, so the
+harder problem is knowing when a result is real.
 
-4. Serve the graph:
+- **Paired tests, not net deltas.** Arms are compared with McNemar over the
+  discordant pairs. Two identical runs disagree on 12.7% of questions, which puts
+  the noise floor at SE ≈ 1.0pp — so a 2-point "improvement" is not one.
+- **Routing replay.** `--replay-routing` pins an arm to a prior run's shortlist,
+  because five model-driven rewriters sit above retrieval and an unpinned A/B
+  cannot separate its own effect from a shortlist that moved. It cuts discordance
+  by 27%.
+- **Treatment identity on every row.** A measurement row carries
+  `corpus_content_hash` and `prompt_set_hash`. Resuming an artifact whose corpus
+  differs from the running one is refused, rather than producing one file holding
+  two experiments and reporting it as a single arm.
+- **Instruments that can fail.** The measurement code is mutation-tested: break
+  the field, confirm a test catches it. Eight tests that could not fail were found
+  and fixed this way.
+- **Abstentions are priced.** For every declined turn the harness runs the gold
+  statement and records what the engine *would* have scored — reported separately,
+  never folded into the headline.
 
-   ```bash
-   uv run langgraph dev
-   ```
+The payoff is being able to tell a real finding from a lucky run. One example: a
+governance rule scoped one level too wide was refusing 568 valid statements across
+119 turns. Narrowing it to references it could actually resolve was worth
+**+5.3 points and 14.4% fewer input tokens** — larger than every prompt
+intervention tried alongside it, and invisible until the field recording which
+rule refused each attempt was added.
 
-A turn takes 30 to 120 seconds, so prefer the streaming surface:
-`POST /threads/{id}/runs/stream`, with `stream_mode: ["values", "messages",
+---
+
+## Try it
+
+You need [uv](https://docs.astral.sh/uv/), Python 3.13, and a Postgres database.
+
+```bash
+uv sync
+```
+
+Put credentials in a git-ignored `.env`, point the engine at a corpus, and serve:
+
+```bash
+GOVERNED_BI_CORPUS_DIR=../BIRD-corpus
+GOVERNED_BI_MODEL=...
+```
+
+```bash
+uv run langgraph dev
+```
+
+A turn takes 30 to 120 seconds, so prefer the streaming surface —
+`POST /threads/{id}/runs/stream` with `stream_mode: ["values", "messages",
 "custom"]` and `stream_subgraphs: true`. Without `stream_subgraphs`, tool and
-token events never reach the client — see
-[ADR 0010 on live stage events](docs/adr/0010-live-stage-events.md). `POST /chat`
-is the blocking fallback.
+token events never reach the client
+([ADR 0010](docs/adr/0010-live-stage-events.md)). `POST /chat` is the blocking
+fallback.
 
-To run one turn without LangGraph Server:
-
-```bash
-uv run python -m governed_bi.serve --schema … -q "…"
-# --corpus-dir … ; --no-model for a stub path
-```
-
-## Development
+One turn without the server:
 
 ```bash
-uv run pytest
+uv run python -m governed_bi.serve --corpus-dir ../BIRD-corpus --schema … -q "…"
 ```
 
-## Web UI
+Full setup, every environment variable, and the Bedrock and proxy gateways are in
+[the usage guide](docs/usage.md). How to run a measured arm is in
+[measurement](docs/measurement.md).
 
-The UI lives in a separate repository,
-[governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui) (Next.js), and
-is available locally at `../governed-bi-ui`.
+---
 
 ## Documentation
 
-Start at [the docs index](docs/README.md), or go straight to
-[usage](docs/usage.md), [architecture](docs/architecture.md),
-[measurement](docs/measurement.md), the [ADRs](docs/adr/), the
-[glossary](docs/glossary.md), or [what is still open](docs/open-work.md).
+| | |
+|---|---|
+| [Usage](docs/usage.md) | install, environment, serve |
+| [Architecture](docs/architecture.md) | the serve spine and the package map |
+| [Measurement](docs/measurement.md) | how to run an arm and what makes a number quotable |
+| [Failure modes](docs/failure-modes.md) | how the engine gets things wrong, per class, with repair experiments |
+| [ADRs](docs/adr/) | binding decisions — start with 0005 and 0006 |
+| [Open work](docs/open-work.md) | what is unfinished, and the evidence for each item |
+
+The web UI is a separate repository,
+[governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui) (Next.js). The
+semantic layer is its own repository too,
+[BIRD-corpus](https://github.com/Minhao-Zhang/BIRD-corpus), because a corpus that
+is not versioned makes every number measured against it unreproducible.
+
+---
 
 ## Repository layout
 
 ```
 docs/               design docs and ADRs
-corpora/            corpus directories for serve (or set GOVERNED_BI_CORPUS_DIR)
 data/bird/          beer_factory.sqlite offline fixture (BIRD, CC BY-SA 4.0)
-scripts/            one-shot corpus build scripts, outside the package
+scripts/            one-shot corpus build kits, outside the package
 src/governed_bi/
   api/              FastAPI app and the LangGraph make_graph entry point
   corpus/           asset schemas, loading, validation
@@ -118,6 +170,9 @@ src/governed_bi/
 tests/
 tools/              the eval driver (run_datalake_eval.py), structural checks
 ```
+
+Postgres is the live path. The SQLite file under `data/bird/` is an offline test
+fixture, not a supported target.
 
 ## License
 
