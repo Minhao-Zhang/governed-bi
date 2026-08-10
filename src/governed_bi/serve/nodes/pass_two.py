@@ -24,6 +24,7 @@ from governed_bi.retrieve.fuse import scale_within_channel
 from governed_bi.retrieve.index import UnifiedIndex
 from governed_bi.serve.runtime import candidate_depth, combine_channels, vector_for_query
 from governed_bi.serve.runtime import facet_hits as hits_of
+from governed_bi.serve.runtime import lexical_coverage as _lexical_coverage
 
 __all__ = ["pass_two_retrieve"]
 
@@ -168,7 +169,7 @@ def pass_two_retrieve(
         if merged:
             hits_by_facet[name] = list(merged.values())
 
-    return _build_retrieved(hits_by_facet, ranking, state)
+    return _build_retrieved(hits_by_facet, ranking, state, index)
 
 
 def _scores_lexical(facet_name: str) -> bool:
@@ -398,6 +399,7 @@ def _build_retrieved(
     facet_hits: Mapping[str, list[dict[str, Any]]],
     ranking: list[tuple[Any, float]],
     state: Mapping[str, Any],
+    index: UnifiedIndex | None = None,
 ) -> dict[str, Any]:
     attributions: dict[str, list[dict[str, Any]]] = {}
     selected: dict[str, dict[str, Any]] = {}
@@ -435,9 +437,12 @@ def _build_retrieved(
             "attributions": {},
             "pulled_in": {},
             "schema_ranking": list(ranking),
-            # Passed through, `None` included: `route_node._lexical_coverage` is the one
-            # derivation, and defaulting absence to 0.0 here would overwrite it.
-            "lexical_coverage": state.get("lexical_coverage"),
+            # **Measured on this path too, and it is the path that needs it most.** Zero hits
+            # is exactly when "are the question's words in the corpus vocabulary at all" is
+            # the question, and this early return is easy to miss — the first attempt at
+            # wiring the live index reached only the branch below, and the test that caught it
+            # happened to produce no hits.
+            "lexical_coverage": _lexical_coverage(state, index),
         }
 
     budgeted = apply_budgets(list(by_id.values()), pulled_in=[])
@@ -454,7 +459,16 @@ def _build_retrieved(
         "attributions": {k: v for k, v in attributions.items() if k in kept_ids},
         "pulled_in": {},
         "schema_ranking": list(ranking),
-        "lexical_coverage": state.get("lexical_coverage"),
+        # **The live index, not the test hook.** This read `state.get("lexical_coverage")`,
+        # which nothing on the served path sets, so the field was null on every turn of every
+        # arm -- a declared measurement with a dead producer. `BM25.coverage` is the derivation
+        # and had no production caller at all; `route_retrieve._lexical_coverage` is the wrapper
+        # and its one call site passes `index=None`, which is right there (the F1 no-index path)
+        # and is why nothing ever reached the real thing. Imported rather than copied: a second
+        # implementation of "which text is measured" is what `check_one_implementation.py`
+        # exists to refuse, and the choice of the raw question over a facet rewrite is the part
+        # that must not drift.
+        "lexical_coverage": _lexical_coverage(state, index),
     }
     # **What the caps discarded, carried out rather than dropped on the floor.** The filter two
     # lines above deletes over-budget ids from `selected` and `attributions`, so without this a

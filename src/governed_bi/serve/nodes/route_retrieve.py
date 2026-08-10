@@ -34,6 +34,7 @@ from governed_bi.serve.runtime import (
 from governed_bi.serve.runtime import (
     configurable as runtime_config,
 )
+from governed_bi.serve.runtime import lexical_coverage as _lexical_coverage
 from governed_bi.serve.state import TERMINAL_PATH_KINDS
 
 __all__ = [
@@ -61,28 +62,6 @@ def empty_retrieved(
         # `None`, not 0.0. An empty retrieval measured no coverage; it did not measure none.
         "lexical_coverage": None,
     }
-
-
-def _lexical_coverage(state: Mapping[str, Any], index: Any) -> float | None:
-    """Share of the question's terms the corpus vocabulary has, or ``None``.
-
-    ``BM25.coverage`` is the measurement; this decides *which text* is measured and honours the
-    ``lexical_coverage`` test hook. The **raw question**, not a facet rewrite: a rewrite is the
-    utility model restating the question *into* the corpus's vocabulary, so measuring it would
-    report the rewriter's success as the corpus's. ``None`` and never ``0.0`` when unavailable
-    — the register declares the field ``Absence.not_measured``.
-    """
-    hooked = state.get("lexical_coverage")
-    if isinstance(hooked, (int, float)) and not isinstance(hooked, bool):
-        return float(hooked)
-    lexical = getattr(index, "lexical", None)
-    coverage = getattr(lexical, "coverage", None)
-    if coverage is None:
-        return None
-    try:
-        return coverage(str(state.get("question") or ""))
-    except Exception:  # noqa: BLE001 — a degraded signal must not fail the turn
-        return None
 
 
 def route_node(state: dict, config: RunnableConfig) -> dict:
