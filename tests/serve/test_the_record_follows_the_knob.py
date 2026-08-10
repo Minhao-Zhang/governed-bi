@@ -166,9 +166,10 @@ def test_every_gateways_spelling_of_effort_reads_back(proxy):
     class Proxied:  # the internal proxy: inside the request envelope
         extra_body = proxy.build_extra_body("s", "high")
 
-    class Anthropic:  # Bedrock: a token budget
+    class Anthropic:  # Bedrock: beside the thinking block, not inside it
         additional_model_request_fields = {
-            "thinking": {"type": "enabled", "budget_tokens": 16384}
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "high"},
         }
 
     class Nova:  # Bedrock: a named effort under another key
@@ -185,11 +186,12 @@ def test_every_gateways_spelling_of_effort_reads_back(proxy):
     assert reasoning_effort_of(Nova()) == "low"
     assert reasoning_effort_of(Nothing()) is None
 
-    # The Anthropic budget is decoded from the same map that encodes it, so editing one
-    # cannot leave the other answering with the old number.
-    from governed_bi.model.provider import _ANTHROPIC_THINKING_BUDGET, _bedrock_reasoning
+    # Round-tripped through the encoder rather than against a hand-written dict, so a change
+    # to the Bedrock spelling that forgets the reporting half fails here instead of landing a
+    # run whose `llm_reasoning_effort` is null.
+    from governed_bi.model.provider import _ANTHROPIC_EFFORTS, _bedrock_reasoning
 
-    for effort in _ANTHROPIC_THINKING_BUDGET:
+    for effort in _ANTHROPIC_EFFORTS:
         class Round:
             additional_model_request_fields = _bedrock_reasoning(effort)
 

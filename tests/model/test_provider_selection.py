@@ -89,19 +89,38 @@ def test_bedrock_retries_count_the_first_attempt() -> None:
 @pytest.mark.parametrize(
     "model_id,expected_key",
     [
-        ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", "thinking"),
+        ("us.anthropic.claude-sonnet-5", "thinking"),
         ("amazon.nova-2-lite-v1:0", "reasoningConfig"),
     ],
 )
 def test_reasoning_is_spelled_per_model_family(model_id: str, expected_key: str) -> None:
-    """Anthropic takes a token budget, Nova a named effort. There is no shared field."""
+    """Anthropic takes adaptive thinking, Nova a named effort. There is no shared field."""
     assert expected_key in P._bedrock_reasoning("high", model_id)
 
 
+def test_anthropic_on_bedrock_asks_for_adaptive_thinking_not_a_token_budget() -> None:
+    """The spelling ``us.anthropic.claude-sonnet-5`` actually accepts.
+
+    Pinned because the wrong one was fully documented and looked measured. Converse answers a
+    ``budget_tokens`` request with *"thinking.type.enabled is not supported for this model. Use
+    thinking.type.adaptive and output_config"* -- a ``ValidationException`` on every turn, not a
+    degraded one. Asserting the absence of ``budget_tokens`` is the half that would have caught
+    it; asserting only that a ``thinking`` key exists does not.
+    """
+    fields = P._bedrock_reasoning("xhigh", "us.anthropic.claude-sonnet-5")
+    assert fields["thinking"] == {"type": "adaptive"}
+    assert fields["output_config"] == {"effort": "xhigh"}
+    assert "budget_tokens" not in fields["thinking"]
+
+
 def test_an_effort_bedrock_cannot_express_raises() -> None:
-    """Rather than reaching the API as a 400 halfway through a paid run."""
+    """Rather than reaching the API as a 400 halfway through a paid run.
+
+    Bedrock does reject an unknown effort (*"unknown variant `enormous`"*), so the local check
+    buys the failure earlier rather than at all.
+    """
     with pytest.raises(ValueError, match="no Bedrock spelling"):
-        P._bedrock_reasoning("enormous", "us.anthropic.claude-sonnet-4-5-v1:0")
+        P._bedrock_reasoning("enormous", "us.anthropic.claude-sonnet-5")
 
 
 # ── refusals that name the fix ────────────────────────────────────────────────

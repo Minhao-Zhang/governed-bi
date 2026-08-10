@@ -171,36 +171,44 @@ def _bedrock_kwargs(
     return kwargs
 
 
-#: Anthropic-on-Bedrock takes a token budget; Nova takes a named effort. There is no shared
-#: field, so the mapping is per family and keyed off the model id -- the alternative is
-#: passing a field the family rejects, which surfaces as a 400 mid-run rather than at build.
-_ANTHROPIC_THINKING_BUDGET: dict[str, int] = {
-    "low": 1024, "medium": 4096, "high": 16384, "xhigh": 32768,
-}
+#: Anthropic-on-Bedrock takes adaptive thinking plus a named effort; Nova takes a named effort
+#: under a different key. There is no shared field, so the mapping is per family and keyed off
+#: the model id -- the alternative is passing a field the family rejects, which surfaces as a
+#: 400 mid-run rather than at build.
+#:
+#: The five levels are Anthropic's own, so ``output_config.effort`` is a passthrough rather
+#: than a mapping. They are still listed, because the point of the local check is that an
+#: unknown value fails at build; Bedrock does reject one, but only after the call is paid for.
+_ANTHROPIC_EFFORTS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
 
 
 def _bedrock_reasoning(effort: str, model_id: str = "") -> dict[str, Any]:
+    """``effort`` in the shape this model family's Converse passthrough accepts.
+
+    **Anthropic takes adaptive thinking, not a token budget.** This sent
+    ``{"thinking": {"type": "enabled", "budget_tokens": N}}`` until 2026-08-10, which is the
+    pre-4.6 spelling. Measured against ``us.anthropic.claude-sonnet-5`` on Converse, that is
+    not a soft failure -- it is *"thinking.type.enabled is not supported for this model. Use
+    thinking.type.adaptive and output_config"*, so a Bedrock arm raised a
+    ``ValidationException`` on every turn at every effort. There is no budget to derive, which
+    is why the budget map and its inverse are gone rather than kept beside this.
+    """
     if "nova" in model_id.lower():
         return {"reasoningConfig": {"type": "enabled", "maxReasoningEffort": effort}}
-    budget = _ANTHROPIC_THINKING_BUDGET.get(effort.lower())
-    if budget is None:
+    if effort.strip().lower() not in _ANTHROPIC_EFFORTS:
         raise ValueError(
             f"reasoning effort {effort!r} has no Bedrock spelling; expected one of "
-            f"{sorted(_ANTHROPIC_THINKING_BUDGET)} or a Nova model id"
+            f"{sorted(_ANTHROPIC_EFFORTS)} or a Nova model id"
         )
-    return {"thinking": {"type": "enabled", "budget_tokens": budget}}
+    return {
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": effort.strip().lower()},
+    }
 
 
 _TRANSLATORS: dict[str, Callable[..., dict[str, Any]]] = {
     "openai": _openai_kwargs,
     "bedrock": _bedrock_kwargs,
-}
-
-
-#: The Anthropic-on-Bedrock budget map, read backwards. Derived rather than restated, so a
-#: budget edited above cannot leave the reporting side answering with the old number.
-_EFFORT_BY_THINKING_BUDGET: dict[int, str] = {
-    budget: effort for effort, budget in _ANTHROPIC_THINKING_BUDGET.items()
 }
 
 
@@ -214,8 +222,9 @@ def reasoning_effort_of(model: Any) -> str | None:
     It exists because reading it off a client's attributes does not work in general and the
     place that tried was ``session._resolved_knobs``:
     ``getattr(agent_model, "reasoning_effort", None)`` is only the *OpenAI-direct* spelling.
-    On the proxy the effort is inside ``extra_body`` and on Bedrock it is a token budget or a
-    Nova ``maxReasoningEffort``, so all 8,106 rows of the six arms in ``runs/eval/`` recorded
+    On the proxy the effort is inside ``extra_body`` and on Bedrock it is an
+    ``output_config.effort`` or a Nova ``maxReasoningEffort``, so all 8,106 rows of the six
+    arms in ``runs/eval/`` recorded
     ``llm_reasoning_effort: null`` while ``driver_v4.log`` records ``effort=high``. A
     high-vs-low A/B on the proxy therefore produced two artifacts with identical
     ``knobs_resolved``, which is the incident the knob's own note exists to prevent.
@@ -246,9 +255,13 @@ def _bedrock_effort(fields: Any) -> str | None:
     if isinstance(nova, Mapping):
         effort = nova.get("maxReasoningEffort")
         return str(effort) if effort else None
-    thinking = fields.get("thinking")
-    if isinstance(thinking, Mapping):
-        return _EFFORT_BY_THINKING_BUDGET.get(thinking.get("budget_tokens"))
+    # Anthropic: beside the thinking block, not inside it. Adaptive thinking carries no depth
+    # of its own, so ``{"thinking": {"type": "adaptive"}}`` with no ``output_config`` is
+    # genuinely "thinking on, provider default" and has no effort string to report.
+    output_config = fields.get("output_config")
+    if isinstance(output_config, Mapping):
+        effort = output_config.get("effort")
+        return str(effort) if effort else None
     return None
 
 
