@@ -131,9 +131,14 @@ time; it costs nothing.
 
 ### 3.2 The corpus is versioned and still not rebuildable
 
-`../BIRD-corpus` is in git. It cannot be regenerated from anything committed: the generators
-that produced it are out of tree, and there is no curator in `src/` for most asset types.
-Versioned is not reproducible-from-source, and no document may describe it as such.
+`../BIRD-corpus` is in git and still cannot be regenerated from anything committed — but not
+for the reason this entry used to give. `scripts/corpus_rebuild/01–03` **are** in the tree and
+**do** write assets: schema, table and column structure, join edges, few-shots. What has no
+producer anywhere is the prose half — every summary, term, metric and note — which those
+scripts leave as `TODO <identifier>` for a writing agent to fill in per schema.
+
+So the mechanical half is rebuildable and the corpus is not. Versioned is not
+reproducible-from-source, and no document may describe it as such.
 
 ### 3.2a `r_ambiguous_fold`'s resolver admits statements it must refuse
 

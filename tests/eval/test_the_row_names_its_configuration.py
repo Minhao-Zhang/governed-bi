@@ -160,12 +160,47 @@ def test_a_measured_row_names_both_treatment_identities(tmp_path: Path) -> None:
 
     AGENTS.md: the corpus is the treatment identity of every measurement. An identity that
     lives in a filename is one ``mv`` away from being wrong.
-    """
-    rows = run_arm(_questions(), stub_arm(connector=_connector(tmp_path)))
 
-    for row in rows:
-        assert "corpus_content_hash" in row, "the row does not say which corpus produced it"
-        assert "prompt_set_hash" in row, "the row does not say which prompt wording produced it"
+    **Asserted on the value, and across two runs.** The predecessor asserted
+    ``"corpus_content_hash" in row``, which a row carrying ``None`` satisfies — and a row
+    carrying a constant satisfies it forever, which is the whole failure it exists to catch,
+    reintroduced one layer down. Two runs differing only in the identities they are given must
+    produce rows that differ in exactly those fields; if they do not, a prompt or corpus A/B
+    emits two artifacts nothing can tell apart.
+    """
+    connector = _connector(tmp_path)
+    treatments = {
+        "alpha": ("corpus-alpha-0f1e", "prompt-alpha-9c8d"),
+        "beta": ("corpus-beta-77aa", "prompt-beta-b31c"),
+    }
+    rows_by_treatment = {
+        label: run_arm(
+            [
+                {**q, "corpus_content_hash": corpus, "prompt_set_hash": prompt}
+                for q in _questions()
+            ],
+            stub_arm(connector=connector),
+        )
+        for label, (corpus, prompt) in treatments.items()
+    }
+
+    for label, (corpus, prompt) in treatments.items():
+        for row in rows_by_treatment[label]:
+            assert row["corpus_content_hash"] == corpus, (
+                f"the row does not say which corpus produced it: {row['corpus_content_hash']!r}"
+            )
+            assert row["prompt_set_hash"] == prompt, (
+                "the row does not say which prompt wording produced it: "
+                f"{row['prompt_set_hash']!r}"
+            )
+
+    alpha, beta = rows_by_treatment["alpha"], rows_by_treatment["beta"]
+    assert {r["corpus_content_hash"] for r in alpha}.isdisjoint(
+        {r["corpus_content_hash"] for r in beta}
+    ), "two corpora produced rows that name the same corpus"
+    assert {r["prompt_set_hash"] for r in alpha}.isdisjoint(
+        {r["prompt_set_hash"] for r in beta}
+    ), "two prompt wordings produced rows that name the same wording"
 
 
 def test_the_prompt_hash_on_the_row_moves_with_the_selected_variant() -> None:

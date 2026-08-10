@@ -10,10 +10,12 @@ SQLite is the offline test/CI substrate.
 2. [Architecture](architecture.md) — serve spine and package map.
 3. [Measurement](measurement.md) — how to run an evaluation arm, what a
    measurement row carries, and what makes a number quotable.
-4. [ADRs](adr/) — binding decisions (start with 0005 and 0006).
-5. [Design decisions](design-decisions.md) — short index into the ADRs.
-6. [Glossary](glossary.md) — canonical terms.
-7. [Open work](open-work.md) — what is unfinished, and the evidence for each.
+4. [Corpus format](corpus-format.md) — where the corpus is, its layout and field
+   tiers.
+5. [ADRs](adr/) — binding decisions (start with 0005 and 0006).
+6. [Design decisions](design-decisions.md) — short index into the ADRs.
+7. [Glossary](glossary.md) — canonical terms.
+8. [Open work](open-work.md) — what is unfinished, and the evidence for each.
 
 ## Decision records (ADRs)
 

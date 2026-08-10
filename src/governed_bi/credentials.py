@@ -1,12 +1,20 @@
-"""One reader for credentials, for tests and tools. Never for ``src/``.
+"""One reader for credentials: the entry points, the tools and the tests.
 
 On 2026-08-03 three copies of "read a secret from the environment or ``.env``" disagreed about
 which sources they read, and parcel I's contract skipped its OpenAI half over a key that was
 present in ``.env`` the whole time. The failure mode of a duplicated credential reader is a
 quiet reduction in what ran, not a crash.
 
-Not in ``src/``, deliberately: a library that reads ``.env`` decides its own configuration
-behind its caller's back. Production code takes a DSN or a client.
+**Entry points only.** A library that reads ``.env`` decides its own configuration behind its
+caller's back, so nothing under ``src/`` may import this except the two processes that *are*
+the caller: ``api/graph_app.py`` and ``serve/__main__.py``. Everything else takes a DSN or a
+client. ``tests/conformance/test_only_entry_points_read_the_environment.py`` holds the list.
+
+This module lived in ``tools/`` to express that rule by geography, and the geography did not
+hold: both entry points imported it anyway, by putting ``tools/`` on ``sys.path`` first. That
+made a module named ``credentials`` importable from anywhere in the process, put an
+unpackaged directory on the runtime path of an installed package, and hid the rule-break
+rather than preventing it. The rule is the same; it is now written down and checked.
 
 :func:`secret` returns the value; :func:`have` answers yes/no without it, so a caller that only
 needs presence cannot interpolate a credential into a skip message.
@@ -15,11 +23,12 @@ needs presence cannot interpolate a credential into a skip message.
 from __future__ import annotations
 
 import os
-from pathlib import Path
+
+from .paths import REPO_ROOT
 
 #: The repository root, resolved from this file rather than the working directory, so a test
 #: invoked from a subdirectory finds the same ``.env`` as one invoked from the root.
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = REPO_ROOT
 
 #: The dotenv file. Git-ignored and the developer's to manage: nothing here writes to it.
 DOTENV = ROOT / ".env"

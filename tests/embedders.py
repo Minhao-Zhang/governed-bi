@@ -50,7 +50,7 @@ def openai_available() -> bool:
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
-    from credentials import have
+    from governed_bi.credentials import have
 
     return have(OPENAI_API_KEY_VAR)
 

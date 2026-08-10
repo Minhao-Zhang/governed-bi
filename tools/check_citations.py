@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CITATIONS = ROOT / "src" / "governed_bi" / "register" / "citations.py"
 
 #: Roots where a hit is fatal: live code, tools, and live documentation.
-STRICT_ROOTS: tuple[str, ...] = ("src", "tools", "docs")
+STRICT_ROOTS: tuple[str, ...] = ("src", "tools", "docs", "scripts")
 
 #: Archive roots (scanned, counted, never fatal). Empty: historical markdown
 #: was deleted from the working tree.

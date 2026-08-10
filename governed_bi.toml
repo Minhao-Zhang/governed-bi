@@ -6,7 +6,7 @@
 environment = "dev"
 
 [paths]
-corpus_root = "corpus"
+corpus_root = "../BIRD-corpus"
 
 [models]
 provider = "openai"

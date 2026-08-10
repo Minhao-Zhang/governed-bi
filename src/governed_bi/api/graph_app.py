@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from governed_bi.paths import REPO_ROOT, TOOLS_DIR
+from governed_bi.paths import REPO_ROOT
 from governed_bi.serve.graph import build_graph
 from governed_bi.serve.runtime import trust
 from governed_bi.serve.session import Session
@@ -66,10 +66,7 @@ def session_from_environment() -> Session:
         return _SESSION
 
     root = REPO_ROOT
-    import sys
-
-    sys.path.insert(0, str(TOOLS_DIR))
-    import credentials
+    from governed_bi import credentials
 
     credentials.load_into_environ()
 

@@ -33,7 +33,6 @@ import sys
 from collections import Counter
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "src"))
 
 DEFAULT_DATASET = REPO.parent / "BIRD-Data-Obfuscation" / "eval_dataset"
@@ -100,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n--dry-run: {len(states)} rows built, no model called, nothing spent.")
         return 0
 
-    import credentials
+    from governed_bi import credentials
 
     credentials.load_into_environ()
     if not credentials.have(*credentials.OPENAI_KEY_NAMES):
@@ -214,7 +213,7 @@ def _result_tables(rows: list[dict], *, required: bool) -> dict[str, dict] | Non
     longer executes yields no table rather than dropping the row — SQL that will not run is
     itself something a reflector should catch.
     """
-    import credentials
+    from governed_bi import credentials
 
     credentials.load_into_environ()
     dsn = credentials.secret(*credentials.PG_DSN_NAMES)

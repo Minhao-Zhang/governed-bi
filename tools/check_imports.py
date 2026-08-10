@@ -22,6 +22,11 @@ LAYERS: tuple[tuple[str, ...], ...] = (
     # A top-level module, not a package: `paths.py` says where the repository is and every
     # layer may ask, so it is innermost.
     ("paths",),
+    # Also a top-level module. Innermost-but-one because it depends on `paths` and nothing
+    # else, but its real constraint is not expressible here: layering answers "what may this
+    # import", and the rule that matters is "who may import *this*" -- entry points only.
+    # `tests/conformance/test_only_entry_points_read_the_environment.py` holds that half.
+    ("credentials",),
     ("ports",),
     ("register",),
     ("measure",),
@@ -40,7 +45,7 @@ LAYERS: tuple[tuple[str, ...], ...] = (
 UNLAYERED: frozenset[str] = frozenset({"__init__"})
 
 #: Packages required to import in a bare interpreter: stdlib only, no third party.
-STDLIB_ONLY: frozenset[str] = frozenset({"paths", "ports", "register"})
+STDLIB_ONLY: frozenset[str] = frozenset({"paths", "credentials", "ports", "register"})
 
 #: Third-party roots that must never appear in a ``STDLIB_ONLY`` module. A denylist of this
 #: project's own dependencies, not an exhaustive one: the inverse — an allowlist of stdlib —

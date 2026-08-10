@@ -21,6 +21,8 @@ from typing import Any
 
 import pytest
 
+from governed_bi.eval.arms import stub_arm
+from governed_bi.eval.harness import run_arm
 from governed_bi.eval.replay import (
     PINNED_SCHEMAS_KEY,
     attach_pinned_routing,
@@ -72,6 +74,39 @@ def test_a_question_the_artifact_does_not_cover_is_counted_not_hidden() -> None:
     assert questions[0][PINNED_SCHEMAS_KEY] == ["sales"]
     assert PINNED_SCHEMAS_KEY not in questions[1], (
         "an uncovered question must route live, not be pinned to nothing"
+    )
+
+
+def test_the_row_says_whether_its_own_shortlist_was_replayed(tmp_path: Path) -> None:
+    """The count above lives in the run header; this is the same fact per row.
+
+    ``attach_pinned_routing`` covers whatever the prior artifact happened to contain, so an arm
+    described as pinned is always part pinned and part live. The header count says how much;
+    only ``routing_pinned`` on the row says *which*, and without it no later reader can restrict
+    an analysis to the replayed half.
+
+    Driven through ``run_arm`` and asserted on the emitted rows, because that is the artifact.
+    A per-row field is exactly the shape that survives being wired to a constant: ``True``
+    everywhere reads as a fully pinned arm and ``False`` everywhere as one that ignored the
+    flag, and both are plausible enough to be believed. So the two questions here must disagree
+    in the row, not merely in the question dict the harness was handed.
+    """
+    covered = _artifact(tmp_path, [{"question_id": "replayed", "schemas": ["main"]}])
+    questions: list[dict[str, Any]] = [
+        {"question_id": "replayed", "question": "how many customers", "db_id": "main"},
+        {"question_id": "routed_live", "question": "list customer ids", "db_id": "main"},
+    ]
+    counts = attach_pinned_routing(questions, routing_from_artifact(covered))
+    assert counts == {"pinned": 1, "unpinned": 1}, "fixture no longer mixes the two cases"
+
+    rows = run_arm(questions, stub_arm())
+
+    assert {str(r["question_id"]): r["routing_pinned"] for r in rows} == {
+        "replayed": True,
+        "routed_live": False,
+    }, (
+        "the row does not distinguish a replayed shortlist from a live one, so the pinned "
+        "fraction of a --replay-routing arm is unrecoverable from its artifact"
     )
 
 

@@ -28,7 +28,6 @@ import sys
 import time
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "tools"))
 
 DEFAULT_CORPUS = "corpora/gold-semantic-layer-20260804"
 DEFAULT_DATASET = REPO.parent / "BIRD-Data-Obfuscation" / "eval_dataset"
@@ -71,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=pathlib.Path, default=None)
     args = parser.parse_args(argv)
 
-    import credentials
+    from governed_bi import credentials
 
     credentials.load_into_environ()
     dsn = credentials.secret(*credentials.PG_DSN_NAMES)

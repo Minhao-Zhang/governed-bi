@@ -243,6 +243,154 @@ def test_stub_arm_invokes_serve(tmp_path: Path) -> None:
     assert "question_id" in rows[0]
 
 
+# ── what a refused row says, and what an abstention would have answered ───────
+
+
+def _governed_arm(connector: SqliteConnector, sql_by_qid: dict[str, str]):
+    """A scripted arm with a real corpus, so ``check()`` runs instead of raising.
+
+    ``licensed`` is empty on this path — there is no index, so routing licenses nothing — which
+    makes every statement naming a table refuse at ``Layer.TABLES``. That is the population the
+    two tests below need: a turn that abstained while holding a statement.
+    """
+    from governed_bi.corpus.analyst import for_analyst
+    from governed_bi.corpus.schema import ColumnAsset, TableAsset
+    from governed_bi.eval.arms import scripted_arm
+
+    assets = [
+        TableAsset(
+            id="main.customers", schema="main", physical_name="customers",
+            summary="customers", columns=("main.customers.id",),
+        ),
+        ColumnAsset(
+            id="main.customers.id", schema="main", parent_table="customers",
+            physical_name="id", summary="id", physical_type="INTEGER",
+        ),
+    ]
+    return scripted_arm(
+        gold_sql_by_qid=sql_by_qid,
+        connector=connector,
+        assets_by_id={a.id: a for a in assets},
+        corpus=for_analyst(assets),
+    )
+
+
+def test_a_measured_row_says_which_layer_refused_each_attempt(tmp_path: Path) -> None:
+    """``refused`` names *that* governance declined; ``attempts`` names which layer.
+
+    ``CheckVerdict`` has carried ``failed_layer`` and ``reason_code`` all along and they stopped
+    at the turn record. Reading the 2026-08-09 run therefore meant replaying every refused
+    statement through ``check()`` offline to learn that 18 of 21 were ``r_table_not_licensed`` —
+    a *retrieval* failure the analysis had until then attributed to a guardrail false-positive.
+    Those two findings ask for opposite work.
+
+    Three questions producing three different verdicts, asserted as the whole list. A trace that
+    is empty, or constant, cannot separate them — and "empty" is what the field silently
+    degrades to, because every reader of it treats no attempts as a turn that attempted nothing.
+    """
+    _, connector = _fixture_db(tmp_path)
+    questions = [
+        {"question_id": "unlicensed", "question": "how many customers", "db_id": "main"},
+        {"question_id": "no_table", "question": "the answer", "db_id": "main"},
+        {"question_id": "not_a_read", "question": "delete them", "db_id": "main"},
+    ]
+    rows = run_arm(
+        questions,
+        _governed_arm(
+            connector,
+            {
+                "unlicensed": "SELECT COUNT(*) AS n FROM customers",
+                # Names no table, so the licensing layer has nothing to refuse: this one passes.
+                "no_table": "SELECT 999 AS n",
+                "not_a_read": "DROP TABLE customers",
+            },
+        ),
+    )
+    trace = {str(r["question_id"]): r["attempts"] for r in rows}
+
+    assert trace["unlicensed"] == [
+        {"layer": "TABLES", "reason_code": "r_table_not_licensed", "passed": False,
+         "path": "agent"}
+    ], trace["unlicensed"]
+    assert trace["not_a_read"] == [
+        {"layer": "NO_WRITE", "reason_code": "r_not_a_read", "passed": False, "path": "agent"}
+    ], trace["not_a_read"]
+    # The passing attempt, so the field is not just a list of refusals: a turn that answered
+    # still says how it got there, and `layer` is null because no layer objected.
+    assert trace["no_table"] == [
+        {"layer": None, "reason_code": "passed", "passed": True, "path": "agent"}
+    ], trace["no_table"]
+
+
+def test_an_abstained_turn_is_priced_without_being_scored(tmp_path: Path) -> None:
+    """``computed_correct`` — what the last statement *would* have answered, never counted.
+
+    A capped or refused turn keeps ``correct=False``: an engine that would not commit to a
+    statement gets no credit for it, and that rule stays. But the rule has a price, and until
+    this field existed nobody knew what it was — of the 2026-08-09 run's 133 capped turns, 23
+    held the correct answer. Keeping the policy and pricing it are only separable if the number
+    is on the row.
+
+    Four rows covering every branch of ``_abstained_fingerprint``, because the field's whole
+    content is *when* it is set: a constant ``None`` is indistinguishable from an engine that
+    never abstains with a statement in hand, and that is precisely the reading the field exists
+    to refuse.
+    """
+    _, connector = _fixture_db(tmp_path)
+    gold = "SELECT COUNT(*) AS n FROM customers"
+    columns, gold_rows, _ = connector.execute(gold)
+    gold_fingerprint = result_fingerprint(list(columns), [list(r) for r in gold_rows])
+
+    questions = [
+        {"question_id": qid, "question": qid, "db_id": "main",
+         "gold_sql": gold, "gold_fingerprint": gold_fingerprint}
+        for qid in ("refused_right", "refused_wrong", "refused_unrunnable", "answered")
+    ]
+    rows = run_arm(
+        questions,
+        _governed_arm(
+            connector,
+            {
+                # Refused for naming an unlicensed table -- and right anyway.
+                "refused_right": gold,
+                # Same refusal, wrong answer.
+                "refused_wrong": "SELECT 999 AS n FROM customers",
+                # Refused and would not have run, so there is nothing to price.
+                "refused_unrunnable": "DROP TABLE customers",
+                # Names no table, so it passes: `grade` already holds this one's verdict.
+                "answered": "SELECT 999 AS n",
+            },
+        ),
+    )
+    by_qid = {str(r["question_id"]): r for r in rows}
+
+    right = by_qid["refused_right"]
+    assert right["outcome"] == "refused", right["outcome"]
+    assert right["computed_correct"] is True, (
+        "a refused turn holding the right answer is priced at nothing, so the cost of the "
+        f"abstention policy cannot be read off the artifact: {right['computed_correct']!r}"
+    )
+    assert right["correct"] is False, (
+        "the price was folded into the score; an engine that refuses now gets credit for it"
+    )
+
+    wrong = by_qid["refused_wrong"]
+    assert wrong["outcome"] == "refused"
+    assert wrong["computed_correct"] is False, (
+        "every abstention prices as unknown, which reads the same as none of them being "
+        f"pricable: {wrong['computed_correct']!r}"
+    )
+
+    # The two genuine absences, so the field is not merely `correct` under another name.
+    assert by_qid["refused_unrunnable"]["computed_fingerprint"] is None
+    assert by_qid["refused_unrunnable"]["computed_correct"] is None
+    assert by_qid["answered"]["outcome"] == "answered"
+    assert by_qid["answered"]["computed_correct"] is None, (
+        "an answered turn is graded by `grade_turn`; a second verdict beside it invites the "
+        "merge the field exists to prevent"
+    )
+
+
 def test_result_fingerprint_order_insensitive() -> None:
     a = result_fingerprint(["id"], [[2], [1]], order_sensitive=False)
     b = result_fingerprint(["id"], [[1], [2]], order_sensitive=False)

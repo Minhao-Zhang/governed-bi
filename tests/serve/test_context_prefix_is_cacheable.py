@@ -207,7 +207,21 @@ def test_assemble_records_an_eviction_only_when_the_budget_bites() -> None:
         "by_type": {"table": [f"s.t{i}" for i in range(40)]},
         "schema_ranking": [],
     }
-    assets = {
+
+    roomy: dict = {}
+    render_context(retrieved=pieces, assets_by_id=_wide_tables(), schemas=["s"],
+                   budget_chars=10**7, evicted=roomy)
+    assert roomy == {}, "a block that fits must record no eviction"
+
+    tight: dict = {}
+    render_context(retrieved=pieces, assets_by_id=_wide_tables(), schemas=["s"],
+                   budget_chars=800, evicted=tight)
+    assert tight, "the budget bit and nothing was recorded"
+
+
+def _wide_tables(n: int = 40) -> dict[str, Any]:
+    """``n`` table assets whose bodies are the first rung of the eviction ladder."""
+    return {
         f"s.t{i}": type(
             "T", (), {
                 "id": f"s.t{i}", "asset_type": type("A", (), {"value": "table"})(),
@@ -215,15 +229,87 @@ def test_assemble_records_an_eviction_only_when_the_budget_bites() -> None:
                 "summary": "x" * 400, "body": "y" * 400,
             },
         )()
-        for i in range(40)
+        for i in range(n)
     }
 
-    roomy: dict = {}
-    render_context(retrieved=pieces, assets_by_id=assets, schemas=["s"], budget_chars=10**7,
-                   evicted=roomy)
-    assert roomy == {}, "a block that fits must record no eviction"
 
-    tight: dict = {}
-    render_context(retrieved=pieces, assets_by_id=assets, schemas=["s"], budget_chars=800,
-                   evicted=tight)
-    assert tight, "the budget bit and nothing was recorded"
+def test_assemble_writes_the_eviction_onto_the_delivery_it_returns() -> None:
+    """The link between the renderer and everything downstream, which nothing covered.
+
+    ``render_context``'s out-parameter is asserted above and ``merge_into``'s carry is asserted
+    two tests up, but ``assemble_node`` is what puts the value on ``delivery`` in the first
+    place — and it is three lines that can be deleted without either neighbour noticing. With
+    them gone the whole chain still runs: the renderer fills its dict, the tracker faithfully
+    carries a key that is not there, and every artifact reports that the budget never bit.
+
+    Asserted on the node's own return value, and paired with the roomy case: a node that always
+    wrote the key would report an eviction on all 1 351 turns of a run where 19 had one.
+    """
+    from governed_bi.serve.nodes.assemble import assemble_node
+
+    state = {
+        "question": "how many customers",
+        "schemas": ["s"],
+        "retrieved": {"by_type": {"table": [f"s.t{i}" for i in range(40)]}, "schema_ranking": []},
+    }
+    config = {"configurable": {"thread_id": "t-evict", "assets_by_id": _wide_tables()}}
+
+    tight = assemble_node({**state, "context_budget_chars": 800}, config)["delivery"]
+    assert tight.get("evicted"), (
+        "assemble dropped what the budget evicted, so nothing downstream can see it: "
+        f"{sorted(tight)}"
+    )
+    assert tight["evicted"].get("bodies_dropped"), tight["evicted"]
+
+    roomy = assemble_node({**state, "context_budget_chars": 10**7}, config)["delivery"]
+    assert "evicted" not in roomy, (
+        "a turn whose block fit records an eviction; absent and empty must stay different facts"
+    )
+
+
+def test_the_served_record_carries_what_the_budget_evicted(
+    two_schema_index, two_schema_assets
+) -> None:
+    """End to end into ``record``, which is what ``runs/serve/*.jsonl`` is written from.
+
+    ``stamp`` projects ``delivery`` into the record through an explicit key set, so ``evicted``
+    is one name in one literal away from reaching the eval row and nothing else — and that is
+    exactly the state it was found in. A served turn would then have no trace that the char
+    budget dropped a licensed table before the model ever saw it, on the only path a user's
+    question actually takes.
+
+    Same turn twice, differing only in the budget, so the field is asserted as a *response* to
+    the budget rather than as a key that happens to be present.
+    """
+    from governed_bi.govern.policy import GovernancePolicy
+    from governed_bi.serve.graph import compile_graph
+
+    def _serve(budget: int | None, thread: str) -> dict[str, Any]:
+        knobs: dict[str, Any] = {"route_top_n": 1, "candidate_depth": 50}
+        if budget is not None:
+            knobs["context_budget_chars"] = budget
+        state = {
+            "question": "customer", "thread_id": thread, "turn_index": 1, "run_id": "r-evict",
+            "turn_id": f"turn-{thread}", "question_id": "q-evict", "db_id": "sales_a",
+            "attempt_id": "a-evict", "corpus_content_hash": "c", "prompt_set_hash": "p",
+            "knobs_resolved": knobs, "n_re_served": 0, "messages": [], "usage": [],
+            "route_top_n": 1, "candidate_depth": 50, "identity": {"token": "tok"},
+        }
+        config = {
+            "configurable": {
+                "thread_id": thread,
+                "policy": GovernancePolicy(guard_rules_enabled={}),
+                "index": two_schema_index,
+                "assets_by_id": two_schema_assets,
+            }
+        }
+        return compile_graph().invoke(state, config)["answer"]["record"]
+
+    tight = _serve(120, "t-evict-tight")
+    assert tight["evicted"], (
+        "the served record does not say the budget bit, so runs/serve/*.jsonl cannot "
+        "distinguish a table that was rendered from one dropped for space"
+    )
+
+    roomy = _serve(None, "t-evict-roomy")
+    assert roomy["evicted"] is None, "a turn whose block fit must record no eviction"

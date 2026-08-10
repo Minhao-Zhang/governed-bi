@@ -14,7 +14,7 @@ Usage::
     uv run --frozen python -m governed_bi.serve --schema gbi_demo_sales -q "how many customers?"
 
     # a corpus already on disk
-    uv run --frozen python -m governed_bi.serve --corpus-dir corpus/ --schema gbi_demo_sales -q "..."
+    uv run --frozen python -m governed_bi.serve --corpus-dir ../BIRD-corpus --schema beer_factory -q "..."
 
     # no model: the graph runs, retrieval and governance are real, the answer is the stub
     uv run --frozen python -m governed_bi.serve --schema gbi_demo_sales -q "..." --no-model
@@ -31,8 +31,6 @@ import sys
 import tempfile
 from typing import Any
 
-from ..paths import TOOLS_DIR
-
 
 def _credentials() -> Any:
     """The shared reader, with ``.env`` bridged into the environment for this process.
@@ -41,8 +39,7 @@ def _credentials() -> Any:
     read `os.environ` directly, so `have()` returning true is not the same as their being able
     to use the value.
     """
-    sys.path.insert(0, str(TOOLS_DIR))
-    import credentials
+    from .. import credentials
 
     credentials.load_into_environ()
     return credentials

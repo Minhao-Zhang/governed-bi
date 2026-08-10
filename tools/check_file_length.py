@@ -16,12 +16,18 @@ SOFT_LIMIT = 400
 #: Fatal. ADR 0005 §6.
 HARD_LIMIT = 1000
 
-#: Roots scanned (src, tools, tests).
-ROOTS: tuple[str, ...] = ("src", "tools", "tests")
+#: Roots scanned. ``scripts`` is here because the one-shot campaign kits under it are still
+#: code someone reads; leaving it out would make "move it to scripts/" a way to leave the
+#: checks.
+ROOTS: tuple[str, ...] = ("src", "tools", "tests", "scripts")
 
 #: Directory names skipped wherever they appear: generated or vendored trees are not code
-#: anyone reads, and ``__pycache__`` holds no ``.py`` files but costs a walk.
-SKIP_DIRS: frozenset[str] = frozenset({"__pycache__", ".venv", "venv", "node_modules"})
+#: anyone reads, and ``__pycache__`` holds no ``.py`` files but costs a walk. ``_build`` is
+#: the corpus-rebuild kit's gitignored staging area — throwaway audit scripts, not a length
+#: anyone should act on.
+SKIP_DIRS: frozenset[str] = frozenset(
+    {"__pycache__", ".venv", "venv", "node_modules", "_build"}
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 

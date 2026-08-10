@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 
 def _load_dotenv_into_environ() -> int:
     """Fill unset environment variables from ``.env``. Returns how many were filled."""
-    from credentials import _dotenv  # noqa: PLC2701 -- one reader, deliberately shared
+    from governed_bi.credentials import _dotenv  # noqa: PLC2701 -- one reader, shared
 
     filled = 0
     for key, value in _dotenv().items():

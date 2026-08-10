@@ -244,8 +244,12 @@ tmp_agent_run/
 # seeded corpus written by from_live_schema. None of them can be rebuilt from anything
 # committed — there is no curator module in src/ — so treat a variant as evidence only
 # for as long as the directory survives. Promote it to the corpus repo before quoting a
-# number from it. See corpus/README.md.
+# number from it. See docs/corpus-format.md.
 corpora/
+
+# Derived, rebuildable projections inside any corpus tree (ADR 0005 D9): search index,
+# embeddings, compiled graph. Never authored directly, so never committed.
+_generated/
 
 # Firecrawl CLI scrape cache. The CLI writes it into the repo root, and AGENTS.md
 # says the top level holds only README.md and configuration files.

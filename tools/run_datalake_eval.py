@@ -30,9 +30,10 @@ import pathlib
 import sys
 import threading
 import time
+from collections.abc import Collection, Mapping
+from typing import Any
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "src"))
 
 #: The corpus, in its own repository as of 2026-08-07 (D13). Derived from this file's location,
@@ -159,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.utility_effort and not args.utility_model:
         parser.error("--utility-effort needs --utility-model; alone it is accepted and ignored")
 
-    import credentials
+    from governed_bi import credentials
 
     credentials.load_into_environ()
     from governed_bi.model import provider as provider_mod
@@ -299,6 +300,10 @@ def main(argv: list[str] | None = None) -> int:
     retrying = 0
     if args.resume and out_path.exists():
         kept_lines: list[str] = []
+        seen_identities: dict[str, collections.Counter] = {
+            "corpus_content_hash": collections.Counter(),
+            "prompt_set_hash": collections.Counter(),
+        }
         for line in out_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line:
@@ -310,8 +315,23 @@ def main(argv: list[str] | None = None) -> int:
             if str(row.get("outcome")) == "crashed":
                 retrying += 1
                 continue
+            for field, counter in seen_identities.items():
+                counter[row.get(field)] += 1
             kept_lines.append(line)
             done.add(str(row.get("question_id")))
+        refusal, warnings = resume_identity_problem(
+            seen_identities,
+            done,
+            corpus_content_hash=session.corpus_content_hash,
+            prompt_set_hash=session.prompt_set_hash,
+            question_ids={str(q["question_id"]) for q in questions},
+        )
+        for warning in warnings:
+            print(f"warning: {warning}", file=sys.stderr)
+        if refusal:
+            print(f"--resume refused for {out_path}:", file=sys.stderr)
+            print(refusal, file=sys.stderr)
+            return 4
         if retrying:
             body = "".join(f"{line}\n" for line in kept_lines)
             out_path.write_text(body, encoding="utf-8")
@@ -555,6 +575,75 @@ def _abstention(every: list[dict]) -> None:
     )
 
 
+def resume_identity_problem(
+    seen: Mapping[str, Mapping[Any, int]],
+    resumed_qids: Collection[str],
+    *,
+    corpus_content_hash: str,
+    prompt_set_hash: str,
+    question_ids: Collection[str],
+) -> tuple[str, list[str]]:
+    """``(refusal, warnings)`` — is the artifact on disk the same treatment as this run?
+
+    Public and pure so it can be tested; ``main`` owns only the printing and the exit code.
+
+    **Why this exists.** The artifact filename carries ``--model``, ``--effort``, ``--top-n``,
+    ``--embed``, the provider and ``--prompt-variant``, and a renamed tag already aborts. It
+    does **not** carry ``--corpus-dir``, and an explicit ``--out`` bypasses the tag entirely.
+    So: ``git pull`` in ``../BIRD-corpus``, resume, and one artifact holds two corpora — every
+    gate passes and the driver prints that the numbers are quotable as a single arm. The corpus
+    is the treatment identity (AGENTS.md), which makes that the worst sentence this driver can
+    print. Both hashes were already on every row and nothing read them back.
+
+    A row that carries ``None`` **warns rather than refuses**: "written before this field
+    existed" is a different fact from "written under a different corpus", and refusing on it
+    would strand every older artifact.
+
+    **What this does not catch:** a dataset whose gold statements were edited while the question
+    ids stayed the same. The row carries no dataset identity, and ``gold_fingerprint`` is
+    attached after the resume decision. A dataset with a *different question set* is caught,
+    below, by the ids themselves.
+    """
+    problems: list[str] = []
+    warnings: list[str] = []
+    expected = {
+        "corpus_content_hash": corpus_content_hash,
+        "prompt_set_hash": prompt_set_hash,
+    }
+    for field, want in expected.items():
+        counter = seen.get(field) or {}
+        foreign = {v: n for v, n in counter.items() if v is not None and v != want}
+        if foreign:
+            lines = [f"  the artifact carries a different {field}:", f"    this run: {want}"]
+            lines += [
+                f"    on disk : {value}  ({n} rows)"
+                for value, n in sorted(foreign.items(), key=lambda kv: -kv[1])
+            ]
+            problems.append("\n".join(lines))
+        missing = counter.get(None, 0)
+        if missing:
+            warnings.append(
+                f"{missing} resumed row(s) carry no {field}; they predate the field and "
+                "cannot prove they are the same treatment"
+            )
+    # Ids the artifact has and this run does not. Either --dataset changed or the scope narrowed
+    # (--limit / --per-schema). Both mean the two are not one population; the driver cannot tell
+    # them apart from here, so it names both rather than guessing.
+    stale = sorted(set(map(str, resumed_qids)) - set(map(str, question_ids)))
+    if stale:
+        problems.append(
+            f"  {len(stale)} row(s) name questions this run does not cover, so the artifact and "
+            f"this run are not one population. Either --dataset changed, or --limit/--per-schema "
+            f"narrowed the scope. Example question id: {stale[0]}"
+        )
+    if problems:
+        problems.append(
+            "  Two treatments in one artifact is not an arm. Rename the artifact and start a "
+            "new one, or restore the treatment it was measured under."
+        )
+    return "\n".join(problems), warnings
+
+
 def _refusal_layers(every: list[dict]) -> None:
     """Which governance layer refused, per attempt.
 
@@ -564,15 +653,25 @@ def _refusal_layers(every: list[dict]) -> None:
     the 2026-08-09 run needed every refused statement replayed through ``check()`` offline to
     tell them apart. This prints it.
     """
+    from governed_bi.serve.ledger import answering_attempts
+
+    # **`answering_attempts`, not every row.** A `sample_rows` probe is refused by the same
+    # layers as a draft answer and lands in the same ledger, so counting the raw list reports
+    # introspection as governance declining to answer -- on the v3-fold arm, 21 `passed` and 3
+    # `r_ambiguous_fold` attempts that were probes. Every other reader of this ledger
+    # (`execution_from_attempts`, `stamp`, `agent_core`) already goes through this function, and
+    # `serve/ledger.py` says why: three copies of "which attempts count" is three answers. This
+    # was the fourth copy, and it disagreed. The row keeps every attempt including `path`, so
+    # the filter belongs here in the reader and no artifact loses information.
     codes: collections.Counter = collections.Counter()
     for row in every:
-        for attempt in row.get("attempts") or ():
+        for attempt in answering_attempts(row.get("attempts") or ()):
             if attempt.get("passed") is True:
                 continue
             codes[f"{attempt.get('layer') or '-'}/{attempt.get('reason_code') or '-'}"] += 1
     if not codes:
         return
-    print("\nfailed attempts by layer/rule:")
+    print("\nfailed attempts by layer/rule (answering attempts only):")
     for name, n in codes.most_common(12):
         print(f"  {name:<44}{n:>6}")
 
