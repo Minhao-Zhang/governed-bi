@@ -10,35 +10,30 @@ built on LangGraph and measured on an obfuscated 57-schema Postgres data lake.
 
 ## What is different here
 
-This engine is built around the questions it should not answer, and three design decisions follow
-from that.
-
 ### 1. The model has no database handle
 
 There is no tool that executes arbitrary SQL. The connector is closed over inside `build_tools`,
 so it never appears in the model's tool schema and never enters the message history. The agent
 writes a statement and hands it to a tool body, which checks it before anything runs.
 
-The governance boundary is a missing tool rather than a policy asking the model to behave. A
-prompt injection can say whatever it likes; there is nothing on the other end to say it to. The
-same property makes the boundary testable: `govern/`'s G2 invariant says every executor passes
-`check()` and writes a ledger row, and the tests enumerate the executors, so adding one that
-skips either fails the suite.
+The governance boundary is a missing tool rather than a policy asking the model to behave. There
+is no channel for a prompt injection to reach the database through. The boundary is also testable:
+`govern/`'s G2 invariant says every executor passes `check()` and writes a ledger row, the tests
+enumerate the executors, and adding one that skips either fails the suite.
 
 ### 2. Retrieval is also the allowlist
 
 The tables retrieval surfaces for a turn are exactly the tables the checker will permit for that
 turn. One mechanism does both jobs, so the two cannot drift apart.
 
-The consequence matters more than the mechanism. When retrieval misses the table a question
-needs, the statement fails at the `TABLES` layer and the turn ends in a refusal that names
-`r_table_not_licensed`. It does not end in a confident answer computed over some other table that
-happened to be nearby. In a lake with decoy tables, which is what the measurement corpus has, that
-distinction is the whole product.
+When retrieval misses the table a question needs, the statement fails at the `TABLES` layer and the
+turn ends in a refusal that names `r_table_not_licensed`, instead of ending in a confident answer
+computed over whichever similar table happened to be nearby. The measurement corpus is a lake with
+decoy tables in it, so that case is common rather than hypothetical.
 
-The cost is real and worth stating: a retrieval miss becomes a hard refusal rather than a degraded
-answer. At 0.936 gold-table coverage that trade is cheap. Whether to keep it is
-[an open question](docs/open-work.md), not a settled one.
+The trade-off is that a retrieval miss becomes a hard refusal rather than a degraded answer. At
+0.936 gold-table coverage it is a cheap one. Whether to keep it is
+[an open question](docs/open-work.md) rather than a settled design.
 
 ### 3. Declining is an outcome, with a taxonomy and a price
 
@@ -48,8 +43,8 @@ attempts without producing a statement that passed. `clarification` means the en
 user a question instead, which is what it does when a turn licenses nothing at all.
 
 Every declined turn is then priced. The harness runs the gold statement and records what the
-engine *would* have scored, in a separate field that never merges into the headline. So the claim
-"declining is worth something" is a number rather than a posture.
+engine would have scored, in a separate field that never merges into the headline. That is what
+makes the numbers in the next section possible.
 
 ---
 
@@ -116,8 +111,8 @@ first refusal ends the attempt:
 | `COLUMNS` | columns the corpus marks excluded or suspect |
 | `TABLES` | tables this turn was not licensed |
 
-A seventh layer, `COST`, is declared and ships off. The allowlist itself is pinned to the sqlglot
-generation the tree was built against, because the function list is keyed on expression classes
+A seventh layer, `COST`, is declared but disabled by default. The function allowlist is pinned to
+the sqlglot generation the tree was built against, because the list is keyed on expression classes
 and those move across major versions.
 
 ### Execute and stamp
@@ -149,22 +144,23 @@ schemas, describing tables, columns, joins, metrics, business terms and worked e
 | Declined turns that would have been **wrong** | **77.4%** (48 of the 62 that can be priced) |
 | Delivered accuracy divided by withheld accuracy | **3.16x** |
 
-The last three rows are why this project exists. An engine that answers everything tells you
+The last three rows are the ones worth reading. An engine that answers everything tells you
 nothing about which of its answers to distrust. This one declines 5.4% of turns and is right about
-why on three of every four declines the dataset lets us price. That is a claim about calibration,
-and it sits orthogonal to accuracy: a system with a higher score can still leave you unable to
-sort its good answers from its bad ones.
+why on three of every four declines the dataset lets us price. Calibration is a separate axis from
+accuracy: a system can score higher and still leave you unable to sort its good answers from its
+bad ones.
 
-The honest version of the claim is narrow. The engine declines when its **own context** is
+The claim is narrower than it first looks. The engine declines when its own context is
 insufficient, and almost all of that is retrieval: 19 of the 20 refusals end on
-`r_table_not_licensed`, and all 4 clarifications licensed nothing at all. It does not know which
-questions are hard. It knows when it is working blind, which turns out to be the more useful thing
-for a reader who cannot check the SQL.
+`r_table_not_licensed`, and all 4 clarifications licensed nothing at all. Knowing when you are
+working blind is a weaker property than knowing which questions are hard, and it is the one these
+measurements support. For a reader who cannot check the SQL it is still the difference between a
+wrong answer and no answer.
 
-The measured conditions, the paired statistics behind every figure above, and the comparison
-against a system that never abstains are in [failure modes](docs/failure-modes.md) and
-[measurement](docs/measurement.md). Numbers here are quotable only with the corpus commit beside
-them, which is why it appears above.
+The measured conditions, the paired statistics behind every figure above, and a comparison against
+a system that never abstains are in [failure modes](docs/failure-modes.md) and
+[measurement](docs/measurement.md). A number here is quotable only with the corpus commit beside
+it, which is why the commit appears above.
 
 ---
 
@@ -211,18 +207,21 @@ Every environment variable, plus the Bedrock and proxy gateways, is in
 A text-to-SQL score moves by a point or two for reasons unrelated to the change you made, so most
 of the engineering here is in telling a real result from a lucky run.
 
-- **Paired tests, not net deltas.** Comparisons use McNemar over the discordant pairs. Two
-  identical runs of this engine disagree on 12.7% of questions, which puts the noise floor at
-  SE around 1.0pp. An agentic loop with up to five attempts, five model-driven rewriters above
-  retrieval, and a layer that can refuse buys expressiveness and pays for it in resolution.
-- **Routing replay.** `--replay-routing` pins a run to a prior run's shortlist, because those five
-  rewriters mean an unpinned A/B cannot separate its own effect from a shortlist that moved. It
-  cuts discordance by about a quarter.
-- **Treatment identity on every row.** Each measurement row carries `corpus_content_hash` and
-  `prompt_set_hash`. Resuming an artifact whose corpus differs from the running one is refused,
-  rather than producing one file holding two experiments and reporting it as one.
-- **Instruments that can fail.** Measurement code is mutation-tested: break the field, confirm a
-  test catches it. Eight tests that could not fail were found and fixed this way.
+Comparisons use McNemar over the discordant pairs rather than a subtraction of two scores. Two
+identical runs of this engine disagree on 12.7% of questions, which puts the noise floor at SE
+around 1.0pp. An agentic loop with up to five attempts, five model-driven rewriters above
+retrieval, and a layer that can refuse buys expressiveness and pays for it in resolution.
+
+`--replay-routing` pins a run to a prior run's schema shortlist. Those five rewriters mean an
+unpinned A/B cannot separate its own effect from a shortlist that moved, and pinning cuts
+discordance by about a quarter.
+
+Each measurement row carries `corpus_content_hash` and `prompt_set_hash`. Resuming an artifact
+whose corpus differs from the running one is refused, so one file cannot end up holding two
+experiments and reporting them as one.
+
+The measurement code is mutation-tested: break the field, confirm a test catches it, restore.
+Eight tests that could not fail were found and fixed that way.
 
 The payoff is being able to explain a number. One example: a governance rule scoped one level too
 wide was refusing fully qualified references it should have allowed, 568 attempts across 119
