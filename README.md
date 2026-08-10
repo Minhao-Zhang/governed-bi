@@ -18,26 +18,69 @@ wording that produced it.
 
 ## What it can say about itself
 
-Measured on 1,351 questions across 57 schemas, decoy tables included.
+The `v4` arm: 1,351 questions across 57 schemas with decoy tables included,
+corpus [`BIRD-corpus`](https://github.com/Minhao-Zhang/BIRD-corpus) @ `30872d3`.
 
 | | |
 |---|---:|
-| Execution accuracy | **0.664** |
-| Accuracy on turns it commits to | **0.709** (n = 1,265) |
-| Turns it declines | 86 (6.4%) |
-| Declined turns that would have been **wrong** | **81.2%** |
-| Delivered accuracy ÷ withheld accuracy | **3.76×** |
+| Execution accuracy | **0.676** |
+| Accuracy on turns it commits to | **0.714** (n = 1,278) |
+| Turns it declines | 73 (5.4%) |
+| Declined turns that would have been **wrong** | **77.4%** (48 of the 62 that can be priced) |
+| Delivered accuracy ÷ withheld accuracy | **3.16×** |
 
-The last three rows are the point. An engine that answers everything gives you no
-signal about which of its answers to distrust; this one abstains on 6.4% of turns
-and is right about *why* four times out of five. That is a claim about
-calibration, and it is orthogonal to accuracy — a system with a higher score can
-still leave you unable to tell its good answers from its bad ones.
+The last three rows are the reason this project exists. An engine that answers
+everything gives you no signal about which of its answers to distrust; this one
+declines 5.4% of turns and is right about *why* on three out of four of the
+declines the dataset lets us price. That is a claim about calibration, and it is
+orthogonal to accuracy — a system with a higher score can still leave you unable
+to tell its good answers from its bad ones.
 
-For reference, [WrenAI](https://github.com/Canner/WrenAI) scores 0.678 on the same
-questions and the same database. Paired over the 1,351 questions that is a net
-difference of 19, McNemar p = 0.240 — **a statistical tie**, and stated as one
-rather than rounded into a win.
+The claim has a measured ceiling, and it is lower than the table above invites.
+[WrenAI](https://github.com/Canner/WrenAI) never abstains, so it doubles as a
+governance-off contrast arm: on the 73 turns this engine declines it answers all
+73 and gets **56.2%** of them right, against 68.5% on the turns this engine
+commits to. A ratio of 1.22× means the declined turns are mostly *answerable*
+questions. The abstention is calibrated to this engine's own competence, not to
+question difficulty.
+
+On accuracy the two systems are level. WrenAI scores 0.678 on the same questions
+and the same database; paired over all 1,351 that is a net difference of 3 in
+WrenAI's favour, McNemar p = 0.895 — **a statistical tie**, and stated as one
+rather than rounded either way.
+
+---
+
+## What four points of that score actually measure
+
+The default prompt contains one paragraph telling the model to select exactly the
+columns the question asks for and nothing else. The `v5` arm is that paragraph
+deleted and nothing else changed:
+
+| | v4 | v5 |
+|---|---:|---:|
+| Execution accuracy | 0.676 | **0.635** |
+| Predictions projecting more columns than the gold | 43 | **126** |
+| Abstention precision | 0.774 | **0.847** |
+
+Paired, that is net −55 questions, −4.07pp, McNemar p < 0.0001 — one of the
+largest effects any single change has produced here, from a rule about output
+formatting.
+
+Nothing in the engine enforces select-list width: `govern/layers.py` has no rule
+about it, and the grader hashes row tuples while explicitly *not* hashing column
+names. So the only thing an extra column can change is the grader's digest.
+Roughly four points of this engine's execution accuracy come from matching the
+reference answer's column set rather than from finding the right data.
+
+That is not a reason to publish 0.635 as the honest number. Every published EX on
+this benchmark contains an output-shaping component; WrenAI's 0.678 does too, and
+its size cannot be measured from the outside, so subtracting only from this side
+would make the comparison less accurate rather than more. It is also not a
+reasoning regression — v5's abstention precision went *up*, 0.774 → 0.847. The
+engine did not get worse at knowing what it does not know. It got worse at
+matching a shape. The finding is a measurement of a confound in the metric, which
+almost nobody measures because it costs a full second arm to see.
 
 ---
 
@@ -68,7 +111,11 @@ harder problem is knowing when a result is real.
 
 - **Paired tests, not net deltas.** Arms are compared with McNemar over the
   discordant pairs. Two identical runs disagree on 12.7% of questions, which puts
-  the noise floor at SE ≈ 1.0pp — so a 2-point "improvement" is not one.
+  the noise floor at SE ≈ 1.0pp — so a 2-point "improvement" is not one. That
+  floor is a property of *this* architecture, not of the benchmark: WrenAI's two
+  runs over the same questions disagree on 2.4%. An agentic loop with up to five
+  attempts, five model-driven rewriters above retrieval, and a layer that can
+  refuse buys expressiveness and pays for it in resolution.
 - **Routing replay.** `--replay-routing` pins an arm to a prior run's shortlist,
   because five model-driven rewriters sit above retrieval and an unpinned A/B
   cannot separate its own effect from a shortlist that moved. It cuts discordance

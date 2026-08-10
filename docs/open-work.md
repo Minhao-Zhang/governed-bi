@@ -15,19 +15,26 @@ Binding design lives in the [ADRs](adr/). This is a work list, not a decision re
 
 ## 1. Engine — measured, with a known ceiling
 
-Current arm: **v3-fold**, engine `4f7430a`, corpus `30872d3`, **EX 0.664** (clean 0.6641).
-454 failures. Method and per-case diagnosis: [failure modes](failure-modes.md).
+Current arm: **v4**, engine `3c0079a`, corpus `30872d3`, **EX 0.676** (clean 0.6762).
+438 failures. Method and per-case diagnosis: [failure modes](failure-modes.md).
 
-Where the remaining failures are:
+Where the remaining failures are. The six rows partition the 438 — every failure lands in
+exactly one — so the coverage-based rows below are stated again as cross-cutting totals,
+because those are the numbers §1.5 and §7 are about:
 
 | bucket | n | nature |
 |---|---:|---|
-| full-coverage answered wrong | **262** | genuine semantics — the generic text-to-SQL problem |
-| coverage incomplete | 86 | retrieval |
-| frozen-literal gold | 85 | dataset defect, unwinnable |
-| capped | 57 | the agent spent all five attempts without a passing statement |
-| refused | 23 | **all** coverage failures, none with full coverage |
-| clarification | 6 | all zero-licensed |
+| full-coverage answered wrong | **257** | genuine semantics — the generic text-to-SQL problem |
+| answered, frozen-literal gold | 75 | dataset defect, unwinnable |
+| capped | 49 | the agent spent all five attempts without a passing statement |
+| answered, coverage incomplete | 33 | retrieval |
+| refused | 20 | none with full coverage |
+| clarification | 4 | all zero-licensed |
+
+Across all outcomes: **73** failures had incomplete table coverage and **85** had a
+frozen-literal gold. The `refused` and `capped` rows are where those two overlap the
+outcome buckets — 19 of the 20 refusals had partial or no coverage and the twentieth
+had a tableless gold, and 26 of the 49 capped turns were not fully covered either.
 
 ### 1.2 The agent budgets its attempts blind
 
@@ -38,53 +45,55 @@ a budget it cannot see.
 
 Returning "attempt 2 of 5" in the tool reply costs nothing. `serve/tools.py`.
 
-### 1.3 Six turns licensed nothing at all
+### 1.3 Four turns licensed nothing at all
 
-Six of 1 351 turns routed zero schemas and licensed zero tables. All six asked a
+Four of 1 351 turns routed zero schemas and licensed zero tables. All four asked a
 clarifying question — the correct response to an empty context, and the reason they are
 **not** an agent-behaviour problem. They are a retrieval defect, isolated and small:
-`licensed` has a median of 26 and these are the only rows below 5.
+`licensed` has a median of 25 and these are the only rows below 5.
 
 ### 1.4 Twenty-two answers were written against the wrong schema
 
-Failures where the prediction and the gold share no schema at all. The pairs are the
-semantically adjacent decoy sets, `mondial_geo ↔ world` in both directions:
+Failures where the prediction and the gold statement share no schema at all. The pairs are
+the semantically adjacent decoy sets, `mondial_geo ↔ world` in both directions:
 
-| gold | predicted |
-|---|---|
-| `ice_hockey_draft` | `hockey` |
-| `mondial_geo` | `world` |
-| `world` | `mondial_geo` |
-| `movielens` | `movies_4` |
-| `regional_sales` | `address`, `car_retails` |
-| `sales` | `movie_3` |
+| gold | predicted | n |
+|---|---|---:|
+| `regional_sales` | `car_retails` | 3 |
+| `mondial_geo` | `world` | 2 |
+| `world` | `mondial_geo` | 2 |
+| `movie_platform` | `movies_4` | 2 |
+| `books`, `book_publishing_company` | `car_retails` | 2 |
+| `address`, `beer_factory` | `works_cycles` | 2 |
+| nine more, one each | — | 9 |
 
-The gold schema was routed in these turns. This is disambiguation **inside** the licensed set,
-not routing recall — the agent is handed tables from several schemas and picks the wrong one.
+The gold schema was routed in 20 of the 22. This is disambiguation **inside** the licensed
+set, not routing recall — the agent is handed tables from several schemas and picks the
+wrong one.
 
-### 1.5 Ninety-four questions never had their gold tables licensed
+### 1.5 Seventy-nine questions never had their gold tables licensed
 
-Table coverage on the v3-fold arm is **0.923** — 1 130 of 1 224 questions with a real gold
-statement had every gold table licensed. The engine answered 8 of the uncovered 94 correctly and
-missed the other 86, which is the "coverage incomplete" bucket in §1.
+Table coverage on the v4 arm is **0.936** — 1 145 of 1 224 questions with a real gold
+statement had every gold table licensed. The engine answered 6 of the uncovered 79 correctly
+and missed the other 73, which is the cross-cutting coverage total under §1.
 
 This is a **licensing figure, not a delivered one**; see §3.3 for what the char budget drops on
-top of it. Concentrated in `superstore`, `hockey` and `beer_factory`.
+top of it. Concentrated in `works_cycles` (7), then `airline`, `law_episode` and `superstore`
+(5 each).
 
-This is now the largest *winnable* bucket after the 262 semantic errors, and unlike those it is
-corpus and retrieval work rather than generic text-to-SQL.
+This is still the largest *winnable* bucket after the 257 semantic errors, and unlike those it
+is corpus and retrieval work rather than generic text-to-SQL.
 
-### 1.6 Ten capped turns had every gold table and still built no join
+### 1.6 Twelve capped turns had every gold table and still built no join
 
-Twenty-one of the 57 capped turns had full coverage; in 10 of those the gold answer needs more
+Twenty-three of the 49 capped turns had full coverage; in 12 of those the gold answer needs more
 than one table and the final draft joins none. The tables were in context. What is missing is
 relationship grounding, not table budget — raising `table` budget above 8 does not address it.
 
-The other 28 capped turns had partial or no coverage, so the capped bucket is now mostly a
-retrieval problem rather than a join-assembly one. That is a change of kind from earlier arms,
-where 106 of 133 capped turns had full coverage.
+The other 26 capped turns had partial coverage, no coverage, or a tableless gold, so the capped
+bucket is about half a retrieval problem. Concentrated in `movie_3` and `works_cycles`, 8 each.
 
-### 1.7 Five answers were delivered with no SQL at all
+### 1.7 Three answers were delivered with no SQL at all
 
 `outcome: answered` with an empty `generated_sql` — the model answered from the delivered
 schema descriptions without querying. This is a declared state (`stamp.py`), not a
@@ -119,15 +128,18 @@ closed-domain claims.
 
 ## 3. Instrument
 
-### 3.1 `--replay-routing` works, and the arm that most needed it did not use it
+### 3.1 `--replay-routing` works, and the one arm that most needed it did not use it
 
-Exercised once, on v3-pinned: 1 343 of 1 351 pinned, and the residual licensed-set drift it
-prints went from Jaccard 0.579 (unpinned, run1 vs run2) to 0.701.
+Now exercised on three arms. v4 and v5 both pin to `proxy_v3_fold_opus_high_corpus30872d3.jsonl`:
+1 345 of 1 351 pinned, mean residual Jaccard 0.702 on v4 and 0.70 on v5, against 0.579 for the
+unpinned run1/run2 pair. It buys real resolution — the pinned v3-fold → v4 comparison is
+discordant on 9.3% of questions against the unpinned null's 12.7%, which is SE(net) 0.83pp
+instead of 0.97pp.
 
-**The v3-fold arm did not pass the flag.** So v3-fold vs v3-pinned differs by the fold fix
-*and* by routing. Routing churn is unbiased (run1 vs run2: net −12, χ²=0.70), so the +5.3pp
-attribution stands, but the discordance is inflated — 189 against the null's 172. Pass it next
-time; it costs nothing.
+**The v3-fold arm itself did not pass the flag.** So v3-fold vs v3-pinned differs by the fold
+fix *and* by routing. Routing churn is unbiased (run1 vs run2: net −12, p = 0.40), so the
++5.3pp attribution stands, but the discordance is inflated — 189 against the null's 172. Every
+arm since has passed it; it costs nothing.
 
 ### 3.2 The corpus is versioned and still not rebuildable
 
@@ -187,15 +199,20 @@ rebuilt corpus.
 
 ### 3.3 The char budget is not the binding constraint
 
-Measured on v3-fold, now that `context_evicted` survives the turn: the 80 000-char budget bit on
-**19 of 1 351 turns (1.4%)**, dropping bodies only and never a whole table. The advice that the
+Measured on v4, now that `context_evicted` survives the turn: the 80 000-char budget bit on
+**18 of 1 351 turns (1.3%)**, dropping bodies only and never a whole table. The advice that the
 budget already binds and must not be cut is **withdrawn**; it rested on an offline
 reconstruction, not on this measurement.
 
 So there is headroom. Whether to use it is a question about whether the content earns its
-place, not about whether it fits. An `agent_core` call averages 22 285 input tokens and the
-node makes 2.46 calls per turn, so the 1 963 repeat calls within a turn carry **58.6%** of all
-input — measured from `usage`, not bounded.
+place, not about whether it fits. `agent_core` carries **98.7%** of the arm's 74.3M input
+tokens at an average of 22 308 per call, and the node makes 2.44 calls per turn — so **1 943
+of its 3 290 calls (59.1%)** are the second and later call within a turn, re-sending a context
+the model has already seen.
+
+`usage` writes one aggregated `agent_core` record per turn, so a per-call token split is not
+recoverable from the artifact; the call counts above are exact and any token figure attributed
+to *repeat* calls specifically is an average, not a measurement.
 
 ### 3.4 Held back on purpose
 
@@ -203,10 +220,10 @@ input — measured from `usage`, not bounded.
 because it changes behaviour and would become a second variable in the next arm. Apply it with
 its own A/B, not alongside something else.
 
-1. **Comparability: run1, run2 and the v3 arm ran on `ba8cef2` or earlier.** `r_ambiguous_fold`
+1. **Comparability: run1, run2 and v3-pinned ran on `ba8cef2` or earlier.** `r_ambiguous_fold`
    was narrowed after them and it moves ~119 turns, so those three are **not** paired-comparable
-   with anything measured since on what the fold touches. **v3-fold is the control for new
-   arms.**
+   with anything measured since on what the fold touches. **v4 is the control for new arms**,
+   and v3-fold is the artifact new arms pin their routing to.
 2. **A hard cancel after the agent's grace period can leave an executed statement out of the
    ledger.** A turn killed between `execute` and the ledger write records no attempt for SQL
    the database actually ran. Rare, and it makes the ledger under-count rather than invent —
@@ -298,37 +315,86 @@ which `None` satisfies. Its sibling was written to close exactly that hole and a
 constant. `test_comparability_knobs` asserts `FUSE_WEIGHTS["lexical"] == knob_default("w_lexical")`,
 which is the tautology behind §3.8.
 
+### 3.10 The noise floor is five times a comparison system's, and that is architectural
+
+Two runs of this engine with the configuration held fixed — run1 and run2, same prompt, same
+corpus, same knobs — disagree on **12.7% of outcomes** (172 of 1 351). WrenAI's two runs over
+the same questions and the same database disagree on **2.4%** (33 of 1 351).
+
+The WrenAI pair is a genuine replicate and not one run graded twice: its `generated_sql` is
+identical on 919 of 1 351 questions (68%), so a third of its statements were regenerated
+differently and still landed on the same outcome.
+
+Nothing is broken. The gap is what this architecture is: an agentic loop that may take up to
+five `run_query` attempts, five model-driven facet rewriters sitting above retrieval, and a
+layer that can end the turn in a refusal. Each is a place where one sampled token changes the
+outcome, and a single-shot generator has none of them.
+
+The consequence is a standing tax on every experiment run here, and it should be stated before
+a run rather than discovered after one:
+
+- SE(net) is about **1.0pp** unpinned and **0.83pp** with `--replay-routing`, so the smallest
+  effect a 1 351-question arm can resolve at 80% power is roughly **2.3pp** — v3-fold → v4's
+  MDE was 2.33pp and its observed delta was 1.18pp. The same comparison against a
+  2.4%-discordant system would resolve about 1.0pp.
+- A change worth less than ~2pp is not measurable here by running one more arm. It needs the
+  mechanism counted instead — the way v4 was accepted on `r_star_projection` going 35/29 to
+  2/2 rather than on its EX — or a larger question set, or an intervention that reduces the
+  loop's own variance.
+- Pinning routing is the only lever currently applied, and it recovers about a quarter of the
+  discordance (§3.1). The attempt loop and the facet rewriters are unaddressed.
+
 ---
 
 ## 4. Open questions
 
-### 4.1 What the headline should be
+### 4.1 What the headline should be, and what the contrast arm did to it
 
-On the v3-fold arm the engine commits to 1 265 of 1 351 turns at **0.709** accuracy and abstains
-on 86 (6.4%). Of those 86, **69 can be priced** — for the other 17 the dataset ships no gold
-fingerprint, so what the engine would have got is unknowable, not zero. Of the 69, 13 would have
-been correct: **81.2% of priced abstentions would have been wrong** had the engine been forced
-to answer. Delivered accuracy is **3.76×** the accuracy it withheld.
+On the v4 arm the engine commits to 1 278 of 1 351 turns at **0.714** accuracy and abstains
+on 73 (5.4%). Of those 73, **62 can be priced** — for the other 11 the dataset ships no gold
+fingerprint, so what the engine would have got is unknowable, not zero. Of the 62, 14 would have
+been correct: **77.4% of priced abstentions would have been wrong** had the engine been forced
+to answer. Delivered accuracy is **3.16×** the accuracy it withheld.
 
-The 69/86 split is not a rounding detail. Abstention precision is computed over a subset the
+The 62/73 split is not a rounding detail. Abstention precision is computed over a subset the
 dataset selected, not a random one, so it is a figure about the priced population and must be
 quoted that way.
 
-That is a claim about *calibration*, and it is orthogonal to EX — a comparison system reporting
-a higher EX says nothing about which of its answers to distrust. Whether the project leads with
-this or with EX decides what gets built next, and the two point at different work.
+**A governance-off contrast arm already exists, and it bounds the claim rather than confirming
+it.** WrenAI runs the same 1 351 questions on the same database with `refusal_rate: 0.0` — it
+never abstains, which is the comparison the calibration claim needs. On the 73 turns v4
+declines, WrenAI answers all 73 and gets **56.2%** of them right, against **68.5%** on the
+1 278 turns v4 commits to. The ratio is **1.22×**.
 
-Making it a result rather than an observation needs a **contrast arm**: the same questions with
-the governance layer off, to show that the turns the engine declined are turns an ungoverned
-engine answers wrongly and confidently. That experiment does not exist yet.
+Read that plainly: the questions this engine declines are mostly answerable. If abstention were
+tracking *question difficulty*, an ungoverned engine should fall apart on the declined set; it
+loses twelve points. What abstention tracks is this engine's own competence on the turn —
+almost all of it retrieval, since 19 of the 20 refusals end on `r_table_not_licensed` (§4.2) and
+all 4 clarifications licensed nothing at all. That is still a real and useful property: it is
+the difference between a retrieval miss surfacing as "I cannot answer" and surfacing as a
+confident answer over the wrong table. It is not the stronger claim, which is that the engine
+knows which questions are hard.
+
+So the honest framing is narrower than "calibrated abstention": **the engine declines when its
+own context is insufficient, and it is right about that 77.4% of the time on the priced
+subset.** Whether the project leads with this or with EX decides what gets built next, and the
+two point at different work — leading with abstention points at retrieval, since that is what
+the declines are made of.
+
+What would still be worth building is the *other* contrast: the same engine with Layer 6
+relaxed to the whole routed schema instead of the licensed 8 tables (§4.2), so the comparison
+holds the model and the corpus fixed and moves only the allowlist. WrenAI differs from this
+engine in every dimension at once, which is why it can bound the claim but cannot attribute it.
 
 ### 4.2 Whether `licensed` should keep serving two masters
 
 `licensed` is both the retrieval budget (`ASSET_REGISTER[table].budget = 8`) and the governance
 allowlist that `check()` Layer 6 enforces. A retrieval miss therefore becomes a hard refusal
-rather than a degraded answer — 19 of the arm's 23 refusals end on `r_table_not_licensed`, and
-21 of the 23 hit it at some point in the turn.
+rather than a degraded answer — 19 of the arm's 20 refusals end on `r_table_not_licensed`, and
+all 20 hit it at some point in the turn.
 
-At 0.923 coverage this is not currently expensive, which is why it is a question and not an
+At 0.936 coverage this is not currently expensive, which is why it is a question and not an
 item in §1. Decoupling them (govern over the whole routed schema, retrieve the top 8) would
-change what "governed" means and needs an ADR, not a patch.
+change what "governed" means and needs an ADR, not a patch — and per §4.1 it is also the
+contrast arm that would attribute the abstention property to the allowlist rather than to
+everything else that differs between two systems.
