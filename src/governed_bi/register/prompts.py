@@ -72,7 +72,19 @@ ANALYST = Prompt(
         "Its worked example names no schema in the evaluation set on purpose: the rule is "
         "derived from measurement, which is the loop working, but an illustration borrowed from "
         "a held-out question's domain would let the prompt be read as tuned on the test split "
-        "for no teaching value a neutral example does not have."
+        "for no teaching value a neutral example does not have.\n"
+        "v5 is v4 minus the projection paragraph, and it is the one variant here written to "
+        "lose. The star rule and the identifier rules state constraints `check()` enforces; "
+        "the projection rule states nothing this engine enforces -- `RULES` in `govern/layers.py` "
+        "has no rule about how wide a select list may be -- while `result_fingerprint` hashes "
+        "row tuples and explicitly does not hash column names, so an extra column can change "
+        "nothing except the grader's digest. A rule aimed at the one dimension of the "
+        "comparator, and at nothing else, is measuring the comparator. v5 prices it: the "
+        "difference v4 - v5 is how much of this engine's EX comes from shaping output to a "
+        "digest rather than from answering the question, and that number belongs in the write-up "
+        "whichever way it falls. Its worked example told the agent to withhold the total from "
+        "'which supplier shipped the most units', which is worse for a real BI reader -- so the "
+        "rule is not obviously right on its own terms either."
     ),
     variants={
         "v1": (
@@ -146,6 +158,33 @@ ANALYST = Prompt(
             "SELECT list: asked which supplier shipped the most units, return the supplier "
             "name alone, not the name and the total beside it. Add a second column only "
             "when the question asks for a second thing.\n"
+            "Choose DISTINCT on what the question means, never as a precaution. Use it when "
+            "the question asks for distinct, unique, different or separate things, and when "
+            "a join fans one row out into duplicates you would otherwise count twice. Do not "
+            "add it to tidy a result you have not looked at, and do not drop it where the "
+            "question is about how many different things there are.\n"
+            "Name the columns you want. A bare star in the select list is refused, because the "
+            "allowlist cannot vouch for columns the statement never names: neither "
+            "`SELECT *` nor `SELECT t.*` will run, however few columns the table has. "
+            "`COUNT(*)` is the one carve-out and is always fine, as is "
+            "`COUNT(DISTINCT col)`."
+        ),
+        # v5 = v4 byte-for-byte, minus the projection paragraph. Not an improvement
+        # candidate: it exists to price a rule this engine does not enforce.
+        "v5": (
+            "You are a governed BI analyst. Use only the context and tools provided. "
+            "Call ask_user only when a missing fact blocks a correct SQL answer.\n"
+            "Write every table reference as schema.table — an unqualified name is refused. "
+            "Spell identifiers exactly as the context gives them, and wrap any identifier "
+            'containing a space, punctuation or a leading digit in double quotes, e.g. '
+            'airline."Air Carriers".\n'
+            "Tool arguments are asset ids, not SQL names. When a context line carries "
+            "id=..., pass that value to read_body, inspect_schema and sample_rows; the "
+            "spelling before it is for SQL only.\n"
+            "Before writing SQL you may call inspect_schema for a table's columns, "
+            "sample_rows to see a column's actual values, and read_body for an asset's "
+            "notes. Use sample_rows whenever a filter compares against a literal you have "
+            "not seen. Then answer with run_query.\n"
             "Choose DISTINCT on what the question means, never as a precaution. Use it when "
             "the question asks for distinct, unique, different or separate things, and when "
             "a join fans one row out into duplicates you would otherwise count twice. Do not "
