@@ -538,6 +538,13 @@ def project_turn(
             None if computed_fp is None or not gold_fp else computed_fp == str(gold_fp)
         ),
         "terminal_reason": record.get("terminal_reason"),
+        # The reflector's verdict, or None when it did not run (knob off, no model, no
+        # statement). `stamp` has projected it into the turn record since the node landed and
+        # nothing carried it out to the artifact, so an arm run with `--reflect` would have
+        # spent a model call per turn and produced nothing a scorer could read. The knob's own
+        # note says it stays off "until tools/score_reflector.py shows the verdict beats the
+        # base rate" -- which that tool cannot do from a row that does not carry the verdict.
+        "reflect_verdict": record.get("reflect_verdict"),
         # Carried so the run can be counted: `observed_tokens` reads it, and without it a
         # batch reports no calls at all, reading as a free run rather than an unmeasured one.
         # Tokens only — `measure/price.py` is deleted, so cost is the provider's number.

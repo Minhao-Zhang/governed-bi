@@ -95,6 +95,15 @@ def main(argv: list[str] | None = None) -> int:
         help="reasoning effort for the utility model. Needs --utility-model.",
     )
     parser.add_argument("--top-n", type=int, default=None, help="override route_top_n")
+    parser.add_argument(
+        "--reflect",
+        action="store_true",
+        help="turn on the post-hoc reflector (reflect_enabled). It is an observer -- it writes "
+        "a verdict and changes no control flow -- so EX should not move, which is the arm's own "
+        "sanity check. Costs one utility-model call per turn. The judge is `reflect_model` if "
+        "set, otherwise --utility-model. It is a comparability knob and enters the artifact tag, "
+        "because a reflected arm and an unreflected one are two arms.",
+    )
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument(
         "--max-retries",
@@ -261,9 +270,14 @@ def main(argv: list[str] | None = None) -> int:
     variant_tag = "".join(
         f"_{pair.replace('=', '')}" for pair in sorted(args.prompt_variant or ())
     )
+    # `reflect_enabled` is a comparability knob, so it moves the config hash -- but the resume
+    # guard compares the corpus and prompt hashes, not that one, so without a tag segment a
+    # reflected arm would resume into an unreflected artifact and the two would be reported as
+    # one. Same reason --prompt-variant is here.
+    reflect_tag = "_reflect" if args.reflect else ""
     tag = (
         f"{args.model}_{args.effort or 'default'}_top{args.top_n or 'default'}"
-        f"_{'embed' if args.embed else 'lexical'}{provider_tag}{variant_tag}"
+        f"_{'embed' if args.embed else 'lexical'}{provider_tag}{variant_tag}{reflect_tag}"
     )
     out_path = args.out or pathlib.Path("runs/eval") / f"live_full_{tag}.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -380,17 +394,29 @@ def main(argv: list[str] | None = None) -> int:
             flush=True,
         )
 
+    # Per-question knob overrides, composed into one dict. Two separate blocks each writing
+    # `knobs_resolved` would mean the second silently dropped the first's override, which is the
+    # defect `Session.turn` already caused once for `--top-n`.
+    knob_overrides: dict[str, Any] = {}
     if args.top_n is not None:
+        knob_overrides["route_top_n"] = args.top_n
+    if args.reflect:
+        knob_overrides["reflect_enabled"] = True
+    if knob_overrides:
         for question in questions:
-            question["knobs_resolved"] = {
-                **session.knobs_resolved,
-                "route_top_n": args.top_n,
-            }
+            question["knobs_resolved"] = {**session.knobs_resolved, **knob_overrides}
 
     total = len(questions)
     print(
         f"model={args.model} effort={args.effort or '(default)'} workers={args.workers} "
-        f"top_n={args.top_n or '(register default)'}\n"
+        f"top_n={args.top_n or '(register default)'}"
+        + (
+            f"\nreflect=ON, judged by {args.utility_model or args.model} "
+            "(observer: writes a verdict, changes no control flow -- EX must not move)"
+            if args.reflect
+            else ""
+        )
+        + "\n"
         f"corpus={args.corpus_dir} ({len(session.assets_by_id)} assets, {len(schemas)} schemas, "
         f"{len(session.degradations)} degradations)\n"
         f"questions={total}"
