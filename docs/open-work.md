@@ -234,6 +234,19 @@ the tag entirely, so the `--prompt-variant` guard does not apply to a run that n
 Separately, without `--resume` the driver appends to an existing artifact with no dedup, and
 reports EX over the duplicated population before the population check raises.
 
+### 3.6a A clarification turn carries no treatment identity
+
+Every row in the 2026-08-09 artifacts whose `corpus_content_hash` is `None` is a zero-licensed
+turn that ended in a clarifying question — 6 of 6 in v3-fold, 8 of 8 in v3-pinned, 4 of 4 in v4.
+A turn that terminates before routing never reaches whatever stamps the identity, so `None` here
+does not mean "written before the field existed"; it means the field has a path it is not
+written on.
+
+It is 0.4% of rows and all of them are abstentions, so no headline number moves. Two
+consequences that are not zero: those rows cannot prove which corpus produced them, and §3.6's
+resume guard warns about them on **every** legitimate resume, which is the shape that teaches a
+reader to ignore a warning.
+
 ### 3.7 Three fields report the intent rather than the outcome
 
 - **`routing_pinned`** is read off the question dict, where `attach_pinned_routing` wrote it —
