@@ -121,7 +121,7 @@ def test_a_seed_only_pair_is_not_quotable_today_and_must_stay_that_way() -> None
     """
     from governed_bi.eval.report import comparison_quotable
 
-    ok, _results_a, _results_b, _ctx = comparison_quotable(*_pair())
+    ok, _results_a, _results_b, _ctx, _knobs = comparison_quotable(*_pair())
     assert ok is False, "a seed-only null pair became quotable"
 
 

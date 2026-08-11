@@ -222,7 +222,7 @@ def test_quotable_false_when_crash_rate_positive() -> None:
         ],
         label="crashy",
     )
-    ok, _results_a, results_b, _ctx = comparison_quotable(a, b)
+    ok, _results_a, results_b, _ctx, _knobs = comparison_quotable(a, b)
     assert not ok
     assert any(r.field == "outcome" and r.verdict is Verdict.failed for r in results_b)
 
