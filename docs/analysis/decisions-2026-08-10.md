@@ -152,7 +152,7 @@ mechanism is the fix. The measured numbers live in the docstrings and in the aud
 
 Review established that `build_index` constructs a fresh `VectorStore` before every `load_from`, so
 `_replace` runs once per store and the retained-store loop I measured is not a path in this tree. On
-the real path the reconnect is worth 0.226 → 0.201 MB per build, inside the noise, against the ~50 GB
+the real path the reconnect is worth 0.226 → 0.201 MB per build, inside the noise, against the ~47 GB
 over 1,351 questions I published.
 
 **Chosen:** keep the line, withdraw the claim, and record the scope in the P-table as
@@ -330,3 +330,21 @@ resolved values are identical to the constants and no score moves. What changed 
 can move them, which is asserted through `_pass_one_hits` — two knob settings, two different scores
 — rather than on the resolver, because a resolver returning the right numbers says nothing about
 whether the scoring path uses them. That is exactly how the import-time constants survived.
+
+## D-23 — The merge's own claims are corrected in the tree, not force-pushed
+
+An independent verification of `774b0d5` found 17 record defects and none in the code. The commit
+message is already on `origin/main`.
+
+**Chosen:** correct them in `audit-2026-08-10.md`, in a named section that lists what the message got
+wrong, and leave the message alone.
+
+**Rejected:** `git push --force` with an amended message. A published commit is a fact other people
+may already hold; rewriting it to look correct is the same move as a page quietly correcting itself,
+which is what this audit exists to remove. The tree is where the correction is durable and reviewable.
+
+**The one that stings:** the headline "+0.08pp" was a bare subtraction of two rates — forbidden by
+`AGENTS.md`, and flagged by this register's own still-open E2 against the very tool that produced it.
+Properly paired it is `discordant=25/1224, p=1.0000, MDE=0.0114`: one question, 14x below the
+detection floor. I reached for the number the tool printed instead of the test the repo owns, in a
+commit whose subject is that gates must be able to fail.
