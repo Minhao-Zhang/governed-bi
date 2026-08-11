@@ -392,3 +392,22 @@ open on an unexpected type is precisely how the first version got shipped.
 **Rule, generalised, since this is the sixth time:** when a test *can* reach the real path, reaching
 for the function instead is not a shortcut — it is a different test, of the author's model of the
 system rather than of the system.
+
+## D-26 — The RAM question is closed with a number, not with a diagnosis
+
+The P-rows were opened by a report that RAM was "absurdly high". They produced two fixes worth having
+(P1, P2), one diagnosis that was wrong by ~190x and is withdrawn (P3), and — until now — **no answer to
+the question actually asked**: what does this thing cost when you run it?
+
+**Chosen:** measure the served path and record the number. `langgraph dev`, real corpus, real
+Postgres, three real turns. 727–785 MB working set, 1,348–1,416 MB private commit, peaks 939 / 1,635.
+Serving does not grow it; the peak is the boot-time index build.
+
+**Why this closes it rather than more profiling:** the reporter had already concluded the symptom was
+another application, and chasing someone else's process is not this repository's business. What *was*
+this repository's business is being able to say what it costs, and that was missing while three P-rows
+argued about allocation. A number that anyone can re-measure ends the question; another diagnosis
+would only have added a fourth thing to be wrong about.
+
+**Not claimed:** that 0.7 GB is good or bad. It is what a process holding 13,304 curated assets and a
+13,304 x 3,072 float32 vector store costs, stated so the next person can decide.
