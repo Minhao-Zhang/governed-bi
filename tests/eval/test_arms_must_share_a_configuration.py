@@ -93,10 +93,28 @@ def test_the_same_configuration_still_compares() -> None:
     assert ok
 
 
-def test_an_operational_difference_is_not_fatal() -> None:
-    """``Role.operational`` is "recorded; difference does not invalidate a comparison" by its
-    own definition in ``register/knobs.py``. Only the comparability set may block."""
-    a, b = _pair(_recorded(), {**_recorded(), "run_id": "other", "not_a_knob": 1})
+def test_an_operational_or_scope_difference_is_not_fatal() -> None:
+    """Only the comparability set may block.
+
+    ``Role.operational`` is "recorded; difference does not invalidate a comparison" and
+    ``Role.scope`` is "not a comparability key", both by their own definitions in
+    ``register/knobs.py``. Two arms built from different commits are still a comparison.
+
+    This test is what makes the key set load-bearing. An earlier version moved ``run_id``,
+    which is **not a knob at all**, so the gate was free to read ``resume_drift_keys()`` — the
+    superset, and the wrong question — with every test still green. Mutation-verified
+    2026-08-11 in the corrected form: swapping ``comparability_keys()`` for
+    ``resume_drift_keys()`` turns this red.
+    """
+    a, b = _pair(
+        _recorded(),
+        {
+            **_recorded(),
+            "git_sha": "beefbeef",          # operational
+            "working_tree_dirty": True,     # operational
+            "split": "dev",                 # scope
+        },
+    )
     _ok, _a, _b, _ctx, knobs = comparison_quotable(a, b)
 
     assert knobs.verdict is Verdict.passed, knobs.detail
