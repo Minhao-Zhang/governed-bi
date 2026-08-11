@@ -464,3 +464,24 @@ reach is overstated is worse than no pin: it makes the next person think the gro
 **Kept anyway**, with `raises=AssertionError` so a rename produces a real failure rather than the
 expected one, and with the null-pair check reading all 1,351 rows instead of one per arm — both
 mutation-verified as insufficient before.
+
+## D-29 — Review before push, not after; and know when not to start a chunk
+
+Two process changes, written down because this session earned both the hard way.
+
+**Review before push.** The rhythm used here was commit → push → independent review → correction
+commit. Twice that put something on `origin/main` that did not work: A4's first handler was dead code
+(it read a key the runtime does not use) and D9's first control turned CI red (it asserted a gitignored
+fixture exists). Both were caught in one review cycle, but both were public first. The order should be
+commit → review → push, with the correction folded in before anything leaves the machine. Nothing about
+the reviews required them to run against a pushed commit.
+
+**Know when not to start a chunk.** Seven independent reviews in this session found that something
+shipped did not do what its commit message claimed. The two worst instances — the dead handler and the
+red CI — were both written when there was little room left to check the work properly. "Commit between
+chunks" implies chunks that are complete; a chunk begun without the budget to verify it is not a small
+chunk, it is a large one that will be finished by someone else, badly. Stopping with the register
+accurate and `main` green is a better handoff than one more half-item.
+
+**What this does not license:** stopping because work is tedious, or because a reviewer found something.
+The test is whether the next unit can be finished *and* verified, not whether it is comfortable.
