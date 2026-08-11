@@ -155,6 +155,56 @@ async def _no_state_writes(ctx: Auth.types.AuthContext, value: dict) -> None:
         ),
     )
 
+def _command_of(value: object) -> dict | None:
+    """The ``command`` a run-creation event carries, from **where the runtime puts it**.
+
+    ``None`` means there is none to inspect. Anything unexpected **raises**, which is the whole
+    lesson of this function: the first version read ``value["command"]`` and returned early when it
+    found nothing, so it allowed every request. ``langgraph_api`` nests it —
+    ``models/run.py`` hands ``command`` to ``Runs.put`` inside the third positional argument and
+    ``langgraph_runtime_inmem/ops.py`` wraps that whole dict as ``RunsCreate(kwargs=kwargs)``. The
+    real value is ``{"thread_id": …, "assistant_id": …, "kwargs": {"input": …, "command": {…}}}``.
+    Verified end to end: the exact payload the audit row claimed was refused was accepted, and the
+    forged ``licensed`` reached the stored run. The gRPC/Postgres runtime nests it identically.
+
+    **A security check that fails open on a shape it did not expect is how that happened**, so a
+    ``command`` present under a type this cannot read is a refusal rather than a pass. That covers
+    the case ``models/run.py`` creates when request encryption is on: ``command`` is then ciphertext
+    rather than a dict, and returning early there would silently reopen this.
+
+    Both locations are read, newest first, so a future version moving the key back to the top level
+    does not reopen it either. What no reading of a payload can protect is the key being *renamed*;
+    the end-to-end test is what covers that.
+    """
+    if not isinstance(value, Mapping):
+        raise Auth.exceptions.HTTPException(
+            status_code=403,
+            detail=(
+                f"run creation received {type(value).__name__}, which this authorisation hook "
+                "cannot inspect for a state-writing command. Refused rather than allowed: a check "
+                "that fails open on an unexpected shape is not a check (audit A4)."
+            ),
+        )
+    for holder in (value.get("kwargs"), value):
+        if not isinstance(holder, Mapping) or "command" not in holder:
+            continue
+        command = holder["command"]
+        if command is None:
+            return None
+        if not isinstance(command, Mapping):
+            raise Auth.exceptions.HTTPException(
+                status_code=403,
+                detail=(
+                    f"run creation carries a command of type {type(command).__name__}, which this "
+                    "hook cannot read — request encryption is the likely cause. Refused rather "
+                    "than allowed, because `command.update` writes the tool bounds the layer stack "
+                    "enforces against (audit A4)."
+                ),
+            )
+        return dict(command)
+    return None
+
+
 #: Keys of a run-creation ``command`` that write state instead of resuming one.
 #:
 #: ``resume`` is the whole point of the paused-turn protocol and must stay: ``ask_user`` interrupts
@@ -185,8 +235,8 @@ async def _no_state_writes_on_a_new_run(ctx: Auth.types.AuthContext, value: dict
     thread" that makes forging the engine's own record acceptable. ``resume`` passes, because
     answering a clarification is what this endpoint is for.
     """
-    command = value.get("command") if isinstance(value, dict) else None
-    if not isinstance(command, dict):
+    command = _command_of(value)
+    if command is None:
         return
     offending = sorted(k for k in _STATE_WRITING_COMMANDS if command.get(k) is not None)
     if not offending:

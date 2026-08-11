@@ -369,3 +369,26 @@ writing them acceptable.
 dispatches a different action, `("threads", "create_run")`, which no handler covered — and LangGraph
 applies `update` through `map_command`, which unlike `map_input` writes every key it is handed with no
 reference to the graph's input schema. Closing a door is not closing the room.
+
+## D-25 — An auth hook is tested through the dispatch, never by calling it
+
+A4's first fix read `value["command"]`; `langgraph_api` puts it at `value["kwargs"]["command"]`. The
+handler returned early and allowed the exact payload the audit row said it refused — verified end to
+end by review, with the forged `licensed` in the stored run.
+
+**Three things all agreed it worked, and all three were looking at the same fiction:** a test that
+called the handler function directly, two mutations written against that call, and the register row.
+Deleting the `@auth.on.threads.create_run` decorator outright also left the test green.
+
+**Chosen:** `tests/api/test_a_run_cannot_write_state.py` goes through `langgraph_api`'s own
+`handle_event` with a real `AuthContext` and the value shape the runtime builds. It needs no port, no
+model, no corpus and no Postgres, so there is no excuse for the direct call. Registration is asserted
+separately, because fail-open-on-no-match is silent.
+
+**Also chosen: fail closed on a shape the hook cannot read.** With request encryption on, `command`
+arrives as ciphertext; returning early there would reopen this quietly. A security check that fails
+open on an unexpected type is precisely how the first version got shipped.
+
+**Rule, generalised, since this is the sixth time:** when a test *can* reach the real path, reaching
+for the function instead is not a shortcut — it is a different test, of the author's model of the
+system rather than of the system.

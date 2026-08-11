@@ -164,17 +164,28 @@ MUTATIONS: tuple[Mutation, ...] = (
         finding="a bug shipped and caught the same day — blocks every cross-origin call",
     ),
     Mutation(
-        id="a4-run-creation-writes-state",
-        what="a new run may carry command.update, forging licensed and the corpus hash",
+        id="a4-reads-the-wrong-key",
+        what="the hook reads value['command'], where the runtime does not put it",
         path="src/governed_bi/api/auth.py",
-        anchor="    offending = sorted(k for k in _STATE_WRITING_COMMANDS if command.get(k) is not None)",
-        replacement="    offending: list[str] = []",
+        anchor="    for holder in (value.get(\"kwargs\"), value):",
+        replacement="    for holder in (value,):",
+        tests=("tests/api/test_a_run_cannot_write_state.py",),
+        finding="A4 as first shipped — `langgraph_api` nests the command under `kwargs`, so the "
+                "handler returned early and allowed the forged payload end to end. The direct-call "
+                "test, both mutations and the audit row all said it worked. Caught in review.",
+    ),
+    Mutation(
+        id="a4-handler-not-registered",
+        what="the decorator is removed, so run creation is fail-open and silent",
+        path="src/governed_bi/api/auth.py",
+        anchor="@auth.on.threads.create_run\n",
+        replacement="",
         tests=(
-            "tests/api/test_the_custom_routes_require_a_key.py::"
-            "test_a_new_run_may_not_carry_a_state_writing_command",
+            "tests/api/test_a_run_cannot_write_state.py::"
+            "test_the_handler_is_actually_registered_for_run_creation",
         ),
-        finding="A4 — A2/A3 through the door closing them left open; `map_command` writes every "
-                "key it is handed with no reference to the graph's input schema",
+        finding="`_get_handler` returns None on no match and `handle_event` treats that as allow; "
+                "deleting this one line left the original A4 test green",
     ),
     Mutation(
         id="a4-resume-refused-too",
@@ -183,11 +194,25 @@ MUTATIONS: tuple[Mutation, ...] = (
         anchor='_STATE_WRITING_COMMANDS = ("update", "goto")',
         replacement='_STATE_WRITING_COMMANDS = ("update", "goto", "resume")',
         tests=(
-            "tests/api/test_the_custom_routes_require_a_key.py::"
-            "test_a_new_run_may_not_carry_a_state_writing_command",
+            "tests/api/test_a_run_cannot_write_state.py::"
+            "test_the_runtime_dispatch_still_allows_a_resume",
         ),
         finding="a blanket deny looks like the fix and removes the feature: `ask_user` interrupts "
-                "and the client answers with `command.resume`",
+                "and the UI answers with `command.resume`. Nearly lost when the A4 mutations were "
+                "rewritten against the real path.",
+    ),
+    Mutation(
+        id="a4-unknown-shape-fails-open",
+        what="a command this hook cannot read is allowed instead of refused",
+        path="src/governed_bi/api/auth.py",
+        anchor="        if not isinstance(command, Mapping):",
+        replacement="        if False:",
+        tests=(
+            "tests/api/test_a_run_cannot_write_state.py::"
+            "test_a_command_shape_this_hook_cannot_read_is_refused_not_allowed",
+        ),
+        finding="failing open on an unexpected shape is how A4 survived its first fix; request "
+                "encryption makes `command` ciphertext",
     ),
     Mutation(
         id="c2-wiring-failure-as-verdict",

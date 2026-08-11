@@ -104,57 +104,8 @@ def test_a_cors_preflight_is_not_refused(anonymous: TestClient) -> None:
         "the UI makes before it is ever sent"
     )
 
-
-def test_a_new_run_may_not_carry_a_state_writing_command() -> None:
-    """Audit A4. The same defect as A2/A3, through the door closing them left open.
-
-    A2/A3 closed ``POST /threads/{id}/state`` and the ``as_node`` write behind it. Run creation
-    dispatches ``("threads", "create_run")``, which no handler covered, so ``langgraph_api``'s
-    default allowed it — and LangGraph applies ``command.update`` through ``map_command``, which
-    unlike ``map_input`` emits a write for **every** key with no reference to the graph's input
-    schema.
-
-    Both fields in the payload below are load-bearing, and neither is a nuisance. ``licensed`` is the
-    tool bound the layer stack enforces against, so widening it and resuming executes SQL against
-    tables the corpus never licensed — the model does not need a database handle if the caller can
-    hand it one. ``corpus_content_hash`` is the treatment identity every quotability gate reads.
-
-    ``resume`` must still pass, or the paused-turn protocol breaks: ``ask_user`` interrupts and the
-    client answers. A blanket deny would have looked like a fix and removed the feature.
-    """
-    import asyncio
-
-    from governed_bi.api import auth as auth_module
-
-    handler = auth_module._no_state_writes_on_a_new_run
-
-    forged = {
-        "command": {
-            "update": {
-                "licensed": ["public.salaries"],
-                "corpus_content_hash": "forged",
-            }
-        }
-    }
-    try:
-        asyncio.run(handler(None, forged))
-    except Exception as exc:  # the SDK's HTTPException
-        assert getattr(exc, "status_code", None) == 403, exc
-        assert "command." in str(getattr(exc, "detail", exc))
-    else:
-        raise AssertionError(
-            "a run carrying command.update was accepted, so licensed and corpus_content_hash "
-            "are writable over HTTP"
-        )
-
-    # `goto` writes too, and is refused for the same reason.
-    try:
-        asyncio.run(handler(None, {"command": {"goto": "check"}}))
-    except Exception as exc:
-        assert getattr(exc, "status_code", None) == 403, exc
-    else:
-        raise AssertionError("command.goto was accepted")
-
-    # The paused-turn protocol survives: these are all accepted.
-    for allowed in ({"command": {"resume": "the sales schema"}}, {"input": {"question": "hi"}}, {}):
-        asyncio.run(handler(None, allowed))
+# `test_a_new_run_may_not_carry_a_state_writing_command` lived here and is **deleted**, not moved.
+# It called the auth handler directly, so it passed while the handler read a key the runtime does not
+# use and while the decorator registering it was absent. The replacement goes through the runtime's
+# own dispatch: tests/api/test_a_run_cannot_write_state.py. This file's own docstring also scopes it
+# to the routes the platform does not wrap, and `POST /threads/{id}/runs` is a platform route.
