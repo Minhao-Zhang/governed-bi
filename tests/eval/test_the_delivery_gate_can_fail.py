@@ -166,3 +166,104 @@ def test_the_null_pair_is_still_a_null() -> None:
         f"{len(differing)} row(s) record different knobs, so this is no longer a null replicate and "
         f"the control above is measuring something else: {differing[:5]}"
     )
+
+
+# ── the treatment judgement itself, on input that reaches it ──────────────────
+#
+# **The four controls above are green against a tree with the entire treatment half of
+# `knobs_comparable` deleted.** Independent review proved it by mutation: on the real null pair every
+# comparability knob check short-circuits at the missing-key branch — those artifacts do not record
+# `cost_budget`, `negative_tau`, `semantic_scale_ceiling` or `sqlglot_version` — so `cannot_evaluate`
+# is returned for *absence* and the replicate check is never reached. That is the
+# `corpus_content_hash` masking defect of audit D7 repeated one gate over: a verdict that looks like
+# the right answer, arrived at without asking the question.
+#
+# Synthetic rows, therefore, and no apology for it: the property is about the *judgement*, and the
+# artifacts on disk cannot express it. The artifact-backed controls above stay, because "no pair on
+# disk can reach this gate" is itself worth pinning.
+
+_ALL_KNOBS_AGREE = None  # populated per test from the register, so a new knob cannot be forgotten
+
+
+def _synthetic(label: str, knobs: dict):
+    from governed_bi.measure.population import Population
+
+    return Population.of(
+        label,
+        [
+            {"question_id": f"q{i}", "outcome": "answered", "correct": True, "knobs_resolved": knobs}
+            for i in range(3)
+        ],
+    )
+
+
+def _every_comparability_knob() -> dict:
+    """A complete, well-formed `knobs_resolved`, so nothing short-circuits on absence."""
+    from governed_bi.eval.report import comparability_keys
+    from governed_bi.register.knobs import Unset, knob_default
+
+    out = {}
+    for key in comparability_keys():
+        value = knob_default(key)
+        out[key] = None if isinstance(value, Unset) else value
+    return out
+
+
+def test_two_arms_with_every_knob_identical_are_a_replicate_not_a_comparison() -> None:
+    """The judgement D9 exists to make, reached rather than short-circuited.
+
+    Deleting the replicate check leaves every artifact-backed control above green; it does not leave
+    this one green. That is the whole difference between a gate and a gate with a control.
+    """
+    from governed_bi.eval.report import Verdict, knobs_comparable
+
+    knobs = _every_comparability_knob()
+    gate = knobs_comparable(_synthetic("a", knobs), _synthetic("b", dict(knobs)))
+    assert gate.verdict is not Verdict.passed, (
+        f"two arms with every comparability knob identical were certified as a comparison: "
+        f"{gate.render()}"
+    )
+    assert "absent" not in gate.render(), (
+        "the verdict came from a missing knob rather than from the judgement, which is the defect "
+        f"this test exists to exclude: {gate.render()}"
+    )
+
+    # **Both halves, because the first assertion alone was green with the replicate check deleted.**
+    # With no treatment declared the gate exits at the "nothing was named" branch and never reaches
+    # the replicate check, so `d9-replicate-check-deleted` survived until this was added — caught by
+    # `tools/mutate.py` within a minute of the control being written, which is the argument for
+    # declaring the mutation at the same time as the test.
+    key = "route_top_n" if "route_top_n" in knobs else sorted(knobs)[0]
+    declared = knobs_comparable(
+        _synthetic("a", knobs), _synthetic("b", dict(knobs)), treatment=frozenset({key})
+    )
+    assert declared.verdict is Verdict.failed, (
+        f"a declared treatment identical on both arms is a replicate, not a comparison: "
+        f"{declared.render()}"
+    )
+    assert "replicate" in declared.render()
+
+
+def test_one_moved_knob_outside_the_declared_treatment_is_a_confounder() -> None:
+    """The paired positive: the gate must still be able to *pass*, and to refuse a confounder.
+
+    Without this, a `knobs_comparable` that refuses everything satisfies the test above.
+    """
+    from governed_bi.eval.report import Verdict, knobs_comparable
+
+    knobs = _every_comparability_knob()
+    moved = dict(knobs)
+    key = "route_top_n" if "route_top_n" in knobs else sorted(knobs)[0]
+    moved[key] = (knobs[key] or 0) + 7 if isinstance(knobs[key], (int, float)) else "moved"
+
+    undeclared = knobs_comparable(_synthetic("a", knobs), _synthetic("b", moved))
+    assert undeclared.verdict is Verdict.failed, (
+        f"a knob moved outside any declared treatment is a confounder, not a comparison: "
+        f"{undeclared.render()}"
+    )
+    declared = knobs_comparable(
+        _synthetic("a", knobs), _synthetic("b", moved), treatment=frozenset({key})
+    )
+    assert declared.verdict is Verdict.passed, (
+        f"the gate cannot pass at all, so refusing a replicate proves nothing: {declared.render()}"
+    )

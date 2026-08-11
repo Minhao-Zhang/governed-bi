@@ -617,6 +617,56 @@ MUTATIONS: tuple[Mutation, ...] = (
         finding="I10 — the third of the three, and the one added by this audit",
     ),
     Mutation(
+        id="d9-replicate-check-deleted",
+        what="two arms with an identical declared treatment are certified as a comparison",
+        path="src/governed_bi/eval/report.py",
+        anchor=(
+            "    unmoved = sorted(k for k in treatment if values_a[k] == values_b[k])\n"
+            "    if unmoved:"
+        ),
+        replacement=(
+            "    unmoved = sorted(k for k in treatment if values_a[k] == values_b[k])\n"
+            "    if False:"
+        ),
+        tests=(
+            "tests/eval/test_the_delivery_gate_can_fail.py::"
+            "test_two_arms_with_every_knob_identical_are_a_replicate_not_a_comparison",
+        ),
+        finding="D9's judgement had no mutation and its four artifact-backed controls were green "
+                "against the whole treatment half deleted — the real null pair short-circuits on "
+                "four absent knobs and never reaches it. Found in review of the fix.",
+    ),
+    Mutation(
+        id="d9-no-treatment-is-a-pass",
+        what="a pair with no declared treatment is certified rather than refused",
+        path="src/governed_bi/eval/report.py",
+        anchor="    if not treatment:\n        return _gate(",
+        replacement="    if False:\n        return _gate(",
+        tests=(
+            "tests/eval/test_the_delivery_gate_can_fail.py::"
+            "test_two_arms_with_every_knob_identical_are_a_replicate_not_a_comparison",
+        ),
+        finding="the other half of the same hole: nothing named a treatment, so nothing was compared",
+    ),
+    Mutation(
+        id="d9-confounder-ignored",
+        what="a knob moved outside the declared treatment stops being a confounder",
+        path="src/governed_bi/eval/report.py",
+        anchor=(
+            "    differing = sorted(k for k in confounders if values_a[k] != values_b[k])\n"
+            "    if differing:"
+        ),
+        replacement=(
+            "    differing = sorted(k for k in confounders if values_a[k] != values_b[k])\n"
+            "    if False:"
+        ),
+        tests=(
+            "tests/eval/test_the_delivery_gate_can_fail.py::"
+            "test_one_moved_knob_outside_the_declared_treatment_is_a_confounder",
+        ),
+        finding="two knobs moved and one declared is not a measurement of the declared one",
+    ),
+    Mutation(
         id="i4-coverage-counts-function-words",
         what="coverage credits the corpus for holding the word `the`",
         path="src/governed_bi/retrieve/lexical.py",

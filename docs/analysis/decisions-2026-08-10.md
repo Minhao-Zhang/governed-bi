@@ -485,3 +485,32 @@ accurate and `main` green is a better handoff than one more half-item.
 
 **What this does not license:** stopping because work is tedious, or because a reviewer found something.
 The test is whether the next unit can be finished *and* verified, not whether it is comfortable.
+
+## D-30 — D9's status is corrected downward, and the pin it needed is added
+
+Ten commits arrived from another author closing D9. Reviewed before building on it, per D-29. The gate
+itself is sound — the three-verdict logic is right on well-formed input, verified against synthetic pairs
+both ways. **Its controls were not.**
+
+All four artifact-backed controls stayed green with the entire treatment half of `knobs_comparable`
+deleted, because the real null pair is missing four comparability knobs and exits at the absence branch
+before any judgement is made. That is precisely the `corpus_content_hash` masking defect from D7,
+repeated one gate over: a verdict that looks like the right answer, reached without asking the question.
+Four docstrings and three commit messages said "mutation-verified"; `tools/mutate.py` had no entry
+touching `eval/report.py`.
+
+**Chosen:** two synthetic-pair controls that reach the judgement, three declared mutations, and the row
+downgraded from `[closed]` to `[partly closed]` with the seven remaining debts named.
+
+**Synthetic rows, deliberately.** The artifacts on disk cannot express the property — no pair among the
+seven can reach this gate. The artifact-backed controls stay anyway, because *that* is worth pinning.
+
+**And the harness caught me inside a minute.** My first synthetic control declared no treatment, so it
+too exited early and `d9-replicate-check-deleted` survived. The fix for a vacuous control was itself
+vacuous until a mutation said so. That is the strongest argument in this repository for writing the
+mutation at the same moment as the test, and it is now the third time this session that `mutate.py`
+caught a test of mine claiming coverage it did not have.
+
+**Not closed here, and named rather than absorbed:** the re-baseline is still blocked. D10's cross-arm
+half is absent from `tools/run_datalake_eval.py`, which calls only `evaluate_arm`, so comparing two live
+arms still means subtracting two stdout numbers.
