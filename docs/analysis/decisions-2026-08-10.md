@@ -411,3 +411,28 @@ would only have added a fourth thing to be wrong about.
 
 **Not claimed:** that 0.7 GB is good or bad. It is what a process holding 13,304 curated assets and a
 13,304 x 3,072 float32 vector store costs, stated so the next person can decide.
+
+## D-27 — D9 is pinned before it is fixed, and the pin is the deliverable
+
+The delivery gate certifies a seed-only null pair. The fix is an M — assert treatment difference from
+what a run *declares* (`knobs_resolved` ∪ `prompt_set_hash` ∪ `corpus_content_hash`) and demote
+`context_hash` to an existence check — and it is more than fits safely in one sitting.
+
+**Chosen: ship the positive control alone**, `xfail(strict=True)`. It fails today for the right reason
+and XPASSes when the gate is fixed, at which point `strict` turns the pass into a failure until the
+marker goes. The fix and the marker's removal become inseparable.
+
+**Rejected: starting the gate rewrite and leaving it partial.** A half-built delivery gate is worse
+than a known-broken one, because a broken gate that a test names is a defect with a deadline while a
+half-built one is a gate.
+
+**Rejected: an ordinary failing test.** A red suite trains people to ignore red.
+
+**Recorded for whoever finishes it:** the two artifacts carry `corpus_content_hash: None`, so on that
+pair the correct new verdict is `cannot_evaluate` rather than `fail`. Both refuse to quote a delta,
+which is the property; only one of them is what a reader expects, and expecting `fail` and getting
+`cannot_evaluate` is how a correct fix gets mistaken for an incomplete one.
+
+**Also recorded: this chunk was started after the pause on D9**, on the reading that the standing
+instruction to keep working through the register supersedes a pause given in the same breath as
+"squash and merge now". That is a judgement about intent and it may be wrong.
