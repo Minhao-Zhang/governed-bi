@@ -36,40 +36,42 @@ itself, including the defects in its own measuring instrument.
 
 ## What it looks like
 
-Ask a question:
+![An answered turn: the question, the answer, and the SQL the engine
+ran](docs/images/answered-with-sql.png)
 
-```bash
-uv run python -m governed_bi.serve --schema airline \
-  -q "What is the total number of flights that have Oklahoma as their origin?"
-```
+Read the SQL, not the answer. The question says "root beer brand" and "star rating"; the statement
+says `wurzelbiermarke.markenname` and `sternbewertung`. Nobody typed those. The physical schema
+here is deliberately obfuscated — this is the [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation)
+lake, where table and column names carry no English meaning — and the mapping from business
+vocabulary onto them lives in the semantic layer you curate. That layer is the product. The
+trailing `LIMIT` is a row guard the engine appends to every statement.
 
-It writes the SQL, runs it read-only, and shows you both. Abbreviated from what the run recorded:
+Now the half that matters more. Asked for something the licensed schema does not contain, it does
+not improvise — it stops:
 
-```
-question : What is the total number of flights that have Oklahoma as their origin?
-outcome  : answered
-sql      : SELECT COUNT(*) FROM "airline"."Airlines" WHERE "ORIGIN" = 'OKC' LIMIT 200001
-```
+![The engine pauses mid-turn, names the entities it could not map, and waits for an
+answer](docs/images/clarification-paused.png)
 
-Notice `'OKC'`. Nobody typed an airport code into the question. That mapping lives in the semantic
-layer, which is the part of this system you curate, and it is how the engine answers questions
-phrased in your own business vocabulary. The trailing `LIMIT` is a row guard the engine appends to
-every statement.
+It names what it could not map — "sales region", "employee headcount" — states that it cannot
+build a valid query without help, and waits. An engine without this returns a confident, plausible,
+wrong number computed over whatever tables happened to be nearby. That is the failure this design
+exists to make structurally unavailable.
 
-Now a question it could not answer, because retrieval failed to find the product and cost tables
-it needed:
+The pause is a real `interrupt()`, not a dead end. Answer it and the same turn resumes:
 
-```
-question : What is the average profit of all the products from the Clothing category?
-outcome  : refused
-attempt  : TABLES  r_table_not_licensed
-```
+![The resumed turn delivers an answer and its SQL](docs/images/clarification-resumed.png)
 
-The tables it did have in hand included a different company's product catalog. Averaging profit
-over those would have produced a confident, plausible, wrong number, which is what an engine
-without this check returns.
+"Reasoning · 2 steps" is the interrupt seen from both sides.
 
-Both are real turns from the [evaluation run](docs/failure-modes.md).
+Both are real turns. **They are a demonstration, not a measurement**: one small schema, restored
+locally, on a model and corpus pairing that is not any arm in `runs/eval/`. Nothing in them is a
+quotable figure — for those, see [how well it works](#how-well-it-works) below and
+[failure modes](docs/failure-modes.md).
+
+The interface is [governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui), a separate
+Next.js client that holds no database handle either — it is a consumer of the same governed HTTP
+surface described in [the usage guide](docs/usage.md). Everything shown above is also available
+from the command line.
 
 ## What the layers actually do
 
@@ -184,9 +186,7 @@ How the measurement works, and where the engine still gets things wrong, are in
 | [Failure modes](docs/failure-modes.md) | how the engine gets things wrong |
 | [ADRs](docs/adr/) | the binding design decisions |
 | [Open work](docs/open-work.md) | the defect list, the instrument's own defects included |
-
-The web UI is a separate repository,
-[governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui) (Next.js).
+| [governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui) | the Next.js client shown above, in its own repository |
 
 ## Project status
 

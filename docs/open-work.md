@@ -484,40 +484,38 @@ Numbered after §4 rather than inserted, because §4.1 and §4.2 are cited by na
 [governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui); each item below was verified in
 that checkout, not inferred from this tree.
 
-### 5.1 No image of the running system exists
+### 5.1 The README still illustrates the engine with terminal transcripts
 
-Neither repository contains a single screenshot, diagram or recording of the product. The UI
-repo's `public/` holds four files, all of them `create-next-app` defaults (`next.svg`,
-`vercel.svg`, `window.svg`, `globe.svg`). This repository's README demonstrates the engine with
-terminal transcripts and points at the UI in two lines below the documentation table.
+Two captures now exist, in `docs/images/`, taken 2026-08-11 against a live stack: one answered
+turn showing its SQL, and one clarification that paused, was answered, and resumed. Neither is
+referenced from `README.md` yet, which still demonstrates the engine with terminal output and
+points at the UI in two lines below the documentation table. The remaining work is the README
+edit, not the capture.
 
-The consequence is specific: a reader has no way to learn what the system looks like without
-provisioning Postgres, the obfuscated lake and a corpus. That is the wrong order of effort for
-the first thirty seconds of a reader's attention.
+**These are a demonstration, not a measurement, and must never be captioned as one.** They come
+from one small schema restored locally, on a model and corpus combination that is not any arm in
+`runs/eval/`. No number visible in them is quotable.
 
-Two captures would carry the argument — one answered turn showing the SQL, and one refusal
-showing the reason. The pair is already the shape of the README's prose, so the section does not
-need redesigning, only re-illustrating. The refusal is the load-bearing one: an answer is what
-every text-to-SQL demonstration shows, and a principled refusal is what almost none can.
+What they show is the argument the prose already makes: an answer is what every text-to-SQL
+demonstration shows, and a governed non-answer is what almost none can.
 
-Blocked on a machine carrying the lake and a corpus. `components/chat/mock-chat.tsx` renders
-without a backend, but it pins a banner reading "Preview mode — showing synthetic output" that
-cannot be dismissed while the answers are synthetic — deliberately, per the component's own
-docstring — so a preview capture is honest but is not evidence the engine ran.
+### 5.2 A degraded retrieval channel does not stop delivery
 
-### 5.2 The UI cannot authenticate against the engine
+The authentication gap that blocked all of this is closed — the UI now presents the key on all
+four of its call sites — but standing the stack up surfaced something worth keeping.
 
-This blocks §5.1 independently of the database, and it is the more surprising half.
+`langgraph dev` wraps the event loop in a blocking-call guard. `botocore`'s retry path calls
+`time.sleep`, so with a Bedrock embedder every one of the four facet nodes — `facet_entity`,
+`facet_term`, `facet_metric`, `facet_example` — raises `BlockingError` and returns nothing. The
+dev server's own advice, `--allow-blocking`, resolves it.
 
-`src/governed_bi/api/auth.py` requires a shared key on every route except `GET /livez`,
-presented as `x-api-key` or `Authorization: Bearer`, and refuses every request outright when
-`GOVERNED_BI_API_KEY` is unset. The string `x-api-key` does not appear anywhere in the UI
-checkout. `lib/api-client.ts` and the `useStream` transport send no credential, so every custom
-route answers 401 and the client cannot get past `/capabilities`.
-
-This is UI code — an environment variable plus a header on two call sites — not a documentation
-repair. Until it lands, "attach a backend for live answers" is not an instruction anyone can
-follow.
+**The turn answered anyway.** The UI reported "5 facets · 55 hits, 4 degraded" with four channels
+marked *semantic channel not wired*, retrieval fell back to the lexical channel alone, and the
+engine delivered a correct answer with no outcome-level signal that most of its retrieval had
+failed. The degradation is visible in the reasoning trace and nowhere in the record. This is the
+retrieval analogue of §3.7: a field reporting intent rather than outcome. Whether a turn whose
+semantic channel produced zero hits should be distinguishable from one that worked, in the
+record rather than only in the trace, is an open question and a candidate for §1.
 
 ### 5.3 Client-side references to surface the engine does not have
 
