@@ -349,8 +349,16 @@ def summarise(
     arms: Mapping[str, Sequence[Mapping[str, Any]]],
     *,
     pair: tuple[str, str] | None = None,
+    treatment: frozenset[str] | None = None,
 ) -> dict[str, Any]:
-    """Build populations, headlines, optional paired McNemar + quotability."""
+    """Build populations, headlines, optional paired McNemar + quotability.
+
+    ``treatment`` names the comparability knobs the pair's second arm was supposed to move.
+    Left ``None`` it is read from ``arms.toml`` via the arm's own name, which is the point of
+    that file: the claim about what an arm changed is committed and diffable rather than living
+    in whoever ran the command. An arm with no profile contributes no treatment, and
+    ``knobs_comparable`` then reports ``cannot_evaluate`` rather than guessing — see D9.
+    """
     pops = {name: arm_population(rows, label=name) for name, rows in arms.items()}
     summary: dict[str, Any] = {
         "arms": {
@@ -370,12 +378,14 @@ def summarise(
         shared = a.units & b.units
         a_s = a.restrict(lambda r: str(r["question_id"]) in shared, "shared questions")
         b_s = b.restrict(lambda r: str(r["question_id"]) in shared, "shared questions")
-        ok, ga, gb, ctx, knobs = comparison_quotable(a_s, b_s)
+        declared = treatment if treatment is not None else _declared_treatment(right)
+        ok, ga, gb, ctx, knobs = comparison_quotable(a_s, b_s, treatment=declared)
         summary["comparison"] = {
             "pair": pair,
             "quotable": ok,
             "context_hash_gate": ctx.render(),
             "knobs_comparable_gate": knobs.render(),
+            "treatment": sorted(declared),
             "mcnemar": paired_ex(a_s, b_s).render() if ok or a_s.n else None,
             "gates_a": [g.render() for g in ga],
             "gates_b": [g.render() for g in gb],
@@ -386,6 +396,22 @@ def summarise(
             summary["comparison"]["ex_a"] = _measured_dict(headline_ex(a_s))
             summary["comparison"]["ex_b"] = _measured_dict(headline_ex(b_s))
     return summary
+
+
+def _declared_treatment(arm_name: str) -> frozenset[str]:
+    """The arm's declared treatment from ``arms.toml``, or empty if it has no profile.
+
+    Empty is not a fallback that lets the comparison through — ``knobs_comparable`` treats an
+    undeclared treatment as ``cannot_evaluate``. An unreadable or absent ``arms.toml`` is the
+    same case: a missing declaration and a declaration of nothing are both "nobody said", and
+    neither may read as "nothing changed".
+    """
+    from governed_bi.register.arm_profiles import arm_profile
+
+    try:
+        return arm_profile(arm_name).treatment
+    except (KeyError, OSError, ValueError):
+        return frozenset()
 
 
 def _with_cross_arm_context(
