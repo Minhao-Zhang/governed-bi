@@ -370,6 +370,28 @@ def test_the_analyst_prompt_tells_the_model_to_answer_in_the_users_language() ->
     assert "state_assumption" in text and "language" in text
 
 
+def test_the_analyst_prompt_scopes_the_language_rule_to_the_final_answer_too() -> None:
+    """v6: a live-observed residual of the v5 bug -- v5's rule names only ask_user's
+    question/why and state_assumption's text, never the model's own closing prose. A live
+    multi-tool-call turn (ask_user -> English answer -> inspect_schema -> sample_rows ->
+    run_query -> final answer) reverted to German exactly at that last, unnamed step, even
+    though every ask_user/state_assumption call in the same turn stayed in English -- the
+    rule was never violated, because it never applied there. v6 must say the rule covers the
+    turn's own final/closing answer as well, not just the two tools.
+    """
+    from governed_bi.register.prompts import prompt_text
+
+    text = prompt_text("analyst")
+    assert "final answer" in text or "closing answer" in text, (
+        "v6 must extend the language rule to the model's own final answer, not just "
+        "ask_user/state_assumption"
+    )
+    assert "tool call" in text, (
+        "v6 must say the rule survives the tool calls in between, since that is exactly "
+        "where the live-observed drift happened"
+    )
+
+
 def test_the_analyst_prompt_guides_grounded_multiple_choice() -> None:
     """v5: ask_user's new ``choices`` argument is real but unused unless the prompt tells the
     model when it is appropriate to pass it -- grounded in something actually inspected, never
