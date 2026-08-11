@@ -477,6 +477,26 @@ everything else that differs between two systems.
 
 ---
 
+### 3.13 The treatment must be declared, and only three arms have declared it
+
+`arms.toml` arrived on 2026-08-11 with audit D9's fix: `eval/report.py::knobs_comparable`
+refuses a pair that cannot name what changed, and the profile is where the name comes from.
+Three arms are declared — `v3_fold`, `v4`, `v5`. Any other artifact in `runs/eval/` is
+`cannot_evaluate` in a comparison until someone writes down what it changed, which is the
+intended pressure and not a defect.
+
+Two things about that fix are owed:
+
+* **Neither half is verified on real artifacts.** `runs/` is gitignored and the designated null
+  pair is not on the machine that made the change, so both D9 controls in
+  `tests/eval/test_the_delivery_gate_can_fail.py` skipped. The logic was exercised on synthetic
+  fixtures and nine mutations, which is not the same as running it on `run1`/`run2`.
+* **`reconcile` has one caller: its tests.** It compares a profile's declared corpus against
+  what a row recorded, and nothing in the eval driver calls it yet — declared machinery with
+  no wire, §3.10's shape, entered here deliberately rather than left to be discovered.
+
+---
+
 ## 5. Presentation surface
 
 Numbered after §4 rather than inserted, because §4.1 and §4.2 are cited by name from `README.md`,

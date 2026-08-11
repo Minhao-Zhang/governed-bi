@@ -136,14 +136,20 @@ two-axis stamp、bundled SQLite demo、`uv run --extra agents --extra api`，以
 77.4% 是主张，WrenAI 1.22× 是反驳，「拒答跟踪的是本回合上下文是否够，不是题难」是收窄结果。
 成功 = 面试官读完能自己说出这个主张**不**成立的地方。
 
-**(4) D9：修跨臂 distinctness gate。** `context_hash` 距离门在只差随机 seed 的 run1/run2 上以 **0.9993**
-通过——它自认为在问「treatment 变了吗」，实际在测检索抖动，而后者恒为真。今天没出事只因这两份 artifact
-早于 `corpus_content_hash` 字段、被 D7 的门挡住：**遮蔽不是修复**，下一对带 corpus hash 的 artifact 就能
-靠 seed 拿到可引用。且唯一调用方是 `python -m governed_bi.eval --pair`（SQLite 驱动，D10），`runs/eval/`
-里没有一份 datalake 数字进过这道门。事前标准：`tests/eval/test_the_delivery_gate_can_fail.py` 由 XFAIL 转
-XPASS 且 `xfail` marker 同时删除（`strict=True` 让修复与摘 marker 不可分）；对 run1/run2 的诚实判定是
-`cannot_evaluate` 而非 `fail`；若改成「存在性检查 + 声明字段判定」的形状，必须把这个 positive control
-重新指向做判断的那段代码，否则它停在 XFAIL 且不再意味着任何东西。
+**(4) D9 —— 已完成（2026-08-11）。** `context_hash` 距离门曾在只差随机 seed 的 run1/run2 上以 **0.9993**
+通过：它自认为在问「treatment 变了吗」，实际在测检索抖动，而后者恒为真。现已按审计 Phase 2 的处方降级为
+**存在性检查**，treatment 判定移到声明字段上——`eval/report.py::knobs_comparable`，由调用方**声明** treatment，
+声明不出来即 `cannot_evaluate`（这正是 run1/run2 的诚实判定）。`xfail(strict=True)` 那个 positive control 按 D9
+行自己的警告**重新指向**而非删除。
+
+顺带补上了一个更大的洞：`comparability_keys()` / `config_hash_keys()` **零生产调用者**，而且根本不存在
+`config_hash`——record 只有 `context_hash` / `delivery_hash` / `corpus_content_hash` / `prompt_set_hash`。
+所以两个 arm 在 `chat_model` 上不同也能被判为可引用。现已接线，9 处变异逐一验证。
+
+**注意：这两处修复没有在真 artifact 上验证过。**`runs/` 是 gitignored，null pair 不在做修复的这台机器上，
+两个 control 都 skip；验证走的是合成 fixture。真机上跑一遍仍是欠账。
+
+配套落地了 `arms.toml`：arm 的 treatment 从此committed 且可 diff，不再只活在某台机器的 `.env` 里。
 
 **(5) 测试完整性债。** [open-work](../open-work.md) §3.9：25 处变异里 **8 处**在全绿套件下存活，形状只有
 一种——**断言常量等于自己**。其中两处正是 `corpus_content_hash` / `prompt_set_hash` 置 `None` 不被发觉

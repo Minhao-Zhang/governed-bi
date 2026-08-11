@@ -1696,9 +1696,17 @@ facet_degradation_rate      == 0      over the arm, AND the count of turns
 negative error_failed_open  == 0
 guardrail_errors            == 0      ADR 0006 §12
 crash_rate                  == 0
-context_hash distinct across arms on ≥ 95% of shared questions
+context_hash recorded by both arms on every shared question
+knobs_resolved  declared treatment moved, no other comparability knob did
 every register key non-absent
 ```
+
+**Amended 2026-08-11 (audit D9).** The `context_hash` line read "distinct across arms on ≥ 95%
+of shared questions" and was the treatment test. It was not one: retrieval is nondeterministic,
+so the hashes differ whether or not the treatment did, and the gate passed at 0.9993 on a pair
+differing only by a random seed. It is now an existence check, and the treatment judgement is
+`eval/report.py::knobs_comparable`, which reads the treatment the caller declares in
+`arms.toml`.
 
 **The delivery gate is on `context_hash`, not `delivery_hash`.**
 `delivery_hash` includes tool-fetched bodies, so it depends on which
