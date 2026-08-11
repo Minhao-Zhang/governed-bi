@@ -23,6 +23,13 @@ __all__ = [
 #: Paths the retired-literal grep gate must skip (this file quotes every pattern).
 GREP_EXEMPT_PATHS: tuple[str, ...] = (
     "src/governed_bi/register/citations.py",
+    # **Sealed contract files, exempt by name and not by tier.** Both quote the retired
+    # reasoning-effort figure while explaining why their test exists. Their headers say "do not edit
+    # this file", so the ``[retired]`` marker is not available, and the honest record of that is an
+    # exemption someone had to type — not a non-fatal root that would have swallowed the other six
+    # with them. Remove either line if its file is ever unsealed.
+    "tests/model/test_embedder_contract.py",
+    "tests/serve/test_session_contract.py",
 )
 
 

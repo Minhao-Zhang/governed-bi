@@ -57,6 +57,52 @@ def test_rule_a_fires_on_a_retired_prefix_phrase(tmp_path: Path) -> None:
     assert "soccer_2016" in result.stderr
 
 
+def test_rule_a_fires_on_a_block_scalar_summary(tmp_path: Path) -> None:
+    """The form the corpus actually uses, which rule A could not see (audit D6).
+
+    ``leads_with`` strips a ``<id>: `` lead-in and then matches the phrase at the head of the
+    value. With ``summary: >-`` the joined value opens with the literal ``>-``, so nothing ever
+    matched — and **32 of the 57 live ``asset_type: schema`` files in ``../BIRD-corpus`` use
+    ``>-`` or ``>``**. Rule A was blind in the majority form while reporting a clean scan.
+
+    This test is here because ``tools/mutate.py`` said so: the block-scalar fix was verified by
+    hand against a temporary tree and never written down, so re-introducing the defect left this
+    file green. The mutation ``d6-block-scalar-blind`` survived on the harness's first run.
+    """
+    root = _probe(
+        tmp_path,
+        "soccer_2016.yaml",
+        "asset_type: schema\n"
+        "summary: >-\n"
+        "  soccer_2016: cricket IPL batsman bowling match analytics\n",
+    )
+    result = _run(root)
+    assert result.returncode == 1, (
+        "a prepended discriminator inside a folded block scalar was not seen; this is the form "
+        f"most live schema assets use. stdout={result.stdout}"
+    )
+    assert "rule A" in result.stderr
+    assert "soccer_2016" in result.stderr
+
+
+def test_rule_b_scans_a_misspelled_asset_type(tmp_path: Path) -> None:
+    """Unrecognised must mean *scanned*, which is the fail-closed direction (audit D6).
+
+    Rule B exempts non-``schema`` assets because a *term* negates as a matter of course. The
+    test was ``declared.group(1) == "schema"``, so ``asset_type: schmea`` and
+    ``asset_type: schema_v2`` were both silently exempt — while the comment directly above it
+    promised that "a corpus omitting or misspelling ``asset_type`` is still scanned".
+    """
+    root = _probe(
+        tmp_path,
+        "typo.yaml",
+        "asset_type: schmea\nsummary: 'typo: a schema that does NOT cover cricket'\n",
+    )
+    result = _run(root)
+    assert result.returncode == 1, f"a misspelled asset_type went exempt: {result.stdout}"
+    assert "rule B" in result.stderr
+
+
 def test_rule_a_fires_on_the_second_producers_lead_phrase(tmp_path: Path) -> None:
     """The table the audit never mentioned.
 

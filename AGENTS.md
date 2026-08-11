@@ -62,7 +62,7 @@ Run before you commit. CI runs all of these plus the full suite:
 
 ```bash
 uv run --frozen ruff check .
-uv run --frozen pytest tests/<subset> -q     # the full suite needs more than 16 GB
+uv run --frozen pytest tests/ -q            # ~70 s, peaks at ~1.4 GB working set
 uv run --frozen python tools/check_file_length.py
 uv run --frozen python tools/check_one_implementation.py
 uv run --frozen python tools/check_measurement_locality.py
@@ -70,6 +70,14 @@ uv run --frozen python tools/check_imports.py
 uv run --frozen python tools/check_citations.py
 uv run --frozen python tools/check_no_benchmark_discriminators.py
 ```
+
+The whole suite fits in memory: measured 2026-08-10, peak working set 1.46 GB and peak private
+commit 2.29 GB in one process. Almost all of that is **one** `build_index` against the warm vector
+store. See the P-rows in `docs/analysis/audit-2026-08-10.md`, and read P3 there before trusting any
+diagnosis in them — including that one, whose first version was wrong by ~190x. Two measurement traps
+recorded with them: `.venv/Scripts/python.exe` is a uv trampoline, so polling its working set from
+outside reads a 4 MB stub; and commit charge can move without working set, so sample
+`PagedMemorySize64` too.
 
 `tools/check_declared_is_consumed.py` is deliberately **not** in CI. It is declared in
 `tests/conformance/test_register_closure.py`'s manual list, which also carries the condition

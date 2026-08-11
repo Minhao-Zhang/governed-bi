@@ -20,9 +20,14 @@ from governed_bi.register.facets import (
 )
 from governed_bi.register.stages import Stage
 from governed_bi.retrieve.budget import apply_budgets
-from governed_bi.retrieve.fuse import scale_within_channel
 from governed_bi.retrieve.index import UnifiedIndex
-from governed_bi.serve.runtime import candidate_depth, combine_channels, vector_for_query
+from governed_bi.serve.runtime import (
+    ChannelScale,
+    candidate_depth,
+    channel_scale,
+    combine_channels,
+    vector_for_query,
+)
 from governed_bi.serve.runtime import facet_hits as hits_of
 from governed_bi.serve.runtime import lexical_coverage as _lexical_coverage
 
@@ -47,6 +52,7 @@ def pass_two_retrieve(
     """
     schema_set = {str(s) for s in schemas}
     depth = candidate_depth(state)
+    scale = channel_scale(state)
     question = str(state.get("question") or "")
     #: query text -> its vector, for this call. Two facets often rewrite to the same phrase.
     vectors: dict[str, Sequence[float] | None] = {}
@@ -123,23 +129,17 @@ def pass_two_retrieve(
                 # `dict.fromkeys` unions the two candidate lists while keeping the lexical
                 # order first and de-duplicating; the real ordering happens in `apply_budgets`.
                 lexical_top = list(lexical_scores)[:depth]
-                # **Both channels onto one scale before they are blended.** A 0.5/0.5 blend of
-                # raw BM25 saturation (0.60-0.97) against raw cosine (0.00-0.635) is the lexical
-                # score plus a small constant. Scaled over each channel's own scored population
-                # within this facet, exactly as pass one does.
-                lexical_scaled = scale_within_channel(lexical_scores)
-                semantic_scaled = scale_within_channel(semantic_scores)
+                # The scale belongs to `combine_channels` and is a fixed ceiling, not a min-max
+                # over this facet's scored population: pass one and pass two score different
+                # candidate sets, so a population-dependent scale gave one asset two different
+                # numbers in one turn and `apply_budgets` sorted them together (audit I1).
                 for asset_id in dict.fromkeys([*lexical_top, *semantic_top]):
                     entry = index.entries.get(asset_id)
                     if entry is None:
                         continue
                     lexical = lexical_scores.get(asset_id)
                     semantic = semantic_scores.get(asset_id)
-                    score = _hybrid(
-                        lexical_scaled.get(asset_id),
-                        semantic_scaled.get(asset_id),
-                        consulted=consulted,
-                    )
+                    score = _hybrid(lexical, semantic, consulted=consulted, scale=scale)
                     payload = {
                         "facet": name,
                         "asset_id": asset_id,
@@ -161,7 +161,7 @@ def pass_two_retrieve(
         for hit in hits_of(facet_result):
             if _raw_schema_tag(hit) is not None:
                 continue
-            payload = _pass_one_payload(hit, name, pass_one_consulted)
+            payload = _pass_one_payload(hit, name, pass_one_consulted, scale)
             if payload is None:
                 continue
             _merge_within_facet(merged, payload)
@@ -275,28 +275,41 @@ def _vector_for(
 
     The five facets frequently rewrite a question into overlapping phrases, and a facet whose
     query *is* the question resolves to ``fallback`` with no embedding call at all.
+
+    **The state is dropped here and the vector is not substituted** (audit I7). Pass two derives
+    ``consulted`` from ``register/facets.py``'s *declared* channels rather than from what ran, so
+    it has nowhere to record an observed ``failed`` — that seam is pass one's. What it must not
+    do is what it used to: score a rewrite's BM25 against the raw question's cosine. With
+    ``None`` the semantic channel contributes 0.0 to every asset, which is a channel that found
+    nothing rather than a channel that searched something else.
     """
     if query not in memo:
-        memo[query] = vector_for_query(
+        vector, _state = vector_for_query(
             query, question=question, fallback=fallback, embedder=embedder
         )
+        memo[query] = vector
     return memo[query]
 
 
 def _hybrid(
-    lexical: float | None, semantic: float | None, *, consulted: Collection[str]
+    lexical: float | None,
+    semantic: float | None,
+    *,
+    consulted: Collection[str],
+    scale: ChannelScale,
 ) -> float | None:
     """Delegates to :func:`~governed_bi.serve.runtime.combine_channels`.
 
-    **Its inputs must be scaled first.** This score is what reaches ``apply_budgets``, so it
-    decides which tables survive the cap of 8 — the largest attributable loss in the pipeline —
-    and fusing raw BM25 saturation with raw cosine is the lexical score plus a small constant.
+    This score is what reaches ``apply_budgets``, so it decides which tables survive the cap of 8
+    — the largest attributable loss in the pipeline — and fusing raw BM25 saturation with raw cosine
+    is the lexical score plus a small constant. ``scale`` carries the three fusion knobs **this turn
+    resolved**, rather than the values ``serve.runtime`` read when it was imported (audit I10).
 
     ``consulted`` comes from the facet's declared channels (``_scores_lexical`` /
     ``_scores_semantic``), so a facet declaring one channel is not diluted and a document one
     channel missed is not credited as if that channel never ran.
     """
-    return combine_channels(lexical, semantic, consulted=consulted)
+    return combine_channels(lexical, semantic, consulted=consulted, scale=scale)
 
 
 def _merge_within_facet(
@@ -342,7 +355,7 @@ def _pass_one_consulted(facet_result: Any) -> frozenset[str]:
 
 
 def _pass_one_payload(
-    hit: Any, facet_name: str, consulted: Collection[str] = ()
+    hit: Any, facet_name: str, consulted: Collection[str], scale: ChannelScale
 ) -> dict[str, Any] | None:
     if isinstance(hit, Mapping):
         asset_id = hit.get("asset_id")
@@ -380,6 +393,7 @@ def _pass_one_payload(
             float(lexical) if lexical is not None else None,
             float(semantic) if semantic is not None else None,
             consulted=frozenset(consulted) | present,
+            scale=scale,
         )
     if score is None:
         return None

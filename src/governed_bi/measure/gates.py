@@ -15,6 +15,7 @@ from typing import Callable, Mapping
 from ..register.knobs import resume_drift_keys
 from ..register.quantity import Measured
 from ..register.record import GATE_CONDITIONS
+from ..register.stages import Outcome
 from .degradation import channel_anomalies
 from .population import Population
 
@@ -210,6 +211,81 @@ def _context_hash_gate(arm: Population) -> GateResult:
     )
 
 
+def _corpus_content_hash_gate(arm: Population) -> GateResult:
+    """One corpus per arm, and it is named. D7.
+
+    ``AGENTS.md`` and the register both call the corpus the treatment identity of every
+    measurement, and until 2026-08-10 no gate read it. Two consequences were live at once: an arm
+    whose rows carry no corpus hash passed every gate (both runs of the designated null replicate
+    are in that state, 1351/1351 null), and two arms measured over *different* corpora also
+    passed, because nothing compared the field across them.
+
+    Single-arm half only, like :func:`_context_hash_gate`: every row present and all rows equal.
+    Two arms carrying *different* single hashes is the desired case for a corpus intervention and
+    the disqualifying case for everything else, so which one it is cannot be decided from one arm
+    — ``eval/report.comparison_quotable`` owns that.
+
+    Three-valued for the same reason as ``context_hash``: an arm predating the field is not
+    instrumented (``cannot_evaluate``), whereas an arm that records it on some turns and not
+    others, or that changed corpus mid-run, cannot be identified (``failed``).
+
+    **Stage-conditional, like ``facet_channels``.** ``stamp`` is what writes this field, and a
+    turn paused on ``ask_user`` never reaches it — so a clarification legitimately carries no
+    corpus hash. Measured on the arms on disk: every null row in the five instrumented artifacts
+    is ``outcome: clarification`` (4 to 13 per arm). Judging those as missing instrumentation
+    would fail every arm that ever asked a question, which is a gate nobody can keep green and
+    therefore a preference rather than a gate. The denominator is turns that reached ``stamp``,
+    published; zero such turns is ``cannot_evaluate``, never a pass.
+    """
+    field = "corpus_content_hash"
+    arm = arm.restrict(lambda r: r.get("outcome") != Outcome.clarification.value, "reached stamp")
+    if arm.n == 0:
+        return _result(
+            field,
+            Verdict.cannot_evaluate,
+            Measured.unmeasured("every turn paused for clarification, so none reached stamp"),
+            arm,
+            "an arm that never finished a turn has no treatment identity to check",
+        )
+    coverage = arm.coverage(field)
+    if not coverage.is_measured or coverage.value == 0.0:
+        return _result(
+            field,
+            Verdict.cannot_evaluate,
+            coverage,
+            arm,
+            "no turn names a corpus, so this arm carries no treatment identity and nothing "
+            "measured against it is comparable to anything",
+        )
+    if coverage.value < 1.0:
+        return _result(
+            field,
+            Verdict.failed,
+            coverage,
+            arm,
+            "corpus_content_hash is recorded on some turns and missing on others, so which "
+            "corpus this arm served is not answerable from its own rows",
+        )
+    distinct = {str(row.get(field)) for row in arm.rows}
+    if len(distinct) > 1:
+        return _result(
+            field,
+            Verdict.failed,
+            coverage,
+            arm,
+            f"{len(distinct)} different corpus_content_hash values inside one arm, so the "
+            "corpus changed while the arm was running and its turns are not one treatment",
+        )
+    return _result(
+        field,
+        Verdict.passed,
+        coverage,
+        arm,
+        "every turn names the same corpus. Whether it differs from another arm's is a two-arm "
+        "condition and is evaluated by eval/report.comparison_quotable",
+    )
+
+
 def _knobs_resolved_gate(arm: Population) -> GateResult:
     """Every row in one arm ran under the same configuration.
 
@@ -286,6 +362,7 @@ GATE_IMPLEMENTATIONS: Mapping[str, GateFn] = {
     "outcome": _outcome_gate,
     "facet_channels": _facet_channels_gate,
     "context_hash": _context_hash_gate,
+    "corpus_content_hash": _corpus_content_hash_gate,
     "knobs_resolved": _knobs_resolved_gate,
     "guardrail_errors": _zero_count_gate("guardrail_errors", "guardrail_error"),
     "negative": _zero_count_gate("negative", "negative_failed_open"),

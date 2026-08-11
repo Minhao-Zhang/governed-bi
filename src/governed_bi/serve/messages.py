@@ -9,10 +9,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
-__all__ = ["last_ai_text", "surface_answer_text"]
+from langchain_core.messages import AIMessage
+
+__all__ = ["last_ai_text", "last_proposed_sql", "surface_answer_text"]
 
 
 def last_ai_text(state: Mapping[str, Any]) -> str | None:
@@ -74,3 +76,30 @@ def _text_of(content: Any) -> str | None:
         joined = "".join(parts).strip()
         return joined or None
     return None
+
+def last_proposed_sql(messages: Sequence[Any]) -> str | None:
+    """The last SQL the model *proposed* to ``run_query``, from its tool-call arguments.
+
+    **This is not a governed statement.** It is what the model asked for, which may have been
+    refused by the layer stack, blocked by the attempt cap, or never have reached ``prepare()`` at
+    all. The record's ``generated_sql`` deliberately does not carry it (audit C4): that field is
+    declared as "the statement the engine SENT" and two callers execute it.
+
+    It lives here, public and named for what it is, because exactly one consumer wants it —
+    ``eval/harness._abstained_fingerprint``, which prices what a refusal cost by running the
+    proposal read-only. Extracting it there from the transcript would be a second implementation
+    of "which tool call was the last run_query", and this repository has paid for that shape.
+    """
+    last: str | None = None
+    for message in messages:
+        if not isinstance(message, AIMessage):
+            continue
+        for call in message.tool_calls or ():
+            name = call.get("name") if isinstance(call, dict) else getattr(call, "name", None)
+            if name != "run_query":
+                continue
+            args = call.get("args") if isinstance(call, dict) else getattr(call, "args", {})
+            sql = (args or {}).get("sql")
+            if sql:
+                last = str(sql)
+    return last

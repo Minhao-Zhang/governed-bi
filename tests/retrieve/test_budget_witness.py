@@ -3,7 +3,7 @@
 ``apply_budgets`` filtered over-budget hits out of ``selected`` and ``attributions`` and counted
 nothing, so a 9th-ranked gold table did not exist to the turn and ``table_coverage`` reported the
 resulting miss as though retrieval had never found it. Measured offline: 44% of questions whose
-schema was routed correctly have a gold table outside the 8-table cap, median worst rank 9 — one
+schema was routed correctly have a gold table outside the 8-table cap, median worst rank 9 — one  [retired]
 position past the budget.
 """
 

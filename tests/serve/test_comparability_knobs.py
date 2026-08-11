@@ -102,7 +102,7 @@ def test_route_top_n_from_knobs_resolved_changes_the_turn(
     )
     # **Both** components stay licensed, and that is the design rather than laxity.
     # `connect_node` used to keep one, which was measured to cap reachability at the
-    # router's `recall@1` (0.442 on BIRD, against `recall@3` = 0.609) because picking is
+    # router's `recall@1` (0.442 on BIRD, against `recall@3` = 0.609) because picking is  [retired]
     # what throws the other candidates away. `licensed` is a table allowlist; a statement
     # can only reach a table it names, and `connect` guarantees a join path *per component*.
     licensed_schemas = {t.split(".", 1)[0] for t in wide.get("licensed") or []}
@@ -151,7 +151,7 @@ def test_every_declared_ranking_knob_has_a_reader() -> None:
 
     from governed_bi.register.knobs import knob_names
     from governed_bi.retrieve.route import route
-    from governed_bi.serve.runtime import FUSE_WEIGHTS
+    from governed_bi.serve.runtime import channel_scale
 
     declared = set(knob_names())
     assert {"facet_weight_schema", "facet_weight_other", "w_lexical", "w_semantic"} <= declared
@@ -160,11 +160,19 @@ def test_every_declared_ranking_knob_has_a_reader() -> None:
     assert "weights" in inspect.signature(route).parameters, (
         "facet_weight_* are declared and route cannot apply them"
     )
-    # `FUSE_WEIGHTS` must come from the register rather than from a literal beside it.
+    # **The knob must be readable from the run, not only from the register** (audit I10). This
+    # asserted `FUSE_WEIGHTS["lexical"] == knob_default("w_lexical")` against a module constant
+    # built at import, which is true of a value no request can move — the same false claim about a
+    # run, one level up. `channel_scale` resolves through `float_knob`, so state wins.
     from governed_bi.register.knobs import knob_default
 
-    assert FUSE_WEIGHTS["lexical"] == float(knob_default("w_lexical"))
-    assert FUSE_WEIGHTS["semantic"] == float(knob_default("w_semantic"))
+    assert channel_scale({}).lexical == float(knob_default("w_lexical"))
+    assert channel_scale({}).semantic == float(knob_default("w_semantic"))
+    moved = channel_scale({"w_lexical": 0.9, "w_semantic": 0.1, "semantic_scale_ceiling": 0.4})
+    assert (moved.lexical, moved.semantic, moved.semantic_ceiling) == (0.9, 0.1, 0.4), (
+        "a request cannot move the fusion knobs, so publishing them in `knobs_resolved` is a "
+        "claim about a run that the run did not honour"
+    )
 
 
 def test_a_facet_weight_actually_moves_the_ranking() -> None:

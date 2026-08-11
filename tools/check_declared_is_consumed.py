@@ -15,7 +15,10 @@ numbers here have twice been quotable and wrong:
 * ``git_sha`` is an operational knob on every row and ``None`` on every row of every arm.
 * ``facet_degraded`` is a retrieval-health signal and is constant ``False`` on all 1,351 rows
   of all six arms.
-* ``w_lexical`` / ``w_semantic`` are comparability knobs bound into ``FUSE_WEIGHTS`` at import
+* ``w_lexical`` / ``w_semantic`` / ``semantic_scale_ceiling`` are comparability knobs resolved
+  per turn by ``serve.runtime.channel_scale``. They *were* bound into a module constant at
+  import, which is why this file described them that way; audit I10 records why that made the
+  declaration a false claim about a run
   from ``knob_default``, so no arm can move them and every arm records that it did not.
 
 Four rules, one per direction the wire can be missing:

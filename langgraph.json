@@ -5,7 +5,19 @@
     "serve": "./src/governed_bi/api/graph_app.py:make_graph"
   },
   "env": ".env",
+  "auth": {
+    "path": "./src/governed_bi/api/auth.py:auth"
+  },
   "http": {
-    "app": "./src/governed_bi/api/routes.py:app"
+    "app": "./src/governed_bi/api/routes.py:app",
+    "disable_store": true,
+    "disable_mcp": true,
+    "disable_a2a": true,
+    "cors": {
+      "allow_origins": ["http://localhost:3000", "http://127.0.0.1:3000"],
+      "allow_methods": ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+      "allow_headers": ["content-type", "accept", "x-api-key", "authorization"],
+      "allow_credentials": true
+    }
   }
 }

@@ -16,7 +16,11 @@ ROOT = Path(__file__).resolve().parent.parent
 CITATIONS = ROOT / "src" / "governed_bi" / "register" / "citations.py"
 
 #: Roots where a hit is fatal: live code, tools, and live documentation.
-STRICT_ROOTS: tuple[str, ...] = ("src", "tools", "docs", "scripts")
+#: ``tests`` joined this list on 2026-08-10; before that a retired figure quoted in a test
+#: docstring was invisible to the gate. Pointing it there found eight. Six were marked or rewritten;
+#: the two in sealed contract files are named in ``GREP_EXEMPT_PATHS``, which is where the reasoning
+#: lives rather than repeated here.
+STRICT_ROOTS: tuple[str, ...] = ("src", "tools", "docs", "scripts", "tests")
 
 #: Archive roots (scanned, counted, never fatal). Empty: historical markdown
 #: was deleted from the working tree.

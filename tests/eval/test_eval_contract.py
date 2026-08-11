@@ -418,7 +418,7 @@ def test_a_different_column_alias_is_not_a_wrong_answer() -> None:
     The fingerprint included column names, so ``SELECT COUNT(*) AS paper_count`` graded wrong
     against a gold of ``SELECT COUNT(*)`` with both returning 100 — and the penalty tracked
     how verbose the model was about aliasing rather than whether it was right. Measured on the
-    xhigh arm: 5% of answerable-but-wrong turns were exactly this.
+    xhigh arm: 5% of answerable-but-wrong turns were exactly this.  [retired]
     """
     from governed_bi.eval.grade import grade_results, result_fingerprint
 
@@ -577,7 +577,7 @@ def test_table_coverage_refuses_rows_that_do_not_carry_licensed() -> None:
     ``routing_recall`` published ``licensed_schemas`` and not ``licensed``, and
     ``table_coverage`` reads exactly ``licensed`` — so the free harness fed to the function
     this module documents as *"the EX ceiling"* reported ``all_gold_tables_licensed: 0.0`` for
-    two arms whose schema recall was 0.851 and 0.877, with ``reached_gold`` in the very same
+    two arms whose schema recall was 0.851 and 0.877, with ``reached_gold`` in the very same  [retired]
     rows proving the tables had been licensed. A zero is a publishable number; a ``KeyError``
     is not, and that asymmetry is the whole point.
 

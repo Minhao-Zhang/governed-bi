@@ -187,11 +187,20 @@ def internal_error(layer: Layer, detail: str, *, evaluated: Sequence[Layer] = ()
 
 
 def _assert_stage_vocabulary_is_shared() -> None:
-    """Import-time guard: this module's two ``refused_by`` literals still resolve to
+    """Import-time guard: this module's ``refused_by`` literals still resolve to
     stages in ``register.stages``. A refusal whose stage is unknown cannot be
     attributed to anything.
+
+    :data:`GUARDRAIL_ERROR` is checked here too, because since the 2026-08-10 audit it is a
+    ``refused_by`` value and not only a ``reason_code``: it is the member of
+    ``register.stages.CRASH_REFUSED_BY`` that has a producer, so if the two spellings drift a
+    swallowed layer exception silently becomes an ordinary refusal again.
     """
-    for value, expected in ((GUARDRAIL_REFUSED_BY, Stage.check), (GUARD_REFUSED_BY, Stage.guard)):
+    for value, expected in (
+        (GUARDRAIL_REFUSED_BY, Stage.check),
+        (GUARD_REFUSED_BY, Stage.guard),
+        (GUARDRAIL_ERROR, Stage.check),
+    ):
         actual = REFUSED_BY_TO_STAGE.get(value)
         if actual is not expected:  # pragma: no cover - import-time guard
             raise AssertionError(

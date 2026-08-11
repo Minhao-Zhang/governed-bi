@@ -25,6 +25,7 @@ import openai
 import pytest
 from langchain_core.messages import AIMessage
 
+from governed_bi.corpus.analyst import analyst_corpus_from_keys
 from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.serve.nodes.agent_core import agent_core_node
 from governed_bi.serve.scripted_model import ScriptedChatModel
@@ -51,18 +52,41 @@ class _DiesAfterOneToolCall(ScriptedChatModel):
         return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
 
 
+class _Stub:
+    """A connector that answers without a database.
+
+    Present because the turn has to reach ``check()`` for these tests to mean what they say.
+    Until the 2026-08-10 audit (C2) this fixture supplied **no** connector, and ``fetch.py``
+    manufactured ``refuse("r_not_a_read", "no connector configured")`` for that — so the single
+    "governed statement" asserted below was a fabricated refusal for a wiring failure, and the
+    statement never reached governance at all. The message read "the statement reached governance
+    before the model died" while nothing had. A missing connector now raises, which is what
+    exposed it.
+    """
+
+    dialect = "postgres"
+
+    def execute(self, sql: str, **_: Any) -> tuple[list[str], list[tuple[Any, ...]], bool]:
+        return (["n"], [(3,)], False)
+
+
 def _run_turn(model: Any) -> dict[str, Any]:
     state: dict[str, Any] = {
         "turn_index": 1,
         "turn_id": "t-partial",
         "messages": [],
         "usage": [],
+        # `ASK` proposes `FROM beer_factory.customers`, so the table has to be licensed or the
+        # attempt is a TABLES refusal rather than the passing statement these tests are about.
+        "licensed": ["beer_factory.customers"],
     }
     config = {
         "configurable": {
             "thread_id": "t-partial",
             "policy": GovernancePolicy(),
             "agent_model": model,
+            "connector": _Stub(),
+            "corpus": analyst_corpus_from_keys(allowed=["beer_factory.customers.id"]),
         }
     }
     # Through `wrap_node`, because that is the boundary that used to be the whole story: it

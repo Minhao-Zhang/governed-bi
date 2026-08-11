@@ -13,6 +13,7 @@ from governed_bi.eval.replay import PINNED_SCHEMAS_KEY
 from governed_bi.register.quantity import Measured
 from governed_bi.register.stages import Outcome
 from governed_bi.serve.graph import compile_graph
+from governed_bi.serve.messages import last_proposed_sql
 
 __all__ = ["run_arm", "run_comparison", "project_turn"]
 
@@ -192,23 +193,35 @@ PRICED_ABSTENTIONS: frozenset[str] = frozenset({"capped", "refused"})
 def _abstained_fingerprint(
     *,
     outcome: str,
-    generated_sql: str | None,
+    proposed_sql: str | None,
     connector: Any | None,
     order_sensitive: bool,
     already_executed: bool,
 ) -> str | None:
-    """Fingerprint of an abstained turn's last statement, or ``None``.
+    """Fingerprint of an abstained turn's last **proposed** statement, or ``None``.
 
     ``None`` for every answered turn (``grade`` already has it), every turn with no statement,
     and every statement that will not run — the last of those is a real state, because a turn
     can be capped precisely because its statements kept failing.
+
+    **The argument is the model's proposal, not a governed statement, and running it here is
+    deliberate.** This is what prices the abstention: a refusal that discarded the right answer
+    and a refusal that discarded a wrong one cost different amounts, and the only way to tell
+    them apart is to run what was refused. It is read-only (``postgres.py`` sets
+    ``default_transaction_read_only = on``) and it happens in the measurement harness, never on
+    a served turn.
+
+    It used to be handed ``record["generated_sql"]``, which is how that field came to carry
+    ungoverned proposals at all (audit C4) — and that same field is executed by the *answered*
+    path a few lines below, where it must be a governed statement. Splitting the two is what
+    lets ``generated_sql`` mean one thing.
     """
     if already_executed or outcome not in PRICED_ABSTENTIONS:
         return None
-    if not generated_sql or connector is None:
+    if not proposed_sql or connector is None:
         return None
     try:
-        cols, rows, _ = connector.execute(str(generated_sql))
+        cols, rows, _ = connector.execute(str(proposed_sql))
     except Exception:  # noqa: BLE001 — a statement that will not run has no fingerprint
         return None
     return result_fingerprint(list(cols), [list(r) for r in rows], order_sensitive=order_sensitive)
@@ -530,6 +543,18 @@ def _guard_verdict(record: Mapping[str, Any], state: Mapping[str, Any]) -> dict[
     return {"outcome": guard.get("outcome"), "rule_id": guard.get("rule_id")}
 
 
+def _int_or_absent(value: object) -> int | None:
+    """``int(value)``, or ``None`` when the field was never written.
+
+    Not ``int(value or 0)``: for a count, ``0`` is both the clean measured value and the shape an
+    absent field takes, so substituting it converts "nobody counted" into "nothing went wrong" —
+    and the quotability gates read that as a pass (audit M2).
+    """
+    if value is None:
+        return None
+    return int(value)
+
+
 def project_turn(
     state: Mapping[str, Any],
     *,
@@ -618,7 +643,9 @@ def project_turn(
     # silently reports an engine that commits to everything.
     computed_fp = _abstained_fingerprint(
         outcome=outcome,
-        generated_sql=generated_sql,
+        # The proposal from the transcript, not `generated_sql` — that field carries only what
+        # the engine actually sent (audit C4), so on a refused turn it is null by design.
+        proposed_sql=last_proposed_sql(state.get("messages") or ()),
         connector=connector,
         order_sensitive=order_sensitive,
         already_executed=pred_columns is not None,
@@ -630,8 +657,21 @@ def project_turn(
         isinstance(negative, Mapping)
         and negative.get("outcome") == "error_failed_open"
     )
-    guardrail_errors = int(record.get("guardrail_errors") or 0)
-    n_re_served = int(state.get("n_re_served") or record.get("n_re_served") or 0)
+    # **Absent stays absent, for these two as well** (audit M2). They read
+    # ``int(record.get(...) or 0)``, which turns a field the turn never wrote into a real zero —
+    # and ``0`` is the *clean* value, so ``guardrail_error`` and ``re_served`` went from
+    # ``cannot_evaluate`` to ``pass``. Measured: a record with ``guardrail_errors`` never written
+    # made **all seven gates pass**. That defeats two guards written to stop exactly this:
+    # ``measure/population.py``'s import-time assertion that an absent outcome is not a negative
+    # one, and the ``or {}`` removed from this same function three lines below.
+    #
+    # ``0`` is also a legitimate measured value, which is what makes the substitution invisible:
+    # "no guardrail errors" and "nobody counted" are the same integer.
+    guardrail_errors = _int_or_absent(record.get("guardrail_errors"))
+    n_re_served = _int_or_absent(
+        state.get("n_re_served") if state.get("n_re_served") is not None
+        else record.get("n_re_served")
+    )
 
     # Absent stays absent. ``{}`` would read to ``measure.gates`` as a real configuration in
     # which every knob resolved to None, so one arm of empties would *pass* the gate.
@@ -668,7 +708,14 @@ def project_turn(
         "grade_detail": grade.get("detail"),
         "context_hash": context_hash,
         "facet_channels": facet_channels,
-        "facet_degraded": bool(record.get("facet_degraded") or False),
+        # `None` when the turn did not record it, not `False` (audit M2). `serve/nodes/stamp.py`
+        # returns a deliberate `None` here — its comment says "`False` there is the degradation
+        # gate reading absence as clean" — and `or False` turned that straight back into `False`,
+        # one function later. The fix and its defeat shipped in the same repository.
+        "facet_degraded": (
+            None if record.get("facet_degraded") is None
+            else bool(record.get("facet_degraded"))
+        ),
         # Retrieval and crash attribution. Without `licensed`/`schemas` a row says EX=0 and
         # not *why*: a miss with the gold schema never licensed is a routing problem, a miss
         # with the right tables in hand is a generation problem — and an absent `reached_gold`
@@ -753,8 +800,8 @@ def project_turn(
         # The other half of cost, and the half no artifact has ever had: `usage` is tokens
         # only. See `_row_latency_sec` for why a `Measured` absence must not be serialised here.
         "latency_sec": _row_latency_sec(record),
-        "guardrail_error": guardrail_errors > 0,
-        "re_served": n_re_served > 0,
+        "guardrail_error": None if guardrail_errors is None else guardrail_errors > 0,
+        "re_served": None if n_re_served is None else n_re_served > 0,
         "negative_failed_open": bool(negative_failed_open),
         "refused_by": answer.get("refused_by") if isinstance(answer, Mapping) else None,
         "failed_stage": answer.get("failed_stage") if isinstance(answer, Mapping) else None,

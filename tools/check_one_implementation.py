@@ -144,6 +144,48 @@ def main() -> int:
     where: dict[str, list[tuple[str, int]]] = defaultdict(list)
     problems: list[str] = []
 
+    #: The same names as they appear in ``tools/``, for **rule (b) only**.
+    #:
+    #: Rule (a) deliberately stays inside the package (audit D11). Scanned across ``tools/`` it
+    #: reports 14 duplicate names, and 13 of them are each script's own boilerplate — ``ROOT``,
+    #: ``REPO``, ``PKG``, ``SKIP_DIRS``, ``EXEMPT``, ``DEFAULT_CORPUS``, ``DEFAULT_DATASET``,
+    #: ``check_file``. Those are not two implementations of one concept, and a gate that reports
+    #: them is a gate that gets waived until it means nothing.
+    #:
+    #: The fourteenth was real: ``mcnemar``, in ``tools/query_summary_alignment.py``, beside the
+    #: singleton this file declares — whose stated reason is that "v1 had two McNemars … which one
+    #: ran changes whether a ladder step is significant". The copy silently intersected unit sets
+    #: where the real one refuses, and returned no minimum detectable effect. So the *declared*
+    #: singletons are exactly what must not have a second home anywhere, and ``tools/`` is where
+    #: four of the five second implementations the audit found were living.
+    # **This repository's** ``tools/``, via the module constant, and skipped entirely under
+    # ``--root``. The scratch trees the singleton tests build have no ``tools/``, so scanning
+    # relative to ``pkg`` made the gate fail on a tree the caller owns; and scanning the real
+    # ``tools/`` against a scratch package would mix two trees into one verdict. ``--root`` exists
+    # to exercise the package-level rules, so the outside scan is not part of that.
+    #
+    # A guard against the opposite mistake: written as ``pkg.parent.parent.parent`` first, which
+    # pointed one level above the repo, left ``outside`` empty, and made this rule pass vacuously
+    # while the gate printed "6 resolved, fully enforced". Caught by putting the rival ``mcnemar``
+    # back and watching the gate stay green.
+    outside: dict[str, list[str]] = defaultdict(list)
+    if pkg == PKG:
+        tools_dir = ROOT / "tools"
+        for path in sorted(tools_dir.glob("*.py")):
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            except SyntaxError:
+                continue  # its own parse error is ruff's to report, not ours
+            for name, lineno in top_level_names(tree):
+                outside[name].append(f"tools/{path.name}:{lineno}")
+        if not outside:
+            print(
+                f"no top-level names under {tools_dir} — the singleton rule would pass vacuously "
+                "outside the package",
+                file=sys.stderr,
+            )
+            return 1
+
     for path in files:
         rel = path.relative_to(pkg).as_posix()
         try:
@@ -203,6 +245,15 @@ def main() -> int:
                 f"src/governed_bi/{concept.module}: {concept.name!r} is a declared "
                 f"singleton and is also defined in {', '.join(elsewhere)}. "
                 f"{concept.why}"
+            )
+        # And outside the package, where rule (a) does not look. `tools/` is not a lesser tree:
+        # it holds the eval driver and every analysis script, so a second implementation there
+        # decides published numbers just as much as one in `src/`.
+        if concept.name in outside:
+            problems.append(
+                f"{', '.join(outside[concept.name])}: {concept.name!r} is a declared singleton "
+                f"that lives in src/governed_bi/{concept.module}. {concept.why} Import it "
+                "rather than restating it — a copy in tools/ still decides a number."
             )
 
     if problems:

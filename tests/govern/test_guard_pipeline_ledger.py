@@ -194,6 +194,43 @@ def test_prepare_returns_no_string_when_the_verdict_blocks(prepare) -> None:
     assert allowed.sql is not None and allowed.verdict["passed"] is True
 
 
+@pytest.mark.parametrize(
+    ("sql", "reason_code"),
+    [
+        # A column the corpus does not authorise: refused at Layer.COLUMNS, which is the
+        # deepest layer an ordinary SELECT reaches, i.e. the case a real refusal looks like.
+        ("SELECT secret FROM customers", "r_column_not_allowed"),
+        # An unlicensed table with no column binding: Layer.TABLES.
+        ("SELECT 1 FROM orders", "r_table_not_licensed"),
+    ],
+)
+def test_a_refused_select_yields_no_executable_string(prepare, sql, reason_code) -> None:
+    """The verdict-to-statement wiring, which the DDL case above cannot reach.
+
+    ``test_prepare_returns_no_string_when_the_verdict_blocks`` used ``DROP TABLE`` and was
+    the package's only assertion on this property. DDL is refused a **second** time one step
+    later, by ``apply_row_limit``'s ``not isinstance(tree, exp.Query)`` branch, so its
+    ``sql is None`` holds even when the line under test is gone: deleting
+    ``if not verdict["passed"]`` from ``prepare`` left all 133 tests in this package passing
+    while ``prepare`` handed back ``'SELECT token FROM secrets LIMIT 200001'`` for a verdict
+    of ``passed=False``. The other refusal assertion in the package uses a bidi control
+    character, refused before ``check()`` runs, so it cannot reach the wiring either.
+
+    A refused **SELECT** is the only shape that does: it parses, it is a ``Query``, and it
+    survives to the row-limit step. ``reason_code`` is pinned because "refused for some
+    coherent reason" is satisfied by a rule firing for the wrong cause.
+    """
+    refused = prepare(sql, licensed=CUSTOMERS, allowed_columns=ALLOWED)
+
+    assert refused.verdict["passed"] is False
+    assert refused.verdict["reason_code"] == reason_code, refused.verdict
+    assert refused.sql is None, (
+        f"a refused statement produced an executable string: {refused.sql!r}. "
+        "Prepared.sql is the pipeline's only runnable output; a caller that trusts the "
+        "contract will execute it."
+    )
+
+
 def test_canonicalisation_precedes_the_check_so_the_verdict_is_about_what_runs(prepare) -> None:
     """The corpus declares ``CustomerID``; the model wrote ``customerid``. The executed
     string carries the declared spelling **and quotes it**.

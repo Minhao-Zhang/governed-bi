@@ -340,7 +340,7 @@ def test_layering_gate_fires_on_an_undeclared_package(tmp_path: Path) -> None:
     assert "LAYERS declares 'register'" in result.stderr
 
 
-RETIRED_LITERAL = "# recall drops 0.70 -> 0.35\n"
+RETIRED_LITERAL = "# recall drops 0.70 -> 0.35\n"  # [retired] the gate's own fixture, not a claim
 
 
 def test_citation_gate_fires_on_a_retired_literal_in_live_code(tmp_path: Path) -> None:

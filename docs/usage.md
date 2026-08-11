@@ -45,6 +45,7 @@ Copy [`.env.example`](../.env.example) to `.env` and fill in what you need.
 |---|---|
 | `GOVERNED_BI_PG_DSN`, else `PG_RENAME_DECOY_DSN` | Postgres DSN — required for LangGraph serve and for the eval driver. Those two names in that precedence, from `tools/credentials.PG_DSN_NAMES` |
 | `OPENAI_API_KEY` | Model access on the `openai` gateway — the default one |
+| `GOVERNED_BI_API_KEY` | **Required to serve.** Transport auth for every route (`api/auth.py`, wired by `langgraph.json`'s `auth.path`). Unset means the server refuses every request and names this variable in the 401 — it does not mean "open". Clients send it as `x-api-key` or `Authorization: Bearer`; the sibling UI reads it from `NEXT_PUBLIC_GOVERNED_BI_API_KEY` and both values must match. One key is one principal, so it is transport auth and not per-user authorization |
 | `GOVERNED_BI_PROVIDER` | Gateway for every surface: `openai` (default), `bedrock`, `proxy` |
 | `GOVERNED_BI_MODEL_PROVIDER`, `GOVERNED_BI_UTILITY_PROVIDER`, `GOVERNED_BI_EMBEDDING_PROVIDER` | Per-surface override of the above. The three surfaces resolve independently |
 | `GOVERNED_BI_AWS_REGION`, else `AWS_REGION`, else `AWS_DEFAULT_REGION` | Bedrock region, in that precedence — the engine's own name wins over whatever the shell exports for other tooling |
@@ -108,10 +109,9 @@ uv run python -m governed_bi.serve --schema <schema> -q "…" --no-model
 uv run --frozen pytest -q -rs
 ```
 
-That is what CI runs. The whole suite needs more than 16 GB, so on a smaller
-machine run a subset by directory — `uv run --frozen pytest tests/serve -q`.
-`-rs` prints every skip with its reason: the Postgres and OpenAI-backed
-contracts skip without credentials, and a silent skip reads as a pass.
+That is what CI runs: ~70 s, peaking around 1.4 GB of working set. `-rs` prints
+every skip with its reason — the Postgres and OpenAI-backed contracts skip
+without credentials, and a silent skip reads as a pass.
 
 ## Evaluation
 

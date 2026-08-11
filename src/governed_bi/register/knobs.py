@@ -132,6 +132,15 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "renormalised by active channels, so a single-channel facet is not "
        "structurally half-weighted"),
     _k("w_semantic", 0.5, Role.comparability, "as above"),
+    _k("semantic_scale_ceiling", 0.6, Role.comparability,
+       "the cosine at which this embedder's evidence is as strong as it gets, so the two "
+       "channels are commensurate without a per-query normaliser (audit I1). FITTED, and only "
+       "for text-embedding-3-large: measured over 120 questions x 57 schema summaries on corpus "
+       "86ed1dbf, the best-matching pair tops out at 0.5443 (an earlier independent measurement "
+       "said 0.635). A different embedding surface needs a different value -- Titan and 3-large "
+       "do not share a scale -- so this is the one knob an arm on a new embedder must re-fit. "
+       "The lexical channel needs no partner: raw/(raw+k) is already in [0,1) by construction, "
+       "which is the absolute scale tests/retrieve/test_scoring_contract.py prescribes"),
     _k("lexical_saturation_k", 1.2, Role.comparability,
        "the k in raw/(raw+k), declared at the value every run has used. Still "
        "UNFITTED -- it sets where the lexical scale sits, so a fit is outstanding "

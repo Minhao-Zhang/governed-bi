@@ -139,12 +139,26 @@ REFUSED_BY_TO_STAGE: Mapping[str, Stage] = {
     "missing_join_path": Stage.connect,
     "over_connect_bounds": Stage.connect,
     "guardrail": Stage.check,
+    "guardrail_error": Stage.check,
     "attempt_cap": Stage.cap,
     "model_error": Stage.agent_core,
 }
 
 #: ``refused_by`` values that mean our bug (crash wearing a refusal stamp).
-CRASH_REFUSED_BY: frozenset[str] = frozenset({"model_error"})
+#:
+#: ``guardrail_error`` was added by the 2026-08-10 audit (C3). A turn whose every attempt ended
+#: in a swallowed exception inside ``check()`` rather than in a verdict is *ours*, and
+#: :class:`Outcome` says the two must stay apart — yet it recorded ``refused``.
+#: ``govern.layers.GUARDRAIL_ERROR``'s own docstring names the consequence ("presents as an arm
+#: that refuses everything, with ``crash_rate == 0`` and every register key present"): the count
+#: was there, ``outcome`` contradicted it, and only the count was gated.
+#:
+#: Spelled as a literal for the same reason ``"guardrail"`` is — ``register`` sits below
+#: ``govern``, so the named constant cannot be imported here, and ``layers.py`` asserts at import
+#: that the two agree.
+#:
+#: ``model_error`` has no producer in ``src/`` and stays a declared value.
+CRASH_REFUSED_BY: frozenset[str] = frozenset({"model_error", "guardrail_error"})
 
 #: Attempt-cap ``refused_by``. Named so rename stays in step with the table.
 ATTEMPT_CAP_REFUSED_BY = "attempt_cap"

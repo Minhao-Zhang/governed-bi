@@ -7,12 +7,12 @@ from collections.abc import Mapping
 from typing import Any
 
 from governed_bi.govern.guard import GUARD_PUBLIC_MESSAGE
-from governed_bi.govern.layers import GUARDRAIL_REFUSED_BY
+from governed_bi.govern.layers import GUARDRAIL_ERROR, GUARDRAIL_REFUSED_BY
 from governed_bi.govern.ledger import ExecutionRecord
 from governed_bi.measure.degradation import facets_degraded
 from governed_bi.register.quantity import Measured
 from governed_bi.register.record import project
-from governed_bi.register.stages import ATTEMPT_CAP_REFUSED_BY, Outcome, classify_outcome
+from governed_bi.register.stages import ATTEMPT_CAP_REFUSED_BY, Outcome, Stage, classify_outcome
 from governed_bi.serve.events import emit, rail_event_id
 from governed_bi.serve.ledger import answering_attempts, attempt_field, execution_from_attempts
 from governed_bi.serve.state import cleared
@@ -156,6 +156,17 @@ def _path_signals(
         if terminal == "capped":
             return ATTEMPT_CAP_REFUSED_BY, None, None, None, False
         if attempts and not any(attempt_field(a, "passed") is True for a in attempts):
+            # Nothing passed. *Why* nothing passed decides the outcome, and the two answers are
+            # different engineering problems: the layer stack objecting is the product working,
+            # a swallowed exception inside `check()` is our bug. `Outcome` requires they stay
+            # apart and this branch used to collapse them, so a systematically broken `check()`
+            # read as an arm that refused everything with `crash_rate == 0` — the exact symptom
+            # `govern.layers.GUARDRAIL_ERROR` documents. `guardrail_errors` is derived by
+            # `execution_from_attempts`, so as with the cap above we read its verdict rather
+            # than re-deriving one that could disagree. 2026-08-10 audit (C3).
+            errors = execution.get("guardrail_errors") if isinstance(execution, Mapping) else None
+            if isinstance(errors, int) and errors > 0:
+                return GUARDRAIL_ERROR, Stage.check.value, None, None, False
             return GUARDRAIL_REFUSED_BY, None, None, None, False
         # No attempt at all: the model answered from the delivered context (or the F3 stub
         # did). That is `answered` with `generated_sql` null, which the register declares.
@@ -318,8 +329,16 @@ def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
     projected_state["usage"] = usage
     if projected_state.get("n_re_served") is None:
         projected_state["n_re_served"] = 0
-    if projected_state.get("knobs_resolved") is None:
-        projected_state["knobs_resolved"] = {}
+    # ``knobs_resolved`` gets the same treatment as ``guard`` above, and for the same reason —
+    # it used to be substituted with ``{}`` here, which is the one case ``measure.gates`` names
+    # as the thing it must never see: ``{}`` is a ``Mapping``, so the drift gate reads it as a
+    # real configuration in which every knob resolved to ``None``, every row's signature is
+    # identical, and **an arm of empties passes**. `gates.py::_knobs_gate` says so in as many
+    # words ("Absent ``knobs_resolved`` is unmeasured, not passing"), and `harness.py` carries the
+    # same "absent stays absent" comment, while this line defeated both. Absent now reaches
+    # ``project`` as absent, so ``Absence.never`` reports ``missing_required`` and the gate
+    # returns ``cannot_evaluate`` — which is what a turn whose knobs were never wired *is*.
+    # Found by the 2026-08-10 audit (C5).
 
     record = project(
         projected_state,

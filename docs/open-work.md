@@ -11,6 +11,10 @@ re-verified were dropped, not demoted.
 
 Binding design lives in the [ADRs](adr/). This is a work list, not a decision record.
 
+The 2026-08-10 implementation audit is a separate page, because it is a one-time systematic sweep
+with its own phased remediation order rather than an accumulating list:
+[audit-2026-08-10](analysis/audit-2026-08-10.md). Items migrate from there to here as phases close.
+
 ---
 
 ## 1. Engine — measured, with a known ceiling

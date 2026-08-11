@@ -361,6 +361,14 @@ def test_a_fully_instrumented_arm_can_actually_be_quotable() -> None:
             # configuration -- and `Absence.never` already reports it as missing, so this
             # fixture was not "fully instrumented" before.
             "knobs_resolved": {"route_top_n": 3, "candidate_depth": 50},
+            # Added 2026-08-10 with the `corpus_content_hash` gate (audit D7), for the same
+            # reason as the line above and with the same consequence for this fixture's name:
+            # the register has always said "the corpus IS the treatment" and no gate read the
+            # field, so an arm naming no corpus -- which is the state of both runs of the
+            # designated null replicate, 1351/1351 -- passed every gate. One value across all
+            # rows, because one arm is one corpus; the cross-arm half is
+            # `report.comparison_quotable`'s.
+            "corpus_content_hash": "corpus-30872d3",
         }
         for i in range(50)
     ]

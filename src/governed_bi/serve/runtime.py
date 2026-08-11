@@ -7,15 +7,18 @@ helpers (ADR 0005 §6 one-implementation gate).
 from __future__ import annotations
 
 from collections.abc import Collection, Sequence
+from dataclasses import dataclass
 from typing import Any, Mapping
 
+from governed_bi.register.facets import ChannelState
 from governed_bi.register.knobs import Unset, knob_default
-from governed_bi.retrieve.fuse import fuse
+from governed_bi.retrieve.fuse import fuse, scale_to_ceiling
 from governed_bi.retrieve.structure import CorpusStructure, build_structure
 
 __all__ = [
+    "ChannelScale",
     "DEFAULT_CONTEXT_BUDGET",
-    "FUSE_WEIGHTS",
+    "channel_scale",
     "assets_by_id",
     "bool_knob",
     "candidate_depth",
@@ -34,22 +37,71 @@ __all__ = [
 
 DEFAULT_CONTEXT_BUDGET = 80_000
 
-#: Channel weights for :func:`~governed_bi.retrieve.fuse.fuse`, from the register.
-FUSE_WEIGHTS: Mapping[str, float] = {
-    "lexical": float(knob_default("w_lexical")),
-    "semantic": float(knob_default("w_semantic")),
-}
+
+@dataclass(frozen=True, slots=True)
+class ChannelScale:
+    """The three fusion knobs **this turn** resolved, carried instead of read at import.
+
+    ``w_lexical``, ``w_semantic`` and ``semantic_scale_ceiling`` were module constants built from
+    ``knob_default`` when ``serve.runtime`` was first imported, so no request could move them
+    (audit I10). That is worse than a missing feature: all three are declared
+    ``Role.comparability``, they enter ``config_hash_keys()`` and ``knobs_resolved``, so a run
+    could publish ``w_semantic: 0.9``, move its config hash, and behave exactly like the default —
+    which is the inverse of the defect ``register/knobs.py`` opens by describing.
+
+    A frozen value object rather than three parameters, because the three are read together and a
+    call site that resolved two of them from state and one from a constant would be the same
+    defect in a smaller place.
+    """
+
+    lexical: float
+    semantic: float
+    semantic_ceiling: float
+
+    @property
+    def weights(self) -> Mapping[str, float]:
+        """The pair :func:`~governed_bi.retrieve.fuse.fuse` takes."""
+        return {"lexical": self.lexical, "semantic": self.semantic}
+
+
+def channel_scale(state: Mapping[str, Any]) -> ChannelScale:
+    """Resolve the three fusion knobs for this turn. **The one reader.**
+
+    Through :func:`float_knob`, so the precedence is the same as every other knob — state, then
+    ``knobs_resolved``, then the register — and an ``UNSET`` raises rather than being guessed.
+    """
+    return ChannelScale(
+        lexical=float_knob(state, "w_lexical"),
+        semantic=float_knob(state, "w_semantic"),
+        semantic_ceiling=float_knob(state, "semantic_scale_ceiling"),
+    )
+
 
 def combine_channels(
     lexical: float | None,
     semantic: float | None,
     *,
     consulted: Collection[str],
+    scale: ChannelScale,
 ) -> float | None:
-    """Weighted fuse of lexical + semantic scores (shared by pass one and pass two).
+    """Weighted fuse of **raw** lexical + semantic scores (shared by pass one and pass two).
 
-    Inputs must already be on a shared scale
-    (:func:`~governed_bi.retrieve.fuse.scale_within_channel`). ``None`` when neither scored.
+    ``None`` when neither channel scored this document.
+
+    ``scale`` is required and has no default, deliberately: a default would let a call site keep
+    reading the register while the turn ran on something else, which is the defect I10 names.
+
+    **Takes raw scores and does the scaling itself** (audit I1). Both nodes used to min-max each
+    channel over its own scored population and pass the result in, which made the score relative
+    to the query — see :func:`~governed_bi.retrieve.fuse.scale_to_ceiling` for why that cannot be
+    summed across facets. Doing it here rather than at two call sites is also the structural
+    point: the two passes score different candidate sets, so any normaliser needing a population
+    gave one asset two different scores in one turn, and ``apply_budgets`` then sorts them
+    together in a single global sort.
+
+    The lexical channel is passed through: ``raw/(raw+k)`` is already in ``[0, 1)``, which is the
+    absolute scale the sealed scoring contract prescribes. Only cosine needs a ceiling, because
+    its practical range is a property of the embedder rather than of the score's definition.
 
     ``consulted`` names the channels that ran for this query, and it is not derivable from the
     two arguments: ``semantic=None`` means either "the channel did not run for this facet" or
@@ -60,10 +112,12 @@ def combine_channels(
     if lexical is not None:
         scores["lexical"] = float(lexical)
     if semantic is not None:
-        scores["semantic"] = float(semantic)
+        scores["semantic"] = scale_to_ceiling(
+            float(semantic), ceiling=scale.semantic_ceiling
+        )
     if not scores:
         return None
-    return float(fuse(scores, FUSE_WEIGHTS, consulted=consulted))
+    return float(fuse(scores, scale.weights, consulted=consulted))
 
 
 def lexical_coverage(state: Mapping[str, Any], index: Any) -> float | None:
@@ -97,8 +151,8 @@ def vector_for_query(
     question: str | None,
     fallback: Sequence[float] | None,
     embedder: Any | None,
-) -> Sequence[float] | None:
-    """The vector of the text that was **actually searched**, or ``fallback``.
+) -> tuple[Sequence[float] | None, ChannelState]:
+    """The vector of the text that was **actually searched**, with the channel's own verdict.
 
     Shared by both retrieval passes because only one of them had it: pass one embedded each
     facet's rewritten query, while pass two took the raw question's call-level vector and
@@ -106,22 +160,33 @@ def vector_for_query(
     two is the pass whose output becomes the analyst's context and decides which tables survive
     the budget.
 
-    ``fallback`` is returned when there is no rewrite (``query == question``), when no embedder
-    is wired, or when the embed fails.
+    **The returned vector is ``query``'s vector or nothing** (audit I7). It used to fall back to
+    ``fallback`` — the *raw question's* vector — whenever the embed raised, so a rate-limited
+    rewrite embed produced a facet that searched BM25 over the rewrite, cosine over the
+    question, blended the two into one ``score``, and recorded ``semantic: ran``. Nothing
+    anywhere said the two channels had searched different text. A degraded channel that reports
+    itself is a measurement; one that substitutes another text's vector is a fabricated one.
 
-    **Skipping the embed when ``query == question`` is a cache hit on ``fallback``, so it is
-    only correct while there is one.** On the harness path there is not (``eval/arms.py``
-    builds the config with no question), and ``facet_schema`` is the one facet that never
-    rewrites — so it scored against ``None`` and reported ``semantic: failed`` on every turn
-    of a 1,351-question run while the four rewriting facets reported ``ran``.
+    Hence the second element, and hence three states rather than a bare ``None``: ``failed`` is
+    "should have run and did not", ``not_configured`` is "there is nothing to embed, or nothing
+    to embed with". Collapsing them would say a rate limit and an unwired embedder are the same
+    event, which is the distinction ``ChannelState`` exists to carry.
+
+    ``fallback`` is trusted **only when it is provably this query's vector**, i.e. when
+    ``query == question``. With ``question`` unknown there is no such proof, so the query is
+    embedded rather than assumed: that path is the harness's, and it is how ``facet_schema``
+    — the one facet that never rewrites — came to score against ``None`` and report
+    ``semantic: failed`` on every turn of a 1,351-question run.
     """
-    rewritten = question is not None and query != question
-    if query and embedder is not None and (rewritten or fallback is None):
-        try:
-            return list(embedder.embed([query])[0])
-        except Exception:  # noqa: BLE001 — a degraded channel, not a failed turn
-            pass
-    return fallback or None
+    if fallback is not None and question is not None and query == question:
+        # No rewrite: `fallback` *is* this text's vector, so the embed is a cache hit.
+        return list(fallback), ChannelState.ran
+    if not query or embedder is None:
+        return None, ChannelState.not_configured
+    try:
+        return list(embedder.embed([query])[0]), ChannelState.ran
+    except Exception:  # noqa: BLE001 — a degraded channel, not a failed turn
+        return None, ChannelState.failed
 
 
 #: ``id(asset container) -> (that container, its projection)``. Insertion-ordered and

@@ -14,6 +14,7 @@ from langchain_core.messages import AIMessage
 from governed_bi.corpus.analyst import for_analyst
 from governed_bi.corpus.schema import ColumnAsset, TableAsset
 from governed_bi.govern.bounds import OUT_OF_SCOPE_MESSAGE
+from governed_bi.govern.layers import GUARDRAIL_ERROR
 from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.serve.agent_state import CAP_LEDGER_KEY
 from governed_bi.serve.delivery import delivery_hash_for, payload_digest
@@ -294,6 +295,15 @@ def test_a_replayed_run_query_does_not_consume_a_second_attempt_slot() -> None:
     )
 
 
+class _Answering:
+    """A connector that answers, so a test can be about governance rather than about the driver."""
+
+    dialect = "postgres"
+
+    def execute(self, sql: str, **_: Any) -> tuple[list[str], list[tuple[Any, ...]], bool]:
+        return (["id"], [(1,)], False)
+
+
 def test_tool_exception_is_not_refuse() -> None:
     class Boom:
         dialect = "sqlite"
@@ -303,12 +313,70 @@ def test_tool_exception_is_not_refuse() -> None:
 
     tools = _tools(_state(), _config(connector=Boom()))
     out, update = _call(tools["run_query"], sql="SELECT 1")
-    assert out.startswith("run_query") or "refused" in out.lower() or "error" in out.lower()
+    # Discriminating, deliberately. This used to read
+    #     out.startswith("run_query") or "refused" in out.lower() or "error" in out.lower()
+    # which the real refusal string `run_query refused: id binds to customers.id, which is not
+    # allowed` also satisfies — so the test could not fail for the reason it exists (audit M4).
+    assert "RuntimeError" in out, f"the driver's failure is not named: {out!r}"
+    assert "refused" not in out.lower(), f"a driver failure is reported as a refusal: {out!r}"
     assert "refused_by" not in out
     # The statement passed governance and was sent to the driver, so the ledger owes it a row
     # even though the driver raised. Returning only the error string would make a driver
     # failure indistinguishable from a turn that attempted nothing.
     assert list(update.get("attempts_by_call") or {}) == ["call-1"], update
+    row = update["attempts_by_call"]["call-1"]
+    assert row["passed"] is True, "the statement did pass every layer; the driver is what failed"
+    assert row["reason_code"] != GUARDRAIL_ERROR, (
+        "a driver failure is not a guardrail error; counting it as one would block quotability "
+        "for an operational fault"
+    )
+
+
+def test_a_checker_that_raises_is_recorded_rather_than_returned_as_a_string() -> None:
+    """Audit C1 — the worst measurement defect found, and the one with no coverage at all.
+
+    An exception escaping ``prepare()`` was caught on the tool surface, refunded, and handed to
+    the model as a string with **no ledger row**. ``stamp`` reads an empty ledger as "answered
+    from the delivered context", so the turn recorded ``outcome: answered``,
+    ``guardrail_errors: 0``, every quotability gate green, and ``generated_sql`` holding a
+    statement that never reached ``prepare()``. A systematically broken ``check()`` presented as
+    a clean, quotable arm.
+
+    The escape is reached the way it happens in production: a malformed key in the corpus.
+    ``check()`` normalises its key arguments *outside* its own ``try`` on purpose
+    (``check.py:89-100``) — "a security parameter was not wired up" must not become a blocked
+    verdict — and ``normalise_column_key`` raises ``ValueError`` on a four-part key. The
+    governance side is right; the recording side had nowhere for the raise to land.
+
+    Paired with ``test_tool_exception_is_not_refuse`` above: a **driver** failure keeps its
+    passing row and is not a guardrail error, while a **checker** failure produces a
+    ``guardrail_error`` row and crashes the turn. The two must not collapse into each other.
+    """
+    from governed_bi.corpus.analyst import AnalystCorpus
+    from governed_bi.serve.ledger import execution_from_attempts
+
+    # Constructed directly rather than through `analyst_corpus_from_keys`, which validates and
+    # would raise here instead of inside `check()`. A corpus object that exists and holds a
+    # malformed key is exactly the state C1 needs: the failure has to happen *inside the tool
+    # body*, past the wiring checks, where the old code turned it into a string.
+    broken = AnalystCorpus({}, frozenset({"a.b.c.d"}), frozenset(), frozenset())
+    tools = _tools(_state(), _config(corpus=broken, connector=_Answering()))
+    out, update = _call(tools["run_query"], sql="SELECT id FROM customers")
+
+    rows = list((update.get("attempts_by_call") or {}).values())
+    assert rows, (
+        f"the checker raised and nothing was recorded: {out!r}. An empty ledger is what stamp "
+        "reads as 'answered from context', so this turn would be quotable and wrong."
+    )
+    assert rows[0]["reason_code"] == GUARDRAIL_ERROR
+    assert rows[0]["passed"] is False
+    assert rows[0]["executed_sql"] is None, "nothing was executed; no statement may be claimed"
+
+    execution = execution_from_attempts(rows)
+    assert execution["guardrail_errors"] == 1, (
+        "the failure is not countable, so the `guardrail_errors == 0` quotability gate cannot "
+        "see it"
+    )
 
 
 def test_ask_user_interrupt_and_identity_resume() -> None:
@@ -389,6 +457,17 @@ def test_the_ledger_survives_the_interrupt() -> None:
     Order: ``run_query`` (a governed statement, recorded), then ``ask_user`` (the interrupt),
     then the answer. The assertion is on what the record says *after* the resume.
     """
+    # A connector, because the statement has to reach `check()` for the assertion below to be
+    # about the ledger. Until the 2026-08-10 audit (C2) this turn ran with none, and `fetch.py`
+    # manufactured `refuse("r_not_a_read", "no connector configured")` for that — so "a governed
+    # statement made before ask_user" was a fabricated refusal for a wiring failure. A missing
+    # connector now raises, which is what surfaced it.
+    class Answering:
+        dialect = "postgres"
+
+        def execute(self, sql: str, **_: Any) -> tuple[list[str], list[tuple[Any, ...]], bool]:
+            return (["id"], [(1,)], False)
+
     call = {"name": "run_query", "args": {"sql": "SELECT id FROM customers"}, "type": "tool_call"}
     model = ScriptedChatModel(
         responses=[
@@ -406,6 +485,7 @@ def test_the_ledger_survives_the_interrupt() -> None:
         "thread_id": "t-ledger", "policy": GovernancePolicy(guard_rules_enabled={}),
         "agent_model": model, "assets_by_id": _assets(),
         "corpus": for_analyst(list(_assets().values())),
+        "connector": Answering(),
     }}
     turn = {
         "question": "revenue?", "thread_id": "t-ledger", "turn_index": 1,

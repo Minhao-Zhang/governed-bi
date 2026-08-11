@@ -24,6 +24,7 @@ from langgraph.types import Command, interrupt
 from governed_bi.govern.bounds import OUT_OF_SCOPE_MESSAGE, ToolBounds
 from governed_bi.govern.check import GovernanceUsageError
 from governed_bi.govern.ledger import (
+    ExecutorPath,
     statement_sha256,
 )
 from governed_bi.govern.policy import GovernancePolicy
@@ -32,7 +33,12 @@ from governed_bi.serve import fetch
 from governed_bi.serve.agent_state import CAP_LEDGER_KEY, AttemptBook
 from governed_bi.serve.delivery import payload_digest, tool_bounds_from_state
 from governed_bi.serve.events import emit, tool_event_id
-from governed_bi.serve.ledger import attempt_field, cap_attempt, execution_from_attempts
+from governed_bi.serve.ledger import (
+    attempt_field,
+    cap_attempt,
+    execution_from_attempts,
+    pipeline_error_attempt,
+)
 from governed_bi.serve.runtime import configurable, prompt_variants
 
 __all__ = [
@@ -105,6 +111,7 @@ async def _fetch(
     runtime: Any,
     detail: dict[str, Any],
     work: Callable[[], tuple[Any, ...]],
+    ledger_path: ExecutorPath | None = None,
 ) -> Command:
     """Corpus tools with stream events. Status: ok / blocked / error.
 
@@ -134,7 +141,18 @@ async def _fetch(
             event_id=event_id,
             detail={**detail, "error_type": type(exc).__name__},
         )
-        return _reply(runtime, f"{stage} error: {type(exc).__name__}: {exc}")
+        # Same as the `run_query` site (audit C1): an executor path that dies before its verdict
+        # exists still owes the ledger a row, or the turn reads as one that attempted nothing.
+        # `read_body` and `inspect_schema` build no statement and own no path, so they get no row
+        # -- inventing one would put a governance verdict on a corpus read.
+        updates: dict[str, Any] = {}
+        if ledger_path is not None:
+            updates["attempts_by_call"] = {
+                _call_id(runtime): pipeline_error_attempt(
+                    ledger_path, f"{type(exc).__name__}: {exc}"
+                )
+            }
+        return _reply(runtime, f"{stage} error: {type(exc).__name__}: {exc}", **updates)
     payload, delivered = result[0], result[1]
     attempt = result[2] if len(result) > 2 else None
     if delivered:
@@ -289,6 +307,7 @@ def build_tools(
                 corpus=corpus,
                 policy=policy,
             ),
+            ledger_path="sample",
         )
 
     @tool
@@ -348,7 +367,21 @@ def build_tools(
                 event_id=tool_event_id("check", call_id),
                 detail={"attempt": attempt_number, "error_type": type(exc).__name__},
             )
-            return _reply(runtime, f"run_query error: {type(exc).__name__}: {exc}")
+            # **A row, not just a string** (audit C1). Everything reaching here failed before a
+            # verdict existed -- `fetch.run_query` already returns the attempt row when the
+            # *execution* fails, for the reason stated at that site -- so this is our checker
+            # breaking. Returning only the string left the ledger empty, and `stamp` reads an
+            # empty ledger as "answered from the delivered context": outcome `answered`,
+            # `guardrail_errors: 0`, every gate green, `generated_sql` holding a statement that
+            # never reached `prepare()`. The refund stays: the attempt cost the model nothing it
+            # should be charged for, and the row is what makes the failure countable.
+            return _reply(
+                runtime,
+                f"run_query error: {type(exc).__name__}: {exc}",
+                attempts_by_call={
+                    call_id: pipeline_error_attempt("agent", f"{type(exc).__name__}: {exc}")
+                },
+            )
         _emit_attempt(runtime, attempt, number=attempt_number, payload=payload)
         table = _result_table(payload)
         return _reply(

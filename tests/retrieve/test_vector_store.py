@@ -26,6 +26,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pyarrow as pa
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -255,3 +256,322 @@ def test_an_empty_candidate_set_ran_and_an_unconfigured_channel_did_not() -> Non
     bare = build_index(_entries())
     assert bare.vectors is None, "an index built without an embedder opened a store anyway"
     assert semantic_search(bare, query) == ([], ChannelState.not_configured)
+
+
+# ── how much the store allocates, as a mechanism rather than as a benchmark ───
+
+
+def test_keys_does_not_read_the_vector_column() -> None:
+    """``keys()`` said "without reading a single vector" while calling ``to_arrow()``.
+
+    Asserted by **removing** the full read and by inspecting the projection actually asked for, not
+    by timing: a benchmark in a test suite is a flake, and the claim is not "this is fast", it is
+    "this does not touch the vectors". Measured on the real 14,613-row store, the projected scan
+    returns the same keys in 1.77 MB against 181.3 MB for the whole table, and a 2 ms sampler
+    catches the full read as a +407 MB working-set transient. ``missing()`` calls this once per
+    index build.
+    """
+    from governed_bi.retrieve.vectors import VectorStore
+
+    store = VectorStore(4)
+    store.add({"a": [1.0, 0.0, 0.0, 0.0], "b": [0.0, 1.0, 0.0, 0.0]})
+
+    # **Asserted on the projection `keys()` itself asks for.** Two earlier versions of this were
+    # green against the defect: the first patched `store._table.to_arrow`, which `keys()` does not
+    # call, and the second built its own projected scan and asserted on *that* — so dropping
+    # `.select([...])` from `keys()` changed nothing either time. Both caught by
+    # `tools/mutate.py`'s `p1-keys-scan-drops-the-projection`, which is why it is declared.
+    class _Spy:
+        def __init__(self, real):
+            self._real = real
+            self.selected: list[str] | None = None
+
+        def select(self, columns):
+            self.selected = list(columns)
+            return self._real.select(columns)
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    spies: list[_Spy] = []
+    real_search = store._table.search
+
+    def _spying_search(*args, **kwargs):
+        spy = _Spy(real_search(*args, **kwargs))
+        spies.append(spy)
+        return spy
+
+    # **Both halves are needed and each was shipped alone once.** The spy alone is green against a
+    # `keys()` that calls `to_arrow()` and *then* projects; the raising patch alone is green against
+    # one that drops the projection from a `search()` it still makes. Third version.
+    real_to_arrow = store._table.to_arrow
+
+    def _refuse(*args, **kwargs):
+        raise AssertionError("keys() read the whole table, vectors included")
+
+    store._table.search = _spying_search  # type: ignore[method-assign]
+    store._table.to_arrow = _refuse  # type: ignore[method-assign]
+    try:
+        keys = store.keys()
+    finally:
+        store._table.search = real_search  # type: ignore[method-assign]
+        store._table.to_arrow = real_to_arrow  # type: ignore[method-assign]
+
+    assert sorted(keys) == ["a", "b"]
+    assert len(spies) == 1, f"keys() made {len(spies)} scans"
+    assert spies[0].selected == ["key"], (
+        f"keys() asked for {spies[0].selected}; without a projection the scan reads every vector"
+    )
+    assert keys == real_to_arrow().column("key").to_pylist(), (
+        "the projected scan must return exactly the keys, and the order, that a full read would"
+    )
+
+
+def test_replace_reconnects_rather_than_reusing_the_connection() -> None:
+    """Overwriting a table on a retained LanceDB connection leaks committed pages.
+
+    Measured over 200 iterations at a 12.3 MB payload: **43.9 MB of private commit per call**,
+    linear and payload-independent, with working set growing 12.4 MB per call beside it — so about a
+    quarter is commit-only, not all of it as first claimed.
+
+    **What that is worth on the real path is almost nothing, and this docstring said otherwise.**
+    ``build_index`` constructs a fresh ``VectorStore`` before every ``load_from``, so ``_replace``
+    runs once per store and nothing retains one: 0.226 MB per build before, 0.201 MB after, in
+    isolated processes. The claim here was "~50 GB across a 1,351-question run", which described a
+    loop no caller performs — caught in review, and the missing step was ``grep load_from src/``.
+    The test stays because the mechanism is real and cheap to keep true.
+
+    Asserted on the connection object and on the *order*, not on a counter: a commit-charge
+    assertion in a test suite is a flake, and reconnecting after the overwrite would satisfy the
+    object check while leaving the leak entirely in place.
+    """
+    from governed_bi.retrieve.vectors import VectorStore
+
+    source = VectorStore(4)
+    source.add({"a": [1.0, 0.0, 0.0, 0.0]})
+    target = VectorStore(4)
+    before = target._db
+
+    target.load_from(source, [("a", "t1")])
+    assert target._db is not before, "the table was overwritten on the retained connection"
+    assert target.keys() == ["t1"], "the reconnect must not lose the rows it just wrote"
+
+    # **The order matters and the first version of this test could not see it.** Reconnecting
+    # *after* `create_table` leaves the leak fully in place while still satisfying "the connection
+    # object changed", so the assertion above is not sufficient on its own. Caught in review.
+    # **Every call, and in the right order.** A substring search over `inspect.getsource` was the
+    # first attempt and a comment mentioning `lancedb.connect` satisfied it; one `load_from` also
+    # cannot see a reconnect that happens only on the first call — which is precisely the retained
+    # store this line is kept for. So: call it repeatedly and require a new connection each time.
+    #
+    # Asserted on **which connection performs the overwrite**, because "the connection object
+    # changed" is satisfied by reconnecting *after* `create_table`, which leaves the leak entirely
+    # in place. So: mark the old connection's `create_table` and require that it is never the one
+    # called. Repeated, because a reconnect that fires only on the first call is invisible to a
+    # single `load_from` — and a retained store is the only scenario the line is kept for.
+    # **The objects, not their ids.** `seen = {id(...)}` was the first version and it flaked once in
+    # four full-suite runs: CPython recycles `id()` once the old connection is collected, so a
+    # genuinely new object can report an id already in the set. Holding the objects both prevents the
+    # recycling and makes the comparison exact.
+    seen = [target._db]
+    for attempt in range(3):
+        stale = target._db
+        used_stale: list[str] = []
+        real_create = stale.create_table
+
+        def _mark(*args, **kwargs):
+            used_stale.append("yes")
+            return real_create(*args, **kwargs)
+
+        stale.create_table = _mark  # type: ignore[method-assign]
+        target.load_from(source, [("a", "t1")])
+        stale.create_table = real_create  # type: ignore[method-assign]
+
+        assert not used_stale, (
+            f"call {attempt}: the overwrite ran on the connection it was meant to replace, so the "
+            "reconnect happens after `create_table` and the leak is untouched"
+        )
+        assert all(target._db is not db for db in seen), (
+            f"call {attempt}: the connection was reused"
+        )
+        seen.append(target._db)
+        assert target.keys() == ["t1"]
+
+    # A separate source, not the store as its own source: `load_from(store, ...)` only worked
+    # because `to_arrow()` materialises before `_replace` destroys it, so it would break the moment
+    # that read becomes lazy — which is the next fix recorded as audit P2.
+
+
+def test_load_from_hands_the_writer_a_reader_and_never_a_whole_table() -> None:
+    """Audit P2. The **write** path is what the saving came from, so that is what is asserted.
+
+    Two earlier versions of this test were green against the defect. The first patched
+    ``source._table.to_arrow`` — but ``_batches()`` goes through ``_table.search()``, a different
+    attribute, so an implementation reading the whole table through the neighbouring API passed.
+    The second added ``assert 2500 > 1024``, which compares two literals.
+
+    What is asserted now is the shape that earned the measured win: ``create_table`` receives a
+    ``RecordBatchReader``, the source is consumed through ``_batches()``, and more than one batch is
+    yielded. Reversed: an implementation that collects ``list(source._batches())`` into a table
+    fails, and so does one that materialises the source.
+
+    **The memory numbers are measured, not asserted** — +944 → +318 MB net and +1,473 → +566 MB peak
+    on the real 14,613-row store — and they live in ``load_from``'s docstring and the P2 row. A
+    memory assertion in a test suite is a flake; what a test can pin is the mechanism.
+    """
+    from governed_bi.retrieve.vectors import VectorStore
+
+    source = VectorStore(4)
+    source.add({f"k{i}": [float(i % 7), 0.0, 0.0, 1.0] for i in range(2500)})
+    target = VectorStore(4)
+
+    # Patched at `lancedb.connect`, not on `target._db`: `_replace` reconnects before it
+    # overwrites (the P3 fix), so a patch on the store's current connection is never reached. Both
+    # stores above already exist, so only the reconnect goes through this.
+    handed: list[object] = []
+    import governed_bi.retrieve.vectors as vectors_module
+
+    real_connect = vectors_module.lancedb.connect
+
+    class _Recording:
+        def __init__(self, db):
+            self._db = db
+
+        def create_table(self, name, data, **kwargs):
+            handed.append(data)
+            return self._db.create_table(name, data, **kwargs)
+
+        def __getattr__(self, attr):
+            return getattr(self._db, attr)
+
+    vectors_module.lancedb.connect = lambda uri: _Recording(real_connect(uri))
+
+    batch_counts: list[int] = []
+    real_batches = source._batches
+
+    def _counting(**kwargs):
+        for batch in real_batches(**kwargs):
+            batch_counts.append(batch.num_rows)
+            yield batch
+
+    def _refuse(*args, **kwargs):
+        raise AssertionError("load_from materialised the whole source table")
+
+    real_to_arrow = source._table.to_arrow
+    source._batches = _counting  # type: ignore[method-assign]
+    source._table.to_arrow = _refuse  # type: ignore[method-assign]
+    try:
+        target.load_from(source, [(f"k{i}", f"asset.{i}") for i in range(2500)])
+    finally:
+        source._table.to_arrow = real_to_arrow  # type: ignore[method-assign]
+        vectors_module.lancedb.connect = real_connect
+
+    assert len(batch_counts) > 1, (
+        f"the source was consumed in {len(batch_counts)} batch(es), so it was not streamed"
+    )
+    assert handed and isinstance(handed[0], pa.RecordBatchReader), (
+        f"create_table was handed {type(handed[0]).__name__}, not a RecordBatchReader — a "
+        "materialised table is what the +626 MB of net saving came from removing"
+    )
+    assert len(target) == len(target.keys()) == 2500
+    assert sorted(target.keys()) == sorted(f"asset.{i}" for i in range(2500))
+
+
+def test_every_asset_gets_its_own_vector() -> None:
+    """The rewrite's whole purpose is re-keying, and nothing in its own tests checked the pairing.
+
+    Review demonstrated it: reversing ``take`` inside each yielded batch — so every asset receives
+    another asset's vector — passed all three tests added with the rewrite. A pre-existing test
+    caught it, which made it a coverage gap rather than an open hole, but the gap was exactly on the
+    property the change is about.
+
+    Each vector below is one-hot, so a mispairing is a cosine of 0.0 rather than a near miss.
+    """
+    from governed_bi.retrieve.vectors import VectorStore
+
+    width = 8
+    source = VectorStore(width)
+    onehot = {}
+    for i in range(width):
+        vector = [0.0] * width
+        vector[i] = 1.0
+        onehot[f"cache.{i}"] = vector
+    source.add(onehot)
+
+    target = VectorStore(width)
+    target.load_from(source, [(f"cache.{i}", f"asset.{i}") for i in range(width)])
+
+    for i in range(width):
+        probe = [0.0] * width
+        probe[i] = 1.0
+        best = max(target.search(probe), key=lambda pair: pair[1])
+        assert best[0] == f"asset.{i}", (
+            f"asset.{i} carries another asset's vector: the nearest row to its own probe is {best}"
+        )
+        assert best[1] == pytest.approx(1.0)
+
+
+def test_two_assets_sharing_one_summary_both_get_the_vector() -> None:
+    """One cache entry, two asset ids — the reason ``pairs`` is a sequence and not a mapping.
+
+    The streaming rewrite has to fan a source row out to every key that wants it *within a batch*,
+    which the old full-permutation ``take()`` did for free.
+    """
+    from governed_bi.retrieve.semantic import cosine
+    from governed_bi.retrieve.vectors import VectorStore
+
+    source = VectorStore(4)
+    source.add({"shared": [0.0, 1.0, 0.0, 0.0]})
+    target = VectorStore(4)
+    target.load_from(source, [("shared", "a.one"), ("shared", "b.two")])
+
+    assert sorted(target.keys()) == ["a.one", "b.two"]
+    scored = dict(target.search([0.0, 1.0, 0.0, 0.0]))
+    assert scored["a.one"] == pytest.approx(1.0)
+    assert scored["b.two"] == pytest.approx(1.0)
+    assert cosine([0.0, 1.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]) == pytest.approx(1.0)
+
+
+def test_a_missing_source_key_raises_before_anything_is_written() -> None:
+    """The check moved to the front, and it had to.
+
+    It used to fall out of the ``row_of`` lookup, which a streaming writer cannot do: by the time
+    a generator discovers a missing key, ``create_table`` has already consumed batches. So
+    membership is checked against ``keys()`` up front — 1.77 MB on the real store — and the target
+    must be left exactly as it was.
+    """
+    from governed_bi.retrieve.vectors import VectorStore
+
+    source = VectorStore(4)
+    source.add({"present": [1.0, 0.0, 0.0, 0.0]})
+    target = VectorStore(4)
+    target.add({"old": [0.0, 0.0, 0.0, 1.0]})
+
+    with pytest.raises(KeyError, match="absent"):
+        target.load_from(source, [("present", "a.one"), ("absent", "a.two")])
+
+    assert target.keys() == ["old"], (
+        f"the target was modified before the refusal: {target.keys()}"
+    )
+
+
+def test_the_row_count_comes_from_the_table_and_not_from_the_caller() -> None:
+    """A regression the streaming rewrite introduced, found in review.
+
+    ``_replace`` took ``count`` as an argument, but with a ``RecordBatchReader`` what gets written is
+    decided by a generator *after* that number was passed. A reader yielding nothing left
+    ``len(store) == 5`` against a table holding 0 rows — and ``search`` uses ``limit = self._rows``,
+    so a store with an inflated count silently returns a subset of the rows it does have. ``add``
+    already counted from the table, so ``count`` was a second writer of one field.
+    """
+    from governed_bi.retrieve.vectors import VectorStore, _schema
+
+    store = VectorStore(4)
+    with pytest.raises(ValueError, match="0 were written"):
+        store._replace(pa.RecordBatchReader.from_batches(_schema(4), iter(())), 5)
+
+    # And the ordinary path stays consistent: the two ways of asking agree.
+    store.add({"a": [1.0, 0.0, 0.0, 0.0], "b": [0.0, 1.0, 0.0, 0.0]})
+    target = VectorStore(4)
+    target.load_from(store, [("a", "one"), ("b", "two")])
+    assert len(target) == target._table.count_rows() == len(target.keys()) == 2

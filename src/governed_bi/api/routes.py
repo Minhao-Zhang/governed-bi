@@ -9,8 +9,10 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 
+from governed_bi.api.auth import api_key_refusal
 from governed_bi.api.browse import DEFAULT_NODE_BUDGET, subgraph
 from governed_bi.api.browse_routes import router as browse_router
 from governed_bi.api.graph_app import session_from_environment
@@ -29,6 +31,47 @@ __all__ = ["app"]
 app = FastAPI(title="governed-bi", version="2")
 
 app.include_router(browse_router)
+
+
+#: Paths served without a key. Only liveness: it returns ``{"ok": true}`` and nothing else, and a
+#: probe that has to hold a credential is a probe that reports the credential's health instead of
+#: the process's.
+_OPEN_PATHS: frozenset[str] = frozenset({"/livez"})
+
+
+@app.middleware("http")
+async def _require_api_key(request: Request, call_next: Any) -> Response:
+    """Transport auth for the custom routes, enforced here rather than by the platform.
+
+    ``api/auth.py`` covers every route LangGraph Server owns, but **not these**: the platform
+    applies its auth middleware to the custom app only under ``http.enable_custom_route_auth``,
+    and that flag cannot be turned on for this app. ``langgraph_api/server.py:148``
+    (``apply_middleware``) walks ``app.routes`` and requires each to have ``.app``; on
+    fastapi 0.141 ``include_router`` leaves a single ``_IncludedRouter`` object that has none, so
+    the flag raises ``ValueError: Cannot apply middleware: route _IncludedRouter(...) has no app``
+    and the server never binds. Measured on 2026-08-10 — the same ``_IncludedRouter`` that makes
+    ``tests/api/test_http_contract.py``'s ``"/schema" not in ...`` assertions unfalsifiable
+    (audit M7).
+
+    So the check lives in our own app, where no platform flag can decide whether it runs. It
+    reads the same variable and the same header as ``api/auth.py`` and reuses that module's
+    comparison, so there is one key and one place that decides whether it matches.
+
+    This is what closes audit A7: ``/audit/turns`` and ``/audit/turns/{id}/trace`` returned every
+    thread's SQL, full records and an absolute log path to anybody who could reach the port.
+    """
+    # `OPTIONS` is exempt, and this is load-bearing rather than a loosening: a browser never puts
+    # custom headers on a CORS preflight, so refusing one for having no `x-api-key` refuses the
+    # preflight for *every* cross-origin request the UI makes — the browser then blocks the real
+    # call and the failure surfaces as an opaque network error, not a 401. Caught by probing the
+    # preflight after adding this middleware; it 401'd both origins. A preflight response carries
+    # no data, only which methods and headers are permitted, and the origin allow-list in
+    # `langgraph.json`'s `http.cors` is what decides whether the browser proceeds.
+    if request.method != "OPTIONS" and request.url.path not in _OPEN_PATHS:
+        refusal = api_key_refusal(dict(request.headers.items()))
+        if refusal is not None:
+            return JSONResponse({"detail": refusal}, status_code=401)
+    return await call_next(request)
 
 
 def _session() -> Any:

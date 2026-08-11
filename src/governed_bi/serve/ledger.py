@@ -11,7 +11,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from governed_bi.govern.ledger import AttemptRecord, execution_record
+from governed_bi.govern.layers import GUARDRAIL_ERROR
+from governed_bi.govern.ledger import AttemptRecord, ExecutorPath, execution_record
 from governed_bi.register.stages import ATTEMPT_CAP_REFUSED_BY
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "answering_attempts",
     "execution_from_attempts",
     "cap_attempt",
+    "pipeline_error_attempt",
     "ledger_ended_without_answer",
 ]
 
@@ -95,6 +97,42 @@ def ledger_ended_without_answer(state: Mapping[str, Any]) -> bool:
     if not isinstance(execution, Mapping):
         return False
     return execution.get("terminal") in ("capped", "refused")
+
+
+def pipeline_error_attempt(path: ExecutorPath, detail: str) -> AttemptRecord:
+    """The ledger row for an attempt that died *before* a verdict existed.
+
+    Closes the 2026-08-10 audit's C1, which was the worst measurement defect found: an exception
+    escaping ``prepare()`` was caught on the tool surface, refunded, and returned to the model as
+    a string, with **no ledger row written at all**. ``stamp`` reads an empty ledger as "the model
+    answered from the delivered context", so the turn recorded ``outcome: answered``,
+    ``guardrail_errors: 0``, every quotability gate green — and ``generated_sql`` holding a
+    statement that was never checked and never executed. A systematically broken ``check()``
+    presented as a clean, quotable arm.
+
+    That the escape is reachable is deliberate on the governance side and correct there:
+    ``check()`` normalises its key arguments **outside** its own ``try`` (``check.py:89-100``) so
+    that a malformed key raises instead of producing a blocked verdict, because "a security
+    parameter was not wired up" is never a statement's fault. The defect was on the *recording*
+    side — the raise had nowhere to land.
+
+    ``reason_code`` is :data:`~governed_bi.govern.layers.GUARDRAIL_ERROR`, so
+    ``govern.ledger.guardrail_errors`` counts it (it counts by reason code) and the
+    ``guardrail_errors == 0`` quotability gate fires. With ``stamp``'s crash branch that makes the
+    turn ``crashed``, which is what a broken checker is.
+
+    ``verdict_layer`` is ``None`` for the same reason :func:`cap_attempt` gives: no layer ran, and
+    a rule id or a layer here would attribute our own failure to a governance layer that never
+    executed. ``check()``'s *internal* ``except`` still uses ``internal_error(layer, ...)``,
+    because there a layer genuinely was running.
+    """
+    return AttemptRecord(
+        verdict_layer=None,
+        passed=False,
+        reason_code=GUARDRAIL_ERROR,
+        path=path,
+        executed_sql=None,
+    )
 
 
 def cap_attempt() -> AttemptRecord:

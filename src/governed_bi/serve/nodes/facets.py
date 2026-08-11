@@ -27,11 +27,12 @@ from governed_bi.register.facets import (
     expected_channel_state,
 )
 from governed_bi.register.stages import Stage
-from governed_bi.retrieve.fuse import scale_within_channel
 from governed_bi.retrieve.index import UnifiedIndex
 from governed_bi.retrieve.semantic import semantic_search
 from governed_bi.serve.runtime import (
+    ChannelScale,
     candidate_depth,
+    channel_scale,
     combine_channels,
     prompt_variants,
     vector_for_query,
@@ -133,7 +134,9 @@ def _pass_one_hits(
     depth: int,
     ran: set[Channel],
     observed: dict[Channel, ChannelState],
+    scale: ChannelScale,
     query_vector: Sequence[float] | None = None,
+    query_vector_state: ChannelState = ChannelState.ran,
 ) -> list[dict[str, Any]]:
     """Top-``depth`` over this facet's target types, on every channel it declares.
 
@@ -145,13 +148,16 @@ def _pass_one_hits(
     declares **only** the semantic channel, so without it the past-SQL-example facet retrieves
     nothing at all.
 
-    **The two channels are scaled, then blended by the declared weights** —
-    :func:`~governed_bi.retrieve.fuse.scale_within_channel` then
-    :func:`~governed_bi.serve.runtime.combine_channels`, never ``max``: BM25-after-saturation
-    starts roughly where cosine ends, so ``max`` is a lexical-only rule by construction. The
-    audit that caught it is retired (register/citations.py). ``fuse`` renormalises by
-    *active* weight, so an asset missed by one channel is not penalised and a facet declaring
-    one channel does not score structurally below one declaring two.
+    **The two channels are blended by :func:`~governed_bi.serve.runtime.combine_channels`,
+    which owns the scale**, and never by ``max``: BM25-after-saturation starts roughly where
+    cosine ends, so ``max`` is a lexical-only rule by construction. The audit that caught it is
+    retired (register/citations.py). ``fuse`` renormalises by *active* weight, so an asset missed
+    by one channel is not penalised and a facet declaring one channel does not score structurally
+    below one declaring two.
+
+    Raw scores go in. Each pass used to min-max its channels over its own scored population
+    first, which made every facet's favourite score exactly 1.0 however weak it was — see
+    :func:`~governed_bi.retrieve.fuse.scale_to_ceiling` (audit I1).
     """
     declared = FACET_CHANNELS[stage]
     if not question:
@@ -176,27 +182,37 @@ def _pass_one_hits(
 
     semantic_scores: dict[str, float] = {}
     if Channel.semantic in declared:
-        # Marked `ran` from `semantic_search`'s own verdict (it returns `failed` when the index
-        # holds no vectors or the query has none), not from this branch having been entered.
-        ranked, state = semantic_search(index, query_vector, candidates=candidate_ids or None)
-        if state is ChannelState.ran:
-            ran.add(Channel.semantic)
-            for asset_id, score in ranked:
-                if float(score) > 0.0:
-                    semantic_scores[str(asset_id)] = float(score)
+        if query_vector_state is ChannelState.failed:
+            # **The query could not be embedded, so this channel does not run** (audit I7).
+            # `vector_for_query` used to hand back the raw question's vector here, which scored
+            # cosine over one text against BM25 over another, blended them into one `score`,
+            # and recorded `ran`. Skipped rather than scored, and the failure is what the record
+            # carries — `semantic_search` cannot tell this apart, because from its side a
+            # substituted vector is just a vector.
+            observed[Channel.semantic] = ChannelState.failed
         else:
-            # Its own verdict, carried to the record rather than flattened to `failed`.
-            observed[Channel.semantic] = state
+            # Marked `ran` from `semantic_search`'s own verdict (it returns `not_configured` when
+            # the index holds no vectors or the query has none), not from this branch having been
+            # entered.
+            ranked, state = semantic_search(index, query_vector, candidates=candidate_ids or None)
+            if state is ChannelState.ran:
+                ran.add(Channel.semantic)
+                for asset_id, score in ranked:
+                    if float(score) > 0.0:
+                        semantic_scores[str(asset_id)] = float(score)
+            else:
+                # Its own verdict, carried to the record rather than flattened to `failed`.
+                observed[Channel.semantic] = state
 
     if not candidate_ids:
         return []
 
-    # **One scale, then one combiner — the same one pass two uses.** `combine_channels` must be
-    # shared with `nodes/pass_two.py`: untagged pass-one hits are carried into pass two verbatim
-    # and then compete against pass-two hits in `apply_budgets`' single global sort, so two
-    # combiners means one asset carrying two different scores in one turn.
-    lexical_scaled = scale_within_channel(lexical_scores)
-    semantic_scaled = scale_within_channel(semantic_scores)
+    # **One combiner, and it owns the scale.** `combine_channels` must be shared with
+    # `nodes/pass_two.py`: untagged pass-one hits are carried into pass two verbatim and then
+    # compete against pass-two hits in `apply_budgets`' single global sort, so two combiners means
+    # one asset carrying two different scores in one turn. Each pass min-maxing its channels over
+    # its own scored population was that, quietly: the two passes score different candidate sets,
+    # so the same raw pair scaled to two different numbers (audit I1).
 
     # `fuse` needs this to tell "this facet has no semantic channel" from "the semantic channel
     # returned nothing for this asset"; conflating them scores an asset found by both channels
@@ -207,7 +223,10 @@ def _pass_one_hits(
     def _combined(aid: str) -> float:
         return (
             combine_channels(
-                lexical_scaled.get(aid), semantic_scaled.get(aid), consulted=consulted
+                lexical_scores.get(aid),
+                semantic_scores.get(aid),
+                consulted=consulted,
+                scale=scale,
             )
             or 0.0
         )
@@ -233,8 +252,7 @@ def _pass_one_hits(
                     asset_type.value if hasattr(asset_type, "value") else str(asset_type)
                 ),
                 # `None` where a channel did not score this asset, a float where it did — the
-                # record reads both. **Raw, deliberately**: attribution keeps the channel's own
-                # number, so only `score` is rescaled and the record can say what BM25 said.
+                # record reads both, and they are the same raw numbers `_combined` was given.
                 "lexical": lexical,
                 "semantic": semantic,
                 "score": _combined(asset_id),
@@ -324,7 +342,7 @@ def _query_vector(
     *,
     query: str | None = None,
     question: str | None = None,
-) -> Sequence[float] | None:
+) -> tuple[Sequence[float] | None, ChannelState]:
     """The vector to score against — **of the rewritten query when there is one**.
 
     The cached ``query_vector`` is the *raw question's*, so a facet that restates the question
@@ -338,6 +356,9 @@ def _query_vector(
     ``graph_app.make_graph`` binds run constants once at load time with no question — the key is
     simply absent and the semantic channel reports ``failed`` however many vectors the index
     holds. ``accept`` writes it into state per turn, so state must win.
+
+    Returns the channel's verdict beside the vector: a rewrite whose embed raised must reach
+    :func:`_pass_one_hits` as ``failed``, not as some other text's vector (audit I7).
     """
     cfg = runtime_config(config)
     fallback = state.get("query_vector") or cfg.get("query_vector") or None
@@ -370,14 +391,19 @@ async def _run_facet(
         query = await _rewritten_query(
             question, stage, config, ran=ran, spent=spent, turn_index=state.get("turn_index", 1)
         )
+        query_vector, query_vector_state = _query_vector(
+            state, config, query=query, question=question
+        )
         hits: list[Any] = _pass_one_hits(
             index,
             stage,
             query,
             depth=candidate_depth(state),
+            scale=channel_scale(state),
             ran=ran,
             observed=observed,
-            query_vector=_query_vector(state, config, query=query, question=question),
+            query_vector=query_vector,
+            query_vector_state=query_vector_state,
         )
     elif _hooked(state, stage):
         # An explicit "is a hook supplied for this facet", not an `else` after the extraction

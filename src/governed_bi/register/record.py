@@ -149,7 +149,12 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "read_body: real database values are the largest source of arm-to-arm variation "
        "in what the model sees. Null when the agent loop did not run"),
     _f("corpus_content_hash", Tier.treatment, Absence.never, Stage.stamp,
-       "the corpus IS the treatment"),
+       "the corpus IS the treatment. Gated from 2026-08-10 (audit D7): the sentence above was "
+       "written and nothing enforced it, so two arms measured over two different corpora passed "
+       "all six gates and compared as one treatment. The two runs the power analysis designates "
+       "as its null replicate carry this field as null on all 1351 rows, which is how a corpus "
+       "identity of `unknown` passing a comparability gate happened a second time",
+       gate="every row in one arm carries the same non-null corpus_content_hash"),
     _f("prompt_set_hash", Tier.treatment, Absence.never, Stage.stamp,
        "hashes the prompt TEXT, not the variant id — editing a variant in place "
        "must change the digest, or an edited prompt is indistinguishable from the "

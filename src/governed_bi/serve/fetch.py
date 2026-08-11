@@ -28,7 +28,6 @@ from governed_bi.corpus.analyst import AnalystCorpus
 from governed_bi.corpus.schema import ColumnAsset, TableAsset
 from governed_bi.govern.bounds import OUT_OF_SCOPE_MESSAGE, ToolBounds
 from governed_bi.govern.check import GovernanceUsageError
-from governed_bi.govern.layers import refuse
 from governed_bi.govern.ledger import (
     AttemptRecord,
     attempt_record,
@@ -217,12 +216,16 @@ def sample_rows(
     if not is_col:
         return OUT_OF_SCOPE_MESSAGE, False, None
     if connector is None:
-        return (
-            "sample_rows error: no connector configured",
-            False,
-            attempt_record(
-                refuse("r_not_a_read", "no connector configured"), "sample", executed_sql=None
-            ),
+        # G1, same as the corpus check below and for the same reason. This used to manufacture
+        # ``refuse("r_not_a_read")`` — a rule ``layers.py`` assigns to ``Layer.NO_WRITE``, i.e.
+        # "the model proposed a write" — for an unconfigured connector. The ledger row was
+        # indistinguishable from a real governance refusal, which is the failure ``check.py``
+        # states as a doctrine four modules away: *"a security parameter was not wired up …
+        # never a statement's fault."* 2026-08-10 audit (C2).
+        raise GovernanceUsageError(
+            "sample_rows has no connector: configurable['connector'] is None. A missing "
+            "connector is a wiring failure, and recording it as a governance verdict attributes "
+            "our own misconfiguration to the statement."
         )
     if not isinstance(corpus, AnalystCorpus):
         # G1: a missing corpus is a wiring failure, and refusing on it would record a
@@ -308,11 +311,14 @@ def run_query(
     committed and this function only ever saw one closure's list.
     """
     if connector is None:
-        return (
-            "run_query error: no connector configured",
-            attempt_record(
-                refuse("r_not_a_read", "no connector configured"), "agent", executed_sql=None
-            ),
+        # G1, as for the corpus below. See the note at the `sample_rows` site: a manufactured
+        # ``r_not_a_read`` blamed ``Layer.NO_WRITE`` for an unconfigured connector, so an
+        # infrastructure failure and "the model proposed a write" produced the same ledger row
+        # and the same ``outcome: refused``. 2026-08-10 audit (C2).
+        raise GovernanceUsageError(
+            "run_query has no connector: configurable['connector'] is None. A missing connector "
+            "is a wiring failure, and a turn served without one cannot tell a governance "
+            "refusal from its own wiring failure."
         )
 
     if not isinstance(corpus, AnalystCorpus):

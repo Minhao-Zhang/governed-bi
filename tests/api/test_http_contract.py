@@ -191,11 +191,17 @@ def test_the_pages_that_do_not_need_a_model_work_without_one(monkeypatch) -> Non
     from fastapi.testclient import TestClient
 
     from governed_bi.api import browse_routes, routes
+    from governed_bi.api.auth import API_KEY_HEADER, API_KEY_VAR
 
     session = _tiny_session()
     monkeypatch.setattr(routes, "_session", lambda: session)
     monkeypatch.setattr(browse_routes, "_request_session", lambda: session)
-    client = TestClient(routes.app)
+    # The custom routes require the transport key since 2026-08-10 (audit A1/A7); `routes.py`'s
+    # middleware refuses without it, and an unset GOVERNED_BI_API_KEY refuses too rather than
+    # letting everything through. Setting it here and sending it is what keeps this test about
+    # "these pages need no model" instead of about authentication.
+    monkeypatch.setenv(API_KEY_VAR, "test-key")
+    client = TestClient(routes.app, headers={API_KEY_HEADER: "test-key"})
 
     for path in ("/audit/corpus", "/schema/summary", "/corpus/assets", "/graph", "/knowledge-graph"):
         response = client.get(path)

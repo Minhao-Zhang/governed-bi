@@ -20,6 +20,7 @@ half of the interrupt is covered end to end by
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -244,9 +245,16 @@ def test_chat_actually_answers_rather_than_raising(dsn: str) -> None:  # noqa: F
     """
     from fastapi.testclient import TestClient
 
+    from governed_bi.api.auth import API_KEY_HEADER, API_KEY_VAR
     from governed_bi.api.routes import app
 
-    response = TestClient(app).post(
+    # The transport key, read from the environment the suite already loaded rather than set here:
+    # `routes.py`'s middleware refuses every request without one (audit A1/A7), and an unset
+    # variable refuses too. Sending it keeps this test about the transport running the graph.
+    key = os.environ.get(API_KEY_VAR) or ""
+    if not key:
+        pytest.skip(f"{API_KEY_VAR} is unset, so the custom routes refuse every request")
+    response = TestClient(app, headers={API_KEY_HEADER: key}).post(
         "/chat", json={"session_id": "t-transport", "question": "how many customers"}
     )
 

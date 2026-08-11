@@ -99,7 +99,16 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
     clarifications = list((result.get("clarifications_by_call") or {}).values())
     delivered = dict(result.get("tool_delivered") or {})
 
-    generated_sql = _last_executed_sql(attempts) or _last_run_query_sql(out_messages)
+    # **The ledger only** (audit C4). This used to fall back to the model's tool-call *argument*
+    # whenever no attempt had executed, so a capped turn — or any turn whose proposal never
+    # reached ``prepare()`` — recorded a statement the engine never sent. ``register/record.py``
+    # declares this field as "the statement the engine SENT", and two callers take that literally
+    # and **execute it** (``eval/harness.py``, the answered-grading and abstention-pricing paths),
+    # so a proposal here is ungoverned SQL run against the database by the measurement harness.
+    # A turn that executed nothing records null, which the register already declares. The
+    # proposal is still recoverable from the transcript — ``serve.messages.last_proposed_sql`` is
+    # where the one consumer that wants it reads it, named for what it is.
+    generated_sql = _last_executed_sql(attempts)
     delivery = DeliveryTracker(delivered).merge_into(state.get("delivery"))
     usage = [usage_row(stage="agent_core", model=model, messages=fresh,
                        turn_index=state.get("turn_index", 1))]
@@ -546,17 +555,3 @@ def _last_executed_sql(attempts: Any) -> str | None:
     return last
 
 
-def _last_run_query_sql(messages: list[Any]) -> str | None:
-    last: str | None = None
-    for m in messages:
-        if not isinstance(m, AIMessage):
-            continue
-        for tc in m.tool_calls or ():
-            name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
-            if name != "run_query":
-                continue
-            args = tc.get("args") if isinstance(tc, dict) else getattr(tc, "args", {})
-            sql = (args or {}).get("sql")
-            if sql:
-                last = str(sql)
-    return last

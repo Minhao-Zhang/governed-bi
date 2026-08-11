@@ -25,7 +25,8 @@ from governed_bi.retrieve.route import route as route_scores
 from governed_bi.retrieve.structure import CorpusStructure, complete_joins
 from governed_bi.serve.nodes.pass_two import pass_two_retrieve
 from governed_bi.serve.runtime import (
-    FUSE_WEIGHTS,
+    ChannelScale,
+    channel_scale,
     corpus_structure,
     facet_hits,
     facet_weights,
@@ -309,12 +310,13 @@ def _triples_from_facets(
     state: Mapping[str, Any], structure: CorpusStructure
 ) -> list[tuple[Any, Any, float]]:
     schema_tags = structure.schema_tags
+    scale = channel_scale(state)
     triples: list[tuple[Any, Any, float]] = []
     for facet_name, facet_result in (state.get("facets") or {}).items():
         hits = facet_hits(facet_result)
         for hit in hits:
             schema = _hit_schema(hit, schema_tags)
-            score = _hit_score(hit)
+            score = _hit_score(hit, scale)
             if schema is None or score is None:
                 continue
             triples.append((facet_name, schema, float(score)))
@@ -335,7 +337,7 @@ def _hit_schema(hit: Any, schema_tags: Mapping[str, str]) -> str | None:
     return None
 
 
-def _hit_score(hit: Any) -> float | None:
+def _hit_score(hit: Any, scale: ChannelScale) -> float | None:
     if isinstance(hit, Mapping):
         if hit.get("score") is not None:
             return float(hit["score"])
@@ -358,7 +360,7 @@ def _hit_score(hit: Any) -> float | None:
     # components but no ``score``, and such a payload does not record which channels ran, so
     # the components present are the whole of what is known. Stated rather than defaulted —
     # for the two real scoring paths the same assumption is what ``fuse``'s signature prevents.
-    return float(fuse(scores, FUSE_WEIGHTS, consulted=scores.keys()))
+    return float(fuse(scores, scale.weights, consulted=scores.keys()))
 
 
 def _hit_asset_id(hit: Any) -> str | None:
@@ -401,6 +403,7 @@ def _retrieved_for_schemas(
     """F1 fallback: RetrievalResult from facet hits in the selected schemas."""
     schema_set = {str(s) for s in schemas}
     schema_tags = structure.schema_tags
+    scale = channel_scale(state)
     ranked: list[tuple[str, str, float]] = []
     attributions: dict[str, list[dict[str, Any]]] = {}
     selected: dict[str, dict[str, Any]] = {}
@@ -413,7 +416,7 @@ def _retrieved_for_schemas(
                 continue
             asset_id = _hit_asset_id(hit)
             asset_type = _hit_asset_type(hit)
-            score = _hit_score(hit)
+            score = _hit_score(hit, scale)
             if asset_id is None or asset_type is None or score is None:
                 continue
             payload = _hit_as_dict(hit)

@@ -141,6 +141,39 @@ def test_the_turn_is_stamped_under_every_stream_mode(stream_mode: str, subgraphs
     assert final["path_kind"] == "crashed", final
 
 
+@pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+def test_a_node_that_returns_no_mapping_crashes_inside_the_wrapper(is_async: bool) -> None:
+    """Audit C7 — the wrapper's own promise, broken by the wrapper.
+
+    ``_end`` and ``_without_cleared_clock`` run *after* the ``except``, and both subscript the
+    update. So a node returning ``None`` — or anything that is not a mapping — raised from the
+    wrapper itself: no ``crashed`` marker, no ``answer``, no ``final`` event, and the exception
+    left the graph. "Every failure routes through ``stamp``" is exactly what this wrapper exists
+    for, and this was the one path around it.
+
+    Parametrised over both shapes because the fix nearly missed one: ``_body``'s async branch
+    returned early, before the check, so the first version covered sync nodes only. The two
+    branches now share one shape check.
+    """
+    from governed_bi.serve.wrap import wrap_node
+
+    if is_async:
+        async def node(state):  # type: ignore[no-untyped-def]
+            return None
+    else:
+        def node(state):  # type: ignore[no-untyped-def]
+            return None
+
+    out = asyncio.run(wrap_node("guard", node)({"turn_id": "t", "turn_index": 1}))
+
+    assert out.get("path_kind") == "crashed", (
+        f"a node returning None escaped the wrapper: {out!r}. Nothing downstream records the "
+        "turn, because stamp never runs."
+    )
+    assert (out.get("failure") or {}).get("error_type") == "TypeError"
+    assert (out.get("failure") or {}).get("stage") == "guard"
+
+
 def test_a_sync_node_cannot_be_given_a_timeout() -> None:
     """Refused at build time, because cancelling the await would not stop the thread.
 

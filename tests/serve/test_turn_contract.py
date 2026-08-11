@@ -120,9 +120,12 @@ def test_a_turn_whose_every_sql_attempt_was_refused_is_not_answered(
       F-5c's defect and not from governance.
     * `conf["connector"]` — a real `PostgresConnector(dsn)`; reuse the `dsn` fixture and
       its skip from `tests/datasource/test_seed_contract.py:71-104`. **This is the reason
-      the test had to wait for parcel C.** With `connector=None`, `tools.py:343` appends
-      `r_not_a_read`/"no connector configured" and the turn is unanswered for a reason
-      that has nothing to do with licensing.
+      the test had to wait for parcel C.** `connector=None` raises
+      `GovernanceUsageError` (2026-08-10 audit, C2), so the turn crashes rather than
+      refusing for a reason that has nothing to do with licensing — either way it is not
+      the property under test. A stub with `dialect` and `execute` is enough if the
+      assertion is only about the verdict; the real connector is what makes it about the
+      engine agreeing.
 
     Assert on `out["answer"]`: `outcome != "answered"`, and no attempt in
     `record["execution"]["attempts"]` has `passed is True`.
@@ -136,6 +139,7 @@ def test_a_turn_whose_every_sql_attempt_was_refused_is_not_answered(
     """
     from governed_bi.corpus.analyst import AnalystCorpus
     from governed_bi.serve.graph import compile_graph
+    from governed_bi.serve.messages import last_proposed_sql
     from governed_bi.serve.nodes.agent_core import STUB_ANSWER
 
     # `audit_log` is the unlicensed table, and it has to be a table **no join reaches**.
@@ -161,7 +165,13 @@ def test_a_turn_whose_every_sql_attempt_was_refused_is_not_answered(
 
     assert licensed, f"precondition: the turn licensed something ({out.get('path_kind')!r})"
     assert f"{probe.schema}.audit_log" not in licensed, "precondition: the queried table is unlicensed"
-    assert record.get("generated_sql"), "precondition: the model emitted SQL — the agent path, not a decline"
+    # The model's *proposal*, not `record["generated_sql"]`. This precondition used to read the
+    # latter, which is how it noticed nothing when that field carried ungoverned proposals: on a
+    # fully-refused turn the engine sent nothing, so `generated_sql` is null by design now
+    # (audit C4) and only the transcript says the agent path ran.
+    assert last_proposed_sql(out.get("messages") or ()), (
+        "precondition: the model emitted SQL — the agent path, not a decline"
+    )
     assert STUB_ANSWER not in " ".join(_texts(out)), "precondition: not the stub path"
     attempts = list(execution.get("attempts") or ())
     assert attempts, (  # tools.py:339 returns on the cap before appending, and an empty ledger

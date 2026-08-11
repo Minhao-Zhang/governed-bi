@@ -147,21 +147,36 @@ def wrap_node(
                 # `wait_for` cancels the inner coroutine — the reason the sync case is refused
                 # above — and raises an ordinary `TimeoutError`, which the `except` below stamps
                 # `crashed` like any other.
-                return await asyncio.wait_for(call, timeout)
-            return await call
-        update = await (
-            asyncio.to_thread(fn, state, config)
-            if accepts_config
-            else asyncio.to_thread(fn, state)
-        )
-        # A sync node returning a coroutine is always a mistake, and awaiting it would hide
-        # that. Left alone it surfaces four frames away as ``'coroutine' object has no
-        # attribute 'get'`` inside ``rail_observation``, naming nothing.
-        if inspect.isawaitable(update):
-            update.close()
+                update = await asyncio.wait_for(call, timeout)
+            else:
+                update = await call
+        else:
+            update = await (
+                asyncio.to_thread(fn, state, config)
+                if accepts_config
+                else asyncio.to_thread(fn, state)
+            )
+            # A sync node returning a coroutine is always a mistake, and awaiting it would hide
+            # that. Left alone it surfaces four frames away as ``'coroutine' object has no
+            # attribute 'get'`` inside ``rail_observation``, naming nothing.
+            if inspect.isawaitable(update):
+                update.close()
+                raise TypeError(
+                    f"node {stage!r} is a sync function that returned an awaitable. It is "
+                    "probably wrapping an async node without awaiting it; make the wrapper "
+                    "`async def`."
+                )
+        # Shape-checked **here**, inside the try, for the same reason the awaitable case is
+        # (audit C7). ``_end`` and ``_without_cleared_clock`` run *after* the ``except`` below and
+        # both subscript the update, so a node returning ``None`` — or anything that is not a
+        # mapping — raised from the wrapper itself: no ``crashed`` marker, no ``answer``, no
+        # ``final`` event, and the exception left the graph. That is the one failure this wrapper
+        # exists to make impossible, reached through the wrapper rather than through the node.
+        # Raising here routes it to ``_crashed`` like any other node fault.
+        if not isinstance(update, Mapping):
             raise TypeError(
-                f"node {stage!r} is a sync function that returned an awaitable. It is probably "
-                "wrapping an async node without awaiting it; make the wrapper `async def`."
+                f"node {stage!r} returned {type(update).__name__}, not a mapping. A LangGraph "
+                "node returns a partial state dict; returning None is not 'no update'."
             )
         return update
 

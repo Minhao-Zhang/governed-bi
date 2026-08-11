@@ -1,10 +1,10 @@
 """Weighted hybrid fusion over the channels that were **consulted**.
 
-:func:`scale_within_channel` min-maxes to ``[0, 1]`` so channels share a scale
-before fusion. Scaling is *within* a channel, never across: the ``max(lexical,
-semantic)`` rule this replaced (fixed in ``5499ab2``) compared a raw BM25 score
-against a raw cosine, on incomparable scales, so the semantic channel lost
-essentially always.
+:func:`scale_to_ceiling` puts a channel on ``[0, 1]`` with a **fixed** ceiling, so
+two channels are commensurate without either of them becoming relative to the
+current query. The ``max(lexical, semantic)`` rule this ultimately replaced (fixed
+in ``5499ab2``) compared a raw BM25 score against a raw cosine, on incomparable
+scales, so the semantic channel lost essentially always.
 
 :func:`fuse` takes the consulted set, because a channel never consulted and a
 channel that scored this document zero are different facts; conflating them made
@@ -17,30 +17,39 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping
 
-__all__ = ["fuse", "scale_within_channel"]
+__all__ = ["fuse", "scale_to_ceiling"]
 
 
-def scale_within_channel(scores: Mapping[str, float]) -> dict[str, float]:
-    """Min-max channel scores to ``[0, 1]`` over documents scored (floors at 0 for ``route``).
+def scale_to_ceiling(value: float, *, ceiling: float) -> float:
+    """``value / ceiling``, clamped to ``[0, 1]``. A fixed map, not a per-query one.
 
-    Min-max rather than raw blending because the raw ranges are incomparable: BM25 after
-    saturation runs 0.60–0.97 and cosine runs 0.00–0.635, so a 0.5/0.5 blend of raw values
-    is the lexical score plus a small constant.
+    **This replaced a min-max over the facet's own scored population** (audit I1), which had
+    three defects that were one defect: the top-scoring document became exactly 1.0, the weakest
+    became exactly 0.0, and with a single scored document — or an all-tie — *every* document
+    became 1.0. So each facet awarded a maximal vote to its own favourite whatever that
+    favourite's absolute strength was, and ``route`` then **sums those votes across facets**: a
+    facet that found nothing convincing voted exactly as loudly as one that found the right
+    table. ``tests/retrieve/test_scoring_contract.py`` states the property being violated in its
+    own words — "a score divided by the current query's best hit is only comparable *within* one
+    query, so it cannot be summed across facets in ``route``" — and it tests ``BM25.search``,
+    which is absolute, one layer below where the division was happening.
 
-    Known residual: the floor is exactly 0.0, so a channel's weakest scored document gets
-    the same value as one that channel never saw. Changing the normaliser needs its own
-    measurement; it is not the monotonicity defect :func:`fuse` fixed.
+    **Reciprocal-rank fusion was the plan and is not the fix.** RRF is immune to *scale*, but it
+    is purely ordinal: the top-ranked document scores ``1/(k+1)``, the maximum a channel can
+    award, however weak the match. That is the same defect expressed in ranks.
+
+    A fixed ceiling keeps what min-max destroyed — how good the best match actually was — and it
+    needs no population, so the two retrieval passes cannot disagree about the scale by scoring
+    different candidate sets.
     """
-    if not scores:
-        return {}
-    low = min(scores.values())
-    high = max(scores.values())
-    if high <= low:
-        # One document, or a tie across all of them: this channel's best evidence within
-        # the facet, with nothing to spread it against.
-        return {key: 1.0 for key in scores}
-    span = high - low
-    return {key: (value - low) / span for key, value in scores.items()}
+    if ceiling <= 0.0:
+        raise ValueError(
+            f"ceiling must be positive, got {ceiling!r}. A ceiling of zero would make every "
+            "score on this channel infinite or undefined, not neutral."
+        )
+    if value <= 0.0:
+        return 0.0
+    return min(1.0, value / ceiling)
 
 
 def fuse(scores: Mapping[str, float], weights: Mapping[str, float], *,

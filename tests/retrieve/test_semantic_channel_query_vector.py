@@ -66,14 +66,18 @@ def test_schema_assets_carry_vectors_after_a_build() -> None:
 def test_a_query_that_was_not_rewritten_is_still_embedded_when_nothing_was_precomputed() -> None:
     """No rewrite is a reason to reuse ``fallback``, not a reason to score against ``None``."""
     embedder = DeterministicEmbedder(dimensions=64)
-    same = vector_for_query(QUESTION, question=QUESTION, fallback=None, embedder=embedder)
+    same, state = vector_for_query(QUESTION, question=QUESTION, fallback=None, embedder=embedder)
     assert same is not None, (
         "an unrewritten query with no precomputed vector returned None, which silences the "
         "semantic channel for every facet that does not rewrite"
     )
+    assert state is ChannelState.ran
     # The cache hit survives: given a fallback and no rewrite, no call is made.
-    cached = vector_for_query(QUESTION, question=QUESTION, fallback=[1.0, 0.0], embedder=embedder)
+    cached, cached_state = vector_for_query(
+        QUESTION, question=QUESTION, fallback=[1.0, 0.0], embedder=embedder
+    )
     assert list(cached) == [1.0, 0.0]
+    assert cached_state is ChannelState.ran
 
 
 def test_facet_schema_runs_the_semantic_channel_without_a_precomputed_query_vector() -> None:
@@ -93,6 +97,65 @@ def test_facet_schema_runs_the_semantic_channel_without_a_precomputed_query_vect
         "the semantic channel reported `ran` but scored no schema asset, so the state is "
         f"true and the channel is still inert: {result['hits']}"
     )
+
+
+def test_a_dead_embedder_reports_failed_and_scores_nothing() -> None:
+    """Audit I7, at the seam that writes the record rather than at the function.
+
+    The unit test on ``vector_for_query`` says it returns ``failed``; it says nothing about
+    whether the node reads it. Before this, the node could not have: ``vector_for_query`` handed
+    back the raw question's vector, so from ``semantic_search``'s side a substituted vector was
+    just a vector and the facet recorded ``ran``.
+
+    Paired with the test below, which is the *other* reason a declared channel does not run.
+    ``failed`` and ``not_configured`` must not converge — one is a dead endpoint and the other is
+    a lexical-only arm, and ``Anomaly`` exists to tell them apart.
+    """
+    from governed_bi.measure.degradation import channel_anomalies
+
+    class _DiesAfterBuild:
+        """Live while the corpus is embedded, dead when the question is."""
+
+        def __init__(self) -> None:
+            self._real = DeterministicEmbedder(dimensions=64)
+            self.live = True
+
+        model = property(lambda self: self._real.model)
+        requested_model = property(lambda self: self._real.model)
+        dimensions = 64
+
+        def embed(self, texts):
+            if not self.live:
+                raise RuntimeError("429 rate limited")
+            return self._real.embed(list(texts))
+
+    embedder = _DiesAfterBuild()
+    session = from_assets(
+        [SchemaAsset(id="ops_b", name="ops_b", summary="ops_b warehouse logistics fleet")],
+        connector=None,
+        policy=GovernancePolicy(guard_rules_enabled={}),
+        db_id="ops_b",
+        corpus_content_hash_="test",
+        agent_model=None,
+        embedder=embedder,
+    )
+    config = session.configurable()
+    assert "query_vector" not in config["configurable"], "fixture no longer models the defect"
+    embedder.live = False
+
+    update = asyncio.run(facet_schema_node(dict(session.turn(QUESTION)), config))
+    result = update["facets"]["facet_schema"]
+
+    assert result["channels"]["semantic"] == ChannelState.failed.value, (
+        f"a 429 on the query embed was not reported as a failure: {result['channels']}"
+    )
+    assert not [h for h in result["hits"] if h.get("semantic") is not None], (
+        "a semantic score survived an embed that raised, so it was computed against some other "
+        f"text's vector: {result['hits']}"
+    )
+    assert channel_anomalies({"facet_schema": result["channels"]}) == {
+        "facet_schema.semantic": "failed"
+    }
 
 
 def test_an_arm_with_no_embedder_reports_unconfigured_rather_than_failed() -> None:

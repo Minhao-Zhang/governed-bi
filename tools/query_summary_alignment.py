@@ -31,23 +31,44 @@ import json
 import pathlib
 import sys
 import time
-from math import comb
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
 DEFAULT_DATASET = REPO.parent / "BIRD-Data-Obfuscation" / "eval_dataset" / "test_final.jsonl"
 
 
-def mcnemar(reference: dict[str, bool], arm: dict[str, bool]) -> dict:
-    """Paired exact test. Both arms answer the identical question set, so the pairing is real."""
-    shared = sorted(set(reference) & set(arm))
-    gained = sum(1 for q in shared if arm[q] and not reference[q])
-    lost = sum(1 for q in shared if reference[q] and not arm[q])
-    n = gained + lost
-    if n == 0:
-        return {"n": len(shared), "gained": 0, "lost": 0, "p": 1.0}
-    tail = sum(comb(n, k) for k in range(min(gained, lost) + 1)) / 2**n
-    return {"n": len(shared), "gained": gained, "lost": lost, "p": round(min(1.0, 2 * tail), 5)}
+def paired(reference: dict[str, bool], arm: dict[str, bool], *, ref_label: str, arm_label: str):
+    """The paired test, through ``measure.stats.mcnemar``.
+
+    **This module used to carry its own McNemar** (audit D5), and
+    ``tools/check_one_implementation.py`` declares ``mcnemar`` a singleton whose stated reason is
+    that "v1 had two McNemars ... which one ran changes whether a ladder step is significant".
+    The gate did not see this one because it scanned ``src/governed_bi`` only; it scans the
+    singletons in ``tools/`` too now.
+
+    The copy was not merely duplicated, it was weaker in three ways that all point the same
+    direction — toward reporting a result as more informative than it is:
+
+    * it **silently intersected** the two unit sets (``set(reference) & set(arm)``) where
+      ``stats.mcnemar`` refuses, so a question missing from one arm quietly left the comparison
+      instead of stopping it;
+    * it returned **no minimum detectable effect**, and printed ``p=1.0`` on zero discordant
+      pairs with nothing carrying how uninformative that is — ``stats.mde`` exists for exactly
+      that case;
+    * it ``round()``ed, which is the thing ``check_measurement_locality`` is about.
+
+    Returns the ``McNemarResult`` so the caller reads named fields rather than a dict.
+    """
+    # Imported inside the function, as every other ``governed_bi`` import in this file is: the
+    # module has to be importable for ``--help`` without the package resolving.
+    from governed_bi.measure.population import Population  # noqa: PLC0415
+    from governed_bi.measure.stats import mcnemar  # noqa: PLC0415
+
+    return mcnemar(
+        Population.of(ref_label, [{"question_id": q, "hit": v} for q, v in reference.items()]),
+        Population.of(arm_label, [{"question_id": q, "hit": v} for q, v in arm.items()]),
+        "hit",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -190,9 +211,19 @@ def main(argv: list[str] | None = None) -> int:
         ("gold/raw", "dense/raw"),
         ("dense/raw", "gold/rewritten"),
     ):
-        stat = mcnemar(per_question[ref], per_question[arm])
-        print(f"  {arm:<18} vs {ref:<18} +{stat['gained']} -{stat['lost']}  p={stat['p']}")
-        results.setdefault("mcnemar", {})[f"{arm}_vs_{ref}"] = stat
+        stat = paired(per_question[ref], per_question[arm], ref_label=ref, arm_label=arm)
+        # `render()` carries the discordance and the minimum detectable effect with the p-value,
+        # so a null result cannot be read as "no difference" when it means "cannot tell".
+        print(f"  {arm:<18} vs {ref:<18} {stat.render()}")
+        results.setdefault("mcnemar", {})[f"{arm}_vs_{ref}"] = {
+            "n_pairs": stat.n_pairs,
+            "gained": stat.only_b,
+            "lost": stat.only_a,
+            "discordance": stat.discordance,
+            "p_value": stat.p_value,
+            "minimum_detectable": stat.minimum_detectable,
+            "is_decisive": stat.is_decisive,
+        }
 
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
