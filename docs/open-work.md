@@ -15,6 +15,11 @@ The 2026-08-10 implementation audit is a separate page, because it is a one-time
 with its own phased remediation order rather than an accumulating list:
 [audit-2026-08-10](analysis/audit-2026-08-10.md). Items migrate from there to here as phases close.
 
+Its **calls** are separate again, in [decisions-2026-08-10](analysis/decisions-2026-08-10.md) — 23
+choices taken while working it, each with the alternative that was rejected and what would reverse it.
+Read it before re-opening any of them: four entries retract their own earlier reasoning in place, so
+the argument you are about to make may already be there with the measurement that killed it.
+
 ---
 
 ## 1. Engine — measured, with a known ceiling
