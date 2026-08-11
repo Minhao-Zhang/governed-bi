@@ -82,10 +82,25 @@ def context_hashes_distinct(
     *,
     threshold: float = CONTEXT_HASH_THRESHOLD,
 ) -> GateResult:
-    """≥ ``threshold`` of shared questions have differing ``context_hash`` (L-R2).
+    """Both arms recorded a ``context_hash`` on the questions they share.
 
-    The delivery gate is on ``context_hash``, not ``delivery_hash``. Missing hashes
-    on either side make the gate ``cannot_evaluate``.
+    **An existence check, not a treatment test — that is audit D9's resolution.** It used to
+    require ``threshold`` (0.95) of shared questions to have *differing* hashes, on the
+    reasoning that a changed treatment changes the context. The inference does not hold in
+    that direction: retrieval is nondeterministic, so the hashes differ whether or not the
+    treatment did. Measured on ``run1``/``run2``, which differ only by a random seed, it passed
+    at **0.9993** — and at 0.992, 0.992 and 0.988 on every other pair on disk. It believed it
+    asked "did the treatment change" and measured "is there retrieval noise", to which the
+    answer is always yes.
+
+    What replaces it is :func:`knobs_comparable`, which reads the declared treatment out of the
+    knobs rather than inferring it from a hash. This function keeps the narrower job it can
+    actually do: a turn with no ``context_hash`` assembled no context, and a pair of arms where
+    that is true of some shared questions cannot be compared on those questions at all.
+
+    ``threshold`` is retained in the signature and deliberately unused by the verdict, because
+    callers pass it and a silent behaviour change under an unchanged call is worse than a
+    parameter that documents its own retirement. It is reported in the detail line.
     """
     if a.unit_key != b.unit_key:
         return _gate(
@@ -136,23 +151,16 @@ def context_hashes_distinct(
         )
 
     rate = Measured.rate(
-        distinct, comparable, what=f"context_hash distinct {a.label!r} vs {b.label!r}"
+        comparable, len(shared), what=f"context_hash recorded {a.label!r} vs {b.label!r}"
     )
-    if rate.value < threshold:
-        return _gate(
-            "context_hash",
-            Verdict.failed,
-            rate,
-            a,
-            f"distinctness {rate.render(4)} < {threshold} "
-            f"({distinct}/{comparable} shared questions)",
-        )
     return _gate(
         "context_hash",
         Verdict.passed,
         rate,
         a,
-        f"{distinct}/{comparable} shared questions differ",
+        f"both arms assembled a context on all {comparable} shared questions "
+        f"({distinct} of them differ; distinctness is no longer the verdict — audit D9 — and "
+        f"the retired threshold was {threshold})",
     )
 
 
@@ -185,25 +193,49 @@ def _arm_knob_values(arm: Population, keys: frozenset[str]) -> dict[str, Any]:
     return out
 
 
-def knobs_comparable(a: Population, b: Population) -> GateResult:
-    """Both arms resolved every comparability knob to the same value.
+def knobs_comparable(
+    a: Population,
+    b: Population,
+    *,
+    treatment: frozenset[str] = frozenset(),
+) -> GateResult:
+    """The arms differ in the declared treatment, and in nothing else that matters.
 
-    The between-arm half of comparability, which had no wire until 2026-08-11:
-    ``comparability_keys()`` and ``config_hash_keys()`` were derived, documented, and called by
-    nothing. A pair differing in ``chat_model`` was published as a delta because each arm was
-    internally consistent and their contexts were distinct — neither of which is a statement
-    about the treatment being the only difference.
+    Both halves are necessary and the second one is audit D9's fix.
 
-    Three verdicts, and the middle one is the point:
+    **Confounders.** Every comparability knob *except* the declared treatment must be recorded
+    on both arms and equal. Until 2026-08-11 nothing checked this: ``comparability_keys()``
+    and ``config_hash_keys()` had no production caller, so a pair differing in ``chat_model``
+    was published as a delta because each arm was internally homogeneous.
 
-    * **fail** — a key is recorded on both sides with different values. The arms are two
-      treatments and the delta confounds them.
-    * **cannot_evaluate** — a key is missing from an arm's rows. Absent is not a value. This is
-      the distinction ``serve/session.py::_resolved_knobs`` was written to preserve, and
-      collapsing it is precisely how a gate certifies a configuration it never saw.
-    * **passed** — every key present on both sides and equal, recorded ``None`` included.
+    **The treatment itself must have moved.** A comparison whose declared treatment is
+    identical on both arms is a replicate wearing an arm's name. This is what D9 asked for:
+    treatment difference asserted from *declared fields* rather than inferred from
+    ``context_hash`` noise, which measured retrieval nondeterminism and passed at 0.9993 on a
+    seed-only null pair.
+
+    ``treatment`` names comparability knobs — a treatment that is not one is a category error
+    and refuses rather than being quietly ignored. An **empty** ``treatment`` is not "nothing
+    changed", it is "nobody said what changed", and a pair that cannot name its treatment
+    cannot be shown to be a comparison rather than a replicate.
+
+    Absent and ``None`` stay apart throughout: ``_resolved_knobs`` flattens ``UNSET`` to
+    ``None`` on purpose, so two arms may agree on a recorded ``None``, while a key missing from
+    the mapping is the arm declining to say. Collapsing them is how the within-arm gate once
+    certified a configuration it never saw.
     """
     keys = comparability_keys()
+
+    undeclared = sorted(treatment - keys)
+    if undeclared:
+        return _gate(
+            "knobs_resolved",
+            Verdict.cannot_evaluate,
+            Measured.unmeasured("treatment names a knob that is not a comparability knob"),
+            a,
+            "declared treatment is not in comparability_keys(): " + ", ".join(undeclared),
+        )
+
     values_a = _arm_knob_values(a, keys)
     values_b = _arm_knob_values(b, keys)
 
@@ -218,7 +250,8 @@ def knobs_comparable(a: Population, b: Population) -> GateResult:
             f"not recorded on both arms, so equality cannot be claimed: {shown}",
         )
 
-    differing = sorted(k for k in keys if values_a[k] != values_b[k])
+    confounders = keys - treatment
+    differing = sorted(k for k in confounders if values_a[k] != values_b[k])
     if differing:
         shown = "; ".join(
             f"{k}: {'/'.join(values_a[k])} vs {'/'.join(values_b[k])}" for k in differing[:4]
@@ -227,19 +260,52 @@ def knobs_comparable(a: Population, b: Population) -> GateResult:
         return _gate(
             "knobs_resolved",
             Verdict.failed,
-            Measured.rate(len(keys) - len(differing), len(keys),
-                          what="comparability knobs agreeing across arms"),
+            Measured.rate(
+                len(confounders) - len(differing),
+                len(confounders),
+                what="non-treatment comparability knobs agreeing across arms",
+            ),
             a,
-            f"arms differ on {len(differing)} comparability knob(s): {shown}{extra}",
+            f"arms differ on {len(differing)} knob(s) outside the declared treatment: "
+            f"{shown}{extra}",
+        )
+
+    if not treatment:
+        return _gate(
+            "knobs_resolved",
+            Verdict.cannot_evaluate,
+            Measured.unmeasured("no treatment declared"),
+            a,
+            "no treatment declared, so this pair cannot be shown to be a comparison rather "
+            "than a replicate — every comparability knob is identical across the two arms",
+        )
+
+    unmoved = sorted(k for k in treatment if values_a[k] == values_b[k])
+    if unmoved:
+        return _gate(
+            "knobs_resolved",
+            Verdict.failed,
+            Measured.rate(
+                len(treatment) - len(unmoved),
+                len(treatment),
+                what="declared treatment knobs that actually differ",
+            ),
+            a,
+            "the declared treatment is identical on both arms, so this is a replicate and not "
+            "a comparison: " + ", ".join(unmoved),
         )
 
     return _gate(
         "knobs_resolved",
         Verdict.passed,
-        Measured.rate(len(keys), len(keys),
-                      what="comparability knobs agreeing across arms"),
+        Measured.rate(
+            len(confounders),
+            len(confounders),
+            what="non-treatment comparability knobs agreeing across arms",
+        ),
         a,
-        f"both arms agree on all {len(keys)} comparability knobs",
+        f"treatment {sorted(treatment)} differs; all {len(confounders)} other comparability "
+        "knobs agree",
     )
 
 
@@ -248,14 +314,16 @@ def comparison_quotable(
     b: Population,
     *,
     threshold: float = CONTEXT_HASH_THRESHOLD,
+    treatment: frozenset[str] = frozenset(),
 ) -> tuple[bool, tuple[GateResult, ...], tuple[GateResult, ...], GateResult, GateResult]:
     """Whether an arm-to-arm delta may be quoted.
 
-    Two cross-arm gates, because a pair can fail comparability in two independent ways and
-    reporting one would hide the other. :func:`context_hashes_distinct` asks whether the arms
-    did anything *different*; :func:`knobs_comparable` asks whether the difference is only the
-    treatment. An arm pair needs both, and until 2026-08-11 only the first was asked — see
-    that function for what the omission allowed.
+    Two cross-arm gates with different jobs. :func:`context_hashes_distinct` is now an
+    **existence** check — both arms assembled a context on the questions they share — because
+    audit D9 established that its old 95%-distinctness threshold measured retrieval
+    nondeterminism and reported it as a treatment difference, passing at 0.9993 on a pair that
+    differs only by a random seed. Judging the treatment is :func:`knobs_comparable`'s job, from
+    declared knobs, and ``treatment`` is how the caller names what is supposed to have moved.
 
     Single-arm ``context_hash`` gates are replaced by the cross-arm one. The ``knobs_resolved``
     gate is **not** replaced: each arm's own within-arm homogeneity is a different question
@@ -266,7 +334,7 @@ def comparison_quotable(
     A's ``describe()`` on the provenance line.
     """
     ctx = context_hashes_distinct(a, b, threshold=threshold)
-    knobs = knobs_comparable(a, b)
+    knobs = knobs_comparable(a, b, treatment=treatment)
     results_a = _with_cross_arm_context(evaluate_arm(a), ctx)
     results_b = _with_cross_arm_context(evaluate_arm(b), ctx)
     ok = (

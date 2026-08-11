@@ -138,8 +138,10 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "pipeline decisions. Null on paths that skip assemble, and NEVER the string "
        "'unknown' — v1's sentinel compared equal to itself and let two runs with no "
        "recorded treatment pass comparability",
-       gate="context_hash distinct across arms on >= 95% of shared questions where "
-            "both arms assembled a context"),
+       gate="both arms recorded a context_hash on every shared question. Distinctness was "
+            "the condition until audit D9: it measured retrieval nondeterminism rather than "
+            "treatment change and passed at 0.9993 on a seed-only pair, so the treatment "
+            "judgement moved to knobs_resolved"),
     _f("delivery_hash", Tier.treatment, Absence.not_applicable, Stage.stamp,
        "context plus every tool-delivered body. NOT deterministic -- it depends on "
        "which read_body calls the model chose -- so it is a diagnostic, never a gate. "
@@ -163,7 +165,9 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "the resolved value of every comparability knob. Without it a turn cannot be "
        "joined against the configuration it ran under, and a manifest-only record lets "
        "two runs over different corpora on different splits compare as one",
-       gate="every row in one arm agrees on knobs.resume_drift_keys()"),
+       gate="every row in one arm agrees on knobs.resume_drift_keys(); across two arms the "
+            "declared treatment differs and every other knobs.comparability_keys() entry is "
+            "recorded on both and equal"),
 
     # ── decision ────────────────────────────────────────────────────────────
     _f("facet_hits", Tier.decision, Absence.not_applicable, Stage.route,

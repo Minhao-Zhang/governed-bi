@@ -173,7 +173,16 @@ def test_one_unexecutable_gold_statement_does_not_end_the_oracle_arm(tmp_path: P
     assert bad["error_type"]
 
 
-def test_context_hash_distinctness_pass_and_fail() -> None:
+def test_context_hash_is_an_existence_check_not_a_treatment_test() -> None:
+    """Rewritten 2026-08-11 for audit D9. It used to assert the opposite of the second case.
+
+    Identical hashes on every shared question no longer fail: distinctness measured retrieval
+    nondeterminism, not treatment change, and passed at 0.9993 on a seed-only null pair. The
+    treatment judgement moved to ``report.knobs_comparable``, which reads declared knobs.
+
+    What this gate still owes a caller is coverage — a shared question where either arm
+    assembled no context cannot be compared on that question.
+    """
     a = arm_population(
         [_clean_row(f"q{i}", context_hash=f"a-{i}") for i in range(20)],
         label="arm_a",
@@ -186,10 +195,14 @@ def test_context_hash_distinctness_pass_and_fail() -> None:
         [_clean_row(f"q{i}", context_hash=f"a-{i}") for i in range(20)],
         label="arm_same",
     )
-    ok = context_hashes_distinct(a, b)
-    assert ok.verdict is Verdict.passed
-    bad = context_hashes_distinct(a, same)
-    assert bad.verdict is Verdict.failed
+    assert context_hashes_distinct(a, b).verdict is Verdict.passed
+    assert context_hashes_distinct(a, same).verdict is Verdict.passed
+
+    thin = arm_population(
+        [_clean_row(f"q{i}", context_hash=None) for i in range(20)],
+        label="arm_thin",
+    )
+    assert context_hashes_distinct(a, thin).verdict is Verdict.cannot_evaluate
 
 
 def test_mcnemar_uses_same_population_as_headline() -> None:

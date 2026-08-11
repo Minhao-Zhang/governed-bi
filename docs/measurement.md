@@ -379,9 +379,23 @@ them: a driver that refused to report a run would lose the run.
 Two further conditions apply to a comparison rather than to one arm, and live
 in [`eval/report.py`](../src/governed_bi/eval/report.py):
 
-- `context_hash` distinctness: at least 95% of shared questions must have
-  differing hashes across the two arms, or the treatment did not actually
-  differ. `comparison_quotable` substitutes this for the single-arm coverage
-  check.
+- `context_hash` existence: both arms must have assembled a context on every
+  shared question, or those questions cannot be compared at all.
+  `comparison_quotable` substitutes this for the single-arm coverage check.
+- `knobs_comparable`: the arms differ in the **declared treatment** and in
+  nothing else in `comparability_keys()`. The caller names the treatment; a pair
+  that cannot name one is `cannot_evaluate`, because "nobody said what changed"
+  is not "nothing changed". A knob absent from either arm is also
+  `cannot_evaluate` — absent is not a value, and `dict.get` collapsing it into a
+  recorded `None` is how a gate certifies a configuration it never saw.
 - Populations must share units and filters before `paired_ex` runs McNemar
   over them.
+
+`context_hash` distinctness used to be the treatment test: at least 95% of shared
+questions had to have differing hashes. It was retired by audit D9. Retrieval is
+nondeterministic, so hashes differ whether or not the treatment did — the gate
+passed at **0.9993** on `run1`/`run2`, which differ only by a random seed, and at
+0.992, 0.992 and 0.988 on every other pair on disk. It believed it asked "did the
+treatment change" and measured "is there retrieval noise", to which the answer is
+always yes. The judgement now reads declared knobs instead of inferring from a
+hash.

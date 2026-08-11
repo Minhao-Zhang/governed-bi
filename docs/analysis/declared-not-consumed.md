@@ -175,9 +175,14 @@ only by a coincidental `"arms"` dict key in `eval/report.py`, and is in the same
   is pure checkpoint growth. Caught by rule S1 (the only S1 hit).
 - **`live_capture_keys()` and the `reconstructable` column on `RecordField`** — zero readers
   anywhere, tests included. Two fields carry `reconstructable=True` and nothing asks.
-- **`config_hash_keys()`** — no reader in `src/` or `tools/`; `register/knobs.py`'s module
-  docstring says it derives "the serve config hash", and no serve config hash exists.
-- **Tests-only readers**: `comparability_keys()`, `record_keys()`, `required_keys()`,
+- **`config_hash_keys()`** — still no reader, and the name is the finding. `register/knobs.py`'s
+  module docstring says it derives "the serve config hash"; no serve config hash exists and the
+  record carries `context_hash`, `delivery_hash`, `corpus_content_hash` and `prompt_set_hash`
+  only. It is an alias returning `comparability_keys()`, which since 2026-08-11 *is* consumed —
+  by `eval/report.py::knobs_comparable`. Either rename this to say what it returns or delete it;
+  a function named for an artifact the system does not produce is how a reader comes to believe
+  the artifact exists.
+- **Tests-only readers**: `record_keys()`, `required_keys()`,
   `gate_keys()`, `defaults()`, `unknown_prompts()`, `KNOB_REGISTER`, `Tier`, `Role`, `Absence`,
   `RETIRED_CLAIMS`, `GATE_CONSUMED_TYPES`, `FACET_EXTRACTS`, `PROMPT_REGISTRY`. Most are
   legitimate — a register accessor whose only caller is a conformance test is doing its job — but

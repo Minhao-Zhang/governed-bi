@@ -89,25 +89,43 @@ def _pair():
 
 
 @_ARTIFACTS
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "audit D9: the cross-arm gate measures retrieval nondeterminism and reports it as a treatment "
-        "difference, so it passes on a seed-only null pair. strict=True turns fixing D9 into a failure "
-        "until the marker goes. raises=AssertionError so an ImportError — which a rename of the "
-        "function would produce — is a real failure rather than the expected one."
-    ),
-)
-def test_the_cross_arm_gate_refuses_a_seed_only_pair() -> None:
-    """The gate must not certify two arms that differ only by a random seed."""
-    from governed_bi.eval.report import Verdict, context_hashes_distinct
+def test_the_cross_arm_judgement_refuses_a_seed_only_pair() -> None:
+    """The control, repointed at the gate that now makes the judgement.
 
-    gate = context_hashes_distinct(*_pair())
+    **This was an ``xfail(strict=True)`` on ``context_hashes_distinct`` until 2026-08-11.** The
+    docstring above anticipated exactly what happened: the fix demoted ``context_hash`` to an
+    existence check and moved the treatment judgement onto declared fields, so the old assertion
+    would have stayed XFAIL and stopped meaning anything. Per the D9 row's instruction, it is
+    repointed rather than deleted.
+
+    ``knobs_comparable`` reads the treatment from ``knobs_resolved`` instead of inferring it
+    from a hash. ``run1`` and ``run2`` differ only by a random seed, so no caller can name a
+    treatment for them and none of the 45 comparability knobs separates them — whichever of
+    those two facts these artifacts show, the verdict must not be ``passed``.
+    """
+    from governed_bi.eval.report import Verdict, knobs_comparable
+
+    gate = knobs_comparable(*_pair())
     assert gate.verdict is not Verdict.passed, (
-        f"the delivery gate passed on two arms that differ only by a random seed: {gate.render()}. "
-        "It is measuring retrieval noise and reporting it as a treatment difference."
+        f"the cross-arm judgement passed on two arms that differ only by a random seed: "
+        f"{gate.render()}"
     )
+
+
+@_ARTIFACTS
+def test_context_hash_no_longer_claims_to_detect_a_treatment() -> None:
+    """The other half of D9, asserted so the demotion cannot be quietly reverted.
+
+    The gate is now an existence check and *does* pass on the null pair — that is correct and
+    is the point. What must not come back is the reading of that pass as "the treatment
+    changed", so the judgement is required to live elsewhere: this asserts the two gates
+    disagree on this pair, which is only possible because they now ask different questions.
+    """
+    from governed_bi.eval.report import Verdict, context_hashes_distinct, knobs_comparable
+
+    a, b = _pair()
+    assert context_hashes_distinct(a, b).verdict is Verdict.passed
+    assert knobs_comparable(a, b).verdict is not Verdict.passed
 
 
 @_ARTIFACTS
