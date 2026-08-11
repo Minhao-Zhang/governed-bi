@@ -426,7 +426,10 @@ marker goes. The fix and the marker's removal become inseparable.
 than a known-broken one, because a broken gate that a test names is a defect with a deadline while a
 half-built one is a gate.
 
-**Rejected: an ordinary failing test.** A red suite trains people to ignore red.
+**Rejected: an ordinary failing test.** A red suite trains people to ignore red — and then the same
+commit shipped an ordinary test that turned `main` red in CI, because it asserted a gitignored fixture
+exists. `skipif` now, not `xfail`: a missing artifact is not a defect in the code, and an xfail would
+make the two indistinguishable.
 
 **Recorded for whoever finishes it:** the two artifacts carry `corpus_content_hash: None`, so on that
 pair the correct new verdict is `cannot_evaluate` rather than `fail`. Both refuse to quote a delta,
@@ -436,3 +439,28 @@ which is the property; only one of them is what a reader expects, and expecting 
 **Also recorded: this chunk was started after the pause on D9**, on the reading that the standing
 instruction to keep working through the register supersedes a pause given in the same breath as
 "squash and merge now". That is a judgement about intent and it may be wrong.
+
+## D-28 — The pin was narrowed twice, and what it cannot force is written on it
+
+Review found three things wrong with D-27's control and one thing wrong with `main`.
+
+**`main` went red.** The control asserted its fixture exists; `runs/` is gitignored, so CI cannot have
+it. "Gates green" in that commit was a statement about one laptop. Now `skipif`, verified both ways:
+2 passed / 1 xfailed with the artifacts, 3 skipped without.
+
+**The severity claim was wrong and is withdrawn.** I wrote that a delta over two identical treatments
+"is published with a `[pass]` beside it". `comparison_quotable(run1, run2)` returns **False** at HEAD —
+the `corpus_content_hash` gate D7 added refuses it, because these artifacts predate the field. And the
+only caller is the SQLite driver that produced none of `runs/eval/`, so nothing has ever been through
+this gate at all. The tautology is real; the harm is currently masked by an unrelated gate, and I
+described a mask as an absence.
+
+**The pin is weaker than I claimed.** `strict=True` fires only if the fix keeps `context_hashes_distinct`
+and rewires it. Phase 2 prescribes the opposite — demote it to an existence check and assert treatment
+difference from declared fields — and under that shape the control stays XFAIL and stops meaning
+anything. That limit is now written into the test's own docstring and the D9 row, because a pin whose
+reach is overstated is worse than no pin: it makes the next person think the ground is covered.
+
+**Kept anyway**, with `raises=AssertionError` so a rename produces a real failure rather than the
+expected one, and with the null-pair check reading all 1,351 rows instead of one per arm — both
+mutation-verified as insufficient before.
