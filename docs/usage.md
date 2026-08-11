@@ -45,7 +45,7 @@ Copy [`.env.example`](../.env.example) to `.env` and fill in what you need.
 |---|---|
 | `GOVERNED_BI_PG_DSN`, else `PG_RENAME_DECOY_DSN` | Postgres DSN — required for LangGraph serve and for the eval driver. Those two names in that precedence, from `tools/credentials.PG_DSN_NAMES` |
 | `OPENAI_API_KEY` | Model access on the `openai` gateway — the default one |
-| `GOVERNED_BI_API_KEY` | **Required to serve.** Transport auth for every route (`api/auth.py`, wired by `langgraph.json`'s `auth.path`). Unset means the server refuses every request and names this variable in the 401 — it does not mean "open". Clients send it as `x-api-key` or `Authorization: Bearer`; the sibling UI reads it from `NEXT_PUBLIC_GOVERNED_BI_API_KEY` and both values must match. One key is one principal, so it is transport auth and not per-user authorization |
+| `GOVERNED_BI_API_KEY` | **Required to serve.** Transport auth for every route but `GET /livez` (`api/auth.py`, wired by `langgraph.json`'s `auth.path`; the custom routes enforce it in `api/routes.py`'s own middleware, which reuses that comparison). Unset means the server refuses every request and names this variable in the 401 — it does not mean "open". Clients send it as `x-api-key` or `Authorization: Bearer`; the sibling UI reads it from `NEXT_PUBLIC_GOVERNED_BI_API_KEY` and both values must match. One key is one principal, so it is transport auth and not per-user authorization |
 | `GOVERNED_BI_PROVIDER` | Gateway for every surface: `openai` (default), `bedrock`, `proxy` |
 | `GOVERNED_BI_MODEL_PROVIDER`, `GOVERNED_BI_UTILITY_PROVIDER`, `GOVERNED_BI_EMBEDDING_PROVIDER` | Per-surface override of the above. The three surfaces resolve independently |
 | `GOVERNED_BI_AWS_REGION`, else `AWS_REGION`, else `AWS_DEFAULT_REGION` | Bedrock region, in that precedence — the engine's own name wins over whatever the shell exports for other tooling |
@@ -87,6 +87,17 @@ uv run langgraph dev
 `langgraph.json` maps graph `"serve"` to
 `src/governed_bi/api/graph_app.py:make_graph` and HTTP to
 `src/governed_bi/api/routes.py:app`.
+
+Set `GOVERNED_BI_API_KEY` first, or every call answers 401 — including the UI's,
+which cannot render past `/capabilities`. Every request but `GET /livez` carries
+it:
+
+```bash
+curl -H "x-api-key: $GOVERNED_BI_API_KEY" localhost:2024/capabilities
+curl -H "Authorization: Bearer $GOVERNED_BI_API_KEY" localhost:2024/capabilities
+```
+
+Route shapes and the 401 body are in [`openapi.json`](openapi.json).
 
 Streaming (preferred): `POST /threads/{id}/runs/stream` with
 `stream_mode: ["values", "messages", "custom"]` and `stream_subgraphs: true`

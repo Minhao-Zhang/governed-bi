@@ -474,3 +474,68 @@ item in §1. Decoupling them (govern over the whole routed schema, retrieve the 
 change what "governed" means and needs an ADR, not a patch — and per §4.1 it is also the
 contrast arm that would attribute the abstention property to the allowlist rather than to
 everything else that differs between two systems.
+
+---
+
+## 5. Presentation surface
+
+Numbered after §4 rather than inserted, because §4.1 and §4.2 are cited by name from `README.md`,
+`failure-modes.md` and the ADRs. The work here lives mostly in the sibling repository
+[governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui); each item below was verified in
+that checkout, not inferred from this tree.
+
+### 5.1 No image of the running system exists
+
+Neither repository contains a single screenshot, diagram or recording of the product. The UI
+repo's `public/` holds four files, all of them `create-next-app` defaults (`next.svg`,
+`vercel.svg`, `window.svg`, `globe.svg`). This repository's README demonstrates the engine with
+terminal transcripts and points at the UI in two lines below the documentation table.
+
+The consequence is specific: a reader has no way to learn what the system looks like without
+provisioning Postgres, the obfuscated lake and a corpus. That is the wrong order of effort for
+the first thirty seconds of a reader's attention.
+
+Two captures would carry the argument — one answered turn showing the SQL, and one refusal
+showing the reason. The pair is already the shape of the README's prose, so the section does not
+need redesigning, only re-illustrating. The refusal is the load-bearing one: an answer is what
+every text-to-SQL demonstration shows, and a principled refusal is what almost none can.
+
+Blocked on a machine carrying the lake and a corpus. `components/chat/mock-chat.tsx` renders
+without a backend, but it pins a banner reading "Preview mode — showing synthetic output" that
+cannot be dismissed while the answers are synthetic — deliberately, per the component's own
+docstring — so a preview capture is honest but is not evidence the engine ran.
+
+### 5.2 The UI cannot authenticate against the engine
+
+This blocks §5.1 independently of the database, and it is the more surprising half.
+
+`src/governed_bi/api/auth.py` requires a shared key on every route except `GET /livez`,
+presented as `x-api-key` or `Authorization: Bearer`, and refuses every request outright when
+`GOVERNED_BI_API_KEY` is unset. The string `x-api-key` does not appear anywhere in the UI
+checkout. `lib/api-client.ts` and the `useStream` transport send no credential, so every custom
+route answers 401 and the client cannot get past `/capabilities`.
+
+This is UI code — an environment variable plus a header on two call sites — not a documentation
+repair. Until it lands, "attach a backend for live answers" is not an instruction anyone can
+follow.
+
+### 5.3 Client-side references to surface the engine does not have
+
+Three readers in `lib/answer-delivery.ts` — `whyLines`, `routedSchemasLabel`,
+`corpusVersionLabel` — consume `provenance.uncertainty_flags`, `suspect_columns`,
+`routed_schemas` and `corpus_release_hash`. None of the four exists in `src/`, and the record
+register declares no such field; the nearest live equivalent to the last is
+`corpus_content_hash` (`register/record.py:151`). The functions are inert rather than wrong, and
+are annotated as such at each site. Repointing the hash is a behaviour change and wants a
+decision, not a patch.
+
+Separately, eight UI files still cite a handoff document that was deleted from this repository,
+and two cite a `D15` that appears nowhere in `docs/`.
+
+Every item in this section is a citation or a contract that drifted across the repository
+boundary, and `check_citations.py` would have caught all of them inside one tree — its
+`STRICT_ROOTS` already covers `docs/`, but no gate in either repository can see across the split.
+Whether to merge the UI here is open, and is a separate question from keeping the corpus and the
+lake external: that one is settled by measurement identity, and merging a client would not touch
+`corpus_content_hash`. Recorded in
+[the strategy checkpoint](analysis/strategy-checkpoint-2026-08-11.md).
