@@ -154,3 +154,50 @@ async def _no_state_writes(ctx: Auth.types.AuthContext, value: dict) -> None:
             "State is written from inside the graph."
         ),
     )
+
+#: Keys of a run-creation ``command`` that write state instead of resuming one.
+#:
+#: ``resume`` is the whole point of the paused-turn protocol and must stay: ``ask_user`` interrupts
+#: and the client answers. ``update`` and ``goto`` are the two that write, and LangGraph applies
+#: ``update`` through ``map_command``, which — unlike ``map_input`` — emits a write for **every** key
+#: it is handed with no reference to the graph's input schema.
+_STATE_WRITING_COMMANDS = ("update", "goto")
+
+
+@auth.on.threads.create_run
+async def _no_state_writes_on_a_new_run(ctx: Auth.types.AuthContext, value: dict) -> None:
+    """Deny ``POST /threads/{id}/runs`` when it carries a state-writing ``command`` (audit A4).
+
+    **The same defect as A2/A3, through a door that closing them left open.** Those closed
+    ``POST /threads/{id}/state`` and the ``as_node`` write behind it; this is run creation, which
+    dispatches ``("threads", "create_run")`` — an action no handler covered, so
+    ``langgraph_api``'s default allowed it. The payload
+    ``{"command": {"update": {"licensed": ["public.salaries"], "corpus_content_hash": "forged"}}}``
+    therefore reached ``map_command``, which writes every key it is given.
+
+    Both halves of that example matter and neither is a nuisance: ``licensed`` is the tool bound the
+    layer stack enforces against, so widening it and then resuming executes SQL against tables the
+    corpus never licensed — the model does not need a database handle if the caller can hand it one.
+    And ``corpus_content_hash`` is the treatment identity every quotability gate reads, so a forged
+    one stamps an audit record with a corpus the run never served.
+
+    A denial and not a filter, for the reason the state hook gives: there is no value of "which
+    thread" that makes forging the engine's own record acceptable. ``resume`` passes, because
+    answering a clarification is what this endpoint is for.
+    """
+    command = value.get("command") if isinstance(value, dict) else None
+    if not isinstance(command, dict):
+        return
+    offending = sorted(k for k in _STATE_WRITING_COMMANDS if command.get(k) is not None)
+    if not offending:
+        return
+    raise Auth.exceptions.HTTPException(
+        status_code=403,
+        detail=(
+            f"command.{{{', '.join(offending)}}} is not accepted on run creation. `update` and "
+            "`goto` write thread state, which carries the tool bounds the layer stack enforces "
+            "against and the corpus hash every quotability gate reads (audit A4, the same defect "
+            "as A2/A3 through a different route). `command.resume` is accepted — answering a "
+            "paused turn is what this endpoint is for. State is written from inside the graph."
+        ),
+    )

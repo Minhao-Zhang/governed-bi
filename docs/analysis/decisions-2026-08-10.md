@@ -348,3 +348,24 @@ which is what this audit exists to remove. The tree is where the correction is d
 Properly paired it is `discordant=25/1224, p=1.0000, MDE=0.0114`: one question, 14x below the
 detection floor. I reached for the number the tool printed instead of the test the repo owns, in a
 commit whose subject is that gates must be able to fail.
+
+## D-24 — A4 is a denial on two command keys, not on `command`
+
+`command.update` and `command.goto` write thread state; `command.resume` answers a paused turn.
+
+**Chosen:** refuse the two writers by name on `threads.create_run`, and let `resume` through.
+
+**Rejected: denying `command` outright.** It is one character shorter and it removes the
+clarification protocol — `ask_user` interrupts and the client answers with `command.resume`. That is
+declared as a mutation (`a4-resume-refused-too`) rather than left as a comment, because a blanket
+deny passes every test written about the *forgery* and silently deletes the feature.
+
+**Rejected: a filter on which threads may be written.** Same reasoning as the state hook it sits
+beside: the finding is not about ownership. `licensed` is the bound the layer stack enforces against
+and `corpus_content_hash` is the treatment identity, so there is no value of "which thread" that makes
+writing them acceptable.
+
+**Why it was still open after A2/A3 shipped:** those closed `POST /threads/{id}/state`. Run creation
+dispatches a different action, `("threads", "create_run")`, which no handler covered — and LangGraph
+applies `update` through `map_command`, which unlike `map_input` writes every key it is handed with no
+reference to the graph's input schema. Closing a door is not closing the room.

@@ -164,6 +164,32 @@ MUTATIONS: tuple[Mutation, ...] = (
         finding="a bug shipped and caught the same day — blocks every cross-origin call",
     ),
     Mutation(
+        id="a4-run-creation-writes-state",
+        what="a new run may carry command.update, forging licensed and the corpus hash",
+        path="src/governed_bi/api/auth.py",
+        anchor="    offending = sorted(k for k in _STATE_WRITING_COMMANDS if command.get(k) is not None)",
+        replacement="    offending: list[str] = []",
+        tests=(
+            "tests/api/test_the_custom_routes_require_a_key.py::"
+            "test_a_new_run_may_not_carry_a_state_writing_command",
+        ),
+        finding="A4 — A2/A3 through the door closing them left open; `map_command` writes every "
+                "key it is handed with no reference to the graph's input schema",
+    ),
+    Mutation(
+        id="a4-resume-refused-too",
+        what="the paused-turn protocol is broken by a blanket deny",
+        path="src/governed_bi/api/auth.py",
+        anchor='_STATE_WRITING_COMMANDS = ("update", "goto")',
+        replacement='_STATE_WRITING_COMMANDS = ("update", "goto", "resume")',
+        tests=(
+            "tests/api/test_the_custom_routes_require_a_key.py::"
+            "test_a_new_run_may_not_carry_a_state_writing_command",
+        ),
+        finding="a blanket deny looks like the fix and removes the feature: `ask_user` interrupts "
+                "and the client answers with `command.resume`",
+    ),
+    Mutation(
         id="c2-wiring-failure-as-verdict",
         what="a missing connector is recorded as a governance refusal",
         path="src/governed_bi/serve/fetch.py",
