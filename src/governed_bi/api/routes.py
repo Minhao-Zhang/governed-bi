@@ -426,6 +426,110 @@ def resolve_conflict_route(asset_id: str, body: dict[str, Any] | None = None) ->
     }
 
 
+# ── /clarifications: v1's offline Clarifications queue, restored (Phase 1a) ────────────────
+#
+# Phase 1a of restoring v1's offline Clarifications queue + Setup Wizard onto v2. Pure CRUD
+# over `curator/clarifications.py`'s ledger -- nothing here writes into the ledger from a live
+# `ask_user` turn (Phase 1b) or folds an answer into the corpus (Phase 1c).
+
+
+def _clarification_row(record: Any) -> dict[str, Any]:
+    """One ``ClarificationRecord`` as a response row.
+
+    ``answer_text`` is ``resolve_answer_text``'s output, distinct from the record's own
+    ``answer`` field -- a choice-only answer leaves ``answer`` null, and a caller rendering
+    the ledger needs something to show for it. The underlying record is unchanged.
+    """
+    from governed_bi.curator.clarifications import resolve_answer_text
+
+    return {
+        "id": record.id,
+        "scope": record.scope,
+        "question": record.question,
+        "status": record.status.value,
+        "raised_by": list(record.raised_by),
+        "choices": [dict(c) for c in record.choices] if record.choices is not None else None,
+        "allow_freeform": record.allow_freeform,
+        "answer": record.answer,
+        "answer_choice_id": record.answer_choice_id,
+        "answer_choice_ids": (
+            list(record.answer_choice_ids) if record.answer_choice_ids is not None else None
+        ),
+        "answered_by": record.answered_by,
+        "converted_to_corpus": record.converted_to_corpus,
+        "source": record.source,
+        "category": record.category,
+        "ui_modality": record.ui_modality,
+        "target_table": record.target_table,
+        "target_column": record.target_column,
+        "answer_text": resolve_answer_text(record),
+    }
+
+
+@app.get("/clarifications")
+def clarifications(status: str | None = None) -> list[dict[str, Any]]:
+    """The offline clarifications ledger (UtkuAI, ported). ``status`` filters by exact value
+    (e.g. ``"open"``); omitted returns every source/status.
+
+    ``session.corpus_root is None`` returns an empty list rather than raising, matching
+    ``/corpus/assets``'s and ``/corpus/assumptions``'s handling of "nothing to read here."
+    """
+    from governed_bi.curator.clarifications import load_clarifications
+
+    session = _session()
+    if session.corpus_root is None:
+        return []
+    records = load_clarifications(session.corpus_root)
+    if status is not None:
+        records = [r for r in records if r.status.value == status]
+    return [_clarification_row(r) for r in records]
+
+
+@app.post("/clarifications/{clarification_id}/answer")
+def answer_clarification_route(clarification_id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Record one admin answer to a ledger record. **Not gated on ``can_edit``** — mirrors
+    ``/corpus/drafts/{id}/approve``'s existing pattern exactly (only requires
+    ``session.corpus_root is not None``; ``can_edit`` gates the unrelated free-form corpus
+    editor surface).
+
+    Request body: ``{"choice_id"?, "choice_ids"?, "answer"?, "answered_by"?: "admin"}`` — at
+    least one of ``choice_id``/``choice_ids``/``answer`` is required, else 422. 404 on an
+    unknown id.
+
+    This phase only records the answer (status -> ``answered``) and returns it — it does not
+    fold the answer into the corpus (Phase 1c) and does not wire ``ask_user`` to write into
+    this ledger in the first place (Phase 1b).
+    """
+    from fastapi import HTTPException
+
+    from governed_bi.curator.clarifications import ClarificationNotFound, answer_clarification
+
+    session = _session()
+    if session.corpus_root is None:
+        raise HTTPException(status_code=409, detail="this session has no corpus_root to write back to")
+
+    body = body or {}
+    choice_id = body.get("choice_id")
+    choice_ids = body.get("choice_ids")
+    answer = body.get("answer")
+    if choice_id is None and choice_ids is None and answer is None:
+        raise HTTPException(
+            status_code=422, detail="one of choice_id, choice_ids, or answer is required"
+        )
+    try:
+        record = answer_clarification(
+            session.corpus_root,
+            clarification_id,
+            choice_id=choice_id,
+            choice_ids=choice_ids,
+            answer=answer,
+            answered_by=str(body.get("answered_by") or "admin"),
+        )
+    except ClarificationNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _clarification_row(record)
+
+
 def _graph_payload() -> dict[str, Any]:
     """ER graph: tables as nodes, join relationships as edges.
 
