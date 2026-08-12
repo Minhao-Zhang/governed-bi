@@ -2,8 +2,9 @@
 
 Unlike the reactive ``ask_user`` live-chat clarification (``serve/tools.py`` — fires mid-turn
 when the live agent is uncertain), this scans an already-known schema **before** any business
-user ever asks a question and proposes a small, conservative set of category-tagged candidate
-questions for an admin to answer once. This module only decides WHAT to ask; answers reuse the
+user ever asks a question and proposes category-tagged candidate questions for an admin to answer
+once — every one its keyword gates find, with no per-category quota (see
+:func:`generate_candidate_questions`). This module only decides WHAT to ask; answers reuse the
 exact same :class:`~governed_bi.curator.clarifications.ClarificationRecord` ledger + fold
 pipeline (``api/curation_routes.py::answer_clarification_route`` ->
 ``curator/clarification.py::fold_ledger_answer_into_corpus``) as every other clarification
@@ -151,12 +152,17 @@ _B_MAX_DISTINCT = 15
 #: right trade, not a cost to engineer away. What it must not do is turn one click into an
 #: unbounded number of statements: only keyword-gated columns are read (see
 #: :func:`_value_gated_columns`), but a wide enough schema can have hundreds of ``*_code`` /
-#: ``*_type`` columns, and B and E each keep at most ``limit_per_category`` candidates anyway.
+#: ``*_type`` columns.
 #:
 #: A constant rather than a knob, for ``SAMPLE_ROWS_MAX_VALUES``'s own stated reason: nothing on
 #: this surface can write a knob, so declaring one would be a control with no writer. The
 #: truncation is deterministic (``_live_tables`` sorts by id, columns follow the table's own
 #: ``columns`` order), so which columns a capped call reads does not move between runs.
+#:
+#: A **cost** bound, and the only kind left on this module: the per-category *reporting* cap
+#: (``limit_per_category``) is gone, because dropping a finding to fit a quota is what let a T3
+#: crowd out a T1 (``curator/gaps.py``'s own module docstring). Bounding round trips per click
+#: and bounding what an admin is told are different quantities with different justifications.
 MAX_VALUE_READS = 50
 
 
@@ -173,9 +179,10 @@ def _record_id(scope: str) -> str:
 
 
 def _live_tables(tables: Sequence[Any]) -> list[Any]:
-    """``tables``, excluded ones dropped, in a fixed (id-sorted) order — so which candidates a
-    per-category ``limit`` keeps is deterministic regardless of what order the caller's
-    ``assets_by_id.values()`` happened to iterate in.
+    """``tables``, excluded ones dropped, in a fixed (id-sorted) order — so the proposed set and
+    its order are the same on every run regardless of what order the caller's
+    ``assets_by_id.values()`` happened to iterate in, and so ``MAX_VALUE_READS``'s truncation
+    reads the same columns each time.
     """
     return sorted(
         (t for t in tables if not t.governance.excluded),
@@ -286,10 +293,18 @@ def generate_candidate_questions(
     assets_by_id: dict[str, Any],
     *,
     existing: Sequence[ClarificationRecord] = (),
-    limit_per_category: int = 3,
     observed_values: Mapping[str, tuple[str, ...]] | None = None,
 ) -> list[ClarificationRecord]:
-    """Propose a conservative set of category-tagged candidate questions.
+    """Propose every category-tagged candidate question the keyword gates find.
+
+    **No reporting cap.** ``limit_per_category=3`` is gone, and the reason is the owner's
+    2026-08-12 decision as ``curator/gaps.py``'s module docstring records it: "list ALL gaps,
+    don't truncate; stratify by severity so the admin can stop at any tier". A per-category quota
+    is the mechanism that makes a T1 finding vanish because three T3s were generated first — it
+    drops a *finding*, silently, and nothing downstream can tell that it did. Cost caps stay
+    (:data:`MAX_VALUE_READS` here, ``gaps.MAX_PAIR_COMPARISONS`` there), because how many
+    governed statements one admin click issues is a different quantity: it bounds the round trips,
+    never the report, and it truncates in a stated order so what it does cost is visible.
 
     ``existing`` is the ledger's current records — used only to make this idempotent: a
     candidate whose ``scope`` already exists among prior ``source="elicitation_wizard"``
@@ -309,14 +324,14 @@ def generate_candidate_questions(
     observed = observed_values or {}
 
     candidates: list[ClarificationRecord] = []
-    candidates += _propose_a(live_tables, assets_by_id, limit_per_category)
-    candidates += _propose_c(live_tables, assets_by_id, limit_per_category)
-    candidates += _propose_e(live_tables, assets_by_id, limit_per_category, observed)
-    candidates += _propose_b(live_tables, assets_by_id, limit_per_category, observed)
+    candidates += _propose_a(live_tables, assets_by_id)
+    candidates += _propose_c(live_tables, assets_by_id)
+    candidates += _propose_e(live_tables, assets_by_id, observed)
+    candidates += _propose_b(live_tables, assets_by_id, observed)
     return [c for c in candidates if c.scope not in existing_scopes]
 
 
-def _propose_a(tables: Sequence[Any], assets_by_id: dict[str, Any], limit: int) -> list[ClarificationRecord]:
+def _propose_a(tables: Sequence[Any], assets_by_id: dict[str, Any]) -> list[ClarificationRecord]:
     """A: for each ambiguous term found in >=1 column name, a column-picker question over every
     matching ``table.column`` candidate."""
     severity, audience = CATEGORY_CLASSIFICATION["A"]
@@ -348,8 +363,6 @@ def _propose_a(tables: Sequence[Any], assets_by_id: dict[str, Any], limit: int) 
                 source=ELICITATION_SOURCE,
             )
         )
-        if len(out) >= limit:
-            break
     return out
 
 
@@ -380,7 +393,7 @@ def _is_date_like(column: Any) -> bool:
     return "date" in physical or "time" in physical
 
 
-def _propose_c(tables: Sequence[Any], assets_by_id: dict[str, Any], limit: int) -> list[ClarificationRecord]:
+def _propose_c(tables: Sequence[Any], assets_by_id: dict[str, Any]) -> list[ClarificationRecord]:
     """C: business-rule constants, only proposed when the schema plausibly needs them (a
     date/datetime column exists) — collected with A per the design doc's "collect together"
     finding."""
@@ -410,13 +423,12 @@ def _propose_c(tables: Sequence[Any], assets_by_id: dict[str, Any], limit: int) 
             raised_by=("elicitation_wizard",),
             source=ELICITATION_SOURCE,
         )
-    ][:limit]
+    ]
 
 
 def _propose_e(
     tables: Sequence[Any],
     assets_by_id: dict[str, Any],
-    limit: int,
     observed_values: Mapping[str, tuple[str, ...]],
 ) -> list[ClarificationRecord]:
     """E: for a status/rating-like column whose **observed** values include a null-like
@@ -477,15 +489,12 @@ def _propose_e(
                     source=ELICITATION_SOURCE,
                 )
             )
-            if len(out) >= limit:
-                return out
     return out
 
 
 def _propose_b(
     tables: Sequence[Any],
     assets_by_id: dict[str, Any],
-    limit: int,
     observed_values: Mapping[str, tuple[str, ...]],
 ) -> list[ClarificationRecord]:
     """B: for a small-cardinality categorical column, a checklist of the actual distinct values
@@ -527,8 +536,6 @@ def _propose_b(
                     source=ELICITATION_SOURCE,
                 )
             )
-            if len(out) >= limit:
-                return out
     return out
 
 

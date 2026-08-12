@@ -532,8 +532,23 @@ def answer_clarification_route(clarification_id: str, body: dict[str, Any] | Non
 
 @router.post("/elicitation/generate")
 def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Run the heuristic candidate generator against this session's current tables and append
-    any newly proposed candidates to the offline clarifications ledger.
+    """Run both candidate generators against this session's current tables and append any newly
+    proposed candidates to the offline clarifications ledger.
+
+    **Two generators, additive, not one replacing the other.** ``curator/gaps.py``'s structural
+    detectors are here because the keyword generator returns an **empty list** on the German
+    ``beer_factory`` corpus this backend actually serves — every one of its gates is an English
+    substring match. But the keyword path finds real traps on English schemas (``app_store``'s
+    ``price`` A-question is a genuine ambiguity between two real columns), so it keeps running:
+    the two read different signals and neither subsumes the other.
+
+    Order is forced, not chosen. ``detect_structural_gaps`` runs first because its near-duplicate
+    output is what ``apply_cluster_dependencies`` gates the keyword candidates *with*: certifying
+    a value mapping on a decoy column makes the wrong column authoritative and nobody shown a
+    value checklist can tell (``utku-ai-setup-wizard-gap-model.md`` § "Presentation
+    consequences"). ``blocked_by`` is stamped on the new records before they are written, so the
+    dependency is persisted on the record rather than recomputed per read — which is what lets
+    ``GET /elicitation/candidates`` derive ``blocked`` from the ledger alone.
 
     Gated the same way the ledger's own write route is (``session.corpus_root is not None``,
     no ``can_edit`` -- this is a read/propose action over the semantic layer, not the unrelated
@@ -554,18 +569,41 @@ def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
     served turn gets (``serve/session.py::Session.configurable`` hands the same three objects to
     every node), so nothing is constructed here that a turn would not also have.
 
-    ``ledger`` in the response is those attempt rows -- named as ``GET /turns/{id}`` already names
-    the same thing (``routes.py``: ``"ledger": execution["attempts"]``). It is returned rather
-    than appended to ``runs/serve/*.jsonl``, because that log holds *turn* records judged by
-    ``register/record.py``'s required fields and a generate call is not a turn; synthesising the
-    fields to make one fit would be the "field the engine does not observe" defect. Returning the
-    rows keeps the property that matters -- a governed statement is never issued from here
-    without its verdict being visible to the caller who caused it.
+    **The structural scan reads rows too**, through the same governed path: one
+    ``serve/fetch.compare_column_pair`` per name-alike column pair (bounded by
+    ``gaps.MAX_PAIR_COMPARISONS``), which is a row-wise ``IS DISTINCT FROM`` count and not a
+    value-set read -- the two columns that made this detector necessary hold the *identical* 554
+    distinct customer ids and disagree on 6 305 of 6 312 rows.
+
+    ``ledger`` in the response is every attempt row from both -- named as ``GET /turns/{id}``
+    already names the same thing (``routes.py``: ``"ledger": execution["attempts"]``). It is
+    returned rather than appended to ``runs/serve/*.jsonl``, because that log holds *turn* records
+    judged by ``register/record.py``'s required fields and a generate call is not a turn;
+    synthesising the fields to make one fit would be the "field the engine does not observe"
+    defect. Returning the rows keeps the property that matters -- a governed statement is never
+    issued from here without its verdict being visible to the caller who caused it.
+
+    ``coverage`` is ``GapScan.coverage``: one "ran / skipped, and why" line per structural
+    detector. It exists because an empty result is otherwise indistinguishable from a
+    structurally blind detector, which is exactly what this route returned on ``beer_factory``
+    before -- ``n_generated: 0`` with no way to tell that every gate had been evaluated in the
+    wrong language. Only the structural detectors report it: the keyword generator has no
+    equivalent (its "considered" set is a word list, not a measured population), and inventing
+    rows for it here would be a coverage claim nothing computed.
+
+    **Reporting caps are absent by construction, not by ordering.** Neither generator drops a
+    finding to fit a quota (``limit_per_category`` is gone), and no two detectors share a budget,
+    so 93 undescribed columns cannot crowd out one disagreeing join key.
     """
     from fastapi import HTTPException
 
     from governed_bi.curator.clarifications import load_clarifications, write_clarifications
-    from governed_bi.curator.elicitation import generate_candidate_questions, read_observed_values
+    from governed_bi.curator.elicitation import (
+        ELICITATION_SOURCE,
+        generate_candidate_questions,
+        read_observed_values,
+    )
+    from governed_bi.curator.gaps import apply_cluster_dependencies, detect_structural_gaps
 
     session = _curation_session()
     if session.corpus_root is None:
@@ -573,22 +611,53 @@ def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
 
     tables = [a for a in session.assets_by_id.values() if a.asset_type.value == "table"]
     existing = load_clarifications(session.corpus_root)
-    observed, ledger = read_observed_values(
+    scan = detect_structural_gaps(
+        tables,
+        session.assets_by_id,
+        connector=session.connector,
+        corpus=session.corpus,
+        policy=session.policy,
+        # ``retrieve/structure.py``'s canonical, endpoint-reconciled edges -- the session already
+        # holds them, and reconciling a join's ``left_table`` spelling to a table id a second
+        # time here would bind an edge to the wrong table rather than merely lose it.
+        join_edges=session.structure.join_edges,
+    )
+    observed, value_ledger = read_observed_values(
         tables,
         session.assets_by_id,
         connector=session.connector,
         corpus=session.corpus,
         policy=session.policy,
     )
-    new_records = generate_candidate_questions(
+    keyword_records = generate_candidate_questions(
         tables, session.assets_by_id, existing=existing, observed_values=observed
+    )
+    # Idempotency for the structural half, by the same rule ``generate_candidate_questions``
+    # applies to its own output: a scope already in the ledger is not proposed again. The
+    # detectors are a pure function of the corpus and the data, so a second click re-derives the
+    # same scopes and this is what keeps it from re-appending them.
+    known_scopes = {r.scope for r in existing if r.source == ELICITATION_SOURCE}
+    structural_records = [r for r in scan.records if r.scope not in known_scopes]
+    new_records = apply_cluster_dependencies(
+        [*structural_records, *keyword_records], scan.gated_columns
     )
     if new_records:
         write_clarifications(session.corpus_root, [*existing, *new_records])
     return {
         "generated": [_clarification_row(r) for r in new_records],
         "n_generated": len(new_records),
-        "ledger": [dict(row) for row in ledger],
+        "ledger": [dict(row) for row in (*scan.ledger, *value_ledger)],
+        "coverage": [
+            {
+                "detector": c.detector,
+                "gap_type": c.gap_type,
+                "considered": c.considered,
+                "measured": c.measured,
+                "found": c.found,
+                "note": c.note,
+            }
+            for c in scan.coverage
+        ],
     }
 
 
@@ -606,6 +675,12 @@ def elicitation_candidates() -> list[dict[str, Any]]:
     candidate's ``blocked_by`` names a question that is not answered yet. Derived rather than
     stored for the reason ``answer_text`` beside it is — it is a fact about the ledger as a whole
     at read time, not about the row.
+
+    Those edges are real as of the commit that wired ``curator/gaps.py`` into
+    ``POST /elicitation/generate``: a near-duplicate-cluster question on a contested column is
+    written with the A/B/E questions naming that column pointing at it, so ``blocked`` flips to
+    ``false`` for them the moment the cluster question is answered through
+    ``POST /clarifications/{id}/answer``. Before that they could only be hand-seeded.
 
     Computed here and not on ``_clarification_row``/``GET /clarifications`` because the
     dependency order is a constraint on the *wizard's* sequencing

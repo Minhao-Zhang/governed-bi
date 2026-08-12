@@ -215,18 +215,71 @@ def test_generate_is_idempotent_against_existing_ledger() -> None:
     assert second == []
 
 
-def test_generate_respects_limit_per_category() -> None:
-    from governed_bi.curator.elicitation import generate_candidate_questions
+#: Value-gated columns for :func:`_uncapped_schema`, all four of each kind past the retired cap
+#: of 3. The B columns hold a small closed vocabulary; the E columns hold a null-like sentinel.
+_UNCAPPED_VALUES: dict[str, tuple[str, ...]] = {
+    "country_code": ("US", "CA"), "region_type": ("north", "south"),
+    "channel_code": ("web", "shop"), "segment_category": ("smb", "ent"),
+    "order_status": ("n/a", "shipped"), "user_rating": ("n/a", "5"),
+    "quality_grade": ("n/a", "A"), "shipment_state": ("n/a", "in_transit"),
+}
+
+
+def _uncapped_schema() -> tuple[list[Any], dict[str, Any]]:
+    """One table whose keyword gates match **more than three** candidates in three categories.
+
+    :func:`_schema` cannot show a cap being gone: it matches exactly three ambiguous terms and
+    one column each for B and E, so it produces the same output capped or not. This fixture is
+    deliberately past the old ``limit_per_category=3`` in A (six terms), B (four columns) and E
+    (four columns), which is what lets the test below fail if a quota ever comes back.
+    """
+    from governed_bi.corpus.schema import TableAsset
+
+    names = ("revenue_total", "unit_price", "cost_basis", "account_balance", "book_value",
+             *_UNCAPPED_VALUES)
+    columns = [_column("shop.wide", n, physical_type="text") for n in names]
+    table = TableAsset(
+        id="shop.wide", schema="shop", physical_name="wide", summary="wide",
+        columns=tuple(c.id for c in columns),
+    )
+    return [table], {a.id: a for a in [table, *columns]}
+
+
+def test_no_category_is_capped_because_a_quota_drops_findings_silently() -> None:
+    """The contract that replaced ``limit_per_category=3``: caps bound **cost**, never findings.
+
+    The old test asserted the opposite — that a category stops at its quota — and a quota is the
+    mechanism that makes a T1 finding vanish because three T3s were generated first, with nothing
+    downstream able to tell that it happened (``curator/gaps.py``'s module docstring records the
+    owner's 2026-08-12 decision: list ALL gaps, stratify by severity instead).
+
+    So the assertion is that the *whole* gate output is reported: every ambiguous term matching a
+    column gets its A question, and every value-gated column clearing its window gets its B or E
+    one. Each of those three counts is above the retired cap on this fixture.
+    """
+    import pytest
+
+    from governed_bi.curator.elicitation import _AMBIGUOUS_TERMS, generate_candidate_questions
 
     tables, assets_by_id = _schema()
+    with pytest.raises(TypeError):
+        # The cap is gone from the signature too, not merely defaulted to something large.
+        generate_candidate_questions(tables, assets_by_id, limit_per_category=1)
+
+    tables, assets_by_id = _uncapped_schema()
     observed, _ledger = _observed(
-        tables, assets_by_id, connector=_ScriptedConnector(_REAL_VALUES)
+        tables, assets_by_id, connector=_ScriptedConnector(_UNCAPPED_VALUES)
     )
-    records = generate_candidate_questions(
-        tables, assets_by_id, limit_per_category=1, observed_values=observed
-    )
-    for category in ("A", "B", "C", "E"):
-        assert len([r for r in records if r.category == category]) <= 1
+    records = generate_candidate_questions(tables, assets_by_id, observed_values=observed)
+    by_category: dict[str, set[str]] = {}
+    for rec in records:
+        by_category.setdefault(rec.category or "", set()).add(rec.scope.rsplit(":", 1)[-1])
+
+    names = [c.physical_name for c in assets_by_id.values() if hasattr(c, "parent_table")]
+    assert by_category["A"] == {t for t in _AMBIGUOUS_TERMS if any(t in n for n in names)}
+    assert len(by_category["A"]) == 6, by_category["A"]
+    assert len(by_category["B"]) == 4, by_category["B"]
+    assert len(by_category["E"]) == 4, by_category["E"]
 
 
 def test_c_fires_from_physical_type_when_logical_type_is_unset() -> None:
@@ -709,11 +762,21 @@ def test_the_classification_table_covers_every_category_the_generator_can_emit()
     assert set(CATEGORY_CLASSIFICATION) == set(CATEGORY_PRIORITY)
 
 
-def test_nothing_is_generated_blocked_yet_because_no_detector_emits_a_prerequisite() -> None:
-    """Structural support only: :data:`ClarificationRecord.blocked_by` exists and is enforced,
-    but the two gap types that populate it (the A-biz/A-eng pair and the near-duplicate cluster
-    question that must precede any A/B/E on the same column) are a later phase's detectors."""
+def test_the_keyword_generator_emits_unblocked_records_and_the_gate_is_applied_after() -> None:
+    """The division of labour ``POST /elicitation/generate`` composes, pinned on both halves.
+
+    This generator computes nothing about near-duplicate columns — it cannot, it reads a word
+    list — so every record it returns is unblocked, and that is correct rather than a gap. The
+    prerequisite is stamped by ``curator/gaps.py::apply_cluster_dependencies`` from the structural
+    scan's contested-column map, which the route runs over this output before writing it. Where
+    that map *comes from* is ``tests/curator/test_gaps.py``'s subject; that it lands on the right
+    records here is this one's.
+
+    Previously this test asserted only the first half, and was true because nothing called the
+    second half at all.
+    """
     from governed_bi.curator.elicitation import generate_candidate_questions
+    from governed_bi.curator.gaps import apply_cluster_dependencies
 
     tables, assets_by_id = _schema()
     observed, _ledger = _observed(
@@ -721,3 +784,12 @@ def test_nothing_is_generated_blocked_yet_because_no_detector_emits_a_prerequisi
     )
     records = generate_candidate_questions(tables, assets_by_id, observed_values=observed)
     assert all(rec.blocked_by == () for rec in records)
+
+    gated = apply_cluster_dependencies(records, {"orders.country_code": "elicit.cluster"})
+    by_category = {rec.category: rec for rec in gated}
+    assert by_category["B"].target_column == "country_code"
+    assert by_category["B"].blocked_by == ("elicit.cluster",)
+    # A ranges over columns via its choices, so it waits on a cluster it merely offers as an
+    # option; C names no column at all and can never be gated.
+    assert by_category["C"].blocked_by == ()
+    assert by_category["E"].blocked_by == ()
