@@ -16,10 +16,11 @@ SOFT_LIMIT = 400
 #: Fatal. ADR 0005 §6.
 HARD_LIMIT = 1000
 
-#: Roots scanned. ``scripts`` is here because the one-shot campaign kits under it are still
-#: code someone reads; leaving it out would make "move it to scripts/" a way to leave the
-#: checks.
-ROOTS: tuple[str, ...] = ("src", "tools", "tests", "scripts")
+#: Roots scanned. ``scripts`` was a fourth root until 2026-08-11, holding the one-shot corpus
+#: rebuild kit — listed here because leaving it out would have made "move it to scripts/" a way
+#: to leave the checks. The kit now lives at ``tools/corpus_rebuild/``, so that escape is closed
+#: by there being no second root to move to rather than by this tuple remembering one.
+ROOTS: tuple[str, ...] = ("src", "tools", "tests")
 
 #: Directory names skipped wherever they appear: generated or vendored trees are not code
 #: anyone reads, and ``__pycache__`` holds no ``.py`` files but costs a walk. ``_build`` is

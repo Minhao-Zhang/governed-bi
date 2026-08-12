@@ -14,7 +14,7 @@ Ids come from ``governed_bi.corpus.identity``. Inline columns carry **no** ``id`
 ``parent_table`` — ``corpus/store.py::_split_inline_columns`` derives all three and treats a
 file that supplies one as a problem rather than an override.
 
-    uv run python scripts/corpus_rebuild/01_structure.py --out ../BIRD-corpus
+    uv run python tools/corpus_rebuild/01_structure.py --out ../BIRD-corpus
 """
 
 from __future__ import annotations

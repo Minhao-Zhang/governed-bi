@@ -28,10 +28,11 @@ from .knobs import comparability_keys
 
 __all__ = ["ARMS_FILE", "ArmProfile", "arm_profile", "load_arm_profiles", "reconcile"]
 
-#: Repo root, three parents up from ``src/governed_bi/register/``. Resolved the same way
-#: ``paths.py`` does rather than imported from it: this module is in the register, and the
-#: register may not depend on the package's runtime layers.
-ARMS_FILE = Path(__file__).resolve().parent.parent.parent.parent / "arms.toml"
+#: Beside this module, because the register owns arm profiles. It lived at the repo root until
+#: 2026-08-11, reached by climbing four parents out of the package — which resolves only from a
+#: source checkout: from an installed wheel the same climb lands above ``site-packages`` and the
+#: file is not there. As package data it travels with the distribution instead.
+ARMS_FILE = Path(__file__).resolve().parent / "arms.toml"
 
 
 @dataclass(frozen=True, slots=True)

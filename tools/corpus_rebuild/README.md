@@ -27,12 +27,12 @@ asset while 24 few-shots cited it.
 01–03 write the corpus. 04–06 stage material for the agent and write no asset.
 
 ```bash
-uv run python scripts/corpus_rebuild/01_structure.py  --out ../BIRD-corpus
-uv run python scripts/corpus_rebuild/02_joins.py      --out ../BIRD-corpus
-uv run python scripts/corpus_rebuild/03_few_shots.py  --out ../BIRD-corpus
-uv run python scripts/corpus_rebuild/04_evidence.py
-uv run python scripts/corpus_rebuild/05_bird_docs.py
-uv run python scripts/corpus_rebuild/06_samples.py
+uv run python tools/corpus_rebuild/01_structure.py  --out ../BIRD-corpus
+uv run python tools/corpus_rebuild/02_joins.py      --out ../BIRD-corpus
+uv run python tools/corpus_rebuild/03_few_shots.py  --out ../BIRD-corpus
+uv run python tools/corpus_rebuild/04_evidence.py
+uv run python tools/corpus_rebuild/05_bird_docs.py
+uv run python tools/corpus_rebuild/06_samples.py
 ```
 
 Every script takes `--schemas a b c` for a single-schema pass, which is how the agent works

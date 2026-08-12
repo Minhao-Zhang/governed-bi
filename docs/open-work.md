@@ -153,7 +153,7 @@ arm since has passed it; it costs nothing.
 ### 3.2 The corpus is versioned and still not rebuildable
 
 `../BIRD-corpus` is in git and still cannot be regenerated from anything committed — but not
-for the reason this entry used to give. `scripts/corpus_rebuild/01–03` **are** in the tree and
+for the reason this entry used to give. `tools/corpus_rebuild/01–03` **are** in the tree and
 **do** write assets: schema, table and column structure, join edges, few-shots. What has no
 producer anywhere is the prose half — every summary, term, metric and note — which those
 scripts leave as `TODO <identifier>` for a writing agent to fill in per schema.

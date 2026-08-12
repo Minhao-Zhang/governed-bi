@@ -89,6 +89,40 @@ def test_each_local_rule_fires(rule: str, kind: str, asset: dict) -> None:
     assert _fires(rule, kind, asset), f"{rule} did not fire on {asset.get('summary', asset)!r}"
 
 
+@pytest.mark.parametrize(
+    "body,fires,why",
+    [
+        ("A decoy column fabricated to mimic alias.", True,
+         "a real provenance disclosure must still be caught"),
+        ("Holds one of two settings, Cover or Offside Trap, for the defensive line.", False,
+         "offside trap is an enumerated domain value, exempt since the BIRD corpus"),
+        ("The asset class, most often FIRE EXTINGUISHER, MOTOR or STEAM TRAP.", False,
+         "steam trap is equipment, exempt since the facilities corpus"),
+        ("This column is a trap for the unwary analyst.", True,
+         "bare 'trap' must still fire, or the exemption is over-broad"),
+        ("Measured across the trapezoid roof sections of each wing.", False,
+         "the word-boundary guard: trapezoid is ordinary vocabulary"),
+    ],
+)
+def test_v10_exempts_domain_values_without_going_blind_to_disclosures(
+    body: str, fires: bool, why: str
+) -> None:
+    """The two ``trap`` exemptions, and the positive control that keeps them narrow.
+
+    Neither exemption had a test. Both exist because a real corpus held ``trap`` as a *value* in
+    an enumerated domain -- ``Offside Trap`` in BIRD's football schema, ``STEAM TRAP`` as the
+    third most common `maximo_active_assets.class_description` in the facilities corpus (2,541
+    assets) -- and censoring it would delete the one string a query needs to retrieve the asset.
+
+    The risk of an exemption list is that it grows until the rule means nothing, so the bare
+    ``trap`` case is here as the control: it must still fire. If it ever stops, the lookbehinds
+    have been widened into a hole.
+    """
+    asset = {"schema": "addr", "physical_name": "alt_alias",
+             "summary": "alt_alias is a text column on the alias table here.", "body": body}
+    assert _fires("V10", "column", asset) is fires, why
+
+
 def test_v3_reads_the_register_rather_than_a_second_copy() -> None:
     """The identifier a summary must carry comes from ``ASSET_REGISTER``, not from this tool."""
     from governed_bi.register.assets import ASSET_REGISTER, AssetType

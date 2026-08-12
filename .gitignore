@@ -80,7 +80,7 @@ docs/_build/
 
 # Staging for the one-shot corpus rebuild scripts (docs/corpus-rebuild-brief.md §3).
 # Extracts of BIRD's shipped documentation and evidence clauses -- regenerable, and large.
-scripts/corpus_rebuild/_build/
+tools/corpus_rebuild/_build/
 
 # PyBuilder
 .pybuilder/
@@ -273,7 +273,7 @@ _generated/
 _archive/
 
 # One-off slices written while debugging the rebuild packets. The packets themselves are
-# already ignored under scripts/corpus_rebuild/_build/; these are hand-cut copies of them.
+# already ignored under tools/corpus_rebuild/_build/; these are hand-cut copies of them.
 scratch_*.json
 
 # The frontend under `ui/` carries its own nested .gitignore, which is where node_modules,

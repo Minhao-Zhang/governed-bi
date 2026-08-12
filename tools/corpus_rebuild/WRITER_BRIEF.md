@@ -18,7 +18,7 @@ So: write `summary` to be **found** by someone asking a question in business lan
 
 ## Your inputs
 
-- `scripts/corpus_rebuild/_build/packets/<schema>.json` — everything you are given:
+- `tools/corpus_rebuild/_build/packets/<schema>.json` — everything you are given:
   - `bird_documentation` — the dataset's own per-column notes. Short (median 28 characters) and
     9% of them just restate the column name. **A starting point, not a description.**
   - `value_samples` — up to five real values per column, plus min and max.

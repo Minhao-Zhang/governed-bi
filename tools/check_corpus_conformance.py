@@ -109,8 +109,21 @@ PAREN_TAIL = re.compile(r"\((?:column|table)\s+\S+\)\s*\.?\s*$", re.I)
 #: writer who hit this described the setting behaviourally instead -- a corpus made worse by a
 #: rule that was never aimed at it. The exemption is deliberately narrow: only this bigram, so
 #: `trap` on its own still fails.
+#:
+#: `steam trap` joins it for the same reason, from the second corpus to hit this rule. A steam
+#: trap is a real piece of building equipment and `maximo_active_assets.class_description` holds
+#: `STEAM TRAP` as its third most common value (2,541 assets) -- so this is a value in an
+#: enumerated domain, not a description of how a column was made. The alternative was deleting
+#: the one string that lets "how many steam traps are there" retrieve the asset register, which
+#: is the failure mode the `offside trap` note already describes. Two lookbehinds rather than one
+#: alternation because Python's `re` requires each to be fixed-width.
+#:
+#: The pattern here is worth naming for whoever adds the third: this rule guards *authored
+#: descriptions of provenance*, and every false positive so far has been an *enumerated domain
+#: value* that happens to collide. If a fourth arrives, the better fix is likely to stop matching
+#: inside quoted or upper-case value rosters at all, rather than to keep extending this list.
 FORBIDDEN = re.compile(
-    "(?<![A-Za-z])(decoy|(?<!offside )trap|mimic|planted|synthetic)(?![A-Za-z])"
+    "(?<![A-Za-z])(decoy|(?<!offside )(?<!steam )trap|mimic|planted|synthetic)(?![A-Za-z])"
     "|(?<![A-Za-z])(fabricat|imitat)",
     re.I,
 )

@@ -12,6 +12,7 @@
 
 - Use `uv` to run commands in a virtual environment. This ensures that the correct dependencies are used.
 - If you are modifying any code relates to LangGraph or LangChain, make sure to load the skill before writing graph code.
+- Check if the skills are up-to-date by using `npx skills update`
 - Use `context7` to look up syntax. Use `firecrawl` to search for good internet search.
 
 ## Documentation Guidelines
@@ -23,3 +24,8 @@
 
 - There is no need to write tests for everything.
 - Always include a test for any new feature or bug fix.
+
+## Git Guidelines
+
+- Use a feature branch for any new work. The main branch should always be stable.
+- Squash commits before merging to keep the history clean.

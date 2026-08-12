@@ -52,6 +52,15 @@ Git history is the record of what changed.
 | [Open work](open-work.md) | the unfinished items those findings imply, re-verified against the current tree |
 | [Strategy checkpoint 2026-08-11](analysis/strategy-checkpoint-2026-08-11.md) | temporary checkpoint for the repository as a portfolio artifact: what is true, what it declines to be, and the work queue — not an ADR; replace when superseded |
 
+## Architecture reviews
+
+Not measurements — readings of the tree, looking for modules whose interface is nearly as wide as
+their implementation. Line numbers are anchored to the commit named in each document and drift.
+
+| Doc | What it covers |
+|---|---|
+| [Architecture review 2026-08-11](analysis/architecture-review-2026-08-11.md) | ten deepening candidates across `serve/`, `eval/`, `api/` and the `ui/` seam, at tree `506ad9b`, each marked verified-here or reported |
+
 ## Frontend, and external data
 
 - UI: [`ui/`](../ui/) in this repository — running it and its checks are in [usage](usage.md#ui)

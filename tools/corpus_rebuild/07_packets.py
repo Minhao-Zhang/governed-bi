@@ -9,7 +9,7 @@ is fair input (the database under test is the decoy instance and a steward would
 *operator*, the *source column* and the word itself are not passed through — naming what a
 column resembles is what makes it rank for that column's questions.
 
-    uv run python scripts/corpus_rebuild/07_packets.py
+    uv run python tools/corpus_rebuild/07_packets.py
 """
 
 from __future__ import annotations

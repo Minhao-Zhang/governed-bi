@@ -144,10 +144,11 @@ EXEMPT_ASSET_TYPES: frozenset[str] = frozenset(
 #: Only under a corpus root — an arbitrary JSON fixture is not a semantic-layer summary.
 DATA_ROOTS: tuple[str, ...] = ("corpus", "corpora")
 
-#: Where a phrase could do damage: producing code, and any corpus tree. ``scripts`` is in the
-#: list because ``scripts/corpus_rebuild`` writes assets. There is no top-level ``corpus``
+#: Where a phrase could do damage: producing code, and any corpus tree. ``scripts`` was in the
+#: list until 2026-08-11 because ``scripts/corpus_rebuild`` writes assets; the kit now lives at
+#: ``tools/corpus_rebuild/`` and is covered by ``tools``. There is no top-level ``corpus``
 #: directory; the served corpus is the sibling checkout named below.
-SCAN_ROOTS: tuple[str, ...] = ("src", "tools", "tests", "scripts", "corpora")
+SCAN_ROOTS: tuple[str, ...] = ("src", "tools", "tests", "corpora")
 
 #: Corpus trees **outside** the scanned repository, scanned when the checkout is present. The
 #: served corpus moved to its own repository on 2026-08-07 (D13), which took it out of every

@@ -4,8 +4,8 @@ Counts unwritten assets directly (V2's condition, cheaply) rather than shelling 
 validator 57 times: a schema is done when nothing still carries the sentinel and every asset
 has a body.
 
-    uv run python scripts/corpus_rebuild/progress.py
-    uv run python scripts/corpus_rebuild/progress.py --pending   # names only, for dispatch
+    uv run python tools/corpus_rebuild/progress.py
+    uv run python tools/corpus_rebuild/progress.py --pending   # names only, for dispatch
 """
 
 from __future__ import annotations

@@ -13,7 +13,7 @@ into one term whose ``synonyms`` carry every phrasing is the job, and it is not 
 Scale: 8,775 distinct clauses over 57 schemas. The corpus being replaced holds 1,393 term and
 metric assets against 6,048 harvestable ones — a 23% yield, 10–16% on the worst schemas.
 
-    uv run python scripts/corpus_rebuild/04_evidence.py
+    uv run python tools/corpus_rebuild/04_evidence.py
 """
 
 from __future__ import annotations

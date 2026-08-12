@@ -20,7 +20,7 @@ CITATIONS = ROOT / "src" / "governed_bi" / "register" / "citations.py"
 #: docstring was invisible to the gate. Pointing it there found eight. Six were marked or rewritten;
 #: the two in sealed contract files are named in ``GREP_EXEMPT_PATHS``, which is where the reasoning
 #: lives rather than repeated here.
-STRICT_ROOTS: tuple[str, ...] = ("src", "tools", "docs", "scripts", "tests")
+STRICT_ROOTS: tuple[str, ...] = ("src", "tools", "docs", "tests")
 
 #: Archive roots (scanned, counted, never fatal). Empty: historical markdown
 #: was deleted from the working tree.

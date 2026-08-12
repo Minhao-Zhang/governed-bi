@@ -21,7 +21,7 @@ never return `None`, and a file in any other encoding was staged as mojibake at 
 already covers latin-1 apart from five undefined bytes, and a CSV containing one of those is not
 text in either encoding — which is exactly the case worth reporting.
 
-    uv run python scripts/corpus_rebuild/05_bird_docs.py
+    uv run python tools/corpus_rebuild/05_bird_docs.py
 """
 
 from __future__ import annotations

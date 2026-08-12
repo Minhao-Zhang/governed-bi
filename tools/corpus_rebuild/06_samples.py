@@ -14,7 +14,7 @@ the whole difficulty, and a writer who cannot see that will describe them as if 
 One statement per table rather than per column: 5,947 round trips over a remote instance is
 minutes of waiting for data that fits in one pass.
 
-    uv run python scripts/corpus_rebuild/06_samples.py
+    uv run python tools/corpus_rebuild/06_samples.py
 """
 
 from __future__ import annotations

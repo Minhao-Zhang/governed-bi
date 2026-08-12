@@ -21,7 +21,7 @@ on:
   pull_request:
 
 jobs:
-  # The Python engine: everything under `src`, `tools`, `tests`, `scripts` and `docs`. None of
+  # The Python engine: everything under `src`, `tools`, `tests` and `docs`. None of
   # the gates below can see `ui/` — they walk named roots and none of them reads TypeScript — so
   # the frontend is a second job rather than three more steps here. Two jobs also means a broken
   # frontend does not hide a broken engine behind a single red X.

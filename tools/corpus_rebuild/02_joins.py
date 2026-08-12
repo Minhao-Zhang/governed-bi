@@ -15,7 +15,7 @@ two spellings mint different ids for one relationship.
 ``cardinality`` is left unset. It is not derivable from a SELECT, and guessing it would be a
 claim the source did not make; the agent fills it in phase 3.
 
-    uv run python scripts/corpus_rebuild/02_joins.py --out ../BIRD-corpus
+    uv run python tools/corpus_rebuild/02_joins.py --out ../BIRD-corpus
 """
 
 from __future__ import annotations

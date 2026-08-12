@@ -16,7 +16,7 @@ Two filters the previous harvest did not have:
 * **Cap the asset.** Those artifacts are also what produced 15 assets over 80 KB in the corpus
   being replaced, one of them 5.1 MB; together they were half its bytes.
 
-    uv run python scripts/corpus_rebuild/03_few_shots.py --out ../BIRD-corpus
+    uv run python tools/corpus_rebuild/03_few_shots.py --out ../BIRD-corpus
 """
 
 from __future__ import annotations

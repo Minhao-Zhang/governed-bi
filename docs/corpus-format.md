@@ -22,7 +22,7 @@ tree, so a number is reproducible only if the corpus commit is known. Quote the 
 any figure, and write nothing into that checkout except assets — anything else becomes part of
 the corpus's identity.
 
-The corpus is versioned and **not rebuildable**. `scripts/corpus_rebuild/01–03` write the
+The corpus is versioned and **not rebuildable**. `tools/corpus_rebuild/01–03` write the
 mechanical half — schema, table and column structure, join edges, few-shots — and leave every
 summary as a `TODO` marker. The prose half has no producer anywhere in this repository. Versioned
 and reproducible-from-source are different guarantees, and only the first one holds.
