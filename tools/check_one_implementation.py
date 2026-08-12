@@ -32,6 +32,12 @@ KNOWN_DUPLICATES: dict[str, str] = {
     #: appears in a module that is not an entry point, that is a different situation and this
     #: entry should not be what permits it.
     "main": "the `python -m` entry-point protocol; one per program, name fixed by the runtime",
+    #: FastAPI's ``APIRouter()`` mount-point convention (``api/browse_routes.py``,
+    #: ``api/curation_routes.py``): each is a distinct *set of routes*, mounted once by
+    #: ``routes.py``'s ``app.include_router(...)``, not two implementations of one router. The
+    #: name is the module's declared export (``__all__ = ["router"]`` in both), analogous to
+    #: `main` above — fixed by the mounting convention, not chosen per module.
+    "router": "FastAPI's per-module APIRouter mount point; one per routes module, not one concept",
 }
 
 
