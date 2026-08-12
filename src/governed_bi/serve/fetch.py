@@ -25,14 +25,27 @@ policy refuse a suspect column in ``run_query`` while returning its values throu
 ``sample_rows``. Both tools now build a statement, pass it through :func:`prepare`, and ledger the
 verdict; the only difference is who writes the statement.
 
+**One function here is not a tool.** :func:`compare_column_pair` has no entry in
+``serve/tools.py`` and no language model ever calls it; its caller is ``curator/gaps.py``'s
+near-duplicate detector, which needs a *row-wise* comparison
+(``COUNT(*) WHERE a IS DISTINCT FROM b``) that no value-set read can express — two columns can
+hold the same 554 distinct customer ids and still disagree on 6 305 of 6 312 rows. It lives
+here anyway, and deliberately: the paragraph above is the reason. "A governed read, built as a
+tree, run through :func:`prepare`, ledgered" has one home, and a second copy of that body
+written next to a detector is how the deleted ``Connector.sample_values`` came to exist. The
+signature difference is the honest marker of the difference in caller — it returns a typed
+:class:`PairAgreement` rather than JSON, because JSON is what a *model* needs to read.
+
 __all__ = ["read_body", "inspect_schema", "sample_rows", "run_query", "read_body_cap",
-           "distinct_values_statement", "SAMPLE_ROWS_MAX_VALUES"]
+           "distinct_values_statement", "SAMPLE_ROWS_MAX_VALUES",
+           "column_pair_agreement_statement", "compare_column_pair", "PairAgreement"]
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from sqlglot import expressions as exp
@@ -191,6 +204,187 @@ def distinct_values_statement(
         .limit(limit)
     )
     return query.sql(dialect=dialect)
+
+
+def column_pair_agreement_statement(
+    *, schema: str, table: str, left: str, right: str, dialect: str
+) -> str:
+    """``SELECT count(*), count(differing), count(distinct l), count(distinct r) FROM t``.
+
+    **Row-wise, and that is the whole point.** :func:`distinct_values_statement` answers "what
+    values does this column hold"; no answer to that question can decide whether two columns
+    hold the same thing *on the same row*. The measured case:
+    ``transaktion.kunde_id`` and ``transaktion.transaktions_kunde_id`` have the identical set of
+    554 distinct customer ids and disagree on 6 305 of 6 312 rows, so a value-set comparison
+    calls them the same column and a row-wise one calls them a poisoned join key.
+
+    ``IS DISTINCT FROM`` rather than ``<>``: ``NULL <> 5`` is NULL, not true, so a plain
+    inequality silently under-counts every row where one side is missing — and two NULLs
+    *agreeing* is the semantics wanted, since a pair that is NULL everywhere is redundant rather
+    than contradictory.
+
+    The two ``count(distinct …)`` columns are in the same statement rather than a second one
+    because they are a **precision** signal for the same finding, not a separate question: two
+    columns that are two copies of one fact draw on comparable value vocabularies, and a pair
+    holding 554 and 2 distinct values is two different facts that happen to share a name stem
+    (``curator/gaps.py`` measures this and it removes 12 of 17 false positives at no cost to
+    recall). Splitting them would double the governed round trips for one finding.
+
+    Built from ``exp`` nodes and rendered, never interpolated — :func:`distinct_values_statement`
+    gives the reason, and it is the same field: ``physical_name`` holds the engine's identifier
+    verbatim, so its content is deliberately unconstrained.
+
+    Both columns must belong to ``table``. A row-wise predicate over two relations needs a join
+    key, and *which* key is the question the join detector asks; :func:`compare_column_pair`
+    enforces that rather than this function, because "these ids name one table" is a fact about
+    the corpus and this function only knows names.
+    """
+    src = exp.table_(table, db=schema or None, quoted=True)
+    left_col = exp.column(left, table=table, quoted=True)
+    right_col = exp.column(right, table=table, quoted=True)
+    differing = exp.Case(
+        ifs=[
+            exp.If(
+                this=exp.NullSafeNEQ(this=left_col.copy(), expression=right_col.copy()),
+                true=exp.Literal.number(1),
+            )
+        ]
+    )
+    return (
+        exp.select(
+            exp.alias_(exp.Count(this=exp.Star()), "n_rows"),
+            exp.alias_(exp.Count(this=differing), "n_differing"),
+            exp.alias_(
+                exp.Count(this=exp.Distinct(expressions=[left_col.copy()])), "n_distinct_left"
+            ),
+            exp.alias_(
+                exp.Count(this=exp.Distinct(expressions=[right_col.copy()])), "n_distinct_right"
+            ),
+        )
+        .from_(src)
+        .sql(dialect=dialect)
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class PairAgreement:
+    """What one governed comparison measured. Four counts, no interpretation.
+
+    A typed record rather than the JSON ``sample_rows`` returns, because the difference in
+    caller is real: ``sample_rows``'s other caller is a language model reading a tool result,
+    and this function's only caller is Python deciding a severity tier. Serialising and
+    re-parsing to look alike would be a cost paid for a resemblance.
+
+    Whether these numbers mean "poisoned duplicate" (T1), "redundant copy" (T4) or "two
+    different facts" lives in ``curator/gaps.py``. This module measures; it does not classify.
+    """
+
+    n_rows: int
+    n_differing: int
+    n_distinct_left: int
+    n_distinct_right: int
+
+
+def compare_column_pair(
+    left_id: str,
+    right_id: str,
+    *,
+    bounds: ToolBounds,
+    assets: Mapping[str, Any],
+    connector: Any,
+    corpus: Any,
+    policy: GovernancePolicy,
+) -> tuple[PairAgreement | None, AttemptRecord | None]:
+    """``(measurement, ledger row)`` for one within-table column pair.
+
+    Same governed route as :func:`sample_rows`, layer for layer: statement as a tree,
+    :func:`prepare`, one ``path="sample"`` ``attempt_record``, and ``connector.execute`` only on
+    the string ``prepare`` returned. The ``None``/row combinations carry the same meanings they
+    do there, for the same reasons:
+
+    * ``(None, None)`` — no statement was ever built, so there is no governance decision to
+      record: an out-of-scope or unknown column id, a pair spanning two tables, or an
+      identifier the corpus cannot spell. The licensing surface that refused it is already in
+      ``bounds.licensed``.
+    * ``(None, refusing row)`` — a layer refused. An ``excluded`` or ``suspect`` column (under
+      ``hard_block_suspect``) refuses at COLUMNS, and the caller's correct response is to skip
+      the pair, never to measure it some other way. The row is still owed: a refused attempt is
+      a governance decision.
+    * ``(None, passing row)`` — the statement cleared every layer and was sent, and the driver
+      failed. The commonest cause is a genuinely type-incompatible pair
+      (``bigint IS DISTINCT FROM text`` raises ``operator does not exist``), which is why the
+      caller's type-compatibility gate is a correctness requirement and not only a filter.
+    """
+    left = assets.get(str(left_id))
+    right = assets.get(str(right_id))
+    if not (bounds.may_sample(str(left_id)) and bounds.may_sample(str(right_id))):
+        return None, None
+    if left is None or right is None or not (_is_column(left) and _is_column(right)):
+        return None, None
+    table_id = str(asset_attr(left, "parent_table") or "")
+    if not table_id or table_id != str(asset_attr(right, "parent_table") or ""):
+        return None, None
+
+    if connector is None:
+        return None, attempt_record(
+            refuse("r_not_a_read", "no connector configured"), "sample", executed_sql=None
+        )
+    if not isinstance(corpus, AnalystCorpus):
+        # G1, verbatim from ``sample_rows``: a missing corpus is a wiring failure, and refusing
+        # on it would record a governance verdict for it.
+        raise GovernanceUsageError(
+            "compare_column_pair has no AnalystCorpus: corpus is "
+            f"{type(corpus).__name__}. Column authorization is derived from AnalystCorpus as a "
+            "type (ADR 0006 §8), never from a parallel set."
+        )
+
+    parent = assets.get(table_id)
+    table_name = str(asset_attr(parent, "physical_name") or "") if parent is not None else ""
+    schema = str(asset_attr(left, "schema") or "")
+    left_name = str(asset_attr(left, "physical_name") or "")
+    right_name = str(asset_attr(right, "physical_name") or "")
+    if not (table_name and left_name and right_name):
+        # No identifier to name a relation or a column with, so no statement — the same
+        # "out of scope rather than a refusal" call ``sample_rows`` makes here.
+        return None, None
+
+    dialect = getattr(connector, "dialect", None) or "sqlite"
+    spellings, ambiguous = spellings_for(corpus, bounds.licensed)
+    prepared = prepare(
+        column_pair_agreement_statement(
+            schema=schema, table=table_name, left=left_name, right=right_name, dialect=dialect
+        ),
+        licensed=bounds.licensed,
+        corpus=corpus,
+        spellings=spellings,
+        ambiguous_folds=ambiguous,
+        dialect=dialect,
+        policy=policy,
+    )
+    attempt = attempt_record(verdict=prepared.verdict, path="sample", executed_sql=prepared.sql)
+    if prepared.sql is None:
+        return None, attempt
+    try:
+        _columns, rows, _truncated = connector.execute(prepared.sql)
+    except Exception:  # noqa: BLE001 — the row is the point, not the traceback
+        return None, attempt
+    row = list(rows)[0] if rows else None
+    if row is None or len(row) < 4:
+        return None, attempt
+    return (
+        PairAgreement(
+            n_rows=int(row[0] or 0),
+            n_differing=int(row[1] or 0),
+            n_distinct_left=int(row[2] or 0),
+            n_distinct_right=int(row[3] or 0),
+        ),
+        attempt,
+    )
+
+
+def _is_column(asset: Any) -> bool:
+    at = asset_attr(asset, "asset_type")
+    return isinstance(asset, ColumnAsset) or str(getattr(at, "value", at) or "") == "column"
 
 
 def sample_rows(
