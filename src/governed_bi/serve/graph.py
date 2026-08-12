@@ -22,6 +22,7 @@ from governed_bi.serve.nodes.facets import (
 )
 from governed_bi.serve.nodes.guard import guard_node
 from governed_bi.serve.nodes.mine_corpus import mine_corpus_node
+from governed_bi.serve.nodes.mine_mistakes import mine_mistakes_node
 from governed_bi.serve.nodes.narrate import narrate_node
 from governed_bi.serve.nodes.negative import negative_node
 from governed_bi.serve.nodes.rewrite import rewrite_node
@@ -193,6 +194,10 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     # so this is belt and braces rather than the thing standing between a bug here and a lost
     # turn.
     rail("mine_corpus", mine_corpus_node, stream=False)
+    # Same `stream=False` reasoning as `mine_corpus` immediately above: mining runs on every
+    # answered turn (not conditioned on anything a live viewer would want to watch), and has
+    # nothing to show on the turns -- most of them -- where the ledger shows no correction.
+    rail("mine_mistakes", mine_mistakes_node, stream=False)
     rail("narrate", narrate_node)
     rail("refuse", refuse_node)
     rail("decline", decline_node)
@@ -248,15 +253,19 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
         _skip_if_terminal,
         {"stamp": "stamp", "continue": "agent_core"},
     )
-    # Terminals skip narrate (and mine_corpus): refusal/decline wording is system copy, and
-    # `assemble`'s conditional edge sends a terminal turn straight to `stamp` without ever
-    # reaching `agent_core`. `mine_corpus` sits before `narrate` rather than after or in
-    # parallel with it: mining and narration read disjoint state (`clarifications` vs.
-    # `messages`/`result_table`) and neither depends on the other's output, so ordering here
-    # is a wiring choice, not a correctness one -- sequential over a fan-out because a corpus
-    # write is not the latency-sensitive half of the turn.
+    # Terminals skip narrate (and mine_corpus/mine_mistakes): refusal/decline wording is system
+    # copy, and `assemble`'s conditional edge sends a terminal turn straight to `stamp` without
+    # ever reaching `agent_core`. `mine_corpus` and `mine_mistakes` sit before `narrate` rather
+    # than after or in parallel with it: mining and narration read disjoint state
+    # (`clarifications` / `execution` vs. `messages`/`result_table`) and neither depends on the
+    # other's output, so ordering here is a wiring choice, not a correctness one -- sequential
+    # over a fan-out because a corpus write is not the latency-sensitive half of the turn. The
+    # two miners are likewise ordered arbitrarily with respect to each other: `mine_corpus`
+    # reads `clarifications`, `mine_mistakes` reads `execution`, and neither's write affects
+    # what the other reads.
     graph.add_edge("agent_core", "mine_corpus")
-    graph.add_edge("mine_corpus", "narrate")
+    graph.add_edge("mine_corpus", "mine_mistakes")
+    graph.add_edge("mine_mistakes", "narrate")
     graph.add_edge("narrate", "stamp")
     graph.add_edge("refuse", "stamp")
     graph.add_edge("decline", "stamp")

@@ -1,5 +1,9 @@
 """``mine_corpus`` -- an answered ``ask_user`` clarification becomes a corpus draft.
 
+See also ``serve/nodes/mine_mistakes.py``, wired in right after this node on the identical
+reasoning: a self-corrected ``run_query`` ledger is a second class of "durable fact extraction
+after a turn" fact and needed the same relocation from an offline-only script.
+
 **Relocated from ``api/routes.py``'s ``_mine_clarification_draft`` (UtkuAI, ported).** That
 function's only call site was ``POST /chat/resume``, whose own docstring calls it a
 "degradation path -- streaming is the primary transport". The real ``governed-bi-ui`` never

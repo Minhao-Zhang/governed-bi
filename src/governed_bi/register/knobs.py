@@ -271,6 +271,13 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "given turn's own answer looks like — the next turn only sees the draft if "
        "someone certified it first, so two runs with this on/off still answer every "
        "question identically until a human acts"),
+    _k("enable_mistake_memory_mining", False, Role.operational,
+       "a turn whose run_query ledger shows a governance/execution failure followed by a "
+       "passing attempt in the SAME turn is mined into a FewShotAsset draft "
+       "(curator/mistake_memory.py), written proposed and invisible until an admin approves "
+       "it. Operational, not comparability, for the identical reason "
+       "enable_clarification_to_draft is: this changes the corpus on disk between two turns "
+       "of the SAME run, never what a given turn's own answer looks like"),
 
     # ── measurement ─────────────────────────────────────────────────────────
     _k("cache_cost_reduction_target", 0.30, Role.comparability,
