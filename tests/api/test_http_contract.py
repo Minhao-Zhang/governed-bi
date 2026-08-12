@@ -20,6 +20,7 @@ Two rules run through all of it, and both are governance rather than plumbing:
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -155,10 +156,20 @@ def _tiny_session() -> Any:
     )
 
 
-#: The client's `graphNodeKindSchema` (governed-bi-ui `lib/schemas.ts`), duplicated here
-#: because the UI is a sibling repository a test may not assume is checked out. Duplicated
-#: **with a test**, which is the difference between a mirror and a drift.
-CLIENT_GRAPH_NODE_KINDS = frozenset({"table", "join", "metric", "term", "note", "few_shot", "negative_example"})
+#: The client's `graphNodeKindSchema`, read out of `ui/lib/schemas.ts` — not a copy of it. It was
+#: a hand-typed copy while the UI was a sibling repository a test could not assume was checked
+#: out; it is in this tree now, and the direction a copy cannot see is the one that matters, since
+#: the assertion is server ⊆ client and a kind *removed* on the client silently widens what
+#: passes. A regex, not a TS parse: needing a JS toolchain to run `pytest` is the worse trade, and
+#: an empty parse raises rather than leaving that `<=` vacuous. **Sensitive only to the kinds the
+#: fixture emits** — mutation-verified both ways, deleting `"term"` fails the assertion below and
+#: deleting `"note"` does not, because `_tiny_session()` produces `table` and `term` and no more.
+CLIENT_SCHEMAS_TS = Path(__file__).resolve().parent.parent.parent / "ui" / "lib" / "schemas.ts"
+_PATTERN = r"graphNodeKindSchema\s*=\s*z\.enum\(\[(.*?)\]\)"
+_ENUM = re.search(_PATTERN, CLIENT_SCHEMAS_TS.read_text(encoding="utf-8"), re.DOTALL)
+assert _ENUM, f"graphNodeKindSchema not found in {CLIENT_SCHEMAS_TS}"
+CLIENT_GRAPH_NODE_KINDS = frozenset(re.findall(r'"([^"]+)"', _ENUM.group(1)))
+assert CLIENT_GRAPH_NODE_KINDS, f"graphNodeKindSchema is an empty enum in {CLIENT_SCHEMAS_TS}"
 
 
 def test_the_pages_that_do_not_need_a_model_work_without_one(monkeypatch) -> None:

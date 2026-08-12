@@ -16,14 +16,13 @@ arm / corpus，否则不可引用。
 - 研究代码，无生产用户；API 与 corpus 格式仍会变（README Project status）。
 - 引擎：自然语言 → 只读 SQL → 确定性 layer stack 先检再跑；模型**不持有**数据库句柄。治理边界是**没有某类工具**，不是「请模型守规矩」。
 - 语义层（corpus）与数据湖（obfuscated lake）是**外部 sibling 仓库**；本仓只服务它们。`corpus_content_hash` 是测量身份；勿往 corpus checkout 写生成物。
-- UI 在独立仓 [governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui)；本仓是引擎。
+- UI 已并入本仓 `ui/`（Next.js）；引擎与前端同仓，但只经 HTTP 相接，双向都没有 import。
 
-### 四件套与本环境
+### 三件套与本环境
 
 | 仓 | 角色 | 约定路径 / 获取 |
 |---|---|---|
-| [governed-bi](https://github.com/Minhao-Zhang/governed-bi) | 引擎 | 本仓 |
-| [governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui) | Next.js 纯客户端 | `../governed-bi-ui` |
+| [governed-bi](https://github.com/Minhao-Zhang/governed-bi) | 引擎 + Next.js 纯客户端 | 本仓；前端在 `ui/` |
 | [BIRD-corpus](https://github.com/Minhao-Zhang/BIRD-corpus) | 语义层（无 README，按 schema 分目录） | `../BIRD-corpus`；钉 commit |
 | [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) | 混淆湖 + `eval_dataset/` | 本地目录须为 `../BIRD-Data-Obfuscation`（**GitHub 名 ≠ 工具默认路径**） |
 

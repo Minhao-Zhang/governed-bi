@@ -7,20 +7,27 @@ __pycache__/
 *.so
 
 # Distribution / packaging
+#
+# **Root-anchored on purpose.** These come from GitHub's Python template, where they are
+# sdist/wheel build output at the top level. Unanchored they match a directory of that name at
+# any depth, and the frontend under `ui/` has a real, tracked `ui/lib/` (19 files: the API
+# client, the zod contract, the stream mapper). An unanchored `lib/` silently excluded the whole
+# thing when the two repositories merged — `git status` clean, nothing to add, no error anywhere.
+# `ui/build` and `ui/dist` are covered by ui/.gitignore's own entries below.
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
+/build/
+/develop-eggs/
+/dist/
+/downloads/
+/eggs/
+/.eggs/
+/lib/
+/lib64/
+/parts/
+/sdist/
+/var/
+/wheels/
+/share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
@@ -268,3 +275,8 @@ _archive/
 # One-off slices written while debugging the rebuild packets. The packets themselves are
 # already ignored under scripts/corpus_rebuild/_build/; these are hand-cut copies of them.
 scratch_*.json
+
+# The frontend under `ui/` carries its own nested .gitignore, which is where node_modules,
+# .next and .env.local are excluded. Nested is deliberate rather than folded in here: those
+# patterns are relative to the app directory, and Next.js's own template is what generates
+# them, so keeping them beside package.json means the next `create-next-app` diff is readable.

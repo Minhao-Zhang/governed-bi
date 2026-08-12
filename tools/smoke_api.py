@@ -7,8 +7,8 @@ naming it, which a unit test must not depend on. Not `langgraph dev` because its
 served stale `src/` here before, and every question this answers is answerable by calling the
 route functions directly.
 
-The cheap half of verification. The other half is `npm run check:api` in `governed-bi-ui`, which
-validates these payloads against the client's zod schemas and needs a live engine.
+The cheap half of verification. The other half is `npm --prefix ui run check:api`, which validates
+these payloads against the client's zod schemas and needs a live engine.
 
 Prints shapes and counts only. Never prints an environment value: a DSN carries credentials.
 """

@@ -91,7 +91,7 @@ A full arm takes hours. Expect to interrupt it and resume it.
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--reflect` | off | Turn on the post-hoc reflector. It writes a verdict and changes no control flow, so EX should not move — that is the arm's own sanity check. Costs one utility-model call per turn, and it is a comparability knob, so a reflected arm and an unreflected one are two arms. Measured once: [reflect arm](analysis/reflect-arm-v4.md) |
+| `--reflect` | off | Turn on the post-hoc reflector. It writes a verdict and changes no control flow, so EX should not move — that is the arm's own sanity check. Costs one utility-model call per turn, and it is a comparability knob, so a reflected arm and an unreflected one are two arms. Measured once: [risk coverage](analysis/risk-coverage-v4.md) §6 |
 
 **Concurrency and robustness**
 

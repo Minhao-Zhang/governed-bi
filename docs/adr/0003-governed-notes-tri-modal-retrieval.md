@@ -343,8 +343,8 @@ content-scanning validator would be needed for a structural guarantee.
 
 **Negative / costs**
 - Rename churn is real, not cosmetic: this repo's own backend `/skills` route +
-  presenter (`api/app.py:296-299`, `viz/presenter.py`) and the sibling
-  `governed-bi-ui` repo's `/skills` surface both migrate lockstep, or they drift.
+  presenter (`api/app.py:296-299`, `viz/presenter.py`) and the frontend's
+  `/skills` surface both migrate lockstep, or they drift.
 - The injection-resolver extension (Honest limits #4) and the `on_match`
   wiring (#3) are load-bearing, not incidental. Skip either and the migrated
   content goes silently missing from prompts.

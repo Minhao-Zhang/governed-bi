@@ -365,7 +365,7 @@ name, so a coincidental string literal launders one.
 The reflector ran, once, as the last untested source of information: everything that does not
 read meaning had already been measured and capped at OOF AUC 0.721. **It scores 0.597** — worse
 than the count of tokens the agent emitted, and combining the two is worse than the token count
-alone. Full result: [reflect arm](analysis/reflect-arm-v4.md).
+alone. Full result: [risk coverage](analysis/risk-coverage-v4.md) §6.
 
 The row that matters is `unsure`. The judge called 77 turns unsure and they are **as likely to be
 right (0.766) as the ones it called correct (0.763)**. So the follow-ups that suggest themselves —
@@ -500,9 +500,8 @@ Two things about that fix are owed:
 ## 5. Presentation surface
 
 Numbered after §4 rather than inserted, because §4.1 and §4.2 are cited by name from `README.md`,
-`failure-modes.md` and the ADRs. The work here lives mostly in the sibling repository
-[governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui); each item below was verified in
-that checkout, not inferred from this tree.
+`failure-modes.md` and the ADRs. The work here lives mostly in the frontend, `ui/`, which is now
+part of this tree; each item below was verified by reading it, not inferred from the engine side.
 
 ### 5.1 The README still illustrates the engine with terminal transcripts
 

@@ -28,4 +28,6 @@ Non-ADR judgements that still matter in code:
   carries is `outcome`, `guardrail_errors`, `terminal_reason` and the per-attempt
   ledger, each derived from something observed. `safety_clearance` and
   `semantic_assurance` are barred from `src/` by a test.
-- **UI is out of tree.** Interactive chat UI lives in `governed-bi-ui`.
+- **UI is in tree, out of the import graph.** The interactive chat UI is `ui/`. It shares the
+  repository and nothing else: no module either way, and every payload it reads crosses the HTTP
+  surface of ADR 0007.

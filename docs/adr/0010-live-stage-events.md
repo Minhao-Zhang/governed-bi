@@ -57,13 +57,32 @@ changes.
 
 **M4 — the `blockbuster` reason in `/capabilities` is retired, and the `.env` fix for it never
 worked.** `routes.py` recorded a second reason to keep streaming off: a synchronous engine
-would trip `blockbuster` inside the server's worker. Measured: `blockbuster` is armed only in
-the in-mem run queue (`langgraph_runtime_inmem/queue.py:110`), LangGraph runs sync nodes in an
-executor thread where it does not fire, and a full streamed run against live Postgres
-completed. Separately, `.env` sets `LANGGRAPH_ALLOW_BLOCKING=true` and **the CLI ignores it**:
-`langgraph_api/cli.py:283` patches the variable from the `--allow-blocking` flag and the loop
-below skips any `.env` key already patched ("Don't overwrite"). The variable has never had an
-effect. It is kept as documentation of the escape hatch, with a comment saying so.
+would trip `blockbuster` inside the server's worker. `blockbuster` is armed only in the in-mem
+run queue (`langgraph_runtime_inmem/queue.py:110`), and LangGraph runs a `def` node in an
+executor thread where it does not fire, so the sync nodes are safe and a full streamed run
+against live Postgres completes. `.env` sets `LANGGRAPH_ALLOW_BLOCKING=true` and **the CLI
+ignores it**: `langgraph_api/cli.py:283` patches the variable from the `--allow-blocking` flag
+and the loop below skips any `.env` key already patched ("Don't overwrite"). The variable has
+never had an effect. It is kept as documentation of the escape hatch, with a comment saying so.
+
+**Amendment 3 (2026-08-11): "sync nodes are safe" is not "the server is safe", and the gap cost
+the semantic channel.** The five facet nodes are `async def`, so their bodies run on the loop
+rather than in an executor thread, and `_query_vector` embedded the rewritten query with the
+*synchronous* OpenAI client. `blockbuster` raised `BlockingError` on `socket.connect`, the SDK
+retried, its `time.sleep` raised too, and `vector_for_query` swallowed both as
+`semantic: failed`. Four of the five facets were retrieving on BM25 alone on every turn of every
+run served this way. `facet_schema` was the exception, and only because it is the one facet that
+does not rewrite, so it reuses the call-level vector instead of embedding.
+
+Nothing surfaced it because every layer behaved as designed: a degraded channel is not a failed
+turn, so the turn answered; the stage stream reported `semantic channel not wired`, which reads
+like configuration rather than a defect. The measured claim above was true about the nodes it
+tested and false about the server as a whole.
+
+Fixed at the call site with `asyncio.to_thread`, which is the framework's own second
+recommendation and removes a TLS handshake from the event loop regardless of `blockbuster`.
+`--allow-blocking` would have silenced the error and kept the stall, so it is still not needed
+and still not the fix.
 
 **M5 — `updates` mode already exposes every rail, for free.** A streamed run emits one
 `updates` event per node keyed by node name: `accept, guard, rewrite, negative_gate, fanout,
@@ -473,8 +492,9 @@ unrecognised `step` as renderable-but-unlabelled rather than as an error.
   installed because neither asks for `"custom"` (§5). The observable behaviour is what this
   bullet claimed; the mechanism is not, and the difference decides whether `events.py`'s guard
   is load-bearing.
-- Local serving requires no flags. `--allow-blocking` is not needed (M4) and
-  `LANGGRAPH_ALLOW_BLOCKING` in `.env` never worked.
+- Local serving requires no flags. `--allow-blocking` is not needed (M4, Amendment 3: the one
+  call that tripped `blockbuster` now runs off the loop) and `LANGGRAPH_ALLOW_BLOCKING` in
+  `.env` never worked.
 - **`POST /chat` becomes a degradation path, and it does not share a memory with the streamed
   one.** `routes.py` compiles its own `InMemorySaver`; `graph_app.make_graph` compiles with none
   so the server can supply its own, which is what makes `/threads` work. So one `session_id`

@@ -21,6 +21,10 @@ on:
   pull_request:
 
 jobs:
+  # The Python engine: everything under `src`, `tools`, `tests`, `scripts` and `docs`. None of
+  # the gates below can see `ui/` — they walk named roots and none of them reads TypeScript — so
+  # the frontend is a second job rather than three more steps here. Two jobs also means a broken
+  # frontend does not hide a broken engine behind a single red X.
   test:
     runs-on: ubuntu-latest
     steps:
@@ -101,3 +105,50 @@ jobs:
           print('built, unaccepted  :', sorted(c.built_but_unaccepted()))
           print('declared, unbuilt  :', sorted(c.unbuilt()))
           "
+
+  # The frontend. Added when the UI stopped being a sibling repository and became `ui/`: while it
+  # was separate it had CI of its own, and folding it in without this job would have quietly
+  # deleted that — the merge would have *removed* checks while appearing to consolidate them.
+  ui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      # `npm ci` and not `npm install`, for the same reason the job above pins `uv --frozen`: an
+      # install that re-resolves is not testing the dependency set anyone else has. It also fails
+      # loudly when package.json and the lockfile disagree, which they did at the moment of the
+      # merge (three missing optional `@emnapi/*` entries under sharp's wasm fallback) and which
+      # `npm install` would have papered over by rewriting the lockfile inside CI.
+      - name: Install (frozen)
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      # Not redundant with the linter. ESLint here does not type-check, so an engine payload
+      # field renamed on the Python side passes lint and fails only in a browser. This is the
+      # same defect class `npm run check:api` catches, one stage earlier and with no engine
+      # needed — which is the whole reason it can run here and `check:api` cannot.
+      - name: Types
+        run: npx tsc --noEmit
+
+      # A production build, which exercises what neither of the above does: the App Router's own
+      # constraints. It needs no engine and no corpus — with `NEXT_PUBLIC_LANGGRAPH_URL` unset the
+      # app renders from `lib/mock/fixtures.ts`, so the build is hermetic.
+      - name: Build
+        run: npm run build
+
+      # `npm run check:api` and `npm run check:stream-messages` are deliberately NOT here.
+      # `check:api` needs a live engine and a loaded corpus (ADR 0009 says so in the section that
+      # introduces it); `check:stream-messages` is pure and could run, but it is a red/green
+      # reproduction of one screenshot bug rather than a gate, and it asserts against fixtures it
+      # ships with. Both are named in `docs/usage.md` as manual.

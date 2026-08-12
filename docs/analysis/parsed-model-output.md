@@ -133,7 +133,7 @@ was contaminated.
 **It also never fired.** The one reflected arm ran on `2da223c`, which predates the fix, so an
 echo would have parsed as a complete favourable verdict. Zero of its 1,351 rows carry the
 signature, and `why_unmeasured` is empty on every row — so the arm is uncontaminated and the
-hand parser's robustness is settled ([reflect arm](reflect-arm-v4.md)).
+hand parser's robustness is settled ([risk coverage](risk-coverage-v4.md) §6).
 
 **The fix, shipped at `95e3b07`** — two lines, no schema:
 
@@ -249,7 +249,7 @@ baseline has since run, and it closed the direction**: the judge scores AUC 0.59
 of tokens the agent emitted, and the turns it calls `unsure` are as likely to be right (0.766) as
 the ones it calls correct (0.763). A judge whose "I cannot tell" bucket matches its "this is
 right" bucket has no perception of its own uncertainty, and no output format supplies one. See
-[reflect arm](reflect-arm-v4.md) and [open work](../open-work.md) §3.11.
+[risk coverage](risk-coverage-v4.md) §6 and [open work](../open-work.md) §3.11.
 
 Two carried notes survive and are worth keeping if anyone revisits it:
 

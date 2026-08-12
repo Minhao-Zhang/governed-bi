@@ -442,7 +442,7 @@ so only the rich contract is emitted. The deterministic flow path is unchanged �
 it keeps emitting the legacy `{stage}` events.
 
 Full event contract: `v1/analyst.md` (deleted with v1).
-The frontend that renders it is built, in [`governed-bi-ui`](https://github.com/Minhao-Zhang/governed-bi-ui).
+The frontend that renders it is built, in [`ui/`](../../ui/).
 Tests: `tests/test_agent_step_events.py`.
 
 ## Implementation note (2026-07-14): P2 cutover landed on `main`
@@ -522,6 +522,6 @@ wires `can_clarify` + a `clarify_checkpointer` (covered by
 checkpointer (Postgres) — today's checkpointer is in-memory, so a clarification
 does not survive a process restart. The wire contract is in
 `v1/analyst.md` (deleted with v1); the frontend
-that consumes it is built, in [`governed-bi-ui`](https://github.com/Minhao-Zhang/governed-bi-ui),
-not here. So
+that consumes it is built, in [`ui/`](../../ui/), which holds no
+persistence of its own either. So
 "Open questions → HITL" now scopes to *durable persistence*, not the mechanism.

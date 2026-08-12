@@ -52,7 +52,7 @@ Git history is the record of what changed.
 | [Open work](open-work.md) | the unfinished items those findings imply, re-verified against the current tree |
 | [Strategy checkpoint 2026-08-11](analysis/strategy-checkpoint-2026-08-11.md) | temporary checkpoint for the repository as a portfolio artifact: what is true, what it declines to be, and the work queue — not an ADR; replace when superseded |
 
-## External UI and data
+## Frontend, and external data
 
-- UI: [governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui) (`../governed-bi-ui`)
+- UI: [`ui/`](../ui/) in this repository — running it and its checks are in [usage](usage.md#ui)
 - Data: [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) (`../BIRD-Data-Obfuscation`)

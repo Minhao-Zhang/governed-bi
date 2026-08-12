@@ -6,7 +6,7 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": [
         "--prefix",
-        "../governed-bi-ui",
+        "ui",
         "run",
         "dev"
       ],
@@ -17,7 +17,7 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": [
         "--prefix",
-        "../governed-bi-ui",
+        "ui",
         "run",
         "dev",
         "--",

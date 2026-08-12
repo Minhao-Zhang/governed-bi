@@ -264,7 +264,7 @@ pages the same assets -- but repointing them is UI work, not an API gap.
 ### What checks this from now on
 
 The contract had been reconciled by hand three times and drifted three times, because nothing
-compared the two sides. `governed-bi-ui` now has `npm run check:api`: it fetches every route from
+compared the two sides. The frontend now has `npm run check:api`: it fetches every route from
 a live engine and validates each response against the client's **real** zod schemas, reporting
 both parse failures (a blank page) and silently stripped keys (a page that renders missing data
 and looks fine). It found a route four browser sessions had not -- `/corpus/assets` answering 200

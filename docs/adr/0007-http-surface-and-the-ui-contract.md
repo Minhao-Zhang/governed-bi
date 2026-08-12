@@ -4,7 +4,7 @@
 
 ## Context
 
-The frontend (`../governed-bi-ui`, `main` @ `4ada0cc`) is architecturally complete: LangGraph
+The frontend (`ui/`, then its own repository at `main` @ `4ada0cc`) is architecturally complete: LangGraph
 `useStream` for chat, twelve custom REST routes, an interrupt/clarification flow, a
 provenance drawer and a step timeline. It was built against v1.
 

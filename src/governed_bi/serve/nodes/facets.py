@@ -14,6 +14,7 @@ index is what made the degradation gate inert (ADR 0005 §2.3).
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Callable, Mapping, Sequence
 
 from langchain_core.runnables import RunnableConfig
@@ -391,8 +392,19 @@ async def _run_facet(
         query = await _rewritten_query(
             question, stage, config, ran=ran, spent=spent, turn_index=state.get("turn_index", 1)
         )
-        query_vector, query_vector_state = _query_vector(
-            state, config, query=query, question=question
+        # **Off the event loop.** This node is `async def`, and `_query_vector` embeds the
+        # rewritten query with the *synchronous* OpenAI client, so calling it directly ran a
+        # TLS handshake on the loop. Under `langgraph dev` blockbuster raises `BlockingError`
+        # on `socket.connect`, the SDK retries, its `time.sleep` raises too, and
+        # `vector_for_query` swallows the lot as `semantic: failed` — four of five facets
+        # degraded on every turn, silently, because a degraded channel is not a failed turn.
+        #
+        # The sync nodes never showed this: LangGraph runs a `def` node in a worker thread
+        # where blockbuster is not armed. Only the `async def` facets touch the loop, and only
+        # `facet_schema` escaped, because it is the one facet that does not rewrite and so
+        # reuses the call-level vector instead of embedding.
+        query_vector, query_vector_state = await asyncio.to_thread(
+            _query_vector, state, config, query=query, question=question
         )
         hits: list[Any] = _pass_one_hits(
             index,

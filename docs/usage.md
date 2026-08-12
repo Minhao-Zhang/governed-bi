@@ -103,8 +103,7 @@ Streaming (preferred): `POST /threads/{id}/runs/stream` with
 `stream_mode: ["values", "messages", "custom"]` and `stream_subgraphs: true`
 ([ADR 0010](adr/0010-live-stage-events.md)). Blocking: `POST /chat`.
 
-Serve expects Postgres. The SQLite file under `data/bird/` is for tests/CI, not
-the default LangGraph serve datasource.
+Serve expects Postgres.
 
 ## One-turn CLI
 
@@ -133,5 +132,53 @@ quotable.
 
 ## UI
 
-[governed-bi-ui](https://github.com/Minhao-Zhang/governed-bi-ui) — local checkout
-typically at `../governed-bi-ui`.
+The frontend is `ui/` in this repository. It needs its own install once, and a
+running engine to show anything but mock fixtures:
+
+```bash
+npm --prefix ui ci
+```
+
+```bash
+npm --prefix ui run dev
+```
+
+`ci` and not `install`: `npm install` reads `package.json` from the working
+directory, and `--prefix` only redirects where the tree is written — so
+`npm --prefix ui install` looks for a root `package.json` that does not exist and
+exits ENOENT. `ci` and `run` both resolve from the prefix. Inside `ui/`, plain
+`npm install` works.
+
+That serves http://localhost:3000. Two variables in `ui/.env.local` point it at
+the engine, and both must be set or the app falls back to fixtures and looks like
+it is working:
+
+| | |
+|---|---|
+| `NEXT_PUBLIC_LANGGRAPH_URL` | `http://localhost:2024`, the server from [Serve](#serve-langgraph-server) above |
+| `NEXT_PUBLIC_ASSISTANT_ID` | `serve`, the graph id in `langgraph.json` |
+| `NEXT_PUBLIC_GOVERNED_BI_API_KEY` | must equal `GOVERNED_BI_API_KEY` in `.env` |
+
+The key is duplicated rather than shared because the two processes read
+configuration by different rules: the engine reads `.env` at the repo root, and
+Next.js only exposes a variable to browser code if it is prefixed
+`NEXT_PUBLIC_` and present at build time. Being in one repository does not merge
+them. If they disagree, every request answers 401 and the UI renders empty
+panels — it cannot get past `/capabilities`.
+
+`.env.local` is gitignored, so a fresh clone starts from
+[`ui/.env.example`](../ui/.env.example).
+
+Frontend checks, run from `ui/`:
+
+```bash
+npm run lint
+npx tsc --noEmit
+npm run build
+```
+
+`npx tsc --noEmit` is not redundant with the linter, which does not type-check: a payload field
+renamed on the engine side passes lint and fails only in a browser. Two more need a live engine and
+a loaded corpus, so they stay manual: `npm run check:api` validates every route against the
+client's zod schemas, and `npm run check:stream-messages` is a red/green reproduction of one
+rendering bug.

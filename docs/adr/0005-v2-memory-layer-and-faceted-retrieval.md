@@ -1749,7 +1749,7 @@ equality.
 
 #### 4.2 `api ↔ frontend`
 
-The sibling repo `../governed-bi-ui` is not rewritten, but four payload changes
+The frontend under `ui/` is not rewritten, but four payload changes
 reach it and **three are breaking**:
 
 1. **`Answer.provenance` carries `normative_force`** and the UI reads it

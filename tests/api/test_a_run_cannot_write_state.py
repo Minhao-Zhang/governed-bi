@@ -92,8 +92,8 @@ def test_the_runtime_dispatch_refuses_a_goto() -> None:
 def test_the_runtime_dispatch_still_allows_a_resume() -> None:
     """The paused-turn protocol, which a blanket deny would have deleted.
 
-    ``ask_user`` interrupts and the client answers — ``../governed-bi-ui``'s
-    ``hooks/use-stream-chat.ts`` submits ``{command: {resume: response}}``.
+    ``ask_user`` interrupts and the client answers — ``ui/hooks/use-stream-chat.ts``
+    submits ``{command: {resume: response}}``.
     """
     _dispatch({"resume": "the sales schema"})
     _dispatch(None)

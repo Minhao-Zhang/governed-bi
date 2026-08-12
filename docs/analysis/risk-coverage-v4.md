@@ -3,7 +3,7 @@
 **Answer: no useful one.** At 70% coverage the best out-of-fold precision on delivered answers is
 **0.801** (95% CI 0.774–0.827). Precision 0.90 is reachable only at **6.9%** coverage. The
 "deliver 70% of turns at 0.90" trade is not available from anything recorded on the row, and it is
-not available from a five-run ensemble either. §3 says what the trade actually costs and §7 says
+not available from a five-run ensemble either. §3 says what the trade actually costs and §8 says
 what this analysis cannot see; read both before quoting any of it.
 
 All figures: arm `v4` (`runs/eval/proxy_v4_corpus30872d3.jsonl`, 1,351 turns, 57 schemas), corpus
@@ -171,10 +171,81 @@ permuted). The model has no concentrated dependence beyond the token counts.
 
 **The critic verdict was the one missing signal, and it has since been measured.** No arm on disk
 carried `reflect_enabled` when this analysis ran. One does now, and it scores **AUC 0.597** —
-below `agent_out_tok`, and worse than `agent_out_tok` alone when the two are combined. See
-[reflect arm](reflect-arm-v4.md).
+below `agent_out_tok`, and worse than `agent_out_tok` alone when the two are combined. §6 is that
+arm in full.
 
-## 6. Replication
+## 6. The critic verdict: the one signal that reads meaning
+
+**A different arm from the rest of this page.** `runs/eval/proxy_v4_reflect_corpus30872d3.jsonl`,
+engine `2da223c`, corpus `30872d3`, ANALYST v4, routing pinned to the v3-fold artifact. v4 plus one
+knob. Every other figure here is the `proxy_v4` arm.
+
+The reflector reads the generated SQL against the question and writes a verdict. It had never run:
+`reflect_enabled` was `False` on every row of every arm measured before this one. It was the last
+untested source of information for selective prediction, every signal that does *not* read meaning
+having already been measured and capped at OOF AUC 0.721 in §4.
+
+It is worse than the token count.
+
+### The four pre-registered criteria
+
+Stated before the run, in the order they were to be read.
+
+| | | |
+|---|---|---|
+| 1 | mechanism: verdicts present, distribution not degenerate | **pass** — 1 268 of 1 351, largest label 72.3% against an 80% degeneracy line |
+| 2 | guardrail: EX must not move | **pass** — 0.6758 → 0.6699, net −8, p = 0.52 |
+| 3 | primary: verdict AUC against the 0.721 bookkeeping baseline | **fail** — 0.597 |
+| 4 | operating point: precision at 70% coverage against 0.801 | **fail** — 0.770 |
+
+Criterion 2 is worth keeping: the node is declared to write a verdict and change no control flow,
+and the arm confirms it. Whatever else this result says, it is a clean single-variable comparison.
+
+### What the judge knows
+
+Delivered answers only, n = 1 268.
+
+| verdict | n | accuracy |
+|---|---:|---:|
+| `answered` | 917 | 0.763 |
+| **`unsure`** | 77 | **0.766** |
+| `wrong` | 274 | 0.533 |
+| all | 1 268 | 0.713 |
+
+**The turns it called `unsure` are as likely to be right as the ones it called correct.** That row
+is the finding. The prompt makes `unsure` first-class and tells the judge that guessing is not a
+useful answer; the judge takes the option and it carries nothing.
+
+Separation between its two confident labels is **1.43×**. Self-consistency between two identical
+runs, measured for free off the run1/run2 pair and costing a second inference, is **2.67×**.
+
+Combining hurts. `agent_out_tok` alone scores AUC 0.719; verdict with the token count as a
+tiebreak scores 0.691, and is worse at every coverage:
+
+| ranker | 90% | 80% | 70% | 60% | 50% |
+|---|---:|---:|---:|---:|---:|
+| `agent_out_tok` | 0.738 | 0.781 | **0.802** | 0.814 | 0.834 |
+| verdict + `agent_out_tok` | 0.740 | 0.759 | 0.770 | 0.805 | 0.822 |
+
+### Why a second judge prompt is not the next move
+
+The obvious follow-ups, a graded `confidence` field, `right` instead of the ambiguous `answered`, a
+typed schema, all address *expression*. The `unsure` row says the problem is not expression. A judge
+whose "I cannot tell" bucket has the same accuracy as its "this is right" bucket does not have a
+resolution it is failing to express; it has no perception of its own uncertainty to express.
+Changing the output format cannot supply one.
+
+### Two things this arm settled in passing
+
+**The parse-failure rate is zero.** `why_unmeasured` is empty on every row. Whether a hand-written
+parser is robust enough, left open pending this arm's data, is answered: it is.
+
+**The template-echo bug did not fire.** This arm ran on `2da223c`, which predates the fix at
+`95e3b07`, so `VERDICT: answered | wrong | unsure` echoed back would have parsed as a complete,
+favourable verdict. Zero rows carry the signature. The bug was real and reproducible and the model
+never triggered it, so the arm is uncontaminated.
+
+## 7. Replication
 
 The pattern replicates. `v3-fold` (1,265 delivered = 93.6%, precision 0.7091, EX 0.6640):
 
@@ -212,7 +283,7 @@ noise. Coverage-70% precision on `v5` is 0.785 — still not 0.90.
 Robustness: `GroupKFold` by `db_id` (so no schema appears in both train and test) changes the
 `v4` OOF AUC from 0.705 to 0.701. The ranker is not memorising which schemas are hard.
 
-## 7. The answer
+## 8. The answer
 
 **There is headroom, and it is about nine points of precision for a quarter of the coverage —
 which is not the trade the framing hoped for.** Ranking the delivered turns takes `v4` from
@@ -232,7 +303,7 @@ The caveat this analysis shipped with — that every signal here is **structural
 nothing in it reads the generated SQL *against the question* — has since been tested. It was the
 one experiment this page said was worth paying for, and it did not pay: an LLM critic reading the
 SQL scores AUC **0.597**, below the token count, and the turns it calls `unsure` are as likely to
-be right as the ones it calls correct ([reflect arm](reflect-arm-v4.md)). The 0.695 AUC from
+be right as the ones it calls correct (§6). The 0.695 AUC from
 cross-*arm* agreement remains the only semantic signal that beats the structural ceiling, and it
 costs a second full inference pass.
 
@@ -257,3 +328,19 @@ comparison of `pred_fingerprint` to `gold_fingerprint`. **Quarantined as gold-de
 reported only as a ceiling: `quality_flags` (its `degenerate` flag is computed from the gold
 statement, `datalake.attach_quality_flags`) and gold-table coverage via `datalake.gold_tables`.
 `outcome` is used only to define the delivered set, never as a feature.
+
+## 9. What this closes
+
+Every source of information available to this engine has now been measured:
+
+| | |
+|---|---|
+| 68 bookkeeping features, fitted | AUC 0.705 — worse than the best single one |
+| `agent_out_tok` alone | **AUC 0.721**, the ceiling |
+| the whole governance ledger | AUC 0.47–0.50, no signal |
+| self-consistency, k=2 | +2–4pp for double the inference |
+| an LLM judge reading the SQL | **AUC 0.597** (§6) |
+
+Selective prediction on this engine tops out around **0.80 precision at 70% coverage**. For a reader
+who cannot verify SQL, the user this was framed for, one wrong answer in five is not a product. The
+direction is closed, and closing it cost one arm of a cheap utility model.
