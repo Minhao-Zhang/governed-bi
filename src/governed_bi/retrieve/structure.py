@@ -136,8 +136,13 @@ def complete_joins(licensed: Set[Any], structure: CorpusStructure) -> frozenset[
 def table_lookup(tables: Mapping[str, Any]) -> Mapping[str, frozenset[str]]:
     """Every spelling a table endpoint may use -> the table ids that answer to it.
 
-    Four keys per table: the asset id, ``table_id(schema, physical_name)``, the bare
-    ``physical_name``, and the **engine spelling** ``{schema}.{physical_name}``. The last
+    Four spellings, deduplicated into a set: the asset id, ``table_id(schema,
+    physical_name)`` (which carries the **slug**), the bare ``physical_name``, and the
+    **engine spelling** ``{schema}.{physical_name}`` (which does not). Three of the four
+    collapse to one string whenever the physical name is already a bare identifier, so the
+    usual table contributes **two** keys, not four — measured on the shipped corpus, 655 of
+    656 tables contribute two and one contributes three. The fourth spelling exists for that
+    one table. The last
     is the physical→id map ADR 0008 D1 implies — an asset id carries the *slug*
     (``airline.Air_Carriers_66c534``) while SQL carries ``FROM airline."Air Carriers"``, so
     without it every few-shot citing a slugged table reports "matches no table asset".

@@ -33,11 +33,11 @@ class Problem:
         return f"{self.where}: {self.reason}"
 
 
-#: How each tag rule is satisfied: the field the index will read, and whether it may be
-#: absent. A predicate table, **not** a copy of the register — the register says which rule
-#: a type uses, this says what makes that rule answerable. Closed at import against
-#: :class:`~governed_bi.register.assets.TagRule`, so a ninth rule cannot be added without
-#: deciding what satisfies it.
+#: How each tag rule is satisfied: the field the index will read, and whether that field is
+#: **required** (``True`` ⇒ a missing value is a problem). A predicate table, **not** a copy of
+#: the register — the register says which rule a type uses, this says what makes that rule
+#: answerable. Closed at import against :class:`~governed_bi.register.assets.TagRule`, which
+#: declares seven, so an eighth rule cannot be added without deciding what satisfies it.
 #:
 #: The two optional entries are values, not oversights: an unbound term and a system-wide
 #: negative example are **untagged**, which is a state — no vote in ``route``, but carried

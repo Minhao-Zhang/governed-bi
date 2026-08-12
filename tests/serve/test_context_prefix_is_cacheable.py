@@ -149,7 +149,7 @@ def test_no_reported_usage_still_means_unmeasured_not_zero_calls() -> None:
 # ── what the budget dropped, which was being destroyed mid-turn ───────────────
 
 
-def test_the_delivery_merge_carries_what_the_budget_evicted() -> None:
+def test_the_delivery_channel_carries_what_the_budget_evicted() -> None:
     """``merge_into`` rebuilt a fresh four-key dict, so ``assemble``'s ``evicted`` was destroyed
     in ``agent_core`` on every turn that had one — a silent data loss that lived undetected.
 
@@ -157,29 +157,52 @@ def test_the_delivery_merge_carries_what_the_budget_evicted() -> None:
     ``table_coverage``, and then dropped for space before the model saw it. Measured once it
     survived: 19 of 1 351 turns (1.4%), bodies only, never a whole table. Rare — but nothing
     could know that while this function deleted the field.
+
+    **Asserted through the channel rather than through the tracker** (2026-08-11). The first
+    fix carried the one named key inside ``merge_into``, and the same loss was live on
+    ``retrieved`` at the same time — a per-channel hand-fix cannot see one channel over. The
+    rule is now ``state.merge_delta`` on the channel and a two-key delta from the tracker, so
+    the property that matters is what the *channel* holds after ``agent_core`` writes, which is
+    what ``stamp`` reads. Composed here exactly as LangGraph composes it.
     """
     from governed_bi.serve.delivery import DeliveryTracker
+    from governed_bi.serve.state import merge_delta
 
     evicted = {"bodies_dropped": 3, "tables_dropped": 1, "dropped_ids": ["s.t"]}
-    merged = DeliveryTracker({"a": "1"}).merge_into(
-        {"context_block": "B", "context_hash": "h", "tool_delivered": {}, "evicted": evicted}
-    )
+    assembled = {"context_block": "B", "context_hash": "h", "tool_delivered": {}, "evicted": evicted}
+    merged = merge_delta(assembled, DeliveryTracker({"a": "1"}).merge_into(assembled))
 
     assert merged["evicted"] == evicted
     assert merged["context_hash"] == "h" and merged["tool_delivered"] == {"a": "1"}
+    assert merged["context_block"] == "B", "the rendered block must survive the tool writes too"
 
 
 def test_a_turn_whose_block_fit_carries_no_evicted_key() -> None:
     """Absent and empty must stay distinguishable: ``{}`` would read as "we checked and dropped
     nothing", which is a different fact from "the budget never bit"."""
     from governed_bi.serve.delivery import DeliveryTracker
+    from governed_bi.serve.state import merge_delta
 
-    assert "evicted" not in DeliveryTracker().merge_into(
-        {"context_block": "B", "context_hash": "h", "tool_delivered": {}}
-    )
-    assert "evicted" not in DeliveryTracker().merge_into(
-        {"context_block": "B", "context_hash": "h", "tool_delivered": {}, "evicted": {}}
-    )
+    for assembled in (
+        {"context_block": "B", "context_hash": "h", "tool_delivered": {}},
+        {"context_block": "B", "context_hash": "h", "tool_delivered": {}, "evicted": {}},
+    ):
+        merged = merge_delta(assembled, DeliveryTracker().merge_into(assembled))
+        assert not merged.get("evicted"), merged
+
+
+def test_the_delivery_channel_starts_each_turn_empty() -> None:
+    """The hazard a merge rule introduces, closed by ``PER_TURN_RESET``.
+
+    ``assemble`` writes no ``evicted`` key on a turn whose block fit, so under a merge rule
+    turn one's eviction would survive into turn two and report a drop that never happened.
+    ``Session.turn`` writes ``delivery: None`` and the reducer treats that as a clear — which
+    is the whole reason ``merge_delta`` has a clearing case rather than merging unconditionally.
+    """
+    from governed_bi.serve.state import PER_TURN_RESET, merge_delta
+
+    stale = {"context_block": "B", "context_hash": "h", "evicted": {"tables_dropped": 1}}
+    assert merge_delta(stale, PER_TURN_RESET["delivery"]) is None
 
 
 def test_the_eval_row_reports_what_was_evicted() -> None:

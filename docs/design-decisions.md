@@ -16,6 +16,8 @@ Do not re-author ADR content here.
 | Browse / filter / relationship API | [0009](adr/0009-browsing-and-filtering-api.md) |
 | Live stage events | [0010](adr/0010-live-stage-events.md) |
 | Two-model split and facet rewriting | [0011](adr/0011-two-model-split-and-facet-query-rewriting.md) |
+| The access seam: principal, authorization, Layer 6 split | [0012](adr/0012-access-seam-principal-and-authorization.md) |
+| The declared abstention policy | [0013](adr/0013-the-declared-abstention-policy.md) |
 
 Non-ADR judgements that still matter in code:
 

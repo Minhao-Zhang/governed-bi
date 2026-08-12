@@ -11,6 +11,11 @@ The through-line is one rule that `serve/` broke in four places: **the record mu
 describe what happened, not what was supposed to happen.** Every v1 number this project
 retired died of the same thing — a field that reported the configuration rather than the
 observation, so a broken run and a clean run produced identical artifacts.
+
+**Every `file.py:NN` coordinate in the "Fixture shape" paragraphs below is as of 2026-08-03
+and has since rotted** — checked 2026-08-12: of the thirty-odd of them only `conftest.py:27`
+and `agent_core.py:39` still land on the line they name. They are kept because they record
+where the reviewer was looking, not as directions. Read the file name; ignore the number.
 """
 
 from __future__ import annotations
@@ -131,11 +136,12 @@ def test_a_turn_whose_every_sql_attempt_was_refused_is_not_answered(
     `record["execution"]["attempts"]` has `passed is True`.
 
     Then assert the ledger is **non-empty**, and write the cap case as a second
-    parametrisation. `tools.py:339` returns on the attempt cap *before* appending, so a
-    capped turn carries zero attempts while `generated_sql` is still read out of the tool
-    args (`agent_core.py:133`) — `has_sql` stays true and `execution_from_attempts`
-    (`tools.py:180`) stamps `terminal: "answered"`. An empty ledger satisfies "no attempt
-    passed" vacuously, which is this test passing for the wrong reason.
+    parametrisation. As of 2026-08-03 `tools.py` returned on the attempt cap *before*
+    appending, so a capped turn carried zero attempts while `generated_sql` was still read
+    out of the tool args — `has_sql` stayed true and `execution_from_attempts` stamped
+    `terminal: "answered"`. An empty ledger satisfies "no attempt passed" vacuously, which is
+    this test passing for the wrong reason. Both halves are fixed now: `cap_attempt()` writes
+    the row (`serve/ledger.py`) and `generated_sql` comes from the ledger only (audit C4).
     """
     from governed_bi.corpus.analyst import AnalystCorpus
     from governed_bi.serve.graph import compile_graph
@@ -174,7 +180,7 @@ def test_a_turn_whose_every_sql_attempt_was_refused_is_not_answered(
     )
     assert STUB_ANSWER not in " ".join(_texts(out)), "precondition: not the stub path"
     attempts = list(execution.get("attempts") or ())
-    assert attempts, (  # tools.py:339 returns on the cap before appending, and an empty ledger
+    assert attempts, (  # a capped turn used to carry none; `cap_attempt()` writes the row now
         "precondition: a non-empty ledger, or 'no attempt passed' below holds vacuously"
     )
     assert not any(a.get("passed") is True for a in attempts), f"no statement ran; attempts={attempts}"
@@ -312,16 +318,18 @@ def test_a_degraded_channel_writes_facet_degraded() -> None:
     **Fixture shape.** Two assertions, and both are needed.
 
     *Behavioural.* Drive the same no-index config as the facet test above through
-    `compile_graph()` and read `answer["record"]["facet_degraded"]`. `harness.py:176` reads
-    it off the record, so that is where it has to appear — it is not a state key. With no
-    index every facet's lexical channel failed, so a truthful record says degraded.
+    `compile_graph()` and read `answer["record"]["facet_degraded"]`. `harness.py`'s
+    `project_turn` reads it off the record, so that is where it has to appear — it is not a
+    state key. With no index every facet's lexical channel failed, so a truthful record says
+    degraded.
 
-    *Structural.* `is_degraded` (`register/facets.py:184`) and `channel_anomaly`
-    (`facets.py:166`) must have at least one call site in `src/`. Today they have none, and
-    a behavioural fix that computes degradation inline would pass the first assertion while
-    leaving the two functions that own the comparison unreachable — a second, divergent
-    implementation of the observed-vs-declared check, which ADR 0005 §6 forbids by name.
-    Assert over `inspect.getsource` of the writing module, the way F-4 below does.
+    *Structural.* `register/facets.py`'s `is_degraded` and `channel_anomaly` must have at least
+    one call site in `src/`. Both are called from `measure/degradation.py` — that is the fix
+    this test drove and the assertion below is what holds it. A behavioural fix that computed
+    degradation inline would pass the first assertion while leaving the two functions that own
+    the comparison unreachable — a second, divergent implementation of the observed-vs-declared
+    check, which ADR 0005 §6 forbids by name. Assert over `inspect.getsource` of the writing
+    module, the way F-4 below does.
     """
     from governed_bi.serve.graph import compile_graph
 
@@ -337,7 +345,8 @@ def test_a_degraded_channel_writes_facet_degraded() -> None:
     )
     assert record.get("facet_degraded") is True, (
         "no index was available, so every facet's lexical channel failed, yet the record reports "
-        f"facet_degraded={record.get('facet_degraded')!r} (harness.py:176 reads it off the record). A "
+        f"facet_degraded={record.get('facet_degraded')!r} (harness.py's project_turn reads it off "
+        "the record). A "
         "gate whose input nobody produces is worse than an absent gate."
     )
     for name in ("is_degraded", "channel_anomaly"):
@@ -613,20 +622,21 @@ def test_a_real_turn_writes_every_required_field_on_every_terminal_path(
       index is missing, which bypasses retrieval entirely. The predecessor test did this.
     * `STUB_ANSWER not in answer["text"]`.
 
-    The semantic channel needs a hand-written `Embedder` (`ports.py:96`: a `model`
-    property, a `dimensions` property, `embed(texts)`) passed to
-    `build_index(entries, embedder=...)`. `src/governed_bi/model/` does not exist, so there
-    is nothing to import. A lexical-only index is enough for this test; say so in the body
-    rather than leaving the semantic channel silently unexercised.
+    The semantic channel needs an `Embedder` (`ports.py`: a `model` property, a `dimensions`
+    property, `embed(texts)`) passed to `build_index(entries, embedder=...)`. On 2026-08-03
+    there was nothing to import; `governed_bi.model.deterministic_embedder` ships one now, so
+    a lexical-only index here is a choice rather than a constraint. It is enough for this test;
+    say so in the body rather than leaving the semantic channel silently unexercised.
 
     Three terminal paths, each its own parametrisation: **refuse** (a `policy` whose guard
     rule fires on the question), **decline** (route finds nothing), **answered** (licensed
     SQL against the probe schema). Assert `missing_required(record) == frozenset()` on each.
 
-    For the answered case, assert `path_kind != "decline"` rather than skipping. The two
-    `pytest.xfail` guards at `test_pass_two_and_context.py:260` and `:331` exist because an
-    accidental decline is easy to hit here — and an accidental decline that the suite
-    tolerates is exactly how this parcel's original end-to-end assertion stopped asserting.
+    For the answered case, assert `path_kind != "decline"` rather than skipping. Two in-body
+    `pytest.xfail` guards in `test_pass_two_and_context.py` existed because an accidental
+    decline is easy to hit here — and an accidental decline that the suite tolerates is
+    exactly how this parcel's original end-to-end assertion stopped asserting. Audit M5 named
+    them for that reason and they are gone: both are plain preconditions now.
     """
     from governed_bi.register.record import missing_required
     from governed_bi.serve.graph import compile_graph

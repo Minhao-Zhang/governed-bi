@@ -5,7 +5,8 @@ into the turn record, ``eval/harness.project_turn`` builds the measurement row f
 list, and the field is not on it — so the arm that would have used the evidence produced an
 artifact without it. The nine were ``schema_ranking``, ``facet_hits``, ``lexical_coverage``,
 ``guard``, ``crossings``, ``pulled_in``, ``delivery_hash``, ``tool_delivered`` and
-``latency_sec``; the last means no artifact in ``runs/eval/`` records wall clock at all.
+``latency_sec``; the last means none of the 1351-row arms in ``runs/eval/`` records wall clock
+at all.
 
 **Every test asserts a value the test supplied**, never that the key is present: `None` is
 present, and a row carrying a constant `None` satisfies `"latency_sec" in row` forever. Eight

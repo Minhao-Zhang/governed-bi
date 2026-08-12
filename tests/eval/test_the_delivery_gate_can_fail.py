@@ -1,8 +1,8 @@
 """Audit D9's positive control: the cross-arm gate passes on a seed-only null pair.
 
 ``run1`` and ``run2`` in ``runs/eval/`` differ **only by a random seed** — the same treatment, kept on
-disk for exactly this purpose. ``context_hashes_distinct`` requires at least 95% of shared questions to
-have differing ``context_hash`` before an arm-to-arm delta may be quoted, on the reasoning that a
+disk for exactly this purpose. ``context_hashes_distinct`` required at least 95% of shared questions to
+have differing ``context_hash`` before an arm-to-arm delta could be quoted, on the reasoning that a
 changed treatment changes the context. On that pair it passes at **0.9993**, and it passes on every
 other pair on disk too (0.992, 0.992, 0.988). It believes it asks "did the treatment change" and
 measures "is there retrieval noise", to which the answer is always yes.
@@ -20,7 +20,7 @@ measures "is there retrieval noise", to which the answer is always yes.
    was present tense about something that has not happened.
 3. **``context_hash`` differing is not merely ordering.** Measured across the pair: only 100 of 1351
    questions get the same schema shortlist and only 33 the same ``licensed`` set. Different tables are
-   selected on 92.6% of questions. That is the strongest argument *for* the current gate — two runs
+   selected on 97.6% of questions. That is the strongest argument *for* the current gate — two runs
    whose realised context differs that much are arguably not one treatment — and it is why the fix is a
    judgement about what "treatment" names, not a bug fix.
 
@@ -100,7 +100,7 @@ def test_the_cross_arm_judgement_refuses_a_seed_only_pair() -> None:
 
     ``knobs_comparable`` reads the treatment from ``knobs_resolved`` instead of inferring it
     from a hash. ``run1`` and ``run2`` differ only by a random seed, so no caller can name a
-    treatment for them and none of the 45 comparability knobs separates them — whichever of
+    treatment for them and none of the 47 comparability knobs separates them — whichever of
     those two facts these artifacts show, the verdict must not be ``passed``.
     """
     from governed_bi.eval.report import Verdict, knobs_comparable

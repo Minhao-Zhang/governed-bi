@@ -165,16 +165,20 @@ def _drift(arm: Population) -> str:
 
 
 def _context_hash_gate(arm: Population) -> GateResult:
-    """The delivery gate: the treatment actually differed between arms. L-R2.
+    """The delivery gate's single-arm half: every turn carries a ``context_hash``. L-R2.
 
     On ``context_hash`` and not ``delivery_hash``, because the latter depends on which tool
     calls the model chose, conflating "the treatment differs" with "the model behaved
     differently".
 
-    Only the single-arm half of the condition is decided here — every turn must *carry* a
-    hash. The >= 95% cross-arm distinctness threshold needs both arms and lives in
-    ``eval/report.comparison_quotable``; answering it from one arm would approximate a
-    two-arm condition and measure something adjacent to what it claims.
+    **This gate does not test that the treatment differed, and nothing does it by hash any
+    more.** The cross-arm half used to be a >= 95% distinctness threshold in
+    ``eval/report.context_hashes_distinct``; audit D9 retired it, because retrieval is
+    nondeterministic and the hashes differ whether or not the treatment did — it passed at
+    0.9993 on a pair differing only by a random seed. That function is now an existence check
+    over the shared questions, and the declared treatment is judged from knobs by
+    ``eval/report.knobs_comparable``. What one arm can answer is only this: a turn with no
+    ``context_hash`` assembled no context, so no later comparison against it holds.
     """
     coverage = arm.coverage("context_hash")
     # Three states, not two. **Never recorded**: the arm is not instrumented, nothing to judge
@@ -206,8 +210,9 @@ def _context_hash_gate(arm: Population) -> GateResult:
         Verdict.passed,
         coverage,
         arm,
-        "every turn carries a context_hash. The >= 95% cross-arm distinctness condition is "
-        "a two-arm comparison and is evaluated by eval/report.comparison_quotable",
+        "every turn carries a context_hash. Whether the treatment differed is a two-arm "
+        "question and audit D9 retired hash distinctness as its test; "
+        "eval/report.knobs_comparable judges it from the declared knobs instead",
     )
 
 
@@ -222,8 +227,16 @@ def _corpus_content_hash_gate(arm: Population) -> GateResult:
 
     Single-arm half only, like :func:`_context_hash_gate`: every row present and all rows equal.
     Two arms carrying *different* single hashes is the desired case for a corpus intervention and
-    the disqualifying case for everything else, so which one it is cannot be decided from one arm
-    — ``eval/report.comparison_quotable`` owns that.
+    the disqualifying case for everything else, so which one it is cannot be decided from one arm.
+
+    **And nothing decides it.** ``eval/report.comparison_quotable`` runs two cross-arm gates,
+    ``context_hashes_distinct`` (an existence check on ``context_hash``) and
+    ``knobs_comparable`` (over ``comparability_keys()``, which does not contain
+    ``corpus_content_hash`` — it is a ``RecordField``, not a knob). So the second consequence
+    named above, two arms measured over different corpora both passing, is still live for the
+    cross-arm case; only the within-arm case is closed here. What exists instead is
+    ``register/arm_profiles.reconcile``, which the driver runs before the first paid question
+    and which checks one arm's rows against the digest that arm's profile declares.
 
     Three-valued for the same reason as ``context_hash``: an arm predating the field is not
     instrumented (``cannot_evaluate``), whereas an arm that records it on some turns and not
@@ -282,7 +295,8 @@ def _corpus_content_hash_gate(arm: Population) -> GateResult:
         coverage,
         arm,
         "every turn names the same corpus. Whether it differs from another arm's is a two-arm "
-        "condition and is evaluated by eval/report.comparison_quotable",
+        "condition and no gate evaluates it: comparison_quotable compares context_hash and the "
+        "comparability knobs, and corpus_content_hash is neither",
     )
 
 

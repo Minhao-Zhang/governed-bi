@@ -416,8 +416,11 @@ def subgraph(
         ordered.sort(key=lambda n: (distance.get(str(n["id"]), 10**6), str(n["id"])))
     else:
         # No focus means no natural centre. Ordering by id spends the budget on an alphabetical
-        # prefix, which rarely holds *both* ends of any edge — on the pooled lake that was 150
-        # of 7,977 nodes and zero edges, reading as "this corpus has no relationships".
+        # prefix, which rarely holds *both* ends of any edge. On the shipped corpus
+        # (`../BIRD-corpus` @ 30872d3, 57 schemas, 7,300 semantic nodes over 12,131 edges;
+        # measured 2026-08-12) the id-ordered prefix at `DEFAULT_NODE_BUDGET` returns 120 nodes
+        # and **zero** edges, reading as "this corpus has no relationships". The ordering below
+        # returns 119 edges over the same budget.
         #
         # So grow neighbourhoods: seed at the best-connected node, take its component
         # breadth-first, move to the next unvisited seed, until the budget runs out. Isolated

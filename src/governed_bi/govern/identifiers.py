@@ -2,7 +2,9 @@
 
 * Path components: ``\\A``/``\\Z``, never ``^``/``$``.
 * Fold both sides of every comparison; declared spelling reaches the engine.
-* Tables: ``{schema}.{physical_name}``; columns: ``{schema}.{table}.{column}``.
+* Tables: ``{schema}.{slug(physical_name)}``; columns:
+  ``{schema}.{slug(table)}.{slug(column)}``. Every component is slugged and folded, because
+  the sets these are compared against are keyed on asset ids (ADR 0008 D1).
   Caller sets and statement refs share the same normalisers.
 """
 

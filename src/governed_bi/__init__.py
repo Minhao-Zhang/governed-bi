@@ -3,7 +3,7 @@
 Importing this package has no side effects. Imports run downward only, in the order
 ``tools/check_imports.py`` declares::
 
-    paths -> ports -> register -> measure -> corpus -> retrieve -> govern
+    paths -> credentials -> ports -> register -> measure -> corpus -> retrieve -> govern
           -> datasource -> model -> serve -> eval -> api
 
 That list is the whole of what is here: the gate fails when a package under this one is

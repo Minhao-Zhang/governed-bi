@@ -5,8 +5,8 @@ words; few_shots exempt with stricter provenance); n-gram rate vs a train-only
 control. Paraphrase leaks are undetectable — a pass is not cleanliness.
 
 ``--control`` is required with no default, as of 2026-08-06. It defaulted to
-``corpora/gold-semantic-layer-20260804`` — the corpus ``.env`` serves — so the
-ordinary invocation compared that corpus against itself, printed ``ratio to
+``corpora/gold-semantic-layer-20260804`` — the corpus ``.env`` served at the
+time — so the ordinary invocation compared that corpus against itself, printed ``ratio to
 control: 1.00x (tolerance 2.0x)``, and the rate arm was arithmetically incapable
 of failing. A control equal to the corpus under test is now refused, not compared.
 

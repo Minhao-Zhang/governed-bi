@@ -72,4 +72,4 @@ derives all three, and a file that supplies one is a problem rather than an over
 `_common.guard()` refuses `test_final.jsonl`, the gold result hashes and the paraphrase file.
 The trap manifests are **not** refused — the database under test is the decoy instance and a
 steward would know which of its columns are junk. What may be *written* about them is
-constrained instead; see the brief, §4.4.
+constrained instead; see the brief's three hard rules, §5.

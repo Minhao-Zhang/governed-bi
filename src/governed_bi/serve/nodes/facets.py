@@ -418,9 +418,11 @@ async def _run_facet(
             query_vector_state=query_vector_state,
         )
     elif _hooked(state, stage):
-        # An explicit "is a hook supplied for this facet", not an `else` after the extraction
-        # branch: ADR 0011 put all five facets inside `FACET_EXTRACTS`, so an `else` here is
-        # unreachable and `retrieve_hooks` is dead with no test failing.
+        # An explicit "is a hook supplied for this facet", never a branch keyed on which facets
+        # rewrite. This line's predecessor keyed on `FACET_EXTRACTS` membership, and when ADR
+        # 0011 put every facet inside that set the branch went unreachable and `retrieve_hooks`
+        # died with no test failing. `facet_schema` has since left the set again, so it holds
+        # four — the same drift arriving from the other direction.
         hits = _hits_from_hook(state, stage, question)
     else:
         # No index, no hook. `ran` stays empty, so every channel this facet declares reports

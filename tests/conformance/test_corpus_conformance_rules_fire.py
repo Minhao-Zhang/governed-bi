@@ -6,8 +6,8 @@ own, so it found zero violations on a corpus with 333. The rule was right and th
 vacuous, which is indistinguishable from passing.
 
 So: one deliberately-broken asset per rule, asserted to be caught, plus a clean one asserted
-to pass everything. The two whole-tree rules that need an external file (V11, V12) get real
-temporary manifests rather than being skipped.
+to pass everything. The three whole-tree rules that need an external file (V11, V12, V15) get
+real temporary manifests rather than being skipped.
 """
 
 from __future__ import annotations

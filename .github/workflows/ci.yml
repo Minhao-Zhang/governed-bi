@@ -19,6 +19,13 @@ on:
   push:
     branches: [main, v2]
   pull_request:
+  # Nightly, for the `mutate` job at the bottom of this file and for nothing else. GitHub only
+  # runs a schedule from the default branch, so what it measures is `main` — which is the right
+  # population for a mutation run, because the question it asks is whether the tests guarding
+  # shipped invariants can still fail. The two jobs above run on this trigger too; that is
+  # harmless and cheaper than teaching each of them to opt out.
+  schedule:
+    - cron: "0 7 * * *"
 
 jobs:
   # The Python engine: everything under `src`, `tools`, `tests` and `docs`. None of
@@ -86,6 +93,25 @@ jobs:
       - name: Gate — no benchmark discriminators in the tree
         run: uv run --frozen python tools/check_no_benchmark_discriminators.py
 
+      # The adversarial governance suite, **printed**. This is not a sixth gate and is not
+      # registered as one: the build-failing half of the property already runs under `pytest`,
+      # in `tests/govern/test_adversarial_suite.py`, which reads the same
+      # `src/governed_bi/govern/adversarial.toml` this driver reads — one suite, two callers,
+      # rather than two lists that drift.
+      #
+      # What the step buys is the same thing the five gates above buy by being run explicitly:
+      # the numbers land in the build log instead of only inside an assertion that passed.
+      # Bypass, misattribution, false refusal, guardrail error and per-layer recall each print
+      # with their denominator, so a reader of a green build can see *what* governance bought
+      # rather than only that a test agreed it bought something. It costs no credential, no
+      # network and no model call, and the layer stack is deterministic, so two runs of it are
+      # identical — which is why it can sit on every push at all.
+      #
+      # It exits 1 on any suite failure, so a broken tree fails here rather than in `pytest`
+      # below: the same defect, one step earlier, with the rates beside it.
+      - name: Report — adversarial governance rates
+        run: uv run --frozen python tools/govern_bench.py
+
       # `-rs` prints every skip with its reason. That is not cosmetic here: the Postgres and
       # OpenAI-backed contracts skip without credentials, and a silent skip turns "we tested
       # one adapter" into "we tested two" — the exact failure `tests/embedders.py` documents.
@@ -152,3 +178,43 @@ jobs:
       # introduces it); `check:stream-messages` is pure and could run, but it is a red/green
       # reproduction of one screenshot bug rather than a gate, and it asserts against fixtures it
       # ships with. Both are named in `docs/usage.md` as manual.
+
+  # Mutation testing. **Nightly, and deliberately not on a push.** `tools/mutate.py`'s own
+  # docstring gives the reason: it runs a pytest selection per declared mutation, so it is slow,
+  # and it "belongs on a nightly or a pre-release run rather than on every push". That is also
+  # why it is not named `check_*` — `tests/conformance/test_register_closure.py` requires every
+  # `tools/check_*.py` to be declared CI or declared manual, and this is a third thing.
+  #
+  # What it proves is narrow and worth having: for each entry in `tools/mutation_catalogue.py`,
+  # that the anchor still exists (so the entry has not gone stale against a refactor), that the
+  # mutated tree makes at least one named test fail, and that the tree is restored. It says
+  # nothing about mutations nobody wrote down.
+  #
+  # **It rewrites source files in place and restores them**, in a `finally`, with the restore
+  # verified byte-for-byte before the next mutation runs — deliberately not via
+  # `git checkout --`, so that it is safe on a dirty tree. The consequence is that it must never
+  # run beside anything else reading the same checkout: for the length of one mutation, `src/`
+  # on disk holds a deliberate defect, and a concurrent reader would see it. On hosted runners
+  # each job gets its own workspace, so the two jobs above cannot; on a self-hosted runner
+  # sharing one, they could. The concurrency group below is what stops two of these overlapping,
+  # and the `if` is what keeps it off pushes.
+  mutate:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    concurrency:
+      group: mutate-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+
+      - name: Sync (frozen)
+        run: uv sync --frozen --extra bedrock
+
+      - name: Mutation testing (every declared mutation)
+        run: uv run --frozen python tools/mutate.py

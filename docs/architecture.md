@@ -63,6 +63,14 @@ security argument is unwired. Adding a new executor that skips `check()` is caug
 by `govern/`'s G2 invariant and its tests, not by the topology. Layers, rules and
 executor paths: [ADR 0006](adr/0006-execution-time-governance.md).
 
+**Authorization is a seam, and on this tree it is unwired.** `govern/access.py` holds an
+`AccessPolicy` port with two adapters, and the TABLES and COLUMNS layers ask the resulting grant
+(`r_table_not_authorized`, `r_column_not_authorized`, `r_row_predicate_unenforced`). The default
+grant authorizes everything and **nothing in `serve/` or `api/` constructs another**, so those
+rules are unreachable in the served app until the wires in
+[ADR 0012 §8](adr/0012-access-seam-principal-and-authorization.md) exist. What a fork implements,
+in what order: [enterprise fork](enterprise-fork.md).
+
 `AgentMiddleware` *is* used in `agent_core`, for two things that are **not**
 governance: injecting the retrieval context block on every model call (via
 `wrap_model_call`, so it never enters `messages`), and ending the turn at the

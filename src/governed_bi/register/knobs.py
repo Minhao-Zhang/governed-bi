@@ -211,8 +211,11 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "carries the prefix but nothing reads it back out, so an arm's gateway was legible "
        "only by eye"),
     _k("llm_max_retries", 3, Role.comparability,
-       "how many times the provider SDK retries one call, across EVERY model surface: "
-       "the agent, the utility model and the embedder. Comparability and not merely "
+       "how many times the provider SDK retries one call, across the agent, the utility "
+       "model, and the OpenAI and Bedrock embedders. **The proxy embedder drops it** "
+       "(audit N6): `provider.py` builds `ProxyEmbedder` with the model and the dimensions "
+       "only, so a proxy arm records this knob and runs the embedder on the SDK default. "
+       "Comparability and not merely "
        "operational because retries move crash_rate. This is NOT LangGraph RetryPolicy "
        "(banned: node retry resamples after seeing failure) and not ModelRetryMiddleware; "
        "it is the ChatModel/httpx layer. Keep it identical across arms"),
@@ -253,9 +256,9 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "production default so a hung loop fails before the agent_node_timeout_s wall clock",
        env_var="GOVERNED_BI_AGENT_RECURSION_LIMIT"),
     _k("embedding_model", None, Role.comparability,
-       "part of every vector cache key: cosine returns 0.0 on a width mismatch rather "
-       "than raising, so a cross-model cache hit degrades routing to 'nothing scores' "
-       "with no error anywhere"),
+       "part of every vector cache key: two same-width models are indistinguishable to "
+       "cosine, which raises only when the widths differ (audit N2), so a cross-model cache "
+       "hit at the same width degrades routing with no error anywhere"),
     _k("embedding_dimensions", None, Role.comparability, "as above"),
     _k("prompt_set", None, Role.comparability,
        "resolved variant per stage. The hash covers the TEXT, so editing a variant "
@@ -297,10 +300,22 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "as an executed one. Comparability-roled, so every number measured at 3 is a "
        "different arm from one measured at 5"),
     _k("max_rows", 200_000, Role.comparability,
-       "applied in the connector base class as max_rows + 1 so truncation is "
-       "detectable"),
+       "applied by each connector adapter as max_rows + 1 so truncation is detectable. "
+       "There is no connector base class: ports.Connector is a Protocol, and "
+       "datasource/postgres.py and datasource/sqlite.py each fetchmany(cap + 1) "
+       "themselves (audit D2)"),
     _k("g_length_max_chars", 8_000, Role.comparability, "guard's hard input bound"),
     _k("cost_budget", UNSET, Role.comparability, "the cost layer's shape estimate bound"),
+    _k("access_grant", None, Role.comparability,
+       "digest of the Grant this run's AccessPolicy returned (ADR 0012 §7). ADR 0006 §13 "
+       "requires security configuration to enter the config hash, or two runs under different "
+       "authorization hash identically -- harmless while the only shipped grant is open, and "
+       "fatal the day a fork ships a restrictive one. The default is None and NOT the open "
+       "grant's digest, deliberately: a digest that came from this register rather than from "
+       "the policy would publish `open` for a fork serving a restriction, which is exactly the "
+       "agent_recursion_limit defect (behaviour moves, the artifact says the default) in the "
+       "security register. session._resolved_knobs reads it off GovernancePolicy.access_grant, "
+       "so a null here means no policy was threaded, never that the grant was open"),
 
     # ── measurement ─────────────────────────────────────────────────────────
     _k("cache_cost_reduction_target", 0.30, Role.comparability,
@@ -308,6 +323,17 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "over 200 questions with EX reported alongside and NOT asserted equal -- "
        "equivalence needs more power than difference detection, and nothing tighter "
        "than about 3pp is demonstrable at this sample size"),
+
+    _k("abstention_policy_enabled", False, Role.comparability,
+       "the declared abstention policy (serve/nodes/abstain.py, ADR 0013), OFF. It decides "
+       "before the agent spends its run_query attempts whether this turn should be answered at "
+       "all, and writes a closed-vocabulary reason either way. Comparability and not "
+       "operational because it changes which turns are delivered, which is the coverage half "
+       "of every selective-accuracy number: v4 is the control and must keep meaning what it "
+       "meant. OFF because the trade has not been measured -- the policy withholds turns the "
+       "engine currently answers, and `docs/analysis/selective-delivery-v4.md` is 300 lines "
+       "about how easy it is to buy accuracy with coverage and call it a win. Turning it on is "
+       "one paired arm, and the paired arm is the point of the knob"),
 
     _k("reflect_enabled", False, Role.comparability,
        "the post-hoc reflector (serve/nodes/reflect.py), OFF. An observer -- it writes "

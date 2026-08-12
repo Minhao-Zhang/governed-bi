@@ -5,11 +5,11 @@ write; the default walks a whole tree and prints a per-rule report. Rules that n
 corpus or an external file are reported as **not evaluated** in ``--file`` mode rather than
 passed, because a rule that silently skips is worse than one that fails.
 
-Why this exists: the corpus shipped today passes both rules the Pydantic model enforces
-(``1 <= len(summary) <= 250``, identifier present) and violates most of what the ADR says in
-prose -- 100% of one arm's schema/table/column summaries are identifier lists, 0/928 joins
-carry a ``body``, 441 of 949 terms drop an alias the retrieval bridge depends on. Prose rules
-that nothing executes are not rules.
+Why this exists: the corpus this kit replaced (measured 2026-08-08) passed both rules the
+Pydantic model enforces (``1 <= len(summary) <= 250``, identifier present) and violated most of
+what the ADR says in prose -- 100% of one arm's schema/table/column summaries were identifier
+lists, 0/928 joins carried a ``body``, 441 of 949 terms dropped an alias the retrieval bridge
+depends on. Prose rules that nothing executes are not rules.
 
 Reads raw YAML rather than ``corpus.store.load``: this must give a useful answer on a
 half-written tree, where the loader would raise.
@@ -136,7 +136,8 @@ FORBIDDEN = re.compile(
 #: becomes agent-written, this exemption has to go with it.
 AUTHORED_ONLY: frozenset[str] = frozenset({"V4", "V5", "V10"})
 
-#: ``Means 'x' (obfuscated to 'x')`` -- 42% of column bodies in both existing corpora.
+#: ``Means 'x' (obfuscated to 'x')`` -- 42% of column bodies in both of the corpora this kit
+#: replaced (measured 2026-08-08).
 TAUTOLOGY_BODY = re.compile(r"^(physical column\s+'[^']*'\.\s*)?means\s+['\"]", re.I)
 
 #: Per-file byte caps. Not one number: a table file carries every one of its columns inline,

@@ -92,7 +92,8 @@ def _join(schema: str, left: str, right: str, on: str) -> Any:
 def test_an_ambiguous_endpoint_is_dropped_and_recorded() -> None:
     """The case where a guess fails **open**, which is why guessing is prohibited.
 
-    `connect`'s nodes are asset ids (`{schema}.{physical}`), because they must match the
+    `connect`'s nodes are asset ids (`{schema}.{slug(physical)}` — the slug, not the raw
+    physical name, per `corpus/identity.py::table_id`), because they must match the
     identifiers in `licensed`. `JoinAsset` carries `left_table` / `right_table` as physical
     names, **bare or qualified** — `corpus/validate.py`'s `_bare()` accepts both and the ADR
     explicitly declines to settle which. So binding an edge is a lookup, and the lookup can
@@ -109,7 +110,7 @@ def test_an_ambiguous_endpoint_is_dropped_and_recorded() -> None:
     **Fixture shape.** Two `SchemaAsset`s, each with a `TableAsset` whose `physical_name` is
     `customers` — ids `sales_a.customers` and `ops_b.customers`. One `JoinAsset` with
     `left_table="customers"` (bare, ambiguous) and a `right_table` that resolves cleanly.
-    Mint the join's id with `join_id` (`corpus/identity.py:151`) so the asset is well-formed
+    Mint the join's id with `join_id` (`corpus/identity.py::join_id`) so the asset is well-formed
     by the rules `problems_with` already enforces — an edge dropped for being *invalid* would
     prove nothing about an edge dropped for being *ambiguous*.
 
@@ -253,7 +254,7 @@ def test_the_edge_endpoints_are_asset_ids_and_not_physical_names() -> None:
     `_canon_edge` canonicalises happily, and `connect` then reports every terminal missing
     and declines. The two namespaces never meet, so nothing raises.
 
-    Assert the endpoints are the ids, `{schema}.{physical}`. And use `table_id` to say so —
+    Assert the endpoints are the ids, `{schema}.{slug(physical)}`. And use `table_id` to say so —
     ADR 0005 §2.8.2 requires it to become a declared function beside `derive_column_id` and
     `join_id`, because this reconciliation is the one place a second hand-written copy of the
     convention would silently mis-license a table.

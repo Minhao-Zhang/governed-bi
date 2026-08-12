@@ -230,6 +230,12 @@ def _extract_factory(
             # engineering problems, so without this "routing found nothing" and "the join
             # graph is disconnected" are the same recorded row.
             "terminal_reason",
+            # The abstention policy's verdict and its evidence (ADR 0013). Copied and never
+            # interpreted, like `reflect_verdict` above and for the inverse reason: `abstain`
+            # has *already* decided, and re-reading its verdict here to adjust `outcome` would
+            # be two answers to "did this turn withhold". The one answer is `terminal_reason`,
+            # which the node writes into the same channel `route` and `connect` write.
+            "abstention",
         ):
             return state.get(name)
 
@@ -271,7 +277,14 @@ def _extract_factory(
             if channels is None:
                 return None
             return facets_degraded(channels)
-        if name in ("schema_ranking", "pulled_in", "lexical_coverage"):
+        # The keys the register reads straight off `retrieved`. Both budget witnesses are here
+        # from 2026-08-12: `merge_delta` stopped `resolve` destroying them, but a key that
+        # survives to `stamp` and is not projected reaches no artifact, so "the cap discarded
+        # the gold table" was still unanswerable from a record. They are `NotRequired` on
+        # `RetrievalResult` — absent when no cap bit — and `.get` writes the null the register
+        # declares for that.
+        if name in ("schema_ranking", "pulled_in", "lexical_coverage",
+                    "budget_dropped", "budget_best_dropped_score"):
             if isinstance(retrieved, Mapping):
                 return retrieved.get(name)
             return None

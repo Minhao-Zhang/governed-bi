@@ -78,6 +78,20 @@ its own ADR.
 > *turn*, not the boundary — and also asserts neither name is in the record register. Bringing
 > the badge back is a deliberate edit to that test.
 >
+> **And it now asserts that it scanned (2026-08-12).** As written it walked `src/`, collected hits
+> and asserted there were none, with nothing checking the walk had reached anything: repointing
+> its root at a path that does not exist scanned zero files and passed green — audit finding D13
+> reintroduced in one of this ADR's two acceptance criteria. It now fails on an empty scan and on
+> a scan far below the engine's size.
+>
+> **`tier` is not banned by name, because it is also a real field property.** `RecordField.tier`
+> off `RECORD_REGISTER` says *why a field is recorded* (`identity` | `treatment` | `decision` |
+> `outcome` | `cost` | `health`) and `/audit/turns/{id}/trace` serialises it per register row;
+> `ui/lib/schemas.ts`'s `auditTraceFieldSchema` documents the distinction from the client side.
+> What §3 forbids is the *reliability* tier v1's `AnswerView` required on the answer card. The
+> test pins the register's single production site by file and text and fails on any second
+> producer of a `"tier"` key under `src/`, so bringing the badge back is still a deliberate edit.
+>
 > `openapi.json`'s `AnswerResponse` was v1's `AnswerView` verbatim, eight required fields the
 > engine produces none of, and is replaced with the shape this section specifies.
 

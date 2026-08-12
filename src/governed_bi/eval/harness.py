@@ -254,6 +254,19 @@ def _attempt_trace(execution: Any) -> list[dict[str, Any]]:
     return trace
 
 
+def _routing_was_pinned(question: Mapping[str, Any], record: Mapping[str, Any]) -> bool:
+    """Did this turn's shortlist come from the replayed artifact?
+
+    An **AND**, deliberately: a pin was attached *and* the shortlist the turn ran on is that
+    pin. The second half alone would credit a live run whose router happened to land on the
+    same schemas, and the first half alone is the intent-not-outcome defect this replaces.
+    """
+    pinned = [str(s) for s in (question.get(PINNED_SCHEMAS_KEY) or ())]
+    if not pinned:
+        return False
+    return [str(s) for s in (record.get("schemas") or ())] == pinned
+
+
 def _turn_knobs(question: Mapping[str, Any], session: Any) -> dict[str, Any] | None:
     """The configuration this question runs under: its own override, else the session's.
 
@@ -388,10 +401,10 @@ def run_comparison(
 #: How many ranked entries the summarised retrieval fields keep.
 #:
 #: Measured over the turn records in ``runs/serve/2026-08-09.jsonl``, which are the same shape
-#: a BIRD turn produces: ``facet_hits`` is **59 KB** per turn (five facets x fifty hits, each
+#: a BIRD turn produces: ``facet_hits`` is **58 KB** per turn (five facets x fifty hits, each
 #: hit carrying a score triple and a copy of the facet's query) and ``schema_ranking`` 2.0 KB,
 #: against a 6.4 KB measurement row. Carried verbatim they take a 1 351-question arm from
-#: 8.6 MB to 89 MB and the six arms in ``runs/eval/`` past half a gigabyte.
+#: 8.6 MB to 89 MB and the seven arms in ``runs/eval/`` past half a gigabyte.
 #:
 #: The truncation is defensible because the *sampled* half of retrieval is the facet
 #: ``queries``, which the row keeps whole; below them everything is a pure function of those
@@ -469,7 +482,9 @@ def _facet_hits(record: Mapping[str, Any]) -> dict[str, Any] | None:
 
     The register's reason is attribution -- "counts alone cannot attribute a finding to an
     asset, so no feedback loop is possible" -- so the asset ids stay. What goes is the per-hit
-    ``lexical`` / ``semantic`` / ``score`` triple on all fifty hits, which is 90% of the 59 KB.
+    ``lexical`` / ``semantic`` / ``score`` triple, 36% of the 58 KB on its own, and every hit
+    below rank ten. Together the summary is 1.8 KB, 97% smaller (measured over
+    ``runs/serve/2026-08-09.jsonl``).
 
     ``queries`` is kept whole and is the load-bearing half: it is the only part of retrieval a
     model sampled, so it cannot be recovered by any replay, while the hits it produced are a
@@ -765,6 +780,13 @@ def project_turn(
         # scores above zero, so an out-of-corpus question still returns top_k tables and a
         # clean run stamps confidence. This is the signal that says so.
         "lexical_coverage": _number(record.get("lexical_coverage")),
+        # The budget witness, carried verbatim from the record. `budget_dropped` is what each
+        # asset budget cut and `budget_best_dropped_score` the best score it cut, so together
+        # they say whether a licensing miss was a retrieval failure or a budget decision --
+        # which is the difference between corpus work and a knob. `None` on a turn where no
+        # cap bit, and that is a measured "nothing was dropped" rather than an absence.
+        "budget_dropped": record.get("budget_dropped"),
+        "budget_best_dropped_score": record.get("budget_best_dropped_score"),
         # Cross-schema Steiner points, verbatim: `max_crossings` bounds the list at 2 on every
         # non-declining turn, so "how often does connect cross, and what is accuracy on those
         # turns" costs nothing to make answerable.
@@ -774,10 +796,19 @@ def project_turn(
             else None
         ),
         "guard": _guard_verdict(record, state),
-        # Whether this row's shortlist was replayed rather than routed. An arm described as
-        # pinned always has some fraction that was not (a question the artifact did not cover),
-        # and per-row is the only place that fraction stays recoverable.
-        "routing_pinned": bool(question.get(PINNED_SCHEMAS_KEY)),
+        # Whether this row's shortlist **was** replayed, not whether one was offered.
+        #
+        # This read `bool(question.get(PINNED_SCHEMAS_KEY))` — the pin as *attached by the
+        # driver*, never as *used by the turn*. `route_node` applies the pin only to schemas
+        # the corpus knows and only if it runs at all, so a turn that ends before routing
+        # records `true` for a shortlist it never had. Measured on the artifacts in
+        # `runs/eval/`: 3 rows on v4, 5 on v5 and 12 on v4-reflect say `true` with
+        # `schemas: []`, every one of them a clarification that abstained before `route_node`.
+        #
+        # A **partial** pin also reads false, and that is the intended reading: the turn's
+        # shortlist is then the known subset, which is not the shortlist that was pinned, and a
+        # boolean that said otherwise would report a different treatment as the same one.
+        "routing_pinned": _routing_was_pinned(question, record),
         # Which layer refused, per attempt. See `_attempt_trace`.
         "attempts": _attempt_trace(record.get("execution")),
         # Set only on abstained turns; never folded into `correct`. See `_abstained_fingerprint`.
@@ -786,6 +817,14 @@ def project_turn(
             None if computed_fp is None or not gold_fp else computed_fp == str(gold_fp)
         ),
         "terminal_reason": record.get("terminal_reason"),
+        # What the declared abstention policy decided, and the evidence behind it (ADR 0013).
+        # `terminal_reason` above already carries the *reason* on a withheld turn, because the
+        # policy writes it into the same channel every other decline uses; this carries the
+        # rules it asked and the facts it asked them about, so a reader can recompute the
+        # verdict from the row instead of trusting it. `None` when the turn ended before the
+        # node; `{"outcome": "disabled", ...}` when the knob was off, which is the fact that
+        # makes a control arm nameable rather than merely silent.
+        "abstention": record.get("abstention"),
         # The reflector's verdict, or None when it did not run (knob off, no model, no
         # statement). `stamp` has projected it into the turn record since the node landed and
         # nothing carried it out to the artifact, so an arm run with `--reflect` would have

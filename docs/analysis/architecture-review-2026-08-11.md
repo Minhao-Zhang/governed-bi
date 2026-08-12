@@ -96,6 +96,23 @@ read-modify-write against a hand-kept list.
 `DeliveryTracker.merge_into` rebuilding a four-key dict and destroying `assemble`'s `evicted` "on every
 turn that had one". That one was fixed by hand. This one is still live.
 
+> **Built, 2026-08-11.** The reducer, on both channels: `state.merge_delta` merges a mapping channel
+> by top-level key, `retrieved` and `delivery` carry it, and `resolve` / `connect` / `merge_into` write
+> deltas. `_copy_retrieved` and the hand-carried `evicted` are deleted. `licensed` deliberately did
+> **not** get one — `connect` *narrows* that set when a component cannot be joined, and a union
+> reducer would re-license a table the node had just refused.
+> `tests/serve/test_state_channels.py::test_the_budget_witness_reaches_stamp` spies on the real
+> `stamp` and asserts the witness arrives; mutation-verified by removing the annotation.
+>
+> **Finished 2026-08-12.** The reducer moved the two keys one super-step and no further: `stamp`
+> projects a named list off `retrieved`, and neither budget key was on it or in
+> `register/record.py`, so the witness was live in state and absent from every turn record, trace
+> page and gate — "no reader anywhere in `src/`" was still true of the artifact after it stopped
+> being true of the channel. Both are register rows now (`Tier.decision`,
+> `Absence.not_applicable`, owner `route`) and both are projected.
+> `tests/serve/test_state_channels.py` asserts the capped path carries them and the uncapped path
+> carries `null` rather than omitting them.
+
 ---
 
 ### C2 — Split the datalake driver into plan / execute / report
@@ -263,6 +280,17 @@ backwards import in `browse_routes` disappears with the cycle it exists to dodge
 call `session_from_environment`, which builds a Postgres connector and seeds a corpus, so `POST /chat`
 and `/chat/resume` are tested by calling `routes._shape` directly. Elsewhere one dependency is supplied
 by patching two private functions.
+
+> **Built, 2026-08-11.** `routes.make_app(session, graph, turn_log)` and
+> `graph_app.build_serve_graph(session, turn_log=…)`; `accept_node(session)` moved to `serve/accept.py`;
+> `browse_routes.make_router(session)` replaced the module-level `router` and the backwards import.
+> `session_from_environment` and the new `routes.app_from_environment` are the process adapter, and
+> `app = app_from_environment()` stays a module attribute because `langgraph.json` names one.
+> All seven strict-xfail stubs in `tests/api/test_http_contract.py` are written — including both
+> ADR 0007 acceptance criteria — and `test_trusted_constants.py`'s source-string check of `"trust("`
+> is now an executed one. `POST /chat` is exercised over HTTP with a four-asset in-memory corpus.
+> **Not done here:** C6, C7, C8, and the `build_graph(surface=…)` rename. `compile_graph()` and the
+> served graph are still two topologies, deliberately — `/chat` still uses the no-`accept` one.
 
 ---
 

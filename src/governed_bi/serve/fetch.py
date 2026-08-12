@@ -121,6 +121,19 @@ def inspect_schema(
     bounds: ToolBounds,
     assets: Mapping[str, Any],
 ) -> tuple[str, bool]:
+    """``(payload, delivered)`` — one table's column roster, minus what the grant withholds.
+
+    **The bound is two tests, not one, and that is a fix rather than a belt.**
+    ``may_inspect_schema`` is a *table*-level question and this tool returns *column* metadata,
+    so the table test alone let a grant that denied ``sales.customers.email`` refuse the column
+    in the layer stack, skip it in the rendered block — and hand the model its id, physical
+    name, type and nullability here. The renderer was gated and the tool was not, which is the
+    two-answers failure ADR 0012 §8.4 exists to prevent, inverted.
+
+    A withheld column is **omitted**, not marked. That is what the renderer does with the same
+    set, and a payload saying "3 columns hidden" is the probing channel
+    :data:`~governed_bi.govern.bounds.OUT_OF_SCOPE_MESSAGE` exists to close, reopened in JSON.
+    """
     tid = str(table_id)
     if not bounds.may_inspect_schema(tid):
         return OUT_OF_SCOPE_MESSAGE, False
@@ -129,6 +142,8 @@ def inspect_schema(
         return OUT_OF_SCOPE_MESSAGE, False
     columns: list[dict[str, Any]] = []
     for col_id in asset_attr(table, "columns") or ():
+        if not bounds.discloses(str(col_id)):
+            continue
         col = assets.get(str(col_id))
         if col is None:
             columns.append({"id": str(col_id)})

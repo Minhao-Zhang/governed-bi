@@ -14,7 +14,9 @@ Seven tables, and each feature earns its place:
 * **Enough rows to aggregate**: a count over three rows cannot distinguish a correct query from
   several wrong ones.
 
-Idempotent: drops and recreates its own schema, never one it did not create.
+Idempotent: drops and recreates the schema named by ``--schema``, CASCADE. Nothing checks that
+this tool created it — the only guard is that the name is alphanumeric-plus-underscore — so the
+prefixed default is what keeps that safe.
 
 Usage::
 

@@ -30,7 +30,10 @@ class BoundSource:
     kind: str
     schema: str | None = None
     name: str | None = None
-    #: ``{schema}.{physical_name}``, folded. Base sources only.
+    #: :func:`~governed_bi.govern.identifiers.table_key`'s output —
+    #: ``{schema}.{slug(physical_name)}``, folded. Base sources only. The ``slug()`` is not a
+    #: detail: the set this is compared against is keyed on asset ids, and a docstring that
+    #: dropped it from a key shape is what made a bound in ``govern/bounds.py`` fail open.
     key: str | None = None
 
 
@@ -40,7 +43,7 @@ class ColumnBinding:
 
     reference: str
     table_key: str
-    #: ``{schema}.{table}.{column}``, folded. The column layer's only input.
+    #: ``{schema}.{slug(table)}.{slug(column)}``, folded. The column layer's only input.
     column_key: str
 
 

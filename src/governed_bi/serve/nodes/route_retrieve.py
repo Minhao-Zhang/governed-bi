@@ -149,12 +149,17 @@ def resolve_node(state: dict, config: RunnableConfig) -> dict:
     §2.8's closure rows **minus** its last one: join completion needs both endpoints, which a
     disjunctive fixpoint cannot express, so it runs in ``connect`` (§2.8.1). Everything here is
     ``join -> its two tables``, never the reverse.
+
+    **Writes a delta.** ``pulled_in`` is the only key of ``retrieved`` this node decides, and
+    :func:`~governed_bi.serve.state.merge_delta` carries the rest. The previous version rebuilt
+    the whole result from the six keys it knew about, which silently deleted the two
+    ``pass_two`` had added beside them.
     """
     if state.get("path_kind") in TERMINAL_PATH_KINDS:
         return {}
 
     structure = corpus_structure(config)
-    retrieved = _copy_retrieved(state.get("retrieved"))
+    retrieved: Mapping[str, Any] = state.get("retrieved") or {}
     hit_ids = _hit_ids(retrieved)
     closure = resolve(hit_ids, references=structure.references)
     added = closure - hit_ids
@@ -162,7 +167,6 @@ def resolve_node(state: dict, config: RunnableConfig) -> dict:
     pulled_in = dict(retrieved.get("pulled_in") or {})
     for asset_id in added:
         pulled_in.setdefault(str(asset_id), "resolve")
-    retrieved["pulled_in"] = pulled_in
 
     asset_types = structure.asset_types
     licensed = set(state.get("licensed") or ())
@@ -172,7 +176,7 @@ def resolve_node(state: dict, config: RunnableConfig) -> dict:
             licensed.add(asset_id)
 
     return {
-        "retrieved": retrieved,
+        "retrieved": {"pulled_in": pulled_in},
         "licensed": sorted(str(x) for x in licensed),
     }
 
@@ -195,12 +199,15 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
     **Join completion** (§2.8.1) runs here rather than in ``resolve``: a Steiner point exists
     to sit on a join path, so the pairs that most need their ``on`` clause in the prompt are
     the ones this node has just created.
+
+    **Writes a delta**, like ``resolve``: only ``pulled_in``, plus the four collections
+    :func:`_restrict_to_component` narrows when a component is dropped.
     """
     if state.get("path_kind") in TERMINAL_PATH_KINDS:
         return {}
 
     structure = corpus_structure(config)
-    retrieved = _copy_retrieved(state.get("retrieved"))
+    retrieved: Mapping[str, Any] = state.get("retrieved") or {}
     terminals = set(state.get("licensed") or ())
     if not terminals:
         terminals = _table_ids_from_retrieved(retrieved, structure.asset_types)
@@ -236,21 +243,25 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
     # answered path, which licenses no table and is supposed to reach the agent.
     if terminals and not connected:
         reason = _connect_decline_reason(terminals, edges, max_points)
+        # No ``retrieved`` key: this node changed nothing about it, and the previous version
+        # wrote back a rebuilt copy of what was already in the channel.
         return {
             "path_kind": "decline",
             "terminal_reason": reason,
-            "retrieved": retrieved,
             "crossings": [],
             "licensed": sorted(str(x) for x in terminals),
         }
 
+    delta: dict[str, Any] = {}
     if unconnectable:
         # Dropped from *both* licensing and context, so the prompt never shows a table the
         # turn could not write a join for.
         dropped = frozenset().union(*unconnectable)
-        retrieved = _restrict_to_component(
+        delta = _restrict_to_component(
             retrieved, frozenset(connected), structure, dropped=dropped
         )
+        # The rest of this node reads the narrowed view, not the channel's.
+        retrieved = {**retrieved, **delta}
 
     terminals = set(connected)
     licensed = frozenset(connected | added)
@@ -263,7 +274,7 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
     # it would be a table key naming no table.
     for join_asset_id in complete_joins(licensed, structure):
         pulled_in.setdefault(str(join_asset_id), "connect")
-    retrieved["pulled_in"] = pulled_in
+    delta["pulled_in"] = pulled_in
 
     table_schemas = structure.table_schemas
     selected_schemas = set(state.get("schemas") or ())
@@ -274,13 +285,13 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
         return {
             "path_kind": "decline",
             "terminal_reason": "over_connect_bounds",
-            "retrieved": retrieved,
+            "retrieved": delta,
             "crossings": crossings,
             "licensed": sorted(str(x) for x in terminals),
         }
 
     return {
-        "retrieved": retrieved,
+        "retrieved": delta,
         "licensed": sorted(str(x) for x in licensed),
         "crossings": crossings,
     }
@@ -464,23 +475,6 @@ def _retrieved_for_schemas(
     }
 
 
-def _copy_retrieved(raw: Any) -> dict[str, Any]:
-    if not raw:
-        return empty_retrieved()
-    return {
-        "by_type": {k: list(v) for k, v in dict(raw.get("by_type") or {}).items()},
-        "selected": dict(raw.get("selected") or {}),
-        "attributions": {
-            k: list(v) for k, v in dict(raw.get("attributions") or {}).items()
-        },
-        "pulled_in": dict(raw.get("pulled_in") or {}),
-        "schema_ranking": list(raw.get("schema_ranking") or ()),
-        # Copied through, `None` included: defaulting absence to 0.0 would manufacture the
-        # measurement the original declined to make.
-        "lexical_coverage": raw.get("lexical_coverage"),
-    }
-
-
 def _hit_ids(retrieved: Mapping[str, Any]) -> set[Any]:
     ids: set[Any] = set(retrieved.get("selected") or {})
     ids.update(retrieved.get("attributions") or {})
@@ -551,13 +545,15 @@ def _crossings(
 
 
 def _restrict_to_component(
-    retrieved: dict[str, Any],
+    retrieved: Mapping[str, Any],
     kept: frozenset[str],
     structure: CorpusStructure,
     *,
     dropped: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
-    """Drop assets belonging to schemas no kept table belongs to.
+    """The four narrowed collections, as a ``retrieved`` delta.
+
+    Drops assets belonging to schemas no kept table belongs to.
 
     ``dropped`` names the tables whose component could not be connected. Their schemas are
     excluded **only when no kept table shares the schema** — two components inside one schema
@@ -585,7 +581,7 @@ def _restrict_to_component(
         tag = tags.get(str(asset_id))
         return tag is None or str(tag) in keep_schemas
 
-    out = dict(retrieved)
+    out: dict[str, Any] = {}
     out["selected"] = {k: v for k, v in (retrieved.get("selected") or {}).items() if inside(k)}
     out["attributions"] = {
         k: v for k, v in (retrieved.get("attributions") or {}).items() if inside(k)

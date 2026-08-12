@@ -47,6 +47,16 @@ computing a confident and plausible number over whatever tables happened to be n
 half the clip above does not show, and it is the half the design exists for.
 [Failure modes](docs/failure-modes.md) is what it does instead, per class, with the numbers.
 
+**Permissions withhold, they do not only refuse.** Point `GOVERNED_BI_ACCESS_POLICY` at a roles
+file and, in one sentence: *a grant withholds an asset from everything this repository shows a
+caller — the model's prompt, all four of its tools, and every HTTP route that projects a corpus
+asset — and it withholds nothing from a database, from a row, from an answer's prose, or from the
+curation problems `/audit/corpus` reports.* Refusing a statement that names a column is a weaker
+property than never showing the column, and the first half of that sentence is what makes it the
+second. On an unmodified checkout the shipped adapter authorizes everything, so every rule fires
+and every rule says yes. [ADR 0012](docs/adr/0012-access-seam-principal-and-authorization.md) §8
+is the boundary in full; [the fork guide](docs/enterprise-fork.md) is how to move it.
+
 **Every figure here carries its own error bar.** Accuracy is quoted at a stated coverage, arms are
 compared with a paired test rather than by subtracting two scores, and
 [open work](docs/open-work.md) lists every defect this project has found in itself, including the
@@ -197,6 +207,31 @@ configuration held fixed disagree on 12.7% of outcomes (172 of 1,351), which put
 1.0pp, or 0.83pp with routing pinned, so the smallest effect a 1,351-question arm resolves at 80%
 power is about 2.3pp. That is why the arms above are compared with paired McNemar over discordant
 pairs, and why the threshold is written down before the run rather than once the number is visible.
+
+Those are all numbers about answering. What the governance layers themselves are worth is a
+separate measurement, and unlike everything above it costs nothing to reproduce: the layer stack
+is deterministic, so it needs no credential, no database and no model call, and two runs of it are
+identical. The suite is 95 cases carried as data in
+[`govern/adversarial.toml`](src/governed_bi/govern/adversarial.toml) — 49 attacks and 46 ordinary
+analytics statements — and one file is read by both the test that fails a build and the driver
+that prints the rates.
+
+| | |
+|---|---:|
+| Attacks that reached executable SQL | **0** (of 49) |
+| Attacks refused, but by the wrong layer or rule | **0** (of 49) |
+| Ordinary statements wrongly refused | **0** (of 46) |
+| Cases where a layer crashed instead of deciding | **0** (of 95) |
+| Per-layer recall, over the attacks each layer owns | **1.000** (PARSE 7/7, NO_WRITE 7/7, FUNCTIONS 13/13, BINDING 9/9, COLUMNS 7/7, TABLES 6/6) |
+
+Read that with its bound, which is not small: 49 is the number of attacks somebody sat down and
+wrote, so zero bypasses is a fact about those 49 and not a claim about attacks nobody thought of.
+The same goes the other way — 0 false refusals is over 46 benign statements, not over the space of
+queries an analyst writes. Five of the ten bypass families this project tracks have no SQL surface
+to aim a statement at and are covered by argument rather than by a case; the suite declares that
+per family rather than leaving it to be assumed. And the COST layer owns no attack, so it has no
+rate at all and is printed as not measured rather than as a pass. Reproduce with
+`uv run --frozen python tools/govern_bench.py`.
 
 How the measurement works, and where the engine still gets things wrong, are in
 [measurement](docs/measurement.md) and [failure modes](docs/failure-modes.md).

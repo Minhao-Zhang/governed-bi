@@ -2,9 +2,12 @@
 
 **An instrument, not a feature.** It writes a verdict and **changes no control flow at all**:
 never ``path_kind``, never ``terminal_reason``, never ``answer``. A retry loop built on a judge
-that cannot beat the base rate re-rolls a draw after seeing it, which is what ``n_re_served``'s
-gate exists to catch; whether this earns a loop is decided offline by
-``tools/score_reflector.py``.
+that cannot beat the base rate re-rolls a draw after seeing it, which is why a node
+``RetryPolicy`` is banned here (``register/knobs.py``). ``n_re_served`` is **not** the guard
+against that — it is a frozen always-0 field and not a quotability gate at all, which
+``tests/serve/test_audit_runtime_fixes.py::test_n_re_served_is_not_a_quotability_gate`` asserts
+against both ``GATE_CONDITIONS`` and ``GATE_IMPLEMENTATIONS``. Whether this earns a loop is
+decided offline by ``tools/score_reflector.py``.
 
 **Off by default.** ``reflect_enabled`` ships ``False`` and no production path wires a
 ``reflect_model``, so the node returns ``{}`` before reading anything but the knob. Registered

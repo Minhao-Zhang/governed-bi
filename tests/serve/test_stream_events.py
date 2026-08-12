@@ -49,6 +49,12 @@ EMITTED_STEPS = (
     "resolve",
     "connect",
     "assemble",
+    # Emitted only when the declared abstention policy ran, which the shipped configuration
+    # never does (`abstention_policy_enabled` is False). Listed for the same reason `reflect`
+    # is: a step the engine *can* put on the wire is declared, and "off by default" is a
+    # configuration rather than an absence. Unlike `reflect` it can also end the turn, so its
+    # `declined` status is the one a timeline has to render.
+    "abstain",
     "agent_core",
     # Emitted only when the observer ran, which the shipped configuration never does. Listed
     # anyway: the point of this table is that a step the engine *can* put on the wire is

@@ -259,7 +259,7 @@ def build_tools(
 ) -> list[Any]:
     """Build the five ADR tools closed over this turn's bounds + corpus."""
     cfg = configurable(config)
-    bounds = bounds or tool_bounds_from_state(state)
+    bounds = bounds or tool_bounds_from_state(state, cfg)
     assets = resolve_assets(config)
     policy = policy_from_config(config)
     connector = cfg.get("connector")

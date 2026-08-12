@@ -58,9 +58,10 @@ def oracle_grade(
     try:
         columns, rows, _truncated = connector.execute(sql)
     except Exception as err:  # noqa: BLE001 — the row is the point
-        # Caught rather than propagated: the harness runs this arm as a list comprehension,
-        # so one unexecutable gold statement would end the arm and discard every row already
-        # computed, reported as a shorter file.
+        # Caught rather than propagated: one unexecutable gold statement raising out of here
+        # would end the arm and discard every row already computed, reported as a shorter
+        # file. `harness.run_arm` calls this row by row and hands each to `on_row`, so a
+        # crashed row is recorded and the arm continues.
         return _row(
             qid,
             sql,

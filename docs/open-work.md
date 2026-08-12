@@ -140,10 +140,31 @@ closed-domain claims.
 ### 3.1 `--replay-routing` works, and the one arm that most needed it did not use it
 
 Now exercised on three arms. v4 and v5 both pin to `proxy_v3_fold_opus_high_corpus30872d3.jsonl`:
-1 345 of 1 351 pinned, mean residual Jaccard 0.702 on v4 and 0.70 on v5, against 0.579 for the
-unpinned run1/run2 pair. It buys real resolution — the pinned v3-fold → v4 comparison is
-discordant on 9.3% of questions against the unpinned null's 12.7%, which is SE(net) 0.83pp
-instead of 0.97pp.
+the artifact offers 1 345 pinnable questions of 1 351 and **1 342 turns on v4 actually ran on the
+pinned shortlist** (1 340 on v5, 1 333 on v4-reflect) — the three-to-twelve row gap is
+clarifications that ended before `route_node`.
+
+Those three counts are now *produced* rather than asserted. Every artifact in `runs/eval/` was
+written when `routing_pinned` recorded the driver's intent, so the shipped one-liner returns 1 345
+on all three arms alike; `eval/replay.py::pin_realised` reads the corrected outcome semantics off
+an old-semantics row and prints both, plus an independent check that never reads the flag —
+ordered-exact agreement of `schemas` against the pin source, which reproduces 1 342 / 1 340 /
+1 333 exactly, with **zero** rows holding the pinned schemas in a different order.
+
+Mean residual Jaccard is **0.7049** on v4, 0.7029 on v5 and 0.6997 on v4-reflect, against
+**0.5719** for the unpinned run1/run2 pair. The 0.579 previously printed here was not the same
+statistic: it was the mean over *every* compared row including the 33 identical ones, which
+`eval/replay.py::licensed_drift` deliberately does not compute because rows that score 1.0 by
+definition drag it upward. Both sides now go through `replay.drift_against`, so the contrast
+cannot mix them again. The error flattered the unpinned baseline, so the conclusion is unchanged
+and the printed comparison was not one.
+
+It buys real resolution — the pinned v3-fold → v4 comparison is discordant on 9.3% of questions
+against the unpinned null's 12.7%, which is SE(net) 0.83pp instead of 0.97pp.
+
+Both Jaccard figures moved on 2026-08-11 and neither is a re-run: v4's was 0.7020 under a
+baseline that included the six rows the pin deliberately skipped, and v5's moved +0.0034 from
+the same cause. See §3.7.
 
 **The v3-fold arm itself did not pass the flag.** So v3-fold vs v3-pinned differs by the fold
 fix *and* by routing. Routing churn is unbiased (run1 vs run2: net −12, p = 0.40), so the
@@ -163,10 +184,9 @@ reproducible-from-source, and no document may describe it as such.
 
 ### 3.2a `r_ambiguous_fold`'s resolver admits statements it must refuse
 
-**Two confirmed governance defects, both reproduced, neither yet fixed.** They are here rather
-than in §1 because they are properties of the checker, not of the model's answers. Neither has
-fired in the field, so no measurement is affected — but "has not fired" is a fact about this
-dataset, not a property of the code.
+**Two confirmed governance defects, both reproduced, both fixed 2026-08-12.** They are here rather
+than in §1 because they are properties of the checker, not of the model's answers. Neither had
+fired in the field, so no measurement is affected.
 
 **`_sources` is blind to derived sources.** It walks `exp.Table` and excludes only CTE names, so
 it has no notion of a subquery, `LATERAL` or `VALUES` alias. `binding.py::_classify_sources`
@@ -187,15 +207,29 @@ reads a different column of a different table. `bind()` marks `p.name` as `opaqu
 the column layer never inspects it and nothing downstream can catch it. Before the narrowing this
 refused with `r_ambiguous_fold`.
 
-Fix: `defined` must absorb every non-`Table` source alias in the tree, or the tree-wide handle
-map must be replaced with the `traverse_scope` walk `binding.py` already uses, which removes the
-disagreement entirely.
+**Fixed by the second option, and the first was tried and withdrawn.** Absorbing every derived
+alias into a tree-wide set closes the defect and costs false refusals in a shape its own controls
+could not see: a handle that is a derived alias in one scope loses per-table spelling in *every*
+scope, so `SELECT r."Name" FROM sales.regions AS r WHERE EXISTS (SELECT 1 FROM (SELECT 1 AS z) AS r)`
+refused `r_ambiguous_fold` for a reference naming exactly one table. Measured on the adversarial
+suite: false-refusal 2/46 under the tree-wide rule, 0/46 under the per-scope one.
+`pipeline._column_sources` now resolves each reference in its own scope and then its ancestors —
+`binding.py::_lookup`'s walk over the same `scope.sources` mapping — so the two resolvers agree by
+construction. Both spellings of the false-refusal shape are benign cases in
+`govern/adversarial.toml`.
+
+One consequence is a widening, not a narrowing: a handle reused for two different tables in two
+different scopes now resolves correctly in each rather than refusing.
+`tests/govern/test_guard_pipeline_ledger.py::test_a_handle_reused_for_two_tables_is_spelled_from_each_scope_s_own`
+pins the spelling, which is what a refusal-only assertion could not.
 
 **A self-colliding table fails to poison its bare name.** The `own_ambiguous` guard returns
 before the cross-schema poison write, so a table whose own columns collide by case neither
 registers nor poisons its bare key, and another schema's table of the same name takes sole
 ownership of it. Two more early returns — an absent corpus entry, and a table with no
-`physical_name` — reach the same state. Fix: move the poison write above the guard.
+`physical_name` — reach the same state. Fix: move the poison write above the guard. Fixed; the
+poison write now runs above the guard, and `a_spelling_self_colliding_table_keeps_its_bare_handle`
+is the case.
 
 **Field reachability, measured.** Zero of 1 342 parsed statements on the v3-fold arm contain a
 derived-source alias that collides with a table handle, and zero of the 656 tables in
@@ -244,56 +278,73 @@ its own A/B, not alongside something else.
 `usage` carries tokens. Price is the provider's number and `measure/price.py` is deleted, so an
 arm's cost is not recoverable from the artifact alone.
 
-### 3.6 `--resume` does not enforce the treatment identity it records
+### 3.6 What `--resume` still cannot tell apart
 
-The artifact filename carries `--model`, `--effort`, `--top-n`, `--embed`, the provider and
-`--prompt-variant`, and a renamed tag aborts rather than restarting silently. It does **not**
-carry `--corpus-dir`, `--dataset` or `--replay-routing`. Every row carries
-`corpus_content_hash` and `prompt_set_hash`, and **nothing reads either back** — the only
-mentions of them in the driver are comments and help text.
+The guard now reads the artifact back before extending it: both treatment hashes, every
+comparability knob, the question ids, and whether the rows' routing was replayed. An artifact at
+`--out` gets the same treatment as one the tag named, an existing artifact without `--resume`
+refuses instead of appending a second population into it, and `--replay-routing` is in the tag.
+The refusal now names `--truncate`, not `--force-fresh`: for a while `--force-fresh` both relaxed
+the sibling-artifact abort *and* silently deleted a completed artifact at `--out`, which on this
+dataset is hours of paid model calls behind one flag documented as doing neither. The two meanings
+are two flags, the destructive one prints the row count it is discarding, and `--truncate` with
+`--resume` is refused as the contradiction it is.
+Two things it still cannot see, stated because a guard whose reach is overstated is worse than
+none:
 
-So: pull `../BIRD-corpus`, resume, and one artifact holds two corpora. Every gate passes and the
-driver prints that the numbers are quotable as a single arm. Given that the corpus is the
-treatment identity, this is the most severe defect in the instrument. An explicit `--out` bypasses
-the tag entirely, so the `--prompt-variant` guard does not apply to a run that names its own file.
+1. **A dataset whose gold statements were edited under unchanged question ids.** The row carries
+   `split` and `question_subset`, which identify the *file* and the *set of ids*, not the
+   statements. `gold_fingerprint` is attached after the resume decision. A dataset with a
+   different question set is caught.
+2. **A pinned run resuming an unpinned artifact.** Only the opposite direction is sound:
+   `routing_pinned` is an outcome, so a `true` can only come from a replayed run, while a pinned
+   run whose kept rows all abstained before routing carries no `true` either. Recording the
+   driver's *intent* would need a knob nobody has declared.
 
-Separately, without `--resume` the driver appends to an existing artifact with no dedup, and
-reports EX over the duplicated population before the population check raises.
+**A consequence worth expecting rather than discovering.** Now that `git_sha`, `diff_sha256` and
+`working_tree_dirty` are on every row, a run resumed across *any* commit or *any* uncommitted
+edit makes `measure/gates.py::_knobs_resolved_gate` report two configurations in one arm, and the
+driver prints that a gate did not pass. That is the declared purpose of a resume-drift key and
+not a regression — but the key covers the whole working tree, including a docs edit, so the gate
+will fire on changes that could not have moved a number. The gate names which key disagreed; the
+judgement of whether it mattered is the reader's, which is the trade `diff_sha256`'s note takes.
 
 ### 3.6a A clarification turn carries no treatment identity
 
 Every row in the 2026-08-09 artifacts whose `corpus_content_hash` is `None` is a zero-licensed
-turn that ended in a clarifying question — 6 of 6 in v3-fold, 8 of 8 in v3-pinned, 4 of 4 in v4.
-A turn that terminates before routing never reaches whatever stamps the identity, so `None` here
-does not mean "written before the field existed"; it means the field has a path it is not
-written on.
+turn that ended in a clarifying question — 6 of 6 in v3-fold, 8 of 8 in v3-pinned, 4 of 4 in v4,
+5 of 5 in v5, 13 of 13 in v4-reflect. A turn that terminates before routing never reaches
+whatever stamps the identity, so `None` here does not mean "written before the field existed";
+it means the field has a path it is not written on.
 
-It is 0.4% of rows and all of them are abstentions, so no headline number moves. Two
-consequences that are not zero: those rows cannot prove which corpus produced them, and §3.6's
-resume guard warns about them on **every** legitimate resume, which is the shape that teaches a
-reader to ignore a warning.
+It is 0.4% of rows and all of them are abstentions, so no headline number moves. Every reader
+now knows the shape — the resume guard counts them instead of warning, and `reconcile` treats
+`None` as silence rather than as contradiction — but the underlying hole is in `serve/`, not in
+the instrument, and closing it there would make those rows provable rather than merely excused.
 
-### 3.7 Three fields report the intent rather than the outcome
+### 3.7 What the refusal histogram still does not say
 
-- **`routing_pinned`** is read off the question dict, where `attach_pinned_routing` wrote it —
-  never off the turn. The pin falls back to live routing when no pinned schema is known to this
-  corpus, when the pin is partial, and when `route_node` never runs; the row says `true` in all
-  three. There is no reader anywhere in `src/` or `tools/`, so the unpinned fraction is not
-  recoverable from the artifact at all.
-- **The drift baseline** is built from every row of the replayed artifact, including the ones
-  `routing_from_artifact` deliberately skipped for having an empty shortlist. Those were never
-  pinned, are guaranteed to differ, and enter at Jaccard 0. The printed residual is deflated by
-  exactly the rows the pin refused to touch.
-- **The refusal histogram counts `sample_rows` probes as governance refusals.** `_attempt_trace`
-  iterates the ledger unfiltered; every other reader goes through `answering_attempts` first.
-  On the v3-fold arm this moves the capped-turn histogram by 21 `passed` and 3 `r_ambiguous_fold`
-  attempts. `serve/ledger.py` states the rule this breaks: three copies of "which attempts count"
-  is three answers. The driver is the fourth.
+The two fields that reported intent rather than outcome are fixed and the corrections are
+quantified in §3.1 and in `eval/replay.py::licensed_baseline`. What remains is the histogram's
+own shape:
 
-`attempts: []` also conflates three distinct facts — a retrieval decline with an empty ledger, an
+`attempts: []` conflates three distinct facts — a retrieval decline with an empty ledger, an
 absent `execution` record, and a concurrency crash row — and the histogram prints with no total
 and no unattributed bucket, so a run whose refusals are mostly declines reads as "governance
 rarely refused".
+
+For the record, since the `sample_rows` correction was itself reported with a partial number.
+Filtering the ledger through `answering_attempts` moves the printed histogram by, on every
+artifact in `runs/eval/`: **25 attempts on v3-pinned**, 3 on v3-fold, 1 on v4, 1 on v5, 3 on
+v4-reflect — all `PARSE/r_ambiguous_fold`. run1 and run2 record no ledger at all. The earlier note
+gave only three of the five arms and omitted the largest, which is eight times the biggest figure
+it did quote. Failed-attempt totals move 929→904, 370→367, 295→294, 286→285 and 310→307
+respectively.
+
+The "21 `passed`" also cited is real and is over a narrower slice than the sentence implied:
+v3-fold's **capped** turns hold 24 `sample`-path attempts, 21 passing and the same 3 refused. Over
+the whole arm it is 132 attempts, 129 passing. A histogram of *failed* attempts never counted the
+passing ones on either slice.
 
 ### 3.8 Two comparability knobs cannot reach the run they name
 
@@ -309,20 +360,18 @@ default and the config hash does not move.
 Neither has been exercised: every run record carries the default weights, and none of the three
 environment variables is set anywhere in the repository.
 
-### 3.9 Eight tests cannot fail
+### 3.9 The eight tests that could not fail are pinned rather than repaired-and-forgotten
 
-Of 25 mutations applied to the instrument code, 8 survived a green suite. Each names a behaviour
-a docstring in the same diff explicitly claims: `routing_pinned` pinned to either constant,
-`corpus_content_hash` and `prompt_set_hash` set to `None`, `_attempt_trace` returning empty,
-`computed_correct` always `None`, and both ends of the eviction chain — `assemble`'s write and
-`stamp`'s projection.
+All eight are now declared mutations under the `s39-` prefix in `tools/mutate.py`, verified
+caught on 2026-08-11: `routing_pinned` pinned to either constant, `corpus_content_hash` and
+`prompt_set_hash` set to `None`, `_attempt_trace` returning empty, `computed_correct` always
+`None`, and both ends of the eviction chain. The repairs themselves landed earlier; what was
+missing was the mechanism that re-checks them, which is the whole argument of `mutate.py`'s own
+docstring — a habit does not survive the person who has it.
 
-The pattern is one shape: **asserting that a constant equals itself.**
-`test_a_measured_row_names_both_treatment_identities` asserts `"corpus_content_hash" in row`,
-which `None` satisfies. Its sibling was written to close exactly that hole and asserts against
-`register.prompts.prompt_set_hash` instead of against a row, so the row remains free to carry a
-constant. `test_comparability_knobs` asserts `FUSE_WEIGHTS["lexical"] == knob_default("w_lexical")`,
-which is the tautology behind §3.8.
+What is **not** claimed: that the suite is otherwise good. A mutation nobody declared says
+nothing, and the pattern these eight shared — asserting that a constant equals itself — is
+cheap to reintroduce anywhere a new field is added to a row.
 
 ### 3.10 Declared machinery with no wire is this repository's recurring defect
 
@@ -330,22 +379,25 @@ One shape keeps recurring: something is declared in the register, stamped by a n
 in a docstring, and **nothing on the other end reads it**. Each instance is individually small;
 together they are the reason numbers here have twice been quotable and wrong.
 
-A sweep found 28. **Fourteen are fixed** — the five that recorded a *wrong* value rather than a
-missing one, the nine record fields that reached the turn record and no artifact, and
-`lexical_coverage`, whose producer turned out to be dead rather than absent. Evidence and the
-per-field decisions are in [declared-not-consumed](analysis/declared-not-consumed.md).
+A sweep found 28 and the checker still reports **6** — unchanged across the 2026-08-12 access-seam
+and abstention work, which added two comparability knobs (`access_grant`,
+`abstention_policy_enabled`), a record field (`abstention`) and a state channel of the same name,
+every one of them with a consumer on the other end. That is the number to watch when adding a
+declaration: it is easy to move and nothing in CI moves it for you.
 
-Fourteen remain, and none of them currently corrupts a number:
+Fourteen were fixed in the sweep itself; the
+eight closed on 2026-08-11 are the driver-side identity — `git_sha`, `git_main_sha`,
+`working_tree_dirty`, `diff_sha256`, `serve_workers`, `schemas_under_test`, `split` and
+`question_subset`, all resolved in `eval/provenance.py` and stamped onto every row. Evidence and
+the per-field decisions are in [declared-not-consumed](analysis/declared-not-consumed.md).
 
-Thirteen unconsumed knobs and one half-wired state channel:
+Six remain, and none of them currently corrupts a number:
 
 | | |
 |---|---|
-| `git_sha`, `git_main_sha`, `working_tree_dirty`, `diff_sha256` | the resume-drift keys, null on every row of every arm, so the gate compares each against itself |
-| `schemas_under_test`, `question_subset`, `split` | scope keys nothing writes |
-| `serve_workers`, `build_workers` | null while the driver runs ten workers |
 | `expand_hops` | a comparability knob with no reader: setting it changes no behaviour and does change the config hash. `pulled_in` now reaches the row, which makes the knob's own question answerable — the measurement half exists, the behaviour half does not |
 | `negative_tau`, `facet_model`, `rewrite_model` | dead declarations |
+| `build_workers` | **deliberately still open.** The eval driver serves and does not build a corpus, so a number here would be the `embedding_provider` defect — a null reads as unmeasured, a value reads as a measurement. The knob's own note is about a worker that "holds a connection AND a long-lived agent conversation", which is the curator, and the curator is not in this repository. Wiring it from the driver would launder it under K1's blind spot rather than close it |
 | `clarifications` | a `ServeState` channel with two writers and no reader outside `state.py` |
 
 The common cause is that declaring and consuming live in different files and nothing forces them
@@ -355,10 +407,43 @@ artifacts showed them.
 
 `tools/check_declared_is_consumed.py` closes the statically-visible part: four rules over knobs,
 record fields and state channels, mutation-verified against a fixture tree. It reported 27
-violations when written and reports 14 now. **It is deliberately not wired into CI yet**, and
-`tests/conformance/test_register_closure.py` carries that decision with the condition for
-reversing it. Its own docstring states the blind spot: rule K1 credits any occurrence of a knob's
-name, so a coincidental string literal launders one.
+violations when written and reports 6 now.
+
+**Tier 1 is clear as of 2026-08-12**, which is the condition
+`tests/conformance/test_register_closure.py` names for a CI step. All five items —
+`llm_reasoning_effort` unreadable on the proxy, `llm_utility_provider` and `embedding_provider`
+publishing `"openai"`, `chat_model` null on four arms with the value in an undeclared key, three
+environment variables outranking `knobs_resolved`, and `sqlglot_version` absent from every row —
+now have writers that fire, each asserted **on its value** in
+`tests/serve/test_the_record_follows_the_knob.py`.
+
+**Which artifacts gain, precisely.** The **six proxy arms** predate the wires and gain nothing, so
+[declared-not-consumed](analysis/declared-not-consumed.md) §1–§5 remain the correct description of
+every number quoted from them — which is every number in this document.
+`runs/eval/live_full_gpt-5.6-luna_xhigh_topdefault_lexical.jsonl` is the exception and is not one
+of the six: it is a two-row smoke artifact written after the wires, and it carries the fixed values
+(`llm_reasoning_effort: "xhigh"`, `llm_utility_provider`, `embedding_provider`,
+`chat_model: "gpt-5.6-luna"`, `sqlglot_version: "30.16.0"`) where the six carry `None` or nothing at
+all. Two rows is not a measurement, and nothing here is quoted from it — but "every one predates the
+wires" was false as written, and declared-not-consumed.md's "all six arms" was the correct scope all
+along. No artifact on disk carries `git_sha`; there is no `runs/index.jsonl` on this tree.
+
+**The gate is still not a CI step**, and the reason has changed. It exits 1 on the six findings
+below, so a step would fail every commit, and waiving six genuine findings to go green is the lie
+it was written to catch. Three of the six need a *decision* rather than a wire: `expand_hops` and
+`negative_tau` are comparability knobs whose readers would live in `retrieve/`, and
+`clarifications` is a question about the clarification protocol.
+
+What did land is the half that was missing either way:
+`test_the_declared_but_unconsumed_set_does_not_grow` runs the gate on **every commit** against
+the six findings pinned by name, so a seventh fails the build with the offending name, and
+closing one fails it too — because a shrinking list nobody updates is how a stale count survives.
+Names and not a count: six findings and six *different* findings are the same integer.
+
+Its own docstring states the blind spot: rule K1 credits any occurrence of a knob's name, so a
+coincidental string literal launders one. That is why the eight closed above are also asserted on
+their **values**, in `tests/eval/test_the_row_names_the_harness_that_produced_it.py`, and why
+`build_workers` is left red rather than given a number.
 
 ### 3.11 Selective prediction is closed at 0.80, and the reflector closed it
 
@@ -386,10 +471,46 @@ empty on every row — so the hand parser is robust enough, which was left open 
 data. And the template-echo bug fixed in `95e3b07` **did not fire**: this arm predates the fix and
 zero rows carry the signature, so it is uncontaminated.
 
-What remains open is not a better judge. It is that **the thesis of this project has never been
-measured**: the layer stack, the allowlist and the scope gate have no adversarial evaluation, so
-what governance buys has no number. The scope gate's fail-open on affirmative-prefixed replies was
-found by reading the code, not by a test, because nothing tries to get past it.
+What remains open is not a better judge. It is what governance itself buys, and **that has a
+first number instead of none**. `src/governed_bi/govern/adversarial.toml` is 115 cases as data —
+62 attacks, 53 benign statements — loaded by both `tests/govern/test_adversarial_suite.py` and
+`tools/govern_bench.py`, so the gate that fails a build and the report that prints the rates
+cannot drift apart. It needs no credential and no network, and the layer stack is deterministic,
+so unlike every other measurement here it has no noise floor and two runs are identical. On the
+current tree: **bypass 0/62**, **misattribution 0/62** (refused, but by the wrong layer or the
+wrong rule), **false refusal 0/53**, and **zero guardrail errors** on either half. Per-layer
+recall is **1.000** on the six layers that own attacks — PARSE 7/7, NO_WRITE 7/7, FUNCTIONS 13/13,
+BINDING 9/9, COLUMNS 11/11, TABLES 15/15. COST owns no attack, so it has no rate at all and prints
+as not measured rather than as a pass.
+
+Twenty of those cases are the `authorization` family ADR 0012 added, which is why COLUMNS and
+TABLES carry more attacks than the other four layers: they are the two the access grant narrows.
+A further twelve `[[probe]]` cases sit beside the statement cases and measure *disclosure* rather
+than refusal — whether a withheld asset reaches the prompt, a tool reply or an HTTP body — at
+**disclosed 0/7** and **over-withheld 0/5**.
+
+The item stays open because of what those rates are not:
+
+* **They are a fact about 62 attacks somebody thought of.** A bypass rate of 0 over hand-written
+  cases is not a rate over the attacks nobody wrote, and adding cases does not turn it into one.
+  What the suite gives is a floor that a change has to keep clearing, not a claim about the space
+  of statements.
+* **Five of ADR 0006's ten bypass families are not in it.** B3, B7, B8, B9 and B10 have no SQL
+  surface to aim a statement at, so they are covered by *argument* — the structural claims in
+  ADR 0006 — and not by a case. The file declares that per family and the loader enforces the
+  declaration both ways, which makes the gap visible; it does not close it.
+* **The benign half is the same kind of sample.** 0/53 says that 53 ordinary analytics
+  statements are not refused, and the statements a real analyst writes are not that set. Its
+  demonstrated value so far is as a cost measurement on a fix rather than as a safety claim: the
+  first, tree-wide repair of §3.2a scored 2/46 on the benign half as it then stood, and was
+  withdrawn for it.
+* **No fork has run any of it.** Every authorization and disclosure figure above is measured on a
+  fictional world declared in the suite itself, against a scripted model. The false-refusal rate
+  of a real grant over a real corpus is unmeasured, and ADR 0012 records it as owed.
+* **The scope gate is still outside the suite.** Its fail-open on affirmative-prefixed replies is
+  fixed and pinned by `tests/serve/test_guard_bi_scope.py`, but every case here drives `check()`
+  and `prepare()`. A gate that costs a model call cannot go in a suite whose whole property is
+  that it costs nothing, so what guards it is unit tests, which is a weaker thing.
 
 ### 3.12 The noise floor is five times a comparison system's, and that is architectural
 
@@ -457,6 +578,26 @@ subset.** Whether the project leads with this or with EX decides what gets built
 two point at different work — leading with abstention points at retrieval, since that is what
 the declines are made of.
 
+**The decision is now declared, 2026-08-12: [ADR 0013](adr/0013-the-declared-abstention-policy.md).**
+It changes nothing above and it does not try to. What it fixes is the sentence *"nothing decided
+to withhold"*: a named policy, `context_sufficiency_v1`, runs between `assemble` and `agent_core`
+and asks four deterministic questions of the turn's own context — a retrieval channel that
+errored, no table licensed, an empty rendered block, a licensed table evicted for space. The
+reason it returns is a member of `stages.ABSTENTION_REASONS`, it is written into
+`terminal_reason` beside `no_schema_matched` and `missing_join_path`, and the evidence behind it
+(what was licensed, what was missing, what share of the question's terms the corpus has) reaches
+the record and the artifact row.
+
+Three things it deliberately is not. **It computes no score** — §3.11 measured that and it
+failed, and ADR 0007 forbids a trust field on the answer card. **It thresholds nothing** —
+`lexical_coverage` is on the evidence and no rule branches on it, for `negative_tau`'s reason.
+And **it ships off**, so every number on this page still stands and v4 is still the control.
+
+What is owed is the number: the policy has never run on a real arm, so how many turns it
+withholds and what share of those would have been right are both unknown. That is one paired arm
+(`tools/run_datalake_eval.py --abstain`), and until it exists the honest claim about ADR 0013 is
+that the engine can now *say* why it withheld, not that it withholds better.
+
 What would still be worth building is the *other* contrast: the same engine with Layer 6
 relaxed to the whole routed schema instead of the licensed 8 tables (§4.2), so the comparison
 holds the model and the corpus fixed and moves only the allowlist. WrenAI differs from this
@@ -475,6 +616,50 @@ change what "governed" means and needs an ADR, not a patch — and per §4.1 it 
 contrast arm that would attribute the abstention property to the allowlist rather than to
 everything else that differs between two systems.
 
+**Answered in part, 2026-08-12: [ADR 0012](adr/0012-access-seam-principal-and-authorization.md).**
+The ADR does *not* do what the paragraph above imagines. It does not widen governance to the whole
+routed schema, and it does not touch the retrieval budget: `licensed` keeps exactly the meaning it
+had. What it adds is the **second master, as its own set**. A turn now carries an `authorized` set
+derived from an `AccessPolicy` port, and the TABLES layer asks three questions in a fixed order —
+`r_table_not_licensed` (retrieval missed), then `r_table_not_authorized` (this principal may not),
+then `r_row_predicate_unenforced`. COLUMNS gains `r_column_not_authorized` beside
+`r_column_excluded`.
+
+Three consequences for this section and for §4.1.
+
+* **The abstention accounting keeps its shape and gains a falsifier.** Today the argument that
+  "19/20 refusals are retrieval misses" rests on there being nothing else `r_table_not_licensed`
+  could mean — an argument from an absent feature, which stops working the day anyone deploys this
+  behind a permission model. The histogram can now separate the two without a second
+  implementation.
+* **No number moved, and that was the requirement.** The shipped default is an open grant, and
+  under it all three new predicates are constant functions, so the three new branches are
+  unreachable. All 95 pre-ADR adversarial cases produce byte-identical verdicts — including
+  `layers_evaluated`, `bound` and `Prepared.sql`. The v4 arm is untouched.
+* **The Layer 6 contrast arm §4.1 still wants is still not run.** ADR 0012 is the *mechanism* that
+  makes it cheap — relaxing the allowlist is now a `Grant`, not a code edit — but the arm has not
+  been run and the outward wording does not change until it has (strategy checkpoint §2.6).
+
+What is still open here, restated because the ADR narrowed rather than closed it: whether the
+*retrieval* budget and the *governance* allowlist should be different sets at all. They still are
+not. ADR 0012 added a third set that intersects both and answers a different question.
+
+Two items it created, both in [ADR 0012 §7 and §8](adr/0012-access-seam-principal-and-authorization.md),
+and **both closed the same day**. The grant's digest is now the `access_grant` knob, resolved from
+`GovernancePolicy.access_grant` and never from the register default — a default carrying the open
+digest would publish "open" for a fork shipping a restriction, which is the `agent_recursion_limit`
+defect in the security register. And all four of §8's wires exist: `api/graph_app.py` builds the
+policy and resolves the one principal, `ToolBounds` carries the grant, `_resolved_knobs` carries
+its digest, and `serve/context.py::withheld_by_grant` narrows both the rendered block and
+`readable_assets` from one set. `tests/serve/test_the_access_seam_reaches_the_served_app.py`
+refuses a licensed, unauthorized table as `r_table_not_authorized` **through `build_serve_graph`**,
+with the paired open-grant run of the same statement executing it.
+
+What that buys §4.2 in particular: `r_table_not_licensed` now has a second thing it could have
+been, so *"19 of 20 refusals are retrieval misses"* stops being an argument from an absent
+feature. The underlying question is still open — `licensed` still serves both masters, and ADR
+0012 added a third set rather than splitting the two.
+
 ---
 
 ### 3.13 The treatment must be declared, and only three arms have declared it
@@ -485,15 +670,45 @@ Three arms are declared — `v3_fold`, `v4`, `v5`. Any other artifact in `runs/e
 `cannot_evaluate` in a comparison until someone writes down what it changed, which is the
 intended pressure and not a defect.
 
-Two things about that fix are owed:
+**`reconcile` is wired**, to `--arm`: the driver looks the profile up before the first paid
+question and refuses a run labelled with an arm whose declared corpus is not the one the session
+loaded, then reconciles every row again in the report. Fixing the wire also found the function
+was vacuous — see the D9 row in [the audit](analysis/audit-2026-08-10.md) for the two namespaces
+it was comparing.
 
-* **Neither half is verified on real artifacts.** `runs/` is gitignored and the designated null
-  pair is not on the machine that made the change, so both D9 controls in
-  `tests/eval/test_the_delivery_gate_can_fail.py` skipped. The logic was exercised on synthetic
-  fixtures and nine mutations, which is not the same as running it on `run1`/`run2`.
-* **`reconcile` has one caller: its tests.** It compares a profile's declared corpus against
-  what a row recorded, and nothing in the eval driver calls it yet — declared machinery with
-  no wire, §3.10's shape, entered here deliberately rather than left to be discovered.
+**That fix was itself incomplete until 2026-08-12, for the arm that mattered most.** `v3_fold`
+declared no `corpus_content_hash`, so the repaired guard was never entered: a run launched
+`--arm v3_fold` against any corpus at all cleared the pre-flight check *and* was told in the
+report that every one of its 1 351 rows agreed with the profile. Two things changed. `v3_fold`
+now declares the digest its artifact carries (1 345 of 1 351 rows; the other 6 are §3.6a
+clarifications), and the digest is **mandatory** — `_parse_profiles` refuses `arms.toml` without
+one and `reconcile` refuses a profile it cannot reconcile, so an unreconcilable arm can no longer
+report agreement. The wire itself was untested and now is: `arm_startup_refusal` and
+`reconciliation_lines` are pure functions in `eval/provenance.py`, driven from dicts by
+`tests/eval/test_the_arm_profile_wire_is_exercised.py`.
+
+**The controls have now been run against the real null pair**, on a machine that has `runs/`. All
+six pass. What that establishes is narrower than it looks and is the reason the four
+artifact-backed ones were downgraded in the first place: every one of the seven artifacts in
+`runs/eval/` is missing the same four comparability knobs — `cost_budget`, `negative_tau`,
+`semantic_scale_ceiling`, `sqlglot_version` — so `knobs_comparable` returns `cannot_evaluate` at
+the absence branch and never reaches the judgement. Re-measured 2026-08-11: still exactly those
+four, on all seven. **No pair on disk can reach this gate**, which is what the two synthetic
+controls exist for.
+
+What is still owed:
+
+* **No real pair is comparable** until an arm records those four knobs. The absence is
+  `session._resolved_knobs` dropping every `UNSET` knob, which is `serve/`'s to fix.
+* **`prompt_set` is `null` on every row of v4 and v5**, and it is the treatment both declare. So
+  even past the absence branch the gate would report a replicate, correctly: the artifacts
+  cannot show that the declared treatment moved. `prompt_set_hash` *does* differ (v3-fold
+  `ef30252f`, v4 `b1f9e4d7`, v5 `7a9e7102`), so the arms are distinguishable and not nameable —
+  declared-not-consumed finding 7.
+* **`compare_to`, `description` and `notes` now have a reader** (the driver prints them under
+  `--arm`) but nothing checks `compare_to` against the pair a comparison is actually run on.
+* `measure/gates.py`'s rendered `detail` still asserts the withdrawn 95% rule, and `render()`
+  prints `detail` while omitting the corrected `condition`. That file is not the instrument's.
 
 ---
 

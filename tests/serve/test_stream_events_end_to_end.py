@@ -327,16 +327,28 @@ def test_a_failing_recorder_cannot_fail_a_served_turn() -> None:
     """A turn that answered is not a turn that failed.
 
     The node is unwrapped — there is nothing after it to receive a ``crashed`` stamp — so it
-    swallows its own failures. ``graph_app._record_node`` does; this pins that a graph built with
+    swallows its own failures. ``graph_app.record_node`` does; this pins that a graph built with
     a *raising* recorder is the one shape that must not happen, by asserting the real node's
     contract rather than the toy one's.
-    """
-    from governed_bi.api.graph_app import _record_node
 
+    The fourth case is the one the old version could not state: a log that **raises**. It used
+    to reach ``trace_store`` directly, so the only failures reachable were the ones a malformed
+    state produced; the log is an argument now, so the swallow itself is assertable.
+    """
+    from governed_bi.api.graph_app import record_node
+
+    class _Exploding:
+        def append_turn(self, *a: Any, **k: Any) -> Any:
+            raise OSError("disk is full")
+
+    node = record_node(_Exploding())
     # No `turn_id`, a record that is not a mapping, and a state with nothing in it at all.
-    assert _record_node({}) == {}
-    assert _record_node({"answer": {"record": None}}) == {}
-    assert _record_node({"answer": {"record": {"turn_id": ""}}}) == {}
+    assert node({}) == {}
+    assert node({"answer": {"record": None}}) == {}
+    assert node({"answer": {"record": {"turn_id": ""}}}) == {}
+    assert node({"answer": {"record": {"turn_id": "t1"}, "outcome": "answered"}}) == {}, (
+        "a log that raised took the turn with it; the recorder must swallow its own failures"
+    )
 
 
 @pytest.mark.parametrize("case", ["guard_blocked"])

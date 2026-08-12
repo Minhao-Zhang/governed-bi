@@ -101,7 +101,8 @@ A full arm takes hours. Expect to interrupt it and resume it.
 | `--max-retries` | `8` | Provider SDK retries per call. Recorded as the `llm_max_retries` comparability knob, so keep it identical across arms you intend to compare |
 | `--timeout` | `240.0` | Per-request timeout in seconds. Without one a worker can block indefinitely |
 | `--resume` | off | Keep measured rows, requeue crashed ones. See [Resume](#resume) |
-| `--force-fresh` | off | Start over when `--resume` finds no artifact but sibling artifacts exist |
+| `--force-fresh` | off | Relax the abort when `--resume` finds no artifact but sibling artifacts exist. Non-destructive: it removes nothing |
+| `--truncate` | off | **Destructive.** Discard the artifact at `--out` and start over. The only flag that deletes a measured run; prints the row count first, and contradicts `--resume` |
 
 ### Where the artifact lands
 
@@ -125,7 +126,10 @@ it.
 If `--resume` finds no artifact but does find siblings named for the same
 model, the driver lists them and exits rather than starting over. A changed tag
 input renames the artifact, and that is a far more common cause than a genuine
-first run. Pass `--force-fresh` when you mean it.
+first run. Pass `--force-fresh` when you mean it. It relaxes that abort and
+nothing else. An artifact that *does* exist at `--out` is a separate refusal,
+and the only way past it is `--truncate`, which discards those rows and says how
+many it is discarding first.
 
 ### Exit codes
 
@@ -134,7 +138,7 @@ first run. Pass `--force-fresh` when you mean it.
 | `0` | The arm finished, or there was nothing left to do |
 | `2` | No credential for one of the model surfaces, or no database credential |
 | `3` | The corpus has fatal problems; each one is printed |
-| `4` | `--resume` found no artifact but sibling artifacts exist, and `--force-fresh` was not passed |
+| `4` | `--resume` found no artifact but sibling artifacts exist and `--force-fresh` was not passed; or an artifact already exists at `--out`, `--resume` was not passed, and `--truncate` was not passed |
 
 ## Select a prompt variant
 

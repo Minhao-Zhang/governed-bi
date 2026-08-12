@@ -1,8 +1,8 @@
 """Safely set summary / grain on a corpus asset YAML without store.write().
 
 Usage:
-  uv run --frozen python tools/_set_asset_fields.py PATH --summary '...'
-  uv run --frozen python tools/_set_asset_fields.py PATH --summary '...' --grain 'one row per X'
+  uv run --frozen python tools/corpus_rebuild/_set_asset_fields.py PATH --summary '...'
+  uv run --frozen python tools/corpus_rebuild/_set_asset_fields.py PATH --summary '...' --grain '...'
 
 Validates summary length against summary_max_chars (250). Does not truncate.
 Exits 1 on validation failure; prints new len on success.

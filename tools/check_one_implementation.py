@@ -147,10 +147,11 @@ def main() -> int:
     #: The same names as they appear in ``tools/``, for **rule (b) only**.
     #:
     #: Rule (a) deliberately stays inside the package (audit D11). Scanned across ``tools/`` it
-    #: reports 14 duplicate names, and 13 of them are each script's own boilerplate — ``ROOT``,
-    #: ``REPO``, ``PKG``, ``SKIP_DIRS``, ``EXEMPT``, ``DEFAULT_CORPUS``, ``DEFAULT_DATASET``,
-    #: ``check_file``. Those are not two implementations of one concept, and a gate that reports
-    #: them is a gate that gets waived until it means nothing.
+    #: reported 14 duplicate names when this rule was scoped, 13 of them each script's own
+    #: boilerplate — ``ROOT``, ``REPO``, ``PKG``, ``SKIP_DIRS``, ``EXEMPT``, ``DEFAULT_CORPUS``,
+    #: ``DEFAULT_DATASET``, ``check_file`` (11 on 2026-08-12, all boilerplate). Those are not two
+    #: implementations of one concept, and a gate that reports them is a gate that gets waived
+    #: until it means nothing.
     #:
     #: The fourteenth was real: ``mcnemar``, in ``tools/query_summary_alignment.py``, beside the
     #: singleton this file declares — whose stated reason is that "v1 had two McNemars … which one

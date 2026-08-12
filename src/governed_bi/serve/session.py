@@ -364,6 +364,15 @@ def _resolved_knobs(policy: Any) -> dict[str, Any]:
       disabled and ``serve/nodes/negative.py`` writes ``"tau": None`` on every turn.
     * **The environment last**, because that is the order the readers use — see
       :func:`~governed_bi.register.knobs.env_override`.
+
+    ``access_grant`` is resolved **from the policy and never from the register** (ADR 0012 §7).
+    It is not in the tuple below because it is not a knob the policy happens to carry: it is a
+    value type whose *digest* is the comparability fact, and the register's default is ``None``
+    precisely so that a run whose policy was never threaded records an absence rather than the
+    open grant's digest. Resolving it from :func:`~governed_bi.register.knobs.knob_default`
+    would publish "open" for a fork shipping a restriction — the ``agent_recursion_limit``
+    defect in the security register, which is what §3.10 of open-work.md is a whole section
+    about.
     """
     from ..govern.functions import sqlglot_version
     from ..register.knobs import UNSET, env_override
@@ -375,6 +384,10 @@ def _resolved_knobs(policy: Any) -> dict[str, Any]:
             # `frozenset` and `Mapping` both need a serializable form: the record is written
             # to JSON and read by a gate, and a set is not JSON.
             knobs[name] = sorted(value) if isinstance(value, (set, frozenset)) else value
+    grant = getattr(policy, "access_grant", None)
+    digest = getattr(grant, "digest", None)
+    if callable(digest):
+        knobs["access_grant"] = digest()
     knobs["sqlglot_version"] = sqlglot_version()
     for name in knobs:
         override = env_override(name)

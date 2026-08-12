@@ -2,23 +2,23 @@
 
 **Not a wrapper over ``langchain-openai``**, whose ``Embeddings`` lacks ``model`` and
 ``dimensions`` — the two facts this port exists to expose (the same reason ``ChatModel``
-was rejected as a port, ``ports.py:22``).
+was rejected as a port, ``ports.py``'s no-single-adapter rule).
 
 **``model`` reports what the provider served, not what was requested.** A provider may
 serve an alias, a dated snapshot or a silent upgrade, and ``embedding_model`` is a
 comparability knob, so recording the request would let two runs on different snapshots
 compare as one (v1's reasoning-effort incident: an unrecorded live config field moved the
 baseline arm past that ladder's own detection threshold — sizes retired, mechanism is not).
-``ports.py:124`` also requires ``model`` to be stable for the object's
+``ports.Embedder.embed``'s ordering rule also requires ``model`` to be stable for the object's
 lifetime, which rules out returning the request and replacing it after the first call —
 that changes identity under a cache key already formed. One memoised probe holds both.
 
 **Cost shape.** One request per :attr:`~.embedder.BaseEmbedder.batch_size` inputs, plus at
-most one two-token probe per object, and only when ``model`` or an unspecified
-``dimensions`` is read before the first ``embed``. No caching here; ``retrieve.index``
-owns that.
+most one one-token probe per object (:data:`~.embedder.PROBE_TEXT` is ``"probe"``, a single
+``cl100k_base`` token), and only when ``model`` or an unspecified ``dimensions`` is read
+before the first ``embed``. No caching here; ``retrieve.index`` owns that.
 
-**A rate limit or a dead endpoint raises** (``ports.py:127``) — a rate-limited embedder
+**A rate limit or a dead endpoint raises** (``ports.Embedder``'s raise-on-rate-limit rule) — a rate-limited embedder
 once published a schema-pick accuracy that rose sharply when re-measured with quota free
 (both figures and the gap between them retired; see ``register/citations.py``).
 """
@@ -98,7 +98,7 @@ class OpenAIEmbedder(BaseEmbedder):
 
     @property
     def model(self) -> str:
-        """``openai:<served model>``. Provider-qualified, per ``ports.py:140``."""
+        """``openai:<served model>``. Provider-qualified, per ``ports.Embedder.model``."""
         if self._served_model is None:
             self._probe()
         return f"openai:{self._served_model}"
@@ -141,7 +141,7 @@ class OpenAIEmbedder(BaseEmbedder):
         return self._client
 
     def _probe(self) -> None:
-        """Learn the served model and native width from one two-token request."""
+        """Learn the served model and native width from one one-token request."""
         self._call([PROBE_TEXT])
 
     def _record_identity(self, served: str, width: int) -> None:
@@ -175,7 +175,7 @@ class OpenAIEmbedder(BaseEmbedder):
 
         # Sorted by the provider's own ``index`` rather than trusted to arrive in order. The
         # API documents order preservation, but a reorder is silent by construction — every
-        # asset takes another asset's vector and nothing disagrees (``ports.py:113``).
+        # asset takes another asset's vector and nothing disagrees (``ports.Embedder.embed``'s ordering rule).
         items = sorted(response.data, key=lambda item: int(item.index))
         if len(items) != len(texts):
             raise ValueError(

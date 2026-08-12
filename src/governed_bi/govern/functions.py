@@ -102,8 +102,10 @@ PERMITTED_FUNCTIONS: frozenset[str] = frozenset(
 #: SQL spellings that must never be permitted. A committed fixture, from ADR 0006 §2.
 #:
 #: Compared by **parsing each spelling and canonicalising it through
-#: :func:`canonical_function_name`**, never by string intersection — see the module
-#: docstring on ``J_S_O_N_ARRAY_AGG``.
+#: :func:`canonical_function_name`**, never by string intersection: ``json_agg`` parses to
+#: ``exp.JSONArrayAgg``, whose canonical name is ``J_S_O_N_ARRAY_AGG``, so
+#: ``"json_agg" in PERMITTED_FUNCTIONS`` is ``False`` whether or not it is permitted. The
+#: reasoning behind the sqlglot pin says the same thing beside the pin, in ``pyproject.toml``.
 ADVERSARIAL_SET: tuple[str, ...] = (
     # B1: reads that reference no table and no column.
     "pg_read_file", "pg_read_binary_file", "pg_ls_dir", "pg_sleep",
@@ -129,8 +131,9 @@ INTENTIONALLY_ABSENT: Mapping[str, str] = {
     "array_agg": (
         "B2. array_agg(t) emits every column of a row — including excluded and "
         "suspect ones — with zero Column nodes for them, so no column-level check "
-        "can see it. Refusing the name costs 3 of the 6,743 gold statements "
-        "(0.04%); permitting it and relying on the whole-row argument rule alone "
+        "can see it. Refusing the name costs 3 calls spread over 2 of the 6,743 gold "
+        "statements (0.03%); the inventory's count of 3 is calls, not statements. "
+        "Permitting it and relying on the whole-row argument rule alone "
         "would make one AST walk the only thing between a decoy column and the "
         "analyst. In ADVERSARIAL_SET, so this is enforced from both sides."
     ),

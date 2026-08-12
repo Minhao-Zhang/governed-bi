@@ -23,9 +23,17 @@ import hashlib
 from collections.abc import Mapping, Sequence, Set
 from typing import Any
 
+from governed_bi.govern.identifiers import normalise_column_key, normalise_table_key
 from governed_bi.serve.runtime import DEFAULT_CONTEXT_BUDGET
 
-__all__ = ["render_context", "escape_field", "EMPTY_CONTEXT"]
+__all__ = [
+    "render_context",
+    "escape_field",
+    "EMPTY_CONTEXT",
+    "table_qualifier",
+    "column_qualifier",
+    "withheld_by_grant",
+]
 
 EMPTY_CONTEXT = "(no context)"
 _STRUCTURAL = ("schema", "table", "column", "join", "metric", "term")
@@ -43,6 +51,7 @@ def render_context(
     schemas: Sequence[str],
     budget_chars: int = DEFAULT_CONTEXT_BUDGET,
     evicted: dict[str, Any] | None = None,
+    withheld: Set[str] = frozenset(),
 ) -> tuple[str, str]:
     """Return ``(context_block, context_hash)`` — sha256 hex of UTF-8 block.
 
@@ -52,8 +61,16 @@ def render_context(
     one that was rendered — a blind spot sitting exactly between "table selection" and
     "generation", the two stages any attribution of the remaining loss has to tell apart.
     :func:`_assemble_and_evict` also returns over-budget text when the ladder is exhausted.
+
+    ``withheld`` is the authorization narrowing ADR 0012 §8.4 owed: asset ids this principal's
+    grant does not authorize, computed by :func:`withheld_by_grant` and passed in rather than
+    derived here, so the renderer and ``ToolBounds.readable_assets`` cannot come to disagree
+    about what "the model may see" means. **Empty under the open grant**, which is why the
+    block and its hash are byte-identical by default. Distinct from ``evicted``: eviction is a
+    space decision worth recording, withholding is a permission decision the layer stack will
+    also make, and folding the two would let a denial read as a budget overrun.
     """
-    pieces = _build_pieces(retrieved, assets_by_id, schemas)
+    pieces = _build_pieces(retrieved, assets_by_id, schemas, withheld)
     block = _assemble_and_evict(pieces, budget_chars, evicted=evicted)
     if not block.strip():
         block = EMPTY_CONTEXT
@@ -64,6 +81,7 @@ def _build_pieces(
     retrieved: Mapping[str, Any],
     assets_by_id: Mapping[str, Any],
     schemas: Sequence[str],
+    withheld: Set[str] = frozenset(),
 ) -> list[dict[str, Any]]:
     selected = retrieved.get("selected") or {}
     pulled_in = retrieved.get("pulled_in") or {}
@@ -76,7 +94,11 @@ def _build_pieces(
     seen: set[str] = set()
 
     def _add(aid: str) -> None:
-        if aid not in seen:
+        # The one gate. Every id the block can name arrives through here — schema assets,
+        # every `by_type` bucket and the closure's `pulled_in` — so filtering at the entrance
+        # covers the rules block, the reliability caveats and the pulled-in column rosters
+        # without three more tests that could each be forgotten separately.
+        if aid not in seen and aid not in withheld:
             seen.add(aid)
             ids.append(aid)
 
@@ -160,7 +182,12 @@ def _build_pieces(
     few_blocks: list[str] = []
     for aid in (str(x) for x in (by_type.get("few_shot") or ())):
         asset = assets_by_id.get(aid)
-        if asset is None:
+        # Filtered here as well as in `_add`: few-shot ids do pass through `_add`, but this
+        # section renders from `by_type` rather than from the `ids` list `_add` builds, so the
+        # gate at the entrance does not reach it. `withheld_by_grant` never names a few-shot
+        # today — deciding that would mean parsing the example's SQL — so this is the seam for
+        # a rule that does, not a claim that one exists.
+        if asset is None or aid in withheld:
             continue
         body = _field(asset, "body")
         if not body:
@@ -266,7 +293,7 @@ def _collect_caveats(ids: Sequence[str], assets_by_id: Mapping[str, Any]) -> lis
 
     This keyed the prohibition on the **asset id** while the context block composed a
     qualified name, so a corpus whose two spellings differ published "do NOT use X" about a
-    column it had shown as Y. :func:`_column_qualifier` is the single answer for both.
+    column it had shown as Y. :func:`column_qualifier` is the single answer for both.
     """
     lines: list[str] = []
     for aid in sorted(ids):
@@ -281,7 +308,7 @@ def _collect_caveats(ids: Sequence[str], assets_by_id: Mapping[str, Any]) -> lis
             continue
         note = _field(rel, "note")
         note_text = escape_field(str(note)) if note else "UNRELIABLE. DO NOT USE"
-        lines.append(f"- {escape_field(_column_qualifier(asset))}: suspect - {note_text}")
+        lines.append(f"- {escape_field(column_qualifier(asset))}: suspect - {note_text}")
     return lines
 
 
@@ -386,8 +413,7 @@ def _structural_line(asset: Any, *, terse: bool = False) -> str:
     if at == "schema":
         return f"schema {escape_field(str(_field(asset, 'name') or _field(asset, 'id') or ''))}"
     if at == "table":
-        schema, phys = _field(asset, "schema") or "", _field(asset, "physical_name") or _field(asset, "id") or ""
-        spelled = f"{schema}.{phys}" if schema else str(phys)
+        spelled = table_qualifier(asset)
         parts = [f"table {escape_field(spelled)}", *_tool_key(asset, spelled)]
         if not terse:
             if _field(asset, "grain"):
@@ -396,7 +422,7 @@ def _structural_line(asset: Any, *, terse: bool = False) -> str:
                 parts.append(f"rows={_field(asset, 'row_count')}")
         return " ".join(parts)
     if at == "column":
-        spelled = _column_qualifier(asset)
+        spelled = column_qualifier(asset)
         return " ".join(
             [
                 f"column {escape_field(spelled)}",
@@ -453,7 +479,132 @@ def _tool_key(asset: Any, spelled: str) -> list[str]:
     return [f"id={escape_field(asset_id)}"]
 
 
-def _column_qualifier(asset: Any) -> str:
+def table_qualifier(asset: Any) -> str:
+    """How the model must spell this table: ``{schema}.{physical_name}``.
+
+    Public and shared with :func:`withheld_by_grant`, for the reason
+    :func:`column_qualifier` was already shared with the caveats block: an asset must have
+    exactly one spelling, and an authorization decision taken against a second one would
+    withhold a different table from the one it rendered.
+    """
+    schema = _field(asset, "schema") or ""
+    phys = _field(asset, "physical_name") or _field(asset, "id") or ""
+    return f"{schema}.{phys}" if schema else str(phys)
+
+
+def withheld_by_grant(assets_by_id: Mapping[str, Any], grant: Any) -> frozenset[str]:
+    """Asset ids this principal's grant does not authorize. **Empty for an open grant.**
+
+    The narrowing ADR 0012 §8.4 owed, and the reason §6 left ``read_body`` ungated: refusing a
+    statement is not the same as not disclosing, and gating the tool while the renderer still
+    put the table's summary in the prompt would be a bound that only looks enforced. One
+    function, called by :func:`~governed_bi.serve.nodes.assemble.assemble_node` for the block
+    and by :func:`~governed_bi.serve.delivery.tool_bounds_from_state` for
+    ``readable_assets`` — two computations of "what may this principal see" is how one comes
+    to disclose what the other refuses.
+
+    The keys are folded through the same ``identifiers`` functions ``check()`` folds a
+    statement's references with, so an integrator writing ``Sales.Orders`` and a corpus
+    declaring ``sales.orders`` are one table here as they are there.
+
+    Four rules, and each says which asset the grant reaches through:
+
+    * a **table** is withheld when the grant does not authorize its qualified name;
+    * a **column** is withheld when the grant denies it, or when its table is withheld;
+    * a **join** or **metric** is withheld when an endpoint table is withheld — an ON clause
+      naming a table the principal may not read is the table's existence, spelled out;
+    * a **term** is withheld when its ``binding`` points at a withheld asset. It names no
+      *table*, which is what this list used to say and why it was exempt — but
+      ``_structural_line`` renders ``binding=<target id>``, and the target of a binding is
+      usually a **column**, which a denial withholds. A term bound to ``sales.customers.email``
+      therefore spelled the denied column into the prompt under the heading of a business
+      phrase. Terms whose target survives are rendered as before;
+    * a **schema** and a **few_shot** are never withheld. The first names no asset. The second
+      can *contain* one, in ``sql`` this repository does not parse — the same non-fatal
+      reference ``session._visible`` declines to prune, recorded here rather than silently
+      decided. A ``metric``'s ``expression`` is the same case for the same reason; what is
+      matched is its ``base_table``.
+
+    **Three spellings, not two, and the third is a fix.** ``left_table`` / ``right_table`` /
+    ``base_table`` / ``parent_table`` may be a table's asset id, its ``{schema}.{physical}``
+    qualifier, **or its bare physical name** — ``retrieve/structure.py`` binds all of them and
+    deliberately declines to settle which, so all of them occur in one corpus. Matching only the
+    first two is how a withheld ``sales.audit_log`` still rendered
+    ``join customers >< audit_log on customers.id = audit_log.customer_id``: the *qualified*
+    spelling of that same join was withheld, so the hole was spelling-dependent rather than a
+    stated trade.
+
+    A **bare** name is matched only when the field carries no ``.`` at all, and it is matched
+    against every withheld table's bare name lake-wide. Two schemas holding a ``customers`` each,
+    one withheld, therefore withhold both bare-spelled joins. That is a false refusal and it is
+    the deliberate direction: an endpoint whose schema nobody wrote down is undecidable, and the
+    two readings are "withhold something the principal may read" and "name a table they may not".
+    """
+    if grant is None or getattr(grant, "is_open", False):
+        return frozenset()
+
+    withheld: set[str] = set()
+    #: Every qualified spelling of a withheld table: its asset id and its ``{schema}.{physical}``.
+    withheld_spellings: set[str] = set()
+    #: The **bare** spellings of the same tables, for a field that carries no schema.
+    withheld_bare: set[str] = set()
+    for aid, asset in assets_by_id.items():
+        if _asset_type(asset) != "table":
+            continue
+        if grant.authorizes_table(normalise_table_key(table_qualifier(asset), None)):
+            continue
+        withheld.add(str(aid))
+        withheld_spellings.update({str(aid), table_qualifier(asset)})
+        physical = str(_field(asset, "physical_name") or "").strip()
+        if physical:
+            withheld_bare.add(physical)
+        withheld_bare.add(str(aid).rsplit(".", 1)[-1])
+
+    def _names_a_withheld_table(value: Any) -> bool:
+        if value is None:
+            return False
+        text = str(value)
+        if not text:
+            return False
+        if text in withheld_spellings:
+            return True
+        return "." not in text and text in withheld_bare
+
+    for aid, asset in assets_by_id.items():
+        at = _asset_type(asset)
+        if at == "column":
+            parent = str(_field(asset, "parent_table") or "")
+            schema = _field(asset, "schema") or ""
+            qualified = f"{schema}.{parent}" if schema and parent else ""
+            if _names_a_withheld_table(parent) or (qualified and qualified in withheld_spellings):
+                withheld.add(str(aid))
+            elif grant.denies_column(normalise_column_key(column_qualifier(asset), None)):
+                withheld.add(str(aid))
+        elif at in ("join", "metric"):
+            endpoints = (
+                _field(asset, "left_table"),
+                _field(asset, "right_table"),
+                _field(asset, "base_table"),
+            )
+            if any(_names_a_withheld_table(e) for e in endpoints):
+                withheld.add(str(aid))
+
+    # A second pass, because a term's target is usually a *column* and the column rules above
+    # have to have run first. One pass with a lookahead would be the same work and would read as
+    # if the order were incidental.
+    for aid, asset in assets_by_id.items():
+        if _asset_type(asset) != "term":
+            continue
+        binding = _field(asset, "binding")
+        target = binding if isinstance(binding, str) else _field(binding, "target_id")
+        if target is not None and (
+            str(target) in withheld or _names_a_withheld_table(target)
+        ):
+            withheld.add(str(aid))
+    return frozenset(withheld)
+
+
+def column_qualifier(asset: Any) -> str:
     """How the model must spell this column, and how the caveats block already spells it.
 
     ``parent_table`` may be bare or schema-qualified (``retrieve/structure.py`` binds both

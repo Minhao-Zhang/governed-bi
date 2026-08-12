@@ -326,7 +326,7 @@ def build_index(
         raise ValueError(
             "vector_cache requires an embedder: the key is (model, dimensions, text), "
             "so without one there is no identity to read the cache under "
-            "(register/knobs.py:208)"
+            "(register/knobs.py, the embedding_provider knob)"
         )
 
     vectors: VectorStore | None = None

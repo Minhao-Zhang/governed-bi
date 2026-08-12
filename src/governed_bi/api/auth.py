@@ -36,7 +36,7 @@ it, and ``useStream`` needs that — so the denial is here, on the ``"update"`` 
 **What this does not do.** It is not multi-user authorization: one key means one principal, so
 ``resume_authorised``'s per-caller check (``govern/bounds.py``) is still the only thing that
 distinguishes two callers, and on the streamed transport it is still not reached
-(audit A5 — ``graph_app._accept_node`` passes no ``identity``). That is a separate fix.
+(audit A5 — ``serve/accept.py``'s node passes no ``identity``). That is a separate fix.
 """
 
 from __future__ import annotations
@@ -47,7 +47,16 @@ from collections.abc import Mapping
 
 from langgraph_sdk import Auth
 
-__all__ = ["API_KEY_HEADER", "API_KEY_VAR", "api_key_refusal", "auth"]
+from governed_bi.govern.access import LOCAL_PRINCIPAL
+from governed_bi.ports import Principal
+
+__all__ = [
+    "API_KEY_HEADER",
+    "API_KEY_VAR",
+    "api_key_refusal",
+    "auth",
+    "authenticated_principal",
+]
 
 #: Env var holding the shared key. Unset means every request is refused — see
 #: :func:`_authenticate`. Named rather than inlined so the error text can quote it.
@@ -72,6 +81,31 @@ _UNSET_DETAIL = (
 )
 
 _WRONG_DETAIL = f"missing or wrong {API_KEY_HEADER}"
+
+
+def authenticated_principal() -> Principal:
+    """The one :class:`~governed_bi.ports.Principal` this server executes turns for.
+
+    **A function of nothing, because authentication here is a function of nothing.**
+    :func:`_authenticate` compares one shared key; a shared key cannot distinguish two
+    callers, so every request that gets past it is the same subject. Returning
+    :data:`~governed_bi.govern.access.LOCAL_PRINCIPAL` rather than deriving a principal
+    from the key is the same refusal ``_authenticate`` already makes about ``identity``.
+
+    It exists so the composition root has **one** place to change. ``govern/access.py`` used
+    to record that ``LOCAL_PRINCIPAL`` was "not imported by ``api/`` today" and now records
+    that it is — this function being the importer — because the literal written twice is the
+    drift this repository keeps auditing for. ``_authenticate`` returns ``LOCAL_PRINCIPAL.id``
+    instead of its own copy of the string, so the identity the resume guard compares and the
+    principal the access policy is asked about cannot come apart.
+
+    A fork that authenticates people replaces this with something taking the request's
+    claims. The moment it can return two different principals, audit findings A5, A6 and B1
+    go live — the streamed transport passes no identity, ``/chat/resume`` validates by
+    thread, and ``POST /threads/search`` returns the rendered context block. That trigger is
+    recorded in ``docs/enterprise-fork.md`` and is deliberately not fixed here.
+    """
+    return LOCAL_PRINCIPAL
 
 
 def _presented(headers: dict[bytes, bytes], authorization: str | None) -> str | None:
@@ -128,7 +162,9 @@ async def _authenticate(
     # One key, one principal. `identity` is what `govern/bounds.resume_authorised` gates on, and
     # it is deliberately NOT derived from this: a single shared key cannot distinguish two
     # callers, so claiming it as an identity would make that check look enforced when it is not.
-    return {"identity": "governed-bi-local", "permissions": []}
+    # Spelled through `authenticated_principal()` so the string the resume guard compares and the
+    # principal `api/graph_app.py` asks the access policy about are one value (ADR 0012 §8.1).
+    return {"identity": authenticated_principal().id, "permissions": []}
 
 
 @auth.on.threads.update

@@ -1,4 +1,23 @@
-"""Eval report: Populations, McNemar, quotability, cross-arm context_hash gate."""
+"""Eval report: Populations, McNemar, quotability, cross-arm context_hash gate.
+
+Also the **refusal histogram** — "why did this arm not answer", counted in the vocabulary
+``register/stages.py`` declares. ADR 0013 §2 argued for putting the abstention reasons in
+``REFUSED_BY_TO_STAGE`` on the grounds that ``classify_outcome``, a refusal histogram and this
+module already read that table. Measured on 2026-08-12, all three were false:
+
+* ``classify_outcome`` never consults it. Any truthy ``refused_by`` returns
+  ``Outcome.refused``, declared or not.
+* The one histogram that exists, ``tools/datalake_report.py::_refusal_layers``, counts
+  ``attempt.reason_code`` off the **ledger** and has never touched the table. A withheld turn
+  writes no ledger row at all — ADR 0013's own acceptance criterion 3 — so the four abstention
+  reasons were not merely uncounted there, they were unreachable.
+* This module had zero references to ``refused_by``, ``terminal_reason`` or the vocabulary.
+
+Three named consumers, none of them real: the declared-machinery-with-no-reader shape the
+argument itself was invoking. The histogram is built here rather than the sentence weakened, and
+:func:`refusal_histogram`'s ``unattributed`` bucket is the part that makes the vocabulary
+load-bearing instead of decorative.
+"""
 
 from __future__ import annotations
 
@@ -15,9 +34,11 @@ from governed_bi.measure.stats import McNemarResult, mcnemar
 from governed_bi.register.knobs import comparability_keys
 from governed_bi.register.quantity import Measured
 from governed_bi.register.record import GATE_CONDITIONS as _GATE_TEXT
+from governed_bi.register.stages import REFUSED_BY_TO_STAGE, Outcome
 
 __all__ = [
     "CONTEXT_HASH_THRESHOLD",
+    "REFUSAL_CHANNELS",
     "arm_population",
     "context_hashes_distinct",
     "evaluate_arm",
@@ -25,8 +46,17 @@ __all__ = [
     "headline_ex",
     "knobs_comparable",
     "paired_ex",
+    "refusal_histogram",
+    "refusal_report_lines",
     "summarise",
 ]
+
+#: Where a refused turn's reason is written, in the order the histogram prefers them.
+#:
+#: ``terminal_reason`` first: ``route``, ``connect`` and the abstention policy all write the
+#: *rule* there, while ``refused_by`` names the stage and is coarser (``"guardrail"`` for every
+#: layer refusal). A row carrying both is one decision, so it is counted once.
+REFUSAL_CHANNELS: tuple[str, ...] = ("terminal_reason", "refused_by")
 
 #: Sentinel for "this arm's rows do not carry the key at all", which is not the same fact as
 #: the key being present and ``None``. ``_resolved_knobs`` flattens ``UNSET`` to ``None`` on
@@ -70,6 +100,90 @@ def paired_ex(a: Population, b: Population) -> McNemarResult:
     return mcnemar(a, b, "correct")
 
 
+def refusal_histogram(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Why this arm did not answer, counted by reason and by the stage that owns each reason.
+
+    **The point of the ``unattributed`` bucket.** ``REFUSED_BY_TO_STAGE`` is called a closed
+    vocabulary, and two import-time guards keep the *declarations* in step with each other — but
+    nothing before this read the table against real rows, so a node writing a string that is in
+    neither the register nor any guard produced a refusal that every count still absorbed
+    silently. Here it lands in its own bucket with its own name, which is what "closed" has to
+    mean once artifacts exist: a reader can see that the histogram does not add up and see which
+    string is why.
+
+    ``by_stage`` is the question §4.2 of open-work.md asks — *retrieval missed, you may not, or
+    the engine decided to withhold* — and it is answerable only because ADR 0012 split
+    ``r_table_not_authorized`` out of the licensing count and ADR 0013 put the abstention
+    reasons in the same table. Unattributed reasons are **not** in ``by_stage``: there is no
+    stage to credit, and inventing one is the misattribution both ADRs exist to end.
+
+    Counted over the rows the arm classified ``refused``. A crash is not a refusal (``Outcome``
+    keeps them apart), a cap is ``capped``, and a clarification is its own outcome — so a
+    histogram over every row would answer a different question from the one it is named for.
+    """
+    by_reason: dict[str, int] = {}
+    unattributed: dict[str, int] = {}
+    by_stage: dict[str, int] = {}
+    n_refused = 0
+    no_reason = 0
+    for row in rows:
+        if str(row.get("outcome") or "") != Outcome.refused.value:
+            continue
+        n_refused += 1
+        reason = next(
+            (str(row[c]) for c in REFUSAL_CHANNELS if row.get(c) not in (None, "")), ""
+        )
+        if not reason:
+            no_reason += 1
+            continue
+        by_reason[reason] = by_reason.get(reason, 0) + 1
+        stage = REFUSED_BY_TO_STAGE.get(reason)
+        if stage is None:
+            unattributed[reason] = unattributed.get(reason, 0) + 1
+            continue
+        by_stage[stage.value] = by_stage.get(stage.value, 0) + 1
+    return {
+        "n_rows": len(rows),
+        "n_refused": n_refused,
+        "by_reason": dict(sorted(by_reason.items())),
+        "by_stage": dict(sorted(by_stage.items())),
+        "unattributed": dict(sorted(unattributed.items())),
+        "no_reason": no_reason,
+    }
+
+
+def refusal_report_lines(hist: Mapping[str, Any]) -> list[str]:
+    """:func:`refusal_histogram` as printable lines, or **nothing** when nothing refused.
+
+    Beside the histogram rather than in the driver, for ``adversarial_run.py``'s reason: a
+    driver and a test both need the rendering while only the reader needs the counts, and the
+    two have different lifecycles.
+
+    The header carries the refused count and the population it came out of, so no line below
+    is a rate whose denominator a reader has to go and find. Those lines are raw counts, at
+    most twelve of them, and they sum to the header with ``no_reason``. ``UNATTRIBUTED`` is
+    shouted because a reason in no register means the numbers below it do not add up.
+    """
+    if not hist.get("n_refused"):
+        return []
+    lines = [
+        f"\nrefused turns by declared reason ({hist['n_refused']} of {hist['n_rows']}):",
+        *(
+            f"  {name:<44}{n:>6}"
+            for name, n in sorted(hist["by_reason"].items(), key=lambda kv: (-kv[1], kv[0]))[:12]
+        ),
+        "  by stage: " + (", ".join(f"{k}={v}" for k, v in hist["by_stage"].items()) or "-"),
+    ]
+    if hist["unattributed"]:
+        lines.append(
+            "  UNATTRIBUTED (in no register): "
+            + ", ".join(f"{k}={v}" for k, v in hist["unattributed"].items())
+        )
+    if hist["no_reason"]:
+        lines.append(f"  refused with no reason recorded: {hist['no_reason']}")
+    return lines
+
+
 def evaluate_arm(arm: Population) -> tuple[GateResult, ...]:
     """Single-arm gates. ``context_hash`` here only checks coverage; the cross-arm
     distinctness half is :func:`context_hashes_distinct`."""
@@ -89,9 +203,11 @@ def context_hashes_distinct(
     reasoning that a changed treatment changes the context. The inference does not hold in
     that direction: retrieval is nondeterministic, so the hashes differ whether or not the
     treatment did. Measured on ``run1``/``run2``, which differ only by a random seed, it passed
-    at **0.9993** — and at 0.992, 0.992 and 0.988 on every other pair on disk. It believed it
-    asked "did the treatment change" and measured "is there retrieval noise", to which the
-    answer is always yes.
+    at **0.9993** (1,350 of 1,351 hashes differ) — and on the 20 other pairs of the seven
+    ``proxy_*`` arms in ``runs/eval/`` it never falls below **0.9882**, hitting exactly 1.0000
+    on 11 of them (corpus ``30872d3``, recomputed 2026-08-12). It believed it asked "did the
+    treatment change" and measured "is there retrieval noise", to which the answer is always
+    yes.
 
     What replaces it is :func:`knobs_comparable`, which reads the declared treatment out of the
     knobs rather than inferring it from a hash. This function keeps the narrower job it can
@@ -366,6 +482,10 @@ def summarise(
                 "n": pop.n,
                 "ex": _measured_dict(headline_ex(pop)),
                 "crash_rate": _measured_dict(pop.rate("crashed")),
+                # The consumer ADR 0013 §2 named and did not have. Per arm and not per pair:
+                # "why did this arm decline" is a description of one arm, and the paired block
+                # below is about a difference.
+                "refusals": refusal_histogram(pop.rows),
                 "gates": [g.render() for g in evaluate_arm(pop)],
             }
             for name, pop in pops.items()
@@ -402,15 +522,21 @@ def _declared_treatment(arm_name: str) -> frozenset[str]:
     """The arm's declared treatment from ``arms.toml``, or empty if it has no profile.
 
     Empty is not a fallback that lets the comparison through — ``knobs_comparable`` treats an
-    undeclared treatment as ``cannot_evaluate``. An unreadable or absent ``arms.toml`` is the
-    same case: a missing declaration and a declaration of nothing are both "nobody said", and
-    neither may read as "nothing changed".
+    undeclared treatment as ``cannot_evaluate``. An arm nobody wrote a profile for is exactly
+    that case, and ``KeyError`` is how ``arm_profile`` says so.
+
+    **``ValueError`` and ``OSError`` are not caught, and that is a correction.** This used to
+    swallow all three, so one typo in ``arms.toml`` — a treatment naming a knob that is not a
+    comparability knob, which the loader refuses the whole file for — silently un-declared
+    *every* arm and turned each comparison into ``cannot_evaluate``. Nothing distinguishes that
+    from "these two arms genuinely cannot be compared", so a broken file reads as a data
+    problem. A malformed or missing register is a defect in the tree and must say so.
     """
     from governed_bi.register.arm_profiles import arm_profile
 
     try:
         return arm_profile(arm_name).treatment
-    except (KeyError, OSError, ValueError):
+    except KeyError:
         return frozenset()
 
 

@@ -197,6 +197,25 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "documented failure bucket at a perfect score over 2030 rows"),
     _f("schemas", Tier.decision, Absence.not_applicable, Stage.route,
        "the selected top-N. The only falsifiable check on the routing formula"),
+    _f("budget_dropped", Tier.decision, Absence.not_applicable, Stage.route,
+       "asset_type -> how many hits a per-type cap discarded before anything downstream could "
+       "see them. **Without it a cap and a retrieval miss are the same row**: `pass_two` "
+       "deletes over-budget ids from `selected`, so a 9th-ranked gold table does not exist to "
+       "the turn and `schema_ranking` shows a schema that was found while nothing says the "
+       "table was cut. `register/citations.py` retired the offline estimate of how often that "
+       "happens and kept the requirement, because the shape survives the number: a budget set "
+       "too tight and a router that never found the table want opposite fixes. Null means no "
+       "cap bit -- which `pass_two` distinguishes from an empty mapping -- or that the fan-out "
+       "did not run, and `schema_ranking` being null is what tells those two apart. Declared "
+       "2026-08-12: `pass_two` had written the key since the caps existed and `resolve` "
+       "destroyed it one super-step later, so carrying it to `stamp` (the `merge_delta` fix) "
+       "moved it one step and no further -- it reached no artifact a gate or a reader could "
+       "open until it was a register row"),
+    _f("budget_best_dropped_score", Tier.decision, Absence.not_applicable, Stage.route,
+       "asset_type -> the highest score that did not survive the cap. The count alone cannot "
+       "tell a drop at 0.97 from a drop at 0.01 and those want opposite decisions: one says "
+       "the cap is too tight, the other says the cap is doing its job. Null on the same two "
+       "conditions as `budget_dropped`, and always null or non-null together with it"),
     _f("pulled_in", Tier.decision, Absence.not_applicable, Stage.connect,
        "asset_id -> resolve|connect. Answers what expand_hops is worth"),
     _f("licensed", Tier.decision, Absence.not_applicable, Stage.connect,
@@ -223,6 +242,26 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "countable, and a nullable hit cannot express it. Null only when guard "
        "blocked first",
        gate="no negative_gate error_failed_open"),
+    _f("abstention", Tier.decision, Absence.not_applicable, Stage.abstain,
+       "what the declared abstention policy decided and the evidence behind it (ADR 0013): "
+       "{policy, outcome, reason, rules_evaluated, evidence}, outcome one of answer | withhold "
+       "| disabled and `reason` a member of stages.ABSTENTION_REASONS. **The engine's answer to "
+       "'why did you not answer'**, which until 2026-08-12 it did not have: 19 of the v4 arm's "
+       "20 refusals end on `r_table_not_licensed`, so the histogram said which layer objected "
+       "and nothing said whether anything had decided. Null means the turn ended before the "
+       "node -- guard, negative gate, route or connect -- which is a different fact from "
+       "`disabled`, and both are different from a policy that ran and let the turn through. "
+       "The verdict is a pure function of state, so a reader can recompute it from the row.\n"
+       "**No gate, and no score in it.** There is no confidence, certainty or graded field "
+       "here and there will not be: a learned abstainer was measured at OOF AUC 0.597 with an "
+       "'unsure' bucket as likely to be right as its 'correct' one (open-work.md 3.11), every "
+       "risk-coverage curve reads 0.7144 at the engine's own coverage, and ADR 0007 forbids a "
+       "trust field on the answer card. `reason` is a closed vocabulary, held closed by two "
+       "bidirectional import-time guards and read by `eval/report.py::refusal_histogram` "
+       "through `terminal_reason` -- which is a different histogram from the driver's "
+       "`_refusal_layers`, and had to be built: that one counts ledger attempts, and a withheld "
+       "turn writes no ledger row, so the abstention reasons were unreachable to it. This field "
+       "carries the evidence beside the reason"),
     _f("execution", Tier.decision, Absence.never, Stage.stamp,
        "attempts, per-attempt verdict layer, terminal, guardrail_errors "
        "(ADR 0006 section 12). Total, including the 'no SQL was attempted' case"),
@@ -247,14 +286,19 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
     _f("error_type", Tier.outcome, Absence.not_applicable, Stage.stamp,
        "exception CLASS only. Tracebacks echo SQL and row values"),
     _f("generated_sql", Tier.outcome, Absence.not_applicable, Stage.stamp,
-       "null when no SQL was produced, which is not the same as empty. **On an answered "
-       "turn this is the statement the engine SENT** -- canonicalised, quoted and "
-       "row-limited, read from the ledger's `executed_sql`. On a refused turn nothing "
-       "was sent, so it falls back to the last statement the model *proposed*, which "
-       "may not execute at all; a capped turn is either. A consumer that re-runs this "
-       "field must gate on `outcome == 'answered'`, or it reports a refusal as a broken "
-       "statement -- which is how 14 capped turns looked like an engine defect on "
-       "2026-08-04"),
+       "null when no SQL was produced, which is not the same as empty. **This is the "
+       "statement the engine SENT** -- canonicalised, quoted and row-limited, read from the "
+       "ledger's `executed_sql` and from nothing else. There is **no fallback to the model's "
+       "proposal**: that fallback was audit C4, closed, because two eval callers execute this "
+       "field and a proposal here is ungoverned SQL run against the database by the "
+       "measurement harness. A turn that executed nothing records null -- every refused turn, "
+       "and any capped turn whose attempts were all declined; a capped turn that did execute "
+       "carries its last executed statement. The proposal is recoverable from the transcript "
+       "through `serve.messages.last_proposed_sql`, which is where `eval/harness.py` reads it "
+       "to price an abstention. A consumer that re-runs this field must still gate on "
+       "`outcome == 'answered'`, or it reports a decline as a broken statement -- which is "
+       "how 14 capped turns looked like an engine defect on 2026-08-04 "
+       "(git-history:198e76e)"),
     # `final_sql_source` was here and is gone (audit §10): zero writers, permanently null.
     # There is one rule for selecting the final statement -- `agent_core._last_executed_sql`
     # reads the ledger, not the tool arguments -- so a field naming a choice between

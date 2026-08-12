@@ -2,7 +2,7 @@
 
 Neither half had a wire before 2026-08-11.
 
-**Confounders.** ``register/knobs.py`` declares 45 knobs ``Role.comparability`` and derives
+**Confounders.** ``register/knobs.py`` declares 47 knobs ``Role.comparability`` and derives
 ``comparability_keys()`` / ``config_hash_keys()`` from them. Neither function had a production
 caller — every hit outside that module was a comment — and there is no ``config_hash`` at all.
 ``comparison_quotable`` was ``context_hashes_distinct`` plus *each arm's own* gates, and the one
@@ -10,8 +10,8 @@ gate reading knobs, ``_knobs_resolved_gate``, uses ``resume_drift_keys()`` **wit
 two arms differing in ``chat_model`` were published as a clean delta.
 
 This is the between-arm twin of a defect already fixed once here: ``session.py``'s
-``_resolved_knobs`` records that ``UNSET`` knobs were *absent* rather than null from all 8,106
-rows of six arms, and "a key missing from every row compares equal to itself and the drift gate
+``_resolved_knobs`` records that ``UNSET`` knobs were *absent* rather than null from all 9,457
+rows of seven arms, and "a key missing from every row compares equal to itself and the drift gate
 passes on a configuration it never saw." Hence the absent-versus-``None`` care below — ``None``
 is a recorded measurement two arms may agree on; a missing key is the arm declining to say.
 
@@ -29,6 +29,8 @@ a prompt change and ``prompt_set`` is a comparability knob.
 from __future__ import annotations
 
 from typing import Any
+
+import pytest
 
 from governed_bi.eval.report import arm_population, comparison_quotable, knobs_comparable
 from governed_bi.measure.gates import Verdict
@@ -230,3 +232,77 @@ def test_a_treatment_that_is_not_a_comparability_knob_is_refused() -> None:
 
     assert result.verdict is Verdict.cannot_evaluate
     assert "git_sha" in result.detail
+
+
+def test_a_malformed_arms_file_is_a_loud_failure_and_not_an_undeclared_arm(
+    tmp_path, monkeypatch
+) -> None:
+    """``summarise`` reads the treatment from ``arms.toml`` when the caller does not name one.
+
+    ``_declared_treatment`` used to catch ``ValueError`` alongside ``KeyError``, so one typo in
+    that file — a treatment naming something that is not a comparability knob, which the loader
+    refuses the *whole file* for — silently un-declared **every** arm and turned each comparison
+    into ``cannot_evaluate``. Nothing distinguishes that from "these two arms genuinely cannot be
+    compared", so a broken register reads as a data problem and sends the reader to the
+    artifacts.
+
+    Driven through ``summarise`` rather than by calling the private helper, because the property
+    is about what a *caller* sees (D25: when a test can reach the real path, reaching for the
+    function instead is a different test).
+    """
+    from governed_bi.eval.report import summarise
+    from governed_bi.register import arm_profiles
+
+    broken = tmp_path / "arms.toml"
+    broken.write_text('[arm.v4]\ntreatment = ["prompt_sett"]\n', encoding="utf-8")
+    monkeypatch.setattr(arm_profiles, "ARMS_FILE", broken)
+    arm_profiles.load_arm_profiles.cache_clear()
+    try:
+        with pytest.raises(ValueError, match="prompt_sett"):
+            summarise(
+                {
+                    "v3_fold": _rows(2, knobs=_recorded(), hash_prefix="a"),
+                    "v4": _rows(2, knobs=_recorded(prompt_set="p-b"), hash_prefix="b"),
+                },
+                pair=("v3_fold", "v4"),
+            )
+    finally:
+        arm_profiles.load_arm_profiles.cache_clear()
+
+
+def test_an_arm_with_no_profile_still_reads_as_nobody_said_what_changed(
+    tmp_path, monkeypatch
+) -> None:
+    """The case that *must* stay a soft one, or the correction above would break every
+    undeclared arm. A well-formed file that simply has no entry for this arm is ``KeyError``,
+    which is exactly "nobody wrote a profile".
+
+    "Well-formed" now includes a ``corpus_content_hash`` on every entry: an arm that declares
+    none cannot be reconciled and the loader refuses the file for it, because the alternative
+    was ``v3_fold`` silently exempting itself from the only check ``reconcile`` performs. The
+    fixture carries one so that this test still exercises the *absent-entry* path and not the
+    malformed-file path above it.
+    """
+    from governed_bi.eval.report import summarise
+    from governed_bi.register import arm_profiles
+
+    fine = tmp_path / "arms.toml"
+    fine.write_text(
+        '[arm.somebody_else]\ntreatment = ["prompt_set"]\ncorpus_content_hash = "abc123"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(arm_profiles, "ARMS_FILE", fine)
+    arm_profiles.load_arm_profiles.cache_clear()
+    try:
+        summary = summarise(
+            {
+                "v3_fold": _rows(2, knobs=_recorded(), hash_prefix="a"),
+                "v4": _rows(2, knobs=_recorded(prompt_set="p-b"), hash_prefix="b"),
+            },
+            pair=("v3_fold", "v4"),
+        )
+    finally:
+        arm_profiles.load_arm_profiles.cache_clear()
+
+    assert summary["comparison"]["treatment"] == []
+    assert summary["comparison"]["quotable"] is False

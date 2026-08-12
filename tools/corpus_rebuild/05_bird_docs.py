@@ -10,7 +10,7 @@ Nothing in the engine has ever read these files. Writes ``_build/bird_docs.jsonl
 
 **Set expectations.** 515 CSVs, 3,663 rows, 2,542 distinct ``(db, column)`` pairs against 4,596
 real columns; ``column_description`` is present on 91.5% of the rows it covers but its median
-length is **28 characters**, and 9% merely restate the column name ("the title of the movie").
+length is **28 characters**, and 8.4% merely restate the column name ("the title of the movie").
 This is a starting point, not a description. The agent writes; it does not transcribe.
 
 Encoding: these CSVs are a mix of UTF-8 and cp1252, and a file that decodes under neither is

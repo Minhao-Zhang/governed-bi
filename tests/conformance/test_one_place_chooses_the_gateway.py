@@ -7,7 +7,7 @@ answers to 'what did this run use', on a comparability knob."* The moment Bedroc
 ``graph_app.py`` and not in ``__main__.py``, the note was false and the two entry points did
 disagree -- silently, because both still ran.
 
-Six call sites had the string. A comment cannot hold that invariant; this can.
+Four call sites had the string. A comment cannot hold that invariant; this can.
 """
 
 from __future__ import annotations

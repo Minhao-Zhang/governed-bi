@@ -280,8 +280,14 @@ RETIRED_CLAIMS: tuple[RetiredClaim, ...] = (
     RetiredClaim(
         # Both spellings occur (prose as a percentage, the artifact as a fraction), so
         # a pattern covering only one misses half the reappearances.
-        pattern=r"(69\.9\s*%|0\.699)|"
-                r"(schema[_ ]?pick|pick[_ ]?accuracy)\D{0,20}(69\.9|0\.699)",
+        #
+        # `(?!\d)` after the fraction, added 2026-08-12: bare `0\.699` also matched `0.6995`
+        # and `0.6997`, which are a selective-delivery coverage and a residual Jaccard and have
+        # nothing to do with schema-pick accuracy. The retired figure was published at three
+        # decimals, so a fourth digit is a different number by construction, and a gate that
+        # fires on unrelated arithmetic is a gate people learn to route around.
+        pattern=r"(69\.9\s*%|0\.699(?!\d))|"
+                r"(schema[_ ]?pick|pick[_ ]?accuracy)\D{0,20}(69\.9|0\.699(?!\d))",
         observed="schema_pick_accuracy: 0.699",
         why="measured through a rate-limited embedder; re-measured at 91.0% with "
             "quota free. The degradation counter existed and no gate read it.",

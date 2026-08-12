@@ -280,3 +280,6 @@ scratch_*.json
 # .next and .env.local are excluded. Nested is deliberate rather than folded in here: those
 # patterns are relative to the app directory, and Next.js's own template is what generates
 # them, so keeping them beside package.json means the next `create-next-app` diff is readable.
+
+# Orchestration working file, not a repo document (AGENTS.md: nothing in the root).
+TODO.md

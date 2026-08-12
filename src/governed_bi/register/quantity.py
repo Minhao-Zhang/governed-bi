@@ -71,13 +71,14 @@ class Measured(Generic[T]):
         """``Measured[int]`` **is** ``Measured`` at runtime: the subscript is erased.
 
         Erasure is what registers the class with LangGraph's msgpack serde. Under
-        strict mode (langgraph 1.2.10) ``StateGraph.compile`` derives the allowlist by
+        strict mode (langgraph 1.2.11) ``StateGraph.compile`` derives the allowlist by
         walking the state schema (``_internal._serde.build_serde_allowlist`` →
         ``BaseCheckpointSaver.with_allowlist``) — the only seam that reaches the
         deployed server's saver, which this repository never builds. That walk
-        recognises real classes only, and ``dataclasses.is_dataclass(Measured[int])``
-        is ``False`` because a subscripted generic is a ``typing._GenericAlias``, so
-        the allowlist derived from ``ServeState`` named nothing from this module.
+        recognises real classes only. Without this method
+        ``dataclasses.is_dataclass(Measured[int])`` would be ``False``, because a
+        subscripted generic is a ``typing._GenericAlias``, and the allowlist derived
+        from ``ServeState`` named nothing from this module.
 
         Unregistered, an absence comes back as a plain dict — ``.is_measured`` gone,
         :func:`~.record.missing_required`'s presence test blind to it, and

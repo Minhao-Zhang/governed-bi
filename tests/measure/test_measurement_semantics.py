@@ -333,12 +333,13 @@ def test_a_fully_instrumented_arm_can_actually_be_quotable() -> None:
     ``_context_hash_gate`` returned ``cannot_evaluate`` on **both** its branches — including
     when coverage was complete — and ``quotable`` treats ``cannot_evaluate`` as blocking. So the
     single-arm API was a permanent refusal. That is not a strict gate; it is a function no
-    caller can use, and the observable consequence is that no driver called it: ``measure/`` is
-    imported by ``eval/report.py`` and by nothing that produced a number this week.
+    caller can use.
 
-    The gate's real principle is preserved — the >= 95% cross-arm distinctness condition still
-    belongs to ``eval/report.comparison_quotable``, which holds both arms. What is decided here
-    is only the half one arm can answer: did every turn carry a ``context_hash`` at all.
+    The >= 95% cross-arm distinctness condition this gate used to defer to was retired by audit
+    D9 — retrieval is nondeterministic, so it passed at 0.9993 on a pair differing only by a
+    random seed — and ``eval/report.knobs_comparable`` judges the treatment from the declared
+    knobs instead. What is decided here is only the half one arm can answer: did every turn
+    carry a ``context_hash`` at all.
     """
     rows = [
         {
@@ -366,8 +367,9 @@ def test_a_fully_instrumented_arm_can_actually_be_quotable() -> None:
             # the register has always said "the corpus IS the treatment" and no gate read the
             # field, so an arm naming no corpus -- which is the state of both runs of the
             # designated null replicate, 1351/1351 -- passed every gate. One value across all
-            # rows, because one arm is one corpus; the cross-arm half is
-            # `report.comparison_quotable`'s.
+            # rows, because one arm is one corpus; no gate does the cross-arm half at all --
+            # `comparison_quotable` compares `context_hash` and the comparability knobs, and
+            # `corpus_content_hash` is neither.
             "corpus_content_hash": "corpus-30872d3",
         }
         for i in range(50)

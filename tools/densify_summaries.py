@@ -5,22 +5,12 @@ prose all sits in ``body``, so the indexed text is an identifier list with a fun
 of 0.00. This drops stopwords and duplicates from ``body`` and puts the leading content words in
 front of that list. No model call, no judgement.
 
-Measured through the real graph on 114 questions (2 per schema), embedder on, facet rewriters off:
-
-.. code-block:: text
-
-                                      baseline    dense     delta
-    all gold tables licensed  top_n=3    0.632    0.693    +6.1 pp
-    all gold tables licensed  top_n=1    0.509    0.588    +7.9 pp
-    schema recall@1                      0.632    0.693    +6.1 pp
-    mean tables licensed      top_n=3     13.7     13.1       -0.6
-
-+6.1 pp is the acceptance bar for a model-authored rewrite, and keeping this floor runnable is
-what makes that bar checkable. Two things it deliberately does not do, both measured: replacing
-the identifier list with prose loses on both channels (recall@3 0.851 -> 0.825 embedded, 0.640 ->
-0.632 lexical-only), because under obfuscation those English table and column meanings are the
-only English in a routing document; and raising the 250-character cap scored worse than this.
-Density, not length.
+The 114-question screen this file used to quote — a ``+6.1 pp`` table and a "prose loses on both
+channels" pair — carried no artifact path and no corpus commit, which is audit finding N11, and
+it is reversed by the measurement that does carry one: indexing prose rather than an identifier
+list is **+6.21 pp** of gold-table coverage and **+1.41 pp** of recall@3 over all 1,351 questions,
+paired (``register/citations.py``; ``runs/ablation/summary-form-1351-20260805.json``, 2026-08-05).
+So this is the mechanical floor and not an acceptance bar.
 """
 
 from __future__ import annotations

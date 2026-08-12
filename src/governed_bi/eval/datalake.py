@@ -644,10 +644,11 @@ def retrieval_funnel(
     # by side. These questions *are* gradeable — an engine that queries the database and gets
     # the right value still matches the digest — but the gold names no table and no join, so
     # nothing above ``answered`` can be conditioned on them and every arm scores poorly.
-    # Measured 2026-08-07 over 1 351 questions: 127 tableless, EX 0.276 / 0.228 / 0.354 against
-    # 0.615 / 0.561 / 0.711 on the other 1 224. Reported, not dropped: the ~3-point lift from
-    # excluding them is uniform across arms and changes no ranking, which makes it a choice
-    # about what a headline means rather than a correction, and the reader owns that choice.
+    # Measured over the seven ``proxy_*`` arms in ``runs/eval/`` (corpus 30872d3, 1 351
+    # questions each): 127 tableless, and their EX runs 0.29 to 0.34 against 0.60 to 0.71 on
+    # the other 1 224. Reported, not dropped: the ~3-point lift from excluding them is uniform
+    # across arms and changes no ranking, which makes it a choice about what a headline means
+    # rather than a correction, and the reader owns that choice.
     tableless = _stage(
         counts["gold_reads_no_table_correct"],
         counts["gold_reads_no_table_graded"],

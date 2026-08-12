@@ -27,6 +27,7 @@ from .guard import has_control_characters
 from .identifiers import fold, fold_map
 from .layers import CheckVerdict, refuse
 from .policy import DEFAULT_DIALECT, GovernancePolicy
+from .scopes import iter_scopes
 
 __all__ = [
     "Prepared",
@@ -74,6 +75,14 @@ def spellings_for(
     The third return value is the fix: the same map **per table**, so a *qualified* reference
     resolves against its own table and never consults the flat one. ``T1."Name"`` was never
     ambiguous; only the flat namespace made it look that way.
+
+    Two early exits remain — one ``continue`` for a licensed id the corpus does not hold, and the
+    ``physical_name`` guard below, which skips the write rather than the iteration. Neither can
+    poison a bare key, because neither has a name
+    to poison it with. Both fail closed elsewhere — an absent table contributes no allowed column
+    keys, so every reference to it refuses at COLUMNS, and a table with no physical name cannot
+    be written in a statement at all. Deriving a name from the id instead would put a second
+    source of truth for a table's name in the file whose job is to agree with the corpus.
     """
     names: list[str] = []
     by_table: dict[str, Mapping[str, str]] = {}
@@ -93,11 +102,8 @@ def spellings_for(
                 names.append(physical)
                 own.append(physical)
         # Keyed by both the bare and the schema-qualified table name, because a reference may
-        # carry either. A table whose *own* columns collide keeps no entry: within one table
-        # the collision is real and the flat map's refusal is the right answer.
+        # carry either.
         own_spellings, own_ambiguous = fold_map(own)
-        if own_ambiguous:
-            continue
         physical_name = getattr(table, "physical_name", None)
         schema = getattr(table, "schema", None)
         if isinstance(physical_name, str) and physical_name:
@@ -105,53 +111,131 @@ def spellings_for(
             # Two licensed schemas both declaring ``country`` must not have one of them own the
             # bare key by sort order -- the same collision this function refuses, one scope up.
             # ``None`` poisons it; the schema-qualified key still resolves.
-            by_table[bare] = None if bare in by_table else own_spellings
-            if isinstance(schema, str) and schema:
+            #
+            # **The poison write runs before the own-collision guard, and that order is the whole
+            # content of the fix** (open-work.md 3.2a, second defect). It used to be a ``continue``
+            # above this block, so a self-colliding table neither registered nor poisoned its bare
+            # key and another schema's table of the same name took sole ownership: ``FROM country``
+            # bound to the self-colliding table while ``country.code`` was spelled from the other
+            # one, behind a passing verdict, where ``r_ambiguous_fold`` was the required answer.
+            by_table[bare] = None if own_ambiguous or bare in by_table else own_spellings
+            # The schema-qualified key is still withheld from a self-colliding table: within one
+            # table the collision is real and the flat map's refusal is the right answer.
+            if isinstance(schema, str) and schema and not own_ambiguous:
                 by_table[f"{fold(schema)}.{bare}"] = own_spellings
     return (*fold_map(names), {k: v for k, v in by_table.items() if v is not None})
 
 
-def _sources(tree: exp.Expression) -> dict[str, str]:
-    """``{handle (folded) -> by_table key}``, **only for handles that name exactly one table**.
+def _handles_in_scope(view) -> dict[str, str | None]:
+    """One scope's ``{handle (folded) -> by_table key}``. ``None`` is a **derived** source.
 
-    A handle used for two different tables anywhere in the statement is dropped, not guessed.
-    That is what makes this safe to run beside ``binding.py``, which resolves per scope with
-    ``traverse_scope``: a handle unambiguous over the whole tree resolves the same way in every
-    scope, so the two resolvers cannot disagree. A handle that is not tree-unambiguous falls
-    through to the flat pass and refuses exactly as it did before this resolver existed.
+    ``binding.py::_classify_sources``, restated over the same ``scope.sources`` mapping and with
+    the same two rules, because the whole justification for this resolver is that it and
+    ``bind()`` must not disagree about what a handle names:
 
-    An aliased table is registered **under its alias only**, the rule
-    ``binding.py::_classify_sources`` states — Postgres hides the table name behind an alias.
+    * an **aliased** table registers under its alias only — Postgres hides the table name behind
+      an alias, so resolving ``sales.customers.id`` against ``FROM sales.customers AS cc`` would
+      approve a reference the engine rejects;
+    * anything that is not an ``exp.Table`` is a derived source — a subquery, a CTE, a ``VALUES``
+      list — and maps to ``None``. The statement defines that name, so the corpus declares no
+      spelling for what it exposes, and a reference through it must fall to the flat pass.
 
-    Three statements motivated both rules; the first draft rewrote each one **wrongly** while
-    reaching a passing verdict, which is the precise failure ``r_ambiguous_fold`` exists to
-    prevent:
+    **The ``None`` is defensive and the adversarial suite cannot falsify it — stated because an
+    unmarked untested branch is the thing this file keeps being audited for.** Deleting it (so a
+    derived handle is simply absent) changes nothing the 115 cases can see: ``_column_sources``
+    then walks to the ancestor scope, which only differs when a derived alias in an *inner* scope
+    shadows a base handle in an *outer* one, and reaching that needs the derived source to expose
+    a column whose folded name is ambiguous in the corpus. Every statement of that shape refuses
+    at the flat pass anyway, on the projection alias inside the subquery — which is an identifier
+    canonicalisation cannot settle. So the branch is what makes this resolver agree with
+    ``bind()`` *by construction* rather than by the flat pass happening to catch the difference,
+    and that is the whole reason to keep it; it is not a claim that a test would notice its loss.
+    Re-verified 2026-08-12 by deleting it: 210/210 govern tests pass and the suite reports 0
+    failures over its 115 cases either way.
+    """
+    local: dict[str, str | None] = {}
+    for alias, source in view.scope.sources.items():
+        if isinstance(source, exp.Table) and isinstance(source.this, exp.Identifier):
+            name = fold(str(source.name))
+            if not name:
+                continue
+            handle = fold(str(alias)) if alias else name
+            local[handle] = f"{fold(str(source.db))}.{name}" if source.db else name
+        elif alias:
+            local[fold(str(alias))] = None
+    return local
+
+
+def _column_sources(tree: exp.Expression) -> dict[int, str]:
+    """``{id(Column node) -> by_table key}``, resolved **per scope**.
+
+    A handle means whatever the scope the reference sits in says it means, and nothing else in
+    the tree gets a vote. That is ``binding.py``'s rule — ``_lookup`` walks the reference's own
+    scope and then its ancestors, for correlated references — and matching it is the point:
+    ``r_ambiguous_fold`` exists to catch the two resolvers disagreeing, so a resolver that
+    answers a *different question* from ``bind()`` is the defect rather than the guard.
+
+    Three statements motivated the per-scope rule; a first draft resolved each one over the whole
+    tree and rewrote it **wrongly** while reaching a passing verdict, which is precisely what
+    ``r_ambiguous_fold`` exists to prevent:
 
     * ``... FROM s.people AS T1 WHERE id IN (SELECT T1.name FROM s.places AS T1)`` — the inner
-      ``T1`` is ``s.places``; the draft spelled it from ``s.people``.
+      ``T1`` is ``s.places``; the draft spelled it from ``s.people``. Here the inner scope owns
+      its own ``T1`` and the outer one owns another, so neither borrows.
     * the same shape across a ``UNION``.
     * ``FROM s.customers AS c JOIN s.orders AS customers`` — ``customers`` is an *alias* of
-      ``s.orders``, and the draft resolved it to the table of that name. ``bind()`` accepts the
-      statement, so nothing downstream would have caught it.
+      ``s.orders``, and the draft resolved it to the table of that name.
 
-    A CTE name is excluded: it is a name the statement defines, not one the corpus declares.
+    And a fourth, the one that made the whole-tree answer unsafe rather than merely coarse
+    (open-work.md 3.2a, first defect)::
+
+        SELECT p.name
+        FROM (SELECT o.name, x.name FROM s.places AS o JOIN s.people AS x ON o.id = x.id) AS p
+        WHERE EXISTS (SELECT 1 FROM s.people AS p WHERE p.id = 1)
+
+    With ``s.places.name`` and ``s.people.Name`` both licensed that reached ``passed: True`` and
+    emitted ``p."Name"`` — the derived source exposes both spellings, so it executes and reads a
+    different column of a different table, and ``bind()`` marks ``p.name`` ``opaque`` so nothing
+    downstream looks at it. The outer ``p`` is derived *in the scope the reference sits in*, so
+    it resolves to nothing here and falls to the flat pass, which refuses.
+
+    **The first fix for that was tree-wide and cost false refusals its own controls could not
+    see.** It collected every derived handle anywhere in the tree and dropped it from the map
+    globally, so a handle that is a derived alias in one scope lost per-table spelling in *every*
+    scope::
+
+        SELECT r."Name" FROM sales.regions AS r WHERE EXISTS (SELECT 1 FROM (SELECT 1 AS z) AS r)
+
+    ``r."Name"`` names exactly one table in its own scope and was refused ``r_ambiguous_fold``
+    because an unrelated subquery two scopes away reused the letter. Both spellings of that shape
+    are benign cases in ``adversarial.toml`` now, so the false-refusal rate covers the only shape
+    this resolver changes.
+
+    Returns nothing for a non-query root (``iter_scopes`` yields no scopes there); every
+    reference then falls to the flat pass, which is where a statement with no query scope belongs.
     """
-    defined = {fold(str(c.alias_or_name)) for c in tree.find_all(exp.CTE) if c.alias_or_name}
-    out: dict[str, str] = {}
-    conflicted: set[str] = set()
-    for table in tree.find_all(exp.Table):
-        name = fold(str(table.name or ""))
-        if not name or name in defined:
-            continue
-        key = f"{fold(str(table.db))}.{name}" if table.db else name
-        handle = fold(str(table.alias or "")) or name
-        if handle in defined:
-            continue
-        if out.get(handle, key) != key:
-            conflicted.add(handle)
-        out.setdefault(handle, key)
-    for handle in conflicted:
-        out.pop(handle, None)
+    views = iter_scopes(tree)
+    if not views:
+        return {}
+    per_scope = {id(view.scope): _handles_in_scope(view) for view in views}
+
+    out: dict[int, str] = {}
+    for view in views:
+        for column in view.columns():
+            handle = fold(str(column.table or ""))
+            if not handle:
+                continue
+            # `binding.py::_lookup`'s walk: this scope, then its ancestors, because a correlated
+            # reference resolves in a named ancestor scope.
+            scope = view.scope
+            while scope is not None:
+                local = per_scope.get(id(scope))
+                if local is not None and handle in local:
+                    key = local[handle]
+                    if key is not None:
+                        out[id(column)] = key
+                    break
+                scope = scope.parent
     return out
 
 
@@ -196,12 +280,12 @@ def canonicalise(
     if by_table is None:
         by_table = {}
     if by_table:
-        sources = _sources(tree)
+        sources = _column_sources(tree)
         for column in tree.find_all(exp.Column):
             identifier = column.this
             if not isinstance(identifier, exp.Identifier):
                 continue
-            own = by_table.get(sources.get(fold(column.table or ""), ""))
+            own = by_table.get(sources.get(id(column), ""))
             if own is None:
                 continue
             declared = own.get(fold(identifier.name))

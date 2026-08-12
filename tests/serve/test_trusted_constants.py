@@ -6,12 +6,14 @@ rather than merged. The seven keys on ``configurable`` had no such rule, and the
 that decide what governance is: ``policy``, ``corpus``, ``assets_by_id``, ``connector``,
 ``index``, ``structure``, ``agent_model``.
 
-``make_graph`` binds them with ``with_config``, and LangGraph merges caller config **over** a
-bound default. That is deliberate and load-bearing for ``thread_id`` — which is exactly why the
-binding is used at all — and it applied identically to the six keys beside it. A request to
-``/threads/{id}/runs`` carrying ``config.configurable.policy`` replaced the
+The server factory **used to** bind them with ``with_config``, and LangGraph merges caller
+config **over** a bound default. That is deliberate and load-bearing for ``thread_id`` — which
+is exactly why the binding was used at all — and it applied identically to the six keys beside
+it. A request to ``/threads/{id}/runs`` carrying ``config.configurable.policy`` replaced the
 ``GovernancePolicy``; one carrying ``assets_by_id`` replaced the corpus every tool licenses
-against.
+against. The binding is gone — ``with_config`` appears nowhere in ``graph_app.py`` and
+``test_the_server_factory_does_not_bind_the_constants_onto_config`` below keeps it gone —
+and ``runtime.trust`` forces the constants back over whatever a request supplies.
 """
 
 from __future__ import annotations
@@ -112,12 +114,54 @@ def test_every_node_reads_config_through_the_shared_reader():
     )
 
 
-def test_trust_is_registered_by_the_server_factory():
-    """``make_graph`` is the only caller, and it must actually call.
+def test_trust_is_registered_by_the_server_factory(two_schema_assets, guard_off_policy):
+    """The server factory declares the session's constants trusted. **Executed now.**
 
-    Structural rather than executed: ``make_graph`` builds a Postgres connector and seeds a
-    corpus, so running it needs a live server and a credential. The assertion that matters is
-    that the call is there at all — the merge above is already covered.
+    This was a source-string check — split ``graph_app.py`` on ``def make_graph()`` and assert
+    the literal ``"trust("`` appears in the body — because ``make_graph`` builds a Postgres
+    connector and seeds a corpus, so nothing could run it. That is a test of a substring, and it
+    passes for a ``trust()`` call that is unreachable, mis-ordered, or handed the wrong mapping.
+
+    ``build_serve_graph`` takes the session, so the claim is now run: build the served topology
+    over a corpus in memory, then ask the reader every node goes through whether a request can
+    still name one of the seven keys. The 2026-08-11 review named this the thing C5 unblocks.
+    """
+    from governed_bi.api.graph_app import build_serve_graph
+    from governed_bi.serve.session import from_assets
+
+    class _Log:
+        def append_turn(self, *a: Any, **k: Any) -> tuple[str, None]:
+            return "t", None
+
+    session = from_assets(
+        list(two_schema_assets.values()), connector=None, policy=guard_off_policy,
+        db_id="ops_b", corpus_content_hash_="corpus-hash",
+    )
+    assert trusted() == {}, "precondition: the autouse fixture cleared the registry"
+
+    build_serve_graph(session, turn_log=_Log())
+
+    registered = trusted()
+    assert registered.get("policy") is session.policy, (
+        "the factory did not declare the run's policy trusted, so a request naming `policy` "
+        f"has nothing forcing it back; registered keys are {sorted(registered)}"
+    )
+    assert registered.get("index") is session.index
+    assert registered.get("assets_by_id") == dict(session.assets_by_id)
+
+    hostile = {"configurable": {"policy": "FORGED", "assets_by_id": {"pwned": 1}}}
+    assert configurable(hostile)["policy"] is session.policy
+    assert configurable(hostile)["assets_by_id"] == dict(session.assets_by_id)
+
+
+def test_the_server_factory_does_not_bind_the_constants_onto_config():
+    """The other half, and it stays structural because it is a claim about *absence*.
+
+    ``with_config`` merges caller config **over** a bound default, so binding these seven keys
+    would reopen the override the test above closes — and they are not JSON, so the server 500s
+    serialising the assistant config for ``/assistants/{id}/schemas``. Nothing an executed test
+    can observe distinguishes "never bound" from "bound and then overridden by trust", which is
+    why this one reads the source.
     """
     from pathlib import Path
 
@@ -125,18 +169,12 @@ def test_trust_is_registered_by_the_server_factory():
         Path(__file__).resolve().parent.parent.parent
         / "src" / "governed_bi" / "api" / "graph_app.py"
     ).read_text(encoding="utf-8")
-    # Code only, not the docstring: `make_graph`'s prose explains at length *why* the
-    # `with_config` binding was removed, and a naive substring check reads its own explanation
-    # as the defect. Caught by this test failing on the commit that fixed the thing it tests.
-    after_def = source.split("def make_graph()", 1)[1]
-    body = after_def.split('"""', 2)[2]
-    assert "trust(" in body, (
-        "make_graph does not declare the session's constants trusted, so a request can name "
-        "any of them and the shared reader has nothing to force back."
-    )
+    # Code only, not the docstring: the prose explains at length *why* the `with_config` binding
+    # was removed, and a naive substring check reads its own explanation as the defect.
+    body = source.split("def build_serve_graph(", 1)[1].split('"""', 2)[2]
     assert "with_config" not in body, (
-        "make_graph binds the live constants onto config again. They are not JSON, so the "
-        "server 500s serialising the assistant config for /assistants/{id}/schemas -- and a "
+        "the server factory binds the live constants onto config again. They are not JSON, so "
+        "the server 500s serialising the assistant config for /assistants/{id}/schemas -- and a "
         "caller's config merges *over* a bound default, which is the override this fixes."
     )
 
@@ -200,7 +238,7 @@ def test_the_usage_row_and_the_knob_report_the_same_model(
     )
 
 
-# --- The other caller-writable channel: the graph's own `input` (audit §4.3) -----------------
+# --- The other caller-writable channel: the graph's own `input` (audit-2026-08-10 §A2/§A3) ---
 #
 # `trust()` above closes `configurable`. It was the only one closed. `langgraph_api` forwards
 # the client's `input` dict to the graph unfiltered, `PER_TURN_RESET` does not clear

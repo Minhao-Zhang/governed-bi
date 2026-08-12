@@ -6,11 +6,13 @@ the agent's several thousand; on a **refused** turn they were the only calls tha
 the record reported ``usage = []`` for a turn that really cost 136 tokens, and every token total
 in the repository was low.
 
-Rows carry ``stage``: with seven producers, the split between the agent model and the utility
-model is a comparability knob (``llm_utility_model``) whose justification is cost and latency,
-which cannot be argued from a single total.
+Rows carry ``stage``: eight of them can produce one today (``agent_core``, ``guard``,
+``narrate``, ``reflect``, and the four facets in ``FACET_EXTRACTS`` — ``facet_schema`` does not
+rewrite, so it never calls a model). The split between the agent model and the utility model is
+a comparability knob (``llm_utility_model``) whose justification is cost and latency, which
+cannot be argued from a single total.
 
-A helper, not a node — six call sites in three modules build the same row, so a provider that
+A helper, not a node — five call sites in five modules build the same row, so a provider that
 changes its usage payload is fixed once.
 """
 

@@ -28,7 +28,10 @@ __all__ = [
     "PINNED_SCHEMAS_KEY",
     "routing_from_artifact",
     "attach_pinned_routing",
+    "licensed_baseline",
     "licensed_drift",
+    "drift_against",
+    "pin_realised",
 ]
 
 #: The question-dict / state key carrying a pinned shortlist. One spelling, imported by
@@ -85,6 +88,38 @@ def attach_pinned_routing(
     return counts
 
 
+def licensed_baseline(path: str | Path) -> dict[str, list[str]]:
+    """``{question_id -> licensed}`` for the rows :func:`routing_from_artifact` would pin.
+
+    The baseline :func:`licensed_drift` measures against must cover **the same rows the pin
+    covered** and no others. The driver built it from every row of the replayed artifact,
+    including the ones ``routing_from_artifact`` deliberately skips for having an empty
+    shortlist — turns that declined with ``no_schema_matched``. Those were never pinned, so
+    whatever the next arm does with them is drift the pin never claimed to prevent, and
+    counting it deflated the residual.
+
+    Measured on the v4 arm against ``proxy_v3_fold``: the six excluded rows move the mean
+    Jaccard over the movers from 0.7020 to 0.7049 and the identical rate from 0.0940 to 0.0937.
+    Small — and in the direction that flatters the pin, which is the direction a measurement
+    must not be wrong in.
+
+    One pass over the file, so the two functions cannot be given different files by accident.
+    """
+    baseline: dict[str, list[str]] = {}
+    with Path(path).open(encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            qid = row.get("question_id")
+            schemas = row.get("schemas")
+            if not qid or not isinstance(schemas, list) or not schemas:
+                continue
+            baseline[str(qid)] = [str(t) for t in (row.get("licensed") or ())]
+    return baseline
+
+
 def licensed_drift(
     rows: Iterable[Mapping[str, Any]], baseline: Mapping[str, Sequence[str]]
 ) -> dict[str, Any]:
@@ -123,4 +158,74 @@ def licensed_drift(
         # Over the moved rows only: averaging in the identical ones reports a number near 1.0
         # that hides how far the movers went.
         "mean_jaccard_when_moved": (sum(jaccards) / len(jaccards)) if jaccards else None,
+    }
+
+
+def drift_against(baseline_path: str | Path, rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """:func:`licensed_drift` of ``rows`` against the artifact at ``baseline_path``.
+
+    **One function, so a contrast cannot difference two different statistics.** The published
+    sentence "mean residual Jaccard is 0.7049 on v4 and 0.7029 on v5 against 0.579 for the
+    unpinned run1/run2 pair" did exactly that. The two pinned figures are
+    ``mean_jaccard_when_moved``; ``0.579`` is the mean over *every* compared row including the
+    33 identical ones — the quantity :func:`licensed_drift` deliberately does not compute,
+    because averaging in rows that scored 1.0 by definition reports a number near 1.0 and hides
+    how far the movers went. The like-for-like value for run1/run2 is **0.5719** through this
+    function, and 0.5689 if the baseline is widened to every row rather than the rows a pin
+    would have covered. The error flattered the unpinned baseline, so the conclusion survives
+    and the printed comparison did not.
+
+    The pinned side of the contrast (the driver) and the unpinned reference now come out of the
+    same two calls, which is the only structural defence against the next one.
+    """
+    return licensed_drift(rows, licensed_baseline(baseline_path))
+
+
+def pin_realised(
+    rows: Iterable[Mapping[str, Any]], pinned: Mapping[str, Sequence[str]]
+) -> dict[str, int]:
+    """How many turns actually ran on the pinned shortlist, readable on an old artifact.
+
+    ``routing_pinned`` has meant two things. Under the corrected semantics it is an *outcome* —
+    the turn's shortlist **is** the pinned one — and a turn that ended before ``route_node``
+    carries ``False``. Every artifact in ``runs/eval/`` predates that and was written under the
+    old *intent* semantics, where the flag recorded that the driver had attached a shortlist,
+    whether or not the turn ever used it. So ``sum(r["routing_pinned"] is True)`` returns 1 345
+    on v4, v5 and v4-reflect alike — the count of questions the pin *offered*, not the count it
+    reached.
+
+    The corrected figures were published (1 342 / 1 340 / 1 333) with no producer: they were
+    arithmetic somebody did once, not output any run had emitted. This is the producer, and it
+    reads both semantics:
+
+    * ``flagged`` — what the shipped one-liner returned;
+    * ``realised`` — flagged **and** the turn recorded a non-empty shortlist, which is the
+      corrected reading applied to an old-semantics row;
+    * ``exact`` — an independent check that does not read the flag at all: the turn's
+      ``schemas`` equals the pin source's, in order;
+    * ``same_set_out_of_order`` — turns whose shortlist holds the pinned schemas in a different
+      order. It is 0 on all three arms, which is what makes ``exact`` and ``realised`` agreeing
+      a real corroboration rather than two spellings of one comparison.
+
+    ``flagged - realised`` is the gap: clarifications that ended before routing.
+    """
+    flagged = realised = exact = same_set = 0
+    for row in rows:
+        shortlist = [str(s) for s in (row.get("schemas") or ())]
+        if row.get("routing_pinned") is True:
+            flagged += 1
+            if shortlist:
+                realised += 1
+        want = pinned.get(str(row.get("question_id")))
+        if want is None or not shortlist:
+            continue
+        if shortlist == [str(s) for s in want]:
+            exact += 1
+        elif set(shortlist) == {str(s) for s in want}:
+            same_set += 1
+    return {
+        "flagged": flagged,
+        "realised": realised,
+        "exact": exact,
+        "same_set_out_of_order": same_set,
     }

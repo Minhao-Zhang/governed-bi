@@ -348,6 +348,7 @@ twice, and a seq-derived id would have shown the same step twice.
 | `resolve` | rail | start, ok, error | `n_pulled_in`, `n_licensed` |
 | `connect` | rail | start, ok, declined, error | `n_crossings`, `n_licensed`, `reason` when declined |
 | `assemble` | rail | start, ok, error | `n_chars` |
+| `abstain` | rail | ok, declined, error | `policy`, `reason` (a `stages.ABSTENTION_REASONS` member when declined, else null). **One row, not a start/resolve pair, and only on turns where the policy ran** — like `reflect` it ships disabled (`abstention_policy_enabled`), and a disabled node putting a start row on every turn would have changed the timeline of every arm measured so far. Unlike `reflect` it *decides*: a `declined` row is followed by `decline` then `stamp`, and `agent_core` never runs. |
 | `agent_core` | rail | start, ok, error | `n_attempts` |
 | `read_body` | tool | start, ok, **blocked**, error | `n_asset_ids`, `error_type` |
 | `inspect_schema` | tool | start, ok, **blocked**, error | `table_id`, `error_type` |

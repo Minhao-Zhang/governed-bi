@@ -20,7 +20,7 @@ __all__ = ["last_ai_text", "last_proposed_sql", "surface_answer_text"]
 def last_ai_text(state: Mapping[str, Any]) -> str | None:
     """The model's answer, via LangChain's own ``AIMessage.text``.
 
-    Three callers that must not disagree — ``routes._shape``, ``graph_app._record_node`` and
+    Three callers that must not disagree — ``routes._shape``, ``graph_app.record_node`` and
     ``serve/nodes/narrate.py`` — because two readers of "what did the model say" is how the
     audit list, the response and the answer card drift apart.
 

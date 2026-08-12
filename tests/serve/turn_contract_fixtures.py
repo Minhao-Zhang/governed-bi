@@ -170,8 +170,11 @@ def probe(dsn):
     data and a test that wrote into it would corrupt the eval corpus.
 
     The index is **lexical only** — no embedder is passed, so nothing below exercises the semantic
-    channel; that needs a hand-written :class:`~governed_bi.ports.Embedder` (``ports.py:96``) and
-    ``src/governed_bi/model/`` does not exist. Said here rather than left implicit.
+    channel. That was once because no embedder existed to pass; it is now a choice, and an
+    unmade one: ``governed_bi.model.deterministic_embedder.DeterministicEmbedder`` ships and two
+    other files in this directory build two-channel indexes with it. Said here rather than left
+    implicit, because a lexical-only probe means every contract below is silent about the half
+    of retrieval where the measured defects were.
     """
     import psycopg
 

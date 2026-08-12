@@ -3,10 +3,11 @@
 These scripts are BIRD-specific and not portable. They deliberately sit outside
 ``src/governed_bi`` and nothing in the package imports them.
 
-The single exception to "no engine imports" is ``governed_bi.corpus.identity``: ids must have
-exactly one spelling, and when they did not, ``airline."Air Carriers"`` ended up with no table
-asset at all while 24 few-shots cited it. Re-deriving that logic here would be a second
-spelling waiting to drift.
+The main exception to "no engine imports" is ``governed_bi.corpus.identity`` (01, 02): ids must
+have exactly one spelling, and when they did not, ``airline."Air Carriers"`` ended up with no
+table asset at all while 24 few-shots cited it. Re-deriving that logic here would be a second
+spelling waiting to drift. ``_set_asset_fields.py`` imports ``register.knobs.knob_default`` for
+the same reason — a second copy of the summary cap is a second threshold.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ SENTINEL = "TODO"
 
 #: Files no rebuild script may read. The trap manifests are *not* here — the database under
 #: test is the decoy instance and a steward would know which of its columns are junk. What may
-#: be written about them is constrained instead (see the brief, §4.4).
+#: be written about them is constrained instead (the brief's three hard rules, §5).
 FORBIDDEN = ("test_final.jsonl", "gold_result_hashes", "question_paraphrases.jsonl")
 
 _PG_TO_LOGICAL = {

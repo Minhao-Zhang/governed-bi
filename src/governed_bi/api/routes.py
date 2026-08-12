@@ -2,35 +2,43 @@
 
 Route shapes follow ``docs/openapi.json``. Capabilities report what is actually built.
 No ungated route needs a model — corpus browsing is model-free.
+
+**The surface has a constructor** (2026-08-11). :func:`make_app` takes its three dependencies —
+the session, the compiled chat graph and the turn log — and returns an app over exactly those.
+:func:`app_from_environment` is the adapter the process entry uses, and is the only thing here
+that resolves anything from the environment; the module-level :data:`app` is that adapter's
+output because ``langgraph.json`` names an attribute rather than a factory.
+
+Before that the app was assembled from process globals: a memoised ``_SESSION`` in
+``graph_app``, a module-level ``_GRAPH``, and a module-level LRU list. The cost is on the record
+— ``tests/serve/test_chat_transport.py`` states that the routes could not be exercised over HTTP
+because they build a Postgres connector and seed a corpus, so ``POST /chat`` was tested by
+calling ``_shape`` directly, and seven of the ten specifications in
+``tests/api/test_http_contract.py`` were strict-xfail stubs for want of a way to construct this.
+
+The two adapters are what justify the seam: the environment in production, a fake ``Session`` in
+tests. Resolution stays **lazy** for the environment one — importing this module must not build
+a Postgres session, or every test that imports it needs a database.
 """
 
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
+from governed_bi.api import trace_store
 from governed_bi.api.auth import api_key_refusal
 from governed_bi.api.browse import DEFAULT_NODE_BUDGET, subgraph
-from governed_bi.api.browse_routes import router as browse_router
-from governed_bi.api.graph_app import session_from_environment
-from governed_bi.api.trace_store import (
-    SUMMARY_FIELDS,
-    TURN_LOG_DIR,
-    append_turn,
-    get_turn,
-    list_turns,
-)
+from governed_bi.api.browse_routes import make_router
+from governed_bi.api.visibility import visible
 from governed_bi.register.assets import ASSET_REGISTER
 from governed_bi.serve.messages import surface_answer_text
 
-__all__ = ["app"]
-
-app = FastAPI(title="governed-bi", version="2")
-
-app.include_router(browse_router)
+__all__ = ["make_app", "app_from_environment", "app"]
 
 
 #: Paths served without a key. Only liveness: it returns ``{"ok": true}`` and nothing else, and a
@@ -38,58 +46,58 @@ app.include_router(browse_router)
 #: the process's.
 _OPEN_PATHS: frozenset[str] = frozenset({"/livez"})
 
-
-@app.middleware("http")
-async def _require_api_key(request: Request, call_next: Any) -> Response:
-    """Transport auth for the custom routes, enforced here rather than by the platform.
-
-    ``api/auth.py`` covers every route LangGraph Server owns, but **not these**: the platform
-    applies its auth middleware to the custom app only under ``http.enable_custom_route_auth``,
-    and that flag cannot be turned on for this app. ``langgraph_api/server.py:148``
-    (``apply_middleware``) walks ``app.routes`` and requires each to have ``.app``; on
-    fastapi 0.141 ``include_router`` leaves a single ``_IncludedRouter`` object that has none, so
-    the flag raises ``ValueError: Cannot apply middleware: route _IncludedRouter(...) has no app``
-    and the server never binds. Measured on 2026-08-10 — the same ``_IncludedRouter`` that makes
-    ``tests/api/test_http_contract.py``'s ``"/schema" not in ...`` assertions unfalsifiable
-    (audit M7).
-
-    So the check lives in our own app, where no platform flag can decide whether it runs. It
-    reads the same variable and the same header as ``api/auth.py`` and reuses that module's
-    comparison, so there is one key and one place that decides whether it matches.
-
-    This is what closes audit A7: ``/audit/turns`` and ``/audit/turns/{id}/trace`` returned every
-    thread's SQL, full records and an absolute log path to anybody who could reach the port.
-    """
-    # `OPTIONS` is exempt, and this is load-bearing rather than a loosening: a browser never puts
-    # custom headers on a CORS preflight, so refusing one for having no `x-api-key` refuses the
-    # preflight for *every* cross-origin request the UI makes — the browser then blocks the real
-    # call and the failure surfaces as an opaque network error, not a 401. Caught by probing the
-    # preflight after adding this middleware; it 401'd both origins. A preflight response carries
-    # no data, only which methods and headers are permitted, and the origin allow-list in
-    # `langgraph.json`'s `http.cors` is what decides whether the browser proceeds.
-    if request.method != "OPTIONS" and request.url.path not in _OPEN_PATHS:
-        refusal = api_key_refusal(dict(request.headers.items()))
-        if refusal is not None:
-            return JSONResponse({"detail": refusal}, status_code=401)
-    return await call_next(request)
-
-
-def _session() -> Any:
-    return session_from_environment()
-
-
-#: Process-wide compiled graph + checkpointer. ``compile_graph()`` builds a fresh saver per
-#: call; compiling once keeps ``thread_id`` meaningful across turns and interrupts.
-_GRAPH: Any = None
-
-#: Cap how many `/chat` threads the process-local ``InMemorySaver`` retains. Eval already
-#: calls ``delete_thread`` per question; without a bound here a long-lived API worker keeps
-#: every session (~100 KB+/turn). Threads with a pending clarification are never evicted.
-_CHAT_THREAD_LRU: list[str] = []
+#: Cap how many `/chat` threads one app's ``InMemorySaver`` retains. Eval already calls
+#: ``delete_thread`` per question; without a bound here a long-lived API worker keeps every
+#: session (~100 KB+/turn). Threads with a pending clarification are never evicted.
 _CHAT_THREAD_CAP = 32
 
 
-def _graph() -> Any:
+# ── the seam ─────────────────────────────────────────────────────────────────
+
+
+def make_app(session: Any, graph: Any, turn_log: Any) -> FastAPI:
+    """An app over exactly these three dependencies. **The constructor.**
+
+    ``session`` is a :class:`~governed_bi.serve.session.Session` (or anything with its read
+    surface: ``assets_by_id``, ``structure``, ``connector``, ``agent_model``, ``knobs_resolved``,
+    ``corpus_content_hash``, ``problems``). ``graph`` is a compiled, sync-callable serve graph —
+    ``None`` is allowed and means this app has no chat transport, which the chat routes report as
+    a refusal rather than a crash. ``turn_log`` is anything exposing ``append_turn``,
+    ``list_turns``, ``get_turn``, ``SUMMARY_FIELDS`` and ``TURN_LOG_DIR``;
+    :mod:`governed_bi.api.trace_store` is the production one.
+
+    All three are required and none is defaulted. A default would put the environment back in
+    the constructor, which is the thing this exists to remove.
+    """
+    return _build_app(lambda: session, lambda: graph, turn_log)
+
+
+def app_from_environment() -> FastAPI:
+    """The process entry's adapter: the same app, over dependencies resolved on first request.
+
+    Lazy on purpose. ``langgraph.json`` points ``http.app`` at the module attribute below, so
+    this runs at import — and ``session_from_environment`` builds a Postgres connector and seeds
+    a corpus. Resolving it here would make importing this module require a database.
+    """
+    from governed_bi.api.graph_app import session_from_environment
+
+    return _build_app(session_from_environment, _chat_graph, trace_store)
+
+
+#: Process-wide compiled graph + checkpointer for the environment adapter.
+#: ``compile_graph()`` builds a fresh saver per call; compiling once keeps ``thread_id``
+#: meaningful across turns and interrupts.
+_GRAPH: Any = None
+
+
+def _chat_graph() -> Any:
+    """``POST /chat``'s graph, compiled once for the process.
+
+    **The no-``accept`` topology**, deliberately and unlike the streamed surface: this route
+    builds the turn in-process through ``Session.turn`` and passes the whole of ``ServeState``,
+    where the served graph derives it from a client conversation (``api/graph_app``). Two
+    topologies, two input schemas; see ``serve/graph.py::build_graph``.
+    """
     global _GRAPH
     if _GRAPH is None:
         from langgraph.checkpoint.memory import InMemorySaver
@@ -103,51 +111,229 @@ def _graph() -> Any:
     return _GRAPH
 
 
-def _touch_chat_thread(thread_id: str) -> None:
-    """Remember ``thread_id`` as most-recently used; drop the oldest idle threads over the cap.
+def _build_app(
+    get_session: Callable[[], Any],
+    get_graph: Callable[[], Any],
+    turn_log: Any,
+) -> FastAPI:
+    """Assemble the app from two dependency thunks and a turn log.
 
-    **A thread leaves the list only once the saver has actually dropped it.** The first version
-    popped the victim before checking whether the checkpointer could delete it, so a saver
-    without ``delete_thread`` left the thread retained but untracked — the unbounded growth the
-    cap exists to prevent, reported as a bounded LRU. ``InMemorySaver`` does expose the method,
-    but the guard is here precisely because the saver gets swapped (LangGraph Server injects its
-    own), so the case it was written for is the one that must not fail silently.
+    Thunks rather than values, so :func:`make_app` can hand over concrete objects and
+    :func:`app_from_environment` can defer. That is the one difference between the two adapters,
+    and it lives here rather than in the routes.
     """
-    if thread_id in _CHAT_THREAD_LRU:
-        _CHAT_THREAD_LRU.remove(thread_id)
-    _CHAT_THREAD_LRU.append(thread_id)
+    app = FastAPI(title="governed-bi", version="2")
 
-    saver = getattr(_graph(), "checkpointer", None)
-    delete = getattr(saver, "delete_thread", None)
-    if not callable(delete):
-        return  # nothing can be evicted; keep the list honest rather than forgetting threads
+    #: Per-app, not per-process: two apps in one test session must not evict each other's threads.
+    chat_threads: list[str] = []
 
-    # Oldest first, newest last; the current thread is never a candidate, because a
-    # clarification it just raised may not be visible until the invoke that follows.
-    current = _CHAT_THREAD_LRU[-1]
-    remaining = len(_CHAT_THREAD_LRU) - _CHAT_THREAD_CAP
-    keep: list[str] = []
-    for victim in _CHAT_THREAD_LRU[:-1]:
-        # Left to right: no checkpointer read at all once enough have been evicted.
-        if remaining > 0 and _pending_on_thread({"configurable": {"thread_id": victim}}) is None:
-            delete(victim)
-            remaining -= 1
-        else:
-            keep.append(victim)  # under the cap, or a paused turn that is never evicted
-    keep.append(current)
-    _CHAT_THREAD_LRU[:] = keep
+    @app.middleware("http")
+    async def _require_api_key(request: Request, call_next: Any) -> Response:
+        """Transport auth for the custom routes, enforced here rather than by the platform.
+
+        ``api/auth.py`` covers every route LangGraph Server owns, but **not these**: the platform
+        applies its auth middleware to the custom app only under
+        ``http.enable_custom_route_auth``, and that flag cannot be turned on for this app.
+        ``langgraph_api/server.py:148`` (``apply_middleware``) walks ``app.routes`` and requires
+        each to have ``.app``; on fastapi 0.141 ``include_router`` leaves a single
+        ``_IncludedRouter`` object that has none, so the flag raises ``ValueError: Cannot apply
+        middleware: route _IncludedRouter(...) has no app`` and the server never binds. Measured
+        on 2026-08-10 — the same ``_IncludedRouter`` that makes
+        ``tests/api/test_http_contract.py``'s ``"/schema" not in ...`` assertions unfalsifiable
+        (audit M7).
+
+        So the check lives in our own app, where no platform flag can decide whether it runs. It
+        reads the same variable and the same header as ``api/auth.py`` and reuses that module's
+        comparison, so there is one key and one place that decides whether it matches.
+
+        This is what closes audit A7: ``/audit/turns`` and ``/audit/turns/{id}/trace`` returned
+        every thread's SQL, full records and an absolute log path to anybody who could reach the
+        port.
+        """
+        # `OPTIONS` is exempt, and this is load-bearing rather than a loosening: a browser never
+        # puts custom headers on a CORS preflight, so refusing one for having no `x-api-key`
+        # refuses the preflight for *every* cross-origin request the UI makes — the browser then
+        # blocks the real call and the failure surfaces as an opaque network error, not a 401.
+        # Caught by probing the preflight after adding this middleware; it 401'd both origins. A
+        # preflight response carries no data, only which methods and headers are permitted, and
+        # the origin allow-list in `langgraph.json`'s `http.cors` is what decides whether the
+        # browser proceeds.
+        if request.method != "OPTIONS" and request.url.path not in _OPEN_PATHS:
+            refusal = api_key_refusal(dict(request.headers.items()))
+            if refusal is not None:
+                return JSONResponse({"detail": refusal}, status_code=401)
+        return await call_next(request)
+
+    @app.get("/livez")
+    def livez() -> dict[str, Any]:
+        """Liveness only — does not touch the session."""
+        return {"ok": True}
+
+    @app.get("/capabilities")
+    def capabilities() -> dict[str, Any]:
+        """What this server can actually do. The UI blocks on this response."""
+        return capabilities_for(get_session())
+
+    @app.get("/corpus/assets")
+    def corpus_assets(type: str | None = None) -> list[dict[str, Any]]:
+        """Assets of one type as rows. ``type`` is validated against the register."""
+        return asset_rows(visible(get_session()), type)
+
+    @app.post("/chat")
+    def chat(body: dict[str, Any]) -> dict[str, Any]:
+        """Serve one turn, blocking. Degradation path — streaming is the primary transport.
+
+        Request: ``{question, session_id, history: [{role, text}]}``.
+        Response: v2 answer shape ``{outcome, text, failed_stage, error_type, refused_by,
+        record}`` plus ``answer_text``. ``session_id`` becomes ``thread_id`` on the config.
+        Sync handler so connector/model calls run in FastAPI's threadpool.
+        """
+        session, compiled = get_session(), get_graph()
+        if compiled is None:
+            return _error("this app was built with no graph, so it cannot serve a turn")
+        question = str(body.get("question") or "").strip()
+        if not question:
+            return _error("no question")
+
+        thread_id = str(body.get("session_id") or "") or uuid.uuid4().hex[:16]
+        turn_index = 1 + sum(1 for h in body.get("history") or [] if (h or {}).get("role") == "user")
+        turn = session.turn(
+            question,
+            turn_index=turn_index,
+            thread_id=thread_id,
+            identity=_identity(body, thread_id),
+        )
+        config = _config(session, question, thread_id)
+        shaped = _logged(turn_log, _shape(compiled.invoke(turn, config)), question)
+        # Evict after the invoke so a pending clarification on this thread is visible to the LRU.
+        _touch_chat_thread(compiled, chat_threads, thread_id)
+        return shaped
+
+    @app.post("/chat/resume")
+    def chat_resume(body: dict[str, Any]) -> dict[str, Any]:
+        """Answer a clarification paused by ``ask_user``.
+
+        Request: ``{session_id, clarification_id?, answer | choice_id | declined, identity?}``.
+        """
+        session, compiled = get_session(), get_graph()
+        if compiled is None:
+            return _error("this app was built with no graph, so it cannot resume a turn")
+        thread_id = str(body.get("session_id") or "")
+        if not thread_id:
+            return _error("no session_id: a resume needs the thread its question is paused on")
+
+        config = _config(session, None, thread_id)
+        pending = _pending_on_thread(compiled, config)
+        if pending is None:
+            return _error(f"no clarification is pending on session {thread_id!r}")
+
+        wanted = str(body.get("clarification_id") or "")
+        if wanted and wanted != pending.get("clarification_id"):
+            return _error(
+                f"clarification_id {wanted!r} does not match the pending question "
+                f"{pending.get('clarification_id')!r}"
+            )
+
+        from governed_bi.serve.resume import ResumeRejected, resume_clarification
+
+        reply = {k: v for k, v in body.items() if k in ("answer", "choice_id", "declined")}
+        try:
+            out = resume_clarification(
+                compiled,
+                config=config,
+                identity=_identity(body, thread_id),
+                answer=reply or str(body.get("answer") or ""),
+            )
+        except ResumeRejected:
+            return _error(
+                "resume identity mismatch: the caller answering is not the caller that was asked"
+            )
+        shaped = _logged(turn_log, _shape(out), str(pending.get("question") or ""))
+        _touch_chat_thread(compiled, chat_threads, thread_id)
+        return shaped
+
+    @app.get("/graph")
+    def er_graph(
+        schema: str | None = None,
+        focus: str | None = None,
+        radius: int = 1,
+        node_budget: int = DEFAULT_NODE_BUDGET,
+        kinds: str | None = None,
+    ) -> dict[str, Any]:
+        """Bounded ER relationship view (ADR 0009 D2). ``meta.truncated`` / ``meta.dropped`` are required."""
+        return _bounded(
+            _graph_payload(visible(get_session())), schema, focus, radius, node_budget, kinds
+        )
+
+    @app.get("/knowledge-graph")
+    def knowledge_graph(
+        schema: str | None = None,
+        focus: str | None = None,
+        radius: int = 1,
+        node_budget: int = DEFAULT_NODE_BUDGET,
+        kinds: str | None = None,
+    ) -> dict[str, Any]:
+        """Bounded semantic graph. Same scope contract as ``/graph``."""
+        return _bounded(
+            _knowledge_payload(visible(get_session())), schema, focus, radius, node_budget, kinds
+        )
+
+    # Audit surface under `/audit` (avoids colliding with LangGraph Server's `/runs`).
+
+    @app.get("/audit/turns")
+    def audit_turns(limit: int = 50, thread_id: str | None = None) -> dict[str, Any]:
+        """Served turns, newest first. ``incomplete_fields`` is judged against today's register.
+
+        ``thread_id`` narrows to one conversation, which is what a transcript needs: the graph
+        checkpoint holds only the newest turn's record (``PER_TURN_RESET``), so this log is the
+        only source for the earlier turns of a thread.
+        """
+        return turns_page(turn_log, limit=limit, thread_id=thread_id)
+
+    @app.get("/audit/turns/{turn_id}/trace")
+    def audit_trace(turn_id: str) -> dict[str, Any]:
+        """Turn fields grouped by owning stage, derived from ``RECORD_REGISTER``."""
+        return trace_for(turn_log, turn_id)
+
+    @app.get("/audit/corpus")
+    def audit_corpus() -> dict[str, Any]:
+        """Corpus inventory plus problems. ``fatal`` and ``degradations`` stay separate (ADR 0008 D9)."""
+        return corpus_audit(visible(get_session()))
+
+    # Mounted last so the app's own paths are declared first; the router's own ordering
+    # (`/schema/summary` before `/schema/{table_id}`) is stated in `make_router`.
+    app.include_router(make_router(_DeferredSession(get_session)))
+    return app
 
 
-@app.get("/livez")
-def livez() -> dict[str, Any]:
-    """Liveness only — does not touch the session."""
-    return {"ok": True}
+class _DeferredSession:
+    """A session that resolves on first attribute read.
+
+    :func:`make_router` takes a session and not a thunk, because that is the honest interface
+    for a caller that has one — and every caller except the process entry does. This is the
+    adapter for the one that does not: ``langgraph.json`` names a module attribute, so
+    :data:`app` is built at import, and resolving the environment there would make importing
+    this module require a database.
+
+    Attribute reads only, which is all the browse routes do (``assets_by_id``). Under
+    :func:`make_app` the thunk is a constant, so this forwards to the object the caller passed
+    and adds nothing but one attribute lookup.
+    """
+
+    __slots__ = ("_get",)
+
+    def __init__(self, get: Callable[[], Any]) -> None:
+        self._get = get
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._get(), name)
 
 
-@app.get("/capabilities")
-def capabilities() -> dict[str, Any]:
-    """What this server can actually do. The UI blocks on this response."""
-    session = _session()
+# ── projections: a function of the session, testable without an app ──────────
+
+
+def capabilities_for(session: Any) -> dict[str, Any]:
+    """``/capabilities``' body. Every field is an observation (ADR 0007 §7)."""
     #: Bound once so ``can_clarify`` cannot drift from ``can_stream``.
     can_stream = True
     return {
@@ -180,13 +366,11 @@ def _provenance_status(asset: Any) -> str | None:
     return status.value if status is not None else None
 
 
-@app.get("/corpus/assets")
-def corpus_assets(type: str | None = None) -> list[dict[str, Any]]:
-    """Assets of one type as rows. ``type`` is validated against the register.
+def asset_rows(session: Any, type: str | None = None) -> list[dict[str, Any]]:
+    """``/corpus/assets``' body.
 
     ``provenance_status`` and ``excluded`` are required by the client's ``assetRowSchema``.
     """
-    session = _session()
     known = {t.value for t in ASSET_REGISTER}
     if type is not None and type not in known:
         return []
@@ -204,12 +388,11 @@ def corpus_assets(type: str | None = None) -> list[dict[str, Any]]:
     ]
 
 
-def _graph_payload() -> dict[str, Any]:
+def _graph_payload(session: Any) -> dict[str, Any]:
     """ER graph: tables as nodes, join relationships as edges.
 
     Drawn from ``CorpusStructure`` (ADR 0005 §2.8.2), not a second asset walk.
     """
-    session = _session()
     structure = session.structure
     by_id = session.assets_by_id
 
@@ -276,12 +459,11 @@ _RELATION_BY_SOURCE: dict[str, str] = {
 }
 
 
-def _knowledge_payload() -> dict[str, Any]:
+def _knowledge_payload(session: Any) -> dict[str, Any]:
     """Semantic graph: every asset kind, edges from the reference closure.
 
     Columns are re-pointed to their owning table (not drawn as nodes).
     """
-    session = _session()
     structure = session.structure
     by_id = session.assets_by_id
 
@@ -338,230 +520,77 @@ def _knowledge_payload() -> dict[str, Any]:
     return {"nodes": nodes, "edges": edges, "meta": {"n_nodes": len(nodes), "n_edges": len(edges)}}
 
 
-@app.post("/chat")
-def chat(body: dict[str, Any]) -> dict[str, Any]:
-    """Serve one turn, blocking. Degradation path — streaming is the primary transport.
-
-    Request: ``{question, session_id, history: [{role, text}]}``.
-    Response: v2 answer shape ``{outcome, text, failed_stage, error_type, refused_by, record}``
-    plus ``answer_text``. ``session_id`` becomes ``thread_id`` on the config.
-    Sync handler so connector/model calls run in FastAPI's threadpool.
-    """
-    session = _session()
-    question = str(body.get("question") or "").strip()
-    if not question:
-        return _error("no question")
-
-    thread_id = str(body.get("session_id") or "") or uuid.uuid4().hex[:16]
-    turn_index = 1 + sum(1 for h in body.get("history") or [] if (h or {}).get("role") == "user")
-    turn = session.turn(
-        question,
-        turn_index=turn_index,
-        thread_id=thread_id,
-        identity=_identity(body, thread_id),
+def _bounded(
+    payload: dict[str, Any],
+    schema: str | None,
+    focus: str | None,
+    radius: int,
+    node_budget: int,
+    kinds: str | None,
+) -> dict[str, Any]:
+    """The scope contract both graph routes share, applied once."""
+    return subgraph(
+        nodes=payload["nodes"],
+        edges=payload["edges"],
+        schema=schema,
+        focus=focus,
+        radius=radius,
+        kinds=[k.strip() for k in kinds.split(",") if k.strip()] if kinds else None,
+        node_budget=node_budget,
     )
-    config = _config(session, question, thread_id)
-    shaped = _logged(_shape(_graph().invoke(turn, config)), question)
-    # Evict after the invoke so a pending clarification on this thread is visible to the LRU.
-    _touch_chat_thread(thread_id)
-    return shaped
 
 
-@app.post("/chat/resume")
-def chat_resume(body: dict[str, Any]) -> dict[str, Any]:
-    """Answer a clarification paused by ``ask_user``.
-
-    Request: ``{session_id, clarification_id?, answer | choice_id | declined, identity?}``.
-    """
-    session = _session()
-    thread_id = str(body.get("session_id") or "")
-    if not thread_id:
-        return _error("no session_id: a resume needs the thread its question is paused on")
-
-    config = _config(session, None, thread_id)
-    pending = _pending_on_thread(config)
-    if pending is None:
-        return _error(f"no clarification is pending on session {thread_id!r}")
-
-    wanted = str(body.get("clarification_id") or "")
-    if wanted and wanted != pending.get("clarification_id"):
-        return _error(
-            f"clarification_id {wanted!r} does not match the pending question {pending.get('clarification_id')!r}"
-        )
-
-    from governed_bi.serve.resume import ResumeRejected, resume_clarification
-
-    reply = {k: v for k, v in body.items() if k in ("answer", "choice_id", "declined")}
-    try:
-        out = resume_clarification(
-            _graph(),
-            config=config,
-            identity=_identity(body, thread_id),
-            answer=reply or str(body.get("answer") or ""),
-        )
-    except ResumeRejected:
-        return _error("resume identity mismatch: the caller answering is not the caller that was asked")
-    shaped = _logged(_shape(out), str(pending.get("question") or ""))
-    _touch_chat_thread(thread_id)
-    return shaped
-
-
-def _config(session: Any, question: str | None, thread_id: str) -> dict[str, Any]:
-    """Request config. ``thread_id`` goes on the config (what LangGraph checkpoints on)."""
-    config = session.configurable(question=question) if question else session.configurable()
-    config["configurable"]["thread_id"] = thread_id
-    return config
-
-
-def _identity(body: dict[str, Any], thread_id: str) -> dict[str, str]:
-    """Caller identity for ``resume_authorised``. Falls back to thread id when none supplied."""
-    supplied = body.get("identity")
-    if isinstance(supplied, str) and supplied:
-        return {"token": supplied}
-    if isinstance(supplied, dict):
-        token = next((str(v) for v in supplied.values() if v), "")
-        if token:
-            return {"token": token}
-    return {"token": thread_id}
-
-
-def _clarification(interrupts: Any) -> dict[str, Any] | None:
-    """The ``ask_user`` payload (ADR 0007 §6) among interrupts, or ``None``."""
-    for item in interrupts or ():
-        value = getattr(item, "value", item)
-        if isinstance(value, dict) and value.get("kind") == "clarification":
-            return value
-    return None
-
-
-def _pending_on_thread(config: dict[str, Any]) -> dict[str, Any] | None:
-    """The clarification paused on this thread, from the checkpoint."""
-    tasks = getattr(_graph().get_state(config), "tasks", ()) or ()
-    return _clarification([i for task in tasks for i in (getattr(task, "interrupts", ()) or ())])
-
-
-def _shape(out: dict[str, Any]) -> dict[str, Any]:
-    """One response shape for both chat routes, including the paused one."""
-    pending = _clarification(out.get("__interrupt__"))
-    if pending is not None:
-        return {
-            "outcome": "clarification",
-            "text": pending.get("question"),
-            "failed_stage": None,
-            "error_type": None,
-            "refused_by": None,
-            "record": {},
-            "answer_text": None,
-            "clarification": pending,
-        }
-    answer = dict(out.get("answer") or {})
-    answer["answer_text"] = surface_answer_text(answer, out)
-    answer.setdefault("clarification", None)
-    return answer
-
-
-def _logged(shaped: dict[str, Any], question: str) -> dict[str, Any]:
-    """Append the turn to the audit log. Paused turns (no record) are skipped."""
-    record = shaped.get("record") or {}
-    if not record.get("turn_id"):
-        return shaped
-    _turn_id, error = append_turn(
-        record,
-        question=question,
-        answer_text=shaped.get("answer_text"),
-        outcome=shaped.get("outcome"),
-    )
-    shaped["audit_logged"] = error is None
-    if error is not None:
-        shaped["audit_error"] = error
-    return shaped
-
-
-def _error(detail: str) -> dict[str, Any]:
-    """A refusal a client can read, in the same shape as every other reply."""
+def corpus_audit(session: Any) -> dict[str, Any]:
+    """``/audit/corpus``' body. ``fatal`` and ``degradations`` stay separate (ADR 0008 D9)."""
+    counts: dict[str, int] = {}
+    for asset in session.assets_by_id.values():
+        counts[asset.asset_type.value] = counts.get(asset.asset_type.value, 0) + 1
+    structure = session.structure
     return {
-        "outcome": "crashed",
-        "text": detail,
-        "failed_stage": "resume",
-        "error_type": "ValueError",
-        "refused_by": None,
-        "record": {},
-        "answer_text": None,
-        "clarification": None,
+        "corpus_content_hash": session.corpus_content_hash,
+        "assets": {"total": len(session.assets_by_id), "by_type": dict(sorted(counts.items()))},
+        "schemas": sorted(
+            {s for s in structure.table_schemas.values() if s},
+        ),
+        "structure": {
+            "join_edges": len(structure.join_edges),
+            "references": len(structure.references),
+            "schema_tags": len(structure.schema_tags),
+            "untagged_assets": len(session.assets_by_id) - len(structure.schema_tags),
+            "table_pairs_with_joins": len(structure.joins_by_edge),
+        },
+        "problems": {
+            "fatal": [str(p) for p in session.fatal_problems],
+            "degradations": [str(p) for p in session.degradations],
+            "n_fatal": len(session.fatal_problems),
+            "n_degradations": len(session.degradations),
+        },
+        "servable": not session.fatal_problems,
     }
 
 
-@app.get("/graph")
-def er_graph(
-    schema: str | None = None,
-    focus: str | None = None,
-    radius: int = 1,
-    node_budget: int = DEFAULT_NODE_BUDGET,
-    kinds: str | None = None,
-) -> dict[str, Any]:
-    """Bounded ER relationship view (ADR 0009 D2). ``meta.truncated`` / ``meta.dropped`` are required."""
-    payload = _graph_payload()
-    return subgraph(
-        nodes=payload["nodes"],
-        edges=payload["edges"],
-        schema=schema,
-        focus=focus,
-        radius=radius,
-        kinds=[k.strip() for k in kinds.split(",") if k.strip()] if kinds else None,
-        node_budget=node_budget,
-    )
+# ── projections of the turn log ───────────────────────────────────────────────
 
 
-@app.get("/knowledge-graph")
-def knowledge_graph(
-    schema: str | None = None,
-    focus: str | None = None,
-    radius: int = 1,
-    node_budget: int = DEFAULT_NODE_BUDGET,
-    kinds: str | None = None,
-) -> dict[str, Any]:
-    """Bounded semantic graph. Same scope contract as ``/graph``."""
-    payload = _knowledge_payload()
-    return subgraph(
-        nodes=payload["nodes"],
-        edges=payload["edges"],
-        schema=schema,
-        focus=focus,
-        radius=radius,
-        kinds=[k.strip() for k in kinds.split(",") if k.strip()] if kinds else None,
-        node_budget=node_budget,
-    )
-
-
-# Audit surface under `/audit` (avoids colliding with LangGraph Server's `/runs`).
-
-
-@app.get("/audit/turns")
-def audit_turns(limit: int = 50, thread_id: str | None = None) -> dict[str, Any]:
-    """Served turns, newest first. ``incomplete_fields`` is judged against today's register.
-
-    ``thread_id`` narrows to one conversation, which is what a transcript needs: the graph
-    checkpoint holds only the newest turn's record (``PER_TURN_RESET``), so this log is the only
-    source for the earlier turns of a thread.
-    """
-    turns = list_turns(limit=limit, thread_id=thread_id)
+def turns_page(turn_log: Any, *, limit: int = 50, thread_id: str | None = None) -> dict[str, Any]:
+    """``/audit/turns``' body."""
+    turns = turn_log.list_turns(limit=limit, thread_id=thread_id)
     return {
         "turns": turns,
         "meta": {
             "n": len(turns),
-            "log_dir": str(TURN_LOG_DIR),
-            "columns": list(SUMMARY_FIELDS),
+            "log_dir": str(turn_log.TURN_LOG_DIR),
+            "columns": list(turn_log.SUMMARY_FIELDS),
         },
     }
 
 
-@app.get("/audit/turns/{turn_id}/trace")
-def audit_trace(turn_id: str) -> dict[str, Any]:
-    """Turn fields grouped by owning stage, derived from ``RECORD_REGISTER``."""
+def trace_for(turn_log: Any, turn_id: str) -> dict[str, Any]:
+    """``/audit/turns/{id}/trace``' body: fields grouped by their register-declared owner."""
     from governed_bi.register.record import RECORD_REGISTER, missing_required, undeclared_keys
     from governed_bi.register.stages import Stage
 
-    entry = get_turn(turn_id)
+    entry = turn_log.get_turn(turn_id)
     if entry is None:
         return {"found": False, "turn_id": turn_id}
     record = entry.get("record") or {}
@@ -601,32 +630,135 @@ def audit_trace(turn_id: str) -> dict[str, Any]:
     }
 
 
-@app.get("/audit/corpus")
-def audit_corpus() -> dict[str, Any]:
-    """Corpus inventory plus problems. ``fatal`` and ``degradations`` stay separate (ADR 0008 D9)."""
-    session = _session()
-    counts: dict[str, int] = {}
-    for asset in session.assets_by_id.values():
-        counts[asset.asset_type.value] = counts.get(asset.asset_type.value, 0) + 1
-    structure = session.structure
+# ── chat plumbing: pure over what it is handed ────────────────────────────────
+
+
+def _touch_chat_thread(compiled: Any, threads: list[str], thread_id: str) -> None:
+    """Remember ``thread_id`` as most-recently used; drop the oldest idle threads over the cap.
+
+    **A thread leaves the list only once the saver has actually dropped it.** The first version
+    popped the victim before checking whether the checkpointer could delete it, so a saver
+    without ``delete_thread`` left the thread retained but untracked — the unbounded growth the
+    cap exists to prevent, reported as a bounded LRU. ``InMemorySaver`` does expose the method,
+    but the guard is here precisely because the saver gets swapped (LangGraph Server injects its
+    own), so the case it was written for is the one that must not fail silently.
+    """
+    if thread_id in threads:
+        threads.remove(thread_id)
+    threads.append(thread_id)
+
+    saver = getattr(compiled, "checkpointer", None)
+    delete = getattr(saver, "delete_thread", None)
+    if not callable(delete):
+        return  # nothing can be evicted; keep the list honest rather than forgetting threads
+
+    # Oldest first, newest last; the current thread is never a candidate, because a
+    # clarification it just raised may not be visible until the invoke that follows.
+    current = threads[-1]
+    remaining = len(threads) - _CHAT_THREAD_CAP
+    keep: list[str] = []
+    for victim in threads[:-1]:
+        # Left to right: no checkpointer read at all once enough have been evicted.
+        pending = _pending_on_thread(compiled, {"configurable": {"thread_id": victim}})
+        if remaining > 0 and pending is None:
+            delete(victim)
+            remaining -= 1
+        else:
+            keep.append(victim)  # under the cap, or a paused turn that is never evicted
+    keep.append(current)
+    threads[:] = keep
+
+
+def _config(session: Any, question: str | None, thread_id: str) -> dict[str, Any]:
+    """Request config. ``thread_id`` goes on the config (what LangGraph checkpoints on)."""
+    config = session.configurable(question=question) if question else session.configurable()
+    config["configurable"]["thread_id"] = thread_id
+    return config
+
+
+def _identity(body: dict[str, Any], thread_id: str) -> dict[str, str]:
+    """Caller identity for ``resume_authorised``. Falls back to thread id when none supplied."""
+    supplied = body.get("identity")
+    if isinstance(supplied, str) and supplied:
+        return {"token": supplied}
+    if isinstance(supplied, dict):
+        token = next((str(v) for v in supplied.values() if v), "")
+        if token:
+            return {"token": token}
+    return {"token": thread_id}
+
+
+def _clarification(interrupts: Any) -> dict[str, Any] | None:
+    """The ``ask_user`` payload (ADR 0007 §6) among interrupts, or ``None``."""
+    for item in interrupts or ():
+        value = getattr(item, "value", item)
+        if isinstance(value, dict) and value.get("kind") == "clarification":
+            return value
+    return None
+
+
+def _pending_on_thread(compiled: Any, config: dict[str, Any]) -> dict[str, Any] | None:
+    """The clarification paused on this thread, from the checkpoint."""
+    tasks = getattr(compiled.get_state(config), "tasks", ()) or ()
+    return _clarification([i for task in tasks for i in (getattr(task, "interrupts", ()) or ())])
+
+
+def _shape(out: dict[str, Any]) -> dict[str, Any]:
+    """One response shape for both chat routes, including the paused one.
+
+    Pure over ``out``: a draft consulted ``graph.get_state`` when no ``__interrupt__`` was
+    present, which put a checkpoint read — and therefore a session build — on the answered path
+    of every request.
+    """
+    pending = _clarification(out.get("__interrupt__"))
+    if pending is not None:
+        return {
+            "outcome": "clarification",
+            "text": pending.get("question"),
+            "failed_stage": None,
+            "error_type": None,
+            "refused_by": None,
+            "record": {},
+            "answer_text": None,
+            "clarification": pending,
+        }
+    answer = dict(out.get("answer") or {})
+    answer["answer_text"] = surface_answer_text(answer, out)
+    answer.setdefault("clarification", None)
+    return answer
+
+
+def _logged(turn_log: Any, shaped: dict[str, Any], question: str) -> dict[str, Any]:
+    """Append the turn to the audit log. Paused turns (no record) are skipped."""
+    record = shaped.get("record") or {}
+    if not record.get("turn_id"):
+        return shaped
+    _turn_id, error = turn_log.append_turn(
+        record,
+        question=question,
+        answer_text=shaped.get("answer_text"),
+        outcome=shaped.get("outcome"),
+    )
+    shaped["audit_logged"] = error is None
+    if error is not None:
+        shaped["audit_error"] = error
+    return shaped
+
+
+def _error(detail: str) -> dict[str, Any]:
+    """A refusal a client can read, in the same shape as every other reply."""
     return {
-        "corpus_content_hash": session.corpus_content_hash,
-        "assets": {"total": len(session.assets_by_id), "by_type": dict(sorted(counts.items()))},
-        "schemas": sorted(
-            {s for s in structure.table_schemas.values() if s},
-        ),
-        "structure": {
-            "join_edges": len(structure.join_edges),
-            "references": len(structure.references),
-            "schema_tags": len(structure.schema_tags),
-            "untagged_assets": len(session.assets_by_id) - len(structure.schema_tags),
-            "table_pairs_with_joins": len(structure.joins_by_edge),
-        },
-        "problems": {
-            "fatal": [str(p) for p in session.fatal_problems],
-            "degradations": [str(p) for p in session.degradations],
-            "n_fatal": len(session.fatal_problems),
-            "n_degradations": len(session.degradations),
-        },
-        "servable": not session.fatal_problems,
+        "outcome": "crashed",
+        "text": detail,
+        "failed_stage": "resume",
+        "error_type": "ValueError",
+        "refused_by": None,
+        "record": {},
+        "answer_text": None,
+        "clarification": None,
     }
+
+
+#: What ``langgraph.json``'s ``http.app`` points at. An attribute, not a factory — the platform
+#: imports the name — so the environment adapter is what builds it.
+app = app_from_environment()

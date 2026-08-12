@@ -3,18 +3,25 @@
 ``/chat`` returned ``out["answer"]`` and nothing else. When ``ask_user`` interrupted, no node
 had written ``answer`` — so the route replied **HTTP 200** with ``{"answer_text": null}``,
 dropped ``__interrupt__``, and left the graph paused forever. The client saw a successful empty
-answer; nothing on screen was wrong. ``serve/tools.py`` already calls the payload version of
-this "the worst failure shape available here", and ``/capabilities`` was reporting
-``can_clarify: true`` over it. There was also no route to answer on.
+answer; nothing on screen was wrong — a success that silently loses the turn, which is the
+worst shape available here. ``/capabilities`` was reporting ``can_clarify: true`` over it, and
+there was also no route to answer on.
 
 The second half was quieter and total: ``resume_clarification`` compares the caller's identity
 to the one checkpointed with the turn, ``resume_authorised`` refuses two ``None``s on purpose,
 and **nothing in the repository ever supplied one** — so every clarification was unanswerable,
 ``ResumeRejected`` for every caller including the right one.
 
-These are unit tests of the shaping functions rather than HTTP round-trips: the routes call
-``session_from_environment``, which builds a Postgres connector and seeds a corpus. The graph
-half of the interrupt is covered end to end by
+Most of these are unit tests of the shaping functions rather than HTTP round-trips. **The
+reason they had to be is gone** (2026-08-11): the routes used to call
+``session_from_environment``, which builds a Postgres connector and seeds a corpus, so there
+was no way to reach ``POST /chat`` in a test at all. ``routes.make_app(session, graph,
+turn_log)`` takes its dependencies now, and the tests that most need the real boundary go
+through it — see ``test_shaping_an_answer_does_not_touch_the_checkpoint``. The rest stay unit
+tests because ``_shape``, ``_identity`` and ``_clarification`` are pure functions and a round
+trip would only make the assertion harder to read.
+
+The graph half of the interrupt is covered end to end by
 ``test_agent_tools_hitl.py::test_the_ledger_survives_the_interrupt``.
 """
 
@@ -46,6 +53,24 @@ class _Interrupt:
 
     def __init__(self, value: Any) -> None:
         self.value = value
+
+
+def _no_model_session() -> Any:
+    """An empty session: no corpus, no connector, no model. Enough to mint a turn.
+
+    The point of ``make_app`` is that this is now enough to drive a route. Before it, reaching
+    ``POST /chat`` meant ``session_from_environment`` — a Postgres connector and a seeded
+    corpus — which is why this module's header says the chat routes were tested by calling
+    ``_shape`` directly.
+    """
+    from governed_bi.govern.policy import GovernancePolicy
+    from governed_bi.serve.session import Session
+
+    return Session(
+        index=None, structure=None, assets_by_id={}, corpus=None, connector=None,
+        policy=GovernancePolicy(guard_rules_enabled={}), corpus_content_hash="c",
+        prompt_set_hash="p", knobs_resolved={}, db_id="d", run_id="r",
+    )
 
 
 def test_a_paused_turn_is_reported_as_a_clarification() -> None:
@@ -108,38 +133,72 @@ def test_governance_terminals_do_not_backfill_model_prose() -> None:
         )
 
 
-def test_shaping_an_answer_does_not_touch_the_checkpoint() -> None:
+def test_shaping_an_answer_does_not_touch_the_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     """``_shape`` must be pure over the returned state.
 
     A draft of this consulted ``graph.get_state`` when no ``__interrupt__`` was present, which
     put a checkpoint read — and therefore a session build — on the answered path of every
     request. Caught by writing this test rather than by a failure.
+
+    Asserted through ``make_app`` now, over a graph double that records every ``get_state``.
+    That is a stronger claim than the previous one, which swapped ``routes._graph`` — a process
+    global — for a counter and could only see the one function that read it. A route reaching
+    the checkpoint by any other path fails here.
     """
-    called: list[int] = []
+    from fastapi.testclient import TestClient
 
-    original = routes._graph
-    routes._graph = lambda: called.append(1)  # type: ignore[assignment]
-    try:
-        routes._shape({"answer": {"outcome": "answered", "record": {}}, "messages": []})
-    finally:
-        routes._graph = original  # type: ignore[assignment]
-    assert not called, "_shape reached for the compiled graph on a turn that did not pause"
+    from governed_bi.api.auth import API_KEY_HEADER, API_KEY_VAR
+    from governed_bi.api.routes import make_app
+
+    reads: list[Any] = []
+
+    class _Graph:
+        checkpointer = None
+
+        def get_state(self, config: Any) -> Any:
+            reads.append(config)
+            raise AssertionError("the answered path must not read the checkpoint")
+
+        def invoke(self, turn: Any, config: Any) -> Any:
+            return {"answer": {"outcome": "answered", "record": {}}, "messages": []}
+
+    class _Log:
+        def append_turn(self, *a: Any, **k: Any) -> tuple[str, None]:
+            raise AssertionError("a record with no turn_id must not be logged")
+
+    session = _no_model_session()
+    app = make_app(session, _Graph(), _Log())
+    # `monkeypatch`, not `os.environ`: whether this variable is set decides whether
+    # `test_chat_actually_answers_rather_than_raising` below skips, so leaking it changes what
+    # the rest of the suite measures.
+    monkeypatch.setenv(API_KEY_VAR, "shape-key")
+    response = TestClient(app, headers={API_KEY_HEADER: "shape-key"}).post(
+        "/chat", json={"session_id": "t-shape", "question": "how many customers"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["outcome"] == "answered"
+    assert not reads, f"the answered path read the checkpoint {len(reads)} time(s)"
 
 
-def test_record_node_does_not_backfill_model_prose_on_crash(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``graph_app._record_node`` shares the narrate skip: no last_ai_text on terminals."""
+def test_record_node_does_not_backfill_model_prose_on_crash() -> None:
+    """``graph_app.record_node`` shares the narrate skip: no last_ai_text on terminals.
+
+    The log is an argument, so this hands over a recorder instead of patching
+    ``trace_store.append_turn`` and trusting that the node reaches for that one.
+    """
     from langchain_core.messages import AIMessage
 
-    from governed_bi.api import graph_app
+    from governed_bi.api.graph_app import record_node
 
     logged: list[Any] = []
 
-    def _append(record: Any, **kwargs: Any) -> tuple[str, None]:
-        logged.append(kwargs)
-        return "t1", None
+    class _Log:
+        def append_turn(self, record: Any, **kwargs: Any) -> tuple[str, None]:
+            logged.append(kwargs)
+            return "t1", None
 
-    monkeypatch.setattr("governed_bi.api.trace_store.append_turn", _append)
-    graph_app._record_node(
+    record_node(_Log())(
         {
             "question": "how many?",
             "answer": {

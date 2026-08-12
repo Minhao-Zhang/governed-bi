@@ -16,6 +16,8 @@ SQLite is the offline test/CI substrate.
 6. [Design decisions](design-decisions.md) — short index into the ADRs.
 7. [Glossary](glossary.md) — canonical terms.
 8. [Open work](open-work.md) — what is unfinished, and the evidence for each.
+9. [Enterprise fork](enterprise-fork.md) — what an enterprise deployment must implement for
+   PII / RLS / RBAC, in what order, and what this repository deliberately does not do for it.
 
 ## Decision records (ADRs)
 
@@ -35,6 +37,7 @@ superseding ADR or a code change wins. Living how-to docs may drift; ADRs do not
 | [0009](adr/0009-browsing-and-filtering-api.md) | Browsing, filtering, and relationship API |
 | [0010](adr/0010-live-stage-events.md) | Live stage events |
 | [0011](adr/0011-two-model-split-and-facet-query-rewriting.md) | Two models and a query per facet |
+| [0012](adr/0012-access-seam-principal-and-authorization.md) | The access seam: principal, authorization, and the Layer 6 split |
 
 ## Measurement findings
 
@@ -49,6 +52,7 @@ Git history is the record of what changed.
 |---|---|
 | [Measurement](measurement.md) | how to produce a finding: the eval driver's flags, the prompt registry, the measurement row schema, and the quotability gates |
 | [Failure modes](failure-modes.md) | how the engine answers wrongly, per failure class, with the causal repair experiments — arm `v4`, engine `3c0079a`, corpus `30872d3` |
+| [Selective delivery on `v4`](analysis/selective-delivery-v4.md) | whether any signal the artifact records beats the engine's own operating point: risk-coverage curves, AURC against an oracle and a no-ranking reference, and what each trade costs in right answers — arm `v4`, corpus `30872d3`, replicated across all seven artifacts in `runs/eval/` |
 | [Open work](open-work.md) | the unfinished items those findings imply, re-verified against the current tree |
 | [Strategy checkpoint 2026-08-11](analysis/strategy-checkpoint-2026-08-11.md) | temporary checkpoint for the repository as a portfolio artifact: what is true, what it declines to be, and the work queue — not an ADR; replace when superseded |
 

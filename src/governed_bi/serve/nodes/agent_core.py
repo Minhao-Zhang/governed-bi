@@ -535,15 +535,17 @@ def _stub(state: dict) -> dict:
 def _last_executed_sql(attempts: Any) -> str | None:
     """The last statement the engine actually **sent** on the answering path, from the ledger.
 
-    Filtered to :data:`~governed_bi.serve.ledger.ANSWERING_PATH`: a ``sample`` row also carries
+    Filtered through :func:`~governed_bi.serve.ledger.answering_attempts`, i.e. every path
+    outside :data:`~governed_bi.serve.ledger.INTROSPECTION_PATHS`: a ``sample`` row also carries
     an ``executed_sql``, so a turn that sampled a column after its last ``run_query`` would
     record the sample's ``SELECT DISTINCT`` as ``generated_sql`` — which an eval re-executes and
     grades as the answer.
 
-    Preferred over the model's ``run_query`` argument: ``canonicalise`` (ADR 0008 D2) and
-    ``apply_row_limit`` rewrite it, so the two differ on every mixed-case identifier, and the
-    ledger hashed the executed one. Falls back to the tool argument when nothing executed — a
-    refused attempt still produced SQL worth recording.
+    The ledger and nothing else. Never the model's ``run_query`` argument: ``canonicalise``
+    (ADR 0008 D2) and ``apply_row_limit`` rewrite it, so the two differ on every mixed-case
+    identifier, and only the executed one was hashed. A turn that executed nothing returns
+    ``None`` — audit C4; the proposal is recoverable from the transcript through
+    :func:`~governed_bi.serve.messages.last_proposed_sql`.
     """
     last: str | None = None
     for attempt in answering_attempts(list(attempts or ())):

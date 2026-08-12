@@ -7,7 +7,8 @@ from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 
-from governed_bi.serve.context import render_context
+from governed_bi.serve.context import render_context, withheld_by_grant
+from governed_bi.serve.delivery import grant_for_turn
 from governed_bi.serve.runtime import (
     DEFAULT_CONTEXT_BUDGET,
 )
@@ -53,6 +54,11 @@ def assemble_node(state: dict, config: RunnableConfig) -> dict:
         schemas=schemas,
         budget_chars=budget,
         evicted=evicted,
+        # ADR 0012 §8.4. Empty under the shipped open grant, so the block and its hash do not
+        # move; under a restrictive one this is what turns "refuses correctly" into "does not
+        # disclose". Computed from the same function `tool_bounds_from_state` narrows
+        # `readable_assets` with, so the prompt and `read_body` cannot disagree.
+        withheld=withheld_by_grant(assets_by_id, grant_for_turn(cfg)),
     )
     delivery: dict[str, Any] = {
         "context_block": block,

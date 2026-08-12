@@ -44,7 +44,7 @@ PROBE_TEXT = "probe"
 
 
 def refuse_blank(texts: Sequence[str]) -> None:
-    """Raise if any element is empty or whitespace-only. ``ports.py:118``.
+    """Raise if any element is empty or whitespace-only. ``ports.Embedder``'s no-blank-input rule.
 
     Raises rather than dropping (which would make the result shorter than the input) or
     substituting a zero vector, which renders "not measured" as "scores nothing" —
@@ -60,7 +60,7 @@ def refuse_blank(texts: Sequence[str]) -> None:
                 f"refusing to embed a blank string at input {position}: "
                 "an empty or whitespace-only summary is a corpus defect, and OpenAI "
                 "would return a vector for it that can score above zero and pollute a "
-                "ranking (ports.py:118)"
+                "ranking (``ports.Embedder``'s no-blank-input rule)"
             )
 
 
@@ -107,7 +107,7 @@ class BaseEmbedder(ABC):
                 raise ValueError(
                     f"{type(self).__name__}._embed_batch returned {len(vectors)} "
                     f"vectors for {len(chunk)} inputs; one per input is the contract "
-                    "(ports.py:113)"
+                    "(``ports.Embedder.embed``'s ordering rule)"
                 )
             out.extend(vectors)
 
@@ -118,7 +118,7 @@ class BaseEmbedder(ABC):
                     f"vector {position} is {len(vector)} wide but "
                     f"{type(self).__name__}.dimensions declares {width}; the declared "
                     "width is in every cache key, so a disagreement here is a "
-                    "cross-model cache hit waiting to happen (ports.py:117)"
+                    "cross-model cache hit waiting to happen (``ports.Embedder.dimensions``)"
                 )
         return out
 

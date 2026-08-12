@@ -1,6 +1,6 @@
 """The corpus is the treatment identity, so a gate has to read it.
 
-``AGENTS.md`` and ``record.py`` both say "the corpus IS the treatment", and until the 2026-08-10
+``docs/measurement.md`` and ``record.py`` both say "the corpus is the treatment", and until the 2026-08-10
 audit (D7) no gate read ``corpus_content_hash``. Two things were live at once: an arm whose rows
 name no corpus passed all six gates, and two arms measured over *different* corpora also passed,
 because nothing compared the field. The repository had already paid for this once —

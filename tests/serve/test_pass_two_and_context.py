@@ -364,7 +364,7 @@ def test_table_hits_capped_at_register_budget(
 def test_pass_two_scores_against_the_turns_query_vector_from_state(monkeypatch) -> None:
     """``route_node`` read ``cfg.get("query_vector")`` only, so the served path had none.
 
-    ``accept`` writes the per-turn vector to **state** (``api/graph_app.py``), because
+    ``accept`` writes the per-turn vector to **state** (``serve/accept.py``), because
     ``make_graph`` binds the run constants once at load time with no question — a query
     vector cannot be a run constant. ``facets._query_vector`` was taught to read state first
     and documents why at length; ``route_node`` was left on the other side of the same fix.
@@ -446,7 +446,8 @@ def test_a_few_shot_reaches_retrieved_and_the_prompt() -> None:
     was never populated, the declared budget of 3 was unreachable, and ``context.py``'s
     ``## Few-shots`` section could not render. The facet voted on schema routing and then
     delivered nothing, which is the incident ``nodes/facets.py`` says it fixed one pass
-    earlier: *"the past-SQL-example facet retrieved nothing, ever."*
+    earlier: *"``facet_example`` declares only the semantic channel, so without it the
+    past-SQL-example facet retrieves nothing at all."*
     """
     from governed_bi.corpus.schema import ColumnAsset, FewShotAsset, TableAsset
     from governed_bi.serve.nodes.pass_two import pass_two_retrieve
@@ -521,9 +522,10 @@ def test_a_semantic_only_candidate_can_enter_pass_two() -> None:
 
     ``pass_two`` took the lexical top-``depth`` and then looked the cosine up **by id**, so
     an asset with a strong cosine and no shared query term could not enter the context at
-    any depth. ``retrieve/semantic.py`` names the shape exactly: *"A caller that ranks
-    lexically and then attaches a cosine to the survivors has no semantic channel at all
-    for that facet: it has a lexical channel the facet does not declare, wearing a cosine."*
+    any depth. A caller that ranks lexically and then attaches a cosine to the survivors has
+    no semantic channel for that facet at all: it has a lexical channel wearing a cosine.
+    ``nodes/pass_two.py``'s own comment states the rule — *"Each channel retrieves; their
+    union is scored"* (ADR 0005 §2.4).
     """
     from governed_bi.corpus.schema import TableAsset
     from governed_bi.serve.nodes.pass_two import pass_two_retrieve
@@ -595,11 +597,11 @@ def test_pass_two_scores_both_channels_over_the_same_text() -> None:
     per-facet ``queries``, which ``_run_facet`` set to the utility-model rewrite. So the two
     channels were scored over two different texts and then blended at 0.5/0.5.
 
-    ``facets.py`` documents the fix in the pass that already had it — *"the rewrite happens
-    first, and both channels then search with it; a rewrite that reached only BM25 would miss
-    the point, since the whole reason to restate the question in the vocabulary of the thing
-    being searched is to move it semantically closer"* — and that fix applied to pass one only,
-    leaving it undone in the pass whose output becomes the analyst's context.
+    ``facets.py`` documents the fix in the pass that already had it — *"The rewrite happens
+    first and both channels then search with it: the point of restating the question in the
+    vocabulary of the thing being searched is to move it semantically closer, so a rewrite
+    reaching only BM25 misses it."* — and that fix applied to pass one only, leaving it undone
+    in the pass whose output becomes the analyst's context.
 
     The fixture makes the two texts disagree as sharply as possible: the raw question's vector
     points at ``raw_match`` and the rewrite's points at ``rewrite_match``. Under the old code

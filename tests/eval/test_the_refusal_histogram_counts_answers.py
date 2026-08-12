@@ -2,7 +2,7 @@
 
 ``sample_rows`` goes through the same governance layers as a draft answer and lands in the same
 ledger, so a driver that counts the raw ``attempts`` list reports a column probe as governance
-declining to answer. On the v3-fold arm that was 21 ``passed`` and 3 ``r_ambiguous_fold``
+declining to answer. On the v3-fold arm that was 129 ``passed`` and 3 ``r_ambiguous_fold``
 attempts — inside the very histogram the ``attempts`` field was added to support.
 
 ``serve/ledger.py`` states the rule: three copies of "which attempts count" is three answers.
@@ -24,7 +24,9 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 
 @pytest.fixture(scope="module")
 def refusal_layers():
-    path = REPO / "tools" / "run_datalake_eval.py"
+    # In ``datalake_report.py`` since the driver was split at the plan / execute / report seam
+    # (architecture review C2) to get back under the 1 000-line hard cap.
+    path = REPO / "tools" / "datalake_report.py"
     spec = importlib.util.spec_from_file_location("_run_datalake_eval_histogram", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)

@@ -286,7 +286,7 @@ def chat_model(
     if name == "proxy":
         raise ValueError(
             "the internal proxy is not built here: it needs credentials resolved before the "
-            "client exists. Call model.proxy_gateway.chat_model() and record "
+            "client exists. Call model.proxy_gateway.build_chat_model() and record "
             f"llm_provider='proxy' (surface={surface!r})"
         )
     if name not in _CHAT_PROVIDERS:

@@ -158,8 +158,8 @@ def test_a_measured_row_names_both_treatment_identities(tmp_path: Path) -> None:
     in ``--prompt-variant`` would emit rows indistinguishable in every field, so a merged
     analysis could not tell the treatment from the control, and neither could a later reader.
 
-    AGENTS.md: the corpus is the treatment identity of every measurement. An identity that
-    lives in a filename is one ``mv`` away from being wrong.
+    ``docs/measurement.md``: the corpus is the treatment identity of every measurement. An
+    identity that lives in a filename is one ``mv`` away from being wrong.
 
     **Asserted on the value, and across two runs.** The predecessor asserted
     ``"corpus_content_hash" in row``, which a row carrying ``None`` satisfies — and a row

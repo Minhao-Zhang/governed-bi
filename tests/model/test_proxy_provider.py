@@ -140,7 +140,7 @@ def test_the_embedder_satisfies_the_port_and_records_a_provider_qualified_knob(c
     embedder = ProxyEmbedder(embedding_dimensions=64)
 
     assert isinstance(embedder, Embedder)
-    # Provider-qualified (ports.py:140): the same model name over two gateways is two
+    # Provider-qualified (``ports.Embedder.model``): the same model name over two gateways is two
     # identities, and `embedding_model` is what keeps them out of one cache entry.
     assert embedder.model == "proxy:text-embedding-3-large"
     assert embedder.model != "openai:text-embedding-3-large"

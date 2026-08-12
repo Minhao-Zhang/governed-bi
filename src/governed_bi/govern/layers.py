@@ -119,8 +119,24 @@ RULES: Mapping[str, Layer] = {
     "r_column_excluded": Layer.COLUMNS,
     "r_column_suspect": Layer.COLUMNS,
     "r_column_authorization_unavailable": Layer.COLUMNS,
+    #: The PII seam (ADR 0012 §4). The principal is denied this column, which is a
+    #: *per-caller* fact and therefore distinct from ``r_column_excluded`` (the corpus hides
+    #: it from everyone) and from ``r_column_not_allowed`` (no such column here at all).
+    "r_column_not_authorized": Layer.COLUMNS,
     # ── TABLES ──
+    #: Retrieval did not license this table **this turn**. Not an authorization verdict:
+    #: 19 of the v4 arm's 20 refusals end here and every one of them is a retrieval miss
+    #: (open-work.md §4.2), which is exactly why the next rule exists.
     "r_table_not_licensed": Layer.TABLES,
+    #: The principal may not read this table, whatever retrieval found (ADR 0012 §3).
+    #: Checked *after* ``r_table_not_licensed`` on purpose: a table the turn never licensed
+    #: is refused as unlicensed whether or not the principal could have seen it, so the pair
+    #: of rules is not an oracle for which tables exist.
+    "r_table_not_authorized": Layer.TABLES,
+    #: A row-level predicate is declared for this table and this engine does not apply one
+    #: (ADR 0012 §5). Refusing is the only safe reading: executing without the predicate
+    #: returns exactly the rows it was written to withhold.
+    "r_row_predicate_unenforced": Layer.TABLES,
     # ── COST ──
     "r_cost_budget_exceeded": Layer.COST,
 }

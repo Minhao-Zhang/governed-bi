@@ -1,4 +1,5 @@
-"""A real embedder that needs no provider. ``ports.py:108``. Three constraints hold it.
+"""A real embedder that needs no provider. ``ports.py``'s ``Embedder`` adapter list names it as an adapter of
+:class:`~governed_bi.ports.Embedder`. Three constraints hold it.
 
 **Stable across processes, not merely within one.** Python salts ``hash()`` for ``str``
 per process, so a ``hash()``-seeded embedder makes every cross-run comparison in a

@@ -1,21 +1,24 @@
 """Does the schema facet want a word-soup query once the schema summary IS a word soup?
 
 ``register/facets.py`` removed ``facet_schema`` from ``FACET_EXTRACTS`` on a measurement: the raw
-question beat every rewrite of it by 1.8 pp of recall@3 over 114 questions. That was taken against
+question beat every rewrite of it on a 114-question screen. That was taken against
 the **gold** schema summaries — sparse identifier lists — a document form the corpus under test no
 longer has, since ``tools/densify_summaries.py`` made those summaries dense term lists and
 ``facet_schema_query`` variant ``v2`` emits terms rather than a sentence.
 
-Two factors, and the cell that matters has never been measured:
+Two factors, and the cell this tool was built to fill:
 
 .. code-block:: text
 
                             raw question      rewritten (term soup)
-    gold summaries          measured           measured  (the 1.8 pp loss)
-    dense summaries         measured (+6 pp)  NEVER MEASURED   <- the hypothesis
+    gold summaries          measured           measured  (the loss that removed it)
+    dense summaries         measured (+6 pp)  measured 2026-08-05 -- null
 
 The claim under test is the **interaction** — the rewriter's sign flipping with the document form
-— not either main effect, both already known. The other four facets are held OFF in every cell so
+— not either main effect, both already known. It came back null: 342 questions, paired,
+interaction -1.17 pp on recall@3 and -0.64 pp on gold-table coverage, every p >= 0.45
+(``register/citations.py``, artifact ``runs/ablation/summary-form-1351-20260805.json``).
+The other four facets are held OFF in every cell so
 they contribute a constant to ``route``'s sum and only the schema facet's query form varies;
 re-testing in the production configuration is a different run.
 

@@ -1,7 +1,7 @@
 """Enforce import layering declared in ``governed_bi/__init__.py``.
 
-AST-only (never imports the package). ``paths``/``ports``/``register`` are stdlib-only;
-nothing imports upward. Exit 1 on violation.
+AST-only (never imports the package). ``paths``/``credentials``/``ports``/``register`` are
+stdlib-only; nothing imports upward. Exit 1 on violation.
 
 ``LAYERS`` must name every package under ``src/governed_bi`` and nothing else, and
 :func:`undeclared` fails the run when it does not. A file's constraints come from its

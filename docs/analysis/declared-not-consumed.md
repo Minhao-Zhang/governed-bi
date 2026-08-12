@@ -7,13 +7,44 @@ Two instruments. The mechanical one is the six artifacts this sweep ran over, 1,
 on corpus `86ed1dbf…` (`../BIRD-corpus` @ `30872d3`): a field constant across all 8,106 rows of
 all six arms is evidence of no writer, which is how `facet_degraded` and `git_sha` were originally
 caught. The static one is `tools/check_declared_is_consumed.py`, written in the same pass. It
-found 27 of the items below when it was written and finds **14** now.
+found 27 of the items below when it was written, 14 on 2026-08-10, and finds **6** now.
 
 Findings are ranked by consequence. Tier 1 means a **recorded number is wrong**, not missing.
 
 ---
 
-## Tier 1 — a measurement is silently corrupted
+## Tier 1 — a measurement is silently corrupted — **all five closed, 2026-08-12**
+
+**Read this before the five sections below, which are kept as the diagnosis rather than the
+state.** Every tier-1 item now has a writer that fires, and each is asserted **on its value** in
+`tests/serve/test_the_record_follows_the_knob.py` — never on presence, because `None` is present
+and eight tests in this repository were once found asserting exactly that:
+
+| finding | closed by | asserted against |
+|---|---|---|
+| 1 `llm_reasoning_effort` | `model/provider.py::reasoning_effort_of` — reads all three spellings (OpenAI attribute, proxy `extra_body`, Bedrock `output_config` / Nova `maxReasoningEffort`) | an effort the test itself requested, through the real `build_chat_model` |
+| 2 `llm_utility_provider` | `session.from_assets` calls `_provider_of(resolved_utility)` | a base URL the test chose |
+| 2 `embedding_provider` | `model/embedder.py::embedding_knobs`, from the port's required provider-qualified `model`; an unqualified id **raises** rather than guessing | the prefix the test's embedder declares |
+| 3 `chat_model` / `llm_model` | `chat_model` written by name; the undeclared `llm_model` key deleted | the model id the session was built with |
+| 4 three environment variables | `register/knobs.py::env_override`, applied last in `session._resolved_knobs`, with the readers' own parsing rules (blank is unset; the declared default decides the cast) | numbers the test exported |
+| 5 `sqlglot_version` (and `negative_tau`, `cost_budget`) | `_resolved_knobs` no longer drops `UNSET` — it writes `None` — and calls `govern/functions.py::sqlglot_version()` | an independent `importlib.metadata` lookup |
+
+**What this does *not* mean.** No artifact in `runs/eval/` gains anything: all six arms were
+written before these wires and still say what §1–§5 record. The fix is for the next run, and
+until one exists the sections below are the correct description of every number on disk.
+
+**What it unblocks, and what it does not.** The condition
+`tests/conformance/test_register_closure.py` names for putting the gate in CI was "tier 1 clear",
+and it is. The gate still exits 1 on the six findings in tiers 2–3, so a CI step would fail every
+commit — and waiving six genuine findings to go green is the lie the gate exists to catch. The
+half that was actually missing is now there:
+`test_the_declared_but_unconsumed_set_does_not_grow` runs the gate on every commit against a
+pinned set of six names, so a **seventh** fails the build and closing one fails it too. Three of
+the six need a decision rather than a wire (`expand_hops` and `negative_tau` in `retrieve/`,
+`clarifications` on the clarification protocol), which is why the ratchet is the honest step and
+a CI step is not yet.
+
+---
 
 ### 1. `llm_reasoning_effort` is null on every arm, and every arm ran at `high`
 
@@ -141,26 +172,48 @@ Caught by rule R1. Three further R1 hits are legitimate and waived in the checke
 node cannot run on a single-turn eval), `cache_read_tokens` and `cache_write_tokens` (carried
 per-call inside `usage`).
 
-### 9. All four resume-drift keys are null on every row
+### 9. The four resume-drift keys — **fixed 2026-08-11**
 
-`git_sha`, `git_main_sha`, `working_tree_dirty`, `diff_sha256`. §3.10 recorded `git_sha`; all
-four have the same shape and no writer. Every one is `Role.operational`, which is to say a
-resume-drift key. `_knobs_resolved_gate` looks for disagreement across rows within an arm, and
-four constants cannot disagree — so the gate that exists to stop a resume blending two harness
-versions into one score cannot fire, which is exactly what `diff_sha256`'s own note says the
-absence would cost.
+`git_sha`, `git_main_sha`, `working_tree_dirty`, `diff_sha256`, all `Role.operational` and all
+null on every row of every arm. `_knobs_resolved_gate` looks for disagreement across rows within
+an arm, and four constants cannot disagree — so the gate that exists to stop a resume blending
+two harness versions into one score could not fire, which is exactly what `diff_sha256`'s own
+note says the absence would cost.
 
-### 10. `serve_workers` and `build_workers` are null on every row
+Resolved by `eval/provenance.py::git_provenance` and stamped onto every row by
+`tools/run_datalake_eval.py`. `git_main_sha` is asked of `main` and then `origin/main`, because
+on the experiment server the branch tip is never equal to main. A tree that is not a checkout
+records four `None`s rather than raising: a run must not die because the harness is a tarball,
+and an unanswerable question must read as unmeasured.
 
-The README says "10 workers" in prose. The knobs' own notes say worker count saturates the shared
-provider quota that the crash-rate and channel-degradation gates read. Nothing writes either.
+### 10. `serve_workers` — **fixed 2026-08-11**; `build_workers` — **deliberately not**
 
-### 11. `schemas_under_test`, `question_subset` and `split` have no writer
+The README says "10 workers" in prose and nothing wrote it. `serve_workers` now comes from
+`--workers`.
 
-`Role.scope` — fatal on resume, and never written. `schemas_under_test`'s note describes the
-incident it exists to prevent (a schema dropped from one attempt leaves its YAML behind and
-competes as a router candidate); nothing records which list was served. `arms` escapes rule K1
-only by a coincidental `"arms"` dict key in `eval/report.py`, and is in the same state.
+`build_workers` is left as a violation on purpose. This driver serves and does not build a
+corpus; the knob's note is about a worker that "holds a connection AND a long-lived agent
+conversation", which is the curator, and the curator is not in this repository. Writing a number
+for a stage that did not run is finding 2 in a different hat — a null reads as unmeasured, a
+value reads as a measurement. Wiring it from the driver would satisfy rule K1 through exactly the
+laundering the rule's own docstring warns about.
+
+### 11. The three scope keys — **fixed 2026-08-11**
+
+`schemas_under_test`, `question_subset`, `split`: `Role.scope`, fatal on resume, never written.
+
+Resolved by `eval/provenance.py::scope_identity`. Each is a **count and a digest**, not a list.
+`schemas_under_test`'s note describes drift *between attempts at one run* ("a schema dropped from
+one attempt leaves its YAML behind and competes as a router candidate"), which a digest detects
+exactly, and carrying 57 names verbatim would add roughly 740 bytes to each of a 1 351-row
+artifact's 6.4 KB rows. `question_subset`'s note is explicit that "a probe set's identity is not
+its count", which is why the digest is there and not just the count. `split` is the dataset file
+stem, `test_final` — not the word "train": the ids in that file are BIRD `train_*` ids re-split
+by another repository, so answering "train or test" from them would be a claim about that
+repository's intent.
+
+`arms` escapes rule K1 only by a coincidental `"arms"` dict key in `eval/report.py`, and still
+has no writer.
 
 ---
 
@@ -220,12 +273,12 @@ only by a coincidental `"arms"` dict key in `eval/report.py`, and is in the same
 
 `tools/check_declared_is_consumed.py`, AST-only, exit 1 on violation. Four rules:
 
-| | rule | when written | today |
-|---|---|---:|---:|
-| K1 | every declared knob is named outside `register/` | 16 | 13 |
-| K2 | every key written into a `knobs` mapping is a declared knob | 1 | 0 |
-| R1 | every declared record field is named in `eval/harness.py` | 9 | 0 |
-| S1 | every `ServeState` channel has a writer *and* a reader outside `state.py` | 1 | 1 |
+| | rule | when written | 2026-08-10 | today |
+|---|---|---:|---:|---:|
+| K1 | every declared knob is named outside `register/` | 16 | 13 | 5 |
+| K2 | every key written into a `knobs` mapping is a declared knob | 1 | 0 | 0 |
+| R1 | every declared record field is named in `eval/harness.py` | 9 | 0 | 0 |
+| S1 | every `ServeState` channel has a writer *and* a reader outside `state.py` | 1 | 1 | 1 |
 
 It is red on purpose. A conformance check that went green on first run against a tree with this
 population would be the same defect as the eight tests that asserted constants against

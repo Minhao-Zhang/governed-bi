@@ -1,4 +1,5 @@
-"""Refuse the hand-authored sibling discriminators (audit §6.1). No data needed.
+"""Refuse the hand-authored sibling discriminators
+(``git-history:docs/v2-postmortem-and-v3-brief.md`` §6.1). No data needed.
 
 A *sibling discriminator* is a phrase written into a corpus ``summary`` to steer the router
 between similarly-named schemas — ``soccer_2016`` prefixed with ``cricket IPL batsman
@@ -14,8 +15,9 @@ Rule B is the shape: a summary shouting what its schema is **NOT**.
 
 Inside a corpus both rules read ``summary`` and nothing else, since ``body``, ``rules`` and
 column ``note`` are read only after the schema is chosen. Scanning every line instead gave
-31,599 hits, 31,560 of them rule B firing on the dataset's own ``'DECOY column: … Do NOT use
-it'`` marker. Outside a corpus rule A still scans every line, the subject there being the script.
+31,599 hits on the corpus of the day (the in-repo ``corpora/`` tree, 2026-08-06), 31,560 of them
+rule B firing on that corpus's ``'DECOY column: … Do NOT use it'`` marker. Outside a corpus rule
+A still scans every line, the subject there being the script.
 
 Blind spots: a single-line JSON corpus document is not decomposed into fields, so its
 summaries are unscanned, and a newly invented positive-only discriminator matches neither
@@ -292,9 +294,10 @@ def _is_corpus_data(path: pathlib.Path, repo: pathlib.Path = REPO) -> bool:
 def summary_blocks(lines: list[str]) -> list[tuple[int, str]]:
     """``(first line number, joined value)`` for each ``summary`` in the file.
 
-    Indentation rather than a YAML parse: 59,661 corpus files is too many to load, and the line
-    number is what makes a hit checkable. Joined because both rules read the value as a
-    sentence — one asks what it *starts* with, the other would miss a phrase that wrapped.
+    Indentation rather than a YAML parse: 7,357 corpus files (``../BIRD-corpus``, 2026-08-12) is
+    too many to load, and the line number is what makes a hit checkable. Joined because both
+    rules read the value as a sentence — one asks what it *starts* with, the other would miss a
+    phrase that wrapped.
     """
     blocks: list[tuple[int, str]] = []
     inside: int | None = None

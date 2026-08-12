@@ -3,7 +3,7 @@
 Wraps the LangChain ``OpenAIEmbeddings`` that :func:`~.proxy_gateway.build_embeddings` returns —
 which carries the proxy auth and the input clipping — and exposes it through
 :class:`~.embedder.BaseEmbedder`, so ``build_index`` and ``Session`` treat it like any other
-adapter. Identity is ``proxy:<model>``, provider-qualified per ``ports.py:140``, which is what
+adapter. Identity is ``proxy:<model>``, provider-qualified per ``ports.Embedder.model``, which is what
 keeps a the internal proxy-served vector out of the cache entry an OpenAI-served one of the same width owns.
 
 **Unlike ``OpenAIEmbedder``, ``model`` reports the request, not what the provider served.**
@@ -71,7 +71,7 @@ class ProxyEmbedder(BaseEmbedder):
 
     @property
     def model(self) -> str:
-        """``proxy:<requested id>``. Provider-qualified, per ``ports.py:140``."""
+        """``proxy:<requested id>``. Provider-qualified, per ``ports.Embedder.model``."""
         return f"proxy:{self._requested_model}"
 
     @property

@@ -24,17 +24,22 @@ Never prints the DSN or the API key.
 from __future__ import annotations
 
 import argparse
-import collections
 import json
 import pathlib
 import sys
 import threading
 import time
-from collections.abc import Collection, Mapping
 from typing import Any
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
+sys.path.insert(0, str(REPO / "tools"))
+
+#: Everything printed after the last question is graded, in its own module: this file reached the
+#: 1 000-line hard cap, and the report half needs no database, model or corpus. The plan / execute
+#: / report seam of ``docs/analysis/architecture-review-2026-08-11.md`` C2, cut at report first
+#: because it is the third that already had no I/O of its own.
+from datalake_report import print_report  # noqa: E402  (needs the path insert above)
 
 #: The corpus, in its own repository as of 2026-08-07 (D13). Derived from this file's location,
 #: like ``DEFAULT_DATASET``: a relative sibling path resolves against the process's working
@@ -104,6 +109,17 @@ def main(argv: list[str] | None = None) -> int:
         "set, otherwise --utility-model. It is a comparability knob and enters the artifact tag, "
         "because a reflected arm and an unreflected one are two arms.",
     )
+    parser.add_argument(
+        "--abstain",
+        action="store_true",
+        help="turn on the declared abstention policy (abstention_policy_enabled, ADR 0013). "
+        "Unlike --reflect this is NOT an observer: it decides, before the agent spends a "
+        "run_query attempt, whether the turn should be answered, so EX and coverage both move "
+        "and the arm is only readable against an unabstained pair. Costs no model call. It is a "
+        "comparability knob and enters the artifact tag, because an abstaining arm and a "
+        "committing one are two arms -- and a resume that merged them would report the "
+        "coverage of one with the accuracy of the other.",
+    )
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument(
         "--max-retries",
@@ -156,8 +172,28 @@ def main(argv: list[str] | None = None) -> int:
         "--force-fresh",
         action="store_true",
         help="start over even though --resume found no artifact but sibling artifacts exist. "
-        "Without it that situation aborts, because it is almost always a changed --tag input "
-        "rather than a genuine first run.",
+        "Without it that aborts, because a changed tag input is a far likelier explanation "
+        "than a genuine first run. NON-DESTRUCTIVE: it relaxes an abort on a path where the "
+        "output file does not exist, and never removes anything. To discard an artifact that "
+        "does exist, see --truncate.",
+    )
+    parser.add_argument(
+        "--truncate",
+        action="store_true",
+        help="DESTRUCTIVE. Discard the artifact at --out and start over. This is the only flag "
+        "that deletes a measured run, and an arm on this dataset is hours of paid model calls, "
+        "so it is separate from --force-fresh (which for a while did this silently) and it "
+        "prints the row count it is discarding first. Contradicts --resume.",
+    )
+    parser.add_argument(
+        "--arm",
+        default=None,
+        help="the arm this run is, by name, from register/arms.toml. Naming it makes the "
+        "committed claim about what this arm changed checkable against what the run records: "
+        "the declared corpus is reconciled against the session's corpus_content_hash BEFORE "
+        "the first paid question, and every row is reconciled again in the report. Unnamed "
+        "runs are still allowed and are simply unreconciled -- but a comparison against an "
+        "arm with no profile is `cannot_evaluate`, by audit D9.",
     )
     args = parser.parse_args(argv)
 
@@ -168,6 +204,15 @@ def main(argv: list[str] | None = None) -> int:
     # to prevent.
     if args.utility_effort and not args.utility_model:
         parser.error("--utility-effort needs --utility-model; alone it is accepted and ignored")
+
+    # "Keep what was measured" and "throw it away" are opposite instructions, and the file is
+    # the same one. Refused rather than resolved in either direction. The decision itself lives
+    # in `provenance.flag_conflict`, where a test can reach it without starting the driver.
+    from governed_bi.eval.provenance import flag_conflict
+
+    conflict = flag_conflict(resume=args.resume, truncate=args.truncate)
+    if conflict:
+        parser.error(conflict)
 
     from governed_bi import credentials
 
@@ -196,6 +241,19 @@ def main(argv: list[str] | None = None) -> int:
         print("no database credential reachable", file=sys.stderr)
         return 2
 
+    # The profile is loaded *before* the models are built, so a typo in --arm or a malformed
+    # arms.toml costs nothing. `arm_profile` raises on an unknown name rather than returning an
+    # empty treatment, which is the whole point of the file.
+    profile = None
+    if args.arm:
+        from governed_bi.register.arm_profiles import arm_profile
+
+        try:
+            profile = arm_profile(args.arm)
+        except (KeyError, OSError, ValueError) as err:
+            print(f"--arm: {err}", file=sys.stderr)
+            return 2
+
     from governed_bi.datasource.postgres import PostgresConnector
     from governed_bi.eval.arms import live_arm
     from governed_bi.eval.datalake import (
@@ -208,6 +266,13 @@ def main(argv: list[str] | None = None) -> int:
         table_coverage,
     )
     from governed_bi.eval.harness import run_arm
+    from governed_bi.eval.provenance import (
+        append_refusal,
+        arm_startup_refusal,
+        harness_knobs,
+        resume_identity_problem,
+        truncation_notice,
+    )
     from governed_bi.govern.policy import GovernancePolicy
     from governed_bi.serve import session as session_mod
 
@@ -248,14 +313,38 @@ def main(argv: list[str] | None = None) -> int:
         return 3
     schemas = sorted({s for s in session.structure.table_schemas.values() if s})
 
+    # **Before the first paid question**, which is the only place this check is worth anything.
+    # `reconcile` compares the profile's committed claim against what a run records, and until
+    # now its only caller was its own tests -- declared machinery with no wire, which is the
+    # defect open-work 3.10 is about, entered deliberately. A run labelled `v4` against a
+    # corpus that is not v4's is a mislabelled artifact, and mislabelled artifacts are how a
+    # number ends up quoted against the wrong treatment.
+    if profile is not None:
+        print(f"arm {profile.name}: {profile.description}", flush=True)
+        if profile.compare_to:
+            print(f"  compares against: {profile.compare_to}", flush=True)
+        if profile.notes:
+            print(f"  notes: {profile.notes}", flush=True)
+        mislabelled = arm_startup_refusal(
+            profile, {"corpus_content_hash": session.corpus_content_hash}
+        )
+        if mislabelled:
+            print(mislabelled, file=sys.stderr)
+            return 5
+
+    dataset_file = args.dataset / "test_final.jsonl"
     questions = load_questions(
-        args.dataset / "test_final.jsonl",
+        dataset_file,
         schemas=schemas,
         limit=args.limit,
         per_schema=args.per_schema,
     )
     if questions:
         questions[0].pop("_skipped_uncovered", None)
+    # The **whole** population this run covers, taken before --resume narrows `questions` to
+    # what is left. `question_subset` must name the same set on the first attempt and the
+    # resume, or the scope key would report drift on every resume and mean nothing.
+    covered_qids = {str(q["question_id"]) for q in questions}
 
     # The retrieval channel is in the tag because it is an arm, not a detail: lexical and
     # embedded runs have different coverage ceilings, so a tag that hid which one ran would
@@ -275,12 +364,37 @@ def main(argv: list[str] | None = None) -> int:
     # reflected arm would resume into an unreflected artifact and the two would be reported as
     # one. Same reason --prompt-variant is here.
     reflect_tag = "_reflect" if args.reflect else ""
+    # Same argument as `reflect_tag`, and it bites harder: the abstention policy moves
+    # *coverage*, so a resume that merged an abstaining run into a committing artifact would
+    # report one arm's delivered set with the other's declines and every selective-accuracy
+    # figure over the file would be a blend of two operating points.
+    abstain_tag = "_abstain" if args.abstain else ""
+    # A pinned arm and an unpinned one are two treatments: v3-fold vs v4 is discordant on 9.3%
+    # of questions with the pin and 12.7% without it, which is the difference between an MDE of
+    # 2.3pp and 2.7pp (`measure.stats.mde`, n=1351). It was the one treatment input with no tag
+    # segment and no readable row, so `--resume` could merge a pinned run into an unpinned one.
+    pinned_tag = "_pinned" if args.replay_routing is not None else ""
     tag = (
         f"{args.model}_{args.effort or 'default'}_top{args.top_n or 'default'}"
-        f"_{'embed' if args.embed else 'lexical'}{provider_tag}{variant_tag}{reflect_tag}"
+        f"_{'embed' if args.embed else 'lexical'}"
+        f"{provider_tag}{variant_tag}{reflect_tag}{abstain_tag}{pinned_tag}"
     )
     out_path = args.out or pathlib.Path("runs/eval") / f"live_full_{tag}.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # A second population appended into one artifact -- see `append_refusal` for what that
+    # printed before anything raised.
+    refusal = append_refusal(out_path, resume=args.resume, truncate=args.truncate)
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 4
+    # The destructive branch, and it says what it is destroying before it does. Both halves of
+    # the decision are in `provenance.py` where a test can drive them; what is left here is the
+    # print and the write.
+    notice = truncation_notice(out_path, resume=args.resume, truncate=args.truncate)
+    if notice:
+        print(notice, flush=True)
+        out_path.write_text("", encoding="utf-8")
 
     # ── resume: keep what was *measured*, retry what crashed ──────────────────────
     #
@@ -310,14 +424,34 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 4
 
+    # Per-question knob overrides, composed into one dict. Two separate blocks each writing
+    # `knobs_resolved` would mean the second silently dropped the first's override, which is the
+    # defect `Session.turn` already caused once for `--top-n`.
+    #
+    # Built here rather than after the resume block, because the resume guard compares the
+    # artifact's recorded comparability knobs against the ones this run is about to write.
+    knob_overrides: dict[str, Any] = harness_knobs(
+        repo=REPO,
+        schemas=schemas,
+        question_ids=covered_qids,
+        dataset_file=dataset_file,
+        serve_workers=args.workers,
+    )
+    if args.top_n is not None:
+        knob_overrides["route_top_n"] = args.top_n
+    if args.reflect:
+        knob_overrides["reflect_enabled"] = True
+    if args.abstain:
+        knob_overrides["abstention_policy_enabled"] = True
+    run_knobs = {**session.knobs_resolved, **knob_overrides}
+
     done: set[str] = set()
     retrying = 0
     if args.resume and out_path.exists():
+        from governed_bi.register.knobs import comparability_keys
+
         kept_lines: list[str] = []
-        seen_identities: dict[str, collections.Counter] = {
-            "corpus_content_hash": collections.Counter(),
-            "prompt_set_hash": collections.Counter(),
-        }
+        kept_rows: list[dict] = []
         for line in out_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line:
@@ -329,16 +463,17 @@ def main(argv: list[str] | None = None) -> int:
             if str(row.get("outcome")) == "crashed":
                 retrying += 1
                 continue
-            for field, counter in seen_identities.items():
-                counter[row.get(field)] += 1
             kept_lines.append(line)
+            kept_rows.append(row)
             done.add(str(row.get("question_id")))
         refusal, warnings = resume_identity_problem(
-            seen_identities,
-            done,
+            kept_rows,
             corpus_content_hash=session.corpus_content_hash,
             prompt_set_hash=session.prompt_set_hash,
-            question_ids={str(q["question_id"]) for q in questions},
+            knobs_resolved=run_knobs,
+            comparability=comparability_keys(),
+            question_ids=covered_qids,
+            replay_routing=args.replay_routing is not None,
         )
         for warning in warnings:
             print(f"warning: {warning}", file=sys.stderr)
@@ -394,20 +529,27 @@ def main(argv: list[str] | None = None) -> int:
             flush=True,
         )
 
-    # Per-question knob overrides, composed into one dict. Two separate blocks each writing
-    # `knobs_resolved` would mean the second silently dropped the first's override, which is the
-    # defect `Session.turn` already caused once for `--top-n`.
-    knob_overrides: dict[str, Any] = {}
-    if args.top_n is not None:
-        knob_overrides["route_top_n"] = args.top_n
-    if args.reflect:
-        knob_overrides["reflect_enabled"] = True
-    if knob_overrides:
-        for question in questions:
-            question["knobs_resolved"] = {**session.knobs_resolved, **knob_overrides}
+    # Composed above, applied here: `Session.turn` writes the session's own knobs over the
+    # turn, and `harness._turn_knobs` prefers the question's mapping, so this is where the
+    # harness half of the identity reaches the row.
+    for question in questions:
+        question["knobs_resolved"] = dict(run_knobs)
 
     total = len(questions)
     print(
+        "harness: "
+        + ", ".join(
+            f"{k}={run_knobs[k]}"
+            for k in (
+                "git_sha",
+                "working_tree_dirty",
+                "serve_workers",
+                "split",
+                "schemas_under_test",
+                "question_subset",
+            )
+        )
+        + "\n"
         f"model={args.model} effort={args.effort or '(default)'} workers={args.workers} "
         f"top_n={args.top_n or '(register default)'}"
         + (
@@ -462,7 +604,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         handle.close()
 
-    _report(rows, out_path, args, observed_tokens, table_coverage)
+    print_report(rows, out_path, args, observed_tokens, table_coverage, profile=profile)
     return 0
 
 
@@ -551,331 +693,10 @@ def _build_models(args):
             provider=embed_provider,
             max_retries=retries,
         )
-        # The persisted store, shared with the server. Without it this driver re-embedded all
-        # 13,968 pooled summaries on every invocation — paid tokens, before the first question.
+        # The persisted store, shared with the server. Without it this driver re-embedded every
+        # pooled summary (13,304 in ``../BIRD-corpus``, 2026-08-12) on every invocation.
         vector_cache = vector_cache_from_environment(model=embedder.requested_model)
     return model, utility_model, embedder, vector_cache
-
-
-def _abstention(every: list[dict]) -> None:
-    """What declining to answer bought, and what it cost.
-
-    The engine's committed answers are the ones it stood behind; the abstained ones are the
-    turns it capped, refused or asked about. Two numbers make that a measurement rather than a
-    posture: how accurate the committed set is, and how accurate the abstained set *would have
-    been*. If the second is near the first, abstention is noise. If it is far below, the engine
-    knows what it does not know, and that is a property no single EX figure can show.
-
-    ``computed_correct`` is the abstained turn's last statement re-executed by the harness and
-    never counted as correct. Rows written before that field existed carry ``None`` and are
-    reported as unmeasured rather than as zero.
-    """
-    committed = [r for r in every if r.get("outcome") == "answered"]
-    # Wider than the harness's `PRICED_ABSTENTIONS`, on purpose: a clarification is an
-    # abstention, it just has no statement to re-execute. Counting it here and not there keeps
-    # "how often did the engine decline" separate from "of those, how many could be priced".
-    abstained = [r for r in every if r.get("outcome") in ("capped", "refused", "clarification")]
-    if not committed or not abstained:
-        return
-    ok = sum(1 for r in committed if r.get("correct") is True)
-    priced = [r for r in abstained if r.get("computed_correct") is not None]
-    would = sum(1 for r in priced if r.get("computed_correct") is True)
-
-    print("\nabstention (the engine declined; scoring is unchanged, this only prices it):")
-    print(f"  committed        {ok}/{len(committed)} = {ok / len(committed):.3f}   accuracy of delivered answers")
-    print(f"  abstained        {len(abstained)} turn(s) = {len(abstained) / len(every):.3f} of the run")
-    if not priced:
-        print("  would-have-been  unmeasured (no `computed_correct` on these rows)")
-        return
-    print(
-        f"  would have been  {would}/{len(priced)} = {would / len(priced):.3f} correct if forced to commit"
-        + (f"   ({len(abstained) - len(priced)} had no runnable statement)" if len(priced) != len(abstained) else "")
-    )
-    print(
-        f"  abstention precision {len(priced) - would}/{len(priced)} = "
-        f"{(len(priced) - would) / len(priced):.3f} of priced abstentions would have been wrong"
-    )
-    print(
-        f"  computed EX      {ok + would}/{len(every)} = {(ok + would) / len(every):.3f}"
-        "   <- NOT the headline: it credits statements the engine refused to stand behind"
-    )
-
-
-def resume_identity_problem(
-    seen: Mapping[str, Mapping[Any, int]],
-    resumed_qids: Collection[str],
-    *,
-    corpus_content_hash: str,
-    prompt_set_hash: str,
-    question_ids: Collection[str],
-) -> tuple[str, list[str]]:
-    """``(refusal, warnings)`` — is the artifact on disk the same treatment as this run?
-
-    Public and pure so it can be tested; ``main`` owns only the printing and the exit code.
-
-    **Why this exists.** The artifact filename carries ``--model``, ``--effort``, ``--top-n``,
-    ``--embed``, the provider and ``--prompt-variant``, and a renamed tag already aborts. It
-    does **not** carry ``--corpus-dir``, and an explicit ``--out`` bypasses the tag entirely.
-    So: ``git pull`` in ``../BIRD-corpus``, resume, and one artifact holds two corpora — every
-    gate passes and the driver prints that the numbers are quotable as a single arm. The corpus
-    is the treatment identity (AGENTS.md), which makes that the worst sentence this driver can
-    print. Both hashes were already on every row and nothing read them back.
-
-    A row that carries ``None`` **warns rather than refuses**: "written before this field
-    existed" is a different fact from "written under a different corpus", and refusing on it
-    would strand every older artifact.
-
-    **What this does not catch:** a dataset whose gold statements were edited while the question
-    ids stayed the same. The row carries no dataset identity, and ``gold_fingerprint`` is
-    attached after the resume decision. A dataset with a *different question set* is caught,
-    below, by the ids themselves.
-    """
-    problems: list[str] = []
-    warnings: list[str] = []
-    expected = {
-        "corpus_content_hash": corpus_content_hash,
-        "prompt_set_hash": prompt_set_hash,
-    }
-    for field, want in expected.items():
-        counter = seen.get(field) or {}
-        foreign = {v: n for v, n in counter.items() if v is not None and v != want}
-        if foreign:
-            lines = [f"  the artifact carries a different {field}:", f"    this run: {want}"]
-            lines += [
-                f"    on disk : {value}  ({n} rows)"
-                for value, n in sorted(foreign.items(), key=lambda kv: -kv[1])
-            ]
-            problems.append("\n".join(lines))
-        missing = counter.get(None, 0)
-        if missing:
-            warnings.append(
-                f"{missing} resumed row(s) carry no {field}; they predate the field and "
-                "cannot prove they are the same treatment"
-            )
-    # Ids the artifact has and this run does not. Either --dataset changed or the scope narrowed
-    # (--limit / --per-schema). Both mean the two are not one population; the driver cannot tell
-    # them apart from here, so it names both rather than guessing.
-    stale = sorted(set(map(str, resumed_qids)) - set(map(str, question_ids)))
-    if stale:
-        problems.append(
-            f"  {len(stale)} row(s) name questions this run does not cover, so the artifact and "
-            f"this run are not one population. Either --dataset changed, or --limit/--per-schema "
-            f"narrowed the scope. Example question id: {stale[0]}"
-        )
-    if problems:
-        problems.append(
-            "  Two treatments in one artifact is not an arm. Rename the artifact and start a "
-            "new one, or restore the treatment it was measured under."
-        )
-    return "\n".join(problems), warnings
-
-
-def _refusal_layers(every: list[dict]) -> None:
-    """Which governance layer refused, per attempt.
-
-    A refusal reported only as ``refused_by: guardrail`` names the *stage* and not the rule, and
-    the two suggest opposite work: ``r_table_not_licensed`` is a retrieval failure the corpus or
-    the router owns, while an excluded-column refusal is the policy working as designed. Reading
-    the 2026-08-09 run needed every refused statement replayed through ``check()`` offline to
-    tell them apart. This prints it.
-    """
-    from governed_bi.serve.ledger import answering_attempts
-
-    # **`answering_attempts`, not every row.** A `sample_rows` probe is refused by the same
-    # layers as a draft answer and lands in the same ledger, so counting the raw list reports
-    # introspection as governance declining to answer -- on the v3-fold arm, 21 `passed` and 3
-    # `r_ambiguous_fold` attempts that were probes. Every other reader of this ledger
-    # (`execution_from_attempts`, `stamp`, `agent_core`) already goes through this function, and
-    # `serve/ledger.py` says why: three copies of "which attempts count" is three answers. This
-    # was the fourth copy, and it disagreed. The row keeps every attempt including `path`, so
-    # the filter belongs here in the reader and no artifact loses information.
-    codes: collections.Counter = collections.Counter()
-    for row in every:
-        for attempt in answering_attempts(row.get("attempts") or ()):
-            if attempt.get("passed") is True:
-                continue
-            codes[f"{attempt.get('layer') or '-'}/{attempt.get('reason_code') or '-'}"] += 1
-    if not codes:
-        return
-    print("\nfailed attempts by layer/rule (answering attempts only):")
-    for name, n in codes.most_common(12):
-        print(f"  {name:<44}{n:>6}")
-
-
-def _report(rows: list[dict], out_path: pathlib.Path, args, observed_tokens, table_coverage) -> None:
-    """Print the whole file, not just this process's rows — a resumed run is one run."""
-    every = [json.loads(line) for line in out_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    print(f"\nrows in {out_path}: {len(every)}")
-
-    # `correct` has three values, and reading it with `r.get("correct")` counted a row the grader
-    # could not judge as a wrong answer. Split first; every rate below is over graded rows only.
-    graded = [r for r in every if r.get("correct") is not None]
-    unmeasured = [r for r in every if r.get("correct") is None]
-    if unmeasured:
-        print(
-            f"UNMEASURED        = {len(unmeasured)} row(s) the grader could not judge, "
-            "excluded from every EX below (not counted as wrong): "
-            + str(dict(collections.Counter(str(r.get("grade_detail")) for r in unmeasured)))
-        )
-
-    def ex(rows: list[dict], label: str, note: str = "") -> None:
-        ok = sum(1 for r in rows if r.get("correct"))
-        print(f"{label:<18}= {ok}/{len(rows)} = {ok / max(1, len(rows)):.3f}{note}")
-
-    ex(graded, "EX")
-    ex([r for r in graded if r.get("outcome") != "clarification"], "EX over attempted")
-
-    # The population, stated rather than quietly changed. The dataset says "Exclude both from
-    # cross-variant EX": `order_sensitive` golds return a different-but-valid result on the decoy
-    # instances, and `exec_failed` golds are degenerate BIRD (>200k rows / 60s timeout) that score
-    # `missing_gold` against any engine. Leakage is its third warning. All printed, never applied
-    # silently — dropping rows shrinks a denominator with nothing in the artifact saying so.
-    from governed_bi.eval.datalake import dataset_leakage_qids, dataset_qid_lists
-
-    lists = dataset_qid_lists(args.dataset)
-    leaked = dataset_leakage_qids(args.dataset)
-    excluded = lists["order_sensitive"] | lists["exec_failed"] | leaked
-    present = {str(r.get("question_id")) for r in graded}
-    stable = [r for r in graded if str(r.get("question_id")) not in excluded]
-    if len(stable) != len(graded):
-        ex(
-            stable,
-            "EX over clean",
-            f"   (excludes {len(graded) - len(stable)}: "
-            f"{len(lists['order_sensitive'] & present)} order-sensitive, "
-            f"{len(lists['exec_failed'] & present)} exec-failed gold, "
-            f"{len(leaked & present)} split-leaked)",
-        )
-    print("outcomes:", dict(collections.Counter(str(r.get("outcome")) for r in every)))
-    crashed = [r for r in every if r.get("outcome") == "crashed"]
-    if crashed:
-        print("crashes:", dict(collections.Counter(str(r.get("error_type")) for r in crashed)))
-
-    # The EX ceiling first, because it decides how to read everything below it: a question whose
-    # gold tables were never licensed could not have been answered by any model.
-    cov = table_coverage(every, _gold_sql_by_qid(args.dataset))
-    print(
-        f"all gold tables licensed = {cov['all_gold_tables_licensed']:.3f}  "
-        f"(some {cov['some_licensed']:.3f}, none {cov['none_licensed']:.3f}, "
-        f"unparsed gold {cov['gold_sql_unparsed']})"
-    )
-
-    _abstention(every)
-    _refusal_layers(every)
-    if getattr(args, "replay_routing", None) is not None:
-        from governed_bi.eval.replay import licensed_drift
-
-        prior = {
-            str(k): v
-            for k, v in (
-                (r.get("question_id"), r.get("licensed") or [])
-                for r in (
-                    json.loads(line)
-                    for line in args.replay_routing.read_text(encoding="utf-8").splitlines()
-                    if line.strip()
-                )
-            )
-        }
-        drift = licensed_drift(every, prior)
-        rate = drift["identical_rate"]
-        print(
-            "\nrouting pinned; residual drift in the licensed table set:"
-            f"\n  identical      {'unmeasured' if rate is None else f'{rate:.4f}'}"
-            f"   {drift['identical']}/{drift['compared']}"
-            f"\n  moved          {drift['moved']}"
-            + (
-                f"   mean Jaccard {drift['mean_jaccard_when_moved']:.3f} over those"
-                if drift["mean_jaccard_when_moved"] is not None
-                else ""
-            )
-            + "\n  Pass two re-searches inside the pinned schemas, so this is expected to be "
-            "non-zero.\n  It is printed because an unquantified drift turns 'we pinned routing' "
-            "into a wider claim than what was done."
-        )
-
-    # The funnel, before the flat rates below. Each stage is conditional on the one above, so a
-    # drop is attributable: `all_gold_tables_licensed` over correctly-routed questions is a
-    # table-selection number; over every question it blends two failures wanting opposite work.
-    from governed_bi.eval.datalake import retrieval_funnel
-
-    funnel = retrieval_funnel(every, _gold_sql_by_qid(args.dataset), _gold_db_by_qid(args.dataset))
-
-    def _rate(cell: dict) -> str:
-        """A rate, or the word for its absence. Never ``0.0000`` for an empty population."""
-        return "unmeasured" if cell["rate"] is None else f"{cell['rate']:.4f}"
-
-    print("\nfunnel (each stage given the one above):")
-    for stage, cell in funnel["conditional"].items():
-        print(f"  {stage:<28}{_rate(cell):>12}   {cell['n']}/{cell['of']}")
-    e2e = funnel["end_to_end"]
-    print(f"  {'end to end':<28}{_rate(e2e):>12}   {e2e['n']}/{e2e['of']}")
-    print(f"  counts: {json.dumps(funnel['counts'])}")
-
-    # The gates, on the path that actually produces numbers. `eval/report.py`'s only caller was
-    # `eval/__main__.py` — SQLite-only, unable to run the live datalake arm — so this driver,
-    # `routing_recall.py` and `query_summary_alignment.py` produced every quoted figure without
-    # reaching a single quotability gate. Printed rather than enforced: a driver that refused to
-    # report a run would lose the run.
-    from governed_bi.eval.report import evaluate_arm
-    from governed_bi.measure.population import Population
-
-    verdicts = evaluate_arm(Population.of(f"live_{args.model}", every))
-    print("\nquotability gates (single-arm; cross-arm distinctness needs a second arm):")
-    for verdict in verdicts:
-        print(f"  {verdict.render()}")
-    blocking = [v for v in verdicts if v.verdict.value != "pass"]
-    print(
-        "  ALL GATES PASS -- these numbers are quotable as a single arm"
-        if not blocking
-        else f"  {len(blocking)} gate(s) did not pass; a check that did not happen is not a "
-        "check that passed"
-    )
-
-    gold = _gold_db_by_qid(args.dataset)
-    reach = [
-        r
-        for r in every
-        if any(str(t).startswith(f"{gold.get(r['question_id'], chr(0))}.") for t in (r.get("licensed") or []))
-    ]
-    # Reachability is over every row (it is a routing fact, true or false regardless of grading);
-    # the EX beneath it is over the graded ones only.
-    reach_graded = [r for r in reach if r.get("correct") is not None]
-    ok = [r for r in reach_graded if r["correct"]]
-    print(f"gold schema reachable = {len(reach)}/{len(every)} = {len(reach) / max(1, len(every)):.3f}")
-    print(
-        f"EX among reachable    = {len(ok)}/{len(reach_graded)} = "
-        f"{len(ok) / max(1, len(reach_graded)):.3f}"
-    )
-    clar_reach = sum(1 for r in reach if r.get("outcome") == "clarification")
-    unreach = [r for r in every if r not in reach]
-    print(
-        f"clarification: {clar_reach}/{len(reach)} when reachable, "
-        f"{sum(1 for r in unreach if r.get('outcome') == 'clarification')}/{len(unreach)} when not"
-    )
-    print("tokens:", json.dumps(observed_tokens(every), indent=2, default=str))
-
-
-def _gold_sql_by_qid(dataset: pathlib.Path) -> dict[str, str]:
-    """``question_id -> sql_rename``. The statement written against the obfuscated schemas,
-    which is what this database is; ``sql_base`` and ``sql_sqlite`` do not execute here."""
-    out: dict[str, str] = {}
-    for line in (dataset / "test_final.jsonl").read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line:
-            row = json.loads(line)
-            if row.get("sql_rename"):
-                out[str(row["question_id"])] = str(row["sql_rename"])
-    return out
-
-
-def _gold_db_by_qid(dataset: pathlib.Path) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for line in (dataset / "test_final.jsonl").read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line:
-            row = json.loads(line)
-            out[str(row["question_id"])] = str(row["db_id"])
-    return out
 
 
 if __name__ == "__main__":

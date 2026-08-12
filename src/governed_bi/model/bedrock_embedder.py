@@ -5,13 +5,18 @@ so model-family quirks stay LangChain's problem. The wrapper exists because the 
 ``Embeddings`` interface is missing the two facts this port is *for*: ``model`` and
 ``dimensions`` both go into every vector cache key, and neither is on that interface --
 the same reason ``OpenAIEmbedder`` is not a wrapper over ``langchain-openai``
-(``ports.py:22``).
+(``ports.py``'s no-single-adapter rule).
 
 **Width is learned, not assumed.** Titan v2 serves 1024 by default but is configurable to
 512 or 256, and Cohere's Bedrock models serve 1024. A hard-coded table would go stale
-silently, and ``cosine`` returns 0.0 on a width mismatch instead of raising -- so a wrong
-declared width degrades routing to "nothing scores" with no error anywhere. One memoised
-probe settles it, the same shape ``OpenAIEmbedder`` uses for its served-model id.
+silently, and the declared width is what enters every cache key -- so a wrong one keys this
+adapter's vectors under a width the provider never served, and ``BaseEmbedder.embed``'s width
+check is what turns that into a failure rather than a silent cross-model cache hit. One
+memoised probe settles it, the same shape ``OpenAIEmbedder`` uses for its served-model id.
+
+(This note read *"``cosine`` returns 0.0 on a width mismatch instead of raising"* until
+2026-08-12 and gave that as the reason for probing. ``retrieve/semantic.py``'s ``cosine``
+raises ``ValueError`` on a width mismatch and has since v2 -- audit N2.)
 """
 
 from __future__ import annotations
@@ -127,7 +132,7 @@ class BedrockEmbedder(BaseEmbedder):
 
     @property
     def model(self) -> str:
-        """``bedrock:<model id>``. Provider-qualified, per ``ports.py:140``.
+        """``bedrock:<model id>``. Provider-qualified, per ``ports.Embedder.model``.
 
         The prefix is not decoration: ``cache_key`` is ``model|dimensions|text`` and takes
         no provider of its own, so the qualification here is the only thing keeping two

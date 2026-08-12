@@ -10,6 +10,7 @@ from typing import Any, Literal
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
+from governed_bi.serve.nodes.abstain import abstain_node
 from governed_bi.serve.nodes.agent_core import agent_core_node
 from governed_bi.serve.nodes.assemble import assemble_node
 from governed_bi.serve.nodes.facets import (
@@ -89,6 +90,22 @@ def _after_connect(state: ServeState) -> Literal["decline", "assemble", "stamp"]
     return "assemble"
 
 
+def _after_abstain(state: ServeState) -> Literal["decline", "agent_core", "stamp"]:
+    """The declared abstention policy's edge (ADR 0013).
+
+    Reads ``path_kind`` and not ``abstention``, deliberately: the node writes the decline the
+    same way ``route`` and ``connect`` do, so there is one answer to "did this turn end here"
+    rather than a second channel this edge would have to agree with. Off by default, in which
+    case the node writes a ``disabled`` verdict and no ``path_kind``, and this returns
+    ``agent_core`` exactly as the ``assemble -> agent_core`` edge did before it existed.
+    """
+    if state.get("path_kind") == "crashed":
+        return "stamp"
+    if state.get("path_kind") == "decline":
+        return "decline"
+    return "agent_core"
+
+
 def _skip_if_terminal(state: ServeState) -> Literal["stamp", "continue"]:
     if state.get("path_kind") in ("refuse", "decline", "crashed"):
         return "stamp"
@@ -147,8 +164,10 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
 
     # `input_schema` / `output_schema` only when `accept` is present. That flag *is* the trust
     # boundary: with it a turn is derived from a client conversation, so nothing else the client
-    # sends may reach state and nothing it did not ask for goes back (audit §4.3; see
-    # `ServeInput` / `ServeOutput`). Without it the caller is `serve/__main__`, `eval/` or
+    # sends may reach state (audit-2026-08-10 §A2/§A3) and `invoke` returns only what the
+    # interface reads. The read half is narrower than it looks — `output_schema` does not reach
+    # `values` frames or `get_state` (§B1, open); see `ServeInput` / `ServeOutput`. Without the
+    # flag the caller is `serve/__main__`, `eval/` or
     # `/chat`, which build the turn in-process and pass and read the whole of ServeState on
     # purpose — the eval harness projects its record out of channels no client sees.
     graph = (
@@ -178,6 +197,11 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     rail("resolve", resolve_node)
     rail("connect", connect_node)
     rail("assemble", assemble_node)
+    # Not through `rail`, and `stream=False` for `reflect`'s reason: the policy ships off, and a
+    # disabled decision must add no rows to a timeline the interface renders. It emits its own
+    # single row on the turns where it judged something. No timeout — it is a pure function of
+    # state with no model call and nothing to hang on.
+    graph.add_node("abstain", wrap_node("abstain", abstain_node, stream=False))
     rail("agent_core", agent_core_node)
     # Not through `rail`. `stream=False`: the node emits its own single row only on the turns
     # where it judged something, so a default-off turn's event stream is unchanged. No timeout,
@@ -251,7 +275,12 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     graph.add_conditional_edges(
         "assemble",
         _skip_if_terminal,
-        {"stamp": "stamp", "continue": "agent_core"},
+        {"stamp": "stamp", "continue": "abstain"},
+    )
+    graph.add_conditional_edges(
+        "abstain",
+        _after_abstain,
+        {"decline": "decline", "agent_core": "agent_core", "stamp": "stamp"},
     )
     # Terminals skip narrate: refusal/decline wording is system copy. `reflect` is a plain edge
     # and not a conditional one, because an edge reading its verdict is exactly the control flow

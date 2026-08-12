@@ -5,7 +5,8 @@ Every executor writes an entry stamped with its ``path`` (G2).
 Invariants: hash the executed string, not the checked one (G4);
 :func:`guardrail_errors` is derived from attempts (quotability precondition).
 
-ADR 0006 §11's redacted retention table (``ledger_entry()``) is gone (audit §8.1/§10):
+ADR 0006 §11's redacted retention table (``ledger_entry()``) is gone — §11's own superseding
+note, 2026-08-06, and ADR 0010's resolution paragraph record it:
 it had zero production callers while :func:`attempt_record` was what reached disk,
 carrying ``executed_sql`` raw. Do not re-add a redacted projection with no writer — it
 is a second answer to "what is the durable record", and the one a reader believes.

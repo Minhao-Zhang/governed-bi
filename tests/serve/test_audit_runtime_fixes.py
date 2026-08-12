@@ -120,15 +120,15 @@ def test_proxy_chat_model_retries_default_matches_knob() -> None:
     assert default == int(knob_default("llm_max_retries"))
 
 
-def test_capabilities_admit_hitl_is_not_durable(monkeypatch: pytest.MonkeyPatch) -> None:
-    from governed_bi.api import routes
+def test_capabilities_admit_hitl_is_not_durable() -> None:
+    """The projection takes its session, so there is no module global to swap for a stub."""
+    from governed_bi.api.routes import capabilities_for
 
     class _S:
         connector = type("C", (), {"dialect": "postgres"})()
         agent_model = None
         knobs_resolved: dict[str, Any] = {}
 
-    monkeypatch.setattr(routes, "_session", lambda: _S())
-    caps = routes.capabilities()
+    caps = capabilities_for(_S())
     assert caps["checkpoint_durable"] is False
     assert caps["hitl_survives_process_restart"] is False

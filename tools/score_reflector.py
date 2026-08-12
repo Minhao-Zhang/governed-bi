@@ -5,8 +5,10 @@
 
 The one question this answers: when the reflector says "this is wrong", how often is EX actually
 0? If that is about the base rate, the reflector cannot tell right from wrong here, and a retry
-loop on top of it re-rolls a draw after seeing it — what ``n_re_served``'s gate exists to catch.
-One utility-model call per already-graded row answers that far cheaper than a paid arm.
+loop on top of it re-rolls a draw after seeing it — which is why node ``RetryPolicy`` is banned
+(``register/knobs.py``; ``n_re_served`` is a frozen always-0 field and **not** a gate, pinned by
+``tests/serve/test_audit_runtime_fixes.py``). One model call per already-graded row answers that
+far cheaper than a paid arm.
 
 It calls ``reflect_on`` from ``serve/nodes/reflect.py``, not a copy of its prompt: an offline
 score is evidence about the live judge only if it *is* the live judge. The judge never sees gold —

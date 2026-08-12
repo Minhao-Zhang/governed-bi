@@ -524,6 +524,13 @@ lake — the same shape as B7.
 | `sample_rows` | column ids whose table is in `licensed`, **and then the layer stack** |
 | `run_query` | the table layer, against `licensed` |
 
+> **Amended 2026-08-12 by [ADR 0012](0012-access-seam-principal-and-authorization.md) §6.**
+> `inspect_schema` and `sample_rows` now also ask this principal's grant, because neither builds a
+> statement the layer stack can read and they would otherwise be the way around it. `read_body`
+> deliberately does not: its payload is prose the turn already rendered into the prompt, and gating
+> the tool without narrowing the renderer would be a bound that looks enforced. Both defaults are
+> the open grant, so the table above is exactly what happens on this tree.
+
 **No tool writes to `licensed`.** A clarification resume continues from the
 interrupt point (0005 §3.1) and therefore cannot widen it either.
 
@@ -778,6 +785,17 @@ id-based, which is a small API change for the agent prompt.
 **What it does not cover.** Row-level security and per-user identity (enterprise
 fork). Indirect injection through data returned by the database (§6). Anything
 above the statement — 0005 owns retrieval and the graph.
+
+> **Amended 2026-08-12 by [ADR 0012](0012-access-seam-principal-and-authorization.md).** The first
+> sentence is now half wrong and the half matters. A `Principal`, an `AccessPolicy` port and two
+> adapters exist; §1's `check()` reads the resulting grant off `GovernancePolicy`; the TABLES layer
+> asks three questions instead of one (`r_table_not_licensed`, then `r_table_not_authorized`, then
+> `r_row_predicate_unenforced`) and COLUMNS gains `r_column_not_authorized`; §8's "the licensed set"
+> is now two sets with two meanings, and no grant may widen `licensed`. **Row-level security is
+> still not enforced here** — a predicate is declared and refused, never injected, for the reason
+> §3's fixed pipeline and G4 give. Per-*user* identity is still absent: one API key is one
+> principal. The default grant is open and 0012 §8 lists the `serve/` and `api/` wires that are
+> still owed, so on this tree the seam is a `govern/` property and not a served one.
 
 ---
 

@@ -163,8 +163,8 @@ def test_every_embedder_qualifies_its_model_with_its_provider() -> None:
     """``cache_key`` is ``model|dimensions|text`` and carries no provider of its own.
 
     The prefix is the only thing keeping two gateways serving one nominal id out of each
-    other's cached vectors, and ``cosine`` returns 0.0 on a width mismatch rather than
-    raising — so a collision degrades routing to "nothing scores" with no error anywhere.
+    other's cached vectors, and nothing downstream can catch a collision between two
+    same-width gateways: ``cosine`` raises only when the widths *differ*, and these agree.
 
     Only Bedrock is asserted here, because only Bedrock can answer offline.
     ``OpenAIEmbedder.model`` reports the *served* id and probes to learn it, and

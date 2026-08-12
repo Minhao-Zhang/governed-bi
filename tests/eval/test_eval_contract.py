@@ -340,8 +340,8 @@ def test_an_abstained_turn_is_priced_without_being_scored(tmp_path: Path) -> Non
 
     A capped or refused turn keeps ``correct=False``: an engine that would not commit to a
     statement gets no credit for it, and that rule stays. But the rule has a price, and until
-    this field existed nobody knew what it was — of the 2026-08-09 run's 133 capped turns, 23
-    held the correct answer. Keeping the policy and pricing it are only separable if the number
+    this field existed nobody knew what it was — of the 2026-08-09 full run's 133 capped turns,
+    23 held the correct answer. Keeping the policy and pricing it are only separable if the number
     is on the row.
 
     Four rows covering every branch of ``_abstained_fingerprint``, because the field's whole

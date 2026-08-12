@@ -95,13 +95,16 @@ def slug(physical_name: str) -> str:
     ``TableAsset`` at all while 24 few-shots cited it, and widening the charset is not the
     fix because ``"Air Carriers".yaml`` is illegal on Windows.
 
-    Returns ``physical_name`` unchanged when it is already a bare identifier (655 of 655
-    tables and 5,942 of 5,942 columns in the corpus, so nothing existing moves). Otherwise
-    unsafe characters become ``_`` and a six-hex digest of the *exact* name is appended:
+    Returns ``physical_name`` unchanged when it is already a bare identifier — 655 of 656
+    tables and 5,946 of 5,947 columns of the shipped BIRD corpus (57 schemas, 13,304 assets),
+    so almost nothing existing moves. The two that do are the last two worked examples below —
+    a table in ``airline`` and a column of ``soccer_2016.saison``, both real assets in that
+    corpus and the reason this function exists. Otherwise unsafe characters become ``_`` and a
+    six-hex digest of the *exact* name is appended:
 
         ``CBSA``          → ``CBSA``
         ``Air Carriers``  → ``Air_Carriers_66c534``
-        ``orange_trophée``→ ``orange_troph_e_1fadf1``
+        ``orange_trophäe``→ ``orange_troph_e_b763be``
 
     The digest is what makes it injective: ``a b`` and ``a_b`` sanitise alike and must not
     collide. Deliberately **not** lowercased — Postgres distinguishes quoted ``"CBSA"`` from

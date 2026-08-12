@@ -17,17 +17,12 @@ arithmetic. Authoring rules applied here:
   tuple.
 * A guard that leaves a trace only when it fires cannot be told from a guard that
   was never wired up, so the negative case is tested too.
-
-Still pending, and marked ``xfail(strict=True)`` rather than omitted so it cannot
-be forgotten: the assertion that a **real turn on every terminal path** writes
-every required field. That needs the graph, which does not exist yet. Strict xfail
-means it fails the suite the moment it starts passing, which is the point at which
-someone must come back and turn it into a real test — a non-strict xfail would
-XPASS in silence and nobody would learn the thing started working.
 """
 
 from __future__ import annotations
 
+import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -103,7 +98,7 @@ def test_presence_test_rejects_a_record_of_nulls() -> None:
 
 
 def test_a_refusal_path_record_passes() -> None:
-    """The complement, and the reason eight fields are stage-conditional.
+    """The complement, and the reason eleven fields are stage-conditional.
 
     A guard-blocked turn reaches ``stamp`` without running the facets, ``connect``
     or the agent loop. Declaring those fields ``never`` would either fail every
@@ -256,12 +251,18 @@ def test_every_gate_in_tools_is_either_in_ci_or_declared_manual() -> None:
             "tests/conformance/test_corpus_conformance_rules_fire.py, which does run in CI"
         ),
         "check_declared_is_consumed.py": (
-            "reports 14 real violations today (open-work.md 3.10). Wiring it now would fail "
-            "every commit from the day it landed, which trains everyone to skip it, and "
-            "waiving 14 genuine findings to make it green is the exact lie it was written to "
-            "catch. Wire it -- and delete this entry -- once the tier-1 items in "
-            "docs/analysis/declared-not-consumed.md are fixed and the waiver list holds only "
-            "declarations that are correct to leave unconsumed"
+            "reports 6 real violations today, down from 14 on 2026-08-11. **Tier 1 is now "
+            "clear** -- all five items in docs/analysis/declared-not-consumed.md's tier-1 "
+            "section are closed and each is asserted on its VALUE in "
+            "tests/serve/test_the_record_follows_the_knob.py, so the condition this entry "
+            "used to name is met. What still stops a CI step is the six remaining findings: "
+            "the run would fail every commit, and waiving 6 genuine findings to make it "
+            "green is the exact lie the gate was written to catch. Three of them "
+            "(expand_hops, negative_tau, clarifications) need a decision in retrieve/ or on "
+            "the clarification protocol rather than a wire. Until then "
+            "test_the_declared_but_unconsumed_set_does_not_grow below runs the gate on every "
+            "commit and fails on a SEVENTH -- which is the half of CI that was actually "
+            "missing. Delete this entry, and that test, when the list reaches zero"
         ),
     }
     missing = [g for g in gates if g not in ci and g not in manual]
@@ -271,6 +272,137 @@ def test_every_gate_in_tools_is_either_in_ci_or_declared_manual() -> None:
     )
     stale = sorted(set(manual) - set(gates))
     assert not stale, f"{stale} are declared manual and no longer exist"
+
+
+#: What ``tools/check_declared_is_consumed.py`` finds on this tree, with whose decision each
+#: one is waiting on. **Not a waiver list**: every entry is a real finding, and putting them in
+#: the checker's ``WAIVED_*`` tuples would be the lie open-work.md §3.10 says the gate exists to
+#: catch. This is a *ratchet* — the set may shrink freely and may not grow.
+KNOWN_UNCONSUMED: frozenset[str] = frozenset({
+    # comparability knobs with no reader: setting one moves the config hash and no behaviour
+    "expand_hops",
+    "negative_tau",
+    # dead declarations, superseded by `llm_utility_model` (ADR 0011's two-model split)
+    "facet_model",
+    "rewrite_model",
+    # deliberately open: the curator that would consume it is not in this repository, and
+    # wiring it from the eval driver would launder it under K1's blind spot
+    "build_workers",
+    # a ServeState channel with two writers and no reader outside state.py
+    "clarifications",
+})
+
+
+def test_the_declared_but_unconsumed_set_does_not_grow() -> None:
+    """The gate runs on every commit, and a **seventh** finding fails the build.
+
+    ``check_declared_is_consumed.py`` is on the ``manual`` list above because it exits 1 on six
+    real findings, and a CI step that fails every commit is a step everyone learns to ignore.
+    That reasoning is sound and it left the gate running nowhere, so the thing it was written to
+    prevent — a new declaration nothing consumes — could still land unnoticed. Three did between
+    2026-08-11 and 2026-08-12; each happened to be wired, and nothing would have said so.
+
+    A ratchet instead. The set is pinned by name, so the gate executes on every run, a new
+    violation fails immediately with the offending name, and closing one fails too — loudly,
+    with "delete it from KNOWN_UNCONSUMED", because a shrinking list nobody updates is how a
+    stale count survives.
+
+    Asserting the **names** and not the count: six findings and six different findings are the
+    same integer, which is the class of defect this whole package exists for.
+    """
+    result = _gate("check_declared_is_consumed.py")
+    found = _findings(result)
+
+    assert not (found - KNOWN_UNCONSUMED), (
+        f"new declared-but-unconsumed finding(s): {sorted(found - KNOWN_UNCONSUMED)}. "
+        "Something was declared and nothing reads it — a knob outside every reader still "
+        "moves the config hash, a record field nothing projects reaches no artifact, and a "
+        "state channel with one end carries nothing. Wire it, delete it, or argue it into "
+        "the checker's own waiver list with a reason that says why no consumer is correct."
+    )
+    assert not (KNOWN_UNCONSUMED - found), (
+        f"{sorted(KNOWN_UNCONSUMED - found)} no longer violate the gate. Delete them from "
+        "KNOWN_UNCONSUMED so the ratchet tightens; a list that outlives its findings is the "
+        "stale count this test replaced."
+    )
+    assert result.returncode == 1, (
+        "the gate now passes. Delete this test and the `manual` entry above, and add a CI "
+        "step — the condition that entry names is finally met."
+    )
+
+
+#: One pattern per rule in ``check_declared_is_consumed.py``, because the four rules do not
+#: phrase their findings the same way.
+#:
+#: **This is the defect the ratchet was built to catch, found in the ratchet.** The single
+#: pattern here before matched ``knob 'x'`` / ``field 'x'`` / ``channel 'x'`` — K1, R1 and S1 —
+#: and K2 says ``writes knobs['x']``, which it cannot match. So an undeclared key written into
+#: a ``knobs`` mapping made the gate report a seventh violation and exit 1 while all three
+#: assertions below still passed: ``found`` never contained the new name, so neither difference
+#: was non-empty, and ``returncode == 1`` was already the expectation. K2 is the class of one of
+#: the tier-1 blockers this ratchet exists to stop recurring — a key outside
+#: ``comparability_keys()`` is outside the config hash, so two runs differing only in it compare
+#: as one treatment.
+#:
+#: :func:`test_the_ratchet_can_see_every_rule_the_gate_has` holds the list to the gate's rules.
+_FINDING_PATTERNS: tuple[str, ...] = (
+    r"(?:knob|field|channel) '([^']+)'",  # K1, R1, S1
+    r"writes knobs\['([^']+)'\]",  # K2
+)
+
+
+def _findings(result: subprocess.CompletedProcess[str]) -> frozenset[str]:
+    """Every name the gate reported, over **both** streams.
+
+    Both, because the gate prints its findings to stderr and its summary to stdout, and a parse
+    of one of them would silently find nothing — which is how this test failed the first time it
+    ran, reporting every known finding as fixed.
+    """
+    blob = result.stdout + result.stderr
+    return frozenset(name for pattern in _FINDING_PATTERNS for name in re.findall(pattern, blob))
+
+
+def test_the_ratchet_can_see_every_rule_the_gate_has(tmp_path: Path) -> None:
+    """A finding this parser cannot read is a finding the ratchet does not ratchet.
+
+    Two halves, and the second is what makes the first honest. **Rule coverage**: every
+    ``rule_*`` function the gate defines must be represented, so adding a fifth rule fails here
+    rather than quietly landing outside the parser. **A live probe**: an undeclared
+    ``knobs[...]`` write is planted and the parser must come back with its name — pinning K2's
+    exact message format, which is the half a list of function names cannot check.
+
+    The probe goes into a **copy** of ``src/``, not a hand-built tree: the gate refuses to run
+    against a root with no knob or record register ("refusing to pass vacuously"), so a
+    synthetic tree would exit 1 for a reason that has nothing to do with the probe — and
+    ``returncode == 1`` is what this test would otherwise be reading.
+    """
+    source = (ROOT / "tools" / "check_declared_is_consumed.py").read_text(encoding="utf-8")
+    rules = set(re.findall(r"^def (rule_\w+)\(", source, re.MULTILINE))
+    assert rules == {"rule_k1", "rule_k2", "rule_r1", "rule_s1"}, (
+        f"{sorted(rules)} — the gate grew or lost a rule. Each one phrases its finding its own "
+        "way, so _FINDING_PATTERNS needs an entry for the new one or the ratchet cannot see it."
+    )
+
+    shutil.copytree(
+        ROOT / "src", tmp_path / "src", ignore=shutil.ignore_patterns("__pycache__")
+    )
+    probe = tmp_path / "src" / "governed_bi" / "serve" / f"{PROBE_NAME}.py"
+    probe.write_text(
+        'def write(knobs: dict) -> None:\n    knobs["probe_undeclared_knob"] = 1\n',
+        encoding="utf-8",
+    )
+    result = _gate("check_declared_is_consumed.py", "--root", str(tmp_path))
+    assert result.returncode == 1, (result.stdout, result.stderr)
+    found = _findings(result)
+    assert "probe_undeclared_knob" in found, (
+        "the gate reported an undeclared knobs[...] write and this parser did not see it. That "
+        "is exactly the shape that let a K2 violation land while the ratchet stayed green:\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
+    assert KNOWN_UNCONSUMED <= found, (
+        "the copied tree lost findings the real one has, so this probe ran against something "
+        f"other than this repository: {sorted(KNOWN_UNCONSUMED - found)}"
+    )
 
 
 def _gate(tool: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -431,9 +563,7 @@ def test_file_length_gate_publishes_a_soft_overrun_without_failing(tmp_path: Pat
     A soft cap that says nothing when it is exceeded cannot be told from a soft cap
     that was never wired up — the same argument the archive tier in
     ``check_citations.py`` rests on. So this asserts the printed output *moved*, not
-    merely that the run passed: one accepted overrun exists today
-    (``register/record.py``, a recorded decision), and the count is what makes a
-    second one visible.
+    merely that the run passed: the count is what makes a new overrun visible.
     """
     soft, hard = _declared_limits()
     quiet = _synthetic_tree(tmp_path / "quiet", {"small.py": "x = 0\n"})
@@ -456,9 +586,9 @@ def test_file_length_gate_publishes_a_soft_overrun_without_failing(tmp_path: Pat
 
 
 def test_duplicate_concept_gate_fires_on_a_duplicate_top_level_name(tmp_path: Path) -> None:
-    """v1 had two McNemars, two EX definitions, two temp-then-replace helpers (and
-    **none** of the three was durable, which is how the run ledger lost 16 of 17
-    records), and two ``LOW_CONFIDENCE_JOIN`` constants with different comparison
+    """v1 had two McNemars, three temp-then-replace helpers (and **none** of the
+    three was durable, which is how the run ledger lost 312 of 320 records), and
+    two ``LOW_CONFIDENCE_JOIN`` constants with different comparison
     operators. With the layers parcelled to parallel agents, none of which can
     import a module its neighbour has not written yet, a second implementation is
     the default outcome rather than a slip — so the gate defaults to deny and this
@@ -615,8 +745,8 @@ def test_measurement_locality_gate_fires_on_formatting_outside_quantity(
     Parametrised over all four detected constructs because they are four different
     code paths in the checker, and a single case passing would leave three that
     might never have been wired up. ``round(`` is checked as an AST call, not by
-    grep, precisely so that ``register/record.py`` and ``register/quantity.py`` can
-    go on quoting ``round(x or 0.0, n)`` in prose while explaining the rule.
+    grep, precisely so that a docstring can go on quoting ``round(x or 0.0, n)``
+    while explaining the rule.
     """
     root = _synthetic_tree(tmp_path, {f"{PROBE_NAME}.py": source})
     result = _gate("check_measurement_locality.py", "--root", str(root))
@@ -624,7 +754,7 @@ def test_measurement_locality_gate_fires_on_formatting_outside_quantity(
     assert PROBE_NAME in result.stderr
 
 
-# ── pending: needs the graph ───────────────────────────────────────────────────
+# ── a real turn on every terminal path ─────────────────────────────────────────
 
 
 def _base_turn(**overrides):

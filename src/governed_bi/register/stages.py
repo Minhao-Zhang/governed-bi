@@ -17,6 +17,7 @@ __all__ = [
     "FACET_STAGES",
     "TERMINAL_STAGES",
     "REFUSED_BY_TO_STAGE",
+    "ABSTENTION_REASONS",
     "CRASH_REFUSED_BY",
     "ATTEMPT_CAP_REFUSED_BY",
     "INFRA_ERROR_PREFIX",
@@ -80,6 +81,12 @@ class Stage(str, Enum):
     #: Attempt cap terminated the turn. Distinct from crash and model refusal.
     cap = "cap"
 
+    #: The declared abstention policy (ADR 0013), between ``assemble`` and ``agent_core``.
+    #: It **decides**, unlike ``reflect``, so it appears in the refusal table below — and it
+    #: sits before the agent because deciding after five ``run_query`` attempts is not a
+    #: decision, it is a report on one.
+    abstain = "abstain"
+
     #: Post-hoc judgement of whether the statement answered the question. An observer:
     #: it decides nothing, so it appears in no refusal table and ends no turn.
     reflect = "reflect"
@@ -130,6 +137,47 @@ class Outcome(str, Enum):
     crashed = "crashed"
 
 
+#: The abstention policy's closed vocabulary — **the reason the engine decided to withhold**,
+#: as opposed to the rule a layer happened to refuse under (ADR 0013).
+#:
+#: Declared here rather than in ``serve/`` because that is what makes it *closed*, and the
+#: mechanism is worth naming exactly — this comment used to claim three readers of
+#: :data:`REFUSED_BY_TO_STAGE` and on 2026-08-12 there were none (ADR 0013 §2 records the
+#: measurement). Two things hold it closed:
+#:
+#: * :func:`_assert_refusal_tables_are_closed` below and
+#:   ``serve/nodes/abstain.py::_assert_the_policy_speaks_the_declared_vocabulary``, which are
+#:   **bidirectional** and run at import. They are what stops a fifth reason arriving as a string
+#:   in a node. What they cannot see is a value neither side declares: they compare declarations
+#:   to declarations, never to a row.
+#: * ``eval/report.py::refusal_histogram``, which is the reader, and whose ``unattributed`` bucket
+#:   is the half the guards cannot cover — a reason in no register is counted **by name** and
+#:   outside ``by_stage``, so a histogram that stops adding up says which string is why.
+#:
+#: Order is **not** encoded here — that is the policy's, in ``serve/nodes/abstain.py``, because
+#: which rule wins when two fire is a judgement about what a person should be told, not a fact
+#: about the vocabulary.
+#:
+#: Every member reads state that already exists on the turn and needs no model, no threshold and
+#: no fitted parameter. That is the constraint the reasons were chosen under: AUC 0.597 for
+#: the reflector and an OOF-AUC ceiling of 0.721 for everything that does not read meaning
+#: (open-work.md §3.11) say a *learned* abstainer is not available, and every risk-coverage curve
+#: reading 0.7144 at the engine's own coverage says a *thresholded* one buys nothing. What was
+#: missing was never a score; it was that the decision is nowhere declared.
+ABSTENTION_REASONS: frozenset[str] = frozenset({
+    #: A facet channel that was configured to run, ran, and errored. The shortlist this turn
+    #: worked from was produced by a retriever that is not the declared one.
+    "retrieval_channel_failed",
+    #: The turn licensed no table. No statement it writes can clear Layer 6, so the five
+    #: ``run_query`` attempts are spent discovering what ``connect`` already knew.
+    "nothing_licensed",
+    #: The rendered context is empty. The model has been handed nothing to work from.
+    "empty_context",
+    #: The char budget dropped a whole licensed table before the model saw it, so the turn is
+    #: asking for SQL over a relation it did not show.
+    "licensed_table_evicted",
+})
+
 #: Where each ``refused_by`` value was decided. Inventory of legal values for
 #: :func:`classify_outcome`.
 REFUSED_BY_TO_STAGE: Mapping[str, Stage] = {
@@ -142,6 +190,7 @@ REFUSED_BY_TO_STAGE: Mapping[str, Stage] = {
     "guardrail_error": Stage.check,
     "attempt_cap": Stage.cap,
     "model_error": Stage.agent_core,
+    **{reason: Stage.abstain for reason in sorted(ABSTENTION_REASONS)},
 }
 
 #: ``refused_by`` values that mean our bug (crash wearing a refusal stamp).
@@ -233,6 +282,27 @@ def _assert_refusal_tables_are_closed() -> None:
     overlap = TERMINAL_STAGES & set(FACET_STAGES)
     if overlap:  # pragma: no cover - import-time guard
         raise AssertionError(f"a facet cannot be a terminal stage: {sorted(overlap)}")
+
+    unmapped = sorted(ABSTENTION_REASONS - set(REFUSED_BY_TO_STAGE))
+    if unmapped:  # pragma: no cover - import-time guard
+        raise AssertionError(
+            f"abstention reasons with no stage: {unmapped}. A reason outside "
+            "REFUSED_BY_TO_STAGE is a terminal nothing can attribute, which is the "
+            "free-text refusal the closed vocabulary exists to replace."
+        )
+    misplaced = sorted(r for r in ABSTENTION_REASONS if REFUSED_BY_TO_STAGE[r] is not Stage.abstain)
+    if misplaced:  # pragma: no cover - import-time guard
+        raise AssertionError(
+            f"abstention reasons attributed to another stage: {misplaced}. A decision the "
+            "abstention policy took must not be filed under the node it happens to be about, "
+            "or the refusal histogram credits `route` with a policy's judgement."
+        )
+    crashing = sorted(ABSTENTION_REASONS & CRASH_REFUSED_BY)
+    if crashing:  # pragma: no cover - import-time guard
+        raise AssertionError(
+            f"abstention reasons classified as crashes: {crashing}. Declining on purpose is "
+            "the product working; `Outcome` requires it stay apart from our own bugs."
+        )
 
 
 _assert_refusal_tables_are_closed()
