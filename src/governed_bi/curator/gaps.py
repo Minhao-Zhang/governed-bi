@@ -14,11 +14,12 @@ German column names were matched against those lists and hit **zero** — ``kred
 contains ``typ``, not ``type``. A word list is a language. So every signal here is computed from
 one of two sources only:
 
-1. **Character structure of identifiers** — :func:`name_similarity`, a maximum of two
-   complementary ratios over the case-folded alphanumeric run. No tokenisation into words, no
-   vocabulary, no stemmer: ``stadt``/``stadtname`` and ``city``/``city_name`` score identically.
+1. **Character structure of identifiers** — ``curator/gap_signals.py``, which is exactly this
+   first source split into its own module: :func:`~governed_bi.curator.gap_signals.name_similarity`
+   and the cheap gates that decide which pairs are worth paying for, with no connector and no
+   record in sight.
 2. **Rows in the database**, read through ``serve/fetch.compare_column_pair`` — the same
-   ``prepare()``-checked, ledgered path the live agent's own tools take.
+   ``prepare()``-checked, ledgered path the live agent's own tools take. That is this module.
 
 **Evidence, not suspicion.** The headline detector requires *both* halves: a near-duplicate name
 **and** a measured row-level disagreement. Either alone is a false-positive machine —
@@ -59,32 +60,22 @@ from governed_bi.curator.clarifications import ClarificationRecord
 # with the keyword generator rather than re-derived here (ADR 0005 §6): a second answer to
 # "excluded tables are skipped, in id order" is a second answer to what the wizard scans.
 from governed_bi.curator.elicitation import ELICITATION_SOURCE, _columns_of, _live_tables, _record_id
+from governed_bi.curator.gap_signals import (
+    candidate_keys,
+    comparison_candidates,
+    type_class,
+    unjoined_pairs,
+)
 
 __all__ = [
-    "NEAR_DUPLICATE_SIMILARITY",
     "CARDINALITY_COMPARABILITY",
     "MAX_PAIR_COMPARISONS",
     "SEVERITY_ORDER",
     "DetectorCoverage",
     "GapScan",
-    "name_similarity",
     "detect_structural_gaps",
     "apply_cluster_dependencies",
 ]
-
-#: How alike two identifiers must read before their values are worth comparing.
-#:
-#: **Chosen by measurement, not by feel.** Swept against BIRD-Obfuscation's
-#: ``trap_manifest.json`` — which names, for each injected decoy column, the ``source_column`` it
-#: mimics — over ``beer_factory`` (21 pairs), ``restaurant`` (9) and ``app_store`` (6). At 0.6 the
-#: detector reports 26 of the 34 manifest pairs with 4 non-manifest pairs; at 0.5 it gains 2 more
-#: manifest pairs and 8 more non-manifest ones. 0.6 is where the trade stops being worth it.
-#:
-#: The same constant gates three different readings of "these two identifiers name the same
-#: thing", which is why it is one constant: two columns of one table (a duplicate), a column of
-#: one table against a column of another (a join key), and a column against its own table's name
-#: (whether that column identifies rows at all).
-NEAR_DUPLICATE_SIMILARITY = 0.6
 
 #: How comparable two columns' value vocabularies must be to be candidate copies of one fact.
 #:
@@ -113,114 +104,6 @@ MAX_PAIR_COMPARISONS = 200
 #: Severity tiers worst-first, so ``index()`` is a sort key. ``utku-ai-setup-wizard-gap-model.md``
 #: § "Tier structure"; the strings are ``ElicitationSeverity``'s own vocabulary.
 SEVERITY_ORDER: tuple[str, ...] = ("T1", "T2", "T3", "T4")
-
-#: Coarse physical-type classes, matched as substrings of the raw engine type.
-#:
-#: Two purposes, and the first is **correctness rather than precision**: Postgres raises
-#: ``operator does not exist: bigint = text`` for a cross-class comparison, so an ungated pair
-#: spends a governed round trip to learn nothing. Substrings because the engine's spelling varies
-#: (``bigint``, ``integer``, ``double precision``, ``character varying``, ``timestamp with time
-#: zone``) and enumerating dialect spellings is the kind of list that goes stale silently. Order
-#: matters: ``timestamp with time zone`` must reach ``time`` before anything else claims it.
-_TYPE_CLASS_MARKERS: tuple[tuple[tuple[str, ...], str], ...] = (
-    (("bool",), "boolean"),
-    (("date", "time", "interval"), "temporal"),
-    (("int", "numeric", "decimal", "real", "double", "float", "money", "serial"), "numeric"),
-    (("char", "text", "string", "clob", "uuid", "enum"), "text"),
-)
-
-
-def _alphanumeric_run(name: str) -> str:
-    """``name`` case-folded with every separator dropped: ``"Content Rating"`` -> ``contentrating``.
-
-    Deliberately *not* a tokenisation. Splitting on ``_`` is what made the design phase's
-    throwaway detector miss ``region``/``regionname`` and ``stadt``/``stadtname``, and a
-    word-boundary rule is a claim about a language.
-    """
-    return "".join(ch for ch in name.casefold() if ch.isalnum())
-
-
-def _trigram_dice(left: str, right: str) -> float:
-    """Dice coefficient over character trigrams. Sees **reordering**.
-
-    ``aktueller_einzelhandelspreis`` and ``einzelhandel_preis_aktuell`` are the same words in a
-    different arrangement, which no containment measure notices and this one scores 0.78.
-    """
-    a, b = _trigrams(_alphanumeric_run(left)), _trigrams(_alphanumeric_run(right))
-    if not a or not b:
-        return 0.0
-    return 2 * len(a & b) / (len(a) + len(b))
-
-
-def _trigrams(text: str) -> frozenset[str]:
-    if len(text) < 3:
-        return frozenset({text}) if text else frozenset()
-    return frozenset(text[i : i + 3] for i in range(len(text) - 2))
-
-
-def _longest_common_run(left: str, right: str) -> int:
-    """Length of the longest character run the two names share."""
-    a, b = _alphanumeric_run(left), _alphanumeric_run(right)
-    best = 0
-    previous = [0] * (len(b) + 1)
-    for i in range(1, len(a) + 1):
-        current = [0] * (len(b) + 1)
-        for j in range(1, len(b) + 1):
-            if a[i - 1] == b[j - 1]:
-                current[j] = previous[j - 1] + 1
-                best = max(best, current[j])
-        previous = current
-    return best
-
-
-def _longest_common_run_ratio(left: str, right: str) -> float:
-    """Longest shared character run, over the shorter name's length. Sees **containment**.
-
-    ``email`` inside ``email_adresse`` scores 1.0 where trigram overlap scores 0.46, because the
-    longer name is mostly *other* characters. This is the affixing shape a migration produces —
-    a column added beside another with a qualifier bolted on.
-
-    Normalising by the *shorter* name is what buys that, and it is also this measure's weakness:
-    any short name contained in a long one scores 1.0, so ``app`` inside ``app_name`` (a real
-    decoy pair) and ``ort`` inside ``betriebsstandorte`` (a coincidence) are indistinguishable
-    here. Telling them apart needs context this function does not have, so it is not attempted
-    here — see :data:`_MIN_KEY_NAME_RUN` for the one caller where the coincidence was measured
-    doing damage.
-    """
-    a, b = _alphanumeric_run(left), _alphanumeric_run(right)
-    if not a or not b:
-        return 0.0
-    return _longest_common_run(left, right) / min(len(a), len(b))
-
-
-def name_similarity(left: str, right: str) -> float:
-    """How alike two identifiers read, in ``[0, 1]``. Language-independent by construction.
-
-    The **maximum** of two measures because they see different shapes and neither subsumes the
-    other: containment (:func:`_longest_common_run_ratio`) reaches ``email``/``email_adresse``
-    and misses reordering; trigram overlap (:func:`_trigram_dice`) reaches
-    ``aktueller_einzelhandelspreis``/``einzelhandel_preis_aktuell`` and misses containment. Each
-    was measured against the decoy manifest below :data:`NEAR_DUPLICATE_SIMILARITY`'s threshold
-    and each recovers pairs the other does not.
-
-    A third candidate — shared ``_``-delimited tokens — was measured and **dropped**: it reached
-    nothing the other two missed and it alone flagged ``in_dosen_erh_ltlich`` against
-    ``in_flaschen_erh_ltlich`` (available in cans vs in bottles), because a shared naming frame
-    is exactly what a family of parallel columns has.
-    """
-    return max(_trigram_dice(left, right), _longest_common_run_ratio(left, right))
-
-
-def _type_class(column: Any) -> str:
-    physical = str(getattr(column, "physical_type", None) or "").casefold()
-    for markers, name in _TYPE_CLASS_MARKERS:
-        if any(marker in physical for marker in markers):
-            return name
-    return physical or "unknown"
-
-
-def _comparable_type(left: Any, right: Any) -> bool:
-    return _type_class(left) == _type_class(right)
 
 
 def _excluded(asset: Any) -> bool:
@@ -300,7 +183,7 @@ def detect_structural_gaps(
         for table in live
     }
 
-    candidates = _comparison_candidates(live, columns_by_table)
+    candidates = comparison_candidates(live, columns_by_table)
     agreements, ledger, refused = _measure_pairs(
         candidates[:max_comparisons],
         assets_by_id=assets_by_id,
@@ -371,42 +254,6 @@ def detect_structural_gaps(
 
 
 # ── S3: near-duplicate columns whose values disagree ────────────────────────────────────────
-
-
-def _comparison_candidates(
-    live: Sequence[Any], columns_by_table: Mapping[str, list[Any]]
-) -> list[tuple[Any, Any, Any, float]]:
-    """``(table, left, right, similarity)`` for every pair worth a governed comparison.
-
-    **The name gate is the only way in, and both detectors read the same measurements.** Two
-    competing candidate join keys are two columns of one table, so their disagreement is this
-    same comparison seen from the join side — which is why the join detector reads
-    ``agreements`` rather than issuing its own statements, and why nothing bypasses this gate to
-    get a pair measured.
-
-    That invariant has a cost worth naming: the join detector can only report a T1 ambiguity
-    whose competing keys are themselves name-alike. In practice they are, because both had to
-    match the *same* target column's name to become candidates — but two candidates with no
-    shared run between them (``acct_id`` and ``customer_ref`` for one target) would be reported
-    as two T3s rather than one T1. Letting them in was tried and measured: it put a pair with
-    *zero* name similarity into the comparison budget, because one three-character coincidence
-    upstream (see :data:`_MIN_KEY_NAME_RUN`) is enough to make an arbitrary column a candidate.
-
-    Sorted by similarity descending, which is what makes :data:`MAX_PAIR_COMPARISONS` degrade
-    recall gracefully.
-    """
-    out: list[tuple[Any, Any, Any, float]] = []
-    for table in live:
-        columns = columns_by_table.get(table.id) or []
-        for index, left in enumerate(columns):
-            for right in columns[index + 1 :]:
-                if not _comparable_type(left, right):
-                    continue
-                similarity = name_similarity(left.physical_name, right.physical_name)
-                if similarity < NEAR_DUPLICATE_SIMILARITY:
-                    continue
-                out.append((table, left, right, similarity))
-    return sorted(out, key=lambda row: (-row[3], row[0].id, row[1].id, row[2].id))
 
 
 def _measure_pairs(
@@ -520,76 +367,6 @@ def _duplicate_records(
 # ── S2 / D: join paths, proactively ─────────────────────────────────────────────────────────
 
 
-def _unjoined_pairs(
-    live: Sequence[Any], join_edges: frozenset[tuple[str, str]]
-) -> list[tuple[Any, Any]]:
-    """Table pairs with no declared join, in a fixed order."""
-    out: list[tuple[Any, Any]] = []
-    for index, left in enumerate(live):
-        for right in live[index + 1 :]:
-            if tuple(sorted((left.id, right.id))) in join_edges:
-                continue
-            out.append((left, right))
-    return out
-
-
-#: Shortest shared run that counts as "this column is named after this table".
-#:
-#: Added because the flaw was **observed, not anticipated**: on ``beer_factory``,
-#: ``betriebsstandorte.ort`` scored 1.0 against its own table name, because
-#: :func:`_longest_common_run_ratio` normalises by the shorter name and ``ort`` is three
-#: characters that happen to sit inside ``betriebsstandorte``. That one coincidence made every
-#: text column of ``standort`` a candidate key into ``betriebsstandorte`` and put a pair with
-#: *zero* name similarity (``bezeichnung`` / ``ort``) into the comparison budget.
-#:
-#: Four, and scoped to this one predicate. A floor inside :func:`name_similarity` itself would
-#: cost real findings — ``playstore.App`` / ``app_name`` is a measured decoy pair whose whole
-#: shared run is three characters — and the difference is that a column-to-column match has the
-#: row-level evidence behind it while a column-to-table match has nothing but the name.
-_MIN_KEY_NAME_RUN = 4
-
-
-def _identifies_rows(column: Any, table: Any) -> bool:
-    """Whether ``column`` reads like something that identifies a row of ``table``.
-
-    The corpus cannot answer this directly: ``is_unique``, ``role`` and ``references`` are all
-    unset by the live-schema seed path, and ``nullable`` is ``true`` on every column. So the
-    available signal is that a key is conventionally named after the thing it identifies —
-    ``kunde_id`` for ``kunden``, ``standort_id`` for ``standort`` — which is the same
-    character-level test :func:`name_similarity` already is, applied to the table's own name.
-    Conventional, therefore fallible; it is a *candidate* gate whose findings are confirmed by
-    row-level evidence before anything is called T1.
-    """
-    if _longest_common_run(column.physical_name, table.physical_name) < _MIN_KEY_NAME_RUN:
-        return False
-    return name_similarity(column.physical_name, table.physical_name) >= NEAR_DUPLICATE_SIMILARITY
-
-
-def _candidate_keys(
-    source_table: Any, target_table: Any, columns_by_table: Mapping[str, list[Any]]
-) -> dict[str, list[Any]]:
-    """``{target column id: source columns that could join to it}``.
-
-    A column of ``source_table`` is a candidate key into ``target_table`` when it reads like a
-    column of ``target_table`` that identifies ``target_table``'s rows. Two or more candidates
-    for one target column is the ambiguity the doc's T1 ``D`` row is about.
-    """
-    out: dict[str, list[Any]] = {}
-    for target in columns_by_table.get(target_table.id) or []:
-        if not _identifies_rows(target, target_table):
-            continue
-        matches = [
-            source
-            for source in columns_by_table.get(source_table.id) or []
-            if _comparable_type(source, target)
-            and name_similarity(source.physical_name, target.physical_name)
-            >= NEAR_DUPLICATE_SIMILARITY
-        ]
-        if matches:
-            out[target.id] = matches
-    return out
-
-
 def _join_records(
     live: Sequence[Any],
     columns_by_table: Mapping[str, list[Any]],
@@ -616,12 +393,12 @@ def _join_records(
     records: list[ClarificationRecord] = []
     without_candidates = 0
     ambiguous_pairs = 0
-    for left_table, right_table in _unjoined_pairs(live, join_edges):
+    for left_table, right_table in unjoined_pairs(live, join_edges):
         pair_records: list[ClarificationRecord] = []
         ambiguous: list[tuple[Any, Any, list[Any], Any]] = []
         for source_table in (left_table, right_table):
             other = right_table if source_table is left_table else left_table
-            for target_id, sources in _candidate_keys(
+            for target_id, sources in candidate_keys(
                 source_table, other, columns_by_table
             ).items():
                 del target_id
@@ -641,7 +418,7 @@ def _join_records(
             continue
         records.extend(pair_records)
     note = (
-        f"{len(_unjoined_pairs(live, join_edges))} table pairs have no declared join: "
+        f"{len(unjoined_pairs(live, join_edges))} table pairs have no declared join: "
         f"{ambiguous_pairs} carry two or more candidate keys whose values disagree (T1, a wrong "
         f"answer), and {without_candidates} have no candidate key at all (T3, a refusal — no "
         "question emitted, because there is nothing grounded to offer as a choice). The rest "
@@ -792,7 +569,7 @@ def _coverage_records(
                 severity="T4",
                 audience="data",
                 choices=tuple(
-                    {"id": c.physical_name, "label": f"{c.physical_name} ({_type_class(c)})"}
+                    {"id": c.physical_name, "label": f"{c.physical_name} ({type_class(c)})"}
                     for c in undescribed
                 ),
                 allow_freeform=True,

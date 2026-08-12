@@ -8,10 +8,11 @@ and 21 injected near-duplicate column pairs of which 19 disagree row-wise. Detec
 shipped generator: **0 of any of them.**
 
 So these detectors key on corpus *shape* and real *data*, never on a word list, and each is
-tested three ways: a unit test of the signal, a test against
-``tests/curator/gaps_fixtures.py``'s literal reproduction of the real German schema and the real
-numbers its database answers with, and (for the near-duplicate detector) a recall bar stated
-against BIRD-Obfuscation's own decoy manifest rather than against the detector's own output.
+tested three ways: a unit test of the signal (``tests/curator/test_gap_signals.py``, split out
+with the module), a test against ``tests/curator/gaps_fixtures.py``'s literal reproduction of the
+real German schema and the real numbers its database answers with, and (for the near-duplicate
+detector) a recall bar stated against BIRD-Obfuscation's own decoy manifest rather than against
+the detector's own output.
 """
 
 from __future__ import annotations
@@ -59,52 +60,6 @@ def _pairs(records: Any, severity: str | None = None) -> set[tuple[str, str, str
         target, _, names = rec.scope.rpartition(":")[2].partition(".")
         out.add((target, *sorted(names.split("|"))))
     return out
-
-
-# ── the name signal: language-independent by construction ────────────────────────────────────
-
-
-def test_similarity_is_computed_on_characters_not_words() -> None:
-    """The root cause this fixes: a word list is a language. Both measures read the case-folded
-    alphanumeric character run, so ``stadt``/``stadtname`` and ``city``/``city_name`` score
-    identically and neither is privileged."""
-    from governed_bi.curator.gaps import name_similarity
-
-    assert name_similarity("stadt", "stadtname") == name_similarity("city", "city_name")
-    assert name_similarity("email", "email_adresse") == name_similarity("email", "email_address")
-
-
-def test_the_two_measures_cover_the_two_shapes_a_duplicate_takes() -> None:
-    """Neither measure alone reaches both, which is why the signal is their maximum.
-
-    Containment (``email`` inside ``email_adresse``) is what a longest-common-substring ratio
-    sees and a trigram overlap barely registers; reordering
-    (``aktueller_einzelhandelspreis`` vs ``einzelhandel_preis_aktuell``) is the reverse.
-    """
-    from governed_bi.curator.gaps import (
-        NEAR_DUPLICATE_SIMILARITY,
-        _longest_common_run_ratio,
-        _trigram_dice,
-        name_similarity,
-    )
-
-    assert _trigram_dice("email", "email_adresse") < NEAR_DUPLICATE_SIMILARITY
-    assert _longest_common_run_ratio("email", "email_adresse") == 1.0
-
-    reordered = ("aktueller_einzelhandelspreis", "einzelhandel_preis_aktuell")
-    assert _longest_common_run_ratio(*reordered) < NEAR_DUPLICATE_SIMILARITY
-    assert _trigram_dice(*reordered) >= NEAR_DUPLICATE_SIMILARITY
-
-    for pair in (("email", "email_adresse"), reordered):
-        assert name_similarity(*pair) >= NEAR_DUPLICATE_SIMILARITY, pair
-
-
-def test_unrelated_names_score_below_the_gate() -> None:
-    from governed_bi.curator.gaps import NEAR_DUPLICATE_SIMILARITY, name_similarity
-
-    for a, b in (("kunde_id", "kreditkartennummer"), ("vorname", "telefonnummer"),
-                 ("order_id", "shipped_at")):
-        assert name_similarity(a, b) < NEAR_DUPLICATE_SIMILARITY, (a, b)
 
 
 # ── near-duplicate columns whose values disagree: the T1 "poison" class ──────────────────────
