@@ -13,9 +13,13 @@ actually calls -- ``/chat/resume`` (via ``resume_clarification``), LangGraph Ser
 resume, the CLI, and ``eval/``. Putting the mining logic in a node here, rather than behind any
 one HTTP route, is what makes it unskippable by a transport that has never been written yet.
 
-The mining logic itself (the ``basis`` gate, the Enhancer dedup/conflict wiring) is
-unchanged -- this module only relocates *where it runs*, from a route to a graph node that
-runs after ``agent_core`` on every turn.
+This module relocates *where mining runs*, from a route to a graph node that runs after
+``agent_core`` on every turn. The ``basis``/decline/defer gate and per-turn dedup
+(``clarifications_mined``) below are specific to reading ``state["clarifications"]`` and stay
+here; the actual "build a draft, run it through Enhancer, write accordingly" logic moved on to
+``curator/clarification.py::fold_answered_clarification`` (Phase 1c, this initiative), shared
+with the offline ``POST /clarifications/{id}/answer`` route (via ``curator/clarification.py::
+fold_ledger_answer_into_corpus``) rather than duplicated for it.
 """
 
 from __future__ import annotations
@@ -24,7 +28,6 @@ from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 
-from governed_bi.corpus.schema import ProvenanceStatus
 from governed_bi.serve.runtime import bool_knob, configurable
 
 __all__ = ["mine_corpus_node"]
@@ -64,9 +67,7 @@ def mine_corpus_node(state: dict, config: RunnableConfig) -> dict:
     if not pending:
         return {}
 
-    from governed_bi.corpus.drafts import submit_draft
-    from governed_bi.curator import enhancer
-    from governed_bi.curator.clarification import draft_from_clarification
+    from governed_bi.curator.clarification import fold_answered_clarification
 
     schema = state.get("db_id")
     agent_model = cfg.get("agent_model")
@@ -97,36 +98,16 @@ def mine_corpus_node(state: dict, config: RunnableConfig) -> dict:
         if not answer_text or not question:
             continue
 
-        try:
-            draft = draft_from_clarification(question, answer_text, schema=schema)
-            try:
-                # Phase 3: compared against every already-**certified** TermAsset this
-                # session has loaded, so a reworded restatement does not mint a second,
-                # unlinked draft and a contradicting answer is flagged rather than silently
-                # producing a second, disagreeing certified fact once approved.
-                existing = [
-                    asset
-                    for asset in assets_by_id.values()
-                    if asset.asset_type.value == "term" and _is_certified(asset)
-                ]
-                enhancer.apply(
-                    agent_model,
-                    corpus_root,
-                    draft,
-                    existing=existing,
-                    namespace=schema,
-                    write_model=write_model,
-                )
-            except enhancer.EnhancerError:
-                # A broken dedup/conflict call must not drop a real user answer -- degrade to
-                # the pre-Phase-3 unconditional write.
-                submit_draft(corpus_root, draft, namespace=schema)
-        except Exception:  # noqa: BLE001 -- mining is best-effort, never fatal to the turn
-            pass
+        # Phase 3's Enhancer dedup/conflict wiring lives in `fold_answered_clarification` now
+        # (Phase 1c, this initiative) -- shared with the offline `/clarifications/{id}/answer`
+        # route -- rather than inline here. Best-effort internally; never raises.
+        fold_answered_clarification(
+            agent_model,
+            corpus_root,
+            question,
+            answer_text,
+            schema=schema,
+            known_assets=assets_by_id.values(),
+            write_model=write_model,
+        )
     return {"clarifications_mined": mined_ids}
-
-
-def _is_certified(asset: Any) -> bool:
-    """Same read as ``corpus/analyst.py``'s: absence of provenance is not "certified"."""
-    provenance = getattr(asset.audit, "provenance", None) if asset.audit is not None else None
-    return provenance is not None and provenance.status is ProvenanceStatus.certified

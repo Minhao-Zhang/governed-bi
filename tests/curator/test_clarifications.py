@@ -46,6 +46,7 @@ def test_write_then_load_round_trips_every_field(tmp_path: Path) -> None:
         answered_by="admin@example.com",
         converted_to_corpus=True,
         source="live_chat",
+        basis="data_definition",
         category="A",
         ui_modality="column_picker",
         target_table="orders",
@@ -182,3 +183,51 @@ def test_answer_clarification_leaves_other_records_untouched(tmp_path: Path) -> 
     by_id = {r.id: r for r in load_clarifications(tmp_path)}
     assert by_id["q001"].status is ClarificationRecordStatus.answered
     assert by_id["q002"].status is ClarificationRecordStatus.open
+
+
+# ── basis (Phase 1c gap fix) ─────────────────────────────────────────────────────────────────
+
+
+def test_basis_defaults_to_none() -> None:
+    assert _record().basis is None
+
+
+def test_basis_round_trips_through_the_ledger(tmp_path: Path) -> None:
+    from governed_bi.curator.clarifications import load_clarifications, write_clarifications
+
+    write_clarifications(tmp_path, [_record(basis="ranking_ambiguity")])
+    (loaded,) = load_clarifications(tmp_path)
+    assert loaded.basis == "ranking_ambiguity"
+
+
+# ── mark_converted_to_corpus ─────────────────────────────────────────────────────────────────
+
+
+def test_mark_converted_to_corpus_sets_the_flag_and_persists(tmp_path: Path) -> None:
+    from governed_bi.curator.clarifications import load_clarifications, mark_converted_to_corpus, write_clarifications
+
+    write_clarifications(tmp_path, [_record(id="q001")])
+    updated = mark_converted_to_corpus(tmp_path, "q001")
+
+    assert updated.converted_to_corpus is True
+    (on_disk,) = load_clarifications(tmp_path)
+    assert on_disk.converted_to_corpus is True
+
+
+def test_mark_converted_to_corpus_unknown_id_raises(tmp_path: Path) -> None:
+    from governed_bi.curator.clarifications import ClarificationNotFound, mark_converted_to_corpus
+
+    import pytest
+
+    with pytest.raises(ClarificationNotFound):
+        mark_converted_to_corpus(tmp_path, "nope")
+
+
+def test_mark_converted_to_corpus_leaves_other_fields_untouched(tmp_path: Path) -> None:
+    from governed_bi.curator.clarifications import mark_converted_to_corpus, write_clarifications
+
+    write_clarifications(tmp_path, [_record(id="q001", answer="90 days", basis="data_definition")])
+    updated = mark_converted_to_corpus(tmp_path, "q001")
+
+    assert updated.answer == "90 days"
+    assert updated.basis == "data_definition"

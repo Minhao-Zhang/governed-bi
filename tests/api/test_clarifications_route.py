@@ -1,5 +1,8 @@
 """GET /clarifications, POST /clarifications/{id}/answer — v1's offline Clarifications queue,
-restored onto v2 (Phase 1a: pure CRUD + persistence, no ask_user wiring, no corpus fold).
+restored onto v2. Phase 1a built pure CRUD + persistence; Phase 1c (this file's fold tests,
+below the CRUD ones) wires the answer route through the same Enhancer/mining pipeline
+``serve/nodes/mine_corpus.py`` uses for a live answer (``curator/clarification.py::
+fold_ledger_answer_into_corpus``).
 """
 
 from __future__ import annotations
@@ -203,3 +206,108 @@ def test_answer_succeeds_with_the_session_default_can_edit_false(monkeypatch, tm
     client = _client(monkeypatch, _session_with_corpus_root(tmp_path))
     response = client.post("/clarifications/q001/answer", json={"answer": "x"})
     assert response.status_code == 200
+
+
+# ── POST /clarifications/{id}/answer folds into the corpus (Phase 1c) ──────────────────────
+#
+# The route delegates to `curator/clarification.py::fold_ledger_answer_into_corpus` -- the
+# same Enhancer/mining pipeline `serve/nodes/mine_corpus.py` uses for a live answer. Novel/
+# duplicate/conflict decisions themselves are exercised directly against that shared function
+# in `tests/curator/test_clarification.py`; these tests are about the *route* reaching it with
+# the right basis gate, schema, and idempotency -- not re-proving the Enhancer's own decisions.
+
+
+def test_answer_with_ranking_ambiguity_basis_mines_nothing(monkeypatch, tmp_path: Path) -> None:
+    from governed_bi.corpus.store import load
+    from governed_bi.curator.clarifications import ClarificationRecord
+
+    _seed(
+        tmp_path,
+        ClarificationRecord(
+            id="q001", scope="s", question="best-selling by what measure?",
+            basis="ranking_ambiguity",
+        ),
+    )
+    client = _client(monkeypatch, _session_with_corpus_root(tmp_path))
+
+    response = client.post("/clarifications/q001/answer", json={"answer": "total revenue"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["converted_to_corpus"] is False
+
+    assets, _ = load(tmp_path)
+    assert assets == [], f"a ranking_ambiguity answer was mined through the offline route: {assets}"
+
+
+def test_answer_with_data_definition_basis_folds_into_the_corpus(monkeypatch, tmp_path: Path) -> None:
+    from governed_bi.corpus.store import load
+    from governed_bi.curator.clarifications import ClarificationRecord
+
+    _seed(
+        tmp_path,
+        ClarificationRecord(
+            id="q001", scope="s", question="what does active mean?", basis="data_definition",
+        ),
+    )
+    client = _client(monkeypatch, _session_with_corpus_root(tmp_path))
+
+    response = client.post("/clarifications/q001/answer", json={"answer": "90 days"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["converted_to_corpus"] is True
+
+    assets, problems = load(tmp_path)
+    assert not problems
+    (draft,) = assets
+    assert draft.asset_type.value == "term"
+    assert "90 days" in draft.summary
+
+
+def test_answer_with_no_basis_at_all_still_folds(monkeypatch, tmp_path: Path) -> None:
+    """A record predating the ``basis`` field (or not sourced from ``ask_user`` at all) has
+    ``basis is None`` -- treated as ``data_definition``-eligible, not silently skipped.
+    """
+    from governed_bi.corpus.store import load
+    from governed_bi.curator.clarifications import ClarificationRecord
+
+    _seed(tmp_path, ClarificationRecord(id="q001", scope="s", question="what does active mean?"))
+    client = _client(monkeypatch, _session_with_corpus_root(tmp_path))
+
+    response = client.post("/clarifications/q001/answer", json={"answer": "90 days"})
+    assert response.json()["converted_to_corpus"] is True
+    assets, _ = load(tmp_path)
+    assert len(assets) == 1
+
+
+def test_answering_the_same_record_twice_via_the_route_does_not_double_write(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A real second ``POST`` to the same id (there is no re-answer flow in the product, but
+    nothing stops a second call at the HTTP layer either) must not fold a second time.
+    """
+    from governed_bi.corpus.store import load
+    from governed_bi.curator.clarifications import ClarificationRecord
+
+    _seed(
+        tmp_path,
+        ClarificationRecord(
+            id="q001", scope="s", question="what does active mean?", basis="data_definition",
+        ),
+    )
+    client = _client(monkeypatch, _session_with_corpus_root(tmp_path))
+
+    first = client.post("/clarifications/q001/answer", json={"answer": "90 days"})
+    assert first.json()["converted_to_corpus"] is True
+    assets_after_first, _ = load(tmp_path)
+    (draft,) = assets_after_first
+    written_at = (tmp_path / "beer" / f"{draft.id}.yaml").stat().st_mtime
+
+    second = client.post("/clarifications/q001/answer", json={"answer": "still 90 days"})
+    assert second.status_code == 200, second.text
+    assert second.json()["converted_to_corpus"] is True
+
+    assets_after_second, _ = load(tmp_path)
+    assert len(assets_after_second) == 1, f"the fold ran twice: {[a.id for a in assets_after_second]}"
+    assert (
+        tmp_path / "beer" / f"{assets_after_second[0].id}.yaml"
+    ).stat().st_mtime == written_at, "the draft file was rewritten on the second answer"

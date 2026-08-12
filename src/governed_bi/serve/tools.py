@@ -223,6 +223,7 @@ def _log_live_clarification(
     question: str,
     choices: list[dict[str, str]] | None,
     allow_freeform: bool,
+    basis: str,
 ) -> None:
     """Durably log an unanswered ``ask_user`` question, before ``interrupt`` pauses the turn
     (UtkuAI, ported from v1's ``analyst/tools.py::_log_live_clarification``).
@@ -237,6 +238,11 @@ def _log_live_clarification(
     on every resume within one turn (LangGraph replays the task that was suspended on the
     pending interrupt), so this runs again on every resume of the same question -- a record
     already logged for this id is left alone rather than duplicated.
+
+    ``basis`` is ``ask_user``'s own ``basis`` argument, carried onto the ledger row (gap fix,
+    this initiative) so an offline answer through ``POST /clarifications/{id}/answer`` can
+    gate identically to a live one (``curator/clarification.py::fold_ledger_answer_into_corpus``)
+    -- the original Phase 1b cut of this function left the record's ``basis`` field unset.
     """
     if corpus_root is None:
         return
@@ -257,6 +263,7 @@ def _log_live_clarification(
             source="live_chat",
             choices=tuple(choices) if choices else None,
             allow_freeform=allow_freeform,
+            basis=basis,
         )
     )
     write_clarifications(corpus_root, records)
@@ -505,6 +512,7 @@ def build_tools(
             question=question,
             choices=choices,
             allow_freeform=allow_freeform,
+            basis=basis,
         )
         answer = interrupt(interrupt_payload)
         text = _clarification_answer(answer)

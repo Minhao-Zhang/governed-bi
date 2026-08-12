@@ -458,6 +458,7 @@ def _clarification_row(record: Any) -> dict[str, Any]:
         "answered_by": record.answered_by,
         "converted_to_corpus": record.converted_to_corpus,
         "source": record.source,
+        "basis": record.basis,
         "category": record.category,
         "ui_modality": record.ui_modality,
         "target_table": record.target_table,
@@ -496,12 +497,17 @@ def answer_clarification_route(clarification_id: str, body: dict[str, Any] | Non
     least one of ``choice_id``/``choice_ids``/``answer`` is required, else 422. 404 on an
     unknown id.
 
-    This phase only records the answer (status -> ``answered``) and returns it — it does not
-    fold the answer into the corpus (Phase 1c) and does not wire ``ask_user`` to write into
-    this ledger in the first place (Phase 1b).
+    **Folds into the corpus (Phase 1c)** via ``curator/clarification.py::
+    fold_ledger_answer_into_corpus`` -- the offline entry point into
+    ``fold_answered_clarification``, the Enhancer logic factored out of
+    ``serve/nodes/mine_corpus.py`` so a live resume and this route reach identical behavior
+    (basis gate + ``converted_to_corpus`` idempotency both live on that helper; see its own
+    docstring). ``known_assets`` is a fresh ``_reload_assets`` disk read, not the frozen
+    ``session.assets_by_id`` -- same reason ``/corpus/conflicts`` reloads rather than trusts it.
     """
     from fastapi import HTTPException
 
+    from governed_bi.curator.clarification import fold_ledger_answer_into_corpus
     from governed_bi.curator.clarifications import ClarificationNotFound, answer_clarification
 
     session = _session()
@@ -527,6 +533,14 @@ def answer_clarification_route(clarification_id: str, body: dict[str, Any] | Non
         )
     except ClarificationNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    record = fold_ledger_answer_into_corpus(
+        record,
+        agent_model=session.agent_model,
+        corpus_root=session.corpus_root,
+        schema=session.db_id,
+        known_assets=_reload_assets(session),
+        write_model=session.knobs_resolved.get("llm_model"),
+    )
     return _clarification_row(record)
 
 

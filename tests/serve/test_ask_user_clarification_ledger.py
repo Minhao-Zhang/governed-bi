@@ -90,6 +90,10 @@ def test_ask_user_logs_an_open_ledger_record_that_survives_an_abandoned_turn(
     assert record.source == "live_chat"
     assert record.scope == f"live_chat:{record.id}"
     assert record.question == "which year?"
+    # Gap fix (this initiative): `ask_user`'s own `basis` argument must reach the ledger row,
+    # so an offline answer can later be gated identically to a live one
+    # (`curator/clarification.py::fold_ledger_answer_into_corpus`).
+    assert record.basis == "data_definition"
 
 
 def test_ask_user_skips_the_ledger_write_cleanly_with_no_corpus_root() -> None:

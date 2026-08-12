@@ -1,21 +1,19 @@
 """The offline clarifications ledger (UtkuAI, ported): ``clarifications.jsonl``.
 
-**Phase 1a of restoring v1's offline Clarifications queue + Setup Wizard onto v2.** v1's
+**Phases 1a-1c of restoring v1's offline Clarifications queue + Setup Wizard onto v2.** v1's
 ``curator/clarifications.py`` persists one admin-facing question per line in
 ``clarifications.jsonl`` and lets an admin answer it outside any live chat turn — see
 ``utku-ai-v2-porting-spec.md``. This module is that ledger's model and storage, ported.
 
-**What this phase is, and is not.** This is pure CRUD + persistence: a record's shape, a
-full-file JSONL load/write, and one function to answer a record and write it back. Three
-things a later phase wires in on purpose are *not* here yet:
-
-* ``ask_user`` (``serve/tools.py``) writing an unanswered question into this ledger — Phase 1b.
-* Folding an answered record into a corpus draft (the ``curator/clarification.py`` +
-  ``curator/enhancer.py`` pipeline this session already built for *live* clarifications) —
-  Phase 1c. This ledger and that pipeline are unconnected until then.
-* ``category``/``ui_modality``/Setup-Wizard-specific answer composition — Phase 2. The two
-  fields are declared below so the record shape does not need to change again to add them,
-  but nothing here reads or writes them.
+**What this module is, and is not.** This is pure CRUD + persistence: a record's shape, a
+full-file JSONL load/write, and functions to answer a record and mark it converted, each
+writing the whole ledger back. ``ask_user`` (``serve/tools.py``) writing an unanswered
+question into this ledger (Phase 1b) and folding an answered record into a corpus draft
+(``curator/clarification.py::fold_ledger_answer_into_corpus``, Phase 1c) both live outside
+this module and call into it — this module never calls out to either. ``category``/
+``ui_modality``/Setup-Wizard-specific answer composition — Phase 2 — remain declared-only:
+the two fields are declared below so the record shape does not need to change again to add
+them, but nothing here reads or writes them.
 
 Frozen dataclass, not Pydantic, matching :mod:`governed_bi.corpus.schema`'s ``Asset``
 subclasses — this repo's own idiom for a persisted domain record — rather than v1's
@@ -40,6 +38,7 @@ __all__ = [
     "write_clarifications",
     "resolve_answer_text",
     "answer_clarification",
+    "mark_converted_to_corpus",
 ]
 
 
@@ -81,6 +80,13 @@ class ClarificationRecord:
     answered_by: str | None = None
     converted_to_corpus: bool = False
     source: Literal["curator", "live_chat", "elicitation_wizard"] = "curator"
+    #: ``ask_user``'s own ``basis`` argument (``"data_definition"`` | ``"ranking_ambiguity"``),
+    #: carried onto the ledger row so an offline answer gates identically to a live one
+    #: (``curator/clarification.py::fold_ledger_answer_into_corpus``). ``None`` for a record
+    #: that predates this field, or is not sourced from ``ask_user`` at all (e.g. a
+    #: ``source="curator"`` row) — that gate treats a missing ``basis`` as
+    #: ``data_definition``-eligible, not a third state silently skipped.
+    basis: str | None = None
     category: ElicitationCategory | None = None
     ui_modality: ElicitationUiModality | None = None
     target_table: str | None = None
@@ -113,6 +119,7 @@ def _to_json(record: ClarificationRecord) -> dict[str, Any]:
         "answered_by": record.answered_by,
         "converted_to_corpus": record.converted_to_corpus,
         "source": record.source,
+        "basis": record.basis,
         "category": record.category,
         "ui_modality": record.ui_modality,
         "target_table": record.target_table,
@@ -188,10 +195,12 @@ def resolve_answer_text(record: ClarificationRecord) -> str | None:
     any of ``choices`` is not an error — it silently falls through to the freeform ``answer``,
     same as v1: this function is not where an id gets validated.
 
-    Not called by anything in this phase (folding an answer into the corpus is Phase 1c) —
-    built now because ``GET /clarifications`` needs it: a choice-only answer leaves the
-    record's own ``answer`` field ``None``, and this is what turns ``answer_choice_id`` back
-    into readable text for a ledger view.
+    Built for ``GET /clarifications``: a choice-only answer leaves the record's own ``answer``
+    field ``None``, and this is what turns ``answer_choice_id`` back into readable text for a
+    ledger view. ``curator/clarification.py::fold_ledger_answer_into_corpus`` (Phase 1c) reuses
+    it for the same reason — the text it folds into the corpus must be the same text a caller
+    would have rendered, not a second reduction of ``answer_choice_id``/``answer`` that could
+    disagree with it.
     """
     label: str | None = None
     if record.answer_choice_id and record.choices:
@@ -202,6 +211,28 @@ def resolve_answer_text(record: ClarificationRecord) -> str | None:
     if label and record.answer:
         return f"{label} — {record.answer}"
     return label or record.answer
+
+
+def _replace_record(
+    corpus_root: Path | str, clarification_id: str, **changes: Any
+) -> ClarificationRecord:
+    """Load the ledger, replace the one record matching ``clarification_id`` with
+    ``dataclasses.replace(record, **changes)``, write the whole ledger back, and return the
+    updated record.
+
+    Shared by :func:`answer_clarification` and :func:`mark_converted_to_corpus` — both do
+    exactly this load-mutate-write-the-whole-file round trip and differ only in which fields
+    change. Raises :class:`ClarificationNotFound` on an unknown id.
+    """
+    records = load_clarifications(corpus_root)
+    for i, record in enumerate(records):
+        if record.id != clarification_id:
+            continue
+        updated = replace(record, **changes)
+        records[i] = updated
+        write_clarifications(corpus_root, records)
+        return updated
+    raise ClarificationNotFound(f"no clarification {clarification_id!r} under {corpus_root}")
 
 
 def answer_clarification(
@@ -220,25 +251,31 @@ def answer_clarification(
     concurrently in this phase, so a load-mutate-write-the-whole-file round trip (matching
     v1's own ``app.py`` handler) needs no locking.
 
-    Does **not** fold the answer into the corpus (Phase 1c, deliberately deferred) and does
-    not validate ``choice_id`` against the record's declared ``choices`` (v1 doesn't either —
-    see :func:`resolve_answer_text`).
+    Does **not** itself fold the answer into the corpus — ``api/routes.py``'s own route calls
+    ``curator/clarification.py::fold_ledger_answer_into_corpus`` right after this returns (Phase
+    1c); keeping that a separate call keeps this function's contract to "the answer is now on
+    the record" only. Does not validate ``choice_id`` against the record's declared ``choices``
+    (v1 doesn't either — see :func:`resolve_answer_text`).
 
     Raises :class:`ClarificationNotFound` on an unknown id.
     """
-    records = load_clarifications(corpus_root)
-    for i, record in enumerate(records):
-        if record.id != clarification_id:
-            continue
-        updated = replace(
-            record,
-            status=ClarificationRecordStatus.answered,
-            answer=answer,
-            answer_choice_id=choice_id,
-            answer_choice_ids=tuple(choice_ids) if choice_ids is not None else None,
-            answered_by=answered_by,
-        )
-        records[i] = updated
-        write_clarifications(corpus_root, records)
-        return updated
-    raise ClarificationNotFound(f"no clarification {clarification_id!r} under {corpus_root}")
+    return _replace_record(
+        corpus_root,
+        clarification_id,
+        status=ClarificationRecordStatus.answered,
+        answer=answer,
+        answer_choice_id=choice_id,
+        answer_choice_ids=tuple(choice_ids) if choice_ids is not None else None,
+        answered_by=answered_by,
+    )
+
+
+def mark_converted_to_corpus(corpus_root: Path | str, clarification_id: str) -> ClarificationRecord:
+    """Flip ``converted_to_corpus`` to ``True`` and persist — the idempotency marker
+    :func:`~governed_bi.curator.clarification.fold_ledger_answer_into_corpus` sets once it has
+    actually folded a record's answer into the corpus, so a second fold attempt on the same
+    record is a no-op (v1 had this exact field name/purpose).
+
+    Raises :class:`ClarificationNotFound` on an unknown id.
+    """
+    return _replace_record(corpus_root, clarification_id, converted_to_corpus=True)

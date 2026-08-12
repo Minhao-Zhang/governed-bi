@@ -1,4 +1,4 @@
-"""Turn an answered live clarification into a corpus candidate (UtkuAI, ported).
+"""Turn an answered clarification into a corpus candidate (UtkuAI, ported).
 
 **What v2 already has, and what it does not.** ``serve/tools.py``'s ``ask_user`` +
 ``serve/resume.py``'s identity-bound resume + ``POST /chat/resume`` are the full
@@ -13,17 +13,29 @@ refuses rather than guessing); UtkuAI v1 fell back to a heuristic-tagged guess. 
 serve-behavior product decision the v2 authors already made on purpose, not a gap this port is
 scoped to fill — :func:`resolved_answer_text` returns ``None`` on a decline so a caller mines
 nothing, and the turn's own refusal is untouched.
+
+**Two entry points, one fold (Phase 1c, this initiative).** :func:`fold_answered_clarification`
+is the Enhancer dedup/conflict pipeline itself, factored out of
+``serve/nodes/mine_corpus.py`` so a live turn's own resume and the offline
+``POST /clarifications/{id}/answer`` route (via :func:`fold_ledger_answer_into_corpus`) reach
+byte-identical behavior rather than two implementations of the same decision.
 """
 
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Mapping
+from pathlib import Path
+from typing import Any, Iterable, Mapping
 
-from governed_bi.corpus.schema import TermAsset
+from governed_bi.corpus.schema import ProvenanceStatus, TermAsset
 from governed_bi.register.knobs import knob_default
 
-__all__ = ["resolved_answer_text", "draft_from_clarification"]
+__all__ = [
+    "resolved_answer_text",
+    "draft_from_clarification",
+    "fold_answered_clarification",
+    "fold_ledger_answer_into_corpus",
+]
 
 
 def resolved_answer_text(body: Mapping[str, Any]) -> str | None:
@@ -67,3 +79,126 @@ def draft_from_clarification(question: str, answer: str, *, schema: str) -> Term
         summary=_truncated(f"{question} — {answer}"),
         body=f"Q: {question}\nA: {answer}",
     )
+
+
+def _is_certified(asset: Any) -> bool:
+    """Same read as ``corpus/analyst.py``'s: absence of provenance is not "certified".
+
+    Moved here from ``serve/nodes/mine_corpus.py`` (Phase 1c, this initiative) alongside the
+    one function that filters on it -- the two had no reason to live apart once a second
+    caller (the offline route) needed the identical filter.
+    """
+    provenance = getattr(asset.audit, "provenance", None) if asset.audit is not None else None
+    return provenance is not None and provenance.status is ProvenanceStatus.certified
+
+
+def fold_answered_clarification(
+    agent_model: Any,
+    corpus_root: Path | str,
+    question: str,
+    answer: str,
+    *,
+    schema: str | None,
+    known_assets: Iterable[Any],
+    write_model: str | None = None,
+) -> None:
+    """Build a :class:`TermAsset` draft from one answered clarification and write it through
+    the Enhancer dedup/conflict path.
+
+    **Factored out of ``serve/nodes/mine_corpus.py`` (Phase 1c, this initiative)** so a second
+    caller -- ``POST /clarifications/{id}/answer`` (``api/routes.py``, via
+    :func:`fold_ledger_answer_into_corpus`) -- reaches byte-identical behavior on an offline
+    answer rather than a parallel reimplementation. ``known_assets`` is filtered down to
+    already-**certified** ``TermAsset``s the same way ``mine_corpus_node`` always did: a
+    reworded restatement does not mint a second, unlinked draft, and a contradicting answer is
+    flagged rather than silently producing a second, disagreeing certified fact once approved.
+    Callers decide what ``known_assets`` means for them -- a live turn's own frozen
+    ``assets_by_id`` (unchanged from before this refactor), or a fresh disk reload for a caller
+    that needs same-request visibility of a fact certified moments earlier.
+
+    Best-effort, matching the node this was extracted from: any failure building the draft, or
+    any :class:`~governed_bi.curator.enhancer.EnhancerError` from a broken dedup/conflict model
+    call, degrades to an unconditional plain write rather than dropping a real user answer --
+    the caller is not expected to inspect what happened past "did not raise".
+    """
+    from governed_bi.corpus.drafts import submit_draft
+    from governed_bi.curator import enhancer
+
+    try:
+        draft = draft_from_clarification(question, answer, schema=schema)
+        existing = [
+            asset
+            for asset in known_assets
+            if asset.asset_type.value == "term" and _is_certified(asset)
+        ]
+        try:
+            enhancer.apply(
+                agent_model,
+                corpus_root,
+                draft,
+                existing=existing,
+                namespace=schema,
+                write_model=write_model,
+            )
+        except enhancer.EnhancerError:
+            submit_draft(corpus_root, draft, namespace=schema)
+    except Exception:  # noqa: BLE001 -- mining is best-effort, never fatal to the caller
+        pass
+
+
+def fold_ledger_answer_into_corpus(
+    record: Any,
+    *,
+    agent_model: Any,
+    corpus_root: Path | str,
+    schema: str | None,
+    known_assets: Iterable[Any],
+    write_model: str | None = None,
+) -> Any:
+    """Fold one *offline-answered* :class:`~governed_bi.curator.clarifications.ClarificationRecord`
+    into the corpus via :func:`fold_answered_clarification` -- the offline ledger's own entry
+    point into the same Enhancer path a live turn's resume takes -- then mark it
+    ``converted_to_corpus`` so a second call on the same record is a no-op. Returns the
+    (possibly updated) record.
+
+    **Basis gate, mirrored exactly from ``serve/nodes/mine_corpus.py``'s live-turn gate.**
+    ``basis == "ranking_ambiguity"`` folds nothing -- a per-turn judgment call, never a durable
+    schema fact, whether the answer arrives live or offline. ``None``/missing ``basis`` (a
+    record that predates this field, or is not sourced from ``ask_user`` at all -- e.g. a
+    hypothetical future ``curator``-sourced record with no ``basis`` concept) is treated as
+    ``data_definition``-eligible rather than silently skipped: the safest default, matching
+    this session's own "don't silently drop a real answer" principle from the ``basis``
+    field's own gap fix. There is no ``declined``/``deferred`` concept on this record shape at
+    all (those live only on a live turn's own ``state["clarifications"]`` entries) -- an
+    offline answer is, by construction, always a real answer.
+
+    **Idempotent on ``record.converted_to_corpus``, folded synchronously, no poll step.** v1's
+    ``apply_answered_clarifications_to_corpus`` polled the ledger for ``answered`` records not
+    yet ``converted_to_corpus`` because multiple writers -- a human admin's
+    ``POST /clarifications/{id}/answer`` *or* a live-chat answer -- could flip a record to
+    ``answered`` outside any one call's own control flow. That is no longer true here:
+    ``curator/clarifications.py::answer_clarification`` is this repo's only writer of
+    ``status -> answered``, and ``POST /clarifications/{id}/answer`` is its only caller -- a
+    live turn's resume never touches the ledger's ``status`` at all (Phase 1b only logs the
+    *open* record, before ``interrupt()``). With exactly one route driving exactly one writer,
+    there is nothing for a separate poll step to catch that this function's own call, made
+    once right after ``answer_clarification`` returns, would miss -- so this folds
+    synchronously inside that same route rather than porting v1's poll mechanism.
+    """
+    from governed_bi.curator.clarifications import mark_converted_to_corpus, resolve_answer_text
+
+    if record.converted_to_corpus or record.basis == "ranking_ambiguity":
+        return record
+    answer_text = resolve_answer_text(record)
+    if not answer_text or not record.question:
+        return record
+    fold_answered_clarification(
+        agent_model,
+        corpus_root,
+        record.question,
+        answer_text,
+        schema=schema,
+        known_assets=known_assets,
+        write_model=write_model,
+    )
+    return mark_converted_to_corpus(corpus_root, record.id)
