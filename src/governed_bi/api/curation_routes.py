@@ -394,6 +394,14 @@ def _clarification_row(record: Any) -> dict[str, Any]:
         "ui_modality": record.ui_modality,
         "target_table": record.target_table,
         "target_column": record.target_column,
+        "severity": record.severity,
+        "audience": record.audience,
+        "blocked_by": list(record.blocked_by),
+        "unmet_prerequisites_at_answer": (
+            list(record.unmet_prerequisites_at_answer)
+            if record.unmet_prerequisites_at_answer is not None
+            else None
+        ),
         "answer_text": resolve_answer_text(record),
     }
 
@@ -592,12 +600,31 @@ def elicitation_candidates() -> list[dict[str, Any]]:
 
     ``session.corpus_root is None`` returns an empty list, matching ``/clarifications``'s own
     handling of "nothing to read here."
+
+    **Adds a derived ``blocked``** on top of ``_clarification_row``'s persisted fields:
+    ``curator/clarifications.py::unmet_prerequisites(record, records) != ()``, i.e. this
+    candidate's ``blocked_by`` names a question that is not answered yet. Derived rather than
+    stored for the reason ``answer_text`` beside it is — it is a fact about the ledger as a whole
+    at read time, not about the row.
+
+    Computed here and not on ``_clarification_row``/``GET /clarifications`` because the
+    dependency order is a constraint on the *wizard's* sequencing
+    (``utku-ai-setup-wizard-gap-model.md`` § "Presentation consequences", point 2): no A/B/E
+    question may be presented before the near-duplicate-cluster question that decides which of
+    two look-alike columns is authoritative, or the admin is invited to certify a value mapping
+    onto a decoy. ``/clarifications`` is the raw ledger view and has no ordered flow to gate.
+    The client renders a blocked candidate as not-yet-answerable rather than hiding it, and
+    resolves the ``blocked_by`` ids against this same list to say what it is waiting for.
     """
-    from governed_bi.curator.clarifications import load_clarifications
+    from governed_bi.curator.clarifications import load_clarifications, unmet_prerequisites
 
     session = _curation_session()
     if session.corpus_root is None:
         return []
     records = load_clarifications(session.corpus_root)
-    return [_clarification_row(r) for r in records if r.source == "elicitation_wizard"]
+    return [
+        {**_clarification_row(r), "blocked": bool(unmet_prerequisites(r, records))}
+        for r in records
+        if r.source == "elicitation_wizard"
+    ]
 

@@ -58,11 +58,17 @@ import hashlib
 import json
 from typing import Any, Mapping, Sequence
 
-from governed_bi.curator.clarifications import ClarificationRecord
+from governed_bi.curator.clarifications import (
+    ClarificationRecord,
+    ElicitationAudience,
+    ElicitationCategory,
+    ElicitationSeverity,
+)
 
 __all__ = [
     "ELICITATION_SOURCE",
     "CATEGORY_PRIORITY",
+    "CATEGORY_CLASSIFICATION",
     "MAX_VALUE_READS",
     "generate_candidate_questions",
     "read_observed_values",
@@ -86,6 +92,46 @@ _SENTINEL_VALUES: frozenset[str] = frozenset(
 )
 
 CATEGORY_PRIORITY: list[str] = ["A", "C", "E", "B", "D"]
+
+#: ``(severity, audience)`` for each category this generator can actually emit, read off
+#: ``utku-ai-setup-wizard-gap-model.md`` § "Gap-type × severity × audience table".
+#:
+#: Declared once and unpacked by each ``_propose_*`` rather than written five times inline, so
+#: "what tier is a B question" has one answer. Severity is a property of a gap *instance*, not of
+#: a category (the doc's Part 3 §1) — this table is a per-category floor, and it is only a
+#: sufficient answer today because the shipped keyword heuristic cannot see the evidence that
+#: would move an instance off it:
+#:
+#: - **A → T2 / data.** The doc's A row is a hybrid (``BIZ+ENG``) that resolves into *two*
+#:   records, and the question as shipped is the engineering one: its choices are bare
+#:   ``table.column`` identifiers, which is exactly what the business half must not contain. Its
+#:   refinements are invisible here — ``A′`` (same gap on an identity/join key) is T1 and ``A″``
+#:   (only one candidate column) should not be generated at all, and telling either apart needs
+#:   the key/disagreement detection a later phase builds. T2 is the floor, not a claim that no
+#:   A instance is worse.
+#: - **B → T2 / business.** ``business`` because the payload is a machine-prepared list of the
+#:   real distinct values, which is the whole point: a domain owner must never type a value that
+#:   can drift from the stored format. ``B′`` (self-evident values like ``Bottle``/``Can``) is
+#:   T4, and nothing here distinguishes it.
+#: - **C → T2 / business.** A wrong constant silently changes every count that uses it, and only
+#:   a human knows it — no data inspection recovers a fiscal-year start.
+#: - **D → T3 / data.** The record this generator mints is
+#:   :func:`maybe_generate_join_followup`'s, which fires when a join is *not declared*, i.e. the
+#:   doc's ``D′`` row, not its ``D`` row: unanswered, the engine cannot traverse and refuses, so
+#:   correctness is not at risk. The doc's T1 ``D`` — two candidate join keys whose values
+#:   disagree — has no detector, and when one exists it must set T1 explicitly rather than inherit
+#:   this entry.
+#: - **E → T2 / business.** Same reasoning as B for the audience (the sentinel is detected, not
+#:   typed); only the owner can decide whether ``'unknown'`` rows belong in a regional breakdown.
+CATEGORY_CLASSIFICATION: dict[
+    ElicitationCategory, tuple[ElicitationSeverity, ElicitationAudience]
+] = {
+    "A": ("T2", "data"),
+    "B": ("T2", "business"),
+    "C": ("T2", "business"),
+    "D": ("T3", "data"),
+    "E": ("T2", "business"),
+}
 
 #: B's cardinality ceiling: strictly more than one distinct value, at most this many.
 #:
@@ -273,6 +319,7 @@ def generate_candidate_questions(
 def _propose_a(tables: Sequence[Any], assets_by_id: dict[str, Any], limit: int) -> list[ClarificationRecord]:
     """A: for each ambiguous term found in >=1 column name, a column-picker question over every
     matching ``table.column`` candidate."""
+    severity, audience = CATEGORY_CLASSIFICATION["A"]
     out: list[ClarificationRecord] = []
     for term in _AMBIGUOUS_TERMS:
         matches: list[tuple[str, str]] = []
@@ -292,6 +339,8 @@ def _propose_a(tables: Sequence[Any], assets_by_id: dict[str, Any], limit: int) 
                 question=f"When you say '{term}', which table/column does that map to?",
                 category="A",
                 ui_modality="column_picker",
+                severity=severity,
+                audience=audience,
                 choices=choices,
                 allow_freeform=True,
                 target_table=matches[0][0],  # "expected" table for the D heuristic
@@ -342,6 +391,7 @@ def _propose_c(tables: Sequence[Any], assets_by_id: dict[str, Any], limit: int) 
     )
     if not has_date_column:
         return []
+    severity, audience = CATEGORY_CLASSIFICATION["C"]
     scope = "elicitation:rule:fiscal_year_start"
     return [
         ClarificationRecord(
@@ -350,6 +400,8 @@ def _propose_c(tables: Sequence[Any], assets_by_id: dict[str, Any], limit: int) 
             question="What month does your fiscal year start? (enter 1-12, 1 = January)",
             category="C",
             ui_modality="numeric",
+            severity=severity,
+            audience=audience,
             choices=tuple(
                 {"id": str(i), "label": f"{i} - {name}"}
                 for i, name in enumerate(_FISCAL_MONTH_NAMES, start=1)
@@ -381,6 +433,7 @@ def _propose_e(
     point is a small closed vocabulary, and the sentinels it looks for (``n/a``, ``null``,
     ``pending``, ``-1``, …) sort early in most of them.
     """
+    severity, audience = CATEGORY_CLASSIFICATION["E"]
     out: list[ClarificationRecord] = []
     for table in tables:
         for column in _columns_of(table, assets_by_id):
@@ -408,6 +461,8 @@ def _propose_e(
                     ),
                     category="E",
                     ui_modality="checkbox",
+                    severity=severity,
+                    audience=audience,
                     choices=(
                         {
                             "id": "exclude",
@@ -441,6 +496,7 @@ def _propose_b(
     :data:`_B_MAX_DISTINCT`, so 16 or more rows back means the column really has more than 15
     distinct values and fewer means the count is exact.
     """
+    severity, audience = CATEGORY_CLASSIFICATION["B"]
     out: list[ClarificationRecord] = []
     for table in tables:
         for column in _columns_of(table, assets_by_id):
@@ -461,6 +517,8 @@ def _propose_b(
                     ),
                     category="B",
                     ui_modality="checklist",
+                    severity=severity,
+                    audience=audience,
                     choices=tuple({"id": v, "label": v} for v in values),
                     allow_freeform=True,
                     target_table=table.physical_name,
@@ -558,6 +616,7 @@ def maybe_generate_join_followup(rec: ClarificationRecord, picked_choice_id: str
     if picked_table == rec.target_table:
         return None
     term = rec.scope.rsplit(":", 1)[-1]
+    severity, audience = CATEGORY_CLASSIFICATION["D"]
     scope = f"elicitation:join:{rec.target_table}:{picked_table}"
     return ClarificationRecord(
         id=_record_id(scope),
@@ -569,6 +628,8 @@ def maybe_generate_join_followup(rec: ClarificationRecord, picked_choice_id: str
         ),
         category="D",
         ui_modality=None,
+        severity=severity,
+        audience=audience,
         choices=None,
         allow_freeform=True,
         target_table=picked_table,

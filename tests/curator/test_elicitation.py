@@ -644,3 +644,80 @@ def test_compose_answer_text_category_d_is_always_freeform() -> None:
     assert compose_elicitation_answer_text(rec, freeform="orders.id = payments.order_id") == (
         "orders.id = payments.order_id"
     )
+
+
+# ── severity / audience classification (utku-ai-setup-wizard-gap-model.md § "Gap-type ×
+# severity × audience table") ────────────────────────────────────────────────────────────────
+
+
+def test_every_generated_candidate_carries_a_severity_and_an_audience() -> None:
+    from governed_bi.curator.elicitation import generate_candidate_questions
+
+    tables, assets_by_id = _schema()
+    observed, _ledger = _observed(
+        tables, assets_by_id, connector=_ScriptedConnector(_REAL_VALUES)
+    )
+    records = generate_candidate_questions(tables, assets_by_id, observed_values=observed)
+    assert records
+    for rec in records:
+        assert rec.severity in {"T1", "T2", "T3", "T4"}, rec
+        assert rec.audience in {"business", "data"}, rec
+
+
+def test_the_four_standalone_categories_carry_the_designed_classification() -> None:
+    """A is ``data`` because the question as shipped *is* the engineering half of the doc's
+    hybrid pair — its choices are bare ``table.column`` identifiers. B, C and E are ``business``:
+    each carries a machine-prepared payload precisely so a domain owner never types a value."""
+    from governed_bi.curator.elicitation import generate_candidate_questions
+
+    tables, assets_by_id = _schema()
+    observed, _ledger = _observed(
+        tables, assets_by_id, connector=_ScriptedConnector(_REAL_VALUES)
+    )
+    records = generate_candidate_questions(tables, assets_by_id, observed_values=observed)
+    by_category = {rec.category: rec for rec in records}
+
+    assert (by_category["A"].severity, by_category["A"].audience) == ("T2", "data")
+    assert (by_category["B"].severity, by_category["B"].audience) == ("T2", "business")
+    assert (by_category["C"].severity, by_category["C"].audience) == ("T2", "business")
+    assert (by_category["E"].severity, by_category["E"].audience) == ("T2", "business")
+
+
+def test_the_d_join_followup_is_a_safe_failure_for_the_data_audience() -> None:
+    """The shipped D record is the doc's **D′** row, not its D row: it fires when a join is not
+    declared at all, so what an unanswered one costs is a refusal (T3), never a wrong number.
+    The T1 D row — two candidate keys whose values disagree — has no detector yet."""
+    from governed_bi.curator.clarifications import ClarificationRecord
+    from governed_bi.curator.elicitation import maybe_generate_join_followup
+
+    rec = ClarificationRecord(
+        id="q001",
+        scope="elicitation:term:amount",
+        question="?",
+        category="A",
+        target_table="orders",
+        source="elicitation_wizard",
+    )
+    followup = maybe_generate_join_followup(rec, "payments.revenue_amount")
+    assert followup is not None
+    assert (followup.severity, followup.audience) == ("T3", "data")
+
+
+def test_the_classification_table_covers_every_category_the_generator_can_emit() -> None:
+    from governed_bi.curator.elicitation import CATEGORY_CLASSIFICATION, CATEGORY_PRIORITY
+
+    assert set(CATEGORY_CLASSIFICATION) == set(CATEGORY_PRIORITY)
+
+
+def test_nothing_is_generated_blocked_yet_because_no_detector_emits_a_prerequisite() -> None:
+    """Structural support only: :data:`ClarificationRecord.blocked_by` exists and is enforced,
+    but the two gap types that populate it (the A-biz/A-eng pair and the near-duplicate cluster
+    question that must precede any A/B/E on the same column) are a later phase's detectors."""
+    from governed_bi.curator.elicitation import generate_candidate_questions
+
+    tables, assets_by_id = _schema()
+    observed, _ledger = _observed(
+        tables, assets_by_id, connector=_ScriptedConnector(_REAL_VALUES)
+    )
+    records = generate_candidate_questions(tables, assets_by_id, observed_values=observed)
+    assert all(rec.blocked_by == () for rec in records)

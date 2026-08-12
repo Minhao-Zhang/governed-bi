@@ -443,3 +443,85 @@ def test_generate_a_second_time_after_answering_does_not_duplicate(monkeypatch, 
 
     second = client.post("/elicitation/generate").json()
     assert second["n_generated"] == 0
+
+
+# ── severity / audience / dependency gating on the wire (utku-ai-setup-wizard-gap-model.md) ──
+
+
+def _blocked_pair() -> list[Any]:
+    """A prerequisite and the candidate that must wait for it. **Hand-written, not generated** —
+    no shipped detector emits a ``blocked_by`` yet (the near-duplicate-cluster question and the
+    A-biz/A-eng pair are a later phase), so the only way to exercise the gate is to seed one."""
+    from governed_bi.curator.clarifications import ClarificationRecord
+
+    return [
+        ClarificationRecord(
+            id="q_blocker", scope="s_blocker", question="Which of the two is authoritative?",
+            source="elicitation_wizard", category="D", severity="T1", audience="data",
+        ),
+        ClarificationRecord(
+            id="q_dependent", scope="s_dependent", question="What month does your year start?",
+            source="elicitation_wizard", category="C", severity="T2", audience="business",
+            blocked_by=("q_blocker",),
+        ),
+    ]
+
+
+def test_candidates_expose_severity_audience_and_the_dependency_fields(monkeypatch, tmp_path: Path) -> None:
+    client = _client(monkeypatch, _session_with_schema(tmp_path))
+    generated = client.post("/elicitation/generate").json()["generated"]
+    assert all(row["severity"] and row["audience"] for row in generated), generated
+
+    rows = client.get("/elicitation/candidates").json()
+    assert {row["audience"] for row in rows} == {"business", "data"}
+    assert {row["severity"] for row in rows} == {"T2"}
+    assert all(row["blocked"] is False and row["blocked_by"] == [] for row in rows)
+
+
+def test_a_candidate_with_an_open_prerequisite_is_reported_as_blocked(monkeypatch, tmp_path: Path) -> None:
+    from governed_bi.curator.clarifications import write_clarifications
+
+    write_clarifications(tmp_path, _blocked_pair())
+    client = _client(monkeypatch, _session_with_schema(tmp_path))
+    rows = {row["id"]: row for row in client.get("/elicitation/candidates").json()}
+
+    assert rows["q_blocker"]["blocked"] is False
+    assert rows["q_dependent"]["blocked"] is True
+    assert rows["q_dependent"]["blocked_by"] == ["q_blocker"]
+
+
+def test_answering_the_prerequisite_unblocks_the_candidate_that_waited(monkeypatch, tmp_path: Path) -> None:
+    from governed_bi.curator.clarifications import write_clarifications
+
+    write_clarifications(tmp_path, _blocked_pair())
+    client = _client(monkeypatch, _session_with_schema(tmp_path))
+    client.post("/clarifications/q_blocker/answer", json={"answer": "orders.id = payments.order_id"})
+
+    rows = {row["id"]: row for row in client.get("/elicitation/candidates").json()}
+    assert rows["q_dependent"]["blocked"] is False
+
+
+def test_answering_a_blocked_candidate_stamps_the_unmet_prerequisite_on_it(monkeypatch, tmp_path: Path) -> None:
+    """Deliberately **not** refused. The doc requires a DBA with no business counterpart to be
+    able to answer the engineering half standalone; what the answer must not do is claim a
+    warrant it does not have, so the still-open prerequisite is recorded on the record for a
+    later phase to land ``draft`` + ``reliability: suspect`` on instead of ``certified``."""
+    from governed_bi.curator.clarifications import write_clarifications
+
+    write_clarifications(tmp_path, _blocked_pair())
+    client = _client(monkeypatch, _session_with_schema(tmp_path))
+    response = client.post("/clarifications/q_dependent/answer", json={"answer": "4"})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "answered"
+    assert body["unmet_prerequisites_at_answer"] == ["q_blocker"]
+
+
+def test_answering_an_unblocked_candidate_stamps_an_empty_warrant(monkeypatch, tmp_path: Path) -> None:
+    client = _client(monkeypatch, _session_with_schema(tmp_path))
+    generated = client.post("/elicitation/generate").json()["generated"]
+    c_rec = next(row for row in generated if row["category"] == "C")
+
+    body = client.post(f"/clarifications/{c_rec['id']}/answer", json={"answer": "4"}).json()
+    assert body["unmet_prerequisites_at_answer"] == []

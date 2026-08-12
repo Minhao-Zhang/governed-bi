@@ -37,6 +37,7 @@ __all__ = [
     "load_clarifications",
     "write_clarifications",
     "resolve_answer_text",
+    "unmet_prerequisites",
     "answer_clarification",
     "mark_converted_to_corpus",
     "append_if_new_scope",
@@ -54,6 +55,35 @@ ElicitationCategory = Literal["A", "B", "C", "D", "E"]
 
 #: Phase 2 Setup Wizard UI widget for a category-tagged candidate. Declared only, same reason.
 ElicitationUiModality = Literal["column_picker", "numeric", "checkbox", "checklist"]
+
+#: Severity tier of the gap a candidate asks about — ``utku-ai-setup-wizard-gap-model.md``
+#: § "Tier structure". The discriminator is **what happens if the question goes unanswered**,
+#: not how much accuracy the category bought on a benchmark:
+#:
+#: - ``T1`` *Poison* — silently wrong answer that looks right, **and** the gap sits on an
+#:   identity/join key, so it contaminates every question touching that table.
+#: - ``T2`` *Silent-wrong, local* — also silently wrong, but scoped to one term/metric/column.
+#:   T1 vs T2 is blast radius, not danger class; both are wrong answers nobody can spot.
+#: - ``T3`` *Safe failure* — worst case is a refusal or a mid-turn ``ask_user``. Correctness is
+#:   never at risk, so leaving one open is an acceptable steady state.
+#: - ``T4`` *Polish* — retrieval quality or phrasing only.
+#:
+#: Stored as the doc's own ``"T1"``-style label rather than an int 1-4, matching
+#: :data:`ElicitationCategory`/:data:`ElicitationUiModality`/``source``: every closed vocabulary
+#: on this record is a string ``Literal`` that ``_to_json`` passes straight through, and a bare
+#: ``2`` in ``clarifications.jsonl`` reads as a count rather than as a name. The label is also
+#: what the doc and the wizard UI both call it, so an int would put the ``"T"`` prefix in a
+#: Python format string and a TypeScript template with nothing keeping the two in agreement.
+ElicitationSeverity = Literal["T1", "T2", "T3", "T4"]
+
+#: Who can answer this candidate — ``utku-ai-setup-wizard-gap-model.md`` § decision 2. Orthogonal
+#: to :data:`ElicitationCategory`: ``business`` is a non-technical domain owner (Kindling's
+#: restaurant owner, who can say what "active customer" means but has never seen a column name);
+#: ``data`` is a DBA (Power Kiosk's Peruz, who can say how two tables join but must guess at
+#: business intent). Exactly two values, because a gap type that needs both audiences is
+#: answered by **two records**, one per tab — never by one record with a third audience value
+#: that no single person can act on.
+ElicitationAudience = Literal["business", "data"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +122,29 @@ class ClarificationRecord:
     ui_modality: ElicitationUiModality | None = None
     target_table: str | None = None
     target_column: str | None = None
+    severity: ElicitationSeverity | None = None
+    audience: ElicitationAudience | None = None
+    #: Ids of the candidates that must be **answered** before this one may be presented.
+    #: ``()`` — the default — means nothing blocks it, which is a real state rather than an
+    #: unknown one, so this defaults like ``raised_by`` (empty tuple) and not like
+    #: ``answer_choice_ids`` (``None``).
+    #:
+    #: A tuple rather than a single id because the measured shape needs more than one: the doc's
+    #: hard constraint is that a near-duplicate-disagreement question on a column must be
+    #: answered before any A/B/E question about that column, and one A question ranges over
+    #: *every* column matching a term — ``beer_factory`` has four price-like columns of which two
+    #: are decoys, so its ``price`` question waits on two separate cluster questions, not one.
+    blocked_by: tuple[str, ...] = ()
+    #: Which of :attr:`blocked_by` were still unanswered at the moment this record was answered.
+    #: ``None`` = never answered; ``()`` = answered with every prerequisite behind it; non-empty
+    #: = answered anyway, without the warrant those prerequisites would have given it.
+    #:
+    #: Recorded at answer time rather than derived on read because it is **not recoverable**
+    #: afterwards: once the prerequisite is answered too, :func:`unmet_prerequisites` returns
+    #: ``()`` for this record and the fact that its own answer arrived first is gone. Nothing in
+    #: this phase acts on it — see :func:`answer_clarification` for what a later phase is meant
+    #: to do with it.
+    unmet_prerequisites_at_answer: tuple[str, ...] | None = None
 
 
 class ClarificationNotFound(LookupError):
@@ -125,6 +178,14 @@ def _to_json(record: ClarificationRecord) -> dict[str, Any]:
         "ui_modality": record.ui_modality,
         "target_table": record.target_table,
         "target_column": record.target_column,
+        "severity": record.severity,
+        "audience": record.audience,
+        "blocked_by": list(record.blocked_by),
+        "unmet_prerequisites_at_answer": (
+            list(record.unmet_prerequisites_at_answer)
+            if record.unmet_prerequisites_at_answer is not None
+            else None
+        ),
     }
 
 
@@ -147,6 +208,10 @@ def _from_json(raw: Mapping[str, Any], *, where: str) -> ClarificationRecord:
         data["choices"] = tuple(dict(c) for c in data["choices"])
     if data.get("answer_choice_ids") is not None:
         data["answer_choice_ids"] = tuple(data["answer_choice_ids"])
+    if data.get("blocked_by") is not None:
+        data["blocked_by"] = tuple(data["blocked_by"])
+    if data.get("unmet_prerequisites_at_answer") is not None:
+        data["unmet_prerequisites_at_answer"] = tuple(data["unmet_prerequisites_at_answer"])
     try:
         return ClarificationRecord(**data)
     except TypeError as err:
@@ -227,6 +292,32 @@ def resolve_answer_text(record: ClarificationRecord) -> str | None:
     return label or record.answer
 
 
+def unmet_prerequisites(
+    record: ClarificationRecord, records: Sequence[ClarificationRecord]
+) -> tuple[str, ...]:
+    """Which of ``record.blocked_by`` are not yet answered, given the whole ledger.
+
+    Empty means the record is answerable now. One definition, two readers — the wizard's
+    candidate listing (which renders a still-blocked question as not-yet-answerable rather than
+    hiding it, so the admin can see *why* it is waiting) and
+    :func:`answer_clarification` (which stamps the result onto the answer as its warrant) — so
+    "presented as blocked" and "recorded as unwarranted" cannot come to disagree.
+
+    **Fails closed on a prerequisite that is not in the ledger at all.** A dangling id is the one
+    state this must not read as "all clear": the record claims something has to be settled first
+    and the ledger cannot show that it was. Reporting it keeps the missing id visible to whoever
+    has to fix it, where treating it as satisfied would silently license the exact answer the
+    dependency exists to hold back (the doc's objection #4: nobody shown a value checklist can
+    tell they are looking at a decoy column).
+    """
+    if not record.blocked_by:
+        return ()
+    answered = {
+        r.id for r in records if r.status is ClarificationRecordStatus.answered
+    }
+    return tuple(pid for pid in record.blocked_by if pid not in answered)
+
+
 def _replace_record(
     corpus_root: Path | str, clarification_id: str, **changes: Any
 ) -> ClarificationRecord:
@@ -271,8 +362,29 @@ def answer_clarification(
     the record" only. Does not validate ``choice_id`` against the record's declared ``choices``
     (v1 doesn't either — see :func:`resolve_answer_text`).
 
+    **Also stamps the answer's warrant** (``unmet_prerequisites_at_answer``): whichever of the
+    record's ``blocked_by`` prerequisites were still open right now. Answering anyway is not
+    refused, deliberately — ``utku-ai-setup-wizard-gap-model.md`` requires a DBA with no business
+    counterpart to be able to answer the engineering half of a hybrid gap standalone (Power Kiosk
+    has no business-domain expert; Kindling has no DBA, and neither pilot can fill both tabs). It
+    is the *warrant* that differs, not the availability: a later phase reads a non-empty stamp and
+    lands the corpus write ``draft`` + ``reliability: suspect`` instead of ``certified``. Nothing
+    reads it in this phase — the fold path is unchanged and still certifies either way.
+
+    Computed here rather than by each caller, from a read of the ledger this function then reads
+    again through :func:`_replace_record`. Two full-file reads of a JSONL ledger on an
+    admin-triggered write is the same "no locking or append-in-place sophistication" trade this
+    module already makes everywhere else, and it buys the invariant that *every* answer carries
+    its warrant rather than only the answers whose caller remembered to pass one.
+
     Raises :class:`ClarificationNotFound` on an unknown id.
     """
+    records = load_clarifications(corpus_root)
+    # ``()`` when no record matches: :func:`_replace_record` below is the one place that decides
+    # an unknown id is a :class:`ClarificationNotFound`, and it is about to.
+    unmet = next(
+        (unmet_prerequisites(r, records) for r in records if r.id == clarification_id), ()
+    )
     return _replace_record(
         corpus_root,
         clarification_id,
@@ -281,6 +393,7 @@ def answer_clarification(
         answer_choice_id=choice_id,
         answer_choice_ids=tuple(choice_ids) if choice_ids is not None else None,
         answered_by=answered_by,
+        unmet_prerequisites_at_answer=unmet,
     )
 
 

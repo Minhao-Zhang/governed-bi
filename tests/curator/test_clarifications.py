@@ -306,3 +306,119 @@ def test_append_if_new_scope_is_a_no_op_when_the_scope_already_exists(tmp_path: 
     records = load_clarifications(tmp_path)
     assert len(records) == 1, "a second record with the same scope must not have been written"
     assert records[0].id == "q001"
+
+
+# ── severity / audience / dependency gating (utku-ai-setup-wizard-gap-model.md) ──────────────
+#
+# Three fields and one predicate: the tier a gap sits in, who can answer it, which questions
+# must be answered first, and — recorded at answer time, because it is unrecoverable
+# afterwards — which of those prerequisites were still open when the answer arrived.
+
+
+def test_severity_audience_and_dependency_fields_default_to_unclassified_and_unblocked() -> None:
+    record = _record()
+    assert record.severity is None
+    assert record.audience is None
+    assert record.blocked_by == ()
+    assert record.unmet_prerequisites_at_answer is None
+
+
+def test_severity_audience_and_dependency_fields_round_trip_through_the_ledger(tmp_path: Path) -> None:
+    from governed_bi.curator.clarifications import load_clarifications, write_clarifications
+
+    record = _record(
+        category="A",
+        severity="T1",
+        audience="data",
+        blocked_by=("elicit.aaaa", "elicit.bbbb"),
+        unmet_prerequisites_at_answer=("elicit.bbbb",),
+    )
+    write_clarifications(tmp_path, [record])
+
+    (loaded,) = load_clarifications(tmp_path)
+    assert loaded == record
+    assert loaded.blocked_by == ("elicit.aaaa", "elicit.bbbb"), "a tuple, not a list"
+    assert loaded.unmet_prerequisites_at_answer == ("elicit.bbbb",)
+
+
+def test_unmet_prerequisites_is_empty_when_nothing_blocks_the_record() -> None:
+    from governed_bi.curator.clarifications import unmet_prerequisites
+
+    record = _record(id="q_dependent")
+    assert unmet_prerequisites(record, [record]) == ()
+
+
+def test_unmet_prerequisites_names_a_prerequisite_that_is_still_open() -> None:
+    from governed_bi.curator.clarifications import unmet_prerequisites
+
+    blocker = _record(id="q_blocker", scope="s_blocker")
+    dependent = _record(id="q_dependent", scope="s_dependent", blocked_by=("q_blocker",))
+    assert unmet_prerequisites(dependent, [blocker, dependent]) == ("q_blocker",)
+
+
+def test_unmet_prerequisites_clears_once_the_prerequisite_is_answered(tmp_path: Path) -> None:
+    from governed_bi.curator.clarifications import (
+        answer_clarification,
+        load_clarifications,
+        unmet_prerequisites,
+        write_clarifications,
+    )
+
+    blocker = _record(id="q_blocker", scope="s_blocker")
+    dependent = _record(id="q_dependent", scope="s_dependent", blocked_by=("q_blocker",))
+    write_clarifications(tmp_path, [blocker, dependent])
+    answer_clarification(tmp_path, "q_blocker", answer="region is authoritative")
+
+    records = load_clarifications(tmp_path)
+    (still_dependent,) = [r for r in records if r.id == "q_dependent"]
+    assert unmet_prerequisites(still_dependent, records) == ()
+
+
+def test_unmet_prerequisites_fails_closed_on_a_prerequisite_missing_from_the_ledger() -> None:
+    """A dangling prerequisite id is the one state the gate must not read as "all clear": the
+    record claims something has to be settled first and the ledger cannot show it was."""
+    from governed_bi.curator.clarifications import unmet_prerequisites
+
+    dependent = _record(id="q_dependent", blocked_by=("q_never_written",))
+    assert unmet_prerequisites(dependent, [dependent]) == ("q_never_written",)
+
+
+def test_answering_records_the_prerequisites_that_were_still_open(tmp_path: Path) -> None:
+    """The warrant an answer carries. Once the blocker is answered too, recomputing the gate
+    returns ``()`` — so whether *this* answer had its prerequisite behind it is only knowable
+    if it was written down at the time."""
+    from governed_bi.curator.clarifications import (
+        answer_clarification,
+        load_clarifications,
+        write_clarifications,
+    )
+
+    blocker = _record(id="q_blocker", scope="s_blocker")
+    dependent = _record(id="q_dependent", scope="s_dependent", blocked_by=("q_blocker",))
+    write_clarifications(tmp_path, [blocker, dependent])
+
+    answered = answer_clarification(tmp_path, "q_dependent", answer="payments.amount")
+    assert answered.unmet_prerequisites_at_answer == ("q_blocker",)
+
+    answer_clarification(tmp_path, "q_blocker", answer="region is authoritative")
+    (persisted,) = [r for r in load_clarifications(tmp_path) if r.id == "q_dependent"]
+    assert persisted.unmet_prerequisites_at_answer == ("q_blocker",), "still visible afterwards"
+
+
+def test_answering_with_every_prerequisite_met_records_an_empty_tuple(tmp_path: Path) -> None:
+    """``()`` and ``None`` are different states: "answered, fully warranted" vs "never
+    answered". A later phase reads the first as ``certified``-eligible."""
+    from governed_bi.curator.clarifications import (
+        ClarificationRecordStatus,
+        answer_clarification,
+        write_clarifications,
+    )
+
+    blocker = _record(
+        id="q_blocker", scope="s_blocker", status=ClarificationRecordStatus.answered, answer="a",
+    )
+    dependent = _record(id="q_dependent", scope="s_dependent", blocked_by=("q_blocker",))
+    write_clarifications(tmp_path, [blocker, dependent])
+
+    answered = answer_clarification(tmp_path, "q_dependent", answer="payments.amount")
+    assert answered.unmet_prerequisites_at_answer == ()
