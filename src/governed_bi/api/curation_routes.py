@@ -535,11 +535,29 @@ def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
     ``source="elicitation_wizard"`` ledger records (open or answered) is never proposed twice --
     ``curator/elicitation.py::generate_candidate_questions``'s own dedup, over the full
     ``existing`` ledger passed in here.
+
+    **Categories B and E read the live database, through the governed path.** Both are about a
+    column's real value vocabulary, and both used to gate on ``ColumnAsset.sample_values``, which
+    ``corpus/seed.py`` never populates -- so neither could fire on any live-seeded corpus.
+    ``curator/elicitation.py::read_observed_values`` supplies the values instead, one
+    ``serve/fetch.sample_rows`` call per keyword-gated column (bounded by ``MAX_VALUE_READS``),
+    which is the same ``prepare()``-checked, ledgered executor path the live agent's own
+    ``sample_rows`` tool takes. ``session.connector``/``.corpus``/``.policy`` are exactly what a
+    served turn gets (``serve/session.py::Session.configurable`` hands the same three objects to
+    every node), so nothing is constructed here that a turn would not also have.
+
+    ``ledger`` in the response is those attempt rows -- named as ``GET /turns/{id}`` already names
+    the same thing (``routes.py``: ``"ledger": execution["attempts"]``). It is returned rather
+    than appended to ``runs/serve/*.jsonl``, because that log holds *turn* records judged by
+    ``register/record.py``'s required fields and a generate call is not a turn; synthesising the
+    fields to make one fit would be the "field the engine does not observe" defect. Returning the
+    rows keeps the property that matters -- a governed statement is never issued from here
+    without its verdict being visible to the caller who caused it.
     """
     from fastapi import HTTPException
 
     from governed_bi.curator.clarifications import load_clarifications, write_clarifications
-    from governed_bi.curator.elicitation import generate_candidate_questions
+    from governed_bi.curator.elicitation import generate_candidate_questions, read_observed_values
 
     session = _curation_session()
     if session.corpus_root is None:
@@ -547,12 +565,22 @@ def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
 
     tables = [a for a in session.assets_by_id.values() if a.asset_type.value == "table"]
     existing = load_clarifications(session.corpus_root)
-    new_records = generate_candidate_questions(tables, session.assets_by_id, existing=existing)
+    observed, ledger = read_observed_values(
+        tables,
+        session.assets_by_id,
+        connector=session.connector,
+        corpus=session.corpus,
+        policy=session.policy,
+    )
+    new_records = generate_candidate_questions(
+        tables, session.assets_by_id, existing=existing, observed_values=observed
+    )
     if new_records:
         write_clarifications(session.corpus_root, [*existing, *new_records])
     return {
         "generated": [_clarification_row(r) for r in new_records],
         "n_generated": len(new_records),
+        "ledger": [dict(row) for row in ledger],
     }
 
 

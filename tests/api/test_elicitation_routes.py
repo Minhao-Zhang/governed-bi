@@ -55,7 +55,41 @@ def _schema_assets() -> dict[str, Any]:
     return {a.id: a for a in [orders, payments, *orders_columns, *payments_columns]}
 
 
-def _session_with_schema(tmp_path: Path, *, agent_model: Any = None) -> Any:
+#: What the two value-gated columns really hold in the fake database behind this session.
+#: Categories B and E now read these through ``serve/fetch.sample_rows`` rather than off
+#: ``ColumnAsset.sample_values``, so a session with no connector proposes neither.
+_DB_VALUES: dict[str, tuple[str, ...]] = {
+    "country_code": ("US", "CA", "MX", "FR", "DE"),
+    "review_status": ("approved", "pending", "not_yet_rated"),
+}
+
+
+class _ScriptedConnector:
+    """The repo's governed-query test idiom (``tests/serve/test_agent_tools_hitl.py``'s
+    ``Recorder``): a ``dialect`` and an ``execute`` returning ``(columns, rows, truncated)``."""
+
+    dialect = "postgres"
+
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def execute(self, sql: str, **_kwargs: Any) -> tuple[list[str], list[tuple[Any, ...]], bool]:
+        self.statements.append(sql)
+        for name, values in _DB_VALUES.items():
+            if f'"{name}"' in sql:
+                return ([name], [(v,) for v in values], False)
+        return ([], [], False)
+
+
+#: "the caller did not say", distinct from ``connector=None`` ("this session has no connector"),
+#: which is itself a case under test.
+_UNSET = object()
+
+
+def _session_with_schema(
+    tmp_path: Path, *, agent_model: Any = None, connector: Any = _UNSET
+) -> Any:
+    from governed_bi.corpus.analyst import for_analyst
     from governed_bi.govern.policy import GovernancePolicy
     from governed_bi.retrieve.structure import CorpusStructure
     from governed_bi.serve.session import Session
@@ -64,8 +98,14 @@ def _session_with_schema(tmp_path: Path, *, agent_model: Any = None) -> Any:
         join_edges=frozenset(), references={}, asset_types={}, table_schemas={},
         schema_tags={}, joins_by_edge={},
     )
+    assets_by_id = _schema_assets()
     return Session(
-        index=None, structure=structure, assets_by_id=_schema_assets(), corpus=None, connector=None,
+        index=None, structure=structure, assets_by_id=assets_by_id,
+        # A real ``AnalystCorpus``, because ``POST /elicitation/generate`` now issues governed
+        # statements and ``check()`` derives column authorization from that type, not from a
+        # parallel set (ADR 0006 §8).
+        corpus=for_analyst(list(assets_by_id.values())),
+        connector=_ScriptedConnector() if connector is _UNSET else connector,
         policy=GovernancePolicy(guard_rules_enabled={}), corpus_content_hash="c",
         prompt_set_hash="p", knobs_resolved={}, db_id="shop", run_id="r",
         corpus_root=tmp_path, agent_model=agent_model,
@@ -122,6 +162,49 @@ def test_generate_produces_real_candidates_across_categories(monkeypatch, tmp_pa
 
     on_disk = load_clarifications(tmp_path)
     assert len(on_disk) == len(body["generated"])
+
+
+def test_generate_reports_a_ledger_row_for_every_governed_value_read(monkeypatch, tmp_path: Path) -> None:
+    """B and E now issue governed statements to get their real values, so the route owes the
+    caller the verdict for each one. The deleted ``Connector.sample_values`` path wrote none,
+    which is what made ``guardrail_errors == 0`` hold vacuously for it."""
+    connector = _ScriptedConnector()
+    client = _client(monkeypatch, _session_with_schema(tmp_path, connector=connector))
+    body = client.post("/elicitation/generate").json()
+
+    # Two keyword-gated columns (country_code, review_status), so two statements.
+    assert len(connector.statements) == 2, connector.statements
+    assert len(body["ledger"]) == 2, body["ledger"]
+    assert all(row["path"] == "sample" and row["passed"] for row in body["ledger"])
+    assert all(row["executed_sql"] for row in body["ledger"])
+    assert any('"country_code"' in row["executed_sql"] for row in body["ledger"])
+
+
+def test_b_and_e_offer_the_values_the_database_really_returned(monkeypatch, tmp_path: Path) -> None:
+    client = _client(monkeypatch, _session_with_schema(tmp_path))
+    generated = client.post("/elicitation/generate").json()["generated"]
+
+    b_rec = next(r for r in generated if r["category"] == "B")
+    assert b_rec["target_column"] == "country_code"
+    assert [c["id"] for c in b_rec["choices"]] == sorted(_DB_VALUES["country_code"])
+
+    e_rec = next(r for r in generated if r["category"] == "E")
+    assert e_rec["target_column"] == "review_status"
+    assert "'pending'" in e_rec["question"], e_rec["question"]
+
+
+def test_b_and_e_are_not_proposed_when_there_is_no_connector_to_read_through(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """``ColumnAsset.sample_values`` is populated on both gated columns in this fixture and is
+    no longer consulted -- the field is empty on every live-seeded corpus, which is the bug."""
+    client = _client(monkeypatch, _session_with_schema(tmp_path, connector=None))
+    body = client.post("/elicitation/generate").json()
+
+    assert {row["category"] for row in body["generated"]} == {"A", "C"}
+    # The refusal is still a governance decision with a row, not a silent skip.
+    assert len(body["ledger"]) == 2
+    assert all(row["passed"] is False for row in body["ledger"])
 
 
 def test_generate_is_idempotent_on_a_second_call(monkeypatch, tmp_path: Path) -> None:

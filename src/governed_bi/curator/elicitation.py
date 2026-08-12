@@ -34,19 +34,38 @@ question text through a chat model (``_llm_rewrite_questions``) for more natural
 ported: nothing in this port's own spec calls for it, and it is exactly the kind of
 "configurability nobody asked for" this project's guidelines warn against — the heuristic's
 template text is what ships.
+
+**B and E read the database; the rest read only the corpus.** Both of those categories are
+*about* a column's real value vocabulary, so both need values, and both originally took them
+from ``ColumnAsset.sample_values`` — a field ``corpus/seed.py``'s live-schema introspection
+never populates, so neither could ever fire on a live-seeded corpus (verified: zero candidates
+on real ``beer_factory``). :func:`read_observed_values` supplies them instead, through
+``serve/fetch.sample_rows`` — statement built as a sqlglot tree, run through ``prepare()``,
+one ``path="sample"`` ledger row per attempt. **Not** by restoring ``Connector.sample_values``,
+which was deleted rather than fixed for two reasons that both still hold (``ports.py`` around
+line 124): it interpolated deliberately-unconstrained identifiers into a string, and it called
+``execute`` itself, so it reached the database through no governance layer and wrote no row.
+
+That split is why the reading is its own function and not a branch inside
+:func:`generate_candidate_questions`: the generator stays a pure function of
+``(tables, assets_by_id, observed_values)`` with nothing to mock, and the one function that
+touches a connector is also the one that has ledger rows to hand back to its caller.
 """
 
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Sequence
+import json
+from typing import Any, Mapping, Sequence
 
 from governed_bi.curator.clarifications import ClarificationRecord
 
 __all__ = [
     "ELICITATION_SOURCE",
     "CATEGORY_PRIORITY",
+    "MAX_VALUE_READS",
     "generate_candidate_questions",
+    "read_observed_values",
     "compose_elicitation_answer_text",
     "maybe_generate_join_followup",
 ]
@@ -67,6 +86,32 @@ _SENTINEL_VALUES: frozenset[str] = frozenset(
 )
 
 CATEGORY_PRIORITY: list[str] = ["A", "C", "E", "B", "D"]
+
+#: B's cardinality ceiling: strictly more than one distinct value, at most this many.
+#:
+#: Named rather than inlined because the move to a *capped* read made it a claim about
+#: ``serve/fetch.SAMPLE_ROWS_MAX_VALUES`` and not just a number. That cap is 20, strictly above
+#: this 15, so a column that comes back at the cap is known to have **more** than 15 distinct
+#: values rather than merely to have been truncated — the predicate stays exact instead of
+#: degrading into an estimate. If the cap ever drops to 15 or below the two become
+#: indistinguishable, which is why the relationship is written down here.
+_B_MAX_DISTINCT = 15
+
+#: Ceiling on how many governed value reads one :func:`read_observed_values` call issues.
+#:
+#: ``POST /elicitation/generate`` is an admin-triggered, once-per-onboarding action, offline
+#: with respect to every business user's turn, and in the same trust and latency class as the
+#: corpus load that precedes it — so paying a governed round trip per candidate column is the
+#: right trade, not a cost to engineer away. What it must not do is turn one click into an
+#: unbounded number of statements: only keyword-gated columns are read (see
+#: :func:`_value_gated_columns`), but a wide enough schema can have hundreds of ``*_code`` /
+#: ``*_type`` columns, and B and E each keep at most ``limit_per_category`` candidates anyway.
+#:
+#: A constant rather than a knob, for ``SAMPLE_ROWS_MAX_VALUES``'s own stated reason: nothing on
+#: this surface can write a knob, so declaring one would be a control with no writer. The
+#: truncation is deterministic (``_live_tables`` sorts by id, columns follow the table's own
+#: ``columns`` order), so which columns a capped call reads does not move between runs.
+MAX_VALUE_READS = 50
 
 
 def _record_id(scope: str) -> str:
@@ -100,12 +145,103 @@ def _columns_of(table: Any, assets_by_id: dict[str, Any]) -> list[Any]:
     return [c for c in (assets_by_id.get(cid) for cid in table.columns) if c is not None]
 
 
+def _name_hits(column: Any, hints: tuple[str, ...]) -> bool:
+    """Whether ``column``'s physical name contains any of ``hints``. One definition, three
+    readers (B's list, E's list, and the union :func:`_value_gated_columns` reads values for) —
+    so "which columns does this category care about" cannot drift from "which columns get a
+    query issued for them"."""
+    lowered = column.physical_name.lower()
+    return any(hint in lowered for hint in hints)
+
+
+def _value_gated_columns(
+    tables: Sequence[Any], assets_by_id: dict[str, Any]
+) -> list[tuple[Any, Any]]:
+    """``(table, column)`` for every column B or E could possibly ask about, in a fixed order.
+
+    The union of the two keyword gates, evaluated *before* any statement is built, because that
+    is what keeps the cost of a generate call proportional to the columns a category might use
+    rather than to the width of the schema.
+    """
+    return [
+        (table, column)
+        for table in _live_tables(tables)
+        for column in _columns_of(table, assets_by_id)
+        if _name_hits(column, _CATEGORICAL_HINTS) or _name_hits(column, _STATUS_HINTS)
+    ]
+
+
+def read_observed_values(
+    tables: Sequence[Any],
+    assets_by_id: dict[str, Any],
+    *,
+    connector: Any,
+    corpus: Any,
+    policy: Any,
+    max_reads: int = MAX_VALUE_READS,
+) -> tuple[dict[str, tuple[str, ...]], tuple[Any, ...]]:
+    """``({column_id: distinct values}, ledger rows)`` for the columns B and E can use.
+
+    Every read goes through ``serve/fetch.sample_rows``: the same governed executor path the
+    live agent's own ``sample_rows`` tool takes, which builds the statement as a syntax tree
+    (``distinct_values_statement``), runs it through ``prepare()``, and returns an
+    ``attempt_record`` with ``path="sample"``. Reusing that function rather than assembling
+    ``distinct_values_statement`` + ``prepare`` + ``execute`` here is deliberate: a second copy
+    of that body would be a second answer to "what does a governed value read check", and this
+    caller needs *none* of the checks relaxed.
+
+    ``bounds`` licenses exactly the one table the column being sampled belongs to, and nothing
+    else. There is no retrieval to derive a licensed set from — an admin asked for a scan of the
+    semantic layer, not a turn — so the narrowest bound that can name the column at all is the
+    honest one, and it also keeps ``spellings_for`` scoped to a single table (a corpus-wide
+    fold map makes ``name``/``id``/``code`` ambiguous and would refuse almost everything).
+
+    **A refusal skips the column; it never routes around it.** ``check()`` still runs every
+    layer, so an ``excluded`` or ``suspect``-flagged column (under ``hard_block_suspect``) is
+    refused at COLUMNS and simply gets no entry in the returned mapping — which makes it not a
+    candidate. The refusal's ledger row is still returned, because a refused attempt is a
+    governance decision the audit trail owes a row exactly as much as a passing one does. The
+    same is true of a driver failure and of a session with no connector at all: ``sample_rows``
+    already decides what each of those is, and re-deciding any of them here would be the
+    second-source-of-truth this module's own docstring warns about.
+
+    ``sample_rows`` returns its payload as JSON because its other caller is a language model.
+    Parsing it back is the cost of having one implementation of the read instead of two.
+    """
+    from governed_bi.govern.bounds import ToolBounds
+    from governed_bi.serve.fetch import SAMPLE_ROWS_MAX_VALUES, sample_rows
+
+    observed: dict[str, tuple[str, ...]] = {}
+    ledger: list[Any] = []
+    for table, column in _value_gated_columns(tables, assets_by_id)[: max(0, int(max_reads))]:
+        payload, delivered, attempt = sample_rows(
+            column.id,
+            # The cap, not a smaller number: one read serves both categories, and 20 is above
+            # B's own ceiling of 15, which is what keeps its predicate exact (see
+            # :data:`_B_MAX_DISTINCT`).
+            limit=SAMPLE_ROWS_MAX_VALUES,
+            bounds=ToolBounds(licensed=frozenset({table.id})),
+            assets=assets_by_id,
+            connector=connector,
+            corpus=corpus,
+            policy=policy,
+        )
+        if attempt is not None:
+            ledger.append(attempt)
+        if not delivered:
+            continue
+        values = json.loads(payload).get("values") or ()
+        observed[column.id] = tuple(str(v) for v in values if v is not None)
+    return observed, tuple(ledger)
+
+
 def generate_candidate_questions(
     tables: Sequence[Any],
     assets_by_id: dict[str, Any],
     *,
     existing: Sequence[ClarificationRecord] = (),
     limit_per_category: int = 3,
+    observed_values: Mapping[str, tuple[str, ...]] | None = None,
 ) -> list[ClarificationRecord]:
     """Propose a conservative set of category-tagged candidate questions.
 
@@ -113,15 +249,24 @@ def generate_candidate_questions(
     candidate whose ``scope`` already exists among prior ``source="elicitation_wizard"``
     records is dropped before it is returned. Returns only the newly proposed records (the
     caller appends them to the ledger); ``existing`` itself is never mutated or re-returned.
+
+    ``observed_values`` is :func:`read_observed_values`'s mapping, keyed by column id. B and E
+    are the only categories that use it, and a column with no entry — never read, or read and
+    refused — is not a candidate for either. Omitting it entirely is therefore a corpus-only
+    scan that proposes A and C and nothing else, which is the honest result for a caller with
+    no connector to read through rather than a reason to fall back to
+    ``ColumnAsset.sample_values`` (empty on every live-seeded corpus, so a fallback there would
+    be a second, silently-worse source for the same fact).
     """
     live_tables = _live_tables(tables)
     existing_scopes = {r.scope for r in existing if r.source == ELICITATION_SOURCE}
+    observed = observed_values or {}
 
     candidates: list[ClarificationRecord] = []
     candidates += _propose_a(live_tables, assets_by_id, limit_per_category)
     candidates += _propose_c(live_tables, assets_by_id, limit_per_category)
-    candidates += _propose_e(live_tables, assets_by_id, limit_per_category)
-    candidates += _propose_b(live_tables, assets_by_id, limit_per_category)
+    candidates += _propose_e(live_tables, assets_by_id, limit_per_category, observed)
+    candidates += _propose_b(live_tables, assets_by_id, limit_per_category, observed)
     return [c for c in candidates if c.scope not in existing_scopes]
 
 
@@ -216,20 +361,36 @@ def _propose_c(tables: Sequence[Any], assets_by_id: dict[str, Any], limit: int) 
     ][:limit]
 
 
-def _propose_e(tables: Sequence[Any], assets_by_id: dict[str, Any], limit: int) -> list[ClarificationRecord]:
-    """E: for a status/rating-like column whose sample values include a null-like sentinel, ask
-    whether to exclude it by default."""
+def _propose_e(
+    tables: Sequence[Any],
+    assets_by_id: dict[str, Any],
+    limit: int,
+    observed_values: Mapping[str, tuple[str, ...]],
+) -> list[ClarificationRecord]:
+    """E: for a status/rating-like column whose **observed** values include a null-like
+    sentinel, ask whether to exclude it by default.
+
+    **Semantics shifted with the value source, in E's favour.** The old gate scanned
+    ``ColumnAsset.sample_values``, an unordered sample of unstated size that in practice was
+    always empty. The new one scans the first ``SAMPLE_ROWS_MAX_VALUES`` distinct values in
+    ``ORDER BY`` order, so a sentinel that sorts past that cap on a high-cardinality column is
+    missed. That is a real limit and worth stating, but it is strictly better than what it
+    replaces on both counts: the values are real, and *which* values are looked at is
+    deterministic rather than whatever a sampler happened to have kept. It is also barely
+    reachable in practice — this gate only fires on status/rating-like columns, whose whole
+    point is a small closed vocabulary, and the sentinels it looks for (``n/a``, ``null``,
+    ``pending``, ``-1``, …) sort early in most of them.
+    """
     out: list[ClarificationRecord] = []
     for table in tables:
         for column in _columns_of(table, assets_by_id):
-            name_lower = column.physical_name.lower()
-            if not any(hint in name_lower for hint in _STATUS_HINTS):
+            if not _name_hits(column, _STATUS_HINTS):
                 continue
             sentinel = next(
                 (
-                    str(v)
-                    for v in column.sample_values
-                    if str(v).strip().lower() in _SENTINEL_VALUES
+                    v
+                    for v in observed_values.get(column.id) or ()
+                    if v.strip().lower() in _SENTINEL_VALUES
                 ),
                 None,
             )
@@ -266,17 +427,27 @@ def _propose_e(tables: Sequence[Any], assets_by_id: dict[str, Any], limit: int) 
     return out
 
 
-def _propose_b(tables: Sequence[Any], assets_by_id: dict[str, Any], limit: int) -> list[ClarificationRecord]:
+def _propose_b(
+    tables: Sequence[Any],
+    assets_by_id: dict[str, Any],
+    limit: int,
+    observed_values: Mapping[str, tuple[str, ...]],
+) -> list[ClarificationRecord]:
     """B: for a small-cardinality categorical column, a checklist of the actual distinct values
-    seen (``ColumnAsset.sample_values`` — no live DB query needed for this MVP)."""
+    the database returned (:func:`read_observed_values`, through the governed sample path).
+
+    The cardinality window is unchanged and, unlike E's sentinel gate, exactly as strict as it
+    was: ``SELECT DISTINCT … LIMIT 20`` returns ``min(cardinality, 20)`` rows, and 20 is above
+    :data:`_B_MAX_DISTINCT`, so 16 or more rows back means the column really has more than 15
+    distinct values and fewer means the count is exact.
+    """
     out: list[ClarificationRecord] = []
     for table in tables:
         for column in _columns_of(table, assets_by_id):
-            name_lower = column.physical_name.lower()
-            if not any(hint in name_lower for hint in _CATEGORICAL_HINTS):
+            if not _name_hits(column, _CATEGORICAL_HINTS):
                 continue
-            values = sorted({str(v) for v in column.sample_values if str(v).strip()})
-            if not (1 < len(values) <= 15):
+            values = sorted({v for v in observed_values.get(column.id) or () if v.strip()})
+            if not (1 < len(values) <= _B_MAX_DISTINCT):
                 continue
             scope = f"elicitation:valuemap:{table.physical_name}.{column.physical_name}"
             out.append(
