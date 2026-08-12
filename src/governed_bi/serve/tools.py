@@ -216,6 +216,52 @@ def _delivered(runtime: Any, payload: str) -> dict[str, Any]:
     return {"tool_delivered": {_call_id(runtime): payload_digest(payload)}}
 
 
+def _log_live_clarification(
+    corpus_root: Any,
+    *,
+    clarification_id: str,
+    question: str,
+    choices: list[dict[str, str]] | None,
+    allow_freeform: bool,
+) -> None:
+    """Durably log an unanswered ``ask_user`` question, before ``interrupt`` pauses the turn
+    (UtkuAI, ported from v1's ``analyst/tools.py::_log_live_clarification``).
+
+    So the question survives even if the live turn is abandoned and nobody ever resumes it --
+    it still shows up in the admin's ``/clarifications`` ledger as homework, regardless of what
+    happens to the live turn. No-op when this session has no ``corpus_root`` (eval/offline
+    callers), the same precondition ``api/routes.py``'s own ``/clarifications`` write route
+    already gates on.
+
+    **Idempotent on ``clarification_id``.** ``interrupt()`` re-runs this function from the top
+    on every resume within one turn (LangGraph replays the task that was suspended on the
+    pending interrupt), so this runs again on every resume of the same question -- a record
+    already logged for this id is left alone rather than duplicated.
+    """
+    if corpus_root is None:
+        return
+    from governed_bi.curator.clarifications import (
+        ClarificationRecord,
+        load_clarifications,
+        write_clarifications,
+    )
+
+    records = load_clarifications(corpus_root)
+    if any(r.id == clarification_id for r in records):
+        return
+    records.append(
+        ClarificationRecord(
+            id=clarification_id,
+            scope=f"live_chat:{clarification_id}",
+            question=question,
+            source="live_chat",
+            choices=tuple(choices) if choices else None,
+            allow_freeform=allow_freeform,
+        )
+    )
+    write_clarifications(corpus_root, records)
+
+
 def build_tools(
     state: Mapping[str, Any],
     config: Mapping[str, Any] | None,
@@ -234,6 +280,9 @@ def build_tools(
     # is a wiring failure and ``_run_query`` raises on it; coercing it to ``None`` here
     # is what let the default below stand in for it (G1).
     corpus = cfg.get("corpus")
+    # UtkuAI, ported (Phase 1b): the offline Clarifications ledger's own precondition --
+    # ``session.corpus_root is not None`` -- matching every write route in ``api/routes.py``.
+    corpus_root = cfg.get("corpus_root")
     read_cap = fetch.read_body_cap(state, cfg)
     book = AttemptBook(policy.run_query_attempt_cap)
     turn_id = str(state.get("turn_id") or "")
@@ -439,17 +488,39 @@ def build_tools(
         }
         if choices:
             interrupt_payload["choices"] = choices
+        # UtkuAI, ported (Phase 1b): survives an abandoned turn nobody ever resumes -- the
+        # question becomes admin homework regardless. Must run before ``interrupt`` and is
+        # itself idempotent, because ``interrupt`` re-runs this function from the top on every
+        # resume (see the helper's own docstring).
+        #
+        # ``asyncio.to_thread``, not a direct call: this is disk I/O inside an *async* tool
+        # body, on the event loop -- the same class of pitfall ``serve/events.py``'s own
+        # "function-level import trips blockbuster's os.getcwd" comment already flags -- and
+        # matches every other disk/network-touching call in this module (``_fetch``,
+        # ``run_query``), none of which call their blocking work directly either.
+        await asyncio.to_thread(
+            _log_live_clarification,
+            corpus_root,
+            clarification_id=clarification_id,
+            question=question,
+            choices=choices,
+            allow_freeform=allow_freeform,
+        )
         answer = interrupt(interrupt_payload)
         text = _clarification_answer(answer)
-        declined = (
-            bool(answer.get("declined") or answer.get("defer"))
-            if isinstance(answer, Mapping)
-            else False
-        )
+        resume_reply = answer if isinstance(answer, Mapping) else {}
+        # Phase 1b (this initiative): `declined` and `deferred` used to collapse onto one
+        # `declined` flag (`defer` was an alias -- see `_clarification_answer`'s prior
+        # docstring). They no longer do: a decline still fails the turn closed exactly as
+        # before (unchanged), but a defer now lets the turn continue on the agent's own best
+        # judgment with a downgraded-reliability caveat (`serve/nodes/stamp.py::_reliability`),
+        # which needs its own, distinct signal on the ledger row rather than reusing `declined`.
+        declined = bool(resume_reply.get("declined"))
+        deferred = bool(resume_reply.get("defer"))
         emit(
             kind="tool",
             step="ask_user",
-            status="declined" if declined else "ok",
+            status="declined" if declined else "deferred" if deferred else "ok",
             event_id=tool_event_id("ask_user", _call_id(runtime)),
             detail=started,
         )
@@ -472,6 +543,10 @@ def build_tools(
                     # the same `declined` value already computed above for the emitted
                     # status; plumbing it through is cheaper than re-deriving it from prose.
                     "declined": declined,
+                    # Phase 1b: distinct from `declined` -- a defer, unlike a decline, does not
+                    # skip mining (`mine_corpus.py`'s own gate checks both flags) and does feed
+                    # `stamp.py`'s per-turn reliability downgrade.
+                    "deferred": deferred,
                 }
             },
         )
@@ -511,16 +586,36 @@ def build_tools(
     return [read_body, inspect_schema, sample_rows, run_query, ask_user, state_assumption]
 
 
+#: Unchanged from before Phase 1b -- decline keeps failing the turn closed on this exact
+#: sentence (no code forces a refusal on it; the model reads it and stops on its own, and that
+#: emergent behavior is the product decision left untouched here).
+_CLARIFY_DECLINED_TEXT = "The user declined to answer this clarification."
+
+#: UtkuAI, ported from v1's ``CLARIFY_DEFERRED`` sentinel (``analyst/tools.py``): unlike the
+#: decline sentence above, this is the actual instruction the model is meant to act on, not a
+#: defensive fallback -- it is what makes the turn continue on the agent's own judgment instead
+#: of stopping (Phase 1b, this initiative).
+_CLARIFY_DEFERRED_TEXT = (
+    "The user could not answer this now and deferred it to admin review. Proceed using your "
+    "own best judgment for this specific point, and explicitly say in your final answer that "
+    "this assumption is unconfirmed and pending admin review."
+)
+
+
 def _clarification_answer(resume: Any) -> str:
     """Human answer from a bare string or structured ``{answer|choice_id|declined|defer}`` reply.
 
-    ``defer`` (governed-bi-ui's "I don't know -- ask the admin later" button) is an alias of
-    ``declined``: both mean the user answered nothing, and neither must be read as a real
-    empty-string answer.
+    ``declined`` and ``defer`` no longer collapse onto one sentinel (Phase 1b, this
+    initiative): a decline still stops the turn on the same sentence as before, unchanged --
+    but a defer now hands the model an instruction to keep going on its own best judgment,
+    flagged unconfirmed, rather than a second spelling of "stop." See ``ask_user``'s own
+    ``deferred`` flag for the ledger-facing half of this distinction.
     """
     if isinstance(resume, Mapping):
-        if resume.get("declined") or resume.get("defer"):
-            return "The user declined to answer this clarification."
+        if resume.get("declined"):
+            return _CLARIFY_DECLINED_TEXT
+        if resume.get("defer"):
+            return _CLARIFY_DEFERRED_TEXT
         for key in ("answer", "choice_id", "text"):
             value = resume.get(key)
             if value:

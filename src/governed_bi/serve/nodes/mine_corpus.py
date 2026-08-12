@@ -82,8 +82,15 @@ def mine_corpus_node(state: dict, config: RunnableConfig) -> dict:
         mined_ids.append(str(clarification_id))
 
         # Phase 2 gate: a ranking/superlative reading is a judgment call for the one question
-        # that asked it, not a durable schema fact. A decline carries no answer to mine.
-        if record.get("basis") == "ranking_ambiguity" or record.get("declined"):
+        # that asked it, not a durable schema fact. A decline carries no answer to mine, and
+        # neither does a defer (Phase 1b, this initiative) -- its `answer` is the agent's own
+        # best-guess instruction text (`serve/tools.py::_CLARIFY_DEFERRED_TEXT`), not the
+        # user's, and mining it would write that instruction into the corpus as a fact.
+        if (
+            record.get("basis") == "ranking_ambiguity"
+            or record.get("declined")
+            or record.get("deferred")
+        ):
             continue
         answer_text = str(record.get("answer") or "")
         question = str(record.get("question") or "")

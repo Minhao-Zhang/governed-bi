@@ -6,6 +6,7 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
+from governed_bi.corpus.schema import Reliability, ReliabilityStatus
 from governed_bi.govern.guard import GUARD_PUBLIC_MESSAGE
 from governed_bi.govern.layers import GUARDRAIL_REFUSED_BY
 from governed_bi.govern.ledger import ExecutionRecord
@@ -122,6 +123,40 @@ def _attempts(execution: Mapping[str, Any] | Any) -> list[Any]:
     if not isinstance(execution, Mapping):
         return []
     return answering_attempts(list(execution.get("attempts") or ()))
+
+
+def _reliability(state: Mapping[str, Any]) -> dict[str, Any] | None:
+    """This turn's reliability caveat, or ``None`` on a clean turn.
+
+    UtkuAI, ported (Phase 1b, this initiative): a deferred ``ask_user`` clarification means the
+    answer rests on the agent's own unconfirmed guess for that point, not a guardrail failure --
+    this reuses ``corpus/schema.py``'s ``Reliability``/``ReliabilityStatus`` shape (a per-
+    *column* caveat there) at the turn level rather than inventing a parallel vocabulary,
+    because it is the same "argues against this, but the caller still sees it" shape
+    ``ReliabilityStatus.suspect`` already gives a column.
+
+    Scoped to *this* turn only, like :func:`_usage_for_turn` above -- ``state["clarifications"]``
+    accumulates across the whole thread (``operator.add``), so an unscoped read would keep
+    flagging every later turn on the thread as suspect long after the deferred question was
+    actually asked and answered-around.
+    """
+    turn_id = state.get("turn_id")
+    deferred = [
+        c
+        for c in (state.get("clarifications") or ())
+        if isinstance(c, Mapping) and c.get("turn_id") == turn_id and c.get("deferred")
+    ]
+    if not deferred:
+        return None
+    reliability = Reliability(
+        status=ReliabilityStatus.suspect,
+        note="; ".join(
+            f"Deferred rather than answered: {c.get('question')!r} -- the agent proceeded on "
+            "its own best-guess judgment for this point; pending admin review."
+            for c in deferred
+        ),
+    )
+    return {"status": reliability.status.value, "note": reliability.note}
 
 
 def _path_signals(
@@ -377,6 +412,11 @@ def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
         # assumptions stated" as a real (and itself informative) empty state rather than an
         # absent field it has to null-check.
         "assumptions": list(state.get("assumptions") or []),
+        # UtkuAI, ported (Phase 1b): a deferred clarification's downgrade caveat, or ``None``
+        # on a clean turn. Same class as ``assumptions`` above (what the turn's answer *says*,
+        # not a durable measured field) and for the same reason -- lives on the live answer,
+        # stays out of ``record``.
+        "reliability": _reliability(state),
     }
     # The turn's one ``final`` event (ADR 0010 §1). Emitted here rather than from ``wrap.py``
     # because ``stamp`` is the one node deliberately left unwrapped — wrapping the recorder

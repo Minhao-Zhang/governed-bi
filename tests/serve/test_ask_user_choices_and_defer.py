@@ -129,26 +129,27 @@ def test_ask_user_interrupt_payload_carries_basis_choices_and_allow_freeform() -
     assert payload["allow_freeform"] is True
 
 
-def test_clarification_answer_treats_defer_as_declined() -> None:
-    """Bug 3: governed-bi-ui's "I don't know -- ask the admin later" button sends
-    ``{"clarification_id": ..., "defer": True}`` -- a distinct variant from
-    ``{"declined": True}`` in ``lib/types.ts``'s ``ClarificationResponse`` union.
-    ``_clarification_answer`` used to check only ``declined``, so a ``defer`` payload matched
-    neither ``declined`` nor ``answer``/``choice_id``/``text`` and silently fell through to
-    ``""`` -- an empty-string "answer" indistinguishable from the user genuinely answering
-    nothing. Both must produce the identical declined-sentinel text.
+def test_clarification_answer_no_longer_treats_defer_as_declined() -> None:
+    """Phase 1b (this initiative) reverses Bug 3's fix on purpose: a decline and a defer used
+    to collapse onto one declined-sentinel text (bug 3's own fix, see the superseded test this
+    replaces), but the product decision is now that they diverge -- decline keeps stopping the
+    turn on the exact same sentence as before; defer instead instructs the model to keep going
+    on its own best judgment, flagged unconfirmed.
     """
     from governed_bi.serve.tools import _clarification_answer
 
     declined_text = _clarification_answer({"declined": True})
     defer_text = _clarification_answer({"defer": True})
-    assert defer_text == declined_text == "The user declined to answer this clarification."
+    assert declined_text == "The user declined to answer this clarification."
+    assert defer_text != declined_text
+    assert "best judgment" in defer_text
+    assert "unconfirmed" in defer_text
 
 
-def test_ask_user_resume_with_defer_is_recorded_as_declined() -> None:
+def test_ask_user_resume_with_defer_is_recorded_distinctly_from_declined() -> None:
     """End to end: resuming a paused ``ask_user`` with ``{"defer": True}`` must record
-    ``declined: True`` on the clarification, exactly as ``{"declined": True}`` already does --
-    not an answered turn carrying an empty-string answer.
+    ``deferred: True`` / ``declined: False`` on the clarification (Phase 1b) -- no longer the
+    same ``declined: True`` a real ``{"declined": True}`` resume produces.
     """
     model = ScriptedChatModel(
         responses=[
@@ -163,7 +164,7 @@ def test_ask_user_resume_with_defer_is_recorded_as_declined() -> None:
                     }
                 ],
             ),
-            AIMessage(content="ok"),
+            AIMessage(content="Assuming 2024 (unconfirmed), revenue is $18,496."),
         ]
     )
     graph = compile_graph()
@@ -201,5 +202,140 @@ def test_ask_user_resume_with_defer_is_recorded_as_declined() -> None:
         graph, config=config, identity={"token": token}, answer={"defer": True}
     )
     clars = done.get("clarifications") or []
-    assert clars and clars[0]["declined"] is True, clars
+    assert clars, clars
+    assert clars[0]["declined"] is False, clars
+    assert clars[0]["deferred"] is True, clars
+    from governed_bi.serve.tools import _CLARIFY_DEFERRED_TEXT
+
+    assert clars[0]["answer"] == _CLARIFY_DEFERRED_TEXT
+
+
+def test_ask_user_resume_with_decline_still_fails_the_turn_closed_unchanged() -> None:
+    """Decline regression (Phase 1b): a real ``{"declined": True}`` resume must be byte-for-
+    byte the same as before this initiative -- same sentinel text, ``declined: True`` /
+    ``deferred: False`` on the clarification, and no reliability caveat on the answer (that
+    caveat is defer-only). The turn "fails closed" only in the sense this repo's investigation
+    found it always has: the model reads the sentinel and stops on its own -- nothing here
+    forces a refusal at the code level, and this test is not asserting one; it locks in the
+    existing wiring untouched.
+    """
+    model = ScriptedChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "ask_user",
+                        "args": {"question": "which year?", "basis": "data_definition"},
+                        "id": "c1",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(content="I can't answer without knowing the year, so I'm not going to guess."),
+        ]
+    )
+    graph = compile_graph()
+    token = "identity-decline"
+    config = {
+        "configurable": {
+            "thread_id": "t-hitl-decline",
+            "policy": GovernancePolicy(guard_rules_enabled={}),
+            "agent_model": model,
+        }
+    }
+    turn = {
+        "question": "revenue?",
+        "thread_id": "t-hitl-decline",
+        "turn_index": 1,
+        "turn_id": "turn-hitl-decline",
+        "run_id": "r",
+        "question_id": "q",
+        "db_id": "sales",
+        "attempt_id": "a",
+        "corpus_content_hash": "c",
+        "prompt_set_hash": "p",
+        "knobs_resolved": {},
+        "n_re_served": 0,
+        "facet_route_hits": [("facet_schema", "sales", 1.0)],
+        "messages": [],
+        "usage": [],
+        "identity": {"token": token},
+        "clarifications": [],
+    }
+    paused = graph.invoke(turn, config)
+    assert paused.get("__interrupt__"), "precondition: ask_user paused the turn"
+
+    done = resume_clarification(
+        graph, config=config, identity={"token": token}, answer={"declined": True}
+    )
+    clars = done.get("clarifications") or []
+    assert clars, clars
+    assert clars[0]["declined"] is True, clars
+    assert clars[0]["deferred"] is False, clars
     assert clars[0]["answer"] == "The user declined to answer this clarification."
+    assert done["answer"]["reliability"] is None, done["answer"]
+
+
+def test_ask_user_defer_lets_the_turn_continue_with_a_downgraded_reliability_caveat() -> None:
+    """Defer diverges from decline (Phase 1b): the turn completes with a real answer (not a
+    refusal), and that answer carries a visible reliability-downgrade caveat -- reusing
+    ``corpus/schema.py``'s ``Reliability``/``ReliabilityStatus`` shape at the turn level
+    (``serve/nodes/stamp.py::_reliability``).
+    """
+    model = ScriptedChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "ask_user",
+                        "args": {"question": "which year?", "basis": "data_definition"},
+                        "id": "c1",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(content="Assuming 2024 (unconfirmed), revenue is $18,496."),
+        ]
+    )
+    graph = compile_graph()
+    token = "identity-defer-reliability"
+    config = {
+        "configurable": {
+            "thread_id": "t-hitl-defer-reliability",
+            "policy": GovernancePolicy(guard_rules_enabled={}),
+            "agent_model": model,
+        }
+    }
+    turn = {
+        "question": "revenue?",
+        "thread_id": "t-hitl-defer-reliability",
+        "turn_index": 1,
+        "turn_id": "turn-hitl-defer-reliability",
+        "run_id": "r",
+        "question_id": "q",
+        "db_id": "sales",
+        "attempt_id": "a",
+        "corpus_content_hash": "c",
+        "prompt_set_hash": "p",
+        "knobs_resolved": {},
+        "n_re_served": 0,
+        "facet_route_hits": [("facet_schema", "sales", 1.0)],
+        "messages": [],
+        "usage": [],
+        "identity": {"token": token},
+        "clarifications": [],
+    }
+    paused = graph.invoke(turn, config)
+    assert paused.get("__interrupt__"), "precondition: ask_user paused the turn"
+
+    done = resume_clarification(
+        graph, config=config, identity={"token": token}, answer={"defer": True}
+    )
+    assert done["answer"]["outcome"] in {"answered", "clarification"}, done["answer"]
+    reliability = done["answer"]["reliability"]
+    assert reliability is not None, "a deferred clarification must downgrade the answer's reliability"
+    assert reliability["status"] == "suspect"
+    assert "which year?" in reliability["note"]
+    assert "pending admin review" in reliability["note"]

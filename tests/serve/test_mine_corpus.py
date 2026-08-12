@@ -62,6 +62,7 @@ def _clarification(
     answer: str = "90 days",
     basis: str = "data_definition",
     declined: bool = False,
+    deferred: bool = False,
 ) -> dict[str, Any]:
     return {
         "clarification_id": clarification_id,
@@ -71,6 +72,7 @@ def _clarification(
         "turn_id": "turn-1",
         "basis": basis,
         "declined": declined,
+        "deferred": deferred,
     }
 
 
@@ -139,6 +141,27 @@ def test_mines_nothing_on_a_decline_even_with_the_knob_on(tmp_path: Path) -> Non
     from governed_bi.corpus.store import load
 
     clar = _clarification(declined=True, answer="The user declined to answer this clarification.")
+    update = mine_corpus_node(_state([clar]), _config(tmp_path))
+    assert update == {"clarifications_mined": ["c1"]}
+    assets, _ = load(tmp_path)
+    assert assets == []
+
+
+def test_mines_nothing_on_a_defer_even_with_the_knob_on(tmp_path: Path) -> None:
+    """Phase 1b (this initiative): a deferred clarification's ``answer`` is the agent's own
+    best-guess instruction text (``serve/tools.py::_CLARIFY_DEFERRED_TEXT``), not the user's --
+    mining it would write that instruction into the corpus as if it were a fact.
+    """
+    from governed_bi.corpus.store import load
+
+    clar = _clarification(
+        deferred=True,
+        answer=(
+            "The user could not answer this now and deferred it to admin review. Proceed "
+            "using your own best judgment for this specific point, and explicitly say in "
+            "your final answer that this assumption is unconfirmed and pending admin review."
+        ),
+    )
     update = mine_corpus_node(_state([clar]), _config(tmp_path))
     assert update == {"clarifications_mined": ["c1"]}
     assets, _ = load(tmp_path)
