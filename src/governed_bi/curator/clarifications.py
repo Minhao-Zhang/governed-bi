@@ -39,6 +39,7 @@ __all__ = [
     "resolve_answer_text",
     "answer_clarification",
     "mark_converted_to_corpus",
+    "append_if_new_scope",
 ]
 
 
@@ -201,7 +202,20 @@ def resolve_answer_text(record: ClarificationRecord) -> str | None:
     it for the same reason — the text it folds into the corpus must be the same text a caller
     would have rendered, not a second reduction of ``answer_choice_id``/``answer`` that could
     disagree with it.
+
+    **Category-tagged bypass (Setup Wizard, Phase 2), ported from v1's own
+    ``resolve_answer_text`` unchanged.** A ``category``-tagged record's ``answer`` is already a
+    fully composed, self-contained sentence
+    (``curator/elicitation.py::compose_elicitation_answer_text``, written into ``answer`` at
+    answer time by ``api/curation_routes.py::answer_clarification_route``) — the label+freeform
+    concatenation below is specifically what would corrupt it: a bare picked-choice label like
+    ``"sales.total_amount"`` means nothing on its own, which is the whole reason the composed
+    sentence exists, and gluing the label back onto it a second time (``"sales.total_amount —
+    'revenue' maps to sales.total_amount."``) is the "choice-picked answer disappears into a
+    duplicate" bug class this module's docstring already names for the opposite input shape.
     """
+    if record.category is not None:
+        return record.answer
     label: str | None = None
     if record.answer_choice_id and record.choices:
         for choice in record.choices:
@@ -279,3 +293,22 @@ def mark_converted_to_corpus(corpus_root: Path | str, clarification_id: str) -> 
     Raises :class:`ClarificationNotFound` on an unknown id.
     """
     return _replace_record(corpus_root, clarification_id, converted_to_corpus=True)
+
+
+def append_if_new_scope(corpus_root: Path | str, record: ClarificationRecord) -> ClarificationRecord | None:
+    """Append ``record`` to the ledger unless a record with the same ``scope`` already exists.
+
+    Returns the appended record, or ``None`` when nothing was written. Idempotent-by-scope,
+    matching ``serve/tools.py::_log_live_clarification``'s idempotent-by-id discipline for the
+    live ledger write — the offline-mint equivalent for a record whose identity is its
+    ``scope``, not a caller-supplied id: ``curator/elicitation.py::maybe_generate_join_followup``
+    (Setup Wizard, Phase 2) mints a fresh D follow-up record from scratch on every A answer that
+    triggers it, and this is what stops a second, differently-worded A answer that lands on the
+    same table pair from duplicating the same join question.
+    """
+    records = load_clarifications(corpus_root)
+    if any(r.scope == record.scope for r in records):
+        return None
+    records.append(record)
+    write_clarifications(corpus_root, records)
+    return record

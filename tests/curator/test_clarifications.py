@@ -231,3 +231,78 @@ def test_mark_converted_to_corpus_leaves_other_fields_untouched(tmp_path: Path) 
 
     assert updated.answer == "90 days"
     assert updated.basis == "data_definition"
+
+
+# ── resolve_answer_text's category-tagged bypass (Setup Wizard, Phase 2) ───────────────────
+
+
+def test_resolve_answer_text_returns_a_category_tagged_records_answer_verbatim() -> None:
+    """A category-tagged record's ``answer`` is already a fully composed, self-contained
+    sentence (``curator/elicitation.py::compose_elicitation_answer_text``, written at answer
+    time) -- the generic picked-choice-label-plus-freeform concatenation below would lose that
+    context (a bare label like ``"payments.revenue_amount"`` means nothing on its own), so a
+    category-tagged record skips it entirely and returns ``answer`` untouched.
+    """
+    from governed_bi.curator.elicitation import compose_elicitation_answer_text
+    from governed_bi.curator.clarifications import resolve_answer_text
+
+    composed = compose_elicitation_answer_text(
+        _record(
+            category="A",
+            choices=({"id": "payments.revenue_amount", "label": "payments.revenue_amount"},),
+        ),
+        choice_id="payments.revenue_amount",
+    )
+    rec = _record(
+        category="A",
+        answer_choice_id="payments.revenue_amount",
+        choices=({"id": "payments.revenue_amount", "label": "payments.revenue_amount"},),
+        answer=composed,
+    )
+    # Without the bypass this would double up as "payments.revenue_amount — 'revenue' maps to
+    # payments.revenue_amount." -- the picked choice's own label glued onto the composed
+    # sentence that already names it.
+    assert resolve_answer_text(rec) == composed
+    assert resolve_answer_text(rec) == "'orders' maps to payments.revenue_amount."
+
+
+def test_resolve_answer_text_bypass_ignores_choices_entirely_for_a_category_tagged_record() -> None:
+    from governed_bi.curator.clarifications import resolve_answer_text
+
+    rec = _record(
+        category="E",
+        answer_choice_id="exclude",
+        choices=({"id": "exclude", "label": "some label that must not appear"},),
+        answer="orders.review_status: apply this exclusion by default.",
+    )
+    assert resolve_answer_text(rec) == "orders.review_status: apply this exclusion by default."
+
+
+# ── append_if_new_scope (Setup Wizard, Phase 2): idempotent-by-scope ledger append ──────────
+
+
+def test_append_if_new_scope_appends_and_returns_the_record(tmp_path: Path) -> None:
+    from governed_bi.curator.clarifications import append_if_new_scope, load_clarifications
+
+    record = _record(id="q001", scope="elicitation:join:orders:payments")
+    appended = append_if_new_scope(tmp_path, record)
+    assert appended == record
+    (on_disk,) = load_clarifications(tmp_path)
+    assert on_disk == record
+
+
+def test_append_if_new_scope_is_a_no_op_when_the_scope_already_exists(tmp_path: Path) -> None:
+    from governed_bi.curator.clarifications import (
+        append_if_new_scope,
+        load_clarifications,
+        write_clarifications,
+    )
+
+    write_clarifications(tmp_path, [_record(id="q001", scope="elicitation:join:orders:payments")])
+    second = _record(id="q002", scope="elicitation:join:orders:payments")
+    appended = append_if_new_scope(tmp_path, second)
+
+    assert appended is None
+    records = load_clarifications(tmp_path)
+    assert len(records) == 1, "a second record with the same scope must not have been written"
+    assert records[0].id == "q001"

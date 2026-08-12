@@ -435,11 +435,35 @@ def answer_clarification_route(clarification_id: str, body: dict[str, Any] | Non
     (basis gate + ``converted_to_corpus`` idempotency both live on that helper; see its own
     docstring). ``known_assets`` is a fresh ``_reload_assets`` disk read, not the frozen
     ``session.assets_by_id`` -- same reason ``/corpus/conflicts`` reloads rather than trusts it.
+
+    **Setup Wizard composition (Phase 2)**, answering a category-tagged (``elicitation_wizard``)
+    candidate: the record's own category decides how ``choice_id``/``choice_ids``/``answer`` are
+    reduced to text (``curator/elicitation.py::compose_elicitation_answer_text``) rather than the
+    generic picked-label/freeform concatenation ``resolve_answer_text`` falls back to for every
+    other record -- computed here, against the record as it stood *before* this call, and handed
+    to ``answer_clarification`` as the ``answer`` it writes so every downstream reader
+    (this row, the ledger view, and the fold below, via ``resolve_answer_text``'s own
+    ``category is not None`` bypass) sees the same composed sentence.
+
+    **D join-path auto-follow-up (Phase 2)**: right after an A-category answer names a real
+    picked column (``choice_id`` set), ``curator/elicitation.py::maybe_generate_join_followup``
+    checks whether it lands on a different table than the question expected and, if so, mints a
+    new open D-category record -- appended to the ledger (idempotent by scope) for a later
+    ``GET /clarifications`` or ``GET /elicitation/candidates`` to pick up.
     """
     from fastapi import HTTPException
 
     from governed_bi.curator.clarification import fold_ledger_answer_into_corpus
-    from governed_bi.curator.clarifications import ClarificationNotFound, answer_clarification
+    from governed_bi.curator.clarifications import (
+        ClarificationNotFound,
+        answer_clarification,
+        append_if_new_scope,
+        load_clarifications,
+    )
+    from governed_bi.curator.elicitation import (
+        compose_elicitation_answer_text,
+        maybe_generate_join_followup,
+    )
 
     session = _curation_session()
     if session.corpus_root is None:
@@ -453,6 +477,15 @@ def answer_clarification_route(clarification_id: str, body: dict[str, Any] | Non
         raise HTTPException(
             status_code=422, detail="one of choice_id, choice_ids, or answer is required"
         )
+
+    existing = next(
+        (r for r in load_clarifications(session.corpus_root) if r.id == clarification_id), None
+    )
+    if existing is not None and existing.category is not None:
+        answer = compose_elicitation_answer_text(
+            existing, choice_id=choice_id, choice_ids=choice_ids, freeform=answer
+        )
+
     try:
         record = answer_clarification(
             session.corpus_root,
@@ -464,6 +497,12 @@ def answer_clarification_route(clarification_id: str, body: dict[str, Any] | Non
         )
     except ClarificationNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if record.category == "A" and choice_id is not None:
+        followup = maybe_generate_join_followup(record, choice_id)
+        if followup is not None:
+            append_if_new_scope(session.corpus_root, followup)
+
     record = fold_ledger_answer_into_corpus(
         record,
         agent_model=session.agent_model,
@@ -473,4 +512,64 @@ def answer_clarification_route(clarification_id: str, body: dict[str, Any] | Non
         write_model=session.knobs_resolved.get("llm_model"),
     )
     return _clarification_row(record)
+
+
+# ── /elicitation: the Phase 1 Setup Wizard's HTTP surface (Phase 2, UtkuAI v1 ported) ──────
+#
+# `curator/elicitation.py`'s heuristic generator, exposed for an admin onboarding flow.
+# Answering a generated candidate is not a separate route -- every category-tagged record
+# above is a plain `ClarificationRecord` and is answered through the exact same
+# `POST /clarifications/{id}/answer` (see that route's own "Setup Wizard composition" section).
+
+
+@router.post("/elicitation/generate")
+def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Run the heuristic candidate generator against this session's current tables and append
+    any newly proposed candidates to the offline clarifications ledger.
+
+    Gated the same way the ledger's own write route is (``session.corpus_root is not None``,
+    no ``can_edit`` -- this is a read/propose action over the semantic layer, not the unrelated
+    free-form corpus editor surface ``can_edit`` gates).
+
+    Idempotent: a candidate whose ``scope`` already exists among prior
+    ``source="elicitation_wizard"`` ledger records (open or answered) is never proposed twice --
+    ``curator/elicitation.py::generate_candidate_questions``'s own dedup, over the full
+    ``existing`` ledger passed in here.
+    """
+    from fastapi import HTTPException
+
+    from governed_bi.curator.clarifications import load_clarifications, write_clarifications
+    from governed_bi.curator.elicitation import generate_candidate_questions
+
+    session = _curation_session()
+    if session.corpus_root is None:
+        raise HTTPException(status_code=409, detail="this session has no corpus_root to write back to")
+
+    tables = [a for a in session.assets_by_id.values() if a.asset_type.value == "table"]
+    existing = load_clarifications(session.corpus_root)
+    new_records = generate_candidate_questions(tables, session.assets_by_id, existing=existing)
+    if new_records:
+        write_clarifications(session.corpus_root, [*existing, *new_records])
+    return {
+        "generated": [_clarification_row(r) for r in new_records],
+        "n_generated": len(new_records),
+    }
+
+
+@router.get("/elicitation/candidates")
+def elicitation_candidates() -> list[dict[str, Any]]:
+    """Every Setup Wizard candidate (``source == "elicitation_wizard"``), open **and**
+    answered -- the wizard needs both to show onboarding progress, unlike ``/clarifications``'s
+    own optional ``status`` filter.
+
+    ``session.corpus_root is None`` returns an empty list, matching ``/clarifications``'s own
+    handling of "nothing to read here."
+    """
+    from governed_bi.curator.clarifications import load_clarifications
+
+    session = _curation_session()
+    if session.corpus_root is None:
+        return []
+    records = load_clarifications(session.corpus_root)
+    return [_clarification_row(r) for r in records if r.source == "elicitation_wizard"]
 
