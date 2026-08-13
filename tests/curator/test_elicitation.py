@@ -689,7 +689,7 @@ def test_compose_answer_text_category_b_via_freeform() -> None:
     assert "Anything in North America" in text
 
 
-def test_compose_answer_text_category_d_is_always_freeform() -> None:
+def test_compose_answer_text_category_d_prefers_freeform() -> None:
     from governed_bi.curator.clarifications import ClarificationRecord
     from governed_bi.curator.elicitation import compose_elicitation_answer_text
 
@@ -697,6 +697,36 @@ def test_compose_answer_text_category_d_is_always_freeform() -> None:
     assert compose_elicitation_answer_text(rec, freeform="orders.id = payments.order_id") == (
         "orders.id = payments.order_id"
     )
+
+
+def test_compose_answer_text_category_d_keeps_a_picked_choice() -> None:
+    """**Found live** on real ``app_store``: this branch returned freeform only, and
+    ``curator/gaps.py``'s near-duplicate cluster question is a D *with a column picker*. So
+    answering the wizard's highest-severity question by clicking a choice composed ``""``,
+    which ``fold_ledger_answer_into_corpus``'s "no answer text" gate then read as nothing to
+    fold — the decision was recorded as answered and lost.
+    """
+    from governed_bi.curator.clarifications import ClarificationRecord
+    from governed_bi.curator.elicitation import compose_elicitation_answer_text
+
+    rec = ClarificationRecord(
+        id="q006",
+        scope="elicitation:duplicate:playstore.Content Rating|content_rating",
+        question="Which one is authoritative?",
+        category="D",
+        ui_modality="column_picker",
+        choices=(
+            {"id": "playstore.Content Rating", "label": "playstore.Content Rating is authoritative"},
+            {"id": "different_fields", "label": "They are different fields, both correct"},
+        ),
+    )
+    assert compose_elicitation_answer_text(rec, choice_id="playstore.Content Rating") == (
+        "playstore.Content Rating is authoritative"
+    )
+    # Freeform still wins when both arrive, matching every other category's branch.
+    assert compose_elicitation_answer_text(
+        rec, choice_id="playstore.Content Rating", freeform="neither; both are imports"
+    ) == "neither; both are imports"
 
 
 # ── severity / audience classification (utku-ai-setup-wizard-gap-model.md § "Gap-type ×

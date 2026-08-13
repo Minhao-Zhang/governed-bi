@@ -642,6 +642,10 @@ def test_answering_the_generated_cluster_question_unblocks_the_value_questions(
     )
     assert answer.status_code == 200, answer.text
     assert answer.json()["unmet_prerequisites_at_answer"] == []
+    # The picked choice survives composition and reaches the corpus. Found live: the D branch
+    # returned freeform only, so a column-picker answer composed "" and folded nothing.
+    assert answer.json()["answer"] == "orders.country_code is authoritative"
+    assert answer.json()["converted_to_corpus"] is True
 
     after = {r["scope"]: r for r in client.get("/elicitation/candidates").json()}
     assert after["elicitation:valuemap:orders.country_code"]["blocked"] is False

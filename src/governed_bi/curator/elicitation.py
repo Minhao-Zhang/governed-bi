@@ -601,7 +601,21 @@ def compose_elicitation_answer_text(
             return f"For {rec.target_table}.{rec.target_column}, the grouping asked about: {freeform}"
         return ""
     if rec.category == "D":
-        return freeform
+        # Freeform first, because the join follow-up this branch was written for offers no
+        # choices at all -- but never *only* freeform. **Found live** on real ``app_store``:
+        # ``curator/gaps.py``'s near-duplicate cluster question is also a D, and it is a column
+        # picker, so answering "playstore.Content Rating is authoritative" through the wizard
+        # composed the empty string, `answer_clarification` stored it, and
+        # `fold_ledger_answer_into_corpus`'s "no answer text" gate then silently folded nothing
+        # -- losing the admin's decision on the highest-severity question the wizard asks. This
+        # is the same "a picked choice disappears" bug class the rest of this function was
+        # written against, reached from the one branch that had no choices to lose.
+        #
+        # The picked label verbatim, not a composed frame: the cluster question's labels already
+        # read as sentences ("X is authoritative"), and the join-key record's are bare
+        # identifiers that a frame would have to guess the verb for. Wording is a later phase's;
+        # not dropping the answer is this one's.
+        return freeform or choices_by_id.get(choice_id or "", choice_id or "")
     return freeform or choices_by_id.get(choice_id or "", "")
 
 
