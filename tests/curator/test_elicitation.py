@@ -374,8 +374,9 @@ def test_b_and_e_stay_silent_when_the_column_returns_no_rows() -> None:
     records = generate_candidate_questions(tables, assets_by_id, observed_values=observed)
 
     assert {r.category for r in records} == {"A", "C"}
-    assert observed == {"shop.orders.country_code": (), "shop.orders.review_status": ()}
-    assert [row["passed"] for row in ledger] == [True, True], "the statements did run"
+    assert set(observed) == {c.id for c in assets_by_id.values() if hasattr(c, "parent_table")}
+    assert set(observed.values()) == {()}
+    assert [row["passed"] for row in ledger] == [True] * len(observed), "the statements did run"
 
 
 def test_a_governance_refusal_skips_the_column_instead_of_bypassing_it() -> None:
@@ -390,10 +391,16 @@ def test_a_governance_refusal_skips_the_column_instead_of_bypassing_it() -> None
         tables, assets_by_id, connector=connector, suspect_blocked=True
     )
 
-    assert observed == {}
-    assert not connector.statements, f"a refused column's values were read: {connector.statements}"
-    assert [row["reason_code"] for row in ledger] == ["r_column_suspect", "r_column_suspect"]
-    assert all(row["passed"] is False and row["executed_sql"] is None for row in ledger)
+    assert set(observed) == {
+        "shop.orders.order_id", "shop.orders.order_date", "shop.orders.total_amount",
+        "shop.payments.payment_id", "shop.payments.revenue_amount",
+    }, "the two suspect columns, and only those, are missing"
+    assert not any(
+        "country_code" in sql or "review_status" in sql for sql in connector.statements
+    ), f"a refused column's values were read: {connector.statements}"
+    refusals = [row for row in ledger if not row["passed"]]
+    assert [row["reason_code"] for row in refusals] == ["r_column_suspect", "r_column_suspect"]
+    assert all(row["executed_sql"] is None for row in refusals)
 
     records = generate_candidate_questions(tables, assets_by_id, observed_values=observed)
     assert {r.category for r in records} == {"A", "C"}
@@ -407,28 +414,40 @@ def test_every_governed_read_gets_its_own_ledger_row() -> None:
         tables, assets_by_id, connector=_ScriptedConnector(_REAL_VALUES)
     )
 
-    assert len(ledger) == 2, "one row per value-gated column, no more and no fewer"
+    assert len(ledger) == 7, "one row per column read, no more and no fewer"
     assert all(row["path"] == "sample" for row in ledger), ledger
     assert all(row["passed"] for row in ledger), ledger
 
 
-def test_only_the_columns_b_or_e_could_want_are_ever_read() -> None:
-    """Cost: ``POST /elicitation/generate`` issues one governed query per *gated* column, not
-    per column. ``order_id``/``order_date``/``total_amount``/``payment_id``/``revenue_amount``
-    match neither keyword list, so no statement is built for them."""
+def test_every_column_is_read_now_that_a_value_driven_detector_exists() -> None:
+    """The keyword gate on the *read set* is gone, and the cost change is the point rather than
+    a side effect.
+
+    It was defensible while every reader of the values was itself name-gated. ``_propose_s6`` is
+    not: the design doc's S6 row exists because ``restaurant.geografisch.region = 'unknown'`` is
+    missed for want of the name ``region`` being in a list, and a value-driven detector over a
+    keyword-gated read set is still keyword-gated one layer down.
+    """
     tables, assets_by_id = _schema()
     connector = _ScriptedConnector(_REAL_VALUES)
     _observed(tables, assets_by_id, connector=connector)
 
-    assert len(connector.statements) == 2, connector.statements
-    assert not any("order_id" in sql for sql in connector.statements)
+    assert len(connector.statements) == 7, connector.statements
+    assert any("order_id" in sql for sql in connector.statements)
 
 
 def test_the_number_of_governed_reads_per_call_is_bounded() -> None:
-    """``max_reads`` is a ceiling on one admin click, not a knob a caller widens per column."""
+    """``max_reads`` is a ceiling on one admin click, not a knob a caller widens per column.
+
+    Raised from 50 with the gate removal: at 50, "every column" would silently truncate
+    ``beer_factory`` at 50 of 93, and a cost bound that deletes findings is the retired
+    ``limit_per_category`` wearing a different hat. 800 clears the widest schema in the lake
+    (``works_cycles``, 703 columns), so it bounds without binding.
+    """
     from governed_bi.curator.elicitation import MAX_VALUE_READS
 
-    assert MAX_VALUE_READS == 50
+    assert MAX_VALUE_READS == 800
+    assert MAX_VALUE_READS > 703, "the widest schema in the lake must not be truncated"
 
     tables, assets_by_id = _schema()
     connector = _ScriptedConnector(_REAL_VALUES)
@@ -436,7 +455,7 @@ def test_the_number_of_governed_reads_per_call_is_bounded() -> None:
 
     assert len(connector.statements) == 1
     assert len(ledger) == 1
-    assert set(observed) == {"shop.orders.country_code"}, "truncated in a fixed order"
+    assert set(observed) == {"shop.orders.order_id"}, "truncated in a fixed order"
 
 
 def test_b_uses_the_governed_caps_headroom_to_decide_small_cardinality() -> None:
@@ -823,3 +842,106 @@ def test_the_keyword_generator_emits_unblocked_records_and_the_gate_is_applied_a
     # option; C names no column at all and can never be gated.
     assert by_category["C"].blocked_by == ()
     assert by_category["E"].blocked_by == ()
+
+
+# ── S6: sentinel detection with no name gate (utku-ai-setup-wizard-gap-model.md § S6) ────────
+
+
+def test_s6_finds_a_sentinel_in_a_column_no_keyword_list_names() -> None:
+    """The design doc's own headline miss, reproduced on its real shape:
+    ``restaurant.geografisch.region`` holds ``'unknown'`` on 17 of 168 rows and E never proposes
+    it, because ``region`` is in ``_CATEGORICAL_HINTS`` and not in ``_STATUS_HINTS`` -- "E's real
+    signal is the value, not the name; ANDing the two destroys recall".
+    """
+    from governed_bi.curator.elicitation import generate_candidate_questions
+
+    tables, assets_by_id = _region_schema()
+    observed = {"geo.geografisch.region": ("bay area", "los angeles", "napa valley", "unknown")}
+    records = generate_candidate_questions(tables, assets_by_id, observed_values=observed)
+
+    (s6,) = [r for r in records if r.scope.startswith("elicitation:sentinel:")]
+    assert (s6.category, s6.severity, s6.audience) == ("E", "T2", "business")
+    assert (s6.target_table, s6.target_column) == ("geografisch", "region")
+    assert "'unknown'" in s6.question, s6.question
+    assert {c["id"] for c in s6.choices or ()} == {"exclude", "include"}
+
+
+def test_s6_does_not_ask_again_about_a_column_e_already_covered() -> None:
+    """The two doc rows are one question with two provenances. Measured on ``app_store``, where
+    all three ``*content_rating*`` columns hold ``'Unrated'`` and E's name gate reaches every
+    one of them: S6 must add nothing there rather than double every card."""
+    from governed_bi.curator.elicitation import generate_candidate_questions
+
+    tables, assets_by_id = _schema()
+    observed, _ledger = _observed(
+        tables, assets_by_id, connector=_ScriptedConnector(_REAL_VALUES)
+    )
+    records = generate_candidate_questions(tables, assets_by_id, observed_values=observed)
+
+    exclusions = [r for r in records if r.scope.startswith("elicitation:exclusion:")]
+    sentinels = [r for r in records if r.scope.startswith("elicitation:sentinel:")]
+    assert [r.target_column for r in exclusions] == ["review_status"]
+    assert not sentinels, [r.scope for r in sentinels]
+
+
+def test_s6_ignores_a_sentinel_in_a_column_nothing_would_group_by() -> None:
+    """"There is a null-like value in here somewhere" is not a gap on a free-text field. The
+    evidence that a column *is* grouped by is that its whole vocabulary came back under the read
+    cap -- at the cap the count stops being a count and becomes a lower bound."""
+    from governed_bi.curator.elicitation import generate_candidate_questions
+    from governed_bi.serve.fetch import SAMPLE_ROWS_MAX_VALUES
+
+    tables, assets_by_id = _region_schema()
+    wide = tuple(f"note {i}" for i in range(SAMPLE_ROWS_MAX_VALUES - 1)) + ("unknown",)
+    assert len(wide) == SAMPLE_ROWS_MAX_VALUES
+    records = generate_candidate_questions(
+        tables, assets_by_id, observed_values={"geo.geografisch.region": wide}
+    )
+    assert not [r for r in records if r.scope.startswith("elicitation:sentinel:")]
+
+
+def test_s6_reaches_a_numeric_measure_because_it_is_averaged() -> None:
+    """``-1`` in a numeric column is the classic sentinel, and it sorts first, so the capped
+    read sees it whenever it is there -- which is why a numeric column needs no cardinality
+    test to qualify as one an answer averages."""
+    from governed_bi.curator.elicitation import generate_candidate_questions
+
+    tables, assets_by_id = _region_schema(physical_type="numeric")
+    values = tuple(str(v) for v in [-1, *range(200)])
+    records = generate_candidate_questions(
+        tables, assets_by_id, observed_values={"geo.geografisch.region": values}
+    )
+    (s6,) = [r for r in records if r.scope.startswith("elicitation:sentinel:")]
+    assert "'-1'" in s6.question, s6.question
+
+
+def test_s6_is_silent_on_a_schema_whose_sentinels_are_not_english() -> None:
+    """The limit that survives, stated rather than implied. Removing the *name* gate is what the
+    doc asked for and is done; ``_SENTINEL_VALUES`` is still an English word list, which is the
+    same failure ``curator/gaps.py`` exists because of. On German ``beer_factory`` this finds
+    nothing, and ``orders.status = 'cancelled'`` is missed for the vocabulary, not for E's name
+    gate."""
+    from governed_bi.curator.elicitation import generate_candidate_questions
+
+    tables, assets_by_id = _region_schema()
+    records = generate_candidate_questions(
+        tables,
+        assets_by_id,
+        observed_values={"geo.geografisch.region": ("bayern", "hessen", "unbekannt")},
+    )
+    assert not [r for r in records if r.scope.startswith("elicitation:sentinel:")]
+
+
+def _region_schema(*, physical_type: str = "text") -> tuple[list[Any], dict[str, Any]]:
+    """One table, one column, named nothing any keyword list contains."""
+    from governed_bi.corpus.schema import ColumnAsset, TableAsset
+
+    column = ColumnAsset(
+        id="geo.geografisch.region", schema="geo", parent_table="geo.geografisch",
+        physical_name="region", summary="region", physical_type=physical_type,
+    )
+    table = TableAsset(
+        id="geo.geografisch", schema="geo", physical_name="geografisch", summary="geografisch",
+        columns=(column.id,),
+    )
+    return [table], {table.id: table, column.id: column}

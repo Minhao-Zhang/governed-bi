@@ -259,13 +259,13 @@ def test_generate_reports_a_ledger_row_for_every_governed_read(monkeypatch, tmp_
     client = _client(monkeypatch, _session_with_schema(tmp_path, connector=connector))
     body = client.post("/elicitation/generate").json()
 
-    # Three keyword-gated columns (country_code, country_code_alt, review_status) and two
-    # name-alike column pairs.
+    # Every column of the fixture gets a value read now that a value-driven detector exists,
+    # plus two name-alike column pairs.
     comparisons = [s for s in connector.statements if "IS DISTINCT FROM" in s]
     value_reads = [s for s in connector.statements if "SELECT DISTINCT" in s]
     assert len(comparisons) == 2, connector.statements
-    assert len(value_reads) == 3, connector.statements
-    assert len(body["ledger"]) == 5, body["ledger"]
+    assert len(value_reads) == 8, connector.statements
+    assert len(body["ledger"]) == 10, body["ledger"]
     assert all(row["path"] == "sample" and row["passed"] for row in body["ledger"])
     assert all(row["executed_sql"] for row in body["ledger"])
     assert any('"country_code"' in row["executed_sql"] for row in body["ledger"])
@@ -303,9 +303,9 @@ def test_b_and_e_are_not_proposed_when_there_is_no_connector_to_read_through(
     assert {row["category"] for row in body["generated"]} == {"A", "C"}
     assert not [r for r in body["generated"] if ":duplicate:" in r["scope"]]
     assert [r for r in body["generated"] if ":describetable:" in r["scope"]]
-    # Every refusal is still a governance decision with a row, not a silent skip: three value
-    # reads plus two pair comparisons.
-    assert len(body["ledger"]) == 5
+    # Every refusal is still a governance decision with a row, not a silent skip: one value
+    # read per column plus two pair comparisons.
+    assert len(body["ledger"]) == 10
     assert all(row["passed"] is False for row in body["ledger"])
 
 

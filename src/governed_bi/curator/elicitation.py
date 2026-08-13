@@ -150,9 +150,19 @@ _B_MAX_DISTINCT = 15
 #: with respect to every business user's turn, and in the same trust and latency class as the
 #: corpus load that precedes it — so paying a governed round trip per candidate column is the
 #: right trade, not a cost to engineer away. What it must not do is turn one click into an
-#: unbounded number of statements: only keyword-gated columns are read (see
-#: :func:`_value_gated_columns`), but a wide enough schema can have hundreds of ``*_code`` /
-#: ``*_type`` columns.
+#: unbounded number of statements.
+#:
+#: **Raised from 50 when the keyword gate came off** (:func:`_value_read_columns`). At 50, a
+#: read set that is now "every column" would silently truncate ``beer_factory`` at 50 of 93 and
+#: report nothing about the rest — and a cost bound that quietly deletes findings is the
+#: ``limit_per_category`` mistake wearing a different hat. 800 is chosen against the lake rather
+#: than picked round: the widest schema in it is ``works_cycles`` at 703 columns
+#: (``information_schema.columns``, measured 2026-08-12), so on every schema that exists here
+#: the cap does not bind and the scan is complete. It is still a bound — it stops one click on
+#: some future 5 000-column warehouse from becoming 5 000 statements — but it is deliberately
+#: above the data, because truncating a scan is worse than paying for it at this cadence. Each
+#: read is one ``SELECT DISTINCT c FROM t ORDER BY c LIMIT 20``; 93 of them against real
+#: Postgres take under two seconds.
 #:
 #: A constant rather than a knob, for ``SAMPLE_ROWS_MAX_VALUES``'s own stated reason: nothing on
 #: this surface can write a knob, so declaring one would be a control with no writer. The
@@ -163,7 +173,7 @@ _B_MAX_DISTINCT = 15
 #: (``limit_per_category``) is gone, because dropping a finding to fit a quota is what let a T3
 #: crowd out a T1 (``curator/gaps.py``'s own module docstring). Bounding round trips per click
 #: and bounding what an admin is told are different quantities with different justifications.
-MAX_VALUE_READS = 50
+MAX_VALUE_READS = 800
 
 
 def _record_id(scope: str) -> str:
@@ -199,28 +209,35 @@ def _columns_of(table: Any, assets_by_id: dict[str, Any]) -> list[Any]:
 
 
 def _name_hits(column: Any, hints: tuple[str, ...]) -> bool:
-    """Whether ``column``'s physical name contains any of ``hints``. One definition, three
-    readers (B's list, E's list, and the union :func:`_value_gated_columns` reads values for) —
-    so "which columns does this category care about" cannot drift from "which columns get a
-    query issued for them"."""
+    """Whether ``column``'s physical name contains any of ``hints``. One definition, two readers
+    (B's list and E's list), so "which columns does this category care about" has one answer."""
     lowered = column.physical_name.lower()
     return any(hint in lowered for hint in hints)
 
 
-def _value_gated_columns(
+def _value_read_columns(
     tables: Sequence[Any], assets_by_id: dict[str, Any]
 ) -> list[tuple[Any, Any]]:
-    """``(table, column)`` for every column B or E could possibly ask about, in a fixed order.
+    """``(table, column)`` for every column a value read is issued for, in a fixed order.
 
-    The union of the two keyword gates, evaluated *before* any statement is built, because that
-    is what keeps the cost of a generate call proportional to the columns a category might use
-    rather than to the width of the schema.
+    **Every column, and the keyword gate that used to be here is gone.** It was the union of B's
+    and E's name lists, which was a defensible cost saving for exactly as long as every reader of
+    the values was itself name-gated. :func:`_propose_s6` is not: the design doc's whole point
+    about the S6 row is that the signal is the *value*, and a read set chosen by column name
+    cannot deliver a value-driven detector — ``restaurant.geografisch.region = 'unknown'`` was
+    missed because ``region`` is not in ``_STATUS_HINTS``, and no amount of care inside the
+    detector recovers a value nobody read.
+
+    The cost moves from "proportional to the keyword hits" to "proportional to the width of the
+    schema", which is what :data:`MAX_VALUE_READS` now bounds and why it was raised with this
+    change rather than after it. B and E are unaffected in *output*: both still apply their own
+    name gate to the columns they propose about, so widening the read set can only give them
+    values they would have ignored.
     """
     return [
         (table, column)
         for table in _live_tables(tables)
         for column in _columns_of(table, assets_by_id)
-        if _name_hits(column, _CATEGORICAL_HINTS) or _name_hits(column, _STATUS_HINTS)
     ]
 
 
@@ -266,7 +283,7 @@ def read_observed_values(
 
     observed: dict[str, tuple[str, ...]] = {}
     ledger: list[Any] = []
-    for table, column in _value_gated_columns(tables, assets_by_id)[: max(0, int(max_reads))]:
+    for table, column in _value_read_columns(tables, assets_by_id)[: max(0, int(max_reads))]:
         payload, delivered, attempt = sample_rows(
             column.id,
             # The cap, not a smaller number: one read serves both categories, and 20 is above
@@ -327,6 +344,9 @@ def generate_candidate_questions(
     candidates += _propose_a(live_tables, assets_by_id)
     candidates += _propose_c(live_tables, assets_by_id)
     candidates += _propose_e(live_tables, assets_by_id, observed)
+    # S6 after E, and it reads E's output: the two ask one question, and the only difference is
+    # what made the column a candidate. A column E already covered gets no second card.
+    candidates += _propose_s6(live_tables, assets_by_id, observed, covered=candidates)
     candidates += _propose_b(live_tables, assets_by_id, observed)
     return [c for c in candidates if c.scope not in existing_scopes]
 
@@ -451,14 +471,7 @@ def _propose_e(
         for column in _columns_of(table, assets_by_id):
             if not _name_hits(column, _STATUS_HINTS):
                 continue
-            sentinel = next(
-                (
-                    v
-                    for v in observed_values.get(column.id) or ()
-                    if v.strip().lower() in _SENTINEL_VALUES
-                ),
-                None,
-            )
+            sentinel = _sentinel_in(observed_values.get(column.id) or ())
             if sentinel is None:
                 continue
             scope = f"elicitation:exclusion:{table.physical_name}.{column.physical_name}"
@@ -470,6 +483,118 @@ def _propose_e(
                         f"Is there a value in `{table.physical_name}.{column.physical_name}` "
                         f"that means 'not yet rated' (seen: {sentinel!r})? Should it be "
                         "excluded from analysis by default?"
+                    ),
+                    category="E",
+                    ui_modality="checkbox",
+                    severity=severity,
+                    audience=audience,
+                    choices=(
+                        {
+                            "id": "exclude",
+                            "label": f"Exclude rows where {column.physical_name} = {sentinel!r}",
+                        },
+                        {"id": "include", "label": "Include them"},
+                    ),
+                    allow_freeform=True,
+                    target_table=table.physical_name,
+                    target_column=column.physical_name,
+                    raised_by=("elicitation_wizard",),
+                    source=ELICITATION_SOURCE,
+                )
+            )
+    return out
+
+
+def _sentinel_in(values: Sequence[str]) -> str | None:
+    """The first null-like value in ``values``, if any. One definition, read by E and by S6.
+
+    Blank counts, and it is the one addition to :data:`_SENTINEL_VALUES`: an empty string in a
+    grouping column is a bucket with no name, which is the same gap as ``'unknown'`` and is the
+    only sentinel shape that is not a word in some language.
+    """
+    return next((v for v in values if not v.strip() or v.strip().lower() in _SENTINEL_VALUES), None)
+
+
+def _groups_or_averages(column: Any, values: Sequence[str]) -> bool:
+    """Whether this column is one an answer would ``GROUP BY`` or ``AVG`` — on evidence.
+
+    Two shapes, and neither is a name test. **Groupable**: the value read came back *below*
+    ``SAMPLE_ROWS_MAX_VALUES``, so what came back is the column's whole vocabulary rather than a
+    truncation of it, and that vocabulary is small. The exactness matters for the same reason it
+    does for :data:`_B_MAX_DISTINCT` — at the cap the count stops being a count and becomes a
+    lower bound, and a detector that treats the two alike is guessing. **Averageable**: a numeric
+    physical type, where the classic sentinel is ``-1`` and it sorts first, so the capped read
+    sees it whenever it is there.
+    """
+    from governed_bi.serve.fetch import SAMPLE_ROWS_MAX_VALUES
+
+    if _is_numeric(column):
+        return True
+    return 1 < len(values) < SAMPLE_ROWS_MAX_VALUES
+
+
+def _is_numeric(column: Any) -> bool:
+    from governed_bi.curator.gap_signals import type_class
+
+    return type_class(column) == "numeric"
+
+
+def _propose_s6(
+    tables: Sequence[Any],
+    assets_by_id: dict[str, Any],
+    observed_values: Mapping[str, tuple[str, ...]],
+    *,
+    covered: Sequence[ClarificationRecord],
+) -> list[ClarificationRecord]:
+    """S6: a sentinel value in a grouping or averaging column, found with **no name gate at all**.
+
+    ``utku-ai-setup-wizard-gap-model.md``'s S6 row, and its own summary of why E is not enough:
+    "E requires the column *name* to match ``_STATUS_HINTS`` AND a sentinel value; ``region``
+    fails the name test. E's real signal is the value, not the name; ANDing the two destroys
+    recall." So this is E with that conjunct removed and a measured one put in its place — the
+    column has to be one an answer would actually group or average by
+    (:func:`_groups_or_averages`), because "there is a null-like value in here somewhere" is not
+    a gap on a free-text comment field.
+
+    **Its prerequisite was a read-set change, not a detector change.** A value-driven detector
+    over a keyword-gated read set is still keyword-gated, one layer down; ``region``'s values
+    were never fetched. :func:`_value_read_columns` now reads every column, which is what makes
+    this reachable and what moved :data:`MAX_VALUE_READS`.
+
+    **A column E already asked about gets no second card.** The two rows in the doc's table are
+    one question with two provenances, so ``covered`` is E's output and this skips anything in
+    it — measured on ``app_store``, where all three ``*content_rating*`` columns hold
+    ``'Unrated'`` and E's name gate already reaches every one of them.
+
+    **What this still cannot see, stated rather than implied.** SQL ``NULL`` itself is invisible:
+    ``distinct_values_statement`` filters ``IS NOT NULL``, so the doc's ``location.State`` NULL
+    case needs a null count this does not read. And :data:`_SENTINEL_VALUES` is an English word
+    list — the same failure ``curator/gaps.py`` exists because of — so this finds three columns
+    on ``restaurant`` and **zero** on German ``beer_factory``. Removing the *name* gate is what
+    the doc asked for and is done; the *value* vocabulary is still a language, and
+    ``orders.status = 'cancelled'`` is missed for that reason and not for E's.
+    """
+    severity, audience = CATEGORY_CLASSIFICATION["E"]
+    already = {(r.target_table, r.target_column) for r in covered if r.category == "E"}
+    out: list[ClarificationRecord] = []
+    for table in tables:
+        for column in _columns_of(table, assets_by_id):
+            if (table.physical_name, column.physical_name) in already:
+                continue
+            values = observed_values.get(column.id) or ()
+            sentinel = _sentinel_in(values)
+            if sentinel is None or not _groups_or_averages(column, values):
+                continue
+            scope = f"elicitation:sentinel:{table.physical_name}.{column.physical_name}"
+            out.append(
+                ClarificationRecord(
+                    id=_record_id(scope),
+                    scope=scope,
+                    question=(
+                        f"`{table.physical_name}.{column.physical_name}` is used to group or "
+                        f"average, and one of its values is {sentinel!r}. Does that value mean "
+                        "'no data' rather than a real category? Should those rows be left out "
+                        "of totals and breakdowns by default?"
                     ),
                     category="E",
                     ui_modality="checkbox",
