@@ -28,7 +28,8 @@ arm / corpus，否则不可引用。
 
 - 湖 dump 在 Hugging Face：`minhaozhang/BIRD_Obfuscation`（≈12–13 GB），sibling 仓已有 `docker compose` + `pg_restore`；本仓**没有**一键下载脚本。
 - SQLite 只是 tests/CI 的离线基底（`datasource/sqlite.py` + 各 test 用 `sqlite3` 现建 `tmp_path` 库），**不是** LangGraph serve 数据源；serve 要 Postgres。本仓**没有**任何随仓提交的 `.sqlite` 文件——早先此处写的 `data/bird/beer_factory.sqlite` 在树里不存在。
-- serve 要 `GOVERNED_BI_API_KEY`（`api/auth.py`）：未设不是「开放」，是每个请求 401；一把 key 即一个 principal。UI 侧 `NEXT_PUBLIC_GOVERNED_BI_API_KEY` 须与之相等（`docs/usage.md`）。
+- ~~serve 要 `GOVERNED_BI_API_KEY`（`api/auth.py`）：未设不是「开放」，是每个请求 401；一把 key 即一个 principal。UI 侧 `NEXT_PUBLIC_GOVERNED_BI_API_KEY` 须与之相等（`docs/usage.md`）。~~
+  **2026-08-13 起不再成立**：传输层认证已整体移除，`GOVERNED_BI_API_KEY` 无人读取，每个路由无凭证即 200。这一条是**操作说明**而非发现，照做会得到一个不存在的变量，故划掉而非保留原样；本文件其余部分是当日快照，不修改。理由与代价见 [usage](../usage.md) 与 [open-work](../open-work.md) §4.3。
 
 ### 当前可引用测量（v4）
 

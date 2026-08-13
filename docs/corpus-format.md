@@ -85,3 +85,27 @@ To check a corpus against the conformance rules:
 ```bash
 uv run --frozen python tools/check_corpus_conformance.py
 ```
+
+The rule ids and their descriptions live in that file's `RULES` table, which is what the report
+prints; this document does not keep a second copy. Two of them bound size, and the split between
+them is the part worth knowing:
+
+| rule | measures | cap |
+|---|---|---|
+| V13 | one asset's **body** | 4,000 for `few_shot`, else 8,000 |
+| V16 | a table's **rendered closure** — structural line, body, and the roster its columns fold into | 20,000 |
+
+**Neither measures the file, and that is deliberate (2026-08-13).** V13 measured
+`path.stat().st_size` until then, on the stated grounds that an asset too big for the context
+block is not deliverable — but the file is not the delivery unit. `corpus/store.py` splits a
+table's inline columns into their own assets and leaves the parent holding a list of ids, and
+nothing on the serve path reads the YAML. Measured on the facilities corpus, the six files that
+failed the old 32,000-byte cap deliver 3,871–8,435 characters; file size overstated the real cost
+by 7.7× on the worst of them. The rule was in practice firing on column count, which is a fact
+about a schema rather than a defect.
+
+V16 exists because a per-asset cap cannot see an aggregate. A roster entry runs about 53
+characters, so a 1,500-column table would render the whole 80,000-character
+`context_budget_chars` while every individual asset sat comfortably under V13. It is measured
+with `serve/context.py`'s own `_structural_line` and `_roster_entry` rather than a second copy of
+that arithmetic, so the rule cannot drift from the renderer it claims to bound.

@@ -12,7 +12,7 @@
 
 import { z } from "zod";
 
-import { authHeaders, LANGGRAPH_URL, USE_MOCKS } from "@/lib/env";
+import { LANGGRAPH_URL, USE_MOCKS } from "@/lib/env";
 import {
   MOCK_ANSWER,
   MOCK_ASSETS,
@@ -99,7 +99,7 @@ async function getLive<T>(path: string, schema: z.ZodType<T>): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`${LANGGRAPH_URL}${path}`, {
-      headers: { accept: "application/json", ...authHeaders() },
+      headers: { accept: "application/json" },
     });
   } catch {
     throw new ApiError(`Could not reach the backend at ${LANGGRAPH_URL}${path}.`);
@@ -141,7 +141,6 @@ async function post<T>(path: string, body: unknown, schema: z.ZodType<T>): Promi
       headers: {
         "content-type": "application/json",
         accept: "application/json",
-        ...authHeaders(),
       },
       body: JSON.stringify(body),
     });

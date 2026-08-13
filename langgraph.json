@@ -14,10 +14,15 @@
     "disable_mcp": true,
     "disable_a2a": true,
     "cors": {
-      "allow_origins": ["http://localhost:3000", "http://127.0.0.1:3000"],
-      "allow_methods": ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-      "allow_headers": ["content-type", "accept", "x-api-key", "authorization"],
-      "allow_credentials": true
+      "allow_origins": [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://smith.langchain.com"
+      ],
+      "allow_methods": ["*"],
+      "allow_headers": ["*"],
+      "allow_credentials": true,
+      "expose_headers": ["x-pagination-total", "x-pagination-next", "content-location"]
     }
   }
 }

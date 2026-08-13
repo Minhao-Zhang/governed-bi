@@ -3,17 +3,9 @@
   "info": {
     "title": "governed-bi",
     "summary": "Corpus browsing, relationship graphs, governed NL2SQL turns, and the turn audit log, as JSON.",
-    "description": "The custom REST surface `langgraph.json` mounts at the server root, beside LangGraph Server's own routes. Spec-of-record for this surface (ADR 0007, ADR 0010).\n\nEvery handler is annotated `-> dict[str, Any]`, so FastAPI neither validates nor filters a response against the schemas here: they document what the handlers build. Paths, parameters and operation ids in this file are taken from the running app.\n\nEvery route except `GET /livez` requires the shared key held in `GOVERNED_BI_API_KEY`, presented either as `x-api-key` or as `Authorization: Bearer <key>` \u2014 both spellings are read, and the value is compared in constant time (`api/auth.py`). The routes here enforce it in their own middleware (`api/routes.py`): the platform's auth wraps the routes LangGraph Server owns and not this app, so the middleware calls that module's comparison rather than a second one that could drift. `OPTIONS` is exempt, so CORS preflights are not refused for carrying no custom header.\n\n**A server whose `GOVERNED_BI_API_KEY` is unset refuses every request with 401.** Unset never means open, and that refusal \u2014 not a wrong header \u2014 is what a first caller usually hits; the `detail` names the variable. One key is one principal, so this is transport auth and not per-user authorization.\n\nServing needs a live Postgres connector and a corpus; there is no offline mode.",
+    "description": "The custom REST surface `langgraph.json` mounts at the server root, beside LangGraph Server's own routes. Spec-of-record for this surface (ADR 0007, ADR 0010).\n\nEvery handler is annotated `-> dict[str, Any]`, so FastAPI neither validates nor filters a response against the schemas here: they document what the handlers build. Paths, parameters and operation ids in this file are taken from the running app.\n\n**No route requires a credential, and that is why there is no security scheme and no 401 in this file.** Reaching the port is sufficient \u2014 on every route, including `/audit/turns` and `/audit/turns/{turn_id}/trace`, which return every thread's SQL, the full turn records, and an absolute path to the log directory. The shared key that guarded these routes until 2026-08-13 is gone, and audit findings A1 and A7 are live again with it; `docs/usage.md` records why (LangGraph Studio's bootstrap calls carry no header) and what it costs. This engine expects to be reachable only on 127.0.0.1.\n\n`api/auth.py` survives and is still wired, but what it enforces is not authentication: `threads.update` and `threads.create_run` refuse a client-supplied state-writing `command` (audit A2/A3/A4). Those are LangGraph Server's own routes and are not described here.\n\nServing needs a live Postgres connector and a corpus; there is no offline mode.",
     "version": "2"
   },
-  "security": [
-    {
-      "ApiKeyHeader": []
-    },
-    {
-      "BearerKey": []
-    }
-  ],
   "paths": {
     "/livez": {
       "get": {
@@ -21,9 +13,8 @@
           "meta"
         ],
         "summary": "Livez",
-        "description": "Process liveness. Touches neither the corpus nor the database, so it answers before the session is built. Corpus status is /audit/corpus.\n\nThe one route served without a key (`routes._OPEN_PATHS`): it returns `{\"ok\": true}` and nothing else, and a probe that has to hold a credential reports the credential's health instead of the process's.",
+        "description": "Process liveness. Touches neither the corpus nor the database, so it answers before the session is built. Corpus status is /audit/corpus.\n\nIt used to be the one route served without a key. Since 2026-08-13 no route needs one, so it is no longer special \u2014 what still makes it the liveness probe is that it returns `{\"ok\": true}` and nothing else, so it reports the process's health and not that of anything the process depends on.",
         "operationId": "livez_livez_get",
-        "security": [],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -56,16 +47,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "No key, a key that does not match, or `GOVERNED_BI_API_KEY` unset on the server \u2014 which refuses every request. `detail` says which.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPError"
-                }
-              }
-            }
           }
         }
       }
@@ -95,16 +76,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AnswerResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No key, a key that does not match, or `GOVERNED_BI_API_KEY` unset on the server \u2014 which refuses every request. `detail` says which.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPError"
                 }
               }
             }
@@ -147,16 +118,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AnswerResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No key, a key that does not match, or `GOVERNED_BI_API_KEY` unset on the server \u2014 which refuses every request. `detail` says which.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPError"
                 }
               }
             }
@@ -216,16 +177,6 @@
               }
             }
           },
-          "401": {
-            "description": "No key, a key that does not match, or `GOVERNED_BI_API_KEY` unset on the server \u2014 which refuses every request. `detail` says which.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPError"
-                }
-              }
-            }
-          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -273,16 +224,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CorpusFieldsResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No key, a key that does not match, or `GOVERNED_BI_API_KEY` unset on the server \u2014 which refuses every request. `detail` says which.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPError"
                 }
               }
             }
@@ -401,16 +342,6 @@
               }
             }
           },
-          "401": {
-            "description": "No key, a key that does not match, or `GOVERNED_BI_API_KEY` unset on the server \u2014 which refuses every request. `detail` says which.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPError"
-                }
-              }
-            }
-          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -484,16 +415,6 @@
               }
             }
           },
-          "401": {
-            "description": "No key, a key that does not match, or `GOVERNED_BI_API_KEY` unset on the server \u2014 which refuses every request. `detail` says which.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPError"
-                }
-              }
-            }
-          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -534,16 +455,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TableResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No key, a key that does not match, or `GOVERNED_BI_API_KEY` unset on the server \u2014 which refuses every request. `detail` says which.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPError"
                 }
               }
             }
@@ -598,16 +509,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ColumnRelatedResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No key, a key that does not match, or `GOVERNED_BI_API_KEY` unset on the server \u2014 which refuses every request. `detail` says which.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPError"
                 }
               }
             }
@@ -719,16 +620,6 @@
               }
             }
           },
-          "401": {
-            "description": "No key, a key that does not match, or `GOVERNED_BI_API_KEY` unset on the server \u2014 which refuses every request. `detail` says which.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPError"
-                }
-              }
-            }
-          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -836,16 +727,6 @@
               }
             }
           },
-          "401": {
-            "description": "No key, a key that does not match, or `GOVERNED_BI_API_KEY` unset on the server \u2014 which refuses every request. `detail` says which.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPError"
-                }
-              }
-            }
-          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -908,16 +789,6 @@
               }
             }
           },
-          "401": {
-            "description": "No key, a key that does not match, or `GOVERNED_BI_API_KEY` unset on the server \u2014 which refuses every request. `detail` says which.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPError"
-                }
-              }
-            }
-          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -962,16 +833,6 @@
               }
             }
           },
-          "401": {
-            "description": "No key, a key that does not match, or `GOVERNED_BI_API_KEY` unset on the server \u2014 which refuses every request. `detail` says which.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPError"
-                }
-              }
-            }
-          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -1003,35 +864,12 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "No key, a key that does not match, or `GOVERNED_BI_API_KEY` unset on the server \u2014 which refuses every request. `detail` says which.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPError"
-                }
-              }
-            }
           }
         }
       }
     }
   },
   "components": {
-    "securitySchemes": {
-      "ApiKeyHeader": {
-        "type": "apiKey",
-        "in": "header",
-        "name": "x-api-key",
-        "description": "The shared key held in `GOVERNED_BI_API_KEY`, compared in constant time (`api/auth.py`). This spelling is what the LangGraph SDK's own `apiKey` option sends, so the UI configures one option and `useStream` carries it too."
-      },
-      "BearerKey": {
-        "type": "http",
-        "scheme": "bearer",
-        "description": "The same shared key, as `Authorization: Bearer <key>`. Not a JWT and not a session token: the presented value is compared against `GOVERNED_BI_API_KEY` itself. Read so a curl against a running server need not know which spelling the UI chose."
-      }
-    },
     "schemas": {
       "AnswerResponse": {
         "properties": {

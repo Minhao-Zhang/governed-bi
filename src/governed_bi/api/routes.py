@@ -1,7 +1,7 @@
 """Custom REST routes mounted by ``langgraph.json``'s ``http.app`` (ADR 0007 §7).
 
 Route shapes follow ``docs/openapi.json``. Capabilities report what is actually built.
-No ungated route needs a model — corpus browsing is model-free.
+Only the two chat routes need a model — corpus browsing and the audit surface are model-free.
 
 **The surface has a constructor** (2026-08-11). :func:`make_app` takes its three dependencies —
 the session, the compiled chat graph and the turn log — and returns an app over exactly those.
@@ -19,6 +19,22 @@ calling ``_shape`` directly, and seven of the ten specifications in
 The two adapters are what justify the seam: the environment in production, a fake ``Session`` in
 tests. Resolution stays **lazy** for the environment one — importing this module must not build
 a Postgres session, or every test that imports it needs a database.
+
+**None of these routes asks for a credential** (2026-08-13). Between 2026-08-10 and 2026-08-13 a
+middleware here refused every path but ``/livez`` without a shared ``GOVERNED_BI_API_KEY``,
+because the platform will not apply its own auth middleware to a custom app (``langgraph.json``'s
+``http.enable_custom_route_auth`` raises ``ValueError: Cannot apply middleware: route
+_IncludedRouter(...) has no app`` on fastapi 0.141, and the server then never binds). That closed
+audit A7. It has been deliberately removed: this is a single-operator dev engine on
+``127.0.0.1``, LangGraph Studio's bootstrap fetches carry no custom headers so the key made
+Studio unusable, and the maintainer chose reachability over transport auth.
+
+So A7 is open again, knowingly: ``/audit/turns`` and ``/audit/turns/{turn_id}/trace`` hand every
+thread's SQL, the full turn records and an absolute log path to anything that can reach the port,
+and ``/chat`` will spend model budget for it. The ``_cors_headers`` helper that made a 401 legible
+to a browser went with the middleware — with no refusal to head by hand, every response now
+passes back through the platform's ``CORSMiddleware`` normally. See ``api/auth.py``, which keeps
+the state-write denials that are *not* authentication.
 """
 
 from __future__ import annotations
@@ -27,11 +43,9 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
 
 from governed_bi.api import trace_store
-from governed_bi.api.auth import api_key_refusal
 from governed_bi.api.browse import DEFAULT_NODE_BUDGET, subgraph
 from governed_bi.api.browse_routes import make_router
 from governed_bi.api.visibility import visible
@@ -40,11 +54,6 @@ from governed_bi.serve.messages import surface_answer_text
 
 __all__ = ["make_app", "app_from_environment", "app"]
 
-
-#: Paths served without a key. Only liveness: it returns ``{"ok": true}`` and nothing else, and a
-#: probe that has to hold a credential is a probe that reports the credential's health instead of
-#: the process's.
-_OPEN_PATHS: frozenset[str] = frozenset({"/livez"})
 
 #: Cap how many `/chat` threads one app's ``InMemorySaver`` retains. Eval already calls
 #: ``delete_thread`` per question; without a bound here a long-lived API worker keeps every
@@ -126,43 +135,6 @@ def _build_app(
 
     #: Per-app, not per-process: two apps in one test session must not evict each other's threads.
     chat_threads: list[str] = []
-
-    @app.middleware("http")
-    async def _require_api_key(request: Request, call_next: Any) -> Response:
-        """Transport auth for the custom routes, enforced here rather than by the platform.
-
-        ``api/auth.py`` covers every route LangGraph Server owns, but **not these**: the platform
-        applies its auth middleware to the custom app only under
-        ``http.enable_custom_route_auth``, and that flag cannot be turned on for this app.
-        ``langgraph_api/server.py:148`` (``apply_middleware``) walks ``app.routes`` and requires
-        each to have ``.app``; on fastapi 0.141 ``include_router`` leaves a single
-        ``_IncludedRouter`` object that has none, so the flag raises ``ValueError: Cannot apply
-        middleware: route _IncludedRouter(...) has no app`` and the server never binds. Measured
-        on 2026-08-10 — the same ``_IncludedRouter`` that makes
-        ``tests/api/test_http_contract.py``'s ``"/schema" not in ...`` assertions unfalsifiable
-        (audit M7).
-
-        So the check lives in our own app, where no platform flag can decide whether it runs. It
-        reads the same variable and the same header as ``api/auth.py`` and reuses that module's
-        comparison, so there is one key and one place that decides whether it matches.
-
-        This is what closes audit A7: ``/audit/turns`` and ``/audit/turns/{id}/trace`` returned
-        every thread's SQL, full records and an absolute log path to anybody who could reach the
-        port.
-        """
-        # `OPTIONS` is exempt, and this is load-bearing rather than a loosening: a browser never
-        # puts custom headers on a CORS preflight, so refusing one for having no `x-api-key`
-        # refuses the preflight for *every* cross-origin request the UI makes — the browser then
-        # blocks the real call and the failure surfaces as an opaque network error, not a 401.
-        # Caught by probing the preflight after adding this middleware; it 401'd both origins. A
-        # preflight response carries no data, only which methods and headers are permitted, and
-        # the origin allow-list in `langgraph.json`'s `http.cors` is what decides whether the
-        # browser proceeds.
-        if request.method != "OPTIONS" and request.url.path not in _OPEN_PATHS:
-            refusal = api_key_refusal(dict(request.headers.items()))
-            if refusal is not None:
-                return JSONResponse({"detail": refusal}, status_code=401)
-        return await call_next(request)
 
     @app.get("/livez")
     def livez() -> dict[str, Any]:

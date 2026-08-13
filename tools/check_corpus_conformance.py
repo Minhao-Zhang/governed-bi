@@ -140,13 +140,35 @@ AUTHORED_ONLY: frozenset[str] = frozenset({"V4", "V5", "V10"})
 #: replaced (measured 2026-08-08).
 TAUTOLOGY_BODY = re.compile(r"^(physical column\s+'[^']*'\.\s*)?means\s+['\"]", re.I)
 
-#: Per-file byte caps. Not one number: a table file carries every one of its columns inline,
-#: so a 73-column table is legitimately large, while a few-shot is one question and one query
-#: and anything bigger is a materialised result set. The corpus being replaced holds 15 assets
-#: over 80,000 bytes -- one of them 5.1 MB, a ``VALUES`` list harvested from a constant-answer
-#: gold query -- and those 15 are half its bytes. Both caps sit under ``context_budget_chars``
-#: (80,000), because a single asset that cannot fit in the context block is not deliverable.
-FILE_CAP: dict[str, int] = {"few_shot": 4_000, "*": 32_000}
+#: Per-**asset** body caps. The motive is unchanged and still good: the corpus this kit replaced
+#: held 15 assets over 80,000 bytes -- one of them 5.1 MB, a ``VALUES`` list harvested from a
+#: constant-answer gold query -- and those 15 were half its bytes. A body is where that pathology
+#: lives, and a body is what :func:`~governed_bi.serve.fetch.read_body` hands the model.
+#:
+#: **This measured the file until 2026-08-13, and the file is not the delivery unit.**
+#: ``corpus/store.py`` splits a table's inline columns into their own assets and leaves the parent
+#: holding a list of ids; nothing on the serve path ever reads the YAML. Measured on the
+#: facilities corpus, the six files the old 32,000-byte cap failed deliver 3,871-8,435 chars --
+#: file size overstated the real cost by 7.7x on the worst one and 11.3x on another. The rule was
+#: therefore firing on *column count* (~75+), which is a fact about a schema and not a defect:
+#: a 66-column table passed at 29,178 bytes for no reason anyone could state.
+#:
+#: ``few_shot`` keeps its own number for its own reason -- one question and one query, so anything
+#: bigger is a materialised result set. Observed maxima are 1,575 (facilities) and 1,346 (BIRD).
+#: 8,000 for everything else sits 2.7x above the largest body in either corpus (2,912).
+BODY_CAP: dict[str, int] = {"few_shot": 4_000, "*": 8_000}
+
+#: What one table actually costs the context block: its structural line, its body, and the roster
+#: its pulled-in columns fold into (``serve/context.py``). **This is the half a per-asset cap
+#: cannot see.** A roster entry runs ~53 chars, so a 1,500-column table would render 80,000 chars
+#: and consume the entire budget while every individual asset passed its cap and nothing
+#: complained. That is the deliverability question the file cap was crudely approximating, and
+#: this is it asked directly.
+#:
+#: 20,000 is a quarter of ``context_budget_chars`` (80,000) -- one table may not take a quarter of
+#: the whole rendered budget. Worst observed: 8,435 (``archibus_room_attributes``, 156 columns)
+#: and 6,787 (``european_football_2.partido``, 118), so 2.4x headroom.
+CLOSURE_CAP: int = 20_000
 
 _ALNUM = re.compile(r"[^a-z0-9]")
 _WORD = re.compile(r"[A-Za-z][A-Za-z'-]*")
@@ -263,6 +285,12 @@ def check_local(kind: str, a: dict[str, Any], where: str) -> dict[str, list[Find
 
     if summary == SENTINEL or summary.startswith(SENTINEL):
         out["V2"].append(Finding(f"{where}: summary is still the scaffold sentinel"))
+
+    body_cap = BODY_CAP.get(kind, BODY_CAP["*"])
+    if len(body) > body_cap:
+        out["V13"].append(
+            Finding(f"{where}: body is {len(body):,} chars, cap {body_cap:,} for {kind}")
+        )
 
     for field in ASSET_REGISTER[at].identifier_fields:
         raw = a.get(field)
@@ -475,6 +503,54 @@ def check_loadable(paths: Iterable[Path]) -> list[Finding]:
     return bad
 
 
+def check_delivery_closure(paths: Iterable[Path]) -> list[Finding]:
+    """V16 -- a table plus the roster its columns fold into fits :data:`CLOSURE_CAP`.
+
+    **Measured with the renderer that does the delivering**, not with a second copy of its
+    arithmetic: ``serve/context.py``'s own ``_structural_line`` and ``_roster_entry`` are what
+    decide the cost, so a rule that recomputed it here would be free to drift from the thing it
+    claims to bound. That is also why this loads the file through ``corpus/store.py`` rather than
+    reading the raw YAML the other rules use -- inline columns only become assets on the way
+    through the loader, and it is the assets that are rendered.
+
+    Per file, which is exact rather than convenient: a column asset exists only inside its
+    table's file, so one file holds a whole closure and no cross-file pass is needed.
+
+    A *hit* column keeps its own body instead of folding, so the true worst case is slightly
+    above what this measures. The gap is small -- column bodies run ~119 chars at the median, so
+    twenty hits add ~2,600 -- and it cannot be computed without a query, which a conformance rule
+    does not have.
+    """
+    from governed_bi.corpus.store import load_file
+    from governed_bi.serve.context import _roster_entry, _structural_line
+
+    bad: list[Finding] = []
+    for path in paths:
+        loaded, _ = load_file(path)
+        tables = [a for a in loaded if type(a).__name__ == "TableAsset"]
+        columns = [a for a in loaded if type(a).__name__ == "ColumnAsset"]
+        for table in tables:
+            roster = sum(len(_roster_entry(c)) + 1 for c in columns)
+            cost = len(_structural_line(table, terse=False)) + len(str(_field_of(table, "body")))
+            total = cost + roster
+            if total > CLOSURE_CAP:
+                bad.append(
+                    Finding(
+                        f"{path.name}: renders {total:,} chars "
+                        f"({cost:,} table + {roster:,} roster over {len(columns)} columns), "
+                        f"cap {CLOSURE_CAP:,}"
+                    )
+                )
+    return bad
+
+
+def _field_of(asset: Any, name: str) -> Any:
+    """One asset field, whether the asset is a model or a mapping. ``""`` when absent."""
+    if isinstance(asset, dict):
+        return asset.get(name) or ""
+    return getattr(asset, name, "") or ""
+
+
 def check_split_leak(assets, test_split: Path) -> list[Finding]:
     """V12 -- no asset quotes a held-out question."""
     questions = {
@@ -507,9 +583,10 @@ RULES: dict[str, str] = {
     "V10": "no text discloses how an unreliable column was made",
     "V11": "a suspect column's summary omits the column it resembles",
     "V12": "no asset quotes a held-out question",
-    "V13": "no file exceeds its byte cap (few_shot 4k, else 32k)",
+    "V13": "no asset body exceeds its cap (few_shot 4k, else 8k)",
     "V14": "the engine's loader accepts the file",
     "V15": "exactly the manifest's columns are marked suspect",
+    "V16": "a table and its folded column roster fit the delivery cap",
 }
 WHOLE_TREE_ONLY = ("V9", "V11", "V12", "V15")
 
@@ -545,15 +622,7 @@ def main(argv: list[str] | None = None) -> int:
 
     findings["V14"].extend(check_loadable(sorted({p for _, _, p in assets})))
 
-    kind_of_file: dict[Path, str] = {}
-    for kind, _, p in assets:
-        kind_of_file.setdefault(p, kind)
-    for p, kind in sorted(kind_of_file.items()):
-        cap = FILE_CAP.get(kind, FILE_CAP["*"])
-        if p.exists() and p.stat().st_size > cap:
-            findings["V13"].append(
-                Finding(f"{p.name}: {p.stat().st_size:,} bytes, cap {cap:,} for {kind}")
-            )
+    findings["V16"].extend(check_delivery_closure(sorted({p for _, _, p in assets})))
 
     skipped: dict[str, str] = {}
     if whole:

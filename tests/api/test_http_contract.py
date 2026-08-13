@@ -62,23 +62,16 @@ QUESTION = "how many root beer brands are there"
 
 
 @pytest.fixture(autouse=True)
-def _isolated(monkeypatch):
-    """Two pieces of process-wide state this file touches, cleaned up around every test.
+def _isolated():
+    """The one piece of process-wide state this file touches, cleaned up around every test.
 
     ``build_serve_graph`` declares its session's constants trusted, and that registry is
     process-wide (``serve/runtime.trust``) — which is the design, since the server is one
     session per process. In a suite it is shared mutable state, and the failure mode is the
     worst kind: a test that passes because an earlier one registered a corpus.
-
-    ``GOVERNED_BI_API_KEY`` is the second: the custom routes refuse every request without it
-    (audit A1/A7), so :func:`_client` has to set one — and through ``monkeypatch``, because a
-    bare ``os.environ`` write decides whether *other* files' tests skip. Caught by the whole
-    suite: ``test_chat_transport.py`` stops skipping when this leaks.
     """
-    from governed_bi.api.auth import API_KEY_VAR
     from governed_bi.serve.runtime import trust
 
-    monkeypatch.setenv(API_KEY_VAR, "contract-key")
     trust()
     yield
     trust()
@@ -298,15 +291,10 @@ def test_capabilities_reports_what_is_true_not_what_is_configured() -> None:
 
 
 def _client(app: Any) -> Any:
-    """A ``TestClient`` holding the transport key the custom routes require (audit A1/A7).
-
-    The variable itself is set by :func:`_isolated`, which owns putting it back.
-    """
+    """A ``TestClient`` over ``app``. No credential: the engine requires none (2026-08-13)."""
     from fastapi.testclient import TestClient
 
-    from governed_bi.api.auth import API_KEY_HEADER
-
-    return TestClient(app, headers={API_KEY_HEADER: "contract-key"})
+    return TestClient(app)
 
 
 def _indexed_session(*, model: Any = None, connector: Any = None, policy: Any = None) -> Any:

@@ -136,26 +136,24 @@ class _TurnLog:
         return None
 
 
-def test_every_check_the_script_makes_still_passes(smoke_api, monkeypatch) -> None:
+def test_every_check_the_script_makes_still_passes(smoke_api) -> None:
     """The whole of ``run_checks``, over an app built from :func:`_session`.
 
     Asserts the returned failure list is empty **and** that the run printed something: a
     ``run_checks`` that returned early would report no failures, which is the shape the script's
     own `PASS` line would then print.
-    """
-    from governed_bi.api.auth import API_KEY_VAR
-    from governed_bi.api.routes import make_app
 
-    # The middleware compares against the environment, so the two ends of the key have to agree.
-    # Through `monkeypatch`, because a bare `os.environ` write decides whether *other* files'
-    # tests skip — `tests/serve/test_chat_transport.py` stops skipping when this leaks.
-    monkeypatch.setenv(API_KEY_VAR, "smoke-key")
+    The client is built here rather than through the script's own helper, because the helper's
+    only remaining job was to attach a transport credential and the engine requires none
+    (2026-08-13). ``run_checks`` takes a client, which is the seam that matters.
+    """
+    from fastapi.testclient import TestClient
+
+    from governed_bi.api.routes import make_app
 
     lines: list[str] = []
     app = make_app(_session(), None, _TurnLog())
-    failures = smoke_api.run_checks(
-        smoke_api.client_for(app, "smoke-key"), out=lines.append
-    )
+    failures = smoke_api.run_checks(TestClient(app), out=lines.append)
 
     assert not failures, "\n".join(lines)
     checks = [line for line in lines if line.startswith(("  ok  ", "  FAIL"))]
@@ -163,19 +161,3 @@ def test_every_check_the_script_makes_still_passes(smoke_api, monkeypatch) -> No
         f"the script made {len(checks)} checks, which is fewer than it declares. A `run_checks` "
         f"that returns early reports no failures and prints PASS:\n" + "\n".join(lines)
     )
-
-
-def test_the_script_refuses_to_run_without_a_transport_key(smoke_api, monkeypatch) -> None:
-    """``main()`` must not measure the auth gate and call it a smoke test.
-
-    Every route but ``/livez`` refuses without ``GOVERNED_BI_API_KEY`` (audit A1/A7), so a run
-    with no key would fail every check for one reason and print a wall of FAILs that says nothing
-    about the payloads. It exits 2 instead — and this is asserted rather than trusted because the
-    check runs *before* ``session_from_environment``, so it is the one branch of ``main()`` a
-    machine with no database can reach.
-    """
-    from governed_bi.api.auth import API_KEY_VAR
-
-    monkeypatch.delenv(API_KEY_VAR, raising=False)
-    monkeypatch.setattr(smoke_api, "_load_env", lambda: [])
-    assert smoke_api.main() == 2

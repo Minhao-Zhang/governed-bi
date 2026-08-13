@@ -1,4 +1,4 @@
-"""Audit A4, through the runtime's own dispatch rather than by calling the handler.
+"""Audits A2/A3 and A4, through the runtime's own dispatch rather than by calling the handler.
 
 **This file exists because the first A4 test called the handler function directly.** It passed while
 the handler was dead: it read ``value["command"]`` and ``langgraph_api`` puts the command at
@@ -14,6 +14,14 @@ model, no corpus and no Postgres — the in-memory runtime is enough.
 Every route that can apply a ``command`` funnels through this one action: ``POST /threads/{id}/runs``,
 ``/runs/stream``, ``/runs/wait``, the threadless ``POST /runs`` family, ``/runs/batch``, the cron
 scheduler and the v2 event-streaming path. One dispatch, so one test covers them.
+
+**A2/A3 — the ``threads.update`` denial — is here too, and it had no test at all until
+2026-08-13.** It was written and audited alongside A4 and nothing in the suite ever dispatched
+against it, so deleting ``@auth.on.threads.update`` was a green diff: ``_get_handler`` returns
+``None`` on no match and ``handle_event`` treats that as *allow*, which is the same fail-open
+shape the A4 story above is about. It became load-bearing when the transport key was removed,
+since the key was the other thing standing between an arbitrary local caller and
+``POST /threads/{id}/state``.
 """
 
 from __future__ import annotations
@@ -35,8 +43,8 @@ FORGED = {
 }
 
 
-def _dispatch(command: dict | None) -> None:
-    """Put a run through the real auth dispatch. Raises the SDK's 403 when refused."""
+def _event(action: str, value: object) -> None:
+    """Put one event through the real auth dispatch. Raises the SDK's 403 when refused."""
     import asyncio
 
     from langgraph_api.auth.custom import handle_event
@@ -55,18 +63,18 @@ def _dispatch(command: dict | None) -> None:
         permissions=[],
         user=_User(),  # type: ignore[arg-type]
         resource="threads",
-        action="create_run",
+        action=action,
     )
+    asyncio.run(handle_event(ctx, value))
+
+
+def _dispatch(command: dict | None) -> None:
+    """Put a run creation through the real auth dispatch."""
     # The shape `langgraph_runtime_inmem/ops.py` builds: the command is nested under `kwargs`.
     kwargs: dict = {"input": {"question": "how many"}, "config": {}, "context": {}}
     if command is not None:
         kwargs["command"] = command
-    value = {
-        "thread_id": "t-1",
-        "assistant_id": "a-1",
-        "kwargs": kwargs,
-    }
-    asyncio.run(handle_event(ctx, value))
+    _event("create_run", {"thread_id": "t-1", "assistant_id": "a-1", "kwargs": kwargs})
 
 
 def test_the_runtime_dispatch_refuses_a_forged_licensed_and_corpus_hash() -> None:
@@ -110,11 +118,35 @@ def test_a_command_shape_this_hook_cannot_read_is_refused_not_allowed() -> None:
     assert getattr(caught.value, "status_code", None) == 403
 
 
-def test_the_handler_is_actually_registered_for_run_creation() -> None:
-    """The wiring, asserted separately — deleting the decorator left the old test green.
+def test_the_runtime_dispatch_refuses_a_thread_state_write() -> None:
+    """Audit A2/A3, through the dispatch ``ops.Threads.State.post`` uses.
+
+    ``POST /threads/{id}/state`` forwards the caller's ``as_node`` into ``graph.aupdate_state``,
+    and ``as_node`` is what bypasses ``input_schema``: ``as_node="accept"`` writes ``ServeState``
+    directly, widening ``ToolBounds.licensed`` and forging ``corpus_content_hash``. The denial is
+    unconditional, so the payload here is the one the audit measured rather than an edge case.
+
+    ``PATCH /threads/{id}`` dispatches the same ``"update"`` action, so it is covered by this.
+    """
+    with pytest.raises(Exception) as caught:
+        _event(
+            "update",
+            {"thread_id": "t-1", "values": FORGED, "as_node": "accept"},
+        )
+    assert getattr(caught.value, "status_code", None) == 403, caught.value
+    assert "as_node" in str(getattr(caught.value, "detail", caught.value))
+
+
+def test_both_handlers_are_actually_registered() -> None:
+    """The wiring, asserted separately — deleting a decorator left the old A4 test green.
 
     ``langgraph_api``'s ``_get_handler`` returns ``None`` when nothing matches and ``handle_event``
-    treats that as **allow**, so an unregistered action is fail-open and silent.
+    treats that as **allow**, so an unregistered action is fail-open and silent. Nothing else in
+    the suite would notice: every other test here asserts a *refusal*, and an unregistered action
+    simply stops refusing.
+
+    Both actions, because they are the whole of what this module protects now that no credential
+    is required to reach the port.
     """
     from langgraph_api.auth.custom import get_auth_instance
 
@@ -123,6 +155,7 @@ def test_the_handler_is_actually_registered_for_run_creation() -> None:
     registered = {
         key for key in getattr(instance, "_handlers", {})
     }
-    assert ("threads", "create_run") in registered, (
-        f"run creation has no handler, so it is fail-open: {sorted(registered)}"
-    )
+    for action in ("create_run", "update"):
+        assert ("threads", action) in registered, (
+            f"threads.{action} has no handler, so it is fail-open: {sorted(registered)}"
+        )

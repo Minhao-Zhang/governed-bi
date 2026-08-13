@@ -21,7 +21,7 @@
 
 import { Client, type Thread } from "@langchain/langgraph-sdk";
 
-import { API_KEY, LANGGRAPH_URL } from "@/lib/env";
+import { LANGGRAPH_URL } from "@/lib/env";
 
 /** One row of the conversation list. */
 export interface ConversationSummary {
@@ -46,11 +46,8 @@ let client: Client | null = null;
 function threadsClient(): Client {
   // One client, built lazily. `LANGGRAPH_URL` is empty in mock mode and `listConversations`
   // refuses before reaching here, so a mock-mode build never constructs one.
-  // `apiKey` is the SDK's own option and sends `x-api-key`, which is the spelling
-  // the engine picked so one option covers every SDK call site. Undefined rather
-  // than "" when unconfigured: the SDK omits the header entirely instead of
-  // presenting an empty credential the engine would reject as wrong-rather-than-absent.
-  client ??= new Client({ apiUrl: LANGGRAPH_URL, apiKey: API_KEY || undefined });
+  // No `apiKey`: the engine reads no credential off the wire, so there is none to send.
+  client ??= new Client({ apiUrl: LANGGRAPH_URL });
   return client;
 }
 

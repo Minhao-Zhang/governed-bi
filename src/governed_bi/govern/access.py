@@ -48,9 +48,9 @@ __all__ = [
     "SUITE_VERSION",
 ]
 
-#: The one principal this repository has. ``api/auth.py`` checks a single shared key and
-#: returns ``identity: "governed-bi-local"``; this is that identity as a value, so a fork
-#: replacing the auth handler has one name to grep for.
+#: The one principal this repository has. ``api/auth.py`` authenticates unconditionally and
+#: returns ``identity: "governed-bi-local"`` for every caller; this is that identity as a value,
+#: so a fork replacing the auth handler has one name to grep for.
 #:
 #: It **is** imported by ``api/`` — ``api/auth.py::authenticated_principal`` returns this object
 #: and the handler returns ``authenticated_principal().id`` rather than its own copy of the

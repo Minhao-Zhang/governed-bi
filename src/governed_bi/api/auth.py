@@ -1,23 +1,29 @@
-"""Authentication and the state-write denial, for the self-hosted deployment.
+"""The state-write denial. **No credential is required to reach this engine.**
 
-Wired by ``langgraph.json``'s ``auth.path``. Without it ``LANGGRAPH_AUTH_TYPE`` defaults to
-``"noop"`` and ``NoopAuthBackend`` returns ``UnauthenticatedUser()`` for every request, which is
-what the 2026-08-10 audit found: **~82 routes with no authentication**, including every custom
-route in ``routes.py`` and every platform route under ``/threads``, ``/runs``, ``/store``,
-``/assistants``, ``/mcp`` and ``/a2a``.
+Wired by ``langgraph.json``'s ``auth.path``, which stays wired even though nothing here
+authenticates: the ``@auth.on`` handlers below are the reason the block exists. Without
+``auth.path`` ``LANGGRAPH_AUTH_TYPE`` defaults to ``"noop"``, and a noop backend runs no
+``@auth.on`` handler either — the state-write denials would go with it.
 
-Two things happen here, and they answer different findings.
+Two things happen here, and only one of them is about who is calling.
 
-**A1 — a shared key, checked in constant time.** This is a single-operator local deployment
-(``langgraph dev`` on localhost), so the threat is not a multi-tenant one: it is that any web page
-the operator visits can drive the engine and read the audit log, because the server's CORS default
-is ``allow_origins=["*"]`` with ``allow_credentials=True``. Narrowing CORS (``langgraph.json``
-``http.cors``) closes the browser half; this closes the rest — another process on the machine, a
-container on the same bridge, anything that can reach the port.
+**A1/A7 were closed by a shared key, and the key was deliberately removed (2026-08-13).** The
+2026-08-10 audit found ~82 routes with no authentication, and the fix was a shared
+``GOVERNED_BI_API_KEY`` compared here in constant time and again in ``routes.py``'s middleware.
+It worked, and it made the product unusable: LangGraph Studio's bootstrap fetches carry no custom
+headers, so its probe arrived with no ``x-api-key`` and the whole surface answered 401 through a
+middleware that runs outside CORS, presenting as an opaque network error rather than a refusal.
+This is a single-operator local dev engine bound to ``127.0.0.1``, the operator is the only
+principal, and the maintainer chose reachability over transport auth: **reaching the port is now
+sufficient.**
 
-A key in the UI's bundle is not a secret from the person using the browser, and is not meant to
-be. It is meant to stop a caller who cannot read that bundle, which is exactly the cross-origin
-attacker the wildcard CORS default invited.
+What that re-exposes is A1 and A7, verbatim and on purpose. Anything that can reach the port —
+another process on the machine, a container on the same bridge, a page whose origin
+``langgraph.json``'s ``http.cors`` allow-list happens to permit — can drive the engine, spend
+model budget, and read ``/audit/turns`` and ``/audit/turns/{id}/trace``, which return every
+thread's SQL, the full turn records and an absolute path to the log directory. The binding to
+loopback is the whole of the remaining control. A fork that exposes this port to a network has to
+put the credential back, and ``docs/enterprise-fork.md`` is where that trigger is recorded.
 
 **A2/A3 — ``threads.update`` is denied outright.** ``POST /threads/{id}/state`` forwards a
 client-supplied ``as_node`` (``langgraph_api/api/threads.py:322``) straight into
@@ -33,16 +39,15 @@ The route cannot be disabled on its own — ``http.disable_threads`` would take 
 it, and ``useStream`` needs that — so the denial is here, on the ``"update"`` action that
 ``langgraph_runtime_inmem.ops.Threads.State.post`` actually consults.
 
-**What this does not do.** It is not multi-user authorization: one key means one principal, so
-``resume_authorised``'s per-caller check (``govern/bounds.py``) is still the only thing that
-distinguishes two callers, and on the streamed transport it is still not reached
-(audit A5 — ``serve/accept.py``'s node passes no ``identity``). That is a separate fix.
+**What this does not do.** It is not authorization of any kind beyond the two denials above.
+There is one principal and no way to tell two callers apart, so ``resume_authorised``'s
+per-caller check (``govern/bounds.py``) is still the only thing that distinguishes them, and on
+the streamed transport it is still not reached (audit A5 — ``serve/accept.py``'s node passes no
+``identity``). That was true while the key existed too: a shared key cannot name a caller either.
 """
 
 from __future__ import annotations
 
-import hmac
-import os
 from collections.abc import Mapping
 
 from langgraph_sdk import Auth
@@ -51,46 +56,21 @@ from governed_bi.govern.access import LOCAL_PRINCIPAL
 from governed_bi.ports import Principal
 
 __all__ = [
-    "API_KEY_HEADER",
-    "API_KEY_VAR",
-    "api_key_refusal",
     "auth",
     "authenticated_principal",
 ]
 
-#: Env var holding the shared key. Unset means every request is refused — see
-#: :func:`_authenticate`. Named rather than inlined so the error text can quote it.
-API_KEY_VAR = "GOVERNED_BI_API_KEY"
-
-#: ``x-api-key`` because that is what the LangGraph SDK's own ``apiKey`` option sends, so the UI
-#: needs one option rather than a custom header on every call, and ``useStream`` carries it for
-#: free. The SDK also accepts ``Authorization: Bearer``; both are read below so a curl against
-#: the running server does not have to know which one the UI chose.
-API_KEY_HEADER = "x-api-key"
-
 auth = Auth()
-
-
-#: Refusal text for an unset variable. One string, because the custom-route middleware and the
-#: platform handler must not disagree about what "no key configured" means.
-_UNSET_DETAIL = (
-    f"{API_KEY_VAR} is not set, so this server refuses every request. Set it to a value the "
-    "client also sends (x-api-key, or Authorization: Bearer). It is the only thing standing "
-    "between the engine and any process that can reach this port — the server's own CORS "
-    "default is allow_origins=* with credentials."
-)
-
-_WRONG_DETAIL = f"missing or wrong {API_KEY_HEADER}"
 
 
 def authenticated_principal() -> Principal:
     """The one :class:`~governed_bi.ports.Principal` this server executes turns for.
 
     **A function of nothing, because authentication here is a function of nothing.**
-    :func:`_authenticate` compares one shared key; a shared key cannot distinguish two
-    callers, so every request that gets past it is the same subject. Returning
-    :data:`~governed_bi.govern.access.LOCAL_PRINCIPAL` rather than deriving a principal
-    from the key is the same refusal ``_authenticate`` already makes about ``identity``.
+    :func:`_authenticate` admits every caller, so every request is the same subject — as it
+    was when a shared key guarded the door, since a shared key cannot distinguish two callers
+    either. The single-principal model did not change when the key went; it just stopped
+    being proven by anything.
 
     It exists so the composition root has **one** place to change. ``govern/access.py`` used
     to record that ``LOCAL_PRINCIPAL`` was "not imported by ``api/`` today" and now records
@@ -108,62 +88,28 @@ def authenticated_principal() -> Principal:
     return LOCAL_PRINCIPAL
 
 
-def _presented(headers: dict[bytes, bytes], authorization: str | None) -> str | None:
-    """The key the caller presented, from either spelling."""
-    raw = headers.get(API_KEY_HEADER.encode())
-    if raw:
-        return raw.decode("utf-8", "replace").strip()
-    if authorization and authorization.lower().startswith("bearer "):
-        return authorization[7:].strip()
-    return None
-
-
-def api_key_refusal(headers: Mapping[str, str]) -> str | None:
-    """``None`` if this caller may proceed, else the refusal detail.
-
-    Exists so ``routes.py``'s middleware — which the platform will not wrap, see the note there —
-    decides with the same code as :func:`_authenticate` rather than with a second comparison that
-    can drift. Takes ``str`` headers because that is what Starlette hands a middleware, while the
-    ``Auth`` handler is given ``bytes``.
-    """
-    lowered = {k.lower().encode(): v.encode() for k, v in headers.items()}
-    authorization = headers.get("authorization") or headers.get("Authorization")
-    expected = (os.environ.get(API_KEY_VAR) or "").strip()
-    if not expected:
-        return _UNSET_DETAIL
-    presented = _presented(lowered, authorization)
-    if not presented or not hmac.compare_digest(presented, expected):
-        return _WRONG_DETAIL
-    return None
-
-
 @auth.authenticate
-async def _authenticate(
-    headers: dict[bytes, bytes],
-    authorization: str | None,
-) -> Auth.types.MinimalUserDict:
-    """Refuse unless the caller presents the configured key.
+async def _authenticate() -> Auth.types.MinimalUserDict:
+    """Admit every caller. **Reaching the port is the whole of the check.**
 
-    **Fail closed on an unset variable, by refusing requests rather than by refusing to start.**
-    Raising at import would leave the operator with a server that will not boot and an exception
-    from a file they did not know was in the request path; refusing here names the variable in
-    the 401 and is diagnosable from the client that hit it. Either way the answer to "no key
-    configured" is *no*, never *everyone* — which is what the default backend answered.
+    It takes no parameters because it reads nothing: no ``headers``, no ``authorization``, no
+    ``request``. A signature that accepted them would suggest something inspects them. Until
+    2026-08-13 this compared ``GOVERNED_BI_API_KEY`` in constant time and raised 401 otherwise,
+    closing audit A1 — see the module docstring for why the key was removed and what that
+    re-exposes.
 
-    ``hmac.compare_digest`` rather than ``==``: the comparison is against a secret, and a
-    short-circuiting compare on a local socket is still a timing oracle. Cheap to do correctly.
+    **It cannot simply be deleted, and this is why ``langgraph.json`` keeps its ``auth`` block.**
+    ``langgraph_api/auth/custom.py`` raises at startup when a loaded ``Auth`` object has no
+    ``@auth.authenticate`` handler, and dropping ``auth.path`` instead would fall back to the noop
+    backend, which runs no ``@auth.on`` handler either — the ``threads.update`` and
+    ``threads.create_run`` denials below would go with it. Those are not authentication and do not
+    depend on knowing the caller: they refuse a *payload*, from anyone.
+
+    ``identity`` is spelled through :func:`authenticated_principal` rather than as a literal, so
+    the string ``govern/bounds.resume_authorised`` compares and the principal
+    ``api/graph_app.py`` asks the access policy about are one value (ADR 0012 §8.1). It is not
+    evidence of anything about the caller — it was not when a shared key produced it either.
     """
-    refusal = api_key_refusal(
-        {k.decode("latin-1"): v.decode("latin-1") for k, v in headers.items()}
-        | ({"authorization": authorization} if authorization else {})
-    )
-    if refusal is not None:
-        raise Auth.exceptions.HTTPException(status_code=401, detail=refusal)
-    # One key, one principal. `identity` is what `govern/bounds.resume_authorised` gates on, and
-    # it is deliberately NOT derived from this: a single shared key cannot distinguish two
-    # callers, so claiming it as an identity would make that check look enforced when it is not.
-    # Spelled through `authenticated_principal()` so the string the resume guard compares and the
-    # principal `api/graph_app.py` asks the access policy about are one value (ADR 0012 §8.1).
     return {"identity": authenticated_principal().id, "permissions": []}
 
 

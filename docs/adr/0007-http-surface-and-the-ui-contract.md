@@ -263,6 +263,46 @@ for the other pages not to error: `/health`, `/schema/summary`, `/corpus/assets`
 > liveness probe, and unlike `/health` it deliberately does not touch the session, so it is the
 > one that was always right for that job.
 
+### Amendment 3 (2026-08-13): the transport authenticates nobody
+
+**The original decision said nothing about authentication, and that was the state of the surface
+for nine days.** The 2026-08-10 audit named it — A1, "~82 routes with no authentication", and A7,
+"`/audit/turns` and `/audit/turns/{id}/trace` return every thread's SQL, full records, and an
+absolute log path, unauthenticated". Both were closed on 2026-08-12 by a shared key in
+`GOVERNED_BI_API_KEY`, compared in constant time, required on every route but `GET /livez`. That
+change was never written down here.
+
+**It is now removed, and A1 and A7 are open again as written.** Deleted: `API_KEY_VAR`,
+`API_KEY_HEADER` and `api_key_refusal` from `api/auth.py`; `_require_api_key`, `_OPEN_PATHS` and
+`_cors_headers` from `api/routes.py`. `GET /livez` is no longer a special case, because there is
+no longer a case to be special about. `@auth.authenticate` remains and allows unconditionally.
+
+**Why.** This is a single-operator engine on `127.0.0.1` under `langgraph dev`, and LangGraph
+Studio cannot present a credential on the calls it bootstraps with: measured 2026-08-13, `/info`,
+`/assistants/search` and `/assistants/{id}` arrive with no custom header — the server answered
+*no credential presented* while the key in Studio's connection dialog was correct. A key that
+makes the primary debugging client unusable, on a port that is already loopback-only, was judged
+to cost more than it bought. The maintainer chose reachability over transport auth.
+
+**What that costs, stated rather than dropped.** Anything that can open a socket to the port can
+drive the engine: post a turn, execute governed SQL against the configured database, and read
+`/audit/turns`, which returns every thread's SQL, the full turn records, and an absolute path to
+the log directory on disk. The CORS origin list in `langgraph.json` is the only remaining
+narrowing, and it narrows browsers only. **The port is the boundary.** A deployment that is not
+one operator on loopback needs authentication in front of this engine — see
+[`docs/enterprise-fork.md`](../enterprise-fork.md).
+
+**What survives, and why `langgraph.json` keeps `auth.path`.** `api/auth.py` still holds its
+`Auth()` instance and both `@auth.on` handlers. `threads.update` and `threads.create_run` refuse a
+client-supplied state-writing `command`, which is what keeps audit findings A2, A3 and A4 closed:
+thread state carries `licensed`, the bound the layer stack enforces against, and
+`corpus_content_hash`, the treatment identity every quotability gate reads. Those denials are
+about *what may be written*, not *who is writing*, so removing authentication does not touch them.
+`authenticated_principal()` also survives and still returns the one principal the access seam
+([ADR 0012](0012-access-seam-principal-and-authorization.md)) is asked about — unchanged in
+behaviour, weaker in justification: it was a function of nothing because one shared key could not
+distinguish two callers, and it is a function of nothing now because there is nothing to read.
+
 ## Consequences
 
 - The engine gains `src/governed_bi/api/`, and `tools/check_imports.py`'s already-declared

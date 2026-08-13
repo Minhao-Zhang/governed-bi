@@ -93,12 +93,17 @@ GOVERNED_BI_CORPUS_DIR=../BIRD-corpus
 Then start the two processes:
 
 ```bash
-GOVERNED_BI_API_KEY=$(openssl rand -hex 32) uv run langgraph dev   # engine  :2024
-npm --prefix ui run dev                                            # client  :3000
+uv run langgraph dev            # engine  :2024
+npm --prefix ui run dev         # client  :3000
 ```
 
-The API key is required on every route but `GET /livez`; unset means refuse, not open. Copy
-[`ui/.env.example`](ui/.env.example) to `ui/.env.local` and give the client the same key.
+**The engine authenticates nobody.** No route asks for a credential, so anything that can reach
+`:2024` can post a turn and read every past one — including the SQL — out of `GET /audit/turns`.
+That is a deliberate choice for a single-operator engine on loopback, taken on 2026-08-13 because
+LangGraph Studio's bootstrap calls cannot carry a header; it re-opens audit findings A1 and A7,
+and [the usage guide](docs/usage.md#serve-langgraph-server) says so in full. Do not put this port
+anywhere but `127.0.0.1`. Copy [`ui/.env.example`](ui/.env.example) to `ui/.env.local` to point
+the client at the engine.
 
 Chat is one of five views. The others show the semantic layer as an ER diagram and a knowledge
 graph, page through every corpus asset, list past conversations, and replay any served turn stage

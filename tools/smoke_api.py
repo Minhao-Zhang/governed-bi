@@ -58,19 +58,6 @@ def _load_env() -> list[str]:
     return names
 
 
-def client_for(app: Any, api_key: str) -> Any:
-    """A ``TestClient`` carrying the transport key every route but ``/livez`` requires.
-
-    The key is an argument rather than read from the environment here, because :func:`run_checks`
-    is called from a test that must not depend on one being set.
-    """
-    from fastapi.testclient import TestClient
-
-    from governed_bi.api.auth import API_KEY_HEADER
-
-    return TestClient(app, headers={API_KEY_HEADER: api_key})
-
-
 def run_checks(client: Any, *, out: Callable[[str], None] = print) -> list[str]:
     """Every assertion this script makes, over an app. Returns the labels that failed.
 
@@ -191,25 +178,20 @@ def main() -> int:
     set_names = _load_env()
     print(f"env: set {len(set_names)} name(s) from .env: {', '.join(sorted(set_names)) or '(none)'}")
 
+    from fastapi.testclient import TestClient
+
     from governed_bi.api import trace_store
-    from governed_bi.api.auth import API_KEY_VAR
     from governed_bi.api.graph_app import session_from_environment
     from governed_bi.api.routes import make_app
-
-    api_key = os.environ.get(API_KEY_VAR)
-    if not api_key:
-        print(
-            f"{API_KEY_VAR} is not set. Every route but /livez refuses without it (audit A1/A7), "
-            "so this run would measure the auth gate and nothing else."
-        )
-        return 2
 
     session = session_from_environment()
     print(f"corpus: {len(session.assets_by_id)} assets, hash {session.corpus_content_hash[:12]}…")
     print(f"        {len(session.fatal_problems)} fatal, {len(session.degradations)} degradations")
 
+    # No headers: no route asks for a credential (2026-08-13). This used to carry `x-api-key`, and
+    # `main()` used to exit 2 when the variable was unset rather than measure the auth gate.
     # `graph=None`: nothing here posts a turn, and a chat graph would build a model client.
-    failures = run_checks(client_for(make_app(session, None, trace_store), api_key))
+    failures = run_checks(TestClient(make_app(session, None, trace_store)))
 
     print(f"\n{'PASS' if not failures else 'FAIL: ' + ', '.join(failures)}")
     return 1 if failures else 0

@@ -37,7 +37,7 @@ import {
   type ClarificationResponse,
 } from "@/lib/clarification";
 import { api } from "@/lib/api-client";
-import { API_KEY, ASSISTANT_ID, LANGGRAPH_URL } from "@/lib/env";
+import { ASSISTANT_ID, LANGGRAPH_URL } from "@/lib/env";
 import {
   buildStepsFromLedger,
   defaultLabel,
@@ -276,10 +276,7 @@ export function useStreamChat(
 
   const stream = useStream<ChatStreamState>({
     apiUrl: LANGGRAPH_URL,
-    // Sends `x-api-key`. Without it every route but `GET /livez` answers 401 and the
-    // stream never opens — see `lib/env.ts`. Undefined rather than "" so an
-    // unconfigured client omits the header instead of presenting an empty one.
-    apiKey: API_KEY || undefined,
+    // No `apiKey`: the engine reads no credential off the wire, so there is none to send.
     assistantId: ASSISTANT_ID,
     messagesKey: "messages",
     threadId,

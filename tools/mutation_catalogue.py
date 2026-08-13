@@ -276,27 +276,16 @@ MUTATIONS: tuple[Mutation, ...] = (
         tests=("tests/measure/test_the_corpus_is_gated_not_only_declared.py",),
         finding="D7 — two arms over two corpora passed all six gates",
     ),
-    Mutation(
-        id="a1-custom-routes-open",
-        what="the custom routes stop requiring a key",
-        path="src/governed_bi/api/routes.py",
-        anchor='    if request.method != "OPTIONS" and request.url.path not in _OPEN_PATHS:',
-        replacement="    if False:",
-        tests=("tests/api/test_the_custom_routes_require_a_key.py",),
-        finding="A1/A7 — /audit/turns returned every thread's SQL to anybody",
-    ),
-    Mutation(
-        id="a1-preflight-gated",
-        what="a CORS preflight is refused for having no key",
-        path="src/governed_bi/api/routes.py",
-        anchor='    if request.method != "OPTIONS" and request.url.path not in _OPEN_PATHS:',
-        replacement="    if request.url.path not in _OPEN_PATHS:",
-        tests=(
-            "tests/api/test_the_custom_routes_require_a_key.py::"
-            "test_a_cors_preflight_is_not_refused",
-        ),
-        finding="a bug shipped and caught the same day — blocks every cross-origin call",
-    ),
+    # `a1-custom-routes-open` and `a1-preflight-gated` were here and are **deleted**, not
+    # disabled. Both were anchored on `routes.py`'s `_require_api_key` middleware and both named
+    # `tests/api/test_the_custom_routes_require_a_key.py`; the middleware and the test file were
+    # removed on 2026-08-13 when transport auth was dropped (see `api/auth.py`'s module
+    # docstring for why). A mutation entry whose anchor no longer exists fails `tools/mutate.py`
+    # as stale, which is the right behaviour and the reason these could not simply be left.
+    #
+    # Nothing replaces them, and that is the honest state: A1/A7 are open by decision now, so
+    # there is no gate left for a mutant to try to slip past. Restoring transport auth means
+    # restoring these two entries with it.
     Mutation(
         id="a4-reads-the-wrong-key",
         what="the hook reads value['command'], where the runtime does not put it",

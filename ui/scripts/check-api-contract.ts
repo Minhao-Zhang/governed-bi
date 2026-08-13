@@ -21,8 +21,6 @@
  * belongs next to `npm run lint` rather than in CI.
  */
 
-import { readFileSync } from "node:fs";
-
 import type { z } from "zod";
 
 import {
@@ -43,43 +41,8 @@ import {
 
 const BASE = process.env.LANGGRAPH_URL ?? "http://127.0.0.1:2024";
 
-/**
- * Transport auth, which this checker did not send and so could not check.
- *
- * The engine grew a required `x-api-key` on 2026-08-10 and every route here answered 401 from
- * then on — reported as `0/11 routes parse`, eleven contract failures that were all the same
- * missing header. A checker that fails identically on every input is not measuring the contract,
- * which is the failure this file's own header describes on the other side of the wire.
- *
- * Node does not read `.env.local`; that is Next's job, and this runs under plain `node
- * --experimental-strip-types`. So the file is parsed here, and only for keys the environment has
- * not already set — an explicit `NEXT_PUBLIC_GOVERNED_BI_API_KEY=… npm run check:api` still wins.
- * `../.env`'s `GOVERNED_BI_API_KEY` is deliberately NOT read: it holds the engine's secrets, and a
- * frontend script reaching into it would make the two configurations one, which they are not.
- */
-function loadEnvLocal(): void {
-  const path = new URL("../.env.local", import.meta.url);
-  let text: string;
-  try {
-    text = readFileSync(path, "utf8");
-  } catch {
-    return;
-  }
-  for (const line of text.split(/\r?\n/)) {
-    const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
-    if (!match || line.trimStart().startsWith("#")) continue;
-    const [, key, rawValue] = match;
-    if (process.env[key] !== undefined) continue;
-    process.env[key] = rawValue.trim().replace(/^["'](.*)["']$/, "$1");
-  }
-}
-
-loadEnvLocal();
-
-// Dynamic, and after `loadEnvLocal()`: `lib/env.ts` reads `process.env` at module scope, so a
-// static import would be evaluated before the file is parsed and `API_KEY` would be "". Importing
-// it rather than re-spelling `x-api-key` here keeps one definition of how this client authenticates.
-const { authHeaders, API_KEY } = await import("../lib/env.ts");
+// No credential is read or sent: the engine dropped transport auth, so `.env.local` holds
+// nothing this checker needs and every route below is reachable unauthenticated.
 
 type Case = { path: string; schema: z.ZodType<unknown>; note?: string };
 
@@ -105,7 +68,7 @@ function droppedKeys(raw: unknown, parsed: unknown, trail = ""): string[] {
 
 async function fetchJson(path: string): Promise<{ status: number; body: unknown }> {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { accept: "application/json", ...authHeaders() },
+    headers: { accept: "application/json" },
   });
   let body: unknown = null;
   try {
@@ -184,17 +147,6 @@ async function main(): Promise<void> {
   const reachable = await fetch(`${BASE}/livez`).catch(() => null);
   if (!reachable) {
     console.error(`No engine at ${BASE}. Start one, or set LANGGRAPH_URL.`);
-    process.exit(2);
-  }
-
-  // Exit 2 (a precondition), not 1 (a contract failure). Without the key every route below
-  // answers 401 identically, and reporting that as eleven schema mismatches is worse than
-  // reporting nothing: it names the payloads as the problem and hides the one real cause.
-  if (!API_KEY) {
-    console.error(
-      "No NEXT_PUBLIC_GOVERNED_BI_API_KEY (checked the environment, then ../.env.local). " +
-        "Every route but /livez answers 401 without it, so nothing here would be a contract result.",
-    );
     process.exit(2);
   }
 

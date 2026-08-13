@@ -4,8 +4,9 @@
 exists — an IdP, groups, a data catalogue with owners, maybe Postgres row-level security. You want
 this engine's governed text-to-SQL path, and you want it to answer *for a particular person*.
 
-**What this repository is.** A research engine with one API key, one principal, and a deterministic
-seven-layer gate between the model's SQL and the database ([ADR 0006](adr/0006-execution-time-governance.md)).
+**What this repository is.** A research engine with **no transport authentication at all**, one
+principal, and a deterministic seven-layer gate between the model's SQL and the database
+([ADR 0006](adr/0006-execution-time-governance.md)).
 It has a **seam** for authorization ([ADR 0012](adr/0012-access-seam-principal-and-authorization.md)) —
 ports, a default adapter that changes nothing, and one reference adapter.
 
@@ -16,7 +17,7 @@ because the right-hand column is work you are going to do:
 |---|---|
 | refuses a statement that names a table your policy does not grant | decide what your policy grants |
 | refuses a statement that names a column your policy denies | know which columns are PII |
-| authenticates one shared key | authenticate people, and map them to a `Principal` |
+| authenticates nobody — reaching the port is sufficient (2026-08-13) | authenticate people **first**, and map them to a `Principal` |
 | carries a `Principal` with an id and roles | resolve the roles — directory, IdP claims, group expansion |
 | declares a row-level predicate and **refuses** rather than applying it | enforce row-level security **in the database** |
 | gives you two `AccessPolicy` adapters | write the third, against whatever you already have |
@@ -24,6 +25,14 @@ because the right-hand column is work you are going to do:
 
 There is no tenant model, no policy admin UI, no user store, no per-caller token infrastructure and
 no SELECT-level masking. Those are the product; this is the seam.
+
+**Step 0, and it is not in the table because it is not optional.** Until 2026-08-12 the engine
+checked a shared key; on 2026-08-13 that was removed, for a reason that holds only here — a
+single-operator engine on `127.0.0.1`, where a required key made LangGraph Studio unusable
+([usage](usage.md#serve-langgraph-server)). The result is that **anything that can open a socket to
+the port can post a turn and read every past turn's SQL out of `/audit/turns`**; audit findings A1
+and A7 are open again as written. A fork does not inherit that trade. Terminate authentication in
+front of this engine before anything else on this page matters.
 
 ---
 
@@ -144,8 +153,9 @@ owed exist. What they do, so you know where to look when it misbehaves:
    ([ADR 0006 §13](adr/0006-execution-time-governance.md)).
 
 **What you still have to decide** is who your principals are and what their roles grant. The
-engine has one principal because it has one shared key; the moment you have two, see the audit
-findings at the bottom of this page.
+engine has one principal because nothing on its transport can produce a second one — there is no
+credential to derive one from; the moment you have two, see the audit findings at the bottom of
+this page.
 
 ### 4. Put row-level security in the database
 
@@ -327,9 +337,13 @@ Stated here rather than discovered by you:
   reader the column exists. ADR 0012 §4 trades that deliberately against collapsing it into
   "no such column"; the fix for a denied column being *visible* is to narrow the context, which
   step 5 does.
+- **Audit findings A1 and A7 are open again** — every route is unauthenticated, and `/audit/turns`
+  and `/audit/turns/{id}/trace` hand any caller every thread's SQL, the full turn records, and an
+  absolute log path. They were closed on 2026-08-12 by a shared key and re-opened on 2026-08-13
+  when it was removed (step 0 above). This is the finding a fork must not inherit.
 - **Audit findings A5, A6 and B1 are open** — the streamed transport passes no identity, `/chat/resume`
   validates by thread rather than by caller, and `POST /threads/search` returns `identity` and the
-  rendered context block. They are open because one shared key means one principal, so there is no
+  rendered context block. They are open because there is one principal, so there is no
   second caller to be wrong about. **The moment you have two principals, all three are live**, and
   they are the first things to fix. See [`docs/analysis/audit-2026-08-10.md`](analysis/audit-2026-08-10.md).
 - **Corpus prose is not PII-gated.** Rule V5 stops literals reaching an asset's `summary`, so authors

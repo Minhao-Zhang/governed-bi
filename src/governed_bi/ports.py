@@ -227,9 +227,11 @@ class RowPredicate:
 class Principal:
     """The subject a turn is executed for.
 
-    **This repository has exactly one.** ``api/auth.py`` checks a single shared key, so one
-    key is one principal (``govern/access.py::LOCAL_PRINCIPAL``); there is no user store, no
-    identity provider and no tenant field, and ADR 0012 declines to add any. ``roles`` exists
+    **This repository has exactly one**, ``govern/access.py::LOCAL_PRINCIPAL``, and since
+    2026-08-13 nothing proves it: ``api/auth.py`` authenticates every caller unconditionally,
+    so the subject is a constant rather than something a credential selects. It was a shared
+    key before that, which was the same one principal by a different route. There is no user
+    store, no identity provider and no tenant field, and ADR 0012 declines to add any. ``roles`` exists
     because an :class:`AccessPolicy` needs something to key on that is not the id itself —
     a fork that maps id → grant directly has a user store in its policy file.
     """

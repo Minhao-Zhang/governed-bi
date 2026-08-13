@@ -32,8 +32,8 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
-# The template is committed, the same way `../.env.example` is on the engine side. It carries no
-# value for the shared API key -- see its header for why the two files cannot be one.
+# The template is committed, the same way `../.env.example` is on the engine side. It holds no
+# secret -- see its header for why the two files cannot be one.
 !.env.example
 
 # vercel

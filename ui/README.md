@@ -94,25 +94,19 @@ Open [http://localhost:3000](http://localhost:3000) — it runs in **mock mode**
    uv run langgraph dev   # serves http://localhost:2024
    ```
 
-   Set `OPENAI_API_KEY` for live NL answers, and `GOVERNED_BI_API_KEY` to a value you
-   choose — every engine route but `GET /livez` requires it, and an engine started
-   without it refuses *every* request with 401 rather than running open. CORS already
-   allows `http://localhost:3000`.
+   Set `OPENAI_API_KEY` for live NL answers. No engine route requires a credential
+   from this client, so there is nothing to keep in step between the two processes.
+   CORS already allows `http://localhost:3000`.
 
 2. Copy [`.env.example`](.env.example) to `.env.local` (git-ignored):
 
    ```
    NEXT_PUBLIC_LANGGRAPH_URL=http://localhost:2024
    NEXT_PUBLIC_ASSISTANT_ID=serve
-   NEXT_PUBLIC_GOVERNED_BI_API_KEY=<the same value the engine was given>
    ```
 
-   The third must match the engine's `GOVERNED_BI_API_KEY` in `../.env` exactly.
    The two files are not merged by sharing a repository: Next.js inlines a
-   `NEXT_PUBLIC_` variable into the bundle at build time and never reads `../.env`. Omit it and the
-   client cannot get past `/capabilities`. Being `NEXT_PUBLIC_`, it ships inside the
-   browser bundle and is readable by anyone who loads the page: it is one shared
-   operator credential, not a per-user one.
+   `NEXT_PUBLIC_` variable into the bundle at build time and never reads `../.env`.
 
 3. Restart `npm run dev`. Leave the URL empty (or delete `.env.local`) to return
    to mock mode.
@@ -120,8 +114,7 @@ Open [http://localhost:3000](http://localhost:3000) — it runs in **mock mode**
 ## Deployment
 
 Config-driven, no code change: the UI deploys to Vercel and points
-`NEXT_PUBLIC_LANGGRAPH_URL` at a hosted LangGraph Server, with
-`NEXT_PUBLIC_GOVERNED_BI_API_KEY` set to that server's key.
+`NEXT_PUBLIC_LANGGRAPH_URL` at a hosted LangGraph Server.
 
 There is no SQLite deployment. The engine's served surface builds a `PostgresConnector`
 unconditionally (`api/graph_app.py`) and needs a live Postgres plus a curated semantic

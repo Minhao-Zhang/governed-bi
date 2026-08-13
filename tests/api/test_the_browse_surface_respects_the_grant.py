@@ -145,7 +145,6 @@ def _assets() -> list[Any]:
 def _client(grant: Grant) -> Any:
     from fastapi.testclient import TestClient
 
-    from governed_bi.api.auth import API_KEY_HEADER
     from governed_bi.api.routes import make_app
     from governed_bi.serve.session import from_assets
 
@@ -157,21 +156,12 @@ def _client(grant: Grant) -> Any:
         corpus_content_hash_="corpus-under-test",
     )
     assert not session.fatal_problems, [str(p) for p in session.fatal_problems]
-    return TestClient(
-        make_app(session, None, _TurnLog()), headers={API_KEY_HEADER: "browse-key"}
-    )
+    return TestClient(make_app(session, None, _TurnLog()))
 
 
 class _TurnLog:
     def list_turns(self, **_: Any) -> list[Any]:
         return []
-
-
-@pytest.fixture(autouse=True)
-def _key(monkeypatch) -> None:
-    from governed_bi.api.auth import API_KEY_VAR
-
-    monkeypatch.setenv(API_KEY_VAR, "browse-key")
 
 
 def _strings(payload: Any) -> list[str]:

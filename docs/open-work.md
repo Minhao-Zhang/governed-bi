@@ -740,6 +740,36 @@ What is still owed:
 
 ---
 
+### 4.3 Nothing authenticates, and audit A1 and A7 are open again
+
+`GOVERNED_BI_API_KEY` was removed on 2026-08-13 with the middleware and the `Auth` plumbing that
+read it ([ADR 0007](adr/0007-http-surface-and-the-ui-contract.md) Amendment 3). No route asks for
+a credential; reaching the port is sufficient. The two findings the key closed on 2026-08-12 are
+therefore live again in the words they were written in
+([audit-2026-08-10](analysis/audit-2026-08-10.md)):
+
+- **A1** — every route is unauthenticated, so anything that can open a socket to `:2024` can post
+  a turn and execute governed SQL against the configured database.
+- **A7** — `/audit/turns` and `/audit/turns/{id}/trace` hand that caller every thread's SQL, the
+  full turn records, and an absolute path to the log directory.
+
+**This is a recorded choice, not an oversight.** The engine is one operator on `127.0.0.1` under
+`langgraph dev`, and LangGraph Studio's bootstrap fetches (`/info`, `/assistants/search`,
+`/assistants/{id}`) carry no custom header — measured 2026-08-13 — so a required key made the
+primary debugging client unusable. Reachability won.
+
+**What is actually open here** is not "put the key back". It is that the repository now has one
+control against this class of exposure, the CORS origin list, and that control stops a browser
+and nothing else. Two things would have to be settled before this engine is reachable from
+anywhere but loopback: a credential Studio can carry (a query parameter or a reverse proxy that
+injects the header, neither tried), and whether `/audit/turns` should project past turns to a
+caller at all — [ADR 0012 §8.7](adr/0012-access-seam-principal-and-authorization.md) records it as
+unfiltered by design, which was a smaller claim when it sat behind a key. Neither is scheduled.
+A2, A3 and A4 stay closed throughout: the `@auth.on` handlers that refuse a client-supplied
+state-writing `command` are untouched, and `langgraph.json` keeps `auth.path` for them.
+
+---
+
 ## 5. Presentation surface
 
 Numbered after §4 rather than inserted, because §4.1 and §4.2 are cited by name from `README.md`,
@@ -765,8 +795,9 @@ the same. No number visible in either is quotable.
 
 ### 5.2 A degraded retrieval channel does not stop delivery
 
-The authentication gap that blocked all of this is closed — the UI now presents the key on all
-four of its call sites — but standing the stack up surfaced something worth keeping.
+The authentication gap that blocked all of this was closed on 2026-08-12 by a shared key the UI
+presented on all four of its call sites; the key itself is gone again as of 2026-08-13 (§4.3).
+Either way the stack stands up, and standing it up surfaced something worth keeping.
 
 `langgraph dev` wraps the event loop in a blocking-call guard. `botocore`'s retry path calls
 `time.sleep`, so with a Bedrock embedder every one of the four facet nodes — `facet_entity`,

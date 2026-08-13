@@ -81,6 +81,15 @@ BROKEN: list[tuple[str, str, dict]] = [
         ("V10", "column", {"schema": "addr", "physical_name": "alt_alias",
                            "summary": "alt_alias is a text column on the alias table here.",
                            "body": "A decoy column fabricated to mimic alias."}),
+        # The pathology the cap exists for: a `VALUES` roster harvested into a body. The
+        # replaced corpus held one of 5.1 MB. `few_shot` carries the tighter cap because one
+        # question and one query is all it is.
+        ("V13", "few_shot", {"id": "f", "schema": "addr",
+                             "summary": "How many postal points does zip_data hold in Oregon?",
+                             "body": "SELECT * FROM (VALUES " + "('x')," * 900 + "('y')) t"}),
+        ("V13", "column", {"schema": "addr", "physical_name": "zip_code",
+                           "summary": "The postal code that identifies this row in the table.",
+                           "body": "Observed values: " + "97079, " * 1_500}),
 ]
 
 
@@ -283,6 +292,58 @@ def test_v15_catches_a_real_column_marked_suspect(tmp_path: Path) -> None:
     assert under and planted in under[0], "an unmarked planted column must be caught"
 
 
+def test_v16_catches_the_cost_no_per_asset_cap_can_see(tmp_path: Path) -> None:
+    """A table wide enough to fill the context block, every asset of which passes V13.
+
+    This is the whole reason V16 exists beside V13. A roster entry runs ~53 chars, so column
+    count alone can spend the budget while no single body is anywhere near its 8,000 cap —
+    exactly the aggregate the per-file cap was crudely approximating before 2026-08-13.
+
+    The narrow table is the control: without it this test would pass just as well against a rule
+    that fired on every table.
+    """
+
+    def table_of(n_columns: int) -> Path:
+        path = tmp_path / f"wide_{n_columns}.yaml"
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    **CLEAN_TABLE,
+                    "columns": [
+                        {
+                            "physical_name": f"measurement_reading_channel_{i:04d}",
+                            "summary": (
+                                f"The measurement_reading_channel_{i:04d} reading recorded "
+                                "against this row by the meter."
+                            ),
+                            "body": "One float per interval.",
+                        }
+                        for i in range(n_columns)
+                    ],
+                },
+                allow_unicode=True,
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    wide = table_of(600)
+    findings = cc.check_delivery_closure([wide])
+    assert findings, "a 600-column table renders past the cap and must be caught"
+    assert "roster" in findings[0], f"the finding must say where the cost is: {findings[0]}"
+
+    assert cc.check_delivery_closure([table_of(40)]) == [], (
+        "an ordinary table must pass, or the rule is just 'tables are too big'"
+    )
+
+    # The half V13 cannot answer: every asset in the oversized file is individually fine.
+    loaded, _ = __import__("governed_bi.corpus.store", fromlist=["load_file"]).load_file(wide)
+    worst = max(len(str(getattr(a, "body", "") or "")) for a in loaded)
+    assert worst < cc.BODY_CAP["*"], (
+        f"the widest body is {worst}, so V13 sees nothing wrong and only V16 can catch this"
+    )
+
+
 def test_v14_catches_a_file_the_engine_cannot_load(tmp_path: Path) -> None:
     """The rule that exists because the text rules cannot see a structural break.
 
@@ -305,9 +366,14 @@ def test_v14_catches_a_file_the_engine_cannot_load(tmp_path: Path) -> None:
     assert cc.check_loadable([ok]) == []
 
 
-#: Rules ``check_local`` cannot emit: four need the whole tree or an external manifest, V13 is
-#: a filesystem size check, and V14 needs a real file for the loader. Each has its own test.
-NOT_LOCAL = {"V9", "V11", "V12", "V13", "V14", "V15"}
+#: Rules ``check_local`` cannot emit: four need the whole tree or an external manifest, V14 needs
+#: a real file for the loader, and V16 needs a table *and* its columns rendered together. Each
+#: has its own test.
+#:
+#: **V13 left this set on 2026-08-13.** It measured ``path.stat().st_size``, which no local rule
+#: can see; it now measures the asset's body, which is the thing delivered and the thing that
+#: goes pathological, so it is answerable from one asset and carries cases in ``BROKEN`` above.
+NOT_LOCAL = {"V9", "V11", "V12", "V14", "V15", "V16"}
 
 
 def test_every_rule_is_documented_and_exercised() -> None:

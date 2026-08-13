@@ -71,7 +71,9 @@ port with two adapters, and the TABLES and COLUMNS layers ask the resulting gran
 `src/` that chooses one: `OpenAccessPolicy` unless `GOVERNED_BI_ACCESS_POLICY` names a
 `StaticRoleAccessPolicy` TOML file, and a `RuntimeError` rather than a fallback if that file is
 missing. `resolve_access_grant` asks it once for the principal
-`api/auth.py::authenticated_principal` resolves, and the grant rides on `GovernancePolicy`. The
+`api/auth.py::authenticated_principal` resolves — one principal, asserted rather than
+authenticated, since no route asks a caller for anything ([usage](usage.md#serve-langgraph-server))
+— and the grant rides on `GovernancePolicy`. The
 default grant authorizes everything, so on a stock install those three rules never fire — what the
 grant *does* narrow when one is configured, and what it deliberately does not, is
 [ADR 0012 §8](adr/0012-access-seam-principal-and-authorization.md). What a fork implements, in

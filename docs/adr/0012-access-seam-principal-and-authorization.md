@@ -15,8 +15,8 @@
 - **Scope:** who a turn is executed *for*, and what that principal may read — a `Principal`, an
   `AccessPolicy` port, the value it returns, the two rules the layer stack gains, the tool
   bounds that have no statement for the stack to read, and the integrator's build order.
-  **Not** authentication (ADR 0007 / `api/auth.py`), not retrieval (ADR 0005), not the
-  statement's shape (ADR 0006).
+  **Not** authentication — there is none, as of [ADR 0007](0007-http-surface-and-the-ui-contract.md)
+  Amendment 3 — not retrieval (ADR 0005), not the statement's shape (ADR 0006).
 - **Related:** [0006](0006-execution-time-governance.md) is the layer stack this amends;
   [0008](0008-identifiers-end-to-end.md) D1/D2 is why keys fold where they do;
   [0005](0005-v2-memory-layer-and-faceted-retrieval.md) §8 owns `licensed`.
@@ -91,10 +91,17 @@ class Principal:                       # ports.py
 ```
 
 **This repository has exactly one principal, and the ADR says so rather than implying
-multi-tenancy exists.** `api/auth.py` compares one shared key in constant time and returns
-`identity: "governed-bi-local"` for every caller that presents it; a single shared key cannot
-distinguish two callers, which is why `auth.py` already refuses to derive an identity from it.
-`govern/access.py::LOCAL_PRINCIPAL` is that identity as a value.
+multi-tenancy exists.** `api/auth.py` returns `identity: "governed-bi-local"` for every caller,
+and `govern/access.py::LOCAL_PRINCIPAL` is that identity as a value.
+
+> **Amendment (2026-08-13): the single principal is now asserted, not proven.** This section was
+> written when `auth.py` compared one shared key in constant time; the argument was that a single
+> shared key cannot distinguish two callers, so deriving an identity from it would be a fiction.
+> The key is gone — no route asks for a credential at all
+> ([usage](../usage.md#serve-langgraph-server)) — and the conclusion is unchanged while the
+> premise is weaker: `authenticated_principal()` is still a function of nothing, but now because
+> there is nothing to be a function *of*. Everything §8 wires is untouched, and a fork that
+> authenticates people still replaces exactly this one function.
 
 `roles` exists and `tenant` does not. Roles are the smallest thing an adapter can key on that is
 not the id itself — an adapter mapping id → grant *is* a user store, and the port would then be
@@ -478,8 +485,10 @@ sentence is the root of this section: it is what made a raw-key comparison look 
 - The seam withholds **assets**, never **values already read**, never **rows**, and never the
   prose of an answer built from data the principal may see.
 - `/audit/turns` and `/audit/turns/{id}/trace` are not filtered. They project the turn log, whose
-  rows are records of turns that were already governed at serve time; audit A7 put the transport
-  key in front of them.
+  rows are records of turns that were already governed at serve time. Audit A7 once put a
+  transport key in front of them; that key was removed on 2026-08-13, so today these two routes
+  are unfiltered *and* unauthenticated — the grant narrows what a turn may read, and narrows
+  nothing about who may read a turn that already ran.
 
 ### 9. The adversarial suite
 
