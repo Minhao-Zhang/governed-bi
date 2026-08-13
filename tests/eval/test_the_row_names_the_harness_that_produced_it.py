@@ -68,6 +68,16 @@ def test_the_harness_writes_a_value_for_every_resume_drift_key_it_can_answer() -
     ``build_workers`` is the deliberate exception and is asserted absent rather than null: this
     driver serves, it does not build a corpus, and a number for a stage that did not run is the
     ``embedding_provider`` defect (a null reads as unmeasured, a value reads as a measurement).
+
+    ``diff_sha256`` is the other exception and is asserted *relationally*, because it is null on a
+    clean tree — there is no diff to digest — and that is the correct answer rather than a missing
+    one. The first version of this test asserted it non-null with the rest, which passed only
+    because the tree was dirty when it was written and **would have failed on every CI run**: CI
+    checks out a clean tree. Found by merging to main and running there, not by the suite.
+
+    So the invariant is one-directional. ``git diff HEAD`` does not see untracked files and
+    ``git status --porcelain`` does, so a tree holding only untracked files is dirty with an empty
+    diff. A digest therefore implies dirty; dirty does not imply a digest.
     """
     knobs = _knobs()
     operational = {
@@ -77,8 +87,15 @@ def test_the_harness_writes_a_value_for_every_resume_drift_key_it_can_answer() -
     assert {"git_sha", "diff_sha256", "working_tree_dirty", "serve_workers"} <= written
     assert "build_workers" not in knobs
 
-    for name in written:
+    for name in written - {"diff_sha256"}:
         assert knobs[name] is not None, f"{name} is written and unmeasured"
+
+    if knobs["diff_sha256"] is not None:
+        assert knobs["working_tree_dirty"] is True, (
+            "diff_sha256 digests a non-empty `git diff HEAD`, so the tree cannot be clean. "
+            "A digest beside working_tree_dirty=False means the two are read from different "
+            "states, which is the resume-drift blend this key exists to catch."
+        )
 
 
 def _role(name: str):
