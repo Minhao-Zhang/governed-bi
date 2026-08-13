@@ -27,16 +27,30 @@ __all__ = ["restamp_model_authored"]
 A = TypeVar("A", bound=Asset)
 
 
-def restamp_model_authored(asset: A, *, model: str | None = None) -> A:
+def restamp_model_authored(
+    asset: A, *, model: str | None = None, status: ProvenanceStatus = ProvenanceStatus.proposed
+) -> A:
     """Strip forged ``governance`` / certified human ``audit``; stamp model provenance.
 
     ``governance.excluded`` and human-certified audit cannot survive this call.
     Reliability (including ``suspect``) is AI-authorable and is left alone.
+
+    ``status`` picks between the two non-certified statuses and **cannot** be
+    ``certified`` — that is checked here rather than trusted, because this
+    function is the control and a parameter that could hand back what the
+    function exists to strip would be no control at all. Its one non-default
+    caller is the Setup Wizard's unwarranted fold
+    (``curator/clarification.py::fold_ledger_answer_into_corpus``), which writes
+    ``draft``: an answer given without the prerequisite that would have justified
+    it, recorded rather than dropped, and left where
+    :func:`~governed_bi.corpus.drafts.approve_draft` will not certify it.
     """
+    if status is ProvenanceStatus.certified:
+        raise ValueError("restamp_model_authored cannot stamp certified: that is human-only")
     audit = Audit(
         provenance=Provenance(
             source=ProvenanceSource.curator,
-            status=ProvenanceStatus.proposed,
+            status=status,
             model=model,
         ),
         evidence=asset.audit.evidence if asset.audit is not None else None,

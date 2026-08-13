@@ -130,6 +130,7 @@ def fold_answered_clarification(
     schema: str | None,
     known_assets: Iterable[Any],
     write_model: str | None = None,
+    status: ProvenanceStatus = ProvenanceStatus.proposed,
 ) -> None:
     """Build a :class:`TermAsset` draft from one answered clarification and write it through
     the Enhancer dedup/conflict path.
@@ -149,6 +150,10 @@ def fold_answered_clarification(
     any :class:`~governed_bi.curator.enhancer.EnhancerError` from a broken dedup/conflict model
     call, degrades to an unconditional plain write rather than dropping a real user answer --
     the caller is not expected to inspect what happened past "did not raise".
+
+    ``status`` is the provenance the write lands at, forwarded to both paths so the
+    Enhancer-degraded one cannot quietly write a stronger warrant than the ordinary one. It is
+    ``proposed`` for every caller but :func:`fold_ledger_answer_into_corpus`'s unwarranted case.
     """
     from governed_bi.corpus.drafts import submit_draft
     from governed_bi.curator import enhancer
@@ -168,9 +173,10 @@ def fold_answered_clarification(
                 existing=existing,
                 namespace=schema,
                 write_model=write_model,
+                status=status,
             )
         except enhancer.EnhancerError:
-            submit_draft(corpus_root, draft, namespace=schema)
+            submit_draft(corpus_root, draft, namespace=schema, status=status)
     except Exception:  # noqa: BLE001 -- mining is best-effort, never fatal to the caller
         pass
 
@@ -213,6 +219,35 @@ def fold_ledger_answer_into_corpus(
     there is nothing for a separate poll step to catch that this function's own call, made
     once right after ``answer_clarification`` returns, would miss -- so this folds
     synchronously inside that same route rather than porting v1's poll mechanism.
+
+    **The answer's warrant, finally read.** ``ClarificationRecord.unmet_prerequisites_at_answer``
+    records which of a record's ``blocked_by`` questions were still unanswered at the moment it
+    was answered (``curator/clarifications.py::answer_clarification``). ``703a442`` made that
+    expressible and left it unenforced; this is where it costs something.
+    ``utku-ai-setup-wizard-gap-model.md`` § "Which gap types produce two audience-specific
+    questions" requires it: A-eng answered with no A-biz behind it "must not land ``certified``
+    … it should land ``draft`` … noting 'picked without a business definition'". Power Kiosk has
+    a DBA and no business-domain expert, so this is the ordinary case there, not an edge one --
+    the answer is taken, and it is taken as weaker evidence.
+
+    Two things change and neither is a refusal:
+
+    * **the status.** ``draft`` rather than ``proposed``, which
+      ``corpus/drafts.py::approve_draft`` refuses to certify (it accepts ``proposed`` only). An
+      admin cannot promote a fact whose warrant is missing by clicking Approve -- the doc's
+      objection #4, that "a human is accountable only for facts they can actually verify from
+      what the question showed them", made mechanical.
+    * **the text.** The caveat rides in the folded sentence itself, which is where every reader
+      of the fact will meet it -- ``summary`` is the one indexed field (ADR 0005 I1) and
+      ``_qa_summary`` spends its budget from the question end, so an appended clause survives.
+      ``ProvenanceStatus`` is a machine's answer to "may this be certified"; the sentence is the
+      human's. The doc asks for ``reliability: suspect`` and that field **does not exist on the
+      asset this writes**: ``Reliability`` is declared on ``ColumnAsset`` only, and
+      ``draft_from_clarification`` hard-codes ``TermAsset`` for every category. So the caveat
+      goes where a ``TermAsset`` can carry it rather than into a field invented to match a doc.
+
+    A record with no ``blocked_by`` at all stamps ``()`` and is untouched by any of this, which
+    is every question the wizard asks outside a hybrid pair or a contested column.
     """
     from governed_bi.curator.clarifications import mark_converted_to_corpus, resolve_answer_text
 
@@ -221,6 +256,9 @@ def fold_ledger_answer_into_corpus(
     answer_text = resolve_answer_text(record)
     if not answer_text or not record.question:
         return record
+    unwarranted = bool(record.unmet_prerequisites_at_answer)
+    if unwarranted:
+        answer_text = f"{answer_text} {_UNWARRANTED_CAVEAT}"
     fold_answered_clarification(
         agent_model,
         corpus_root,
@@ -229,5 +267,16 @@ def fold_ledger_answer_into_corpus(
         schema=schema,
         known_assets=known_assets,
         write_model=write_model,
+        status=ProvenanceStatus.draft if unwarranted else ProvenanceStatus.proposed,
     )
     return mark_converted_to_corpus(corpus_root, record.id)
+
+
+#: What an unwarranted answer's folded sentence says about itself.
+#:
+#: Short on purpose: ``summary`` is capped at ``summary_max_chars`` and this clause has to fit
+#: beside the answer it qualifies, not displace it. It names the *shape* of what is missing
+#: rather than the specific prerequisite, because the mechanism is general — an A-eng answer with
+#: no business definition and a value mapping answered before its near-duplicate cluster question
+#: are the same defect, and the ledger holds the ids either way.
+_UNWARRANTED_CAVEAT = "(Unverified: answered before the question it depends on.)"

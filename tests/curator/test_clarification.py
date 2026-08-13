@@ -363,3 +363,112 @@ def test_fold_ledger_answer_with_no_answer_text_is_a_no_op(tmp_path: Path) -> No
     assert updated.converted_to_corpus is False
     assets, _ = load(tmp_path)
     assert assets == []
+
+
+# ── the answer's warrant: what an unmet prerequisite costs the fact it produced ─────────────
+#
+# ``703a442`` made ``unmet_prerequisites_at_answer`` expressible and deliberately left it
+# unenforced. ``utku-ai-setup-wizard-gap-model.md`` § "Which gap types produce two
+# audience-specific questions" says what it must cost: an A-eng answer with no business
+# definition behind it "must not land ``certified`` … it should land ``draft``". Power Kiosk has
+# a DBA and no business-domain expert, so that is the ordinary case there and not an edge one —
+# the answer is taken, and it is taken as weaker evidence.
+
+
+def _provenance(asset: Any) -> str:
+    return asset.audit.provenance.status.value
+
+
+def test_an_answer_with_every_prerequisite_behind_it_lands_proposed(tmp_path: Path) -> None:
+    """The control for the test below. ``proposed`` is the pending state
+    ``corpus/drafts.py::approve_draft`` accepts, i.e. an admin can certify this one."""
+    from governed_bi.corpus.store import load
+    from governed_bi.curator.clarification import fold_ledger_answer_into_corpus
+    from governed_bi.curator.clarifications import write_clarifications
+
+    record = _record(blocked_by=("q_biz",), unmet_prerequisites_at_answer=())
+    write_clarifications(tmp_path, [record])
+
+    fold_ledger_answer_into_corpus(
+        record, agent_model=None, corpus_root=tmp_path, schema="olist", known_assets=()
+    )
+    (draft,) = load(tmp_path)[0]
+    assert _provenance(draft) == "proposed"
+    assert "Unverified" not in draft.summary, draft.summary
+
+
+def test_an_answer_given_before_its_prerequisite_lands_draft_and_says_so(tmp_path: Path) -> None:
+    """Two things change, and neither is a refusal — the doc requires the standalone answer to
+    be *possible*, only not to carry the same warrant.
+
+    The caveat rides in the folded sentence because that is the only place a ``TermAsset`` can
+    carry one: ``Reliability`` is declared on ``ColumnAsset`` alone, and
+    ``draft_from_clarification`` writes a ``TermAsset`` for every category. ``summary`` is also
+    the one indexed field (ADR 0005 I1), so a reader who retrieves this fact meets the caveat
+    with it.
+    """
+    from governed_bi.corpus.store import load
+    from governed_bi.curator.clarification import fold_ledger_answer_into_corpus
+    from governed_bi.curator.clarifications import write_clarifications
+
+    record = _record(blocked_by=("q_biz",), unmet_prerequisites_at_answer=("q_biz",))
+    write_clarifications(tmp_path, [record])
+
+    updated = fold_ledger_answer_into_corpus(
+        record, agent_model=None, corpus_root=tmp_path, schema="olist", known_assets=()
+    )
+    assert updated.converted_to_corpus is True, "recorded, not dropped"
+    (draft,) = load(tmp_path)[0]
+    assert _provenance(draft) == "draft"
+    assert "90 days" in draft.summary, "the answer itself survives the caveat"
+    assert "Unverified" in draft.summary, draft.summary
+
+
+def test_an_unwarranted_draft_cannot_be_certified_by_clicking_approve(tmp_path: Path) -> None:
+    """What ``draft`` actually buys, and the reason it is that status and not a note.
+
+    ``approve_draft`` accepts ``proposed`` only, so the admin route ``POST
+    /corpus/drafts/{id}/approve`` refuses this asset. The gap model's objection #4 — "the human
+    is accountable only for facts they can actually verify from what the question showed them" —
+    made mechanical rather than advisory.
+
+    **The consequence is a one-way door and is deliberate**: nothing promotes a ``draft`` back to
+    ``proposed``, so an answer given without its business half stays uncertifiable until the
+    wizard is re-run against a corpus that has one. Re-running is Part 4's subject; the wizard
+    has no re-answer path at all today (``utku-ai-design-gaps`` #4).
+    """
+    import pytest
+
+    from governed_bi.corpus.drafts import DraftNotPending, approve_draft
+    from governed_bi.corpus.store import load
+    from governed_bi.curator.clarification import fold_ledger_answer_into_corpus
+    from governed_bi.curator.clarifications import write_clarifications
+
+    record = _record(blocked_by=("q_biz",), unmet_prerequisites_at_answer=("q_biz",))
+    write_clarifications(tmp_path, [record])
+    fold_ledger_answer_into_corpus(
+        record, agent_model=None, corpus_root=tmp_path, schema="olist", known_assets=()
+    )
+
+    (draft,) = load(tmp_path)[0]
+    with pytest.raises(DraftNotPending):
+        approve_draft(tmp_path, draft.id)
+
+
+def test_the_restamp_control_still_refuses_to_stamp_certified() -> None:
+    """The parameter that made ``draft`` reachable must not also make ``certified`` reachable.
+    ``corpus/provenance.py`` exists because "a model that owns files can mint them by writing
+    YAML; the prompt telling it not to is not a control" — a keyword argument would be no better
+    a control than a prompt if it accepted the one value the function exists to strip."""
+    import pytest
+
+    from governed_bi.corpus.provenance import restamp_model_authored
+    from governed_bi.corpus.schema import ProvenanceStatus, TermAsset
+
+    asset = TermAsset(id="t.1", name="n", summary="s")
+    with pytest.raises(ValueError):
+        restamp_model_authored(asset, status=ProvenanceStatus.certified)
+    assert (
+        restamp_model_authored(asset, status=ProvenanceStatus.draft).audit.provenance.status
+        is ProvenanceStatus.draft
+    )

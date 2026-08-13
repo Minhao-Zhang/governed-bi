@@ -27,7 +27,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from governed_bi.corpus.drafts import submit_draft
-from governed_bi.corpus.schema import Asset
+from governed_bi.corpus.schema import Asset, ProvenanceStatus
 
 __all__ = ["EnhancerDecision", "EnhancerError", "decide", "apply"]
 
@@ -128,6 +128,7 @@ def apply(
     existing: Sequence[Any],
     namespace: str | None = None,
     write_model: str | None = None,
+    status: ProvenanceStatus = ProvenanceStatus.proposed,
 ) -> tuple[Path | None, EnhancerDecision]:
     """Decide, then act: duplicate skips the write, conflict writes flagged, novel writes plain.
 
@@ -135,10 +136,17 @@ def apply(
     second copy" (v1's baseline behavior; reinforcing the existing asset was its own,
     never-shipped follow-up round) means nothing was written to skip a caller having to
     distinguish "wrote nothing" from "wrote nothing because it crashed".
+
+    ``status`` is forwarded to :func:`~governed_bi.corpus.drafts.submit_draft` and is about the
+    *caller's* warrant for the fact, not about this function's judgment of it — the dedup and
+    conflict decision is the same question either way, and an unwarranted answer that duplicates
+    an existing fact should still not mint a second copy of it.
     """
     decision = decide(model, candidate.summary, existing)
     if decision.duplicate_of:
         return None, decision
     extra = {"conflict_with": decision.conflict_with} if decision.conflict_with else None
-    path = submit_draft(root, candidate, namespace=namespace, model=write_model, extra=extra)
+    path = submit_draft(
+        root, candidate, namespace=namespace, model=write_model, extra=extra, status=status
+    )
     return path, decision

@@ -71,8 +71,9 @@ def submit_draft(
     namespace: str | None = None,
     model: str | None = None,
     extra: Mapping[str, Any] | None = None,
+    status: ProvenanceStatus = ProvenanceStatus.proposed,
 ) -> Path:
-    """Restamp ``asset`` as a ``proposed`` model-authored candidate and write it.
+    """Restamp ``asset`` as a model-authored candidate and write it.
 
     Thin composition, deliberately: :func:`restamp_model_authored` and :func:`write` already
     carry the guarantees this needs, so this function adds none of its own. ``namespace`` is
@@ -83,8 +84,14 @@ def submit_draft(
     from scratch, so this is the one hook for a caller (``curator/enhancer.py``'s conflict flag)
     to attach a reason without it being silently dropped. It is data, not a governance field:
     it cannot set ``excluded`` or a provenance status, both of which stay code-controlled.
+
+    ``status`` is forwarded to :func:`restamp_model_authored`, which refuses ``certified``, and
+    defaults to ``proposed`` — the pending state :func:`approve_draft` accepts. The one caller
+    that passes anything else writes ``draft``, for a Setup Wizard answer given without the
+    prerequisite that would have warranted it; :func:`approve_draft` will not certify that, which
+    is the point of writing it differently.
     """
-    restamped = restamp_model_authored(asset, model=model)
+    restamped = restamp_model_authored(asset, model=model, status=status)
     if extra:
         restamped = replace(restamped, audit=replace(restamped.audit, extra={**restamped.audit.extra, **extra}))
     return write(root, restamped, namespace=namespace)
