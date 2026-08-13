@@ -64,6 +64,7 @@ from governed_bi.curator.gap_signals import (
     candidate_keys,
     comparison_candidates,
     evidence_strength,
+    frame_siblings,
     type_class,
     unjoined_pairs,
 )
@@ -193,7 +194,9 @@ def detect_structural_gaps(
         policy=policy,
     )
 
-    duplicates, gated = _duplicate_records(candidates[:max_comparisons], agreements, assets_by_id)
+    duplicates, gated = _duplicate_records(
+        candidates[:max_comparisons], agreements, columns_by_table
+    )
     joins, join_note = _join_records(live, columns_by_table, join_edges, agreements)
     coverage_records, uncovered_columns = _coverage_records(live, columns_by_table)
     reliability = _reliability_records(live, columns_by_table)
@@ -297,41 +300,117 @@ def _measure_pairs(
     return agreements, ledger, refused
 
 
+def _comparable_vocabularies(left_distinct: int, right_distinct: int) -> bool:
+    """Whether two columns range over comparable numbers of values.
+
+    :data:`CARDINALITY_COMPARABILITY`'s predicate, named once because it now has two readers:
+    the near-duplicate gate itself, and :func:`_parallel_frame` confirming that a look-alike
+    sibling really is drawn from the same vocabulary as the pair.
+    """
+    widest = max(left_distinct, right_distinct)
+    return not widest or min(left_distinct, right_distinct) / widest >= CARDINALITY_COMPARABILITY
+
+
+def _distinct_counts(agreements: Mapping[tuple[str, str], Any]) -> dict[str, int]:
+    """``{column id: distinct values}``, read off the comparisons already paid for.
+
+    Every governed comparison reports both columns' distinct counts in the same statement (that
+    is why they are in it), so the vocabulary of any column that took part in one is already
+    known and :func:`_parallel_frame` costs no additional round trip.
+    """
+    counts: dict[str, int] = {}
+    for (left_id, right_id), agreement in agreements.items():
+        counts[left_id] = agreement.n_distinct_left
+        counts[right_id] = agreement.n_distinct_right
+    return counts
+
+
+def _parallel_frame(
+    columns: Sequence[Any], left: Any, right: Any, similarity: float, distinct: Mapping[str, int]
+) -> Any | None:
+    """The sibling that makes this pair a family of parallel facts rather than a duplicate, if any.
+
+    Two halves, and neither works alone. ``frame_siblings`` supplies the *name* half — a third
+    type-compatible column of the same table wearing the pair's shared run at least as well as
+    the pair wears it. This function supplies the *evidence* half: that sibling must be drawn
+    from a comparable vocabulary, or it is not a member of the same family.
+
+    **The evidence half is what keeps recall.** ``playstore`` holds ``App``, ``app_name`` and
+    ``app_category``: all three wear ``app``, so on names alone the ``App``/``app_name`` decoy
+    pair is indistinguishable from a parallel frame — and the names are all there is to look at
+    until you notice ``app_category`` holds 33 values against ``App``'s 9 659. Same shape on
+    ``user_reviews``, where ``Sentiment_Polarity`` (6 492 values) wears the ``sentiment`` frame
+    of the ``Sentiment``/``sentiment_label`` decoy pair (4 values each). Without this half both
+    manifest pairs are demoted; with it neither is, on any of the three schemas measured.
+
+    A sibling nobody measured is **not** treated as confirmation. The counts come from
+    comparisons the scan already ran, so an unmeasured sibling leaves the pair at T1 — the
+    status quo, which is the safe direction for a rule that can only soften a finding.
+    """
+    for sibling in frame_siblings(columns, left, right, similarity):
+        if sibling.id not in distinct:
+            continue
+        if any(
+            _comparable_vocabularies(distinct[sibling.id], distinct[member.id])
+            for member in (left, right)
+            if member.id in distinct
+        ):
+            return sibling
+    return None
+
+
 def _duplicate_records(
     candidates: Sequence[tuple[Any, Any, Any, float]],
     agreements: Mapping[tuple[str, str], Any],
-    assets_by_id: dict[str, Any],
+    columns_by_table: Mapping[str, list[Any]],
 ) -> tuple[list[ClarificationRecord], dict[str, str]]:
     """Records for measured pairs, and the columns a T1 record gates.
 
-    Three outcomes, and the middle one is the finding this phase exists for:
+    Four outcomes now, and the new one is a *demotion* rather than a drop:
 
     * **vocabularies not comparable** — not two versions of one fact. No record.
-    * **values disagree** — T1. Both columns are type-valid and non-empty, so nothing at answer
-      time can tell them apart; picking the decoy attaches data to the wrong entity for every
-      question that traverses it.
+    * **values disagree, and no third column wears the pair's naming frame** — T1. Both columns
+      are type-valid and non-empty, so nothing at answer time can tell them apart; picking the
+      decoy attaches data to the wrong entity for every question that traverses it.
+    * **values disagree, but the pair is one of ≥3 columns wearing that frame** — T2
+      (:func:`_parallel_frame`). Cans/bottles/kegs and latitude/longitude disagree row-wise
+      exactly as a poisoned duplicate does, and T1's claim — that this makes *every* answer
+      touching the table wrong — is simply false for them. **Demoted, never dropped**: the
+      owner's "list ALL gaps" decision means a shakier finding gets a quieter label, not
+      silence, and the question is re-worded to ask what it now means.
     * **values agree** — T4. Redundant, not dangerous: pick either, record which.
     """
-    del assets_by_id  # names come off the assets already in hand
     records: list[ClarificationRecord] = []
     gated: dict[str, str] = {}
-    for table, left, right, _similarity in candidates:
+    distinct = _distinct_counts(agreements)
+    for table, left, right, similarity in candidates:
         agreement = agreements.get((left.id, right.id))
         if agreement is None:
             continue
-        widest = max(agreement.n_distinct_left, agreement.n_distinct_right)
-        narrowest = min(agreement.n_distinct_left, agreement.n_distinct_right)
-        if widest and narrowest / widest < CARDINALITY_COMPARABILITY:
+        if not _comparable_vocabularies(agreement.n_distinct_left, agreement.n_distinct_right):
             continue
         names = sorted((left.physical_name, right.physical_name))
         scope = f"elicitation:duplicate:{table.physical_name}.{names[0]}|{names[1]}"
         disagrees = agreement.n_differing > 0
+        sibling = (
+            _parallel_frame(
+                columns_by_table.get(table.id) or [], left, right, similarity, distinct
+            )
+            if disagrees
+            else None
+        )
         qualified = [f"{table.physical_name}.{name}" for name in names]
         record = ClarificationRecord(
             id=_record_id(scope),
             scope=scope,
             question=(
                 f"`{qualified[0]}` and `{qualified[1]}` hold different values on "
+                f"{agreement.n_differing} of {agreement.n_rows} rows, and so does "
+                f"`{table.physical_name}.{sibling.physical_name}`, which is named the same way "
+                "— so these read as parallel fields rather than as one field stored twice. Are "
+                "they different facts, or is one of them a copy of another?"
+                if sibling is not None
+                else f"`{qualified[0]}` and `{qualified[1]}` hold different values on "
                 f"{agreement.n_differing} of {agreement.n_rows} rows, and read as two names for "
                 "one thing. Which one is authoritative? Is the other a legacy copy, an import "
                 "artefact, or a different field entirely?"
@@ -347,7 +426,7 @@ def _duplicate_records(
             # ``compose_elicitation_answer_text``'s freeform D branch as the fold path.
             category="D",
             ui_modality="column_picker",
-            severity="T1" if disagrees else "T4",
+            severity=("T2" if sibling is not None else "T1") if disagrees else "T4",
             audience="data",
             choices=(
                 *({"id": name, "label": f"{name} is authoritative"} for name in qualified),
@@ -359,7 +438,10 @@ def _duplicate_records(
             source=ELICITATION_SOURCE,
         )
         records.append(record)
-        if disagrees:
+        # Only a T1 gates: a parallel frame means neither column is a decoy of the other, so a
+        # value mapping certified on either is not certified on a decoy and nothing downstream
+        # has to wait. Blocking a whole tab on a T2 would be the cost without the reason.
+        if disagrees and sibling is None:
             for name in qualified:
                 gated[name] = record.id
     return records, gated

@@ -101,3 +101,60 @@ def test_no_evidence_scores_zero_rather_than_raising() -> None:
 
     assert evidence_strength(0, 0) == 0.0
     assert evidence_strength(0, 100) == 0.0
+
+
+def test_a_frame_sibling_has_to_match_the_frame_as_well_as_the_pair_matches_itself() -> None:
+    """The comparison that makes the rule safe, on the three real ``geoposition`` columns that
+    force it. ``l_ngengrad``/``laengengrad`` is a manifest decoy pair scoring 0.89 and
+    ``breitengrad`` matches their shared ``ngengrad`` at only 0.75 — so it is *not* their
+    sibling. The very same ``breitengrad`` **is** a sibling of the
+    ``breitengrad``/``l_ngengrad`` pair, which scores 0.67. One fixed threshold cannot give both
+    answers; a comparison against the pair's own similarity can.
+    """
+    from governed_bi.curator.gap_signals import frame_siblings, name_similarity, shared_name_run
+
+    columns = [_column(n, "real") for n in ("breitengrad", "l_ngengrad", "laengengrad")]
+    breite, lnge, laenge = columns
+
+    decoy = name_similarity("l_ngengrad", "laengengrad")
+    assert name_similarity("breitengrad", shared_name_run("l_ngengrad", "laengengrad")) < decoy
+    assert frame_siblings(columns, lnge, laenge, decoy) == []
+
+    parallel = name_similarity("breitengrad", "l_ngengrad")
+    assert [c.physical_name for c in frame_siblings(columns, breite, lnge, parallel)] == [
+        "laengengrad"
+    ]
+
+
+def test_a_frame_sibling_of_another_type_cannot_be_a_family_member() -> None:
+    """``standort`` is what kills the naive version: ``standort_id``, ``standortname``,
+    ``standort_nummer`` and ``standort_bezeichnung`` all wear ``standort``, so by names alone the
+    ``standort_id``/``standort_nummer`` manifest decoy pair looks exactly like a parallel frame.
+    Two of the four are text; a comparison that cannot execute is not a family member.
+    """
+    from governed_bi.curator.gap_signals import frame_siblings, name_similarity
+
+    columns = [
+        _column("standort_id", "bigint"), _column("standort_nummer", "bigint"),
+        _column("standortname", "text"), _column("standort_bezeichnung", "text"),
+    ]
+    pair = name_similarity("standort_id", "standort_nummer")
+    assert frame_siblings(columns, columns[0], columns[1], pair) == []
+
+
+def test_the_shared_run_is_the_frame_two_names_wear() -> None:
+    from governed_bi.curator.gap_signals import shared_name_run
+
+    assert shared_name_run("kunde_id", "transaktions_kunde_id") == "kundeid"
+    assert shared_name_run("transaktions_id", "transaktions_wurzelbier_id") == "transaktions"
+    assert shared_name_run("Content Rating", "content_rating") == "contentrating"
+    assert shared_name_run("abc", "xyz") == ""
+
+
+def _column(name: str, physical_type: str):
+    from governed_bi.corpus.schema import ColumnAsset
+
+    return ColumnAsset(
+        id=f"s.t.{name}", schema="s", parent_table="s.t", physical_name=name,
+        summary=name, physical_type=physical_type,
+    )

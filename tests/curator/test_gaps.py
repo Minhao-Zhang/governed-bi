@@ -159,21 +159,102 @@ def test_the_synonym_decoys_are_the_stated_ceiling_and_are_not_claimed() -> None
 
 
 def test_precision_on_the_real_schema_is_pinned_so_a_regression_is_visible() -> None:
-    """4 non-manifest pairs come back T1, and they are one recognisable class: parallel columns
-    that share a naming frame and are genuinely different facts -- ``in_dosen_erh_ltlich`` vs
-    ``in_flaschen_erh_ltlich`` (available in cans / in bottles), ``breitengrad`` vs
-    ``l_ngengrad`` (latitude / longitude), and a primary key beside a foreign key that shares
-    its prefix. This is the ``created_at``/``updated_at`` class and it is not solved; it is
-    counted, so a change that trades precision away shows up here.
+    """One non-manifest pair still comes back T1, down from four, and it is the one the
+    parallel-frame rule cannot reach: ``transaktions_id`` is a primary key beside
+    ``transaktions_wurzelbier_id``, its three ``transaktions_*_id`` siblings hold 554, 2 and
+    6 312 distinct values against its 6 312, and only one of those is a comparable vocabulary —
+    so the family is not confirmed and the pair keeps the louder label. Pinned, so a change that
+    trades precision away shows up here.
     """
     scan = _scan(beer_factory_assets())
     unexpected = _pairs(scan.records, "T1") - BEER_FACTORY_DECOY_PAIRS
     assert unexpected == {
-        ("wurzelbiermarke", "in_dosen_erh_ltlich", "in_f_ssern_erh_ltlich"),
-        ("wurzelbiermarke", "in_dosen_erh_ltlich", "in_flaschen_erh_ltlich"),
-        ("geoposition", "breitengrad", "l_ngengrad"),
         ("transaktion", "transaktions_id", "transaktions_wurzelbier_id"),
     }, sorted(unexpected)
+
+
+def test_a_family_of_parallel_columns_is_demoted_rather_than_claimed_as_a_duplicate() -> None:
+    """**Three of the six wrong T1 cards an admin saw on real ``beer_factory``**, and all three
+    are the class ``name_similarity``'s own docstring admits it cannot solve: cans / bottles /
+    kegs, and latitude / longitude / a second longitude. Each pair disagrees row-wise exactly as
+    a poisoned duplicate does, and T1's copy — "will make every answer touching this table
+    wrong" — is simply false about them.
+
+    Demoted to T2, **not dropped**: the owner's standing decision is to list all gaps, so a
+    shakier finding gets a quieter label. The question text moves with the label, because a card
+    that still asked "which one is authoritative?" would now be asking something the detector no
+    longer believes.
+    """
+    scan = _scan(beer_factory_assets())
+    demoted = _pairs(scan.records, "T2")
+    assert demoted == {
+        ("geoposition", "breitengrad", "l_ngengrad"),
+        ("wurzelbiermarke", "in_dosen_erh_ltlich", "in_f_ssern_erh_ltlich"),
+        ("wurzelbiermarke", "in_dosen_erh_ltlich", "in_flaschen_erh_ltlich"),
+    }, sorted(demoted)
+    rec = next(
+        r
+        for r in scan.records
+        if r.scope == "elicitation:duplicate:geoposition.breitengrad|l_ngengrad"
+    )
+    assert "laengengrad" in rec.question, rec.question
+    assert "authoritative" not in rec.question, rec.question
+
+
+def test_a_demoted_pair_stops_gating_the_questions_about_its_columns() -> None:
+    """A parallel frame means neither column is a decoy of the other, so a value mapping
+    certified on either is not certified on a decoy — and blocking a whole tab on it would be
+    the cost of the dependency gate without its reason."""
+    scan = _scan(beer_factory_assets())
+    demoted_ids = {r.id for r in scan.records if r.severity == "T2"}
+    assert demoted_ids, "the fixture stopped producing a demoted pair"
+    assert not (demoted_ids & set(scan.gated_columns.values()))
+    # ``in_dosen_erh_ltlich`` is in two demoted pairs and no T1, so nothing gates it at all.
+    # ``breitengrad`` is in a demoted pair *and* in the real ``breitenkoordinate`` cluster, and
+    # stays gated by that one -- the gate follows the finding, not the column.
+    assert "wurzelbiermarke.in_dosen_erh_ltlich" not in scan.gated_columns
+    assert scan.gated_columns["geoposition.breitengrad"] == next(
+        r.id
+        for r in scan.records
+        if r.scope == "elicitation:duplicate:geoposition.breitengrad|breitenkoordinate"
+    )
+    assert "transaktion.kunde_id" in scan.gated_columns
+
+
+def test_the_frame_rule_needs_a_measured_vocabulary_and_not_only_a_matching_name() -> None:
+    """**The recall half, and it is what the rule turns on.** ``playstore`` holds ``App``,
+    ``app_name`` and ``app_category``; all three wear the ``app`` frame, so on names alone the
+    ``App``/``app_name`` manifest decoy pair is indistinguishable from cans/bottles/kegs. What
+    separates them is that ``app_category`` holds 33 values against ``App``'s 9 659.
+
+    Stated on the real ``app_store`` shape and its real counts, because a fixture with two
+    columns cannot show a rule about a third being rejected.
+    """
+    from governed_bi.corpus.schema import ColumnAsset, TableAsset
+
+    columns = [
+        ColumnAsset(
+            id=f"app_store.playstore.{name}", schema="app_store",
+            parent_table="app_store.playstore", physical_name=name, summary=name,
+            physical_type="text", body="described",
+        )
+        for name in ("App", "app_name", "app_category")
+    ]
+    table = TableAsset(
+        id="app_store.playstore", schema="app_store", physical_name="playstore",
+        summary="playstore", body="Apps.", grain="one row per app",
+        columns=tuple(c.id for c in columns),
+    )
+    assets = {a.id: a for a in [table, *columns]}
+    connector = MeasuredConnector(
+        {
+            ("playstore", "App", "app_name"): (10840, 10840, 9659, 9659),
+            ("playstore", "App", "app_category"): (10840, 10840, 9659, 33),
+        }
+    )
+    scan = _scan(assets, connector=connector)
+    assert ("playstore", "App", "app_name") in _pairs(scan.records, "T1")
+    assert not _pairs(scan.records, "T2")
 
 
 def test_every_governed_comparison_gets_its_own_ledger_row() -> None:
@@ -516,7 +597,8 @@ def test_nothing_is_dropped_for_a_quota() -> None:
     join key, and the only way to guarantee that is for no detector to share a budget with
     another."""
     scan = _scan(beer_factory_assets())
-    assert len(_pairs(scan.records, "T1")) == 20
+    assert len(_pairs(scan.records, "T1")) == 17
+    assert len(_pairs(scan.records, "T2")) == 3, "demoted, and still reported"
     assert len([r for r in scan.records if r.severity == "T4"]) >= 18
 
 

@@ -27,11 +27,13 @@ __all__ = [
     "EVIDENCE_Z",
     "NEAR_DUPLICATE_SIMILARITY",
     "name_similarity",
+    "shared_name_run",
     "evidence_strength",
     "type_class",
     "comparable_type",
     "identifies_rows",
     "comparison_candidates",
+    "frame_siblings",
     "unjoined_pairs",
     "candidate_keys",
 ]
@@ -94,19 +96,32 @@ def _trigrams(text: str) -> frozenset[str]:
     return frozenset(text[i : i + 3] for i in range(len(text) - 2))
 
 
-def _longest_common_run(left: str, right: str) -> int:
-    """Length of the longest character run the two names share."""
+def shared_name_run(left: str, right: str) -> str:
+    """The longest character run the two names share, case-folded and separator-free.
+
+    The **frame** two look-alike identifiers wear: ``kunde_id``/``transaktions_kunde_id`` share
+    ``kundeid``, and ``transaktions_id``/``transaktions_wurzelbier_id`` share ``transaktions``.
+    Which of those two shapes a pair has is what :func:`frame_siblings` reads, and it is a
+    property of the run itself rather than of its length — the first has nothing else in its
+    table wearing it, the second has three.
+    """
     a, b = _alphanumeric_run(left), _alphanumeric_run(right)
-    best = 0
+    best = end = 0
     previous = [0] * (len(b) + 1)
     for i in range(1, len(a) + 1):
         current = [0] * (len(b) + 1)
         for j in range(1, len(b) + 1):
             if a[i - 1] == b[j - 1]:
                 current[j] = previous[j - 1] + 1
-                best = max(best, current[j])
+                if current[j] > best:
+                    best, end = current[j], i
         previous = current
-    return best
+    return a[end - best : end]
+
+
+def _longest_common_run(left: str, right: str) -> int:
+    """Length of the longest character run the two names share."""
+    return len(shared_name_run(left, right))
 
 
 def _longest_common_run_ratio(left: str, right: str) -> float:
@@ -280,6 +295,50 @@ def comparison_candidates(
                     continue
                 out.append((table, left, right, similarity))
     return sorted(out, key=lambda row: (-row[3], row[0].id, row[1].id, row[2].id))
+
+
+def frame_siblings(
+    columns: Sequence[Any], left: Any, right: Any, similarity: float
+) -> list[Any]:
+    """Other columns of this table wearing the same naming frame as the pair ``(left, right)``.
+
+    **The class this exists for is named in :func:`name_similarity`'s own docstring as unsolved,
+    and it was 5 of the 6 wrong T1 cards an admin saw on real ``beer_factory``**:
+    ``in_dosen_erh_ltlich`` / ``in_flaschen_erh_ltlich`` / ``in_f_ssern_erh_ltlich`` (available
+    in cans / in bottles / in kegs), ``breitengrad`` / ``l_ngengrad`` / ``laengengrad``
+    (latitude / longitude), ``transaktions_id`` beside three ``transaktions_*_id`` foreign keys.
+    Two columns sharing a frame with *different* discriminators are a family of parallel facts;
+    a duplicate and its copy are a family of two. The size of the family is the signal, and it
+    is one a pairwise measure cannot see by construction.
+
+    A sibling has to match the frame **at least as well as the pair matches each other**, and
+    that comparison rather than a fixed floor is what makes the rule safe. ``l_ngengrad`` and
+    ``laengengrad`` are a real decoy pair scoring 0.89, and ``breitengrad`` matches their shared
+    ``ngengrad`` at only 0.75 — so it is not admitted as their sibling, while the same
+    ``breitengrad`` *is* admitted as a sibling of the ``breitengrad``/``l_ngengrad`` pair, which
+    scores 0.67. A fixed threshold cannot separate those two readings of the same three columns.
+
+    Type-compatible, because ``standort`` is the case that kills the naive version:
+    ``standort_id``, ``standortname``, ``standort_nummer`` and ``standort_bezeichnung`` all wear
+    ``standort``, so by names alone ``standort_id``/``standort_nummer`` — a manifest decoy pair —
+    looks exactly like a parallel frame. Two of the four are text and two are ``bigint``, and a
+    comparison that cannot execute is not a family member.
+
+    Names only, and deliberately not enough on its own: ``playstore.app_category`` wears the same
+    ``app`` frame as the ``App``/``app_name`` decoy pair, and only its values say it is a
+    different fact. ``gaps.py`` confirms every sibling against a measured vocabulary before
+    acting on it.
+    """
+    frame = shared_name_run(left.physical_name, right.physical_name)
+    if not frame:
+        return []
+    return [
+        column
+        for column in columns
+        if column.id not in (left.id, right.id)
+        and comparable_type(column, left)
+        and name_similarity(column.physical_name, frame) >= similarity
+    ]
 
 
 def unjoined_pairs(
