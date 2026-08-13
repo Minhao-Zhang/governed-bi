@@ -63,6 +63,7 @@ from governed_bi.curator.elicitation import ELICITATION_SOURCE, _columns_of, _li
 from governed_bi.curator.gap_signals import (
     candidate_keys,
     comparison_candidates,
+    evidence_strength,
     type_class,
     unjoined_pairs,
 )
@@ -686,20 +687,33 @@ def _column_keys(record: ClarificationRecord) -> Iterable[str]:
             yield identifier
 
 
-def _severity_sort_key(record: ClarificationRecord) -> tuple[int, float, str]:
-    """Worst tier first, then strongest row-level evidence, then a stable tiebreak.
+def _severity_sort_key(record: ClarificationRecord) -> tuple[int, float, int, str]:
+    """Worst tier first, then strongest evidence, then widest blast radius, then a stable tiebreak.
 
-    Stratification is what makes "list ALL gaps" usable: an admin reads top-down and stops when
-    they run out of time, and the doc's within-tier rule is that a pair disagreeing on 6 305 of
-    6 312 rows outranks one disagreeing on 6 of 24.
+    **Two terms, because the two questions are different, and ranking on either alone was
+    measured going wrong.** ``differing / rows`` alone — what this sorted by until it was looked
+    at on real data — put ``beer_factory``'s top three T1 cards on ``geoposition``, a *three-row*
+    table where "3 of 3" is a perfect score, and pushed the design doc's headline case
+    (``transaktion.kunde_id`` vs ``transaktions_kunde_id``, 6 305 of 6 312) to #13.
+    :func:`~governed_bi.curator.gap_signals.evidence_strength` is that share discounted by how
+    little evidence supports it, which fixes the ordering at the root: on three rows two
+    unrelated columns disagree on all three too, so the share is barely a measurement there.
+
+    Absolute ``differing`` is the second term and it is *not* a tiebreak dressed up — it is the
+    other half of "most severe". Evidence strength says how sure the finding is; the count says
+    how many rows carry a wrong value if the admin picks wrong. Three pairs on this schema
+    disagree on 100% of their rows with the discount saturated, and among those the 6 430-row
+    table genuinely outranks the 6 312-row one. Multiplying the two into one number was
+    considered and rejected: the product answers neither question and cannot be read off a card.
     """
     tier = record.severity or "T4"
     index = SEVERITY_ORDER.index(tier) if tier in SEVERITY_ORDER else len(SEVERITY_ORDER)
-    return (index, -_evidence_share(record.question), record.scope)
+    differing, rows = _evidence_counts(record.question)
+    return (index, -evidence_strength(differing, rows), -differing, record.scope)
 
 
-def _evidence_share(question: str) -> float:
-    """``differing / rows`` recovered from a record's own evidence sentence, else 0.
+def _evidence_counts(question: str) -> tuple[int, int]:
+    """``(differing, rows)`` recovered from a record's own evidence sentence, else ``(0, 0)``.
 
     Read back out of the text rather than carried on the record because
     ``ClarificationRecord`` has no field for it and inventing one for a sort order would be a
@@ -708,7 +722,4 @@ def _evidence_share(question: str) -> float:
     import re
 
     found = re.search(r"on (\d+) of (\d+) rows", question)
-    if found is None:
-        return 0.0
-    rows = int(found.group(2))
-    return int(found.group(1)) / rows if rows else 0.0
+    return (int(found.group(1)), int(found.group(2))) if found else (0, 0)

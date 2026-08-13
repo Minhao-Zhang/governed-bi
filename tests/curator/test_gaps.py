@@ -457,13 +457,57 @@ def test_records_come_back_severity_first_so_an_admin_can_stop_at_any_tier() -> 
 
 
 def test_within_t1_the_strongest_row_level_evidence_comes_first() -> None:
+    from governed_bi.curator.gap_signals import evidence_strength
+
     scan = _scan(beer_factory_assets())
     duplicates = [
         r for r in scan.records
         if r.scope.startswith("elicitation:duplicate:") and r.severity == "T1"
     ]
-    shares = [_differing_share(r.question) for r in duplicates]
-    assert shares == sorted(shares, reverse=True), shares
+    keys = [
+        (-evidence_strength(*_differing_counts(r.question)),
+         -_differing_counts(r.question)[0])
+        for r in duplicates
+    ]
+    assert keys == sorted(keys), keys
+
+
+def test_a_three_row_table_does_not_outrank_the_schemas_worst_join_key() -> None:
+    """**Found by looking at the real output through the admin UI.** Ranking T1 on
+    ``differing / rows`` put the top three cards on ``geoposition`` -- 3 of 3 rows, a perfect
+    1.0 on a *three-row* table -- and sorted ``transaktion.kunde_id`` against
+    ``transaktions_kunde_id`` (6 305 of 6 312, the case the whole design doc is written around)
+    to #13. An admin who reads top-down and stops is then answering the wrong questions first,
+    which is the entire premise of stratifying by severity.
+
+    Both halves are asserted, because either alone can be satisfied by the wrong fix: the
+    headline case has to come first, *and* the three-row pairs have to leave the top of the tier
+    rather than merely swap places among themselves.
+    """
+    scan = _scan(beer_factory_assets())
+    ranked = [
+        r.scope.rpartition(":")[2]
+        for r in scan.records
+        if r.scope.startswith("elicitation:duplicate:") and r.severity == "T1"
+    ]
+    headline = "transaktion.kunde_id|transaktions_kunde_id"
+    assert headline in ranked, ranked
+    assert ranked.index(headline) < 5, ranked[:6]
+    assert not [s for s in ranked[:5] if s.startswith("geoposition.")], ranked[:5]
+
+
+def test_equally_certain_findings_are_ordered_by_how_many_rows_are_wrong() -> None:
+    """The second term, and the reason it is not a tiebreak: three ``beer_factory`` pairs
+    disagree on 100% of their rows with the small-sample discount saturated, so evidence
+    strength cannot separate them -- and among those, the pair that puts 6 430 rows on the wrong
+    entity is worse than the one that puts 6 312 there."""
+    scan = _scan(beer_factory_assets())
+    top = [
+        _differing_counts(r.question)
+        for r in scan.records
+        if r.scope.startswith("elicitation:duplicate:") and r.severity == "T1"
+    ][:3]
+    assert [d for d, _ in top] == [6430, 6312, 6312], top
 
 
 def test_nothing_is_dropped_for_a_quota() -> None:
@@ -503,12 +547,13 @@ def test_one_scope_and_one_id_per_finding_across_a_whole_scan() -> None:
 # ── helpers ─────────────────────────────────────────────────────────────────────────────────
 
 
-def _differing_share(question: str) -> float:
-    """``(differing, rows)`` back out of the question text, for the ordering assertion."""
+def _differing_counts(question: str) -> tuple[int, int]:
+    """``(differing, rows)`` back out of the question text, for the ordering assertions."""
     import re
 
-    differing, rows = (int(n.replace(" ", "")) for n in re.findall(r"([\d ]+\d)", question)[:2])
-    return differing / rows
+    found = re.search(r"on (\d+) of (\d+) rows", question)
+    assert found is not None, question
+    return int(found.group(1)), int(found.group(2))
 
 
 def _identical_pair_schema(*, differing: int, right_type: str = "bigint") -> dict[str, Any]:

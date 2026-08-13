@@ -24,8 +24,10 @@ from __future__ import annotations
 from typing import Any, Mapping, Sequence
 
 __all__ = [
+    "EVIDENCE_Z",
     "NEAR_DUPLICATE_SIMILARITY",
     "name_similarity",
+    "evidence_strength",
     "type_class",
     "comparable_type",
     "identifies_rows",
@@ -143,6 +145,53 @@ def name_similarity(left: str, right: str) -> float:
     is exactly what a family of parallel columns has.
     """
     return max(_trigram_dice(left, right), _longest_common_run_ratio(left, right))
+
+
+#: Standard-normal z for :func:`evidence_strength`'s lower bound. 1.96 is the 95% convention.
+#:
+#: The one knob in that function, and it only moves *how hard* small denominators are discounted,
+#: never the direction. At 1.96 a 3-of-3 disagreement scores 0.44 and a 6 305-of-6 312 one scores
+#: 1.00; the ordering of the ``beer_factory`` T1 tier is unchanged anywhere between 1.0 and 3.0,
+#: which is the sense in which it is not tuned.
+EVIDENCE_Z = 1.96
+
+
+def evidence_strength(differing: int, rows: int) -> float:
+    """How strongly ``differing of rows`` says "these two columns disagree", in ``[0, 1]``.
+
+    **The share alone is the wrong quantity, and it was measured being wrong.** Ranking T1 by
+    ``differing / rows`` put the three top cards on ``beer_factory``'s ``geoposition`` — a table
+    with *three rows*, where "3 of 3" scores a perfect 1.0 — and sorted the design doc's headline
+    case, ``transaktion.kunde_id`` against ``transaktions_kunde_id`` at 6 305 of 6 312, to #13.
+    "Answer the most severe first" is the whole premise of the tiering, so a ranking that a
+    three-row lookup table can dominate is a broken ranking.
+
+    This is the Wilson score lower bound of that share: the same statistic that stops three
+    five-star reviews from outranking six thousand. It reads as *the share, discounted by how
+    little evidence supports it* — 3 of 3 lands at 0.44, 24 of 24 at 0.86, 6 305 of 6 312 at
+    1.00 — and the discount vanishes as the denominator grows, so it agrees with the raw share
+    exactly where the raw share was already trustworthy.
+
+    **A shrinkage estimator, not a claim about sampling.** The counts come from a census
+    (``COUNT(*)`` over the whole table), so there is no sampling error to bound and calling this
+    a 95% confidence interval would be wrong. What it corrects for is different and real: on
+    three rows, two columns that are genuinely unrelated disagree on all three too, so the
+    measurement barely discriminates. The denominator is how much the disagreement is worth as
+    evidence, and this is the standard way to say so.
+
+    Blast radius — *how many rows get the wrong value* — is a second, independent question, and
+    it is not folded in here. ``gaps.py``'s sort key carries it as the next term, because
+    multiplying a confidence by a row count produces a number that answers neither.
+    """
+    if rows <= 0 or differing <= 0:
+        return 0.0
+    from math import sqrt
+
+    share = differing / rows
+    z2 = EVIDENCE_Z * EVIDENCE_Z
+    centre = share + z2 / (2 * rows)
+    spread = EVIDENCE_Z * sqrt(share * (1 - share) / rows + z2 / (4 * rows * rows))
+    return max(0.0, (centre - spread) / (1 + z2 / rows))
 
 
 def type_class(column: Any) -> str:

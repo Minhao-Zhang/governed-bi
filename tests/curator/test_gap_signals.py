@@ -69,3 +69,35 @@ def test_a_short_name_inside_a_long_one_is_not_a_key_into_that_table() -> None:
     assert identifies_rows(column, table) is False
     assert identifies_rows(SimpleNamespace(physical_name="kunde_id"),
                            SimpleNamespace(physical_name="kunden")) is True
+
+
+def test_evidence_strength_discounts_a_tiny_denominator() -> None:
+    """The measured failure: ``3 of 3`` and ``6 305 of 6 312`` are both ~100% and ranking them
+    by share alone put the three-row table first. The lower bound separates them by two thirds,
+    and it agrees with the raw share once the denominator is large enough to trust."""
+    from governed_bi.curator.gap_signals import evidence_strength
+
+    tiny, headline = evidence_strength(3, 3), evidence_strength(6305, 6312)
+    assert tiny < 0.5 < headline
+    assert headline > 0.99
+    assert abs(headline - 6305 / 6312) < 0.01, "the discount vanishes on a large denominator"
+
+
+def test_evidence_strength_is_monotone_in_both_arguments() -> None:
+    """More of the same evidence is stronger; a smaller share of it is weaker. Both directions,
+    because a ranking key that is not monotone in either is not a ranking of severity."""
+    from governed_bi.curator.gap_signals import evidence_strength
+
+    same_share = [evidence_strength(n, n) for n in (3, 24, 554, 6312)]
+    assert same_share == sorted(same_share)
+    same_rows = [evidence_strength(d, 100) for d in (1, 10, 50, 99)]
+    assert same_rows == sorted(same_rows)
+
+
+def test_no_evidence_scores_zero_rather_than_raising() -> None:
+    """Records with no measured sentence sort last within their tier, so the sort key has to
+    have a value for them."""
+    from governed_bi.curator.gap_signals import evidence_strength
+
+    assert evidence_strength(0, 0) == 0.0
+    assert evidence_strength(0, 100) == 0.0
