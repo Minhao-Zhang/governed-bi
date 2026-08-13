@@ -838,6 +838,38 @@ def test_a_question_already_answered_and_folded_is_not_asked_again() -> None:
     assert len(kept) == len(records) - 1
 
 
+def test_dropping_a_settled_prerequisite_unblocks_what_was_waiting_on_it() -> None:
+    """**Found live** through the admin UI on real ``app_store``, immediately after the corpus
+    dedup landed. The near-duplicate question on ``playstore.Content Rating`` had been answered
+    in an earlier session, so the dedup suppressed it — and the two E questions that
+    ``apply_cluster_dependencies`` had already stamped as waiting on it were left pointing at an
+    id in no ledger. ``unmet_prerequisites`` fails closed on a dangling id, deliberately, so both
+    cards rendered "Waiting" on "a question that is not in this ledger" and could never be
+    answered. The dedup had turned two answerable questions into two dead ones.
+
+    The edge is not dangling, it is **met**: the only reason its target was dropped is that its
+    answer already exists. So dropping a record clears it from everything that was waiting on it.
+    """
+    from dataclasses import replace
+
+    from governed_bi.curator.clarification import draft_from_clarification
+    from governed_bi.curator.clarifications import unmet_prerequisites
+    from governed_bi.curator.elicitation import drop_already_answered
+
+    records, assets_by_id = _wizard_records()
+    blocker = next(r for r in records if r.category == "B")
+    waiting = replace(
+        next(r for r in records if r.category == "E"), blocked_by=(blocker.id, "elicit.other")
+    )
+    folded = draft_from_clarification(blocker.question, "US and CA", schema="shop")
+    assets_by_id[folded.id] = folded
+
+    kept = drop_already_answered([blocker, waiting], assets_by_id, schema="shop")
+    (survivor,) = kept
+    assert survivor.blocked_by == ("elicit.other",), "the settled prerequisite is met, not lost"
+    assert unmet_prerequisites(survivor, kept) == ("elicit.other",)
+
+
 def test_a_folded_answer_from_another_schema_settles_nothing_here() -> None:
     from governed_bi.curator.clarification import draft_from_clarification
     from governed_bi.curator.elicitation import drop_already_answered

@@ -154,6 +154,25 @@ def test_no_business_audience_question_contains_a_raw_schema_identifier() -> Non
         assert leak is None, f"{rec.scope}: {leak!r} in {rec.question!r}"
 
 
+def test_every_business_audience_question_still_says_which_table_it_is_about() -> None:
+    """The other half of the leak fix, and it is a real constraint rather than a nicety.
+
+    The wizard card used to render ``{target_table}.{target_column}`` in monospace beneath every
+    question, which put ``mobile_app_market.content_rating`` on the business tab whatever the
+    question said — so the card is now identifier-free for that audience, and the question text
+    is the only thing left that can disambiguate. ``app_store`` is the case that proves it
+    matters: ``playstore`` and ``mobile_app_market`` **both** hold a ``content_rating`` column,
+    so a question naming only the field would appear twice, identically, with no way to tell
+    which was which.
+    """
+    from governed_bi.curator.elicitation import plain_name
+
+    for rec in _presented():
+        if rec.audience != "business" or not rec.target_table:
+            continue
+        assert plain_name(rec.target_table) in rec.question, f"{rec.scope}: {rec.question!r}"
+
+
 def test_every_data_audience_question_names_a_real_object_of_the_schema() -> None:
     """The other direction, and it is not the same test negated. A DBA has to be able to go and
     look at the thing, so the question (or the choices it offers) must carry a real physical

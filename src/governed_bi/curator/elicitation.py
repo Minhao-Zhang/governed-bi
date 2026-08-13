@@ -422,18 +422,43 @@ def drop_already_answered(
     Whether something is described, joined or contested is **not** re-checked here: those are the
     detectors' own gates (``gaps.py::_described``, ``join_edges``), evaluated against the same
     corpus, and a second copy of them would be a second answer to one question.
+
+    **Dropping a record clears it from every ``blocked_by`` that named it**, and that is the
+    whole reason this function returns rebuilt records rather than a filtered list. Found live
+    through the admin UI the moment this landed on real ``app_store``: the near-duplicate
+    question on ``playstore.Content Rating`` had been answered in an earlier session, the dedup
+    suppressed it, and the two E questions ``apply_cluster_dependencies`` had already stamped as
+    waiting on it were left pointing at an id in no ledger. ``unmet_prerequisites`` fails closed
+    on a dangling id — correctly, and for a reason that does not apply here — so both cards
+    rendered "Waiting" on "a question that is not in this ledger" and could never be answered.
+    The dedup had turned two answerable questions into two dead ones.
+
+    The edge is not dangling, it is **met**: the only reason its target was dropped is that its
+    answer already exists in the corpus, which is exactly the state the dependency was waiting
+    for. Ids this function did not drop are left alone — a prerequisite that is merely
+    *unanswered* still blocks, and one already in the ledger resolves there.
     """
     folded = _folded_question_ids(assets_by_id, schema)
     terms = _certified_terms(assets_by_id)
     kept: list[ClarificationRecord] = []
+    settled_ids: set[str] = set()
     for record in records:
         if _record_id_for_question(record.question, schema) in folded:
+            settled_ids.add(record.id)
             continue
         if record.scope.startswith("elicitation:term:"):
             if record.scope.rsplit(":", 1)[-1].casefold() in terms:
+                settled_ids.add(record.id)
                 continue
         kept.append(record)
-    return kept
+    if not settled_ids:
+        return kept
+    return [
+        replace(record, blocked_by=tuple(b for b in record.blocked_by if b not in settled_ids))
+        if settled_ids & set(record.blocked_by)
+        else record
+        for record in kept
+    ]
 
 
 def _record_id_for_question(question: str, schema: str | None) -> str:
@@ -694,6 +719,7 @@ def _propose_e(
                     id=_record_id(scope),
                     scope=scope,
                     question=(
+                        f"In your {plain_name(table.physical_name)} data, "
                         f"{plain_name(column.physical_name)!r} is sometimes recorded as "
                         f"{sentinel!r}. If that means the information is missing rather than a "
                         "real value, should those rows be left out of counts and averages?"
@@ -815,9 +841,10 @@ def _propose_s6(
                     id=_record_id(scope),
                     scope=scope,
                     question=(
-                        f"Totals get broken down by {plain_name(column.physical_name)!r}, and "
-                        f"one of its values is {sentinel!r}. If that means the information is "
-                        "missing rather than a real category, should those rows be left out?"
+                        f"Totals in your {plain_name(table.physical_name)} data get broken down "
+                        f"by {plain_name(column.physical_name)!r}, and one of its values is "
+                        f"{sentinel!r}. If that means the information is missing rather than a "
+                        "real category, should those rows be left out?"
                     ),
                     category="E",
                     ui_modality="checkbox",
@@ -872,9 +899,10 @@ def _propose_b(
                     id=_record_id(scope),
                     scope=scope,
                     question=(
-                        f"Do any of these {plain_name(column.physical_name)!r} values mean the "
-                        "same thing in everyday language? Check the ones that belong together, "
-                        "and say what you call them."
+                        f"In your {plain_name(table.physical_name)} data, do any of these "
+                        f"{plain_name(column.physical_name)!r} values mean the same thing in "
+                        "everyday language? Check the ones that belong together, and say what "
+                        "you call them."
                     ),
                     category="B",
                     ui_modality="checklist",

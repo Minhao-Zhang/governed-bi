@@ -648,8 +648,11 @@ def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
     structural_records = [r for r in scan.records if r.scope not in known_scopes]
     # Then the two rules about the *presented set* rather than about any one candidate, in the
     # order they have to run: dependency stamping, then "is this already answered", then "can
-    # its audience read it". A dropped candidate must not leave a `blocked_by` edge pointing at
-    # it, which is why the dedup runs after the stamp and over the same list.
+    # its audience read it". The dedup runs *after* the stamp because a prerequisite that is
+    # already answered is a prerequisite that is met, and only the stamped list knows which
+    # records were waiting on the one being dropped -- `drop_already_answered` clears those
+    # edges as it goes (found live: without that, suppressing an answered cluster question left
+    # two E cards permanently "Waiting" on an id in no ledger).
     #
     # `_reload_assets`, not `session.assets_by_id`: the frozen mapping is a run constant, and the
     # whole point of the dedup is that an answer folded a minute ago on this same server should
