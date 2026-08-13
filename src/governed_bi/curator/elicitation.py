@@ -79,6 +79,7 @@ __all__ = [
     "read_observed_values",
     "plain_name",
     "enforce_audience_language",
+    "drop_already_answered",
     "maybe_generate_join_followup",
 ]
 
@@ -347,6 +348,103 @@ def _value_read_columns(
         for table in _live_tables(tables)
         for column in _columns_of(table, assets_by_id)
     ]
+
+
+# ── questions the corpus already answers ────────────────────────────────────────────────────
+
+
+def _folded_question_ids(assets_by_id: Mapping[str, Any], schema: str | None) -> frozenset[str]:
+    """Ids of the clarification-derived assets already in this schema's corpus.
+
+    ``curator/clarification.py::draft_from_clarification`` mints
+    ``clarification.<schema>.<sha256(question)[:16]>`` on **every** fold it performs, so the id
+    of an answered question is a pure function of its text and one dict lookup decides whether
+    the answer already exists. That prefix is the same discriminator
+    ``api/curation_routes.py::_is_clarification_derived`` already relies on.
+    """
+    prefix = f"clarification.{schema}."
+    return frozenset(asset_id for asset_id in assets_by_id if asset_id.startswith(prefix))
+
+
+def _certified_terms(assets_by_id: Mapping[str, Any]) -> frozenset[str]:
+    """Case-folded names and synonyms of every **certified** ``TermAsset``.
+
+    ``certified`` and not ``proposed``, because that is the line ``corpus/analyst.py`` draws for
+    what the engine may use: a draft nobody has approved is invisible to a served turn, so the
+    engine still does not know what the term means and the question is still open.
+
+    Clarification-derived terms are excluded. Their ``name`` is the question they came from
+    (``draft_from_clarification``), so a certified one would enter this set as a whole sentence
+    -- harmless, since no ambiguous term equals a sentence, but it would also be a second,
+    accidental spelling of the check above.
+    """
+    from governed_bi.corpus.schema import ProvenanceStatus
+
+    out: set[str] = set()
+    for asset_id, asset in assets_by_id.items():
+        if asset.asset_type.value != "term" or asset_id.startswith("clarification."):
+            continue
+        provenance = getattr(asset.audit, "provenance", None) if asset.audit is not None else None
+        if provenance is None or provenance.status is not ProvenanceStatus.certified:
+            continue
+        out.add(str(asset.name).casefold())
+        out.update(str(s).casefold() for s in getattr(asset, "synonyms", ()) or ())
+    return frozenset(out)
+
+
+def drop_already_answered(
+    records: Sequence[ClarificationRecord],
+    assets_by_id: Mapping[str, Any],
+    *,
+    schema: str | None,
+) -> list[ClarificationRecord]:
+    """Candidates minus the ones the corpus already answers.
+
+    **Not the same rule as scope idempotency, and not in tension with "list ALL gaps".** The
+    scope filter in :func:`generate_candidate_questions` stops one ledger proposing one candidate
+    twice. This asks the broader question the ledger cannot: has this been *answered* somewhere
+    else? A gap that is already filled is not a gap, and the owner's decision is about never
+    truncating a finding to fit a quota -- it is not a licence to ask an admin something they
+    have already told us.
+
+    Two settlings, and each is exact rather than a similarity judgment:
+
+    * **the question was answered and folded.** The corpus holds a
+      ``clarification.<schema>.<hash of the question>`` asset. Broader than scope because the
+      ledger is a single file at the corpus root while the fact lives as an asset beneath it --
+      a rebuilt, relocated or hand-cleared ledger loses the record and keeps the fact.
+    * **a curator already defined the term.** An A question asks which column a business term
+      maps to; a certified ``TermAsset`` named that term is that answer, arrived at without the
+      wizard. Only A is checked this way, because only A's subject *is* a term -- inferring that
+      a certified term settles a value mapping or a join would be a similarity judgment, and
+      this function makes none.
+
+    Whether something is described, joined or contested is **not** re-checked here: those are the
+    detectors' own gates (``gaps.py::_described``, ``join_edges``), evaluated against the same
+    corpus, and a second copy of them would be a second answer to one question.
+    """
+    folded = _folded_question_ids(assets_by_id, schema)
+    terms = _certified_terms(assets_by_id)
+    kept: list[ClarificationRecord] = []
+    for record in records:
+        if _record_id_for_question(record.question, schema) in folded:
+            continue
+        if record.scope.startswith("elicitation:term:"):
+            if record.scope.rsplit(":", 1)[-1].casefold() in terms:
+                continue
+        kept.append(record)
+    return kept
+
+
+def _record_id_for_question(question: str, schema: str | None) -> str:
+    """The asset id ``draft_from_clarification`` would mint for this question.
+
+    Built by calling that function rather than re-hashing here: the id format is its decision,
+    and a second implementation of it would silently stop matching the day it changes.
+    """
+    from governed_bi.curator.clarification import draft_from_clarification
+
+    return draft_from_clarification(question, "", schema=schema).id
 
 
 def read_observed_values(

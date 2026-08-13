@@ -601,6 +601,7 @@ def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
     from governed_bi.curator.clarifications import load_clarifications, write_clarifications
     from governed_bi.curator.elicitation import (
         ELICITATION_SOURCE,
+        drop_already_answered,
         enforce_audience_language,
         generate_candidate_questions,
         read_observed_values,
@@ -645,8 +646,22 @@ def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
     # same scopes and this is what keeps it from re-appending them.
     known_scopes = {r.scope for r in existing if r.source == ELICITATION_SOURCE}
     structural_records = [r for r in scan.records if r.scope not in known_scopes]
+    # Then the two rules about the *presented set* rather than about any one candidate, in the
+    # order they have to run: dependency stamping, then "is this already answered", then "can
+    # its audience read it". A dropped candidate must not leave a `blocked_by` edge pointing at
+    # it, which is why the dedup runs after the stamp and over the same list.
+    #
+    # `_reload_assets`, not `session.assets_by_id`: the frozen mapping is a run constant, and the
+    # whole point of the dedup is that an answer folded a minute ago on this same server should
+    # already have settled its question (`/corpus/conflicts` reloads for the same reason).
     new_records = enforce_audience_language(
-        apply_cluster_dependencies([*structural_records, *keyword_records], scan.gated_columns)
+        drop_already_answered(
+            apply_cluster_dependencies(
+                [*structural_records, *keyword_records], scan.gated_columns
+            ),
+            {a.id: a for a in _reload_assets(session)},
+            schema=session.db_id,
+        )
     )
     if new_records:
         write_clarifications(session.corpus_root, [*existing, *new_records])

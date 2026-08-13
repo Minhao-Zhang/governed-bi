@@ -563,6 +563,30 @@ def test_generate_a_second_time_after_answering_does_not_duplicate(monkeypatch, 
     assert second["n_generated"] == 0
 
 
+def test_a_question_whose_answer_is_already_in_the_corpus_is_not_re_proposed(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Scope idempotency cannot cover this, which is why the corpus check exists. The ledger is
+    one file at the corpus root; the folded answer is an asset beneath it. Clear the ledger --
+    a rebuilt corpus root, a hand-edited file, a second deployment pointed at the same corpus --
+    and every scope the wizard knew about is gone while every fact it produced is still there.
+    """
+    client = _client(monkeypatch, _session_with_schema(tmp_path))
+    first = client.post("/elicitation/generate").json()["generated"]
+    answered = next(r for r in first if r["category"] == "B")
+    body = client.post(
+        f"/clarifications/{answered['id']}/answer", json={"choice_ids": ["US", "CA"]}
+    ).json()
+    assert body["converted_to_corpus"] is True
+
+    (tmp_path / "clarifications.jsonl").unlink()
+    regenerated = client.post("/elicitation/generate").json()["generated"]
+
+    scopes = {r["scope"] for r in regenerated}
+    assert answered["scope"] not in scopes, "the corpus already answers this one"
+    assert scopes, "every other question is proposed again, because nothing answered them"
+
+
 # ── severity / audience / dependency gating on the wire (utku-ai-setup-wizard-gap-model.md) ──
 
 

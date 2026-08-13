@@ -755,3 +755,96 @@ def _region_schema(*, physical_type: str = "text") -> tuple[list[Any], dict[str,
         columns=(column.id,),
     )
     return [table], {table.id: table, column.id: column}
+
+
+# ── dedup against what is already settled ───────────────────────────────────────────────────
+#
+# Scope idempotency (above) stops the *same candidate* being proposed twice from one ledger.
+# This is the broader question: the answer may already exist somewhere else -- folded into the
+# corpus by an earlier run, or certified by a curator who never used the wizard at all.
+
+
+def _term_asset(name: str, *, certified: bool, asset_id: str | None = None) -> Any:
+    from governed_bi.corpus.schema import Audit, Provenance, ProvenanceStatus, TermAsset
+
+    status = ProvenanceStatus.certified if certified else ProvenanceStatus.proposed
+    return TermAsset(
+        id=asset_id or f"term.{name}",
+        name=name,
+        summary=f"{name} — a definition someone already wrote down",
+        audit=Audit(provenance=Provenance(source="curator", status=status)),
+    )
+
+
+def _wizard_records() -> tuple[list[Any], dict[str, Any]]:
+    from governed_bi.curator.elicitation import generate_candidate_questions
+
+    tables, assets_by_id = _schema()
+    observed, _ledger = _observed(
+        tables, assets_by_id, connector=_ScriptedConnector(_REAL_VALUES)
+    )
+    records = generate_candidate_questions(tables, assets_by_id, observed_values=observed)
+    return records, assets_by_id
+
+
+def test_a_bare_corpus_settles_nothing() -> None:
+    """The direction that matters most: a check that suppresses when it should not is worse
+    than no check, because the gap it hides is one nobody will be told about again."""
+    from governed_bi.curator.elicitation import drop_already_answered
+
+    records, assets_by_id = _wizard_records()
+    assert drop_already_answered(records, assets_by_id, schema="shop") == records
+
+
+def test_a_term_the_corpus_already_defines_is_not_asked_about_again() -> None:
+    from governed_bi.curator.elicitation import drop_already_answered
+
+    records, assets_by_id = _wizard_records()
+    assert any(r.scope == "elicitation:term:total" for r in records)
+
+    assets_by_id["term.total"] = _term_asset("total", certified=True)
+    kept = drop_already_answered(records, assets_by_id, schema="shop")
+    assert not any(r.scope == "elicitation:term:total" for r in kept)
+    assert any(r.scope == "elicitation:term:amount" for r in kept), "only the settled one goes"
+
+
+def test_a_proposed_definition_does_not_settle_a_term() -> None:
+    """``proposed`` is a draft nobody has approved -- ``corpus/analyst.py`` does not serve it, so
+    the engine still does not know what the term means and the question is still open."""
+    from governed_bi.curator.elicitation import drop_already_answered
+
+    records, assets_by_id = _wizard_records()
+    assets_by_id["term.total"] = _term_asset("total", certified=False)
+    kept = drop_already_answered(records, assets_by_id, schema="shop")
+    assert any(r.scope == "elicitation:term:total" for r in kept)
+
+
+def test_a_question_already_answered_and_folded_is_not_asked_again() -> None:
+    """Broader than scope idempotency, and it is the case scope cannot cover: the ledger is a
+    file at the corpus root and the folded answer is an asset under it, so a rebuilt or relocated
+    ledger loses the record while the corpus keeps the fact. ``draft_from_clarification`` hashes
+    the question into the asset id, so the check is exact and costs one dict lookup.
+    """
+    from governed_bi.curator.clarification import draft_from_clarification
+    from governed_bi.curator.elicitation import drop_already_answered
+
+    records, assets_by_id = _wizard_records()
+    answered = next(r for r in records if r.category == "B")
+    folded = draft_from_clarification(answered.question, "US and CA", schema="shop")
+    assets_by_id[folded.id] = folded
+
+    kept = drop_already_answered(records, assets_by_id, schema="shop")
+    assert answered.scope not in {r.scope for r in kept}
+    assert len(kept) == len(records) - 1
+
+
+def test_a_folded_answer_from_another_schema_settles_nothing_here() -> None:
+    from governed_bi.curator.clarification import draft_from_clarification
+    from governed_bi.curator.elicitation import drop_already_answered
+
+    records, assets_by_id = _wizard_records()
+    answered = next(r for r in records if r.category == "B")
+    folded = draft_from_clarification(answered.question, "US and CA", schema="other_db")
+    assets_by_id[folded.id] = folded
+
+    assert drop_already_answered(records, assets_by_id, schema="shop") == records
